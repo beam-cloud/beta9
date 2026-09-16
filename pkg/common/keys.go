@@ -10,6 +10,7 @@ var (
 	schedulerContainerRequests        string = "scheduler:container_requests"
 	schedulerBackgroundRequests       string = "scheduler:background_requests"
 	schedulerWorkerLock               string = "scheduler:worker:lock:%s"
+	schedulerWorkerProvisioningLock   string = "scheduler:worker:provisioning:lock:%s"
 	schedulerWorkerRequests           string = "scheduler:worker:requests:%s"
 	schedulerWorkerRequestChannel     string = "scheduler:worker:requests"
 	schedulerWorkerPendingRequests    string = "scheduler:worker:requests:pending:%s"
@@ -206,6 +207,10 @@ func (rk *redisKeys) SchedulerBackgroundRequests() string {
 
 func (rk *redisKeys) SchedulerWorkerLock(workerId string) string {
 	return fmt.Sprintf(schedulerWorkerLock, workerId)
+}
+
+func (rk *redisKeys) SchedulerWorkerProvisioningLock(containerId string) string {
+	return fmt.Sprintf(schedulerWorkerProvisioningLock, containerId)
 }
 
 func (rk *redisKeys) SchedulerWorkerRequests(workerId string) string {

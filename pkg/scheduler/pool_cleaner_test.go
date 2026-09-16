@@ -69,6 +69,43 @@ func TestWorkerResourceCleanerScopesRedisOnlyWorkersToExternalMachine(t *testing
 	assert.Equal(t, machineBWorker.Id, worker.Id)
 }
 
+// A worker whose Job appears after the cleaner listed Jobs is not an orphan.
+func TestWorkerResourceCleanerPreservesWorkerCreatedDuringJobScan(t *testing.T) {
+	ctx := context.Background()
+	rdb, err := repo.NewRedisClientForTest()
+	assert.Nil(t, err)
+	workerRepo := repo.NewWorkerRedisRepositoryForTest(rdb)
+	worker := cleanerTestWorker("new-worker", "default", "")
+	assert.Nil(t, workerRepo.AddWorker(worker))
+	kubeClient := fake.NewSimpleClientset()
+
+	cleaner := WorkerResourceCleaner{PoolName: "default", Config: types.WorkerConfig{Namespace: "beta9"}, KubeClient: kubeClient}
+	cleaner.WorkerRepo = &workerRepoWithHook{WorkerRepository: workerRepo, beforePoolList: func() {
+		job := cleanerTestWorkerJob("worker-default-new-worker", worker.Id, "default", "")
+		_, err := kubeClient.BatchV1().Jobs("beta9").Create(ctx, job, metav1.CreateOptions{})
+		assert.Nil(t, err)
+	}}
+	cleaner.Clean(ctx)
+
+	preserved, err := workerRepo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, worker.Id, preserved.Id)
+}
+
+// workerRepoWithHook runs beforePoolList once, before the first pool listing.
+type workerRepoWithHook struct {
+	repo.WorkerRepository
+	beforePoolList func()
+}
+
+func (r *workerRepoWithHook) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
+	if hook := r.beforePoolList; hook != nil {
+		r.beforePoolList = nil
+		hook()
+	}
+	return r.WorkerRepository.GetAllWorkersInPool(poolName)
+}
+
 func TestWorkerResourceCleanerDeletesCompletedWorkerJob(t *testing.T) {
 	ctx := context.Background()
 	rdb, err := repo.NewRedisClientForTest()

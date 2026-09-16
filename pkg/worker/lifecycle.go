@@ -864,9 +864,9 @@ func (s *Worker) prepareContainerMounts(ctx context.Context, request *types.Cont
 	})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetupMounts, phaseStart, err == nil, map[string]string{"mount_count": fmt.Sprintf("%d", len(request.Mounts))})
 	if err != nil {
+		// Without its code the container cannot run. Going on would bind the
+		// unresolved object path, and runc would report that instead.
 		outputLogger.Info(fmt.Sprintf("failed to setup container mounts: %v", err))
-	}
-	if err := ctx.Err(); err != nil {
 		return err
 	}
 

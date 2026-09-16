@@ -458,57 +458,60 @@ func TestProvisioningLimitStopsFurtherWorkerCreation(t *testing.T) {
 	assert.False(t, newSchedulingAttempt(scheduler, request, nil).runnable())
 }
 
-func TestProvisioningLimitSurvivesSchedulerHandoffs(t *testing.T) {
-	first, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-	replicas := []*Scheduler{first, schedulerReplicaForTest(first), schedulerReplicaForTest(first)}
-
-	started := make(chan struct{}, len(replicas))
-	done := make(chan struct{}, len(replicas))
+// blockedProvisioning is a pool whose AddWorker parks until unblock closes,
+// reporting each call on started.
+func blockedProvisioning(t *testing.T, scheduler *Scheduler, n int) (*LocalWorkerPoolControllerForTest, chan struct{}) {
+	t.Helper()
 	unblock := make(chan struct{})
 	controller := &LocalWorkerPoolControllerForTest{
-		ctx:              context.Background(),
-		name:             "beta9-cpu",
-		config:           first.config,
-		workerRepo:       first.workerRepo,
-		addWorkerStarted: started,
-		addWorkerDone:    done,
-		unblockAddWorker: unblock,
+		ctx: context.Background(), name: "beta9-cpu", config: scheduler.config, workerRepo: scheduler.workerRepo,
+		addWorkerStarted: make(chan struct{}, n), addWorkerDone: make(chan struct{}, n), unblockAddWorker: unblock,
 	}
-	first.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
+	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
+	return controller, unblock
+}
 
-	request := &types.ContainerRequest{
-		ContainerId:  uuid.NewString(),
-		Cpu:          100,
-		Memory:       100,
-		PoolSelector: "beta9-cpu",
-		Timestamp:    time.Now(),
-	}
-	setPendingSchedulerRequests(t, first, request)
-
-	for attempt, scheduler := range replicas {
-		newSchedulingAttempt(scheduler, request, nil).provisionWorker()
+func awaitN(t *testing.T, ch chan struct{}, n int, what string) {
+	t.Helper()
+	for i := range n {
 		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatalf("provisioning attempt %d did not start", attempt+1)
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: %d/%d", what, i, n)
 		}
-		request = popBacklogRequest(t, first.requestBacklog)
-		assert.Equal(t, attempt+1, request.ProvisioningAttempts)
 	}
+}
 
-	newSchedulingAttempt(first, request, nil).provisionWorker()
-	assert.Equal(t, maxWorkerProvisioningAttempts, controller.AddWorkerCallCount())
-	assert.False(t, newSchedulingAttempt(first, request, nil).runnable())
+// Replicas share one lock per container: while one provisions, or until its
+// pending worker's reservation expires, the others do not add a second worker.
+// Distinct containers never contend.
+func TestProvisioningLockIsPerContainerAcrossReplicas(t *testing.T) {
+	first, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	second := schedulerReplicaForTest(first)
+	controller, unblock := blockedProvisioning(t, first, 3)
+	request := func() *types.ContainerRequest {
+		return &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 100, Memory: 100, PoolSelector: "beta9-cpu", Timestamp: time.Now()}
+	}
+	same, otherA, otherB := request(), request(), request()
+	setPendingSchedulerRequests(t, first, same, otherA, otherB)
+
+	newSchedulingAttempt(first, same, nil).provisionWorker()
+	newSchedulingAttempt(second, same, nil).provisionWorker()
+	newSchedulingAttempt(second, otherA, nil).provisionWorker()
+	newSchedulingAttempt(first, otherB, nil).provisionWorker()
+	awaitN(t, controller.addWorkerStarted, 3, "distinct containers started provisioning")
+	time.Sleep(2 * requestProcessingInterval)
+	assert.Equal(t, 3, controller.AddWorkerCallCount(), "the duplicate attempt waits")
 
 	close(unblock)
-	for range replicas {
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatal("provisioning attempt did not finish")
-		}
-	}
+	awaitN(t, controller.addWorkerDone, 3, "provisioning finished")
+	newSchedulingAttempt(second, same, nil).provisionWorker()
+	time.Sleep(2 * requestProcessingInterval)
+	assert.Equal(t, 3, controller.AddWorkerCallCount(), "the lock outlives a successful attempt")
+	workers, err := first.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	assert.Len(t, workers, 3)
 }
 
 func popBacklogRequest(t *testing.T, backlog *RequestBacklog) *types.ContainerRequest {

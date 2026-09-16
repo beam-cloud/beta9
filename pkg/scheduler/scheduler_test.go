@@ -94,6 +94,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workspaceRepo:         workspaceRepo,
 
 		provisioning:              newProvisioningTracker(),
+		workerProvisioningLock:    common.NewRedisLock(rdb),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
 	}, nil
@@ -1864,6 +1865,7 @@ func schedulerReplicaForTest(source *Scheduler) *Scheduler {
 		schedulerUsageMetrics:     source.schedulerUsageMetrics,
 		eventBus:                  source.eventBus,
 		provisioning:              newProvisioningTracker(),
+		workerProvisioningLock:    common.NewRedisLock(source.requestBacklog.rdb),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
 		pushComputeEvent:          source.pushComputeEvent,
