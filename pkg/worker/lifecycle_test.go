@@ -162,6 +162,52 @@ func TestWaitForRuntimeStartedReturnsWhenRuntimeDoneWithoutPID(t *testing.T) {
 	require.False(t, handled)
 }
 
+func TestReadyToPublishRunningWaitsForSandboxProcessManager(t *testing.T) {
+	const containerID = "sandbox-test"
+	instance := &ContainerInstance{Id: containerID}
+	instance.initializeProcessManagerReadiness()
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(containerID, instance)
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- worker.readyToPublishRunning(context.Background(), request, instance)
+	}()
+
+	select {
+	case <-result:
+		t.Fatal("sandbox became publishable before its process manager was ready")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	instance.signalProcessManagerReadiness(true)
+	select {
+	case publishable := <-result:
+		require.True(t, publishable)
+	case <-time.After(time.Second):
+		t.Fatal("sandbox did not become publishable after its process manager became ready")
+	}
+}
+
+func TestReadyToPublishRunningRejectsFailedSandboxProcessManager(t *testing.T) {
+	const containerID = "sandbox-test"
+	instance := &ContainerInstance{Id: containerID}
+	instance.initializeProcessManagerReadiness()
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(containerID, instance)
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+
+	instance.signalProcessManagerReadiness(false)
+	require.False(t, worker.readyToPublishRunning(context.Background(), request, instance))
+}
+
 func TestContainerResolvConfSourceFallsBackForLoopbackHostResolver(t *testing.T) {
 	hostResolv := filepath.Join(t.TempDir(), "resolv.conf")
 	require.NoError(t, os.WriteFile(hostResolv, []byte("nameserver 127.0.0.53\noptions edns0\n"), 0o644))

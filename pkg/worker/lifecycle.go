@@ -2153,9 +2153,8 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	var runtimeStartedPID atomic.Int64
 	runtimeStartedPID.Store(-1)
 
-	// The PID goes to monitoring and the sandbox readiness probe first, so the
-	// process manager comes up while the address map is joined and RUNNING is
-	// published; a failed registration stops the container and cancels both.
+	// The PID goes to monitoring and the sandbox readiness probe first. Sandbox
+	// RUNNING publication waits for that probe; address registration follows.
 	var joinAddresses sync.Once
 	var addressesErr error
 	publishRuntimeStarted := func(pid int) {
@@ -2165,6 +2164,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			case <-ctx.Done():
 			}
 		})
+		if !s.readyToPublishRunning(ctx, request, instance) {
+			return
+		}
 		joinAddresses.Do(func() {
 			addressesErr = addressesRegistered.wait(ctx)
 		})
@@ -2375,6 +2377,24 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	return exitCode, err
+}
+
+func (s *Worker) readyToPublishRunning(ctx context.Context, request *types.ContainerRequest, instance *ContainerInstance) bool {
+	if request.Stub.Type.Kind() != types.StubTypeSandbox {
+		return true
+	}
+
+	ready := instance.processManagerReadyChannel()
+	if ready == nil {
+		return false
+	}
+	select {
+	case <-ready:
+		fresh, exists := s.containerInstances.Get(request.ContainerId)
+		return exists && fresh.processManagerReady()
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (s *Worker) waitForRestoredContainerExit(ctx context.Context, rt runtime.Runtime, containerId string, fallbackExitCode int) (int, error) {

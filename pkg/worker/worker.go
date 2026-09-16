@@ -1326,7 +1326,8 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 		expirySeconds = int64(types.ContainerStateTtlSWhileStopping)
 	} else if status == types.ContainerStatusPending {
 		runtimeStarted, runtimePID := instance.runtimeStartState()
-		if runtimeStarted {
+		processManagerReady := request.Stub.Type.Kind() != types.StubTypeSandbox || instance.processManagerReady()
+		if runtimeStarted && processManagerReady {
 			log.Info().
 				Str("container_id", request.ContainerId).
 				Int("pid", runtimePID).

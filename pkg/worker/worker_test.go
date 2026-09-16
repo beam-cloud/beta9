@@ -862,12 +862,47 @@ func TestUpdateContainerStatusOnceReconcilesStartedPendingContainer(t *testing.T
 	done, err := worker.updateContainerStatusOnce(context.Background(), &types.ContainerRequest{
 		ContainerId: "container-1",
 		ImageId:     "image-1",
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePodRun)}},
 	})
 
 	require.NoError(t, err)
 	require.False(t, done)
 	require.Equal(t, 1, repoClient.getStateCalls)
 	require.Equal(t, 1, repoClient.updateStatusCalls)
+	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
+	require.Equal(t, int64(types.ContainerStateTtlS), repoClient.lastUpdateStatus.ExpirySeconds)
+}
+
+func TestUpdateContainerStatusKeepsSandboxPendingUntilProcessManagerReady(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{
+			ContainerId: "sandbox-1",
+			Status:      string(types.ContainerStatusPending),
+		},
+	}
+	instance := &ContainerInstance{ExitCode: -1, RuntimeStarted: true, RuntimePid: 1234}
+	instance.initializeProcessManagerReadiness()
+	worker := &Worker{
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		containerRepoClient: repoClient,
+		stopContainerChan:   make(chan stopContainerEvent, 1),
+	}
+	worker.containerInstances.Set("sandbox-1", instance)
+	request := &types.ContainerRequest{
+		ContainerId: "sandbox-1",
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+
+	done, err := worker.updateContainerStatusOnce(context.Background(), request)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, string(types.ContainerStatusPending), repoClient.lastUpdateStatus.Status)
+	require.Equal(t, int64(types.ContainerStateTtlSWhilePending), repoClient.lastUpdateStatus.ExpirySeconds)
+
+	instance.signalProcessManagerReadiness(true)
+	done, err = worker.updateContainerStatusOnce(context.Background(), request)
+	require.NoError(t, err)
+	require.False(t, done)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
 	require.Equal(t, int64(types.ContainerStateTtlS), repoClient.lastUpdateStatus.ExpirySeconds)
 }
