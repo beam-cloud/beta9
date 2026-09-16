@@ -168,11 +168,13 @@ func (g *CreditGate) Check(ctx context.Context, workspaceId string) error {
 	return decision.Deny(workspaceId)
 }
 
-// Decision returns the current decision for a workspace, from cache when it
-// is fresh, otherwise from billing. When billing is unreachable a stale
-// cached decision is reused; with none available the configured fail-open
-// policy decides. The error return is only non-nil when the gate fails
-// closed, and is then an *types.InsufficientCreditsError.
+// Decision returns the current decision for a workspace. Fresh decisions are
+// served from cache. Stale approvals are served while a background refresh
+// runs so billing latency does not block container admission; stale denials
+// and cache misses are refreshed synchronously. When billing is unreachable a
+// stale cached decision is reused; with none available the configured
+// fail-open policy decides. The error return is only non-nil when the gate
+// fails closed, and is then an *types.InsufficientCreditsError.
 func (g *CreditGate) Decision(ctx context.Context, workspaceId string) (creditDecision, error) {
 	if g == nil {
 		return creditDecision{OK: true}, nil
@@ -182,31 +184,47 @@ func (g *CreditGate) Decision(ctx context.Context, workspaceId string) (creditDe
 	if hasCached && g.fresh(cached) {
 		return cached, nil
 	}
+	if hasCached && cached.OK {
+		g.refreshAsync(workspaceId)
+		return cached, nil
+	}
 
+	return g.refresh(workspaceId)
+}
+
+func (g *CreditGate) refreshAsync(workspaceId string) {
+	_ = g.inflight.DoChan(workspaceId, func() (any, error) {
+		return g.fetch(workspaceId)
+	})
+}
+
+func (g *CreditGate) refresh(workspaceId string) (creditDecision, error) {
 	result, err, _ := g.inflight.Do(workspaceId, func() (any, error) {
-		// Another caller may have refreshed while we waited on the flight.
-		if cached, ok := g.cached(ctx, workspaceId); ok && g.fresh(cached) {
-			return cached, nil
-		}
-
-		// Deliberately not derived from the caller's ctx: a decision is
-		// shared by every waiter on this flight.
-		fetchCtx, cancel := context.WithTimeout(context.Background(), g.config.TimeoutOrDefault())
-		defer cancel()
-
-		decision, err := g.backend.Check(fetchCtx, workspaceId)
-		if err != nil {
-			return g.unavailable(workspaceId, err)
-		}
-
-		decision.CheckedAt = g.now()
-		g.store(ctx, workspaceId, decision)
-		return decision, nil
+		return g.fetch(workspaceId)
 	})
 	if err != nil {
 		return creditDecision{}, err
 	}
 	return result.(creditDecision), nil
+}
+
+func (g *CreditGate) fetch(workspaceId string) (creditDecision, error) {
+	ctx := context.Background()
+	if cached, ok := g.cached(ctx, workspaceId); ok && g.fresh(cached) {
+		return cached, nil
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, g.config.TimeoutOrDefault())
+	defer cancel()
+
+	decision, err := g.backend.Check(fetchCtx, workspaceId)
+	if err != nil {
+		return g.unavailable(workspaceId, err)
+	}
+
+	decision.CheckedAt = g.now()
+	g.store(ctx, workspaceId, decision)
+	return decision, nil
 }
 
 // Invalidate drops the cached decision so the next check asks billing.
@@ -242,10 +260,10 @@ func (g *CreditGate) unavailable(workspaceId string, cause error) (creditDecisio
 }
 
 // deniedDecisionTTL bounds how long a denial is served from cache. A stale
-// approval costs us at most CacheTTL of compute; a stale denial costs a
-// customer who has just paid a "no credits" refusal, which is the moment they
-// decide whether to stay. Denials are therefore re-checked almost immediately;
-// the cached copy still serves as the stale fallback when billing is down.
+// denial costs a customer who has just paid a "no credits" refusal, which is
+// the moment they decide whether to stay. Denials are therefore re-checked
+// almost immediately; the cached copy still serves as the stale fallback when
+// billing is down.
 const deniedDecisionTTL = 2 * time.Second
 
 func (g *CreditGate) fresh(decision creditDecision) bool {

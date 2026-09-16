@@ -24,6 +24,24 @@ type fakeCreditBackend struct {
 	err      error
 }
 
+type blockingCreditBackend struct {
+	calls   atomic.Int32
+	started chan struct{}
+	result  chan creditDecision
+}
+
+func (b *blockingCreditBackend) Check(ctx context.Context, workspaceId string) (creditDecision, error) {
+	if b.calls.Add(1) == 1 {
+		close(b.started)
+	}
+	select {
+	case decision := <-b.result:
+		return decision, nil
+	case <-ctx.Done():
+		return creditDecision{}, ctx.Err()
+	}
+}
+
 func (f *fakeCreditBackend) Check(ctx context.Context, workspaceId string) (creditDecision, error) {
 	f.calls.Add(1)
 	if f.err != nil {
@@ -92,7 +110,48 @@ func TestCreditGateCachesDecisionsUntilCacheTTL(t *testing.T) {
 
 	*now = now.Add(31 * time.Second)
 	assert.NoError(t, gate.Check(context.Background(), "ws-1"))
-	assert.Equal(t, int32(3), backend.calls.Load(), "expired decisions should be refreshed")
+	require.Eventually(t, func() bool {
+		return backend.calls.Load() == 3
+	}, time.Second, 10*time.Millisecond, "expired approvals should be refreshed in the background")
+}
+
+func TestCreditGateRefreshesStaleApprovalWithoutBlockingAdmission(t *testing.T) {
+	backend := &blockingCreditBackend{
+		started: make(chan struct{}),
+		result:  make(chan creditDecision),
+	}
+	gate, now := newTestCreditGate(t, backend, types.CreditGateConfig{CacheTTL: 30 * time.Second})
+	gate.store(context.Background(), "ws-1", creditDecision{
+		OK:        true,
+		CheckedAt: now.Add(-time.Minute),
+	})
+
+	returned := make(chan error, 1)
+	go func() {
+		returned <- gate.Check(context.Background(), "ws-1")
+	}()
+
+	select {
+	case err := <-returned:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stale approval blocked admission on the billing refresh")
+	}
+
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("billing refresh did not start")
+	}
+
+	backend.result <- creditDecision{OK: false, ErrorCode: "insufficient_credits"}
+	require.Eventually(t, func() bool {
+		decision, ok := gate.cached(context.Background(), "ws-1")
+		return ok && !decision.OK
+	}, time.Second, 10*time.Millisecond, "background refresh should replace the stale approval")
+
+	assert.Error(t, gate.Check(context.Background(), "ws-1"))
+	assert.Equal(t, int32(1), backend.calls.Load())
 }
 
 func TestCreditGateRechecksDenialsAlmostImmediately(t *testing.T) {
@@ -137,6 +196,9 @@ func TestCreditGateReusesStaleDecisionWhenBillingIsDown(t *testing.T) {
 	allowBackend.err = errors.New("billing is down")
 	*allowNow = allowNow.Add(time.Minute)
 	assert.NoError(t, allowGate.Check(context.Background(), "ws-1"))
+	require.Eventually(t, func() bool {
+		return allowBackend.calls.Load() == 2
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestCreditGateFailurePolicyWithoutCachedDecision(t *testing.T) {
