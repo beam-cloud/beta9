@@ -287,10 +287,11 @@ const (
 
 // CreditGateConfig configures the scheduler's prepaid-credit check.
 //
-// In "http" mode every container request (and the periodic enforcement sweep)
-// asks the billing service whether the workspace still has credit. Decisions
-// are cached in Redis for CacheTTL and reused for up to StaleTTL when billing
-// is unreachable; with no usable cached decision FailOpen decides.
+// In "http" mode container admission and the periodic enforcement sweep check
+// whether the workspace still has credit. Decisions are cached in Redis for
+// CacheTTL. Stale approvals are refreshed asynchronously and may be reused for
+// up to StaleTTL; stale denials and cache misses are refreshed synchronously.
+// With no usable cached decision FailOpen decides if billing is unavailable.
 type CreditGateConfig struct {
 	Mode            string        `key:"mode" json:"mode"`
 	Endpoint        string        `key:"endpoint" json:"endpoint"`
