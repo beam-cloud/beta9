@@ -1,6 +1,6 @@
 dependencies:
 - name: common
-  repository: https://bjw-s-labs.github.io/helm-charts
+  repository: oci://public.ecr.aws/n4e0e1y0
   version: 2.5.0
 - name: beam-blobcache-chart
   repository: oci://public.ecr.aws/n4e0e1y0
@@ -23,5 +23,5 @@ dependencies:
 - name: victoria-metrics-agent
   repository: https://victoriametrics.github.io/helm-charts
   version: 0.9.17
-digest: sha256:b4adfbc1a1ddea3a896f3d880468d6e58a88dd4ae769786f77b577b6929c79cd
-generated: "2026-05-27T13:39:46.548822-04:00"
+digest: sha256:b7433ce1c81c39e476e88395e6f98eb3b0737139e0c51607b2969a018ace1b28
+generated: "2026-09-16T08:22:03.11532-07:00"
