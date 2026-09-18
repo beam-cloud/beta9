@@ -49,6 +49,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	usage "github.com/beam-cloud/beta9/pkg/repository/usage"
+	"github.com/beam-cloud/beta9/pkg/router"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/task"
@@ -273,6 +274,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
 	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.EventRepo, g.BackendRepo, g.TaskDispatcher, g.Scheduler, g.Config)
 	apiv1.NewEventGroup(g.baseRouteGroup.Group("/events", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo)
+	router.NewGroup(g.baseRouteGroup.Group("/router", authMiddleware), g.EventRepo)
 	apiv1.NewLogGroup(g.baseRouteGroup.Group("/logs", authMiddleware), g.BackendRepo, g.ContainerRepo, repository.NewComputeRedisRepository(g.RedisClient), g.EventRepo)
 	apiv1.NewMetricsGroup(g.baseRouteGroup.Group("/metrics", authMiddleware), g.BackendRepo, g.EventRepo)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)

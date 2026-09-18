@@ -631,3 +631,22 @@ func TestPushPlatformLogSkipsCallbackSinks(t *testing.T) {
 		t.Fatalf("expected platform log event to skip callbacks, got %d callback events", got)
 	}
 }
+
+func TestPushRouterTraceKeepsTraceIdentity(t *testing.T) {
+	storage := &captureEventSink{}
+	repo := &EventClientRepo{storageSinks: []eventSink{storage}}
+	end := time.Date(2026, 9, 16, 12, 0, 5, 0, time.UTC)
+	repo.PushRouterTrace("ws-1", types.Trace{ID: "turn-1", Harness: types.TraceHarnessCodex, Start: end.Add(-5 * time.Second), End: end,
+		Steps: []types.TraceStep{{Model: &types.TraceModelCall{ID: "c1", Text: "hi"}}}})
+	if len(storage.events) != 1 {
+		t.Fatalf("got %d events", len(storage.events))
+	}
+	event := storage.events[0]
+	if event.Type() != types.EventRouterTrace || event.ID() != "turn-1" || event.Extensions()["workspaceid"] != "ws-1" || !event.Time().Equal(end) {
+		t.Fatalf("event = type %s id %s ext %v time %v", event.Type(), event.ID(), event.Extensions(), event.Time())
+	}
+	var payload types.EventRouterTraceSchema
+	if err := json.Unmarshal(event.Data(), &payload); err != nil || payload.WorkspaceID != "ws-1" || payload.Trace.Steps[0].Model.Text != "hi" {
+		t.Fatalf("payload = %+v err %v", payload, err)
+	}
+}

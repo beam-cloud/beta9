@@ -377,6 +377,7 @@ type EventRepository interface {
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema)
 	PushContainerEvent(event types.EventContainerEventSchema)
+	PushRouterTrace(workspaceID string, trace types.Trace)
 	PushContainerLogEvent(entry types.EventContainerLogSchema)
 	PushContainerLogEventQueued(entry types.EventContainerLogSchema) error
 	PushPlatformLogEvent(entry types.EventPlatformLogSchema)

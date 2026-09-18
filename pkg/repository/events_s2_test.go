@@ -782,6 +782,65 @@ func TestReadLogSeqWindowCoversByteCappedBatches(t *testing.T) {
 	}
 }
 
+func TestReadTailWindowCoversByteCappedBatches(t *testing.T) {
+	// Router traces run to hundreds of KB, so a 1000-record tail window can
+	// come back truncated by S2's 1 MiB cap. The scan must still see the
+	// newest records in the window rather than stepping past them.
+	read := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		batch := &s2.ReadBatch{}
+		for seq := seqNum; seq < seqNum+min(count, 2); seq++ {
+			batch.Records = append(batch.Records, s2.SequencedRecord{SeqNum: seq})
+		}
+		return batch, nil
+	}
+	records, tailOffset, err := readTailWindow(context.Background(), read, 0, 1_000_005, 5)
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), tailOffset)
+	require.Len(t, records, 5)
+	for i, record := range records {
+		require.Equal(t, uint64(1_000_000+i), record.SeqNum)
+	}
+}
+
+func TestSplitS2AppendBatchesRespectsMeteredByteCap(t *testing.T) {
+	record := func(size int) s2.AppendRecord { return s2.AppendRecord{Body: make([]byte, size)} }
+	third := s2.MaxBatchMeteredBytes / 3
+	records := []s2.AppendRecord{
+		record(third), record(third), record(third), // 3×(third+8) > cap: the last one must spill
+		record(s2.MaxBatchMeteredBytes + 1), // never fits
+		record(16),
+	}
+	batches, oversized := splitS2AppendBatches(records)
+	require.Equal(t, 1, oversized)
+	require.Len(t, batches, 2)
+	require.Len(t, batches[0], 2)
+	require.Len(t, batches[1], 2)
+	for _, batch := range batches {
+		require.LessOrEqual(t, s2.MeteredBatchBytes(batch), int64(s2.MaxBatchMeteredBytes))
+	}
+
+	many := make([]s2.AppendRecord, s2.MaxBatchRecords+1)
+	batches, oversized = splitS2AppendBatches(many)
+	require.Zero(t, oversized)
+	require.Len(t, batches, 2)
+	require.Len(t, batches[0], s2.MaxBatchRecords)
+}
+
+func TestRouterTracesUseDenseWorkspaceStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	written := repo.streamNamesForEvent(types.EventRouterTrace, eventMetadata{WorkspaceID: "ws-1"})
+	require.ElementsMatch(t, []s2.StreamName{"events/workspaces/ws-1", "events/workspaces/ws-1/router"}, written,
+		"the workspace stream feeds the live SSE; the router stream keeps history dense")
+
+	read, err := repo.resolveEventHistoryStreams(context.Background(), types.EventQuery{WorkspaceID: "ws-1", EventTypes: []string{types.EventRouterTrace}})
+	require.NoError(t, err)
+	require.Equal(t, []s2.StreamName{"events/workspaces/ws-1/router"}, read)
+
+	mixed, err := repo.resolveEventHistoryStreams(context.Background(), types.EventQuery{WorkspaceID: "ws-1", EventTypes: []string{types.EventRouterTrace, types.EventContainerLifecycle}})
+	require.NoError(t, err)
+	require.Equal(t, []s2.StreamName{"events/workspaces/ws-1"}, mixed)
+}
+
 func TestReadLogSeqWindowStopsAtTrimmedPrefixAndTail(t *testing.T) {
 	// Records below 50 were trimmed: S2 clamps the read forward to the first
 	// retained record, so a request for [40, 60) yields records past 60.

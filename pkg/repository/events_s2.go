@@ -647,6 +647,8 @@ func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, quer
 		return addKnown(r.stubStreamName(query.WorkspaceID, query.StubID))
 	case query.WorkspaceID != "" && allComputeEventTypes(query.EventTypes):
 		return addKnown(r.workspaceComputeStreamName(query.WorkspaceID))
+	case query.WorkspaceID != "" && allRouterEventTypes(query.EventTypes):
+		return addKnown(r.workspaceRouterStreamName(query.WorkspaceID))
 	case query.WorkspaceID != "":
 		return addKnown(r.workspaceStreamName(query.WorkspaceID))
 	default:
@@ -662,6 +664,20 @@ func allComputeEventTypes(eventTypes []string) bool {
 	}
 	for _, eventType := range eventTypes {
 		if !strings.HasPrefix(strings.TrimSpace(eventType), "compute.") {
+			return false
+		}
+	}
+	return true
+}
+
+// allRouterEventTypes reports whether the query asks only for router traces,
+// which have their own dense per-workspace stream.
+func allRouterEventTypes(eventTypes []string) bool {
+	if len(eventTypes) == 0 {
+		return false
+	}
+	for _, eventType := range eventTypes {
+		if strings.TrimSpace(eventType) != types.EventRouterTrace {
 			return false
 		}
 	}
@@ -709,29 +725,21 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 	var recordsScanned uint64
 	var scannedFromTail uint64
 	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < scanLimit && uint64(len(response.Events)) < limit {
-		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
-		tailOffsetValue := int64(tailOffset)
-		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			TailOffset: &tailOffsetValue,
-			Count:      &count,
-		})
+		records, tailOffset, err := r.readTailWindow(ctx, streamName, scannedFromTail, tail.Tail.SeqNum, chunkSize)
 		if err != nil {
-			if isS2ReadEmpty(err) {
-				return nil
-			}
 			return fmt.Errorf("read container events from s2 stream %q: %w", streamName, err)
 		}
-		if len(batch.Records) == 0 {
+		if len(records) == 0 {
 			return nil
 		}
-		recordsScanned += uint64(len(batch.Records))
+		recordsScanned += uint64(len(records))
 		scannedFromTail = tailOffset
 
-		for i := len(batch.Records) - 1; i >= 0; i-- {
-			if eventRecordHeadersSkip(batch.Records[i], query) {
+		for i := len(records) - 1; i >= 0; i-- {
+			if eventRecordHeadersSkip(records[i], query) {
 				continue
 			}
-			eventRecord, ok := containerEventRecordFromS2(batch.Records[i], query, response)
+			eventRecord, ok := containerEventRecordFromS2(records[i], query, response)
 			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
 				continue
 			}
@@ -864,29 +872,21 @@ func (r *S2EventRepository) readEventHistoryStreamFromTail(ctx context.Context, 
 	var recordsScanned uint64
 	var scannedFromTail uint64
 	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < scanLimit && uint64(len(response.Events)) < limit {
-		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
-		tailOffsetValue := int64(tailOffset)
-		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			TailOffset: &tailOffsetValue,
-			Count:      &count,
-		})
+		records, tailOffset, err := r.readTailWindow(ctx, streamName, scannedFromTail, tail.Tail.SeqNum, chunkSize)
 		if err != nil {
-			if isS2ReadEmpty(err) {
-				return nil
-			}
 			return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
 		}
-		if len(batch.Records) == 0 {
+		if len(records) == 0 {
 			return nil
 		}
-		recordsScanned += uint64(len(batch.Records))
+		recordsScanned += uint64(len(records))
 		scannedFromTail = tailOffset
 
-		for i := len(batch.Records) - 1; i >= 0; i-- {
-			if eventRecordHeadersSkip(batch.Records[i], query) {
+		for i := len(records) - 1; i >= 0; i-- {
+			if eventRecordHeadersSkip(records[i], query) {
 				continue
 			}
-			eventRecord, ok := containerEventRecordFromS2(batch.Records[i], query, &types.ContainerEventsResponse{})
+			eventRecord, ok := containerEventRecordFromS2(records[i], query, &types.ContainerEventsResponse{})
 			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
 				continue
 			}
@@ -898,6 +898,29 @@ func (r *S2EventRepository) readEventHistoryStreamFromTail(ctx context.Context, 
 		}
 	}
 	return nil
+}
+
+// readTailWindow returns the next chunk of a newest-first scan, oldest record
+// first, plus the tail offset the scan has now reached. A unary S2 read is
+// capped at 1 MiB as well as by count, so a window of large records (router
+// traces carry whole prompts) can need several requests; a single tail-offset
+// read would return only the oldest records that fit and the scan would then
+// step past the newest ones as if it had seen them.
+func (r *S2EventRepository) readTailWindow(ctx context.Context, streamName s2.StreamName, scannedFromTail, tailSeqNum, chunkSize uint64) ([]s2.SequencedRecord, uint64, error) {
+	read := func(ctx context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		return r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{SeqNum: &seqNum, Count: &count})
+	}
+	return readTailWindow(ctx, read, scannedFromTail, tailSeqNum, chunkSize)
+}
+
+func readTailWindow(ctx context.Context, read s2SeqReader, scannedFromTail, tailSeqNum, chunkSize uint64) ([]s2.SequencedRecord, uint64, error) {
+	tailOffset, count := nextTailReadWindow(scannedFromTail, tailSeqNum, chunkSize)
+	lo := tailSeqNum - tailOffset
+	records, err := readLogSeqWindow(ctx, read, lo, lo+count)
+	if err != nil {
+		return nil, tailOffset, err
+	}
+	return records, tailOffset, nil
 }
 
 type s2EventStream struct {
@@ -1256,6 +1279,49 @@ func (r *S2EventRepository) appendRecordsForWrite(streamName s2.StreamName, reco
 }
 
 func appendS2RecordsForWrite(basin *s2.BasinClient, streamName s2.StreamName, records []s2.AppendRecord) error {
+	batches, oversized := splitS2AppendBatches(records)
+	if oversized > 0 {
+		log.Warn().Int("records", oversized).Str("stream", string(streamName)).Msg("dropping s2 records larger than the append limit")
+	}
+	for _, batch := range batches {
+		if err := appendS2Batch(basin, streamName, batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// splitS2AppendBatches cuts records into appends S2 accepts: at most
+// MaxBatchRecords records and MaxBatchMeteredBytes per append. The writer
+// coalesces events by count alone, and a few router traces (each carrying a
+// whole prompt) exceed the byte cap together even though every one of them
+// fits on its own. Records that cannot fit any append are counted and left
+// out rather than sinking the whole batch.
+func splitS2AppendBatches(records []s2.AppendRecord) ([][]s2.AppendRecord, int) {
+	var batches [][]s2.AppendRecord
+	var current []s2.AppendRecord
+	var currentBytes uint64
+	oversized := 0
+	for _, record := range records {
+		size := s2.MeteredPayloadBytes(record)
+		if size > uint64(s2.MaxBatchMeteredBytes) {
+			oversized++
+			continue
+		}
+		if len(current) > 0 && (len(current) >= s2.MaxBatchRecords || currentBytes+size > uint64(s2.MaxBatchMeteredBytes)) {
+			batches = append(batches, current)
+			current, currentBytes = nil, 0
+		}
+		current = append(current, record)
+		currentBytes += size
+	}
+	if len(current) > 0 {
+		batches = append(batches, current)
+	}
+	return batches, oversized
+}
+
+func appendS2Batch(basin *s2.BasinClient, streamName s2.StreamName, records []s2.AppendRecord) error {
 	appendRecords := func() error {
 		ctx, cancel := s2EventWriteContext()
 		defer cancel()
@@ -1411,6 +1477,13 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 		if metadata.AppID != "" {
 			add(r.appNamespaceStreamName(metadata.WorkspaceID, metadata.AppID))
 		}
+	}
+	if eventType == types.EventRouterTrace && metadata.WorkspaceID != "" {
+		// The workspace stream carries the live SSE; the router stream keeps
+		// trace history dense so a page load does not page through container
+		// metrics to find a handful of turns.
+		add(r.workspaceStreamName(metadata.WorkspaceID))
+		add(r.workspaceRouterStreamName(metadata.WorkspaceID))
 	}
 	return streams
 }
@@ -1594,6 +1667,13 @@ func (r *S2EventRepository) workspaceStreamName(workspaceID string) s2.StreamNam
 // shared workspace stream (which also carries container metrics/lifecycle).
 func (r *S2EventRepository) workspaceComputeStreamName(workspaceID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/compute", r.streamPrefix, eventStreamPart(workspaceID)))
+}
+
+// workspaceRouterStreamName holds only router traces (one record per agent
+// turn) so trace history is a short read rather than a scan of the workspace
+// stream.
+func (r *S2EventRepository) workspaceRouterStreamName(workspaceID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/router", r.streamPrefix, eventStreamPart(workspaceID)))
 }
 
 func (r *S2EventRepository) workspacePoolMetricsStreamName(workspaceID string) s2.StreamName {

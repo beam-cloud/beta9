@@ -113,6 +113,9 @@ func (r *EventClientRepo) createEventObject(eventName string, schemaVersion stri
 	metadata := eventMetadataFromData(data)
 	event := cloudevents.NewEvent()
 	event.SetID(objectId)
+	if trace, ok := data.(types.EventRouterTraceSchema); ok && trace.Trace.ID != "" {
+		event.SetID(trace.Trace.ID)
+	}
 	event.SetSource("beta9-cluster")
 	event.SetType(eventName)
 	event.SetSpecVersion(schemaVersion)
@@ -169,6 +172,13 @@ func eventTimeForData(data interface{}) time.Time {
 	case types.EventPlatformCacheSchema:
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
+		}
+	case types.EventRouterTraceSchema:
+		if !d.Trace.End.IsZero() {
+			return d.Trace.End
+		}
+		if !d.Trace.Start.IsZero() {
+			return d.Trace.Start
 		}
 	}
 
@@ -333,6 +343,11 @@ func (r *EventClientRepo) PushContainerEvent(event types.EventContainerEventSche
 	event.Reason = types.NormalizeEventReason(event.Reason)
 
 	r.pushEvent(types.EventContainerEvent, types.EventContainerEventSchemaVersion, event)
+}
+
+// PushRouterTrace records one harness turn on the workspace event stream.
+func (r *EventClientRepo) PushRouterTrace(workspaceID string, trace types.Trace) {
+	r.pushEvent(types.EventRouterTrace, types.EventRouterTraceSchemaVersion, types.EventRouterTraceSchema{WorkspaceID: workspaceID, Trace: trace})
 }
 
 func (r *EventClientRepo) PushContainerLogEvent(entry types.EventContainerLogSchema) {
@@ -1167,6 +1182,8 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 	case types.EventWorkerLifecycleSchema:
 		return eventMetadata{WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName}
 	case types.EventGatewayEndpointSchema:
+		return eventMetadata{WorkspaceID: d.WorkspaceID}
+	case types.EventRouterTraceSchema:
 		return eventMetadata{WorkspaceID: d.WorkspaceID}
 	case types.EventComputeSchema:
 		return eventMetadata{
