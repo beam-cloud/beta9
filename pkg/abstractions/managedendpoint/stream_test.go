@@ -303,16 +303,43 @@ func TestRelayStreamDoesNotCountCommentOrEmptyDataAsOutput(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), ": engine keepalive")
 }
 
-func TestTokenUsageRejectsInvalidCounters(t *testing.T) {
-	for _, body := range []string{
-		`{"usage":{"prompt_tokens":-1}}`,
-		`{"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":2}}}`,
-		`{"usage":{"completion_tokens":-3}}`,
-		`{"usage":{"prompt_tokens":9007199254740992}}`,
+// tokenUsage accepts one complete counter format (OpenAI prompt/completion or
+// input/output) and reports nothing for a missing, malformed or mixed one.
+func TestTokenUsageDecodesOneCompleteCounterFormat(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want *types.Work
+	}{
+		{`{"usage":{"prompt_tokens":10,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":4}}}`, &types.Work{PromptTokens: 10, CompletionTokens: 3, CachedTokens: 4}},
+		{`{"usage":{"prompt_tokens":10}}`, &types.Work{PromptTokens: 10}},
+		{`{"usage":{"prompt_tokens":0,"completion_tokens":0}}`, &types.Work{}},
+		{`{"usage":{"prompt_tokens":10,"prompt_tokens_details":null}}`, &types.Work{PromptTokens: 10}},
+		{`{"usage":{"input_tokens":10,"output_tokens":3}}`, &types.Work{PromptTokens: 10, CompletionTokens: 3}},
+		{`{"usage":{"input_tokens":0,"output_tokens":0}}`, &types.Work{}},
+		// No usage, or no known counter.
+		{`{}`, nil},
+		{`{"usage":null}`, nil},
+		{`{"usage":[]}`, nil},
+		{`{"usage":{}}`, nil},
+		{`{"usage":{"total_tokens":10}}`, nil},
+		// Null, non-integer or out-of-range counters.
+		{`{"usage":{"prompt_tokens":null,"completion_tokens":1}}`, nil},
+		{`{"usage":{"input_tokens":null,"output_tokens":0}}`, nil},
+		{`{"usage":{"input_tokens":1.5,"output_tokens":0}}`, nil},
+		{`{"usage":{"input_tokens":"1","output_tokens":0}}`, nil},
+		{`{"usage":{"prompt_tokens":-1}}`, nil},
+		{`{"usage":{"input_tokens":1,"output_tokens":-1}}`, nil},
+		{`{"usage":{"prompt_tokens":9007199254740992}}`, nil},
+		{`{"usage":{"input_tokens":9007199254740992,"output_tokens":0}}`, nil},
+		{`{"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":null}}}`, nil},
+		{`{"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":2}}}`, nil},
+		// Input/output needs both counters and cannot mix with the OpenAI fields.
+		{`{"usage":{"input_tokens":1}}`, nil},
+		{`{"usage":{"output_tokens":0}}`, nil},
+		{`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens":1}}`, nil},
+		{`{"usage":{"input_tokens":1,"output_tokens":0,"completion_tokens":null}}`, nil},
+		{`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens_details":{"cached_tokens":1}}}`, nil},
 	} {
-		require.Nil(t, tokenUsage([]byte(body)), body)
+		require.Equal(t, tc.want, tokenUsage([]byte(tc.body)), tc.body)
 	}
-	w := tokenUsage([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":4}}}`))
-	require.NotNil(t, w)
-	require.Equal(t, types.Work{PromptTokens: 10, CompletionTokens: 3, CachedTokens: 4}, *w)
 }

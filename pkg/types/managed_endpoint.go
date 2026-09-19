@@ -765,7 +765,8 @@ func (p Pricing) Price(w Work) (Cost, error) {
 			if err != nil {
 				return Cost{}, err
 			}
-			amount.Mul(rate, big.NewRat(l.quantity*1_000_000, 1))
+			// A valid counter times 1e6 can overflow int64; scale in big.Rat.
+			amount.SetInt64(l.quantity).Mul(amount, rate).Mul(amount, big.NewRat(1_000_000, 1))
 		}
 		whole := new(big.Int).Quo(amount.Num(), amount.Denom())
 		if !whole.IsInt64() {

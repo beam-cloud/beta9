@@ -228,24 +228,62 @@ func stampSSE(line []byte, requestID string, toolChoices map[int]bool) []byte {
 	return append(append([]byte("data: "), out...), '\n')
 }
 
-// tokenUsage reads the OpenAI usage object from a response body; nil when
-// the body carries none.
+// usageCounter distinguishes an omitted counter from an explicit zero and
+// rejects null or non-integer values at the JSON boundary.
+type usageCounter struct {
+	value   int64
+	present bool
+}
+
+func (c *usageCounter) UnmarshalJSON(data []byte) error {
+	var value *int64
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if value == nil {
+		return errors.New("token count must be a non-null integer")
+	}
+	*c = usageCounter{value: *value, present: true}
+	return nil
+}
+
+// tokenUsage maps either prompt/completion or input/output usage into billing
+// counters. A missing, malformed or ambiguous usage object is not reported work.
 func tokenUsage(body []byte) *types.Work {
 	var env struct {
 		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			Details          *struct {
-				CachedTokens int64 `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
+			PromptTokens        usageCounter    `json:"prompt_tokens"`
+			CompletionTokens    usageCounter    `json:"completion_tokens"`
+			InputTokens         usageCounter    `json:"input_tokens"`
+			OutputTokens        usageCounter    `json:"output_tokens"`
+			PromptTokensDetails json.RawMessage `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil || env.Usage == nil {
 		return nil
 	}
-	w := &types.Work{PromptTokens: env.Usage.PromptTokens, CompletionTokens: env.Usage.CompletionTokens}
-	if env.Usage.Details != nil {
-		w.CachedTokens = env.Usage.Details.CachedTokens
+	usage := env.Usage
+	prompt, completion := usage.PromptTokens, usage.CompletionTokens
+	switch {
+	case usage.InputTokens.present || usage.OutputTokens.present:
+		// Both counters are required, and the two formats cannot be mixed.
+		if !usage.InputTokens.present || !usage.OutputTokens.present || prompt.present || completion.present || usage.PromptTokensDetails != nil {
+			return nil
+		}
+		prompt, completion = usage.InputTokens, usage.OutputTokens
+	case !prompt.present && !completion.present:
+		return nil
+	}
+	// Embedding responses may omit completion usage; an omitted counter is zero.
+	w := &types.Work{PromptTokens: prompt.value, CompletionTokens: completion.value}
+	if usage.PromptTokensDetails != nil {
+		var details struct {
+			CachedTokens usageCounter `json:"cached_tokens"`
+		}
+		if json.Unmarshal(usage.PromptTokensDetails, &details) != nil {
+			return nil
+		}
+		w.CachedTokens = details.CachedTokens.value
 	}
 	if !w.Valid() {
 		return nil

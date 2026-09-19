@@ -202,8 +202,8 @@ func (s *Service) reviewFleet(r *review) {
 			r.fail("config.yaml: %s is not an app in the repo", id)
 			continue
 		}
-		if entry.Enabled && entry.Pricing.PerToken() && app.Spec.Kind != types.EndpointKindLLM && app.Spec.Kind != types.EndpointKindEmbedding {
-			r.fail("config.yaml: %s: token pricing needs an llm or embedding engine; %s apps are priced per request", id, app.Spec.Kind)
+		if entry.Enabled && entry.Pricing.PerToken() && app.Spec.Kind != types.EndpointKindLLM && app.Spec.Kind != types.EndpointKindEmbedding && app.Spec.Kind != types.EndpointKindCustom {
+			r.fail("config.yaml: %s: token pricing needs an llm, embedding or custom engine reporting usage; %s apps are priced per request", id, app.Spec.Kind)
 		}
 		if entry.Enabled && entry.OpenRouter != nil {
 			if err := entry.OpenRouter.ValidateFor(app.Spec.Kind, entry.Catalog, entry.Pricing); err != nil {
