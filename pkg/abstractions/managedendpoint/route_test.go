@@ -694,6 +694,51 @@ func TestHostedSlotLossDuringJSONBodyReturns503(t *testing.T) {
 // A JSON response is billed from the usage it reports, in either counter
 // format, and served with its original counters plus the cost. Token pricing
 // without usable usage is an unbilled 502; request pricing ignores usage.
+func TestDecisionKindServesSystemOneVerbatim(t *testing.T) {
+	s := newServiceForTest(t)
+	pricing := types.Pricing{PromptTokens: "0.000000021", CompletionTokens: "0"}
+	app := seedApp(t, s, "jev/laya", types.EndpointKindDecision, pricing)
+	replica := seedReplica(t, s, app)
+	require.True(t, serves(app, types.EndpointRouteSystemOne))
+	require.True(t, serves(app, types.EndpointRouteInvoke))
+	require.False(t, serves(app, types.EndpointRouteChatCompletions))
+	require.False(t, serves(seedApp(t, s, "acme/custom", types.EndpointKindCustom, pricing), types.EndpointRouteSystemOne))
+	assert.Equal(t, "/v1/systemone", protocols[types.EndpointRouteSystemOne].upstream)
+	assert.False(t, types.EndpointRouteSystemOne.ModelScoped(), "the model is named in the body, as TypeSafe clients send it")
+
+	// TypeSafe's response contract: model, answers and usage, nothing else.
+	body := `{"model":"jev/laya","answers":{"refund":{"type":"noul","noul":0.82}},"usage":{"input_tokens":1000,"output_tokens":0}}`
+	for _, tc := range []struct {
+		route    types.EndpointRoute
+		verbatim bool
+	}{{types.EndpointRouteSystemOne, true}, {types.EndpointRouteInvoke, false}} {
+		t.Run(string(tc.route), func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			ctx := &auth.HttpAuthContext{Context: echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/"+string(tc.route), nil), rec), AuthInfo: userInfo}
+			now := time.Now()
+			rq := &routeRequest{
+				ctx: ctx, auth: userInfo, route: tc.route, proto: protocols[tc.route], requestID: "req-" + string(tc.route), startedAt: now,
+				charge: &types.Charge{ID: "req-" + string(tc.route), WorkspaceID: "user-ws", AppID: app.Spec.ID, Pricing: pricing, AcceptedAt: now},
+			}
+			response := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+			require.NoError(t, newRouter(s).proxyJSON(context.Background(), rq, app, replica, response, "application/json"))
+			assert.Equal(t, http.StatusOK, rec.Code)
+			c := charge(t, s, rq.requestID)
+			assert.Equal(t, types.Work{Requests: 1, PromptTokens: 1000}, c.Work, "billed from input_tokens on both routes")
+			assert.Equal(t, int64(21), c.Cost.MicroUSD)
+			if tc.verbatim {
+				assert.Equal(t, body, rec.Body.String(), "systemone forwards the model server's response unmodified")
+				return
+			}
+			var served map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &served))
+			assert.Contains(t, served, "id")
+			assert.Contains(t, served, "provider")
+			assert.Contains(t, string(served["usage"]), `"cost"`)
+		})
+	}
+}
+
 func TestProxyJSONBillsReportedUsage(t *testing.T) {
 	tokens := types.Pricing{PromptTokens: "0.000000021", CompletionTokens: "0"}
 	flat := types.Pricing{Request: "0.002"}

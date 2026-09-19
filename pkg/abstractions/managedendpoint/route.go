@@ -37,21 +37,25 @@ const (
 	headerReplicaServed = "X-Beam-Replica"
 )
 
-// protocol is one OpenAI-style path: where a model server serves it and
-// whether it carries LLM usage (affinity routing; usage in the final chunk).
+// protocol is one path a model server serves: where it serves it, whether it
+// carries LLM usage (affinity routing; usage in the final chunk), and whether
+// the response is a foreign contract the gateway must forward verbatim
+// instead of decorating with id, provider and cost.
 type protocol struct {
 	upstream string
 	llm      bool
+	verbatim bool
 }
 
 var protocols = map[types.EndpointRoute]protocol{
-	types.EndpointRouteChatCompletions:  {"/v1/chat/completions", true},
-	types.EndpointRouteCompletions:      {"/v1/completions", true},
-	types.EndpointRouteEmbeddings:       {"/v1/embeddings", false},
-	types.EndpointRouteImageGenerations: {"/v1/images/generations", false},
-	types.EndpointRouteImageEdits:       {"/v1/images/edits", false},
-	types.EndpointRouteAudioSpeech:      {"/v1/audio/speech", false},
-	types.EndpointRouteInvoke:           {"/invoke", false},
+	types.EndpointRouteChatCompletions:  {"/v1/chat/completions", true, false},
+	types.EndpointRouteCompletions:      {"/v1/completions", true, false},
+	types.EndpointRouteEmbeddings:       {"/v1/embeddings", false, false},
+	types.EndpointRouteImageGenerations: {"/v1/images/generations", false, false},
+	types.EndpointRouteImageEdits:       {"/v1/images/edits", false, false},
+	types.EndpointRouteAudioSpeech:      {"/v1/audio/speech", false, false},
+	types.EndpointRouteSystemOne:        {"/v1/systemone", false, true},
+	types.EndpointRouteInvoke:           {"/invoke", false, false},
 }
 
 // kindRoutes are the protocols each engine kind serves besides invoke.
@@ -59,6 +63,7 @@ var kindRoutes = map[types.EndpointKind][]types.EndpointRoute{
 	types.EndpointKindLLM:       {types.EndpointRouteChatCompletions, types.EndpointRouteCompletions},
 	types.EndpointKindEmbedding: {types.EndpointRouteEmbeddings},
 	types.EndpointKindImage:     {types.EndpointRouteImageGenerations, types.EndpointRouteImageEdits},
+	types.EndpointKindDecision:  {types.EndpointRouteSystemOne},
 }
 
 // serves reports whether an app's engine kind serves a route.

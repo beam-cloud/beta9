@@ -34,6 +34,11 @@ const (
 	applyLockTTL      = time.Minute
 )
 
+// tokenPricedKinds report token usage in their responses and may be priced per token.
+var tokenPricedKinds = []types.EndpointKind{
+	types.EndpointKindLLM, types.EndpointKindEmbedding, types.EndpointKindCustom, types.EndpointKindDecision,
+}
+
 // ApplyRepo validates one commit of the endpoints repo and, unless dry_run,
 // records deploy outcomes, applies config.yaml and retires apps whose
 // directory is gone. Validation problems are returned in errors. Commits
@@ -202,8 +207,8 @@ func (s *Service) reviewFleet(r *review) {
 			r.fail("config.yaml: %s is not an app in the repo", id)
 			continue
 		}
-		if entry.Enabled && entry.Pricing.PerToken() && app.Spec.Kind != types.EndpointKindLLM && app.Spec.Kind != types.EndpointKindEmbedding && app.Spec.Kind != types.EndpointKindCustom {
-			r.fail("config.yaml: %s: token pricing needs an llm, embedding or custom engine reporting usage; %s apps are priced per request", id, app.Spec.Kind)
+		if entry.Enabled && entry.Pricing.PerToken() && !slices.Contains(tokenPricedKinds, app.Spec.Kind) {
+			r.fail("config.yaml: %s: token pricing needs an engine reporting usage (%v); %s apps are priced per request", id, tokenPricedKinds, app.Spec.Kind)
 		}
 		if entry.Enabled && entry.OpenRouter != nil {
 			if err := entry.OpenRouter.ValidateFor(app.Spec.Kind, entry.Catalog, entry.Pricing); err != nil {
