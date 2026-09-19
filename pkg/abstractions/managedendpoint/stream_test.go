@@ -307,9 +307,12 @@ func TestTokenUsageRejectsInvalidCounters(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
 		`{"usage":null}`,
+		`{"usage":1}`,
+		`{"usage":[]}`,
 		`{"usage":{}}`,
 		`{"usage":{"total_tokens":10}}`,
 		`{"usage":{"prompt_tokens":null}}`,
+		`{"usage":{"prompt_tokens":null,"completion_tokens":1}}`,
 		`{"usage":{"prompt_tokens":1,"completion_tokens":null}}`,
 		`{"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":null}}}`,
 		`{"usage":{"prompt_tokens":-1}}`,
@@ -331,6 +334,8 @@ func TestTokenUsageRejectsInvalidCounters(t *testing.T) {
 		`{"usage":{"input_tokens":1,"output_tokens":0,"completion_tokens":2}}`,
 		`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens":null}}`,
 		`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens_details":{"cached_tokens":1}}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens_details":null}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens_details":{}}}`,
 	} {
 		require.Nil(t, tokenUsage([]byte(body)), body)
 	}
