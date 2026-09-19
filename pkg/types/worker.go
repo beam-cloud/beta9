@@ -24,6 +24,8 @@ const (
 	WorkerSandboxProcessManagerPort          int32         = 7111
 	WorkerSandboxProcessManagerWorkerPath    string        = "/usr/local/bin/goproc"
 	WorkerSandboxProcessManagerContainerPath string        = "/usr/bin/goproc"
+	WorkerSandboxMemoryLimitWorkerPath       string        = "/usr/local/bin/cgroup-memory"
+	WorkerSandboxMemoryLimitContainerPath    string        = "/usr/bin/cgroup-memory"
 )
 
 const (

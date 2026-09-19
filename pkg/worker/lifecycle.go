@@ -1604,6 +1604,20 @@ func validateContainerSpec(spec *specs.Spec) error {
 	return nil
 }
 
+func cancelAndWaitForContainerSetup(cancel context.CancelFunc, setupDone <-chan struct{}) {
+	cancel()
+	<-setupDone
+}
+
+func waitForContainerStarted(ctx context.Context, started <-chan int) (int, bool) {
+	select {
+	case pid, ok := <-started:
+		return pid, ok
+	case <-ctx.Done():
+		return 0, false
+	}
+}
+
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	defer s.containerWg.Done()
@@ -1790,6 +1804,20 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				"nodev",
 			},
 		})
+		if s.sandboxMemoryLimitRequired(request, instance) {
+			spec.Mounts = append(spec.Mounts, specs.Mount{
+				Type:        "bind",
+				Source:      types.WorkerSandboxMemoryLimitWorkerPath,
+				Destination: types.WorkerSandboxMemoryLimitContainerPath,
+				Options: []string{
+					"ro",
+					"rbind",
+					"rprivate",
+					"nosuid",
+					"nodev",
+				},
+			})
+		}
 	}
 
 	// Add Docker capabilities if enabled for sandbox containers.
@@ -1856,16 +1884,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
+	sandboxSetupDone := make(chan struct{})
 	defer func() {
 		// Close in reverse order of dependency
 		close(checkpointPIDChan)
 		close(monitorPIDChan)
 		close(startedChan)
 	}()
+	// A runtime exit can race sandbox setup. Join the setup goroutine before
+	// finalization deletes the instance so late readiness handling cannot
+	// reinsert state for a container that is already gone.
+	defer cancelAndWaitForContainerSetup(cancel, sandboxSetupDone)
 
 	go func() {
+		defer close(sandboxSetupDone)
 		// When the process starts monitor it and potentially checkpoint it
-		pid, ok := <-startedChan
+		pid, ok := waitForContainerStarted(ctx, startedChan)
 		if !ok {
 			return
 		}
@@ -1881,9 +1915,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			if restoringRuntimeCheckpoint {
 				s.signalRestoredSandboxProcessManager(ctx, request, instance.Runtime)
 			}
+			memoryLimitRequired := s.sandboxMemoryLimitRequired(request, instance)
+			setupCtx := ctx
+			setupCancel := func() {}
+			if memoryLimitRequired {
+				setupCtx, setupCancel = context.WithTimeout(ctx, sandboxRequiredSetupTimeout)
+			}
+			defer setupCancel()
 
 			phaseStart := time.Now()
-			processManagerClient, processManagerReady, processManagerStats := s.waitForProcessManager(ctx, containerId, instance)
+			processManagerClient, processManagerReady, processManagerStats := s.waitForProcessManager(setupCtx, containerId, instance)
 			metrics.RecordWorkerStartupPhase("sandbox_process_manager_ready", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", processManagerReady)})
 			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxProcessManagerReady, phaseStart, processManagerReady, processManagerStats.attrs())
 
@@ -1904,12 +1945,35 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 					instance = fresh
 				}
 			}
+			if processManagerReady {
+				phaseStart = time.Now()
+				err := s.exposeSandboxMemoryLimit(setupCtx, request, instance, processManagerClient)
+				metrics.RecordWorkerStartupPhase("sandbox_memory_limit_visible", time.Since(phaseStart), request, map[string]string{
+					"success": fmt.Sprintf("%t", err == nil),
+				})
+				if err != nil {
+					log.Error().Err(err).Str("container_id", containerId).Msg("failed to expose sandbox memory limit")
+					processManagerReady = false
+				}
+			}
 			instance.SandboxProcessManager = processManagerClient
 			instance.signalProcessManagerReadiness(processManagerReady)
+			if memoryLimitRequired && !processManagerReady && ctx.Err() == nil {
+				instance.setStopReason(types.StopContainerReasonUnknown)
+			}
 			s.containerInstances.Set(containerId, instance)
 
 			if !processManagerReady {
-				if ctx.Err() == nil {
+				if memoryLimitRequired && ctx.Err() == nil {
+					stopCtx, stopCancel := context.WithTimeout(context.Background(), observedStoppingSignalTimeout)
+					stopErr := s.stopContainerWithoutCheckpointDeferral(stopCtx, containerId, true)
+					stopCancel()
+					if stopErr != nil && !runtimeContainerNotFound(stopErr) {
+						log.Error().Err(stopErr).Str("container_id", containerId).Msg("failed to stop sandbox after required setup failure")
+						s.handleObservedOrphanedContainer(containerId, types.EventSourceWorkerRuntime)
+					}
+					log.Error().Str("container_id", containerId).Msg("failed to initialize sandbox; container was stopped")
+				} else if ctx.Err() == nil {
 					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
 				}
 				return
@@ -2153,30 +2217,47 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	var runtimeStartedPID atomic.Int64
 	runtimeStartedPID.Store(-1)
 
-	// The PID goes to monitoring and the sandbox readiness probe first, so the
-	// process manager comes up while the address map is joined and RUNNING is
-	// published; a failed registration stops the container and cancels both.
+	// The PID goes to monitoring and the sandbox readiness probe first. RUNNING
+	// is published only after the address map and required sandbox setup have
+	// completed; a failed registration or setup never exposes a broken sandbox.
 	var joinAddresses sync.Once
 	var addressesErr error
-	publishRuntimeStarted := func(pid int) {
+	publishRuntimeStarted := func(pid int) bool {
+		startupNotificationPublished := false
 		runtimeStartedPublished.Do(func() {
 			select {
 			case startedChan <- pid:
+				startupNotificationPublished = true
 			case <-ctx.Done():
 			}
 		})
+		if !startupNotificationPublished {
+			return false
+		}
 		joinAddresses.Do(func() {
 			addressesErr = addressesRegistered.wait(ctx)
 		})
 		if errors.Is(addressesErr, context.Canceled) {
-			return
+			return false
 		}
 		if addressesErr != nil {
 			log.Error().Err(addressesErr).Str("container_id", request.ContainerId).Msg("failed to register container network addresses")
 			s.handleObservedContainerStop(request.ContainerId, types.EventSourceWorkerRuntime, false)
-			return
+			return false
+		}
+		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+			current, exists := s.containerInstances.Get(request.ContainerId)
+			if !exists || current == nil {
+				log.Error().Str("container_id", request.ContainerId).Msg("sandbox disappeared before process manager readiness")
+				return false
+			}
+			if !s.waitForSandboxMemoryLimitSetup(ctx, request, current) {
+				log.Error().Str("container_id", request.ContainerId).Msg("sandbox setup failed before container publication")
+				return false
+			}
 		}
 		s.markContainerRunning(ctx, request, startupStartedAt)
+		return true
 	}
 
 	handleRuntimeStarted := func(pid int) {
@@ -2287,7 +2368,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			if restored {
 				finishRuntimeStarted()
 				if restoredPID := int(runtimeStartedPID.Load()); restoredPID > 0 {
-					publishRuntimeStarted(restoredPID)
+					if !publishRuntimeStarted(restoredPID) {
+						return int(types.ContainerExitCodeUnknownError), errors.New("checkpoint restore sandbox setup failed")
+					}
 				} else {
 					return exitCode, fmt.Errorf("checkpoint restore completed without a valid runtime pid")
 				}
