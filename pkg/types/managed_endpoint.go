@@ -765,10 +765,8 @@ func (p Pricing) Price(w Work) (Cost, error) {
 			if err != nil {
 				return Cost{}, err
 			}
-			// Valid counters can exceed MaxInt64/1e6; scale only after
-			// converting to arbitrary precision, before applying the rate.
-			quantity := new(big.Int).Mul(big.NewInt(l.quantity), big.NewInt(1_000_000))
-			amount.Mul(rate, new(big.Rat).SetInt(quantity))
+			// A valid counter times 1e6 can overflow int64; scale in big.Rat.
+			amount.SetInt64(l.quantity).Mul(amount, rate).Mul(amount, big.NewRat(1_000_000, 1))
 		}
 		whole := new(big.Int).Quo(amount.Num(), amount.Denom())
 		if !whole.IsInt64() {

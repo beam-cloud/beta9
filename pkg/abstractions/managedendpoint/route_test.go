@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -688,4 +689,79 @@ func TestHostedSlotLossDuringJSONBodyReturns503(t *testing.T) {
 	stored := charge(t, s, rq.requestID)
 	assert.Equal(t, http.StatusServiceUnavailable, stored.StatusCode, "lease loss is audited once as a 503")
 	assert.Equal(t, types.ChargeVoid, stored.Status)
+}
+
+// A JSON response is billed from the usage it reports, in either counter
+// format, and served with its original counters plus the cost. Token pricing
+// without usable usage is an unbilled 502; request pricing ignores usage.
+func TestProxyJSONBillsReportedUsage(t *testing.T) {
+	tokens := types.Pricing{PromptTokens: "0.000000021", CompletionTokens: "0"}
+	flat := types.Pricing{Request: "0.002"}
+	for _, tc := range []struct {
+		name         string
+		kind         types.EndpointKind
+		pricing      types.Pricing
+		usage        string
+		wantWork     types.Work
+		wantMicro    int64
+		missingUsage bool
+	}{
+		{"custom input/output", types.EndpointKindCustom, tokens, `{"input_tokens":1000,"output_tokens":0}`, types.Work{Requests: 1, PromptTokens: 1000}, 21, false},
+		{"custom explicit zero", types.EndpointKindCustom, tokens, `{"input_tokens":0,"output_tokens":0}`, types.Work{Requests: 1}, 0, false},
+		{"llm prompt/completion", types.EndpointKindLLM, tokens, `{"prompt_tokens":1000,"completion_tokens":2}`, types.Work{Requests: 1, PromptTokens: 1000, CompletionTokens: 2}, 21, false},
+		{"embedding without completion", types.EndpointKindEmbedding, tokens, `{"prompt_tokens":1000}`, types.Work{Requests: 1, PromptTokens: 1000}, 21, false},
+		{"request pricing ignores tokens", types.EndpointKindCustom, flat, `{"input_tokens":1000,"output_tokens":0}`, types.Work{Requests: 1}, 2000, false},
+		{"request pricing needs no usage", types.EndpointKindCustom, flat, `null`, types.Work{Requests: 1}, 2000, false},
+		{"token pricing without usage", types.EndpointKindCustom, tokens, `{"total_tokens":1000}`, types.Work{}, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newServiceForTest(t)
+			app := seedApp(t, s, "acme/decision", tc.kind, tc.pricing)
+			replica := seedReplica(t, s, app)
+			rec := httptest.NewRecorder()
+			ctx := &auth.HttpAuthContext{Context: echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/invoke", nil), rec), AuthInfo: userInfo}
+			now := time.Now()
+			rq := &routeRequest{
+				ctx: ctx, auth: userInfo, requestID: "req-billing", startedAt: now,
+				charge: &types.Charge{ID: "req-billing", WorkspaceID: "user-ws", AppID: app.Spec.ID, Pricing: tc.pricing, AcceptedAt: now},
+			}
+			body := `{"answers":{"a":0.9},"usage":` + tc.usage + `}`
+			response := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+			require.NoError(t, newRouter(s).proxyJSON(context.Background(), rq, app, replica, response, "application/json"))
+
+			c := charge(t, s, rq.requestID)
+			assert.Equal(t, tc.wantWork, c.Work)
+			assert.Equal(t, tc.wantMicro, c.Cost.MicroUSD)
+			metrics, err := s.repo.GetRouteMetrics(context.Background(), app.Spec.ID, replica.GPU, replica.ID, 0, time.Minute)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, metrics.Requests)
+			assert.Equal(t, tc.wantWork.PromptTokens, metrics.PromptTokens)
+			assert.Equal(t, tc.wantMicro, metrics.CostMicroUSD)
+			if tc.missingUsage {
+				assert.Equal(t, http.StatusBadGateway, rec.Code)
+				assert.Contains(t, rec.Body.String(), "missing_usage")
+				assert.Equal(t, types.ChargeVoid, c.Status)
+				assert.Equal(t, types.Usage{}, spend(t, s, "user-ws"))
+				return
+			}
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, types.ChargeSettled, c.Status)
+			assert.Equal(t, c.Usage(), spend(t, s, "user-ws"))
+			var served struct {
+				Answers json.RawMessage            `json:"answers"`
+				Usage   map[string]json.RawMessage `json:"usage"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &served))
+			assert.JSONEq(t, `{"a":0.9}`, string(served.Answers))
+			var original map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal([]byte(tc.usage), &original))
+			if original != nil {
+				var cost float64
+				require.NoError(t, json.Unmarshal(served.Usage["cost"], &cost))
+				assert.Equal(t, costUSD(tc.wantMicro), cost)
+				delete(served.Usage, "cost")
+			}
+			assert.Equal(t, original, served.Usage, "the original counter names and values are preserved")
+		})
+	}
 }

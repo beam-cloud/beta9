@@ -201,28 +201,21 @@ func TestPricingPrice(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Cost{MicroUSD: 50_000, RequestMicroUSD: 50_000}, flat, "flat pricing ignores tokens")
 
-	for _, w := range []Work{{PromptTokens: -1}, {PromptTokens: 1, CachedTokens: 2}, {PromptTokens: MaxUsageCounter + 1}, {PromptTokens: math.MaxInt64}} {
+	for _, w := range []Work{{PromptTokens: -1}, {PromptTokens: 1, CachedTokens: 2}, {PromptTokens: MaxUsageCounter + 1}, {PromptTokens: math.MaxInt64}, {PromptTokens: MaxUsageCounter}} {
 		_, err := Pricing{PromptTokens: "1", CompletionTokens: "0"}.Price(w)
-		require.Error(t, err)
+		require.Error(t, err, "invalid work, or valid work whose cost exceeds the counter limit")
 	}
 	_, err = Pricing{Request: "9007199255"}.Price(Work{Requests: 1})
 	require.Error(t, err, "a charge must fit the usage counters before it can be journaled")
-}
 
-func TestPricingScalesLargeValidCountersWithoutOverflow(t *testing.T) {
-	p := Pricing{PromptTokens: "0.000000021", CompletionTokens: "0"}
-	for _, tc := range []struct{ tokens, microUSD int64 }{
-		{9_223_372_036_855, 193_690_812_774}, // First count whose integer micro scaling overflowed.
-		{MaxUsageCounter, 189_151_184_349_561},
-	} {
-		work := Work{Requests: 1, PromptTokens: tc.tokens}
-		require.True(t, work.Valid())
-		cost, err := p.Price(work)
+	// Any valid counter prices exactly: micro-scaling happens in big.Int, so
+	// counts above MaxInt64/1e6 cannot overflow into a negative charge.
+	cheap := Pricing{PromptTokens: "0.000000021", CompletionTokens: "0"}
+	for tokens, microUSD := range map[int64]int64{9_223_372_036_855: 193_690_812_774, MaxUsageCounter: 189_151_184_349_561} {
+		cost, err := cheap.Price(Work{Requests: 1, PromptTokens: tokens})
 		require.NoError(t, err)
-		require.Equal(t, Cost{MicroUSD: tc.microUSD, PromptMicroUSD: tc.microUSD}, cost)
+		require.Equal(t, Cost{MicroUSD: microUSD, PromptMicroUSD: microUSD}, cost)
 	}
-	_, err := (Pricing{PromptTokens: "1", CompletionTokens: "0"}).Price(Work{PromptTokens: MaxUsageCounter})
-	require.Error(t, err, "a valid counter may still exceed the maximum monetary amount")
 }
 
 func TestChargeSettlesOnceFromReportedWork(t *testing.T) {
