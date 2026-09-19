@@ -151,6 +151,17 @@
 			]
 		},
 		{
+			"destination": "/sys/fs/cgroup",
+			"type": "cgroup",
+			"source": "cgroup",
+			"options": [
+				"nosuid",
+				"noexec",
+				"nodev",
+				"relatime"
+			]
+		},
+		{
 			"destination": "/usr/bin/beta9",
 			"type": "bind",
 			"source": "/usr/local/bin/beta9",
