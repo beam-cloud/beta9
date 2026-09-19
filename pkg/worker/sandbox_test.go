@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
-	betaruntime "github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
@@ -309,119 +308,6 @@ func TestNewProcessManagerClientKeepsRetryableErrorWhenFallbackFailsHard(t *test
 
 func TestDockerSandboxStartupCleanupRemovesStalePidFiles(t *testing.T) {
 	require.Equal(t, "rm -f /var/run/docker.pid /var/run/docker/containerd/containerd.pid", dockerSandboxStartupCleanupScript())
-}
-
-func TestSandboxMemoryLimitBytesUsesRequestedMiB(t *testing.T) {
-	limitBytes, err := sandboxMemoryLimitBytes(16 * 1024)
-	require.NoError(t, err)
-	require.Equal(t, int64(17179869184), limitBytes)
-
-	_, err = sandboxMemoryLimitBytes(0)
-	require.ErrorContains(t, err, "invalid sandbox memory request")
-}
-
-func TestSandboxMemoryLimitRequiredOnlyForEnforcedGvisor(t *testing.T) {
-	request := &types.ContainerRequest{Memory: 256}
-	gvisor := &ContainerInstance{Runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
-	runc := &ContainerInstance{Runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
-
-	enforced := &Worker{config: types.AppConfig{Worker: types.WorkerConfig{
-		ContainerResourceLimits: types.ContainerResourceLimitsConfig{MemoryEnforced: true},
-	}}}
-	notEnforced := &Worker{}
-
-	require.True(t, enforced.sandboxMemoryLimitRequired(request, gvisor))
-	require.False(t, enforced.sandboxMemoryLimitRequired(request, runc))
-	require.False(t, notEnforced.sandboxMemoryLimitRequired(request, gvisor))
-}
-
-func TestWaitForSandboxMemoryLimitSetupStopsWhenRuntimeExits(t *testing.T) {
-	request := &types.ContainerRequest{Memory: 256}
-	rt := &mockRuntime{
-		name: types.ContainerRuntimeGvisor.String(),
-		state: func(context.Context, string) (betaruntime.State, error) {
-			return betaruntime.State{Status: types.RuncContainerStatusStopped}, nil
-		},
-	}
-	instance := &ContainerInstance{Id: "sandbox-exited", Runtime: rt}
-	instance.initializeProcessManagerReadiness()
-	worker := &Worker{config: types.AppConfig{Worker: types.WorkerConfig{
-		ContainerResourceLimits: types.ContainerResourceLimitsConfig{MemoryEnforced: true},
-	}}}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	started := time.Now()
-
-	require.False(t, worker.waitForSandboxMemoryLimitSetup(ctx, request, instance))
-	require.Less(t, time.Since(started), 500*time.Millisecond)
-}
-
-func TestWaitForSandboxMemoryLimitSetupAcceptsSuccessfulReadiness(t *testing.T) {
-	request := &types.ContainerRequest{Memory: 256}
-	instance := &ContainerInstance{
-		Id:      "sandbox-ready",
-		Runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()},
-	}
-	instance.initializeProcessManagerReadiness()
-	instance.signalProcessManagerReadiness(true)
-	worker := &Worker{config: types.AppConfig{Worker: types.WorkerConfig{
-		ContainerResourceLimits: types.ContainerResourceLimitsConfig{MemoryEnforced: true},
-	}}}
-
-	require.True(t, worker.waitForSandboxMemoryLimitSetup(context.Background(), request, instance))
-}
-
-func TestWaitForSandboxMemoryLimitSetupToleratesInitialRuntimeStateRace(t *testing.T) {
-	tests := []struct {
-		name         string
-		initialState func(string) (betaruntime.State, error)
-	}{
-		{
-			name: "container not found before runsc publishes state",
-			initialState: func(containerID string) (betaruntime.State, error) {
-				return betaruntime.State{}, betaruntime.ErrContainerNotFound{ContainerID: containerID}
-			},
-		},
-		{
-			name: "created before runsc reports running",
-			initialState: func(string) (betaruntime.State, error) {
-				return betaruntime.State{Status: types.RuncContainerStatusCreated}, nil
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			request := &types.ContainerRequest{Memory: 256}
-			stateCalls := 0
-			rt := &mockRuntime{
-				name: types.ContainerRuntimeGvisor.String(),
-				state: func(_ context.Context, containerID string) (betaruntime.State, error) {
-					stateCalls++
-					if stateCalls == 1 {
-						return tt.initialState(containerID)
-					}
-					return betaruntime.State{Status: types.RuncContainerStatusRunning}, nil
-				},
-			}
-			instance := &ContainerInstance{Id: "sandbox-starting", Runtime: rt}
-			instance.initializeProcessManagerReadiness()
-			worker := &Worker{config: types.AppConfig{Worker: types.WorkerConfig{
-				ContainerResourceLimits: types.ContainerResourceLimitsConfig{MemoryEnforced: true},
-			}}}
-
-			go func() {
-				time.Sleep(350 * time.Millisecond)
-				instance.signalProcessManagerReadiness(true)
-			}()
-
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			require.True(t, worker.waitForSandboxMemoryLimitSetup(ctx, request, instance))
-			require.GreaterOrEqual(t, stateCalls, 2)
-		})
-	}
 }
 
 func TestDockerSandboxShutdownScriptPreservesInnerContainers(t *testing.T) {

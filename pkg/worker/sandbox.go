@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"sort"
 	"strconv"
@@ -33,9 +32,6 @@ const (
 	goprocMaxBackoff              = 15 * time.Millisecond
 	goprocBackoffMultiplier       = 1.5
 	sandboxSetupCommandTimeout    = 10 * time.Second
-	sandboxSetupStatePollInterval = 100 * time.Millisecond
-	sandboxSetupRuntimeStateGrace = 5 * time.Second
-	sandboxRequiredSetupTimeout   = 60 * time.Second
 	dockerDaemonStartupTimeout    = 30 * time.Second
 	dockerDaemonReadyPollInterval = 1 * time.Second
 	dockerInfoCommandTimeout      = 2 * time.Second
@@ -225,114 +221,6 @@ func (s *Worker) stopDockerSandbox(containerId string, instance *ContainerInstan
 
 func runSandboxShell(ctx context.Context, manager *goproc.GoProcClient, name, script string) error {
 	return runSandboxProcessManagerCommand(ctx, manager, []string{"sh", "-c", script}, "/", nil, name)
-}
-
-// sandboxMemoryLimitRequired identifies sandboxes whose synthetic gVisor
-// cgroup limit must be narrowed to the application's requested memory.
-func (s *Worker) sandboxMemoryLimitRequired(request *types.ContainerRequest, instance *ContainerInstance) bool {
-	return request != nil && instance != nil && instance.Runtime != nil &&
-		instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() &&
-		s.memoryLimitsEnforced(request)
-}
-
-func sandboxMemoryLimitBytes(memoryMiB int64) (int64, error) {
-	const bytesPerMiB int64 = 1024 * 1024
-	if memoryMiB <= 0 || memoryMiB > math.MaxInt64/bytesPerMiB {
-		return 0, fmt.Errorf("invalid sandbox memory request: %d MiB", memoryMiB)
-	}
-	return memoryMiB * bytesPerMiB, nil
-}
-
-func (s *Worker) waitForSandboxMemoryLimitSetup(ctx context.Context, request *types.ContainerRequest, instance *ContainerInstance) bool {
-	if !s.sandboxMemoryLimitRequired(request, instance) {
-		return true
-	}
-
-	readyChan := instance.processManagerReadyChannel()
-	if readyChan == nil {
-		return false
-	}
-
-	ticker := time.NewTicker(sandboxSetupStatePollInterval)
-	defer ticker.Stop()
-	stateGraceDeadline := time.Now().Add(sandboxSetupRuntimeStateGrace)
-	sawRunning := false
-	stateFailures := 0
-	for {
-		select {
-		case <-readyChan:
-			return instance.processManagerReady()
-		case <-ctx.Done():
-			return false
-		case <-ticker.C:
-			stateCtx, cancel := context.WithTimeout(ctx, containerRuntimeStateTimeout)
-			state, err := instance.Runtime.State(stateCtx, instance.Id)
-			cancel()
-			if err != nil {
-				if runtimeContainerNotFound(err) {
-					if sawRunning || !time.Now().Before(stateGraceDeadline) {
-						return false
-					}
-					continue
-				}
-				stateFailures++
-				if stateFailures >= 3 {
-					return false
-				}
-				continue
-			}
-			stateFailures = 0
-			switch state.Status {
-			case types.RuncContainerStatusRunning, types.RuncContainerStatusPaused:
-				sawRunning = true
-			case types.RuncContainerStatusStopped:
-				return false
-			case types.RuncContainerStatusCreated:
-				if sawRunning || !time.Now().Before(stateGraceDeadline) {
-					return false
-				}
-			default:
-				if !time.Now().Before(stateGraceDeadline) {
-					return false
-				}
-			}
-		}
-	}
-}
-
-// exposeSandboxMemoryLimit makes the application's requested memory visible
-// before the sandbox is published ready. gVisor enforces a larger outer
-// cgroup limit so the Sentry and gofer retain their own headroom; its in-guest
-// cgroup memory limit is a reporting value and is safe to narrow here.
-func (s *Worker) exposeSandboxMemoryLimit(
-	ctx context.Context,
-	request *types.ContainerRequest,
-	instance *ContainerInstance,
-	manager *goproc.GoProcClient,
-) error {
-	if request == nil || instance == nil || instance.Runtime == nil {
-		return fmt.Errorf("sandbox memory limit requires a container request and runtime")
-	}
-	if !s.sandboxMemoryLimitRequired(request, instance) {
-		return nil
-	}
-	limitBytes, err := sandboxMemoryLimitBytes(request.Memory)
-	if err != nil {
-		return err
-	}
-	if manager == nil {
-		return fmt.Errorf("sandbox memory limit requires a running process manager")
-	}
-	setupCtx, cancel := context.WithTimeout(ctx, sandboxSetupCommandTimeout)
-	defer cancel()
-	return runSandboxProcessManagerCommand(
-		setupCtx,
-		manager,
-		[]string{types.WorkerSandboxMemoryLimitContainerPath, strconv.FormatInt(limitBytes, 10)},
-		"/",
-		nil,
-		"gVisor memory limit setup",
-	)
 }
 
 func runSandboxProcessManagerCommand(ctx context.Context, manager *goproc.GoProcClient, args []string, cwd string, env []string, name string) error {

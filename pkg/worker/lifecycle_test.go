@@ -411,43 +411,6 @@ func registeredAddresses() *addressRegistration {
 	return newAddressRegistration(func() error { return nil })
 }
 
-func TestCancelAndWaitForContainerSetupPreventsStateResurrection(t *testing.T) {
-	const containerID = "sandbox-exited-during-setup"
-	instances := common.NewSafeMap[*ContainerInstance]()
-	instance := &ContainerInstance{Id: containerID}
-	instances.Set(containerID, instance)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	setupDone := make(chan struct{})
-	go func() {
-		defer close(setupDone)
-		<-ctx.Done()
-		// Model the setup goroutine's final readiness update after runtime exit.
-		instances.Set(containerID, instance)
-	}()
-
-	cancelAndWaitForContainerSetup(cancel, setupDone)
-	instances.Delete(containerID)
-
-	_, exists := instances.Get(containerID)
-	require.False(t, exists)
-}
-
-func TestCancelAndWaitForContainerSetupWithoutStartedPID(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	started := make(chan int)
-	setupDone := make(chan struct{})
-	startObserved := make(chan bool, 1)
-	go func() {
-		defer close(setupDone)
-		_, ok := waitForContainerStarted(ctx, started)
-		startObserved <- ok
-	}()
-
-	cancelAndWaitForContainerSetup(cancel, setupDone)
-	require.False(t, <-startObserved)
-}
-
 func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 	containerID := "container-route"
 	repoClient := &fakeContainerRepoClient{}

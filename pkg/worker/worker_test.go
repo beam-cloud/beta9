@@ -872,52 +872,6 @@ func TestUpdateContainerStatusOnceReconcilesStartedPendingContainer(t *testing.T
 	require.Equal(t, int64(types.ContainerStateTtlS), repoClient.lastUpdateStatus.ExpirySeconds)
 }
 
-func TestUpdateContainerStatusOnceWaitsForGvisorMemorySetup(t *testing.T) {
-	const containerID = "sandbox-memory-setup"
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: containerID,
-			Status:      string(types.ContainerStatusPending),
-		},
-	}
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{
-			ContainerResourceLimits: types.ContainerResourceLimitsConfig{MemoryEnforced: true},
-		}},
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-		containerRepoClient: repoClient,
-		stopContainerChan:   make(chan stopContainerEvent, 1),
-	}
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		Memory:      256,
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			Type: types.StubType(types.StubTypeSandbox),
-		}},
-	}
-	instance := &ContainerInstance{
-		Id:             containerID,
-		ExitCode:       -1,
-		RuntimeStarted: true,
-		RuntimePid:     1234,
-		Runtime:        &mockRuntime{name: types.ContainerRuntimeGvisor.String()},
-	}
-	instance.initializeProcessManagerReadiness()
-	worker.containerInstances.Set(containerID, instance)
-
-	done, err := worker.updateContainerStatusOnce(context.Background(), request)
-	require.NoError(t, err)
-	require.False(t, done)
-	require.Equal(t, string(types.ContainerStatusPending), repoClient.lastUpdateStatus.Status)
-	require.Equal(t, int64(types.ContainerStateTtlSWhilePending), repoClient.lastUpdateStatus.ExpirySeconds)
-
-	instance.signalProcessManagerReadiness(true)
-	done, err = worker.updateContainerStatusOnce(context.Background(), request)
-	require.NoError(t, err)
-	require.False(t, done)
-	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
-}
-
 func TestRuntimeStartStateIsPublishedAtomically(t *testing.T) {
 	instance := &ContainerInstance{}
 	var writers sync.WaitGroup
