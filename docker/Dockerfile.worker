@@ -187,6 +187,7 @@ COPY --exclude=sdk . .
 RUN go build -gcflags "all=-N" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
 RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 RUN go build -o /usr/local/bin/agent ./cmd/agent
+RUN CGO_ENABLED=0 go build -o /usr/local/bin/cgroup-memory ./cmd/cgroup-memory
 
 # uv
 # ========================
@@ -422,6 +423,7 @@ COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY --from=worker /usr/local/bin/worker-debug /usr/local/bin/worker-debug
 COPY --from=worker /usr/local/bin/agent /usr/local/bin/agent
 COPY --from=worker /usr/local/bin/agent /usr/local/bin/beam-agent
+COPY --from=worker /usr/local/bin/cgroup-memory /usr/local/bin/cgroup-memory
 COPY ./sdk/src/beta9 /workspace/sdk
 COPY --from=uv /root/.local/bin/uv /usr/local/bin/uv
 COPY --from=dropbear /usr/local/bin/dropbear /usr/local/bin/dropbear

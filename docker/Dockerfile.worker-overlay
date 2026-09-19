@@ -26,6 +26,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       go build -trimpath -gcflags="all=-N -l" -o /out/worker-debug ./cmd/worker/main.go && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
       go build -trimpath -o /out/agent ./cmd/agent && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+      go build -trimpath -o /out/cgroup-memory ./cmd/cgroup-memory && \
     ln /out/agent /out/beam-agent
 
 FROM --platform=$TARGETPLATFORM ${WORKER_RUNTIME_IMAGE}
