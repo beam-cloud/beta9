@@ -1904,6 +1904,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 					instance = fresh
 				}
 			}
+			if processManagerReady {
+				phaseStart = time.Now()
+				err := s.exposeSandboxMemoryLimit(ctx, request, instance, processManagerClient)
+				metrics.RecordWorkerStartupPhase("sandbox_memory_limit_visible", time.Since(phaseStart), request, map[string]string{
+					"success": fmt.Sprintf("%t", err == nil),
+				})
+				if err != nil && ctx.Err() == nil {
+					log.Error().Err(err).Str("container_id", containerId).Msg("failed to expose sandbox memory limit; workload will see host memory")
+				}
+			}
 			instance.SandboxProcessManager = processManagerClient
 			instance.signalProcessManagerReadiness(processManagerReady)
 			s.containerInstances.Set(containerId, instance)

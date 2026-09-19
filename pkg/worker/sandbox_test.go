@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -320,6 +323,59 @@ func TestDockerSandboxShutdownScriptPreservesInnerContainers(t *testing.T) {
 	require.Contains(t, script, "pkill -TERM dockerd")
 	require.Contains(t, script, "pkill -KILL containerd")
 	require.True(t, strings.HasSuffix(strings.TrimSpace(script), "exit 0"))
+}
+
+func TestSandboxMemoryLimitScriptWritesMountedHierarchy(t *testing.T) {
+	const limit = 16 * 1024 * 1024 * 1024
+
+	tests := []struct {
+		name string
+		file string
+	}{
+		{name: "cgroup v2", file: "memory.max"},
+		{name: "cgroup v1", file: "memory/memory.limit_in_bytes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, tt.file)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte("max\n"), 0o644))
+
+			out, err := exec.Command("sh", "-c", sandboxMemoryLimitScript(root, limit)).CombinedOutput()
+			require.NoError(t, err, string(out))
+
+			contents, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, strconv.FormatInt(limit, 10), strings.TrimSpace(string(contents)))
+		})
+	}
+
+	t.Run("no cgroup mounted", func(t *testing.T) {
+		out, err := exec.Command("sh", "-c", sandboxMemoryLimitScript(t.TempDir(), limit)).CombinedOutput()
+		require.Error(t, err)
+		require.Contains(t, string(out), "no cgroup memory limit file")
+	})
+}
+
+func TestExposeSandboxMemoryLimitOnlyTargetsGvisorRequests(t *testing.T) {
+	tests := []struct {
+		name    string
+		runtime string
+		memory  int64
+	}{
+		{name: "runc sees its real cgroup", runtime: types.ContainerRuntimeRunc.String(), memory: 1024},
+		{name: "no memory request", runtime: types.ContainerRuntimeGvisor.String(), memory: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := &ContainerInstance{Runtime: &mockRuntime{name: tt.runtime}}
+			request := &types.ContainerRequest{Memory: tt.memory}
+
+			// A nil process manager would fail the exec if the request were not skipped.
+			require.NoError(t, (&Worker{}).exposeSandboxMemoryLimit(context.Background(), request, instance, nil))
+		})
+	}
 }
 
 func TestStopDockerSandboxPreservesTerminalCheckpointState(t *testing.T) {

@@ -36,6 +36,7 @@ const (
 	dockerDaemonReadyPollInterval = 1 * time.Second
 	dockerInfoCommandTimeout      = 2 * time.Second
 	sandboxMissingProcessExitCode = 137
+	sandboxCgroupRoot             = "/sys/fs/cgroup"
 )
 
 func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
@@ -221,6 +222,40 @@ func (s *Worker) stopDockerSandbox(containerId string, instance *ContainerInstan
 
 func runSandboxShell(ctx context.Context, manager *goproc.GoProcClient, name, script string) error {
 	return runSandboxProcessManagerCommand(ctx, manager, []string{"sh", "-c", script}, "/", nil, name)
+}
+
+// exposeSandboxMemoryLimit writes the requested memory into the sandbox's
+// cgroup memory limit so workloads that size themselves from it (JVM, Node,
+// build tools) see their allocation instead of the host. gVisor's cgroupfs is
+// virtual and enforces nothing; the real limit stays on the host cgroup, which
+// also holds the sentry and gofer headroom. runc containers already see their
+// real cgroup and are left alone.
+func (s *Worker) exposeSandboxMemoryLimit(ctx context.Context, request *types.ContainerRequest, instance *ContainerInstance, manager *goproc.GoProcClient) error {
+	if request.Memory <= 0 || instance.Runtime == nil || instance.Runtime.Name() != types.ContainerRuntimeGvisor.String() {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, sandboxSetupCommandTimeout)
+	defer cancel()
+
+	return runSandboxShell(ctx, manager, "memory limit setup", sandboxMemoryLimitScript(sandboxCgroupRoot, request.Memory*1024*1024))
+}
+
+// sandboxMemoryLimitScript sets and verifies the memory limit on whichever
+// cgroup hierarchy the sandbox mounted: v2 (memory.max) or v1
+// (memory/memory.limit_in_bytes).
+func sandboxMemoryLimitScript(cgroupRoot string, limitBytes int64) string {
+	return fmt.Sprintf(`limit=%d
+for f in %[2]s/memory.max %[2]s/memory/memory.limit_in_bytes; do
+  [ -f "$f" ] || continue
+  echo "$limit" > "$f" || exit 1
+  [ "$(cat "$f")" = "$limit" ] && exit 0
+  echo "memory limit readback mismatch: $(cat "$f")" >&2
+  exit 1
+done
+echo "no cgroup memory limit file under %[2]s" >&2
+exit 1
+`, limitBytes, cgroupRoot)
 }
 
 func runSandboxProcessManagerCommand(ctx context.Context, manager *goproc.GoProcClient, args []string, cwd string, env []string, name string) error {
