@@ -397,7 +397,7 @@ func (r *router) proxyJSON(ctx context.Context, rq *routeRequest, app *types.Man
 	if rerr := r.finish(rq, app, replica, resp.StatusCode, work, 0, ""); rerr != nil {
 		return rerr.write(rq.ctx)
 	}
-	if resp.StatusCode < 300 && strings.Contains(contentType, "json") {
+	if resp.StatusCode < 300 && strings.Contains(contentType, "json") && !rq.proto.verbatim {
 		body = decorateJSON(body, rq.requestID, work != nil, rq.charge.Cost.MicroUSD)
 	}
 	w := rq.ctx.Response()

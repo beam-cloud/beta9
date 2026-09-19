@@ -74,7 +74,8 @@ class ManagedEndpoint(RunnerAbstraction):
 
     Parameters:
         id: ``vendor/slug``; also the model name callers send to ``/v1``.
-        kind: ``llm`` | ``embedding`` | ``image`` | ``custom``; picks the routes served.
+        kind: ``llm`` | ``embedding`` | ``image`` | ``decision`` | ``custom``; picks the
+            routes served. ``decision`` is a System One model on TypeSafe's ``/v1/systemone``.
         image: Container image the engine runs in.
         entrypoint: Engine command; ``Gpu.engine_args`` for the placed GPU type are appended.
         engine: Engine name for validation/observability (``vllm``, ``sglang``...).

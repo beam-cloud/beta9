@@ -64,11 +64,16 @@ const (
 	EndpointKindEmbedding EndpointKind = "embedding"
 	EndpointKindImage     EndpointKind = "image"
 	EndpointKindCustom    EndpointKind = "custom"
+	// EndpointKindDecision is a System One decision model: it answers typed
+	// Choice, Score and Noul questions about a state on TypeSafe's
+	// POST /v1/systemone contract and reports input/output token usage.
+	EndpointKindDecision EndpointKind = "decision"
 )
 
-var EndpointKinds = []EndpointKind{EndpointKindLLM, EndpointKindEmbedding, EndpointKindImage, EndpointKindCustom}
+var EndpointKinds = []EndpointKind{EndpointKindLLM, EndpointKindEmbedding, EndpointKindImage, EndpointKindCustom, EndpointKindDecision}
 
-// EndpointRoute is an OpenAI-style route suffix under /v1.
+// EndpointRoute is a route suffix under /v1: OpenAI-style paths, TypeSafe's
+// systemone, and Beam's model-scoped invoke.
 type EndpointRoute string
 
 const (
@@ -78,6 +83,7 @@ const (
 	EndpointRouteImageGenerations EndpointRoute = "images/generations"
 	EndpointRouteImageEdits       EndpointRoute = "images/edits"
 	EndpointRouteAudioSpeech      EndpointRoute = "audio/speech"
+	EndpointRouteSystemOne        EndpointRoute = "systemone"
 	EndpointRouteInvoke           EndpointRoute = "invoke"
 )
 
