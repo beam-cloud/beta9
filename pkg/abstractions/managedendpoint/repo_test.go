@@ -143,6 +143,29 @@ func TestApplyRepoRejectsUnpublishablePricing(t *testing.T) {
 	}
 }
 
+func TestApplyRepoAllowsCustomTokenPricing(t *testing.T) {
+	s := newServiceForTest(t)
+	app := seedApp(t, s, "acme/decision", types.EndpointKindCustom, types.Pricing{Request: "0"})
+	config := `acme/decision:
+  enabled: true
+  pricing: {prompt_tokens: "0.000000021", completion_tokens: "0"}
+  gpus: {A10G: {priority: 1, maxReplicas: 1, serverless: true}}
+`
+	for _, dryRun := range []bool{true, false} {
+		out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
+			DryRun: dryRun, ConfigYaml: config, Endpoints: []*pb.RepoEndpoint{repoEndpoint(app.Spec.ID, app)},
+		})
+		require.NoError(t, err)
+		require.True(t, out.Ok, out.Errors)
+	}
+	published, err := s.repo.GetEndpoint(context.Background(), app.Spec.ID)
+	require.NoError(t, err)
+	require.Equal(t, types.EndpointKindCustom, published.Spec.Kind)
+	require.Equal(t, types.Pricing{PromptTokens: "0.000000021", CompletionTokens: "0"}, published.Pricing)
+	require.True(t, serves(published, types.EndpointRouteInvoke))
+	require.False(t, serves(published, types.EndpointRouteChatCompletions))
+}
+
 func TestApplyRepoKeepsAppOfBrokenImport(t *testing.T) {
 	s := newServiceForTest(t)
 	existing := seedEndpoint(t, s)

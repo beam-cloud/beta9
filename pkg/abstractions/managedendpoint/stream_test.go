@@ -305,14 +305,54 @@ func TestRelayStreamDoesNotCountCommentOrEmptyDataAsOutput(t *testing.T) {
 
 func TestTokenUsageRejectsInvalidCounters(t *testing.T) {
 	for _, body := range []string{
+		`{}`,
+		`{"usage":null}`,
+		`{"usage":{}}`,
+		`{"usage":{"total_tokens":10}}`,
+		`{"usage":{"prompt_tokens":null}}`,
+		`{"usage":{"prompt_tokens":1,"completion_tokens":null}}`,
+		`{"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":null}}}`,
 		`{"usage":{"prompt_tokens":-1}}`,
 		`{"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":2}}}`,
 		`{"usage":{"completion_tokens":-3}}`,
 		`{"usage":{"prompt_tokens":9007199254740992}}`,
+		`{"usage":{"input_tokens":1}}`,
+		`{"usage":{"output_tokens":0}}`,
+		`{"usage":{"input_tokens":null,"output_tokens":0}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":null}}`,
+		`{"usage":{"input_tokens":-1,"output_tokens":0}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":-1}}`,
+		`{"usage":{"input_tokens":1.5,"output_tokens":0}}`,
+		`{"usage":{"input_tokens":"1","output_tokens":0}}`,
+		`{"usage":{"input_tokens":true,"output_tokens":0}}`,
+		`{"usage":{"input_tokens":9007199254740992,"output_tokens":0}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":9007199254740992}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens":1}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":0,"completion_tokens":2}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens":null}}`,
+		`{"usage":{"input_tokens":1,"output_tokens":0,"prompt_tokens_details":{"cached_tokens":1}}}`,
 	} {
 		require.Nil(t, tokenUsage([]byte(body)), body)
 	}
 	w := tokenUsage([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":4}}}`))
 	require.NotNil(t, w)
 	require.Equal(t, types.Work{PromptTokens: 10, CompletionTokens: 3, CachedTokens: 4}, *w)
+}
+
+func TestTokenUsageSupportsReportedCounterFormats(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want types.Work
+	}{
+		{`{"usage":{"input_tokens":10,"output_tokens":3}}`, types.Work{PromptTokens: 10, CompletionTokens: 3}},
+		{`{"usage":{"input_tokens":0,"output_tokens":0}}`, types.Work{}},
+		{`{"usage":{"prompt_tokens":10}}`, types.Work{PromptTokens: 10}},
+		{`{"usage":{"completion_tokens":3}}`, types.Work{CompletionTokens: 3}},
+		{`{"usage":{"prompt_tokens":0,"completion_tokens":0}}`, types.Work{}},
+		{`{"usage":{"prompt_tokens":10,"prompt_tokens_details":null}}`, types.Work{PromptTokens: 10}},
+	} {
+		work := tokenUsage([]byte(tc.body))
+		require.NotNil(t, work, tc.body)
+		require.Equal(t, tc.want, *work, tc.body)
+	}
 }

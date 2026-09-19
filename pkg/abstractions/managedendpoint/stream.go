@@ -228,24 +228,43 @@ func stampSSE(line []byte, requestID string, toolChoices map[int]bool) []byte {
 	return append(append([]byte("data: "), out...), '\n')
 }
 
-// tokenUsage reads the OpenAI usage object from a response body; nil when
-// the body carries none.
+// tokenUsage maps either OpenAI or input/output usage into the existing billing
+// counters. A missing, malformed or ambiguous usage object is not reported work.
 func tokenUsage(body []byte) *types.Work {
 	var env struct {
-		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			Details          *struct {
-				CachedTokens int64 `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-		} `json:"usage"`
+		Usage map[string]json.RawMessage `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil || env.Usage == nil {
 		return nil
 	}
-	w := &types.Work{PromptTokens: env.Usage.PromptTokens, CompletionTokens: env.Usage.CompletionTokens}
-	if env.Usage.Details != nil {
-		w.CachedTokens = env.Usage.Details.CachedTokens
+	usage := env.Usage
+	openAI := usage["prompt_tokens"] != nil || usage["completion_tokens"] != nil
+	inputOutput := usage["input_tokens"] != nil || usage["output_tokens"] != nil
+	if openAI == inputOutput { // Neither format, or a mixture of both.
+		return nil
+	}
+	input, output := "prompt_tokens", "completion_tokens"
+	if inputOutput {
+		input, output = "input_tokens", "output_tokens"
+		// TypeSafe-style responses report both counts, including explicit zero.
+		if usage[input] == nil || usage[output] == nil {
+			return nil
+		}
+	}
+	read := func(raw json.RawMessage, target *int64) bool {
+		// OpenAI embeddings omit completion_tokens; missing optional counters
+		// remain zero, but a reported null is never a measured zero.
+		return raw == nil || (!bytes.Equal(bytes.TrimSpace(raw), []byte("null")) && json.Unmarshal(raw, target) == nil)
+	}
+	w := &types.Work{}
+	if !read(usage[input], &w.PromptTokens) || !read(usage[output], &w.CompletionTokens) {
+		return nil
+	}
+	if raw := usage["prompt_tokens_details"]; raw != nil {
+		var details map[string]json.RawMessage
+		if inputOutput || json.Unmarshal(raw, &details) != nil || !read(details["cached_tokens"], &w.CachedTokens) {
+			return nil
+		}
 	}
 	if !w.Valid() {
 		return nil

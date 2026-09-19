@@ -209,6 +209,22 @@ func TestPricingPrice(t *testing.T) {
 	require.Error(t, err, "a charge must fit the usage counters before it can be journaled")
 }
 
+func TestPricingScalesLargeValidCountersWithoutOverflow(t *testing.T) {
+	p := Pricing{PromptTokens: "0.000000021", CompletionTokens: "0"}
+	for _, tc := range []struct{ tokens, microUSD int64 }{
+		{9_223_372_036_855, 193_690_812_774}, // First count whose integer micro scaling overflowed.
+		{MaxUsageCounter, 189_151_184_349_561},
+	} {
+		work := Work{Requests: 1, PromptTokens: tc.tokens}
+		require.True(t, work.Valid())
+		cost, err := p.Price(work)
+		require.NoError(t, err)
+		require.Equal(t, Cost{MicroUSD: tc.microUSD, PromptMicroUSD: tc.microUSD}, cost)
+	}
+	_, err := (Pricing{PromptTokens: "1", CompletionTokens: "0"}).Price(Work{PromptTokens: MaxUsageCounter})
+	require.Error(t, err, "a valid counter may still exceed the maximum monetary amount")
+}
+
 func TestChargeSettlesOnceFromReportedWork(t *testing.T) {
 	now := time.Now()
 	c := Charge{ID: "gen-1", Pricing: Pricing{PromptTokens: "0.000001", CompletionTokens: "0.000002"}}
