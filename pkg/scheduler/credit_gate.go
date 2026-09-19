@@ -227,14 +227,20 @@ func (g *CreditGate) fetch(workspaceId string) (creditDecision, error) {
 	return decision, nil
 }
 
-// Invalidate drops the cached decision so the next check asks billing.
+// Invalidate marks the cached decision stale so the next check asks billing:
+// an approval keeps admitting while the refresh runs in the background, a
+// denial is re-asked synchronously. Dropping the entry instead made every
+// request that followed a paid one wait on the billing round trip.
 func (g *CreditGate) Invalidate(ctx context.Context, workspaceId string) {
 	if g == nil || g.rdb == nil {
 		return
 	}
-	if err := g.rdb.Del(ctx, common.RedisKeys.WorkspaceCreditGate(workspaceId)).Err(); err != nil {
-		log.Warn().Err(err).Str("workspace_id", workspaceId).Msg("credit gate: failed to invalidate cached decision")
+	cached, ok := g.cached(ctx, workspaceId)
+	if !ok {
+		return
 	}
+	cached.CheckedAt = g.now().Add(-g.config.CacheTTLOrDefault())
+	g.store(ctx, workspaceId, cached)
 }
 
 func (g *CreditGate) unavailable(workspaceId string, cause error) (creditDecision, error) {

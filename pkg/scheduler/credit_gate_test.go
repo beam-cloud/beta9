@@ -227,6 +227,49 @@ func TestCreditGateFailurePolicyWithoutCachedDecision(t *testing.T) {
 	})
 }
 
+func TestCreditGateInvalidatedApprovalAdmitsWhileBillingRefreshes(t *testing.T) {
+	backend := &blockingCreditBackend{
+		started: make(chan struct{}),
+		result:  make(chan creditDecision),
+	}
+	gate, now := newTestCreditGate(t, backend, types.CreditGateConfig{CacheTTL: 30 * time.Second})
+	gate.store(context.Background(), "ws-1", creditDecision{OK: true, CheckedAt: *now})
+
+	// A settled charge invalidates the decision; the request that follows
+	// must not wait on billing.
+	gate.Invalidate(context.Background(), "ws-1")
+
+	returned := make(chan error, 1)
+	go func() {
+		returned <- gate.Check(context.Background(), "ws-1")
+	}()
+	select {
+	case err := <-returned:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("invalidated approval blocked admission on the billing refresh")
+	}
+
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("invalidation did not trigger a billing refresh")
+	}
+	backend.result <- creditDecision{OK: false, ErrorCode: "insufficient_credits"}
+	require.Eventually(t, func() bool {
+		return gate.Check(context.Background(), "ws-1") != nil
+	}, time.Second, 10*time.Millisecond, "the refreshed denial should take effect")
+}
+
+func TestCreditGateInvalidateWithoutCachedDecisionIsNoop(t *testing.T) {
+	backend := &fakeCreditBackend{decision: creditDecision{OK: true}}
+	gate, _ := newTestCreditGate(t, backend, types.CreditGateConfig{})
+
+	gate.Invalidate(context.Background(), "ws-1")
+	_, ok := gate.cached(context.Background(), "ws-1")
+	assert.False(t, ok)
+}
+
 func TestCreditGateInvalidateForcesRefresh(t *testing.T) {
 	backend := &fakeCreditBackend{decision: creditDecision{OK: false, ErrorCode: "insufficient_credits"}}
 	gate, _ := newTestCreditGate(t, backend, types.CreditGateConfig{})
