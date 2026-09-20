@@ -314,7 +314,7 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, app *types.Managed
 	case contentType == "text/event-stream":
 		return false, r.proxyStream(ctx, rq, app, replica, resp, sentAt)
 	case strings.Contains(contentType, "json") || resp.StatusCode >= 300:
-		return false, r.proxyJSON(ctx, rq, app, replica, resp, contentType)
+		return false, r.proxyJSON(ctx, rq, app, replica, resp, contentType, sentAt)
 	}
 	return false, r.proxyBinary(rq, app, replica, resp)
 }
@@ -380,8 +380,9 @@ func (r *router) streamBroke(ctx context.Context, rq *routeRequest, app *types.M
 }
 
 // proxyJSON buffers the response, settles it and writes it decorated with usage and cost.
-func (r *router) proxyJSON(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, replica *types.EndpointReplica, resp *http.Response, contentType string) error {
+func (r *router) proxyJSON(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, replica *types.EndpointReplica, resp *http.Response, contentType string, sentAt time.Time) error {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	addResponseTiming(rq, sentAt, time.Now())
 	switch {
 	case err != nil:
 		rerr := errUpstreamEnded
@@ -405,6 +406,25 @@ func (r *router) proxyJSON(ctx context.Context, rq *routeRequest, app *types.Man
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)
 	return nil
+}
+
+// addResponseTiming measures buffered responses without changing their body.
+// Prepare runs from this route handler's start to the final upstream dispatch:
+// admission, routing and any earlier failed attempt. Upstream includes the
+// transport, model server and complete response read, not just model compute.
+// Settle includes usage parsing, the durable journal, accounting scheduling and
+// response formatting. Total ends just before headers are written; middleware
+// authentication, client networking, response transfer and async metering are
+// outside this clock. Preserve any model-provided Server-Timing values.
+func addResponseTiming(rq *routeRequest, sentAt, receivedAt time.Time) {
+	w := rq.ctx.Response()
+	w.Before(func() {
+		now := time.Now()
+		milliseconds := func(d time.Duration) float64 { return float64(max(d, 0)) / float64(time.Millisecond) }
+		w.Header().Add("Server-Timing", fmt.Sprintf("beam_prepare;dur=%.3f, beam_upstream;dur=%.3f, beam_settle;dur=%.3f, beam_total;dur=%.3f",
+			milliseconds(sentAt.Sub(rq.startedAt)), milliseconds(receivedAt.Sub(sentAt)),
+			milliseconds(now.Sub(receivedAt)), milliseconds(now.Sub(rq.startedAt))))
+	})
 }
 
 // reject voids the charge of a request that got no response and answers with the error.

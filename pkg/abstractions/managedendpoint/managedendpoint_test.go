@@ -438,6 +438,7 @@ func TestChargeFlowCreditsProviderWorkspace(t *testing.T) {
 	finish := func(id string, status int, work *types.Work, errMsg string) *types.Charge {
 		rq := &routeRequest{auth: userInfo, requestID: id, startedAt: now, charge: &types.Charge{ID: id, WorkspaceID: "user-ws", AppID: app.Spec.ID, Pricing: app.Pricing, AcceptedAt: now}}
 		require.Nil(t, s.router.finish(rq, app, replica, status, work, 0, errMsg))
+		drainAccounting(t, s)
 		return charge(t, s, id)
 	}
 
