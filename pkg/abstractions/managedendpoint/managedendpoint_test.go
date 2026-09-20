@@ -27,6 +27,20 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// Most route unit tests do not run service workers. Explicitly finish queued
+// accounting when those tests assert the resulting meter totals.
+func drainAccounting(t *testing.T, s *Service) {
+	t.Helper()
+	for {
+		select {
+		case c := <-s.billing.queue:
+			require.NoError(t, s.billing.account(context.Background(), &c))
+		default:
+			return
+		}
+	}
+}
+
 func TestAuthorization(t *testing.T) {
 	s := newServiceForTest(t)
 
