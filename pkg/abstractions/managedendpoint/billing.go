@@ -16,24 +16,37 @@ import (
 
 // billing is the one accounting path. A Charge snapshots the caller, app
 // version and price when a request is accepted; finishing it prices what the
-// app reported, journals it and meters it right away. Anything the inline
-// path left pending (a crash, the meter down) is finished by the next flush,
-// which one gateway runs at a time.
+// app reported and journals it before responding. Bounded workers meter
+// journaled charges; the durable pending index recovers failed, overflowed or
+// interrupted work in a flush, which one gateway runs at a time.
 
 const (
 	chargeTTL       = time.Hour // journal retention after accounting
 	billingLockKey  = "managed_endpoint:meter"
 	billingLockTTL  = 30 * time.Second
 	billingInterval = 5 * time.Second
-	pendingRetry    = 30 * time.Second // how long a journaled charge is left to the gateway that finished it
+	pendingRetry    = 30 * time.Second // grace for the gateway's prompt accounting workers
 	pendingBatch    = 100
+	billingWorkers  = 4
+	billingQueue    = 128
 )
 
-type billing struct{ s *Service }
+type billing struct {
+	s     *Service
+	queue chan types.Charge // an optimization; Redis owns every queued or overflowed charge
+}
 
-func newBilling(s *Service) *billing { return &billing{s: s} }
+func newBilling(s *Service) *billing {
+	return &billing{s: s, queue: make(chan types.Charge, billingQueue)}
+}
 
 func (b *billing) run(ctx context.Context) {
+	var workers sync.WaitGroup
+	for range billingWorkers {
+		workers.Add(1)
+		go func() { defer workers.Done(); b.work(ctx) }()
+	}
+	defer workers.Wait()
 	ticker := time.NewTicker(billingInterval)
 	defer ticker.Stop()
 	for {
@@ -49,8 +62,21 @@ func (b *billing) run(ctx context.Context) {
 	}
 }
 
-// finish journals a finished charge and applies it. The journal write is the
-// commit point: once it succeeds the work is accepted for billing and a
+func (b *billing) work(ctx context.Context) {
+	for ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+			return
+		case c := <-b.queue:
+			if err := b.account(ctx, &c); err != nil {
+				log.Warn().Err(err).Str("charge_id", c.ID).Msg("managed endpoints: charge journaled; accounting will retry")
+			}
+		}
+	}
+}
+
+// finish journals a finished charge and schedules accounting. The journal
+// write is the commit point: once it succeeds the work is accepted for billing and a
 // failure applying counters is retried by flush, never surfaced as a client
 // error that would invite a retry of already-billed work. A charge that was
 // already final (a duplicate completion) is left exactly as it was.
@@ -78,10 +104,23 @@ func (b *billing) finish(ctx context.Context, c *types.Charge, replica *types.En
 	if err := b.s.repo.RecordRouteSample(ctx, c); err != nil {
 		log.Debug().Err(err).Msg("managed endpoints: record route sample")
 	}
-	if err := b.account(ctx, c); err != nil {
-		log.Warn().Err(err).Str("charge_id", c.ID).Msg("managed endpoints: charge journaled; accounting will retry")
+	// Preserve credit checks while the external meter catches up: invalidate
+	// the cached decision now, then again after accounting updates the balance.
+	// Queue overflow and shutdown leave the journal pending for replay.
+	b.invalidateCredit(ctx, c)
+	select {
+	case b.queue <- *c:
+	default:
 	}
 	return nil
+}
+
+func (b *billing) invalidateCredit(ctx context.Context, c *types.Charge) {
+	if c.Status == types.ChargeSettled && c.Cost.MicroUSD > 0 && b.s.scheduler != nil {
+		if gate := b.s.scheduler.CreditGate(); gate != nil {
+			gate.Invalidate(ctx, c.WorkspaceID)
+		}
+	}
 }
 
 // account meters a settled charge for the caller (spend) and, when a
@@ -99,11 +138,7 @@ func (b *billing) account(ctx context.Context, c *types.Charge) error {
 				return err
 			}
 		}
-		if c.Cost.MicroUSD > 0 && b.s.scheduler != nil {
-			if gate := b.s.scheduler.CreditGate(); gate != nil {
-				gate.Invalidate(ctx, c.WorkspaceID)
-			}
-		}
+		b.invalidateCredit(ctx, c)
 	}
 	return b.s.repo.CompleteAccounting(ctx, c.ID, chargeTTL)
 }
@@ -129,7 +164,7 @@ func (b *billing) meter(kind types.UsageKind, workspaceID string, c *types.Charg
 }
 
 // flush finishes pending accounting oldest first, stopping at the first
-// failure. Charges younger than pendingRetry are still being metered inline.
+// failure. Charges younger than pendingRetry are left to the prompt workers.
 func (b *billing) flush(ctx context.Context) error {
 	pending, err := b.s.repo.ListPendingCharges(ctx, time.Now().Add(-pendingRetry), pendingBatch)
 	if err != nil {

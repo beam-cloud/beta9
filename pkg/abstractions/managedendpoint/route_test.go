@@ -721,7 +721,7 @@ func TestDecisionKindServesSystemOneVerbatim(t *testing.T) {
 				charge: &types.Charge{ID: "req-" + string(tc.route), WorkspaceID: "user-ws", AppID: app.Spec.ID, Pricing: pricing, AcceptedAt: now},
 			}
 			response := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
-			require.NoError(t, newRouter(s).proxyJSON(context.Background(), rq, app, replica, response, "application/json"))
+			require.NoError(t, newRouter(s).proxyJSON(context.Background(), rq, app, replica, response, "application/json", now))
 			assert.Equal(t, http.StatusOK, rec.Code)
 			c := charge(t, s, rq.requestID)
 			assert.Equal(t, types.Work{Requests: 1, PromptTokens: 1000}, c.Work, "billed from input_tokens on both routes")
@@ -772,7 +772,8 @@ func TestProxyJSONBillsReportedUsage(t *testing.T) {
 			}
 			body := `{"answers":{"a":0.9},"usage":` + tc.usage + `}`
 			response := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
-			require.NoError(t, newRouter(s).proxyJSON(context.Background(), rq, app, replica, response, "application/json"))
+			require.NoError(t, newRouter(s).proxyJSON(context.Background(), rq, app, replica, response, "application/json", now))
+			drainAccounting(t, s)
 
 			c := charge(t, s, rq.requestID)
 			assert.Equal(t, tc.wantWork, c.Work)
