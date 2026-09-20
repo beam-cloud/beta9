@@ -564,6 +564,14 @@ func testSigningKey(t *testing.T) (string, []byte) {
 	return "sk_" + base64.StdEncoding.EncodeToString(key), key
 }
 
+func TestParseRuntimeWorkspaceSecretKeyRejectsMissingWorkspace(t *testing.T) {
+	_, err := parseRuntimeWorkspaceSecretKey(nil)
+	require.EqualError(t, err, "workspace signing key is unavailable")
+
+	_, err = parseRuntimeWorkspaceSecretKey(&types.Workspace{})
+	require.EqualError(t, err, "workspace signing key is unavailable")
+}
+
 // Managed endpoint replicas authenticate with their own replica secret and
 // may run on contributed hardware, so the worker token that claims them must
 // not be able to turn into an admin-workspace token or read undeclared secrets.

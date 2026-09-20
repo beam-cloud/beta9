@@ -252,7 +252,7 @@ func (s *WorkerRepositoryService) workerRuntimeSecrets(ctx context.Context, work
 		return nil, err
 	}
 
-	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
+	secretKey, err := parseRuntimeWorkspaceSecretKey(workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -314,6 +314,13 @@ func uniqueRuntimeSecretNames(names []string) []string {
 	return out
 }
 
+func parseRuntimeWorkspaceSecretKey(workspace *types.Workspace) ([]byte, error) {
+	if workspace == nil {
+		return nil, common.ErrWorkspaceSigningKeyUnavailable
+	}
+	return common.ParseSecretKeyPointer(workspace.SigningKey)
+}
+
 func (s *WorkerRepositoryService) workspaceRuntimeToken(ctx context.Context, workspaceID uint) (string, error) {
 	tokens, err := s.backendRepo.ListTokens(ctx, workspaceID)
 	if err != nil && err != sql.ErrNoRows {
@@ -338,7 +345,7 @@ func (s *WorkerRepositoryService) workerRuntimeMountCredentials(ctx context.Cont
 		return nil, err
 	}
 
-	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
+	secretKey, err := parseRuntimeWorkspaceSecretKey(workspace)
 	if err != nil {
 		return nil, err
 	}

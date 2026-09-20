@@ -2145,6 +2145,26 @@ func validateEnvironmentVariableName(name string) error {
 	return nil
 }
 
+func (r *PostgresBackendRepository) getWorkspaceSecretKey(ctx context.Context, workspace *types.Workspace) ([]byte, error) {
+	if workspace == nil {
+		return nil, errors.New("workspace is required to access secrets")
+	}
+
+	if workspace.SigningKey == nil || *workspace.SigningKey == "" {
+		if workspace.ExternalId == "" {
+			return nil, errors.New("workspace signing key is unavailable")
+		}
+
+		workspaceWithSigningKey, err := r.GetWorkspaceByExternalIdWithSigningKey(ctx, workspace.ExternalId)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load workspace signing key: %w", err)
+		}
+		workspace.SigningKey = workspaceWithSigningKey.SigningKey
+	}
+
+	return pkgCommon.ParseSecretKeyPointer(workspace.SigningKey)
+}
+
 func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string, validateName bool) (*types.Secret, error) {
 	query := `
 	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
@@ -2159,7 +2179,7 @@ func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace 
 		}
 	}
 
-	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
+	secretKey, err := r.getWorkspaceSecretKey(ctx, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -2202,12 +2222,12 @@ func (r *PostgresBackendRepository) GetSecretsByName(ctx context.Context, worksp
 }
 
 func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
-	secret, err := r.GetSecretByName(ctx, workspace, name)
+	secretKey, err := r.getWorkspaceSecretKey(ctx, workspace)
 	if err != nil {
 		return nil, err
 	}
 
-	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
+	secret, err := r.GetSecretByName(ctx, workspace, name)
 	if err != nil {
 		return nil, err
 	}
@@ -2223,12 +2243,12 @@ func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context
 }
 
 func (r *PostgresBackendRepository) GetSecretsByNameDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
-	secrets, err := r.GetSecretsByName(ctx, workspace, names)
+	secretKey, err := r.getWorkspaceSecretKey(ctx, workspace)
 	if err != nil {
 		return nil, err
 	}
 
-	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
+	secrets, err := r.GetSecretsByName(ctx, workspace, names)
 	if err != nil {
 		return nil, err
 	}
@@ -2274,7 +2294,7 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
-	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
+	secretKey, err := r.getWorkspaceSecretKey(ctx, workspace)
 	if err != nil {
 		return nil, err
 	}

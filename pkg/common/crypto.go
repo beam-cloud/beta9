@@ -6,7 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"strings"
 )
+
+const secretKeyPrefix = "sk_"
+
+var ErrWorkspaceSigningKeyUnavailable = errors.New("workspace signing key is unavailable")
 
 func Encrypt(secretKey []byte, plaintext string) (string, error) {
 	aes, err := aes.NewCipher(secretKey)
@@ -84,6 +89,24 @@ func DecryptAllSecrets(signingKey []byte, secrets []string) ([]string, error) {
 }
 
 func ParseSecretKey(secretKey string) ([]byte, error) {
-	secret := secretKey[len("sk_"):]
-	return base64.StdEncoding.DecodeString(secret)
+	if !strings.HasPrefix(secretKey, secretKeyPrefix) || len(secretKey) == len(secretKeyPrefix) {
+		return nil, errors.New("invalid secret key")
+	}
+
+	secret, err := base64.StdEncoding.DecodeString(secretKey[len(secretKeyPrefix):])
+	if err != nil {
+		return nil, err
+	}
+	return secret, nil
+}
+
+// ParseSecretKeyPointer converts an optional workspace signing key without
+// ever dereferencing a nil pointer. Secret-bearing request paths use this
+// helper so malformed workspace data becomes an ordinary error instead of a
+// gateway panic.
+func ParseSecretKeyPointer(secretKey *string) ([]byte, error) {
+	if secretKey == nil || *secretKey == "" {
+		return nil, ErrWorkspaceSigningKeyUnavailable
+	}
+	return ParseSecretKey(*secretKey)
 }

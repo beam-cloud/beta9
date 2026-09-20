@@ -2,9 +2,11 @@ package common
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEncryptDecrypt(t *testing.T) {
@@ -32,4 +34,25 @@ func TestEncryptDecrypt(t *testing.T) {
 	}
 
 	assert.Equal(t, "my-secret-value", decryptedVal)
+}
+
+func TestParseSecretKeyRejectsMalformedValues(t *testing.T) {
+	for _, value := range []string{"", "x", "sk_", "sk_not-base64"} {
+		_, err := ParseSecretKey(value)
+		assert.Error(t, err, "ParseSecretKey(%q)", value)
+	}
+
+	valid := "sk_" + base64.StdEncoding.EncodeToString(make([]byte, 32))
+	key, err := ParseSecretKey(valid)
+	require.NoError(t, err)
+	assert.Len(t, key, 32)
+}
+
+func TestParseSecretKeyPointerRejectsMissingKey(t *testing.T) {
+	_, err := ParseSecretKeyPointer(nil)
+	assert.EqualError(t, err, "workspace signing key is unavailable")
+
+	empty := ""
+	_, err = ParseSecretKeyPointer(&empty)
+	assert.EqualError(t, err, "workspace signing key is unavailable")
 }

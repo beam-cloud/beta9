@@ -77,3 +77,13 @@ func TestConfigureContainerRequestMountsRejectsInvalidVolumes(t *testing.T) {
 	_, err := ConfigureContainerRequestMounts("sandbox-1", stub, workspace, types.StubConfigV1{Volumes: volumes})
 	require.Error(t, err)
 }
+
+func TestConfigureContainerRequestMountsRejectsMissingSigningKey(t *testing.T) {
+	stub := &types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}
+
+	_, err := ConfigureContainerRequestMounts("sandbox-1", stub, nil, types.StubConfigV1{})
+	require.EqualError(t, err, "workspace signing key is unavailable")
+
+	_, err = ConfigureContainerRequestMounts("sandbox-1", stub, &types.Workspace{}, types.StubConfigV1{})
+	require.EqualError(t, err, "workspace signing key is unavailable")
+}

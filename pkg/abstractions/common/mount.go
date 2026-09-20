@@ -32,7 +32,7 @@ func ValidateVolume(v *pb.Volume) error {
 }
 
 func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRelated, workspace *types.Workspace, config types.StubConfigV1) ([]types.Mount, error) {
-	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
+	secretKey, err := parseWorkspaceSecretKey(workspace)
 	if err != nil {
 		return nil, err
 	}

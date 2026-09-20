@@ -11,7 +11,7 @@ func ConfigureContainerRequestSecrets(
 	workspace *types.Workspace,
 	stubConfig types.StubConfigV1,
 ) ([]string, error) {
-	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
+	secretKey, err := parseWorkspaceSecretKey(workspace)
 	if err != nil {
 		return nil, err
 	}
