@@ -224,12 +224,15 @@ func runSandboxShell(ctx context.Context, manager *goproc.GoProcClient, name, sc
 	return runSandboxProcessManagerCommand(ctx, manager, []string{"sh", "-c", script}, "/", nil, name)
 }
 
-// exposeSandboxMemoryLimit writes the requested memory into the sandbox's
-// cgroup memory limit so workloads that size themselves from it (JVM, Node,
-// build tools) see their allocation instead of the host. gVisor's cgroupfs is
-// virtual and enforces nothing; the real limit stays on the host cgroup, which
-// also holds the sentry and gofer headroom. runc containers already see their
-// real cgroup and are left alone.
+// exposeSandboxMemoryLimit writes the requested memory and CPU into the
+// sandbox so workloads see their allocation instead of the host: the memory
+// limit and CPU quota go into the cgroup (JVM, cargo, .NET read those), and
+// the process manager's CPU affinity is narrowed to the requested count so
+// every process it spawns inherits it (nproc, Go, Node, Rust read that).
+// gVisor's cgroupfs is virtual and enforces neither the quota nor the mask;
+// the real limits stay on the host cgroup, which also holds the sentry and
+// gofer headroom and, for CPU, is applied after startup. runc containers
+// already see their real cgroup and are left alone.
 func (s *Worker) exposeSandboxMemoryLimit(ctx context.Context, request *types.ContainerRequest, instance *ContainerInstance, manager *goproc.GoProcClient) error {
 	if request.Memory <= 0 || instance.Runtime == nil || instance.Runtime.Name() != types.ContainerRuntimeGvisor.String() {
 		return nil
@@ -238,24 +241,64 @@ func (s *Worker) exposeSandboxMemoryLimit(ctx context.Context, request *types.Co
 	ctx, cancel := context.WithTimeout(ctx, sandboxSetupCommandTimeout)
 	defer cancel()
 
-	return runSandboxShell(ctx, manager, "memory limit setup", sandboxMemoryLimitScript(sandboxCgroupRoot, request.Memory*1024*1024))
+	cpu := NewGvisorResources().GetCPU(request)
+	return runSandboxShell(ctx, manager, "memory limit setup", sandboxMemoryLimitScript(sandboxCgroupRoot, request.Memory*1024*1024, *cpu.Quota, *cpu.Period, requestedCPUCount(request.Cpu)))
 }
 
-// sandboxMemoryLimitScript sets and verifies the memory limit on whichever
-// cgroup hierarchy the sandbox mounted: v2 (memory.max) or v1
-// (memory/memory.limit_in_bytes).
-func sandboxMemoryLimitScript(cgroupRoot string, limitBytes int64) string {
-	return fmt.Sprintf(`limit=%d
-for f in %[2]s/memory.max %[2]s/memory/memory.limit_in_bytes; do
-  [ -f "$f" ] || continue
-  echo "$limit" > "$f" || exit 1
-  [ "$(cat "$f")" = "$limit" ] && exit 0
-  echo "memory limit readback mismatch: $(cat "$f")" >&2
+// requestedCPUCount is the whole number of CPUs a millicore request occupies,
+// which is what nproc should report.
+func requestedCPUCount(millicores int64) int64 {
+	if millicores <= 0 {
+		return 0
+	}
+	return (millicores + 999) / 1000
+}
+
+// sandboxMemoryLimitScript sets and verifies the memory limit and CPU quota
+// on whichever cgroup hierarchy the sandbox mounted, v2 (memory.max, cpu.max)
+// or v1 (memory/memory.limit_in_bytes, cpu/cpu.cfs_*_us), then narrows PID 1's
+// affinity to the first cpus CPUs. A CPU quota of zero or less leaves CPU
+// alone. Readbacks use the read builtin: every fork costs milliseconds in
+// gVisor and this runs on the sandbox-ready path.
+func sandboxMemoryLimitScript(cgroupRoot string, limitBytes, cpuQuota int64, cpuPeriod uint64, cpus int64) string {
+	affinity := "0"
+	if cpus > 1 {
+		affinity = fmt.Sprintf("0-%d", cpus-1)
+	}
+	return fmt.Sprintf(`root=%[1]s
+set_limit() {
+  echo "$2" > "$1" || exit 1
+  read -r v < "$1" || exit 1
+  [ "$v" = "$2" ] && return
+  echo "$1 readback mismatch: $v" >&2
   exit 1
-done
-echo "no cgroup memory limit file under %[2]s" >&2
-exit 1
-`, limitBytes, cgroupRoot)
+}
+if [ -f "$root/memory.max" ]; then
+  set_limit "$root/memory.max" %[2]d
+elif [ -f "$root/memory/memory.limit_in_bytes" ]; then
+  set_limit "$root/memory/memory.limit_in_bytes" %[2]d
+else
+  echo "no cgroup memory limit file under $root" >&2
+  exit 1
+fi
+[ %[3]d -gt 0 ] || exit 0
+if [ -f "$root/cpu.max" ]; then
+  set_limit "$root/cpu.max" "%[3]d %[4]d"
+elif [ -f "$root/cpu/cpu.cfs_quota_us" ]; then
+  set_limit "$root/cpu/cpu.cfs_period_us" %[4]d
+  set_limit "$root/cpu/cpu.cfs_quota_us" %[3]d
+else
+  echo "no cgroup cpu limit file under $root" >&2
+  exit 1
+fi
+if command -v taskset >/dev/null 2>&1; then
+  taskset -a -c -p %[5]s 1 >/dev/null || exit 1
+elif command -v python3 >/dev/null 2>&1; then
+  python3 -c 'import os,sys; n=int(sys.argv[1]); [os.sched_setaffinity(int(t), range(n)) for t in os.listdir("/proc/1/task")]' %[6]d || exit 1
+else
+  echo "no taskset or python3 to set cpu affinity; nproc keeps the host count" >&2
+fi
+`, cgroupRoot, limitBytes, cpuQuota, cpuPeriod, affinity, cpus)
 }
 
 func runSandboxProcessManagerCommand(ctx context.Context, manager *goproc.GoProcClient, args []string, cwd string, env []string, name string) error {

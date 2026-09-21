@@ -1911,7 +1911,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 					"success": fmt.Sprintf("%t", err == nil),
 				})
 				if err != nil && ctx.Err() == nil {
-					log.Error().Err(err).Str("container_id", containerId).Msg("failed to expose sandbox memory limit; workload will see host memory")
+					log.Error().Err(err).Str("container_id", containerId).Msg("failed to expose sandbox memory and cpu limits; workload will see host resources")
 				}
 			}
 			instance.SandboxProcessManager = processManagerClient
