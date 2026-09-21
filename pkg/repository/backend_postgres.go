@@ -2223,6 +2223,10 @@ func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context
 }
 
 func (r *PostgresBackendRepository) GetSecretsByNameDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
+	if workspace.SigningKey == nil || *workspace.SigningKey == "" {
+		return nil, fmt.Errorf("workspace %s has no signing key to decrypt secrets", workspace.ExternalId)
+	}
+
 	secrets, err := r.GetSecretsByName(ctx, workspace, names)
 	if err != nil {
 		return nil, err
@@ -2687,6 +2691,18 @@ func (r *PostgresBackendRepository) GetImageCredentials(ctx context.Context, wor
 	query := `SELECT credential_secret_names FROM image WHERE image_id = $1;`
 	if err := r.client.QueryRowContext(ctx, query, imageId).Scan(&names); err != nil || len(names) == 0 {
 		return "", err
+	}
+
+	// Callers often pass a workspace copied off a container request, which
+	// carries no signing key; decryption needs it.
+	if workspace.SigningKey == nil || *workspace.SigningKey == "" {
+		withKey, err := r.GetWorkspaceByExternalIdWithSigningKey(ctx, workspace.ExternalId)
+		if err != nil {
+			return "", fmt.Errorf("load signing key for workspace %s: %w", workspace.ExternalId, err)
+		}
+		copied := *workspace
+		copied.SigningKey = withKey.SigningKey
+		workspace = &copied
 	}
 
 	secrets, err := r.GetSecretsByNameDecrypted(ctx, workspace, names)
