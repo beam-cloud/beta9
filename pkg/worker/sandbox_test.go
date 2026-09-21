@@ -327,35 +327,97 @@ func TestDockerSandboxShutdownScriptPreservesInnerContainers(t *testing.T) {
 
 func TestSandboxMemoryLimitScriptWritesMountedHierarchy(t *testing.T) {
 	const limit = 16 * 1024 * 1024 * 1024
+	const quota, period, cpus = 400000, 100000, 4
 
-	tests := []struct {
-		name string
-		file string
-	}{
-		{name: "cgroup v2", file: "memory.max"},
-		{name: "cgroup v1", file: "memory/memory.limit_in_bytes"},
+	// Run the script where neither taskset nor python3 resolves, so the
+	// affinity step cannot reach the test host's PID 1; the rest is builtins.
+	run := func(script string) ([]byte, error) {
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = []string{"PATH=/nonexistent"}
+		return cmd.CombinedOutput()
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			path := filepath.Join(root, tt.file)
+	writeFiles := func(t *testing.T, root string, files ...string) {
+		for _, file := range files {
+			path := filepath.Join(root, file)
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte("max\n"), 0o644))
-
-			out, err := exec.Command("sh", "-c", sandboxMemoryLimitScript(root, limit)).CombinedOutput()
-			require.NoError(t, err, string(out))
-
-			contents, err := os.ReadFile(path)
-			require.NoError(t, err)
-			require.Equal(t, strconv.FormatInt(limit, 10), strings.TrimSpace(string(contents)))
-		})
+		}
+	}
+	readFile := func(t *testing.T, root, file string) string {
+		contents, err := os.ReadFile(filepath.Join(root, file))
+		require.NoError(t, err)
+		return strings.TrimSpace(string(contents))
 	}
 
+	t.Run("cgroup v2", func(t *testing.T) {
+		root := t.TempDir()
+		writeFiles(t, root, "memory.max", "cpu.max")
+
+		out, err := run(sandboxMemoryLimitScript(root, limit, quota, period, cpus))
+		require.NoError(t, err, string(out))
+		require.Equal(t, strconv.FormatInt(limit, 10), readFile(t, root, "memory.max"))
+		require.Equal(t, "400000 100000", readFile(t, root, "cpu.max"))
+	})
+
+	// The layout gVisor mounts: the process's cgroup is the mount root, so the
+	// controller files at the root are what cargo, the JVM and Node read.
+	t.Run("cgroup v1", func(t *testing.T) {
+		root := t.TempDir()
+		writeFiles(t, root, "memory/memory.limit_in_bytes", "cpu/cpu.cfs_quota_us", "cpu/cpu.cfs_period_us")
+
+		out, err := run(sandboxMemoryLimitScript(root, limit, quota, period, cpus))
+		require.NoError(t, err, string(out))
+		require.Equal(t, strconv.FormatInt(limit, 10), readFile(t, root, "memory/memory.limit_in_bytes"))
+		require.Equal(t, "400000", readFile(t, root, "cpu/cpu.cfs_quota_us"))
+		require.Equal(t, "100000", readFile(t, root, "cpu/cpu.cfs_period_us"))
+	})
+
+	t.Run("no cpu request leaves cpu files alone", func(t *testing.T) {
+		root := t.TempDir()
+		writeFiles(t, root, "memory/memory.limit_in_bytes", "cpu/cpu.cfs_quota_us", "cpu/cpu.cfs_period_us")
+
+		out, err := run(sandboxMemoryLimitScript(root, limit, 0, period, 0))
+		require.NoError(t, err, string(out))
+		require.Equal(t, strconv.FormatInt(limit, 10), readFile(t, root, "memory/memory.limit_in_bytes"))
+		require.Equal(t, "max", readFile(t, root, "cpu/cpu.cfs_quota_us"))
+	})
+
 	t.Run("no cgroup mounted", func(t *testing.T) {
-		out, err := exec.Command("sh", "-c", sandboxMemoryLimitScript(t.TempDir(), limit)).CombinedOutput()
+		out, err := run(sandboxMemoryLimitScript(t.TempDir(), limit, quota, period, cpus))
 		require.Error(t, err)
 		require.Contains(t, string(out), "no cgroup memory limit file")
 	})
+
+	t.Run("memory mounted without cpu controller", func(t *testing.T) {
+		root := t.TempDir()
+		writeFiles(t, root, "memory/memory.limit_in_bytes")
+
+		out, err := run(sandboxMemoryLimitScript(root, limit, quota, period, cpus))
+		require.Error(t, err)
+		require.Contains(t, string(out), "no cgroup cpu limit file")
+		require.Equal(t, strconv.FormatInt(limit, 10), readFile(t, root, "memory/memory.limit_in_bytes"), "memory is written before the cpu check fails")
+	})
+
+	t.Run("affinity narrows PID 1 to the requested cpus", func(t *testing.T) {
+		require.Contains(t, sandboxMemoryLimitScript("/sys/fs/cgroup", limit, quota, period, 4), "taskset -a -c -p 0-3 1 ")
+		require.Contains(t, sandboxMemoryLimitScript("/sys/fs/cgroup", limit, 100000, period, 1), "taskset -a -c -p 0 1 ")
+		require.Contains(t, sandboxMemoryLimitScript("/sys/fs/cgroup", limit, quota, period, 4), `os.listdir("/proc/1/task")]' 4 `)
+	})
+
+	t.Run("no affinity tool is not an error", func(t *testing.T) {
+		root := t.TempDir()
+		writeFiles(t, root, "memory/memory.limit_in_bytes", "cpu/cpu.cfs_quota_us", "cpu/cpu.cfs_period_us")
+
+		out, err := run(sandboxMemoryLimitScript(root, limit, quota, period, cpus))
+		require.NoError(t, err, string(out))
+		require.Contains(t, string(out), "no taskset or python3")
+	})
+}
+
+func TestRequestedCPUCount(t *testing.T) {
+	for millicores, want := range map[int64]int64{0: 0, -1: 0, 1: 1, 500: 1, 1000: 1, 1001: 2, 1500: 2, 4000: 4, 255000: 255} {
+		require.Equal(t, want, requestedCPUCount(millicores), "millicores=%d", millicores)
+	}
 }
 
 func TestExposeSandboxMemoryLimitOnlyTargetsGvisorRequests(t *testing.T) {
