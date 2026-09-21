@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	pkgCommon "github.com/beam-cloud/beta9/pkg/common"
 	repositoryCommon "github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,6 +131,53 @@ func TestGetAdminWorkspaceIncludesStorageForAgentScheduling(t *testing.T) {
 	cached, err := repo.GetAdminWorkspace(context.Background())
 	require.NoError(t, err)
 	require.True(t, cached.StorageAvailable())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The scheduler passes the workspace copied onto a container request, which
+// carries no signing key. Decryption must load it instead of dereferencing nil.
+func TestGetImageCredentialsLoadsSigningKeyWhenWorkspaceLacksIt(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	signingKey := "sk_pKz38fK8v7lz01AneJI8MJnR70akmP2CtDNf1IufKcY="
+	key, err := pkgCommon.ParseSecretKey(signingKey)
+	require.NoError(t, err)
+	encryptedUser, err := pkgCommon.Encrypt(key, "user")
+	require.NoError(t, err)
+	encryptedToken, err := pkgCommon.Encrypt(key, "token")
+	require.NoError(t, err)
+	now := time.Now().UTC()
+
+	mock.ExpectQuery(`SELECT credential_secret_names FROM image WHERE image_id = \$1`).
+		WithArgs("image-1").
+		WillReturnRows(sqlmock.NewRows([]string{"credential_secret_names"}).AddRow(pq.StringArray{"REG_USERNAME", "REG_PASSWORD"}))
+	mock.ExpectQuery(`SELECT id, name, created_at, concurrency_limit_id, signing_key, volume_cache_enabled, multi_gpu_enabled FROM workspace WHERE external_id = \$1`).
+		WithArgs("workspace-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "created_at", "concurrency_limit_id", "signing_key", "volume_cache_enabled", "multi_gpu_enabled"}).
+			AddRow(uint(7), "Workspace", now, nil, signingKey, false, false))
+	mock.ExpectQuery(`SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = ANY\(\$1\) AND workspace_id = \$2`).
+		WithArgs(pq.Array([]string{"REG_USERNAME", "REG_PASSWORD"}), uint(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "name", "value", "workspace_id", "last_updated_by", "created_at", "updated_at"}).
+			AddRow(uint(1), "secret-1", "REG_USERNAME", encryptedUser, uint(7), uint(1), now, now).
+			AddRow(uint(2), "secret-2", "REG_PASSWORD", encryptedToken, uint(7), uint(1), now, now))
+
+	request := &types.ContainerRequest{
+		ImageId:     "image-1",
+		WorkspaceId: "workspace-1",
+		Workspace:   types.Workspace{Id: 7, ExternalId: "workspace-1"},
+	}
+	credentials, err := repo.GetImageCredentials(context.Background(), &request.Workspace, request.ImageId)
+	require.NoError(t, err)
+	require.Contains(t, credentials, "user")
+	require.Contains(t, credentials, "token")
+	require.Nil(t, request.Workspace.SigningKey, "the caller's copy must not gain the signing key")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSecretsByNameDecryptedRejectsWorkspaceWithoutSigningKey(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+
+	_, err := repo.GetSecretsByNameDecrypted(context.Background(), &types.Workspace{Id: 7, ExternalId: "workspace-1"}, []string{"REG_USERNAME"})
+	require.ErrorContains(t, err, "no signing key")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
