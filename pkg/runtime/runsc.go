@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -24,7 +26,14 @@ const (
 	runscGPUAnnotation            = "com.beam.gvisor.nvproxy"
 	runscAllowUnsupportedDriver   = "--nvproxy-allow-unsupported-driver"
 	cudaCheckpointContainerPath   = "/usr/local/bin/cuda-checkpoint"
+	runscCheckpointImageName      = "checkpoint.img"
+	runscCheckpointSpecsKey       = "container_specs"
+	runscCheckpointMaxMetadata    = 16 * 1024 * 1024
+	sandboxCgroupMountDestination = "/sys/fs/cgroup"
 )
+
+// runscStateFileMagic opens every runsc state file ("gVisorSF").
+var runscStateFileMagic = []byte{0x67, 0x56, 0x69, 0x73, 0x6f, 0x72, 0x53, 0x46}
 
 // Runsc implements Runtime using the gVisor runsc runtime
 //
@@ -450,6 +459,10 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
+	if err := alignRestoreSpecCgroupMount(opts.BundlePath, opts.ImagePath); err != nil {
+		log.Warn().Err(err).Str("container_id", containerID).Msg("failed to align restore spec cgroup mount with checkpoint")
+	}
+
 	// Ensure directories exist
 	if opts.WorkDir != "" {
 		if err := os.MkdirAll(opts.WorkDir, 0755); err != nil {
@@ -640,6 +653,145 @@ func (r *Runsc) bundleUsesGPU(bundlePath string) (bool, error) {
 		return false, fmt.Errorf("failed to decode container bundle: %w", err)
 	}
 	return spec.Annotations[runscGPUAnnotation] == "true" || r.hasGPUDevices(&spec), nil
+}
+
+// alignRestoreSpecCgroupMount rewrites the bundle so its /sys/fs/cgroup mount
+// matches the spec saved in the checkpoint: present with the checkpoint's
+// definition, or absent. runsc refuses to restore when the two specs' mounts
+// differ, and the cgroupfs mount is virtual, so a checkpoint taken before the
+// base config requested it restores without it and one taken with it restores
+// with it. Every other mount is left alone so real mismatches still surface.
+func alignRestoreSpecCgroupMount(bundlePath, imagePath string) error {
+	if bundlePath == "" || imagePath == "" {
+		return nil
+	}
+
+	checkpointSpecs, err := readRunscCheckpointSpecs(imagePath)
+	if err != nil {
+		return err
+	}
+	checkpointMount, checkpointHasMount := findMount(mergeSpecMounts(checkpointSpecs), sandboxCgroupMountDestination)
+
+	configPath := filepath.Join(bundlePath, "config.json")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read restore bundle: %w", err)
+	}
+	var spec specs.Spec
+	if err := json.Unmarshal(config, &spec); err != nil {
+		return fmt.Errorf("decode restore bundle: %w", err)
+	}
+	restoreMount, restoreHasMount := findMount(spec.Mounts, sandboxCgroupMountDestination)
+	if checkpointHasMount == restoreHasMount && (!restoreHasMount || mountsEqual(checkpointMount, restoreMount)) {
+		return nil
+	}
+
+	mounts := make([]specs.Mount, 0, len(spec.Mounts)+1)
+	for _, m := range spec.Mounts {
+		if filepath.Clean(m.Destination) != sandboxCgroupMountDestination {
+			mounts = append(mounts, m)
+		}
+	}
+	if checkpointHasMount {
+		mounts = append(mounts, checkpointMount)
+	}
+	spec.Mounts = mounts
+
+	updated, err := json.Marshal(&spec)
+	if err != nil {
+		return fmt.Errorf("encode restore bundle: %w", err)
+	}
+	if err := os.WriteFile(configPath, updated, 0644); err != nil {
+		return fmt.Errorf("write restore bundle: %w", err)
+	}
+	log.Info().
+		Str("bundle", bundlePath).
+		Bool("checkpoint_mounts_cgroup", checkpointHasMount).
+		Msg("aligned restore spec cgroup mount with checkpoint")
+	return nil
+}
+
+// readRunscCheckpointSpecs returns the OCI specs runsc saved alongside a
+// checkpoint. A runsc state file opens with an 8-byte magic, an 8-byte
+// big-endian metadata length and a JSON string map; the specs are the map's
+// "container_specs" entry, keyed by container name.
+func readRunscCheckpointSpecs(imagePath string) (map[string]*specs.Spec, error) {
+	image, err := os.Open(filepath.Join(imagePath, runscCheckpointImageName))
+	if err != nil {
+		return nil, fmt.Errorf("open checkpoint image: %w", err)
+	}
+	defer image.Close()
+
+	header := make([]byte, len(runscStateFileMagic)+8)
+	if _, err := io.ReadFull(image, header); err != nil {
+		return nil, fmt.Errorf("read checkpoint image header: %w", err)
+	}
+	if !bytes.Equal(header[:len(runscStateFileMagic)], runscStateFileMagic) {
+		return nil, fmt.Errorf("checkpoint image is not a runsc state file")
+	}
+	metadataLen := binary.BigEndian.Uint64(header[len(runscStateFileMagic):])
+	if metadataLen > runscCheckpointMaxMetadata {
+		return nil, fmt.Errorf("checkpoint metadata length %d exceeds %d", metadataLen, runscCheckpointMaxMetadata)
+	}
+
+	rawMetadata := make([]byte, metadataLen)
+	if _, err := io.ReadFull(image, rawMetadata); err != nil {
+		return nil, fmt.Errorf("read checkpoint metadata: %w", err)
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal(rawMetadata, &metadata); err != nil {
+		return nil, fmt.Errorf("decode checkpoint metadata: %w", err)
+	}
+	rawSpecs, ok := metadata[runscCheckpointSpecsKey]
+	if !ok {
+		return nil, fmt.Errorf("checkpoint metadata has no %s", runscCheckpointSpecsKey)
+	}
+	var containerSpecs map[string]*specs.Spec
+	if err := json.Unmarshal([]byte(rawSpecs), &containerSpecs); err != nil {
+		return nil, fmt.Errorf("decode checkpoint container specs: %w", err)
+	}
+	if len(containerSpecs) == 0 {
+		return nil, fmt.Errorf("checkpoint metadata has no container specs")
+	}
+	return containerSpecs, nil
+}
+
+func mergeSpecMounts(containerSpecs map[string]*specs.Spec) []specs.Mount {
+	var mounts []specs.Mount
+	for _, spec := range containerSpecs {
+		if spec != nil {
+			mounts = append(mounts, spec.Mounts...)
+		}
+	}
+	return mounts
+}
+
+func findMount(mounts []specs.Mount, destination string) (specs.Mount, bool) {
+	for _, m := range mounts {
+		if filepath.Clean(m.Destination) == destination {
+			return m, true
+		}
+	}
+	return specs.Mount{}, false
+}
+
+// mountsEqual compares mounts the way runsc's restore validation does: by
+// destination, type and option set, ignoring source.
+func mountsEqual(a, b specs.Mount) bool {
+	if filepath.Clean(a.Destination) != filepath.Clean(b.Destination) || a.Type != b.Type || len(a.Options) != len(b.Options) {
+		return false
+	}
+	options := make(map[string]int, len(a.Options))
+	for _, opt := range a.Options {
+		options[opt]++
+	}
+	for _, opt := range b.Options {
+		if options[opt] == 0 {
+			return false
+		}
+		options[opt]--
+	}
+	return true
 }
 
 func (r *Runsc) Close() error {

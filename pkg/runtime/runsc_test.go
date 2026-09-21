@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"os"
@@ -260,4 +262,177 @@ func writeRunscBundle(t *testing.T, dir string, gpu bool) string {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(bundlePath, "config.json"), data, 0o644))
 	return bundlePath
+}
+
+var (
+	testProcMount   = specs.Mount{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}}
+	testCgroupMount = specs.Mount{Destination: "/sys/fs/cgroup", Type: "cgroup", Source: "cgroup", Options: []string{"nosuid", "noexec", "nodev", "relatime"}}
+)
+
+func writeRunscBundleWithMounts(t *testing.T, dir string, mounts ...specs.Mount) string {
+	t.Helper()
+	bundlePath := filepath.Join(dir, "bundle")
+	require.NoError(t, os.MkdirAll(bundlePath, 0o755))
+	data, err := json.Marshal(specs.Spec{Linux: &specs.Linux{}, Mounts: mounts})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(bundlePath, "config.json"), data, 0o644))
+	return bundlePath
+}
+
+// writeRunscCheckpointImage lays out checkpoint.img the way runsc does: magic,
+// big-endian metadata length, JSON metadata holding the container specs, then
+// opaque state data.
+func writeRunscCheckpointImage(t *testing.T, dir string, mounts ...specs.Mount) string {
+	t.Helper()
+	imagePath := filepath.Join(dir, "checkpoint")
+	require.NoError(t, os.MkdirAll(imagePath, 0o755))
+	containerSpecs, err := json.Marshal(map[string]*specs.Spec{"__no_name_0": {Mounts: mounts}})
+	require.NoError(t, err)
+	metadata, err := json.Marshal(map[string]string{"runsc_version": "test", runscCheckpointSpecsKey: string(containerSpecs)})
+	require.NoError(t, err)
+	var image bytes.Buffer
+	image.Write(runscStateFileMagic)
+	require.NoError(t, binary.Write(&image, binary.BigEndian, uint64(len(metadata))))
+	image.Write(metadata)
+	image.WriteString("state data that must never be parsed")
+	require.NoError(t, os.WriteFile(filepath.Join(imagePath, runscCheckpointImageName), image.Bytes(), 0o644))
+	return imagePath
+}
+
+func readBundleMounts(t *testing.T, bundlePath string) []specs.Mount {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(bundlePath, "config.json"))
+	require.NoError(t, err)
+	var spec specs.Spec
+	require.NoError(t, json.Unmarshal(data, &spec))
+	return spec.Mounts
+}
+
+// Checkpoints taken before the base config requested /sys/fs/cgroup must keep
+// restoring: runsc rejects a restore whose mounts differ from the checkpoint.
+func TestAlignRestoreSpecCgroupMount(t *testing.T) {
+	tests := []struct {
+		name       string
+		checkpoint []specs.Mount
+		bundle     []specs.Mount
+		want       []specs.Mount
+	}{
+		{
+			name:       "drops mount the checkpoint predates",
+			checkpoint: []specs.Mount{testProcMount},
+			bundle:     []specs.Mount{testProcMount, testCgroupMount},
+			want:       []specs.Mount{testProcMount},
+		},
+		{
+			name:       "adds mount the checkpoint was taken with",
+			checkpoint: []specs.Mount{testProcMount, testCgroupMount},
+			bundle:     []specs.Mount{testProcMount},
+			want:       []specs.Mount{testProcMount, testCgroupMount},
+		},
+		{
+			name:       "leaves matching specs alone",
+			checkpoint: []specs.Mount{testProcMount, testCgroupMount},
+			bundle:     []specs.Mount{testProcMount, testCgroupMount},
+			want:       []specs.Mount{testProcMount, testCgroupMount},
+		},
+		{
+			name:       "leaves specs without the mount alone",
+			checkpoint: []specs.Mount{testProcMount},
+			bundle:     []specs.Mount{testProcMount},
+			want:       []specs.Mount{testProcMount},
+		},
+		{
+			name:       "only touches the cgroup mount",
+			checkpoint: []specs.Mount{testProcMount, {Destination: "/volumes/a", Type: "bind", Source: "/a"}},
+			bundle:     []specs.Mount{testProcMount, testCgroupMount, {Destination: "/volumes/b", Type: "bind", Source: "/b"}},
+			want:       []specs.Mount{testProcMount, {Destination: "/volumes/b", Type: "bind", Source: "/b"}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bundlePath := writeRunscBundleWithMounts(t, dir, test.bundle...)
+			imagePath := writeRunscCheckpointImage(t, dir, test.checkpoint...)
+
+			require.NoError(t, alignRestoreSpecCgroupMount(bundlePath, imagePath))
+			require.Equal(t, test.want, readBundleMounts(t, bundlePath))
+		})
+	}
+}
+
+func TestAlignRestoreSpecCgroupMountLeavesBundleWhenCheckpointUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := writeRunscBundleWithMounts(t, dir, testProcMount, testCgroupMount)
+
+	missing := filepath.Join(dir, "missing")
+	require.Error(t, alignRestoreSpecCgroupMount(bundlePath, missing))
+	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, readBundleMounts(t, bundlePath))
+
+	corrupt := filepath.Join(dir, "corrupt")
+	require.NoError(t, os.MkdirAll(corrupt, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(corrupt, runscCheckpointImageName), []byte("not a state file"), 0o644))
+	require.Error(t, alignRestoreSpecCgroupMount(bundlePath, corrupt))
+	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, readBundleMounts(t, bundlePath))
+}
+
+func TestReadRunscCheckpointSpecs(t *testing.T) {
+	dir := t.TempDir()
+	imagePath := writeRunscCheckpointImage(t, dir, testProcMount, testCgroupMount)
+
+	containerSpecs, err := readRunscCheckpointSpecs(imagePath)
+	require.NoError(t, err)
+	require.Len(t, containerSpecs, 1)
+	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, containerSpecs["__no_name_0"].Mounts)
+}
+
+// The restore command must see the aligned bundle, not the one the worker wrote.
+func TestRunscRestoreAlignsBundleCgroupMountBeforeRestoring(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := writeRunscBundleWithMounts(t, dir, testProcMount, testCgroupMount)
+	imagePath := writeRunscCheckpointImage(t, dir, testProcMount)
+	mountsAtRestore := filepath.Join(dir, "mounts-at-restore.json")
+	runscPath := filepath.Join(dir, "runsc")
+	require.NoError(t, os.WriteFile(runscPath, []byte(`#!/bin/sh
+set -eu
+cmd=""
+for arg in "$@"; do
+  case "$arg" in
+    flags|restore|state|wait|delete)
+      cmd="$arg"
+      break
+      ;;
+  esac
+done
+case "$cmd" in
+  flags) ;;
+  restore)
+    cp "$RUNSC_FAKE_BUNDLE/config.json" "$RUNSC_FAKE_MOUNTS"
+    ;;
+  state)
+    printf '{"id":"container-1","pid":4321,"status":"running"}'
+    ;;
+  wait|delete) ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 1
+    ;;
+esac
+`), 0o755))
+	t.Setenv("RUNSC_FAKE_BUNDLE", bundlePath)
+	t.Setenv("RUNSC_FAKE_MOUNTS", mountsAtRestore)
+
+	rt, err := NewRunsc(Config{RunscPath: runscPath, RunscRoot: filepath.Join(dir, "root")})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := make(chan int, 1)
+	_, err = rt.Restore(ctx, "container-1", &RestoreOpts{ImagePath: imagePath, BundlePath: bundlePath, Started: started})
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(mountsAtRestore)
+	require.NoError(t, err)
+	var spec specs.Spec
+	require.NoError(t, json.Unmarshal(data, &spec))
+	require.Equal(t, []specs.Mount{testProcMount}, spec.Mounts)
 }
