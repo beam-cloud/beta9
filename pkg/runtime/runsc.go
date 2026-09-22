@@ -24,6 +24,10 @@ const (
 	runscRestoreStatePollInterval = 25 * time.Millisecond
 	runscDeleteTimeout            = 5 * time.Second
 	runscGPUAnnotation            = "com.beam.gvisor.nvproxy"
+	// RunscTotalMemoryAnnotation tells runsc (beam-cloud/gvisor
+	// release-20260714.0-beam.9 and later) the total memory, in bytes, to report
+	// to the application instead of the sandbox cgroup's limit.
+	RunscTotalMemoryAnnotation    = "dev.gvisor.internal.total-memory"
 	runscAllowUnsupportedDriver   = "--nvproxy-allow-unsupported-driver"
 	cudaCheckpointContainerPath   = "/usr/local/bin/cuda-checkpoint"
 	runscCheckpointImageName      = "checkpoint.img"
