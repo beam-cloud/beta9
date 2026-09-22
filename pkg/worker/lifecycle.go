@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1243,6 +1244,17 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if memoryEnforced && resources.Memory != nil {
 			spec.Linux.Resources.Unified = cgroupV2Parameters()
 			spec.Linux.Resources.Memory = resources.Memory
+		}
+	}
+
+	// gVisor reports the memory of the cgroup it runs in, which carries
+	// headroom for the sentry; tell it to report the request instead.
+	if request.Memory > 0 {
+		if instance, exists := s.containerInstances.Get(request.ContainerId); exists && instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
+			if spec.Annotations == nil {
+				spec.Annotations = make(map[string]string)
+			}
+			spec.Annotations[runtime.RunscTotalMemoryAnnotation] = strconv.FormatInt(request.Memory*1024*1024, 10)
 		}
 	}
 
