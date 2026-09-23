@@ -722,6 +722,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	} else if subPath == "" {
 		subPath = "/"
 	}
+	routePrefix := podPathPrefix(request.RequestURI, subPath)
 
 	request.URL.Scheme = "http"
 	request.URL.Host = podBackendHost(targetHost)
@@ -743,6 +744,13 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	if err != nil {
 		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
 		return false
+	}
+
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if location := resp.Header.Get("Location"); location != "" {
+			resp.Header.Set("Location", rewriteRedirect(location, routePrefix, targetHost))
+		}
+		return nil
 	}
 
 	var retryErr error
@@ -891,6 +899,38 @@ func podBackendHost(address string) string {
 		return "backend.route"
 	}
 	return address
+}
+
+// podPathPrefix is the part of the browser-facing path in front of subPath
+// (`/pod/<name>/latest/<port>`); empty for subdomain-routed requests, whose
+// raw request line already starts at subPath.
+func podPathPrefix(requestURI, subPath string) string {
+	raw, _, _ := strings.Cut(requestURI, "?")
+	if subPath == "/" {
+		return strings.TrimSuffix(raw, "/")
+	}
+	if strings.HasSuffix(raw, subPath) {
+		return raw[:len(raw)-len(subPath)]
+	}
+	return ""
+}
+
+// rewriteRedirect keeps an app's redirects inside its path prefix: root-relative
+// Locations and absolute ones addressed to the backend itself get the prefix.
+func rewriteRedirect(location, prefix, backendHost string) string {
+	if prefix == "" {
+		return location
+	}
+	if u, err := url.Parse(location); err == nil && u.Host != "" {
+		if u.Host != backendHost && u.Host != podBackendHost(backendHost) {
+			return location
+		}
+		location = u.RequestURI()
+	}
+	if !strings.HasPrefix(location, "/") || strings.HasPrefix(location, "//") || strings.HasPrefix(location, prefix+"/") || location == prefix {
+		return location
+	}
+	return prefix + location
 }
 
 func (pb *PodProxyBuffer) backendProxy(targetHost string, dialTimeout time.Duration) (*httputil.ReverseProxy, error) {

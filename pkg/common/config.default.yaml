@@ -72,7 +72,7 @@ storage:
       cacheThroughEnabled: true
 gateway:
   host: beta9-gateway
-  invokeURLType: path
+  invokeURLType: host
   grpc:
     externalHost: beta9-gateway
     externalPort: 1993
