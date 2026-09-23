@@ -23,9 +23,9 @@ const (
 	webhookWorkers         = 4 // one slow receiver must not stall every workspace's deliveries
 	webhookCacheTTL        = 15 * time.Second
 	webhookHTTPTimeout     = 10 * time.Second
-	webhookSignatureHeader = "X-Beam-Signature"
-	webhookEventHeader     = "X-Beam-Event"
-	webhookDeliveryHeader  = "X-Beam-Delivery"
+	webhookSignatureHeader = "X-Beta9-Signature"
+	webhookEventHeader     = "X-Beta9-Event"
+	webhookDeliveryHeader  = "X-Beta9-Delivery"
 )
 
 // Never fanned out to webhooks.

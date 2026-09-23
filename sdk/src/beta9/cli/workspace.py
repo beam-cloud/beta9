@@ -1,5 +1,5 @@
 """
-`beam workspace duplicate|sync`: copy every app's latest active deployment,
+`workspace duplicate|sync`: copy every app's latest active deployment,
 secrets and databases from one context to another over existing gateway routes.
 """
 

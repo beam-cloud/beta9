@@ -1,6 +1,6 @@
 """
-`beam mcp`: an MCP server over stdio plus installers for agent clients. Tools
-run the equivalent `beam --json` command and return its JSON.
+`mcp`: an MCP server over stdio plus installers for agent clients. Tools run
+the equivalent CLI command with `--json` and return its JSON.
 """
 
 import datetime
@@ -17,7 +17,7 @@ import click
 
 from .. import terminal
 from ..channel import GatewayHTTP, GatewayHTTPError, ServiceClient, _sdk_version
-from ..config import DEFAULT_CONTEXT_NAME, get_config_context
+from ..config import DEFAULT_CONTEXT_NAME, get_config_context, get_settings
 from ..references import complete, validate_env
 from . import extraclick
 from .extraclick import ClickCommonGroup, cli_command, parse_last_json
@@ -30,7 +30,10 @@ from .stubconfig import (
 )
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_NAME = "beam"
+
+
+def _server_name() -> str:
+    return get_settings().name.lower()
 
 
 @click.group(cls=ClickCommonGroup)
@@ -38,7 +41,7 @@ def common(**_):
     pass
 
 
-@common.group(name="mcp", help="Run or install the Beam MCP server for coding agents.")
+@common.group(name="mcp", help="Run or install the MCP server for coding agents.")
 def mcp():
     pass
 
@@ -142,7 +145,7 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         "deploy",
-        "Deploy an app from a local directory (runs `beam deploy` there). Returns deployment_id, version and invoke_url. "
+        "Deploy an app from a local directory (runs the CLI's deploy there). Returns deployment_id, version and invoke_url. "
         "invoke_url is pinned to this version; wire other services with ${{app.<name>.URL}} instead of copying it.",
         _obj(
             {
@@ -426,7 +429,7 @@ def _http(context: Optional[str]) -> GatewayHTTP:
 
 def _cli_env() -> Dict[str, str]:
     env = {**os.environ, "BETA9_NO_INPUT": "1"}
-    env.setdefault("BEAM_CALLER", f"mcp/{_sdk_version()}")
+    env.setdefault("BETA9_CALLER", f"mcp/{_sdk_version()}")
     return env
 
 
@@ -952,7 +955,7 @@ TOOLS += [
     ),
     Tool(
         "template_plan",
-        "Show the ordered steps of a template manifest (path, URL, or a name from beam-cloud/templates).",
+        "Show the ordered steps of a template manifest (path, URL, or a catalog name).",
         _obj(
             {"source": {"type": "string"}, "prefix": {"type": "string", "default": ""}}, ["source"]
         ),
@@ -1262,9 +1265,9 @@ class StdioServer:
                 {
                     "protocolVersion": params.get("protocolVersion") or PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": SERVER_NAME, "version": _sdk_version()},
+                    "serverInfo": {"name": get_settings().name.lower(), "version": _sdk_version()},
                     "instructions": (
-                        "Beam runs serverless GPU/CPU apps, one-off containers and managed databases. "
+                        f"{get_settings().name} runs serverless GPU/CPU apps, one-off containers and managed databases. "
                         "Start with whoami and list_apps. Ship code with deploy (from a project directory), "
                         "then wait_deployment on the returned deployment_id, invoke it by app name, and read "
                         "logs. Provision databases with create_database and wire them with connect_services "
@@ -1356,17 +1359,17 @@ def _merge_json(path: Path, key: str, entry: Dict[str, Any]) -> None:
                 f"{path} is not valid JSON; fix it or pass --print to install by hand."
             )
     servers = data.setdefault(key, {})
-    servers[SERVER_NAME] = entry
+    servers[_server_name()] = entry
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
 def _codex_toml(path: Path, entry: Dict[str, Any]) -> None:
-    block = f'\n[mcp_servers.{SERVER_NAME}]\ncommand = "{entry["command"]}"\nargs = {json.dumps(entry["args"])}\n'
+    block = f'\n[mcp_servers.{_server_name()}]\ncommand = "{entry["command"]}"\nargs = {json.dumps(entry["args"])}\n'
     existing = path.read_text() if path.exists() else ""
-    if f"[mcp_servers.{SERVER_NAME}]" in existing:
+    if f"[mcp_servers.{_server_name()}]" in existing:
         terminal.detail(
-            f"{path} already has a [mcp_servers.{SERVER_NAME}] block; leaving it unchanged."
+            f"{path} already has a [mcp_servers.{_server_name()}] block; leaving it unchanged."
         )
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1410,7 +1413,7 @@ def install(client: str, project: bool, print_only: bool, context: Optional[str]
     entry = _server_entry(context)
     path = _client_path(client, project)
     if print_only or path is None:
-        terminal.print_json({"mcpServers": {SERVER_NAME: entry}})
+        terminal.print_json({"mcpServers": {_server_name(): entry}})
         return
 
     if client == "codex":
@@ -1421,6 +1424,6 @@ def install(client: str, project: bool, print_only: bool, context: Optional[str]
     if terminal.json_output():
         terminal.print_json({"client": client, "path": str(path), "server": entry})
     else:
-        terminal.success(f"Registered the {SERVER_NAME} MCP server for {client}")
+        terminal.success(f"Registered the {_server_name()} MCP server for {client}")
         terminal.detail(f"{path}")
         terminal.detail("Restart the client to pick it up.")

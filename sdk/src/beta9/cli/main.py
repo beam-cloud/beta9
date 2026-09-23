@@ -16,7 +16,6 @@ from ..config import SDKSettings, is_config_empty, set_settings
 from ..exceptions import ImageBuildError
 from . import (
     api,
-    code,
     config,
     container,
     database,
@@ -25,7 +24,6 @@ from . import (
     disk,
     endpoints,
     image,
-    infra,
     logs,
     machine,
     mcp,
@@ -119,7 +117,6 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(template)
     cli.register(status)
     cli.register(api)
-    cli.register(code)
     cli.register(mcp)
     cli.register(setup)
     cli.register(skills)
@@ -130,7 +127,6 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(workspace)
     cli.register(disk)
     cli.register(image)
-    cli.register(infra)
     cli.register(logs)
     cli.register(config)
     cli.register(pool)

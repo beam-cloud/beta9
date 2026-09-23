@@ -24,8 +24,8 @@ type AuthInfo struct {
 }
 
 const (
-	CallerHeader       = "x-beam-caller"
-	AgentSessionHeader = "x-beam-agent-session"
+	CallerHeader       = "x-beta9-caller"
+	AgentSessionHeader = "x-beta9-agent-session"
 )
 
 func actorFromMetadata(md metadata.MD) types.EventActor {

@@ -329,7 +329,7 @@ type EventStubSchema struct {
 	EventActor
 }
 
-// WorkspaceWebhook receives CloudEvents JSON signed with HMAC-SHA256(Secret) in `X-Beam-Signature`.
+// WorkspaceWebhook receives CloudEvents JSON signed with HMAC-SHA256(Secret) in `X-Beta9-Signature`.
 type WorkspaceWebhook struct {
 	ExternalId  string    `json:"id"`
 	URL         string    `json:"url"`
@@ -340,7 +340,7 @@ type WorkspaceWebhook struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// EventActor is the request attribution (X-Beam-Caller / X-Beam-Agent-Session) on control-plane events.
+// EventActor is the request attribution (X-Beta9-Caller / X-Beta9-Agent-Session) on control-plane events.
 type EventActor struct {
 	Caller       string `json:"caller,omitempty"`
 	AgentSession string `json:"agent_session,omitempty"`

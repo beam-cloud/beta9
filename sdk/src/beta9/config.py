@@ -57,6 +57,9 @@ class SDKSettings:
     # "https://platform.beam.cloud/app/{app_id}/overview". Empty when there is
     # no dashboard to link to (plain beta9 installs without one).
     app_url_template: str = os.getenv("BETA9_APP_URL_TEMPLATE", "")
+    # Catalogs `template deploy <name>` and `skills install` read from; empty means path/URL only.
+    templates_url: str = os.getenv("BETA9_TEMPLATES_URL", "")
+    skills_repo: str = os.getenv("BETA9_SKILLS_REPO", "")
 
     @property
     def api_url(self) -> str:
@@ -78,6 +81,10 @@ class SDKSettings:
                 self.config_path = Path("~/.beam/config.ini").expanduser()
             self.use_defaults_in_prompt = True
             self.api_token = os.getenv("BEAM_TOKEN")
+            self.templates_url = (
+                self.templates_url or "https://raw.githubusercontent.com/beam-cloud/templates/main"
+            )
+            self.skills_repo = self.skills_repo or "https://github.com/beam-cloud/beam-skills"
 
             # The dashboard lives at platform.<domain>, mirroring the api host
             # at app.<domain> (e.g. app.beam.cloud -> platform.beam.cloud)

@@ -117,7 +117,7 @@ def load_module_spec(specfile: str, command: str):
 
     if not obj_name:
         terminal.error(
-            f"Invalid handler function specified. Expected format: beam {command} [file.py]:[function]"
+            f"Invalid handler function specified. Expected format: {terminal.cli_name()} {command} [file.py]:[function]"
         )
 
     try:

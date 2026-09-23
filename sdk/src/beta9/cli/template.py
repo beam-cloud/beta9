@@ -1,5 +1,5 @@
 """
-`beam template`: multi-service templates as YAML manifests.
+`template`: multi-service templates as YAML manifests.
 
     name: fastapi-postgres
     description: FastAPI + Postgres + Redis
@@ -30,11 +30,11 @@
 
 The orchestrator orders services by their `${{db.*}}` / `${{app.*}}` references
 and runs each through the same paths the CLI already has: databases through
-the gateway's database routes, image and repo services through `beam deploy`.
+the gateway's database routes, image and repo services through `deploy`.
 References themselves are expanded by the gateway. Deployed services are
 grouped into a stack named after the manifest.
 
-`beam template import` converts a docker-compose.yml into this format.
+`template import` converts a docker-compose.yml into this format.
 """
 
 import os
@@ -52,13 +52,13 @@ import yaml
 
 from .. import terminal
 from ..channel import GatewayHTTPError, ServiceClient
+from ..config import get_settings
 from ..clients.gateway import ListDeploymentsRequest, StringList
 from ..references import validate_env
 from . import extraclick
 from .extraclick import ClickCommonGroup, cli_command, parse_last_json
 from .stubconfig import stub_config
 
-TEMPLATE_REPO_RAW = "https://raw.githubusercontent.com/beam-cloud/templates/main"
 REF_RE = re.compile(r"\$\{\{\s*(db|app)\.([^.}\s]+)\.[^}]*\}\}")
 DATABASE_IMAGES = {
     "postgres": "postgres",
@@ -90,14 +90,19 @@ def template():
 
 
 def load_manifest(source: str) -> Dict[str, Any]:
-    """Read a manifest from a path, URL, or a name in the templates catalog."""
+    """Read a manifest from a path, URL, or a name in the configured templates catalog."""
     if source.startswith(("http://", "https://")):
         text = _fetch(source)
     elif os.path.exists(source):
         with open(source) as f:
             text = f.read()
     else:
-        text = _fetch(f"{TEMPLATE_REPO_RAW}/{source}.yaml")
+        catalog = get_settings().templates_url
+        if not catalog:
+            raise TemplateError(
+                f"{source} is not a file or URL, and no templates catalog is configured"
+            )
+        text = _fetch(f"{catalog}/{source}.yaml")
     try:
         manifest = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
@@ -383,7 +388,7 @@ def _checkout(step: Dict[str, Any]) -> Tuple[str, Optional[str]]:
         if not os.path.isdir(path):
             raise TemplateError(f"{step['app_name']}: {path} is not a directory")
         return path, None
-    tmp = tempfile.mkdtemp(prefix="beam-template-")
+    tmp = tempfile.mkdtemp(prefix="beta9-template-")
     cmd = ["git", "clone", "--depth", "1"]
     if step.get("branch"):
         cmd += ["--branch", step["branch"]]
@@ -494,7 +499,7 @@ def plan(source: str, prefix: str):
         else:
             src = f" from {step['source']}" if step.get("source") else ""
             terminal.print(
-                f"{i}. {step['app_name']}: beam {' '.join(shlex.quote(a) for a in step['command'])}{src}"
+                f"{i}. {step['app_name']}: {terminal.cli_name()} {' '.join(shlex.quote(a) for a in step['command'])}{src}"
             )
 
 
@@ -541,7 +546,7 @@ def _safe_name(n: Any) -> str:
     return re.sub(r"[^a-z0-9-]", "-", str(n).lower()).strip("-")[:32] or "service"
 
 
-@template.command(name="import", help="Convert a docker-compose.yml into a Beam template manifest.")
+@template.command(name="import", help="Convert a docker-compose.yml into a template manifest.")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",

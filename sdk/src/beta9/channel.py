@@ -221,14 +221,14 @@ def with_grpc_error_handling(func: Callable) -> Callable:
 def caller_metadata() -> List[Tuple[str, str]]:
     """
     Attribution headers sent with every request so the gateway can record who
-    acted (a human at the CLI, an agent via the skill/MCP). `BEAM_CALLER`
-    overrides the default `cli/<version>`; `BEAM_AGENT_SESSION` groups the
+    acted (a human at the CLI, an agent via the skill/MCP). `BETA9_CALLER`
+    overrides the default `cli/<version>`; `BETA9_AGENT_SESSION` groups the
     actions of one agent run.
     """
-    caller = os.getenv("BEAM_CALLER") or f"cli/{_sdk_version()}"
-    metadata = [("x-beam-caller", caller)]
-    if session := os.getenv("BEAM_AGENT_SESSION"):
-        metadata.append(("x-beam-agent-session", session))
+    caller = os.getenv("BETA9_CALLER") or f"cli/{_sdk_version()}"
+    metadata = [("x-beta9-caller", caller)]
+    if session := os.getenv("BETA9_AGENT_SESSION"):
+        metadata.append(("x-beta9-agent-session", session))
     return metadata
 
 
