@@ -151,6 +151,7 @@ func (g *MCPGroup) catalog() []mcpTool {
 		{Name: "list_tasks", Description: "Recent tasks (invocations), newest first.", Schema: schema(props{"stub_id": str(""), "status": str("Comma-separated: pending, running, complete, error, cancelled, timeout"), "limit": integer(20)}), Run: g.listTasks},
 		{Name: "get_task", Description: "Status, timing and container of one task.", Schema: schema(props{"task_id": str("")}, "task_id"), Run: g.getTask},
 		{Name: "stop_task", Description: "Stop a running or pending task.", Schema: schema(props{"task_id": str("")}, "task_id"), Destructive: true, Run: g.stopTask},
+		{Name: "metrics", Description: "CPU, memory, GPU memory, network and container count for an app over a window, per 1m or 1h bucket, plus the latest bucket as `now`. Averages are per container; memory_limit and cpu_limit are the configured resources.", Schema: schema(props{"name": str("App name"), "deployment_id": str(""), "stub_id": str(""), "window_minutes": integer(60), "interval": str("1m (default) or 1h")}), Run: g.metrics},
 		{Name: "request_stats", Description: "Request count, 5xx share and p50/p95/p99 latency for an endpoint over a window (upper bounds from a fixed histogram).", Schema: window, Run: g.requestStats},
 		{Name: "list_webhooks", Description: "Workspace webhooks (URL, event types, enabled).", Schema: schema(props{}), Run: g.listWebhooks},
 		{Name: "create_webhook", Description: "Register a signed HTTP webhook for workspace events (stub.*, task.*, endpoint.request_stats). Returns the signing secret once.", Schema: schema(props{"url": str(""), "event_types": strList(""), "description": str("")}, "url"), Destructive: true, Run: g.createWebhook},
@@ -833,14 +834,67 @@ func (g *MCPGroup) stopTask(ctx context.Context, _ *auth.AuthInfo, args toolArgs
 	return okOrErr(res.GetOk(), res.GetErrMsg(), err, map[string]any{"task_id": args.str("task_id"), "stopped": true})
 }
 
-func (g *MCPGroup) requestStats(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	stubID := args.str("stub_id")
-	if stubID == "" {
-		d, err := g.target(ctx, a, args)
-		if err != nil {
-			return nil, err
+// stubID is the stub a metrics tool reads: given directly, or the target deployment's.
+func (g *MCPGroup) stubID(ctx context.Context, a *auth.AuthInfo, args toolArgs) (string, error) {
+	if id := args.str("stub_id"); id != "" {
+		return id, nil
+	}
+	d, err := g.target(ctx, a, args)
+	if err != nil {
+		return "", err
+	}
+	return d.Stub.ExternalId, nil
+}
+
+func (g *MCPGroup) metrics(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	stubID, err := g.stubID(ctx, a, args)
+	if err != nil {
+		return nil, err
+	}
+	interval := args.str("interval")
+	if interval == "" {
+		interval = "1m"
+	}
+	if interval != "1m" && interval != "1h" {
+		return nil, fail("INVALID_ARGS", "interval must be 1m or 1h")
+	}
+	end := time.Now().UTC()
+	start := end.Add(-time.Duration(args.num("window_minutes", 60)) * time.Minute)
+	res, err := g.eventRepo.GetStubMetricsTimeseries(ctx, types.EventQuery{WorkspaceID: a.Workspace.ExternalId, StubID: stubID, EventTypes: []string{types.EventContainerMetrics}}, start, end, interval)
+	if err != nil {
+		return nil, err
+	}
+	const mb = 1 << 20
+	points := make([]map[string]any, 0, len(res.Timeseries.AggregationBuckets))
+	for _, b := range res.Timeseries.AggregationBuckets {
+		if b.DocCount == 0 {
+			continue
 		}
-		stubID = d.Stub.ExternalId
+		points = append(points, map[string]any{
+			"time":                time.UnixMilli(b.Key).UTC(),
+			"containers":          b.ContainerCount.Value,
+			"cpu_pct":             b.CPUPercentAvg.Value,
+			"cpu_used":            b.CPUUsedAvg.Value,
+			"cpu_limit":           b.CPUTotalAvg.Value,
+			"memory_mb":           b.MemoryRSSBytesAvg.Value / mb,
+			"memory_limit_mb":     b.MemoryTotalBytesAvg.Value / mb,
+			"gpu_memory_mb":       b.GPUMemoryUsedBytesAvg.Value / mb,
+			"gpu_memory_total_mb": b.GPUMemoryTotalBytesAvg.Value / mb,
+			"net_in_bps":          b.NetworkRecvBytesRateAvg.Value,
+			"net_out_bps":         b.NetworkSentBytesRateAvg.Value,
+		})
+	}
+	out := map[string]any{"stub_id": stubID, "interval": interval, "points": points}
+	if len(points) > 0 {
+		out["now"] = points[len(points)-1]
+	}
+	return out, nil
+}
+
+func (g *MCPGroup) requestStats(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	stubID, err := g.stubID(ctx, a, args)
+	if err != nil {
+		return nil, err
 	}
 	minutes := int(args.num("window_minutes", 60))
 	end := time.Now().UTC()
