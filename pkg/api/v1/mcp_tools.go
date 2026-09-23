@@ -1,10 +1,12 @@
 package apiv1
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -193,28 +195,22 @@ func (g *MCPGroup) getApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	if err != nil {
 		return nil, fail("NOT_FOUND", "%s", err)
 	}
-	var full map[string]any
-	if err := json.Unmarshal([]byte(d.Stub.Config), &full); err != nil {
+	cfg, err := d.Stub.UnmarshalConfig()
+	if err != nil {
 		return nil, err
 	}
-	view := map[string]any{}
+	raw, _ := json.Marshal(cfg)
+	var full map[string]any
+	_ = json.Unmarshal(raw, &full)
+	view := make(map[string]any, len(configView)+1)
 	for _, key := range configView {
 		if v, ok := full[key]; ok {
 			view[key] = v
 		}
 	}
-	bindings := []map[string]string{}
-	if secrets, ok := full["secrets"].([]any); ok {
-		for _, s := range secrets {
-			if m, ok := s.(map[string]any); ok {
-				n, _ := m["name"].(string)
-				e, _ := m["env_name"].(string)
-				if e == "" {
-					e = n
-				}
-				bindings = append(bindings, map[string]string{"name": n, "env_name": e})
-			}
-		}
+	bindings := make([]map[string]string, 0, len(cfg.Secrets))
+	for _, s := range cfg.Secrets {
+		bindings = append(bindings, map[string]string{"name": s.Name, "env_name": cmp.Or(s.EnvName, s.Name)})
 	}
 	view["secrets"] = bindings
 	out := g.deploymentView(d)
@@ -291,13 +287,7 @@ func (g *MCPGroup) redeploy(ctx context.Context, a *auth.AuthInfo, args toolArgs
 		return nil, err
 	}
 	res, err := g.gws.DeployStub(ctx, &pb.DeployStubRequest{StubId: d.Stub.ExternalId, Name: d.Name})
-	if err != nil {
-		return nil, err
-	}
-	if !res.Ok {
-		return nil, fmt.Errorf("%s", res.ErrMsg)
-	}
-	return map[string]any{"deployment_id": res.DeploymentId, "version": res.Version, "name": d.Name}, nil
+	return deployed(res, err, d.Name)
 }
 
 func (g *MCPGroup) stopDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
@@ -337,27 +327,23 @@ func (g *MCPGroup) scaleDeployment(ctx context.Context, a *auth.AuthInfo, args t
 	return okOrErr(res.GetOk(), res.GetErrMsg(), err, map[string]any{"deployment_id": d.ExternalId, "name": d.Name, "containers": containers})
 }
 
+// okOrErr turns a gateway {ok, err_msg} response into a tool result.
 func okOrErr(ok bool, errMsg string, err error, value any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("%s", errMsg)
+		return nil, errors.New(errMsg)
 	}
 	return value, nil
 }
 
-// --- settings -------------------------------------------------------------------------------
-
+// deployed is the result of every tool that ends in a new version.
 func deployed(res *pb.DeployStubResponse, err error, name string) (any, error) {
-	if err != nil {
-		return nil, err
-	}
-	if !res.Ok {
-		return nil, fmt.Errorf("%s", res.ErrMsg)
-	}
-	return map[string]any{"deployment_id": res.DeploymentId, "version": res.Version, "name": name}, nil
+	return okOrErr(res.GetOk(), res.GetErrMsg(), err, map[string]any{"deployment_id": res.GetDeploymentId(), "version": res.GetVersion(), "name": name})
 }
+
+// --- settings -------------------------------------------------------------------------------
 
 func (g *MCPGroup) updateConfig(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	fields, _ := args["fields"].(map[string]any)
@@ -594,12 +580,13 @@ type stackSpec struct {
 	Pending   json.RawMessage            `json:"pending,omitempty"`
 }
 
-func (g *MCPGroup) appNames(ctx context.Context, ws *types.Workspace) (map[string]string, map[string]string, error) {
+// appNames maps app ids to names and back, once per call.
+func (g *MCPGroup) appNames(ctx context.Context, ws *types.Workspace) (byID, byName map[string]string, err error) {
 	page, err := g.backendRepo.ListAppsPaginated(ctx, ws.Id, types.AppFilter{Limit: 1000})
 	if err != nil {
 		return nil, nil, err
 	}
-	byID, byName := map[string]string{}, map[string]string{}
+	byID, byName = map[string]string{}, map[string]string{}
 	for _, app := range page.Data {
 		byID[app.ExternalId] = app.Name
 		byName[app.Name] = app.ExternalId
@@ -607,11 +594,7 @@ func (g *MCPGroup) appNames(ctx context.Context, ws *types.Workspace) (map[strin
 	return byID, byName, nil
 }
 
-func (g *MCPGroup) stackView(ctx context.Context, ws *types.Workspace, s *types.Stack) (map[string]any, error) {
-	byID, _, err := g.appNames(ctx, ws)
-	if err != nil {
-		return nil, err
-	}
+func stackView(s *types.Stack, byID map[string]string) map[string]any {
 	var spec stackSpec
 	_ = json.Unmarshal(s.Spec, &spec)
 	apps := make([]string, 0, len(spec.AppIds))
@@ -620,7 +603,7 @@ func (g *MCPGroup) stackView(ctx context.Context, ws *types.Workspace, s *types.
 			apps = append(apps, name)
 		}
 	}
-	return map[string]any{"name": s.Name, "id": s.ExternalId, "apps": apps}, nil
+	return map[string]any{"name": s.Name, "id": s.ExternalId, "apps": apps}
 }
 
 func (g *MCPGroup) stack(ctx context.Context, ws *types.Workspace, name string) (*types.Stack, error) {
@@ -641,22 +624,18 @@ func (g *MCPGroup) listStacks(ctx context.Context, a *auth.AuthInfo, _ toolArgs)
 	if err != nil {
 		return nil, err
 	}
+	byID, _, err := g.appNames(ctx, a.Workspace)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]map[string]any, 0, len(stacks))
 	for i := range stacks {
-		view, err := g.stackView(ctx, a.Workspace, &stacks[i])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, view)
+		out = append(out, stackView(&stacks[i], byID))
 	}
 	return out, nil
 }
 
-func (g *MCPGroup) resolveApps(ctx context.Context, ws *types.Workspace, names []string) ([]string, error) {
-	_, byName, err := g.appNames(ctx, ws)
-	if err != nil {
-		return nil, err
-	}
+func resolveApps(byName map[string]string, names []string) ([]string, error) {
 	ids := make([]string, 0, len(names))
 	for _, n := range names {
 		id, ok := byName[n]
@@ -669,7 +648,11 @@ func (g *MCPGroup) resolveApps(ctx context.Context, ws *types.Workspace, names [
 }
 
 func (g *MCPGroup) createStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	ids, err := g.resolveApps(ctx, a.Workspace, args.strings("apps"))
+	byID, byName, err := g.appNames(ctx, a.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := resolveApps(byName, args.strings("apps"))
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +661,7 @@ func (g *MCPGroup) createStack(ctx context.Context, a *auth.AuthInfo, args toolA
 	if err != nil {
 		return nil, err
 	}
-	return g.stackView(ctx, a.Workspace, s)
+	return stackView(s, byID), nil
 }
 
 func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
@@ -686,11 +669,15 @@ func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolA
 	if err != nil {
 		return nil, err
 	}
-	add, err := g.resolveApps(ctx, a.Workspace, args.strings("add"))
+	byID, byName, err := g.appNames(ctx, a.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	remove, err := g.resolveApps(ctx, a.Workspace, args.strings("remove"))
+	add, err := resolveApps(byName, args.strings("add"))
+	if err != nil {
+		return nil, err
+	}
+	remove, err := resolveApps(byName, args.strings("remove"))
 	if err != nil {
 		return nil, err
 	}
@@ -700,17 +687,17 @@ func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolA
 	for _, id := range remove {
 		drop[id] = true
 	}
+	keep := map[string]bool{}
 	ids := make([]string, 0, len(spec.AppIds)+len(add))
-	seen := map[string]bool{}
 	for _, id := range append(spec.AppIds, add...) {
-		if !drop[id] && !seen[id] {
+		if !drop[id] && !keep[id] {
 			ids = append(ids, id)
-			seen[id] = true
+			keep[id] = true
 		}
 	}
 	spec.AppIds = ids
 	for id := range spec.Positions {
-		if !seen[id] {
+		if !keep[id] {
 			delete(spec.Positions, id)
 		}
 	}
@@ -719,7 +706,7 @@ func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolA
 	if err != nil {
 		return nil, err
 	}
-	return g.stackView(ctx, a.Workspace, updated)
+	return stackView(updated, byID), nil
 }
 
 func (g *MCPGroup) deleteStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
@@ -800,11 +787,8 @@ func (g *MCPGroup) listTasks(ctx context.Context, _ *auth.AuthInfo, args toolArg
 		filters["status"] = &pb.StringList{Values: strings.Split(strings.ToUpper(strings.ReplaceAll(v, " ", "")), ",")}
 	}
 	res, err := g.gws.ListTasks(ctx, &pb.ListTasksRequest{Filters: filters, Limit: uint32(args.num("limit", 20))})
-	if err != nil {
+	if _, err := okOrErr(res.GetOk(), res.GetErrMsg(), err, nil); err != nil {
 		return nil, err
-	}
-	if !res.Ok {
-		return nil, fmt.Errorf("%s", res.ErrMsg)
 	}
 	out := make([]map[string]any, 0, len(res.Tasks))
 	for _, t := range res.Tasks {

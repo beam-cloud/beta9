@@ -92,19 +92,19 @@ func (g *MCPGroup) Post(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	var raw json.RawMessage
 	if err := json.NewDecoder(ctx.Request().Body).Decode(&raw); err != nil {
-		return ctx.JSON(http.StatusBadRequest, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{-32700, "parse error"}})
+		return parseError(ctx)
 	}
+	batch := len(raw) > 0 && raw[0] == '['
 	var requests []rpcRequest
-	if len(raw) > 0 && raw[0] == '[' {
+	if batch {
 		if err := json.Unmarshal(raw, &requests); err != nil {
-			return ctx.JSON(http.StatusBadRequest, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{-32700, "parse error"}})
+			return parseError(ctx)
 		}
 	} else {
-		var one rpcRequest
-		if err := json.Unmarshal(raw, &one); err != nil {
-			return ctx.JSON(http.StatusBadRequest, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{-32700, "parse error"}})
+		requests = make([]rpcRequest, 1)
+		if err := json.Unmarshal(raw, &requests[0]); err != nil {
+			return parseError(ctx)
 		}
-		requests = []rpcRequest{one}
 	}
 
 	reqCtx := withIdentityHeaders(ctx.Request().Context(), ctx.Request().Header)
@@ -115,15 +115,18 @@ func (g *MCPGroup) Post(ctx echo.Context) error {
 		}
 		responses = append(responses, g.dispatch(reqCtx, cc.AuthInfo, req))
 	}
-	switch len(responses) {
-	case 0:
+	switch {
+	case len(responses) == 0:
 		return ctx.NoContent(http.StatusAccepted)
-	case 1:
-		if len(requests) == 1 {
-			return ctx.JSON(http.StatusOK, responses[0])
-		}
+	case batch:
+		return ctx.JSON(http.StatusOK, responses)
+	default:
+		return ctx.JSON(http.StatusOK, responses[0])
 	}
-	return ctx.JSON(http.StatusOK, responses)
+}
+
+func parseError(ctx echo.Context) error {
+	return ctx.JSON(http.StatusBadRequest, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{-32700, "parse error"}})
 }
 
 func (g *MCPGroup) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rpcRequest) rpcResponse {

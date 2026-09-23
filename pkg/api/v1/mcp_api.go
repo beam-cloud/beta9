@@ -84,11 +84,16 @@ func (g *MCPGroup) api(ctx context.Context, a *auth.AuthInfo, args toolArgs) (an
 	if !strings.HasPrefix(path, "/") {
 		return nil, fail("INVALID_ARGS", "path must start with /")
 	}
-	var body []byte
-	if raw, ok := args["body"]; ok && raw != nil {
-		body, _ = json.Marshal(raw)
+	return g.serve(ctx, method, g.config.GatewayService.HTTP.GetExternalURL()+path, jsonBody(args), args.stringMap("headers"))
+}
+
+func jsonBody(args toolArgs) []byte {
+	raw, ok := args["body"]
+	if !ok || raw == nil {
+		return nil
 	}
-	return g.serve(ctx, method, g.config.GatewayService.HTTP.GetExternalURL()+path, body, args.stringMap("headers"))
+	body, _ := json.Marshal(raw)
+	return body
 }
 
 func (g *MCPGroup) apiRoutes(_ context.Context, _ *auth.AuthInfo, _ toolArgs) (any, error) {
@@ -121,10 +126,6 @@ func (g *MCPGroup) invoke(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	if method == "" {
 		method = http.MethodPost
 	}
-	var body []byte
-	if raw, ok := args["body"]; ok && raw != nil {
-		body, _ = json.Marshal(raw)
-	}
 	url := strings.TrimSuffix(g.deploymentURL(d), "/") + "/" + strings.TrimPrefix(args.str("path"), "/")
-	return g.serve(ctx, method, url, body, args.stringMap("headers"))
+	return g.serve(ctx, method, url, jsonBody(args), args.stringMap("headers"))
 }
