@@ -34,7 +34,6 @@ from . import (
     shell,
     status,
     task,
-    template,
     token,
     volume,
     worker,
@@ -112,7 +111,6 @@ class CLI:
 def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
     cli.register(task)
-    cli.register(template)
     cli.register(status)
     cli.register(api)
     cli.register(mcp)

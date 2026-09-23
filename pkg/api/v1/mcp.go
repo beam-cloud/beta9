@@ -132,7 +132,7 @@ func (g *MCPGroup) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rp
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "beta9", "version": "1"},
 			"instructions": "Serverless GPU/CPU apps, one-off containers and managed databases in one workspace. " +
-				"Start with whoami and list_apps. Ship code with the CLI in the project directory (`deploy`, `template deploy`); " +
+				"Start with whoami and list_apps. Ship code with the CLI in the project directory (`deploy`); " +
 				"everything else is here: read config with get_app, wire services with connect_services or set_env " +
 				"(${{db.NAME.DATABASE_URL}}, ${{secret.NAME}}, ${{app.NAME.URL}}), provision databases, manage secrets, " +
 				"group apps into stacks, read logs and request stats. Tools that say so need confirm=true.",

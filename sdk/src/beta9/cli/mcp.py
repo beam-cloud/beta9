@@ -1,7 +1,7 @@
 """
 `mcp`: register the gateway-hosted MCP server (`/api/v1/mcp`) with agent clients.
 The server runs in the control plane; the client connects over HTTP with the
-workspace token. Only shipping code (`deploy`, `template deploy`) stays in the CLI.
+workspace token. Only shipping code (`deploy`) stays in the CLI.
 """
 
 import json

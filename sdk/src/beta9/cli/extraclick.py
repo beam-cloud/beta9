@@ -3,7 +3,6 @@ import json
 import inspect
 import os
 import shlex
-import sys
 import textwrap
 from gettext import gettext
 from typing import Any, Callable, Dict, List, Optional
@@ -651,22 +650,6 @@ def env_vars_to_dict(value) -> Dict[str, str]:
             raise ValueError("env must be in KEY=value format")
         env[key] = raw_value
     return env
-
-
-def cli_command() -> List[str]:
-    """
-    Argv prefix that re-invokes this CLI (for subprocess-based tools such as
-    the MCP server and template orchestrator), whether it runs from an
-    installed entrypoint or `python -c`.
-    """
-    argv0 = sys.argv[0] if sys.argv else ""
-    if (
-        argv0
-        and os.path.basename(argv0) not in ("-c", "python", "python3")
-        and os.path.exists(argv0)
-    ):
-        return [argv0]
-    return [sys.executable, "-c", "from beta9.cli.main import start; start()"]
 
 
 def parse_last_json(text: str) -> Optional[Any]:
