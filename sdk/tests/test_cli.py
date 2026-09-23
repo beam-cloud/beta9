@@ -255,13 +255,29 @@ class TestMCPTools:
                 assert required in tool.schema["properties"], f"{tool.name}: {required}"
             assert tool.confirm is None or "confirm" in tool.schema["properties"], tool.name
 
-    def test_run_pod_builds_cli_argv(self):
-        from beta9.cli.mcp import TOOLS_BY_NAME
+    def test_run_pod_builds_cli_argv(self, monkeypatch):
+        from beta9.cli import mcp
 
-        argv = TOOLS_BY_NAME["run_pod"].build(
-            {"directory": ".", "command": "sh -c 'echo ok'", "image": "python:3.12", "cpu": 0.5}
+        seen = {}
+        monkeypatch.setattr(
+            mcp,
+            "_cli",
+            lambda argv, context, cwd=None, timeout=900: (
+                seen.update(argv=argv, cwd=cwd) or {"ok": True}
+            ),
         )
-        assert argv == [
+        mcp.run_pod(
+            {
+                "directory": ".",
+                "command": "sh -c 'echo ok'",
+                "image": "python:3.12",
+                "cpu": 0.5,
+                "env": ["A=1"],
+            },
+            None,
+        )
+        assert seen["cwd"] == "."
+        assert seen["argv"] == [
             "run",
             "--detach",
             "--json",
@@ -271,7 +287,25 @@ class TestMCPTools:
             "python:3.12",
             "--cpu",
             "0.5",
+            "--env",
+            "A=1",
         ]
+
+    def test_logs_requires_exactly_one_target(self):
+        from beta9.cli.mcp import logs
+
+        assert logs({}, None)["code"] == "INVALID_ARGS"
+        assert logs({"task_id": "t", "stub_id": "s"}, None)["code"] == "INVALID_ARGS"
+
+    def test_confirm_gate_and_error_shape(self):
+        from beta9.cli.mcp import TOOLS_BY_NAME, Tool, _obj, _run_tool
+
+        assert (
+            _run_tool(TOOLS_BY_NAME["delete_app"], {"name": "x"}, None)["code"]
+            == "NEEDS_CONFIRMATION"
+        )
+        boom = Tool("boom", "", _obj({}), lambda a, c: 1 / 0)
+        assert _run_tool(boom, {}, None)["code"] == "ERROR"
 
     def test_set_env_rejects_bad_references(self):
         from beta9.cli.mcp import set_env_tool

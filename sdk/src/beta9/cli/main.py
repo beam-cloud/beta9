@@ -31,9 +31,7 @@ from . import (
     run,
     secret,
     serve,
-    setup,
     shell,
-    skills,
     status,
     task,
     template,
@@ -118,8 +116,6 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(status)
     cli.register(api)
     cli.register(mcp)
-    cli.register(setup)
-    cli.register(skills)
     cli.register(deployment)
     cli.register(database)
     cli.register(serve)

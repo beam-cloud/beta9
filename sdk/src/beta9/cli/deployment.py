@@ -153,57 +153,52 @@ def management():
     pass
 
 
-@management.command(
-    "wait", help="Wait for an endpoint's exact deployed revision to serve health checks."
-)
-@click.argument("deployment_id")
-@click.option("--timeout", type=click.FloatRange(min=0, min_open=True), default=300)
-@extraclick.pass_service_client
-def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
+class DeploymentNotReady(Exception):
+    def __init__(self, message: str, code: str = "ERROR"):
+        super().__init__(message)
+        self.code = code
+
+
+def _deployment_by_id(service: ServiceClient, deployment_id: str):
+    result = service.gateway.list_deployments(
+        ListDeploymentsRequest(filters={"id": StringList([deployment_id])}, limit=1)
+    )
+    if not result.ok or not result.deployments:
+        raise DeploymentNotReady(
+            result.err_msg or f"Deployment {deployment_id} was not found.", "NOT_FOUND"
+        )
+    return result.deployments[0]
+
+
+def wait_for_deployment(service: ServiceClient, deployment_id: str, timeout: float) -> Dict:
+    """Block until the deployment serves: health checks for endpoint/ASGI, active for the rest."""
     start = time.monotonic()
     deadline = start + timeout
     with rpc_timeout(timeout):
-        result = service.gateway.list_deployments(
-            ListDeploymentsRequest(
-                filters={"id": StringList([deployment_id])},
-                limit=1,
-            )
-        )
-        if not result.ok or not result.deployments:
-            terminal.error(result.err_msg or f"Deployment {deployment_id} was not found.")
-        deployment = result.deployments[0]
+        deployment = _deployment_by_id(service, deployment_id)
         if deployment.stub_type not in ("endpoint/deployment", "asgi/deployment"):
-            # No health endpoint; ready once the gateway reports active.
             while not deployment.active and time.monotonic() < deadline:
                 time.sleep(1)
-                result = service.gateway.list_deployments(
-                    ListDeploymentsRequest(filters={"id": StringList([deployment_id])}, limit=1)
-                )
-                if result.ok and result.deployments:
-                    deployment = result.deployments[0]
+                deployment = _deployment_by_id(service, deployment_id)
             if not deployment.active:
-                terminal.error(
-                    f"Deployment {deployment_id} did not become active within {timeout}s",
-                    code="TIMEOUT",
+                raise DeploymentNotReady(
+                    f"Deployment {deployment_id} did not become active within {timeout}s", "TIMEOUT"
                 )
-            terminal.print_json(
-                {
-                    "deployment_id": deployment_id,
-                    "stub_id": deployment.stub_id,
-                    "stub_type": deployment.stub_type,
-                    "version": deployment.version,
-                    "status": "active",
-                    "ready_seconds": time.monotonic() - start,
-                }
-            )
-            return
+            return {
+                "deployment_id": deployment_id,
+                "stub_id": deployment.stub_id,
+                "stub_type": deployment.stub_type,
+                "version": deployment.version,
+                "status": "active",
+                "ready_seconds": time.monotonic() - start,
+            }
         if not deployment.active:
-            terminal.error(f"Deployment {deployment_id} is not active", code="INACTIVE")
+            raise DeploymentNotReady(f"Deployment {deployment_id} is not active", "INACTIVE")
         url = service.gateway.get_url(
             GetUrlRequest(deployment_id=deployment_id, stub_id=deployment.stub_id, url_type="path")
         )
         if not url.ok:
-            terminal.error(url.err_msg)
+            raise DeploymentNotReady(url.err_msg)
     last_error = "No healthy response"
     next_active_check = time.monotonic() + 2
     with requests.Session() as session:
@@ -211,13 +206,10 @@ def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
         while (remaining := deadline - time.monotonic()) > 0:
             if time.monotonic() >= next_active_check:
                 next_active_check = time.monotonic() + 2
-                result = service.gateway.list_deployments(
-                    ListDeploymentsRequest(filters={"id": StringList([deployment_id])}, limit=1)
-                )
-                if result.ok and result.deployments and not result.deployments[0].active:
-                    terminal.error(
+                if not _deployment_by_id(service, deployment_id).active:
+                    raise DeploymentNotReady(
                         f"Deployment {deployment_id} was stopped or superseded before it became ready",
-                        code="INACTIVE",
+                        "INACTIVE",
                     )
             try:
                 response = session.get(
@@ -229,25 +221,36 @@ def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
                     response.status_code == 200
                     and response.headers.get("X-Beta9-Stub-Id") == deployment.stub_id
                 ):
-                    terminal.print_json(
-                        {
-                            "deployment_id": deployment_id,
-                            "stub_id": deployment.stub_id,
-                            "version": deployment.version,
-                            "status": "ready",
-                            "ready_seconds": time.monotonic() - start,
-                        }
-                    )
-                    return
+                    return {
+                        "deployment_id": deployment_id,
+                        "stub_id": deployment.stub_id,
+                        "version": deployment.version,
+                        "status": "ready",
+                        "ready_seconds": time.monotonic() - start,
+                    }
                 last_error = f"HTTP {response.status_code}; revision {response.headers.get('X-Beta9-Stub-Id', 'unknown')}: {response.text[:200]}"
                 if response.status_code in (401, 403):
                     break
             except requests.RequestException as exc:
                 last_error = str(exc)
             time.sleep(min(0.2, max(0, deadline - time.monotonic())))
-    terminal.error(
-        f"Deployment {deployment_id} did not become ready within {timeout}s: {last_error}"
+    raise DeploymentNotReady(
+        f"Deployment {deployment_id} did not become ready within {timeout}s: {last_error}",
+        "TIMEOUT",
     )
+
+
+@management.command(
+    "wait", help="Wait for an endpoint's exact deployed revision to serve health checks."
+)
+@click.argument("deployment_id")
+@click.option("--timeout", type=click.FloatRange(min=0, min_open=True), default=300)
+@extraclick.pass_service_client
+def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
+    try:
+        terminal.print_json(wait_for_deployment(service, deployment_id, timeout))
+    except DeploymentNotReady as exc:
+        terminal.error(str(exc), code=exc.code)
 
 
 def _merge_port_options(kwargs: Dict) -> None:

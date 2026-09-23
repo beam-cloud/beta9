@@ -1,6 +1,7 @@
 """
-`mcp`: an MCP server over stdio plus installers for agent clients. Tools run
-the equivalent CLI command with `--json` and return its JSON.
+`mcp`: an MCP server over stdio plus installers for agent clients. Tools call
+the SDK in-process; `deploy` and `run_pod` run the CLI in the project directory
+because they sync files and stream builds.
 """
 
 import datetime
@@ -11,15 +12,39 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse, urlunparse
 
 import click
+from betterproto import Casing
 
 from .. import terminal
 from ..channel import GatewayHTTP, GatewayHTTPError, ServiceClient, _sdk_version
+from ..clients.gateway import (
+    DeleteDeploymentRequest,
+    ListContainersRequest,
+    ListDeploymentsRequest,
+    ListTasksRequest,
+    ScaleDeploymentRequest,
+    StartDeploymentRequest,
+    StopDeploymentRequest,
+    StopTasksRequest,
+    StringList,
+)
+from ..clients.secret import (
+    CreateSecretRequest,
+    DeleteSecretRequest,
+    GetSecretRequest,
+    ListSecretsRequest,
+    UpdateSecretRequest,
+)
+from ..clients.volume import GetOrCreateVolumeRequest, ListVolumesRequest
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context, get_settings
 from ..references import complete, validate_env
 from . import extraclick
+from .api import ECHO_ROUTES, _load_specs, _spec_routes
+from .database import _redis_fields, _result as database_result
+from .deployment import DeploymentNotReady, wait_for_deployment
 from .extraclick import ClickCommonGroup, cli_command, parse_last_json
 from .stubconfig import (
     connect_apps,
@@ -28,8 +53,16 @@ from .stubconfig import (
     stub_config,
     stub_request_from_config,
 )
+from .template import (
+    deploy_template as run_template,
+    load_manifest,
+    manifest_service,
+    missing_secrets,
+    plan_steps,
+)
 
 PROTOCOL_VERSION = "2024-11-05"
+DATABASE_KINDS = ["postgres", "redis", "mysql", "mongo"]
 
 
 def _server_name() -> str:
@@ -46,7 +79,7 @@ def mcp():
     pass
 
 
-# --- tool definitions -------------------------------------------------------
+# --- tool plumbing -------------------------------------------------------------
 
 
 def _obj(properties: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -56,49 +89,27 @@ def _obj(properties: Dict[str, Any], required: Optional[List[str]] = None) -> Di
     return schema
 
 
-def _cli_args(args: Dict[str, Any], mapping: Dict[str, str]) -> List[str]:
-    """Turn tool arguments into CLI flags via mapping {arg: --flag}."""
-    out: List[str] = []
-    for key, flag in mapping.items():
-        value = args.get(key)
-        if value is None or value == "" or value is False:
-            continue
-        if value is True:
-            out.append(flag)
-        elif isinstance(value, list):
-            for item in value:
-                out.extend([flag, str(item)])
-        else:
-            out.extend([flag, str(value)])
-    return out
+ToolFn = Callable[[Dict[str, Any], Optional[str]], Any]
 
 
 class Tool:
-    """CLI-backed (`build` returns argv) or in-process (`run`). `confirm` gates irreversible actions."""
+    """`run(args, context)` returns JSON. `confirm` gates irreversible actions."""
 
     def __init__(
         self,
         name: str,
         description: str,
         schema: Dict[str, Any],
-        build: Optional[Callable[[Dict[str, Any]], List[str]]] = None,
-        run: Optional[Callable[[Dict[str, Any], Optional[str]], Any]] = None,
+        run: ToolFn,
         destructive: bool = False,
         confirm: Optional[str] = None,
-        cwd_from: Optional[str] = None,
-        per_line: bool = False,
-        redact: Tuple[str, ...] = (),
     ):
         self.name = name
         self.description = description
         self.schema = schema
-        self.build = build
         self.run = run
         self.destructive = destructive or confirm is not None
         self.confirm = confirm
-        self.cwd_from = cwd_from
-        self.per_line = per_line
-        self.redact = redact  # result keys withheld from the agent (credentials)
 
     def describe(self) -> Dict[str, Any]:
         return {
@@ -112,290 +123,44 @@ class Tool:
         }
 
 
-TOOLS: List[Tool] = [
-    Tool(
-        "whoami",
-        "Active context, workspace id and gateway URLs.",
-        _obj({}),
-        lambda a: ["whoami", "--format", "json"],
-    ),
-    Tool(
-        "status",
-        "Snapshot of the workspace: latest deployments and running containers.",
-        _obj({"limit": {"type": "integer", "minimum": 1, "default": 10}}),
-        lambda a: ["status", "--format", "json"] + _cli_args(a, {"limit": "--limit"}),
-    ),
-    Tool(
-        "list_deployments",
-        "List deployments. Filter with name=..., stub_type=..., active=true.",
-        _obj(
-            {
-                "limit": {"type": "integer", "minimum": 1, "default": 20},
-                "filter": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "key=value filters, e.g. name=api",
-                },
-            }
-        ),
-        lambda a: (
-            ["deployment", "list", "--format", "json"]
-            + _cli_args(a, {"limit": "--limit", "filter": "--filter"})
-        ),
-    ),
-    Tool(
-        "deploy",
-        "Deploy an app from a local directory (runs the CLI's deploy there). Returns deployment_id, version and invoke_url. "
-        "invoke_url is pinned to this version; wire other services with ${{app.<name>.URL}} instead of copying it.",
-        _obj(
-            {
-                "directory": {
-                    "type": "string",
-                    "description": "Project directory containing the app.",
-                },
-                "entrypoint": {
-                    "type": "string",
-                    "description": "module:function, e.g. app:handler (omit for Dockerfile/entrypoint apps).",
-                },
-                "name": {"type": "string", "description": "Deployment name."},
-                "rollout": {
-                    "type": "string",
-                    "enum": ["auto", "immediate", "manual"],
-                    "default": "auto",
-                },
-            },
-            ["directory", "name"],
-        ),
-        lambda a: (
-            ["deploy", "--json", "--name", a["name"]]
-            + ([a["entrypoint"]] if a.get("entrypoint") else [])
-            + _cli_args(a, {"rollout": "--rollout"})
-        ),
-        destructive=True,
-        cwd_from="directory",
-    ),
-    Tool(
-        "wait_deployment",
-        "Block until a deployment is serving (health check for endpoints, active for others).",
-        _obj(
-            {"deployment_id": {"type": "string"}, "timeout": {"type": "number", "default": 300}},
-            ["deployment_id"],
-        ),
-        lambda a: (
-            ["deployment", "wait", a["deployment_id"]] + _cli_args(a, {"timeout": "--timeout"})
-        ),
-    ),
-    Tool(
-        "stop_deployment",
-        "Stop a deployment (drains containers; requests fail until started).",
-        _obj({"deployment_id": {"type": "string"}}, ["deployment_id"]),
-        lambda a: ["deployment", "stop", a["deployment_id"]],
-        destructive=True,
-    ),
-    Tool(
-        "start_deployment",
-        "Start a stopped deployment.",
-        _obj({"deployment_id": {"type": "string"}}, ["deployment_id"]),
-        lambda a: ["deployment", "start", a["deployment_id"]],
-        destructive=True,
-    ),
-    Tool(
-        "delete_deployment",
-        "Delete a deployment. Requires confirm=true.",
-        _obj(
-            {"deployment_id": {"type": "string"}, "confirm": {"type": "boolean"}}, ["deployment_id"]
-        ),
-        lambda a: ["deployment", "delete", a["deployment_id"], "--yes"],
-        confirm="Deleting a deployment is irreversible.",
-    ),
-    Tool(
-        "scale_deployment",
-        "Set the replica count of a pod deployment.",
-        _obj(
-            {"deployment_id": {"type": "string"}, "containers": {"type": "integer", "minimum": 0}},
-            ["deployment_id", "containers"],
-        ),
-        lambda a: ["deployment", "scale", a["deployment_id"], "--containers", str(a["containers"])],
-        destructive=True,
-    ),
-    Tool(
-        "list_tasks",
-        "List recent tasks (invocations), newest first.",
-        _obj(
-            {
-                "limit": {"type": "integer", "minimum": 1, "default": 20},
-                "stub_id": {"type": "string", "description": "Only tasks of this stub."},
-                "status": {
-                    "type": "string",
-                    "description": "Comma-separated: pending, running, complete, error, cancelled, timeout",
-                },
-            }
-        ),
-        lambda a: (
-            ["task", "list", "--format", "json"]
-            + _cli_args(a, {"limit": "--limit"})
-            + (["--filter", f"stub-id={a['stub_id']}"] if a.get("stub_id") else [])
-            + (["--filter", f"status={a['status']}"] if a.get("status") else [])
-        ),
-    ),
-    Tool(
-        "logs",
-        "Fetch recent logs for a deployment, container, task, stub or app (one JSON record per line).",
-        _obj(
-            {
-                "deployment_id": {"type": "string"},
-                "container_id": {"type": "string"},
-                "task_id": {"type": "string"},
-                "stub_id": {"type": "string"},
-                "app_id": {"type": "string"},
-                "tail": {"type": "integer", "default": 100},
-                "search": {"type": "string"},
-            }
-        ),
-        lambda a: (
-            ["logs", "--json"]
-            + _cli_args(
-                a,
-                {
-                    "deployment_id": "--deployment-id",
-                    "container_id": "--container-id",
-                    "task_id": "--task-id",
-                    "stub_id": "--stub-id",
-                    "app_id": "--app-id",
-                    "tail": "--tail",
-                    "search": "--search",
-                },
-            )
-        ),
-        per_line=True,
-    ),
-    Tool(
-        "list_secrets",
-        "List workspace secret names.",
-        _obj({}),
-        lambda a: ["secret", "list", "--format", "json"],
-    ),
-    Tool(
-        "create_secret",
-        "Create a workspace secret. Reference it from apps with ${{secret.NAME}} or secrets=[NAME].",
-        _obj({"name": {"type": "string"}, "value": {"type": "string"}}, ["name", "value"]),
-        lambda a: ["secret", "create", a["name"], a["value"]],
-        destructive=True,
-    ),
-    Tool(
-        "list_databases",
-        "List managed database services (postgres, redis).",
-        _obj({}),
-        lambda a: ["db", "list", "--format", "json"],
-    ),
-    Tool(
-        "create_database",
-        "Create a managed Postgres, Redis, MySQL or MongoDB service. Credentials are stored as secrets; reference with ${{db.<name>.DATABASE_URL}}.",
-        _obj(
-            {
-                "kind": {"type": "string", "enum": ["postgres", "redis", "mysql", "mongo"]},
-                "name": {"type": "string", "description": "lowercase letters, digits, dashes"},
-                "always_on": {"type": "boolean", "default": False},
-            },
-            ["kind", "name"],
-        ),
-        lambda a: (
-            ["db", a["kind"], "create", a["name"], "--format", "json"]
-            + (["--min-replicas", "1"] if a.get("always_on") else [])
-        ),
-        destructive=True,
-        redact=("connection_string",),
-    ),
-    Tool(
-        "connect_services",
-        "Wire one app to another: adds an env var on `target` referencing `source` (a database's URL or an app's public URL) and redeploys `target`. Default env name is DATABASE_URL / REDIS_URL / <SOURCE>_URL.",
-        _obj(
-            {
-                "source": {"type": "string", "description": "App name to reference"},
-                "target": {"type": "string", "description": "App name that receives the env var"},
-                "env_name": {"type": "string"},
-            },
-            ["source", "target"],
-        ),
-        run=lambda a, c: connect_apps(
-            _service(c),
-            a["source"],
-            a["target"],
-            a.get("env_name", ""),
-        ),
-        destructive=True,
-    ),
-    Tool(
-        "database_credentials",
-        "Connection details for a database service.",
-        _obj(
-            {
-                "kind": {"type": "string", "enum": ["postgres", "redis", "mysql", "mongo"]},
-                "name": {"type": "string"},
-            },
-            ["kind", "name"],
-        ),
-        lambda a: ["db", a["kind"], "credentials", a["name"], "--format", "json"],
-    ),
-    Tool(
-        "rotate_database_credentials",
-        "Rotate a database service's password. The database and every deployment bound to its secrets restart with the new credentials.",
-        _obj(
-            {
-                "kind": {"type": "string", "enum": ["postgres", "redis", "mysql", "mongo"]},
-                "name": {"type": "string"},
-            },
-            ["kind", "name"],
-        ),
-        lambda a: ["db", a["kind"], "rotate", a["name"], "--format", "json"],
-        destructive=True,
-        redact=("connection_string",),
-    ),
-    Tool(
-        "delete_database",
-        "Delete a database service and its credential secrets. Requires confirm=true.",
-        _obj(
-            {
-                "kind": {"type": "string", "enum": ["postgres", "redis", "mysql", "mongo"]},
-                "name": {"type": "string"},
-                "confirm": {"type": "boolean"},
-            },
-            ["kind", "name"],
-        ),
-        lambda a: ["db", a["kind"], "delete", a["name"]],
-        confirm="Deleting a database removes its credential secrets.",
-    ),
-    Tool(
-        "api_search",
-        "Find gateway REST routes by keyword (discovery for api_call).",
-        _obj({"term": {"type": "string"}}),
-        lambda a: ["api", "search", a.get("term", ""), "--format", "json"],
-    ),
-    Tool(
-        "api_call",
-        "Call a gateway REST route. `{ws}` in path is replaced with the workspace id. Body is a JSON string.",
-        _obj(
-            {
-                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
-                "path": {"type": "string"},
-                "data": {"type": "string", "description": "JSON request body"},
-                "query": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "KEY=VALUE query params",
-                },
-            },
-            ["method", "path"],
-        ),
-        lambda a: (
-            ["api", "call", a["method"], a["path"]]
-            + _cli_args(a, {"data": "--data", "query": "--query"})
-        ),
-        destructive=True,
-    ),
-]
+def _proto(message: Any) -> Any:
+    return message.to_dict(casing=Casing.SNAKE)
 
-# --- in-process tools: staged changes, request metrics, references ------------
+
+def _grpc(response: Any, ok_value: Any = None) -> Any:
+    """Turn a gateway response into tool output; failures become errors."""
+    if not response.ok:
+        raise RuntimeError(response.err_msg or "request failed")
+    return ok_value if ok_value is not None else {"ok": True}
+
+
+def _cli(
+    args: List[str], context: Optional[str], cwd: Optional[str] = None, timeout: int = 900
+) -> Any:
+    """Run the CLI for the few operations that are process-shaped (deploy, run)."""
+    command = cli_command() + ["--json"] + (["--context", context] if context else []) + args
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=cwd,
+            env={**_cli_env(), "BETA9_JSON": "1"},
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"{args[0]} timed out", "code": "TIMEOUT"}
+    stdout = proc.stdout.strip()
+    parsed = parse_last_json(stdout) if stdout else None
+    if proc.returncode != 0:
+        if isinstance(parsed, dict) and "error" in parsed:
+            return parsed
+        return {
+            "error": (proc.stderr or stdout or f"{args[0]} failed").strip()[-2000:],
+            "code": "ERROR",
+        }
+    return parsed if parsed is not None else {"output": stdout}
+
 
 # Paths the gateway applies live; mirrors LIVE_PATHS in the dashboard.
 LIVE_PATHS = {
@@ -704,10 +469,18 @@ def invoke(args: Dict[str, Any], context: Optional[str]) -> Any:
     url = summary["latest_url"]
     if path := (args.get("path") or "").lstrip("/"):
         url += "/" + path
+    http = _http(context)
+    headers = dict(http.headers)
+    target = url
+    # Subdomains of .localhost resolve in browsers but not in Python; dial the gateway and keep Host.
+    parsed = urlparse(url)
+    if parsed.hostname and parsed.hostname.endswith(".localhost"):
+        headers["Host"] = parsed.netloc
+        target = urlunparse(parsed._replace(netloc=urlparse(http.base_url).netloc))
     response = requests.request(
         args.get("method") or "POST",
-        url,
-        headers=_http(context).headers,
+        target,
+        headers=headers,
         json=args.get("body"),
         timeout=float(args.get("timeout") or 180),
     )
@@ -841,181 +614,421 @@ def run_function(args: Dict[str, Any], context: Optional[str]) -> Any:
     return {"result": json.loads(result), "logs": output.strip()[-4000:]}
 
 
-def _http_stats_tool(
-    name: str, description: str, run: Callable[[Dict[str, Any], Optional[str]], Any]
-) -> Tool:
-    return Tool(
-        name,
-        description,
-        _obj(
-            {
-                "stub_id": {"type": "string", "description": "Deployment stub id (endpoint/asgi)."},
-                "window_minutes": {
-                    "type": "integer",
-                    "default": 60,
-                    "minimum": 1,
-                    "maximum": 10080,
-                },
-            },
-            ["stub_id"],
-        ),
-        run=run,
+# --- workspace, deployments, tasks, logs --------------------------------------
+
+
+def _summary(service: ServiceClient, context: Optional[str]) -> Dict[str, Any]:
+    cfg = service._config
+    return {
+        "context": context or DEFAULT_CONTEXT_NAME,
+        "workspace_id": service.http.workspace_id,
+        "gateway_grpc": f"{cfg.gateway_host}:{cfg.gateway_port}",
+        "gateway_http": service.http.base_url,
+        "token": f"{(cfg.token or '')[:6]}…" if cfg.token else "",
+    }
+
+
+def whoami(_: Dict[str, Any], context: Optional[str]) -> Any:
+    return _summary(_service(context), context)
+
+
+def status(args: Dict[str, Any], context: Optional[str]) -> Any:
+    service = _service(context)
+    deployments = service.gateway.list_deployments(
+        ListDeploymentsRequest(limit=int(args.get("limit") or 10))
+    )
+    containers = service.gateway.list_containers(ListContainersRequest())
+    return {
+        **_summary(service, context),
+        "deployments": [_proto(d) for d in _grpc(deployments, deployments.deployments)],
+        "containers": [_proto(c) for c in containers.containers] if containers.ok else [],
+    }
+
+
+def list_deployments(args: Dict[str, Any], context: Optional[str]) -> Any:
+    filters = {
+        k: StringList([str(args[k])])
+        for k in ("name", "stub_type", "active")
+        if args.get(k) is not None
+    }
+    res = _service(context).gateway.list_deployments(
+        ListDeploymentsRequest(filters=filters, limit=int(args.get("limit") or 50))
+    )
+    return [_proto(d) for d in _grpc(res, res.deployments)]
+
+
+def deploy(args: Dict[str, Any], context: Optional[str]) -> Any:
+    argv = ["deploy", "--json"] + ([args["entrypoint"]] if args.get("entrypoint") else [])
+    if args.get("name"):
+        argv += ["--name", args["name"]]
+    if args.get("rollout"):
+        argv += ["--rollout", args["rollout"]]
+    return _cli(argv, context, cwd=args["directory"])
+
+
+def wait_deployment(args: Dict[str, Any], context: Optional[str]) -> Any:
+    try:
+        return wait_for_deployment(
+            _service(context), args["deployment_id"], float(args.get("timeout") or 300)
+        )
+    except DeploymentNotReady as exc:
+        return {"error": str(exc), "code": exc.code}
+
+
+def stop_deployment(args: Dict[str, Any], context: Optional[str]) -> Any:
+    return _grpc(
+        _service(context).gateway.stop_deployment(StopDeploymentRequest(id=args["deployment_id"]))
     )
 
 
-TOOLS += [
-    Tool(
-        "stage_config",
-        "Stage config edits for a stub without applying them. Dotted paths (keep_warm_seconds, autoscaler.max_containers, runtime.cpu, runtime.memory, env). Live paths patch in place on accept_deploy; others create a new version.",
-        _obj(
+def start_deployment(args: Dict[str, Any], context: Optional[str]) -> Any:
+    return _grpc(
+        _service(context).gateway.start_deployment(StartDeploymentRequest(id=args["deployment_id"]))
+    )
+
+
+def delete_deployment(args: Dict[str, Any], context: Optional[str]) -> Any:
+    return _grpc(
+        _service(context).gateway.delete_deployment(
+            DeleteDeploymentRequest(id=args["deployment_id"])
+        )
+    )
+
+
+def scale_deployment(args: Dict[str, Any], context: Optional[str]) -> Any:
+    res = _service(context).gateway.scale_deployment(
+        ScaleDeploymentRequest(id=args["deployment_id"], containers=int(args["containers"]))
+    )
+    return _grpc(
+        res, {"deployment_id": args["deployment_id"], "containers": int(args["containers"])}
+    )
+
+
+def list_tasks(args: Dict[str, Any], context: Optional[str]) -> Any:
+    filters: Dict[str, StringList] = {}
+    if args.get("stub_id"):
+        filters["stub-id"] = StringList([args["stub_id"]])
+    if args.get("status"):
+        filters["status"] = StringList([s.strip().upper() for s in str(args["status"]).split(",")])
+    res = _service(context).gateway.list_tasks(
+        ListTasksRequest(filters=filters, limit=int(args.get("limit") or 20))
+    )
+    return [_proto(t) for t in _grpc(res, res.tasks)]
+
+
+def get_task(args: Dict[str, Any], context: Optional[str]) -> Any:
+    return _http(context).json("GET", f"/api/v1/task/{{ws}}/{args['task_id']}")
+
+
+def stop_task(args: Dict[str, Any], context: Optional[str]) -> Any:
+    return _grpc(_service(context).gateway.stop_tasks(StopTasksRequest(task_ids=[args["task_id"]])))
+
+
+LOG_TARGETS = ("deployment_id", "container_id", "task_id", "stub_id", "app_id")
+
+
+def logs(args: Dict[str, Any], context: Optional[str]) -> Any:
+    chosen = [k for k in LOG_TARGETS if args.get(k)]
+    if len(chosen) != 1:
+        return {"error": f"pass exactly one of {', '.join(LOG_TARGETS)}", "code": "INVALID_ARGS"}
+    kind = chosen[0][: -len("_id")]
+    params: Dict[str, Any] = {
+        "object_id": args[chosen[0]],
+        "object_type": f"BETA9_{kind.upper()}",
+        "limit": int(args.get("tail") or 100),
+    }
+    if args.get("since"):
+        params["start_time"] = args["since"]
+    if args.get("search"):
+        params["query"] = args["search"]
+    return (_http(context).json("GET", "/api/v1/logs/{ws}", params=params) or {}).get("logs", [])
+
+
+# --- secrets, databases, volumes, webhooks --------------------------------------
+
+
+def list_secrets(_: Dict[str, Any], context: Optional[str]) -> Any:
+    res = _service(context).secret.list_secrets(ListSecretsRequest())
+    return [
+        {"name": s.name, "updated_at": _proto(s).get("updated_at")} for s in _grpc(res, res.secrets)
+    ]
+
+
+def create_secret(args: Dict[str, Any], context: Optional[str]) -> Any:
+    res = _service(context).secret.create_secret(
+        CreateSecretRequest(name=args["name"], value=args["value"])
+    )
+    return _grpc(res, {"name": args["name"], "created": True})
+
+
+def update_secret(args: Dict[str, Any], context: Optional[str]) -> Any:
+    res = _service(context).secret.update_secret(
+        UpdateSecretRequest(name=args["name"], value=args["value"])
+    )
+    return _grpc(res, {"name": args["name"], "updated": True})
+
+
+def delete_secret(args: Dict[str, Any], context: Optional[str]) -> Any:
+    res = _service(context).secret.delete_secret(DeleteSecretRequest(name=args["name"]))
+    return _grpc(res, {"name": args["name"], "deleted": True})
+
+
+def _databases(http: GatewayHTTP) -> List[Dict[str, Any]]:
+    return http.json("GET", "/api/v1/database/{ws}") or []
+
+
+def _database(http: GatewayHTTP, kind: str, name: str) -> Dict[str, Any]:
+    for info in _databases(http):
+        if info["name"] == name and info["kind"] == kind:
+            return info
+    raise RuntimeError(f"no {kind} database named {name}")
+
+
+def _public(info: Dict[str, Any]) -> Dict[str, Any]:
+    """Database service info without credential values."""
+    out = database_result(info)
+    out.pop("connection_string", None)
+    return out
+
+
+def list_databases(_: Dict[str, Any], context: Optional[str]) -> Any:
+    return [_public(d) for d in _databases(_http(context))]
+
+
+def create_database(args: Dict[str, Any], context: Optional[str]) -> Any:
+    body = {"kind": args["kind"], "name": args["name"], "always_on": bool(args.get("always_on"))}
+    return _public(_http(context).json("POST", "/api/v1/database/{ws}", json=body, timeout=660))
+
+
+def database_credentials(args: Dict[str, Any], context: Optional[str]) -> Any:
+    service = _service(context)
+    info = _database(service.http, args["kind"], args["name"])
+
+    def secret(name: str) -> str:
+        res = service.secret.get_secret(GetSecretRequest(name=name))
+        return _grpc(res, res.secret.value)
+
+    payload = {
+        "name": args["name"],
+        "kind": args["kind"],
+        "username": secret(info["username_secret"]),
+        "connection_string": secret(info["connection_string_secret"]),
+        "connection_string_secret": info["connection_string_secret"],
+    }
+    if info.get("database_secret"):
+        payload["database"] = secret(info["database_secret"])
+    if args["kind"] == "redis":
+        payload.update(
             {
-                "stub_id": {"type": "string"},
-                "fields": {"type": "object", "additionalProperties": True},
-            },
-            ["stub_id", "fields"],
-        ),
-        run=stage_config,
-    ),
-    Tool(
-        "staged_changes",
-        "Show the session's staged changes and how each would apply.",
-        _obj({}),
-        run=lambda a, c: _describe_staged(),
-    ),
-    Tool(
-        "discard_staged",
-        "Drop staged changes (all, or one stub's).",
-        _obj({"stub_id": {"type": "string"}}),
-        run=discard_staged,
-        destructive=True,
-    ),
-    Tool(
-        "accept_deploy",
-        "Apply every staged change: PATCH live paths, redeploy stubs whose staged paths need a new version. Requires confirm=true.",
-        _obj({"confirm": {"type": "boolean"}, "message": {"type": "string"}}),
-        run=accept_deploy,
-        confirm="accept_deploy applies staged changes to the workspace.",
-    ),
-    _http_stats_tool(
-        "http_requests",
-        "Request count for an endpoint over a window.",
-        http_requests,
-    ),
-    _http_stats_tool(
-        "http_error_rate", "Share of 5xx responses for an endpoint over a window.", http_error_rate
-    ),
-    _http_stats_tool(
-        "http_response_time",
-        "p50/p95/p99 latency (ms) for an endpoint over a window; percentiles come from a fixed histogram, so they are upper bounds.",
-        http_response_time,
-    ),
-    Tool(
-        "validate_references",
-        "Check the syntax of ${{...}} references in KEY=VALUE env entries; whether the named database or app exists is checked by the gateway at deploy time.",
-        _obj(
-            {
-                "env": {"type": "array", "items": {"type": "string"}},
-                "complete": {"type": "string", "description": "partial expression after ${{"},
+                k: v
+                for k, v in _redis_fields(payload["connection_string"]).items()
+                if k != "password"
             }
-        ),
-        run=validate_references_tool,
-    ),
+        )
+    return payload
+
+
+def rotate_database_credentials(args: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    _database(http, args["kind"], args["name"])
+    return _public(http.json("POST", f"/api/v1/database/{{ws}}/{args['name']}/rotate", timeout=660))
+
+
+def delete_database(args: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    _database(http, args["kind"], args["name"])
+    http.json("DELETE", f"/api/v1/database/{{ws}}/{args['name']}")
+    return {"deleted": args["name"], "kind": args["kind"]}
+
+
+def list_volumes(_: Dict[str, Any], context: Optional[str]) -> Any:
+    res = _service(context).volume.list_volumes(ListVolumesRequest())
+    return [_proto(v) for v in _grpc(res, res.volumes)]
+
+
+def create_volume(args: Dict[str, Any], context: Optional[str]) -> Any:
+    res = _service(context).volume.get_or_create_volume(GetOrCreateVolumeRequest(name=args["name"]))
+    return _grpc(res, _proto(res.volume))
+
+
+def list_webhooks(_: Dict[str, Any], context: Optional[str]) -> Any:
+    return _http(context).json("GET", "/api/v1/webhook/{ws}") or []
+
+
+def create_webhook(args: Dict[str, Any], context: Optional[str]) -> Any:
+    body = {
+        "url": args["url"],
+        "event_types": args.get("event_types") or ["stub.*", "task.*"],
+        "description": args.get("description", ""),
+    }
+    return _http(context).json("POST", "/api/v1/webhook/{ws}", json=body)
+
+
+# --- REST escape hatch ------------------------------------------------------------
+
+
+def api_search(args: Dict[str, Any], _: Optional[str]) -> Any:
+    needle = (args.get("term") or "").lower()
+    return [
+        r
+        for r in ECHO_ROUTES + _spec_routes(_load_specs())
+        if not needle
+        or needle in r["path"].lower()
+        or needle in r.get("summary", "").lower()
+        or needle in r.get("operation", "").lower()
+    ]
+
+
+def api_call(args: Dict[str, Any], context: Optional[str]) -> Any:
+    body = (
+        json.loads(args["body"])
+        if isinstance(args.get("body"), str) and args["body"]
+        else args.get("body")
+    )
+    response = _http(context).request(
+        args["method"].upper(), args["path"], params=args.get("query"), json=body
+    )
+    try:
+        payload: Any = response.json()
+    except ValueError:
+        payload = response.text
+    return {"status": response.status_code, "body": payload}
+
+
+# --- templates ---------------------------------------------------------------------
+
+
+def template_plan(args: Dict[str, Any], _: Optional[str]) -> Any:
+    manifest = load_manifest(args["source"])
+    return {"name": manifest.get("name"), "steps": plan_steps(manifest, args.get("prefix") or "")}
+
+
+def deploy_template(args: Dict[str, Any], context: Optional[str]) -> Any:
+    service = _service(context)
+    manifest = load_manifest(args["source"])
+    if missing := missing_secrets(service, manifest):
+        return {
+            "error": f"Create these secrets first: {', '.join(missing)}",
+            "code": "MISSING_SECRETS",
+        }
+    results = run_template(
+        service,
+        manifest,
+        context or DEFAULT_CONTEXT_NAME,
+        args.get("prefix") or "",
+        args.get("only") or None,
+    )
+    return {"name": manifest.get("name"), "results": results}
+
+
+def export_template(args: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    services: Dict[str, Any] = {}
+    for name in args["apps"]:
+        summary = _app_summary(_app(http, name))
+        if not summary["stub_id"]:
+            raise RuntimeError(f"{name} has nothing deployed")
+        services[name] = manifest_service(
+            stub_config(http.json("GET", f"/api/v1/stub/{{ws}}/{summary['stub_id']}"))
+        )
+    return {"name": args.get("name") or "exported", "services": services}
+
+
+def run_pod(args: Dict[str, Any], context: Optional[str]) -> Any:
+    argv = ["run", "--detach", "--json"] + ([args["entrypoint"]] if args.get("entrypoint") else [])
+    for key, flag in (
+        ("command", "--command"),
+        ("image", "--image"),
+        ("cpu", "--cpu"),
+        ("memory", "--memory"),
+        ("gpu", "--gpu"),
+    ):
+        if args.get(key) is not None:
+            argv += [flag, str(args[key])]
+    for kv in args.get("env") or []:
+        argv += ["--env", kv]
+    return _cli(argv, context, cwd=args["directory"])
+
+
+# --- tool catalog -------------------------------------------------------------------
+
+_KIND = {"type": "string", "enum": DATABASE_KINDS}
+_NAME = _obj({"name": {"type": "string"}}, ["name"])
+_DB = _obj({"kind": _KIND, "name": {"type": "string"}}, ["kind", "name"])
+_DB_CONFIRM = _obj(
+    {"kind": _KIND, "name": {"type": "string"}, "confirm": {"type": "boolean"}}, ["kind", "name"]
+)
+_DEPLOYMENT = _obj({"deployment_id": {"type": "string"}}, ["deployment_id"])
+_WINDOW = _obj(
+    {
+        "stub_id": {"type": "string", "description": "Deployment stub id (endpoint/asgi)."},
+        "window_minutes": {"type": "integer", "default": 60, "minimum": 1, "maximum": 10080},
+    },
+    ["stub_id"],
+)
+
+TOOLS: List[Tool] = [
+    # workspace
+    Tool("whoami", "Active context, workspace id and gateway URLs.", _obj({}), whoami),
     Tool(
-        "list_webhooks",
-        "Workspace webhooks (URL, event types, enabled).",
-        _obj({}),
-        lambda a: ["api", "call", "GET", "/api/v1/webhook/{ws}"],
-    ),
-    Tool(
-        "create_webhook",
-        "Register a signed HTTP webhook for workspace events (e.g. stub.*, task.*, endpoint.request_stats). Returns the signing secret once.",
-        _obj(
-            {
-                "url": {"type": "string"},
-                "event_types": {"type": "array", "items": {"type": "string"}},
-                "description": {"type": "string"},
-            },
-            ["url"],
-        ),
-        lambda a: [
-            "api",
-            "call",
-            "POST",
-            "/api/v1/webhook/{ws}",
-            "--data",
-            json.dumps(
-                {
-                    "url": a["url"],
-                    "event_types": a.get("event_types") or ["stub.*", "task.*"],
-                    "description": a.get("description", ""),
-                }
-            ),
-        ],
-        destructive=True,
-    ),
-    Tool(
-        "template_plan",
-        "Show the ordered steps of a template manifest (path, URL, or a catalog name).",
-        _obj(
-            {"source": {"type": "string"}, "prefix": {"type": "string", "default": ""}}, ["source"]
-        ),
-        lambda a: ["template", "plan", a["source"]] + _cli_args(a, {"prefix": "--prefix"}),
-    ),
-    Tool(
-        "deploy_template",
-        "Deploy every service in a template manifest in dependency order (databases first) and group them into a stack. Requires confirm=true.",
-        _obj(
-            {
-                "source": {"type": "string"},
-                "prefix": {"type": "string", "default": ""},
-                "only": {"type": "array", "items": {"type": "string"}},
-                "confirm": {"type": "boolean"},
-            },
-            ["source"],
-        ),
-        lambda a: (
-            ["template", "deploy", a["source"], "--yes"]
-            + _cli_args(a, {"prefix": "--prefix", "only": "--only"})
-        ),
-        confirm="deploy_template creates databases and deployments; use template_plan first.",
-    ),
-    Tool(
-        "export_template",
-        "Save existing apps as a template manifest (secret values are never included).",
-        _obj(
-            {
-                "apps": {"type": "array", "items": {"type": "string"}},
-                "name": {"type": "string", "default": "exported"},
-            },
-            ["apps"],
-        ),
-        lambda a: ["template", "export"] + list(a["apps"]) + _cli_args(a, {"name": "--name"}),
+        "status",
+        "Snapshot of the workspace: latest deployments and running containers.",
+        _obj({"limit": {"type": "integer", "default": 10}}),
+        status,
     ),
     Tool(
         "list_apps",
         "Apps in the workspace with their latest deployment and URLs.",
         _obj({}),
-        run=list_apps,
+        list_apps,
     ),
     Tool(
         "get_app",
         "One app: its config (resources, scaling, env, secret bindings, ports) and URLs.",
-        _obj({"name": {"type": "string"}}, ["name"]),
-        run=get_app,
+        _NAME,
+        get_app,
     ),
     Tool(
         "delete_app",
         "Delete an app and all of its deployments and versions. Requires confirm=true.",
         _obj({"name": {"type": "string"}, "confirm": {"type": "boolean"}}, ["name"]),
-        run=delete_app,
+        delete_app,
         confirm="delete_app removes every deployment of the app.",
+    ),
+    # ship code
+    Tool(
+        "deploy",
+        "Deploy an app from a local directory: a python entrypoint (app.py:handler) or a Dockerfile/image app. Returns deployment_id, version and invoke_url (pinned to this version; wire other services with ${{app.<name>.URL}}).",
+        _obj(
+            {
+                "directory": {
+                    "type": "string",
+                    "description": "Project root; files sync from here.",
+                },
+                "entrypoint": {"type": "string", "description": "module:function for python apps."},
+                "name": {"type": "string"},
+                "rollout": {"type": "string", "enum": ["auto", "blue-green", "replace"]},
+            },
+            ["directory"],
+        ),
+        deploy,
+        destructive=True,
+    ),
+    Tool(
+        "wait_deployment",
+        "Block until a deployment is serving (health check for endpoints, active for others).",
+        _obj(
+            {"deployment_id": {"type": "string"}, "timeout": {"type": "number", "default": 300}},
+            ["deployment_id"],
+        ),
+        wait_deployment,
     ),
     Tool(
         "invoke",
-        "Call a deployed endpoint, ASGI app, task queue or function by name (latest version) with the workspace token. Task queues and functions return a task_id; follow it with list_tasks or get_task.",
+        "Call a deployed endpoint, ASGI app, task queue or function by name (latest version) with the workspace token. Task queues and functions return a task_id; follow it with get_task.",
         _obj(
             {
-                "name": {"type": "string", "description": "App name"},
+                "name": {"type": "string"},
                 "method": {"type": "string", "default": "POST"},
                 "path": {"type": "string", "description": "Sub-path for ASGI apps, e.g. /notes"},
                 "body": {"description": "JSON body"},
@@ -1023,40 +1036,27 @@ TOOLS += [
             },
             ["name"],
         ),
-        run=invoke,
-        destructive=True,
-    ),
-    Tool(
-        "get_task",
-        "Status, timing and result of one task.",
-        _obj({"task_id": {"type": "string"}}, ["task_id"]),
-        run=lambda a, c: _http(c).json("GET", f"/api/v1/task/{{ws}}/{a['task_id']}"),
-    ),
-    Tool(
-        "stop_task",
-        "Stop a running or pending task.",
-        _obj({"task_id": {"type": "string"}}, ["task_id"]),
-        lambda a: ["task", "stop", a["task_id"]],
+        invoke,
         destructive=True,
     ),
     Tool(
         "run_function",
-        "Run a @function from a local directory on the control plane and return its result: the image is built if needed, then fn.remote(**args) is called. Blocks until the function finishes.",
+        "Run a @function from a local directory on the control plane and return its result: builds the image if needed, then fn.remote(**args).",
         _obj(
             {
                 "directory": {"type": "string"},
                 "entrypoint": {"type": "string", "description": "module:function, e.g. app:square"},
-                "args": {"type": "object", "description": "Keyword arguments"},
+                "args": {"type": "object"},
                 "timeout": {"type": "number", "default": 900},
             },
             ["directory", "entrypoint"],
         ),
-        run=run_function,
+        run_function,
         destructive=True,
     ),
     Tool(
         "run_pod",
-        "Start a one-off container from a local directory: a Pod handler (app.py:pod) or a command on an image. Returns container_id; read output with logs and stop it with stop_task.",
+        "Start a one-off container from a local directory: a Pod handler or a command on an image. Returns container_id; read output with logs, stop it with stop_task.",
         _obj(
             {
                 "directory": {"type": "string"},
@@ -1073,24 +1073,57 @@ TOOLS += [
             },
             ["directory"],
         ),
-        lambda a: (
-            ["run", "--detach", "--json"]
-            + ([a["entrypoint"]] if a.get("entrypoint") else [])
-            + _cli_args(
-                a,
-                {
-                    "command": "--command",
-                    "image": "--image",
-                    "cpu": "--cpu",
-                    "memory": "--memory",
-                    "gpu": "--gpu",
-                    "env": "--env",
-                },
-            )
-        ),
+        run_pod,
         destructive=True,
-        cwd_from="directory",
     ),
+    # deployments
+    Tool(
+        "list_deployments",
+        "List deployments (versions). Filter by name, stub_type, active.",
+        _obj(
+            {
+                "name": {"type": "string"},
+                "stub_type": {"type": "string"},
+                "active": {"type": "boolean"},
+                "limit": {"type": "integer", "default": 50},
+            }
+        ),
+        list_deployments,
+    ),
+    Tool(
+        "stop_deployment",
+        "Stop a deployment (drains containers; requests fail until started).",
+        _DEPLOYMENT,
+        stop_deployment,
+        destructive=True,
+    ),
+    Tool(
+        "start_deployment",
+        "Start a stopped deployment.",
+        _DEPLOYMENT,
+        start_deployment,
+        destructive=True,
+    ),
+    Tool(
+        "delete_deployment",
+        "Delete one deployment version. Requires confirm=true.",
+        _obj(
+            {"deployment_id": {"type": "string"}, "confirm": {"type": "boolean"}}, ["deployment_id"]
+        ),
+        delete_deployment,
+        confirm="delete_deployment is irreversible.",
+    ),
+    Tool(
+        "scale_deployment",
+        "Set the replica count of a pod deployment.",
+        _obj(
+            {"deployment_id": {"type": "string"}, "containers": {"type": "integer", "minimum": 0}},
+            ["deployment_id", "containers"],
+        ),
+        scale_deployment,
+        destructive=True,
+    ),
+    # settings
     Tool(
         "set_env",
         "Set or remove environment variables on a deployed app and redeploy it as a new version. Values may be ${{secret.NAME}}, ${{db.NAME.DATABASE_URL}} or ${{app.NAME.URL}} references.",
@@ -1102,28 +1135,142 @@ TOOLS += [
             },
             ["name"],
         ),
-        run=set_env_tool,
+        set_env_tool,
+        destructive=True,
+    ),
+    Tool(
+        "connect_services",
+        "Wire one app to another: adds env on `target` referencing `source` (a database's URL and parts, or an app's URL) and redeploys target.",
+        _obj(
+            {
+                "source": {"type": "string", "description": "App or database name to reference"},
+                "target": {"type": "string", "description": "App that receives the env vars"},
+                "env_name": {
+                    "type": "string",
+                    "description": "Override the variable name (single URL)",
+                },
+            },
+            ["source", "target"],
+        ),
+        lambda a, c: connect_apps(_service(c), a["source"], a["target"], a.get("env_name", "")),
+        destructive=True,
+    ),
+    Tool(
+        "stage_config",
+        "Stage config edits for a stub without applying them. Dotted paths (keep_warm_seconds, autoscaler.max_containers, runtime.cpu, runtime.memory, env). Live paths patch in place on accept_deploy; others create a new version.",
+        _obj(
+            {
+                "stub_id": {"type": "string"},
+                "fields": {"type": "object", "additionalProperties": True},
+            },
+            ["stub_id", "fields"],
+        ),
+        stage_config,
+    ),
+    Tool(
+        "staged_changes",
+        "Show the session's staged changes and how each would apply.",
+        _obj({}),
+        lambda a, c: _describe_staged(),
+    ),
+    Tool(
+        "discard_staged",
+        "Drop staged changes (all, or one stub's).",
+        _obj({"stub_id": {"type": "string"}}),
+        discard_staged,
+        destructive=True,
+    ),
+    Tool(
+        "accept_deploy",
+        "Apply every staged change: PATCH live paths, redeploy stubs whose staged paths need a new version. Requires confirm=true.",
+        _obj({"confirm": {"type": "boolean"}, "message": {"type": "string"}}),
+        accept_deploy,
+        confirm="accept_deploy applies staged changes to the workspace.",
+    ),
+    Tool(
+        "validate_references",
+        "Check the syntax of ${{...}} references in KEY=VALUE env entries; existence of the named database or app is checked at deploy time.",
+        _obj(
+            {
+                "env": {"type": "array", "items": {"type": "string"}},
+                "complete": {"type": "string", "description": "partial expression after ${{"},
+            }
+        ),
+        validate_references_tool,
+    ),
+    # secrets
+    Tool("list_secrets", "Workspace secret names.", _obj({}), list_secrets),
+    Tool(
+        "create_secret",
+        "Create a workspace secret. Reference it from apps with ${{secret.NAME}} or secrets=[NAME].",
+        _obj({"name": {"type": "string"}, "value": {"type": "string"}}, ["name", "value"]),
+        create_secret,
         destructive=True,
     ),
     Tool(
         "update_secret",
-        "Change a workspace secret's value. Deployments pick it up on their next container start.",
+        "Change a secret's value. Deployments pick it up on their next container start.",
         _obj({"name": {"type": "string"}, "value": {"type": "string"}}, ["name", "value"]),
-        lambda a: ["secret", "modify", a["name"], a["value"]],
+        update_secret,
         destructive=True,
     ),
     Tool(
         "delete_secret",
         "Delete a workspace secret. Requires confirm=true.",
         _obj({"name": {"type": "string"}, "confirm": {"type": "boolean"}}, ["name"]),
-        lambda a: ["secret", "delete", a["name"]],
+        delete_secret,
         confirm="delete_secret breaks deployments still bound to it.",
     ),
+    # databases
+    Tool("list_databases", "Managed database services and their state.", _obj({}), list_databases),
+    Tool(
+        "create_database",
+        "Create a managed Postgres, Redis, MySQL or MongoDB service. Credentials are stored as secrets; reference them with ${{db.<name>.DATABASE_URL}} (or REDIS_URL, HOST, PORT, USERNAME, PASSWORD, DATABASE).",
+        _obj(
+            {
+                "kind": _KIND,
+                "name": {"type": "string"},
+                "always_on": {"type": "boolean", "default": False},
+            },
+            ["kind", "name"],
+        ),
+        create_database,
+        destructive=True,
+    ),
+    Tool(
+        "database_credentials",
+        "Connection details for a database service, including the connection string.",
+        _DB,
+        database_credentials,
+    ),
+    Tool(
+        "rotate_database_credentials",
+        "Rotate a database's password. The database and every deployment bound to its secrets restart with the new credentials.",
+        _DB,
+        rotate_database_credentials,
+        destructive=True,
+    ),
+    Tool(
+        "delete_database",
+        "Delete a database service and its credential secrets. Requires confirm=true.",
+        _DB_CONFIRM,
+        delete_database,
+        confirm="delete_database removes the service and its data.",
+    ),
+    # storage
+    Tool(
+        "list_volumes",
+        "Persistent volumes (mount with Volume(name, mount_path) in app code).",
+        _obj({}),
+        list_volumes,
+    ),
+    Tool("create_volume", "Create a persistent volume.", _NAME, create_volume, destructive=True),
+    # stacks
     Tool(
         "list_stacks",
         "Stacks: named groups of apps shown together on the dashboard board.",
         _obj({}),
-        run=list_stacks,
+        list_stacks,
     ),
     Tool(
         "create_stack",
@@ -1132,7 +1279,7 @@ TOOLS += [
             {"name": {"type": "string"}, "apps": {"type": "array", "items": {"type": "string"}}},
             ["name"],
         ),
-        run=create_stack,
+        create_stack,
         destructive=True,
     ),
     Tool(
@@ -1146,35 +1293,153 @@ TOOLS += [
             },
             ["name"],
         ),
-        run=update_stack,
+        update_stack,
         destructive=True,
     ),
     Tool(
         "delete_stack",
         "Delete a stack. Its apps are untouched.",
-        _obj({"name": {"type": "string"}}, ["name"]),
-        run=delete_stack,
+        _NAME,
+        delete_stack,
         destructive=True,
     ),
+    # templates
     Tool(
-        "list_volumes",
-        "Persistent volumes in the workspace (mount with Volume(name, mount_path) in app code).",
-        _obj({}),
-        lambda a: ["volume", "list", "--format", "json"],
+        "template_plan",
+        "Show the ordered steps of a template manifest (path, URL, or a catalog name).",
+        _obj(
+            {"source": {"type": "string"}, "prefix": {"type": "string", "default": ""}}, ["source"]
+        ),
+        template_plan,
     ),
     Tool(
-        "create_volume",
-        "Create a persistent volume.",
-        _obj({"name": {"type": "string"}}, ["name"]),
-        lambda a: ["volume", "create", a["name"], "--format", "json"],
+        "deploy_template",
+        "Deploy every service in a template manifest in dependency order (databases first) and group them into a stack. Requires confirm=true.",
+        _obj(
+            {
+                "source": {"type": "string"},
+                "prefix": {"type": "string", "default": ""},
+                "only": {"type": "array", "items": {"type": "string"}},
+                "confirm": {"type": "boolean"},
+            },
+            ["source"],
+        ),
+        deploy_template,
+        confirm="deploy_template creates databases and deployments; use template_plan first.",
+    ),
+    Tool(
+        "export_template",
+        "Describe existing apps as a template manifest (secret values are never included).",
+        _obj(
+            {
+                "apps": {"type": "array", "items": {"type": "string"}},
+                "name": {"type": "string", "default": "exported"},
+            },
+            ["apps"],
+        ),
+        export_template,
+    ),
+    # observe
+    Tool(
+        "logs",
+        "Recent logs for one target: deployment_id, container_id, task_id, stub_id or app_id.",
+        _obj(
+            {
+                "deployment_id": {"type": "string"},
+                "container_id": {"type": "string"},
+                "task_id": {"type": "string"},
+                "stub_id": {"type": "string"},
+                "app_id": {"type": "string"},
+                "tail": {"type": "integer", "default": 100},
+                "since": {"type": "string", "description": "RFC3339 start time"},
+                "search": {"type": "string"},
+            }
+        ),
+        logs,
+    ),
+    Tool(
+        "list_tasks",
+        "Recent tasks (invocations), newest first.",
+        _obj(
+            {
+                "limit": {"type": "integer", "minimum": 1, "default": 20},
+                "stub_id": {"type": "string"},
+                "status": {
+                    "type": "string",
+                    "description": "Comma-separated: pending, running, complete, error, cancelled, timeout",
+                },
+            }
+        ),
+        list_tasks,
+    ),
+    Tool(
+        "get_task",
+        "Status, timing and result of one task.",
+        _obj({"task_id": {"type": "string"}}, ["task_id"]),
+        get_task,
+    ),
+    Tool(
+        "stop_task",
+        "Stop a running or pending task.",
+        _obj({"task_id": {"type": "string"}}, ["task_id"]),
+        stop_task,
+        destructive=True,
+    ),
+    Tool("http_requests", "Request count for an endpoint over a window.", _WINDOW, http_requests),
+    Tool(
+        "http_error_rate",
+        "Share of 5xx responses for an endpoint over a window.",
+        _WINDOW,
+        http_error_rate,
+    ),
+    Tool(
+        "http_response_time",
+        "p50/p95/p99 latency (ms) for an endpoint over a window; percentiles come from a fixed histogram, so they are upper bounds.",
+        _WINDOW,
+        http_response_time,
+    ),
+    Tool(
+        "list_webhooks", "Workspace webhooks (URL, event types, enabled).", _obj({}), list_webhooks
+    ),
+    Tool(
+        "create_webhook",
+        "Register a signed HTTP webhook for workspace events (stub.*, task.*, endpoint.request_stats). Returns the signing secret once.",
+        _obj(
+            {
+                "url": {"type": "string"},
+                "event_types": {"type": "array", "items": {"type": "string"}},
+                "description": {"type": "string"},
+            },
+            ["url"],
+        ),
+        create_webhook,
+        destructive=True,
+    ),
+    # escape hatch
+    Tool(
+        "api_search",
+        "Find gateway REST routes by keyword (discovery for api_call).",
+        _obj({"term": {"type": "string"}}),
+        api_search,
+    ),
+    Tool(
+        "api_call",
+        "Call a gateway REST route. `{ws}` in path is replaced with the workspace id.",
+        _obj(
+            {
+                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+                "path": {"type": "string"},
+                "body": {"description": "JSON body (object or JSON string)"},
+                "query": {"type": "object", "additionalProperties": {"type": "string"}},
+            },
+            ["method", "path"],
+        ),
+        api_call,
         destructive=True,
     ),
 ]
 
 TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
-
-
-# --- server ------------------------------------------------------------------
 
 
 def _run_tool(tool: Tool, args: Dict[str, Any], context: Optional[str]) -> Any:
@@ -1183,59 +1448,12 @@ def _run_tool(tool: Tool, args: Dict[str, Any], context: Optional[str]) -> Any:
             "error": f"{tool.confirm} Call again with confirm=true.",
             "code": "NEEDS_CONFIRMATION",
         }
-    if tool.run is not None:
-        try:
-            return tool.run(args, context)
-        except GatewayHTTPError as exc:
-            return {
-                "error": exc.message,
-                "code": "NOT_AUTHENTICATED" if exc.status == 401 else "ERROR",
-            }
-        except Exception as exc:  # surface as a tool error; keep the server alive
-            return {"error": str(exc), "code": "ERROR"}
-
-    command = cli_command() + ["--json"]
-    if context:
-        command += ["--context", context]
-    command += tool.build(args)  # type: ignore[misc]
-
-    cwd = args.get(tool.cwd_from) if tool.cwd_from else None
     try:
-        proc = subprocess.run(
-            command,
-            cwd=cwd,
-            env={**_cli_env(), "BETA9_JSON": "1"},
-            capture_output=True,
-            text=True,
-            timeout=900,
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": f"{tool.name} timed out", "code": "TIMEOUT"}
-    except FileNotFoundError as exc:
+        return tool.run(args, context)
+    except GatewayHTTPError as exc:
+        return {"error": exc.message, "code": "NOT_AUTHENTICATED" if exc.status == 401 else "ERROR"}
+    except Exception as exc:  # surface as a tool error; keep the server alive
         return {"error": str(exc), "code": "ERROR"}
-
-    stdout = proc.stdout.strip()
-    parsed: Any = None
-    if stdout and tool.per_line:
-        parsed = [
-            record for record in map(parse_last_json, stdout.splitlines()) if record is not None
-        ]
-    elif stdout:
-        parsed = parse_last_json(stdout)
-    if stdout and parsed is None:
-        parsed = {"output": stdout}
-
-    if isinstance(parsed, dict):
-        for key in tool.redact:
-            parsed.pop(key, None)
-    if proc.returncode != 0:
-        if isinstance(parsed, dict) and "error" in parsed:
-            return parsed
-        return {
-            "error": (proc.stderr or stdout or f"{tool.name} failed").strip()[-2000:],
-            "code": "ERROR",
-        }
-    return parsed if parsed is not None else {"ok": True}
 
 
 class StdioServer:
