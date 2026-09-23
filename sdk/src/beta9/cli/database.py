@@ -22,10 +22,6 @@ from .extraclick import ClickCommonGroup
 
 PRODUCTS = {"postgres": "Postgres", "redis": "Redis", "mysql": "MySQL", "mongo": "MongoDB"}
 
-FORMAT_OPTION = click.option(
-    "--format", type=click.Choice(("table", "json")), default="table", show_default=True
-)
-
 
 @click.group(cls=ClickCommonGroup)
 def common(**_):
@@ -40,14 +36,11 @@ def db():
 # --- gateway ------------------------------------------------------------------
 
 
-_ERROR_CODES = {401: "NOT_AUTHENTICATED", 404: "NOT_FOUND", 409: "ALREADY_EXISTS"}
-
-
 def _api(service: ServiceClient, method: str, path: str = "", **kwargs) -> Any:
     try:
         return service.http.json(method, f"/api/v1/database/{{ws}}{path}", timeout=660, **kwargs)
     except GatewayHTTPError as exc:
-        terminal.error(exc.message, code=_ERROR_CODES.get(exc.status, "ERROR"))
+        terminal.error(exc.message, code=exc.code)
 
 
 def _services(service: ServiceClient) -> List[Dict[str, Any]]:
@@ -58,13 +51,13 @@ def _service_info(service: ServiceClient, kind: str, name: str) -> Dict[str, Any
     for info in _services(service):
         if info["name"] == name and info["kind"] == kind:
             return info
-    raise click.ClickException(f"{kind} service {name!r} not found.")
+    terminal.error(f"{kind} service {name!r} not found.", code="NOT_FOUND")
 
 
 def _secret_value(service: ServiceClient, name: str) -> str:
     res = service.secret.get_secret(GetSecretRequest(name=name))
     if not res.ok:
-        raise click.ClickException(res.err_msg or f"Secret {name} not found.")
+        terminal.error(res.err_msg or f"Secret {name} not found.", code="NOT_FOUND")
     return res.secret.value
 
 
@@ -73,7 +66,7 @@ def _deployments_by_name(service: ServiceClient, name: str):
         ListDeploymentsRequest(filters={"name": StringList(values=[name])}, limit=20)
     )
     if not res.ok:
-        raise click.ClickException(res.err_msg or "Unable to list deployments.")
+        terminal.error(res.err_msg or "Unable to list deployments.")
     return [d for d in res.deployments if d.name == name]
 
 
@@ -83,15 +76,17 @@ def _deployments_by_name(service: ServiceClient, name: str):
 def _password(password: str, password_from_env: str, password_stdin: bool) -> str:
     """One password source at most; empty means the gateway generates one."""
     if sum([bool(password), bool(password_from_env), password_stdin]) > 1:
-        raise click.ClickException("Specify only one password source.")
+        terminal.error("Specify only one password source.", code="INVALID_ARGS")
     if password_from_env:
         password = os.getenv(password_from_env, "")
         if not password:
-            raise click.ClickException(f"Environment variable {password_from_env!r} is not set.")
+            terminal.error(
+                f"Environment variable {password_from_env!r} is not set.", code="INVALID_ARGS"
+            )
     if password_stdin:
         password = sys.stdin.read().strip()
         if not password:
-            raise click.ClickException("No password was provided on stdin.")
+            terminal.error("No password was provided on stdin.", code="INVALID_ARGS")
     return password
 
 
@@ -130,19 +125,15 @@ def _redis_fields(url: str) -> Dict[str, object]:
         "port": parsed.port or 443,
         "username": parsed.username or "default",
         "password": parsed.password or "",
-        "tls_server_name": parsed.hostname or "",
     }
 
 
 def _result(info: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {key: info[key] for key in RESULT_KEYS if info.get(key)}
-    if info.get("kind") == "redis" and info.get("connection_string"):
-        payload["tls_server_name"] = _redis_fields(info["connection_string"])["tls_server_name"]
-    return payload
+    return {key: info[key] for key in RESULT_KEYS if info.get(key)}
 
 
 def _print_result(format: str, payload: Dict[str, Any]) -> None:
-    if format == "json":
+    if terminal.json_output(format):
         terminal.print_json(payload)
         return
     table = Table(Column("Field"), Column("Value"), box=box.SIMPLE)
@@ -155,7 +146,7 @@ def _print_result(format: str, payload: Dict[str, Any]) -> None:
 
 def _print_list(format: str, services: Iterable[Dict[str, Any]]) -> None:
     services = list(services)
-    if format == "json":
+    if terminal.json_output(format):
         terminal.print_json(services)
         return
     table = Table(
@@ -192,7 +183,7 @@ def _print_list(format: str, services: Iterable[Dict[str, Any]]) -> None:
     show_default=True,
     help="Only show one kind of database.",
 )
-@FORMAT_OPTION
+@extraclick.format_option
 @extraclick.pass_service_client
 def list_databases(service: ServiceClient, kind: str, format: str):
     services = _services(service)
@@ -224,7 +215,7 @@ def _create_options(func):
                 "--cpu", type=click.FLOAT, default=None, help="CPU cores, for example 0.5 or 2."
             ),
             click.option("--memory", default=None, help="Memory, for example 1024 or 2Gi."),
-            FORMAT_OPTION,
+            extraclick.format_option,
         )
     ):
         func = option(func)
@@ -241,7 +232,7 @@ def _scale_options(func):
             ),
             click.option("--memory", default=None, help="Memory, for example 1024 or 2Gi."),
             click.option("--pool", default=None, help="Redeploy the database on a pool."),
-            FORMAT_OPTION,
+            extraclick.format_option,
         )
     ):
         func = option(func)
@@ -260,10 +251,10 @@ def _scale(
     format: str,
 ) -> None:
     if always_on and serverless:
-        raise click.ClickException("Specify --always-on or --serverless, not both.")
+        terminal.error("Specify --always-on or --serverless, not both.", code="INVALID_ARGS")
     containers = 1 if always_on else 0 if serverless else None
     if containers is None and cpu is None and memory is None and pool is None:
-        raise click.ClickException("Nothing to change.")
+        terminal.error("Nothing to change.", code="INVALID_ARGS")
     info = _service_info(service, kind, name)
 
     if cpu is not None or memory is not None or pool is not None:
@@ -279,7 +270,10 @@ def _scale(
             if containers is not None:
                 config.setdefault("autoscaler", {})["min_containers"] = containers
 
-        result = stubconfig.redeploy_with_config(service, name, info["stub_id"], mutate)
+        try:
+            result = stubconfig.redeploy_with_config(service, name, info["stub_id"], mutate)
+        except (RuntimeError, GatewayHTTPError) as exc:
+            terminal.error(str(exc))
         _print_result(format, {"name": name, "kind": kind, **result})
         return
 
@@ -292,8 +286,12 @@ def _scale(
             ScaleDeploymentRequest(id=deployment.id, containers=containers)
         )
         if not res.ok:
-            raise click.ClickException(res.err_msg or f"Failed to scale {name}.")
-    terminal.success(f"Set {kind} service {name} to {'always-on' if always_on else 'serverless'}")
+            terminal.error(res.err_msg or f"Failed to scale {name}.")
+    mode = "always-on" if always_on else "serverless"
+    if terminal.json_output(format):
+        terminal.print_json({"name": name, "kind": kind, "mode": mode})
+    else:
+        terminal.success(f"Set {kind} service {name} to {mode}")
 
 
 def _database_group(kind: str, label: str) -> click.Group:
@@ -341,7 +339,7 @@ def _database_group(kind: str, label: str) -> click.Group:
 
     @group.command(name="credentials", help=f"Show {label} connection details.")
     @click.argument("name")
-    @FORMAT_OPTION
+    @extraclick.format_option
     @extraclick.pass_service_client
     def credentials(service: ServiceClient, name: str, format: str):
         info = _service_info(service, kind, name)
@@ -359,38 +357,9 @@ def _database_group(kind: str, label: str) -> click.Group:
             payload.update({k: v for k, v in fields.items() if k != "password"})
         _print_result(format, payload)
 
-    @group.command(name="secrets", help=f"Print the {label} connection string and its secrets.")
-    @click.argument("name")
-    @FORMAT_OPTION
-    @extraclick.pass_service_client
-    def secrets(service: ServiceClient, name: str, format: str):
-        info = _service_info(service, kind, name)
-        connection_string = _secret_value(service, info["connection_string_secret"])
-        if format == "json":
-            terminal.print_json(
-                {
-                    "name": name,
-                    "kind": kind,
-                    "connection_string": connection_string,
-                    "connection_string_secret": info["connection_string_secret"],
-                    "secrets": {
-                        key: info[key]
-                        for key in (
-                            "connection_string_secret",
-                            "username_secret",
-                            "password_secret",
-                            "database_secret",
-                        )
-                        if info.get(key)
-                    },
-                }
-            )
-            return
-        click.echo(connection_string)
-
     @group.command(name="status", help=f"Show {label} service status.")
     @click.argument("name")
-    @FORMAT_OPTION
+    @extraclick.format_option
     @extraclick.pass_service_client
     def status(service: ServiceClient, name: str, format: str):
         _print_result(format, _result(_service_info(service, kind, name)))
@@ -400,7 +369,7 @@ def _database_group(kind: str, label: str) -> click.Group:
         help=f"Rotate the {label} password; the service restarts with the new credentials.",
     )
     @click.argument("name")
-    @FORMAT_OPTION
+    @extraclick.format_option
     @extraclick.pass_service_client
     def rotate(service: ServiceClient, name: str, format: str):
         _print_result(format, _result(_api(service, "POST", f"/{name}/rotate")))
@@ -450,7 +419,7 @@ def redis_connect(
     service: ServiceClient, name: str, redis_cli_command: bool, node_redis: bool, ioredis: bool
 ):
     if sum([redis_cli_command, node_redis, ioredis]) > 1:
-        raise click.ClickException("Specify only one Redis client output format.")
+        terminal.error("Specify only one Redis client output format.", code="INVALID_ARGS")
     info = _service_info(service, "redis", name)
     url = _secret_value(service, info["connection_string_secret"])
     fields = _redis_fields(url)
@@ -463,9 +432,9 @@ def redis_connect(
     elif node_redis:
         click.echo(
             "createClient({ url: %r, socket: { tls: true, servername: %r } })"
-            % (url, fields["tls_server_name"])
+            % (url, fields["host"])
         )
     elif ioredis:
-        click.echo("new Redis(%r, { tls: { servername: %r } })" % (url, fields["tls_server_name"]))
+        click.echo("new Redis(%r, { tls: { servername: %r } })" % (url, fields["host"]))
     else:
         click.echo(url)

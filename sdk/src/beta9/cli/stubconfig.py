@@ -7,6 +7,7 @@ import json
 from typing import Any, Callable, Dict
 
 from ..channel import ServiceClient
+from ..clients.gateway import DeployStubRequest
 
 
 def stub_request_from_config(stub: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
@@ -85,14 +86,15 @@ def redeploy_with_config(
     mutate: Callable[[Dict[str, Any]], None],
 ) -> Dict[str, Any]:
     """Create a new version of deployment `name` from `stub_id` with an edited config."""
-    from ..clients.gateway import DeployStubRequest
-
     stub = service.http.json("GET", f"/api/v1/stub/{{ws}}/{stub_id}")
     config = stub_config(stub)
     mutate(config)
-    created = service.http.json(
-        "POST", "/api/v1/gateway/stubs", json=stub_request_from_config(stub, config), timeout=600
-    )
+    return create_and_deploy(service, name, stub_request_from_config(stub, config))
+
+
+def create_and_deploy(service: ServiceClient, name: str, request: Dict[str, Any]) -> Dict[str, Any]:
+    """POST a stub request and deploy it under `name`; raises RuntimeError with the gateway's message."""
+    created = service.http.json("POST", "/api/v1/gateway/stubs", json=request, timeout=600)
     if not created.get("ok"):
         raise RuntimeError(created.get("errMsg") or "stub creation failed")
     deployed = service.gateway.deploy_stub(DeployStubRequest(stub_id=created["stubId"], name=name))

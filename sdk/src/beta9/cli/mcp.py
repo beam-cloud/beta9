@@ -1,7 +1,7 @@
 """
 `mcp`: register the gateway-hosted MCP server (`/api/v1/mcp`) with agent clients.
 The server runs in the control plane; the client connects over HTTP with the
-workspace token. Only shipping code (`deploy`) stays in the CLI.
+workspace token.
 """
 
 import json
@@ -36,7 +36,10 @@ def mcp():
 def _server(context: Optional[str]) -> Dict[str, str]:
     cfg = get_config_context(context or extraclick.selected_context())
     if not cfg.token:
-        raise click.ClickException("No token for this context; run `configure` first.")
+        terminal.error(
+            f"No token for this context; run `{terminal.cli_name()} configure` first.",
+            code="NOT_AUTHENTICATED",
+        )
     return {"url": f"{cfg.http_url}/api/v1/mcp", "authorization": f"Bearer {cfg.token}"}
 
 
@@ -83,9 +86,7 @@ def _merge_json(path: Path, entry: Dict[str, Any]) -> None:
         try:
             data = json.loads(path.read_text() or "{}")
         except json.JSONDecodeError:
-            raise click.ClickException(
-                f"{path} is not valid JSON; fix it or pass --print to install by hand."
-            )
+            terminal.error(f"{path} is not valid JSON; fix it or pass --print to install by hand.")
     data.setdefault("mcpServers", {})[_server_name()] = entry
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")

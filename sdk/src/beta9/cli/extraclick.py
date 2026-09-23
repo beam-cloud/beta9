@@ -1,5 +1,4 @@
 import functools
-import json
 import inspect
 import os
 import shlex
@@ -118,10 +117,6 @@ class Beta9Command(click.Command):
             )
         return params
 
-    def cli_name(self, ctx: click.Context) -> str:
-        name, *_ = ctx.command_path.split()
-        return name
-
     def format_options(self, ctx, formatter):
         groups = {"Options": [], "Additional options": []}
         for param in self.get_params(ctx):
@@ -147,8 +142,7 @@ class Beta9Command(click.Command):
         if not self.epilog:
             return
 
-        name = self.cli_name(ctx)
-        text = self.epilog.format(cli_name=name)
+        text = self.epilog.format(cli_name=terminal.cli_name())
         text = textwrap.dedent(text).replace("\b", "").strip()
         formatter.write_paragraph()
         formatter.write(text)
@@ -168,8 +162,7 @@ class Beta9Command(click.Command):
             text = gettext("(Deprecated) {text}").format(text=text)
 
         if text:
-            name = self.cli_name(ctx)
-            text = text.format(cli_name=name)
+            text = text.format(cli_name=terminal.cli_name())
 
             formatter.write_paragraph()
 
@@ -317,6 +310,11 @@ def selected_context(ctx: Optional[click.Context] = None) -> str:
             return ctx.params["context"]
         ctx = ctx.parent
     return DEFAULT_CONTEXT_NAME
+
+
+format_option = click.option(
+    "--format", type=click.Choice(("table", "json")), default="table", show_default=True
+)
 
 
 def command_hint() -> str:
@@ -650,30 +648,3 @@ def env_vars_to_dict(value) -> Dict[str, str]:
             raise ValueError("env must be in KEY=value format")
         env[key] = raw_value
     return env
-
-
-def parse_last_json(text: str) -> Optional[Any]:
-    """
-    The last JSON value in CLI output. `--json` results are pretty-printed
-    and may follow progress lines, so scan back for the last top-level value.
-    """
-    stripped = (text or "").strip()
-    if not stripped:
-        return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        pass
-    for opener in ("\n{", "\n["):
-        index = stripped.rfind(opener)
-        while index != -1:
-            try:
-                return json.loads(stripped[index + 1 :])
-            except json.JSONDecodeError:
-                index = stripped.rfind(opener, 0, index)
-    for line in reversed(stripped.splitlines()):
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            continue
-    return None

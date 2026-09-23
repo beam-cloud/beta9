@@ -28,11 +28,11 @@ def _workspace_summary(service: ServiceClient) -> Dict[str, Any]:
 
 
 @common.command(name="whoami", help="Show the active context, workspace and gateway.")
-@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
+@extraclick.format_option
 @extraclick.pass_service_client
 def whoami(service: ServiceClient, format: str):
     summary = _workspace_summary(service)
-    if format == "json" or terminal.json_output():
+    if terminal.json_output(format):
         terminal.print_json(summary)
         return
     terminal.resource("Workspace", summary)
@@ -43,14 +43,14 @@ def whoami(service: ServiceClient, format: str):
     help="One-shot snapshot of the workspace: latest deployments and running containers.",
 )
 @click.option("--limit", type=click.IntRange(min=1), default=10, show_default=True)
-@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
+@extraclick.format_option
 @extraclick.pass_service_client
 def status(service: ServiceClient, limit: int, format: str):
     summary = _workspace_summary(service)
 
     deployments_res = service.gateway.list_deployments(ListDeploymentsRequest(limit=limit))
     if not deployments_res.ok:
-        terminal.error(deployments_res.err_msg, code="ERROR")
+        terminal.error(deployments_res.err_msg)
     deployments = [d.to_dict(casing=Casing.SNAKE) for d in deployments_res.deployments]  # type: ignore
 
     containers_res = service.gateway.list_containers(ListContainersRequest())
@@ -60,7 +60,7 @@ def status(service: ServiceClient, limit: int, format: str):
         else []
     )
 
-    if format == "json" or terminal.json_output():
+    if terminal.json_output(format):
         terminal.print_json({**summary, "deployments": deployments, "containers": containers})
         return
 

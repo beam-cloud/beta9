@@ -14,10 +14,7 @@ from betterproto import Casing
 
 from .. import terminal
 from ..channel import GatewayHTTPError, ServiceClient
-from ..clients.gateway import (
-    DeployStubRequest,
-    ListDeploymentsRequest,
-)
+from ..clients.gateway import ListDeploymentsRequest
 from ..clients.secret import (
     CreateSecretRequest,
     GetSecretRequest,
@@ -26,8 +23,9 @@ from ..clients.secret import (
 )
 from ..config import get_config_context
 from ..sync import FileSyncer
+from . import extraclick
 from .extraclick import ClickCommonGroup
-from .stubconfig import stub_config, stub_request_from_config
+from .stubconfig import create_and_deploy, stub_config, stub_request_from_config
 
 
 @click.group(cls=ClickCommonGroup)
@@ -47,7 +45,7 @@ class _Env:
         self.name = context_name
         self.config = get_config_context(context_name)
         if not self.config.is_valid():
-            raise click.ClickException(f"Context {context_name!r} is not configured.")
+            terminal.error(f"Context {context_name!r} is not configured.", code="NOT_AUTHENTICATED")
         self.client = ServiceClient(self.config)
 
     @property
@@ -57,7 +55,7 @@ class _Env:
     def latest_deployments(self) -> Dict[str, Dict[str, Any]]:
         res = self.client.gateway.list_deployments(ListDeploymentsRequest(limit=1000))
         if not res.ok:
-            raise click.ClickException(res.err_msg or "Unable to list deployments")
+            terminal.error(res.err_msg or "Unable to list deployments")
         latest: Dict[str, Dict[str, Any]] = {}
         for d in res.deployments:
             row = d.to_dict(casing=Casing.SNAKE)  # type: ignore[attr-defined]
@@ -71,11 +69,11 @@ class _Env:
         self.client.close()
 
 
-def _copy_object(src: _Env, dst: _Env, stub_id: str) -> Optional[str]:
-    """Copy a stub's code bundle from src to dst; returns the new object id."""
+def _copy_object(src: _Env, dst: _Env, stub_id: str) -> str:
+    """Copy a stub's code bundle from src to dst; returns the new object id, empty when there is none."""
     r = src.http.request("GET", f"/api/v1/deployment/{{ws}}/download/{stub_id}", timeout=600)
     if r.status_code != 200 or not r.content:
-        return None
+        return ""
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         tmp.write(r.content)
     try:
@@ -85,14 +83,14 @@ def _copy_object(src: _Env, dst: _Env, stub_id: str) -> Optional[str]:
     finally:
         os.remove(tmp.name)
     if object_id is None:
-        raise click.ClickException("Failed to upload the code object to the target workspace")
+        raise RuntimeError("failed to upload the code object to the target workspace")
     return object_id
 
 
 def _copy_secrets(src: _Env, dst: _Env, force: bool) -> Dict[str, List[str]]:
     listed = src.client.secret.list_secrets(ListSecretsRequest())
     if not listed.ok:
-        raise click.ClickException(listed.err_msg or "Unable to list secrets")
+        terminal.error(listed.err_msg or "Unable to list secrets")
     existing: Set[str] = set()
     dst_listed = dst.client.secret.list_secrets(ListSecretsRequest())
     if dst_listed.ok:
@@ -157,49 +155,22 @@ def _copy_apps(
     for name, deployment in sorted(src_latest.items()):
         if only and name not in only:
             continue
-        if deployment.get("stub_type") == "pod/deployment" and _is_database(
-            src, deployment["stub_id"]
-        ):
-            continue  # handled by _copy_databases
         if name in dst_latest:
             results.append({"name": name, "status": "skipped", "reason": "exists"})
             continue
         try:
             stub = src.http.json("GET", f"/api/v1/stub/{{ws}}/{deployment['stub_id']}")
             config = stub_config(stub)
+            if ((config.get("serving") or {}).get("database") or {}).get("kind"):
+                continue  # handled by _copy_databases
             request = stub_request_from_config(stub, config)
-            object_id = (
-                _copy_object(src, dst, deployment["stub_id"]) if request.get("object_id") else ""
-            )
-            request["object_id"] = object_id or ""
-            created = dst.http.json("POST", "/api/v1/gateway/stubs", json=request, timeout=600)
-            if not created.get("ok"):
-                raise click.ClickException(created.get("errMsg") or "stub creation failed")
-            deployed = dst.client.gateway.deploy_stub(
-                DeployStubRequest(stub_id=created["stubId"], name=name)
-            )
-            if not deployed.ok:
-                raise click.ClickException(deployed.err_msg or "deploy failed")
-            results.append(
-                {
-                    "name": name,
-                    "status": "deployed",
-                    "deployment_id": deployed.deployment_id,
-                    "version": deployed.version,
-                }
-            )
+            if request.get("object_id"):
+                request["object_id"] = _copy_object(src, dst, deployment["stub_id"])
+            deployed = create_and_deploy(dst.client, name, request)
+            results.append({"name": name, "status": "deployed", **deployed})
         except Exception as exc:  # keep going; report per app
             results.append({"name": name, "status": "failed", "reason": str(exc)})
     return results
-
-
-def _is_database(env: _Env, stub_id: str) -> bool:
-    try:
-        cfg = stub_config(env.http.json("GET", f"/api/v1/stub/{{ws}}/{stub_id}"))
-    except (requests.RequestException, GatewayHTTPError):
-        return False
-    serving = cfg.get("serving") or {}
-    return bool((serving.get("database") or {}).get("kind"))
 
 
 def _run(
@@ -213,10 +184,10 @@ def _run(
     format: str,
 ):
     if source == target:
-        raise click.ClickException("Source and target contexts must differ.")
+        terminal.error("Source and target contexts must differ.", code="INVALID_ARGS")
     src, dst = _Env(source), _Env(target)
     try:
-        report: Dict[str, Any] = {"source": src.workspace_id, "target": dst.workspace_id}
+        report: Dict[str, Any] = {"source": src.http.workspace_id, "target": dst.http.workspace_id}
         if secrets:
             report["secrets"] = _copy_secrets(src, dst, force_secrets)
         if databases:
@@ -226,7 +197,7 @@ def _run(
         src.close()
         dst.close()
 
-    if format == "json" or terminal.json_output():
+    if terminal.json_output(format):
         terminal.print_json(report)
         return
     for app in report["apps"]:
@@ -255,7 +226,7 @@ def _run(
 @click.option("--only", multiple=True, help="Copy only these app names (repeatable).")
 @click.option("--secrets/--no-secrets", default=True, show_default=True)
 @click.option("--databases/--no-databases", default=True, show_default=True)
-@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
+@extraclick.format_option
 def duplicate(
     source: str, target: str, only: List[str], secrets: bool, databases: bool, format: str
 ):
@@ -283,7 +254,7 @@ def duplicate(
 @click.option(
     "--overwrite-secrets", is_flag=True, help="Replace secrets that already exist in the target."
 )
-@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
+@extraclick.format_option
 def sync(
     source: str,
     target: str,
@@ -305,9 +276,7 @@ def sync(
     )
 
 
-@workspace.command(
-    name="diff", help="Show apps, secrets and databases that differ between two contexts."
-)
+@workspace.command(name="diff", help="Show apps and secrets that differ between two contexts.")
 @click.argument("source")
 @click.argument("target")
 def diff(source: str, target: str):

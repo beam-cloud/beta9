@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from types import ModuleType
 
-import click
 import pytest
 from click.testing import CliRunner
 
@@ -120,7 +119,7 @@ def test_database_kinds_share_one_command_set():
     cli = load_cli(check_config=False)
     db = cli.common_group.get_command(None, "db")
 
-    verbs = {"create", "credentials", "secrets", "status", "rotate", "delete", "scale"}
+    verbs = {"create", "credentials", "status", "rotate", "delete", "scale"}
     for kind in ("postgres", "redis", "mysql", "mongo"):
         assert verbs <= set(db.commands[kind].commands), kind
     assert "connect" in db.commands["postgres"].commands
@@ -212,7 +211,7 @@ def test_database_password_sources_are_exclusive(monkeypatch):
     monkeypatch.setenv("DB_PASS", "from-env")
     assert database_cli._password("", "DB_PASS", False) == "from-env"
     assert database_cli._password("", "", False) == ""
-    with pytest.raises(click.ClickException):
+    with pytest.raises(SystemExit):
         database_cli._password("x", "DB_PASS", False)
     assert database_cli._memory_mb("2Gi") == 2048
     assert database_cli._memory_mb("512") == 512

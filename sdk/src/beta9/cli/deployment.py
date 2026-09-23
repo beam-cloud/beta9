@@ -532,7 +532,7 @@ def list_deployments(
     if not res.ok:
         terminal.error(res.err_msg)
 
-    if format == "json" or terminal.json_output():
+    if terminal.json_output(format):
         deployments = [d.to_dict(casing=Casing.SNAKE) for d in res.deployments]  # type:ignore
         terminal.print_json(deployments)
         return
@@ -667,7 +667,7 @@ def delete_deployment(service: ServiceClient, deployment_id: str, yes: bool):
     res = service.gateway.delete_deployment(DeleteDeploymentRequest(deployment_id))
 
     if not res.ok:
-        terminal.error(res.err_msg, code="ERROR")
+        terminal.error(res.err_msg)
 
     if terminal.json_output():
         terminal.print_json({"deleted": deployment_id})

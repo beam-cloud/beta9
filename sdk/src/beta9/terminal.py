@@ -75,9 +75,9 @@ def print_json(data: Any, **kwargs: Any) -> None:
     _console.print_json(data=data, indent=2, default=lambda o: str(o), **kwargs)
 
 
-def json_output() -> bool:
-    """True when the caller asked for machine-readable output (`--json` or BETA9_JSON=1)."""
-    return os.getenv("BETA9_JSON") == "1"
+def json_output(format: Optional[str] = None) -> bool:
+    """True when the caller asked for machine-readable output (`--format json`, `--json` or BETA9_JSON=1)."""
+    return format == "json" or os.getenv("BETA9_JSON") == "1"
 
 
 def _no_input() -> bool:
@@ -119,13 +119,10 @@ def warn(text: str) -> None:
 
 
 def cli_name() -> str:
-    """The executable the user invoked (`beam` or `beta9`), for messages that quote commands."""
-    import click
+    """The CLI executable name, for messages that quote commands."""
+    from .config import get_settings
 
-    ctx = click.get_current_context(silent=True)
-    if ctx is not None and ctx.command_path:
-        return ctx.command_path.split()[0]
-    return "beta9"
+    return get_settings().name.lower()
 
 
 def error(

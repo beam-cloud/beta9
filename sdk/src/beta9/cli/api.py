@@ -5,7 +5,7 @@ import click
 import requests
 
 from .. import terminal
-from ..channel import ServiceClient
+from ..channel import ServiceClient, http_error_code
 from . import extraclick
 from .extraclick import ClickCommonGroup
 
@@ -131,7 +131,7 @@ def _spec_routes(specs: List[Dict[str, Any]]) -> List[Dict[str, str]]:
 
 @api.command(name="search", help="Find REST routes by keyword.")
 @click.argument("term", required=False, default="")
-@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
+@extraclick.format_option
 def search(term: str, format: str):
     routes = ECHO_ROUTES + _spec_routes(_load_specs())
     needle = term.lower()
@@ -143,7 +143,7 @@ def search(term: str, format: str):
         or needle in r.get("summary", "").lower()
         or needle in r.get("operation", "").lower()
     ]
-    if format == "json" or terminal.json_output():
+    if terminal.json_output(format):
         terminal.print_json(matches)
         return
     for r in matches:
@@ -192,9 +192,5 @@ def call(service: ServiceClient, method: str, path: str, data: Optional[str], qu
         else:
             terminal.print(payload)
 
-    if response.status_code == 401:
-        terminal.error("Unauthorized", code="NOT_AUTHENTICATED")
-    if response.status_code == 404:
-        terminal.error("Not found", code="NOT_FOUND")
     if response.status_code >= 400:
-        terminal.error(f"HTTP {response.status_code}", code="ERROR")
+        terminal.error(f"HTTP {response.status_code}", code=http_error_code(response.status_code))

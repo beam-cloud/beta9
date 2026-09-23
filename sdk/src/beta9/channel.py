@@ -1,6 +1,7 @@
 import atexit
 import functools
 import os
+from importlib.metadata import PackageNotFoundError, version
 import sys
 import time
 import traceback
@@ -12,6 +13,7 @@ from contextvars import ContextVar
 from typing import Any, Callable, Generator, List, NewType, Optional, Sequence, Tuple, cast
 
 import grpc
+import requests
 from grpc import ChannelCredentials, RpcError
 from grpc._interceptor import _Channel as InterceptorChannel
 
@@ -203,9 +205,9 @@ def handle_grpc_error(error: grpc.RpcError):
     elif code == grpc.StatusCode.INVALID_ARGUMENT:
         terminal.error(f"Invalid request: {details}", code="INVALID_CONFIG")
     elif code == grpc.StatusCode.UNKNOWN:
-        terminal.error(f"Error {details}", code="ERROR")
+        terminal.error(f"Error {details}")
     else:
-        terminal.error(f"Unhandled GRPC error: {code}", code="ERROR")
+        terminal.error(f"Unhandled GRPC error: {code}")
 
 
 def with_grpc_error_handling(func: Callable) -> Callable:
@@ -219,25 +221,18 @@ def with_grpc_error_handling(func: Callable) -> Callable:
 
 
 def caller_metadata() -> List[Tuple[str, str]]:
-    """
-    Attribution headers sent with every request so the gateway can record who
-    acted (a human at the CLI, an agent via the skill/MCP). `BETA9_CALLER`
-    overrides the default `cli/<version>`; `BETA9_AGENT_SESSION` groups the
-    actions of one agent run.
-    """
-    caller = os.getenv("BETA9_CALLER") or f"cli/{_sdk_version()}"
+    """Attribution headers: BETA9_CALLER overrides `cli/<version>`, BETA9_AGENT_SESSION groups one agent run."""
+    caller = os.getenv("BETA9_CALLER") or f"cli/{sdk_version()}"
     metadata = [("x-beta9-caller", caller)]
     if session := os.getenv("BETA9_AGENT_SESSION"):
         metadata.append(("x-beta9-agent-session", session))
     return metadata
 
 
-def _sdk_version() -> str:
+def sdk_version() -> str:
     try:
-        from importlib.metadata import version
-
         return version("beta9")
-    except Exception:
+    except PackageNotFoundError:
         return "unknown"
 
 
@@ -442,15 +437,16 @@ class GatewayHTTP:
         return self.base_url + path.replace("{ws}", self.workspace_id)
 
     def request(self, method: str, path: str, timeout: float = 60, **kwargs):
-        import requests
-
         return requests.request(
             method, self.url(path), headers=self.headers, timeout=timeout, **kwargs
         )
 
     def json(self, method: str, path: str, **kwargs):
-        """Request and decode JSON, raising a readable error on 4xx/5xx."""
-        response = self.request(method, path, **kwargs)
+        """Request and decode JSON; GatewayHTTPError on 4xx/5xx or when the gateway is unreachable."""
+        try:
+            response = self.request(method, path, **kwargs)
+        except requests.RequestException as exc:
+            raise GatewayHTTPError(0, f"Request failed: {exc}")
         if response.status_code >= 400:
             try:
                 message = response.json().get("message") or response.text
@@ -460,8 +456,22 @@ class GatewayHTTP:
         return response.json() if response.content else None
 
 
+def http_error_code(status: int) -> str:
+    """The CLI error code for an HTTP status, for `--json` consumers."""
+    return {
+        0: "GATEWAY_UNAVAILABLE",
+        401: "NOT_AUTHENTICATED",
+        404: "NOT_FOUND",
+        409: "ALREADY_EXISTS",
+    }.get(status, "ERROR")
+
+
 class GatewayHTTPError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status = status
         self.message = message
+
+    @property
+    def code(self) -> str:
+        return http_error_code(self.status)

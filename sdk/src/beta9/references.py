@@ -1,5 +1,5 @@
 """
-`${{...}}` reference grammar: validation and autocomplete. The gateway resolves
+`${{...}}` reference grammar: validation. The gateway resolves
 (pkg/gateway/services/references.go).
 """
 
@@ -9,8 +9,6 @@ from typing import Dict, Iterable, List, Sequence, Union
 REFERENCE_RE = re.compile(r"\$\{\{\s*([^}]*?)\s*\}\}")
 
 DB_FIELDS = ("DATABASE_URL", "REDIS_URL", "URL", "USERNAME", "PASSWORD", "DATABASE", "HOST", "PORT")
-FUNCTIONS = ("secret(", "randomInt(")
-KINDS = ("secret.", "db.", "app.", "secret(", "randomInt(")
 
 _SECRET_FN = re.compile(r"^secret\(\s*(\d+)?\s*(?:,\s*(\"[^\"]*\"|'[^']*'))?\s*\)$")
 _RANDOM_FN = re.compile(r"^randomInt\(\s*(-?\d+)?\s*(?:,\s*(-?\d+))?\s*\)$")
@@ -77,28 +75,3 @@ def validate_env(env: Union[Dict[str, str], Sequence[str]]) -> List[str]:
                     f"{key}: {expr!r} must be the entire value; secrets cannot be embedded in a string"
                 )
     return problems
-
-
-def complete(
-    prefix: str,
-    secrets: Sequence[str] = (),
-    databases: Sequence[str] = (),
-    apps: Sequence[str] = (),
-) -> List[str]:
-    """Autocomplete candidates for a partial expression (text after `${{`)."""
-    p = prefix.strip()
-    if p.startswith("secret."):
-        return [f"secret.{s}" for s in secrets if s.startswith(p[len("secret.") :])]
-    if p.startswith("db."):
-        rest = p[len("db.") :]
-        name, dot, field = rest.partition(".")
-        if dot:
-            return [f"db.{name}.{f}" for f in DB_FIELDS if f.startswith(field.upper())]
-        return [f"db.{d}." for d in databases if d.startswith(name)]
-    if p.startswith("app."):
-        rest = p[len("app.") :]
-        name, dot, _ = rest.partition(".")
-        if dot:
-            return [f"app.{name}.URL"]
-        return [f"app.{a}.URL" for a in apps if a.startswith(name)]
-    return [k for k in KINDS if k.startswith(p)]
