@@ -35,7 +35,8 @@ func generateHash(hashLength int, inputs ...any) string {
 	return hashString[:hashLength]
 }
 
-func generateSubdomain(deploymentName, stubType string, workspaceId uint) string {
+// GenerateSubdomain is deterministic, so a deployment's host URL is known before it exists.
+func GenerateSubdomain(deploymentName, stubType string, workspaceId uint) string {
 	const maxSubdomainLength = 63
 	const hashLength = 7
 	const hyphenLength = 1

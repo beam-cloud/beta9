@@ -1315,6 +1315,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
             w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.id AS "workspace.id",
             s.external_id AS "stub.external_id",
             s.name AS "stub.name",
+            s.type AS "stub.type",
             s.config AS "stub.config"
         FROM deployment d
 		JOIN workspace w ON d.workspace_id = w.id
@@ -1341,7 +1342,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	query := `
         SELECT d.*,
                w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.id AS "workspace.id",
-               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
+               s.external_id AS "stub.external_id", s.name AS "stub.name", s.type AS "stub.type", s.config AS "stub.config"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
@@ -1550,7 +1551,7 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.id, d.external_id, d.name, d.active, d.subdomain, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at, d.deleted_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"", "w.created_at AS \"workspace.created_at\"", "w.updated_at AS \"workspace.updated_at\"",
-		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"", "s.type AS \"stub.type\"", "s.created_at AS \"stub.created_at\"", "s.updated_at AS \"stub.updated_at\"",
+		"s.id AS \"stub.id\"", "s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"", "s.type AS \"stub.type\"", "s.created_at AS \"stub.created_at\"", "s.updated_at AS \"stub.updated_at\"",
 		"a.external_id AS \"app.external_id\"", "a.name AS \"app.name\"", "a.created_at AS \"app.created_at\"", "a.updated_at AS \"app.updated_at\"",
 	).From("deployment d").
 		Join("workspace w ON d.workspace_id = w.id").
@@ -1748,7 +1749,7 @@ func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context
 func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string, appId uint) (*types.Deployment, error) {
 	var deployment types.Deployment
 
-	subdomain := generateSubdomain(name, stubType, workspaceId)
+	subdomain := GenerateSubdomain(name, stubType, workspaceId)
 	queryCreate := `
 		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type, app_id)
 		VALUES ($1, true, $2, $3, $4, $5, $6, $7)
@@ -2294,6 +2295,53 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	}
 
 	return &secret, nil
+}
+
+const stackColumns = "id, external_id, workspace_id, name, spec, created_at, updated_at"
+
+func (r *PostgresBackendRepository) ListStacks(ctx context.Context, workspaceId uint) ([]types.Stack, error) {
+	query := `SELECT ` + stackColumns + ` FROM workspace_stack WHERE workspace_id = $1 ORDER BY created_at;`
+
+	stacks := []types.Stack{}
+	if err := r.client.SelectContext(ctx, &stacks, query, workspaceId); err != nil {
+		return nil, err
+	}
+	return stacks, nil
+}
+
+func (r *PostgresBackendRepository) CreateStack(ctx context.Context, workspaceId uint, name string, spec json.RawMessage) (*types.Stack, error) {
+	query := `
+	INSERT INTO workspace_stack (workspace_id, name, spec)
+	VALUES ($1, $2, $3)
+	RETURNING ` + stackColumns + `;
+	`
+
+	var stack types.Stack
+	if err := r.client.GetContext(ctx, &stack, query, workspaceId, name, spec); err != nil {
+		return nil, err
+	}
+	return &stack, nil
+}
+
+func (r *PostgresBackendRepository) UpdateStack(ctx context.Context, workspaceId uint, externalId, name string, spec json.RawMessage) (*types.Stack, error) {
+	query := `
+	UPDATE workspace_stack
+	SET name = $3, spec = $4, updated_at = CURRENT_TIMESTAMP
+	WHERE external_id = $1 AND workspace_id = $2
+	RETURNING ` + stackColumns + `;
+	`
+
+	var stack types.Stack
+	if err := r.client.GetContext(ctx, &stack, query, externalId, workspaceId, name, spec); err != nil {
+		return nil, err
+	}
+	return &stack, nil
+}
+
+func (r *PostgresBackendRepository) DeleteStack(ctx context.Context, workspaceId uint, externalId string) error {
+	query := `DELETE FROM workspace_stack WHERE external_id = $1 AND workspace_id = $2;`
+	_, err := r.client.ExecContext(ctx, query, externalId, workspaceId)
+	return err
 }
 
 func (r *PostgresBackendRepository) CreateScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) (*types.ScheduledJob, error) {

@@ -67,6 +67,8 @@ type Gateway struct {
 	pb.UnimplementedSchedulerServer
 	Config               types.AppConfig
 	httpServer           *http.Server
+	echo                 *echo.Echo
+	authMiddleware       echo.MiddlewareFunc
 	grpcServer           *grpc.Server
 	healthServer         *health.Server
 	RedisClient          *common.RedisClient
@@ -120,7 +122,8 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	eventRepo := repository.NewEventClientRepo(config)
+	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
+	eventRepo := repository.NewEventClientRepo(config, repository.WithWorkspaceWebhooks(workspaceRepo))
 
 	storage, err := storage.NewStorage(config.Storage, nil)
 	if err != nil {
@@ -150,7 +153,6 @@ func NewGateway() (*Gateway, error) {
 	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
 	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config), tailscaleRepo)
 
-	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
 	computeRepo := repository.NewComputeRedisRepository(redisClient)
 	managedPoolRepo := repository.NewManagedPoolRedisRepository(redisClient)
 
@@ -263,13 +265,17 @@ func (g *Gateway) initHttp() error {
 		Handler: h2c.NewHandler(e, &http2.Server{}),
 	}
 
-	authMiddleware := auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)
+	g.echo = e
+	g.authMiddleware = auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)
+	authMiddleware := g.authMiddleware
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo, g.isReady)
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config, g.workerRepo)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.DefaultStorageClient, g.Config)
+	apiv1.NewWebhookGroup(g.baseRouteGroup.Group("/webhook", authMiddleware), g.WorkspaceRepo)
+	apiv1.NewStackGroup(g.baseRouteGroup.Group("/stack", authMiddleware), g.BackendRepo)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
 	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.EventRepo, g.BackendRepo, g.TaskDispatcher, g.Scheduler, g.Config)
 	apiv1.NewEventGroup(g.baseRouteGroup.Group("/events", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo)
@@ -322,7 +328,10 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	g.httpServer.RegisterOnShutdown(func() {
 		cancel()
 	})
-	mux := runtime.NewServeMux(runtime.WithOutgoingHeaderMatcher(gatewayOutgoingHeaderMatcher))
+	mux := runtime.NewServeMux(
+		runtime.WithOutgoingHeaderMatcher(gatewayOutgoingHeaderMatcher),
+		runtime.WithIncomingHeaderMatcher(gatewayIncomingHeaderMatcher),
+	)
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	if err := pb.RegisterPodServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
 		return err
@@ -345,6 +354,16 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	wrappedHandler := gatewaymiddleware.GatewayEvents(g.EventRepo, g.BackendRepo, g.WorkspaceRepo)(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux))
 	g.baseRouteGroup.Any("/gateway/*", wrappedHandler)
 	return nil
+}
+
+// Forward attribution headers to the gRPC auth interceptor.
+func gatewayIncomingHeaderMatcher(key string) (string, bool) {
+	switch strings.ToLower(key) {
+	case auth.CallerHeader, auth.AgentSessionHeader:
+		return strings.ToLower(key), true
+	default:
+		return runtime.DefaultHeaderMatcher(key)
+	}
 }
 
 func gatewayOutgoingHeaderMatcher(key string) (string, bool) {
@@ -627,11 +646,16 @@ func (g *Gateway) registerServices() error {
 		ThunderService:   ts,
 		UsageMetricsRepo: g.UsageMetricsRepo,
 		Tailscale:        g.Tailscale,
+		ImageService:     is,
 	})
 	if err != nil {
 		return err
 	}
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
+
+	// Needs the assembled gateway service, so not in initHttp.
+	apiv1.NewDatabaseGroup(g.baseRouteGroup.Group("/database", g.authMiddleware), gws)
+	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", g.authMiddleware), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
 
 	g.registerHealthService()
 

@@ -75,8 +75,13 @@ def print_json(data: Any, **kwargs: Any) -> None:
     _console.print_json(data=data, indent=2, default=lambda o: str(o), **kwargs)
 
 
+def json_output(format: Optional[str] = None) -> bool:
+    """True when the caller asked for machine-readable output (`--format json`, `--json` or BETA9_JSON=1)."""
+    return format == "json" or os.getenv("BETA9_JSON") == "1"
+
+
 def _no_input() -> bool:
-    return os.getenv("BETA9_NO_INPUT") == "1"
+    return os.getenv("BETA9_NO_INPUT") == "1" or json_output()
 
 
 def prompt(
@@ -84,7 +89,10 @@ def prompt(
 ) -> Any:
     if _no_input():
         if default is None:
-            error(f"Input required: {text}. Provide it explicitly when using --no-input.")
+            error(
+                f"Input required: {text}. Provide it explicitly when using --no-input.",
+                code="INPUT_REQUIRED",
+            )
         return default
     prompt_text = f"{text} [{default}]: " if default is not None else f"{text}: "
     user_input = _console.input(prompt_text, markup=markup, password=password).strip()
@@ -110,13 +118,35 @@ def warn(text: str) -> None:
     _error_console.print(Text("! ", style="bold yellow").append(text, style="bold yellow"))
 
 
-def error(text: str, exit: bool = True, hint: Optional[str] = None) -> None:
+def cli_name() -> str:
+    """The CLI executable name, for messages that quote commands."""
+    from .config import get_settings
+
+    return get_settings().name.lower()
+
+
+def error(
+    text: str, exit: bool = True, hint: Optional[str] = None, code: Optional[str] = None
+) -> None:
+    """
+    Report a failure. In JSON mode the error is a single stdout object
+    (`{"error", "code", "details", "hint"}`) so agents and scripts can branch
+    on `code` (NOT_AUTHENTICATED, NOT_FOUND, NEEDS_CONFIRMATION, ...).
+    """
     title, _, details = text.partition("\n")
-    _error_console.print(Text(f"✗ {title}", style="bold red"))
-    if details:
-        _error_console.print(Text(details), soft_wrap=True)
-    if hint:
-        _error_console.print(Text(f"  hint: {hint}", style="dim"))
+    if json_output():
+        payload = {"error": title, "code": code or "ERROR"}
+        if details:
+            payload["details"] = details
+        if hint:
+            payload["hint"] = hint
+        _console.print_json(data=payload)
+    else:
+        _error_console.print(Text(f"✗ {title}", style="bold red"))
+        if details:
+            _error_console.print(Text(details), soft_wrap=True)
+        if hint:
+            _error_console.print(Text(f"  hint: {hint}", style="dim"))
 
     if exit:
         reset_terminal()
@@ -459,7 +489,10 @@ def confirm(text: str, default: bool = True) -> bool:
     terminal can't do raw-mode reads.
     """
     if _no_input():
-        error("Confirmation required. Use an explicit confirmation flag such as --yes.")
+        error(
+            "Confirmation required. Use an explicit confirmation flag such as --yes.",
+            code="NEEDS_CONFIRMATION",
+        )
     suffix = "[Y/n]" if default else "[y/N]"
     prompt_text = Text(text, style="bold").append(f" {suffix} ", style="dim")
 

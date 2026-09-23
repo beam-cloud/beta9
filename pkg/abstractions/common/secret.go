@@ -25,7 +25,7 @@ func ConfigureContainerRequestSecrets(
 
 		secretEnv = append(
 			secretEnv,
-			fmt.Sprintf("%s=%s", secret.Name, secretValue),
+			fmt.Sprintf("%s=%s", secret.EnvVarName(), secretValue),
 		)
 	}
 

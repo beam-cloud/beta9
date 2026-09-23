@@ -294,3 +294,12 @@ func NewEventBus(rdb *RedisClient, subscribers ...EventBusSubscriber) *EventBus 
 		rdb:            rdb,
 	}
 }
+
+// PublishReloadInstance asks running instances of a stub to re-read its config.
+func PublishReloadInstance(rdb *RedisClient, stubId, stubType string) {
+	NewEventBus(rdb).Send(&Event{Type: EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   stubId,
+		"stub_type": stubType,
+		"timestamp": time.Now().Unix(),
+	}})
+}

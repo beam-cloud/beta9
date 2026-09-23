@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	pkgcommon "github.com/beam-cloud/beta9/pkg/common"
@@ -204,6 +205,9 @@ type ManagedEndpointRepository interface {
 type WorkspaceRepository interface {
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
+	ListWebhooks(ctx context.Context, workspaceId string) ([]types.WorkspaceWebhook, error)
+	SetWebhook(ctx context.Context, workspaceId string, webhook types.WorkspaceWebhook) error
+	DeleteWebhook(ctx context.Context, workspaceId, webhookId string) error
 	AuthorizeToken(string) (*types.Token, *types.Workspace, error)
 	RevokeToken(tokenKey string) error
 	SetAuthorizationToken(*types.Token, *types.Workspace) error
@@ -287,6 +291,10 @@ type BackendRepository interface {
 	ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error)
 	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretName string, value string) (*types.Secret, error)
 	DeleteSecret(ctx context.Context, workspace *types.Workspace, secretName string) error
+	ListStacks(ctx context.Context, workspaceId uint) ([]types.Stack, error)
+	CreateStack(ctx context.Context, workspaceId uint, name string, spec json.RawMessage) (*types.Stack, error)
+	UpdateStack(ctx context.Context, workspaceId uint, externalId, name string, spec json.RawMessage) (*types.Stack, error)
+	DeleteStack(ctx context.Context, workspaceId uint, externalId string) error
 	CreateScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) (*types.ScheduledJob, error)
 	DeleteScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) error
 	DeletePreviousScheduledJob(ctx context.Context, deployment *types.Deployment) error
@@ -412,14 +420,15 @@ type EventRepository interface {
 	PushComputeEvent(eventType string, event types.EventComputeSchema)
 	PushEndpointEvent(eventType string, event types.EventEndpointSchema)
 	PushEndpointRouteEvent(event types.EventEndpointRouteSchema)
-	PushDeployStubEvent(workspaceId string, stub *types.Stub)
-	PushServeStubEvent(workspaceId string, stub *types.Stub)
-	PushRunStubEvent(workspaceId string, stub *types.Stub)
-	PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub)
+	PushDeployStubEvent(workspaceId string, stub *types.Stub, actor types.EventActor)
+	PushServeStubEvent(workspaceId string, stub *types.Stub, actor types.EventActor)
+	PushRunStubEvent(workspaceId string, stub *types.Stub, actor types.EventActor)
+	PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub, actor types.EventActor)
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
 	PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string)
+	PushEndpointRequestStatsEvent(schema types.EventEndpointRequestStatsSchema)
 	PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error
 	PushPlatformCacheEvent(schema types.EventPlatformCacheSchema)
 	ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error)

@@ -178,7 +178,16 @@ class EndpointManager:
             if not is_asgi3(self.app):
                 raise ValueError("Invalid ASGI app returned from handler")
 
-            self.app.router.lifespan_context = self.lifespan
+            # Keep the app's own startup/shutdown (lifespan, on_event) inside ours.
+            user_lifespan = self.app.router.lifespan_context
+
+            @asynccontextmanager
+            async def lifespan(app: FastAPI):
+                async with self.lifespan(app):
+                    async with user_lifespan(app):
+                        yield
+
+            self.app.router.lifespan_context = lifespan
         else:
             self.app = FastAPI(lifespan=self.lifespan)
 

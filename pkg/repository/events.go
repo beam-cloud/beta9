@@ -74,7 +74,17 @@ type eventMetadata struct {
 	Action string
 }
 
-func NewEventClientRepo(config types.AppConfig) EventRepository {
+// EventClientOption adds sinks beyond the configured ones.
+type EventClientOption func(*EventClientRepo)
+
+// WithWorkspaceWebhooks fans events out to workspace webhooks. Gateway only.
+func WithWorkspaceWebhooks(source WebhookSource) EventClientOption {
+	return func(r *EventClientRepo) {
+		r.callbackSinks = append(r.callbackSinks, newWorkspaceWebhookSink(source))
+	}
+}
+
+func NewEventClientRepo(config types.AppConfig, opts ...EventClientOption) EventRepository {
 	storageSinks := []eventSink{}
 	callbackSinks := []eventSink{}
 
@@ -101,7 +111,11 @@ func NewEventClientRepo(config types.AppConfig) EventRepository {
 		callbackSinks = append(callbackSinks, newEventHTTPSink(callback))
 	}
 
-	return &EventClientRepo{storageSinks: storageSinks, callbackSinks: callbackSinks, reader: reader, streamer: streamer}
+	repo := &EventClientRepo{storageSinks: storageSinks, callbackSinks: callbackSinks, reader: reader, streamer: streamer}
+	for _, opt := range opts {
+		opt(repo)
+	}
+	return repo
 }
 
 func (r *EventClientRepo) createEventObject(eventName string, schemaVersion string, data interface{}) (cloudevents.Event, error) {
@@ -159,6 +173,10 @@ func eventTimeForData(data interface{}) time.Time {
 			return d.Timestamp
 		}
 	case types.EventEndpointRouteSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
+	case types.EventEndpointRequestStatsSchema:
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
@@ -887,57 +905,31 @@ func (r *EventClientRepo) PushContainerResourceMetricsEvent(workerID string, req
 	)
 }
 
-func (r *EventClientRepo) PushDeployStubEvent(workspaceId string, stub *types.Stub) {
-	r.pushEvent(
-		types.EventStubDeploy,
-		types.EventStubSchemaVersion,
-		types.EventStubSchema{
-			ID:          stub.ExternalId,
-			StubType:    stub.Type,
-			StubConfig:  stub.Config,
-			WorkspaceID: workspaceId,
-		},
-	)
+func (r *EventClientRepo) pushStubEvent(eventType, workspaceId string, stub *types.Stub, parentStubId string, actor types.EventActor) {
+	r.pushEvent(eventType, types.EventStubSchemaVersion, types.EventStubSchema{
+		ID:           stub.ExternalId,
+		StubType:     stub.Type,
+		StubConfig:   stub.Config,
+		WorkspaceID:  workspaceId,
+		ParentStubID: parentStubId,
+		EventActor:   actor,
+	})
 }
 
-func (r *EventClientRepo) PushServeStubEvent(workspaceId string, stub *types.Stub) {
-	r.pushEvent(
-		types.EventStubServe,
-		types.EventStubSchemaVersion,
-		types.EventStubSchema{
-			ID:          stub.ExternalId,
-			StubType:    stub.Type,
-			StubConfig:  stub.Config,
-			WorkspaceID: workspaceId,
-		},
-	)
+func (r *EventClientRepo) PushDeployStubEvent(workspaceId string, stub *types.Stub, actor types.EventActor) {
+	r.pushStubEvent(types.EventStubDeploy, workspaceId, stub, "", actor)
 }
 
-func (r *EventClientRepo) PushRunStubEvent(workspaceId string, stub *types.Stub) {
-	r.pushEvent(
-		types.EventStubRun,
-		types.EventStubSchemaVersion,
-		types.EventStubSchema{
-			ID:          stub.ExternalId,
-			StubType:    stub.Type,
-			StubConfig:  stub.Config,
-			WorkspaceID: workspaceId,
-		},
-	)
+func (r *EventClientRepo) PushServeStubEvent(workspaceId string, stub *types.Stub, actor types.EventActor) {
+	r.pushStubEvent(types.EventStubServe, workspaceId, stub, "", actor)
 }
 
-func (r *EventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub) {
-	r.pushEvent(
-		types.EventStubClone,
-		types.EventStubSchemaVersion,
-		types.EventStubSchema{
-			ID:           stub.ExternalId,
-			StubType:     stub.Type,
-			StubConfig:   stub.Config,
-			WorkspaceID:  workspaceId,
-			ParentStubID: parentStub.ExternalId,
-		},
-	)
+func (r *EventClientRepo) PushRunStubEvent(workspaceId string, stub *types.Stub, actor types.EventActor) {
+	r.pushStubEvent(types.EventStubRun, workspaceId, stub, "", actor)
+}
+
+func (r *EventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub, actor types.EventActor) {
+	r.pushStubEvent(types.EventStubClone, workspaceId, stub, parentStub.ExternalId, actor)
 }
 
 func (r *EventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
@@ -1004,6 +996,10 @@ func (r *EventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId stri
 			FailedContainers: failedContainers,
 		},
 	)
+}
+
+func (r *EventClientRepo) PushEndpointRequestStatsEvent(schema types.EventEndpointRequestStatsSchema) {
+	r.pushEvent(types.EventEndpointRequestStats, types.EventEndpointRequestStatsSchemaVersion, schema)
 }
 
 func (r *EventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string) {
@@ -1168,6 +1164,8 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName}
 	case types.EventGatewayEndpointSchema:
 		return eventMetadata{WorkspaceID: d.WorkspaceID}
+	case types.EventEndpointRequestStatsSchema:
+		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventComputeSchema:
 		return eventMetadata{
 			ContainerID: d.ContainerID,

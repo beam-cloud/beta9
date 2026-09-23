@@ -25,11 +25,13 @@ from . import (
     image,
     logs,
     machine,
+    mcp,
     pool,
     run,
     secret,
     serve,
     shell,
+    status,
     task,
     token,
     volume,
@@ -107,6 +109,8 @@ class CLI:
 def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
     cli.register(task)
+    cli.register(status)
+    cli.register(mcp)
     cli.register(deployment)
     cli.register(database)
     cli.register(serve)

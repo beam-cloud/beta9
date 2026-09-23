@@ -17,6 +17,7 @@ from ..clients.gateway import (
     StringList,
 )
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
+from ..type import DurableDisk
 from ..utils import get_init_args_kwargs
 
 CLICK_CONTEXT_SETTINGS = dict(
@@ -116,10 +117,6 @@ class Beta9Command(click.Command):
             )
         return params
 
-    def cli_name(self, ctx: click.Context) -> str:
-        name, *_ = ctx.command_path.split()
-        return name
-
     def format_options(self, ctx, formatter):
         groups = {"Options": [], "Additional options": []}
         for param in self.get_params(ctx):
@@ -145,8 +142,7 @@ class Beta9Command(click.Command):
         if not self.epilog:
             return
 
-        name = self.cli_name(ctx)
-        text = self.epilog.format(cli_name=name)
+        text = self.epilog.format(cli_name=terminal.cli_name())
         text = textwrap.dedent(text).replace("\b", "").strip()
         formatter.write_paragraph()
         formatter.write(text)
@@ -166,8 +162,7 @@ class Beta9Command(click.Command):
             text = gettext("(Deprecated) {text}").format(text=text)
 
         if text:
-            name = self.cli_name(ctx)
-            text = text.format(cli_name=name)
+            text = text.format(cli_name=terminal.cli_name())
 
             formatter.write_paragraph()
 
@@ -197,16 +192,19 @@ class CommandGroupCollection(click.CommandCollection):
     def __init__(self, *args, **kwargs):
         params = kwargs.get("params", [])
         params.append(config_context_param)
-        for name in ("no-input", "verbose"):
+        flag_help = {
+            "no-input": "Disable prompts.",
+            "verbose": "Show SDK diagnostic details.",
+            "json": "Machine-readable output: JSON errors with a `code`, implies --no-input.",
+        }
+        for name, help_text in flag_help.items():
             params.append(
                 click.Option(
                     [f"--{name}"],
                     is_flag=True,
                     expose_value=False,
                     callback=set_cli_flag,
-                    help="Disable prompts."
-                    if name == "no-input"
-                    else "Show SDK diagnostic details.",
+                    help=help_text,
                 )
             )
         kwargs["params"] = params
@@ -314,9 +312,14 @@ def selected_context(ctx: Optional[click.Context] = None) -> str:
     return DEFAULT_CONTEXT_NAME
 
 
+format_option = click.option(
+    "--format", type=click.Choice(("table", "json")), default="table", show_default=True
+)
+
+
 def command_hint() -> str:
     ctx = click.get_current_context()
-    return f"{ctx.command_path.split()[0]} --context {shlex.quote(selected_context(ctx))}"
+    return f"{terminal.cli_name()} --context {shlex.quote(selected_context(ctx))}"
 
 
 def filter_values_callback(
@@ -380,6 +383,23 @@ class ShlexParser(click.ParamType):
         return shlex.split(value)
 
 
+class DurableDiskSpec(click.ParamType):
+    """NAME:/mount[:SIZE], e.g. data:/app/data:20Gi."""
+
+    name = "disk"
+    default_size = "10Gi"
+
+    def convert(self, value, param, ctx):
+        parts = str(value).split(":")
+        if len(parts) not in (2, 3) or not parts[0] or not parts[1].startswith("/"):
+            self.fail(f"{value!r} is not NAME:/mount[:SIZE]", param, ctx)
+        return DurableDisk(
+            name=parts[0],
+            mount_path=parts[1],
+            size=parts[2] if len(parts) == 3 else self.default_size,
+        )
+
+
 class CommaSeparatedList(click.ParamType):
     name = "comma_separated_list"
 
@@ -430,6 +450,13 @@ def override_config_options(func: click.Command):
         type=click.INT,
         multiple=True,
         help="Expose a single container port. Can be provided multiple times.",
+    )(f)
+    f = click.option(
+        "--disk",
+        "disks",
+        type=DurableDiskSpec(),
+        multiple=True,
+        help="Durable disk NAME:/mount[:SIZE] that survives restarts (default 10Gi). Can be provided multiple times.",
     )(f)
     f = click.option(
         "--entrypoint",

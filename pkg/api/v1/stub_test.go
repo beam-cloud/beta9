@@ -1252,9 +1252,7 @@ func TestUpdateConfig(t *testing.T) {
 	}
 }
 
-func TestUpdateConfigField(t *testing.T) {
-	stubGroup := NewStubGroupForTest()
-
+func TestSetConfigField(t *testing.T) {
 	tests := []struct {
 		name        string
 		config      *types.StubConfigV1
@@ -1373,7 +1371,7 @@ func TestUpdateConfigField(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			configCopy := *tt.config
 
-			err := stubGroup.updateConfigField(&configCopy, tt.fieldPath, tt.value)
+			err := setConfigField(&configCopy, tt.fieldPath, tt.value)
 
 			if tt.expectedErr {
 				if err == nil {

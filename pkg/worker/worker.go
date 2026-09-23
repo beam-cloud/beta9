@@ -106,6 +106,7 @@ type Worker struct {
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
 	containerNetworkManager ContainerNetwork
+	serviceProxy            *ServiceProxy
 	containerGPUManager     GPUManager
 	containerThunderManager GPUManager
 	containerMountManager   *ContainerMountManager
@@ -655,6 +656,7 @@ func NewWorker() (_ *Worker, err error) {
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount), defaultRuntime.Name()),
 		containerThunderManager: NewContainerThunderManager(thunderClient),
 		containerNetworkManager: containerNetworkManager,
+		serviceProxy:            NewServiceProxy(ctx, config),
 		containerMountManager:   NewContainerMountManager(config, poolConfig),
 		podAddr:                 podAddr,
 		routeLocalTargetHost:    routeLocalTargetHost,
@@ -1650,6 +1652,8 @@ func (s *Worker) shutdown() error {
 		}
 		cancel()
 	}
+
+	s.serviceProxy.Stop()
 
 	if s.containerNetworkManager != nil {
 		if err := s.containerNetworkManager.Close(); err != nil {

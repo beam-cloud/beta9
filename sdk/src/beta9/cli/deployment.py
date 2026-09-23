@@ -153,41 +153,64 @@ def management():
     pass
 
 
-@management.command(
-    "wait", help="Wait for an endpoint's exact deployed revision to serve health checks."
-)
-@click.argument("deployment_id")
-@click.option("--timeout", type=click.FloatRange(min=0, min_open=True), default=300)
-@extraclick.pass_service_client
-def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
+class DeploymentNotReady(Exception):
+    def __init__(self, message: str, code: str = "ERROR"):
+        super().__init__(message)
+        self.code = code
+
+
+def _deployment_by_id(service: ServiceClient, deployment_id: str):
+    result = service.gateway.list_deployments(
+        ListDeploymentsRequest(filters={"id": StringList([deployment_id])}, limit=1)
+    )
+    if not result.ok or not result.deployments:
+        raise DeploymentNotReady(
+            result.err_msg or f"Deployment {deployment_id} was not found.", "NOT_FOUND"
+        )
+    return result.deployments[0]
+
+
+def wait_for_deployment(service: ServiceClient, deployment_id: str, timeout: float) -> Dict:
+    """Block until the deployment serves: health checks for endpoint/ASGI, active for the rest."""
     start = time.monotonic()
     deadline = start + timeout
     with rpc_timeout(timeout):
-        result = service.gateway.list_deployments(
-            ListDeploymentsRequest(
-                filters={"id": StringList([deployment_id])},
-                limit=1,
-            )
-        )
-        if not result.ok or not result.deployments:
-            terminal.error(result.err_msg or f"Deployment {deployment_id} was not found.")
-        deployment = result.deployments[0]
-        if not deployment.active or deployment.stub_type not in (
-            "endpoint/deployment",
-            "asgi/deployment",
-        ):
-            raise click.UsageError(
-                "Readiness checks require an active endpoint or ASGI deployment."
-            )
+        deployment = _deployment_by_id(service, deployment_id)
+        if deployment.stub_type not in ("endpoint/deployment", "asgi/deployment"):
+            while not deployment.active and time.monotonic() < deadline:
+                time.sleep(1)
+                deployment = _deployment_by_id(service, deployment_id)
+            if not deployment.active:
+                raise DeploymentNotReady(
+                    f"Deployment {deployment_id} did not become active within {timeout}s", "TIMEOUT"
+                )
+            return {
+                "deployment_id": deployment_id,
+                "stub_id": deployment.stub_id,
+                "stub_type": deployment.stub_type,
+                "version": deployment.version,
+                "status": "active",
+                "ready_seconds": time.monotonic() - start,
+            }
+        if not deployment.active:
+            raise DeploymentNotReady(f"Deployment {deployment_id} is not active", "INACTIVE")
         url = service.gateway.get_url(
             GetUrlRequest(deployment_id=deployment_id, stub_id=deployment.stub_id, url_type="path")
         )
         if not url.ok:
-            terminal.error(url.err_msg)
+            raise DeploymentNotReady(url.err_msg)
     last_error = "No healthy response"
+    next_active_check = time.monotonic() + 2
     with requests.Session() as session:
         session.headers["Authorization"] = f"Bearer {service._config.token}"
         while (remaining := deadline - time.monotonic()) > 0:
+            if time.monotonic() >= next_active_check:
+                next_active_check = time.monotonic() + 2
+                if not _deployment_by_id(service, deployment_id).active:
+                    raise DeploymentNotReady(
+                        f"Deployment {deployment_id} was stopped or superseded before it became ready",
+                        "INACTIVE",
+                    )
             try:
                 response = session.get(
                     url.url.rstrip("/") + "/health",
@@ -198,25 +221,36 @@ def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
                     response.status_code == 200
                     and response.headers.get("X-Beta9-Stub-Id") == deployment.stub_id
                 ):
-                    terminal.print_json(
-                        {
-                            "deployment_id": deployment_id,
-                            "stub_id": deployment.stub_id,
-                            "version": deployment.version,
-                            "status": "ready",
-                            "ready_seconds": time.monotonic() - start,
-                        }
-                    )
-                    return
+                    return {
+                        "deployment_id": deployment_id,
+                        "stub_id": deployment.stub_id,
+                        "version": deployment.version,
+                        "status": "ready",
+                        "ready_seconds": time.monotonic() - start,
+                    }
                 last_error = f"HTTP {response.status_code}; revision {response.headers.get('X-Beta9-Stub-Id', 'unknown')}: {response.text[:200]}"
                 if response.status_code in (401, 403):
                     break
             except requests.RequestException as exc:
                 last_error = str(exc)
             time.sleep(min(0.2, max(0, deadline - time.monotonic())))
-    terminal.error(
-        f"Deployment {deployment_id} did not become ready within {timeout}s: {last_error}"
+    raise DeploymentNotReady(
+        f"Deployment {deployment_id} did not become ready within {timeout}s: {last_error}",
+        "TIMEOUT",
     )
+
+
+@management.command(
+    "wait", help="Wait for an endpoint's exact deployed revision to serve health checks."
+)
+@click.argument("deployment_id")
+@click.option("--timeout", type=click.FloatRange(min=0, min_open=True), default=300)
+@extraclick.pass_service_client
+def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
+    try:
+        terminal.print_json(wait_for_deployment(service, deployment_id, timeout))
+    except DeploymentNotReady as exc:
+        terminal.error(str(exc), code=exc.code)
 
 
 def _merge_port_options(kwargs: Dict) -> None:
@@ -274,7 +308,6 @@ def _service_checkpoint_options(kwargs: Dict) -> Dict:
     return options
 
 
-
 def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
     service_image = _service_image_option(kwargs)
     ports = resolve_service_ports(
@@ -300,10 +333,10 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
     }
     service_kwargs.update(_service_checkpoint_options(kwargs))
 
-    for key in ("cpu", "memory", "gpu", "gpu_count", "secrets"):
+    for key in ("cpu", "memory", "gpu", "gpu_count", "secrets", "disks"):
         value = kwargs.get(key)
-        if value is not None:
-            service_kwargs[key] = value
+        if value is not None and value != ():
+            service_kwargs[key] = list(value) if key == "disks" else value
 
     return Service(**service_kwargs)
 
@@ -371,7 +404,7 @@ def create_deployment(
     rollout: str,
     **kwargs,
 ):
-    if json_output:
+    if json_output or terminal.json_output():
         format = "json"
     _merge_port_options(kwargs)
     entrypoint = kwargs["entrypoint"]
@@ -499,7 +532,7 @@ def list_deployments(
     if not res.ok:
         terminal.error(res.err_msg)
 
-    if format == "json":
+    if terminal.json_output(format):
         deployments = [d.to_dict(casing=Casing.SNAKE) for d in res.deployments]  # type:ignore
         terminal.print_json(deployments)
         return
@@ -624,15 +657,22 @@ def start_deployment(service: ServiceClient, deployment_id: str):
     type=click.STRING,
     required=True,
 )
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @extraclick.pass_service_client
-def delete_deployment(service: ServiceClient, deployment_id: str):
+def delete_deployment(service: ServiceClient, deployment_id: str, yes: bool):
+    if not yes and not terminal.confirm(f"Delete deployment {deployment_id}?", default=False):
+        terminal.error("Cancelled.", code="CANCELLED")
+
     res: DeleteDeploymentResponse
     res = service.gateway.delete_deployment(DeleteDeploymentRequest(deployment_id))
 
     if not res.ok:
         terminal.error(res.err_msg)
 
-    terminal.print(f"Deleted {deployment_id}")
+    if terminal.json_output():
+        terminal.print_json({"deleted": deployment_id})
+    else:
+        terminal.print(f"Deleted {deployment_id}")
 
 
 @management.command(

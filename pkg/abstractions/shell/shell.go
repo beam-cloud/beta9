@@ -438,7 +438,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 	}
 
 	if ss.eventRepo != nil {
-		go ss.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+		go ss.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub, authInfo.Actor)
 	}
 
 	var stubConfig types.StubConfigV1 = types.StubConfigV1{}

@@ -37,6 +37,7 @@ type GatewayService struct {
 	keyEventManager  *common.KeyEventManager
 	clientCache      *sync.Map
 	endpointRepo     repository.ManagedEndpointRepository // nil when managed endpoints are disabled
+	imageService     pb.ImageServiceServer                // optional; needed to create database services
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -60,6 +61,7 @@ type GatewayServiceOpts struct {
 	Tailscale        *network.Tailscale
 	KeyEventManager  *common.KeyEventManager
 	EndpointRepo     repository.ManagedEndpointRepository // optional; created from RedisClient when nil
+	ImageService     pb.ImageServiceServer                // optional; resolves registry images for database services
 }
 
 func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
@@ -121,5 +123,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		keyEventManager:  keyEventManager,
 		clientCache:      &sync.Map{},
 		endpointRepo:     endpointRepo,
+		imageService:     opts.ImageService,
 	}, nil
 }

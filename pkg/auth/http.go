@@ -50,6 +50,10 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 			authInfo := &AuthInfo{
 				Token:     token,
 				Workspace: workspace,
+				Actor: types.EventActor{
+					Caller:       c.Request().Header.Get(CallerHeader),
+					AgentSession: c.Request().Header.Get(AgentSessionHeader),
+				},
 			}
 
 			cc := &HttpAuthContext{c, authInfo}

@@ -2,13 +2,11 @@ package gatewayservices
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
 	"strings"
-	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
@@ -121,6 +119,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	servingConfig := servingConfigFromProto(in.Serving)
+
+	// Secret/db references become bindings; URLs and integers are inlined.
+	expandedEnv, referenceBindings, err := gws.expandStubReferences(ctx, authInfo, in)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+	in.Env = expandedEnv
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
@@ -267,29 +275,15 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
-	// Get secrets
+	// Requested secrets plus bindings from env references.
+	requestedSecrets := make([]secretBinding, 0, len(in.Secrets)+len(referenceBindings))
 	for _, requestedSecret := range in.Secrets {
-		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, requestedSecret.Name)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				return &pb.GetOrCreateStubResponse{
-					Ok:     false,
-					ErrMsg: fmt.Sprintf("Secret %q does not exist in this workspace.", requestedSecret.Name),
-				}, nil
-			}
-
-			return &pb.GetOrCreateStubResponse{
-				Ok:     false,
-				ErrMsg: "Failed to resolve workspace secrets.",
-			}, nil
-		}
-
-		stubConfig.Secrets = append(stubConfig.Secrets, types.Secret{
-			Name:      secret.Name,
-			Value:     secret.Value,
-			CreatedAt: secret.CreatedAt,
-			UpdatedAt: secret.UpdatedAt,
-		})
+		requestedSecrets = append(requestedSecrets, secretBinding{Name: requestedSecret.Name})
+	}
+	requestedSecrets = append(requestedSecrets, referenceBindings...)
+	stubConfig.Secrets, err = gws.resolveSecretBindings(ctx, authInfo.Workspace, uniqueByEnvName(requestedSecrets))
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
 	err = gws.configureVolumes(ctx, in.Volumes, authInfo.Workspace)
@@ -1037,17 +1031,11 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), common.InvokeUrlTypePath, stub, deployment)
 
 	if gws.eventRepo != nil {
-		go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+		go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub, authInfo.Actor)
 	}
 
 	if rolloutReplicas(&config) > 0 {
-		// Publish reload instance event
-		eventBus := common.NewEventBus(gws.redisClient)
-		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-			"stub_id":   stub.ExternalId,
-			"stub_type": stub.Type,
-			"timestamp": time.Now().Unix(),
-		}})
+		gws.reloadInstances(stub.ExternalId, string(stub.Type))
 	}
 
 	return &pb.DeployStubResponse{

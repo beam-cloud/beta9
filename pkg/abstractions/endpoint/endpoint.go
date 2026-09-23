@@ -42,6 +42,7 @@ type HttpEndpointService struct {
 	workspaceRepo     repository.WorkspaceRepository
 	containerRepo     repository.ContainerRepository
 	eventRepo         repository.EventRepository
+	requestStats      *requestStats
 	usageMetricsRepo  repository.UsageMetricsRepository
 	taskRepo          repository.TaskRepository
 	endpointInstances *common.SafeMap[*endpointInstance]
@@ -98,6 +99,7 @@ func NewHTTPEndpointService(
 		tailscale:         opts.Tailscale,
 		taskDispatcher:    opts.TaskDispatcher,
 		eventRepo:         opts.EventRepo,
+		requestStats:      newRequestStats(ctx, opts.EventRepo),
 		usageMetricsRepo:  opts.UsageMetricsRepo,
 	}
 
@@ -163,6 +165,17 @@ func (es *HttpEndpointService) forwardRequest(
 	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
 	if err != nil {
 		return err
+	}
+
+	if ctx.Param("subPath") != "health" {
+		start := time.Now()
+		defer func() {
+			appId := ""
+			if instance.Stub != nil && instance.Stub.App != nil {
+				appId = instance.Stub.App.ExternalId
+			}
+			es.requestStats.record(stubId, instance.Workspace.ExternalId, appId, ctx.Response().Status, time.Since(start))
+		}()
 	}
 
 	// Fail fast instead of queueing until timeout when the stub's GPU has no

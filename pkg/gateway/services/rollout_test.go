@@ -8,6 +8,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 func TestRolloutContainerRequestPropagatesGpuSchedulingFields(t *testing.T) {
@@ -52,6 +53,31 @@ func TestDeploymentRolloutAppliesToAnyAlwaysOnDeployment(t *testing.T) {
 		}) {
 			t.Fatalf("expected rollout to apply to %s", stubType)
 		}
+	}
+}
+
+func TestDurableDiskDeploymentAlwaysReplacesPreviousVersion(t *testing.T) {
+	gws := &GatewayService{}
+	stubType := types.StubType(types.StubTypePodDeployment)
+	config := &types.StubConfigV1{Disks: []*pb.DurableDisk{{Name: "db-data", MountPath: "/data"}}}
+	latest := &types.DeploymentWithRelated{
+		Deployment: types.Deployment{Active: true},
+		Stub:       types.Stub{Type: stubType, Config: "{}"},
+	}
+
+	plan, err := gws.planDeploymentRollout(deploymentRolloutInput{
+		stub: &types.StubWithRelated{Stub: types.Stub{Type: stubType}}, config: config, latest: latest, mode: rolloutModeAuto,
+	})
+	if err != nil || !plan.stopLatest || plan.action != rolloutActionReplace {
+		t.Fatalf("scale-to-zero disk deployment: plan = %+v, err = %v; want replace", plan, err)
+	}
+
+	config.Disks[0].ReadOnly = true
+	plan, err = gws.planDeploymentRollout(deploymentRolloutInput{
+		stub: &types.StubWithRelated{Stub: types.Stub{Type: stubType}}, config: config, latest: latest, mode: rolloutModeAuto,
+	})
+	if err != nil || plan.stopLatest {
+		t.Fatalf("read-only disk: plan = %+v, err = %v; want no replacement", plan, err)
 	}
 }
 

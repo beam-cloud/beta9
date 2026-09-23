@@ -571,10 +571,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		return "", err
 	}
 
-	go s.eventRepo.PushRunStubEvent(
-		workspace.ExternalId,
-		&stub.Stub,
-	)
+	go s.eventRepo.PushRunStubEvent(workspace.ExternalId, &stub.Stub, authInfo.Actor)
 
 	// Sandboxes never create task records, so the dashboard's 24h activity
 	// strip reads this O(1) hourly counter instead of replaying event history.

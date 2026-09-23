@@ -61,7 +61,7 @@ func TestGenerateSubdomain(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			subdomain := generateSubdomain(test.deploymentName, test.stubType, test.workspaceId)
+			subdomain := GenerateSubdomain(test.deploymentName, test.stubType, test.workspaceId)
 			assert.Equal(t, test.expectedSubdomain, subdomain)
 
 			if _, exists := subdomains[subdomain]; exists {

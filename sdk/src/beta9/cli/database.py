@@ -1,43 +1,26 @@
+"""
+`db` commands: managed Postgres, Redis, MySQL and MongoDB services. The
+gateway owns provisioning (`/api/v1/database`); this module only shapes
+requests, reads the credential secrets back, and prints.
+"""
+
 import os
-import secrets as secrets_lib
 import shlex
 import sys
-from dataclasses import dataclass
-from typing import Dict, Iterable, Optional, Tuple
-from urllib.parse import quote, urlparse
+from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 import click
 from rich.table import Column, Table, box
 
 from .. import terminal
-from ..abstractions.base.runner import POD_DEPLOYMENT_STUB_TYPE
-from ..abstractions.image import Image
-from ..abstractions.service import Service
-from ..channel import ServiceClient
-from ..clients.gateway import (
-    Autoscaler as AutoscalerProto,
-    DeleteDeploymentRequest,
-    DeployStubRequest,
-    GetUrlRequest,
-    GetOrCreateStubRequest,
-    ListDeploymentsRequest,
-    SecretVar,
-    DatabaseServingConfig as DatabaseServingConfigProto,
-    ServingConfig as ServingConfigProto,
-    ScaleDeploymentRequest,
-    StringList,
-    TaskPolicy as TaskPolicyProto,
-)
-from ..clients.image import BuildImageRequest, ImageServiceStub, VerifyImageBuildRequest
-from ..clients.secret import (
-    CreateSecretRequest,
-    DeleteSecretRequest,
-    GetSecretRequest,
-    UpdateSecretRequest,
-)
-from ..type import DatabaseServingConfig, DurableDisk, ServingConfig
-from . import extraclick
+from ..channel import GatewayHTTPError, ServiceClient
+from ..clients.gateway import ListDeploymentsRequest, ScaleDeploymentRequest, StringList
+from ..clients.secret import GetSecretRequest
+from . import extraclick, stubconfig
 from .extraclick import ClickCommonGroup
+
+PRODUCTS = {"postgres": "Postgres", "redis": "Redis", "mysql": "MySQL", "mongo": "MongoDB"}
 
 
 @click.group(cls=ClickCommonGroup)
@@ -50,137 +33,32 @@ def db():
     pass
 
 
-@db.command(name="list", help="List database services.")
-@click.option(
-    "--kind",
-    type=click.Choice(("all", "postgres", "redis")),
-    default="all",
-    show_default=True,
-    help="Filter database services by kind.",
-)
-@click.option("--limit", type=click.IntRange(min=1), default=1000, show_default=True, help="Maximum deployments to scan.")
-@click.option("--all-versions", is_flag=True, help="Show every database deployment version.")
-@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
-@extraclick.pass_service_client
-def list_databases(service: ServiceClient, kind: str, limit: int, all_versions: bool, format: str):
-    _print_database_list(format, _database_deployments(service, limit, kind, all_versions))
+# --- gateway ------------------------------------------------------------------
 
 
-@db.group(name="postgres", help="Create and manage Postgres services.")
-def postgres():
-    pass
+def _api(service: ServiceClient, method: str, path: str = "", **kwargs) -> Any:
+    try:
+        return service.http.json(method, f"/api/v1/database/{{ws}}{path}", timeout=660, **kwargs)
+    except GatewayHTTPError as exc:
+        terminal.error(exc.message, code=exc.code)
 
 
-@db.group(name="redis", help="Create and manage Redis services.")
-def redis():
-    pass
+def _services(service: ServiceClient) -> List[Dict[str, Any]]:
+    return _api(service, "GET") or []
 
 
-@dataclass
-class DatabaseProduct:
-    kind: str
-    image: str
-    port: int
-    mount_path: str
-    default_size: str
-    readiness_probe: str
-    connection_env_name: str
-    default_database: str = ""
+def _service_info(service: ServiceClient, kind: str, name: str) -> Dict[str, Any]:
+    for info in _services(service):
+        if info["name"] == name and info["kind"] == kind:
+            return info
+    terminal.error(f"{kind} service {name!r} not found.", code="NOT_FOUND")
 
 
-POSTGRES = DatabaseProduct(
-    kind="postgres",
-    image="docker.io/library/postgres:16",
-    port=5432,
-    mount_path="/var/lib/postgresql/data",
-    default_size="10Gi",
-    readiness_probe="pg_isready",
-    connection_env_name="DATABASE_URL",
-    default_database="postgres",
-)
-
-REDIS = DatabaseProduct(
-    kind="redis",
-    image="docker.io/library/redis:7",
-    port=6379,
-    mount_path="/data",
-    default_size="5Gi",
-    readiness_probe="PING",
-    connection_env_name="REDIS_URL",
-)
-
-DEFAULT_DATABASE_KEEP_WARM_SECONDS = 300
-DEFAULT_DATABASE_CPU = 1.0
-DEFAULT_DATABASE_MEMORY = 512
-
-
-def _env_prefix(kind: str, name: str) -> str:
-    safe = "".join(ch if ch.isalnum() else "_" for ch in name.upper()).strip("_")
-    return f"BETA9_{kind.upper()}_{safe or 'SERVICE'}"
-
-
-def _password(password: str, password_from_env: str, password_stdin: bool) -> str:
-    supplied = [bool(password), bool(password_from_env), password_stdin]
-    if sum(supplied) > 1:
-        raise click.ClickException("Specify only one password source.")
-    if password:
-        return password
-    if password_from_env:
-        value = os.getenv(password_from_env)
-        if not value:
-            raise click.ClickException(f"Environment variable {password_from_env!r} is not set.")
-        return value
-    if password_stdin:
-        value = sys.stdin.read().strip()
-        if not value:
-            raise click.ClickException("No password was provided on stdin.")
-        return value
-    return secrets_lib.token_urlsafe(32)
-
-
-def _secret_names(product: DatabaseProduct, name: str) -> Dict[str, str]:
-    prefix = _env_prefix(product.kind, name)
-    names = {
-        "username": f"{prefix}_USERNAME",
-        "password": f"{prefix}_PASSWORD",
-        "url": f"{prefix}_URL",
-    }
-    if product.kind == "postgres":
-        names["database"] = f"{prefix}_DATABASE"
-    return names
-
-
-def _upsert_secret(service: ServiceClient, name: str, value: str) -> None:
-    existing = service.secret.get_secret(GetSecretRequest(name=name))
-    if existing.ok:
-        res = service.secret.update_secret(UpdateSecretRequest(name=name, value=value))
-        if not res.ok:
-            raise click.ClickException(res.err_msg or f"Failed to update secret {name}.")
-        return
-
-    res = service.secret.create_secret(CreateSecretRequest(name=name, value=value))
-    if not res.ok:
-        raise click.ClickException(res.err_msg or f"Failed to create secret {name}.")
-
-
-def _delete_secret(service: ServiceClient, name: str) -> None:
-    res = service.secret.delete_secret(DeleteSecretRequest(name=name))
-    if not res.ok:
-        terminal.error(res.err_msg or f"Failed to delete secret {name}.", exit=False)
-
-
-def _get_secret_value(service: ServiceClient, name: str) -> str:
+def _secret_value(service: ServiceClient, name: str) -> str:
     res = service.secret.get_secret(GetSecretRequest(name=name))
     if not res.ok:
-        raise click.ClickException(res.err_msg or f"Secret {name} not found.")
+        terminal.error(res.err_msg or f"Secret {name} not found.", code="NOT_FOUND")
     return res.secret.value
-
-
-def _deployment_by_name(service: ServiceClient, name: str):
-    deployments = _deployments_by_name(service, name)
-    if not deployments:
-        return None
-    return max(deployments, key=_deployment_sort_key)
 
 
 def _deployments_by_name(service: ServiceClient, name: str):
@@ -188,84 +66,89 @@ def _deployments_by_name(service: ServiceClient, name: str):
         ListDeploymentsRequest(filters={"name": StringList(values=[name])}, limit=20)
     )
     if not res.ok:
-        raise click.ClickException(res.err_msg or "Unable to list deployments.")
-    return [deployment for deployment in res.deployments if deployment.name == name]
+        terminal.error(res.err_msg or "Unable to list deployments.")
+    return [d for d in res.deployments if d.name == name]
 
 
-def _cli_name() -> str:
-    ctx = click.get_current_context(silent=True)
-    if ctx is not None and ctx.command_path:
-        return ctx.command_path.split()[0]
-    return "beta9"
+# --- inputs -------------------------------------------------------------------
 
 
-def _ensure_database_name_available(service: ServiceClient, product: DatabaseProduct, name: str) -> None:
-    if _deployment_by_name(service, name) is None:
-        return
-    cli_name = _cli_name()
-    raise click.ClickException(
-        f"{product.kind} service {name!r} already exists. "
-        f"Use `{cli_name} db {product.kind} credentials {name}`, "
-        f"`{cli_name} db {product.kind} status {name}`, "
-        f"or delete it before creating a replacement."
-    )
+def _password(password: str, password_from_env: str, password_stdin: bool) -> str:
+    """One password source at most; empty means the gateway generates one."""
+    if sum([bool(password), bool(password_from_env), password_stdin]) > 1:
+        terminal.error("Specify only one password source.", code="INVALID_ARGS")
+    if password_from_env:
+        password = os.getenv(password_from_env, "")
+        if not password:
+            terminal.error(
+                f"Environment variable {password_from_env!r} is not set.", code="INVALID_ARGS"
+            )
+    if password_stdin:
+        password = sys.stdin.read().strip()
+        if not password:
+            terminal.error("No password was provided on stdin.", code="INVALID_ARGS")
+    return password
 
 
-def _deployment_sort_key(deployment):
-    return (
-        bool(deployment.active),
-        deployment.version,
-        deployment.updated_at.timestamp() if deployment.updated_at else 0,
-        deployment.created_at.timestamp() if deployment.created_at else 0,
-    )
+def _memory_mb(memory: Optional[str]) -> int:
+    if not memory:
+        return 0
+    value = memory.strip().lower()
+    for suffix, factor in (("gi", 1024), ("g", 1024), ("mi", 1), ("m", 1)):
+        if value.endswith(suffix):
+            return int(float(value[: -len(suffix)]) * factor)
+    return int(float(value))
 
 
-def _is_database_deployment(deployment) -> bool:
-    return bool(getattr(deployment, "database_kind", ""))
+# --- output -------------------------------------------------------------------
+
+RESULT_KEYS = (
+    "name",
+    "kind",
+    "deployment_id",
+    "host",
+    "username",
+    "database",
+    "connection_env_name",
+    "connection_string",
+    "connection_string_secret",
+    "username_secret",
+    "password_secret",
+    "database_secret",
+)
 
 
-def _database_deployments(service: ServiceClient, limit: int, kind: str, all_versions: bool = False):
-    res = service.gateway.list_deployments(ListDeploymentsRequest(limit=limit))
-    if not res.ok:
-        raise click.ClickException(res.err_msg or "Unable to list database services.")
-
-    deployments = [
-        deployment
-        for deployment in res.deployments
-        if _is_database_deployment(deployment)
-        and (kind == "all" or deployment.database_kind == kind)
-    ]
-    if all_versions:
-        return deployments
-
-    latest = {}
-    for deployment in deployments:
-        key = (deployment.database_kind, deployment.name)
-        if key not in latest or _deployment_sort_key(deployment) > _deployment_sort_key(latest[key]):
-            latest[key] = deployment
-    return sorted(latest.values(), key=lambda deployment: deployment.updated_at or deployment.created_at, reverse=True)
-
-
-def _database_list_payload(deployment) -> Dict[str, object]:
+def _redis_fields(url: str) -> Dict[str, object]:
+    parsed = urlparse(url)
     return {
-        "name": deployment.name,
-        "kind": deployment.database_kind,
-        "deployment_id": deployment.id,
-        "version": deployment.version,
-        "active": deployment.active,
-        "connection_env_name": deployment.connection_env_name,
-        "connection_string_secret": deployment.connection_string_secret,
-        "created_at": deployment.created_at,
-        "updated_at": deployment.updated_at,
+        "host": parsed.hostname or "",
+        "port": parsed.port or 443,
+        "username": parsed.username or "default",
+        "password": parsed.password or "",
     }
 
 
-def _print_database_list(format: str, deployments: Iterable) -> None:
-    deployments = list(deployments)
-    if format == "json":
-        terminal.print_json([_database_list_payload(deployment) for deployment in deployments])
-        return
+def _result(info: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: info[key] for key in RESULT_KEYS if info.get(key)}
 
+
+def _print_result(format: str, payload: Dict[str, Any]) -> None:
+    if terminal.json_output(format):
+        terminal.print_json(payload)
+        return
+    table = Table(Column("Field"), Column("Value"), box=box.SIMPLE)
+    keys = [key for key in RESULT_KEYS if key in payload]
+    keys.extend(sorted(key for key in payload if key not in keys))
+    for key in keys:
+        table.add_row(key, str(payload[key]))
+    terminal.print(table)
+
+
+def _print_list(format: str, services: Iterable[Dict[str, Any]]) -> None:
+    services = list(services)
+    if terminal.json_output(format):
+        terminal.print_json(services)
+        return
     table = Table(
         Column("Name"),
         Column("Kind"),
@@ -273,562 +156,245 @@ def _print_database_list(format: str, deployments: Iterable) -> None:
         Column("Version", justify="right"),
         Column("Connection Env"),
         Column("Connection Secret"),
-        Column("Updated At"),
         box=box.SIMPLE,
     )
-    for deployment in deployments:
+    for info in services:
         table.add_row(
-            deployment.name,
-            deployment.database_kind,
-            "Yes" if deployment.active else "No",
-            str(deployment.version),
-            deployment.connection_env_name or "-",
-            deployment.connection_string_secret or "-",
-            terminal.humanize_date(deployment.updated_at),
+            info["name"],
+            info["kind"],
+            "Yes" if info.get("active") else "No",
+            str(info.get("version", "")),
+            info.get("connection_env_name") or "-",
+            info.get("connection_string_secret") or "-",
         )
     table.add_section()
-    table.add_row(f"[bold]{len(deployments)} databases")
+    table.add_row(f"[bold]{len(services)} databases")
     terminal.print(table)
 
 
-def _tcp_host_from_url(url: str) -> str:
-    parsed = urlparse(url)
-    host = parsed.netloc or parsed.path
-    host = host.rstrip("/")
-    if ":" not in host:
-        host = f"{host}:443"
-    return host or "<host>"
+# --- commands -----------------------------------------------------------------
 
 
-def _tcp_host_for_stub(service: ServiceClient, stub_id: str, deployment_id: str) -> str:
-    res = service.gateway.get_url(GetUrlRequest(stub_id=stub_id, deployment_id=deployment_id))
-    if not res.ok:
-        raise click.ClickException(res.err_msg or "Failed to get database TCP endpoint.")
-    return _tcp_host_from_url(res.url)
-
-
-def _postgres_url(username: str, password: str, host: str, database: str) -> str:
-    return "postgresql://{}:{}@{}/{}?sslmode=require".format(
-        quote(username),
-        quote(password),
-        host,
-        quote(database),
-    )
-
-
-def _redis_url(username: str, password: str, host: str) -> str:
-    if username:
-        return "rediss://{}:{}@{}/0".format(quote(username), quote(password), host)
-    return "rediss://:{}@{}/0".format(quote(password), host)
-
-
-def _redis_connection_fields(url: str) -> Dict[str, object]:
-    parsed = urlparse(url)
-    return {
-        "host": parsed.hostname or "",
-        "port": parsed.port or 443,
-        "username": parsed.username or "default",
-        "password": parsed.password or "",
-        "tls_server_name": parsed.hostname or "",
-    }
-
-
-def _print_result(format: str, payload: Dict[str, object]) -> None:
-    if format == "json":
-        terminal.print_json(payload)
-        return
-
-    table = Table(
-        Column("Field"),
-        Column("Value"),
-        box=box.SIMPLE,
-    )
-    preferred = (
-        "name",
-        "kind",
-        "deployment_id",
-        "disk",
-        "host",
-        "username",
-        "database",
-        "connection_env_name",
-        "connection_string",
-        "connection_string_secret",
-        "username_secret",
-        "password_secret",
-        "database_secret",
-    )
-    keys = [key for key in preferred if key in payload]
-    keys.extend(sorted(key for key in payload if key not in keys))
-    for key in keys:
-        table.add_row(key, str(payload[key]))
-    terminal.print(table)
-
-
-def _database_serving_config(
-    product: DatabaseProduct,
-    secret_names: Dict[str, str],
-) -> ServingConfig:
-    return ServingConfig(
-        app_kind="database",
-        serving_protocol=product.kind,
-        database=DatabaseServingConfig(
-            kind=product.kind,
-            port=product.port,
-            readiness_probe=product.readiness_probe,
-            connection_env_name=product.connection_env_name,
-            durability_mode="snapshot_wal" if product.kind == "postgres" else "aof_tail",
-            credential_secret_names=list(secret_names.values()),
-            username_secret_name=secret_names["username"],
-            password_secret_name=secret_names["password"],
-            database_secret_name=secret_names.get("database", ""),
-            connection_url_secret_name=secret_names["url"],
-        )
-    )
-
-
-def _serving_config_proto(config: ServingConfig) -> ServingConfigProto:
-    database = config.database
-    return ServingConfigProto(
-        app_kind=config.app_kind,
-        serving_protocol=config.serving_protocol,
-        database=DatabaseServingConfigProto(
-            kind=database.kind,
-            port=database.port,
-            readiness_probe=database.readiness_probe,
-            connection_env_name=database.connection_env_name,
-            credential_secret_names=database.credential_secret_names,
-            durability_mode=database.durability_mode,
-            username_secret_name=database.username_secret_name,
-            password_secret_name=database.password_secret_name,
-            database_secret_name=database.database_secret_name,
-            connection_url_secret_name=database.connection_url_secret_name,
-        )
-        if database
-        else None,
-    )
-
-
-def _postgres_entrypoint(secret_names: Dict[str, str]) -> list:
-    return [
-        "sh",
-        "-lc",
-        (
-            "export PATH=/usr/lib/postgresql/16/bin:$PATH "
-            f"POSTGRES_USER=\"${{{secret_names['username']}}}\" "
-            f"POSTGRES_PASSWORD=\"${{{secret_names['password']}}}\" "
-            f"POSTGRES_DB=\"${{{secret_names['database']}}}\" "
-            "PGDATA=/var/lib/postgresql/data/pgdata; "
-            "exec docker-entrypoint.sh postgres "
-            "-c wal_compression=on"
-        ),
-    ]
-
-
-def _redis_entrypoint(secret_names: Dict[str, str]) -> list:
-    username = secret_names["username"]
-    password = secret_names["password"]
-    return [
-        "sh",
-        "-lc",
-        (
-            f"if [ \"${{{username}}}\" = \"default\" ]; then "
-            "printf 'appendonly yes\\nappendfsync always\\ndir /data\\nuser default on >%s ~* &* +@all\\n' "
-            f"\"${{{password}}}\" > /tmp/redis.conf; "
-            "else "
-            "printf 'appendonly yes\\nappendfsync always\\ndir /data\\nuser default off\\nuser %s on >%s ~* &* +@all\\n' "
-            f"\"${{{username}}}\" \"${{{password}}}\" > /tmp/redis.conf; "
-            "fi; exec redis-server /tmp/redis.conf"
-        ),
-    ]
-
-
-def _registry_image_id(service: ServiceClient, image: Image) -> Tuple[str, str]:
-    image_client = ImageServiceStub(service.channel)
-    python_version = getattr(image.python_version, "value", image.python_version)
-    verify = image_client.verify_image_build(
-        VerifyImageBuildRequest(
-            python_version=python_version,
-            existing_image_uri=image.base_image,
-            ignore_python=image.ignore_python,
-        )
-    )
-    if verify.exists:
-        return verify.image_id, python_version
-
-    final = None
-    for response in image_client.build_image(
-        BuildImageRequest(
-            python_version=python_version,
-            existing_image_uri=image.base_image,
-            ignore_python=image.ignore_python,
-        )
-    ):
-        if response.done:
-            final = response
-            break
-
-    if not final or not final.success:
-        raise click.ClickException(
-            (final.msg if final else "") or f"Failed to prepare image {image.base_image}."
-        )
-    return final.image_id, final.python_version or python_version
-
-
-def _database_service(
-    product: DatabaseProduct,
-    name: str,
-    size: str,
-    pool: Optional[str],
-    min_replicas: int,
-    cpu: Optional[float],
-    memory: Optional[str],
-) -> Service:
-    secret_names = _secret_names(product, name)
-    image = Image.from_registry(product.image)
-    image.ignore_python = True
-    disk = DurableDisk(
-        name=f"{name}-data",
-        size=size,
-        mount_path=product.mount_path,
-    )
-    return Service(
-        name=name,
-        image=image,
-        entrypoint=_postgres_entrypoint(secret_names)
-        if product.kind == "postgres"
-        else _redis_entrypoint(secret_names),
-        ports=[product.port],
-        tcp=True,
-        min_replicas=min_replicas,
-        keep_warm_seconds=DEFAULT_DATABASE_KEEP_WARM_SECONDS,
-        pool=pool,
-        secrets=[v for k, v in secret_names.items() if k != "url"],
-        env={},
-        disks=[disk],
-        serving=_database_serving_config(product, secret_names),
-        cpu=cpu or DEFAULT_DATABASE_CPU,
-        memory=memory or DEFAULT_DATABASE_MEMORY,
-    )
-
-
-def _deploy_database_stub(service: ServiceClient, db_service: Service) -> Tuple[str, str, int]:
-    image_id, python_version = _registry_image_id(service, db_service.image)
-    stub_response = service.gateway.get_or_create_stub(
-        GetOrCreateStubRequest(
-            image_id=image_id,
-            stub_type=POD_DEPLOYMENT_STUB_TYPE,
-            name=POD_DEPLOYMENT_STUB_TYPE,
-            python_version=python_version,
-            cpu=db_service.cpu,
-            memory=db_service.memory,
-            gpu="",
-            gpu_count=0,
-            keep_warm_seconds=db_service.keep_warm_seconds,
-            workers=1,
-            max_pending_tasks=100,
-            secrets=[SecretVar(name=secret.name) for secret in db_service.secrets],
-            autoscaler=AutoscalerProto(
-                type="queue_depth",
-                max_containers=db_service.max_replicas,
-                tasks_per_container=1,
-                min_containers=db_service.min_replicas,
-            ),
-            task_policy=TaskPolicyProto(timeout=3600, max_retries=3),
-            concurrent_requests=1,
-            entrypoint=db_service.entrypoint or [],
-            ports=db_service.ports,
-            env=db_service.env,
-            app_name=db_service.name or "",
-            force_create=True,
-            authorized=False,
-            tcp=True,
-            pool=db_service.pool_config,
-            is_service=True,
-            serving=_serving_config_proto(db_service.serving),
-            disks=[disk.export() for disk in db_service.disks],
-        )
-    )
-    if not stub_response.ok:
-        raise click.ClickException(stub_response.err_msg or "Failed to create database service.")
-
-    deploy_response = service.gateway.deploy_stub(
-        DeployStubRequest(stub_id=stub_response.stub_id, name=db_service.name or "")
-    )
-    if not deploy_response.ok:
-        raise click.ClickException(
-            deploy_response.invoke_url or f"Failed to deploy database service {db_service.name}."
-        )
-    return stub_response.stub_id, deploy_response.deployment_id, deploy_response.version
-
-
-def _create_database(
-    service: ServiceClient,
-    product: DatabaseProduct,
-    name: str,
-    username: str,
-    database: str,
-    password: str,
-    size: str,
-    pool: Optional[str],
-    min_replicas: int,
-    format: str,
-    cpu: Optional[float],
-    memory: Optional[str],
-) -> None:
-    _ensure_database_name_available(service, product, name)
-    secret_names = _secret_names(product, name)
-    _upsert_secret(service, secret_names["username"], username)
-    _upsert_secret(service, secret_names["password"], password)
-    if product.kind == "postgres":
-        _upsert_secret(service, secret_names["database"], database)
-
-    _deploy_database_service(
-        service=service,
-        product=product,
-        name=name,
-        username=username,
-        database=database,
-        password=password,
-        size=size,
-        pool=pool,
-        min_replicas=min_replicas,
-        format=format,
-        cpu=cpu,
-        memory=memory,
-    )
-
-
-def _deploy_database_service(
-    service: ServiceClient,
-    product: DatabaseProduct,
-    name: str,
-    username: str,
-    database: str,
-    password: str,
-    size: str,
-    pool: Optional[str],
-    min_replicas: int,
-    format: str,
-    cpu: Optional[float],
-    memory: Optional[str],
-) -> None:
-    secret_names = _secret_names(product, name)
-    db_service = _database_service(
-        product=product,
-        name=name,
-        size=size,
-        pool=pool,
-        min_replicas=min_replicas,
-        cpu=cpu,
-        memory=memory,
-    )
-    stub_id, deployment_id, _ = _deploy_database_stub(service, db_service)
-    host = _tcp_host_for_stub(service, stub_id, deployment_id)
-    if product.kind == "postgres":
-        connection_url = _postgres_url(username, password, host, database)
-    else:
-        connection_url = _redis_url(username, password, host)
-    _upsert_secret(service, secret_names["url"], connection_url)
-
-    _print_result(
-        format,
-        {
-            "name": name,
-            "kind": product.kind,
-            "deployment_id": deployment_id,
-            "disk": db_service.disks[0].name,
-            "host": host,
-            "username": username,
-            "connection_string": connection_url,
-            "connection_string_secret": secret_names["url"],
-            "username_secret": secret_names["username"],
-            "password_secret": secret_names["password"],
-            **({"tls_server_name": _redis_connection_fields(connection_url)["tls_server_name"]} if product.kind == "redis" else {}),
-            **({"database": database} if product.kind == "postgres" else {}),
-            **({"database_secret": secret_names["database"]} if product.kind == "postgres" else {}),
-        },
-    )
+@db.command(name="list", help="List database services.")
+@click.option(
+    "--kind",
+    type=click.Choice(("all", *PRODUCTS)),
+    default="all",
+    show_default=True,
+    help="Only show one kind of database.",
+)
+@extraclick.format_option
+@extraclick.pass_service_client
+def list_databases(service: ServiceClient, kind: str, format: str):
+    services = _services(service)
+    if kind != "all":
+        services = [s for s in services if s["kind"] == kind]
+    _print_list(format, sorted(services, key=lambda s: s["name"]))
 
 
 def _create_options(func):
-    func = click.option(
-        "--format",
-        "format",
-        type=click.Choice(("table", "json")),
-        default="table",
-        show_default=True,
-        help="Change the format of the output.",
-    )(func)
-    func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
-    func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
-    func = click.option(
-        "--min-replicas",
-        type=click.IntRange(min=0, max=1),
-        default=0,
-        show_default=True,
-        help="Minimum database replicas to keep warm. Use 1 to keep the service warm.",
-    )(func)
-    func = click.option("--pool", type=click.STRING, default=None, help="Run on a private pool.")(func)
-    func = click.option("--password-stdin", is_flag=True, help="Read password from stdin.")(func)
-    func = click.option("--password-from-env", type=click.STRING, default="", help="Read password from an environment variable.")(func)
-    func = click.option("--password", type=click.STRING, default="", help="Database password. Generated if omitted.")(func)
-    func = click.option("--username", type=click.STRING, default="", help="Database username.")(func)
+    for option in reversed(
+        (
+            click.option("--username", default="", help="Database username."),
+            click.option("--password", default="", help="Database password. Generated if omitted."),
+            click.option(
+                "--password-from-env",
+                default="",
+                help="Read password from an environment variable.",
+            ),
+            click.option("--password-stdin", is_flag=True, help="Read password from stdin."),
+            click.option("--pool", default=None, help="Run on a private pool."),
+            click.option(
+                "--min-replicas",
+                type=click.IntRange(min=0, max=1),
+                default=0,
+                show_default=True,
+                help="Minimum database replicas to keep warm. Use 1 to keep the service warm.",
+            ),
+            click.option(
+                "--cpu", type=click.FLOAT, default=None, help="CPU cores, for example 0.5 or 2."
+            ),
+            click.option("--memory", default=None, help="Memory, for example 1024 or 2Gi."),
+            extraclick.format_option,
+        )
+    ):
+        func = option(func)
     return func
 
 
-@postgres.command(name="create", help="Create a serverless Postgres service.")
-@click.argument("name")
-@click.option("--database", type=click.STRING, default="", help="Initial database name.")
-@_create_options
-@extraclick.pass_service_client
-def create_postgres(
+def _scale_options(func):
+    for option in reversed(
+        (
+            click.option("--always-on", is_flag=True, help="Keep one database container warm."),
+            click.option("--serverless", is_flag=True, help="Scale to zero when idle."),
+            click.option(
+                "--cpu", type=click.FLOAT, default=None, help="CPU cores, for example 0.5 or 2."
+            ),
+            click.option("--memory", default=None, help="Memory, for example 1024 or 2Gi."),
+            click.option("--pool", default=None, help="Redeploy the database on a pool."),
+            extraclick.format_option,
+        )
+    ):
+        func = option(func)
+    return func
+
+
+def _scale(
     service: ServiceClient,
+    kind: str,
     name: str,
-    database: str,
-    username: str,
-    password: str,
-    password_from_env: str,
-    password_stdin: bool,
-    pool: Optional[str],
-    min_replicas: int,
-    format: str,
+    always_on: bool,
+    serverless: bool,
     cpu: Optional[float],
     memory: Optional[str],
-):
-    _create_database(
-        service=service,
-        product=POSTGRES,
-        name=name,
-        username=username or name.replace("-", "_"),
-        database=database or name.replace("-", "_") or POSTGRES.default_database,
-        password=_password(password, password_from_env, password_stdin),
-        size=POSTGRES.default_size,
-        pool=pool,
-        min_replicas=min_replicas,
-        format=format,
-        cpu=cpu,
-        memory=memory,
-    )
-
-
-@redis.command(name="create", help="Create a serverless Redis service.")
-@click.argument("name")
-@_create_options
-@extraclick.pass_service_client
-def create_redis(
-    service: ServiceClient,
-    name: str,
-    username: str,
-    password: str,
-    password_from_env: str,
-    password_stdin: bool,
     pool: Optional[str],
-    min_replicas: int,
     format: str,
-    cpu: Optional[float],
-    memory: Optional[str],
-):
-    _create_database(
-        service=service,
-        product=REDIS,
-        name=name,
-        username=username or "default",
-        database="",
-        password=_password(password, password_from_env, password_stdin),
-        size=REDIS.default_size,
-        pool=pool,
-        min_replicas=min_replicas,
-        format=format,
-        cpu=cpu,
-        memory=memory,
-    )
+) -> None:
+    if always_on and serverless:
+        terminal.error("Specify --always-on or --serverless, not both.", code="INVALID_ARGS")
+    containers = 1 if always_on else 0 if serverless else None
+    if containers is None and cpu is None and memory is None and pool is None:
+        terminal.error("Nothing to change.", code="INVALID_ARGS")
+    info = _service_info(service, kind, name)
 
+    if cpu is not None or memory is not None or pool is not None:
+        # Resources live in the stub config: new version; warm mode rides along.
+        def mutate(config: Dict[str, Any]) -> None:
+            runtime = config.setdefault("runtime", {})
+            if cpu is not None:
+                runtime["cpu"] = int(cpu * 1000)
+            if memory is not None:
+                runtime["memory"] = _memory_mb(memory)
+            if pool is not None:
+                config["pool"] = {"name": pool} if pool else None
+            if containers is not None:
+                config.setdefault("autoscaler", {})["min_containers"] = containers
 
-def _credentials(service: ServiceClient, product: DatabaseProduct, name: str, format: str) -> None:
-    secret_names = _secret_names(product, name)
-    payload = {
-        "name": name,
-        "kind": product.kind,
-        "username": _get_secret_value(service, secret_names["username"]),
-        "connection_string": _get_secret_value(service, secret_names["url"]),
-        "connection_string_secret": secret_names["url"],
-    }
-    if product.kind == "postgres":
-        payload["database"] = _get_secret_value(service, secret_names["database"])
-    else:
-        payload.update({k: v for k, v in _redis_connection_fields(payload["connection_string"]).items() if k != "password"})
-    _print_result(format, payload)
-
-
-def _secret_env_names(product: DatabaseProduct) -> Dict[str, str]:
-    if product.kind == "postgres":
-        return {
-            "DATABASE_URL": "url",
-            "POSTGRES_USER": "username",
-            "POSTGRES_PASSWORD": "password",
-            "POSTGRES_DB": "database",
-        }
-    return {
-        "REDIS_URL": "url",
-        "REDIS_USER": "username",
-        "REDIS_PASSWORD": "password",
-    }
-
-
-def _secrets(service: ServiceClient, product: DatabaseProduct, name: str, format: str) -> None:
-    secret_names = _secret_names(product, name)
-    connection_string = _get_secret_value(service, secret_names["url"])
-
-    env = {
-        env_name: secret_names[key]
-        for env_name, key in _secret_env_names(product).items()
-        if key in secret_names
-    }
-    payload = {
-        "name": name,
-        "kind": product.kind,
-        "connection_string": connection_string,
-        "connection_string_secret": secret_names["url"],
-        "secrets": env,
-    }
-    if format == "json":
-        terminal.print_json(payload)
+        try:
+            result = stubconfig.redeploy_with_config(service, name, info["stub_id"], mutate)
+        except (RuntimeError, GatewayHTTPError) as exc:
+            terminal.error(str(exc))
+        _print_result(format, {"name": name, "kind": kind, **result})
         return
 
-    click.echo(connection_string)
+    # Zero stops every version; warm touches the newest.
+    deployments = _deployments_by_name(service, name)
+    if containers == 1:
+        deployments = [d for d in deployments if d.id == info["deployment_id"]]
+    for deployment in deployments:
+        res = service.gateway.scale_deployment(
+            ScaleDeploymentRequest(id=deployment.id, containers=containers)
+        )
+        if not res.ok:
+            terminal.error(res.err_msg or f"Failed to scale {name}.")
+    mode = "always-on" if always_on else "serverless"
+    if terminal.json_output(format):
+        terminal.print_json({"name": name, "kind": kind, "mode": mode})
+    else:
+        terminal.success(f"Set {kind} service {name} to {mode}")
 
 
-@postgres.command(name="credentials", help="Show Postgres connection details.")
-@click.argument("name")
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
-@extraclick.pass_service_client
-def postgres_credentials(service: ServiceClient, name: str, format: str):
-    _credentials(service, POSTGRES, name, format)
+def _database_group(kind: str, label: str) -> click.Group:
+    """The per-kind command set; every kind gets the same verbs."""
+
+    @db.group(name=kind, help=f"Create and manage {label} services.")
+    def group():
+        pass
+
+    @group.command(name="create", help=f"Create a serverless {label} service.")
+    @click.argument("name")
+    @click.option("--database", default="", help="Initial database name.", hidden=kind == "redis")
+    @_create_options
+    @extraclick.pass_service_client
+    def create(
+        service: ServiceClient,
+        name: str,
+        database: str,
+        username: str,
+        password: str,
+        password_from_env: str,
+        password_stdin: bool,
+        pool: Optional[str],
+        min_replicas: int,
+        cpu: Optional[float],
+        memory: Optional[str],
+        format: str,
+    ):
+        info = _api(
+            service,
+            "POST",
+            json={
+                "kind": kind,
+                "name": name,
+                "username": username,
+                "password": _password(password, password_from_env, password_stdin),
+                "database": database,
+                "pool": pool or "",
+                "always_on": min_replicas > 0,
+                "cpu": int(cpu * 1000) if cpu else 0,
+                "memory": _memory_mb(memory),
+            },
+        )
+        _print_result(format, _result(info))
+
+    @group.command(name="credentials", help=f"Show {label} connection details.")
+    @click.argument("name")
+    @extraclick.format_option
+    @extraclick.pass_service_client
+    def credentials(service: ServiceClient, name: str, format: str):
+        info = _service_info(service, kind, name)
+        payload = {
+            "name": name,
+            "kind": kind,
+            "username": _secret_value(service, info["username_secret"]),
+            "connection_string": _secret_value(service, info["connection_string_secret"]),
+            "connection_string_secret": info["connection_string_secret"],
+        }
+        if info.get("database_secret"):
+            payload["database"] = _secret_value(service, info["database_secret"])
+        if kind == "redis":
+            fields = _redis_fields(payload["connection_string"])
+            payload.update({k: v for k, v in fields.items() if k != "password"})
+        _print_result(format, payload)
+
+    @group.command(name="status", help=f"Show {label} service status.")
+    @click.argument("name")
+    @extraclick.format_option
+    @extraclick.pass_service_client
+    def status(service: ServiceClient, name: str, format: str):
+        _print_result(format, _result(_service_info(service, kind, name)))
+
+    @group.command(
+        name="rotate",
+        help=f"Rotate the {label} password; the service restarts with the new credentials.",
+    )
+    @click.argument("name")
+    @extraclick.format_option
+    @extraclick.pass_service_client
+    def rotate(service: ServiceClient, name: str, format: str):
+        _print_result(format, _result(_api(service, "POST", f"/{name}/rotate")))
+
+    @group.command(name="delete", help=f"Delete a {label} service and its generated secrets.")
+    @click.argument("name")
+    @extraclick.pass_service_client
+    def delete(service: ServiceClient, name: str):
+        _api(service, "DELETE", f"/{name}")
+        terminal.success(f"Deleted {kind} service {name}")
+
+    @group.command(name="scale", help=f"Set {label} warm mode or resources.")
+    @click.argument("name")
+    @_scale_options
+    @extraclick.pass_service_client
+    def scale(service: ServiceClient, name: str, **options):
+        _scale(service, kind, name, **options)
+
+    return group
 
 
-@redis.command(name="credentials", help="Show Redis connection details.")
-@click.argument("name")
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
-@extraclick.pass_service_client
-def redis_credentials(service: ServiceClient, name: str, format: str):
-    _credentials(service, REDIS, name, format)
-
-
-@postgres.command(name="secrets", help="Print the Postgres connection string.")
-@click.argument("name")
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
-@extraclick.pass_service_client
-def postgres_secrets(service: ServiceClient, name: str, format: str):
-    _secrets(service, POSTGRES, name, format)
-
-
-@redis.command(name="secrets", help="Print the Redis connection string.")
-@click.argument("name")
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
-@extraclick.pass_service_client
-def redis_secrets(service: ServiceClient, name: str, format: str):
-    _secrets(service, REDIS, name, format)
+postgres = _database_group("postgres", PRODUCTS["postgres"])
+redis = _database_group("redis", PRODUCTS["redis"])
+mysql = _database_group("mysql", PRODUCTS["mysql"])
+mongo = _database_group("mongo", PRODUCTS["mongo"])
 
 
 @postgres.command(name="connect", help="Print the Postgres connection string.")
@@ -836,240 +402,39 @@ def redis_secrets(service: ServiceClient, name: str, format: str):
 @click.option("--psql", "psql_command", is_flag=True, help="Print a psql command.")
 @extraclick.pass_service_client
 def postgres_connect(service: ServiceClient, name: str, psql_command: bool):
-    url = _get_secret_value(service, _secret_names(POSTGRES, name)["url"])
+    info = _service_info(service, "postgres", name)
+    url = _secret_value(service, info["connection_string_secret"])
     click.echo(f"psql {shlex.quote(url)}" if psql_command else url)
 
 
 @redis.command(name="connect", help="Print the Redis connection string.")
 @click.argument("name")
-@click.option("--redis-cli", "redis_cli_command", is_flag=True, help="Print a redis-cli command with SNI.")
-@click.option("--node-redis", "node_redis", is_flag=True, help="Print a node-redis connection snippet.")
-@click.option("--ioredis", "ioredis", is_flag=True, help="Print an ioredis connection snippet.")
+@click.option(
+    "--redis-cli", "redis_cli_command", is_flag=True, help="Print a redis-cli command with SNI."
+)
+@click.option("--node-redis", is_flag=True, help="Print a node-redis connection snippet.")
+@click.option("--ioredis", is_flag=True, help="Print an ioredis connection snippet.")
 @extraclick.pass_service_client
 def redis_connect(
-    service: ServiceClient,
-    name: str,
-    redis_cli_command: bool,
-    node_redis: bool,
-    ioredis: bool,
+    service: ServiceClient, name: str, redis_cli_command: bool, node_redis: bool, ioredis: bool
 ):
     if sum([redis_cli_command, node_redis, ioredis]) > 1:
-        raise click.ClickException("Specify only one Redis client output format.")
-
-    url = _get_secret_value(service, _secret_names(REDIS, name)["url"])
-    fields = _redis_connection_fields(url)
+        terminal.error("Specify only one Redis client output format.", code="INVALID_ARGS")
+    info = _service_info(service, "redis", name)
+    url = _secret_value(service, info["connection_string_secret"])
+    fields = _redis_fields(url)
     if redis_cli_command:
         click.echo(
             "redis-cli --tls --sni {host} -h {host} -p {port} --user {username} --pass {password}".format(
-                host=shlex.quote(str(fields["host"])),
-                port=shlex.quote(str(fields["port"])),
-                username=shlex.quote(str(fields["username"])),
-                password=shlex.quote(str(fields["password"])),
+                **{k: shlex.quote(str(v)) for k, v in fields.items()}
             )
         )
-        return
-    if node_redis:
+    elif node_redis:
         click.echo(
-            "createClient({ url: %s, socket: { tls: true, servername: %s } })"
-            % (repr(url), repr(fields["tls_server_name"]))
+            "createClient({ url: %r, socket: { tls: true, servername: %r } })"
+            % (url, fields["host"])
         )
-        return
-    if ioredis:
-        click.echo(
-            "new Redis(%s, { tls: { servername: %s } })"
-            % (repr(url), repr(fields["tls_server_name"]))
-        )
-        return
-    click.echo(url)
-
-
-def _status(service: ServiceClient, product: DatabaseProduct, name: str, format: str) -> None:
-    deployment = _deployment_by_name(service, name)
-    if deployment is None:
-        raise click.ClickException(f"{product.kind} service {name!r} not found.")
-    payload = {
-        "name": deployment.name,
-        "kind": product.kind,
-        "deployment_id": deployment.id,
-        "active": deployment.active,
-        "connection_string_secret": _secret_names(product, name)["url"],
-    }
-    if format == "json":
-        terminal.print_json(payload)
-        return
-    table = Table(Column("Field"), Column("Value"), box=box.SIMPLE)
-    for key, value in payload.items():
-        table.add_row(key, str(value))
-    terminal.print(table)
-
-
-@postgres.command(name="status", help="Show Postgres service status.")
-@click.argument("name")
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
-@extraclick.pass_service_client
-def postgres_status(service: ServiceClient, name: str, format: str):
-    _status(service, POSTGRES, name, format)
-
-
-@redis.command(name="status", help="Show Redis service status.")
-@click.argument("name")
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
-@extraclick.pass_service_client
-def redis_status(service: ServiceClient, name: str, format: str):
-    _status(service, REDIS, name, format)
-
-
-def _rotate(service: ServiceClient, product: DatabaseProduct, name: str, format: str) -> None:
-    raise click.ClickException(
-        f"{product.kind} password rotation is not available yet. "
-        "Delete and recreate the service to replace credentials."
-    )
-
-
-@postgres.command(name="rotate", help="Rotate the Postgres password. Not available yet.")
-@click.argument("name")
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
-@extraclick.pass_service_client
-def postgres_rotate(service: ServiceClient, name: str, format: str):
-    _rotate(service, POSTGRES, name, format)
-
-
-@redis.command(name="rotate", help="Rotate the Redis password. Not available yet.")
-@click.argument("name")
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
-@extraclick.pass_service_client
-def redis_rotate(service: ServiceClient, name: str, format: str):
-    _rotate(service, REDIS, name, format)
-
-
-def _delete_database(service: ServiceClient, product: DatabaseProduct, name: str) -> None:
-    deployments = _deployments_by_name(service, name)
-    for deployment in deployments:
-        res = service.gateway.delete_deployment(DeleteDeploymentRequest(id=deployment.id))
-        if not res.ok:
-            raise click.ClickException(res.err_msg or f"Failed to delete deployment {deployment.id}.")
-    for secret_name in _secret_names(product, name).values():
-        _delete_secret(service, secret_name)
-    terminal.success(f"Deleted {product.kind} service {name}")
-
-
-@postgres.command(name="delete", help="Delete a Postgres service and its generated secrets.")
-@click.argument("name")
-@extraclick.pass_service_client
-def postgres_delete(service: ServiceClient, name: str):
-    _delete_database(service, POSTGRES, name)
-
-
-@redis.command(name="delete", help="Delete a Redis service and its generated secrets.")
-@click.argument("name")
-@extraclick.pass_service_client
-def redis_delete(service: ServiceClient, name: str):
-    _delete_database(service, REDIS, name)
-
-
-def _scale_options(func):
-    func = click.option("--format", type=click.Choice(("table", "json")), default="table")(func)
-    func = click.option("--pool", type=click.STRING, default=None, help="Redeploy the database on a pool.")(func)
-    func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
-    func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
-    func = click.option("--serverless", is_flag=True, help="Scale to zero when idle.")(func)
-    return click.option("--always-on", is_flag=True, help="Keep one database container warm.")(func)
-
-
-@postgres.command(name="scale", help="Set Postgres warm mode or resources.")
-@click.argument("name")
-@_scale_options
-@extraclick.pass_service_client
-def postgres_scale(
-    service: ServiceClient,
-    name: str,
-    always_on: bool,
-    serverless: bool,
-    cpu: Optional[float],
-    memory: Optional[str],
-    pool: Optional[str],
-    format: str,
-):
-    _scale_database(service, POSTGRES, name, always_on, serverless, cpu, memory, pool, format)
-
-
-@redis.command(name="scale", help="Set Redis warm mode or resources.")
-@click.argument("name")
-@_scale_options
-@extraclick.pass_service_client
-def redis_scale(
-    service: ServiceClient,
-    name: str,
-    always_on: bool,
-    serverless: bool,
-    cpu: Optional[float],
-    memory: Optional[str],
-    pool: Optional[str],
-    format: str,
-):
-    _scale_database(service, REDIS, name, always_on, serverless, cpu, memory, pool, format)
-
-
-def _scale_mode_containers(always_on: bool, serverless: bool) -> int:
-    if always_on == serverless:
-        raise click.ClickException("Specify exactly one of --always-on or --serverless.")
-    return 1 if always_on else 0
-
-
-def _scale_database(
-    service: ServiceClient,
-    product: DatabaseProduct,
-    name: str,
-    always_on: bool,
-    serverless: bool,
-    cpu: Optional[float],
-    memory: Optional[str],
-    pool: Optional[str],
-    format: str,
-) -> None:
-    containers = _scale_mode_containers(always_on, serverless)
-    if cpu is not None or memory is not None or pool is not None:
-        secret_names = _secret_names(product, name)
-        _scale_database_to(service, product, name, 0, quiet=True, all_deployments=True)
-        _deploy_database_service(
-            service=service,
-            product=product,
-            name=name,
-            username=_get_secret_value(service, secret_names["username"]),
-            database=_get_secret_value(service, secret_names["database"]) if product.kind == "postgres" else "",
-            password=_get_secret_value(service, secret_names["password"]),
-            size=product.default_size,
-            pool=pool,
-            min_replicas=containers,
-            format=format,
-            cpu=cpu,
-            memory=memory,
-        )
-        return
-
-    _scale_database_to(service, product, name, containers, quiet=False)
-
-
-def _scale_database_to(
-    service: ServiceClient,
-    product: DatabaseProduct,
-    name: str,
-    containers: int,
-    quiet: bool,
-    all_deployments: bool = False,
-) -> None:
-    deployments = _deployments_by_name(service, name)
-    if not deployments:
-        raise click.ClickException(f"{product.kind} service {name!r} not found.")
-    targets = deployments if all_deployments or containers == 0 else [max(deployments, key=_deployment_sort_key)]
-    for deployment in targets:
-        if deployment is None:
-            continue
-        res = service.gateway.scale_deployment(
-            ScaleDeploymentRequest(id=deployment.id, containers=containers)
-        )
-        if not res.ok:
-            raise click.ClickException(res.err_msg or f"Failed to scale {name}.")
-    if not quiet:
-        mode = "always-on" if containers == 1 else "serverless"
-        terminal.success(f"Set {product.kind} service {name} to {mode}")
+    elif ioredis:
+        click.echo("new Redis(%r, { tls: { servername: %r } })" % (url, fields["host"]))
+    else:
+        click.echo(url)

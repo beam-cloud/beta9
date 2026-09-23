@@ -154,7 +154,7 @@ func (fs *ContainerFunctionService) invoke(ctx context.Context, authInfo *auth.A
 		return nil, err
 	}
 
-	go fs.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+	go fs.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub, authInfo.Actor)
 	return task, err
 }
 

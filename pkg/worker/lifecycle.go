@@ -1744,6 +1744,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if deviceSetup.Wait() != nil {
 		return
 	}
+	if err := s.serviceProxy.Attach(request, spec); err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to attach service proxy: %v", err)
+		return
+	}
 	if assignGPU {
 		// Only use CDI if runtime supports it
 		if !s.gpuVirtualizedForRequest(request) && s.runtime.Capabilities().CDI {

@@ -1316,4 +1316,9 @@ type PodTCPConfig struct {
 	Port         int    `key:"port" json:"port"`
 	CertFile     string `key:"certFile" json:"cert_file"`
 	KeyFile      string `key:"keyFile" json:"key_file"`
+	// ServiceProxyTarget is host:port of this listener as workers reach it.
+	// When set, containers that reference *.ExternalHost are pinned to a
+	// worker-side proxy to it instead of resolving ExternalHost over DNS.
+	// Leave empty where ExternalHost resolves publicly.
+	ServiceProxyTarget string `key:"serviceProxyTarget" json:"service_proxy_target"`
 }

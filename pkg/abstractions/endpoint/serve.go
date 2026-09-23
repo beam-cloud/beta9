@@ -32,7 +32,7 @@ func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, req *pb.S
 		return &pb.StartEndpointServeResponse{Ok: false}, nil
 	}
 
-	go es.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
+	go es.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub, authInfo.Actor)
 
 	timeout := types.DefaultServeContainerTimeout
 	if req.Timeout > 0 {

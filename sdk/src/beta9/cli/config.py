@@ -1,5 +1,4 @@
 import json
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +7,7 @@ from rich.style import Style
 from rich.table import Column, Table, box
 
 from .. import terminal
-from ..channel import ServiceClient, rpc_timeout
+from ..channel import ServiceClient, rpc_timeout, sdk_version
 from ..cli import extraclick
 from ..clients.gateway import AuthorizeRequest, ExportWorkspaceConfigRequest
 from ..config import (
@@ -35,12 +34,8 @@ def common(**_):
 def doctor(service: ServiceClient, format: str):
     with rpc_timeout(10):
         result = service.gateway.authorize(AuthorizeRequest())
-    try:
-        sdk_version = version("beta9")
-    except PackageNotFoundError:
-        sdk_version = "unknown"
     details = {
-        "sdk_version": sdk_version,
+        "sdk_version": sdk_version(),
         "context": extraclick.selected_context(),
         "gateway": f"{service._config.gateway_host}:{service._config.gateway_port}",
         "authenticated": result.ok,
