@@ -15,7 +15,6 @@ from ..channel import handle_grpc_error, prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
 from ..exceptions import ImageBuildError
 from . import (
-    api,
     config,
     container,
     database,
@@ -37,7 +36,6 @@ from . import (
     token,
     volume,
     worker,
-    workspace,
 )
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
@@ -112,13 +110,11 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
     cli.register(task)
     cli.register(status)
-    cli.register(api)
     cli.register(mcp)
     cli.register(deployment)
     cli.register(database)
     cli.register(serve)
     cli.register(volume)
-    cli.register(workspace)
     cli.register(disk)
     cli.register(image)
     cli.register(logs)
