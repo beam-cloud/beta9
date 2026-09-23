@@ -34,10 +34,12 @@ type MCPGateway interface {
 	StopTasks(ctx context.Context, in *pb.StopTasksRequest) (*pb.StopTasksResponse, error)
 	ActiveDeploymentByName(ctx context.Context, workspace *types.Workspace, name string) (*types.DeploymentWithRelated, error)
 	SetDeploymentEnv(ctx context.Context, authInfo *auth.AuthInfo, appName string, set map[string]string, unset []string) (*pb.DeployStubResponse, error)
+	RedeployWithConfig(ctx context.Context, authInfo *auth.AuthInfo, appName string, mutate func(*types.StubConfigV1) error) (*pb.DeployStubResponse, error)
 	SecretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error)
 }
 
 type MCPGroup struct {
+	router        *echo.Echo // the gateway itself, for in-process `api` and `invoke` calls
 	gws           MCPGateway
 	backendRepo   repository.BackendRepository
 	workspaceRepo repository.WorkspaceRepository
@@ -47,8 +49,8 @@ type MCPGroup struct {
 	byName        map[string]*mcpTool
 }
 
-func NewMCPGroup(g *echo.Group, gws MCPGateway, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, eventRepo repository.EventRepository, config types.AppConfig) *MCPGroup {
-	group := &MCPGroup{gws: gws, backendRepo: backendRepo, workspaceRepo: workspaceRepo, eventRepo: eventRepo, config: config}
+func NewMCPGroup(g *echo.Group, router *echo.Echo, gws MCPGateway, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, eventRepo repository.EventRepository, config types.AppConfig) *MCPGroup {
+	group := &MCPGroup{router: router, gws: gws, backendRepo: backendRepo, workspaceRepo: workspaceRepo, eventRepo: eventRepo, config: config}
 	group.tools = group.catalog()
 	group.byName = make(map[string]*mcpTool, len(group.tools))
 	for i := range group.tools {
@@ -105,12 +107,13 @@ func (g *MCPGroup) Post(ctx echo.Context) error {
 		requests = []rpcRequest{one}
 	}
 
+	reqCtx := withIdentityHeaders(ctx.Request().Context(), ctx.Request().Header)
 	responses := make([]rpcResponse, 0, len(requests))
 	for _, req := range requests {
 		if len(req.ID) == 0 || string(req.ID) == "null" {
 			continue // notification
 		}
-		responses = append(responses, g.dispatch(ctx.Request().Context(), cc.AuthInfo, req))
+		responses = append(responses, g.dispatch(reqCtx, cc.AuthInfo, req))
 	}
 	switch len(responses) {
 	case 0:
@@ -133,9 +136,10 @@ func (g *MCPGroup) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rp
 			"serverInfo":      map[string]any{"name": "beta9", "version": "1"},
 			"instructions": "Serverless GPU/CPU apps, one-off containers and managed databases in one workspace. " +
 				"Start with whoami and list_apps. Ship code with the CLI in the project directory (`deploy`); " +
-				"everything else is here: read config with get_app, wire services with connect_services or set_env " +
+				"everything else is here: read config with get_app, change it with update_config, wire services with connect_services or set_env " +
 				"(${{db.NAME.DATABASE_URL}}, ${{secret.NAME}}, ${{app.NAME.URL}}), provision databases, manage secrets, " +
-				"group apps into stacks, read logs and request stats. Tools that say so need confirm=true.",
+				"group apps into stacks, call apps with invoke, read logs and request stats. Anything without a tool: api_routes then api. " +
+				"Tools that say so need confirm=true.",
 		}
 	case "ping":
 		resp.Result = map[string]any{}

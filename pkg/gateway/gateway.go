@@ -67,6 +67,7 @@ type Gateway struct {
 	pb.UnimplementedSchedulerServer
 	Config               types.AppConfig
 	httpServer           *http.Server
+	echo                 *echo.Echo
 	grpcServer           *grpc.Server
 	healthServer         *health.Server
 	RedisClient          *common.RedisClient
@@ -263,6 +264,7 @@ func (g *Gateway) initHttp() error {
 		Handler: h2c.NewHandler(e, &http2.Server{}),
 	}
 
+	g.echo = e
 	authMiddleware := auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
@@ -651,7 +653,7 @@ func (g *Gateway) registerServices() error {
 
 	// Needs the assembled gateway service, so not in initHttp.
 	apiv1.NewDatabaseGroup(g.baseRouteGroup.Group("/database", auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)), gws)
-	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)), gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
+	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
 
 	g.registerHealthService()
 
