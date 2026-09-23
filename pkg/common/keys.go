@@ -103,6 +103,7 @@ var (
 
 	workspaceVolumePathDownloadToken          string = "workspace:volume_path_download_token:%s"
 	workspaceConcurrencyLimit                 string = "workspace:concurrency_limit:%s"
+	workspaceWebhooks                         string = "workspace:webhooks:%s"
 	workspaceConcurrencyLimitLock             string = "workspace:concurrency_limit:lock:%s"
 	workspaceConcurrencyLimitUsage            string = "workspace:{%s}:concurrency_limit:usage"
 	workspaceConcurrencyLimitReservation      string = "workspace:{%s}:concurrency_limit:reservation:%s"
@@ -569,6 +570,10 @@ func (rk *redisKeys) WorkspacePrefix() string {
 
 func (rk *redisKeys) WorkspaceConcurrencyLimit(workspaceId string) string {
 	return fmt.Sprintf(workspaceConcurrencyLimit, workspaceId)
+}
+
+func (rk *redisKeys) WorkspaceWebhooks(workspaceId string) string {
+	return fmt.Sprintf(workspaceWebhooks, workspaceId)
 }
 
 func (rk *redisKeys) WorkspaceConcurrencyLimitLock(workspaceId string) string {

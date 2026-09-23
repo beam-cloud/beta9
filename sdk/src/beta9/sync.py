@@ -354,38 +354,42 @@ class FileSyncer:
         temp_zip_name = self._write_archive(sorted(manifest.entries))
         try:
             terminal.header("Uploading")
-            # The object record's size is the archive's byte length, as the
-            # stream and delta paths record it (the manifest's uncompressed
-            # total only drives the delta heuristic).
-            archive_size = os.path.getsize(temp_zip_name)
-            create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
-                CreateObjectRequest(
-                    object_metadata=ObjectMetadata(name=hash, size=archive_size),
-                    hash=hash,
-                    size=archive_size,
-                    overwrite=True,
-                    supports_put_headers=True,
-                    multipart_part_size=MULTIPART_PART_SIZE,
-                    multipart_total_size=archive_size,
-                )
-            )
-            if not create_object_response.ok:
+            object_id = self.upload_archive(temp_zip_name, hash)
+            if object_id is None:
                 terminal.error("File sync failed")
-                return None
-            if create_object_response.upload_parts:
-                ok = self._put_archive_parts(temp_zip_name, create_object_response)
-            else:
-                ok = self._put_archive(
-                    temp_zip_name,
-                    create_object_response.presigned_url,
-                    create_object_response.put_headers,
-                )
-            if not ok:
-                terminal.error("File sync failed")
-                return None
-            return create_object_response.object_id
+            return object_id
         finally:
             os.remove(temp_zip_name)
+
+    def upload_archive(self, archive_path: str, hash: str) -> Optional[str]:
+        """
+        Register and upload a zip archive as a code object; returns its id.
+        The object record's size is the archive's byte length, as the stream
+        and delta paths record it.
+        """
+        archive_size = os.path.getsize(archive_path)
+        create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
+            CreateObjectRequest(
+                object_metadata=ObjectMetadata(name=hash, size=archive_size),
+                hash=hash,
+                size=archive_size,
+                overwrite=True,
+                supports_put_headers=True,
+                multipart_part_size=MULTIPART_PART_SIZE,
+                multipart_total_size=archive_size,
+            )
+        )
+        if not create_object_response.ok:
+            return None
+        if create_object_response.upload_parts:
+            ok = self._put_archive_parts(archive_path, create_object_response)
+        else:
+            ok = self._put_archive(
+                archive_path,
+                create_object_response.presigned_url,
+                create_object_response.put_headers,
+            )
+        return create_object_response.object_id if ok else None
 
     def _upload_delta(
         self, manifest: "_Manifest", hash: str, size: int, cache: "_SyncCache"

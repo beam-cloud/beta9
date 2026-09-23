@@ -1071,6 +1071,27 @@ type Secret struct {
 	Value         string    `db:"value" json:"value,omitempty"`
 	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id,omitempty"`
 	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by,omitempty"`
+	// EnvName is the variable a bound secret is injected under. Stub config only, not a column.
+	EnvName string `db:"-" json:"env_name,omitempty"`
+}
+
+// EnvVarName is the variable the secret is exposed as inside the container.
+func (s Secret) EnvVarName() string {
+	if s.EnvName != "" {
+		return s.EnvName
+	}
+	return s.Name
+}
+
+// Stack is a dashboard board; Spec is opaque JSON the gateway does not interpret.
+type Stack struct {
+	Id          uint            `db:"id" json:"-"`
+	ExternalId  string          `db:"external_id" json:"id"`
+	WorkspaceId uint            `db:"workspace_id" json:"-"`
+	Name        string          `db:"name" json:"name"`
+	Spec        json.RawMessage `db:"spec" json:"spec"`
+	CreatedAt   time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 type ScheduledJob struct {

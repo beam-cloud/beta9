@@ -19,6 +19,32 @@ var authContextKey = "auth"
 type AuthInfo struct {
 	Workspace *types.Workspace
 	Token     *types.Token
+	// Request attribution.
+	Actor types.EventActor
+}
+
+const (
+	CallerHeader       = "x-beam-caller"
+	AgentSessionHeader = "x-beam-agent-session"
+)
+
+func actorFromMetadata(md metadata.MD) types.EventActor {
+	actor := types.EventActor{}
+	if v := md.Get(CallerHeader); len(v) > 0 {
+		actor.Caller = v[0]
+	}
+	if v := md.Get(AgentSessionHeader); len(v) > 0 {
+		actor.AgentSession = v[0]
+	}
+	return actor
+}
+
+// TokenId is zero for requests without a token.
+func (ai *AuthInfo) TokenId() uint {
+	if ai.Token == nil {
+		return 0
+	}
+	return ai.Token.Id
 }
 
 func AuthInfoFromContext(ctx context.Context) (*AuthInfo, bool) {
@@ -125,6 +151,7 @@ func (ai *AuthInterceptor) validateToken(ctx context.Context, md metadata.MD) (*
 	return &AuthInfo{
 		Token:     token,
 		Workspace: workspace,
+		Actor:     actorFromMetadata(md),
 	}, true
 }
 

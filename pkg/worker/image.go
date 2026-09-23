@@ -1953,6 +1953,15 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 		}
 	}
 
+	// The clip indexer cannot index zstd layers; fail before copying the image.
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
+		for _, layer := range imageMetadata.LayersData {
+			if strings.HasSuffix(layer.MIMEType, "+zstd") {
+				return fmt.Errorf("image %s has zstd-compressed layers, which cannot be indexed yet; push a gzip-compressed copy (skopeo copy --compression-format gzip) or pick a gzip-compressed tag", *request.BuildOptions.SourceImage)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -2801,6 +2810,11 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info("Inspecting image name and verifying architecture...\n")
 	if err := c.inspectAndVerifyImage(ctx, request); err != nil {
+		// Non-exit-code errors would otherwise surface only as an exit code.
+		var exitErr *types.ExitCodeError
+		if !errors.As(err, &exitErr) {
+			outputLogger.Error(err.Error() + "\n")
+		}
 		return err
 	}
 

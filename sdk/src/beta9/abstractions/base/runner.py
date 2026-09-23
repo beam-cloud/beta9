@@ -9,6 +9,7 @@ from typing import Callable, Dict, List, Optional, Union
 import cloudpickle
 
 from ... import terminal
+from ...references import validate_env
 from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
@@ -151,6 +152,12 @@ class RunnerAbstraction(BaseAbstraction):
         formatted_env = []
         if env:
             formatted_env = [f"{k}={v}" for k, v in env.items()]
+            problems = validate_env(formatted_env)
+            if problems:
+                terminal.error(
+                    "Invalid ${{...}} reference in env:\n" + "\n".join(problems),
+                    code="INVALID_CONFIG",
+                )
 
         self.name = name
         self.app = app

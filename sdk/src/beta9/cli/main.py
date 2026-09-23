@@ -15,6 +15,8 @@ from ..channel import handle_grpc_error, prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
 from ..exceptions import ImageBuildError
 from . import (
+    api,
+    code,
     config,
     container,
     database,
@@ -23,17 +25,24 @@ from . import (
     disk,
     endpoints,
     image,
+    infra,
     logs,
     machine,
+    mcp,
     pool,
     run,
     secret,
     serve,
+    setup,
     shell,
+    skills,
+    status,
     task,
+    template,
     token,
     volume,
     worker,
+    workspace,
 )
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
@@ -107,12 +116,21 @@ class CLI:
 def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
     cli.register(task)
+    cli.register(template)
+    cli.register(status)
+    cli.register(api)
+    cli.register(code)
+    cli.register(mcp)
+    cli.register(setup)
+    cli.register(skills)
     cli.register(deployment)
     cli.register(database)
     cli.register(serve)
     cli.register(volume)
+    cli.register(workspace)
     cli.register(disk)
     cli.register(image)
+    cli.register(infra)
     cli.register(logs)
     cli.register(config)
     cli.register(pool)

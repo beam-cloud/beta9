@@ -1,7 +1,9 @@
 import functools
+import json
 import inspect
 import os
 import shlex
+import sys
 import textwrap
 from gettext import gettext
 from typing import Any, Callable, Dict, List, Optional
@@ -197,16 +199,19 @@ class CommandGroupCollection(click.CommandCollection):
     def __init__(self, *args, **kwargs):
         params = kwargs.get("params", [])
         params.append(config_context_param)
-        for name in ("no-input", "verbose"):
+        flag_help = {
+            "no-input": "Disable prompts.",
+            "verbose": "Show SDK diagnostic details.",
+            "json": "Machine-readable output: JSON errors with a `code`, implies --no-input.",
+        }
+        for name, help_text in flag_help.items():
             params.append(
                 click.Option(
                     [f"--{name}"],
                     is_flag=True,
                     expose_value=False,
                     callback=set_cli_flag,
-                    help="Disable prompts."
-                    if name == "no-input"
-                    else "Show SDK diagnostic details.",
+                    help=help_text,
                 )
             )
         kwargs["params"] = params
@@ -316,7 +321,7 @@ def selected_context(ctx: Optional[click.Context] = None) -> str:
 
 def command_hint() -> str:
     ctx = click.get_current_context()
-    return f"{ctx.command_path.split()[0]} --context {shlex.quote(selected_context(ctx))}"
+    return f"{terminal.cli_name()} --context {shlex.quote(selected_context(ctx))}"
 
 
 def filter_values_callback(
@@ -621,3 +626,46 @@ def env_vars_to_dict(value) -> Dict[str, str]:
             raise ValueError("env must be in KEY=value format")
         env[key] = raw_value
     return env
+
+
+def cli_command() -> List[str]:
+    """
+    Argv prefix that re-invokes this CLI (for subprocess-based tools such as
+    the MCP server and template orchestrator), whether it runs from an
+    installed entrypoint or `python -c`.
+    """
+    argv0 = sys.argv[0] if sys.argv else ""
+    if (
+        argv0
+        and os.path.basename(argv0) not in ("-c", "python", "python3")
+        and os.path.exists(argv0)
+    ):
+        return [argv0]
+    return [sys.executable, "-c", "from beta9.cli.main import start; start()"]
+
+
+def parse_last_json(text: str) -> Optional[Any]:
+    """
+    The last JSON value in CLI output. `--json` results are pretty-printed
+    and may follow progress lines, so scan back for the last top-level value.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    for opener in ("\n{", "\n["):
+        index = stripped.rfind(opener)
+        while index != -1:
+            try:
+                return json.loads(stripped[index + 1 :])
+            except json.JSONDecodeError:
+                index = stripped.rfind(opener, 0, index)
+    for line in reversed(stripped.splitlines()):
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    return None

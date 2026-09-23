@@ -47,7 +47,7 @@ def test_database_commands_are_nested_under_db():
 
     db = cli.common_group.get_command(None, "db")
     assert db is not None
-    assert sorted(db.commands) == ["list", "postgres", "redis"]
+    assert sorted(db.commands) == ["list", "mongo", "mysql", "postgres", "redis"]
     assert "list" in db.commands
     assert "create" in db.commands["postgres"].commands
     assert "create" in db.commands["redis"].commands
@@ -116,108 +116,104 @@ def test_run_runtime_prepare_failure_exits_nonzero(monkeypatch):
     assert result.exit_code == 1
 
 
-def test_database_exists_error_uses_active_cli_name(monkeypatch):
-    monkeypatch.setattr(database_cli, "_deployment_by_name", lambda service, name: object())
+def test_database_kinds_share_one_command_set():
+    cli = load_cli(check_config=False)
+    db = cli.common_group.get_command(None, "db")
 
-    with click.Context(click.Command("create"), info_name="beta9"):
-        with pytest.raises(click.ClickException) as exc:
-            database_cli._ensure_database_name_available(None, database_cli.REDIS, "myredis")
-
-    message = str(exc.value)
-    assert "beta9 db redis credentials myredis" in message
-    assert "beta9 db redis status myredis" in message
-    assert "beam redis" not in message
+    verbs = {"create", "credentials", "secrets", "status", "rotate", "delete", "scale"}
+    for kind in ("postgres", "redis", "mysql", "mongo"):
+        assert verbs <= set(db.commands[kind].commands), kind
+    assert "connect" in db.commands["postgres"].commands
+    assert "connect" in db.commands["redis"].commands
 
 
-def test_database_scale_redeploys_when_pool_changes(monkeypatch):
-    scaled = []
-    deployed = []
-
+def test_database_create_sends_gateway_request(monkeypatch):
+    calls = []
     monkeypatch.setattr(
         database_cli,
-        "_scale_database_to",
-        lambda *args, **kwargs: scaled.append((args, kwargs)),
+        "_api",
+        lambda service, method, path="", **kwargs: (
+            calls.append((method, path, kwargs))
+            or {"name": "app-db", "kind": "postgres", "host": "h:443"}
+        ),
     )
+
+    class FakeServiceClient:
+        def __init__(self, _config):
+            self.channel = object()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(extraclick, "ServiceClient", FakeServiceClient)
+    monkeypatch.setattr(extraclick, "get_config_context", lambda _context: SimpleNamespace())
+
+    result = CliRunner().invoke(
+        database_cli.common,
+        [
+            "db",
+            "postgres",
+            "create",
+            "app-db",
+            "--memory",
+            "2Gi",
+            "--cpu",
+            "0.5",
+            "--min-replicas",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    method, path, kwargs = calls[0]
+    assert (method, path) == ("POST", "")
+    assert kwargs["json"] == {
+        "kind": "postgres",
+        "name": "app-db",
+        "username": "",
+        "password": "",
+        "database": "",
+        "pool": "",
+        "always_on": True,
+        "cpu": 500,
+        "memory": 2048,
+    }
+    assert "h:443" in result.output
+
+
+def test_database_scale_with_resources_redeploys_the_stub(monkeypatch):
     monkeypatch.setattr(
         database_cli,
-        "_deploy_database_service",
-        lambda **kwargs: deployed.append(kwargs),
+        "_service_info",
+        lambda service, kind, name: {"stub_id": "stub-1", "deployment_id": "dep-1"},
     )
-    monkeypatch.setattr(database_cli, "_get_secret_value", lambda service, name: f"value-{name}")
+    captured = {}
 
-    database_cli._scale_database(
-        service=None,
-        product=database_cli.REDIS,
-        name="myredis",
-        always_on=True,
-        serverless=False,
-        cpu=None,
-        memory=None,
-        pool="private-pool",
-        format="table",
-    )
+    def fake_redeploy(service, name, stub_id, mutate):
+        config = {"runtime": {"cpu": 1000, "memory": 512}, "autoscaler": {"min_containers": 0}}
+        mutate(config)
+        captured.update(stub_id=stub_id, config=config)
+        return {"deployment_id": "dep-2", "version": 2}
 
-    assert scaled[0][0][3] == 0
-    assert scaled[0][1]["all_deployments"] is True
-    assert deployed[0]["pool"] == "private-pool"
-    assert deployed[0]["min_replicas"] == 1
+    monkeypatch.setattr(database_cli.stubconfig, "redeploy_with_config", fake_redeploy)
+
+    database_cli._scale(None, "redis", "cache", True, False, None, "1Gi", "private", "json")
+
+    assert captured["stub_id"] == "stub-1"
+    assert captured["config"]["runtime"] == {"cpu": 1000, "memory": 1024}
+    assert captured["config"]["pool"] == {"name": "private"}
+    assert captured["config"]["autoscaler"]["min_containers"] == 1
 
 
-def test_database_registry_images_skip_python_runtime(monkeypatch):
-    class FakeImageClient:
-        verify_requests = []
-        build_requests = []
-
-        def __init__(self, channel):
-            pass
-
-        def verify_image_build(self, request):
-            self.verify_requests.append(request)
-            return SimpleNamespace(exists=False, image_id="")
-
-        def build_image(self, request):
-            self.build_requests.append(request)
-            yield SimpleNamespace(
-                done=True,
-                success=True,
-                msg="",
-                image_id="redis-image-id",
-                python_version="",
-            )
-
-    monkeypatch.setattr(database_cli, "ImageServiceStub", FakeImageClient)
-
-    db_service = database_cli._database_service(
-        product=database_cli.REDIS,
-        name="myredis",
-        size=database_cli.REDIS.default_size,
-        pool=None,
-        min_replicas=0,
-        cpu=None,
-        memory=None,
-    )
-
-    assert db_service.image.ignore_python is True
-
-    image_id, _ = database_cli._registry_image_id(
-        SimpleNamespace(channel=object()),
-        db_service.image,
-    )
-
-    assert image_id == "redis-image-id"
-    assert FakeImageClient.verify_requests[0].ignore_python is True
-    assert FakeImageClient.build_requests[0].ignore_python is True
-
-
-def test_database_services_are_serverless_without_pool():
-    db_service = database_cli._database_service(
-        product=database_cli.REDIS,
-        name="myredis",
-        size=database_cli.REDIS.default_size,
-        pool=None,
-        min_replicas=0,
-        cpu=None,
-        memory=None,
-    )
-
-    assert db_service.pool_config is None
+def test_database_password_sources_are_exclusive(monkeypatch):
+    monkeypatch.setenv("DB_PASS", "from-env")
+    assert database_cli._password("", "DB_PASS", False) == "from-env"
+    assert database_cli._password("", "", False) == ""
+    with pytest.raises(click.ClickException):
+        database_cli._password("x", "DB_PASS", False)
+    assert database_cli._memory_mb("2Gi") == 2048
+    assert database_cli._memory_mb("512") == 512
+    assert database_cli._memory_mb(None) == 0

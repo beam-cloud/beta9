@@ -2296,6 +2296,53 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	return &secret, nil
 }
 
+const stackColumns = "id, external_id, workspace_id, name, spec, created_at, updated_at"
+
+func (r *PostgresBackendRepository) ListStacks(ctx context.Context, workspaceId uint) ([]types.Stack, error) {
+	query := `SELECT ` + stackColumns + ` FROM workspace_stack WHERE workspace_id = $1 ORDER BY created_at;`
+
+	stacks := []types.Stack{}
+	if err := r.client.SelectContext(ctx, &stacks, query, workspaceId); err != nil {
+		return nil, err
+	}
+	return stacks, nil
+}
+
+func (r *PostgresBackendRepository) CreateStack(ctx context.Context, workspaceId uint, name string, spec json.RawMessage) (*types.Stack, error) {
+	query := `
+	INSERT INTO workspace_stack (workspace_id, name, spec)
+	VALUES ($1, $2, $3)
+	RETURNING ` + stackColumns + `;
+	`
+
+	var stack types.Stack
+	if err := r.client.GetContext(ctx, &stack, query, workspaceId, name, spec); err != nil {
+		return nil, err
+	}
+	return &stack, nil
+}
+
+func (r *PostgresBackendRepository) UpdateStack(ctx context.Context, workspaceId uint, externalId, name string, spec json.RawMessage) (*types.Stack, error) {
+	query := `
+	UPDATE workspace_stack
+	SET name = $3, spec = $4, updated_at = CURRENT_TIMESTAMP
+	WHERE external_id = $1 AND workspace_id = $2
+	RETURNING ` + stackColumns + `;
+	`
+
+	var stack types.Stack
+	if err := r.client.GetContext(ctx, &stack, query, externalId, workspaceId, name, spec); err != nil {
+		return nil, err
+	}
+	return &stack, nil
+}
+
+func (r *PostgresBackendRepository) DeleteStack(ctx context.Context, workspaceId uint, externalId string) error {
+	query := `DELETE FROM workspace_stack WHERE external_id = $1 AND workspace_id = $2;`
+	_, err := r.client.ExecContext(ctx, query, externalId, workspaceId)
+	return err
+}
+
 func (r *PostgresBackendRepository) CreateScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) (*types.ScheduledJob, error) {
 	payloadJSON, err := json.Marshal(scheduledJob.Payload)
 	if err != nil {

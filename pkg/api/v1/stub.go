@@ -255,7 +255,7 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 		return err
 	}
 
-	newStub, err := g.cloneStub(ctx.Request().Context(), cc.AuthInfo.Workspace, stub)
+	newStub, err := g.cloneStub(ctx.Request().Context(), cc.AuthInfo.Workspace, stub, cc.AuthInfo.Actor)
 	if err != nil {
 		return err
 	}
@@ -467,7 +467,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace
 	return newObject.Id, nil
 }
 
-func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (*types.Stub, error) {
+func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated, actor types.EventActor) (*types.Stub, error) {
 	objectId, err := g.copyObjectContents(ctx, workspace, stub)
 	if err != nil {
 		return nil, HTTPBadRequest("Failed to clone object")
@@ -539,7 +539,7 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		return nil, HTTPInternalServerError("Failed to clone stub")
 	}
 
-	go g.eventRepo.PushCloneStubEvent(workspace.ExternalId, &newStub, &stub.Stub)
+	go g.eventRepo.PushCloneStubEvent(workspace.ExternalId, &newStub, &stub.Stub, actor)
 
 	return &newStub, nil
 }
@@ -635,10 +635,24 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to update stub config")
 	}
 
+	g.reloadInstances(stub)
+
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"message":        fmt.Sprintf("Stub config updated successfully. Updated fields: %v", updatedFields),
 		"updated_fields": updatedFields,
 	})
+}
+
+// reloadInstances asks running instances to re-read the stub config.
+func (g *StubGroup) reloadInstances(stub *types.StubWithRelated) {
+	if g.redisClient == nil {
+		return
+	}
+	common.NewEventBus(g.redisClient).Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   stub.ExternalId,
+		"stub_type": stub.Type,
+		"timestamp": time.Now().Unix(),
+	}})
 }
 
 func (g *StubGroup) ScaleStub(ctx echo.Context) error {
@@ -680,14 +694,7 @@ func (g *StubGroup) ScaleStub(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to update stub config")
 	}
 
-	if g.redisClient != nil {
-		eventBus := common.NewEventBus(g.redisClient)
-		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-			"stub_id":   stub.ExternalId,
-			"stub_type": stub.Type,
-			"timestamp": time.Now().Unix(),
-		}})
-	}
+	g.reloadInstances(stub)
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"ok":         true,

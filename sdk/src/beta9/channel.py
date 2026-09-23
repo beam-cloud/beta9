@@ -1,5 +1,6 @@
 import atexit
 import functools
+import os
 import sys
 import time
 import traceback
@@ -16,7 +17,12 @@ from grpc._interceptor import _Channel as InterceptorChannel
 
 from . import terminal
 from .clients.disk import DiskServiceStub
-from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
+from .clients.gateway import (
+    AuthorizeRequest,
+    AuthorizeResponse,
+    ExportWorkspaceConfigRequest,
+    GatewayServiceStub,
+)
 from .clients.secret import SecretServiceStub
 from .clients.volume import VolumeServiceStub
 from .config import (
@@ -179,19 +185,27 @@ def handle_grpc_error(error: grpc.RpcError):
     details = error.details()
 
     if code == grpc.StatusCode.UNAUTHENTICATED:
-        terminal.error("Unauthorized: Invalid auth token provided.")
+        terminal.error(
+            "Unauthorized: Invalid auth token provided.",
+            code="NOT_AUTHENTICATED",
+            hint=f"Run `{terminal.cli_name()} configure` or pass --context.",
+        )
     elif code == grpc.StatusCode.UNAVAILABLE:
-        terminal.error("Unable to connect to gateway.")
+        terminal.error("Unable to connect to gateway.", code="GATEWAY_UNAVAILABLE")
     elif code == grpc.StatusCode.CANCELLED:
-        terminal.error("Request cancelled.")
+        terminal.error("Request cancelled.", code="CANCELLED")
     elif code == grpc.StatusCode.DEADLINE_EXCEEDED:
-        terminal.error("Request timed out.")
+        terminal.error("Request timed out.", code="TIMEOUT")
     elif code == grpc.StatusCode.RESOURCE_EXHAUSTED:
-        terminal.error(f"Resource limit exceeded: {details}")
+        terminal.error(f"Resource limit exceeded: {details}", code="CAPACITY")
+    elif code == grpc.StatusCode.NOT_FOUND:
+        terminal.error(f"Not found: {details}", code="NOT_FOUND")
+    elif code == grpc.StatusCode.INVALID_ARGUMENT:
+        terminal.error(f"Invalid request: {details}", code="INVALID_CONFIG")
     elif code == grpc.StatusCode.UNKNOWN:
-        terminal.error(f"Error {details}")
+        terminal.error(f"Error {details}", code="ERROR")
     else:
-        terminal.error(f"Unhandled GRPC error: {code}")
+        terminal.error(f"Unhandled GRPC error: {code}", code="ERROR")
 
 
 def with_grpc_error_handling(func: Callable) -> Callable:
@@ -204,6 +218,29 @@ def with_grpc_error_handling(func: Callable) -> Callable:
     return wrapper
 
 
+def caller_metadata() -> List[Tuple[str, str]]:
+    """
+    Attribution headers sent with every request so the gateway can record who
+    acted (a human at the CLI, an agent via the skill/MCP). `BEAM_CALLER`
+    overrides the default `cli/<version>`; `BEAM_AGENT_SESSION` groups the
+    actions of one agent run.
+    """
+    caller = os.getenv("BEAM_CALLER") or f"cli/{_sdk_version()}"
+    metadata = [("x-beam-caller", caller)]
+    if session := os.getenv("BEAM_AGENT_SESSION"):
+        metadata.append(("x-beam-agent-session", session))
+    return metadata
+
+
+def _sdk_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("beta9")
+    except Exception:
+        return "unknown"
+
+
 def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     if not context:
         _, context = prompt_for_config_context()
@@ -211,6 +248,7 @@ def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     channel = Channel(
         addr=f"{context.gateway_host}:{context.gateway_port}",
         token=context.token,
+        metadata=caller_metadata(),
     )
     channel.config = context
     return channel
@@ -317,6 +355,7 @@ class ServiceClient:
         self._volume: Optional[VolumeServiceStub] = None
         self._disk: Optional[DiskServiceStub] = None
         self._secret: Optional[SecretServiceStub] = None
+        self._http: Optional["GatewayHTTP"] = None
 
     def __enter__(self) -> "ServiceClient":
         return self
@@ -341,6 +380,22 @@ class ServiceClient:
         if not value or not isinstance(value, Channel):
             raise ValueError("Invalid channel")
         self._channel = value
+
+    @property
+    def http(self) -> "GatewayHTTP":
+        """REST access to the same gateway, resolved once per client."""
+        if not self._http:
+            config = self.gateway.export_workspace_config(ExportWorkspaceConfigRequest())
+            scheme = "https" if config.gateway_http_tls else "http"
+            base_url = self._config.api_url if self._config and self._config.api_url else None
+            self._http = GatewayHTTP(
+                base_url=(
+                    base_url or f"{scheme}://{config.gateway_http_host}:{config.gateway_http_port}"
+                ).rstrip("/"),
+                workspace_id=config.workspace_id,
+                token=(self._config.token if self._config else "") or self.channel.config.token,
+            )
+        return self._http
 
     @property
     def gateway(self) -> GatewayServiceStub:
@@ -369,3 +424,44 @@ class ServiceClient:
     def close(self) -> None:
         if self._channel:
             self._channel.close()
+
+
+class GatewayHTTP:
+    """
+    The gateway's REST surface (`/api/v1/...`) for one workspace. `{ws}` in a
+    path is replaced with the workspace id; the caller headers are attached so
+    actions are attributed like gRPC calls.
+    """
+
+    def __init__(self, base_url: str, workspace_id: str, token: str):
+        self.base_url = base_url
+        self.workspace_id = workspace_id
+        self.headers = {"Authorization": f"Bearer {token}", **dict(caller_metadata())}
+
+    def url(self, path: str) -> str:
+        return self.base_url + path.replace("{ws}", self.workspace_id)
+
+    def request(self, method: str, path: str, timeout: float = 60, **kwargs):
+        import requests
+
+        return requests.request(
+            method, self.url(path), headers=self.headers, timeout=timeout, **kwargs
+        )
+
+    def json(self, method: str, path: str, **kwargs):
+        """Request and decode JSON, raising a readable error on 4xx/5xx."""
+        response = self.request(method, path, **kwargs)
+        if response.status_code >= 400:
+            try:
+                message = response.json().get("message") or response.text
+            except ValueError:
+                message = response.text
+            raise GatewayHTTPError(response.status_code, message or f"HTTP {response.status_code}")
+        return response.json() if response.content else None
+
+
+class GatewayHTTPError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message

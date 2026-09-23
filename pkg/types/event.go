@@ -36,6 +36,8 @@ var (
 	EventStubClone          = "stub.clone"
 
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
+	// One record per endpoint/ASGI invocation: status, latency, task.
+	EventEndpointRequest = "endpoint.request"
 
 	EventComputePool      = "compute.pool"
 	EventComputeJoinToken = "compute.join_token"
@@ -324,6 +326,24 @@ type EventStubSchema struct {
 	WorkspaceID  string   `json:"workspace_id"`
 	StubConfig   string   `json:"stub_config"`
 	ParentStubID string   `json:"parent_stub_id"`
+	EventActor
+}
+
+// WorkspaceWebhook receives CloudEvents JSON signed with HMAC-SHA256(Secret) in `X-Beam-Signature`.
+type WorkspaceWebhook struct {
+	ExternalId  string    `json:"id"`
+	URL         string    `json:"url"`
+	EventTypes  []string  `json:"event_types"`
+	Secret      string    `json:"secret,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// EventActor is the request attribution (X-Beam-Caller / X-Beam-Agent-Session) on control-plane events.
+type EventActor struct {
+	Caller       string `json:"caller,omitempty"`
+	AgentSession string `json:"agent_session,omitempty"`
 }
 
 var EventTaskSchemaVersion = "1.0"
@@ -358,6 +378,20 @@ type EventStubStateSchema struct {
 }
 
 var EventGatewayEndpointSchemaVersion = "1.0"
+
+var EventEndpointRequestSchemaVersion = "1.0"
+
+type EventEndpointRequestSchema struct {
+	StubID      string    `json:"stub_id"`
+	WorkspaceID string    `json:"workspace_id"`
+	AppID       string    `json:"app_id,omitempty"`
+	TaskID      string    `json:"task_id,omitempty"`
+	Method      string    `json:"method"`
+	Path        string    `json:"path"`
+	StatusCode  int       `json:"status_code"`
+	DurationMs  int64     `json:"duration_ms"`
+	Timestamp   time.Time `json:"timestamp"`
+}
 
 type EventGatewayEndpointSchema struct {
 	Method       string `json:"method"`

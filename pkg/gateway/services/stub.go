@@ -122,6 +122,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	servingConfig := servingConfigFromProto(in.Serving)
 
+	// Secret/db references become bindings; URLs and integers are inlined.
+	expandedEnv, referenceBindings, err := gws.expandReferences(ctx, authInfo, in.AppName, in.Env)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+	in.Env = expandedEnv
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
@@ -267,8 +277,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
-	// Get secrets
+	// Requested secrets plus bindings from env references.
+	requestedSecrets := make([]secretBinding, 0, len(in.Secrets)+len(referenceBindings))
 	for _, requestedSecret := range in.Secrets {
+		requestedSecrets = append(requestedSecrets, secretBinding{Name: requestedSecret.Name})
+	}
+	requestedSecrets = append(requestedSecrets, referenceBindings...)
+	for _, requestedSecret := range requestedSecrets {
 		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, requestedSecret.Name)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -287,6 +302,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		stubConfig.Secrets = append(stubConfig.Secrets, types.Secret{
 			Name:      secret.Name,
 			Value:     secret.Value,
+			EnvName:   requestedSecret.EnvName,
 			CreatedAt: secret.CreatedAt,
 			UpdatedAt: secret.UpdatedAt,
 		})
@@ -1037,7 +1053,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), common.InvokeUrlTypePath, stub, deployment)
 
 	if gws.eventRepo != nil {
-		go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+		go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub, authInfo.Actor)
 	}
 
 	if rolloutReplicas(&config) > 0 {

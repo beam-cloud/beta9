@@ -172,10 +172,32 @@ def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
         if not result.ok or not result.deployments:
             terminal.error(result.err_msg or f"Deployment {deployment_id} was not found.")
         deployment = result.deployments[0]
-        if not deployment.active or deployment.stub_type not in (
-            "endpoint/deployment",
-            "asgi/deployment",
-        ):
+        if deployment.stub_type not in ("endpoint/deployment", "asgi/deployment"):
+            # No health endpoint; ready once the gateway reports active.
+            while not deployment.active and time.monotonic() < deadline:
+                time.sleep(1)
+                result = service.gateway.list_deployments(
+                    ListDeploymentsRequest(filters={"id": StringList([deployment_id])}, limit=1)
+                )
+                if result.ok and result.deployments:
+                    deployment = result.deployments[0]
+            if not deployment.active:
+                terminal.error(
+                    f"Deployment {deployment_id} did not become active within {timeout}s",
+                    code="TIMEOUT",
+                )
+            terminal.print_json(
+                {
+                    "deployment_id": deployment_id,
+                    "stub_id": deployment.stub_id,
+                    "stub_type": deployment.stub_type,
+                    "version": deployment.version,
+                    "status": "active",
+                    "ready_seconds": time.monotonic() - start,
+                }
+            )
+            return
+        if not deployment.active:
             raise click.UsageError(
                 "Readiness checks require an active endpoint or ASGI deployment."
             )
@@ -274,7 +296,6 @@ def _service_checkpoint_options(kwargs: Dict) -> Dict:
     return options
 
 
-
 def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
     service_image = _service_image_option(kwargs)
     ports = resolve_service_ports(
@@ -371,7 +392,7 @@ def create_deployment(
     rollout: str,
     **kwargs,
 ):
-    if json_output:
+    if json_output or terminal.json_output():
         format = "json"
     _merge_port_options(kwargs)
     entrypoint = kwargs["entrypoint"]
@@ -499,7 +520,7 @@ def list_deployments(
     if not res.ok:
         terminal.error(res.err_msg)
 
-    if format == "json":
+    if format == "json" or terminal.json_output():
         deployments = [d.to_dict(casing=Casing.SNAKE) for d in res.deployments]  # type:ignore
         terminal.print_json(deployments)
         return
@@ -624,15 +645,22 @@ def start_deployment(service: ServiceClient, deployment_id: str):
     type=click.STRING,
     required=True,
 )
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @extraclick.pass_service_client
-def delete_deployment(service: ServiceClient, deployment_id: str):
+def delete_deployment(service: ServiceClient, deployment_id: str, yes: bool):
+    if not yes and not terminal.confirm(f"Delete deployment {deployment_id}?", default=False):
+        terminal.error("Cancelled.", code="CANCELLED")
+
     res: DeleteDeploymentResponse
     res = service.gateway.delete_deployment(DeleteDeploymentRequest(deployment_id))
 
     if not res.ok:
-        terminal.error(res.err_msg)
+        terminal.error(res.err_msg, code="ERROR")
 
-    terminal.print(f"Deleted {deployment_id}")
+    if terminal.json_output():
+        terminal.print_json({"deleted": deployment_id})
+    else:
+        terminal.print(f"Deleted {deployment_id}")
 
 
 @management.command(

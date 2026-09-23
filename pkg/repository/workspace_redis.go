@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -54,6 +55,36 @@ func (wr *WorkspaceRedisRepository) SetConcurrencyLimitByWorkspaceId(workspaceId
 	}
 
 	return nil
+}
+
+// Webhooks live in one hash per workspace: field = webhook id, value = JSON.
+func (wr *WorkspaceRedisRepository) ListWebhooks(ctx context.Context, workspaceId string) ([]types.WorkspaceWebhook, error) {
+	res, err := wr.rdb.HGetAll(ctx, common.RedisKeys.WorkspaceWebhooks(workspaceId)).Result()
+	if err != nil {
+		return nil, err
+	}
+	webhooks := make([]types.WorkspaceWebhook, 0, len(res))
+	for _, raw := range res {
+		var webhook types.WorkspaceWebhook
+		if err := json.Unmarshal([]byte(raw), &webhook); err != nil {
+			continue
+		}
+		webhooks = append(webhooks, webhook)
+	}
+	sort.Slice(webhooks, func(i, j int) bool { return webhooks[i].CreatedAt.Before(webhooks[j].CreatedAt) })
+	return webhooks, nil
+}
+
+func (wr *WorkspaceRedisRepository) SetWebhook(ctx context.Context, workspaceId string, webhook types.WorkspaceWebhook) error {
+	raw, err := json.Marshal(webhook)
+	if err != nil {
+		return err
+	}
+	return wr.rdb.HSet(ctx, common.RedisKeys.WorkspaceWebhooks(workspaceId), webhook.ExternalId, raw).Err()
+}
+
+func (wr *WorkspaceRedisRepository) DeleteWebhook(ctx context.Context, workspaceId, webhookId string) error {
+	return wr.rdb.HDel(ctx, common.RedisKeys.WorkspaceWebhooks(workspaceId), webhookId).Err()
 }
 
 type AuthInfo struct {

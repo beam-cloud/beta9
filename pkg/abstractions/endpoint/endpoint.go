@@ -165,6 +165,28 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
+	// Record status, latency and task after the response; health probes excluded.
+	if ctx.Param("subPath") != "health" && es.eventRepo != nil {
+		start := time.Now()
+		defer func() {
+			appId := ""
+			if instance.Stub != nil && instance.Stub.App != nil {
+				appId = instance.Stub.App.ExternalId
+			}
+			go es.eventRepo.PushEndpointRequestEvent(types.EventEndpointRequestSchema{
+				StubID:      stubId,
+				WorkspaceID: instance.Workspace.ExternalId,
+				AppID:       appId,
+				TaskID:      ctx.Response().Header().Get("X-Task-Id"),
+				Method:      ctx.Request().Method,
+				Path:        ctx.Request().URL.Path,
+				StatusCode:  ctx.Response().Status,
+				DurationMs:  time.Since(start).Milliseconds(),
+				Timestamp:   start,
+			})
+		}()
+	}
+
 	// Fail fast instead of queueing until timeout when the stub's GPU has no
 	// supporting pool; requests start succeeding as soon as capacity joins.
 	if reason := instance.UnschedulableReason(); reason != "" {

@@ -33,6 +33,7 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 	g.POST("", group.CreateWorkspace)
 	g.GET("/current", auth.WithAuth(group.CurrentWorkspace))
 	g.GET("/:workspaceId/export", auth.WithStrictWorkspaceAuth(group.ExportWorkspaceConfig))
+	g.GET("/:workspaceId/limits", auth.WithWorkspaceAuth(group.Limits))
 	g.POST("/:workspaceId/set-external-storage", auth.WithStrictWorkspaceAuth(group.SetExternalWorkspaceStorage))
 	g.POST("/:workspaceId/create-storage", auth.WithStrictWorkspaceAuth(group.CreateWorkspaceStorage))
 
@@ -40,6 +41,48 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 }
 
 type CreateWorkspaceRequest struct{}
+
+// WorkspaceLimits: per-stub ceilings, concurrency limit and GPU types a client may request.
+type WorkspaceLimits struct {
+	Cpu               uint64   `json:"cpu"`
+	Memory            uint64   `json:"memory"`
+	MaxReplicas       uint64   `json:"max_replicas"`
+	MaxGpuCount       uint32   `json:"max_gpu_count"`
+	GPULimit          uint32   `json:"gpu_limit"`
+	CPUMillicoreLimit uint32   `json:"cpu_millicore_limit"`
+	GPUTypes          []string `json:"gpu_types"`
+}
+
+func (g *WorkspaceGroup) Limits(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	limits := WorkspaceLimits{
+		Cpu:         g.config.GatewayService.StubLimits.Cpu,
+		Memory:      g.config.GatewayService.StubLimits.Memory,
+		MaxReplicas: g.config.GatewayService.StubLimits.MaxReplicas,
+		MaxGpuCount: g.config.GatewayService.StubLimits.MaxGpuCount,
+	}
+
+	if cc.AuthInfo.Workspace != nil {
+		if cl, err := g.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId); err == nil && cl != nil {
+			limits.GPULimit = cl.GPULimit
+			limits.CPUMillicoreLimit = cl.CPUMillicoreLimit
+		}
+	}
+
+	blacklisted := make(map[string]struct{}, len(g.config.GatewayService.StubLimits.GPUBlackList.GPUTypes))
+	for _, gpu := range g.config.GatewayService.StubLimits.GPUBlackList.GPUTypes {
+		blacklisted[gpu] = struct{}{}
+	}
+	for _, gpu := range types.AllGPUTypes() {
+		if _, blocked := blacklisted[string(gpu)]; blocked {
+			continue
+		}
+		limits.GPUTypes = append(limits.GPUTypes, string(gpu))
+	}
+
+	return ctx.JSON(http.StatusOK, limits)
+}
 
 func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
