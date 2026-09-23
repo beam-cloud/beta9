@@ -120,7 +120,14 @@ def load_module_spec(specfile: str, command: str):
             f"Invalid handler function specified. Expected format: beam {command} [file.py]:[function]"
         )
 
-    module = importlib.import_module(module_name)
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as exc:
+        terminal.error(
+            f"Failed to import '{module_path}': {type(exc).__name__}: {exc}",
+            hint="The app's imports must be installed locally; the image only applies inside the container.",
+            code="IMPORT_ERROR",
+        )
 
     module_spec = getattr(module, obj_name, None)
     if module_spec is None:

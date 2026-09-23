@@ -1315,6 +1315,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
             w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.id AS "workspace.id",
             s.external_id AS "stub.external_id",
             s.name AS "stub.name",
+            s.type AS "stub.type",
             s.config AS "stub.config"
         FROM deployment d
 		JOIN workspace w ON d.workspace_id = w.id
@@ -1341,7 +1342,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	query := `
         SELECT d.*,
                w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.id AS "workspace.id",
-               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
+               s.external_id AS "stub.external_id", s.name AS "stub.name", s.type AS "stub.type", s.config AS "stub.config"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
@@ -1550,7 +1551,7 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.id, d.external_id, d.name, d.active, d.subdomain, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at, d.deleted_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"", "w.created_at AS \"workspace.created_at\"", "w.updated_at AS \"workspace.updated_at\"",
-		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"", "s.type AS \"stub.type\"", "s.created_at AS \"stub.created_at\"", "s.updated_at AS \"stub.updated_at\"",
+		"s.id AS \"stub.id\"", "s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"", "s.type AS \"stub.type\"", "s.created_at AS \"stub.created_at\"", "s.updated_at AS \"stub.updated_at\"",
 		"a.external_id AS \"app.external_id\"", "a.name AS \"app.name\"", "a.created_at AS \"app.created_at\"", "a.updated_at AS \"app.updated_at\"",
 	).From("deployment d").
 		Join("workspace w ON d.workspace_id = w.id").

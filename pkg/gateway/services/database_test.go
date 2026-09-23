@@ -8,9 +8,9 @@ func TestDatabaseConnectionString(t *testing.T) {
 	}{
 		{"postgres", "u", "postgresql://u:p%40ss@h:443/db?sslmode=require"},
 		{"mysql", "u", "mysql://u:p%40ss@h:443/db?ssl-mode=REQUIRED"},
-		{"mongo", "u", "mongodb://u:p%40ss@h:443/db?tls=true&authSource=admin"},
-		{"redis", "default", "rediss://:p%40ss@h:443/0"},
-		{"redis", "bob", "rediss://bob:p%40ss@h:443/0"},
+		{"mongo", "u", "mongodb://u:p%40ss@h:443/db?tls=true&tlsAllowInvalidCertificates=true&authSource=admin"},
+		{"redis", "default", "rediss://:p%40ss@h:443/0?ssl_cert_reqs=none"},
+		{"redis", "bob", "rediss://bob:p%40ss@h:443/0?ssl_cert_reqs=none"},
 	}
 	for _, tt := range tests {
 		if got := databaseConnectionString(tt.kind, tt.user, "p@ss", "h:443", "db"); got != tt.want {

@@ -35,6 +35,29 @@ type secretBinding struct {
 	EnvName string
 }
 
+func (b secretBinding) envName() string {
+	if b.EnvName != "" {
+		return b.EnvName
+	}
+	return b.Name
+}
+
+// uniqueByEnvName keeps the last binding for each container variable, so a
+// re-pointed reference replaces the old binding instead of stacking on it.
+func uniqueByEnvName(bindings []secretBinding) []secretBinding {
+	last := make(map[string]int, len(bindings))
+	for i, b := range bindings {
+		last[b.envName()] = i
+	}
+	out := make([]secretBinding, 0, len(last))
+	for i, b := range bindings {
+		if last[b.envName()] == i {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 // expandReferences resolves `${{...}}` tokens in env, returning the rewritten
 // env (secret-bearing entries removed) and the secret bindings to attach.
 func (gws *GatewayService) expandReferences(ctx context.Context, authInfo *auth.AuthInfo, appName string, env []string) ([]string, []secretBinding, error) {
@@ -67,7 +90,7 @@ func (gws *GatewayService) expandReferences(ctx context.Context, authInfo *auth.
 		out = append(out, key+"="+rewritten)
 	}
 
-	return out, bindings, nil
+	return out, uniqueByEnvName(bindings), nil
 }
 
 // referenceScope resolves one stub's references; database lookups are memoized.
@@ -285,7 +308,7 @@ func generatedSecretName(appName, key string) string {
 	return app + "_" + sanitizeSecretName(key)
 }
 
-// deploymentURLByName is the public URL of the newest active deployment named name.
+// deploymentURLByName is the stable (latest) URL of deployment name; it survives redeploys of the target.
 func (gws *GatewayService) deploymentURLByName(ctx context.Context, workspace *types.Workspace, name string) (string, error) {
 	deployments, err := gws.deploymentsByName(ctx, workspace, name)
 	if err != nil {
@@ -314,7 +337,7 @@ func (gws *GatewayService) deploymentURLByName(ctx context.Context, workspace *t
 		}
 		return common.BuildPodDeploymentURL(externalURL, urlType, &d.Deployment, cfg), nil
 	}
-	return common.BuildDeploymentURL(externalURL, urlType, &types.StubWithRelated{Stub: d.Stub}, &d.Deployment), nil
+	return common.BuildDeploymentLatestURL(externalURL, urlType, &d.Stub, &d.Deployment), nil
 }
 
 const defaultSecretAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

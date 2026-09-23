@@ -40,11 +40,14 @@ def db():
 # --- gateway ------------------------------------------------------------------
 
 
+_ERROR_CODES = {401: "NOT_AUTHENTICATED", 404: "NOT_FOUND", 409: "ALREADY_EXISTS"}
+
+
 def _api(service: ServiceClient, method: str, path: str = "", **kwargs) -> Any:
     try:
         return service.http.json(method, f"/api/v1/database/{{ws}}{path}", timeout=660, **kwargs)
     except GatewayHTTPError as exc:
-        raise click.ClickException(str(exc))
+        terminal.error(exc.message, code=_ERROR_CODES.get(exc.status, "ERROR"))
 
 
 def _services(service: ServiceClient) -> List[Dict[str, Any]]:
@@ -256,9 +259,11 @@ def _scale(
     pool: Optional[str],
     format: str,
 ) -> None:
-    if always_on == serverless:
-        raise click.ClickException("Specify exactly one of --always-on or --serverless.")
-    containers = 1 if always_on else 0
+    if always_on and serverless:
+        raise click.ClickException("Specify --always-on or --serverless, not both.")
+    containers = 1 if always_on else 0 if serverless else None
+    if containers is None and cpu is None and memory is None and pool is None:
+        raise click.ClickException("Nothing to change.")
     info = _service_info(service, kind, name)
 
     if cpu is not None or memory is not None or pool is not None:
@@ -271,7 +276,8 @@ def _scale(
                 runtime["memory"] = _memory_mb(memory)
             if pool is not None:
                 config["pool"] = {"name": pool} if pool else None
-            config.setdefault("autoscaler", {})["min_containers"] = containers
+            if containers is not None:
+                config.setdefault("autoscaler", {})["min_containers"] = containers
 
         result = stubconfig.redeploy_with_config(service, name, info["stub_id"], mutate)
         _print_result(format, {"name": name, "kind": kind, **result})

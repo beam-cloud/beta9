@@ -217,3 +217,64 @@ def test_database_password_sources_are_exclusive(monkeypatch):
     assert database_cli._memory_mb("2Gi") == 2048
     assert database_cli._memory_mb("512") == 512
     assert database_cli._memory_mb(None) == 0
+
+
+def test_stub_request_round_trips_bindings_and_entrypoint():
+    from beta9.cli.stubconfig import stub_request_from_config
+
+    stub = {
+        "type": "pod/deployment",
+        "name": "pod",
+        "object": {"external_id": "obj"},
+        "app": {"name": "api"},
+    }
+    config = {
+        "entry_point": ["sh", "-lc", "exec app"],
+        "env": ["PORT=8080"],
+        "secrets": [
+            {"name": "BETA9_POSTGRES_DB_URL", "env_name": "DATABASE_URL"},
+            {"name": "HF_TOKEN"},
+        ],
+    }
+
+    request = stub_request_from_config(stub, config)
+
+    assert request["entrypoint"] == ["sh", "-lc", "exec app"]
+    assert request["env"] == ["PORT=8080", "DATABASE_URL=${{secret.BETA9_POSTGRES_DB_URL}}"]
+    assert request["secrets"] == [{"name": "HF_TOKEN"}]
+
+
+class TestMCPTools:
+    def test_tool_names_unique_and_schemas_valid(self):
+        from beta9.cli.mcp import TOOLS
+
+        names = [t.name for t in TOOLS]
+        assert len(names) == len(set(names))
+        for tool in TOOLS:
+            for required in tool.schema.get("required", []):
+                assert required in tool.schema["properties"], f"{tool.name}: {required}"
+            assert tool.confirm is None or "confirm" in tool.schema["properties"], tool.name
+
+    def test_run_pod_builds_cli_argv(self):
+        from beta9.cli.mcp import TOOLS_BY_NAME
+
+        argv = TOOLS_BY_NAME["run_pod"].build(
+            {"directory": ".", "command": "sh -c 'echo ok'", "image": "python:3.12", "cpu": 0.5}
+        )
+        assert argv == [
+            "run",
+            "--detach",
+            "--json",
+            "--command",
+            "sh -c 'echo ok'",
+            "--image",
+            "python:3.12",
+            "--cpu",
+            "0.5",
+        ]
+
+    def test_set_env_rejects_bad_references(self):
+        from beta9.cli.mcp import set_env_tool
+
+        result = set_env_tool({"name": "api", "env": {"URL": "${{bogus.X}}"}}, None)
+        assert result["code"] == "INVALID_REFERENCE"

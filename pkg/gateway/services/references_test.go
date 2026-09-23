@@ -117,6 +117,20 @@ func TestExpandReferences(t *testing.T) {
 	}
 }
 
+func TestExpandReferencesLastBindingPerVariableWins(t *testing.T) {
+	repo := newReferenceBackendRepo()
+	repo.secrets["OLD_URL"] = "x"
+	gws := &GatewayService{backendRepo: repo}
+	ws := &types.Workspace{Id: 1}
+
+	_, bindings, err := gws.expandReferences(context.Background(), authFor(ws), "app", []string{
+		"DATABASE_URL=${{secret.OLD_URL}}",
+		"DATABASE_URL=${{db.app-db.DATABASE_URL}}",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []secretBinding{{Name: "BETA9_POSTGRES_APP_DB_URL", EnvName: "DATABASE_URL"}}, bindings)
+}
+
 func TestExpandReferencesResolvesEachDatabaseOnce(t *testing.T) {
 	repo := newReferenceBackendRepo()
 	gws := &GatewayService{backendRepo: repo}

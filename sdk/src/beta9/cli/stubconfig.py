@@ -14,6 +14,12 @@ def stub_request_from_config(stub: Dict[str, Any], config: Dict[str, Any]) -> Di
     """Same code object; every other field from config."""
     runtime = config.get("runtime") or {}
     gpus = runtime.get("gpus") or ([runtime["gpu"]] if runtime.get("gpu") else [])
+    secrets = config.get("secrets") or []
+    # A secret bound under another name was a `${{secret.X}}` reference before the
+    # gateway expanded it; send it back as one so the binding survives.
+    env = list(config.get("env") or []) + [
+        f"{s['env_name']}=${{{{secret.{s['name']}}}}}" for s in secrets if s.get("env_name")
+    ]
     return {
         "object_id": (stub.get("object") or {}).get("external_id", ""),
         "image_id": runtime.get("image_id", ""),
@@ -34,7 +40,7 @@ def stub_request_from_config(stub: Dict[str, Any], config: Dict[str, Any]) -> Di
         "concurrent_requests": config.get("concurrent_requests", 1),
         "max_pending_tasks": config.get("max_pending_tasks", 100),
         "volumes": config.get("volumes") or [],
-        "secrets": [{"name": s["name"]} for s in config.get("secrets") or []],
+        "secrets": [{"name": s["name"]} for s in secrets if not s.get("env_name")],
         "authorized": config.get("authorized", True),
         "autoscaler": config.get("autoscaler"),
         "task_policy": config.get("task_policy"),
@@ -42,9 +48,12 @@ def stub_request_from_config(stub: Dict[str, Any], config: Dict[str, Any]) -> Di
         if isinstance(config.get("extra"), str)
         else json.dumps(config.get("extra") or {}),
         "checkpoint_enabled": config.get("checkpoint_enabled", False),
-        "entrypoint": config.get("entrypoint") or [],
+        "checkpoint_trigger": config.get("checkpoint_trigger"),
+        "entrypoint": config.get("entry_point") or [],
         "ports": config.get("ports") or [],
-        "env": config.get("env") or [],
+        "env": env,
+        "inputs": config.get("inputs"),
+        "outputs": config.get("outputs"),
         "app_name": (stub.get("app") or {}).get("name", ""),
         "tcp": config.get("tcp", False),
         "block_network": config.get("block_network", False),
@@ -55,6 +64,9 @@ def stub_request_from_config(stub: Dict[str, Any], config: Dict[str, Any]) -> Di
         "serving": config.get("serving"),
         "disks": config.get("disks") or [],
         "pool": config.get("pool"),
+        "managed_endpoint": json.dumps((config.get("managed_endpoint") or {}).get("endpoint"))
+        if (config.get("managed_endpoint") or {}).get("endpoint")
+        else "",
         "force_create": True,
     }
 

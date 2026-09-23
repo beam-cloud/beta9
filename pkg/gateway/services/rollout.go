@@ -43,6 +43,11 @@ func (gws *GatewayService) planDeploymentRollout(in deploymentRolloutInput) (dep
 	if !deploymentRolloutTarget(in) {
 		return deploymentRolloutPlan{}, nil
 	}
+	// A writable durable disk has one writer. Two active versions of the same
+	// deployment would both mount it, so the previous version stops first.
+	if writableDurableDisks(in.config) {
+		return deploymentRolloutPlan{action: rolloutActionReplace, stopLatest: true}, nil
+	}
 	if mode == rolloutModeAuto {
 		return deploymentRolloutPlan{}, nil
 	}
@@ -147,6 +152,15 @@ func latestAlwaysOnDeployment(deployment *types.DeploymentWithRelated) bool {
 
 func alwaysOnDeploymentConfig(config *types.StubConfigV1) bool {
 	return rolloutReplicas(config) > 0
+}
+
+func writableDurableDisks(config *types.StubConfigV1) bool {
+	for _, disk := range config.Disks {
+		if disk != nil && !disk.ReadOnly {
+			return true
+		}
+	}
+	return false
 }
 
 func rolloutReplicas(config *types.StubConfigV1) uint {

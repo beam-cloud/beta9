@@ -8,7 +8,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
@@ -283,7 +282,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		requestedSecrets = append(requestedSecrets, secretBinding{Name: requestedSecret.Name})
 	}
 	requestedSecrets = append(requestedSecrets, referenceBindings...)
-	for _, requestedSecret := range requestedSecrets {
+	for _, requestedSecret := range uniqueByEnvName(requestedSecrets) {
 		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, requestedSecret.Name)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -1057,13 +1056,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}
 
 	if rolloutReplicas(&config) > 0 {
-		// Publish reload instance event
-		eventBus := common.NewEventBus(gws.redisClient)
-		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-			"stub_id":   stub.ExternalId,
-			"stub_type": stub.Type,
-			"timestamp": time.Now().Unix(),
-		}})
+		gws.reloadInstances(stub.ExternalId, string(stub.Type))
 	}
 
 	return &pb.DeployStubResponse{

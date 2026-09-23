@@ -198,18 +198,27 @@ def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
             )
             return
         if not deployment.active:
-            raise click.UsageError(
-                "Readiness checks require an active endpoint or ASGI deployment."
-            )
+            terminal.error(f"Deployment {deployment_id} is not active", code="INACTIVE")
         url = service.gateway.get_url(
             GetUrlRequest(deployment_id=deployment_id, stub_id=deployment.stub_id, url_type="path")
         )
         if not url.ok:
             terminal.error(url.err_msg)
     last_error = "No healthy response"
+    next_active_check = time.monotonic() + 2
     with requests.Session() as session:
         session.headers["Authorization"] = f"Bearer {service._config.token}"
         while (remaining := deadline - time.monotonic()) > 0:
+            if time.monotonic() >= next_active_check:
+                next_active_check = time.monotonic() + 2
+                result = service.gateway.list_deployments(
+                    ListDeploymentsRequest(filters={"id": StringList([deployment_id])}, limit=1)
+                )
+                if result.ok and result.deployments and not result.deployments[0].active:
+                    terminal.error(
+                        f"Deployment {deployment_id} was stopped or superseded before it became ready",
+                        code="INACTIVE",
+                    )
             try:
                 response = session.get(
                     url.url.rstrip("/") + "/health",

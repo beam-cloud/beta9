@@ -16,6 +16,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"k8s.io/utils/ptr"
 )
 
 // A managed database service is a pod deployment of the upstream image on a
@@ -95,14 +96,18 @@ var databaseProducts = map[string]databaseProduct{
 
 // Entrypoints read credentials from the bound secrets and sync the role
 // password on start, so a rotation is a restart. `$USER_SECRET` and friends
-// are replaced with the secret names.
+// are replaced with the secret names. Postgres treats SIGTERM as a smart
+// shutdown that waits for clients, so the worker's stop is relayed as SIGINT
+// (fast shutdown) to keep stops inside the grace period.
 const (
 	postgresEntrypoint = `export PATH=/usr/lib/postgresql/16/bin:$PATH POSTGRES_USER="${USER_SECRET}" POSTGRES_PASSWORD="${PASSWORD_SECRET}" POSTGRES_DB="${DATABASE_SECRET}" PGDATA=/var/lib/postgresql/data/pgdata;
 if [ -s "$PGDATA/PG_VERSION" ]; then
   ESCAPED=$(printf %s "$POSTGRES_PASSWORD" | sed "s/'/''/g");
   printf 'ALTER USER "%s" PASSWORD '"'"'%s'"'"';\n' "$POSTGRES_USER" "$ESCAPED" | gosu postgres postgres --single -D "$PGDATA" postgres >/dev/null 2>&1 || true;
 fi;
-exec docker-entrypoint.sh postgres -c wal_compression=on`
+docker-entrypoint.sh postgres -c wal_compression=on & PG=$!;
+trap 'kill -INT "$PG"' TERM INT;
+wait "$PG"; wait "$PG"`
 
 	redisEntrypoint = `if [ "${USER_SECRET}" = "default" ]; then
   printf 'appendonly yes\nappendfsync always\ndir /data\nuser default on >%s ~* &* +@all\n' "${PASSWORD_SECRET}" > /tmp/redis.conf;
@@ -333,13 +338,27 @@ func (gws *GatewayService) RotateDatabaseCredentials(ctx context.Context, authIn
 		return nil, err
 	}
 
-	// The stub config caches secret values; refresh before recycling.
-	if err := gws.refreshStubSecrets(ctx, authInfo.Workspace, &deployment.Stub); err != nil {
+	// Stub configs and running instances cache secret values. Recycle the
+	// database and every active deployment bound to its secrets so nothing
+	// keeps serving with the old password.
+	if err := gws.recycleWithSecrets(ctx, authInfo.Workspace, deployment, true); err != nil {
 		return nil, err
 	}
-	if containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId); err == nil {
-		for _, c := range containers {
-			_ = gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: c.ContainerId, Force: true})
+	dependents, err := gws.backendRepo.ListDeploymentsWithRelated(ctx, types.DeploymentFilter{
+		WorkspaceID: authInfo.Workspace.Id,
+		Active:      ptr.To(true),
+		BaseFilter:  types.BaseFilter{Limit: 1000},
+	})
+	if err != nil {
+		return nil, err
+	}
+	bound := `"` + databaseSecretPrefix(product.Kind, name) + `_`
+	for i := range dependents {
+		d := &dependents[i]
+		if d.Stub.ExternalId != deployment.Stub.ExternalId && strings.Contains(d.Stub.Config, bound) {
+			if err := gws.recycleWithSecrets(ctx, authInfo.Workspace, d, false); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -478,6 +497,18 @@ func (gws *GatewayService) secretValue(ctx context.Context, workspace *types.Wor
 	return value, nil
 }
 
+// recycleWithSecrets re-reads a deployment's bound secrets into its stub
+// config, reloads the instance, and stops its containers so replacements
+// start with the new values. Databases stop hard; their entrypoints apply
+// the new password on the way up. Apps drain.
+func (gws *GatewayService) recycleWithSecrets(ctx context.Context, workspace *types.Workspace, d *types.DeploymentWithRelated, force bool) error {
+	if err := gws.refreshStubSecrets(ctx, workspace, &d.Stub); err != nil {
+		return err
+	}
+	gws.reloadInstances(d.Stub.ExternalId, d.StubType)
+	return gws.stopActiveDeploymentContainers(*d, force)
+}
+
 // refreshStubSecrets re-reads the bound secrets into the stub config.
 func (gws *GatewayService) refreshStubSecrets(ctx context.Context, workspace *types.Workspace, stub *types.Stub) error {
 	cfg, err := stub.UnmarshalConfig()
@@ -580,6 +611,9 @@ func tcpHostFromURL(raw string) string {
 	return host
 }
 
+// databaseConnectionString requires TLS to the TCP gateway but, like Postgres's
+// sslmode=require, does not pin the certificate: clusters without a CA-signed
+// cert (local, air-gapped) must still connect.
 func databaseConnectionString(kind, username, password, host, database string) string {
 	user, pass, db := url.QueryEscape(username), url.QueryEscape(password), url.QueryEscape(database)
 	switch kind {
@@ -588,12 +622,12 @@ func databaseConnectionString(kind, username, password, host, database string) s
 	case "mysql":
 		return fmt.Sprintf("mysql://%s:%s@%s/%s?ssl-mode=REQUIRED", user, pass, host, db)
 	case "mongo":
-		return fmt.Sprintf("mongodb://%s:%s@%s/%s?tls=true&authSource=admin", user, pass, host, db)
+		return fmt.Sprintf("mongodb://%s:%s@%s/%s?tls=true&tlsAllowInvalidCertificates=true&authSource=admin", user, pass, host, db)
 	default:
 		if username != "" && username != "default" {
-			return fmt.Sprintf("rediss://%s:%s@%s/0", user, pass, host)
+			return fmt.Sprintf("rediss://%s:%s@%s/0?ssl_cert_reqs=none", user, pass, host)
 		}
-		return fmt.Sprintf("rediss://:%s@%s/0", pass, host)
+		return fmt.Sprintf("rediss://:%s@%s/0?ssl_cert_reqs=none", pass, host)
 	}
 }
 

@@ -7,6 +7,7 @@ import datetime
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,12 +17,17 @@ import click
 
 from .. import terminal
 from ..channel import GatewayHTTP, GatewayHTTPError, ServiceClient, _sdk_version
-from .stubconfig import connect_apps
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
 from ..references import complete, validate_env
 from . import extraclick
 from .extraclick import ClickCommonGroup, cli_command, parse_last_json
-from .stubconfig import stub_config, stub_request_from_config
+from .stubconfig import (
+    connect_apps,
+    redeploy_with_config,
+    set_env,
+    stub_config,
+    stub_request_from_config,
+)
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "beam"
@@ -78,6 +84,7 @@ class Tool:
         confirm: Optional[str] = None,
         cwd_from: Optional[str] = None,
         per_line: bool = False,
+        redact: Tuple[str, ...] = (),
     ):
         self.name = name
         self.description = description
@@ -88,6 +95,7 @@ class Tool:
         self.confirm = confirm
         self.cwd_from = cwd_from
         self.per_line = per_line
+        self.redact = redact  # result keys withheld from the agent (credentials)
 
     def describe(self) -> Dict[str, Any]:
         return {
@@ -134,7 +142,8 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         "deploy",
-        "Deploy an app from a local directory (runs `beam deploy` there). Returns deployment_id, version and invoke_url.",
+        "Deploy an app from a local directory (runs `beam deploy` there). Returns deployment_id, version and invoke_url. "
+        "invoke_url is pinned to this version; wire other services with ${{app.<name>.URL}} instead of copying it.",
         _obj(
             {
                 "directory": {
@@ -208,16 +217,22 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         "list_tasks",
-        "List recent tasks (invocations). Filter with stub_id=..., status=....",
+        "List recent tasks (invocations), newest first.",
         _obj(
             {
                 "limit": {"type": "integer", "minimum": 1, "default": 20},
-                "filter": {"type": "array", "items": {"type": "string"}},
+                "stub_id": {"type": "string", "description": "Only tasks of this stub."},
+                "status": {
+                    "type": "string",
+                    "description": "Comma-separated: pending, running, complete, error, cancelled, timeout",
+                },
             }
         ),
         lambda a: (
             ["task", "list", "--format", "json"]
-            + _cli_args(a, {"limit": "--limit", "filter": "--filter"})
+            + _cli_args(a, {"limit": "--limit"})
+            + (["--filter", f"stub-id={a['stub_id']}"] if a.get("stub_id") else [])
+            + (["--filter", f"status={a['status']}"] if a.get("status") else [])
         ),
     ),
     Tool(
@@ -286,6 +301,7 @@ TOOLS: List[Tool] = [
             + (["--min-replicas", "1"] if a.get("always_on") else [])
         ),
         destructive=True,
+        redact=("connection_string",),
     ),
     Tool(
         "connect_services",
@@ -299,7 +315,7 @@ TOOLS: List[Tool] = [
             ["source", "target"],
         ),
         run=lambda a, c: connect_apps(
-            ServiceClient(get_config_context(c or DEFAULT_CONTEXT_NAME)),
+            _service(c),
             a["source"],
             a["target"],
             a.get("env_name", ""),
@@ -320,7 +336,7 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         "rotate_database_credentials",
-        "Rotate a database service's password; the service restarts with the new credentials.",
+        "Rotate a database service's password. The database and every deployment bound to its secrets restart with the new credentials.",
         _obj(
             {
                 "kind": {"type": "string", "enum": ["postgres", "redis", "mysql", "mongo"]},
@@ -330,6 +346,7 @@ TOOLS: List[Tool] = [
         ),
         lambda a: ["db", a["kind"], "rotate", a["name"], "--format", "json"],
         destructive=True,
+        redact=("connection_string",),
     ),
     Tool(
         "delete_database",
@@ -399,8 +416,18 @@ STAGED: Dict[str, Dict[str, Any]] = {}
 STAGED_MESSAGE = {"text": ""}
 
 
+def _service(context: Optional[str]) -> ServiceClient:
+    return ServiceClient(get_config_context(context or DEFAULT_CONTEXT_NAME))
+
+
 def _http(context: Optional[str]) -> GatewayHTTP:
-    return ServiceClient(get_config_context(context or DEFAULT_CONTEXT_NAME)).http
+    return _service(context).http
+
+
+def _cli_env() -> Dict[str, str]:
+    env = {**os.environ, "BETA9_NO_INPUT": "1"}
+    env.setdefault("BEAM_CALLER", f"mcp/{_sdk_version()}")
+    return env
 
 
 def _set_path(obj: Dict[str, Any], path: str, value: Any) -> None:
@@ -567,6 +594,228 @@ def validate_references_tool(args: Dict[str, Any], _: Optional[str]) -> Any:
     return out
 
 
+# --- apps, invoke, env, stacks -------------------------------------------------
+
+_INVOCABLE = ("endpoint", "asgi", "taskqueue", "function")
+
+# Config keys an agent acts on; the rest is runner plumbing.
+_CONFIG_KEYS = (
+    "runtime",
+    "autoscaler",
+    "keep_warm_seconds",
+    "workers",
+    "concurrent_requests",
+    "max_pending_tasks",
+    "task_policy",
+    "env",
+    "ports",
+    "tcp",
+    "authorized",
+    "entry_point",
+    "volumes",
+    "disks",
+    "pool",
+)
+
+
+def _apps(http: GatewayHTTP) -> List[Dict[str, Any]]:
+    return http.json("GET", "/api/v1/app/{ws}/latest", params={"limit": 200}).get("data") or []
+
+
+def _app(http: GatewayHTTP, name: str) -> Dict[str, Any]:
+    for app in _apps(http):
+        if app["name"] == name:
+            return app
+    raise RuntimeError(f"no app named {name}")
+
+
+def _latest_url(url: str) -> str:
+    """Version-pinned deployment URL -> its `latest` alias (path or subdomain form)."""
+    return re.sub(r"-v\d+\.", "-latest.", re.sub(r"/v\d+$", "/latest", url))
+
+
+def _app_summary(app: Dict[str, Any]) -> Dict[str, Any]:
+    deployment = app.get("deployment") or {}
+    stub = app.get("stub") or {}
+    return {
+        "name": app["name"],
+        "app_id": app["id"],
+        "stub_type": deployment.get("stub_type") or stub.get("type"),
+        "stub_id": deployment.get("stub_id") or stub.get("id"),
+        "deployment_id": deployment.get("id"),
+        "version": deployment.get("version"),
+        "active": deployment.get("active"),
+        "running_containers": app.get("running_containers", 0),
+        "url": app.get("url"),
+        "latest_url": _latest_url(app["url"]) if deployment and app.get("url") else None,
+    }
+
+
+def list_apps(_: Dict[str, Any], context: Optional[str]) -> Any:
+    return [_app_summary(app) for app in _apps(_http(context))]
+
+
+def get_app(args: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    summary = _app_summary(_app(http, args["name"]))
+    config: Dict[str, Any] = {}
+    if summary["stub_id"]:
+        config = stub_config(http.json("GET", f"/api/v1/stub/{{ws}}/{summary['stub_id']}"))
+    view = {k: config[k] for k in _CONFIG_KEYS if k in config}
+    view["secrets"] = [
+        {"name": s["name"], "env_name": s.get("env_name") or s["name"]}
+        for s in config.get("secrets") or []
+    ]
+    return {**summary, "config": view}
+
+
+def invoke(args: Dict[str, Any], context: Optional[str]) -> Any:
+    import requests
+
+    summary = _app_summary(_app(_http(context), args["name"]))
+    kind = (summary["stub_type"] or "").split("/")[0]
+    if kind not in _INVOCABLE or not summary["latest_url"]:
+        raise RuntimeError(f"{args['name']} is not an invocable deployment")
+    url = summary["latest_url"]
+    if path := (args.get("path") or "").lstrip("/"):
+        url += "/" + path
+    response = requests.request(
+        args.get("method") or "POST",
+        url,
+        headers=_http(context).headers,
+        json=args.get("body"),
+        timeout=float(args.get("timeout") or 180),
+    )
+    try:
+        body: Any = response.json()
+    except ValueError:
+        body = response.text[-4000:]
+    return {"status": response.status_code, "url": url, "body": body}
+
+
+def set_env_tool(args: Dict[str, Any], context: Optional[str]) -> Any:
+    env: Dict[str, str] = args.get("env") or {}
+    unset: List[str] = args.get("unset") or []
+    if not env and not unset:
+        return {"error": "env or unset is required", "code": "INVALID_CONFIG"}
+    if problems := validate_env([f"{k}={v}" for k, v in env.items()]):
+        return {"error": "; ".join(problems), "code": "INVALID_REFERENCE"}
+    service = _service(context)
+    summary = _app_summary(_app(service.http, args["name"]))
+    if not summary["deployment_id"]:
+        raise RuntimeError(f"{args['name']} has nothing deployed")
+
+    def mutate(config: Dict[str, Any]) -> None:
+        for key, value in env.items():
+            set_env(config, key, value)
+        config["env"] = [e for e in config.get("env") or [] if e.split("=", 1)[0] not in unset]
+        config["secrets"] = [
+            s for s in config.get("secrets") or [] if (s.get("env_name") or s["name"]) not in unset
+        ]
+
+    return redeploy_with_config(service, args["name"], summary["stub_id"], mutate)
+
+
+def delete_app(args: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    app = _app(http, args["name"])
+    http.json("DELETE", f"/api/v1/app/{{ws}}/{app['id']}")
+    return {"deleted": args["name"], "app_id": app["id"]}
+
+
+def _stacks(http: GatewayHTTP) -> List[Dict[str, Any]]:
+    return http.json("GET", "/api/v1/stack/{ws}") or []
+
+
+def _stack(http: GatewayHTTP, name: str) -> Dict[str, Any]:
+    for stack in _stacks(http):
+        if stack["name"] == name:
+            return stack
+    raise RuntimeError(f"no stack named {name}")
+
+
+def _stack_view(http: GatewayHTTP, stack: Dict[str, Any]) -> Dict[str, Any]:
+    names = {a["id"]: a["name"] for a in _apps(http)}
+    ids = (stack.get("spec") or {}).get("appIds") or []
+    return {"name": stack["name"], "id": stack["id"], "apps": [names.get(i, i) for i in ids]}
+
+
+def list_stacks(_: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    return [_stack_view(http, s) for s in _stacks(http)]
+
+
+def create_stack(args: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    ids = [_app(http, n)["id"] for n in args.get("apps") or []]
+    body = {"name": args["name"], "spec": {"appIds": ids}}
+    return _stack_view(http, http.json("POST", "/api/v1/stack/{ws}", json=body))
+
+
+def update_stack(args: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    stack = _stack(http, args["name"])
+    ids = list((stack.get("spec") or {}).get("appIds") or [])
+    ids += [i for i in (_app(http, n)["id"] for n in args.get("add") or []) if i not in ids]
+    drop = {_app(http, n)["id"] for n in args.get("remove") or []}
+    ids = [i for i in ids if i not in drop]
+    spec = {**(stack.get("spec") or {}), "appIds": ids}
+    spec["positions"] = {k: v for k, v in (spec.get("positions") or {}).items() if k in ids}
+    body = {"name": stack["name"], "spec": spec}
+    return _stack_view(http, http.json("PUT", f"/api/v1/stack/{{ws}}/{stack['id']}", json=body))
+
+
+def delete_stack(args: Dict[str, Any], context: Optional[str]) -> Any:
+    http = _http(context)
+    stack = _stack(http, args["name"])
+    http.json("DELETE", f"/api/v1/stack/{{ws}}/{stack['id']}")
+    return {"deleted": stack["name"]}
+
+
+_RUN_FUNCTION = """
+import importlib, json, sys
+from beta9.abstractions.base import set_channel
+from beta9.config import get_config_context
+set_channel(context=get_config_context(sys.argv[1]))
+module, name = sys.argv[2].split(":")
+fn = getattr(importlib.import_module(module), name)
+result = fn.remote(**json.loads(sys.argv[3]))
+print("__RESULT__" + json.dumps(result, default=str))
+"""
+
+
+def run_function(args: Dict[str, Any], context: Optional[str]) -> Any:
+    entrypoint = args["entrypoint"]
+    if ":" not in entrypoint:
+        return {"error": "entrypoint must be module:function", "code": "INVALID_ARGS"}
+    command = [
+        sys.executable,
+        "-c",
+        _RUN_FUNCTION,
+        context or DEFAULT_CONTEXT_NAME,
+        entrypoint.replace(".py:", ":"),
+        json.dumps(args.get("args") or {}),
+    ]
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=args["directory"],
+            env=_cli_env(),
+            capture_output=True,
+            text=True,
+            timeout=float(args.get("timeout") or 900),
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": "run_function timed out", "code": "TIMEOUT"}
+    output, marker, result = proc.stdout.rpartition("__RESULT__")
+    if not marker:
+        return {
+            "error": (proc.stderr or output).strip()[-4000:] or "function did not return",
+            "code": "ERROR",
+        }
+    return {"result": json.loads(result), "logs": output.strip()[-4000:]}
+
+
 def _http_stats_tool(
     name: str, description: str, run: Callable[[Dict[str, Any], Optional[str]], Any]
 ) -> Tool:
@@ -637,7 +886,7 @@ TOOLS += [
     ),
     Tool(
         "validate_references",
-        "Check ${{...}} references in KEY=VALUE env entries before deploying; optionally autocomplete a partial expression.",
+        "Check the syntax of ${{...}} references in KEY=VALUE env entries; whether the named database or app exists is checked by the gateway at deploy time.",
         _obj(
             {
                 "env": {"type": "array", "items": {"type": "string"}},
@@ -717,6 +966,184 @@ TOOLS += [
         ),
         lambda a: ["template", "export"] + list(a["apps"]) + _cli_args(a, {"name": "--name"}),
     ),
+    Tool(
+        "list_apps",
+        "Apps in the workspace with their latest deployment and URLs.",
+        _obj({}),
+        run=list_apps,
+    ),
+    Tool(
+        "get_app",
+        "One app: its config (resources, scaling, env, secret bindings, ports) and URLs.",
+        _obj({"name": {"type": "string"}}, ["name"]),
+        run=get_app,
+    ),
+    Tool(
+        "delete_app",
+        "Delete an app and all of its deployments and versions. Requires confirm=true.",
+        _obj({"name": {"type": "string"}, "confirm": {"type": "boolean"}}, ["name"]),
+        run=delete_app,
+        confirm="delete_app removes every deployment of the app.",
+    ),
+    Tool(
+        "invoke",
+        "Call a deployed endpoint, ASGI app, task queue or function by name (latest version) with the workspace token. Task queues and functions return a task_id; follow it with list_tasks or get_task.",
+        _obj(
+            {
+                "name": {"type": "string", "description": "App name"},
+                "method": {"type": "string", "default": "POST"},
+                "path": {"type": "string", "description": "Sub-path for ASGI apps, e.g. /notes"},
+                "body": {"description": "JSON body"},
+                "timeout": {"type": "number", "default": 180},
+            },
+            ["name"],
+        ),
+        run=invoke,
+        destructive=True,
+    ),
+    Tool(
+        "get_task",
+        "Status, timing and result of one task.",
+        _obj({"task_id": {"type": "string"}}, ["task_id"]),
+        run=lambda a, c: _http(c).json("GET", f"/api/v1/task/{{ws}}/{a['task_id']}"),
+    ),
+    Tool(
+        "stop_task",
+        "Stop a running or pending task.",
+        _obj({"task_id": {"type": "string"}}, ["task_id"]),
+        lambda a: ["task", "stop", a["task_id"]],
+        destructive=True,
+    ),
+    Tool(
+        "run_function",
+        "Run a @function from a local directory on the control plane and return its result: the image is built if needed, then fn.remote(**args) is called. Blocks until the function finishes.",
+        _obj(
+            {
+                "directory": {"type": "string"},
+                "entrypoint": {"type": "string", "description": "module:function, e.g. app:square"},
+                "args": {"type": "object", "description": "Keyword arguments"},
+                "timeout": {"type": "number", "default": 900},
+            },
+            ["directory", "entrypoint"],
+        ),
+        run=run_function,
+        destructive=True,
+    ),
+    Tool(
+        "run_pod",
+        "Start a one-off container from a local directory: a Pod handler (app.py:pod) or a command on an image. Returns container_id; read output with logs and stop it with stop_task.",
+        _obj(
+            {
+                "directory": {"type": "string"},
+                "entrypoint": {"type": "string", "description": "module:pod, omit for a command"},
+                "command": {
+                    "type": "string",
+                    "description": "argv, no shell: use 'sh -c \"...\"' for pipes",
+                },
+                "image": {"type": "string", "description": "e.g. python:3.12"},
+                "cpu": {"type": "number"},
+                "memory": {"type": "string"},
+                "gpu": {"type": "string"},
+                "env": {"type": "array", "items": {"type": "string"}, "description": "KEY=VALUE"},
+            },
+            ["directory"],
+        ),
+        lambda a: (
+            ["run", "--detach", "--json"]
+            + ([a["entrypoint"]] if a.get("entrypoint") else [])
+            + _cli_args(
+                a,
+                {
+                    "command": "--command",
+                    "image": "--image",
+                    "cpu": "--cpu",
+                    "memory": "--memory",
+                    "gpu": "--gpu",
+                    "env": "--env",
+                },
+            )
+        ),
+        destructive=True,
+        cwd_from="directory",
+    ),
+    Tool(
+        "set_env",
+        "Set or remove environment variables on a deployed app and redeploy it as a new version. Values may be ${{secret.NAME}}, ${{db.NAME.DATABASE_URL}} or ${{app.NAME.URL}} references.",
+        _obj(
+            {
+                "name": {"type": "string"},
+                "env": {"type": "object", "additionalProperties": {"type": "string"}},
+                "unset": {"type": "array", "items": {"type": "string"}},
+            },
+            ["name"],
+        ),
+        run=set_env_tool,
+        destructive=True,
+    ),
+    Tool(
+        "update_secret",
+        "Change a workspace secret's value. Deployments pick it up on their next container start.",
+        _obj({"name": {"type": "string"}, "value": {"type": "string"}}, ["name", "value"]),
+        lambda a: ["secret", "modify", a["name"], a["value"]],
+        destructive=True,
+    ),
+    Tool(
+        "delete_secret",
+        "Delete a workspace secret. Requires confirm=true.",
+        _obj({"name": {"type": "string"}, "confirm": {"type": "boolean"}}, ["name"]),
+        lambda a: ["secret", "delete", a["name"]],
+        confirm="delete_secret breaks deployments still bound to it.",
+    ),
+    Tool(
+        "list_stacks",
+        "Stacks: named groups of apps shown together on the dashboard board.",
+        _obj({}),
+        run=list_stacks,
+    ),
+    Tool(
+        "create_stack",
+        "Create a stack, optionally with apps (by name).",
+        _obj(
+            {"name": {"type": "string"}, "apps": {"type": "array", "items": {"type": "string"}}},
+            ["name"],
+        ),
+        run=create_stack,
+        destructive=True,
+    ),
+    Tool(
+        "update_stack",
+        "Add or remove apps (by name) on a stack. Apps are untouched; only membership changes.",
+        _obj(
+            {
+                "name": {"type": "string"},
+                "add": {"type": "array", "items": {"type": "string"}},
+                "remove": {"type": "array", "items": {"type": "string"}},
+            },
+            ["name"],
+        ),
+        run=update_stack,
+        destructive=True,
+    ),
+    Tool(
+        "delete_stack",
+        "Delete a stack. Its apps are untouched.",
+        _obj({"name": {"type": "string"}}, ["name"]),
+        run=delete_stack,
+        destructive=True,
+    ),
+    Tool(
+        "list_volumes",
+        "Persistent volumes in the workspace (mount with Volume(name, mount_path) in app code).",
+        _obj({}),
+        lambda a: ["volume", "list", "--format", "json"],
+    ),
+    Tool(
+        "create_volume",
+        "Create a persistent volume.",
+        _obj({"name": {"type": "string"}}, ["name"]),
+        lambda a: ["volume", "create", a["name"], "--format", "json"],
+        destructive=True,
+    ),
 ]
 
 TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
@@ -748,11 +1175,14 @@ def _run_tool(tool: Tool, args: Dict[str, Any], context: Optional[str]) -> Any:
     command += tool.build(args)  # type: ignore[misc]
 
     cwd = args.get(tool.cwd_from) if tool.cwd_from else None
-    env = {**os.environ, "BETA9_JSON": "1", "BETA9_NO_INPUT": "1"}
-    env.setdefault("BEAM_CALLER", f"mcp/{_sdk_version()}")
     try:
         proc = subprocess.run(
-            command, cwd=cwd, env=env, capture_output=True, text=True, timeout=900
+            command,
+            cwd=cwd,
+            env={**_cli_env(), "BETA9_JSON": "1"},
+            capture_output=True,
+            text=True,
+            timeout=900,
         )
     except subprocess.TimeoutExpired:
         return {"error": f"{tool.name} timed out", "code": "TIMEOUT"}
@@ -767,9 +1197,12 @@ def _run_tool(tool: Tool, args: Dict[str, Any], context: Optional[str]) -> Any:
         ]
     elif stdout:
         parsed = parse_last_json(stdout)
-    if stdout and parsed in (None, []):
+    if stdout and parsed is None:
         parsed = {"output": stdout}
 
+    if isinstance(parsed, dict):
+        for key in tool.redact:
+            parsed.pop(key, None)
     if proc.returncode != 0:
         if isinstance(parsed, dict) and "error" in parsed:
             return parsed
@@ -809,8 +1242,14 @@ class StdioServer:
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": SERVER_NAME, "version": _sdk_version()},
                     "instructions": (
-                        "Beam runs serverless GPU/CPU apps. Use whoami/status first, deploy from a project "
-                        "directory, then wait_deployment and logs. Destructive tools need confirm=true."
+                        "Beam runs serverless GPU/CPU apps, one-off containers and managed databases. "
+                        "Start with whoami and list_apps. Ship code with deploy (from a project directory), "
+                        "then wait_deployment on the returned deployment_id, invoke it by app name, and read "
+                        "logs. Provision databases with create_database and wire them with connect_services "
+                        "or set_env using ${{db.NAME.DATABASE_URL}}, ${{secret.NAME}} and ${{app.NAME.URL}}; "
+                        "get_app shows the resulting config. Group related apps with create_stack. "
+                        "run_function and run_pod execute local code without deploying. Tools marked "
+                        "destructive change infrastructure; those that say so need confirm=true."
                     ),
                 },
             )

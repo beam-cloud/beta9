@@ -31,6 +31,19 @@ func BuildDeploymentURL(externalUrl, urlType string, stub *types.StubWithRelated
 	return fmt.Sprintf("%s://%s/%s/%s/v%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), deployment.Name, deployment.Version)
 }
 
+// BuildDeploymentLatestURL is the version-independent address of a deployment,
+// the one other services should be wired to.
+func BuildDeploymentLatestURL(externalUrl, urlType string, stub *types.Stub, deployment *types.Deployment) string {
+	parsedUrl, err := url.Parse(externalUrl)
+	if err != nil {
+		return ""
+	}
+	if urlType == InvokeUrlTypeHost {
+		return fmt.Sprintf("%s://%s-latest.%s", parsedUrl.Scheme, deployment.Subdomain, parsedUrl.Host)
+	}
+	return fmt.Sprintf("%s://%s/%s/%s/latest", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), deployment.Name)
+}
+
 func BuildStubURL(externalUrl, urlType string, stub *types.StubWithRelated) string {
 	parsedUrl, err := url.Parse(externalUrl)
 	if err != nil {

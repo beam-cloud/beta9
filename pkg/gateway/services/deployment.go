@@ -32,6 +32,8 @@ func (gws *GatewayService) ListDeployments(ctx context.Context, in *pb.ListDeplo
 
 	for field, value := range in.Filters {
 		switch field {
+		case "id":
+			filter.SearchQuery = value.Values[0]
 		case "name":
 			filter.Name = value.Values[0]
 		case "active":
@@ -260,13 +262,7 @@ func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDepl
 		}, nil
 	}
 
-	// Publish reload instance event
-	eventBus := common.NewEventBus(gws.redisClient)
-	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-		"stub_id":   deploymentWithRelated.Stub.ExternalId,
-		"stub_type": deploymentWithRelated.StubType,
-		"timestamp": time.Now().Unix(),
-	}})
+	gws.reloadInstances(deploymentWithRelated.Stub.ExternalId, deploymentWithRelated.StubType)
 
 	return &pb.StartDeploymentResponse{
 		Ok: true,
@@ -334,12 +330,7 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 			return err
 		}
 
-		eventBus := common.NewEventBus(gws.redisClient)
-		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-			"stub_id":   deployment.Stub.ExternalId,
-			"stub_type": deployment.StubType,
-			"timestamp": time.Now().Unix(),
-		}})
+		gws.reloadInstances(deployment.Stub.ExternalId, deployment.StubType)
 
 		if err := gws.stopActiveDeploymentContainers(deployment, false); err != nil {
 			return err
@@ -381,15 +372,18 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 		}
 	}
 
-	// Publish reload instance event
-	eventBus := common.NewEventBus(gws.redisClient)
-	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-		"stub_id":   deployment.Stub.ExternalId,
-		"stub_type": deployment.StubType,
-		"timestamp": time.Now().Unix(),
-	}})
+	gws.reloadInstances(deployment.Stub.ExternalId, deployment.StubType)
 
 	return nil
+}
+
+// reloadInstances asks running instances of a stub to re-read its config.
+func (gws *GatewayService) reloadInstances(stubId, stubType string) {
+	common.NewEventBus(gws.redisClient).Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   stubId,
+		"stub_type": stubType,
+		"timestamp": time.Now().Unix(),
+	}})
 }
 
 func (gws *GatewayService) stopActiveDeploymentContainers(deployment types.DeploymentWithRelated, force bool) error {
