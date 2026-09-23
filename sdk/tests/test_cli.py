@@ -240,7 +240,7 @@ def test_stub_request_round_trips_bindings_and_entrypoint():
     request = stub_request_from_config(stub, config)
 
     assert request["entrypoint"] == ["sh", "-lc", "exec app"]
-    assert request["env"] == ["PORT=8080", "DATABASE_URL=${{secret.BETA9_POSTGRES_DB_URL}}"]
+    assert request["env"] == ["DATABASE_URL=${{secret.BETA9_POSTGRES_DB_URL}}", "PORT=8080"]
     assert request["secrets"] == [{"name": "HF_TOKEN"}]
 
 

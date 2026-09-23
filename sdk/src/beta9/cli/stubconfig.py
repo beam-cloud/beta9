@@ -16,10 +16,11 @@ def stub_request_from_config(stub: Dict[str, Any], config: Dict[str, Any]) -> Di
     gpus = runtime.get("gpus") or ([runtime["gpu"]] if runtime.get("gpu") else [])
     secrets = config.get("secrets") or []
     # A secret bound under another name was a `${{secret.X}}` reference before the
-    # gateway expanded it; send it back as one so the binding survives.
-    env = list(config.get("env") or []) + [
+    # gateway expanded it; send it back as one so the binding survives. Bindings go
+    # first: an env entry for the same variable (a re-pointed reference) wins.
+    env = [
         f"{s['env_name']}=${{{{secret.{s['name']}}}}}" for s in secrets if s.get("env_name")
-    ]
+    ] + list(config.get("env") or [])
     return {
         "object_id": (stub.get("object") or {}).get("external_id", ""),
         "image_id": runtime.get("image_id", ""),
