@@ -14,6 +14,7 @@
         entrypoint: app.py:handler      # python entrypoint, or omit for Dockerfile/command
         command: ["uvicorn", "app:app", "--port", "8000"]
         ports: [8000]
+        disks: {data: /var/lib/app}      # durable disks, name -> mount path (10Gi each)
         resources: {cpu: 1, memory: 2Gi, gpu: A10G}
         replicas: {min: 0, max: 3}
         secrets: [OPENAI_API_KEY]
@@ -30,7 +31,11 @@
 The orchestrator orders services by their `${{db.*}}` / `${{app.*}}` references
 and runs each through the same paths the CLI already has: databases through
 the gateway's database routes, image and repo services through `beam deploy`.
-References themselves are expanded by the gateway.
+References themselves are expanded by the gateway. Deployed services are
+grouped into a stack named after the manifest.
+
+`beam template import` converts a docker-compose.yml or a Railway template
+(`railway.com/deploy/<slug>`) into this format.
 """
 
 import os
@@ -86,7 +91,11 @@ def template():
 
 
 def load_manifest(source: str) -> Dict[str, Any]:
-    """Read a manifest from a path, URL, or a name in the beam-skills catalog."""
+    """Read a manifest from a path, URL, Railway template URL, or a name in the beam-skills catalog."""
+    if source.startswith((RAILWAY_DEPLOY_URL, "railway:")):
+        manifest = import_railway(fetch_railway_manifest(source))
+        validate_manifest(manifest)
+        return manifest
     if source.startswith(("http://", "https://")):
         text = _fetch(source)
     elif os.path.exists(source):
@@ -117,7 +126,7 @@ def validate_manifest(manifest: Dict[str, Any]) -> None:
         raise TemplateError("Manifest needs a non-empty `services` mapping")
     problems: List[str] = []
     for name, svc in manifest["services"].items():
-        if not re.fullmatch(r"[a-z][a-z0-9-]{1,31}", name):
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,31}", name):
             problems.append(
                 f"{name}: service names are lowercase letters, digits and dashes (2-32 chars)"
             )
@@ -134,6 +143,11 @@ def validate_manifest(manifest: Dict[str, Any]) -> None:
             )
         if kind == "image" and not svc.get("image"):
             problems.append(f"{name}: image services need `image`")
+        for disk_name, mount in _disks(svc):
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", disk_name) or not str(mount).startswith(
+                "/"
+            ):
+                problems.append(f"{name}: disks map a short name to an absolute mount path")
         env = svc.get("env") or {}
         if not isinstance(env, dict):
             problems.append(f"{name}: env must be a mapping")
@@ -147,6 +161,17 @@ def validate_manifest(manifest: Dict[str, Any]) -> None:
                         problems.append(f"{name}: env references unknown service {m.group(2)!r}")
     if problems:
         raise TemplateError("Invalid manifest:\n" + "\n".join(problems))
+
+
+def _disks(svc: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """`disks: {name: /mount}` or `disks: [{name, mount_path, size?}]`."""
+    disks = svc.get("disks") or {}
+    if isinstance(disks, dict):
+        return [(str(k), str(v)) for k, v in disks.items()]
+    return [
+        (str(d.get("name")), str(d.get("mount_path")) + (f":{d['size']}" if d.get("size") else ""))
+        for d in disks
+    ]
 
 
 def ordered_services(manifest: Dict[str, Any]) -> List[str]:
@@ -210,6 +235,8 @@ def _deploy_command(app_name: str, svc: Dict[str, Any], prefix: str) -> List[str
             args += ["--entrypoint", part]
     for port in svc.get("ports") or []:
         args += ["--port", str(port)]
+    for disk_name, mount in _disks(svc):
+        args += ["--disk", f"{disk_name}:{mount}"]
     res = svc.get("resources") or {}
     if res.get("cpu") is not None:
         args += ["--cpu", str(res["cpu"])]
@@ -303,6 +330,25 @@ def manifest_service(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # --- execution ------------------------------------------------------------------
+
+
+SECRET_REF_RE = re.compile(r"\$\{\{\s*secret\.([A-Za-z0-9_]+)\s*\}\}")
+
+
+def missing_secrets(service: ServiceClient, manifest: Dict[str, Any]) -> List[str]:
+    """Workspace secrets the manifest binds that do not exist yet."""
+    wanted: set = set()
+    for svc in manifest["services"].values():
+        wanted.update(svc.get("secrets") or [])
+        for value in (svc.get("env") or {}).values():
+            wanted.update(SECRET_REF_RE.findall(str(value)))
+    if not wanted:
+        return []
+    from ..clients.secret import ListSecretsRequest
+
+    res = service.secret.list_secrets(ListSecretsRequest())
+    existing = {s.name for s in res.secrets} if res.ok else set()
+    return sorted(wanted - existing)
 
 
 def create_database_step(service: ServiceClient, step: Dict[str, Any]) -> Dict[str, Any]:
@@ -407,7 +453,31 @@ def deploy_template(
             results.append({**step, "status": "failed", "error": exc.message})
             break  # later services depend on this one
         results.append({**step, **outcome})
+    stack = f"{prefix}{manifest.get('name') or 'template'}".rstrip("-")
+    group_into_stack(service, stack, [r["app_name"] for r in results if r["status"] != "failed"])
     return results
+
+
+def group_into_stack(service: ServiceClient, name: str, app_names: List[str]) -> None:
+    """Add the apps to the stack `name`, creating it if needed; membership only."""
+    apps = (
+        service.http.json("GET", "/api/v1/app/{ws}/latest", params={"limit": 200}).get("data") or []
+    )
+    ids = [a["id"] for a in apps if a["name"] in app_names]
+    if not ids:
+        return
+    stacks = service.http.json("GET", "/api/v1/stack/{ws}") or []
+    existing = next((s for s in stacks if s["name"] == name), None)
+    if existing is None:
+        service.http.json(
+            "POST", "/api/v1/stack/{ws}", json={"name": name, "spec": {"appIds": ids}}
+        )
+        return
+    spec = existing.get("spec") or {}
+    spec["appIds"] = list(dict.fromkeys((spec.get("appIds") or []) + ids))
+    service.http.json(
+        "PUT", f"/api/v1/stack/{{ws}}/{existing['id']}", json={"name": name, "spec": spec}
+    )
 
 
 # --- commands ---------------------------------------------------------------------
@@ -442,6 +512,13 @@ def plan(source: str, prefix: str):
 def deploy(service: ServiceClient, source: str, prefix: str, only: List[str], yes: bool):
     manifest = load_manifest(source)
     steps = plan_steps(manifest, prefix)
+    if missing := missing_secrets(service, manifest):
+        cli = extraclick.command_hint()
+        terminal.error(
+            f"Create these secrets first: {', '.join(missing)}",
+            hint=" · ".join(f"{cli} secret create {name} <value>" for name in missing),
+            code="MISSING_SECRETS",
+        )
     names = ", ".join(s["app_name"] for s in steps if not only or s["service"] in only)
     if not yes and not terminal.confirm(f"Deploy {len(steps)} service(s) ({names})?", default=True):
         terminal.error("Cancelled.", code="CANCELLED")
@@ -465,8 +542,219 @@ def deploy(service: ServiceClient, source: str, prefix: str, only: List[str], ye
         sys.exit(1)
 
 
-@template.command(name="import", help="Convert a docker-compose.yml into a Beam template manifest.")
-@click.argument("compose_file", type=click.Path(exists=True, dir_okay=False))
+RAILWAY_DEPLOY_URL = "https://railway.com/deploy/"
+GENERIC_DATABASE_NAMES = DATABASE_IMAGES.keys() | {"postgres-ssl", "database", "db", "cache"}
+
+
+def _safe_name(n: Any) -> str:
+    return re.sub(r"[^a-z0-9-]", "-", str(n).lower()).strip("-")[:32] or "service"
+
+
+def _database_engine(image: str) -> Optional[str]:
+    base = image.split("/")[-1].split(":")[0]
+    if base in DATABASE_IMAGES:
+        return DATABASE_IMAGES[base]
+    for prefix, engine in (
+        ("postgres", "postgres"),
+        ("redis", "redis"),
+        ("valkey", "redis"),
+        ("mysql", "mysql"),
+        ("mariadb", "mysql"),
+        ("mongo", "mongo"),
+    ):
+        if base.startswith(prefix):
+            return engine
+    return None
+
+
+def _database_reference(key: str, databases: Dict[str, str]) -> Optional[str]:
+    """`${{db.<name>.<FIELD>}}` for a variable that names a database by convention (DATABASE_URL, PGHOST, REDIS_URL...)."""
+    upper = key.upper()
+    engine = None
+    if re.search(r"REDIS|VALKEY", upper):
+        engine = "redis"
+    elif re.search(r"MONGO", upper):
+        engine = "mongo"
+    elif re.search(r"MYSQL|MARIADB", upper):
+        engine = "mysql"
+    elif re.search(r"^PG|POSTGRES|DATABASE|^DB_|_DB_?|MB_DB", upper):
+        engine = "postgres"
+    names = [n for n, e in databases.items() if e == engine]
+    if len(names) != 1:
+        return None
+    if upper.endswith("URL") or upper.endswith("URI") or upper.endswith("DSN"):
+        field = "REDIS_URL" if engine == "redis" else "DATABASE_URL"
+    elif upper.endswith("HOST"):
+        field = "HOST"
+    elif upper.endswith("PORT"):
+        field = "PORT"
+    elif re.search(r"USER", upper):
+        field = "USERNAME"
+    elif re.search(r"PASS", upper):
+        field = "PASSWORD"
+    elif re.search(r"DATABASE$|DBNAME$|_DB$|^DB$", upper):
+        field = "DATABASE"
+    else:
+        return None
+    return f"${{{{db.{names[0]}.{field}}}}}"
+
+
+_MANIFEST_TYPES = (
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+)
+
+
+def image_exposed_ports(image: str) -> List[int]:
+    """EXPOSE ports from a registry image's config; empty when unknown."""
+    ref, _, tag = image.partition("@")[0].rpartition(":")
+    if not ref or "/" in tag:
+        ref, tag = image, "latest"
+    registry, _, repo = ref.partition("/")
+    if "." not in registry and ":" not in registry and registry != "localhost":
+        registry, repo = "registry-1.docker.io", ref
+    if registry == "registry-1.docker.io" and "/" not in repo:
+        repo = f"library/{repo}"
+    session = requests.Session()
+    session.headers["Accept"] = ", ".join(_MANIFEST_TYPES)
+
+    def get(url: str) -> Optional[requests.Response]:
+        response = session.get(url, timeout=20)
+        if response.status_code == 401 and "Bearer" in response.headers.get("Www-Authenticate", ""):
+            params = dict(re.findall(r'(\w+)="([^"]*)"', response.headers["Www-Authenticate"]))
+            token = requests.get(
+                params["realm"],
+                params={k: params[k] for k in ("service", "scope") if k in params},
+                timeout=20,
+            )
+            if token.ok:
+                session.headers["Authorization"] = (
+                    f"Bearer {token.json().get('token') or token.json().get('access_token')}"
+                )
+                response = session.get(url, timeout=20)
+        return response if response.ok else None
+
+    try:
+        manifest = get(f"https://{registry}/v2/{repo}/manifests/{tag}")
+        if manifest is None:
+            return []
+        body = manifest.json()
+        if "manifests" in body:
+            digest = next(
+                (
+                    m["digest"]
+                    for m in body["manifests"]
+                    if (m.get("platform") or {}).get("architecture") == "amd64"
+                ),
+                body["manifests"][0]["digest"],
+            )
+            manifest = get(f"https://{registry}/v2/{repo}/manifests/{digest}")
+            if manifest is None:
+                return []
+            body = manifest.json()
+        config = get(f"https://{registry}/v2/{repo}/blobs/{body['config']['digest']}")
+        if config is None:
+            return []
+        exposed = (config.json().get("config") or {}).get("ExposedPorts") or {}
+        return sorted({int(p.split("/")[0]) for p in exposed if p.split("/")[0].isdigit()})
+    except (requests.RequestException, ValueError, KeyError):
+        return []
+
+
+def import_railway(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a railway.com/deploy manifest.json to a Beam manifest. Railway runs
+    databases as images with volumes; here they become managed databases and
+    the app variables that named them become `${{db.*}}` references."""
+    services: Dict[str, Any] = {}
+    databases: Dict[str, str] = {}
+    template = manifest.get("template") or {}
+    slug = _safe_name(template.get("slug") or template.get("name") or "railway-import")
+    names: Dict[str, str] = {}
+    for svc in manifest.get("services") or []:
+        source = svc.get("source") or {}
+        engine = _database_engine(source.get("image") or "")
+        safe = _safe_name(svc["name"])
+        # App names are workspace-wide; a database called "postgres" would be shared by every template.
+        if engine and safe in GENERIC_DATABASE_NAMES:
+            safe = _safe_name(f"{slug[:24]}-{engine}")
+        names[svc["name"]] = safe
+        if engine:
+            services[safe] = {"kind": "database", "engine": engine}
+            databases[safe] = engine
+            continue
+        out: Dict[str, Any] = (
+            {"kind": "image", "image": source["image"]}
+            if source.get("image")
+            else {
+                "kind": "repo",
+                "repo": source.get("repo"),
+                **({"branch": source["branch"]} if source.get("branch") else {}),
+            }
+        )
+        if svc.get("start_command"):
+            out["command"] = shlex.split(svc["start_command"])
+        if svc.get("needs_volume") and svc.get("volume_mount_path"):
+            out["disks"] = {"data": svc["volume_mount_path"]}
+        out["env"] = {}
+        services[safe] = out
+
+    for item in manifest.get("required_inputs") or []:
+        safe = names.get(item.get("service"))
+        svc = services.get(safe or "")
+        if not svc or svc["kind"] == "database":
+            continue
+        key, strategy = item["key"], item.get("strategy")
+        value: Optional[str] = None
+        if strategy == "default":
+            value = str(item.get("default", ""))
+            if key == "PORT" and value.isdigit():
+                svc["ports"] = [int(value)]
+        elif strategy == "generate":
+            value = (
+                "${{secret(24)}}"
+                if item.get("generate") == "strong_password"
+                else "${{secret(32)}}"
+            )
+        elif strategy == "railway_provided":
+            if item.get("railway_source") == "railway_domain":
+                value = f"${{{{app.{safe}.URL}}}}"
+            else:
+                value = _database_reference(key, databases)
+        if value is None:
+            svc.setdefault("secrets", []).append(key)
+        else:
+            svc["env"][key] = value
+
+    for svc in services.values():
+        if svc.get("env") == {}:
+            del svc["env"]
+        if svc["kind"] == "image" and not svc.get("ports"):
+            ports = image_exposed_ports(svc["image"])
+            if ports:
+                svc["ports"] = ports[:1]
+    return {
+        "name": slug,
+        "description": template.get("description")
+        or f"Imported from {template.get('url', 'Railway')}",
+        "services": services,
+    }
+
+
+def fetch_railway_manifest(source: str) -> Dict[str, Any]:
+    slug = source.removeprefix(RAILWAY_DEPLOY_URL).removeprefix("railway:").strip("/").split("/")[0]
+    response = requests.get(f"{RAILWAY_DEPLOY_URL}{slug}/manifest.json", timeout=30)
+    if response.status_code != 200:
+        raise TemplateError(f"No Railway manifest for {slug!r} (HTTP {response.status_code})")
+    return response.json()
+
+
+@template.command(
+    name="import",
+    help="Convert a docker-compose.yml, or a Railway template (railway.com/deploy/<slug>), into a Beam manifest.",
+)
+@click.argument("source")
 @click.option(
     "--output",
     "-o",
@@ -474,12 +762,29 @@ def deploy(service: ServiceClient, source: str, prefix: str, only: List[str], ye
     default=None,
     help="Write the manifest here instead of stdout.",
 )
-def import_compose(compose_file: str, output: Optional[str]):
+def import_manifest(source: str, output: Optional[str]):
+    if source.startswith((RAILWAY_DEPLOY_URL, "railway:")):
+        manifest = import_railway(fetch_railway_manifest(source))
+    else:
+        manifest = import_compose(source)
+    validate_manifest(manifest)
+    text = yaml.safe_dump(manifest, sort_keys=False)
+    if output:
+        with open(output, "w") as f:
+            f.write(text)
+        terminal.success(f"Wrote {output}")
+    else:
+        click.echo(text)
+
+
+def import_compose(compose_file: str) -> Dict[str, Any]:
+    if not os.path.isfile(compose_file):
+        raise TemplateError(f"{compose_file} is not a file or a railway.com/deploy URL")
     with open(compose_file) as f:
         compose = yaml.safe_load(f) or {}
     services: Dict[str, Any] = {}
     compose_services = compose.get("services") or {}
-    safe_name = lambda n: re.sub(r"[^a-z0-9-]", "-", str(n).lower()).strip("-")[:32] or "service"  # noqa: E731
+    safe_name = _safe_name
     # Databases first; env mapping points at them.
     for name, svc in compose_services.items():
         base = str(svc.get("image") or "").split("/")[-1].split(":")[0]
@@ -534,24 +839,18 @@ def import_compose(compose_file: str, output: Optional[str]):
             mapped[key] = value
         if mapped:
             out["env"] = mapped
-        if svc.get("volumes"):
-            out["volumes"] = [
-                str(v).split(":")[-1] if ":" in str(v) else str(v) for v in svc["volumes"]
-            ]
+        mounts = [
+            str(v).split(":")[1] if ":" in str(v) else str(v) for v in svc.get("volumes") or []
+        ]
+        if mounts:
+            out["disks"] = {f"disk{i}" if i else "data": m for i, m in enumerate(mounts)}
         services[safe] = out
-    manifest = {
+    return {
         "name": os.path.basename(os.path.dirname(os.path.abspath(compose_file)))
         or "compose-import",
         "description": f"Imported from {os.path.basename(compose_file)}",
         "services": services,
     }
-    text = yaml.safe_dump(manifest, sort_keys=False)
-    if output:
-        with open(output, "w") as f:
-            f.write(text)
-        terminal.success(f"Wrote {output}")
-    else:
-        click.echo(text)
 
 
 @template.command(

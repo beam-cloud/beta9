@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -192,4 +194,30 @@ func TestReferenceGrammar(t *testing.T) {
 	require.Equal(t, "BETA9_POSTGRES_APP_DB", databaseSecretPrefix("postgres", "app-db"))
 	require.Equal(t, "MY_APP_JWT_SECRET", generatedSecretName("my app", "jwt_secret"))
 	require.True(t, strings.HasPrefix(databaseSecretPrefix("redis", "!!"), "BETA9_REDIS_SERVICE"))
+}
+
+func TestExpandStubReferencesResolvesOwnURLBeforeFirstDeploy(t *testing.T) {
+	gws := &GatewayService{backendRepo: newReferenceBackendRepo()}
+	gws.appConfig.GatewayService.HTTP.ExternalHost = "app.example.com"
+	gws.appConfig.GatewayService.HTTP.ExternalPort = 443
+	gws.appConfig.GatewayService.HTTP.TLS = true
+	gws.appConfig.GatewayService.InvokeURLType = common.InvokeUrlTypePath
+	ws := &types.Workspace{Id: 1}
+
+	env, _, err := gws.expandStubReferences(context.Background(), authFor(ws), &pb.GetOrCreateStubRequest{
+		AppName:  "router",
+		StubType: types.StubTypePodDeployment,
+		Ports:    []uint32{20128},
+		Env:      []string{"BASE_URL=${{app.router.URL}}", "PEER=${{app.other.URL}}"},
+	})
+	require.ErrorContains(t, err, `no active deployment named "other"`)
+
+	env, _, err = gws.expandStubReferences(context.Background(), authFor(ws), &pb.GetOrCreateStubRequest{
+		AppName:  "router",
+		StubType: types.StubTypePodDeployment,
+		Ports:    []uint32{20128},
+		Env:      []string{"BASE_URL=${{app.router.URL}}"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"BASE_URL=https://app.example.com/pod/router/latest/20128"}, env)
 }

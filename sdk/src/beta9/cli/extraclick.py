@@ -19,6 +19,7 @@ from ..clients.gateway import (
     StringList,
 )
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
+from ..type import DurableDisk
 from ..utils import get_init_args_kwargs
 
 CLICK_CONTEXT_SETTINGS = dict(
@@ -385,6 +386,23 @@ class ShlexParser(click.ParamType):
         return shlex.split(value)
 
 
+class DurableDiskSpec(click.ParamType):
+    """NAME:/mount[:SIZE], e.g. data:/app/data:20Gi."""
+
+    name = "disk"
+    default_size = "10Gi"
+
+    def convert(self, value, param, ctx):
+        parts = str(value).split(":")
+        if len(parts) not in (2, 3) or not parts[0] or not parts[1].startswith("/"):
+            self.fail(f"{value!r} is not NAME:/mount[:SIZE]", param, ctx)
+        return DurableDisk(
+            name=parts[0],
+            mount_path=parts[1],
+            size=parts[2] if len(parts) == 3 else self.default_size,
+        )
+
+
 class CommaSeparatedList(click.ParamType):
     name = "comma_separated_list"
 
@@ -435,6 +453,13 @@ def override_config_options(func: click.Command):
         type=click.INT,
         multiple=True,
         help="Expose a single container port. Can be provided multiple times.",
+    )(f)
+    f = click.option(
+        "--disk",
+        "disks",
+        type=DurableDiskSpec(),
+        multiple=True,
+        help="Durable disk NAME:/mount[:SIZE] that survives restarts (default 10Gi). Can be provided multiple times.",
     )(f)
     f = click.option(
         "--entrypoint",

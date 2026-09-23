@@ -1749,7 +1749,7 @@ func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context
 func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string, appId uint) (*types.Deployment, error) {
 	var deployment types.Deployment
 
-	subdomain := generateSubdomain(name, stubType, workspaceId)
+	subdomain := GenerateSubdomain(name, stubType, workspaceId)
 	queryCreate := `
 		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type, app_id)
 		VALUES ($1, true, $2, $3, $4, $5, $6, $7)

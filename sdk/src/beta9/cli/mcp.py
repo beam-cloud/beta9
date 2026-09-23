@@ -952,7 +952,7 @@ TOOLS += [
     ),
     Tool(
         "template_plan",
-        "Show the ordered steps of a template manifest (path, URL, or name from beam-cloud/beam-skills/templates).",
+        "Show the ordered steps of a template manifest: a path, URL, name from beam-cloud/beam-skills/templates, or a railway.com/deploy/<slug> URL (converted on the fly).",
         _obj(
             {"source": {"type": "string"}, "prefix": {"type": "string", "default": ""}}, ["source"]
         ),
@@ -960,7 +960,7 @@ TOOLS += [
     ),
     Tool(
         "deploy_template",
-        "Deploy every service in a template manifest in dependency order (databases first). Requires confirm=true.",
+        "Deploy every service in a template manifest in dependency order (databases first) and group them into a stack. Accepts railway.com/deploy/<slug> URLs. Requires confirm=true.",
         _obj(
             {
                 "source": {"type": "string"},

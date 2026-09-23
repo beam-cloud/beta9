@@ -14,7 +14,9 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 // Reference syntax accepted in stub env values:
@@ -61,7 +63,36 @@ func uniqueByEnvName(bindings []secretBinding) []secretBinding {
 // expandReferences resolves `${{...}}` tokens in env, returning the rewritten
 // env (secret-bearing entries removed) and the secret bindings to attach.
 func (gws *GatewayService) expandReferences(ctx context.Context, authInfo *auth.AuthInfo, appName string, env []string) ([]string, []secretBinding, error) {
-	scope := &referenceScope{gws: gws, ctx: ctx, workspace: authInfo.Workspace, tokenId: authInfo.TokenId(), appName: appName}
+	return gws.expandEnv(&referenceScope{gws: gws, ctx: ctx, workspace: authInfo.Workspace, tokenId: authInfo.TokenId(), appName: appName}, env)
+}
+
+// expandStubReferences is expandReferences for a stub being created: the app
+// may reference its own URL before its first deployment exists.
+func (gws *GatewayService) expandStubReferences(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest) ([]string, []secretBinding, error) {
+	scope := &referenceScope{gws: gws, ctx: ctx, workspace: authInfo.Workspace, tokenId: authInfo.TokenId(), appName: in.AppName}
+	if types.StubType(in.StubType).IsDeployment() && in.AppName != "" {
+		scope.selfURL = gws.pendingDeploymentURL(authInfo.Workspace, in)
+	}
+	return gws.expandEnv(scope, in.Env)
+}
+
+// pendingDeploymentURL is the latest-alias URL the deployment will have.
+func (gws *GatewayService) pendingDeploymentURL(workspace *types.Workspace, in *pb.GetOrCreateStubRequest) string {
+	stub := types.Stub{Type: types.StubType(in.StubType)}
+	deployment := types.Deployment{Name: in.AppName, Subdomain: repository.GenerateSubdomain(in.AppName, in.StubType, workspace.Id)}
+	externalURL := gws.appConfig.GatewayService.HTTP.GetExternalURL()
+	urlType := gws.appConfig.GatewayService.InvokeURLType
+	if stub.Type.Kind() != types.StubTypePod {
+		return common.BuildDeploymentLatestURL(externalURL, urlType, &stub, &deployment)
+	}
+	cfg := &types.StubConfigV1{Ports: in.Ports, TCP: in.Tcp}
+	if in.Tcp {
+		return common.BuildPodDeploymentURL(gws.appConfig.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost, &deployment, cfg)
+	}
+	return common.BuildPodDeploymentURL(externalURL, urlType, &deployment, cfg)
+}
+
+func (gws *GatewayService) expandEnv(scope *referenceScope, env []string) ([]string, []secretBinding, error) {
 	out := make([]string, 0, len(env))
 	bindings := []secretBinding{}
 
@@ -100,6 +131,7 @@ type referenceScope struct {
 	workspace *types.Workspace
 	tokenId   uint
 	appName   string
+	selfURL   string // URL of appName once deployed; set while its stub is being created
 	databases map[string]*referencedDatabase
 }
 
@@ -187,7 +219,11 @@ func (s *referenceScope) inlineOne(expr string) (string, error) {
 		if !ok || field != "URL" {
 			return "", fmt.Errorf("invalid app reference %q; expected app.<name>.URL", expr)
 		}
-		return s.gws.deploymentURLByName(s.ctx, s.workspace, name)
+		url, err := s.gws.deploymentURLByName(s.ctx, s.workspace, name)
+		if err != nil && name == s.appName && s.selfURL != "" {
+			return s.selfURL, nil
+		}
+		return url, err
 	case strings.HasPrefix(expr, "db."):
 		name, field, ok := strings.Cut(strings.TrimPrefix(expr, "db."), ".")
 		if !ok || !isDatabaseAddressField(field) {

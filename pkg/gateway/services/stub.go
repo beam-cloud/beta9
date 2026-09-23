@@ -122,7 +122,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	servingConfig := servingConfigFromProto(in.Serving)
 
 	// Secret/db references become bindings; URLs and integers are inlined.
-	expandedEnv, referenceBindings, err := gws.expandReferences(ctx, authInfo, in.AppName, in.Env)
+	expandedEnv, referenceBindings, err := gws.expandStubReferences(ctx, authInfo, in)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
