@@ -7,7 +7,6 @@ import json
 from typing import Any, Callable, Dict
 
 from ..channel import ServiceClient
-from ..references import connection_references
 
 
 def stub_request_from_config(stub: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
@@ -100,37 +99,3 @@ def redeploy_with_config(
     if not deployed.ok:
         raise RuntimeError(deployed.err_msg or "deploy failed")
     return {"deployment_id": deployed.deployment_id, "version": deployed.version}
-
-
-def set_env(config: Dict[str, Any], key: str, value: str) -> None:
-    env = [e for e in config.get("env") or [] if not e.startswith(f"{key}=")]
-    config["env"] = env + [f"{key}={value}"]
-
-
-def connect_apps(
-    service: ServiceClient, source: str, target: str, env_name: str = ""
-) -> Dict[str, Any]:
-    """Add a `${{...}}` reference to `source` on `target` and redeploy."""
-    apps = (
-        service.http.json("GET", "/api/v1/app/{ws}/latest", params={"limit": 200}).get("data") or []
-    )
-    by_name = {a["name"]: a for a in apps}
-    if source not in by_name:
-        raise RuntimeError(f"no app named {source}")
-    if target not in by_name:
-        raise RuntimeError(f"no app named {target}")
-    src_stub = (
-        (by_name[source].get("deployment") or {}).get("stub") or by_name[source].get("stub") or {}
-    )
-    dst = by_name[target].get("deployment") or {}
-    if not dst.get("stub_id"):
-        raise RuntimeError(f"{target} has nothing deployed to connect to")
-    kind = ((stub_config(src_stub).get("serving") or {}).get("database") or {}).get("kind")
-    refs = connection_references(source, kind, env_name)
-
-    def apply(config: Dict[str, Any]) -> None:
-        for key, reference in refs:
-            set_env(config, key, reference)
-
-    result = redeploy_with_config(service, target, dst["stub_id"], apply)
-    return {**result, "env": dict(refs)}

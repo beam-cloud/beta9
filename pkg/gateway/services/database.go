@@ -315,13 +315,13 @@ func (gws *GatewayService) RotateDatabaseCredentials(ctx context.Context, authIn
 	if err != nil {
 		return nil, err
 	}
-	username, err := gws.secretValue(ctx, authInfo.Workspace, names.Username)
+	username, err := gws.SecretValue(ctx, authInfo.Workspace, names.Username)
 	if err != nil {
 		return nil, err
 	}
 	database := ""
 	if product.HasDatabase {
-		if database, err = gws.secretValue(ctx, authInfo.Workspace, names.Database); err != nil {
+		if database, err = gws.SecretValue(ctx, authInfo.Workspace, names.Database); err != nil {
 			return nil, err
 		}
 	}
@@ -477,8 +477,8 @@ func (gws *GatewayService) upsertSecret(ctx context.Context, authInfo *auth.Auth
 	return err
 }
 
-// secretValue returns a workspace secret's plaintext.
-func (gws *GatewayService) secretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error) {
+// SecretValue returns a workspace secret's plaintext.
+func (gws *GatewayService) SecretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error) {
 	secret, err := gws.backendRepo.GetSecretByName(ctx, workspace, name)
 	if err != nil {
 		return "", fmt.Errorf("read secret %s: %w", name, err)

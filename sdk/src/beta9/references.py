@@ -4,7 +4,7 @@
 """
 
 import re
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, List, Sequence, Union
 
 REFERENCE_RE = re.compile(r"\$\{\{\s*([^}]*?)\s*\}\}")
 
@@ -102,39 +102,3 @@ def complete(
             return [f"app.{name}.URL"]
         return [f"app.{a}.URL" for a in apps if a.startswith(name)]
     return [k for k in KINDS if k.startswith(p)]
-
-
-DB_ENV_PREFIX = {"postgres": "PG", "redis": "REDIS", "mysql": "MYSQL", "mongo": "MONGO"}
-DB_URL_NAME = {
-    "postgres": "DATABASE_URL",
-    "redis": "REDIS_URL",
-    "mysql": "MYSQL_URL",
-    "mongo": "MONGO_URL",
-}
-
-
-def connection_references(
-    source: str, database_kind: Optional[str], env_name: str = ""
-) -> List[Tuple[str, str]]:
-    """References wiring an app to `source`: a database's URL and parts, or an app's URL. Mirrors utils/connections.ts."""
-    if not database_kind:
-        key = re.sub(r"[^A-Z0-9]+", "_", source.upper()).strip("_")
-        return [(env_name or f"{key}_URL", f"${{{{app.{source}.URL}}}}")]
-
-    def ref(field: str) -> str:
-        return f"${{{{db.{source}.{field}}}}}"
-
-    url_name = DB_URL_NAME.get(database_kind, "DATABASE_URL")
-    if env_name:
-        return [(env_name, ref(url_name))]
-    prefix = DB_ENV_PREFIX.get(database_kind, database_kind.upper())
-    refs = [
-        (url_name, ref(url_name)),
-        (f"{prefix}HOST", ref("HOST")),
-        (f"{prefix}PORT", ref("PORT")),
-        (f"{prefix}USER", ref("USERNAME")),
-        (f"{prefix}PASSWORD", ref("PASSWORD")),
-    ]
-    if database_kind != "redis":
-        refs.append((f"{prefix}DATABASE", ref("DATABASE")))
-    return refs

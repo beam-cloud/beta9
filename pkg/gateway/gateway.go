@@ -651,6 +651,7 @@ func (g *Gateway) registerServices() error {
 
 	// Needs the assembled gateway service, so not in initHttp.
 	apiv1.NewDatabaseGroup(g.baseRouteGroup.Group("/database", auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)), gws)
+	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)), gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
 
 	g.registerHealthService()
 
