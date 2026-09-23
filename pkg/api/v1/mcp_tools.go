@@ -147,7 +147,7 @@ func (g *MCPGroup) catalog() []mcpTool {
 		{Name: "update_stack", Description: "Add or remove apps (by name) on a stack; the apps themselves are untouched.", Schema: schema(props{"name": str(""), "add": strList(""), "remove": strList("")}, "name"), Destructive: true, Run: g.updateStack},
 		{Name: "delete_stack", Description: "Delete a stack; its apps are untouched.", Schema: name, Destructive: true, Run: g.deleteStack},
 		// observe
-		{Name: "logs", Description: "Recent logs for an app (by name), deployment, stub, task or container.", Schema: schema(props{"name": str("App name"), "deployment_id": str(""), "stub_id": str(""), "task_id": str(""), "container_id": str(""), "tail": integer(100), "search": str("Substring filter")}), Run: g.logs},
+		{Name: "logs", Description: "Recent logs, newest last. By app name (every version), or one deployment, stub, task or container. Stream is stdout, stderr or system (container lifecycle: image pulls, mounts, exits).", Schema: schema(props{"name": str("App name"), "deployment_id": str(""), "stub_id": str(""), "task_id": str(""), "container_id": str(""), "tail": integer(100), "since_minutes": integer(0), "search": str("Substring filter")}), Run: g.logs},
 		{Name: "list_tasks", Description: "Recent tasks (invocations), newest first.", Schema: schema(props{"stub_id": str(""), "status": str("Comma-separated: pending, running, complete, error, cancelled, timeout"), "limit": integer(20)}), Run: g.listTasks},
 		{Name: "get_task", Description: "Status, timing and container of one task.", Schema: schema(props{"task_id": str("")}, "task_id"), Run: g.getTask},
 		{Name: "stop_task", Description: "Stop a running or pending task.", Schema: schema(props{"task_id": str("")}, "task_id"), Destructive: true, Run: g.stopTask},
@@ -736,13 +736,22 @@ func (g *MCPGroup) deleteStack(ctx context.Context, a *auth.AuthInfo, args toolA
 
 func (g *MCPGroup) logs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	query := types.LogQuery{WorkspaceID: a.Workspace.ExternalId, Limit: uint64(args.num("tail", 100)), Query: args.str("search")}
+	if minutes := args.num("since_minutes", 0); minutes > 0 {
+		query.StartTime = ptr.To(time.Now().UTC().Add(-time.Duration(minutes) * time.Minute))
+	}
 	switch {
-	case args.str("deployment_id") != "" || args.str("name") != "":
+	case args.str("deployment_id") != "":
 		d, err := g.target(ctx, a, args)
 		if err != nil {
 			return nil, err
 		}
 		query.ObjectType, query.ObjectID, query.StubID, query.AppID = types.GatewayObjectTypeDeployment, d.ExternalId, d.Stub.ExternalId, d.App.ExternalId
+	case args.str("name") != "":
+		app, err := g.appByName(ctx, a.Workspace, args.str("name"))
+		if err != nil {
+			return nil, err
+		}
+		query.ObjectType, query.ObjectID, query.AppID = types.GatewayObjectTypeApp, app.ExternalId, app.ExternalId
 	case args.str("stub_id") != "":
 		stub, err := g.backendRepo.GetStubByExternalId(ctx, args.str("stub_id"), types.QueryFilter{Field: "workspace_id", Value: a.Workspace.ExternalId})
 		if err != nil || stub == nil || stub.ExternalId == "" {
@@ -767,7 +776,18 @@ func (g *MCPGroup) logs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (a
 	if err != nil {
 		return nil, err
 	}
-	return res.Logs, nil
+	out := make([]map[string]any, 0, len(res.Logs))
+	for _, l := range res.Logs {
+		line := map[string]any{"time": l.Timestamp, "message": l.Message, "container_id": l.ContainerID}
+		if l.Stream != "" {
+			line["stream"] = l.Stream
+		}
+		if l.TaskID != "" {
+			line["task_id"] = l.TaskID
+		}
+		out = append(out, line)
+	}
+	return out, nil
 }
 
 func (g *MCPGroup) listTasks(ctx context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
