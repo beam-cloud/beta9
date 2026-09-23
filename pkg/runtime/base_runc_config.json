@@ -30,7 +30,9 @@
 				"CAP_SETUID",
 				"CAP_SETFCAP",
 				"CAP_SYS_CHROOT",
-				"CAP_MKNOD"
+				"CAP_MKNOD",
+				"CAP_NET_BIND_SERVICE",
+				"CAP_SETPCAP"
 			],
 			"effective": [
 				"CAP_AUDIT_WRITE",
@@ -44,7 +46,9 @@
 				"CAP_SETUID",
 				"CAP_SETFCAP",
 				"CAP_SYS_CHROOT",
-				"CAP_MKNOD"
+				"CAP_MKNOD",
+				"CAP_NET_BIND_SERVICE",
+				"CAP_SETPCAP"
 			],
 			"permitted": [
 				"CAP_AUDIT_WRITE",
@@ -58,7 +62,9 @@
 				"CAP_SETUID",
 				"CAP_SETFCAP",
 				"CAP_SYS_CHROOT",
-				"CAP_MKNOD"
+				"CAP_MKNOD",
+				"CAP_NET_BIND_SERVICE",
+				"CAP_SETPCAP"
 			],
 			"ambient": []
 		},
