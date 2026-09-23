@@ -12,8 +12,7 @@ import (
 
 func testServiceProxyConfig(externalHost string) types.AppConfig {
 	cfg := types.AppConfig{}
-	cfg.GatewayService.GRPC.ExternalHost = "beta9-gateway"
-	cfg.Abstractions.Pod.TCP = types.PodTCPConfig{Enabled: true, Port: 1995, ExternalHost: externalHost, ExternalPort: 1995}
+	cfg.Abstractions.Pod.TCP = types.PodTCPConfig{Enabled: true, Port: 1995, ExternalHost: externalHost, ExternalPort: 1995, ServiceProxyTarget: "beta9-gateway:1995"}
 	return cfg
 }
 
@@ -75,6 +74,11 @@ func TestNewServiceProxyDisabled(t *testing.T) {
 		}()},
 		{"ip external host", testServiceProxyConfig("10.0.0.1")},
 		{"empty external host", testServiceProxyConfig("")},
+		{"no proxy target", func() types.AppConfig {
+			c := testServiceProxyConfig("tcp.example.com")
+			c.Abstractions.Pod.TCP.ServiceProxyTarget = ""
+			return c
+		}()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -84,6 +88,24 @@ func TestNewServiceProxyDisabled(t *testing.T) {
 				t.Fatalf("Attach = %v, mounts = %d; want no-op", err, len(spec.Mounts))
 			}
 		})
+	}
+}
+
+func TestServiceProxyAttachFailsOpenWhenTargetUnreachable(t *testing.T) {
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := closed.Addr().String()
+	closed.Close()
+
+	p := &ServiceProxy{ctx: context.Background(), suffix: ".localhost", target: target, port: 1995}
+	spec := &specs.Spec{Process: &specs.Process{Env: []string{"PGHOST=db.localhost"}}}
+	if err := p.Attach(&types.ContainerRequest{ContainerId: "c"}, spec); err != nil || len(spec.Mounts) != 0 {
+		t.Fatalf("Attach = %v, mounts = %d; want no-op", err, len(spec.Mounts))
+	}
+	if p.retryAt.IsZero() {
+		t.Fatal("failed start did not schedule a retry")
 	}
 }
 

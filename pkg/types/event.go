@@ -36,8 +36,8 @@ var (
 	EventStubClone          = "stub.clone"
 
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
-	// One record per endpoint/ASGI invocation: status, latency, task.
-	EventEndpointRequest = "endpoint.request"
+	// Per-stub request counts and latency histogram, one record per flush window.
+	EventEndpointRequestStats = "endpoint.request_stats"
 
 	EventComputePool      = "compute.pool"
 	EventComputeJoinToken = "compute.join_token"
@@ -379,18 +379,28 @@ type EventStubStateSchema struct {
 
 var EventGatewayEndpointSchemaVersion = "1.0"
 
-var EventEndpointRequestSchemaVersion = "1.0"
+var EventEndpointRequestStatsSchemaVersion = "1.0"
 
-type EventEndpointRequestSchema struct {
-	StubID      string    `json:"stub_id"`
-	WorkspaceID string    `json:"workspace_id"`
-	AppID       string    `json:"app_id,omitempty"`
-	TaskID      string    `json:"task_id,omitempty"`
-	Method      string    `json:"method"`
-	Path        string    `json:"path"`
-	StatusCode  int       `json:"status_code"`
-	DurationMs  int64     `json:"duration_ms"`
-	Timestamp   time.Time `json:"timestamp"`
+// RequestLatencyBoundsMs are the upper bounds of the latency histogram
+// buckets; the last bucket is open-ended.
+var RequestLatencyBoundsMs = []int64{5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000}
+
+type EventEndpointRequestStatsSchema struct {
+	StubID        string    `json:"stub_id"`
+	WorkspaceID   string    `json:"workspace_id"`
+	AppID         string    `json:"app_id,omitempty"`
+	WindowStart   time.Time `json:"window_start"`
+	WindowSeconds int       `json:"window_seconds"`
+	Requests      int64     `json:"requests"`
+	Status4xx     int64     `json:"status_4xx"`
+	Status5xx     int64     `json:"status_5xx"`
+	DurationSumMs int64     `json:"duration_sum_ms"`
+	DurationMaxMs int64     `json:"duration_max_ms"`
+	// LatencyBuckets[i] counts requests with duration <= RequestLatencyBoundsMs[i];
+	// the final element counts the rest.
+	LatencyBuckets  []int64   `json:"latency_buckets"`
+	LatencyBoundsMs []int64   `json:"latency_bounds_ms"`
+	Timestamp       time.Time `json:"timestamp"`
 }
 
 type EventGatewayEndpointSchema struct {

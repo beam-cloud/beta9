@@ -1380,8 +1380,8 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	if isStubEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 	}
-	// Request records also feed the app-scoped history.
-	if eventType == types.EventEndpointRequest && metadata.WorkspaceID != "" && metadata.AppID != "" {
+	// Request stats also feed the app-scoped history.
+	if eventType == types.EventEndpointRequestStats && metadata.WorkspaceID != "" && metadata.AppID != "" {
 		add(r.appNamespaceStreamName(metadata.WorkspaceID, metadata.AppID))
 	}
 	if metadata.WorkspaceID != "" && (eventType == types.EventEndpointConfig ||

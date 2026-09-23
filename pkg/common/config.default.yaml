@@ -522,3 +522,4 @@ abstractions:
       port: 1995
       certFile: ""
       keyFile: ""
+      serviceProxyTarget: beta9-gateway:1995

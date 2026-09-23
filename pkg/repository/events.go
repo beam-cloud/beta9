@@ -176,7 +176,7 @@ func eventTimeForData(data interface{}) time.Time {
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
-	case types.EventEndpointRequestSchema:
+	case types.EventEndpointRequestStatsSchema:
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
@@ -998,8 +998,8 @@ func (r *EventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId stri
 	)
 }
 
-func (r *EventClientRepo) PushEndpointRequestEvent(schema types.EventEndpointRequestSchema) {
-	r.pushEvent(types.EventEndpointRequest, types.EventEndpointRequestSchemaVersion, schema)
+func (r *EventClientRepo) PushEndpointRequestStatsEvent(schema types.EventEndpointRequestStatsSchema) {
+	r.pushEvent(types.EventEndpointRequestStats, types.EventEndpointRequestStatsSchemaVersion, schema)
 }
 
 func (r *EventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string) {
@@ -1164,8 +1164,8 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName}
 	case types.EventGatewayEndpointSchema:
 		return eventMetadata{WorkspaceID: d.WorkspaceID}
-	case types.EventEndpointRequestSchema:
-		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID, AppID: d.AppID, TaskID: d.TaskID}
+	case types.EventEndpointRequestStatsSchema:
+		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventComputeSchema:
 		return eventMetadata{
 			ContainerID: d.ContainerID,

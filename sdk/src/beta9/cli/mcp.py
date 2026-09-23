@@ -525,9 +525,8 @@ def accept_deploy(args: Dict[str, Any], context: Optional[str]) -> Any:
     return {"results": results, "remaining": _describe_staged()}
 
 
-def _request_events(
-    args: Dict[str, Any], context: Optional[str]
-) -> Tuple[int, List[Dict[str, Any]]]:
+def _request_stats(args: Dict[str, Any], context: Optional[str]) -> Dict[str, Any]:
+    """Sum the window's endpoint.request_stats records into one aggregate."""
     minutes = int(args.get("window_minutes") or 60)
     end = datetime.datetime.now(datetime.timezone.utc)
     start = end - datetime.timedelta(minutes=minutes)
@@ -536,53 +535,76 @@ def _request_events(
         "/api/v1/events/{ws}/history",
         params={
             "stub_id": args["stub_id"],
-            "event_types": "endpoint.request",
+            "event_types": "endpoint.request_stats",
             "start_time": start.isoformat(),
             "end_time": end.isoformat(),
             "limit": 5000,
         },
     )
-    return minutes, [
-        e.get("cloud_event", {}).get("data", {}) for e in (history or {}).get("events", [])
-    ]
+    total = {"requests": 0, "status_5xx": 0, "duration_sum_ms": 0, "duration_max_ms": 0}
+    buckets: List[int] = []
+    bounds: List[int] = []
+    for e in (history or {}).get("events", []):
+        d = e.get("cloud_event", {}).get("data", {})
+        for k in ("requests", "status_5xx", "duration_sum_ms"):
+            total[k] += int(d.get(k) or 0)
+        total["duration_max_ms"] = max(total["duration_max_ms"], int(d.get("duration_max_ms") or 0))
+        counts = d.get("latency_buckets") or []
+        if len(counts) > len(buckets):
+            buckets += [0] * (len(counts) - len(buckets))
+            bounds = d.get("latency_bounds_ms") or bounds
+        for i, c in enumerate(counts):
+            buckets[i] += int(c)
 
+    def percentile(p: float) -> int:
+        target, seen = total["requests"] * p / 100, 0
+        for i, c in enumerate(buckets):
+            seen += c
+            if seen >= target:
+                bound = int(bounds[i]) if i < len(bounds) else total["duration_max_ms"]
+                return min(bound, total["duration_max_ms"])
+        return 0
 
-def http_requests(args: Dict[str, Any], context: Optional[str]) -> Any:
-    minutes, events = _request_events(args, context)
     return {
         "stub_id": args["stub_id"],
         "window_minutes": minutes,
-        "requests": len(events),
-        "per_minute": round(len(events) / minutes, 3),
+        **total,
+        "percentile": percentile,
+    }
+
+
+def http_requests(args: Dict[str, Any], context: Optional[str]) -> Any:
+    stats = _request_stats(args, context)
+    return {
+        "stub_id": stats["stub_id"],
+        "window_minutes": stats["window_minutes"],
+        "requests": stats["requests"],
+        "per_minute": round(stats["requests"] / stats["window_minutes"], 3),
     }
 
 
 def http_error_rate(args: Dict[str, Any], context: Optional[str]) -> Any:
-    minutes, events = _request_events(args, context)
-    errors = sum(1 for e in events if int(e.get("status_code") or 0) >= 500)
+    stats = _request_stats(args, context)
+    requests, errors = stats["requests"], stats["status_5xx"]
     return {
-        "stub_id": args["stub_id"],
-        "window_minutes": minutes,
-        "requests": len(events),
+        "stub_id": stats["stub_id"],
+        "window_minutes": stats["window_minutes"],
+        "requests": requests,
         "errors_5xx": errors,
-        "error_rate": round(errors / len(events), 4) if events else 0.0,
+        "error_rate": round(errors / requests, 4) if requests else 0.0,
     }
 
 
 def http_response_time(args: Dict[str, Any], context: Optional[str]) -> Any:
-    minutes, events = _request_events(args, context)
-    durations = sorted(int(e["duration_ms"]) for e in events if e.get("duration_ms") is not None)
-
-    def percentile(p: float) -> int:
-        return durations[min(len(durations) - 1, int(p / 100 * len(durations)))] if durations else 0
-
+    stats = _request_stats(args, context)
     return {
-        "stub_id": args["stub_id"],
-        "window_minutes": minutes,
-        "requests": len(events),
-        "p50_ms": percentile(50),
-        "p95_ms": percentile(95),
-        "p99_ms": percentile(99),
+        "stub_id": stats["stub_id"],
+        "window_minutes": stats["window_minutes"],
+        "requests": stats["requests"],
+        "p50_ms": stats["percentile"](50),
+        "p95_ms": stats["percentile"](95),
+        "p99_ms": stats["percentile"](99),
+        "max_ms": stats["duration_max_ms"],
     }
 
 
@@ -873,7 +895,7 @@ TOOLS += [
     ),
     _http_stats_tool(
         "http_requests",
-        "Request count for an endpoint over a window, from endpoint.request events.",
+        "Request count for an endpoint over a window.",
         http_requests,
     ),
     _http_stats_tool(
@@ -881,7 +903,7 @@ TOOLS += [
     ),
     _http_stats_tool(
         "http_response_time",
-        "p50/p95/p99 latency (ms) for an endpoint over a window.",
+        "p50/p95/p99 latency (ms) for an endpoint over a window; percentiles come from a fixed histogram, so they are upper bounds.",
         http_response_time,
     ),
     Tool(
@@ -903,7 +925,7 @@ TOOLS += [
     ),
     Tool(
         "create_webhook",
-        "Register a signed HTTP webhook for workspace events (e.g. stub.*, task.*, endpoint.request). Returns the signing secret once.",
+        "Register a signed HTTP webhook for workspace events (e.g. stub.*, task.*, endpoint.request_stats). Returns the signing secret once.",
         _obj(
             {
                 "url": {"type": "string"},

@@ -21,34 +21,37 @@ import (
 )
 
 const (
-	serviceProxyDialTimeout = 10 * time.Second
-	containerHostsFileName  = "hosts"
+	serviceProxyDialTimeout  = 10 * time.Second
+	serviceProxyProbeTimeout = 2 * time.Second
+	serviceProxyRetryAfter   = 30 * time.Second
+	containerHostsFileName   = "hosts"
 )
 
-// ServiceProxy forwards a container's connections to sibling services
-// (<name>.<tcp externalHost>) to the gateway's TCP listener over the worker's
-// own route, so the hostnames work over cluster DNS and tailscale alike.
-// Bytes are untouched; the gateway terminates TLS and routes by SNI.
+// ServiceProxy lets containers reach TCP services (<name>.<tcp externalHost>:
+// databases and TCP pods, never HTTP apps) where that host does not resolve
+// for them, by pinning it in /etc/hosts to a worker-side listener that
+// forwards to the gateway's TCP listener. Bytes are untouched; the gateway
+// terminates TLS and routes by SNI. Pinning is best effort: if the target is
+// unreachable from this worker, containers keep resolving the host over DNS.
 type ServiceProxy struct {
 	ctx       context.Context
 	target    string // the gateway's TCP listener, as the worker reaches it
 	port      int    // the port clients dial, i.e. the gateway's external TCP port
 	suffix    string // "." + the TCP gateway's external host, lower-cased; empty disables the proxy
-	startOnce sync.Once
-	startErr  error
 	mu        sync.Mutex
 	listeners []net.Listener
-	addresses []string // bridge addresses that accepted a listener
+	addresses []string  // bridge addresses that accepted a listener
+	retryAt   time.Time // after a failed start
 }
 
 func NewServiceProxy(ctx context.Context, config types.AppConfig) *ServiceProxy {
 	tcp := config.Abstractions.Pod.TCP
-	if !tcp.Enabled || tcp.ExternalHost == "" || net.ParseIP(tcp.ExternalHost) != nil {
+	if !tcp.Enabled || tcp.ServiceProxyTarget == "" || tcp.ExternalHost == "" || net.ParseIP(tcp.ExternalHost) != nil {
 		return &ServiceProxy{}
 	}
 	return &ServiceProxy{
 		ctx:    ctx,
-		target: net.JoinHostPort(config.GatewayService.GRPC.ExternalHost, strconv.Itoa(tcp.Port)),
+		target: tcp.ServiceProxyTarget,
 		port:   tcp.ExternalPort,
 		suffix: "." + strings.ToLower(tcp.ExternalHost),
 	}
@@ -64,7 +67,8 @@ func (p *ServiceProxy) Attach(request *types.ContainerRequest, spec *specs.Spec)
 		return nil
 	}
 	if err := p.start(); err != nil {
-		return fmt.Errorf("start service proxy: %w", err)
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("service proxy unavailable; sibling hosts resolve over DNS")
+		return nil
 	}
 
 	path := filepath.Join(baseConfigPath, request.ContainerId, containerHostsFileName)
@@ -117,27 +121,46 @@ func hostsFile(addresses []string, hostname string, hostnames []string) string {
 	return b.String()
 }
 
-// start listens lazily: the bridge address exists only once a container runs. IPv6 is best effort.
+// start listens lazily: the bridge address exists only once a container runs.
+// The target is probed first so a wrong or unreachable address never pins
+// hostnames to a dead listener. Failures back off before the next attempt.
+// IPv6 is best effort.
 func (p *ServiceProxy) start() error {
-	p.startOnce.Do(func() {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		for _, address := range []string{containerBridgeAddress, containerBridgeAddressIPv6} {
-			ln, err := net.Listen("tcp", net.JoinHostPort(address, strconv.Itoa(p.port)))
-			if err != nil {
-				if address == containerBridgeAddress {
-					p.startErr = err
-					return
-				}
-				continue
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.listeners) > 0 {
+		return nil
+	}
+	if time.Now().Before(p.retryAt) {
+		return fmt.Errorf("service proxy start deferred until %s", p.retryAt.Format(time.TimeOnly))
+	}
+	err := p.startLocked()
+	if err != nil {
+		p.retryAt = time.Now().Add(serviceProxyRetryAfter)
+	}
+	return err
+}
+
+func (p *ServiceProxy) startLocked() error {
+	probe, err := net.DialTimeout("tcp", p.target, serviceProxyProbeTimeout)
+	if err != nil {
+		return fmt.Errorf("probe %s: %w", p.target, err)
+	}
+	probe.Close()
+	for _, address := range []string{containerBridgeAddress, containerBridgeAddressIPv6} {
+		ln, err := net.Listen("tcp", net.JoinHostPort(address, strconv.Itoa(p.port)))
+		if err != nil {
+			if address == containerBridgeAddress {
+				return fmt.Errorf("listen %s:%d: %w", address, p.port, err)
 			}
-			p.listeners = append(p.listeners, ln)
-			p.addresses = append(p.addresses, address)
-			go p.serve(ln)
+			continue
 		}
-		log.Info().Strs("addresses", p.addresses).Int("port", p.port).Str("target", p.target).Msg("service proxy listening")
-	})
-	return p.startErr
+		p.listeners = append(p.listeners, ln)
+		p.addresses = append(p.addresses, address)
+		go p.serve(ln)
+	}
+	log.Info().Strs("addresses", p.addresses).Int("port", p.port).Str("target", p.target).Msg("service proxy listening")
+	return nil
 }
 
 func (p *ServiceProxy) serve(ln net.Listener) {

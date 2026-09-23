@@ -428,7 +428,7 @@ type EventRepository interface {
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
 	PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string)
-	PushEndpointRequestEvent(schema types.EventEndpointRequestSchema)
+	PushEndpointRequestStatsEvent(schema types.EventEndpointRequestStatsSchema)
 	PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error
 	PushPlatformCacheEvent(schema types.EventPlatformCacheSchema)
 	ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error)
