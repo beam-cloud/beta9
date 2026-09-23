@@ -2,16 +2,13 @@ package gatewayservices
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
@@ -153,7 +150,7 @@ func databaseSecrets(product databaseProduct, name string) databaseSecretNames {
 	return names
 }
 
-// bound excludes the URL, which the entrypoint derives.
+// bound excludes the URL, written after deploy once the host is known.
 func (n databaseSecretNames) all() []string   { return append(n.bound(), n.URL) }
 func (n databaseSecretNames) bound() []string { return compact(n.Username, n.Password, n.Database) }
 
@@ -189,7 +186,7 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 		p.Database = identifier
 	}
 	if p.Password == "" {
-		password, err := randomToken(32)
+		password, err := randomString(32, defaultSecretAlphabet)
 		if err != nil {
 			return nil, err
 		}
@@ -217,6 +214,42 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 	if err != nil {
 		return nil, err
 	}
+	stubRes, err := gws.GetOrCreateStub(ctx, databaseStubRequest(product, names, p, imageId))
+	if err != nil {
+		return nil, err
+	}
+	if !stubRes.Ok {
+		return nil, errors.New(stubRes.ErrMsg)
+	}
+
+	deployRes, err := gws.DeployStub(ctx, &pb.DeployStubRequest{StubId: stubRes.StubId, Name: p.Name})
+	if err != nil {
+		return nil, err
+	}
+	if !deployRes.Ok {
+		return nil, errors.New(deployRes.ErrMsg)
+	}
+
+	host, err := gws.databaseHost(ctx, stubRes.StubId, deployRes.DeploymentId)
+	if err != nil {
+		return nil, err
+	}
+	connection := databaseConnectionString(product.Kind, p.Username, p.Password, host, p.Database)
+	if err := gws.upsertSecret(ctx, authInfo, names.URL, connection); err != nil {
+		return nil, err
+	}
+
+	deployment, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, deployRes.DeploymentId)
+	if err != nil {
+		return nil, fmt.Errorf("read deployment: %w", err)
+	}
+	info := databaseInfo(product, names, deployment)
+	info.Host, info.Username, info.Database, info.ConnectionString = host, p.Username, p.Database, connection
+	return &info, nil
+}
+
+// databaseStubRequest is the pod stub a database runs as: one TCP container on a durable disk.
+func databaseStubRequest(product databaseProduct, names databaseSecretNames, p types.CreateDatabaseParams, imageId string) *pb.GetOrCreateStubRequest {
 	minContainers := uint32(0)
 	if p.AlwaysOn {
 		minContainers = 1
@@ -229,8 +262,7 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 	if p.Pool != "" {
 		pool = &pb.PoolConfig{Name: p.Pool}
 	}
-
-	stubRes, err := gws.GetOrCreateStub(ctx, &pb.GetOrCreateStubRequest{
+	return &pb.GetOrCreateStubRequest{
 		ImageId:            imageId,
 		StubType:           types.StubTypePodDeployment,
 		Name:               types.StubTypePodDeployment,
@@ -268,38 +300,7 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 			},
 		},
 		Disks: []*pb.DurableDisk{{Name: p.Name + "-data", Size: p.Size, MountPath: product.MountPath, Filesystem: databaseDiskFilesystem}},
-	})
-	if err != nil {
-		return nil, err
 	}
-	if !stubRes.Ok {
-		return nil, errors.New(stubRes.ErrMsg)
-	}
-
-	deployRes, err := gws.DeployStub(ctx, &pb.DeployStubRequest{StubId: stubRes.StubId, Name: p.Name})
-	if err != nil {
-		return nil, err
-	}
-	if !deployRes.Ok {
-		return nil, errors.New(deployRes.ErrMsg)
-	}
-
-	host, err := gws.databaseHost(ctx, stubRes.StubId, deployRes.DeploymentId)
-	if err != nil {
-		return nil, err
-	}
-	connection := databaseConnectionString(product.Kind, p.Username, p.Password, host, p.Database)
-	if err := gws.upsertSecret(ctx, authInfo, names.URL, connection); err != nil {
-		return nil, err
-	}
-
-	deployment, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, deployRes.DeploymentId)
-	if err != nil {
-		return nil, fmt.Errorf("read deployment: %w", err)
-	}
-	info := databaseInfo(product, names, deployment)
-	info.Host, info.Username, info.Database, info.ConnectionString = host, p.Username, p.Database, connection
-	return &info, nil
 }
 
 // RotateDatabaseCredentials sets a new password and recycles the container.
@@ -311,7 +312,7 @@ func (gws *GatewayService) RotateDatabaseCredentials(ctx context.Context, authIn
 	deployment := newestDeployment(deployments)
 	names := databaseSecrets(product, name)
 
-	password, err := randomToken(32)
+	password, err := randomString(32, defaultSecretAlphabet)
 	if err != nil {
 		return nil, err
 	}
@@ -344,27 +345,35 @@ func (gws *GatewayService) RotateDatabaseCredentials(ctx context.Context, authIn
 	if err := gws.recycleWithSecrets(ctx, authInfo.Workspace, deployment, true); err != nil {
 		return nil, err
 	}
-	dependents, err := gws.backendRepo.ListDeploymentsWithRelated(ctx, types.DeploymentFilter{
-		WorkspaceID: authInfo.Workspace.Id,
-		Active:      ptr.To(true),
-		BaseFilter:  types.BaseFilter{Limit: 1000},
-	})
-	if err != nil {
+	if err := gws.recycleDependents(ctx, authInfo.Workspace, deployment, databaseSecretPrefix(product.Kind, name)); err != nil {
 		return nil, err
-	}
-	bound := `"` + databaseSecretPrefix(product.Kind, name) + `_`
-	for i := range dependents {
-		d := &dependents[i]
-		if d.Stub.ExternalId != deployment.Stub.ExternalId && strings.Contains(d.Stub.Config, bound) {
-			if err := gws.recycleWithSecrets(ctx, authInfo.Workspace, d, false); err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	info := databaseInfo(product, names, deployment)
 	info.Host, info.Username, info.Database, info.ConnectionString = host, username, database, connection
 	return &info, nil
+}
+
+// recycleDependents restarts every other active deployment bound to a secret with this prefix.
+func (gws *GatewayService) recycleDependents(ctx context.Context, workspace *types.Workspace, source *types.DeploymentWithRelated, secretPrefix string) error {
+	dependents, err := gws.backendRepo.ListDeploymentsWithRelated(ctx, types.DeploymentFilter{
+		WorkspaceID: workspace.Id,
+		Active:      ptr.To(true),
+		BaseFilter:  types.BaseFilter{Limit: 1000},
+	})
+	if err != nil {
+		return err
+	}
+	bound := `"` + secretPrefix + `_`
+	for i := range dependents {
+		d := &dependents[i]
+		if d.Stub.ExternalId != source.Stub.ExternalId && strings.Contains(d.Stub.Config, bound) {
+			if err := gws.recycleWithSecrets(ctx, workspace, d, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // DeleteDatabaseService removes the deployment and its secrets; the disk is kept.
@@ -458,14 +467,6 @@ func compact(values ...string) []string {
 	return out
 }
 
-func randomToken(n int) (string, error) {
-	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
 func (gws *GatewayService) upsertSecret(ctx context.Context, authInfo *auth.AuthInfo, name, value string) error {
 	if _, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, name); err == nil {
 		_, err = gws.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.TokenId(), name, value)
@@ -479,22 +480,11 @@ func (gws *GatewayService) upsertSecret(ctx context.Context, authInfo *auth.Auth
 
 // SecretValue returns a workspace secret's plaintext.
 func (gws *GatewayService) SecretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error) {
-	secret, err := gws.backendRepo.GetSecretByName(ctx, workspace, name)
+	secret, err := gws.backendRepo.GetSecretByNameDecrypted(ctx, workspace, name)
 	if err != nil {
 		return "", fmt.Errorf("read secret %s: %w", name, err)
 	}
-	if workspace.SigningKey == nil {
-		return "", errors.New("workspace has no signing key")
-	}
-	key, err := common.ParseSecretKey(*workspace.SigningKey)
-	if err != nil {
-		return "", err
-	}
-	value, err := common.Decrypt(key, secret.Value)
-	if err != nil {
-		return "", fmt.Errorf("decrypt secret %s: %w", name, err)
-	}
-	return value, nil
+	return secret.Value, nil
 }
 
 // recycleWithSecrets re-reads a deployment's bound secrets into its stub
@@ -526,12 +516,23 @@ func (gws *GatewayService) refreshStubSecrets(ctx context.Context, workspace *ty
 	return gws.backendRepo.UpdateStubConfig(ctx, stub.Id, cfg)
 }
 
+// deploymentsByName is every version named exactly name (the repository filter is a substring match).
 func (gws *GatewayService) deploymentsByName(ctx context.Context, workspace *types.Workspace, name string) ([]types.DeploymentWithRelated, error) {
-	return gws.backendRepo.ListDeploymentsWithRelated(ctx, types.DeploymentFilter{
+	all, err := gws.backendRepo.ListDeploymentsWithRelated(ctx, types.DeploymentFilter{
 		WorkspaceID: workspace.Id,
 		Name:        name,
-		BaseFilter:  types.BaseFilter{Limit: 50},
+		BaseFilter:  types.BaseFilter{Limit: 1000},
 	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.DeploymentWithRelated, 0, len(all))
+	for _, d := range all {
+		if d.Name == name {
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }
 
 // databaseDeployments returns every version of the named service and its product.
@@ -577,7 +578,7 @@ func databaseKind(stub *types.Stub) string {
 		return ""
 	}
 	if db := cfg.EffectiveDatabaseConfig(); db != nil {
-		if kind := types.NormalizeDatabaseKind(db.Kind); databaseProducts[kind].Kind != "" {
+		if kind := types.NormalizeDatabaseKind(db.Kind); databaseProducts[kind].Kind == kind {
 			return kind
 		}
 	}

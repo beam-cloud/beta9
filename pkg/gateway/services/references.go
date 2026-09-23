@@ -80,16 +80,7 @@ func (gws *GatewayService) expandStubReferences(ctx context.Context, authInfo *a
 func (gws *GatewayService) pendingDeploymentURL(workspace *types.Workspace, in *pb.GetOrCreateStubRequest) string {
 	stub := types.Stub{Type: types.StubType(in.StubType)}
 	deployment := types.Deployment{Name: in.AppName, Subdomain: repository.GenerateSubdomain(in.AppName, in.StubType, workspace.Id)}
-	externalURL := gws.appConfig.GatewayService.HTTP.GetExternalURL()
-	urlType := gws.appConfig.GatewayService.InvokeURLType
-	if stub.Type.Kind() != types.StubTypePod {
-		return common.BuildDeploymentLatestURL(externalURL, urlType, &stub, &deployment)
-	}
-	cfg := &types.StubConfigV1{Ports: in.Ports, TCP: in.Tcp}
-	if in.Tcp {
-		return common.BuildPodDeploymentURL(gws.appConfig.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost, &deployment, cfg)
-	}
-	return common.BuildPodDeploymentURL(externalURL, urlType, &deployment, cfg)
+	return gws.deploymentURL(&stub, &deployment, &types.StubConfigV1{Ports: in.Ports, TCP: in.Tcp})
 }
 
 func (gws *GatewayService) expandEnv(scope *referenceScope, env []string) ([]string, []secretBinding, error) {
@@ -104,7 +95,7 @@ func (gws *GatewayService) expandEnv(scope *referenceScope, env []string) ([]str
 		}
 
 		if m := referenceRe.FindStringSubmatchIndex(value); m != nil && m[0] == 0 && m[1] == len(value) {
-			binding, handled, err := scope.secretBinding(key, strings.TrimSpace(value[m[2]:m[3]]))
+			binding, handled, err := scope.bindSecret(key, strings.TrimSpace(value[m[2]:m[3]]))
 			if err != nil {
 				return nil, nil, err
 			}
@@ -142,18 +133,12 @@ type referencedDatabase struct {
 	host, port string // resolved on first use
 }
 
-// secretBinding binds a secret to key; handled is false when expr is not secret-bearing.
-func (s *referenceScope) secretBinding(key, expr string) (secretBinding, bool, error) {
+// bindSecret binds a secret to key; handled is false when expr is not secret-bearing.
+// Existence is checked when the bindings resolve (resolveSecretBindings).
+func (s *referenceScope) bindSecret(key, expr string) (secretBinding, bool, error) {
 	switch {
 	case strings.HasPrefix(expr, "secret."):
-		name := strings.TrimPrefix(expr, "secret.")
-		if _, err := s.gws.backendRepo.GetSecretByName(s.ctx, s.workspace, name); err != nil {
-			if err == sql.ErrNoRows {
-				return secretBinding{}, false, fmt.Errorf("secret %q does not exist in this workspace", name)
-			}
-			return secretBinding{}, false, fmt.Errorf("resolve secret %q: %w", name, err)
-		}
-		return secretBinding{Name: name, EnvName: key}, true, nil
+		return secretBinding{Name: strings.TrimPrefix(expr, "secret."), EnvName: key}, true, nil
 
 	case strings.HasPrefix(expr, "db."):
 		dbName, field, ok := strings.Cut(strings.TrimPrefix(expr, "db."), ".")
@@ -315,7 +300,7 @@ func (s *referenceScope) databaseSecretName(name, field string) (string, error) 
 	return "", fmt.Errorf("unknown database field %q; use DATABASE_URL, USERNAME, PASSWORD, DATABASE, HOST or PORT", field)
 }
 
-// sanitizeSecretName mirrors `_env_prefix` in the SDK's database CLI.
+// sanitizeSecretName upper-cases and keeps [A-Z0-9], collapsing the rest to '_'.
 func sanitizeSecretName(name string) string {
 	safe := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
@@ -326,7 +311,7 @@ func sanitizeSecretName(name string) string {
 	return strings.Trim(safe, "_")
 }
 
-// databaseSecretPrefix mirrors `_env_prefix` in the SDK's database CLI.
+// databaseSecretPrefix is BETA9_<KIND>_<NAME>, the prefix of a database's credential secrets.
 func databaseSecretPrefix(kind, name string) string {
 	safe := sanitizeSecretName(name)
 	if safe == "" {
@@ -346,34 +331,52 @@ func generatedSecretName(appName, key string) string {
 
 // deploymentURLByName is the stable (latest) URL of deployment name; it survives redeploys of the target.
 func (gws *GatewayService) deploymentURLByName(ctx context.Context, workspace *types.Workspace, name string) (string, error) {
-	deployments, err := gws.deploymentsByName(ctx, workspace, name)
+	d, err := gws.ActiveDeploymentByName(ctx, workspace, name)
 	if err != nil {
-		return "", fmt.Errorf("resolve app %q: %w", name, err)
+		return "", err
 	}
-	active := make([]types.DeploymentWithRelated, 0, len(deployments))
-	for _, d := range deployments {
-		if d.Active {
-			active = append(active, d)
-		}
-	}
-	if len(active) == 0 {
-		return "", fmt.Errorf("no active deployment named %q in this workspace", name)
-	}
-	d := newestDeployment(active)
+	return gws.DeploymentURL(d)
+}
 
-	externalURL := gws.appConfig.GatewayService.HTTP.GetExternalURL()
-	urlType := gws.appConfig.GatewayService.InvokeURLType
+// DeploymentURL is the latest-alias URL of a deployment: TCP pods on the TCP
+// gateway, other pods and web stubs on the HTTP gateway.
+func (gws *GatewayService) DeploymentURL(d *types.DeploymentWithRelated) (string, error) {
+	var cfg *types.StubConfigV1
 	if d.Stub.Type.Kind() == types.StubTypePod {
-		cfg, err := d.Stub.UnmarshalConfig()
-		if err != nil {
+		var err error
+		if cfg, err = d.Stub.UnmarshalConfig(); err != nil {
 			return "", fmt.Errorf("decode stub config: %w", err)
 		}
-		if cfg.TCP {
-			return common.BuildPodDeploymentURL(gws.appConfig.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost, &d.Deployment, cfg), nil
-		}
-		return common.BuildPodDeploymentURL(externalURL, urlType, &d.Deployment, cfg), nil
 	}
-	return common.BuildDeploymentLatestURL(externalURL, urlType, &d.Stub, &d.Deployment), nil
+	return gws.deploymentURL(&d.Stub, &d.Deployment, cfg), nil
+}
+
+func (gws *GatewayService) deploymentURL(stub *types.Stub, deployment *types.Deployment, cfg *types.StubConfigV1) string {
+	externalURL := gws.appConfig.GatewayService.HTTP.GetExternalURL()
+	urlType := gws.appConfig.GatewayService.InvokeURLType
+	if stub.Type.Kind() != types.StubTypePod {
+		return common.BuildDeploymentLatestURL(externalURL, urlType, stub, deployment)
+	}
+	if cfg.TCP {
+		return common.BuildPodDeploymentURL(gws.appConfig.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost, deployment, cfg)
+	}
+	return common.BuildPodDeploymentURL(externalURL, urlType, deployment, cfg)
+}
+
+// resolveSecretBindings reads each bound secret; a missing one is the error the deploy reports.
+func (gws *GatewayService) resolveSecretBindings(ctx context.Context, workspace *types.Workspace, bindings []secretBinding) ([]types.Secret, error) {
+	out := make([]types.Secret, 0, len(bindings))
+	for _, b := range bindings {
+		secret, err := gws.backendRepo.GetSecretByName(ctx, workspace, b.Name)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil, fmt.Errorf("Secret %q does not exist in this workspace.", b.Name)
+			}
+			return nil, fmt.Errorf("resolve secret %q: %w", b.Name, err)
+		}
+		out = append(out, types.Secret{Name: secret.Name, Value: secret.Value, EnvName: b.EnvName, CreatedAt: secret.CreatedAt, UpdatedAt: secret.UpdatedAt})
+	}
+	return out, nil
 }
 
 const defaultSecretAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -448,9 +451,9 @@ func funcArgs(expr, name string) ([]string, error) {
 
 func randomString(length int, alphabet string) (string, error) {
 	out := make([]byte, length)
-	max := big.NewInt(int64(len(alphabet)))
+	size := big.NewInt(int64(len(alphabet)))
 	for i := range out {
-		n, err := rand.Int(rand.Reader, max)
+		n, err := rand.Int(rand.Reader, size)
 		if err != nil {
 			return "", err
 		}

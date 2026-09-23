@@ -68,6 +68,7 @@ type Gateway struct {
 	Config               types.AppConfig
 	httpServer           *http.Server
 	echo                 *echo.Echo
+	authMiddleware       echo.MiddlewareFunc
 	grpcServer           *grpc.Server
 	healthServer         *health.Server
 	RedisClient          *common.RedisClient
@@ -265,7 +266,8 @@ func (g *Gateway) initHttp() error {
 	}
 
 	g.echo = e
-	authMiddleware := auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)
+	g.authMiddleware = auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)
+	authMiddleware := g.authMiddleware
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
@@ -652,8 +654,8 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
 
 	// Needs the assembled gateway service, so not in initHttp.
-	apiv1.NewDatabaseGroup(g.baseRouteGroup.Group("/database", auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)), gws)
-	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
+	apiv1.NewDatabaseGroup(g.baseRouteGroup.Group("/database", g.authMiddleware), gws)
+	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", g.authMiddleware), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
 
 	g.registerHealthService()
 

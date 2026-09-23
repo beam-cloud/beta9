@@ -36,6 +36,7 @@ type MCPGateway interface {
 	SetDeploymentEnv(ctx context.Context, authInfo *auth.AuthInfo, appName string, set map[string]string, unset []string) (*pb.DeployStubResponse, error)
 	RedeployWithConfig(ctx context.Context, authInfo *auth.AuthInfo, appName string, mutate func(*types.StubConfigV1) error) (*pb.DeployStubResponse, error)
 	SecretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error)
+	DeploymentURL(d *types.DeploymentWithRelated) (string, error)
 }
 
 type MCPGroup struct {

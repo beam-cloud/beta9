@@ -643,16 +643,10 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 	})
 }
 
-// reloadInstances asks running instances to re-read the stub config.
 func (g *StubGroup) reloadInstances(stub *types.StubWithRelated) {
-	if g.redisClient == nil {
-		return
+	if g.redisClient != nil {
+		common.PublishReloadInstance(g.redisClient, stub.ExternalId, string(stub.Type))
 	}
-	common.NewEventBus(g.redisClient).Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-		"stub_id":   stub.ExternalId,
-		"stub_type": stub.Type,
-		"timestamp": time.Now().Unix(),
-	}})
 }
 
 func (g *StubGroup) ScaleStub(ctx echo.Context) error {

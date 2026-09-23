@@ -33,19 +33,8 @@ func protoMap(m proto.Message) map[string]any {
 var configView = []string{"runtime", "autoscaler", "keep_warm_seconds", "workers", "concurrent_requests", "max_pending_tasks", "task_policy", "env", "ports", "tcp", "authorized", "entry_point", "volumes", "disks", "pool"}
 
 func (g *MCPGroup) deploymentURL(d *types.DeploymentWithRelated) string {
-	externalURL := g.config.GatewayService.HTTP.GetExternalURL()
-	urlType := g.config.GatewayService.InvokeURLType
-	if d.Stub.Type.Kind() == types.StubTypePod {
-		cfg, err := d.Stub.UnmarshalConfig()
-		if err != nil {
-			return ""
-		}
-		if cfg.TCP {
-			return common.BuildPodDeploymentURL(g.config.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost, &d.Deployment, cfg)
-		}
-		return common.BuildPodDeploymentURL(externalURL, urlType, &d.Deployment, cfg)
-	}
-	return common.BuildDeploymentLatestURL(externalURL, urlType, &d.Stub, &d.Deployment)
+	url, _ := g.gws.DeploymentURL(d)
+	return url
 }
 
 func (g *MCPGroup) deploymentView(d *types.DeploymentWithRelated) map[string]any {

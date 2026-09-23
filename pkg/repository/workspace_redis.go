@@ -9,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 type WorkspaceRedisRepository struct {
@@ -67,6 +68,7 @@ func (wr *WorkspaceRedisRepository) ListWebhooks(ctx context.Context, workspaceI
 	for _, raw := range res {
 		var webhook types.WorkspaceWebhook
 		if err := json.Unmarshal([]byte(raw), &webhook); err != nil {
+			log.Warn().Err(err).Str("workspace_id", workspaceId).Msg("skipping unreadable webhook")
 			continue
 		}
 		webhooks = append(webhooks, webhook)

@@ -50,7 +50,7 @@ func redact(w types.WorkspaceWebhook) types.WorkspaceWebhook {
 func validateWebhookURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "url must be an absolute http(s) URL")
+		return HTTPBadRequest("url must be an absolute http(s) URL")
 	}
 	return nil
 }
@@ -103,8 +103,10 @@ func (g *WebhookGroup) Create(ctx echo.Context) error {
 	return ctx.JSON(http.StatusCreated, webhook)
 }
 
-func (g *WebhookGroup) find(ctx echo.Context, workspaceId string) (*types.WorkspaceWebhook, error) {
-	webhooks, err := g.workspaceRepo.ListWebhooks(ctx.Request().Context(), workspaceId)
+// find is the webhook named by the route's :webhookId in the caller's workspace.
+func (g *WebhookGroup) find(ctx echo.Context) (*types.WorkspaceWebhook, error) {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	webhooks, err := g.workspaceRepo.ListWebhooks(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId)
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to list webhooks")
 	}
@@ -118,7 +120,7 @@ func (g *WebhookGroup) find(ctx echo.Context, workspaceId string) (*types.Worksp
 
 func (g *WebhookGroup) Update(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
-	webhook, err := g.find(ctx, cc.AuthInfo.Workspace.ExternalId)
+	webhook, err := g.find(ctx)
 	if err != nil {
 		return err
 	}
@@ -150,7 +152,7 @@ func (g *WebhookGroup) Update(ctx echo.Context) error {
 
 func (g *WebhookGroup) Delete(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
-	if _, err := g.find(ctx, cc.AuthInfo.Workspace.ExternalId); err != nil {
+	if _, err := g.find(ctx); err != nil {
 		return err
 	}
 	if err := g.workspaceRepo.DeleteWebhook(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId, ctx.Param("webhookId")); err != nil {
@@ -162,7 +164,7 @@ func (g *WebhookGroup) Delete(ctx echo.Context) error {
 // Test posts a `webhook.test` event synchronously and reports the receiver's status.
 func (g *WebhookGroup) Test(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
-	webhook, err := g.find(ctx, cc.AuthInfo.Workspace.ExternalId)
+	webhook, err := g.find(ctx)
 	if err != nil {
 		return err
 	}
@@ -176,8 +178,7 @@ func (g *WebhookGroup) Test(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to build test event")
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	if err := repository.DeliverWebhook(ctx.Request().Context(), client, *webhook, event); err != nil {
+	if err := repository.DeliverWebhook(ctx.Request().Context(), *webhook, event); err != nil {
 		return ctx.JSON(http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"ok": true})

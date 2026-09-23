@@ -52,7 +52,6 @@ type webhookDelivery struct {
 // workspaceWebhookSink fans events out to a workspace's webhooks, signed.
 type workspaceWebhookSink struct {
 	source WebhookSource
-	client *http.Client
 	queue  chan webhookDelivery
 
 	mu    sync.Mutex
@@ -67,7 +66,6 @@ type webhookCacheEntry struct {
 func newWorkspaceWebhookSink(source WebhookSource) *workspaceWebhookSink {
 	sink := &workspaceWebhookSink{
 		source: source,
-		client: &http.Client{Timeout: webhookHTTPTimeout},
 		queue:  make(chan webhookDelivery, webhookQueueSize),
 		cache:  map[string]webhookCacheEntry{},
 	}
@@ -121,14 +119,16 @@ func (s *workspaceWebhookSink) webhooksFor(workspaceId string) []types.Workspace
 
 func (s *workspaceWebhookSink) run() {
 	for delivery := range s.queue {
-		if err := DeliverWebhook(context.Background(), s.client, delivery.webhook, delivery.event); err != nil {
+		if err := DeliverWebhook(context.Background(), delivery.webhook, delivery.event); err != nil {
 			log.Debug().Err(err).Str("event_type", delivery.event.Type()).Str("webhook_id", delivery.webhook.ExternalId).Msg("webhook delivery failed")
 		}
 	}
 }
 
+var webhookClient = &http.Client{Timeout: webhookHTTPTimeout}
+
 // DeliverWebhook posts one signed CloudEvent; non-2xx is an error.
-func DeliverWebhook(ctx context.Context, client *http.Client, webhook types.WorkspaceWebhook, event cloudevents.Event) error {
+func DeliverWebhook(ctx context.Context, webhook types.WorkspaceWebhook, event cloudevents.Event) error {
 	body, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -141,10 +141,10 @@ func DeliverWebhook(ctx context.Context, client *http.Client, webhook types.Work
 	req.Header.Set(webhookEventHeader, event.Type())
 	req.Header.Set(webhookDeliveryHeader, event.ID())
 	if webhook.Secret != "" {
-		req.Header.Set(webhookSignatureHeader, SignWebhookBody(webhook.Secret, body))
+		req.Header.Set(webhookSignatureHeader, signWebhookBody(webhook.Secret, body))
 	}
 
-	resp, err := client.Do(req)
+	resp, err := webhookClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -155,8 +155,8 @@ func DeliverWebhook(ctx context.Context, client *http.Client, webhook types.Work
 	return nil
 }
 
-// SignWebhookBody returns the `sha256=<hex>` HMAC.
-func SignWebhookBody(secret string, body []byte) string {
+// signWebhookBody returns the `sha256=<hex>` HMAC.
+func signWebhookBody(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))

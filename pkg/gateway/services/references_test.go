@@ -79,9 +79,10 @@ func TestExpandReferences(t *testing.T) {
 			wantBindings: []secretBinding{{Name: "HF_TOKEN", EnvName: "TOKEN"}},
 		},
 		{
-			name:    "missing secret is an error",
-			env:     []string{"TOKEN=${{secret.NOPE}}"},
-			wantErr: `secret "NOPE" does not exist`,
+			name:         "missing secret binds; resolution reports it",
+			env:          []string{"TOKEN=${{secret.NOPE}}"},
+			wantEnv:      []string{},
+			wantBindings: []secretBinding{{Name: "NOPE", EnvName: "TOKEN"}},
 		},
 		{
 			name:         "database credentials bind to the service's secrets",
@@ -117,6 +118,12 @@ func TestExpandReferences(t *testing.T) {
 			require.ElementsMatch(t, tt.wantBindings, bindings)
 		})
 	}
+}
+
+func TestResolveSecretBindingsMissing(t *testing.T) {
+	gws := &GatewayService{backendRepo: newReferenceBackendRepo()}
+	_, err := gws.resolveSecretBindings(context.Background(), &types.Workspace{ExternalId: "ws-1"}, []secretBinding{{Name: "NOPE", EnvName: "TOKEN"}})
+	require.ErrorContains(t, err, `Secret "NOPE" does not exist`)
 }
 
 func TestExpandReferencesLastBindingPerVariableWins(t *testing.T) {

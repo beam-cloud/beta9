@@ -2,7 +2,6 @@ package gatewayservices
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,16 +17,16 @@ func (gws *GatewayService) ActiveDeploymentByName(ctx context.Context, workspace
 	if err != nil {
 		return nil, err
 	}
-	matches := make([]types.DeploymentWithRelated, 0, len(deployments))
+	active := make([]types.DeploymentWithRelated, 0, len(deployments))
 	for _, d := range deployments {
-		if d.Name == name && d.Active {
-			matches = append(matches, d)
+		if d.Active {
+			active = append(active, d)
 		}
 	}
-	if len(matches) == 0 {
+	if len(active) == 0 {
 		return nil, fmt.Errorf("no active deployment named %q", name)
 	}
-	return newestDeployment(matches), nil
+	return newestDeployment(active), nil
 }
 
 // RedeployWithConfig deploys a new version of an app's newest active
@@ -92,18 +91,12 @@ func (gws *GatewayService) SetDeploymentEnv(ctx context.Context, authInfo *auth.
 		if err != nil {
 			return err
 		}
-		for _, binding := range bindings {
-			secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, binding.Name)
-			if err != nil {
-				if err == sql.ErrNoRows {
-					return fmt.Errorf("secret %q does not exist in this workspace", binding.Name)
-				}
-				return fmt.Errorf("resolve secret %q: %w", binding.Name, err)
-			}
-			secrets = append(secrets, types.Secret{Name: secret.Name, Value: secret.Value, EnvName: binding.EnvName, CreatedAt: secret.CreatedAt, UpdatedAt: secret.UpdatedAt})
+		bound, err := gws.resolveSecretBindings(ctx, authInfo.Workspace, bindings)
+		if err != nil {
+			return err
 		}
 		config.Env = append(env, expanded...)
-		config.Secrets = secrets
+		config.Secrets = append(secrets, bound...)
 		return nil
 	})
 }

@@ -2,7 +2,6 @@ package gatewayservices
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -282,29 +281,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		requestedSecrets = append(requestedSecrets, secretBinding{Name: requestedSecret.Name})
 	}
 	requestedSecrets = append(requestedSecrets, referenceBindings...)
-	for _, requestedSecret := range uniqueByEnvName(requestedSecrets) {
-		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, requestedSecret.Name)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				return &pb.GetOrCreateStubResponse{
-					Ok:     false,
-					ErrMsg: fmt.Sprintf("Secret %q does not exist in this workspace.", requestedSecret.Name),
-				}, nil
-			}
-
-			return &pb.GetOrCreateStubResponse{
-				Ok:     false,
-				ErrMsg: "Failed to resolve workspace secrets.",
-			}, nil
-		}
-
-		stubConfig.Secrets = append(stubConfig.Secrets, types.Secret{
-			Name:      secret.Name,
-			Value:     secret.Value,
-			EnvName:   requestedSecret.EnvName,
-			CreatedAt: secret.CreatedAt,
-			UpdatedAt: secret.UpdatedAt,
-		})
+	stubConfig.Secrets, err = gws.resolveSecretBindings(ctx, authInfo.Workspace, uniqueByEnvName(requestedSecrets))
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
 	err = gws.configureVolumes(ctx, in.Volumes, authInfo.Workspace)

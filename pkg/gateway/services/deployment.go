@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -377,13 +376,8 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	return nil
 }
 
-// reloadInstances asks running instances of a stub to re-read its config.
 func (gws *GatewayService) reloadInstances(stubId, stubType string) {
-	common.NewEventBus(gws.redisClient).Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-		"stub_id":   stubId,
-		"stub_type": stubType,
-		"timestamp": time.Now().Unix(),
-	}})
+	common.PublishReloadInstance(gws.redisClient, stubId, stubType)
 }
 
 func (gws *GatewayService) stopActiveDeploymentContainers(deployment types.DeploymentWithRelated, force bool) error {

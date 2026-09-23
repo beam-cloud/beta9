@@ -63,11 +63,9 @@ func (g *WorkspaceGroup) Limits(ctx echo.Context) error {
 		MaxGpuCount: g.config.GatewayService.StubLimits.MaxGpuCount,
 	}
 
-	if cc.AuthInfo.Workspace != nil {
-		if cl, err := g.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId); err == nil && cl != nil {
-			limits.GPULimit = cl.GPULimit
-			limits.CPUMillicoreLimit = cl.CPUMillicoreLimit
-		}
+	if cl, err := g.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId); err == nil && cl != nil {
+		limits.GPULimit = cl.GPULimit
+		limits.CPUMillicoreLimit = cl.CPUMillicoreLimit
 	}
 
 	blacklisted := make(map[string]struct{}, len(g.config.GatewayService.StubLimits.GPUBlackList.GPUTypes))
