@@ -17,11 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const (
-	gitCloneTimeout    = 10 * time.Minute
-	nixpacksTimeout    = 5 * time.Minute
-	nixpacksDockerfile = ".nixpacks/Dockerfile"
-)
+const gitCloneTimeout = 10 * time.Minute
 
 // prepareGitBuild clones the source and settles on a Dockerfile. It returns
 // the directory buildah gets as its context (the checkout, or working_dir
@@ -32,10 +28,10 @@ func (c *ImageClient) prepareGitBuild(ctx context.Context, out *slog.Logger, src
 	if err != nil {
 		return "", "", nil, fmt.Errorf("create checkout dir: %w", err)
 	}
-	cleanup = func() { os.RemoveAll(root) }
+	remove := func() { os.RemoveAll(root) }
 	defer func() {
 		if err != nil {
-			cleanup()
+			remove()
 		}
 	}()
 
@@ -52,11 +48,11 @@ func (c *ImageClient) prepareGitBuild(ctx context.Context, out *slog.Logger, src
 		}
 	}
 
-	dockerfile, err = resolveGitDockerfile(ctx, out, contextDir, src)
+	dockerfile, err = resolveGitDockerfile(out, contextDir, src)
 	if err != nil {
 		return "", "", nil, err
 	}
-	return contextDir, dockerfile, cleanup, nil
+	return contextDir, dockerfile, remove, nil
 }
 
 // gitCheckout fetches exactly the commit the gateway resolved. Fetching by hash
@@ -152,8 +148,8 @@ func gitRedact(s, token string) string {
 
 // resolveGitDockerfile returns the Dockerfile to build, in the order Railway
 // resolves it: the path requested or set in railway.json, the repository's
-// own Dockerfile, else one nixpacks generates into the context.
-func resolveGitDockerfile(ctx context.Context, out *slog.Logger, contextDir string, src *types.GitSource) (string, error) {
+// own Dockerfile, else one rendered from the detected stack.
+func resolveGitDockerfile(out *slog.Logger, contextDir string, src *types.GitSource) (string, error) {
 	cfg := readRailwayConfig(contextDir)
 
 	if path := firstNonEmpty(src.DockerfilePath, cfg.dockerfilePath); path != "" {
@@ -169,45 +165,12 @@ func resolveGitDockerfile(ctx context.Context, out *slog.Logger, contextDir stri
 		return text, nil
 	}
 
-	start := gunicornBound(firstNonEmpty(src.StartCommand, cfg.startCommand))
-	build := firstNonEmpty(src.BuildCommand, cfg.buildCommand)
-	return nixpacksDockerfileFor(ctx, out, contextDir, start, build)
-}
-
-// nixpacksDockerfileFor writes .nixpacks/ into the context (its Dockerfile
-// COPYs the nix plan from there) and returns the Dockerfile.
-func nixpacksDockerfileFor(ctx context.Context, out *slog.Logger, contextDir, startCommand, buildCommand string) (string, error) {
-	nixpacks, err := exec.LookPath("nixpacks")
+	start := firstNonEmpty(src.StartCommand, cfg.startCommand, procfileCommand(contextDir))
+	text, err := renderDockerfile(contextDir, start, firstNonEmpty(src.BuildCommand, cfg.buildCommand))
 	if err != nil {
-		return "", fmt.Errorf("repository has no Dockerfile and this worker cannot generate one (nixpacks missing)")
+		return "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, nixpacksTimeout)
-	defer cancel()
-
-	args := []string{"build", contextDir, "--out", contextDir}
-	if startCommand != "" {
-		args = append(args, "--start-cmd", startCommand)
-	}
-	if buildCommand != "" {
-		args = append(args, "--build-cmd", buildCommand)
-	}
-	cmd := exec.CommandContext(ctx, nixpacks, args...)
-	cmd.Env = append(os.Environ(), "NIXPACKS_NO_COLOR=1")
-	var output bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &output, &output
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("repository has no Dockerfile and nixpacks could not detect how to build it: %s", strings.TrimSpace(output.String()))
-	}
-	text, err := readRepoFile(contextDir, nixpacksDockerfile)
-	if err != nil {
-		return "", fmt.Errorf("nixpacks produced no Dockerfile: %s", strings.TrimSpace(output.String()))
-	}
-	out.Info("Generated a Dockerfile with nixpacks\n")
-	// The plan box nixpacks prints tells the user what it detected; the
-	// progress noise around it does not.
-	if start, end := strings.Index(output.String(), "╔"), strings.LastIndex(output.String(), "╝"); start >= 0 && end > start {
-		out.Info(output.String()[start:end+len("╝")] + "\n")
-	}
+	out.Info(fmt.Sprintf("No Dockerfile in repository; generated one (%s)\n", strings.SplitN(text, "\n", 2)[0]))
 	return text, nil
 }
 

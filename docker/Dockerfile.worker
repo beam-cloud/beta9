@@ -376,21 +376,6 @@ EOT
 
 RUN apt-get install -y wget git
 
-# Builds from a git repository: git clones it, nixpacks (Railway's builder)
-# writes a Dockerfile for repositories that have none.
-ARG NIXPACKS_VERSION=1.41.0
-RUN <<EOT
-set -eux
-case "$TARGETARCH" in
-    amd64) arch=x86_64 ;;
-    arm64) arch=aarch64 ;;
-    *) echo "Unsupported architecture: $TARGETARCH" && exit 1 ;;
-esac
-wget -qO- "https://github.com/railwayapp/nixpacks/releases/download/v${NIXPACKS_VERSION}/nixpacks-v${NIXPACKS_VERSION}-${arch}-unknown-linux-musl.tar.gz" \
-    | tar -xz -C /usr/local/bin nixpacks
-chmod +x /usr/local/bin/nixpacks
-EOT
-
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       wget https://github.com/beam-cloud/goproc/releases/download/v0.1.12/goproc-0.1.12-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
     elif [ "$TARGETARCH" = "amd64" ]; then \

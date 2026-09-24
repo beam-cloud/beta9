@@ -27,7 +27,7 @@ func writeFiles(t *testing.T, files map[string]string) string {
 func TestResolveGitDockerfileFollowsRailwayOrder(t *testing.T) {
 	out := slog.New(slog.NewTextHandler(io.Discard, nil))
 	resolve := func(dir string, src *types.GitSource) (string, error) {
-		return resolveGitDockerfile(context.Background(), out, dir, src)
+		return resolveGitDockerfile(out, dir, src)
 	}
 
 	dir := writeFiles(t, map[string]string{
@@ -48,11 +48,49 @@ func TestResolveGitDockerfileFollowsRailwayOrder(t *testing.T) {
 	_, err = resolve(dir, &types.GitSource{DockerfilePath: "../../etc/passwd"})
 	assert.ErrorContains(t, err, "not found", "paths cannot escape the checkout")
 
-	plain := writeFiles(t, map[string]string{"Dockerfile": "# repo", "railway.json": `{"deploy":{"startCommand":"gunicorn app:app"}}`})
+	plain := writeFiles(t, map[string]string{"Dockerfile": "# repo", "requirements.txt": "flask"})
 	text, err = resolve(plain, &types.GitSource{})
 	require.NoError(t, err)
 	assert.Equal(t, "# repo", text, "then the repository's own Dockerfile")
-	assert.Equal(t, "gunicorn app:app --bind 0.0.0.0:$PORT", gunicornBound(readRailwayConfig(plain).startCommand))
+
+	_, err = resolve(writeFiles(t, map[string]string{"README.md": ""}), &types.GitSource{})
+	assert.ErrorContains(t, err, "no recognised stack")
+}
+
+func TestRenderDockerfileFromDetectedStack(t *testing.T) {
+	flask := writeFiles(t, map[string]string{
+		"requirements.txt": "flask\n",
+		"app.py":           "from flask import Flask\napp = Flask(__name__)\n",
+		"runtime.txt":      "python-3.11.4\n",
+		"railway.json":     `{"build":{"buildCommand":"python manage.py collectstatic"}}`,
+	})
+	text, err := renderDockerfile(flask, "", readRailwayConfig(flask).buildCommand)
+	require.NoError(t, err)
+	assert.Contains(t, text, "FROM python:3.11-slim\n")
+	assert.Contains(t, text, "RUN pip install --no-cache-dir -r requirements.txt gunicorn\n", "the chosen server is installed")
+	assert.Contains(t, text, "RUN python manage.py collectstatic\n")
+	assert.Contains(t, text, `CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:$PORT"]`)
+
+	procfile := writeFiles(t, map[string]string{"requirements.txt": "", "Procfile": "web: gunicorn wsgi\n"})
+	text, err = renderDockerfile(procfile, procfileCommand(procfile), "")
+	require.NoError(t, err)
+	assert.Contains(t, text, `"gunicorn wsgi --bind 0.0.0.0:$PORT"`, "gunicorn is bound to the service port")
+
+	node := writeFiles(t, map[string]string{
+		"package.json": `{"engines":{"node":">=18"},"scripts":{"build":"tsc","start":"node dist/index.js"}}`,
+		"yarn.lock":    "",
+	})
+	text, err = renderDockerfile(node, "", "")
+	require.NoError(t, err)
+	assert.Contains(t, text, "FROM node:18-slim\n")
+	assert.Contains(t, text, "RUN corepack enable && yarn install --frozen-lockfile\nRUN yarn run build\nENV NODE_ENV=production", "dev dependencies are present for the build")
+	assert.Contains(t, text, `CMD ["sh", "-c", "yarn run start"]`)
+
+	goMod := writeFiles(t, map[string]string{"go.mod": "module example.com/v2\n\ngo 1.22\n", "main.go": ""})
+	text, err = renderDockerfile(goMod, "", "")
+	require.NoError(t, err)
+	assert.Contains(t, text, "FROM golang:1.22 AS build\n", "the go directive, not the module path, names the version")
+	assert.Contains(t, text, "COPY --from=build /out /out\n")
 }
 
 func TestGitCheckoutFetchesResolvedCommit(t *testing.T) {
@@ -87,4 +125,11 @@ func TestGitCheckoutFetchesResolvedCommit(t *testing.T) {
 	assert.Equal(t, "# v1", checkout(&types.GitSource{RepoURL: "file://" + origin, Ref: "main", Commit: first}), "builds the commit the gateway resolved, not the branch tip")
 	assert.Equal(t, "# v2", checkout(&types.GitSource{RepoURL: "file://" + origin, Ref: "main", Commit: strings.Repeat("0", 40)}), "a hash the server cannot serve falls back to cloning the ref")
 	assert.Error(t, gitCheckout(context.Background(), t.TempDir(), &types.GitSource{RepoURL: "file://" + origin, Ref: "nope"}))
+
+	client := &ImageClient{imageCachePath: t.TempDir()}
+	out := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, _, _, err := client.prepareGitBuild(context.Background(), out, &types.GitSource{RepoURL: "file://" + origin, Ref: "main", Commit: first, WorkingDir: "missing"})
+	assert.ErrorContains(t, err, `working directory "missing" not found`, "a failed prepare returns an error, not a panic")
+	entries, _ := os.ReadDir(filepath.Join(client.imageCachePath, "spool"))
+	assert.Empty(t, entries, "and removes its checkout")
 }
