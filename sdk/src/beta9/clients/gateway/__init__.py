@@ -502,6 +502,9 @@ class GetOrCreateStubRequest(betterproto.Message):
      managed_service/* stubs (system workspace only).
     """
 
+    use_vm: bool = betterproto.bool_field(50)
+    """Run the sandbox in its own virtual machine (microvm pools only)."""
+
 
 @dataclass(eq=False, repr=False)
 class GetOrCreateStubResponse(betterproto.Message):

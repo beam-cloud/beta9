@@ -272,3 +272,11 @@ func (r *startupHookRuntime) RestoreWaitsForExit() bool {
 	restoreRuntime, ok := r.Runtime.(interface{ RestoreWaitsForExit() bool })
 	return ok && restoreRuntime.RestoreWaitsForExit()
 }
+
+func (r *startupHookRuntime) FreezeDisk(ctx context.Context, containerID, mountPath string) (func(), error) {
+	freezer, ok := r.Runtime.(DiskFreezer)
+	if !ok {
+		return nil, fmt.Errorf("runtime %s does not own the container's disks", r.Name())
+	}
+	return freezer.FreezeDisk(ctx, containerID, mountPath)
+}

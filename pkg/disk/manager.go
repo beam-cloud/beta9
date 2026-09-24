@@ -215,8 +215,14 @@ func (m *Manager) Attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	if spec.VirtualSizeBytes <= 0 {
 		return nil, fmt.Errorf("volume %s requires a positive size", spec.Key)
 	}
-	if spec.Mountpoint == "" {
-		return nil, fmt.Errorf("volume %s requires a mountpoint", spec.Key)
+	switch spec.Export {
+	case ExportNBD:
+		if spec.Mountpoint == "" {
+			return nil, fmt.Errorf("volume %s requires a mountpoint", spec.Key)
+		}
+	case ExportVhostUser:
+	default:
+		return nil, fmt.Errorf("volume %s: unsupported export mode %q", spec.Key, spec.Export)
 	}
 
 	m.mu.Lock()

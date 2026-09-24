@@ -203,7 +203,7 @@ worker:
       mode: local
       priority: 1
       # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod (e.g., "nvidia")
-      containerRuntime: gvisor  # Pool-specific container runtime: "runc" or "gvisor"
+      containerRuntime: gvisor  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
       containerStartConcurrency: 32
       containerRuntimeConfig:
         gvisorPlatform: systrap
@@ -237,7 +237,7 @@ worker:
       mode: local
       requiresPoolSelector: true
       # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod
-      containerRuntime: runc  # Pool-specific container runtime: "runc" or "gvisor"
+      containerRuntime: runc  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
@@ -269,7 +269,7 @@ worker:
     #   mode: local
     #   gpuType: any
     #   runtime: nvidia  # Kubernetes RuntimeClass for GPU support
-    #   containerRuntime: gvisor  # Pool-specific container runtime: "runc" or "gvisor"
+    #   containerRuntime: gvisor  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
     #   containerRuntimeConfig:
     #     gvisorPlatform: systrap
     #     gvisorRoot: /run/gvisor

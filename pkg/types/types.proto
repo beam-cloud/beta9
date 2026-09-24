@@ -120,6 +120,7 @@ message ContainerRequest {
   uint32 evict_drain_seconds = 43;
   uint32 drain_seconds = 44;
   int32 evict_order = 45;
+  bool use_vm = 46;
 }
 
 message ContainerState {

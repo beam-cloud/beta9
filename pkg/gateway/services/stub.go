@@ -44,6 +44,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	gpus := gpuTypesForStubRequest(in)
 
+	if errMsg := validateUseVM(in, gpus); errMsg != "" {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: errMsg,
+		}, nil
+	}
+
 	autoscaler := autoscalerFromProto(in.Autoscaler)
 
 	keepWarmSeconds := normalizeKeepWarmSeconds(in.KeepWarmSeconds, types.StubType(in.StubType))
@@ -165,6 +172,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
+		UseVM:              in.UseVm,
 		Hostname:           in.Hostname,
 		IsService:          in.IsService,
 		Serving:            servingConfig,
@@ -488,6 +496,25 @@ func gpuTypesForStubRequest(in *pb.GetOrCreateStubRequest) []types.GpuType {
 		return []types.GpuType{types.GPU_ANY}
 	}
 	return gpus
+}
+
+// validateUseVM rejects combinations the microvm runtime cannot serve at stub
+// creation, where the error is readable, rather than as a scheduler
+// "no suitable worker" later. Returns an empty string when the request is fine.
+func validateUseVM(in *pb.GetOrCreateStubRequest, gpus []types.GpuType) string {
+	if !in.UseVm {
+		return ""
+	}
+	if types.StubType(in.StubType).Kind() != types.StubTypeSandbox {
+		return "use_vm is only supported for sandboxes"
+	}
+	if len(gpus) > 0 || in.GpuCount > 0 {
+		return "use_vm sandboxes cannot request a GPU"
+	}
+	if in.CheckpointEnabled {
+		return "use_vm sandboxes do not support memory snapshots yet"
+	}
+	return ""
 }
 
 func normalizeKeepWarmSeconds(raw float32, stubType types.StubType) int {

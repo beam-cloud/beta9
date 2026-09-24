@@ -60,6 +60,7 @@ def stub_request_from_config(stub: Dict[str, Any], config: Dict[str, Any]) -> Di
         "block_network": config.get("block_network", False),
         "allow_list": config.get("allow_list") or [],
         "docker_enabled": config.get("docker_enabled", False),
+        "use_vm": config.get("use_vm", False),
         "hostname": config.get("hostname", ""),
         "is_service": config.get("is_service", False),
         "serving": config.get("serving"),

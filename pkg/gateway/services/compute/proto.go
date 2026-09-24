@@ -57,7 +57,7 @@ func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservatio
 		return model.Pool{}, fmt.Errorf("unsupported private pool fallback %q", in.Fallback)
 	}
 	switch in.ContainerRuntime {
-	case "", types.ContainerRuntimeRunc.String(), types.ContainerRuntimeGvisor.String():
+	case "", types.ContainerRuntimeRunc.String(), types.ContainerRuntimeGvisor.String(), types.ContainerRuntimeMicroVM.String():
 	default:
 		return model.Pool{}, fmt.Errorf("unsupported container runtime %q", in.ContainerRuntime)
 	}

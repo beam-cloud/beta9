@@ -62,23 +62,27 @@ func fmtNodeName(pivot int) string {
 }
 
 type qsdProcess struct {
-	pid        int
-	qmpSocket  string
-	nbdSocket  string
-	runtimeDir string
+	pid          int
+	qmpSocket    string
+	nbdSocket    string // NBD export socket; empty for vhost-user exports
+	exportSocket string // vhost-user-blk socket; empty for NBD exports
+	runtimeDir   string
 }
 
-// startQSD launches one qemu-storage-daemon serving headPath over an NBD unix
-// socket and waits until its QMP socket answers. fmtNode is the node name of
-// the active qcow2 layer, which changes on every pivot.
-func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode string, readOnly bool) (*qsdProcess, error) {
+// startQSD launches one qemu-storage-daemon serving headPath either over an
+// NBD unix socket or as a vhost-user-blk device, and waits until the export
+// socket exists. fmtNode is the node name of the active qcow2 layer, which
+// changes on every pivot; both export types reference it and follow pivots
+// the same way.
+func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode string, readOnly bool, export ExportMode) (*qsdProcess, error) {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return nil, err
 	}
 	qmpSocket := filepath.Join(runtimeDir, "qmp.sock")
 	nbdSocket := filepath.Join(runtimeDir, "nbd.sock")
+	vhostSocket := filepath.Join(runtimeDir, "vhost-user-blk.sock")
 	pidFile := filepath.Join(runtimeDir, "qsd.pid")
-	for _, stale := range []string{qmpSocket, nbdSocket, pidFile} {
+	for _, stale := range []string{qmpSocket, nbdSocket, vhostSocket, pidFile} {
 		if err := os.Remove(stale); err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
@@ -98,8 +102,22 @@ func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode st
 		"--monitor", "chardev=qmp0",
 		"--blockdev", string(fileBlockdev),
 		"--blockdev", string(fmtBlockdev),
-		"--nbd-server", fmt.Sprintf("addr.type=unix,addr.path=%s", nbdSocket),
-		"--export", fmt.Sprintf("type=nbd,id=%s,node-name=%s,name=%s,writable=%s", qsdExportName, fmtNode, qsdExportName, boolOnOff(!readOnly)),
+	}
+	waitSocket := nbdSocket
+	proc := &qsdProcess{qmpSocket: qmpSocket, runtimeDir: runtimeDir}
+	switch export {
+	case ExportVhostUser:
+		args = append(args,
+			"--export", fmt.Sprintf("type=vhost-user-blk,id=%s,node-name=%s,addr.type=unix,addr.path=%s,writable=%s", qsdExportName, fmtNode, vhostSocket, boolOnOff(!readOnly)),
+		)
+		waitSocket = vhostSocket
+		proc.exportSocket = vhostSocket
+	default:
+		args = append(args,
+			"--nbd-server", fmt.Sprintf("addr.type=unix,addr.path=%s", nbdSocket),
+			"--export", fmt.Sprintf("type=nbd,id=%s,node-name=%s,name=%s,writable=%s", qsdExportName, fmtNode, qsdExportName, boolOnOff(!readOnly)),
+		)
+		proc.nbdSocket = nbdSocket
 	}
 
 	if _, err := m.run(ctx, m.binaries.QSD, args...); err != nil {
@@ -110,11 +128,12 @@ func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode st
 	if err != nil {
 		return nil, err
 	}
-	if err := waitForSocket(ctx, nbdSocket, qsdStartTimeout); err != nil {
+	if err := waitForSocket(ctx, waitSocket, qsdStartTimeout); err != nil {
 		killProcess(pid, m.binaries.qsdComm())
 		return nil, err
 	}
-	return &qsdProcess{pid: pid, qmpSocket: qmpSocket, nbdSocket: nbdSocket, runtimeDir: runtimeDir}, nil
+	proc.pid = pid
+	return proc, nil
 }
 
 func boolOnOff(v bool) string {

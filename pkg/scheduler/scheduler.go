@@ -1010,7 +1010,7 @@ func filterControllersByFlagsForFailover(controllers []WorkerPoolController, req
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
-		if !runtimeMatchesCheckpoint(request, controllerRuntime(controller)) {
+		if !runtimeMatchesCheckpoint(request, controllerRuntime(controller)) || !runtimeAcceptsRequest(request, controllerRuntime(controller)) {
 			continue
 		}
 		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
@@ -1128,7 +1128,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	}
 
 	for _, worker := range workers {
-		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) {
+		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) || !runtimeAcceptsRequest(request, workerRuntime(worker)) {
 			continue
 		}
 		if !acceleratorMatchesCheckpoint(request, worker.Gpu) {
@@ -1210,6 +1210,30 @@ func checkpointRuntime(request *types.ContainerRequest) string {
 func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName string) bool {
 	requiredRuntime := checkpointRuntime(request)
 	return requiredRuntime == "" || runtimeName == requiredRuntime
+}
+
+// runtimeAcceptsRequest is the two-way gate between the microvm runtime and
+// everything else. A microvm worker only takes a sandbox that explicitly
+// asked for a VM (use_vm) and that the runtime can serve: no GPU, no memory
+// checkpoint. Every other runtime refuses use_vm requests, so a sandbox that
+// asked for a VM fails closed instead of quietly landing in a container.
+func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) bool {
+	if request == nil {
+		return true
+	}
+	if runtimeName != types.ContainerRuntimeMicroVM.String() {
+		return !request.UseVM
+	}
+	if !request.UseVM || request.Stub.Type.Kind() != types.StubTypeSandbox || request.RequiresGPU() {
+		return false
+	}
+	if request.CheckpointEnabled {
+		return false
+	}
+	if checkpoint := availableCheckpoint(request); checkpoint != nil && !checkpoint.IsFilesystemOnly() {
+		return false
+	}
+	return true
 }
 
 func checkpointAccelerator(request *types.ContainerRequest) string {

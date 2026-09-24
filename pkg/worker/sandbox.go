@@ -172,6 +172,12 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		"--bridge=none",
 		"--storage-driver=vfs",
 	}
+	// A microvm has its own kernel: /var/lib/docker sits on a real ext4 block
+	// device and the guest has netfilter, so dockerd runs with its defaults
+	// (overlay2, bridge, iptables) and inner containers get real networking.
+	if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeMicroVM.String() {
+		cmd = []string{"dockerd"}
+	}
 
 	// dockerd runs in the foreground; waiting here would block readiness checks.
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, false)

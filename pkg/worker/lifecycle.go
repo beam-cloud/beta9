@@ -1258,6 +1258,24 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 	}
 
+	// A microvm sizes its guest from the request whether or not the pool
+	// enforces cgroup limits, and consumes durable qcow disks as block
+	// devices rather than bind mounts.
+	if s.runtimeOwnsBlockRoot() {
+		if spec.Annotations == nil {
+			spec.Annotations = make(map[string]string)
+		}
+		if request.Memory > 0 {
+			spec.Annotations[runtime.MicroVMMemoryMiBAnnotation] = strconv.FormatInt(request.Memory, 10)
+		}
+		if cpus := requestedCPUCount(request.Cpu); cpus > 0 {
+			spec.Annotations[runtime.MicroVMVCPUAnnotation] = strconv.FormatInt(cpus, 10)
+		}
+		if err := s.annotateExportedDurableDisks(request, spec); err != nil {
+			return nil, err
+		}
+	}
+
 	deferredCPU := s.hasDeferredCPUThrottle(request.ContainerId)
 	runnerReadySignal := deferredCPU && request.Stub.Type.Kind() == types.StubTypeFunction
 	if runnerReadySignal {
@@ -1476,8 +1494,13 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 
 	// Durable disks were brought online during startup (prepareDurableDiskMounts).
 	// A machine-root disk is not bind-mounted; it hosts the container's
-	// overlay upper layer instead (see SetupWithWritable below).
+	// overlay upper layer instead (see SetupWithWritable below). A block-root
+	// runtime attaches every qcow disk to the guest directly; those are
+	// annotated onto the spec instead (annotateExportedDurableDisks).
 	if mount.MountType == types.StorageModeDurableDisk {
+		if isQcowDurableDiskMount(mount) && s.runtimeOwnsBlockRoot() {
+			return false, nil
+		}
 		return !isQcowRootDiskMount(mount), nil
 	}
 
@@ -1685,7 +1708,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 	phaseStart := time.Now()
-	if rootDisk := qcowRootDiskMount(request); rootDisk != nil {
+	if rootDisk := qcowRootDiskMount(request); rootDisk != nil && !s.runtimeOwnsBlockRoot() {
 		// The whole machine filesystem persists: the overlay's writable layer
 		// lives on the qcow volume, so every root filesystem change is part of
 		// the disk snapshot.
@@ -1694,6 +1717,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			filepath.Join(rootDisk.LocalPath, "overlay", "work"),
 		)
 	} else {
+		// A block-root runtime attaches the qcow volume to the guest directly
+		// and the guest puts its overlay upper on it; this host overlay is only
+		// the read-only canvas the image and bind mounts are shared from.
 		err = containerInstance.Overlay.Setup()
 	}
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
@@ -1811,6 +1837,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Add Docker capabilities if enabled for sandbox containers.
 	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox {
 		runtime.AddDockerInDockerCapabilities(spec)
+		if s.runtimeOwnsBlockRoot() {
+			// The guest binds its block device's docker directory over
+			// /var/lib/docker so overlay2 runs on a real filesystem.
+			if spec.Annotations == nil {
+				spec.Annotations = make(map[string]string)
+			}
+			spec.Annotations[runtime.MicroVMDockerAnnotation] = "true"
+		}
 		log.Info().Str("container_id", containerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
 	}
 

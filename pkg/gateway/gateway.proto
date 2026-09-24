@@ -763,6 +763,8 @@ message GetOrCreateStubRequest {
   // JSON-encoded types.ManagedEndpointStubConfig for managed_endpoint/* and
   // managed_service/* stubs (system workspace only).
   string managed_endpoint = 49;
+  // Run the sandbox in its own virtual machine (microvm pools only).
+  bool use_vm = 50;
 }
 
 message GetOrCreateStubResponse {

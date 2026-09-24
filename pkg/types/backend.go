@@ -549,6 +549,8 @@ type StubConfigV1 struct {
 	BlockNetwork       bool               `json:"block_network"`
 	AllowList          []string           `json:"allow_list"`
 	DockerEnabled      bool               `json:"docker_enabled"`
+	// UseVM runs sandboxes in a microvm pool instead of a container runtime.
+	UseVM bool `json:"use_vm,omitempty"`
 	// Hostname to set inside the container.
 	Hostname string `json:"hostname,omitempty"`
 	// MachineID pins the stub's containers to one agent machine (pod/shell

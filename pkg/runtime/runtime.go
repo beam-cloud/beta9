@@ -15,6 +15,11 @@ type Capabilities struct {
 	OOMEvents         bool // Runtime-native OOM events (use cgroup poller as fallback)
 	JoinExistingNetNS bool // Can join existing network namespace
 	CDI               bool // Container Device Interface support
+	// BlockRoot means the runtime owns the container's writable layer as a
+	// block device it attaches itself: the host must not mount durable disks
+	// or place an overlay upper on them, and the rootfs path it receives is
+	// consumed read-only.
+	BlockRoot bool
 }
 
 // State represents the current state of a container
@@ -130,13 +135,21 @@ type Runtime interface {
 
 // Config contains configuration for creating a runtime
 type Config struct {
-	Type           string // "runc" | "gvisor"
+	Type           string // "runc" | "gvisor" | "microvm"
 	RuncPath       string // Path to runc binary (default: "runc")
 	RunscPath      string // Path to runsc binary (default: "runsc")
 	RunscPlatform  string // "kvm" | "systrap" | "ptrace" (optional)
 	RunscRoot      string // Root directory for runsc state (default: "/run/gvisor")
 	RunscExtraArgs []string
 	Debug          bool // Enable debug mode
+
+	// MicroVM settings. Empty fields take the defaults baked into the worker
+	// image (see microvm.go).
+	MicroVMHypervisorPath string // cloud-hypervisor binary (default: "cloud-hypervisor")
+	MicroVMVirtiofsdPath  string // virtiofsd binary (default: "virtiofsd")
+	MicroVMKernelPath     string // guest vmlinux (default: DefaultMicroVMKernelPath)
+	MicroVMInitPath       string // static guest init bind-mounted into the rootfs (default: DefaultMicroVMInitPath)
+	MicroVMStateRoot      string // per-VM sockets, scratch disks, pidfiles (default: DefaultMicroVMStateRoot)
 }
 
 // New creates a new Runtime based on the provided configuration
@@ -146,6 +159,8 @@ func New(cfg Config) (Runtime, error) {
 		return NewRunc(cfg)
 	case types.ContainerRuntimeGvisor.String():
 		return NewRunsc(cfg)
+	case types.ContainerRuntimeMicroVM.String():
+		return NewMicroVM(cfg)
 	default:
 		return nil, ErrUnsupportedRuntime{Runtime: cfg.Type}
 	}

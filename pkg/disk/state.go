@@ -48,6 +48,18 @@ type volumeState struct {
 	QMPSocket string `json:"qmp_socket,omitempty"`
 	NBDSocket string `json:"nbd_socket,omitempty"`
 	NBDDevice string `json:"nbd_device,omitempty"`
+
+	// Export is how the head is served (see ExportMode); empty means NBD.
+	// ExportSocket is the vhost-user-blk socket while attached in that mode.
+	Export       string `json:"export,omitempty"`
+	ExportSocket string `json:"export_socket,omitempty"`
+}
+
+func (s *volumeState) exportMode() ExportMode {
+	if s.Export == string(ExportVhostUser) {
+		return ExportVhostUser
+	}
+	return ExportNBD
 }
 
 type stateLayer struct {

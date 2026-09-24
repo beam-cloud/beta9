@@ -253,6 +253,58 @@ func TestDockerEnabledRequestsCanUseRuncWorkersAndControllers(t *testing.T) {
 	assert.Equal(t, workers, filteredWorkers)
 }
 
+// The microvm runtime is opt-in in both directions: only use_vm sandboxes
+// reach it, and use_vm sandboxes reach nothing else.
+func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
+	runc := &LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()}
+	gvisor := &LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()}
+	microvm := &LocalWorkerPoolControllerForTest{name: "microvm", containerRuntime: types.ContainerRuntimeMicroVM.String()}
+	controllers := []WorkerPoolController{runc, gvisor, microvm}
+
+	worker := func(id, runtimeName string) *types.Worker {
+		return &types.Worker{Id: id, Status: types.WorkerStatusAvailable, FreeCpu: 4000, FreeMemory: 8000, Runtime: runtimeName}
+	}
+	runcWorker := worker("runc-worker", types.ContainerRuntimeRunc.String())
+	gvisorWorker := worker("gvisor-worker", types.ContainerRuntimeGvisor.String())
+	microvmWorker := worker("microvm-worker", types.ContainerRuntimeMicroVM.String())
+	workers := []*types.Worker{runcWorker, gvisorWorker, microvmWorker}
+
+	sandbox := func(useVM bool) *types.ContainerRequest {
+		request := &types.ContainerRequest{Cpu: 1000, Memory: 1024, UseVM: useVM}
+		request.Stub.Type = types.StubType(types.StubTypeSandbox)
+		return request
+	}
+
+	// A plain sandbox never sees VM capacity, even when it is the only idle worker.
+	assert.Equal(t, []WorkerPoolController{runc, gvisor}, filterControllersByFlags(controllers, sandbox(false)))
+	assert.Equal(t, []*types.Worker{runcWorker, gvisorWorker}, filterWorkersByResources(workers, sandbox(false), nil))
+	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{microvmWorker}, sandbox(false), nil))
+
+	// use_vm goes only to microvm, and fails closed when there is none.
+	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, sandbox(true)))
+	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, sandbox(true), nil))
+	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{runcWorker, gvisorWorker}, sandbox(true), nil))
+
+	// Things the VM runtime cannot serve stay off it even with use_vm.
+	gpu := sandbox(true)
+	gpu.Gpu = "RTX5090"
+	gpu.GpuCount = 1
+	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, gpu))
+
+	checkpointing := sandbox(true)
+	checkpointing.CheckpointEnabled = true
+	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, checkpointing))
+
+	restoring := sandbox(true)
+	restoring.Checkpoint = &types.Checkpoint{CheckpointId: "c1", Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String()}
+	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, restoring))
+
+	pod := &types.ContainerRequest{Cpu: 1000, Memory: 1024, UseVM: true}
+	pod.Stub.Type = types.StubType(types.StubTypePodRun)
+	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, pod))
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{microvmWorker}, pod, nil))
+}
+
 // Provider pools (workspace-supplied machines) only run platform-owned managed
 // endpoint replicas; ordinary requests never reach them, even by selector.
 func TestProviderControllersOnlyAdmitManagedRequests(t *testing.T) {

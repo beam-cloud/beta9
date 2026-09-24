@@ -391,6 +391,10 @@ type ContainerRequest struct {
 	// EvictOrder ranks evictable containers on a worker: lower values are
 	// evicted first. Ties fall to the most recently started container.
 	EvictOrder int32 `json:"evict_order,omitempty"`
+	// UseVM asks for a microvm pool: the sandbox boots in its own virtual
+	// machine. Only such requests are ever scheduled onto microvm workers, and
+	// they never fall back to a container runtime.
+	UseVM bool `json:"use_vm,omitempty"`
 }
 
 // @go2proto
@@ -740,6 +744,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		EvictDrainSeconds:        c.EvictDrainSeconds,
 		DrainSeconds:             c.DrainSeconds,
 		EvictOrder:               c.EvictOrder,
+		UseVm:                    c.UseVM,
 	}
 }
 
@@ -807,6 +812,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		EvictDrainSeconds:        in.EvictDrainSeconds,
 		DrainSeconds:             in.DrainSeconds,
 		EvictOrder:               in.EvictOrder,
+		UseVM:                    in.UseVm,
 	}
 }
 

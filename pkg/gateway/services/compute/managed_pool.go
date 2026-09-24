@@ -103,7 +103,7 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 		config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 	}
 	switch config.ContainerRuntime {
-	case types.ContainerRuntimeRunc.String(), types.ContainerRuntimeGvisor.String():
+	case types.ContainerRuntimeRunc.String(), types.ContainerRuntimeGvisor.String(), types.ContainerRuntimeMicroVM.String():
 	default:
 		return types.WorkerPoolConfig{}, fmt.Errorf("unsupported container runtime %q", config.ContainerRuntime)
 	}

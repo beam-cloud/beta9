@@ -3501,6 +3501,10 @@
         "managedEndpoint": {
           "type": "string",
           "description": "JSON-encoded types.ManagedEndpointStubConfig for managed_endpoint/* and\nmanaged_service/* stubs (system workspace only)."
+        },
+        "useVm": {
+          "type": "boolean",
+          "description": "Run the sandbox in its own virtual machine (microvm pools only)."
         }
       }
     },
