@@ -57,6 +57,34 @@ func TestResolveGitDockerfileFollowsRailwayOrder(t *testing.T) {
 	assert.ErrorContains(t, err, "no recognised stack")
 }
 
+func TestRepoFilesCannotEscapeThroughSymlinks(t *testing.T) {
+	out := slog.New(slog.NewTextHandler(io.Discard, nil))
+	outside := writeFiles(t, map[string]string{"secret": "host file"})
+	dir := writeFiles(t, map[string]string{"app/Dockerfile.real": "# inside", "README.md": ""})
+	require.NoError(t, os.Symlink(filepath.Join(outside, "secret"), filepath.Join(dir, "Dockerfile")))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "secret"), filepath.Join(dir, "railway.json")))
+	require.NoError(t, os.Symlink("app/Dockerfile.real", filepath.Join(dir, "Dockerfile.link")))
+	require.NoError(t, os.Symlink(outside, filepath.Join(dir, "hostdir")))
+
+	_, err := readRepoFile(dir, "Dockerfile")
+	assert.ErrorContains(t, err, "outside the repository", "a committed link to a host file is not read")
+	_, err = readRepoFile(dir, "hostdir/secret")
+	assert.ErrorContains(t, err, "outside the repository", "nor through a linked directory")
+	text, err := readRepoFile(dir, "Dockerfile.link")
+	require.NoError(t, err)
+	assert.Equal(t, "# inside", text, "links that stay inside the checkout still work")
+
+	_, err = resolveGitDockerfile(out, dir, &types.GitSource{DockerfilePath: "Dockerfile"})
+	assert.ErrorContains(t, err, "not found")
+	assert.Equal(t, railwayConfig{}, readRailwayConfig(dir), "a linked railway.json is ignored")
+
+	_, err = repoPath(dir, "hostdir")
+	assert.ErrorContains(t, err, "outside the repository", "a linked working_dir cannot become the build context")
+	path, err := repoPath(dir, "app")
+	require.NoError(t, err)
+	assert.Equal(t, "Dockerfile.real", func() string { e, _ := os.ReadDir(path); return e[0].Name() }())
+}
+
 func TestRenderDockerfileFromDetectedStack(t *testing.T) {
 	flask := writeFiles(t, map[string]string{
 		"requirements.txt": "flask\n",

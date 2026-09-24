@@ -42,8 +42,13 @@ func (c *ImageClient) prepareGitBuild(ctx context.Context, out *slog.Logger, src
 
 	contextDir = root
 	if src.WorkingDir != "" {
-		contextDir = filepath.Join(root, filepath.Clean("/"+src.WorkingDir))
-		if info, statErr := os.Stat(contextDir); statErr != nil || !info.IsDir() {
+		contextDir, err = repoPath(root, src.WorkingDir)
+		if err == nil {
+			if info, statErr := os.Stat(contextDir); statErr != nil || !info.IsDir() {
+				err = os.ErrNotExist
+			}
+		}
+		if err != nil {
 			return "", "", nil, fmt.Errorf("working directory %q not found in repository", src.WorkingDir)
 		}
 	}
@@ -238,8 +243,30 @@ func tomlString(text, table, key string) string {
 }
 
 // readRepoFile reads a file by path relative to dir, refusing paths that
-// escape it.
+// escape it, including through symlinks committed to the repository.
 func readRepoFile(dir, rel string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, filepath.Clean("/"+rel)))
+	path, err := repoPath(dir, rel)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
 	return string(data), err
+}
+
+// repoPath resolves rel inside dir with symlinks followed, and refuses the
+// result unless it is still within dir. The checkout is user-controlled, so a
+// committed link to / or /proc/self/environ must not reach the worker host.
+func repoPath(dir, rel string) (string, error) {
+	base, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	path, err := filepath.EvalSymlinks(filepath.Join(base, filepath.Clean("/"+rel)))
+	if err != nil {
+		return "", err
+	}
+	if inside, err := filepath.Rel(base, path); err != nil || inside == ".." || strings.HasPrefix(inside, "../") {
+		return "", fmt.Errorf("%q resolves outside the repository", rel)
+	}
+	return path, nil
 }
