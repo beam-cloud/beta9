@@ -24,6 +24,7 @@ message BuildOptions {
   string build_ctx_object = 3;
   string source_image_creds = 4;
   repeated string build_secrets = 5;
+  GitSource git_source = 6;
 }
 
 message Checkpoint {
@@ -178,6 +179,17 @@ message FileSearchRange {
 message FileSearchResult {
   string path = 1;
   repeated FileSearchMatch matches = 2;
+}
+
+message GitSource {
+  string repo_url = 1;
+  string ref = 2;
+  string commit = 3;
+  string token = 4;
+  string working_dir = 5;
+  string dockerfile_path = 6;
+  string start_command = 7;
+  string build_command = 8;
 }
 
 message Mount {

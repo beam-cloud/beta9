@@ -109,9 +109,19 @@ func (is *ContainerImageService) buildOptionsFromVerifyRequest(ctx context.Conte
 		BuildSecrets:   buildSecrets,
 		Gpu:            in.Gpu,
 		ClipVersion:    is.config.ImageService.ClipVersion,
+		GitSource:      gitSourceFromProto(in.GitSource),
 	}
 
-	if in.Dockerfile == "" {
+	if opts.GitSource != nil {
+		if opts.ClipVersion != uint32(types.ClipVersion2) {
+			return nil, errors.New("git sources need clip v2 builds")
+		}
+		if err := resolveGitCommit(ctx, opts.GitSource); err != nil {
+			return nil, err
+		}
+	}
+
+	if in.Dockerfile == "" && opts.GitSource == nil {
 		opts.BaseImageTag = baseImageTag
 		opts.BaseImageName = is.config.ImageService.Runner.BaseImageName
 		opts.BaseImageRegistry = is.config.ImageService.Runner.BaseImageRegistry
@@ -125,6 +135,12 @@ func (is *ContainerImageService) buildOptionsFromVerifyRequest(ctx context.Conte
 }
 
 func (is *ContainerImageService) prepareBuildOptionsForImageID(ctx context.Context, in *pb.VerifyImageBuildRequest, opts *BuildOpts) error {
+	if opts.GitSource != nil {
+		// The repository supplies (or nixpacks generates) the Dockerfile on
+		// the build worker; there is nothing to render here.
+		return nil
+	}
+
 	if in.ExistingImageUri != "" {
 		opts.ExistingImageUri = in.ExistingImageUri
 

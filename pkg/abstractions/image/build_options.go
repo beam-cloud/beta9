@@ -29,6 +29,7 @@ type BuildOpts struct {
 	Gpu                string
 	IgnorePython       bool
 	ClipVersion        uint32
+	GitSource          *types.GitSource
 }
 
 func (o *BuildOpts) String() string {

@@ -29,6 +29,7 @@ class BuildOptions(betterproto.Message):
     build_ctx_object: str = betterproto.string_field(3)
     source_image_creds: str = betterproto.string_field(4)
     build_secrets: List[str] = betterproto.string_field(5)
+    git_source: "GitSource" = betterproto.message_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -195,6 +196,18 @@ class FileSearchRange(betterproto.Message):
 class FileSearchResult(betterproto.Message):
     path: str = betterproto.string_field(1)
     matches: List["FileSearchMatch"] = betterproto.message_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class GitSource(betterproto.Message):
+    repo_url: str = betterproto.string_field(1)
+    ref: str = betterproto.string_field(2)
+    commit: str = betterproto.string_field(3)
+    token: str = betterproto.string_field(4)
+    working_dir: str = betterproto.string_field(5)
+    dockerfile_path: str = betterproto.string_field(6)
+    start_command: str = betterproto.string_field(7)
+    build_command: str = betterproto.string_field(8)
 
 
 @dataclass(eq=False, repr=False)
