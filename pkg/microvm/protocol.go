@@ -31,6 +31,12 @@ const (
 	NewRoot = CanvasDir + "/newroot"
 	// OldRoot is where pivot_root parks the virtiofs root inside the new root.
 	OldRoot = CanvasDir + "/oldroot"
+	// BindsDir is where the host mounts the spec's bind mounts inside the
+	// canvas, one numbered entry each, instead of at their destinations.
+	// virtiofsd announces every bind as a submount and overlayfs refuses to
+	// look through a submount in its lower layer (EREMOTE), so the guest binds
+	// them from the virtiofs root into the assembled root instead.
+	BindsDir = CanvasDir + "/binds"
 	// OCISpecFile is the bundle config.json; the worker writes it at the root
 	// of the rootfs, which is the canvas root.
 	OCISpecFile = "/config.json"
@@ -96,8 +102,10 @@ type Disk struct {
 	ReadOnly  bool   `json:"readonly,omitempty"`
 }
 
-// Bind is a mount the guest binds from the virtiofs root into the new root.
+// Bind is a mount the guest binds from Source (a path under BindsDir in the
+// virtiofs root) to Destination in the new root.
 type Bind struct {
+	Source      string `json:"source"`
 	Destination string `json:"destination"`
 	File        bool   `json:"file,omitempty"`
 	ReadOnly    bool   `json:"readonly,omitempty"`
@@ -123,6 +131,75 @@ const (
 	MsgFreeze = "freeze" // FIFREEZE the filesystem at Text (a guest mount path; empty means the root disk).
 	MsgThaw   = "thaw"   // FITHAW the same.
 )
+
+// Filesystem operations the host performs inside the guest. The worker's
+// sandbox file RPCs use these because the guest's writable layer is a block
+// device the host cannot see.
+//
+// They run on their own vsock port, not the JSON control stream: the host
+// opens one connection per operation to FSPort, writes an FSRequest as a
+// single JSON line, then (for write) the raw payload of exactly Length bytes.
+// The guest answers with an FSResponse as a single JSON line, then (for read)
+// the raw file bytes of exactly Length bytes. Nothing is base64-encoded.
+const (
+	FSPort = 1025
+
+	FSOpRead    = "read"    // Path, Offset, Length (0 = to EOF) -> raw bytes, FSResponse.Length
+	FSOpWrite   = "write"   // Path, Offset, Mode, Length raw bytes follow; creates parent dirs
+	FSOpMkdir   = "mkdir"   // Path, Mode
+	FSOpRemove  = "remove"  // Path (recursive)
+	FSOpStat    = "stat"    // Path -> Info
+	FSOpList    = "list"    // Path -> Entries
+	FSOpReplace = "replace" // Path, Pattern (regexp), Replacement; regular files under Path
+	FSOpFind    = "find"    // Path, Pattern (regexp) -> Results
+)
+
+// FSRequest is one filesystem operation header.
+type FSRequest struct {
+	Op          string `json:"op"`
+	Path        string `json:"path"`
+	Offset      int64  `json:"offset,omitempty"`
+	Length      int64  `json:"length,omitempty"`
+	Mode        uint32 `json:"mode,omitempty"`
+	Pattern     string `json:"pattern,omitempty"`
+	Replacement string `json:"replacement,omitempty"`
+}
+
+// FSFileInfo mirrors what the worker reports for a stat or directory entry.
+type FSFileInfo struct {
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	Mode    uint32 `json:"mode"`
+	ModTime int64  `json:"mod_time"`
+	IsDir   bool   `json:"is_dir"`
+	UID     uint32 `json:"uid"`
+	GID     uint32 `json:"gid"`
+}
+
+// FSMatch is one regexp hit: 1-based line, 1-based start column, end column.
+type FSMatch struct {
+	Line     int32  `json:"line"`
+	StartCol int32  `json:"start_col"`
+	EndCol   int32  `json:"end_col"`
+	Content  string `json:"content"`
+}
+
+// FSSearchResult lists the matches in one file.
+type FSSearchResult struct {
+	Path    string    `json:"path"`
+	Matches []FSMatch `json:"matches"`
+}
+
+// FSResponse is the result header of an FSRequest. For reads, Length raw
+// bytes follow it on the stream.
+type FSResponse struct {
+	OK      bool             `json:"ok"`
+	Error   string           `json:"error,omitempty"`
+	Length  int64            `json:"length,omitempty"`
+	Info    *FSFileInfo      `json:"info,omitempty"`
+	Entries []FSFileInfo     `json:"entries,omitempty"`
+	Results []FSSearchResult `json:"results,omitempty"`
+}
 
 // Message is one control frame.
 type Message struct {

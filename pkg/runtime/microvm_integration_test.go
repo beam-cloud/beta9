@@ -11,7 +11,9 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -585,7 +587,18 @@ func TestMicroVMBootAndExit(t *testing.T) {
 
 func TestMicroVMGoprocOverTheWire(t *testing.T) {
 	rt := requireMicroVMEnv(t)
-	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true, hostname: "sandbox-vm"})
+	// A directory bind whose destination does not exist in the image (the
+	// worker binds the SDK into site-packages this way) and one whose
+	// destination does.
+	sdkDir := filepath.Join(testWorkRoot, "sdk-bind")
+	require.NoError(t, os.MkdirAll(sdkDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sdkDir, "marker.py"), []byte("BOUND = True\n"), 0o644))
+	uploads := filepath.Join(testWorkRoot, "uploads-bind")
+	require.NoError(t, os.MkdirAll(uploads, 0o755))
+	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true, hostname: "sandbox-vm", binds: []specs.Mount{
+		{Destination: "/usr/lib/python3/site-packages/beam", Type: "bind", Source: sdkDir, Options: []string{"rbind", "ro"}},
+		{Destination: "/tmp", Type: "none", Source: uploads, Options: []string{"rbind", "rw"}},
+	}})
 	vm.start()
 
 	startedAt := time.Now()
@@ -605,12 +618,80 @@ func TestMicroVMGoprocOverTheWire(t *testing.T) {
 	require.Contains(t, out, "nameserver 1.1.1.1")
 	require.Contains(t, out, "binds-ok")
 
+	// Directory binds: content visible, read-only enforced, writes to a rw
+	// bind land on the host side.
+	code, out = vm.sh(client, "cat /usr/lib/python3/site-packages/beam/marker.py && (touch /usr/lib/python3/site-packages/beam/x 2>&1 || echo ro-enforced) && echo from-guest > /tmp/guest.txt && echo dir-binds-ok")
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, "BOUND = True")
+	require.Contains(t, out, "ro-enforced")
+	require.Contains(t, out, "dir-binds-ok")
+	hostSide, err := os.ReadFile(filepath.Join(uploads, "guest.txt"))
+	require.NoError(t, err, "rw directory bind must write through to the host")
+	require.Equal(t, "from-guest\n", string(hostSide))
+
 	// Writes land on the block device, not the virtio-fs share.
 	code, out = vm.sh(client, "echo hi > /written && df -T / | tail -1 && grep -w vda /proc/partitions && df -T "+microvm.DiskMount+" | tail -1")
 	require.Equal(t, 0, code, out)
 	require.Contains(t, out, "overlay")
 	require.Contains(t, out, "vda")
 	require.Contains(t, out, "ext4")
+
+	// The host reaches files on the block device through the guest FS
+	// service: raw bytes over vsock, no encoding, offsets honored.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	payload := make([]byte, 32<<20+17)
+	_, err = rand.Read(payload)
+	require.NoError(t, err)
+	writeStart := time.Now()
+	_, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpWrite, Path: "/data/deep/blob.bin", Length: int64(len(payload)), Mode: 0o640}, bytes.NewReader(payload), nil)
+	require.NoError(t, err)
+	writeTook := time.Since(writeStart)
+	var back bytes.Buffer
+	readStart := time.Now()
+	reply, err := rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpRead, Path: "/data/deep/blob.bin"}, nil, &back)
+	require.NoError(t, err)
+	readTook := time.Since(readStart)
+	require.Equal(t, int64(len(payload)), reply.Length)
+	require.True(t, bytes.Equal(payload, back.Bytes()), "guest FS read must return the exact bytes written")
+	t.Logf("guest FS 32 MiB over vsock: write %s (%.0f MiB/s), read %s (%.0f MiB/s)",
+		writeTook.Round(time.Millisecond), 32/writeTook.Seconds(), readTook.Round(time.Millisecond), 32/readTook.Seconds())
+	back.Reset()
+	_, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpRead, Path: "/data/deep/blob.bin", Offset: 1 << 20, Length: 4096}, nil, &back)
+	require.NoError(t, err)
+	require.Equal(t, payload[1<<20:1<<20+4096], back.Bytes())
+	tail := []byte("tail")
+	_, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpWrite, Path: "/data/deep/blob.bin", Offset: int64(len(payload)), Length: int64(len(tail))}, bytes.NewReader(tail), nil)
+	require.NoError(t, err)
+	reply, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpStat, Path: "/data/deep/blob.bin"}, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(payload)+len(tail)), reply.Info.Size)
+	require.Equal(t, uint32(0o640), reply.Info.Mode&0o777)
+	code, out = vm.sh(client, "stat -c '%s %a' /data/deep/blob.bin && tail -c 4 /data/deep/blob.bin")
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, fmt.Sprintf("%d 640", len(payload)+len(tail)))
+	require.Contains(t, out, "tail")
+
+	_, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpWrite, Path: "/data/notes.txt", Length: 12}, strings.NewReader("hello world\n"), nil)
+	require.NoError(t, err)
+	reply, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpList, Path: "/data"}, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, reply.Entries, 2)
+	reply, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpFind, Path: "/data", Pattern: "wor"}, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, reply.Results, 1)
+	require.Equal(t, "/data/notes.txt", reply.Results[0].Path)
+	require.Equal(t, int32(1), reply.Results[0].Matches[0].Line)
+	require.Equal(t, int32(7), reply.Results[0].Matches[0].StartCol)
+	_, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpReplace, Path: "/data", Pattern: "world", Replacement: "guest"}, nil, nil)
+	require.NoError(t, err)
+	code, out = vm.sh(client, "cat /data/notes.txt")
+	require.Equal(t, 0, code, out)
+	require.Equal(t, "hello guest\n", out)
+	_, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpRemove, Path: "/data"}, nil, nil)
+	require.NoError(t, err)
+	_, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpStat, Path: "/data"}, nil, nil)
+	require.ErrorContains(t, err, "no such file")
 
 	killedAt := time.Now()
 	require.NoError(t, rt.Kill(context.Background(), vm.id, syscall.SIGTERM, &KillOpts{All: true}))

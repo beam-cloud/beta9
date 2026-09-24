@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -116,7 +117,7 @@ func TestMicroVMHypervisorArgs(t *testing.T) {
 	assert.Contains(t, joined, "--serial tty --console off")
 
 	cmdline := microVMKernelCmdline()
-	assert.Contains(t, cmdline, "root=beamfs rootfstype=virtiofs ro")
+	assert.Contains(t, cmdline, "root=beamfs rootfstype=virtiofs rw")
 	assert.Contains(t, cmdline, "init="+microvm.InitPath)
 	assert.Contains(t, cmdline, "console=ttyS0")
 }
@@ -153,6 +154,31 @@ func TestTailWriterKeepsLastLines(t *testing.T) {
 	_, _ = w.Write([]byte("one\ntwo\nthr"))
 	_, _ = w.Write([]byte("ee\nfour"))
 	assert.Equal(t, "two\nthree\nfour", w.String(), "last two complete lines plus the unterminated one")
+}
+
+type recordingWriter struct{ records []string }
+
+func (r *recordingWriter) Write(p []byte) (int, error) {
+	r.records = append(r.records, string(p))
+	return len(p), nil
+}
+
+func TestLineWriterEmitsWholeLines(t *testing.T) {
+	dst := &recordingWriter{}
+	w := newLineWriter(dst)
+	for _, chunk := range []string{"[ ", "0.1", "] boot", "ing\nvminit: ", "ready\npar"} {
+		_, err := w.Write([]byte(chunk))
+		require.NoError(t, err)
+	}
+	assert.Equal(t, []string{"[ 0.1] booting\n", "vminit: ready\n"}, dst.records, "byte-sized console writes become one record per line")
+	require.NoError(t, w.Close())
+	assert.Equal(t, "par", dst.records[len(dst.records)-1], "Close flushes the trailing partial line")
+
+	dst = &recordingWriter{}
+	w = newLineWriter(dst)
+	_, err := w.Write(bytes.Repeat([]byte("x"), lineWriterMaxLine))
+	require.NoError(t, err)
+	assert.Len(t, dst.records, 1, "an over-long line without a newline is flushed rather than buffered forever")
 }
 
 func TestMicroVMProtocolRoundTrip(t *testing.T) {

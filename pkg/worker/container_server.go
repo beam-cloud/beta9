@@ -1236,6 +1236,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestUploadFile(ctx, gfs, in, containerPath)
+	}
 
 	// For gVisor: write to external mount, then mv inside container to avoid caching issues
 	// External mounts are always shared (no caching) per gVisor docs
@@ -1319,6 +1322,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Con
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestCreateDirectory(ctx, gfs, in, containerPath)
+	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
 	if err != nil {
@@ -1345,6 +1351,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteDirectory(ctx context.Con
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestDeleteDirectory(ctx, gfs, in, containerPath)
 	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
@@ -1376,6 +1385,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxDownloadFile(ctx context.Contex
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestDownloadFile(ctx, gfs, in, containerPath)
 	}
 
 	root, name, err := containerRoot(instance, containerPath, false)
@@ -1418,6 +1430,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteFile(ctx context.Context,
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestDeleteFile(ctx, gfs, in, containerPath)
+	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
 	if err != nil {
@@ -1446,6 +1461,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatFile(ctx context.Context, i
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestStatFile(ctx, gfs, in, containerPath)
 	}
 
 	root, name, err := containerRoot(instance, containerPath, false)
@@ -1484,6 +1502,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxListFiles(ctx context.Context, 
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestListFiles(ctx, gfs, in, containerPath)
 	}
 
 	root, name, err := containerRoot(instance, containerPath, false)
@@ -1685,6 +1706,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxReplaceInFiles(ctx context.Cont
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestReplaceInFiles(ctx, gfs, in, containerPath)
+	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
 	if err != nil {
@@ -1720,6 +1744,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxFindInFiles(ctx context.Context
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestFindInFiles(ctx, gfs, in, containerPath)
 	}
 
 	regex, err := regexp.Compile(in.Pattern)

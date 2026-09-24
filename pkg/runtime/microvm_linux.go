@@ -3,6 +3,8 @@
 package runtime
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -188,16 +190,28 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMKernelCmdline(), vcpus, memory, network.MAC, root, extra)
 	cmd := exec.Command(m.cfg.MicroVMHypervisorPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// The serial console arrives a few bytes at a time; the worker's writers
+	// log one record per Write, so hand them whole lines.
 	var out io.Writer = inst.console
+	var lines []*lineWriter
 	if opts != nil && opts.OutputWriter != nil {
-		out = io.MultiWriter(opts.OutputWriter, inst.console)
+		lw := newLineWriter(opts.OutputWriter)
+		lines = append(lines, lw)
+		out = io.MultiWriter(lw, inst.console)
 	}
 	cmd.Stdout = out
 	if opts != nil && opts.ErrorWriter != nil {
-		cmd.Stderr = io.MultiWriter(opts.ErrorWriter, inst.console)
+		lw := newLineWriter(opts.ErrorWriter)
+		lines = append(lines, lw)
+		cmd.Stderr = io.MultiWriter(lw, inst.console)
 	} else {
 		cmd.Stderr = out
 	}
+	defer func() {
+		for _, lw := range lines {
+			_ = lw.Close()
+		}
+	}()
 
 	if err := startInNetworkNamespace(cmd, inst.netnsPath); err != nil {
 		return -1, fmt.Errorf("start cloud-hypervisor: %w", err)
@@ -381,6 +395,96 @@ func (m *MicroVM) instance(containerID string) (*microVMInstance, bool) {
 	return inst, ok
 }
 
+var _ GuestFilesystem = (*MicroVM)(nil)
+
+// GuestFS runs one filesystem operation inside the guest over a dedicated
+// vsock connection: JSON header line out, raw payload for writes, JSON reply
+// line back, raw bytes for reads. See microvm.FSPort.
+func (m *MicroVM) GuestFS(ctx context.Context, containerID string, req microvm.FSRequest, payload io.Reader, sink io.Writer) (*microvm.FSResponse, error) {
+	inst, ok := m.instance(containerID)
+	if !ok {
+		return nil, ErrContainerNotFound{ContainerID: containerID}
+	}
+	if !inst.alive() {
+		return nil, fmt.Errorf("microvm %s is not running", containerID)
+	}
+	conn, err := dialGuestVsock(ctx, filepath.Join(inst.stateDir, "vsock.sock"), microvm.FSPort)
+	if err != nil {
+		return nil, fmt.Errorf("connect to guest filesystem: %w", err)
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	} else {
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Minute))
+	}
+
+	header, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Write(append(header, '\n')); err != nil {
+		return nil, fmt.Errorf("send fs request: %w", err)
+	}
+	if req.Op == microvm.FSOpWrite {
+		if payload == nil {
+			payload = bytes.NewReader(nil)
+		}
+		if _, err := io.CopyN(conn, payload, req.Length); err != nil {
+			return nil, fmt.Errorf("send fs payload: %w", err)
+		}
+	}
+
+	reader := bufio.NewReaderSize(conn, 64<<10)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read fs reply: %w", err)
+	}
+	var reply microvm.FSResponse
+	if err := json.Unmarshal(line, &reply); err != nil {
+		return nil, fmt.Errorf("decode fs reply: %w", err)
+	}
+	if !reply.OK {
+		return &reply, errors.New(reply.Error)
+	}
+	if req.Op == microvm.FSOpRead && reply.Length > 0 {
+		if sink == nil {
+			sink = io.Discard
+		}
+		if _, err := io.CopyN(sink, reader, reply.Length); err != nil {
+			return nil, fmt.Errorf("read fs payload: %w", err)
+		}
+	}
+	return &reply, nil
+}
+
+// dialGuestVsock opens a host-initiated vsock connection through Cloud
+// Hypervisor's unix socket: the VMM expects "CONNECT <port>\n" and answers
+// "OK <port>\n" once the guest accepted.
+func dialGuestVsock(ctx context.Context, socketPath string, port uint32) (net.Conn, error) {
+	dialer := net.Dialer{Timeout: 10 * time.Second}
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	reply, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("vsock connect handshake: %w", err)
+	}
+	if !strings.HasPrefix(reply, "OK ") {
+		conn.Close()
+		return nil, fmt.Errorf("vsock connect to port %d refused: %s", port, strings.TrimSpace(reply))
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
+
 // --- disks -------------------------------------------------------------------
 
 func (m *MicroVM) prepareDisks(ctx context.Context, inst *microVMInstance, spec *specs.Spec) (microVMDisk, []microVMDisk, error) {
@@ -438,8 +542,8 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 
 	bindMounts, tmpfs := microVMMountPlan(spec.Mounts)
 	binds := make([]microvm.Bind, 0, len(bindMounts))
-	for _, mount := range bindMounts {
-		bind, err := inst.bindIntoCanvas(mount)
+	for i, mount := range bindMounts {
+		bind, err := inst.bindIntoCanvas(i, mount)
 		if err != nil {
 			return nil, err
 		}
@@ -457,28 +561,29 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 	return vmSpec, nil
 }
 
-// bindIntoCanvas mounts one OCI bind mount at its destination inside the
-// canvas. virtiofsd announces it as a submount; the guest binds it again over
-// the overlay because overlayfs does not descend into mounts in a lower dir.
-func (inst *microVMInstance) bindIntoCanvas(mount specs.Mount) (microvm.Bind, error) {
+// bindIntoCanvas mounts one OCI bind mount under the canvas's binds directory
+// rather than at its destination. virtiofsd announces each as a submount, and
+// overlayfs refuses to look through a submount in its lower layer, so the
+// guest binds the entry from the virtiofs root to the destination in the
+// assembled root instead.
+func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (microvm.Bind, error) {
 	dest := filepath.Clean(mount.Destination)
-	target := filepath.Join(inst.canvas, dest)
-	if !strings.HasPrefix(target, filepath.Clean(inst.canvas)+string(os.PathSeparator)) {
-		return microvm.Bind{}, fmt.Errorf("mount destination %q escapes the rootfs", mount.Destination)
+	if !filepath.IsAbs(dest) || dest == "/" {
+		return microvm.Bind{}, fmt.Errorf("mount destination %q is not an absolute path inside the rootfs", mount.Destination)
 	}
 	info, err := os.Stat(mount.Source)
 	if err != nil {
 		return microvm.Bind{}, fmt.Errorf("bind source %s: %w", mount.Source, err)
 	}
 	isFile := !info.IsDir()
+	guestSource := filepath.Join(microvm.BindsDir, strconv.Itoa(index))
+	target := filepath.Join(inst.canvas, guestSource)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return microvm.Bind{}, err
+	}
 	if isFile {
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := os.WriteFile(target, nil, 0o644); err != nil {
 			return microvm.Bind{}, err
-		}
-		if _, err := os.Stat(target); err != nil {
-			if err := os.WriteFile(target, nil, 0o644); err != nil {
-				return microvm.Bind{}, err
-			}
 		}
 	} else if err := os.MkdirAll(target, 0o755); err != nil {
 		return microvm.Bind{}, err
@@ -498,7 +603,7 @@ func (inst *microVMInstance) bindIntoCanvas(mount specs.Mount) (microvm.Bind, er
 			return microvm.Bind{}, fmt.Errorf("remount %s read-only: %w", target, err)
 		}
 	}
-	return microvm.Bind{Destination: dest, File: isFile, ReadOnly: readOnly}, nil
+	return microvm.Bind{Source: guestSource, Destination: dest, File: isFile, ReadOnly: readOnly}, nil
 }
 
 // --- virtiofsd -----------------------------------------------------------------
@@ -508,7 +613,6 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 	cmd := exec.Command(m.cfg.MicroVMVirtiofsdPath,
 		"--socket-path="+socket,
 		"--shared-dir="+inst.canvas,
-		"--readonly",
 		"--announce-submounts",
 		"--xattr",
 		"--cache=auto",

@@ -19,14 +19,18 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -112,6 +116,9 @@ func run() (int, error) {
 		return -1, fmt.Errorf("configure network: %w", err)
 	}
 
+	if err := serveFS(microvm.FSPort); err != nil {
+		return -1, err
+	}
 	ctrl, err := dialControl(vm.ControlPort)
 	if err != nil {
 		return -1, err
@@ -286,10 +293,12 @@ func waitForDevice(device string) error {
 	}
 }
 
-// applyBind re-binds a host-provided mount from the virtio-fs root (where it
-// is a submount the kernel auto-mounts on first access) into the new root.
+// applyBind binds a host-provided mount from the virtio-fs root (where it is
+// a submount the kernel auto-mounts on first access, under BindsDir) to its
+// destination in the new root. The source path is resolved through the
+// virtio-fs mount, never through the overlay, which cannot cross submounts.
 func applyBind(newRoot string, bind microvm.Bind) error {
-	source := bind.Destination
+	source := firstNonEmpty(bind.Source, bind.Destination)
 	target := filepath.Join(newRoot, bind.Destination)
 	if bind.File {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -627,6 +636,267 @@ func (c *control) serve(childPid func() int) {
 			c.ack(msg.ID, fmt.Errorf("unknown command %q", msg.Type))
 		}
 	}
+}
+
+// --- guest filesystem service ----------------------------------------------------------
+
+const maxSearchLineBytes = 16 << 20
+
+// serveFS accepts one vsock connection per filesystem operation from the
+// host: a JSON header line, raw payload bytes for writes, then a JSON reply
+// line and raw file bytes for reads. Started before the container process so
+// the worker's file RPCs work as soon as the sandbox is reachable.
+func serveFS(port uint32) error {
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("vsock socket: %w", err)
+	}
+	if err := unix.Bind(fd, &unix.SockaddrVM{CID: unix.VMADDR_CID_ANY, Port: port}); err != nil {
+		unix.Close(fd)
+		return fmt.Errorf("bind vsock port %d: %w", port, err)
+	}
+	if err := unix.Listen(fd, 16); err != nil {
+		unix.Close(fd)
+		return fmt.Errorf("listen vsock port %d: %w", port, err)
+	}
+	go func() {
+		for {
+			nfd, _, err := unix.Accept(fd)
+			if err != nil {
+				if errors.Is(err, unix.EINTR) {
+					continue
+				}
+				logf("fs accept: %v", err)
+				return
+			}
+			go func(conn *os.File) {
+				defer conn.Close()
+				if err := handleFSConn(conn); err != nil {
+					logf("fs: %v", err)
+				}
+			}(os.NewFile(uintptr(nfd), "vsock-fs"))
+		}
+	}()
+	return nil
+}
+
+func handleFSConn(conn *os.File) error {
+	reader := bufio.NewReaderSize(conn, 64<<10)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		return fmt.Errorf("read fs header: %w", err)
+	}
+	var req microvm.FSRequest
+	if err := json.Unmarshal(line, &req); err != nil {
+		return fmt.Errorf("decode fs header: %w", err)
+	}
+
+	reply, body := handleFS(req, reader)
+	header, err := json.Marshal(reply)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(append(header, '\n')); err != nil {
+		return err
+	}
+	if body != nil {
+		defer body.Close()
+		if _, err := io.CopyN(conn, body, reply.Length); err != nil {
+			return fmt.Errorf("stream %s: %w", req.Path, err)
+		}
+	}
+	return nil
+}
+
+// handleFS performs one filesystem operation inside the guest. Paths are the
+// container's own paths: the guest is the sandbox, so there is nothing to
+// escape from. For reads it returns the open file to stream; for writes it
+// consumes exactly req.Length bytes from payload.
+func handleFS(req microvm.FSRequest, payload io.Reader) (microvm.FSResponse, io.ReadCloser) {
+	reply, body, err := doFS(req, payload)
+	if err != nil {
+		if body != nil {
+			body.Close()
+		}
+		return microvm.FSResponse{Error: err.Error()}, nil
+	}
+	reply.OK = true
+	return reply, body
+}
+
+func doFS(req microvm.FSRequest, payload io.Reader) (microvm.FSResponse, io.ReadCloser, error) {
+	var none microvm.FSResponse
+	path := filepath.Clean(req.Path)
+	if !filepath.IsAbs(path) {
+		return none, nil, fmt.Errorf("path %q must be absolute", req.Path)
+	}
+	switch req.Op {
+	case microvm.FSOpRead:
+		file, err := os.Open(path)
+		if err != nil {
+			return none, nil, err
+		}
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return none, nil, err
+		}
+		if req.Offset > 0 {
+			if _, err := file.Seek(req.Offset, io.SeekStart); err != nil {
+				file.Close()
+				return none, nil, err
+			}
+		}
+		length := max(info.Size()-req.Offset, 0)
+		if req.Length > 0 && req.Length < length {
+			length = req.Length
+		}
+		return microvm.FSResponse{Length: length}, file, nil
+	case microvm.FSOpWrite:
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return none, nil, err
+		}
+		flags := os.O_CREATE | os.O_WRONLY
+		if req.Offset == 0 {
+			flags |= os.O_TRUNC
+		}
+		mode := os.FileMode(req.Mode)
+		if mode == 0 {
+			mode = 0o644
+		}
+		file, err := os.OpenFile(path, flags, mode)
+		if err != nil {
+			return none, nil, err
+		}
+		if req.Offset > 0 {
+			if _, err := file.Seek(req.Offset, io.SeekStart); err != nil {
+				file.Close()
+				return none, nil, err
+			}
+		}
+		if _, err := io.CopyN(file, payload, req.Length); err != nil {
+			file.Close()
+			return none, nil, fmt.Errorf("write payload: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			return none, nil, err
+		}
+		if req.Mode != 0 {
+			_ = os.Chmod(path, mode)
+		}
+		return none, nil, nil
+	case microvm.FSOpMkdir:
+		mode := os.FileMode(req.Mode)
+		if mode == 0 {
+			mode = 0o755
+		}
+		return none, nil, os.MkdirAll(path, mode)
+	case microvm.FSOpRemove:
+		return none, nil, os.RemoveAll(path)
+	case microvm.FSOpStat:
+		info, err := os.Stat(path)
+		if err != nil {
+			return none, nil, err
+		}
+		fi := fsFileInfo(info)
+		return microvm.FSResponse{Info: &fi}, nil, nil
+	case microvm.FSOpList:
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return none, nil, err
+		}
+		infos := make([]microvm.FSFileInfo, 0, len(entries))
+		for _, entry := range entries {
+			info, err := os.Lstat(filepath.Join(path, entry.Name()))
+			if err != nil {
+				return none, nil, err
+			}
+			infos = append(infos, fsFileInfo(info))
+		}
+		return microvm.FSResponse{Entries: infos}, nil, nil
+	case microvm.FSOpReplace:
+		regex, err := regexp.Compile(req.Pattern)
+		if err != nil {
+			return none, nil, err
+		}
+		err = walkRegularFiles(path, func(name string) error {
+			content, err := os.ReadFile(name)
+			if err != nil {
+				return err
+			}
+			if !regex.Match(content) {
+				return nil
+			}
+			return os.WriteFile(name, regex.ReplaceAll(content, []byte(req.Replacement)), 0o644)
+		})
+		return none, nil, err
+	case microvm.FSOpFind:
+		regex, err := regexp.Compile(req.Pattern)
+		if err != nil {
+			return none, nil, err
+		}
+		var results []microvm.FSSearchResult
+		err = walkRegularFiles(path, func(name string) error {
+			file, err := os.Open(name)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			matches, err := searchFile(file, regex)
+			if len(matches) > 0 {
+				results = append(results, microvm.FSSearchResult{Path: name, Matches: matches})
+			}
+			return err
+		})
+		return microvm.FSResponse{Results: results}, nil, err
+	default:
+		return none, nil, fmt.Errorf("unknown fs op %q", req.Op)
+	}
+}
+
+func fsFileInfo(info os.FileInfo) microvm.FSFileInfo {
+	fi := microvm.FSFileInfo{
+		Name:    info.Name(),
+		Size:    info.Size(),
+		Mode:    uint32(info.Mode()),
+		ModTime: info.ModTime().Unix(),
+		IsDir:   info.IsDir(),
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		fi.UID, fi.GID = st.Uid, st.Gid
+	}
+	return fi
+}
+
+func walkRegularFiles(base string, visit func(string) error) error {
+	return filepath.WalkDir(base, func(name string, entry os.DirEntry, err error) error {
+		if err == nil && entry.Type().IsRegular() {
+			return visit(name)
+		}
+		return err
+	})
+}
+
+// searchFile reports regex matches as 1-based line and column ranges, the
+// same shape the worker computes for container runtimes. A file with a NUL
+// byte is binary and has no matches.
+func searchFile(r io.Reader, regex *regexp.Regexp) ([]microvm.FSMatch, error) {
+	var matches []microvm.FSMatch
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(nil, maxSearchLineBytes)
+	for line := int32(1); scanner.Scan(); line++ {
+		text := scanner.Bytes()
+		if bytes.IndexByte(text, 0) >= 0 {
+			return nil, nil
+		}
+		for _, loc := range regex.FindAllIndex(text, -1) {
+			matches = append(matches, microvm.FSMatch{Line: line, StartCol: int32(loc[0] + 1), EndCol: int32(loc[1]), Content: string(text[loc[0]:loc[1]])})
+		}
+	}
+	if err := scanner.Err(); err != nil && !errors.Is(err, bufio.ErrTooLong) {
+		return nil, err
+	}
+	return matches, nil
 }
 
 // --- container process --------------------------------------------------------------------

@@ -67,6 +67,15 @@ type DiskFreezer interface {
 	FreezeDisk(ctx context.Context, containerID, mountPath string) (thaw func(), err error)
 }
 
+// GuestFilesystem is implemented by runtimes whose writable layer the host
+// cannot read directly (a VM's block device). The worker's sandbox file RPCs
+// go through it instead of the host overlay. Reads stream the file bytes into
+// sink; writes stream req.Length bytes from payload. Everything else is
+// answered in the response header.
+type GuestFilesystem interface {
+	GuestFS(ctx context.Context, containerID string, req microvm.FSRequest, payload io.Reader, sink io.Writer) (*microvm.FSResponse, error)
+}
+
 type microVMDisk struct {
 	arg       string
 	device    string
@@ -365,7 +374,9 @@ func microVMKernelCmdline() string {
 		"console=ttyS0",
 		"root=" + microvm.VirtiofsTag,
 		"rootfstype=virtiofs",
-		"ro",
+		// rw: the share carries the spec's writable bind mounts (volumes,
+		// uploads). The image itself is only ever read as an overlay lower.
+		"rw",
 		"init=" + microvm.InitPath,
 		"reboot=k",
 		"panic=0",
@@ -402,6 +413,57 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 }
 
 // --- console -----------------------------------------------------------------------
+
+// lineWriter reassembles the serial console into whole lines before handing
+// them to the worker's output writer, which treats each Write as one log
+// record; the guest writes the console a few bytes at a time. A partial line
+// is flushed once it exceeds maxLine or on Close.
+type lineWriter struct {
+	mu  sync.Mutex
+	dst io.Writer
+	buf []byte
+}
+
+const lineWriterMaxLine = 16 << 10
+
+func newLineWriter(dst io.Writer) *lineWriter {
+	return &lineWriter{dst: dst}
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		if _, err := w.dst.Write(w.buf[:i+1]); err != nil {
+			return 0, err
+		}
+		w.buf = w.buf[i+1:]
+	}
+	if len(w.buf) >= lineWriterMaxLine {
+		if _, err := w.dst.Write(w.buf); err != nil {
+			return 0, err
+		}
+		w.buf = w.buf[:0]
+	}
+	return len(p), nil
+}
+
+// Close flushes any trailing partial line.
+func (w *lineWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buf) == 0 {
+		return nil
+	}
+	_, err := w.dst.Write(w.buf)
+	w.buf = nil
+	return err
+}
 
 // tailWriter keeps the last n lines written to it for error reporting.
 type tailWriter struct {
