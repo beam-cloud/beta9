@@ -409,7 +409,12 @@ case "$cmd" in
     cp "$RUNSC_FAKE_BUNDLE/config.json" "$RUNSC_FAKE_MOUNTS"
     ;;
   state)
-    printf '{"id":"container-1","pid":4321,"status":"running"}'
+    # No pid until restore has run: Restore returns on the first pid it sees.
+    if [ -f "$RUNSC_FAKE_MOUNTS" ]; then
+      printf '{"id":"container-1","pid":4321,"status":"running"}'
+    else
+      printf '{"id":"container-1","pid":0,"status":"created"}'
+    fi
     ;;
   wait|delete) ;;
   *)

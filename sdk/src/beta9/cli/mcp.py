@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 import click
 
 from .. import terminal
+from ..channel import ServiceClient
 from ..config import get_config_context, get_settings
 from . import extraclick
 from .extraclick import ClickCommonGroup
@@ -34,13 +35,19 @@ def mcp():
 
 
 def _server(context: Optional[str]) -> Dict[str, str]:
+    """The MCP URL on the gateway's HTTP host, as the gateway reports it, plus the context token."""
     cfg = get_config_context(context or extraclick.selected_context())
     if not cfg.token:
         terminal.error(
             f"No token for this context; run `{terminal.cli_name()} configure` first.",
             code="NOT_AUTHENTICATED",
         )
-    return {"url": f"{cfg.http_url}/api/v1/mcp", "authorization": f"Bearer {cfg.token}"}
+    client = ServiceClient(cfg)
+    try:
+        base_url = client.http.base_url
+    finally:
+        client.close()
+    return {"url": f"{base_url}/api/v1/mcp", "authorization": f"Bearer {cfg.token}"}
 
 
 def _entry(client: str, server: Dict[str, str]) -> Dict[str, Any]:

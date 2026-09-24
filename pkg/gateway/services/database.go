@@ -376,7 +376,7 @@ func (gws *GatewayService) recycleDependents(ctx context.Context, workspace *typ
 	return nil
 }
 
-// DeleteDatabaseService removes the deployment and its secrets; the disk is kept.
+// DeleteDatabaseService removes the deployments, secrets and app record; the disk is kept.
 func (gws *GatewayService) DeleteDatabaseService(ctx context.Context, authInfo *auth.AuthInfo, name string) error {
 	deployments, product, err := gws.databaseDeployments(ctx, authInfo.Workspace, name)
 	if err != nil {
@@ -396,7 +396,7 @@ func (gws *GatewayService) DeleteDatabaseService(ctx context.Context, authInfo *
 			return fmt.Errorf("delete secret %s: %w", secret, err)
 		}
 	}
-	return nil
+	return gws.backendRepo.DeleteApp(ctx, deployments[0].App.ExternalId)
 }
 
 // ListDatabaseServices returns the newest version of each database service.

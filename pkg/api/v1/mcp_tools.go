@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -212,8 +213,13 @@ func (g *MCPGroup) deleteApp(ctx context.Context, a *auth.AuthInfo, args toolArg
 	if err != nil {
 		return nil, err
 	}
-	if err := g.backendRepo.DeleteApp(ctx, app.ExternalId); err != nil {
+	// The REST handler stops deployments and containers before removing the record.
+	res, err := g.serve(ctx, http.MethodDelete, g.config.GatewayService.HTTP.GetExternalURL()+HttpServerBaseRoute+"/app/"+a.Workspace.ExternalId+"/"+app.ExternalId, nil, nil)
+	if err != nil {
 		return nil, err
+	}
+	if status := res.(map[string]any)["status"].(int); status >= 300 {
+		return nil, fmt.Errorf("delete app: HTTP %d", status)
 	}
 	return map[string]any{"deleted": app.Name, "app_id": app.ExternalId}, nil
 }
