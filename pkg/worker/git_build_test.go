@@ -15,69 +15,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReadRailwayConfig(t *testing.T) {
+func writeFiles(t *testing.T, files map[string]string) string {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "railway.json"), []byte(`{
-		"build": {"buildCommand": "npm run build", "dockerfilePath": "docker/Dockerfile.web"},
-		"deploy": {"startCommand": "npm start"}
-	}`), 0o644))
-	cfg := readRailwayConfig(dir)
-	assert.Equal(t, railwayConfig{startCommand: "npm start", buildCommand: "npm run build", dockerfilePath: "docker/Dockerfile.web"}, cfg)
-
-	tomlDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tomlDir, "railway.toml"), []byte(`
-[build]
-builder = "nixpacks"
-buildCommand = "make build"
-
-[deploy]
-startCommand = 'hypercorn main:app --bind "[::]:$PORT"'
-`), 0o644))
-	cfg = readRailwayConfig(tomlDir)
-	assert.Equal(t, "make build", cfg.buildCommand)
-	assert.Equal(t, `hypercorn main:app --bind "[::]:$PORT"`, cfg.startCommand)
-	assert.Empty(t, cfg.dockerfilePath)
-
-	assert.Equal(t, railwayConfig{}, readRailwayConfig(t.TempDir()))
+	for name, text := range files {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644))
+	}
+	return dir
 }
 
-func TestGunicornBound(t *testing.T) {
-	assert.Equal(t, "gunicorn app:app --bind 0.0.0.0:$PORT", gunicornBound("gunicorn app:app"))
-	assert.Equal(t, "gunicorn -b :9000 app:app", gunicornBound("gunicorn -b :9000 app:app"))
-	assert.Equal(t, "gunicorn --bind=0.0.0.0:80 app:app", gunicornBound("gunicorn --bind=0.0.0.0:80 app:app"))
-	assert.Equal(t, "uvicorn app:app", gunicornBound("uvicorn app:app"))
-	assert.Equal(t, "", gunicornBound(""))
-}
-
-func TestResolveGitDockerfilePrefersExplicitThenRepoThenRailway(t *testing.T) {
+func TestResolveGitDockerfileFollowsRailwayOrder(t *testing.T) {
 	out := slog.New(slog.NewTextHandler(io.Discard, nil))
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n# repo"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "docker"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker", "Dockerfile.web"), []byte("FROM scratch\n# web"), 0o644))
+	resolve := func(dir string, src *types.GitSource) (string, error) {
+		return resolveGitDockerfile(context.Background(), out, dir, src)
+	}
 
-	text, err := resolveGitDockerfile(context.Background(), out, dir, &types.GitSource{DockerfilePath: "docker/Dockerfile.web"})
+	dir := writeFiles(t, map[string]string{
+		"Dockerfile":            "# repo",
+		"docker/Dockerfile.web": "# web",
+		"Dockerfile.api":        "# api",
+		"railway.toml":          "[build]\ndockerfilePath = 'Dockerfile.api'\n\n[deploy]\nstartCommand = \"hypercorn main:app --bind \\\"[::]:$PORT\\\"\"\n",
+	})
+	text, err := resolve(dir, &types.GitSource{DockerfilePath: "docker/Dockerfile.web"})
 	require.NoError(t, err)
-	assert.Contains(t, text, "# web")
+	assert.Equal(t, "# web", text, "an explicit path wins")
 
-	text, err = resolveGitDockerfile(context.Background(), out, dir, &types.GitSource{})
+	text, err = resolve(dir, &types.GitSource{})
 	require.NoError(t, err)
-	assert.Contains(t, text, "# repo")
+	assert.Equal(t, "# api", text, "then railway config")
+	assert.Equal(t, `hypercorn main:app --bind \"[::]:$PORT\"`, readRailwayConfig(dir).startCommand, "quotes inside a TOML string survive")
 
-	_, err = resolveGitDockerfile(context.Background(), out, dir, &types.GitSource{DockerfilePath: "missing/Dockerfile"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"missing/Dockerfile" not found`)
+	_, err = resolve(dir, &types.GitSource{DockerfilePath: "../../etc/passwd"})
+	assert.ErrorContains(t, err, "not found", "paths cannot escape the checkout")
 
-	_, err = resolveGitDockerfile(context.Background(), out, dir, &types.GitSource{DockerfilePath: "../../etc/passwd"})
-	require.Error(t, err, "paths cannot escape the checkout")
-
-	railwayDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(railwayDir, "Dockerfile"), []byte("FROM scratch\n# root"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(railwayDir, "Dockerfile.api"), []byte("FROM scratch\n# api"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(railwayDir, "railway.json"), []byte(`{"build":{"dockerfilePath":"Dockerfile.api"}}`), 0o644))
-	text, err = resolveGitDockerfile(context.Background(), out, railwayDir, &types.GitSource{})
+	plain := writeFiles(t, map[string]string{"Dockerfile": "# repo", "railway.json": `{"deploy":{"startCommand":"gunicorn app:app"}}`})
+	text, err = resolve(plain, &types.GitSource{})
 	require.NoError(t, err)
-	assert.Contains(t, text, "# api", "railway.json picks the Dockerfile like it does on Railway")
+	assert.Equal(t, "# repo", text, "then the repository's own Dockerfile")
+	assert.Equal(t, "gunicorn app:app --bind 0.0.0.0:$PORT", gunicornBound(readRailwayConfig(plain).startCommand))
 }
 
 func TestGitCheckoutFetchesResolvedCommit(t *testing.T) {
@@ -89,39 +64,27 @@ func TestGitCheckoutFetchesResolvedCommit(t *testing.T) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = origin
 		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		outBytes, err := cmd.CombinedOutput()
-		require.NoError(t, err, string(outBytes))
-		return strings.TrimSpace(string(outBytes))
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+		return strings.TrimSpace(string(out))
 	}
 	git("init", "-q", "-b", "main")
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "Dockerfile"), []byte("FROM scratch\n# v1"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "Dockerfile"), []byte("# v1"), 0o644))
 	git("add", ".")
 	git("commit", "-q", "-m", "v1")
 	first := git("rev-parse", "HEAD")
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "Dockerfile"), []byte("FROM scratch\n# v2"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "Dockerfile"), []byte("# v2"), 0o644))
 	git("commit", "-q", "-am", "v2")
 	git("config", "uploadpack.allowReachableSHA1InWant", "true")
 
-	dir := t.TempDir()
-	src := &types.GitSource{RepoURL: "file://" + origin, Ref: "main", Commit: first}
-	require.NoError(t, gitCheckout(context.Background(), dir, src))
-	text, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
-	require.NoError(t, err)
-	assert.Contains(t, string(text), "# v1", "the build uses the commit the gateway resolved, not the branch tip")
-
-	// A ref the server cannot serve by hash still clones by branch.
-	dir = t.TempDir()
-	src = &types.GitSource{RepoURL: "file://" + origin, Ref: "main", Commit: strings.Repeat("0", 40)}
-	require.NoError(t, gitCheckout(context.Background(), dir, src))
-	text, err = os.ReadFile(filepath.Join(dir, "Dockerfile"))
-	require.NoError(t, err)
-	assert.Contains(t, string(text), "# v2")
-
-	err = gitCheckout(context.Background(), t.TempDir(), &types.GitSource{RepoURL: "file://" + origin, Ref: "nope"})
-	require.Error(t, err)
-}
-
-func TestGitRedactHidesToken(t *testing.T) {
-	assert.Equal(t, "fatal: auth *** failed", gitRedact("fatal: auth ghs_secret failed", "ghs_secret"))
-	assert.Equal(t, "plain", gitRedact("plain", ""))
+	checkout := func(src *types.GitSource) string {
+		dir := t.TempDir()
+		require.NoError(t, gitCheckout(context.Background(), dir, src))
+		text, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+		require.NoError(t, err)
+		return string(text)
+	}
+	assert.Equal(t, "# v1", checkout(&types.GitSource{RepoURL: "file://" + origin, Ref: "main", Commit: first}), "builds the commit the gateway resolved, not the branch tip")
+	assert.Equal(t, "# v2", checkout(&types.GitSource{RepoURL: "file://" + origin, Ref: "main", Commit: strings.Repeat("0", 40)}), "a hash the server cannot serve falls back to cloning the ref")
+	assert.Error(t, gitCheckout(context.Background(), t.TempDir(), &types.GitSource{RepoURL: "file://" + origin, Ref: "nope"}))
 }

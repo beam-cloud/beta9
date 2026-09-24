@@ -16,11 +16,7 @@ import (
 // the individual build options that will be used to construct the image.
 func getImageID(opts *BuildOpts) (string, error) {
 	if opts.GitSource != nil {
-		hash, err := hashstructure.Hash(opts.gitImageIDInput(), hashstructure.FormatV2, nil)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("%016x", hash), nil
+		return gitImageID(opts)
 	}
 
 	// For V2 builds with a Dockerfile, the Dockerfile contains all the build instructions

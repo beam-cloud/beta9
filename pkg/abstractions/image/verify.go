@@ -113,9 +113,6 @@ func (is *ContainerImageService) buildOptionsFromVerifyRequest(ctx context.Conte
 	}
 
 	if opts.GitSource != nil {
-		if opts.ClipVersion != uint32(types.ClipVersion2) {
-			return nil, errors.New("git sources need clip v2 builds")
-		}
 		if err := resolveGitCommit(ctx, opts.GitSource); err != nil {
 			return nil, err
 		}

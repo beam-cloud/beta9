@@ -2581,13 +2581,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		dockerfile = *request.BuildOptions.Dockerfile
 	}
 	if src := request.BuildOptions.GitSource; src != nil {
-		git, cleanupGit, err := c.prepareGitBuild(ctx, outputLogger, src)
+		var cleanupGit func()
+		buildCtxPath, dockerfile, cleanupGit, err = c.prepareGitBuild(ctx, outputLogger, src)
 		if err != nil {
 			outputLogger.Error(err.Error() + "\n")
 			return err
 		}
 		defer cleanupGit()
-		buildCtxPath, dockerfile = git.contextDir, git.dockerfile
 	}
 
 	imagePath := filepath.Join(buildPath, "image")

@@ -5,14 +5,18 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/mitchellh/hashstructure/v2"
 )
 
 const gitResolveTimeout = 30 * time.Second
+
+var fullCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func gitSourceFromProto(in *pb.GitBuildSource) *types.GitSource {
 	if in == nil || in.RepoUrl == "" {
@@ -30,96 +34,82 @@ func gitSourceFromProto(in *pb.GitBuildSource) *types.GitSource {
 }
 
 // resolveGitCommit pins the source to the commit its ref points at right now,
-// so the image id (and the build cache) keys on content, not on a moving branch.
+// so the image id (and the build cache) keys on content, not on a moving
+// branch. A repository or ref that does not exist fails here, before a build
+// worker is involved.
 func resolveGitCommit(ctx context.Context, src *types.GitSource) error {
-	if _, err := url.ParseRequestURI(src.RepoURL); err != nil || !strings.HasPrefix(src.RepoURL, "https://") {
+	if !strings.HasPrefix(src.RepoURL, "https://") {
 		return fmt.Errorf("git repository must be an https URL")
 	}
 	ctx, cancel := context.WithTimeout(ctx, gitResolveTimeout)
 	defer cancel()
 
-	lsRemote := func(patterns ...string) (string, error) {
+	lsRemote := func(patterns ...string) (string, bool) {
 		cmd := exec.CommandContext(ctx, "git", append([]string{"ls-remote", "--exit-code", gitAuthURL(src)}, patterns...)...)
+		// A bare environment: the token in the URL is the only credential git may use.
 		cmd.Env = []string{"GIT_TERMINAL_PROMPT=0", "PATH=/usr/bin:/bin:/usr/local/bin"}
 		out, err := cmd.Output()
 		if err != nil {
-			return "", err
+			return "", false
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if sha, _, ok := strings.Cut(line, "\t"); ok && isFullCommit(sha) {
-				return sha, nil
-			}
-		}
-		return "", fmt.Errorf("no match")
+		sha, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
+		return sha, fullCommit.MatchString(sha)
 	}
 
 	if src.Ref == "" {
-		sha, err := lsRemote("HEAD")
-		if err != nil {
+		sha, ok := lsRemote("HEAD")
+		if !ok {
 			return fmt.Errorf("repository %s not found or not accessible", src.RepoURL)
 		}
 		src.Commit = sha
 		return nil
 	}
-	if sha, err := lsRemote(src.Ref, "refs/heads/"+src.Ref, "refs/tags/"+src.Ref); err == nil {
+	if sha, ok := lsRemote(src.Ref, "refs/heads/"+src.Ref, "refs/tags/"+src.Ref); ok {
 		src.Commit = sha
 		return nil
 	}
-	if _, err := lsRemote("HEAD"); err != nil {
+	if _, ok := lsRemote("HEAD"); !ok {
 		return fmt.Errorf("repository %s not found or not accessible", src.RepoURL)
 	}
-	if isFullCommit(src.Ref) {
-		src.Commit = src.Ref // a commit the worker fetches by hash
+	if fullCommit.MatchString(src.Ref) {
+		src.Commit = src.Ref // the worker fetches it by hash
 		return nil
 	}
 	return fmt.Errorf("ref %q not found in %s", src.Ref, src.RepoURL)
 }
 
-func isFullCommit(s string) bool {
-	if len(s) != 40 {
-		return false
-	}
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // gitAuthURL embeds the token the way GitHub and GitLab accept it over https.
 func gitAuthURL(src *types.GitSource) string {
-	if src.Token == "" {
-		return src.RepoURL
-	}
 	u, err := url.Parse(src.RepoURL)
-	if err != nil {
+	if src.Token == "" || err != nil {
 		return src.RepoURL
 	}
 	u.User = url.UserPassword("x-access-token", src.Token)
 	return u.String()
 }
 
-// gitImageIDInput is what makes two git builds the same image: the commit and
-// how it is built, never the token.
-type gitImageIDInput struct {
-	ClipVersion    uint32
-	RepoURL        string
-	Commit         string
-	WorkingDir     string
-	DockerfilePath string
-	StartCommand   string
-	BuildCommand   string
-}
-
-func (o *BuildOpts) gitImageIDInput() gitImageIDInput {
-	return gitImageIDInput{
-		ClipVersion:    o.ClipVersion,
-		RepoURL:        o.GitSource.RepoURL,
-		Commit:         o.GitSource.Commit,
-		WorkingDir:     o.GitSource.WorkingDir,
-		DockerfilePath: o.GitSource.DockerfilePath,
-		StartCommand:   o.GitSource.StartCommand,
-		BuildCommand:   o.GitSource.BuildCommand,
+// gitImageID is what makes two git builds the same image: the commit and how
+// it is built. The token and runtime env play no part.
+func gitImageID(opts *BuildOpts) (string, error) {
+	hash, err := hashstructure.Hash(struct {
+		ClipVersion    uint32
+		RepoURL        string
+		Commit         string
+		WorkingDir     string
+		DockerfilePath string
+		StartCommand   string
+		BuildCommand   string
+	}{
+		opts.ClipVersion,
+		opts.GitSource.RepoURL,
+		opts.GitSource.Commit,
+		opts.GitSource.WorkingDir,
+		opts.GitSource.DockerfilePath,
+		opts.GitSource.StartCommand,
+		opts.GitSource.BuildCommand,
+	}, hashstructure.FormatV2, nil)
+	if err != nil {
+		return "", err
 	}
+	return fmt.Sprintf("%016x", hash), nil
 }
