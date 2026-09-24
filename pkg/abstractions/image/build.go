@@ -318,6 +318,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 			Dockerfile:       &dockerfile,
 			BuildCtxObject:   &b.opts.BuildCtxObject,
 			BuildSecrets:     b.opts.BuildSecrets,
+			GitSource:        b.opts.GitSource,
 		},
 		ContainerId: b.containerID,
 		Env:         b.opts.EnvVars,
@@ -360,7 +361,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 // For custom Dockerfiles: use the final image ID since we're building from scratch
 func (b *Build) getContainerImageID() (string, error) {
 	isV2 := b.config.ImageService.ClipVersion == 2
-	hasCustomDockerfile := b.opts.Dockerfile != "" && b.opts.BaseImageName == ""
+	hasCustomDockerfile := (b.opts.Dockerfile != "" || b.opts.GitSource != nil) && b.opts.BaseImageName == ""
 
 	// For v2 builds OR custom Dockerfiles, use the final image ID
 	if isV2 || hasCustomDockerfile {

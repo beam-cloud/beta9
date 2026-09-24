@@ -15,6 +15,10 @@ import (
 // build context. For V1 builds and V2 builds without Dockerfiles, we hash all
 // the individual build options that will be used to construct the image.
 func getImageID(opts *BuildOpts) (string, error) {
+	if opts.GitSource != nil {
+		return gitImageID(opts)
+	}
+
 	// For V2 builds with a Dockerfile, the Dockerfile contains all the build instructions
 	// Base the image ID primarily on the Dockerfile content and build context
 	if opts.ClipVersion == uint32(types.ClipVersion2) && opts.Dockerfile != "" {

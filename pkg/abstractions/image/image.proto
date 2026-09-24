@@ -42,6 +42,7 @@ message VerifyImageBuildRequest {
   string gpu = 11;
   bool ignore_python = 12;
   optional string image_id = 13;
+  GitBuildSource git_source = 14;
 }
 
 message VerifyImageBuildResponse {
@@ -68,6 +69,19 @@ message BuildImageRequest {
   repeated string secrets = 10;
   string gpu = 11;
   bool ignore_python = 12;
+  GitBuildSource git_source = 13;
+}
+
+// GitSource builds from a repository instead of an uploaded context: its
+// Dockerfile when it has one, otherwise one generated with nixpacks.
+message GitBuildSource {
+  string repo_url = 1;
+  string ref = 2; // branch, tag or commit; the repository default when empty
+  string token = 3; // for private repositories
+  string working_dir = 4;
+  string dockerfile_path = 5;
+  string start_command = 6;
+  string build_command = 7;
 }
 
 message BuildImageResponse {

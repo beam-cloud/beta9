@@ -135,3 +135,22 @@ func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {
 	require.Empty(t, proto.Workspace.Storage.AccessKey)
 	require.Empty(t, proto.Workspace.Storage.SecretKey)
 }
+
+func TestContainerRequestProtoRoundTripPreservesGitSource(t *testing.T) {
+	dockerfile := ""
+	request := &ContainerRequest{
+		BuildOptions: BuildOptions{
+			Dockerfile: &dockerfile,
+			GitSource:  &GitSource{RepoURL: "https://github.com/acme/app", Ref: "main", Commit: "abc", Token: "tok", WorkingDir: "api"},
+		},
+	}
+	require.True(t, request.IsBuildRequest())
+
+	restored := NewContainerRequestFromProto(request.ToProto())
+	require.True(t, restored.IsBuildRequest(), "an empty Dockerfile string travels as nil; the git source alone marks a build")
+	require.Equal(t, request.BuildOptions.GitSource, restored.BuildOptions.GitSource)
+
+	private := request.PrivateWorkerRequest()
+	require.Empty(t, private.BuildOptions.GitSource.Token)
+	require.Equal(t, "tok", request.BuildOptions.GitSource.Token, "sanitizing the private copy leaves the original alone")
+}

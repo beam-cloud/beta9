@@ -374,7 +374,7 @@ case "$TARGETARCH" in
 esac
 EOT
 
-RUN apt-get install -y wget
+RUN apt-get install -y wget git
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       wget https://github.com/beam-cloud/goproc/releases/download/v0.1.12/goproc-0.1.12-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \

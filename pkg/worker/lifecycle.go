@@ -1049,7 +1049,7 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
 	// For Clip v2 builds, the Dockerfile is rendered by the builder with all build steps.
 	// Build via buildah if a non-empty Dockerfile is present (contains RUN commands for actual builds).
-	if request.BuildOptions.Dockerfile != nil && *request.BuildOptions.Dockerfile != "" {
+	if (request.BuildOptions.Dockerfile != nil && *request.BuildOptions.Dockerfile != "") || request.BuildOptions.GitSource != nil {
 		log.Info().Str("container_id", containerId).Msg("building image from Dockerfile")
 		return s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request)
 	}

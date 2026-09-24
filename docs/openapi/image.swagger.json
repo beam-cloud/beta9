@@ -151,6 +151,9 @@
         },
         "ignorePython": {
           "type": "boolean"
+        },
+        "gitSource": {
+          "$ref": "#/definitions/imageGitBuildSource"
         }
       }
     },
@@ -187,6 +190,35 @@
           "type": "string"
         }
       }
+    },
+    "imageGitBuildSource": {
+      "type": "object",
+      "properties": {
+        "repoUrl": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string",
+          "title": "branch, tag or commit; the repository default when empty"
+        },
+        "token": {
+          "type": "string",
+          "title": "for private repositories"
+        },
+        "workingDir": {
+          "type": "string"
+        },
+        "dockerfilePath": {
+          "type": "string"
+        },
+        "startCommand": {
+          "type": "string"
+        },
+        "buildCommand": {
+          "type": "string"
+        }
+      },
+      "description": "GitSource builds from a repository instead of an uploaded context: its\nDockerfile when it has one, otherwise one generated with nixpacks."
     },
     "imageVerifyImageBuildRequest": {
       "type": "object",
@@ -245,6 +277,9 @@
         },
         "imageId": {
           "type": "string"
+        },
+        "gitSource": {
+          "$ref": "#/definitions/imageGitBuildSource"
         }
       }
     },

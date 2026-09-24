@@ -46,6 +46,7 @@ class VerifyImageBuildRequest(betterproto.Message):
     gpu: str = betterproto.string_field(11)
     ignore_python: bool = betterproto.bool_field(12)
     image_id: Optional[str] = betterproto.string_field(13, optional=True)
+    git_source: "GitBuildSource" = betterproto.message_field(14)
 
 
 @dataclass(eq=False, repr=False)
@@ -75,6 +76,23 @@ class BuildImageRequest(betterproto.Message):
     secrets: List[str] = betterproto.string_field(10)
     gpu: str = betterproto.string_field(11)
     ignore_python: bool = betterproto.bool_field(12)
+    git_source: "GitBuildSource" = betterproto.message_field(13)
+
+
+@dataclass(eq=False, repr=False)
+class GitBuildSource(betterproto.Message):
+    """
+    GitSource builds from a repository instead of an uploaded context: its
+     Dockerfile when it has one, otherwise one generated with nixpacks.
+    """
+
+    repo_url: str = betterproto.string_field(1)
+    ref: str = betterproto.string_field(2)
+    token: str = betterproto.string_field(3)
+    working_dir: str = betterproto.string_field(4)
+    dockerfile_path: str = betterproto.string_field(5)
+    start_command: str = betterproto.string_field(6)
+    build_command: str = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)

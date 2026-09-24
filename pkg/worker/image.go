@@ -2576,6 +2576,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
+	dockerfile := ""
+	if request.BuildOptions.Dockerfile != nil {
+		dockerfile = *request.BuildOptions.Dockerfile
+	}
+	if src := request.BuildOptions.GitSource; src != nil {
+		var cleanupGit func()
+		buildCtxPath, dockerfile, cleanupGit, err = c.prepareGitBuild(ctx, outputLogger, src)
+		if err != nil {
+			outputLogger.Error(err.Error() + "\n")
+			return err
+		}
+		defer cleanupGit()
+	}
+
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
 	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
@@ -2586,7 +2600,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	// Pre-pull base image with insecure option if necessary
 	insecure := false
-	dockerfile := *request.BuildOptions.Dockerfile
 	if sourceImage != "" {
 		insecure = c.config.ImageService.BuildRegistryInsecure
 

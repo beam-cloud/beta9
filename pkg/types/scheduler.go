@@ -270,11 +270,60 @@ func NewContainerFromProto(in *pb.Container) *Container {
 
 // @go2proto
 type BuildOptions struct {
-	SourceImage      *string  `json:"source_image"`
-	Dockerfile       *string  `json:"dockerfile"`
-	BuildCtxObject   *string  `json:"build_context"`
-	SourceImageCreds string   `json:"source_image_creds"`
-	BuildSecrets     []string `json:"build_secrets"`
+	SourceImage      *string    `json:"source_image"`
+	Dockerfile       *string    `json:"dockerfile"`
+	BuildCtxObject   *string    `json:"build_context"`
+	SourceImageCreds string     `json:"source_image_creds"`
+	BuildSecrets     []string   `json:"build_secrets"`
+	GitSource        *GitSource `json:"git_source,omitempty"`
+}
+
+// GitSource builds an image from a git repository: the build worker clones
+// it as the build context and uses its Dockerfile, or generates one with
+// nixpacks when there is none.
+//
+// @go2proto
+type GitSource struct {
+	RepoURL        string `json:"repo_url"`
+	Ref            string `json:"ref"`
+	Commit         string `json:"commit"` // resolved by the gateway; the image id keys on it
+	Token          string `json:"token,omitempty"`
+	WorkingDir     string `json:"working_dir,omitempty"`
+	DockerfilePath string `json:"dockerfile_path,omitempty"`
+	StartCommand   string `json:"start_command,omitempty"`
+	BuildCommand   string `json:"build_command,omitempty"`
+}
+
+func (g *GitSource) ToProto() *pb.GitSource {
+	if g == nil {
+		return nil
+	}
+	return &pb.GitSource{
+		RepoUrl:        g.RepoURL,
+		Ref:            g.Ref,
+		Commit:         g.Commit,
+		Token:          g.Token,
+		WorkingDir:     g.WorkingDir,
+		DockerfilePath: g.DockerfilePath,
+		StartCommand:   g.StartCommand,
+		BuildCommand:   g.BuildCommand,
+	}
+}
+
+func NewGitSourceFromProto(in *pb.GitSource) *GitSource {
+	if in == nil {
+		return nil
+	}
+	return &GitSource{
+		RepoURL:        in.RepoUrl,
+		Ref:            in.Ref,
+		Commit:         in.Commit,
+		Token:          in.Token,
+		WorkingDir:     in.WorkingDir,
+		DockerfilePath: in.DockerfilePath,
+		StartCommand:   in.StartCommand,
+		BuildCommand:   in.BuildCommand,
+	}
 }
 
 // @go2proto
@@ -442,7 +491,7 @@ func WorkerStartConcurrency(workerConfig WorkerConfig, worker *Worker) int {
 
 // IsBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
 func (c *ContainerRequest) IsBuildRequest() bool {
-	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil
+	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil || c.BuildOptions.GitSource != nil
 }
 
 func (c *ContainerRequest) VolumeCacheCompatible() bool {
@@ -498,6 +547,10 @@ func (c *ContainerRequest) Clone() *ContainerRequest {
 	cloned.Ports = append([]uint32(nil), c.Ports...)
 	cloned.AllowList = append([]string(nil), c.AllowList...)
 	cloned.BuildOptions.BuildSecrets = append([]string(nil), c.BuildOptions.BuildSecrets...)
+	if c.BuildOptions.GitSource != nil {
+		gitSource := *c.BuildOptions.GitSource
+		cloned.BuildOptions.GitSource = &gitSource
+	}
 	cloned.RuntimeSecretNames = append([]string(nil), c.RuntimeSecretNames...)
 	return &cloned
 }
@@ -520,6 +573,9 @@ func (c *ContainerRequest) PrivateWorkerRequest() *ContainerRequest {
 	request.BuildRegistryCredentials = ""
 	request.BuildOptions.SourceImageCreds = ""
 	request.BuildOptions.BuildSecrets = nil
+	if request.BuildOptions.GitSource != nil {
+		request.BuildOptions.GitSource.Token = ""
+	}
 	return request
 }
 
@@ -634,6 +690,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 			BuildCtxObject:   buildCtxObject,
 			SourceImageCreds: c.BuildOptions.SourceImageCreds,
 			BuildSecrets:     c.BuildOptions.BuildSecrets,
+			GitSource:        c.BuildOptions.GitSource.ToProto(),
 		}
 	}
 
@@ -700,6 +757,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 			BuildCtxObject:   getPointerOrNil(in.BuildOptions.BuildCtxObject),
 			SourceImageCreds: in.BuildOptions.SourceImageCreds,
 			BuildSecrets:     in.BuildOptions.BuildSecrets,
+			GitSource:        NewGitSourceFromProto(in.BuildOptions.GitSource),
 		}
 	}
 
