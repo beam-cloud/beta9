@@ -191,6 +191,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.EventRepo = eventRepo
 	gateway.workerRepo = workerRepo
 	gateway.DefaultStorageClient = storageClient
+	auth.EnsureWorkspaceStorage = gateway.ensureWorkspaceStorage
 
 	keyEventManager := common.NewKeyEventManager(redisClient)
 	gateway.ComputeService = computesvc.New(computesvc.Options{
@@ -225,6 +226,48 @@ func (g *Gateway) migratePostgres(backendRepo postgresMigrator) error {
 		Retries:       480,
 		RetryInterval: 500 * time.Millisecond,
 	}, backendRepo.MigrateContext)
+}
+
+// ensureWorkspaceStorage creates the default bucket and storage row for a
+// workspace that predates per-workspace storage, on its first request. Replicas
+// serialize on a per-workspace lease and re-read the row inside it, so
+// concurrent first requests end up with one bucket and one row; the second
+// caller finds the row and only attaches it.
+func (g *Gateway) ensureWorkspaceStorage(ctx context.Context, workspace *types.Workspace) error {
+	lock := common.NewRedisLock(g.RedisClient)
+	return lock.WithLease(ctx, "workspace:storage:ensure:"+workspace.ExternalId, common.RedisLockOptions{
+		TtlS:          60,
+		Retries:       60,
+		RetryInterval: 500 * time.Millisecond,
+	}, func(ctx context.Context) error {
+		current, err := g.BackendRepo.GetWorkspace(ctx, workspace.Id)
+		if err != nil {
+			return fmt.Errorf("ensure workspace storage: %w", err)
+		}
+		if !current.StorageAvailable() {
+			cfg := g.Config.Storage.WorkspaceStorage
+			bucket := types.WorkspaceBucketName(cfg.DefaultBucketPrefix, workspace.ExternalId)
+			if err := g.DefaultStorageClient.EnsureBucket(ctx, bucket); err != nil {
+				return fmt.Errorf("ensure workspace storage bucket %s: %w", bucket, err)
+			}
+			if _, err := g.BackendRepo.CreateWorkspaceStorage(ctx, workspace.Id, types.WorkspaceStorage{
+				BucketName:  &bucket,
+				AccessKey:   &cfg.DefaultAccessKey,
+				SecretKey:   &cfg.DefaultSecretKey,
+				EndpointUrl: &cfg.DefaultEndpointUrl,
+				Region:      &cfg.DefaultRegion,
+			}); err != nil {
+				return fmt.Errorf("ensure workspace storage row: %w", err)
+			}
+			if current, err = g.BackendRepo.GetWorkspace(ctx, workspace.Id); err != nil {
+				return fmt.Errorf("ensure workspace storage: %w", err)
+			}
+			log.Info().Str("workspace_id", workspace.ExternalId).Str("bucket", bucket).Msg("created workspace storage on first use")
+		}
+		workspace.StorageId = current.Storage.Id
+		workspace.Storage = current.Storage
+		return nil
+	})
 }
 
 func (g *Gateway) initHttp() error {

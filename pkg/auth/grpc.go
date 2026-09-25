@@ -121,6 +121,13 @@ func (ai *AuthInterceptor) getToken(ctx context.Context, tokenKey string) (*type
 		}
 	}
 
+	if !workspace.StorageAvailable() {
+		if err := ensureWorkspaceStorage(ctx, workspace); err != nil {
+			return nil, nil, err
+		}
+		_ = ai.workspaceRepo.SetAuthorizationToken(token, workspace)
+	}
+
 	return token, workspace, nil
 }
 

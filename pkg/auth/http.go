@@ -47,6 +47,12 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 			if !token.Active || token.DisabledByClusterAdmin {
 				return echo.NewHTTPError(http.StatusUnauthorized)
 			}
+			if !workspace.StorageAvailable() {
+				if err := ensureWorkspaceStorage(c.Request().Context(), workspace); err != nil {
+					return echo.NewHTTPError(http.StatusInternalServerError)
+				}
+				_ = workspaceRepo.SetAuthorizationToken(token, workspace)
+			}
 			authInfo := &AuthInfo{
 				Token:     token,
 				Workspace: workspace,

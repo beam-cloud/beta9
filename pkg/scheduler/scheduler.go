@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -378,6 +379,14 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		Msg("received run request")
 
 	request.Timestamp = time.Now()
+
+	// Scheduled and autoscaled requests never pass through token auth, so a
+	// workspace without storage gets it here, before the container is placed.
+	if !request.StorageAvailable() && auth.EnsureWorkspaceStorage != nil {
+		if err := auth.EnsureWorkspaceStorage(s.ctx, &request.Workspace); err != nil {
+			return err
+		}
+	}
 
 	exempt := s.privatePoolQuotaExempt(request)
 
