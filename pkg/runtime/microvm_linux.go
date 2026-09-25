@@ -400,7 +400,8 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 		}
 	}()
 
-	if err := startInNetworkNamespace(cmd, inst.netnsPath); err != nil {
+	// Cloud Hypervisor starts inside the container's netns so the guest inherits it.
+	if err := inNetworkNamespace(inst.netnsPath, cmd.Start); err != nil {
 		return -1, fmt.Errorf("start cloud-hypervisor: %w", err)
 	}
 	inst.mu.Lock()
@@ -1035,13 +1036,9 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 
 // --- hypervisor ------------------------------------------------------------------
 
-// startInNetworkNamespace starts cmd with the calling thread switched into
-// the container's network namespace so the child inherits it. Only the
-// network namespace changes; mounts, pids, and cgroups stay the worker's.
-func startInNetworkNamespace(cmd *exec.Cmd, nsPath string) error {
-	return inNetworkNamespace(nsPath, cmd.Start)
-}
-
+// inNetworkNamespace runs fn on a thread switched into nsPath, so a process
+// fn starts there inherits it. Only the network namespace changes; mounts,
+// pids, and cgroups stay the worker's.
 func inNetworkNamespace(nsPath string, fn func() error) error {
 	goruntime.LockOSThread()
 	defer goruntime.UnlockOSThread()
