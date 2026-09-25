@@ -18,6 +18,7 @@
 #   MICROVM_REMOTE_DIR     remote checkout       (~/beta9-microvm)
 #   MICROVM_RUNTIME_IMAGE  cached runtime image  (public.ecr.aws/n4e0e1y0/beta9-worker:0.1.764)
 #   MICROVM_IMAGE_TAG      dev image tag         (localhost:5000/beta9-worker:microvm-dev)
+#   MICROVM_TEST_TIMEOUT   go test timeout       (45m)
 
 set -Eeuo pipefail
 
@@ -108,7 +109,7 @@ cmd_test() {
   fi
   log "running microvm integration tests in $image_tag on $host"
   remote "sudo docker run --rm $(docker_run_flags) $image_tag \
-    /usr/local/bin/microvm.test -test.v -test.timeout 45m $filter_args"
+    /usr/local/bin/microvm.test -test.v -test.timeout ${MICROVM_TEST_TIMEOUT:-45m} $filter_args"
 }
 
 cmd_shell() {

@@ -320,7 +320,7 @@ func createTarWithSHA256Progress(ctx context.Context, srcDir, destTar string, pr
 
 		hasher := sha256.New()
 		counter := &countingWriter{progress: progress}
-		tarArgs := append(tarXattrArgs(), "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+		tarArgs := append(tarSparseArgs(), "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
 		cmd := exec.CommandContext(ctx, "tar", tarArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdout = io.MultiWriter(out, hasher, counter)
@@ -380,6 +380,16 @@ func tarXattrArgs() []string {
 	args := []string{"--xattrs"}
 	if runtime.GOOS == "linux" {
 		args = append(args, "--xattrs-include=*")
+	}
+	return args
+}
+
+// tarSparseArgs stores holes as holes (GNU tar only): a VM checkpoint carries
+// a mostly-empty root disk and memory image at their allocated size.
+func tarSparseArgs() []string {
+	args := tarXattrArgs()
+	if runtime.GOOS == "linux" {
+		args = append(args, "--sparse")
 	}
 	return args
 }

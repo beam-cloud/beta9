@@ -180,6 +180,11 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 // ImagePath, and copies the scratch root disk alongside so a restore has the
 // filesystem the memory image expects. Durable qcow disks are sealed by the
 // worker around this call; with the vCPUs stopped there is no I/O to freeze.
+//
+// A VM that has to keep running is restored in place from the snapshot it
+// just took: capturing virtiofsd's state stops its queues for good, so
+// resuming the paused VM would leave the guest without a root filesystem.
+// Any failure past the pause ends the VM instead of leaving a guest hung.
 func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
 	if opts == nil || opts.ImagePath == "" {
 		return fmt.Errorf("checkpoint requires an image path")
@@ -191,22 +196,6 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	if !inst.alive() {
 		return fmt.Errorf("microvm %s is not running", containerID)
 	}
-	api := inst.api()
-	if err := api.put(ctx, "vm.pause", nil); err != nil {
-		return fmt.Errorf("pause vm: %w", err)
-	}
-	inst.setPaused(true)
-	if opts.LeaveRunning {
-		defer func() {
-			if err := api.put(ctx, "vm.resume", nil); err != nil {
-				log.Error().Err(err).Str("container_id", containerID).Msg("failed to resume vm after checkpoint")
-				inst.killHypervisor()
-				return
-			}
-			inst.setPaused(false)
-		}()
-	}
-
 	snapshotDir := filepath.Join(opts.ImagePath, checkpointVMDir)
 	if err := os.RemoveAll(snapshotDir); err != nil {
 		return err
@@ -214,17 +203,45 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
 		return err
 	}
-	if err := api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir}); err != nil {
-		return fmt.Errorf("snapshot vm: %w", err)
+	api := inst.api()
+	if err := api.put(ctx, "vm.pause", nil); err != nil {
+		return fmt.Errorf("pause vm: %w", err)
 	}
-	if inst.scratch != "" {
-		if err := copySparse(inst.scratch, filepath.Join(opts.ImagePath, checkpointRootDisk)); err != nil {
-			return fmt.Errorf("copy root disk: %w", err)
-		}
+	inst.setPaused(true)
+	err := api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir})
+	if err == nil && inst.scratch != "" {
+		err = copySparse(inst.scratch, filepath.Join(opts.ImagePath, checkpointRootDisk))
 	}
-	if !opts.LeaveRunning {
+	if err == nil && opts.LeaveRunning {
+		err = m.restoreInPlace(ctx, inst, snapshotDir)
+	}
+	if err != nil || !opts.LeaveRunning {
 		inst.killHypervisor()
 	}
+	return err
+}
+
+// restoreInPlace replaces the running VM with a restore of snapshotDir
+// inside the same hypervisor process: same pid, sockets, tap and cgroup, so
+// the worker sees nothing but a pause. The guest keeps its addresses and
+// reconnects the control channel on its own.
+func (m *MicroVM) restoreInPlace(ctx context.Context, inst *microVMInstance, snapshotDir string) error {
+	api := inst.api()
+	if err := api.put(ctx, "vm.delete", nil); err != nil {
+		return err
+	}
+	// Deleting the VM leaves the hypervisor's vsock listener behind and
+	// takes virtiofsd down with its connection; the restore needs both fresh.
+	if err := os.Remove(filepath.Join(inst.stateDir, "vsock.sock")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := m.startVirtiofsd(ctx, inst); err != nil {
+		return fmt.Errorf("start virtiofsd: %w", err)
+	}
+	if err := api.put(ctx, "vm.restore", map[string]any{"source_url": "file://" + snapshotDir, "resume": true}); err != nil {
+		return err
+	}
+	inst.setPaused(false)
 	return nil
 }
 
@@ -279,11 +296,11 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 	if err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm rootfs: %w", err)
 	}
-	if err := m.startVirtiofsd(ctx, inst); err != nil {
-		return none, microVMDisk{}, nil, fmt.Errorf("start virtiofsd: %w", err)
-	}
 	if err := m.setupCgroup(inst, spec, microVMMemoryBytes(spec)); err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("setup microvm cgroup: %w", err)
+	}
+	if err := m.startVirtiofsd(ctx, inst); err != nil {
+		return none, microVMDisk{}, nil, fmt.Errorf("start virtiofsd: %w", err)
 	}
 	ctrl, err := listenMicroVMControl(filepath.Join(inst.stateDir, "vsock.sock"), vmSpec.ControlPort)
 	if err != nil {
@@ -358,11 +375,6 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	inst.mu.Unlock()
 	if err := inst.addToCgroup(cmd.Process.Pid); err != nil {
 		log.Warn().Err(err).Str("container_id", inst.id).Msg("failed to place hypervisor in its cgroup")
-	}
-	if inst.virtiofsd != nil && inst.virtiofsd.Process != nil {
-		if err := inst.addToCgroup(inst.virtiofsd.Process.Pid); err != nil {
-			log.Debug().Err(err).Str("container_id", inst.id).Msg("failed to place virtiofsd in the vm cgroup")
-		}
 	}
 	log.Info().Str("container_id", inst.id).Int("pid", cmd.Process.Pid).Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec)).Msg("microvm started")
 
@@ -936,8 +948,20 @@ func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (micro
 
 // --- virtiofsd -----------------------------------------------------------------
 
+// startVirtiofsd serves the canvas over vhost-user, replacing any earlier
+// daemon of this VM (an in-place restore needs a fresh one).
 func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) error {
+	inst.mu.Lock()
+	previous := inst.virtiofsd
+	inst.mu.Unlock()
+	if previous != nil && previous.Process != nil {
+		_ = previous.Process.Kill()
+		waitProcessGone(previous.Process, 5*time.Second)
+	}
 	socket := filepath.Join(inst.stateDir, "virtiofs.sock")
+	if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	// --killpriv-v2 makes the guest mark the share SB_NOSEC, so it stops
 	// asking for security.capability before every write. Without it each
 	// write costs virtiofsd an extra open/getxattr/close of the file on the
@@ -963,6 +987,9 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 	inst.mu.Lock()
 	inst.virtiofsd = cmd
 	inst.mu.Unlock()
+	if err := inst.addToCgroup(cmd.Process.Pid); err != nil {
+		log.Debug().Err(err).Str("container_id", inst.id).Msg("failed to place virtiofsd in the vm cgroup")
+	}
 	exited := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
@@ -1333,11 +1360,12 @@ type microVMControl struct {
 	// a restored guest still carries the checkpointed container's addresses.
 	network *microvm.Network
 
-	mu      sync.Mutex
-	conn    net.Conn
-	enc     *microvm.Encoder
-	nextID  uint64
-	pending map[uint64]chan microvm.Message
+	mu        sync.Mutex
+	conn      net.Conn
+	enc       *microvm.Encoder
+	nextID    uint64
+	pending   map[uint64]chan microvm.Message
+	readyOnce sync.Once
 }
 
 func listenMicroVMControl(vsockPath string, port uint32) (*microVMControl, error) {
@@ -1361,16 +1389,28 @@ func listenMicroVMControl(vsockPath string, port uint32) (*microVMControl, error
 	return ctrl, nil
 }
 
+// accept serves guest connections until the listener closes. The guest
+// reconnects whenever its vsock device is replaced under it, as an in-place
+// restore does.
 func (c *microVMControl) accept() {
-	conn, err := c.listener.Accept()
-	if err != nil {
-		return
+	for {
+		conn, err := c.listener.Accept()
+		if err != nil {
+			return
+		}
+		c.serve(conn)
 	}
+}
+
+func (c *microVMControl) serve(conn net.Conn) {
 	c.mu.Lock()
+	if c.conn != nil {
+		_ = c.conn.Close()
+	}
 	c.conn = conn
 	c.enc = microvm.NewEncoder(conn)
 	c.mu.Unlock()
-	close(c.ready)
+	c.readyOnce.Do(func() { close(c.ready) })
 
 	dec := microvm.NewDecoder(conn)
 	for {
@@ -1654,7 +1694,8 @@ func removeCgroup(path string, timeout time.Duration) error {
 			if err := unix.Rmdir(path); err == nil || errors.Is(err, unix.ENOENT) {
 				return nil
 			}
-			return fmt.Errorf("remove cgroup %s: %w", path, err)
+			procs, _ := os.ReadFile(filepath.Join(path, "cgroup.procs"))
+			return fmt.Errorf("remove cgroup %s (pids %s): %w", path, strings.Join(strings.Fields(string(procs)), ","), err)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

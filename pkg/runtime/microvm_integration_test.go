@@ -481,6 +481,7 @@ func createTestNetwork(t *testing.T, id string, ip4, ip6 net.IP) (nsPath, hostVe
 		_ = netlink.LinkDel(link)
 	}
 	_ = netns.DeleteNamed(id)
+	_ = os.Remove("/run/netns/" + id) // left by a run that died in another mount namespace
 
 	bridge, err := netlink.LinkByName(testBridgeName)
 	require.NoError(t, err)
@@ -666,6 +667,55 @@ func TestMicroVMCheckpointRestore(t *testing.T) {
 	res = restored.wait(30 * time.Second)
 	require.NoError(t, res.err)
 	require.NoError(t, rt.Delete(context.Background(), restored.id, &DeleteOpts{Force: true}))
+}
+
+// A non-terminal checkpoint (the SDK's snapshot_memory) leaves the VM
+// serving: every device keeps working after the pause/snapshot/resume cycle
+// and the copied root disk stays sparse.
+func TestMicroVMCheckpointLeaveRunning(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true})
+	vm.start()
+	client := vm.goprocClient(60 * time.Second)
+	code, out := vm.sh(client, "echo before > /marker && cat /marker")
+	require.Equal(t, 0, code, out)
+
+	inst, _ := rt.instance(vm.id)
+	pid := inst.hypervisor.Process.Pid
+	imagePath := filepath.Join(testWorkRoot, "checkpoint-live-"+vm.id)
+	require.NoError(t, os.RemoveAll(imagePath))
+	checkpointStart := time.Now()
+	require.NoError(t, rt.Checkpoint(context.Background(), vm.id, &CheckpointOpts{ImagePath: imagePath, LeaveRunning: true}))
+	t.Logf("live checkpoint took %s", time.Since(checkpointStart).Round(time.Millisecond))
+	require.Equal(t, pid, inst.hypervisor.Process.Pid, "the hypervisor process is kept")
+
+	// Scratch disk (virtio-blk), image layer (virtiofs), network and the
+	// control channel all have to answer afterwards, over the same goproc
+	// connection the worker would be holding.
+	code, out = vm.sh(client, "cat /marker && echo after >> /marker && sync && ls /bin | head -1 && wget -qO- -T 5 http://1.1.1.1/cdn-cgi/trace 2>&1 | head -1; echo rc=$?")
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, "before\n", "the resumed VM still serves its root disk: %s", out)
+	require.Contains(t, out, "rc=0", "egress works after the resume: %s", out)
+	require.Eventually(t, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err := inst.ctrl.request(ctx, microvm.Message{Type: microvm.MsgSignal, Signal: 0})
+		return err == nil
+	}, 15*time.Second, 200*time.Millisecond, "the guest reconnects its control channel")
+	select {
+	case res := <-vm.result:
+		t.Fatalf("the VM exited (%d, %v) after a non-terminal checkpoint\n%s", res.code, res.err, vm.output.String())
+	case <-time.After(2 * time.Second):
+	}
+
+	rootDisk, err := os.Stat(filepath.Join(imagePath, "root.img"))
+	require.NoError(t, err)
+	allocated := rootDisk.Sys().(*syscall.Stat_t).Blocks * 512
+	require.Less(t, allocated, rootDisk.Size()/4, "the copied root disk stays sparse (%d of %d bytes allocated)", allocated, rootDisk.Size())
+
+	require.NoError(t, rt.Kill(context.Background(), vm.id, syscall.SIGKILL, &KillOpts{All: true}))
+	require.NoError(t, vm.wait(30*time.Second).err)
+	require.NoError(t, rt.Delete(context.Background(), vm.id, &DeleteOpts{Force: true}))
 }
 
 // A forced stop (the worker's Kill with SIGKILL, which is what a scheduler or

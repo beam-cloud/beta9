@@ -211,6 +211,25 @@ func TestCopyDirectoryContextHonorsCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestCreateTarWithSHA256KeepsSparseFilesSparse(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs GNU tar")
+	}
+	root := t.TempDir()
+	src := filepath.Join(root, "checkpoint")
+	require.NoError(t, os.MkdirAll(src, 0755))
+	disk, err := os.Create(filepath.Join(src, "root.img"))
+	require.NoError(t, err)
+	require.NoError(t, disk.Truncate(1<<30))
+	_, err = disk.WriteAt([]byte("data"), 1<<29)
+	require.NoError(t, err)
+	require.NoError(t, disk.Close())
+
+	_, size, err := createTarWithSHA256(src, filepath.Join(root, "checkpoint.tar"))
+	require.NoError(t, err)
+	require.Less(t, size, int64(1<<20), "a 1 GiB image holding 4 bytes archives to a few KiB")
+}
+
 func TestCreateTarWithSHA256ReturnsArchiveHashAndSize(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "checkpoint")
