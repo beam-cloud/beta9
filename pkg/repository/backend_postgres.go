@@ -2609,8 +2609,12 @@ func (r *PostgresBackendRepository) CountApps(ctx context.Context, workspaceId u
 }
 
 // Use to update the updated_at field of app when stub and deployment is created with app_id
+// updateAppActivity records that the app was used. The touch is skipped when
+// the row is already fresh: every stub lookup and creation in an app updates
+// the same row, so a burst of concurrent creations otherwise queues on its
+// lock one commit at a time, and a burst of 96 spent 1.8s each waiting there.
 func (r *PostgresBackendRepository) updateAppActivity(ctx context.Context, appId uint) error {
-	query := `UPDATE app set updated_at=NOW() where id=$1`
+	query := `UPDATE app SET updated_at = NOW() WHERE id = $1 AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')`
 
 	if _, err := r.client.ExecContext(ctx, query, appId); err != nil {
 		return err

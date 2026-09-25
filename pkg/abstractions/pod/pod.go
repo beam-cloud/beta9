@@ -680,7 +680,8 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		stub, err = s.loadStub(ctx, in.StubId)
 		if err != nil {
 			return &pb.CreatePodResponse{
-				Ok: false,
+				Ok:       false,
+				ErrorMsg: fmt.Sprintf("load stub %s: %v", in.StubId, err),
 			}, nil
 		}
 	}
