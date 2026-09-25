@@ -476,6 +476,99 @@ func TestContainerNetworkSlotPoolSizeEnvOverride(t *testing.T) {
 	}
 }
 
+// burstIPWorkerRepoClient is an arbitrating repository: it rejects one address
+// outright and any address a different owner already holds, and records how
+// many SetContainerIp calls overlap so a test can prove reservations are not
+// serialized behind the manager's lock.
+type burstIPWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+	loads       atomic.Int32
+	inFlight    atomic.Int32
+	maxInFlight atomic.Int32
+	reject      string
+	mu          sync.Mutex
+	owners      map[string]string
+}
+
+func (c *burstIPWorkerRepoClient) GetContainerIps(context.Context, *pb.GetContainerIpsRequest, ...grpc.CallOption) (*pb.GetContainerIpsResponse, error) {
+	c.loads.Add(1)
+	return &pb.GetContainerIpsResponse{Ok: true}, nil
+}
+
+func (c *burstIPWorkerRepoClient) SetContainerIp(_ context.Context, req *pb.SetContainerIpRequest, _ ...grpc.CallOption) (*pb.SetContainerIpResponse, error) {
+	now := c.inFlight.Add(1)
+	defer c.inFlight.Add(-1)
+	for {
+		seen := c.maxInFlight.Load()
+		if now <= seen || c.maxInFlight.CompareAndSwap(seen, now) {
+			break
+		}
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if req.IpAddress == c.reject {
+		return nil, fmt.Errorf("ip address already reserved by someone-else")
+	}
+	if owner, ok := c.owners[req.IpAddress]; ok && owner != req.ContainerId {
+		return nil, fmt.Errorf("ip address already reserved by %s", owner)
+	}
+	c.owners[req.IpAddress] = req.ContainerId
+	return &pb.SetContainerIpResponse{Ok: true}, nil
+}
+
+func TestReserveIPRunsRepositoryCallsInParallelAndSkipsConflicts(t *testing.T) {
+	repo := &burstIPWorkerRepoClient{reject: "192.168.0.5", owners: map[string]string{}}
+	manager := &ContainerNetworkManager{
+		ctx:              context.Background(),
+		workerRepoClient: repo,
+		allocatedIPs:     map[string]struct{}{},
+		containerIPs:     map[string]string{},
+	}
+
+	const n = 32
+	results := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			addr, err := manager.reserveIP(fmt.Sprintf("container-%d", i), "container", nil)
+			if err == nil {
+				results[i] = addr.IP.String()
+			}
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	seen := map[string]int{}
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("reservation %d failed: %v", i, errs[i])
+		}
+		ip := results[i]
+		if ip == repo.reject {
+			t.Fatalf("reservation %d was handed the address the repository rejected", i)
+		}
+		seen[ip]++
+	}
+	if len(seen) != n {
+		t.Fatalf("expected %d distinct addresses, got %d", n, len(seen))
+	}
+	if repo.maxInFlight.Load() < 2 {
+		t.Fatal("repository reservations were serialized behind the ip lock")
+	}
+	if loads := repo.loads.Load(); loads != 1 {
+		t.Fatalf("expected a single allocated IP load for the burst, got %d", loads)
+	}
+	if _, taken := manager.allocatedIPs[repo.reject]; !taken {
+		t.Fatal("a rejected address must stay marked as taken so it is not retried")
+	}
+}
+
 func TestNetworkSlotReservationsLoadAllocatedIPsOnce(t *testing.T) {
 	repo := &networkIPWorkerRepoClient{}
 	manager := &ContainerNetworkManager{
@@ -767,6 +860,33 @@ func TestContainerSubnetSupportsThousandContainerBurst(t *testing.T) {
 	t.Fatalf("container subnet only has %d usable addresses, need at least 1000", usable)
 }
 
+func TestContainerNetworkManagerSkipsHostRoutedOffBridgeIPs(t *testing.T) {
+	_, nodeLAN, _ := net.ParseCIDR("192.168.1.0/24")
+	manager := &ContainerNetworkManager{
+		allocatedIPsLoaded: true,
+		allocatedIPs:       map[string]struct{}{},
+		containerIPs:       map[string]string{},
+		offBridgeNets:      []*net.IPNet{nodeLAN},
+		nextIPv4Offset:     250,
+	}
+
+	for i := 0; i < 300; i++ {
+		addr := manager.nextAvailableContainerIPLocked()
+		if addr == nil {
+			t.Fatal("expected an available container IP")
+		}
+		if nodeLAN.Contains(addr.IP) {
+			t.Fatalf("allocated %s, which the host routes off the bridge", addr.IP)
+		}
+		manager.rememberContainerIPLocked(fmt.Sprintf("container-%d", i), addr.IP.String())
+	}
+
+	manager.releasedIPs = append(manager.releasedIPs, "192.168.1.50")
+	if addr := manager.nextAvailableContainerIPLocked(); addr == nil || nodeLAN.Contains(addr.IP) {
+		t.Fatalf("released off-bridge IP must not be reused, got %v", addr)
+	}
+}
+
 func TestContainerNetworkManagerReusesReleasedLocalIP(t *testing.T) {
 	manager := &ContainerNetworkManager{
 		allocatedIPsLoaded: true,
@@ -796,6 +916,20 @@ func TestContainerNetworkManagerReusesReleasedLocalIP(t *testing.T) {
 	}
 	if !first.IP.Equal(reused.IP) {
 		t.Fatalf("expected released IP %s to be reusable, got %s", first.IP, reused.IP)
+	}
+}
+
+func TestDerivedContainerIPv6MatchesPinnedAddress(t *testing.T) {
+	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+	pinned, err := containerIPv6Address(net.ParseIP("192.168.3.77"), ipv6Net)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := derivedContainerIPv6("192.168.3.77"); got != pinned.String() {
+		t.Fatalf("a recovered slot must clear the same IPv6 pin it installed: got %q, pinned %s", got, pinned)
+	}
+	if got := derivedContainerIPv6(""); got != "" {
+		t.Fatalf("no IPv4 address must derive no IPv6 address, got %q", got)
 	}
 }
 
