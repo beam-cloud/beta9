@@ -642,12 +642,13 @@ func TestMicroVMCheckpointRestore(t *testing.T) {
 	t.Logf("restore to goproc-ready took %s", time.Since(restoreStart).Round(time.Millisecond))
 
 	time.Sleep(2 * time.Second) // the network push follows the guest's reconnect
-	code, out = vm.sh(client, "cat /marker; cat /counter; ip -4 -o addr show dev eth0 | awk '{print $4}'")
+	code, out = vm.sh(client, "cat /marker; cat /counter; ip -4 -o addr show dev eth0 | awk '{print $4}'; cat /sys/class/net/eth0/address")
 	require.Equal(t, 0, code, out)
 	_, state := vm.sh(client, "ip -o addr; ip route; ip neigh")
 	t.Logf("restored guest network:\n%s", state)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	require.Len(t, lines, 3, out)
+	require.Len(t, lines, 4, out)
+	require.Equal(t, restored.vethMAC.String(), lines[3], "the guest took the new slot's MAC, which the worker pins its addresses to")
 	require.Equal(t, "before-checkpoint", lines[0], "files written before the checkpoint survive")
 	after, err := strconv.Atoi(lines[1])
 	require.NoError(t, err)

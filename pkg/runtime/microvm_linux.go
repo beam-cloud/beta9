@@ -169,7 +169,7 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 		return -1, err
 	}
 	inst.ctrl.network = &network
-	snapshotDir, err := m.stageSnapshot(inst, opts.ImagePath, root, extra)
+	snapshotDir, err := m.stageSnapshot(inst, opts.ImagePath, network, root, extra)
 	if err != nil {
 		return -1, fmt.Errorf("stage snapshot: %w", err)
 	}
@@ -313,7 +313,7 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 // stageSnapshot lays out the restore source: the checkpoint's memory and
 // state files (linked, not copied) next to a config.json rewritten for this
 // VM's sockets and disk image.
-func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, root microVMDisk, extra []microVMDisk) (string, error) {
+func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, network microvm.Network, root microVMDisk, extra []microVMDisk) (string, error) {
 	src := filepath.Join(imagePath, checkpointVMDir)
 	dst := filepath.Join(inst.stateDir, "restore")
 	if err := os.MkdirAll(dst, 0o700); err != nil {
@@ -323,7 +323,7 @@ func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, root mi
 	if err != nil {
 		return "", err
 	}
-	config, err = rewriteSnapshotConfig(config, inst.stateDir, root, extra)
+	config, err = rewriteSnapshotConfig(config, inst.stateDir, network, root, extra)
 	if err != nil {
 		return "", err
 	}

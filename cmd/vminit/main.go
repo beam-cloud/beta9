@@ -443,13 +443,19 @@ func mountPseudo() error {
 
 // --- network -----------------------------------------------------------------------
 
-// reconfigureNetwork replaces the NIC's addresses with cfg's. After a
-// restore the guest still holds the checkpointed container's addresses and
-// the old gateway's neighbour entry; both must go before the new ones work.
+// reconfigureNetwork moves the NIC to cfg's MAC and addresses. After a
+// restore the guest still holds the checkpointed container's identity, and
+// the host pins each address to its slot's MAC, so all of it has to change
+// before the new addresses work.
 func reconfigureNetwork(cfg microvm.Network) error {
 	link, err := findNIC(cfg.MAC)
 	if err != nil {
 		return err
+	}
+	if mac, err := net.ParseMAC(cfg.MAC); err == nil && !bytes.Equal(mac, link.Attrs().HardwareAddr) {
+		if err := netlink.LinkSetHardwareAddr(link, mac); err != nil {
+			return fmt.Errorf("set mac %s: %w", cfg.MAC, err)
+		}
 	}
 	for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
 		addrs, _ := netlink.AddrList(link, family)
@@ -533,8 +539,8 @@ func findNIC(mac string) (netlink.Link, error) {
 	}
 	// Only the virtio NIC qualifies as a fallback: the kernel's dummy0 and
 	// anything Docker creates in the guest are software links. A restored
-	// guest keeps the snapshot's MAC, so the fallback is what finds eth0
-	// when the host pushes the new container's addresses.
+	// guest still has the snapshot's MAC, so the fallback is what finds eth0
+	// when the host pushes the new container's identity.
 	var fallback netlink.Link
 	for _, link := range links {
 		attrs := link.Attrs()

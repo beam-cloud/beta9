@@ -196,7 +196,8 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	}`)
 	root := microVMDisk{path: "/new/scratch.ext4"}
 	extra := []microVMDisk{{socket: "/new/run/bbb/vhost-user-blk.sock"}}
-	out, err := rewriteSnapshotConfig(snapshot, "/new/state", root, extra)
+	network := microvm.Network{MAC: "02:00:00:00:00:02"}
+	out, err := rewriteSnapshotConfig(snapshot, "/new/state", network, root, extra)
 	require.NoError(t, err)
 
 	var cfg map[string]any
@@ -207,11 +208,11 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	assert.Equal(t, "/new/run/bbb/vhost-user-blk.sock", disks[1].(map[string]any)["vhost_socket"])
 	assert.Equal(t, "/new/state/virtiofs.sock", cfg["fs"].([]any)[0].(map[string]any)["socket"])
 	assert.Equal(t, "/new/state/vsock.sock", cfg["vsock"].(map[string]any)["socket"])
-	assert.Equal(t, "02:00:00:00:00:01", cfg["net"].([]any)[0].(map[string]any)["mac"], "the guest keeps its NIC identity")
+	assert.Equal(t, "02:00:00:00:00:02", cfg["net"].([]any)[0].(map[string]any)["mac"], "the guest takes the new slot's MAC")
 
-	_, err = rewriteSnapshotConfig(snapshot, "/new/state", root, nil)
+	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, root, nil)
 	assert.ErrorContains(t, err, "snapshot has 2 disks, this VM has 1")
-	_, err = rewriteSnapshotConfig(snapshot, "/new/state", microVMDisk{socket: "/x"}, extra)
+	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, microVMDisk{socket: "/x"}, extra)
 	assert.ErrorContains(t, err, "not a vhost-user export", "a scratch-root snapshot cannot be restored onto a durable root")
 }
 

@@ -447,14 +447,19 @@ func microVMRestoreArgs(stateDir, snapshotDir string) []string {
 }
 
 // rewriteSnapshotConfig points a snapshot's device config at this VM's
-// sockets and disk image. Cloud Hypervisor documents config.json as editable
-// between snapshot and restore for exactly this. Devices are matched by
-// position: our --disk order is root first, then the extra disks in
-// annotation order, and there is one fs and one vsock device.
-func rewriteSnapshotConfig(config []byte, stateDir string, root microVMDisk, extra []microVMDisk) ([]byte, error) {
+// sockets, disk image and MAC. Cloud Hypervisor documents config.json as
+// editable between snapshot and restore for exactly this. Devices are
+// matched by position: our --disk order is root first, then the extra disks
+// in annotation order, and there is one net, one fs and one vsock device.
+func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Network, root microVMDisk, extra []microVMDisk) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return nil, fmt.Errorf("decode snapshot config: %w", err)
+	}
+	if nets, _ := cfg["net"].([]any); len(nets) == 1 {
+		if entry, ok := nets[0].(map[string]any); ok {
+			entry["mac"] = network.MAC
+		}
 	}
 	disks, _ := cfg["disks"].([]any)
 	want := append([]microVMDisk{root}, extra...)
