@@ -110,3 +110,54 @@ class TestImageLocalFiles(TestCase):
             (image.build_steps[2].command, image.build_steps[2].type), ("echo hi", "shell")
         )
         self.assertEqual(image.env_vars, ["A=1"])
+
+
+class TestImageLookupDedup(TestCase):
+    def test_concurrent_lookups_of_one_image_check_existence_once(self):
+        # A burst of sandboxes sharing an Image must not each ask the gateway
+        # whether it exists; the first lookup fills the per-process cache and
+        # the rest wait for it instead of stampeding.
+        import threading
+        import uuid
+        from unittest.mock import patch
+
+        from beta9.abstractions.image import ImageBuildResult
+        from beta9.clients.image import VerifyImageBuildResponse
+
+        calls = []
+        release = threading.Event()
+
+        class _Stub:
+            def verify_image_build(self, req):
+                calls.append(req)
+                release.wait(timeout=5)
+                return VerifyImageBuildResponse(exists=True, image_id="img-1", valid=True)
+
+        class _Channel:
+            cache_key = uuid.uuid4().hex
+
+        images = [Image(base_image="docker.io/library/python:3.12-slim") for _ in range(8)]
+        for img in images:
+            img._stub = _Stub()
+            img._channel = _Channel()
+
+        results = []
+        with (
+            patch.object(Image, "stub", property(lambda self: self._stub)),
+            patch.object(Image, "channel", property(lambda self: self._channel)),
+            patch.object(Image, "_prepare_context", lambda self: None),
+        ):
+            threads = [
+                threading.Thread(target=lambda i=img: results.append(i.build())) for img in images
+            ]
+            for t in threads:
+                t.start()
+            release.set()
+            for t in threads:
+                t.join(timeout=10)
+
+        self.assertEqual(len(calls), 1, "one existence check must serve the whole burst")
+        self.assertEqual(len(results), 8)
+        self.assertTrue(
+            all(r == ImageBuildResult(True, "img-1", results[0].python_version) for r in results)
+        )

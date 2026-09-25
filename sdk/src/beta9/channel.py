@@ -1,11 +1,11 @@
 import atexit
 import functools
+import hashlib
 import os
 from importlib.metadata import PackageNotFoundError, version
 import sys
 import time
 import traceback
-import uuid
 import weakref
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -107,7 +107,11 @@ class Channel(InterceptorChannel):
 
         interceptor = AuthTokenInterceptor(token, metadata)
         super().__init__(channel=channel, interceptor=interceptor)
-        self.cache_key = uuid.uuid4().hex
+        # Identifies the gateway and identity this channel talks to, so results
+        # cached per channel (image existence, synced objects) are shared by
+        # every channel to the same gateway and token in this process, and by
+        # nothing else.
+        self.cache_key = hashlib.sha256(f"{addr}\n{token or ''}".encode()).hexdigest()
         _channels.add(self)
 
     def close(self) -> None:
