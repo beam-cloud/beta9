@@ -672,10 +672,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	}
 
 	var filesystemRestore *checkpointFilesystemRestore
-	// A machine-root disk hosts the upper layer, so the checkpoint filesystem
-	// cannot be staged in scratch space; it is reseeded onto the disk after
-	// mounts are prepared (see prepareRestoreFallback).
-	if s.canRestoreCheckpoint(request, s.runtime) && qcowRootDiskMount(request) == nil {
+	// A root disk already holds the checkpoint filesystem; only an overlay
+	// upper is staged here and reseeded (see prepareRestoreFallback).
+	if s.canRestoreCheckpoint(request, s.runtime) && !checkpointFilesystemOnDisk(request, s.runtime) {
 		filesystemRestore = s.startCheckpointFilesystemRestore(request, outputLogger)
 	}
 	filesystemRestoreHandedOff := false
@@ -2186,9 +2185,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			request.Checkpoint = nil
 		}
 		var seedUpper func(string) error
-		// A qcow root disk already holds the checkpoint filesystem; Reset
+		// A root disk already holds the checkpoint filesystem; Reset
 		// preserves its persistent upper, so no reseed is needed (or safe).
-		if reseedCheckpointFilesystem && qcowRootDiskMount(request) == nil {
+		if reseedCheckpointFilesystem && !checkpointFilesystemOnDisk(request, s.runtime) {
 			seedUpper = func(upperPath string) error {
 				return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
 			}
@@ -2293,10 +2292,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			restoreErr = filesystemRestore.wait()
 		} else if originalConfigErr != nil {
 			restoreErr = fmt.Errorf("checkpoint filesystem restore requires the original container config: %w", originalConfigErr)
-		} else if qcowRootDiskMount(request) != nil {
-			// The root disk is sealed after the CRIU dump, so the restored
-			// disk already holds the checkpoint filesystem; reseeding would
-			// wipe it and re-extract the same bytes.
+		} else if checkpointFilesystemOnDisk(request, s.runtime) {
+			// The restored disk already holds the checkpoint filesystem;
+			// reseeding would wipe it and re-extract the same bytes.
 			restoreErr = s.prepareRestoreFallback(request, originalConfig, nil)
 		} else {
 			restoreErr = s.prepareRestoreFallback(request, originalConfig, func(upperPath string) error {

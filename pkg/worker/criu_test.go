@@ -2021,6 +2021,21 @@ func TestCheckpointFilesystemArchiveMustBeARegularNonemptyFile(t *testing.T) {
 	require.False(t, checkpointFilesystemOnly(checkpointPath))
 }
 
+func TestCheckpointFilesystemOnDiskCoversRootDisksAndBlockRootRuntimes(t *testing.T) {
+	overlay := NewMockRuntime("gvisor", runtime.Capabilities{})
+	blockRoot := NewMockRuntime("microvm", runtime.Capabilities{BlockRoot: true})
+	plain := &types.ContainerRequest{}
+	rootDisk := &types.ContainerRequest{Mounts: []types.Mount{{
+		MountPath:   types.DurableDiskRootMountPath,
+		DurableDisk: &types.DurableDiskMountConfig{Driver: types.DurableDiskDriverQcow},
+	}}}
+
+	require.False(t, checkpointFilesystemOnDisk(plain, overlay))
+	require.True(t, checkpointFilesystemOnDisk(rootDisk, overlay))
+	require.True(t, checkpointFilesystemOnDisk(plain, blockRoot))
+	require.False(t, checkpointFilesystemOnDisk(plain, nil))
+}
+
 func TestCheckpointFilesystemOnDiskMarkerIsValidatedStrictly(t *testing.T) {
 	checkpointPath := t.TempDir()
 	markerPath := filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile)

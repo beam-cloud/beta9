@@ -52,6 +52,14 @@ func qcowRootDiskMount(request *types.ContainerRequest) *types.Mount {
 	return nil
 }
 
+// checkpointFilesystemOnDisk reports whether the container's writable layer
+// lives on a disk the checkpoint already carries: a sealed qcow root disk,
+// or the scratch disk of a block-root runtime. The worker then neither
+// copies the upper dir into the checkpoint nor reseeds it on restore.
+func checkpointFilesystemOnDisk(request *types.ContainerRequest, rt runtime.Runtime) bool {
+	return qcowRootDiskMount(request) != nil || (rt != nil && rt.Capabilities().BlockRoot)
+}
+
 // qcowVolumeKey is stable across container restarts for writable volumes so
 // locally cached layers are reused. Read-only attachments get per-container
 // volumes since they may coexist on one host.
