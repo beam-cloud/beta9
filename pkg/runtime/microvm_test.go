@@ -115,6 +115,7 @@ func TestMicroVMHypervisorArgs(t *testing.T) {
 	assert.Contains(t, joined, "--disk path=/tmp/scratch.ext4 vhost_user=on,socket=/s")
 	assert.Contains(t, joined, "--net tap=b9tap0,mac=02:00:00:00:00:01")
 	assert.Contains(t, joined, "--vsock cid=3,socket=/run/beam/microvm/c1/vsock.sock")
+	assert.Contains(t, joined, "--balloon size=0,free_page_reporting=on")
 	assert.Contains(t, joined, "--serial tty --console off")
 
 	cmdline := microVMKernelCmdline()

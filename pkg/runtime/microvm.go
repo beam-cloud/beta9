@@ -430,6 +430,9 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		"--net", fmt.Sprintf("tap=%s,mac=%s", microVMTapName, mac),
 		"--vsock", fmt.Sprintf("cid=%d,socket=%s", microvm.GuestCID, filepath.Join(stateDir, "vsock.sock")),
 		"--rng", "src=/dev/urandom",
+		// Pages the guest frees are punched out of its memory on the host,
+		// so idle VMs shrink and snapshots carry only live memory.
+		"--balloon", "size=0,free_page_reporting=on",
 		"--serial", "tty",
 		"--console", "off",
 	)
