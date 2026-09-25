@@ -19,6 +19,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"encoding/json"
@@ -701,6 +702,12 @@ func handleFSConn(conn *os.File) error {
 	}
 	if body != nil {
 		defer body.Close()
+		if reply.Length == microvm.FSStreamUntilEOF {
+			if _, err := io.Copy(conn, body); err != nil {
+				return fmt.Errorf("stream %s: %w", req.Path, err)
+			}
+			return nil
+		}
 		if _, err := io.CopyN(conn, body, reply.Length); err != nil {
 			return fmt.Errorf("stream %s: %w", req.Path, err)
 		}
@@ -849,8 +856,145 @@ func doFS(req microvm.FSRequest, payload io.Reader) (microvm.FSResponse, io.Read
 			return err
 		})
 		return microvm.FSResponse{Results: results}, nil, err
+	case microvm.FSOpArchive:
+		info, err := os.Stat(path)
+		if err != nil {
+			return none, nil, err
+		}
+		if !info.IsDir() {
+			return none, nil, fmt.Errorf("%s is not a directory", path)
+		}
+		pr, pw := io.Pipe()
+		go func() { pw.CloseWithError(writeTree(pw, path, req.Exclude)) }()
+		return microvm.FSResponse{Length: microvm.FSStreamUntilEOF}, pr, nil
 	default:
 		return none, nil, fmt.Errorf("unknown fs op %q", req.Op)
+	}
+}
+
+// writeTree streams root as a PAX tar the host can replay into an overlay
+// upper directory: ownership, modes, mtimes, symlinks, FIFOs, character and
+// block devices (overlay whiteouts are 0:0 character devices) and every
+// xattr (trusted.overlay.opaque marks opaque directories). Sockets are
+// skipped. Hard links become independent copies. A file that changes size
+// mid-stream is truncated or zero-padded to the size in its header.
+func writeTree(w io.Writer, root string, exclude []string) error {
+	tw := tar.NewWriter(w)
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		for _, ex := range exclude {
+			ex = strings.Trim(filepath.Clean("/"+ex), "/")
+			if rel == ex || strings.HasPrefix(rel, ex+"/") {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSocket != 0 {
+			return nil
+		}
+		link := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			if link, err = os.Readlink(path); err != nil {
+				return err
+			}
+		}
+		hdr, err := tar.FileInfoHeader(info, link)
+		if err != nil {
+			return err
+		}
+		hdr.Name = filepath.ToSlash(rel)
+		if info.IsDir() {
+			hdr.Name += "/"
+		}
+		hdr.Format = tar.FormatPAX
+		hdr.Uname, hdr.Gname = "", ""
+		if names, err := listXattrs(path); err == nil {
+			for _, name := range names {
+				value, err := getXattr(path, name)
+				if err != nil {
+					continue
+				}
+				if hdr.PAXRecords == nil {
+					hdr.PAXRecords = map[string]string{}
+				}
+				hdr.PAXRecords["SCHILY.xattr."+name] = string(value)
+			}
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || hdr.Size == 0 {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		n, err := io.CopyN(tw, file, hdr.Size)
+		if err == io.EOF {
+			_, err = io.CopyN(tw, zeroReader{}, hdr.Size-n)
+		}
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	return tw.Close()
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+func listXattrs(path string) ([]string, error) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := unix.Llistxattr(path, buf)
+		if err == unix.ERANGE {
+			buf = make([]byte, len(buf)*2)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var names []string
+		for _, name := range bytes.Split(buf[:n], []byte{0}) {
+			if len(name) > 0 {
+				names = append(names, string(name))
+			}
+		}
+		return names, nil
+	}
+}
+
+func getXattr(path, name string) ([]byte, error) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := unix.Lgetxattr(path, name, buf)
+		if err == unix.ERANGE {
+			buf = make([]byte, len(buf)*2)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return buf[:n], nil
 	}
 }
 
@@ -956,6 +1100,16 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 				continue
 			}
 			code := exitCode(status)
+			// Flush before the host learns the process is gone: sync(2) sends
+			// FUSE_SYNCFS for every virtiofs superblock, which reaches the host
+			// filesystems behind the bind mounts (volumes on FUSE-backed object
+			// storage flush to the bucket here). Reporting first would let the
+			// host tear the VM down while that flush is still in flight.
+			syncStart := time.Now()
+			unix.Sync()
+			if took := time.Since(syncStart); took > time.Second {
+				logf("synced filesystems in %s", took.Round(time.Millisecond))
+			}
 			ctrl.send(microvm.Message{Type: microvm.MsgExit, Code: code})
 			return code, nil
 		}

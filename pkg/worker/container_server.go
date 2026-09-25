@@ -458,9 +458,30 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 	}()
 
 	if layered {
-		err = s.imageClient.ArchiveLayer(ctx, instance.Request, instance.Overlay.TopLayerUpperDir(), req.ImageId, progressChan)
+		var upperDir string
+		var cleanup func()
+		if upperDir, cleanup, err = containerUpperDir(ctx, instance); err == nil {
+			defer cleanup()
+			err = s.imageClient.ArchiveLayer(ctx, instance.Request, upperDir, req.ImageId, progressChan)
+		}
 	} else {
-		err = s.imageClient.Archive(ctx, NewPathInfo(instance.Overlay.TopLayerPath()), req.ImageId, progressChan)
+		var rootDir string
+		var cleanup func()
+		if rootDir, cleanup, err = containerRootDir(ctx, instance); err == nil {
+			defer cleanup()
+			// An exported guest root is read after the specs were written into
+			// the host merged root; carry them over so the archive has them.
+			if rootDir != instance.Overlay.TopLayerPath() {
+				for _, name := range []string{initialSpecBaseName, specBaseName} {
+					if err = copyFile(filepath.Join(instance.Overlay.TopLayerPath(), name), filepath.Join(rootDir, name)); err != nil {
+						break
+					}
+				}
+			}
+			if err == nil {
+				err = s.imageClient.Archive(ctx, NewPathInfo(rootDir), req.ImageId, progressChan)
+			}
+		}
 	}
 	if err != nil {
 		log.Error().Err(err).Str("container_id", req.ContainerId).Str("image_id", req.ImageId).Msg("filesystem snapshot failed")

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -74,7 +75,17 @@ type DiskFreezer interface {
 // answered in the response header.
 type GuestFilesystem interface {
 	GuestFS(ctx context.Context, containerID string, req microvm.FSRequest, payload io.Reader, sink io.Writer) (*microvm.FSResponse, error)
+	// ExportGuestTree replays the guest directory guestPath into hostDir as
+	// an overlay-style tree: whiteout devices, opaque xattrs, ownership and
+	// modes intact, so the image and checkpoint code can read it exactly
+	// like a host overlay upper directory. exclude lists paths relative to
+	// guestPath to leave out.
+	ExportGuestTree(ctx context.Context, containerID, guestPath, hostDir string, exclude []string) error
 }
+
+// GuestUpperDir is where a guest keeps the writable layer of its root
+// filesystem, the counterpart of a host overlay's upper directory.
+var GuestUpperDir = path.Join(microvm.DiskMount, microvm.DiskOverlayUpper)
 
 type microVMDisk struct {
 	arg       string

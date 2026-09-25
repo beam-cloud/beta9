@@ -871,7 +871,11 @@ func captureCheckpointFilesystem(ctx context.Context, instance *ContainerInstanc
 		}
 	}
 
-	upperDir := instance.Overlay.TopLayerUpperDir()
+	upperDir, cleanupUpper, err := containerUpperDir(ctx, instance)
+	if err != nil {
+		return fmt.Errorf("read checkpoint filesystem state: %w", err)
+	}
+	defer cleanupUpper()
 	legacyPath := filepath.Join(checkpointPath, checkpointFsDir)
 	archivePath := filepath.Join(checkpointPath, checkpointFsArchive)
 	copyErr := copyDirectoryContext(ctx, upperDir, legacyPath, []string{"config.json", "outputs", "snapshot"})

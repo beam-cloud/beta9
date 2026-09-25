@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"context"
@@ -447,15 +448,143 @@ func (m *MicroVM) GuestFS(ctx context.Context, containerID string, req microvm.F
 	if !reply.OK {
 		return &reply, errors.New(reply.Error)
 	}
-	if req.Op == microvm.FSOpRead && reply.Length > 0 {
-		if sink == nil {
-			sink = io.Discard
+	if sink == nil {
+		sink = io.Discard
+	}
+	switch {
+	case reply.Length == microvm.FSStreamUntilEOF:
+		if _, err := io.Copy(sink, reader); err != nil {
+			return nil, fmt.Errorf("read fs stream: %w", err)
 		}
+	case req.Op == microvm.FSOpRead && reply.Length > 0:
 		if _, err := io.CopyN(sink, reader, reply.Length); err != nil {
 			return nil, fmt.Errorf("read fs payload: %w", err)
 		}
 	}
 	return &reply, nil
+}
+
+// ExportGuestTree streams a PAX tar of guestPath out of the guest and
+// materializes it under hostDir with mknod, lchown and lsetxattr, which is
+// why it needs the worker's privileges. Directory mtimes are restored last
+// since creating children would clobber them.
+func (m *MicroVM) ExportGuestTree(ctx context.Context, containerID, guestPath, hostDir string, exclude []string) error {
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
+		return err
+	}
+	pr, pw := io.Pipe()
+	extracted := make(chan error, 1)
+	go func() {
+		err := extractTree(pr, hostDir)
+		// Drain so a guest still streaming is not blocked on a dead pipe.
+		_, _ = io.Copy(io.Discard, pr)
+		extracted <- err
+	}()
+	req := microvm.FSRequest{Op: microvm.FSOpArchive, Path: guestPath, Exclude: exclude}
+	_, err := m.GuestFS(ctx, containerID, req, nil, pw)
+	pw.CloseWithError(err)
+	if xerr := <-extracted; err == nil && xerr != nil {
+		return fmt.Errorf("materialize guest tree: %w", xerr)
+	}
+	if err != nil {
+		return fmt.Errorf("export guest tree %s: %w", guestPath, err)
+	}
+	return nil
+}
+
+func extractTree(r io.Reader, dst string) error {
+	dst = filepath.Clean(dst)
+	tr := tar.NewReader(r)
+	type dirTime struct {
+		path string
+		when time.Time
+	}
+	var dirs []dirTime
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, filepath.Clean("/"+hdr.Name))
+		if target != dst && !strings.HasPrefix(target, dst+string(filepath.Separator)) {
+			return fmt.Errorf("entry %q escapes the export directory", hdr.Name)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		mode := os.FileMode(hdr.Mode) & 0o7777
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.Mkdir(target, 0o700); err != nil && !os.IsExist(err) {
+				return err
+			}
+			dirs = append(dirs, dirTime{target, hdr.ModTime})
+		case tar.TypeReg:
+			file, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(file, tr); err != nil {
+				file.Close()
+				return err
+			}
+			if err := file.Close(); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			_ = os.Remove(target)
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
+		case tar.TypeLink:
+			_ = os.Remove(target)
+			if err := os.Link(filepath.Join(dst, filepath.Clean("/"+hdr.Linkname)), target); err != nil {
+				return err
+			}
+		case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			kind := uint32(unix.S_IFCHR)
+			if hdr.Typeflag == tar.TypeBlock {
+				kind = unix.S_IFBLK
+			} else if hdr.Typeflag == tar.TypeFifo {
+				kind = unix.S_IFIFO
+			}
+			_ = os.Remove(target)
+			if err := unix.Mknod(target, kind|uint32(mode), int(unix.Mkdev(uint32(hdr.Devmajor), uint32(hdr.Devminor)))); err != nil {
+				return fmt.Errorf("mknod %s: %w", hdr.Name, err)
+			}
+		default:
+			continue
+		}
+		if err := os.Lchown(target, hdr.Uid, hdr.Gid); err != nil {
+			return fmt.Errorf("chown %s: %w", hdr.Name, err)
+		}
+		if hdr.Typeflag != tar.TypeSymlink {
+			if err := os.Chmod(target, mode); err != nil {
+				return err
+			}
+		}
+		for key, value := range hdr.PAXRecords {
+			name, ok := strings.CutPrefix(key, "SCHILY.xattr.")
+			if !ok || name == "security.selinux" {
+				continue
+			}
+			if err := unix.Lsetxattr(target, name, []byte(value), 0); err != nil && !errors.Is(err, unix.ENOTSUP) {
+				return fmt.Errorf("set xattr %s on %s: %w", name, hdr.Name, err)
+			}
+		}
+		if hdr.Typeflag != tar.TypeDir {
+			ts := unix.NsecToTimespec(hdr.ModTime.UnixNano())
+			_ = unix.UtimesNanoAt(unix.AT_FDCWD, target, []unix.Timespec{ts, ts}, unix.AT_SYMLINK_NOFOLLOW)
+		}
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		ts := unix.NsecToTimespec(dirs[i].when.UnixNano())
+		_ = unix.UtimesNanoAt(unix.AT_FDCWD, dirs[i].path, []unix.Timespec{ts, ts}, 0)
+	}
+	return nil
 }
 
 // dialGuestVsock opens a host-initiated vsock connection through Cloud
@@ -610,11 +739,17 @@ func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (micro
 
 func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) error {
 	socket := filepath.Join(inst.stateDir, "virtiofs.sock")
+	// --killpriv-v2 makes the guest mark the share SB_NOSEC, so it stops
+	// asking for security.capability before every write. Without it each
+	// write costs virtiofsd an extra open/getxattr/close of the file on the
+	// host, and on FUSE-backed volumes (geesefs with fsync-on-close) every
+	// one of those closes uploads a half-written snapshot to the bucket.
 	cmd := exec.Command(m.cfg.MicroVMVirtiofsdPath,
 		"--socket-path="+socket,
 		"--shared-dir="+inst.canvas,
 		"--announce-submounts",
 		"--xattr",
+		"--killpriv-v2",
 		"--cache=auto",
 		"--inode-file-handles=never",
 		"--sandbox=chroot",

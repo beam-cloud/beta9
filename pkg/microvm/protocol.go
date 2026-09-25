@@ -152,17 +152,24 @@ const (
 	FSOpList    = "list"    // Path -> Entries
 	FSOpReplace = "replace" // Path, Pattern (regexp), Replacement; regular files under Path
 	FSOpFind    = "find"    // Path, Pattern (regexp) -> Results
+	FSOpArchive = "archive" // Path, Exclude -> PAX tar of the tree (xattrs, devices, whiteouts) until EOF
+
+	// FSStreamUntilEOF as FSResponse.Length means the raw bytes run until
+	// the guest closes the connection; the tar end-of-archive marker is the
+	// integrity check.
+	FSStreamUntilEOF = -1
 )
 
 // FSRequest is one filesystem operation header.
 type FSRequest struct {
-	Op          string `json:"op"`
-	Path        string `json:"path"`
-	Offset      int64  `json:"offset,omitempty"`
-	Length      int64  `json:"length,omitempty"`
-	Mode        uint32 `json:"mode,omitempty"`
-	Pattern     string `json:"pattern,omitempty"`
-	Replacement string `json:"replacement,omitempty"`
+	Op          string   `json:"op"`
+	Path        string   `json:"path"`
+	Offset      int64    `json:"offset,omitempty"`
+	Length      int64    `json:"length,omitempty"`
+	Mode        uint32   `json:"mode,omitempty"`
+	Pattern     string   `json:"pattern,omitempty"`
+	Replacement string   `json:"replacement,omitempty"`
+	Exclude     []string `json:"exclude,omitempty"` // archive: paths relative to Path to leave out
 }
 
 // FSFileInfo mirrors what the worker reports for a stat or directory entry.
