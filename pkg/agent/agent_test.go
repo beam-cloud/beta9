@@ -1392,6 +1392,34 @@ func TestDetectNvidiaGPUDevicesAllowsUnknownVideoBIOS(t *testing.T) {
 	}
 }
 
+func TestDetectNvidiaGPUDevicesKeepsV100MemoryVariant(t *testing.T) {
+	previousQuery := queryNvidiaGPUDevices
+	queryNvidiaGPUDevices = func() ([]byte, error) {
+		return []byte(`0, GPU-a, Tesla V100-SXM2-32GB, 0x0000, 00000000:01:00.0
+1, GPU-b, Tesla V100-SXM2-16GB, 0x0000, 00000000:24:00.0`), nil
+	}
+	t.Cleanup(func() { queryNvidiaGPUDevices = previousQuery })
+
+	root := t.TempDir()
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-a", "535.54.03", "88.00.4f.00.09", false)
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-b", "535.54.03", "88.00.4f.00.09", false)
+
+	previousRoot := nvidiaProcGPUInfoRoot
+	nvidiaProcGPUInfoRoot = root
+	t.Cleanup(func() { nvidiaProcGPUInfoRoot = previousRoot })
+
+	devices := detectNvidiaGPUDevices()
+	if len(devices) != 2 {
+		t.Fatalf("devices = %#v, want two GPUs", devices)
+	}
+	if devices[0].Name != string(types.GPU_V100_32) {
+		t.Fatalf("32GB V100 name = %q, want %q", devices[0].Name, types.GPU_V100_32)
+	}
+	if devices[1].Name != string(types.GPU_V100) {
+		t.Fatalf("16GB V100 name = %q, want %q", devices[1].Name, types.GPU_V100)
+	}
+}
+
 func TestNvidiaProcDriverStateReportsFailedAdapterWithoutHardFail(t *testing.T) {
 	root := t.TempDir()
 	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?", true)
