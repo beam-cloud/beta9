@@ -153,7 +153,9 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 // the scratch root disk copied back from the checkpoint, then Cloud
 // Hypervisor restores guest memory and device state and resumes. The guest
 // init notices its control connection is gone, reconnects, reports itself
-// started again and applies this container's network config.
+// started again and takes this container's network identity. Like runsc's,
+// Restore returns once that has happened; the VM is supervised in the
+// background and State reports its exit.
 func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error) {
 	if opts == nil || opts.ImagePath == "" {
 		return -1, fmt.Errorf("restore requires a checkpoint path")
@@ -162,18 +164,47 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 	if err != nil {
 		return -1, err
 	}
-	defer inst.stopProcesses()
-
 	network, root, extra, err := m.prepare(ctx, inst, spec, opts.ImagePath)
 	if err != nil {
+		inst.stopProcesses()
 		return -1, err
 	}
 	inst.ctrl.network = &network
 	snapshotDir, err := m.stageSnapshot(inst, opts.ImagePath, network, root, extra)
 	if err != nil {
+		inst.stopProcesses()
 		return -1, fmt.Errorf("stage snapshot: %w", err)
 	}
-	return m.boot(ctx, inst, spec, microVMRestoreArgs(inst.stateDir, snapshotDir), opts.OutputWriter, nil, opts.Started)
+
+	booted := make(chan error, 1)
+	go func() {
+		defer inst.stopProcesses()
+		code, err := m.boot(ctx, inst, spec, microVMRestoreArgs(inst.stateDir, snapshotDir), opts.OutputWriter, nil, nil)
+		log.Info().Str("container_id", containerID).Int("exit_code", code).Err(err).Msg("restored microvm exited")
+		booted <- err
+	}()
+	select {
+	case err := <-inst.ctrl.networkApplied:
+		if err != nil {
+			inst.killHypervisor()
+			return -1, fmt.Errorf("restored guest did not take its network: %w", err)
+		}
+	case err := <-booted:
+		if err == nil {
+			err = errors.New("microvm exited before the restored guest reported in")
+		}
+		return -1, err
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	}
+	if opts.Started != nil {
+		select {
+		case opts.Started <- inst.pid():
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		}
+	}
+	return 0, nil
 }
 
 // Checkpoint pauses the VM, snapshots guest memory and device state into
@@ -481,12 +512,7 @@ func (m *MicroVM) State(ctx context.Context, containerID string) (State, error) 
 	if !ok {
 		return State{}, ErrContainerNotFound{ContainerID: containerID}
 	}
-	state := State{ID: containerID, Status: "stopped"}
-	inst.mu.Lock()
-	if inst.hypervisor != nil && inst.hypervisor.Process != nil {
-		state.Pid = inst.hypervisor.Process.Pid
-	}
-	inst.mu.Unlock()
+	state := State{ID: containerID, Status: "stopped", Pid: inst.pid()}
 	if inst.alive() {
 		state.Status = "running"
 	}
@@ -1356,9 +1382,11 @@ type microVMControl struct {
 	started  chan int
 	exit     chan int
 	ready    chan struct{}
-	// network, when set, is pushed to the guest as soon as it reports in:
-	// a restored guest still carries the checkpointed container's addresses.
-	network *microvm.Network
+	// network, when set, is pushed to the guest as soon as it reports in: a
+	// restored guest still carries the checkpointed container's identity.
+	// networkApplied receives the outcome of the first push.
+	network        *microvm.Network
+	networkApplied chan error
 
 	mu        sync.Mutex
 	conn      net.Conn
@@ -1379,11 +1407,12 @@ func listenMicroVMControl(vsockPath string, port uint32) (*microVMControl, error
 		return nil, err
 	}
 	ctrl := &microVMControl{
-		listener: listener,
-		started:  make(chan int, 1),
-		exit:     make(chan int, 1),
-		ready:    make(chan struct{}),
-		pending:  map[uint64]chan microvm.Message{},
+		listener:       listener,
+		started:        make(chan int, 1),
+		exit:           make(chan int, 1),
+		ready:          make(chan struct{}),
+		networkApplied: make(chan error, 1),
+		pending:        map[uint64]chan microvm.Message{},
 	}
 	go ctrl.accept()
 	return ctrl, nil
@@ -1451,8 +1480,13 @@ func (c *microVMControl) serve(conn net.Conn) {
 func (c *microVMControl) pushNetwork() {
 	ctx, cancel := context.WithTimeout(context.Background(), microVMControlRequestTimeout)
 	defer cancel()
-	if _, err := c.request(ctx, microvm.Message{Type: microvm.MsgNetwork, Network: c.network}); err != nil {
+	_, err := c.request(ctx, microvm.Message{Type: microvm.MsgNetwork, Network: c.network})
+	if err != nil {
 		log.Error().Err(err).Msg("restored microvm did not take its network configuration")
+	}
+	select {
+	case c.networkApplied <- err:
+	default:
 	}
 }
 
@@ -1588,6 +1622,16 @@ func (inst *microVMInstance) alive() bool {
 		return false
 	}
 	return inst.hypervisor.Process.Signal(syscall.Signal(0)) == nil
+}
+
+// pid is the hypervisor's, or 0 before it has started.
+func (inst *microVMInstance) pid() int {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	if inst.hypervisor == nil || inst.hypervisor.Process == nil {
+		return 0
+	}
+	return inst.hypervisor.Process.Pid
 }
 
 func (inst *microVMInstance) killHypervisor() {

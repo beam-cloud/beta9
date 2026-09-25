@@ -324,23 +324,27 @@ func (vm *testVM) start() int {
 	return 0
 }
 
-// restore boots this VM from a checkpoint instead of from scratch.
+// restore boots this VM from a checkpoint the way the worker does: Restore
+// returns once the guest is back, and the exit is observed through State.
 func (vm *testVM) restore(imagePath string) int {
 	vm.t.Helper()
 	vm.runCtx, vm.cancel = context.WithCancel(context.Background())
+	code, err := vm.rt.Restore(vm.runCtx, vm.id, &RestoreOpts{ImagePath: imagePath, BundlePath: vm.canvas, OutputWriter: vm.output, Started: vm.started})
+	require.NoError(vm.t, err, vm.output.String())
+	require.Equal(vm.t, 0, code)
+	pid := <-vm.started
+	require.NotZero(vm.t, pid, "Restore signals the hypervisor pid before returning")
 	go func() {
-		code, err := vm.rt.Restore(vm.runCtx, vm.id, &RestoreOpts{ImagePath: imagePath, BundlePath: vm.canvas, OutputWriter: vm.output, Started: vm.started})
-		vm.result <- runResult{code: code, err: err}
+		for {
+			state, err := vm.rt.State(context.Background(), vm.id)
+			if err != nil || state.Status != "running" {
+				vm.result <- runResult{code: -1, err: nil}
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 	}()
-	select {
-	case pid := <-vm.started:
-		return pid
-	case res := <-vm.result:
-		vm.t.Fatalf("Restore returned before start: code=%d err=%v\n%s", res.code, res.err, vm.output.String())
-	case <-time.After(60 * time.Second):
-		vm.t.Fatalf("hypervisor did not start within 60s\n%s", vm.output.String())
-	}
-	return 0
+	return pid
 }
 
 func (vm *testVM) wait(timeout time.Duration) runResult {
@@ -641,7 +645,7 @@ func TestMicroVMCheckpointRestore(t *testing.T) {
 	client = restored.goprocClient(60 * time.Second)
 	t.Logf("restore to goproc-ready took %s", time.Since(restoreStart).Round(time.Millisecond))
 
-	time.Sleep(2 * time.Second) // the network push follows the guest's reconnect
+	// Restore returns only after the guest took its new identity.
 	code, out = vm.sh(client, "cat /marker; cat /counter; ip -4 -o addr show dev eth0 | awk '{print $4}'; cat /sys/class/net/eth0/address")
 	require.Equal(t, 0, code, out)
 	_, state := vm.sh(client, "ip -o addr; ip route; ip neigh")
