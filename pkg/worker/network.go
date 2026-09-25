@@ -753,7 +753,7 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 			slotWorkerID, slotID, ok := containerNetworkSlotReservationParts(assignment.ContainerId)
 			if !ok {
 				// The prefix is per node: a reservation without a container is a local leak.
-				if m.containerStateMissing(assignment.ContainerId) {
+				if m.containerGone(assignment.ContainerId) {
 					orphans = append(orphans, assignment.ContainerId)
 				} else if assignment.IpAddress != "" {
 					activeIPs[assignment.IpAddress] = struct{}{}
@@ -859,13 +859,22 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 	})
 }
 
-func (m *ContainerNetworkManager) containerStateMissing(containerId string) bool {
+// containerGone reports a container this node can no longer be running: its
+// state is gone, or it belonged to this worker id, whose previous incarnation
+// took every container down with it.
+func (m *ContainerNetworkManager) containerGone(containerId string) bool {
 	if m.containerRepoClient == nil {
 		return false
 	}
-	_, err := handleGRPCResponse(m.containerRepoClient.GetContainerState(m.ctx, &pb.GetContainerStateRequest{ContainerId: containerId}))
-	notFound := &types.ErrContainerStateNotFound{}
-	return err != nil && notFound.From(err)
+	resp, err := handleGRPCResponse(m.containerRepoClient.GetContainerState(m.ctx, &pb.GetContainerStateRequest{ContainerId: containerId}))
+	if err != nil {
+		notFound := &types.ErrContainerStateNotFound{}
+		return notFound.From(err)
+	}
+	if _, running := m.containerInstances.Get(containerId); running {
+		return false
+	}
+	return resp.State != nil && resp.State.WorkerId == m.workerId
 }
 
 func shouldCleanupNetworkSlotReservation(currentWorkerID, slotWorkerID string, resourcesExist bool, workerExists func(string) (bool, error)) (bool, error) {
@@ -2392,7 +2401,7 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 
 			for _, containerId := range containerIds {
 				// TearDown takes the per-container lock; an in-flight stop finishes first.
-				if !m.containerStateMissing(containerId) {
+				if !m.containerGone(containerId) {
 					continue
 				}
 				log.Info().Str("container_id", containerId).Msg("orphaned namespace detected, cleaning up")

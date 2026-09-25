@@ -27,6 +27,18 @@ func tarCommandError(action string, err error, stderr bytes.Buffer) error {
 	return fmt.Errorf("%s: %w: %s", action, err, message)
 }
 
+func writeFileNoFollow(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 // Creates a symlink, but will remove any existing symlinks, files, or directories
 // before doing so.
 func forceSymlink(source, link string) error {

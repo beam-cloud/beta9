@@ -1884,7 +1884,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	configPath := filepath.Join(spec.Root.Path, specBaseName)
 	phaseStart = time.Now()
-	err = os.WriteFile(configPath, configContents, 0644)
+	// The rootfs is image content; never follow a symlink the image put here.
+	err = writeFileNoFollow(configPath, configContents, 0644)
 	metrics.RecordWorkerStartupPhase("config_write", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleConfigWrite, phaseStart, err == nil, nil)
 	if err != nil {

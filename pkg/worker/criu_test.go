@@ -2803,3 +2803,29 @@ func TestRuntimeCompatibility(t *testing.T) {
 		})
 	}
 }
+
+type whilePausedRuntime struct {
+	runtime.Runtime
+	sawHook bool
+}
+
+func (r *whilePausedRuntime) Checkpoint(ctx context.Context, _ string, opts *runtime.CheckpointOpts) error {
+	if opts.WhilePaused != nil {
+		r.sawHook = true
+		return opts.WhilePaused(ctx)
+	}
+	return nil
+}
+
+func TestCheckpointHookRuntimeHandsTheSealToTheRuntime(t *testing.T) {
+	inner := &whilePausedRuntime{}
+	sealed := false
+	wrapped := checkpointHookRuntime{Runtime: inner, whilePaused: func(context.Context) error {
+		sealed = true
+		return nil
+	}}
+
+	require.NoError(t, wrapped.Checkpoint(context.Background(), "c1", &runtime.CheckpointOpts{}))
+	require.True(t, inner.sawHook, "the runtime must receive WhilePaused")
+	require.True(t, sealed, "the seal runs inside the runtime's paused window")
+}
