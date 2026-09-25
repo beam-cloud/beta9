@@ -29,6 +29,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
@@ -56,6 +57,7 @@ type microVMInstance struct {
 	hypervisor *exec.Cmd
 	ctrl       *microVMControl
 	console    *tailWriter
+	prepared   string // per-step durations of prepare, for the start log line
 
 	mu     sync.Mutex
 	exited bool
@@ -355,29 +357,41 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 	if err := os.MkdirAll(inst.stateDir, 0o700); err != nil {
 		return none, microVMDisk{}, nil, err
 	}
+	var steps strings.Builder
+	step := time.Now()
+	took := func(name string) {
+		fmt.Fprintf(&steps, "%s=%dms ", name, time.Since(step).Milliseconds())
+		step = time.Now()
+	}
 	network, err := m.setupNetwork(inst, spec)
 	if err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("setup microvm network: %w", err)
 	}
+	took("network")
 	root, extra, err := m.prepareDisks(ctx, inst, spec, restoreFrom)
 	if err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm disks: %w", err)
 	}
+	took("disks")
 	vmSpec, err := m.prepareCanvas(inst, spec, network, root, extra)
 	if err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm rootfs: %w", err)
 	}
+	took("canvas")
 	if err := m.setupCgroup(inst, spec, microVMMemoryBytes(spec)); err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("setup microvm cgroup: %w", err)
 	}
+	took("cgroup")
 	if err := m.startVirtiofsd(ctx, inst); err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("start virtiofsd: %w", err)
 	}
+	took("virtiofsd")
 	ctrl, err := listenMicroVMControl(filepath.Join(inst.stateDir, "vsock.sock"), vmSpec.ControlPort)
 	if err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("listen on vsock control socket: %w", err)
 	}
 	inst.ctrl = ctrl
+	inst.prepared = strings.TrimSpace(steps.String())
 	return network, root, extra, nil
 }
 
@@ -443,13 +457,15 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	}()
 
 	// Cloud Hypervisor starts inside the container's netns so the guest inherits it.
+	spawnStart := time.Now()
 	if err := inNetworkNamespace(inst.netnsPath, cmd.Start); err != nil {
 		return -1, fmt.Errorf("start cloud-hypervisor: %w", err)
 	}
 	inst.mu.Lock()
 	inst.hypervisor = cmd
 	inst.mu.Unlock()
-	log.Info().Str("container_id", inst.id).Int("pid", cmd.Process.Pid).Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec)).Msg("microvm started")
+	log.Info().Str("container_id", inst.id).Int("pid", cmd.Process.Pid).Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec)).
+		Str("prepare", inst.prepared).Dur("spawn", time.Since(spawnStart)).Msg("microvm started")
 
 	if started != nil {
 		select {
@@ -1249,12 +1265,38 @@ func (inst *microVMInstance) cgroupAttr(cmd *exec.Cmd) (*os.File, error) {
 
 // --- network ---------------------------------------------------------------------
 
-// setupNetwork runs inside the container's network namespace. It records the
-// veth's MAC, MTU, addresses, and default routes for the guest, removes the
-// addresses from the veth so the namespace kernel stops answering for them,
-// creates the tap, and wires the two together with tc mirred redirects. The
-// tap ingress additionally drops any frame the guest sources from an address
-// that is not its own.
+// preparedNetwork is what plumbNetwork leaves behind in a namespace: the
+// guest's addresses and the tap the hypervisor attaches to.
+type preparedNetwork struct {
+	Network  microvm.Network `json:"network"`
+	TapIndex int             `json:"tap_index"`
+}
+
+// preparedNetworkPath is PrepareNetworkSlot's record for a namespace. A new
+// worker never reuses old slots, so sweepLeftoverVMs drops the directory.
+func (m *MicroVM) preparedNetworkPath(nsPath string) string {
+	return filepath.Join(m.cfg.MicroVMStateRoot, "netns", filepath.Base(nsPath)+".json")
+}
+
+// PrepareNetworkSlot plumbs a pooled namespace before a VM is assigned to it.
+// Its ~30 rtnetlink round trips serialize on the kernel's rtnl lock; 48 VMs
+// doing them inside Run at once cost seconds each.
+func (m *MicroVM) PrepareNetworkSlot(nsPath string) error {
+	prepared, err := plumbNetwork(nsPath)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(prepared)
+	if err != nil {
+		return err
+	}
+	path := m.preparedNetworkPath(nsPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
 func (m *MicroVM) setupNetwork(inst *microVMInstance, spec *specs.Spec) (microvm.Network, error) {
 	nsPath := networkNamespacePath(spec)
 	if nsPath == "" {
@@ -1262,7 +1304,43 @@ func (m *MicroVM) setupNetwork(inst *microVMInstance, spec *specs.Spec) (microvm
 	}
 	inst.netnsPath = nsPath
 
-	var network microvm.Network
+	if prepared, ok := m.loadPreparedNetwork(nsPath); ok {
+		inst.tapIndex = prepared.TapIndex
+		return prepared.Network, nil
+	}
+	prepared, err := plumbNetwork(nsPath)
+	if err != nil {
+		return microvm.Network{}, err
+	}
+	inst.tapIndex = prepared.TapIndex
+	return prepared.Network, nil
+}
+
+// loadPreparedNetwork consumes PrepareNetworkSlot's record for nsPath without
+// a netlink call: nothing else touches a pooled namespace before its VM.
+func (m *MicroVM) loadPreparedNetwork(nsPath string) (preparedNetwork, bool) {
+	path := m.preparedNetworkPath(nsPath)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return preparedNetwork{}, false
+	}
+	_ = os.Remove(path)
+	var prepared preparedNetwork
+	if err := json.Unmarshal(data, &prepared); err != nil || prepared.TapIndex == 0 {
+		return preparedNetwork{}, false
+	}
+	if _, err := os.Stat(nsPath); err != nil {
+		return preparedNetwork{}, false
+	}
+	return prepared, true
+}
+
+// plumbNetwork hands the namespace's veth to a guest: records its addresses
+// and gateways, removes them from the namespace kernel, creates the tap, and
+// wires tap and veth together behind the anti-spoof filters.
+func plumbNetwork(nsPath string) (preparedNetwork, error) {
+	var prepared preparedNetwork
+	network := &prepared.Network
 	err := inNetworkNamespace(nsPath, func() error {
 		veth, err := findVeth()
 		if err != nil {
@@ -1303,8 +1381,10 @@ func (m *MicroVM) setupNetwork(inst *microVMInstance, spec *specs.Spec) (microvm
 		}
 
 		// The namespace kernel must not answer ARP/NDP for addresses the
-		// guest now owns.
-		_ = writeSysctl(filepath.Join("/proc/sys/net/ipv6/conf", attrs.Name, "disable_ipv6"), "1")
+		// guest now owns: drop every address and stop the kernel deriving a
+		// new link-local. That is done over netlink, not the disable_ipv6
+		// sysctl, whose handler spins on rtnl_trylock under contention.
+		_ = netlink.LinkSetIP6AddrGenMode(veth, nl.IN6_ADDR_GEN_MODE_NONE)
 		for _, addr := range append(v4, v6...) {
 			a := addr
 			if err := netlink.AddrDel(veth, &a); err != nil && !errors.Is(err, unix.EADDRNOTAVAIL) {
@@ -1332,14 +1412,14 @@ func (m *MicroVM) setupNetwork(inst *microVMInstance, spec *specs.Spec) (microvm
 		if err != nil {
 			return err
 		}
-		_ = writeSysctl(filepath.Join("/proc/sys/net/ipv6/conf", microVMTapName, "disable_ipv6"), "1")
+		_ = netlink.LinkSetIP6AddrGenMode(tapLink, nl.IN6_ADDR_GEN_MODE_NONE)
 		if err := netlink.LinkSetUp(tapLink); err != nil {
 			return fmt.Errorf("bring tap up: %w", err)
 		}
 		if err := netlink.LinkSetUp(veth); err != nil {
 			return fmt.Errorf("bring %s up: %w", attrs.Name, err)
 		}
-		inst.tapIndex = tapLink.Attrs().Index
+		prepared.TapIndex = tapLink.Attrs().Index
 
 		if err := redirectAll(veth, tapLink); err != nil {
 			return fmt.Errorf("redirect %s to tap: %w", attrs.Name, err)
@@ -1349,7 +1429,7 @@ func (m *MicroVM) setupNetwork(inst *microVMInstance, spec *specs.Spec) (microvm
 		}
 		return nil
 	})
-	return network, err
+	return prepared, err
 }
 
 // findVeth returns the container side of the veth pair: the only non-loopback
@@ -1389,10 +1469,6 @@ func defaultGateway(link netlink.Link, family int) string {
 		}
 	}
 	return ""
-}
-
-func writeSysctl(path, value string) error {
-	return os.WriteFile(path, []byte(value), 0o644)
 }
 
 func ensureIngress(link netlink.Link) error {

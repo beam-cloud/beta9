@@ -70,8 +70,12 @@ func main() {
 	powerOff(code)
 }
 
+var bootStart = time.Now()
+
+// logf prefixes the seconds since init started so the console shows where
+// boot time goes.
 func logf(format string, args ...any) {
-	fmt.Fprintf(os.Stdout, "vminit: "+format+"\n", args...)
+	fmt.Fprintf(os.Stdout, "vminit[+%.3fs]: "+format+"\n", append([]any{time.Since(bootStart).Seconds()}, args...)...)
 }
 
 // powerOff flushes and halts the VM; the host reads the exit code from the
@@ -508,6 +512,10 @@ func configureNetwork(cfg microvm.Network) error {
 	if err := netlink.LinkSetUp(link); err != nil {
 		return fmt.Errorf("bring %s up: %w", name, err)
 	}
+	// virtio-net receives before linkwatch activates its TX qdisc. Frames the
+	// host queued during boot must not be answered until then: the reply's ARP
+	// request would be dropped and the guest would wait out a 1s ARP retry.
+	waitOperUp(name, 50*time.Millisecond)
 	if cfg.IPv4 != "" {
 		addr, err := netlink.ParseAddr(cfg.IPv4)
 		if err != nil {
@@ -541,6 +549,24 @@ func configureNetwork(cfg microvm.Network) error {
 		}
 	}
 	return nil
+}
+
+// waitOperUp returns once linkwatch has run for name (operstate "up"), which
+// takes a few milliseconds after LinkSetUp, or after limit.
+func waitOperUp(name string, limit time.Duration) {
+	path := "/sys/class/net/" + name + "/operstate"
+	deadline := time.Now().Add(limit)
+	for {
+		state, err := os.ReadFile(path)
+		if err != nil || strings.TrimSpace(string(state)) == "up" {
+			return
+		}
+		if time.Now().After(deadline) {
+			logf("%s not operationally up after %s: %s", name, limit, strings.TrimSpace(string(state)))
+			return
+		}
+		time.Sleep(200 * time.Microsecond)
+	}
 }
 
 func findNIC(mac string) (netlink.Link, error) {

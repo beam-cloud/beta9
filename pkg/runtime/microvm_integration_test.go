@@ -375,7 +375,9 @@ func (vm *testVM) goprocClient(timeout time.Duration) *goproc.GoProcClient {
 		clientCtx, cancelClient := context.WithCancel(context.Background())
 		client, err := goproc.NewGoProcClient(clientCtx, vm.ip4.String(), goprocPort)
 		if err == nil {
-			probeCtx, cancelProbe := context.WithTimeout(clientCtx, 2*time.Second)
+			// Same short probe the worker uses: a SYN the guest cannot answer
+			// yet must not sit in the kernel's 1s retransmit.
+			probeCtx, cancelProbe := context.WithTimeout(clientCtx, 50*time.Millisecond)
 			err = client.ReadyContext(probeCtx)
 			cancelProbe()
 			if err == nil {
@@ -389,7 +391,7 @@ func (vm *testVM) goprocClient(timeout time.Duration) *goproc.GoProcClient {
 		}
 		cancelClient()
 		lastErr = err
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	vm.t.Fatalf("goproc at %s:%d never became ready: %v\n%s", vm.ip4, goprocPort, lastErr, vm.output.String())
 	return nil
@@ -524,6 +526,23 @@ func createTestNetwork(t *testing.T, id string, ip4, ip6 net.IP) (nsPath, hostVe
 	require.NoError(t, netlink.AddrAdd(peer, addr6))
 	_, def6, _ := net.ParseCIDR("::/0")
 	require.NoError(t, netlink.RouteAdd(&netlink.Route{LinkIndex: peer.Attrs().Index, Dst: def6, Gw: net.ParseIP(testBridgeIP6)}))
+
+	// The worker pins every container address on the bridge, so the host
+	// never ARPs for a booting guest; the harness must match to time boots.
+	require.NoError(t, netns.Set(hostNS))
+	for _, ip := range []net.IP{ip4, ip6} {
+		require.NoError(t, netlink.NeighSet(&netlink.Neigh{
+			LinkIndex:    bridge.Attrs().Index,
+			State:        0x80, // NUD_PERMANENT
+			IP:           ip,
+			HardwareAddr: peerMAC,
+		}))
+	}
+	t.Cleanup(func() {
+		for _, ip := range []net.IP{ip4, ip6} {
+			_ = netlink.NeighDel(&netlink.Neigh{LinkIndex: bridge.Attrs().Index, IP: ip})
+		}
+	})
 
 	return filepath.Join("/var/run/netns", id), hostVeth, peerMAC
 }
@@ -746,6 +765,36 @@ func TestMicroVMForcedStopIsASignalExit(t *testing.T) {
 	require.NoError(t, res.err, "a kill the host issued must not surface as a VM failure: %s", vm.output.String())
 	require.Equal(t, 128+int(syscall.SIGKILL), res.code)
 	require.Less(t, time.Since(killedAt), 10*time.Second)
+	require.NoError(t, rt.Delete(context.Background(), vm.id, &DeleteOpts{Force: true}))
+}
+
+// The worker plumbs pooled namespaces ahead of time; a VM started in one
+// must find the record, consume it, and come up with the same network.
+func TestMicroVMPreparedNetworkSlot(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true})
+
+	require.NoError(t, rt.PrepareNetworkSlot(vm.netns))
+	record := rt.preparedNetworkPath(vm.netns)
+	_, err := os.Stat(record)
+	require.NoError(t, err, "PrepareNetworkSlot leaves a record for Run")
+
+	startedAt := time.Now()
+	vm.start()
+	client := vm.goprocClient(60 * time.Second)
+	t.Logf("boot-to-goproc-ready on a prepared slot: %s", time.Since(startedAt).Round(time.Millisecond))
+	_, err = os.Stat(record)
+	require.True(t, os.IsNotExist(err), "Run consumes the record")
+
+	code, out := vm.sh(client, "ip -o addr show eth0 && ip route show default")
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, vm.ip4.String()+"/24")
+	require.Contains(t, out, "default via "+testBridgeIP4)
+	code, out = vm.sh(client, "ping -c 1 -W 2 "+testBridgeIP4)
+	require.Equal(t, 0, code, "guest reaches the host through the prepared plumbing: %s", out)
+
+	require.NoError(t, rt.Kill(context.Background(), vm.id, syscall.SIGKILL, nil))
+	vm.wait(30 * time.Second)
 	require.NoError(t, rt.Delete(context.Background(), vm.id, &DeleteOpts{Force: true}))
 }
 

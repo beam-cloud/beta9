@@ -107,6 +107,9 @@ type ContainerNetworkManager struct {
 	slotFillRunning     bool
 	slotPoolClosed      bool
 	staleSweepDone      atomic.Bool
+	// slotPreparer, when set, plumbs a freshly created slot's namespace for the
+	// pool's runtime before the slot can be handed out.
+	slotPreparer func(netnsPath string) error
 }
 
 type PortBinding struct {
@@ -433,7 +436,7 @@ func iptablesAddressMatches(value string, ip string) bool {
 	return net.ParseIP(value).Equal(target)
 }
 
-func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int, slotPreparer func(netnsPath string) error) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -490,6 +493,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		ctx:                 ctx,
 		ipt:                 ipt,
 		ipt6:                ipt6,
+		slotPreparer:        slotPreparer,
 		defaultLink:         defaultLink,
 		workerId:            workerId,
 		workerRepoClient:    workerRepoClient,
@@ -693,6 +697,15 @@ func (m *ContainerNetworkManager) fillNetworkSlotPoolLocked(maxSlots int) error 
 			if err != nil {
 				log.Debug().Err(err).Msg("failed to preallocate container network slot")
 				return
+			}
+			if m.slotPreparer != nil {
+				if err := m.slotPreparer(slot.netnsPath); err != nil {
+					log.Warn().Str("network_slot", slot.id).Err(err).Msg("failed to prepare network slot for the runtime; discarding it")
+					if err := m.releaseUnusedNetworkSlot(slot); err != nil {
+						log.Debug().Str("network_slot", slot.id).Err(err).Msg("failed to release unprepared network slot")
+					}
+					return
+				}
 			}
 
 			m.slotMu.Lock()
