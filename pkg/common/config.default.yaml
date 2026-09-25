@@ -14,10 +14,6 @@ database:
     # requests otherwise open a connection each and the server thrashes;
     # ~2-4x the database's vCPUs is a good starting point.
     maxOpenConns: 0
-    # Connections one gateway holds to Postgres; 0 is unbounded. Bursts of
-    # requests otherwise open a connection each and the server thrashes;
-    # ~2-4x the database's vCPUs is a good starting point.
-    maxOpenConns: 0
   redis:
     mode: single
     addrs:
