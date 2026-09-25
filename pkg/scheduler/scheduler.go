@@ -1213,10 +1213,10 @@ func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName strin
 }
 
 // runtimeAcceptsRequest is the two-way gate between the microvm runtime and
-// everything else. A microvm worker only takes a sandbox that explicitly
-// asked for a VM (use_vm) and that the runtime can serve: no GPU, no memory
-// checkpoint. Every other runtime refuses use_vm requests, so a sandbox that
-// asked for a VM fails closed instead of quietly landing in a container.
+// everything else. A microvm worker only takes a CPU sandbox that explicitly
+// asked for a VM (use_vm); every other runtime refuses use_vm requests, so a
+// sandbox that asked for a VM fails closed instead of quietly landing in a
+// container. Checkpoints are runtime-specific and matched by runtimeAccepts.
 func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) bool {
 	if request == nil {
 		return true
@@ -1224,16 +1224,7 @@ func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) 
 	if runtimeName != types.ContainerRuntimeMicroVM.String() {
 		return !request.UseVM
 	}
-	if !request.UseVM || request.Stub.Type.Kind() != types.StubTypeSandbox || request.RequiresGPU() {
-		return false
-	}
-	if request.CheckpointEnabled {
-		return false
-	}
-	if checkpoint := availableCheckpoint(request); checkpoint != nil && !checkpoint.IsFilesystemOnly() {
-		return false
-	}
-	return true
+	return request.UseVM && request.Stub.Type.Kind() == types.StubTypeSandbox && !request.RequiresGPU()
 }
 
 func checkpointAccelerator(request *types.ContainerRequest) string {

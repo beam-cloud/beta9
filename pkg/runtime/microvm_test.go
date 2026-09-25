@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -179,6 +180,39 @@ func TestLineWriterEmitsWholeLines(t *testing.T) {
 	_, err := w.Write(bytes.Repeat([]byte("x"), lineWriterMaxLine))
 	require.NoError(t, err)
 	assert.Len(t, dst.records, 1, "an over-long line without a newline is flushed rather than buffered forever")
+}
+
+func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
+	snapshot := []byte(`{
+	  "cpus": {"boot_vcpus": 2},
+	  "memory": {"size": 1073741824, "shared": true},
+	  "disks": [
+	    {"path": "/old/scratch.ext4", "image_type": "raw", "id": "_disk0"},
+	    {"vhost_user": true, "vhost_socket": "/old/run/aaa/vhost-user-blk.sock", "id": "_disk1"}
+	  ],
+	  "fs": [{"tag": "beamfs", "socket": "/old/state/virtiofs.sock"}],
+	  "vsock": {"cid": 3, "socket": "/old/state/vsock.sock"},
+	  "net": [{"tap": "b9tap0", "mac": "02:00:00:00:00:01"}]
+	}`)
+	root := microVMDisk{path: "/new/scratch.ext4"}
+	extra := []microVMDisk{{socket: "/new/run/bbb/vhost-user-blk.sock"}}
+	out, err := rewriteSnapshotConfig(snapshot, "/new/state", root, extra)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal(out, &cfg))
+	disks := cfg["disks"].([]any)
+	assert.Equal(t, "/new/scratch.ext4", disks[0].(map[string]any)["path"])
+	assert.Equal(t, "raw", disks[0].(map[string]any)["image_type"], "unrelated keys survive")
+	assert.Equal(t, "/new/run/bbb/vhost-user-blk.sock", disks[1].(map[string]any)["vhost_socket"])
+	assert.Equal(t, "/new/state/virtiofs.sock", cfg["fs"].([]any)[0].(map[string]any)["socket"])
+	assert.Equal(t, "/new/state/vsock.sock", cfg["vsock"].(map[string]any)["socket"])
+	assert.Equal(t, "02:00:00:00:00:01", cfg["net"].([]any)[0].(map[string]any)["mac"], "the guest keeps its NIC identity")
+
+	_, err = rewriteSnapshotConfig(snapshot, "/new/state", root, nil)
+	assert.ErrorContains(t, err, "snapshot has 2 disks, this VM has 1")
+	_, err = rewriteSnapshotConfig(snapshot, "/new/state", microVMDisk{socket: "/x"}, extra)
+	assert.ErrorContains(t, err, "not a vhost-user export", "a scratch-root snapshot cannot be restored onto a durable root")
 }
 
 func TestMicroVMProtocolRoundTrip(t *testing.T) {

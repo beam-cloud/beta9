@@ -202,8 +202,8 @@ class Sandbox(Pod):
         use_vm (bool):
             Run the sandbox in its own virtual machine instead of a container. Only CPU sandboxes
             are supported; the sandbox is scheduled exclusively onto microvm pools and fails if none
-            is available rather than falling back to a container. Docker and durable disks work as
-            usual; memory snapshots are not supported yet. Default is False.
+            is available rather than falling back to a container. Docker, durable disks and memory
+            snapshots work as usual. Default is False.
         ports (Optional[List[int]]):
             List of ports to expose from the sandbox. When specified, these ports will be accessible
             via public URLs upon sandbox creation. Default is an empty list. You can also dynamically

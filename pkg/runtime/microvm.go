@@ -92,7 +92,18 @@ type microVMDisk struct {
 	device    string
 	mountPath string
 	readOnly  bool
+	// Exactly one of path (a raw image the runtime owns) or socket (a
+	// vhost-user-blk export) is set; a restore rewrites these into the
+	// snapshot's device config.
+	path   string
+	socket string
 }
+
+// Checkpoint layout under CheckpointOpts.ImagePath.
+const (
+	checkpointVMDir    = "vm"       // Cloud Hypervisor snapshot: config.json, state.json, memory-ranges
+	checkpointRootDisk = "root.img" // the scratch root disk, when the VM has one
+)
 
 // --- bundle -----------------------------------------------------------------
 
@@ -229,11 +240,11 @@ func microVMCPUMax(spec *specs.Spec) string {
 // exports with a guest mount path. Devices are named in --disk order.
 func microVMDiskPlan(spec *specs.Spec, scratchPath string) (root microVMDisk, extra []microVMDisk, err error) {
 	if socket := strings.TrimSpace(spec.Annotations[MicroVMRootDiskAnnotation]); socket != "" {
-		root = microVMDisk{arg: vhostUserDiskArg(socket), device: "/dev/vda"}
+		root = microVMDisk{arg: vhostUserDiskArg(socket), device: "/dev/vda", socket: socket}
 	} else {
 		// An explicit image type: Cloud Hypervisor blocks sector 0 writes on
 		// auto-detected raw images, which breaks the ext4 superblock update.
-		root = microVMDisk{arg: "path=" + scratchPath + ",image_type=raw", device: "/dev/vda"}
+		root = microVMDisk{arg: "path=" + scratchPath + ",image_type=raw", device: "/dev/vda", path: scratchPath}
 	}
 
 	keys := make([]string, 0)
@@ -256,11 +267,13 @@ func microVMDiskPlan(spec *specs.Spec, scratchPath string) (root microVMDisk, ex
 		if !filepath.IsAbs(mountPath) {
 			return root, nil, fmt.Errorf("annotation %s mount path %q must be absolute", key, mountPath)
 		}
+		socket = strings.TrimSpace(socket)
 		extra = append(extra, microVMDisk{
-			arg:       vhostUserDiskArg(strings.TrimSpace(socket)),
+			arg:       vhostUserDiskArg(socket),
 			device:    fmt.Sprintf("/dev/vd%c", 'b'+i),
 			mountPath: filepath.Clean(mountPath),
 			readOnly:  readOnly,
+			socket:    socket,
 		})
 	}
 	return root, extra, nil
@@ -421,6 +434,60 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		"--console", "off",
 	)
 	return args
+}
+
+// microVMRestoreArgs launches Cloud Hypervisor from a snapshot directory. The
+// device configuration comes from the snapshot's config.json, so nothing
+// else from microVMHypervisorArgs is passed.
+func microVMRestoreArgs(stateDir, snapshotDir string) []string {
+	return []string{
+		"--api-socket", "path=" + filepath.Join(stateDir, "api.sock"),
+		"--restore", "source_url=file://" + snapshotDir + ",resume=true",
+	}
+}
+
+// rewriteSnapshotConfig points a snapshot's device config at this VM's
+// sockets and disk image. Cloud Hypervisor documents config.json as editable
+// between snapshot and restore for exactly this. Devices are matched by
+// position: our --disk order is root first, then the extra disks in
+// annotation order, and there is one fs and one vsock device.
+func rewriteSnapshotConfig(config []byte, stateDir string, root microVMDisk, extra []microVMDisk) ([]byte, error) {
+	var cfg map[string]any
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return nil, fmt.Errorf("decode snapshot config: %w", err)
+	}
+	disks, _ := cfg["disks"].([]any)
+	want := append([]microVMDisk{root}, extra...)
+	if len(disks) != len(want) {
+		return nil, fmt.Errorf("snapshot has %d disks, this VM has %d", len(disks), len(want))
+	}
+	for i, entry := range disks {
+		disk, ok := entry.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("snapshot disk %d is not an object", i)
+		}
+		switch {
+		case want[i].socket != "":
+			if _, vhost := disk["vhost_socket"]; !vhost {
+				return nil, fmt.Errorf("snapshot disk %d is not a vhost-user export", i)
+			}
+			disk["vhost_socket"] = want[i].socket
+		case want[i].path != "":
+			if _, raw := disk["path"]; !raw {
+				return nil, fmt.Errorf("snapshot disk %d is not an image-backed disk", i)
+			}
+			disk["path"] = want[i].path
+		}
+	}
+	if fs, _ := cfg["fs"].([]any); len(fs) == 1 {
+		if entry, ok := fs[0].(map[string]any); ok {
+			entry["socket"] = filepath.Join(stateDir, "virtiofs.sock")
+		}
+	}
+	if vsock, ok := cfg["vsock"].(map[string]any); ok {
+		vsock["socket"] = filepath.Join(stateDir, "vsock.sock")
+	}
+	return json.Marshal(cfg)
 }
 
 // --- console -----------------------------------------------------------------------

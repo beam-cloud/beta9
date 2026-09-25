@@ -293,7 +293,7 @@ func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
 
 	checkpointing := sandbox(true)
 	checkpointing.CheckpointEnabled = true
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, checkpointing))
+	assert.Len(t, filterControllersByFlags([]WorkerPoolController{microvm}, checkpointing), 1, "VM sandboxes snapshot through the runtime's own checkpoint support")
 
 	restoring := sandbox(true)
 	restoring.Checkpoint = &types.Checkpoint{CheckpointId: "c1", Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String()}

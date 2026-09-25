@@ -324,6 +324,25 @@ func (vm *testVM) start() int {
 	return 0
 }
 
+// restore boots this VM from a checkpoint instead of from scratch.
+func (vm *testVM) restore(imagePath string) int {
+	vm.t.Helper()
+	vm.runCtx, vm.cancel = context.WithCancel(context.Background())
+	go func() {
+		code, err := vm.rt.Restore(vm.runCtx, vm.id, &RestoreOpts{ImagePath: imagePath, BundlePath: vm.canvas, OutputWriter: vm.output, Started: vm.started})
+		vm.result <- runResult{code: code, err: err}
+	}()
+	select {
+	case pid := <-vm.started:
+		return pid
+	case res := <-vm.result:
+		vm.t.Fatalf("Restore returned before start: code=%d err=%v\n%s", res.code, res.err, vm.output.String())
+	case <-time.After(60 * time.Second):
+		vm.t.Fatalf("hypervisor did not start within 60s\n%s", vm.output.String())
+	}
+	return 0
+}
+
 func (vm *testVM) wait(timeout time.Duration) runResult {
 	vm.t.Helper()
 	select {
@@ -583,6 +602,70 @@ func TestMicroVMBootAndExit(t *testing.T) {
 	})
 	_, err = rt.State(context.Background(), vm.id)
 	require.ErrorAs(t, err, &ErrContainerNotFound{})
+}
+
+// Checkpoint pauses the VM, snapshots memory plus the scratch root disk, and
+// Restore brings that image up as a new VM with a new IP: the guest's
+// counter continues from where it was, files written before the checkpoint
+// are there, and the new address is reachable.
+func TestMicroVMCheckpointRestore(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true})
+	vm.start()
+	client := vm.goprocClient(60 * time.Second)
+	// A background counter is the memory state that must survive.
+	code, out := vm.sh(client, "(n=0; while true; do n=$((n+1)); echo $n > /counter; sleep 1; done) >/dev/null 2>&1 & echo before-checkpoint > /marker && sleep 3 && cat /counter")
+	require.Equal(t, 0, code, out)
+	before, err := strconv.Atoi(strings.TrimSpace(out))
+	require.NoError(t, err)
+	require.Greater(t, before, 1)
+
+	imagePath := filepath.Join(testWorkRoot, "checkpoint-"+vm.id)
+	require.NoError(t, os.RemoveAll(imagePath))
+	checkpointStart := time.Now()
+	require.NoError(t, rt.Checkpoint(context.Background(), vm.id, &CheckpointOpts{ImagePath: imagePath, LeaveRunning: false}))
+	t.Logf("checkpoint took %s", time.Since(checkpointStart).Round(time.Millisecond))
+	res := vm.wait(30 * time.Second)
+	require.NoError(t, res.err)
+	require.Equal(t, 128+int(syscall.SIGKILL), res.code, "a terminal checkpoint stops the VM like a forced stop")
+	for _, name := range []string{"vm/config.json", "vm/state.json", "vm/memory-ranges", "root.img"} {
+		require.FileExists(t, filepath.Join(imagePath, name))
+	}
+	require.NoError(t, rt.Delete(context.Background(), vm.id, &DeleteOpts{Force: true}))
+
+	restored := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true})
+	require.NotEqual(t, vm.ip4.String(), restored.ip4.String(), "the restored VM gets a new address")
+	restoreStart := time.Now()
+	restored.restore(imagePath)
+	client = restored.goprocClient(60 * time.Second)
+	t.Logf("restore to goproc-ready took %s", time.Since(restoreStart).Round(time.Millisecond))
+
+	time.Sleep(2 * time.Second) // the network push follows the guest's reconnect
+	code, out = vm.sh(client, "cat /marker; cat /counter; ip -4 -o addr show dev eth0 | awk '{print $4}'")
+	require.Equal(t, 0, code, out)
+	_, state := vm.sh(client, "ip -o addr; ip route; ip neigh")
+	t.Logf("restored guest network:\n%s", state)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	require.Len(t, lines, 3, out)
+	require.Equal(t, "before-checkpoint", lines[0], "files written before the checkpoint survive")
+	after, err := strconv.Atoi(lines[1])
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, after, before, "the counter resumes rather than restarting")
+	require.Less(t, after, before+60, "the counter did not run for long between checkpoint and restore")
+	require.Contains(t, lines[2], restored.ip4.String(), "the guest took the new container address; console:\n%s", restored.output.String())
+	code, out = vm.sh(client, "sleep 2; cat /counter")
+	require.Equal(t, 0, code, out)
+	later, err := strconv.Atoi(strings.TrimSpace(out))
+	require.NoError(t, err)
+	require.Greater(t, later, after, "the background process keeps running in the restored VM")
+
+	code, out = vm.sh(client, "wget -qO- -T 5 http://1.1.1.1/cdn-cgi/trace 2>&1 | head -1; echo rc=$?")
+	require.Contains(t, out, "rc=0", "egress works from the restored VM: %s", out)
+
+	require.NoError(t, rt.Kill(context.Background(), restored.id, syscall.SIGKILL, &KillOpts{All: true}))
+	res = restored.wait(30 * time.Second)
+	require.NoError(t, res.err)
+	require.NoError(t, rt.Delete(context.Background(), restored.id, &DeleteOpts{Force: true}))
 }
 
 // A forced stop (the worker's Kill with SIGKILL, which is what a scheduler or

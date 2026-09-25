@@ -1177,8 +1177,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		// A qcow root disk hosts the upper layer and is sealed alongside this
 		// checkpoint below; restore takes the filesystem from the disk and never
 		// from the checkpoint, so copying the upper dir here only costs time and
-		// inflates the archive.
-		if qcowRootDiskMount(opts.Request) != nil {
+		// inflates the archive. A block-root runtime likewise keeps its writable
+		// layer on a disk the checkpoint already carries.
+		if qcowRootDiskMount(opts.Request) != nil || instance.Runtime.Capabilities().BlockRoot {
 			err = os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile), []byte(checkpointFilesystemOnDiskV1), 0644)
 		} else {
 			err = captureCheckpointFilesystem(checkpointCtx, instance, checkpointPath, false)
@@ -2110,7 +2111,8 @@ func supportsTerminalCheckpoint(rt runtime.Runtime) bool {
 		return false
 	}
 	return rt.Name() == types.ContainerRuntimeRunc.String() ||
-		rt.Name() == types.ContainerRuntimeGvisor.String()
+		rt.Name() == types.ContainerRuntimeGvisor.String() ||
+		rt.Name() == types.ContainerRuntimeMicroVM.String()
 }
 
 func checkpointRuntimeHasStopped(ctx context.Context, rt runtime.Runtime, containerID string) bool {

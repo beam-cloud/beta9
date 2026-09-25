@@ -47,6 +47,7 @@ const (
 	deviceWaitTimeout  = 20 * time.Second
 	controlDialTimeout = 30 * time.Second
 	controlDialBackoff = 50 * time.Millisecond
+	controlHeartbeat   = 2 * time.Second
 
 	// linux/fs.h: _IOWR('X', 119, int) and _IOWR('X', 120, int).
 	ioctlFIFREEZE = 0xC0045877
@@ -442,6 +443,29 @@ func mountPseudo() error {
 
 // --- network -----------------------------------------------------------------------
 
+// reconfigureNetwork replaces the NIC's addresses with cfg's. After a
+// restore the guest still holds the checkpointed container's addresses and
+// the old gateway's neighbour entry; both must go before the new ones work.
+func reconfigureNetwork(cfg microvm.Network) error {
+	link, err := findNIC(cfg.MAC)
+	if err != nil {
+		return err
+	}
+	for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
+		addrs, _ := netlink.AddrList(link, family)
+		for _, addr := range addrs {
+			if addr.Scope != int(netlink.SCOPE_LINK) {
+				_ = netlink.AddrDel(link, &addr)
+			}
+		}
+		neighs, _ := netlink.NeighList(link.Attrs().Index, family)
+		for _, neigh := range neighs {
+			_ = netlink.NeighDel(&neigh)
+		}
+	}
+	return configureNetwork(cfg)
+}
+
 func configureNetwork(cfg microvm.Network) error {
 	if lo, err := netlink.LinkByName("lo"); err == nil {
 		_ = netlink.LinkSetUp(lo)
@@ -507,10 +531,14 @@ func findNIC(mac string) (netlink.Link, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Only the virtio NIC qualifies as a fallback: the kernel's dummy0 and
+	// anything Docker creates in the guest are software links. A restored
+	// guest keeps the snapshot's MAC, so the fallback is what finds eth0
+	// when the host pushes the new container's addresses.
 	var fallback netlink.Link
 	for _, link := range links {
 		attrs := link.Attrs()
-		if attrs.Flags&net.FlagLoopback != 0 || attrs.Name == "lo" {
+		if attrs.Flags&net.FlagLoopback != 0 || attrs.Name == "lo" || link.Type() != "device" {
 			continue
 		}
 		if mac != "" && strings.EqualFold(attrs.HardwareAddr.String(), mac) {
@@ -535,29 +563,55 @@ func writeSysctl(path, value string) {
 // --- control channel -------------------------------------------------------------------
 
 type control struct {
+	port uint32
+	mu   sync.Mutex
 	file *os.File
 	enc  *microvm.Encoder
-	mu   sync.Mutex
 }
 
+// controlReconnectTimeout bounds how long init keeps trying to reach the
+// host after its connection dies; a restored VM's host listener is up
+// before the guest resumes, so this only has to absorb the restore itself.
+const controlReconnectTimeout = 2 * time.Minute
+
 func dialControl(port uint32) (*control, error) {
-	deadline := time.Now().Add(controlDialTimeout)
+	c := &control{port: port}
+	if err := c.connect(controlDialTimeout); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *control) connect(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for {
 		fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 		if err != nil {
-			return nil, fmt.Errorf("vsock socket: %w", err)
+			return fmt.Errorf("vsock socket: %w", err)
 		}
-		err = unix.Connect(fd, &unix.SockaddrVM{CID: microvm.HostCID, Port: port})
+		err = unix.Connect(fd, &unix.SockaddrVM{CID: microvm.HostCID, Port: c.port})
 		if err == nil {
 			file := os.NewFile(uintptr(fd), "vsock")
-			return &control{file: file, enc: microvm.NewEncoder(file)}, nil
+			c.mu.Lock()
+			if c.file != nil {
+				_ = c.file.Close()
+			}
+			c.file, c.enc = file, microvm.NewEncoder(file)
+			c.mu.Unlock()
+			return nil
 		}
 		unix.Close(fd)
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("connect to host vsock port %d: %w", port, err)
+			return fmt.Errorf("connect to host vsock port %d: %w", c.port, err)
 		}
 		time.Sleep(controlDialBackoff)
 	}
+}
+
+func (c *control) current() *os.File {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.file
 }
 
 func (c *control) send(msg microvm.Message) {
@@ -582,22 +636,50 @@ func (c *control) close() {
 	_ = c.file.Close()
 }
 
-// serve handles host commands until the stream closes. Signals go to the
-// container process; freeze/thaw act on a mounted filesystem, the root disk
-// by default.
+// heartbeat keeps a trickle of traffic on the connection so a restored VM,
+// whose connection died with the snapshot, finds out and reconnects.
+func (c *control) heartbeat(interval time.Duration) {
+	for range time.Tick(interval) {
+		c.send(microvm.Message{Type: microvm.MsgPing})
+	}
+}
+
+// serve handles host commands. Signals go to the container process;
+// freeze/thaw act on a mounted filesystem, the root disk by default. When
+// the stream dies the guest was most likely restored from a snapshot: init
+// reconnects to the (new) host, reports itself started again and takes the
+// container's new network configuration from the host.
 func (c *control) serve(childPid func() int) {
-	dec := microvm.NewDecoder(c.file)
 	frozen := map[string]*os.File{}
+	dec := microvm.NewDecoder(c.current())
 	for {
 		msg, err := dec.Decode()
 		if err != nil {
-			for _, dir := range frozen {
+			for path, dir := range frozen {
 				_ = unix.IoctlSetInt(int(dir.Fd()), ioctlFITHAW, 0)
 				dir.Close()
+				delete(frozen, path)
 			}
-			return
+			logf("control connection lost (%v); reconnecting", err)
+			if err := c.connect(controlReconnectTimeout); err != nil {
+				logf("control reconnect failed: %v", err)
+				return
+			}
+			logf("control reconnected")
+			c.send(microvm.Message{Type: microvm.MsgStarted, Pid: childPid()})
+			dec = microvm.NewDecoder(c.current())
+			continue
 		}
 		switch msg.Type {
+		case microvm.MsgPing:
+		case microvm.MsgNetwork:
+			if msg.Network == nil {
+				c.ack(msg.ID, errors.New("network config is missing"))
+				continue
+			}
+			err := reconfigureNetwork(*msg.Network)
+			logf("network reconfigured to %s %s: %v", msg.Network.IPv4, msg.Network.IPv6, err)
+			c.ack(msg.ID, err)
 		case microvm.MsgSignal:
 			pid := childPid()
 			if pid <= 0 {
@@ -1087,6 +1169,7 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 	pid := cmd.Process.Pid
 	ctrl.send(microvm.Message{Type: microvm.MsgStarted, Pid: pid})
 	go ctrl.serve(func() int { return pid })
+	go ctrl.heartbeat(controlHeartbeat)
 	logf("started %v as pid %d", proc.Args, pid)
 
 	for range sigchld {

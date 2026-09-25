@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +59,7 @@ type microVMInstance struct {
 
 	mu     sync.Mutex
 	exited bool
+	paused bool // vCPUs stopped by Checkpoint; nothing in the guest can run
 	// killed is set when the host itself SIGKILLs the hypervisor (a forced
 	// stop, or a signal the guest would not take); Run then reports the
 	// kill as the container's exit instead of a VM failure.
@@ -111,7 +113,7 @@ func (m *MicroVM) Name() string {
 }
 
 func (m *MicroVM) Capabilities() Capabilities {
-	return Capabilities{JoinExistingNetNS: true, BlockRoot: true}
+	return Capabilities{JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: true}
 }
 
 // Prepare strips what only a shared-kernel runtime needs. The VM is the
@@ -126,18 +128,119 @@ func (m *MicroVM) Prepare(ctx context.Context, spec *specs.Spec) error {
 }
 
 func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
-	spec, err := readBundleSpec(bundlePath)
+	if opts == nil {
+		opts = &RunOpts{}
+	}
+	inst, spec, err := m.newInstance(containerID, bundlePath)
 	if err != nil {
 		return -1, err
 	}
+	// Whatever happens, the processes must be gone when Run returns. Mounts,
+	// the tap, the cgroup, and state files are released by Delete, which the
+	// worker calls after every Run, so the overlay under the canvas can be
+	// torn down in order.
+	defer inst.stopProcesses()
+
+	network, root, extra, err := m.prepare(ctx, inst, spec, "")
+	if err != nil {
+		return -1, err
+	}
+	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra)
+	return m.boot(ctx, inst, spec, args, opts.OutputWriter, opts.ErrorWriter, opts.Started)
+}
+
+// Restore boots a VM from a Checkpoint: the same host preparation as Run,
+// the scratch root disk copied back from the checkpoint, then Cloud
+// Hypervisor restores guest memory and device state and resumes. The guest
+// init notices its control connection is gone, reconnects, reports itself
+// started again and applies this container's network config.
+func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error) {
+	if opts == nil || opts.ImagePath == "" {
+		return -1, fmt.Errorf("restore requires a checkpoint path")
+	}
+	inst, spec, err := m.newInstance(containerID, opts.BundlePath)
+	if err != nil {
+		return -1, err
+	}
+	defer inst.stopProcesses()
+
+	network, root, extra, err := m.prepare(ctx, inst, spec, opts.ImagePath)
+	if err != nil {
+		return -1, err
+	}
+	inst.ctrl.network = &network
+	snapshotDir, err := m.stageSnapshot(inst, opts.ImagePath, root, extra)
+	if err != nil {
+		return -1, fmt.Errorf("stage snapshot: %w", err)
+	}
+	return m.boot(ctx, inst, spec, microVMRestoreArgs(inst.stateDir, snapshotDir), opts.OutputWriter, nil, opts.Started)
+}
+
+// Checkpoint pauses the VM, snapshots guest memory and device state into
+// ImagePath, and copies the scratch root disk alongside so a restore has the
+// filesystem the memory image expects. Durable qcow disks are sealed by the
+// worker around this call; with the vCPUs stopped there is no I/O to freeze.
+func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
+	if opts == nil || opts.ImagePath == "" {
+		return fmt.Errorf("checkpoint requires an image path")
+	}
+	inst, ok := m.instance(containerID)
+	if !ok {
+		return ErrContainerNotFound{ContainerID: containerID}
+	}
+	if !inst.alive() {
+		return fmt.Errorf("microvm %s is not running", containerID)
+	}
+	api := inst.api()
+	if err := api.put(ctx, "vm.pause", nil); err != nil {
+		return fmt.Errorf("pause vm: %w", err)
+	}
+	inst.setPaused(true)
+	if opts.LeaveRunning {
+		defer func() {
+			if err := api.put(ctx, "vm.resume", nil); err != nil {
+				log.Error().Err(err).Str("container_id", containerID).Msg("failed to resume vm after checkpoint")
+				inst.killHypervisor()
+				return
+			}
+			inst.setPaused(false)
+		}()
+	}
+
+	snapshotDir := filepath.Join(opts.ImagePath, checkpointVMDir)
+	if err := os.RemoveAll(snapshotDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
+		return err
+	}
+	if err := api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir}); err != nil {
+		return fmt.Errorf("snapshot vm: %w", err)
+	}
+	if inst.scratch != "" {
+		if err := copySparse(inst.scratch, filepath.Join(opts.ImagePath, checkpointRootDisk)); err != nil {
+			return fmt.Errorf("copy root disk: %w", err)
+		}
+	}
+	if !opts.LeaveRunning {
+		inst.killHypervisor()
+	}
+	return nil
+}
+
+// newInstance reads the bundle and registers the VM under its container id.
+func (m *MicroVM) newInstance(containerID, bundlePath string) (*microVMInstance, *specs.Spec, error) {
+	spec, err := readBundleSpec(bundlePath)
+	if err != nil {
+		return nil, nil, err
+	}
 	canvas := spec.Root.Path
 	if canvas == "" {
-		return -1, fmt.Errorf("spec has no root path")
+		return nil, nil, fmt.Errorf("spec has no root path")
 	}
 	if !filepath.IsAbs(canvas) {
 		canvas = filepath.Join(bundlePath, canvas)
 	}
-
 	inst := &microVMInstance{
 		id:       containerID,
 		stateDir: filepath.Join(m.cfg.MicroVMStateRoot, containerID),
@@ -145,68 +248,97 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 		console:  newTailWriter(microVMConsoleTail),
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, exists := m.vms[containerID]; exists {
-		m.mu.Unlock()
-		return -1, fmt.Errorf("microvm %s already exists", containerID)
+		return nil, nil, fmt.Errorf("microvm %s already exists", containerID)
 	}
 	m.vms[containerID] = inst
-	m.mu.Unlock()
+	return inst, spec, nil
+}
 
-	// Whatever happens, the processes must be gone when Run returns. Mounts,
-	// the tap, the cgroup, and state files are released by Delete, which the
-	// worker calls after every Run, so the overlay under the canvas can be
-	// torn down in order.
-	defer inst.stopProcesses()
-
+// prepare builds everything on the host side of the VM: state dir, network,
+// disks, canvas, virtiofsd, cgroup and the control listener. restoreFrom is
+// a checkpoint path whose root disk replaces a fresh scratch image.
+func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *specs.Spec, restoreFrom string) (microvm.Network, microVMDisk, []microVMDisk, error) {
+	var none microvm.Network
 	if err := os.RemoveAll(inst.stateDir); err != nil {
-		return -1, err
+		return none, microVMDisk{}, nil, err
 	}
 	if err := os.MkdirAll(inst.stateDir, 0o700); err != nil {
-		return -1, err
+		return none, microVMDisk{}, nil, err
 	}
-
 	network, err := m.setupNetwork(inst, spec)
 	if err != nil {
-		return -1, fmt.Errorf("setup microvm network: %w", err)
+		return none, microVMDisk{}, nil, fmt.Errorf("setup microvm network: %w", err)
 	}
-	root, extra, err := m.prepareDisks(ctx, inst, spec)
+	root, extra, err := m.prepareDisks(ctx, inst, spec, restoreFrom)
 	if err != nil {
-		return -1, fmt.Errorf("prepare microvm disks: %w", err)
+		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm disks: %w", err)
 	}
 	vmSpec, err := m.prepareCanvas(inst, spec, network, root, extra)
 	if err != nil {
-		return -1, fmt.Errorf("prepare microvm rootfs: %w", err)
+		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm rootfs: %w", err)
 	}
 	if err := m.startVirtiofsd(ctx, inst); err != nil {
-		return -1, fmt.Errorf("start virtiofsd: %w", err)
+		return none, microVMDisk{}, nil, fmt.Errorf("start virtiofsd: %w", err)
 	}
-
-	memory := microVMMemoryBytes(spec)
-	if err := m.setupCgroup(inst, spec, memory); err != nil {
-		return -1, fmt.Errorf("setup microvm cgroup: %w", err)
+	if err := m.setupCgroup(inst, spec, microVMMemoryBytes(spec)); err != nil {
+		return none, microVMDisk{}, nil, fmt.Errorf("setup microvm cgroup: %w", err)
 	}
 	ctrl, err := listenMicroVMControl(filepath.Join(inst.stateDir, "vsock.sock"), vmSpec.ControlPort)
 	if err != nil {
-		return -1, fmt.Errorf("listen on vsock control socket: %w", err)
+		return none, microVMDisk{}, nil, fmt.Errorf("listen on vsock control socket: %w", err)
 	}
 	inst.ctrl = ctrl
+	return network, root, extra, nil
+}
 
-	vcpus := microVMVCPUs(spec)
-	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMKernelCmdline(), vcpus, memory, network.MAC, root, extra)
+// stageSnapshot lays out the restore source: the checkpoint's memory and
+// state files (linked, not copied) next to a config.json rewritten for this
+// VM's sockets and disk image.
+func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, root microVMDisk, extra []microVMDisk) (string, error) {
+	src := filepath.Join(imagePath, checkpointVMDir)
+	dst := filepath.Join(inst.stateDir, "restore")
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return "", err
+	}
+	config, err := os.ReadFile(filepath.Join(src, "config.json"))
+	if err != nil {
+		return "", err
+	}
+	config, err = rewriteSnapshotConfig(config, inst.stateDir, root, extra)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dst, "config.json"), config, 0o600); err != nil {
+		return "", err
+	}
+	for _, name := range []string{"state.json", "memory-ranges"} {
+		if err := os.Symlink(filepath.Join(src, name), filepath.Join(dst, name)); err != nil {
+			return "", err
+		}
+	}
+	return dst, nil
+}
+
+// boot launches Cloud Hypervisor with args and supervises it until the guest
+// reports the container's exit or the VM dies.
+func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.Spec, args []string, outputWriter, errorWriter io.Writer, started chan<- int) (int, error) {
+	ctrl := inst.ctrl
 	cmd := exec.Command(m.cfg.MicroVMHypervisorPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// The serial console arrives a few bytes at a time; the worker's writers
 	// log one record per Write, so hand them whole lines.
 	var out io.Writer = inst.console
 	var lines []*lineWriter
-	if opts != nil && opts.OutputWriter != nil {
-		lw := newLineWriter(opts.OutputWriter)
+	if outputWriter != nil {
+		lw := newLineWriter(outputWriter)
 		lines = append(lines, lw)
 		out = io.MultiWriter(lw, inst.console)
 	}
 	cmd.Stdout = out
-	if opts != nil && opts.ErrorWriter != nil {
-		lw := newLineWriter(opts.ErrorWriter)
+	if errorWriter != nil {
+		lw := newLineWriter(errorWriter)
 		lines = append(lines, lw)
 		cmd.Stderr = io.MultiWriter(lw, inst.console)
 	} else {
@@ -225,18 +357,18 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 	inst.hypervisor = cmd
 	inst.mu.Unlock()
 	if err := inst.addToCgroup(cmd.Process.Pid); err != nil {
-		log.Warn().Err(err).Str("container_id", containerID).Msg("failed to place hypervisor in its cgroup")
+		log.Warn().Err(err).Str("container_id", inst.id).Msg("failed to place hypervisor in its cgroup")
 	}
 	if inst.virtiofsd != nil && inst.virtiofsd.Process != nil {
 		if err := inst.addToCgroup(inst.virtiofsd.Process.Pid); err != nil {
-			log.Debug().Err(err).Str("container_id", containerID).Msg("failed to place virtiofsd in the vm cgroup")
+			log.Debug().Err(err).Str("container_id", inst.id).Msg("failed to place virtiofsd in the vm cgroup")
 		}
 	}
-	log.Info().Str("container_id", containerID).Int("pid", cmd.Process.Pid).Int("vcpus", vcpus).Int64("memory_bytes", memory).Msg("microvm started")
+	log.Info().Str("container_id", inst.id).Int("pid", cmd.Process.Pid).Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec)).Msg("microvm started")
 
-	if opts != nil && opts.Started != nil {
+	if started != nil {
 		select {
-		case opts.Started <- cmd.Process.Pid:
+		case started <- cmd.Process.Pid:
 		case <-ctx.Done():
 		}
 	}
@@ -285,9 +417,10 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 			killed := inst.killed
 			inst.mu.Unlock()
 			if killed {
-				// The host stopped the VM (Kill with SIGKILL, or a signal the
-				// guest did not acknowledge). That is the container's exit,
-				// reported the way runc reports a SIGKILLed init.
+				// The host stopped the VM (Kill with SIGKILL, a signal the
+				// guest did not acknowledge, or a terminal checkpoint). That
+				// is the container's exit, reported the way runc reports a
+				// SIGKILLed init.
 				return 128 + int(syscall.SIGKILL), nil
 			}
 			return -1, fmt.Errorf("microvm exited before the container process reported: %v: %s", err, inst.console.String())
@@ -354,14 +487,6 @@ func (m *MicroVM) Events(ctx context.Context, containerID string) (<-chan Event,
 	return ch, nil
 }
 
-func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
-	return fmt.Errorf("microvm runtime does not support checkpoint")
-}
-
-func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error) {
-	return -1, fmt.Errorf("microvm runtime does not support restore")
-}
-
 func (m *MicroVM) Close() error {
 	m.mu.Lock()
 	instances := make([]*microVMInstance, 0, len(m.vms))
@@ -384,7 +509,9 @@ func (m *MicroVM) Close() error {
 func (m *MicroVM) FreezeDisk(ctx context.Context, containerID, mountPath string) (func(), error) {
 	noop := func() {}
 	inst, ok := m.instance(containerID)
-	if !ok || !inst.alive() || inst.ctrl == nil || !inst.ctrl.connected() {
+	if !ok || !inst.alive() || inst.ctrl == nil || !inst.ctrl.connected() || inst.isPaused() {
+		// A paused VM (mid-checkpoint) has no I/O in flight and cannot
+		// answer; its disks are already quiescent.
 		return noop, nil
 	}
 	if _, err := inst.ctrl.request(ctx, microvm.Message{Type: microvm.MsgFreeze, Text: mountPath}); err != nil {
@@ -629,23 +756,82 @@ func dialGuestVsock(ctx context.Context, socketPath string, port uint32) (net.Co
 
 // --- disks -------------------------------------------------------------------
 
-func (m *MicroVM) prepareDisks(ctx context.Context, inst *microVMInstance, spec *specs.Spec) (microVMDisk, []microVMDisk, error) {
+func (m *MicroVM) prepareDisks(ctx context.Context, inst *microVMInstance, spec *specs.Spec, restoreFrom string) (microVMDisk, []microVMDisk, error) {
 	scratch := filepath.Join(filepath.Dir(inst.canvas), "scratch.ext4")
 	root, extra, err := microVMDiskPlan(spec, scratch)
 	if err != nil {
 		return root, nil, err
 	}
-	if strings.HasPrefix(root.arg, "path=") {
+	if root.path == "" {
+		return root, extra, nil
+	}
+	if restoreFrom != "" {
+		// The memory image expects the filesystem exactly as it was at the
+		// checkpoint; that is the copied disk, not a fresh one.
+		err = copySparse(filepath.Join(restoreFrom, checkpointRootDisk), scratch)
+	} else {
 		sizeGiB := int64(microVMDefaultScratchGiB)
 		if n, ok := annotationInt(spec, MicroVMScratchGiBAnnotation); ok && n > 0 {
 			sizeGiB = n
 		}
-		if err := createScratchDisk(ctx, scratch, sizeGiB<<30); err != nil {
-			return root, nil, err
-		}
-		inst.scratch = scratch
+		err = createScratchDisk(ctx, scratch, sizeGiB<<30)
 	}
+	if err != nil {
+		return root, nil, err
+	}
+	inst.scratch = scratch
 	return root, extra, nil
+}
+
+// copySparse copies only the allocated extents of src, so a mostly empty
+// multi-GiB scratch image costs as much as the data it holds.
+func copySparse(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if err := out.Truncate(info.Size()); err != nil {
+		return err
+	}
+	buf := make([]byte, 1<<20)
+	for off := int64(0); off < info.Size(); {
+		data, err := unix.Seek(int(in.Fd()), off, unix.SEEK_DATA)
+		if errors.Is(err, unix.ENXIO) {
+			break // only holes remain
+		}
+		if err != nil {
+			return err
+		}
+		hole, err := unix.Seek(int(in.Fd()), data, unix.SEEK_HOLE)
+		if err != nil {
+			return err
+		}
+		for pos := data; pos < hole; {
+			n, err := in.ReadAt(buf[:min(int64(len(buf)), hole-pos)], pos)
+			if err != nil && err != io.EOF {
+				return err
+			}
+			if n == 0 {
+				break
+			}
+			if _, err := out.WriteAt(buf[:n], pos); err != nil {
+				return err
+			}
+			pos += int64(n)
+		}
+		off = hole
+	}
+	return out.Sync()
 }
 
 // createScratchDisk makes a sparse ext4 image. Lazy initialisation keeps
@@ -1143,6 +1329,9 @@ type microVMControl struct {
 	started  chan int
 	exit     chan int
 	ready    chan struct{}
+	// network, when set, is pushed to the guest as soon as it reports in:
+	// a restored guest still carries the checkpointed container's addresses.
+	network *microvm.Network
 
 	mu      sync.Mutex
 	conn    net.Conn
@@ -1196,6 +1385,10 @@ func (c *microVMControl) accept() {
 			case c.started <- msg.Pid:
 			default:
 			}
+			if c.network != nil {
+				go c.pushNetwork()
+			}
+		case microvm.MsgPing:
 		case microvm.MsgExit:
 			select {
 			case c.exit <- msg.Code:
@@ -1212,6 +1405,14 @@ func (c *microVMControl) accept() {
 		case microvm.MsgLog:
 			log.Debug().Str("guest", msg.Text).Msg("microvm init")
 		}
+	}
+}
+
+func (c *microVMControl) pushNetwork() {
+	ctx, cancel := context.WithTimeout(context.Background(), microVMControlRequestTimeout)
+	defer cancel()
+	if _, err := c.request(ctx, microvm.Message{Type: microvm.MsgNetwork, Network: c.network}); err != nil {
+		log.Error().Err(err).Msg("restored microvm did not take its network configuration")
 	}
 }
 
@@ -1286,6 +1487,59 @@ func (c *microVMControl) close() {
 }
 
 // --- lifecycle ---------------------------------------------------------------------
+
+func (inst *microVMInstance) setPaused(paused bool) {
+	inst.mu.Lock()
+	inst.paused = paused
+	inst.mu.Unlock()
+}
+
+func (inst *microVMInstance) isPaused() bool {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	return inst.paused
+}
+
+// api is Cloud Hypervisor's HTTP API over the VM's unix socket.
+func (inst *microVMInstance) api() *hypervisorAPI {
+	return &hypervisorAPI{socket: filepath.Join(inst.stateDir, "api.sock")}
+}
+
+type hypervisorAPI struct {
+	socket string
+}
+
+// put issues PUT /api/v1/<action>; body, when non-nil, is sent as JSON.
+func (a *hypervisorAPI) put(ctx context.Context, action string, body any) error {
+	var payload io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		payload = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://localhost/api/v1/"+action, payload)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", a.socket)
+	}}}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("%s: %s: %s", action, resp.Status, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
 
 func (inst *microVMInstance) alive() bool {
 	inst.mu.Lock()

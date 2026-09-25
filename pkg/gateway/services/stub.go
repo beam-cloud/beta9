@@ -511,9 +511,6 @@ func validateUseVM(in *pb.GetOrCreateStubRequest, gpus []types.GpuType) string {
 	if len(gpus) > 0 || in.GpuCount > 0 {
 		return "use_vm sandboxes cannot request a GPU"
 	}
-	if in.CheckpointEnabled {
-		return "use_vm sandboxes do not support memory snapshots yet"
-	}
 	return ""
 }
 

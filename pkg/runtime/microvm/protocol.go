@@ -125,11 +125,13 @@ const (
 	MsgExit    = "exit"    // Payload: Code, the container process exit code.
 	MsgAck     = "ack"     // Payload: ID of the command, OK, Error.
 	MsgLog     = "log"     // Payload: Text; diagnostics from init.
+	MsgPing    = "ping"    // Keepalive; lets init notice a connection that died with a restore.
 
 	// Host -> guest.
-	MsgSignal = "signal" // Payload: Signal to deliver to the container process.
-	MsgFreeze = "freeze" // FIFREEZE the filesystem at Text (a guest mount path; empty means the root disk).
-	MsgThaw   = "thaw"   // FITHAW the same.
+	MsgSignal  = "signal"  // Payload: Signal to deliver to the container process.
+	MsgFreeze  = "freeze"  // FIFREEZE the filesystem at Text (a guest mount path; empty means the root disk).
+	MsgThaw    = "thaw"    // FITHAW the same.
+	MsgNetwork = "network" // Payload: Network; reconfigure the NIC (after a restore, the container's new addresses).
 )
 
 // Filesystem operations the host performs inside the guest. The worker's
@@ -218,6 +220,8 @@ type Message struct {
 	OK     bool   `json:"ok,omitempty"`
 	Error  string `json:"error,omitempty"`
 	Text   string `json:"text,omitempty"`
+	// Network is set on MsgNetwork.
+	Network *Network `json:"network,omitempty"`
 }
 
 // Encoder writes messages as one JSON object per line.
