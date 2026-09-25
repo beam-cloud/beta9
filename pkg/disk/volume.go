@@ -31,6 +31,7 @@ type Volume struct {
 	// freeze quiesces the filesystem before a pivot when the host has not
 	// mounted it (ExportVhostUser). Nil means crash-consistent pivots only.
 	freeze func(ctx context.Context) (func(), error)
+	owner  string
 
 	// freshHead is true when the current head file was created within this
 	// daemon session, which is what makes a zero write-offset on its file
@@ -70,6 +71,11 @@ type AttachSpec struct {
 	// consumer can quiesce the filesystem it has mounted; it returns the
 	// matching thaw. Optional.
 	Freeze func(ctx context.Context) (thaw func(), err error)
+	// Owner names who attached the volume (a container id). DetachOwned only
+	// releases a volume still held by that owner, so a finished container's
+	// late cleanup cannot take down the same disk its successor just
+	// attached under the same key.
+	Owner string
 }
 
 // ChainLayer is one published generation of a volume.
@@ -88,6 +94,7 @@ type SealedLayer struct {
 }
 
 func (v *Volume) Mountpoint() string { return v.state.Mountpoint }
+func (v *Volume) Owner() string      { return v.owner }
 func (v *Volume) Depth() int         { return v.state.depth() }
 func (v *Volume) ReadOnly() bool     { return v.state.ReadOnly }
 
@@ -155,7 +162,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 		state.Mountpoint = ""
 	}
 
-	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead, freeze: spec.Freeze}
+	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead, freeze: spec.Freeze, owner: spec.Owner}
 	if err := volume.start(ctx); err != nil {
 		return nil, err
 	}

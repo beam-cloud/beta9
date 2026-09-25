@@ -122,6 +122,7 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 		ReadOnly:         mount.ReadOnly,
 		Mountpoint:       mount.LocalPath,
 		Chain:            chain,
+		Owner:            request.ContainerId,
 	}
 	if s.runtimeOwnsBlockRoot() {
 		// The guest consumes the volume as a block device; nothing is mounted
@@ -614,7 +615,10 @@ func (s *Worker) detachQcowDurableDiskMount(ctx context.Context, request *types.
 	if s.diskManager == nil {
 		return nil
 	}
-	return s.diskManager.Detach(ctx, s.qcowVolumeKey(request, mount))
+	// Keyed by owner: the final sync already detached this container's
+	// volume, and by the time the cleanup safety net runs the key may belong
+	// to a successor container that re-attached the same disk.
+	return s.diskManager.DetachOwned(ctx, s.qcowVolumeKey(request, mount), request.ContainerId)
 }
 
 // qcowChunkSink adapts the workspace bucket store, reporting progress so the

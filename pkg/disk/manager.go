@@ -272,6 +272,19 @@ func (m *Manager) Detach(ctx context.Context, key string) error {
 	return nil
 }
 
+// DetachOwned is Detach for one attacher: it leaves the volume alone when it
+// is currently held by a different owner, which happens when a container's
+// final cleanup runs after its successor re-attached the same key.
+func (m *Manager) DetachOwned(ctx context.Context, key, owner string) error {
+	m.mu.Lock()
+	volume, ok := m.volumes[key]
+	m.mu.Unlock()
+	if !ok || volume == nil || volume.owner != owner {
+		return nil
+	}
+	return m.Detach(ctx, key)
+}
+
 // Close detaches every volume and destroys the spare pool. For worker
 // shutdown; an idle worker uses DetachAll and keeps its spares.
 func (m *Manager) Close(ctx context.Context) error {

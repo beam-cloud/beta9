@@ -155,6 +155,37 @@ func TestStartQSDExportArguments(t *testing.T) {
 	}
 }
 
+// A container's final cleanup detaches by key after its final sync already
+// released the volume; if a successor re-attached the same key in between,
+// that late detach must not take the successor's volume down.
+func TestDetachOwnedLeavesSuccessorVolumeAlone(t *testing.T) {
+	manager := NewManager(Config{Root: t.TempDir(), Runner: fakeRunner})
+	dir := filepath.Join(manager.root, "vol")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	successor := &Volume{manager: manager, dir: dir, owner: "container-b",
+		state: &volumeState{Key: "vol", Attached: true, Export: string(ExportVhostUser)}}
+	manager.volumes["vol"] = successor
+
+	if err := manager.DetachOwned(context.Background(), "vol", "container-a"); err != nil {
+		t.Fatalf("stale owner detach must be a no-op, got %v", err)
+	}
+	if got, ok := manager.Volume("vol"); !ok || got != successor || !successor.state.Attached {
+		t.Fatal("predecessor's late detach removed the successor's volume")
+	}
+
+	if err := manager.DetachOwned(context.Background(), "vol", "container-b"); err != nil {
+		t.Fatalf("owner detach: %v", err)
+	}
+	if _, ok := manager.Volume("vol"); ok || successor.state.Attached {
+		t.Fatal("owner detach must release the volume")
+	}
+	if err := manager.DetachOwned(context.Background(), "missing", "container-b"); err != nil {
+		t.Fatalf("unknown key must be a no-op, got %v", err)
+	}
+}
+
 func TestAttachRejectsUnknownExportAndAllowsNoMountpointForVhostUser(t *testing.T) {
 	manager := NewManager(Config{Root: t.TempDir(), Runner: fakeRunner})
 	_, err := manager.Attach(context.Background(), AttachSpec{Key: "k", VirtualSizeBytes: 1, Export: ExportMode("bogus")}, nil)
