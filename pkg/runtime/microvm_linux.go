@@ -58,6 +58,10 @@ type microVMInstance struct {
 
 	mu     sync.Mutex
 	exited bool
+	// killed is set when the host itself SIGKILLs the hypervisor (a forced
+	// stop, or a signal the guest would not take); Run then reports the
+	// kill as the container's exit instead of a VM failure.
+	killed bool
 }
 
 // NewMicroVM validates that the hypervisor, virtiofsd, guest kernel, guest
@@ -276,6 +280,15 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 			}
 			if exitReported {
 				return exitCode, nil
+			}
+			inst.mu.Lock()
+			killed := inst.killed
+			inst.mu.Unlock()
+			if killed {
+				// The host stopped the VM (Kill with SIGKILL, or a signal the
+				// guest did not acknowledge). That is the container's exit,
+				// reported the way runc reports a SIGKILLed init.
+				return 128 + int(syscall.SIGKILL), nil
 			}
 			return -1, fmt.Errorf("microvm exited before the container process reported: %v: %s", err, inst.console.String())
 		}
@@ -1286,6 +1299,7 @@ func (inst *microVMInstance) alive() bool {
 func (inst *microVMInstance) killHypervisor() {
 	inst.mu.Lock()
 	cmd := inst.hypervisor
+	inst.killed = true
 	inst.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		return

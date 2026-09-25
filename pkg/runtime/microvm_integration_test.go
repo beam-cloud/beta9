@@ -585,6 +585,23 @@ func TestMicroVMBootAndExit(t *testing.T) {
 	require.ErrorAs(t, err, &ErrContainerNotFound{})
 }
 
+// A forced stop (the worker's Kill with SIGKILL, which is what a scheduler or
+// TTL stop sends) is the container's exit, reported like runc reports a
+// SIGKILLed init: code 137 and no error. It is not a VM failure.
+func TestMicroVMForcedStopIsASignalExit(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	vm := newTestVM(t, rt, vmOptions{image: "alpine", args: []string{"sleep", "300"}})
+	vm.start()
+
+	killedAt := time.Now()
+	require.NoError(t, rt.Kill(context.Background(), vm.id, syscall.SIGKILL, &KillOpts{All: true}))
+	res := vm.wait(30 * time.Second)
+	require.NoError(t, res.err, "a kill the host issued must not surface as a VM failure: %s", vm.output.String())
+	require.Equal(t, 128+int(syscall.SIGKILL), res.code)
+	require.Less(t, time.Since(killedAt), 10*time.Second)
+	require.NoError(t, rt.Delete(context.Background(), vm.id, &DeleteOpts{Force: true}))
+}
+
 func TestMicroVMGoprocOverTheWire(t *testing.T) {
 	rt := requireMicroVMEnv(t)
 	// A directory bind whose destination does not exist in the image (the
