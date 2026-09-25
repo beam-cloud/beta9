@@ -52,7 +52,7 @@ const (
 	podRoutePrefix         string = "/pod"
 	sandboxRoutePrefix     string = "/sandbox"
 	podProxyBufferSize            = 300
-	podStubLoadTimeout            = time.Second
+	podStubLoadTimeout            = 5 * time.Second
 )
 
 type PodService interface {

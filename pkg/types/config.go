@@ -156,6 +156,10 @@ type PostgresConfig struct {
 	TimeZone      string `key:"timezone" json:"timezone"`
 	EnableTLS     bool   `key:"enableTLS" json:"enable_tls"`
 	EncryptionKey string `key:"encryptionKey" json:"encryption_key"`
+	// MaxOpenConns caps the connections one process holds to the database;
+	// 0 leaves the pool unbounded. Queries beyond the cap wait for a free
+	// connection instead of piling onto the server.
+	MaxOpenConns int `key:"maxOpenConns" json:"max_open_conns"`
 }
 
 type S2Config struct {

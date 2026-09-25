@@ -116,6 +116,10 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 	if err != nil {
 		return nil, err
 	}
+	if config.MaxOpenConns > 0 {
+		db.SetMaxOpenConns(config.MaxOpenConns)
+		db.SetMaxIdleConns(config.MaxOpenConns)
+	}
 
 	repo := &PostgresBackendRepository{
 		client:    db,
