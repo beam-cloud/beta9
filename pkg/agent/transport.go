@@ -80,12 +80,10 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		return err
 	}
 
-	hostname := credential.Hostname
+	routeHost := credential.Hostname
 	if localClient, err := server.LocalClient(); err == nil {
 		if status, err := localClient.Status(ctx); err == nil {
-			if status.Self != nil && status.Self.DNSName != "" {
-				hostname = strings.TrimSuffix(status.Self.DNSName, ".")
-			}
+			routeHost = tailnetRouteHost(status, routeHost)
 		}
 	}
 	poolVirtualized, err := requestAgentPoolGPUVirtualized(ctx, client, agentToken)
@@ -110,7 +108,7 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		return err
 	}
 
-	proxyTarget := net.JoinHostPort(hostname, port)
+	proxyTarget := net.JoinHostPort(routeHost, port)
 	statusf(stdout, "Network ready")
 	statusf(stdout, "Agent running; leave this terminal open")
 	verbosef(stdout, "agent route listener ready at %s\n", proxyTarget)
@@ -220,6 +218,32 @@ func tsnetSnapshotFailure(err error) (string, string) {
 		return "deadline_exceeded", "transport snapshot timed out"
 	}
 	return "status_unavailable", "transport snapshot unavailable"
+}
+
+// tailnetRouteHost is the address the gateway dials for this node. It is the
+// tailnet IP, not the MagicDNS name: an ephemeral node gets a new key and IP
+// on every agent restart, and dialers cache the name's previous answer for
+// minutes, during which every route dial goes to the dead node.
+func tailnetRouteHost(status *ipnstate.Status, fallback string) string {
+	if status == nil {
+		return fallback
+	}
+	host := ""
+	for _, ip := range status.TailscaleIPs {
+		if ip.Is4() {
+			return ip.String()
+		}
+		if host == "" {
+			host = ip.String()
+		}
+	}
+	if host != "" {
+		return host
+	}
+	if status.Self != nil && status.Self.DNSName != "" {
+		return strings.TrimSuffix(status.Self.DNSName, ".")
+	}
+	return fallback
 }
 
 func tsnetSnapshotAttrs(status *ipnstate.Status, proxyTarget string, full bool) map[string]string {

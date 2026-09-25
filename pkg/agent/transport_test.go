@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -185,4 +186,25 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestTailnetRouteHostPrefersTailnetIPv4(t *testing.T) {
+	status := &ipnstate.Status{
+		Self:         &ipnstate.PeerStatus{DNSName: "beam-agent-machine-1.tailnet.ts.net."},
+		TailscaleIPs: []netip.Addr{netip.MustParseAddr("fd7a:115c:a1e0::1"), netip.MustParseAddr("100.64.0.7")},
+	}
+	if got := tailnetRouteHost(status, "fallback"); got != "100.64.0.7" {
+		t.Fatalf("route host = %q, want the tailnet IPv4", got)
+	}
+	status.TailscaleIPs = status.TailscaleIPs[:1]
+	if got := tailnetRouteHost(status, "fallback"); got != "fd7a:115c:a1e0::1" {
+		t.Fatalf("route host = %q, want the tailnet IPv6 when there is no IPv4", got)
+	}
+	status.TailscaleIPs = nil
+	if got := tailnetRouteHost(status, "fallback"); got != "beam-agent-machine-1.tailnet.ts.net" {
+		t.Fatalf("route host = %q, want the MagicDNS name when the node has no IPs yet", got)
+	}
+	if got := tailnetRouteHost(nil, "fallback"); got != "fallback" {
+		t.Fatalf("route host = %q, want the requested hostname without a status", got)
+	}
 }
