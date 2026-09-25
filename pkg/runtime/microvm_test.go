@@ -12,6 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCPUMaxString(t *testing.T) {
+	quota := func(q, p int64) *specs.LinuxCPU {
+		c := &specs.LinuxCPU{Quota: &q}
+		if p > 0 {
+			period := uint64(p)
+			c.Period = &period
+		}
+		return c
+	}
+	assert.Equal(t, "", cpuMaxString(nil), "no CPU spec means no limit (boots unthrottled)")
+	assert.Equal(t, "", cpuMaxString(&specs.LinuxCPU{}), "no quota means no limit")
+	assert.Equal(t, "10000 100000", cpuMaxString(quota(10000, 0)), "0.1 core with the default period")
+	assert.Equal(t, "200000 100000", cpuMaxString(quota(200000, 100000)), "2 cores")
+	assert.Equal(t, "50000 50000", cpuMaxString(quota(50000, 50000)), "1 core with a custom period")
+}
+
 func TestMicroVMMountPlanSplitsHostBindsFromGuestMounts(t *testing.T) {
 	binds, tmpfs := microVMMountPlan([]specs.Mount{
 		{Destination: "/proc", Type: "proc", Source: "proc"},

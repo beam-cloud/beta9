@@ -218,11 +218,16 @@ func microVMCgroupPath(spec *specs.Spec, containerID string) string {
 }
 
 func microVMCPUMax(spec *specs.Spec) string {
-	if spec == nil || spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.CPU == nil {
+	if spec == nil || spec.Linux == nil || spec.Linux.Resources == nil {
 		return ""
 	}
-	cpu := spec.Linux.Resources.CPU
-	if cpu.Quota == nil || *cpu.Quota <= 0 {
+	return cpuMaxString(spec.Linux.Resources.CPU)
+}
+
+// cpuMaxString renders a cgroup v2 cpu.max value ("<quota> <period>") from an
+// OCI CPU spec, or "" when there is no quota to enforce.
+func cpuMaxString(cpu *specs.LinuxCPU) string {
+	if cpu == nil || cpu.Quota == nil || *cpu.Quota <= 0 {
 		return ""
 	}
 	period := uint64(100000)

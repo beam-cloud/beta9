@@ -478,6 +478,29 @@ func (m *MicroVM) Exec(ctx context.Context, containerID string, proc specs.Proce
 	return fmt.Errorf("microvm runtime does not support exec; sandboxes use the in-guest process manager")
 }
 
+// UpdateResources applies a CPU limit to a running VM's cgroup. Implementing
+// it lets the worker defer the requested quota (see deferCPUThrottle): the VM
+// boots at full node speed and is throttled only once the guest is up, so a
+// fractional-core sandbox is not crippled during boot. Guest RAM is fixed by
+// --memory at boot, so memory is not updated here.
+func (m *MicroVM) UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error {
+	inst, ok := m.instance(containerID)
+	if !ok {
+		return ErrContainerNotFound{ContainerID: containerID}
+	}
+	if inst.cgroup == "" || resources == nil {
+		return nil
+	}
+	cpuMax := cpuMaxString(resources.CPU)
+	if cpuMax == "" {
+		return nil
+	}
+	if err := os.WriteFile(filepath.Join(inst.cgroup, "cpu.max"), []byte(cpuMax), 0o644); err != nil {
+		return fmt.Errorf("set cpu.max: %w", err)
+	}
+	return nil
+}
+
 func (m *MicroVM) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *KillOpts) error {
 	inst, ok := m.instance(containerID)
 	if !ok {
