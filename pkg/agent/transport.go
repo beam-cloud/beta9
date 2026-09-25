@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +59,17 @@ func runRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentTok
 	}
 }
 
+// agentTSNetDir keeps the tailnet node's state on the agent's persistent
+// state disk, so a restart resumes the same node instead of registering a new
+// one. An empty dir falls back to tsnet's default, which is fine for tests.
+func agentTSNetDir() string {
+	stateDir, err := agentStateDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(stateDir, "tsnet")
+}
+
 func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentToken, machineID, transport string, workers *workerRuntimeManager, telemetry *agentTelemetry, stdout, stderr io.Writer) error {
 	credential, err := requestTransportCredential(ctx, client, agentToken, transport)
 	if err != nil {
@@ -68,6 +80,7 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	}
 
 	server := &tsnet.Server{
+		Dir:        agentTSNetDir(),
 		Hostname:   credential.Hostname,
 		AuthKey:    credential.AuthKey,
 		ControlURL: credential.ControlURL,

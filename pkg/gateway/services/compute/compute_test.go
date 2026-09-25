@@ -2654,6 +2654,50 @@ func TestAgentPoolGPUVirtualizedRequiresWorkerConfig(t *testing.T) {
 	}
 }
 
+func TestRequestAgentTransportCredentialVendsNonEphemeralNode(t *testing.T) {
+	workspaceID := "workspace-1"
+	poolName := "pool-1"
+	agentToken := "agent-token"
+	service := &Service{
+		appConfig: types.AppConfig{
+			Tailscale: types.TailscaleConfig{
+				Enabled:      true,
+				AuthKey:      "tskey-auth-gateway",
+				AgentAuthKey: "tskey-auth-worker",
+			},
+		},
+		computeRepo: &fakeComputeRepo{
+			machines: map[string][]*model.AgentTokenState{
+				fakeComputeKey(workspaceID, poolName): {
+					{
+						TokenHash:   hashComputeToken(agentToken),
+						WorkspaceID: workspaceID,
+						PoolName:    poolName,
+						MachineID:   "machine-1",
+					},
+				},
+			},
+		},
+	}
+
+	resp, err := service.RequestAgentTransportCredential(context.Background(), &pb.RequestAgentTransportCredentialRequest{
+		AgentToken: agentToken,
+		Transport:  types.BackendRouteTransportTSNet,
+	})
+	if err != nil {
+		t.Fatalf("RequestAgentTransportCredential() error = %v", err)
+	}
+	// A restart must reuse the same tailnet node so its IP is stable; an
+	// ephemeral node would come back with an address long-lived gateway
+	// clients cannot reach until control reaps the old one.
+	if !resp.GetOk() || resp.GetEphemeral() {
+		t.Fatalf("RequestAgentTransportCredential() = %+v, want ok non-ephemeral", resp)
+	}
+	if resp.GetHostname() != types.AgentTailnetHostnamePrefix+"machine-1" {
+		t.Fatalf("hostname = %q, want deterministic per-machine", resp.GetHostname())
+	}
+}
+
 func TestValidateAgentTransportConfig(t *testing.T) {
 	s := &Service{
 		appConfig: types.AppConfig{
