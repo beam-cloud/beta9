@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/microvm"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 

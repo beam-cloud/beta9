@@ -1,5 +1,7 @@
 //go:build !linux
 
+// vminit is the Linux guest init and only builds there. This stub keeps
+// `go build ./...` and `go vet ./...` working on other platforms.
 package main
 
 import (
@@ -8,6 +10,6 @@ import (
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "beam-vminit only runs as PID 1 inside a Linux microvm")
-	os.Exit(2)
+	fmt.Fprintln(os.Stderr, "vminit only runs as a Linux guest init")
+	os.Exit(1)
 }

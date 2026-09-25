@@ -37,7 +37,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/microvm"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"

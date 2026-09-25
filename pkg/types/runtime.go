@@ -3,10 +3,8 @@ package types
 type ContainerRuntime string
 
 const (
-	ContainerRuntimeRunc   ContainerRuntime = "runc"
-	ContainerRuntimeGvisor ContainerRuntime = "gvisor"
-	// ContainerRuntimeMicroVM boots each container as a Cloud Hypervisor
-	// virtual machine. Only opt-in CPU sandboxes are scheduled onto it.
+	ContainerRuntimeRunc    ContainerRuntime = "runc"
+	ContainerRuntimeGvisor  ContainerRuntime = "gvisor"
 	ContainerRuntimeMicroVM ContainerRuntime = "microvm"
 )
 

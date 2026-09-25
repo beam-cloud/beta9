@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/beam-cloud/beta9/pkg/microvm"
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 

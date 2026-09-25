@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/beam-cloud/beta9/pkg/microvm"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

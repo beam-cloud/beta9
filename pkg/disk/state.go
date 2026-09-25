@@ -49,8 +49,8 @@ type volumeState struct {
 	NBDSocket string `json:"nbd_socket,omitempty"`
 	NBDDevice string `json:"nbd_device,omitempty"`
 
-	// Export is how the head is served (see ExportMode); empty means NBD.
-	// ExportSocket is the vhost-user-blk socket while attached in that mode.
+	// Export is the ExportMode the volume was attached with ("" = NBD).
+	// For vhost-user-blk, ExportSocket is the socket the VM connects to.
 	Export       string `json:"export,omitempty"`
 	ExportSocket string `json:"export_socket,omitempty"`
 }

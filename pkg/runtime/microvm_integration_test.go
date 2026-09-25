@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/disk"
-	"github.com/beam-cloud/beta9/pkg/microvm"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"

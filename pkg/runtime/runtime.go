@@ -15,10 +15,8 @@ type Capabilities struct {
 	OOMEvents         bool // Runtime-native OOM events (use cgroup poller as fallback)
 	JoinExistingNetNS bool // Can join existing network namespace
 	CDI               bool // Container Device Interface support
-	// BlockRoot means the runtime owns the container's writable layer as a
-	// block device it attaches itself: the host must not mount durable disks
-	// or place an overlay upper on them, and the rootfs path it receives is
-	// consumed read-only.
+	// BlockRoot: the runtime attaches its own writable block device; the
+	// host only provides a read-only rootfs and does not mount durable disks.
 	BlockRoot bool
 }
 

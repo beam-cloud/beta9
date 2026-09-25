@@ -174,8 +174,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Severity: severity(fuseOK),
 		})
 
-		// Informational: only microvm pools need it, and the worker refuses to
-		// start such a pool without it, so the dashboard shows why.
+		// Only microvm pools need /dev/kvm.
 		kvm := pathExists("/dev/kvm")
 		kvmMessage := "available; the worker can run microvm (Cloud Hypervisor) sandbox pools"
 		if !kvm {
