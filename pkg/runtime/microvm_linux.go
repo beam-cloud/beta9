@@ -241,7 +241,9 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	inst.setPaused(true)
 	err := api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir})
 	if err == nil && inst.scratch != "" {
-		err = copySparse(inst.scratch, filepath.Join(opts.ImagePath, checkpointRootDisk))
+		if err = copySparse(inst.scratch, filepath.Join(opts.ImagePath, checkpointRootDisk)); err != nil {
+			err = fmt.Errorf("copy root disk: %w", err)
+		}
 	}
 	if err == nil && opts.LeaveRunning {
 		err = m.restoreInPlace(ctx, inst, snapshotDir)
