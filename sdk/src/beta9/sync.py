@@ -36,8 +36,7 @@ from .config import get_settings
 from .env import is_local
 
 _sync_lock = threading.Lock()
-# Sandboxes without sync_local_dir all sync the same empty manifest; its object
-# is resolved once per gateway identity per process instead of once per sandbox.
+# The sync-nothing object is looked up once per gateway identity.
 _empty_sync_results: Dict[str, "FileSyncResult"] = {}
 
 CHUNK_SIZE = 1024 * 1024 * 4

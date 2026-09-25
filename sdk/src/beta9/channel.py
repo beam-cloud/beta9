@@ -107,10 +107,7 @@ class Channel(InterceptorChannel):
 
         interceptor = AuthTokenInterceptor(token, metadata)
         super().__init__(channel=channel, interceptor=interceptor)
-        # Identifies the gateway and identity this channel talks to, so results
-        # cached per channel (image existence, synced objects) are shared by
-        # every channel to the same gateway and token in this process, and by
-        # nothing else.
+        # Per-channel caches are shared across channels to the same gateway and token.
         self.cache_key = hashlib.sha256(f"{addr}\n{token or ''}".encode()).hexdigest()
         _channels.add(self)
 

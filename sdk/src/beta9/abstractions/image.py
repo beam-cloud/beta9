@@ -51,8 +51,7 @@ _image_build_cache = TTLCache(
     ttl_env_var="BETA9_IMAGE_BUILD_CACHE_TTL_SECONDS",
     disabled=lambda: env_enabled("BETA9_DISABLE_IMAGE_BUILD_CACHE"),
 )
-# Concurrent first lookups of one image (a burst of sandboxes sharing an Image)
-# take turns, so one existence check fills the cache for the rest.
+# Concurrent first lookups of one image take turns; one check fills the cache.
 _image_lookup_locks: Dict[str, threading.Lock] = {}
 _image_lookup_locks_guard = threading.Lock()
 

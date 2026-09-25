@@ -621,12 +621,8 @@ func (m *ContainerNetworkManager) maintainNetworkSlotPool() {
 	}
 }
 
-// sweepStaleNetworkState runs the startup sweep of leftover slots and
-// reservations. The pool lock it needs may still be held by a worker that died
-// mid-fill (its TTL is two minutes), so a skipped attempt is retried from the
-// maintenance loop instead of being forgotten, which used to leave the dead
-// worker's addresses reserved and its neighbor pins in place until the next
-// restart.
+// sweepStaleNetworkState retries from the maintenance loop while a dead
+// worker still holds the pool lock (TTL two minutes).
 func (m *ContainerNetworkManager) sweepStaleNetworkState() {
 	err := m.cleanupStaleNetworkSlots()
 	switch {
@@ -756,9 +752,7 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 		for _, assignment := range response.Assignments {
 			slotWorkerID, slotID, ok := containerNetworkSlotReservationParts(assignment.ContainerId)
 			if !ok {
-				// The prefix is per node, so an on-demand reservation whose
-				// container no longer exists is a leak on this host: a worker
-				// that died mid-life, or a teardown that never finished.
+				// The prefix is per node: a reservation without a container is a local leak.
 				if m.containerStateMissing(assignment.ContainerId) {
 					orphans = append(orphans, assignment.ContainerId)
 				} else if assignment.IpAddress != "" {
@@ -1166,10 +1160,8 @@ func hostLinkSysfsPath(name string) string {
 	return path
 }
 
-// clearNetworkSlotNeighbor drops the bridge pins for a slot. A slot recovered
-// at startup knows at most its IPv4 address, so the IPv6 pin is derived from it
-// the same way pinBridgeNeighbors derived it; otherwise every restart left one
-// permanent IPv6 neighbor per slot behind until the table overflowed.
+// clearNetworkSlotNeighbor drops a slot's bridge pins; a recovered slot only
+// knows its IPv4, so the IPv6 pin is derived as pinBridgeNeighbors did.
 func (m *ContainerNetworkManager) clearNetworkSlotNeighbor(slot *containerNetworkSlot) error {
 	if slot == nil {
 		return nil
@@ -1181,8 +1173,7 @@ func (m *ContainerNetworkManager) clearNetworkSlotNeighbor(slot *containerNetwor
 	return m.clearBridgeNeighbors(slot.ip, ipv6)
 }
 
-// derivedContainerIPv6 returns the IPv6 address paired with a container's IPv4
-// address, or "" when ip is not one.
+// derivedContainerIPv6 returns the IPv6 paired with a container IPv4, or "".
 func derivedContainerIPv6(ip string) string {
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
@@ -1456,13 +1447,9 @@ func (m *ContainerNetworkManager) reserveNetworkSlotIP(reservationID string) (*n
 	return m.reserveIP(reservationID, "preallocated network slot", nil)
 }
 
-// reserveIP picks a free address under ipMu, marks it in flight so concurrent
-// callers skip it, and confirms the reservation with the repository outside the
-// lock. The repository's atomic script is the arbiter: a conflict leaves the
-// address marked as taken and the next candidate is tried, so the lock is
-// never held across a round trip and bursts reserve in parallel. The local view
-// is refreshed only when the walk finds nothing, which picks up addresses other
-// workers on the prefix have released.
+// reserveIP marks a candidate in flight under ipMu and confirms it with the
+// repository outside the lock; the repository arbitrates conflicts. The local
+// view is reloaded only when the walk finds nothing.
 func (m *ContainerNetworkManager) reserveIP(ownerID, what string, request *types.ContainerRequest) (*netlink.Addr, error) {
 	var lastErr error
 	reloaded := false
@@ -2004,10 +1991,9 @@ func (m *ContainerNetworkManager) reloadAllocatedIPsLocked() error {
 	return nil
 }
 
-// hostRoutedOffBridgeNets returns the host routes that carve a more specific
-// prefix out of the container subnet on another interface, typically a node LAN
-// that overlaps it. Longest-prefix matching sends those addresses out that
-// interface instead of the bridge, so they must never be allocated.
+// hostRoutedOffBridgeNets returns host routes more specific than the container
+// subnet on other interfaces (a node LAN inside it); those addresses leave via
+// the NIC, not the bridge.
 func (m *ContainerNetworkManager) hostRoutedOffBridgeNets() []*net.IPNet {
 	_, subnet, _ := net.ParseCIDR(containerSubnet)
 	subnetOnes, _ := subnet.Mask.Size()
@@ -2405,9 +2391,7 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 			}
 
 			for _, containerId := range containerIds {
-				// TearDown takes the per-container network lock, so a worker
-				// that is still stopping the container finishes first and this
-				// pass finds its reservation already gone.
+				// TearDown takes the per-container lock; an in-flight stop finishes first.
 				if !m.containerStateMissing(containerId) {
 					continue
 				}
@@ -2449,12 +2433,8 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
 	defer cleanupCancel()
 
-	// The lock is per container: it keeps this worker and the orphan reaper on
-	// another worker of the same node from tearing down one container twice,
-	// and nothing here touches state shared between containers. A node-wide
-	// lock made every teardown on the node queue behind every other, and under
-	// a burst of stops the losers timed out and leaked their veth, namespace
-	// and address.
+	// Per container: nothing here touches shared state, and a node-wide lock
+	// made bursts of stops time out and leak the veth, namespace and address.
 	lockKey := m.containerNetworkLockKey(containerId)
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(cleanupCtx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: lockKey,

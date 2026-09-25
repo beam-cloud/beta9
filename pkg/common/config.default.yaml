@@ -10,9 +10,7 @@ database:
     name: main
     timezone: UTC
     encryptionKey: sk_pKz38fK8v7lz01AneJI8MJnR70akmP2CtDNf1IufKcY=
-    # Connections one gateway holds to Postgres; 0 is unbounded. Bursts of
-    # requests otherwise open a connection each and the server thrashes;
-    # ~2-4x the database's vCPUs is a good starting point.
+    # Postgres connections per gateway; 0 is unbounded. ~2-4x the database's vCPUs.
     maxOpenConns: 0
   redis:
     mode: single

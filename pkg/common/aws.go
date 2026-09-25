@@ -10,19 +10,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
-// awsHTTPClient is shared by every S3 client this process builds. Credentials
-// live in the per-client config, not here, so one pool can serve every
-// workspace and registry. Several paths build an S3 client per request; with
-// the SDK default each of those carried its own transport, so no connection
-// outlived the request and every call paid a TLS handshake, while the shared
-// registry client was capped at 10 idle connections per host and serialized
-// bursts of parallel HEADs behind connection churn.
+// One connection pool for every S3 client in the process; credentials stay per client.
+// Per-request clients otherwise get their own transport and the SDK caps idle conns at 10.
 var awsHTTPClient = awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
 	tr.MaxIdleConns = 1024
 	tr.MaxIdleConnsPerHost = 256
 })
 
-// AWSHTTPClient returns the process-wide HTTP client for AWS SDK clients.
 func AWSHTTPClient() *awshttp.BuildableClient {
 	return awsHTTPClient
 }
