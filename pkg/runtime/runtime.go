@@ -67,6 +67,11 @@ type CheckpointOpts struct {
 	LinkRemap    bool         // Enable link remapping
 	FileLocks    bool         // Preserve file locks held by container processes
 	OutputWriter OutputWriter // Writer for checkpoint output
+	// WhilePaused runs after the image is written and before the container
+	// resumes or ends, for runtimes that stop it to checkpoint (microvm). A
+	// disk sealed here pairs with the memory image; one sealed after
+	// LeaveRunning resumed the guest would not.
+	WhilePaused func(ctx context.Context) error
 }
 
 // RestoreOpts contains options for restoring a container from checkpoint

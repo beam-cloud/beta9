@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
@@ -57,6 +58,9 @@ const (
 	microVMMemoryHeadroom = 256 << 20
 	microVMMemoryAlign    = 2 << 20
 	microVMConsoleTail    = 64
+	// microVMMaxGuestRead bounds a whole-file read (Length 0) the guest
+	// answers; the worker's file RPCs ask for 4 MiB chunks.
+	microVMMaxGuestRead = 64 << 20
 )
 
 // DiskFreezer is implemented by runtimes that own the container's writable
@@ -290,11 +294,12 @@ func vhostUserDiskArg(socket string) string {
 
 // --- canvas ------------------------------------------------------------------
 
-// microVMMountPlan splits the spec's mounts into what the host binds into the
-// canvas (the guest re-binds them over the overlay) and the tmpfs mounts the
-// guest creates itself. Pseudo filesystems and anything under /dev, /proc,
-// /sys are the guest's own business.
-func microVMMountPlan(mounts []specs.Mount) (binds []specs.Mount, tmpfs []specs.Mount) {
+// microVMMountPlan keeps the spec's binds and tmpfs mounts, in spec order, so
+// the guest applies them the way runc would (a /volumes tmpfs before the
+// /volumes/<name> binds under it). Pseudo filesystems and anything under
+// /dev, /proc, /sys are the guest's own business.
+func microVMMountPlan(mounts []specs.Mount) []specs.Mount {
+	var plan []specs.Mount
 	for _, mount := range mounts {
 		dest := filepath.Clean(mount.Destination)
 		if !filepath.IsAbs(dest) || dest == "/" {
@@ -307,17 +312,17 @@ func microVMMountPlan(mounts []specs.Mount) (binds []specs.Mount, tmpfs []specs.
 		case "proc", "sysfs", "devpts", "mqueue", "cgroup", "cgroup2":
 			continue
 		case "tmpfs":
-			tmpfs = append(tmpfs, mount)
+			plan = append(plan, mount)
 			continue
 		}
 		if mount.Type == "bind" || mount.Type == "none" || mount.Type == "" || hasOption(mount.Options, "bind") || hasOption(mount.Options, "rbind") {
 			if strings.TrimSpace(mount.Source) == "" || mount.Source == "none" {
 				continue
 			}
-			binds = append(binds, mount)
+			plan = append(plan, mount)
 		}
 	}
-	return binds, tmpfs
+	return plan
 }
 
 func underAny(path string, prefixes ...string) bool {
@@ -340,22 +345,23 @@ func hasOption(options []string, name string) bool {
 
 // microVMGuestSpec is the vm.json the guest init reads: everything the host
 // decided that the guest has to act on.
-func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, binds []microvm.Bind, tmpfs []specs.Mount) *microvm.Spec {
+func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, mounts []microvm.Mount) *microvm.Spec {
 	vmSpec := &microvm.Spec{
 		Hostname:    spec.Hostname,
 		Network:     network,
 		RootDisk:    root.device,
 		Docker:      annotationBool(spec, MicroVMDockerAnnotation),
-		Binds:       binds,
+		Mounts:      mounts,
 		ControlPort: microvm.ControlPort,
 	}
 	for _, disk := range extra {
 		vmSpec.Disks = append(vmSpec.Disks, microvm.Disk{Device: disk.device, MountPath: disk.mountPath, ReadOnly: disk.readOnly})
 	}
-	for _, mount := range tmpfs {
-		vmSpec.Tmpfs = append(vmSpec.Tmpfs, microvm.Tmpfs{Destination: filepath.Clean(mount.Destination), Options: append([]string(nil), mount.Options...)})
-	}
 	return vmSpec
+}
+
+func tmpfsMount(mount specs.Mount) microvm.Mount {
+	return microvm.Mount{Type: microvm.MountTmpfs, Destination: filepath.Clean(mount.Destination), Options: append([]string(nil), mount.Options...)}
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
@@ -365,7 +371,7 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	}
 	defer in.Close()
 	_ = os.Remove(dst)
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
 	if err != nil {
 		return err
 	}

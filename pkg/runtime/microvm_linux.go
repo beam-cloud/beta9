@@ -64,6 +64,7 @@ type microVMInstance struct {
 	// stop, or a signal the guest would not take); Run then reports the
 	// kill as the container's exit instead of a VM failure.
 	killed bool
+	waited bool // Wait reaped the hypervisor; its pid must not be signalled again
 }
 
 // NewMicroVM validates that the hypervisor, virtiofsd, guest kernel, guest
@@ -105,7 +106,39 @@ func NewMicroVM(cfg Config) (Runtime, error) {
 	if err := os.MkdirAll(cfg.MicroVMStateRoot, 0o755); err != nil {
 		return nil, unavailable(fmt.Sprintf("create state root: %v", err))
 	}
+	sweepLeftoverVMs(cfg.MicroVMStateRoot)
 	return &MicroVM{cfg: cfg, vms: map[string]*microVMInstance{}}, nil
+}
+
+// sweepLeftoverVMs kills the hypervisors and virtiofsd daemons a previous
+// worker left behind and removes their state. VMs are not adopted across a
+// worker restart, and the disk manager recovers (and stops) their qcow
+// daemons right after, so a VM and its disks always go down together.
+func sweepLeftoverVMs(stateRoot string) {
+	entries, err := os.ReadDir(stateRoot)
+	if err != nil {
+		return
+	}
+	procs, _ := os.ReadDir("/proc")
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(stateRoot, entry.Name())
+		for _, proc := range procs {
+			pid, err := strconv.Atoi(proc.Name())
+			if err != nil {
+				continue
+			}
+			cmdline, err := os.ReadFile(filepath.Join("/proc", proc.Name(), "cmdline"))
+			if err != nil || !bytes.Contains(cmdline, []byte(dir+"/")) {
+				continue
+			}
+			log.Warn().Str("container_id", entry.Name()).Int("pid", pid).Msg("killing microvm process left by a previous worker")
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+		_ = os.RemoveAll(dir)
+	}
 }
 
 func (m *MicroVM) Name() string {
@@ -209,8 +242,9 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 
 // Checkpoint pauses the VM, snapshots guest memory and device state into
 // ImagePath, and copies the scratch root disk alongside so a restore has the
-// filesystem the memory image expects. Durable qcow disks are sealed by the
-// worker around this call; with the vCPUs stopped there is no I/O to freeze.
+// filesystem the memory image expects. opts.WhilePaused (the worker sealing
+// its qcow disks) runs with the vCPUs still stopped, so the disks match the
+// memory image and there is no I/O to freeze.
 //
 // A VM that has to keep running is restored in place from the snapshot it
 // just took: capturing virtiofsd's state stops its queues for good, so
@@ -245,13 +279,17 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 			err = fmt.Errorf("copy root disk: %w", err)
 		}
 	}
+	var hookErr error
+	if err == nil && opts.WhilePaused != nil {
+		hookErr = opts.WhilePaused(ctx)
+	}
 	if err == nil && opts.LeaveRunning {
 		err = m.restoreInPlace(ctx, inst, snapshotDir)
 	}
 	if err != nil || !opts.LeaveRunning {
 		inst.killHypervisor()
 	}
-	return err
+	return errors.Join(err, hookErr)
 }
 
 // restoreInPlace replaces the running VM with a restore of snapshotDir
@@ -376,7 +414,11 @@ func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, network
 func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.Spec, args []string, outputWriter, errorWriter io.Writer, started chan<- int) (int, error) {
 	ctrl := inst.ctrl
 	cmd := exec.Command(m.cfg.MicroVMHypervisorPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cgroupFD, err := inst.cgroupAttr(cmd)
+	if err != nil {
+		return -1, err
+	}
+	defer cgroupFD.Close()
 	// The serial console arrives a few bytes at a time; the worker's writers
 	// log one record per Write, so hand them whole lines.
 	var out io.Writer = inst.console
@@ -407,9 +449,6 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	inst.mu.Lock()
 	inst.hypervisor = cmd
 	inst.mu.Unlock()
-	if err := inst.addToCgroup(cmd.Process.Pid); err != nil {
-		log.Warn().Err(err).Str("container_id", inst.id).Msg("failed to place hypervisor in its cgroup")
-	}
 	log.Info().Str("container_id", inst.id).Int("pid", cmd.Process.Pid).Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec)).Msg("microvm started")
 
 	if started != nil {
@@ -420,7 +459,13 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	}
 
 	waitDone := make(chan error, 1)
-	go func() { waitDone <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		inst.mu.Lock()
+		inst.waited = true
+		inst.mu.Unlock()
+		waitDone <- err
+	}()
 
 	bootTimer := time.NewTimer(microVMBootTimeout)
 	defer bootTimer.Stop()
@@ -582,6 +627,10 @@ func (m *MicroVM) FreezeDisk(ctx context.Context, containerID, mountPath string)
 		if !inst.alive() {
 			return noop, nil
 		}
+		// The freeze may still land after the host gave up on it.
+		thawCtx, cancel := context.WithTimeout(context.Background(), microVMControlRequestTimeout)
+		_, _ = inst.ctrl.request(thawCtx, microvm.Message{Type: microvm.MsgThaw, Text: mountPath})
+		cancel()
 		return nil, fmt.Errorf("freeze guest filesystem: %w", err)
 	}
 	return func() {
@@ -640,8 +689,8 @@ func (m *MicroVM) GuestFS(ctx context.Context, containerID string, req microvm.F
 		}
 	}
 
-	reader := bufio.NewReaderSize(conn, 64<<10)
-	line, err := reader.ReadBytes('\n')
+	reader := bufio.NewReaderSize(conn, microvm.MaxLineBytes)
+	line, err := microvm.ReadLine(reader)
 	if err != nil {
 		return nil, fmt.Errorf("read fs reply: %w", err)
 	}
@@ -655,11 +704,17 @@ func (m *MicroVM) GuestFS(ctx context.Context, containerID string, req microvm.F
 	if sink == nil {
 		sink = io.Discard
 	}
+	// The guest chooses the reply length; hold it to what was asked for.
 	switch {
 	case reply.Length == microvm.FSStreamUntilEOF:
+		if req.Op != microvm.FSOpArchive {
+			return nil, fmt.Errorf("fs reply to %s streams without a length", req.Op)
+		}
 		if _, err := io.Copy(sink, reader); err != nil {
 			return nil, fmt.Errorf("read fs stream: %w", err)
 		}
+	case reply.Length < 0, req.Op == microvm.FSOpRead && req.Length > 0 && reply.Length > req.Length, req.Op == microvm.FSOpRead && reply.Length > microVMMaxGuestRead:
+		return nil, fmt.Errorf("fs reply length %d exceeds the request", reply.Length)
 	case req.Op == microvm.FSOpRead && reply.Length > 0:
 		if _, err := io.CopyN(sink, reader, reply.Length); err != nil {
 			return nil, fmt.Errorf("read fs payload: %w", err)
@@ -923,8 +978,20 @@ func createScratchDisk(ctx context.Context, path string, size int64) error {
 // --- canvas ------------------------------------------------------------------
 
 func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk) (*microvm.Spec, error) {
-	for _, dir := range []string{"dev", "proc", "sys", "run", "tmp", microvm.CanvasDir, microvm.DiskMount, microvm.ImageMount, microvm.NewRoot} {
-		if err := os.MkdirAll(filepath.Join(inst.canvas, dir), 0o755); err != nil {
+	// The canvas is image content: a symlink at any of these paths would
+	// redirect the host's writes and mounts below, so they are created
+	// without following one, and .beam is recreated empty.
+	for _, dir := range []string{"dev", "proc", "sys", "run", "tmp"} {
+		if err := inst.canvasDir(dir); err != nil {
+			return nil, err
+		}
+	}
+	beam := filepath.Join(inst.canvas, microvm.CanvasDir)
+	if err := removeCanvasEntry(beam); err != nil {
+		return nil, err
+	}
+	for _, dir := range []string{microvm.CanvasDir, microvm.DiskMount, microvm.ImageMount, microvm.NewRoot, microvm.BindsDir} {
+		if err := inst.canvasDir(dir); err != nil {
 			return nil, err
 		}
 	}
@@ -932,25 +999,75 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 		return nil, fmt.Errorf("install guest init: %w", err)
 	}
 
-	bindMounts, tmpfs := microVMMountPlan(spec.Mounts)
-	binds := make([]microvm.Bind, 0, len(bindMounts))
-	for i, mount := range bindMounts {
+	plan := microVMMountPlan(spec.Mounts)
+	mounts := make([]microvm.Mount, 0, len(plan))
+	for i, mount := range plan {
+		if mount.Type == "tmpfs" {
+			mounts = append(mounts, tmpfsMount(mount))
+			continue
+		}
 		bind, err := inst.bindIntoCanvas(i, mount)
 		if err != nil {
 			return nil, err
 		}
-		binds = append(binds, bind)
+		mounts = append(mounts, bind)
 	}
-	vmSpec := microVMGuestSpec(spec, network, root, extra, binds, tmpfs)
+	vmSpec := microVMGuestSpec(spec, network, root, extra, mounts)
 
 	data, err := json.MarshalIndent(vmSpec, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(inst.canvas, microvm.SpecFile), data, 0o644); err != nil {
+	if err := writeFileNoFollow(filepath.Join(inst.canvas, microvm.SpecFile), data, 0o644); err != nil {
 		return nil, err
 	}
 	return vmSpec, nil
+}
+
+// canvasDir makes rel a real directory directly under the canvas root (or
+// under .beam), replacing a symlink or file the image put there.
+func (inst *microVMInstance) canvasDir(rel string) error {
+	path := filepath.Join(inst.canvas, rel)
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil && info.IsDir():
+		return nil
+	case err == nil:
+		if err := removeCanvasEntry(path); err != nil {
+			return err
+		}
+	case !os.IsNotExist(err):
+		return err
+	}
+	return os.Mkdir(path, 0o755)
+}
+
+// removeCanvasEntry removes a symlink, file or directory at path without
+// following a symlink.
+func removeCanvasEntry(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return os.RemoveAll(path)
+	}
+	return os.Remove(path)
+}
+
+func writeFileNoFollow(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|unix.O_NOFOLLOW, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // bindIntoCanvas mounts one OCI bind mount under the canvas's binds directory
@@ -958,27 +1075,27 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 // overlayfs refuses to look through a submount in its lower layer, so the
 // guest binds the entry from the virtiofs root to the destination in the
 // assembled root instead.
-func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (microvm.Bind, error) {
+func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (microvm.Mount, error) {
 	dest := filepath.Clean(mount.Destination)
 	if !filepath.IsAbs(dest) || dest == "/" {
-		return microvm.Bind{}, fmt.Errorf("mount destination %q is not an absolute path inside the rootfs", mount.Destination)
+		return microvm.Mount{}, fmt.Errorf("mount destination %q is not an absolute path inside the rootfs", mount.Destination)
 	}
 	info, err := os.Stat(mount.Source)
 	if err != nil {
-		return microvm.Bind{}, fmt.Errorf("bind source %s: %w", mount.Source, err)
+		return microvm.Mount{}, fmt.Errorf("bind source %s: %w", mount.Source, err)
 	}
 	isFile := !info.IsDir()
 	guestSource := filepath.Join(microvm.BindsDir, strconv.Itoa(index))
 	target := filepath.Join(inst.canvas, guestSource)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return microvm.Bind{}, err
+	if err := removeCanvasEntry(target); err != nil {
+		return microvm.Mount{}, err
 	}
 	if isFile {
-		if err := os.WriteFile(target, nil, 0o644); err != nil {
-			return microvm.Bind{}, err
+		if err := writeFileNoFollow(target, nil, 0o644); err != nil {
+			return microvm.Mount{}, err
 		}
-	} else if err := os.MkdirAll(target, 0o755); err != nil {
-		return microvm.Bind{}, err
+	} else if err := os.Mkdir(target, 0o755); err != nil {
+		return microvm.Mount{}, err
 	}
 
 	flags := uintptr(unix.MS_BIND)
@@ -986,16 +1103,16 @@ func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (micro
 		flags |= unix.MS_REC
 	}
 	if err := unix.Mount(mount.Source, target, "", flags, ""); err != nil {
-		return microvm.Bind{}, fmt.Errorf("bind %s to %s: %w", mount.Source, target, err)
+		return microvm.Mount{}, fmt.Errorf("bind %s to %s: %w", mount.Source, target, err)
 	}
 	inst.submounts = append(inst.submounts, target)
 	readOnly := hasOption(mount.Options, "ro")
 	if readOnly {
 		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
-			return microvm.Bind{}, fmt.Errorf("remount %s read-only: %w", target, err)
+			return microvm.Mount{}, fmt.Errorf("remount %s read-only: %w", target, err)
 		}
 	}
-	return microvm.Bind{Source: guestSource, Destination: dest, File: isFile, ReadOnly: readOnly}, nil
+	return microvm.Mount{Type: microvm.MountBind, Source: guestSource, Destination: dest, File: isFile, ReadOnly: readOnly}, nil
 }
 
 // --- virtiofsd -----------------------------------------------------------------
@@ -1030,7 +1147,11 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 		"--sandbox=chroot",
 		"--log-level=warn",
 	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cgroupFD, err := inst.cgroupAttr(cmd)
+	if err != nil {
+		return err
+	}
+	defer cgroupFD.Close()
 	cmd.Stdout = inst.console
 	cmd.Stderr = inst.console
 	if err := cmd.Start(); err != nil {
@@ -1039,9 +1160,6 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 	inst.mu.Lock()
 	inst.virtiofsd = cmd
 	inst.mu.Unlock()
-	if err := inst.addToCgroup(cmd.Process.Pid); err != nil {
-		log.Debug().Err(err).Str("container_id", inst.id).Msg("failed to place virtiofsd in the vm cgroup")
-	}
 	exited := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
@@ -1112,11 +1230,21 @@ func (m *MicroVM) setupCgroup(inst *microVMInstance, spec *specs.Spec, guestMemo
 	return nil
 }
 
-func (inst *microVMInstance) addToCgroup(pid int) error {
+// cgroupAttr makes cmd start inside the VM's cgroup (CLONE_INTO_CGROUP), so
+// it never runs a moment without its limits. The returned fd must stay open
+// until cmd has started.
+func (inst *microVMInstance) cgroupAttr(cmd *exec.Cmd) (*os.File, error) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if inst.cgroup == "" {
-		return nil
+		return nil, nil // (*os.File)(nil).Close is a harmless ErrInvalid
 	}
-	return os.WriteFile(filepath.Join(inst.cgroup, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0o644)
+	fd, err := os.OpenFile(inst.cgroup, os.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open vm cgroup: %w", err)
+	}
+	cmd.SysProcAttr.UseCgroupFD = true
+	cmd.SysProcAttr.CgroupFD = int(fd.Fd())
+	return fd, nil
 }
 
 // --- network ---------------------------------------------------------------------
@@ -1216,7 +1344,7 @@ func (m *MicroVM) setupNetwork(inst *microVMInstance, spec *specs.Spec) (microvm
 		if err := redirectAll(veth, tapLink); err != nil {
 			return fmt.Errorf("redirect %s to tap: %w", attrs.Name, err)
 		}
-		if err := redirectGuestFrames(tapLink, veth, ip4, ip6); err != nil {
+		if err := redirectGuestFrames(tapLink, veth, attrs.HardwareAddr, ip4, ip6); err != nil {
 			return fmt.Errorf("redirect tap to %s: %w", attrs.Name, err)
 		}
 		return nil
@@ -1299,56 +1427,103 @@ func redirectAll(from, to netlink.Link) error {
 	})
 }
 
-// redirectGuestFrames wires tap ingress to the veth with an allow-list on the
-// source address: ARP, IPv4 from ip4, IPv6 from ip6, link-local, or the
-// unspecified address (duplicate address detection). Everything else is
-// dropped before it can reach the bridge.
-func redirectGuestFrames(tap, veth netlink.Link, ip4, ip6 net.IP) error {
+// redirectGuestFrames wires tap ingress to the veth behind an allow-list of
+// what the guest may source: frames from its own MAC only, carrying ARP that
+// names its MAC and IPv4, IPv4 from ip4, IPv6 from ip6, and from link-local
+// or the unspecified address only the neighbour discovery it needs (RS, NS,
+// NA for its own addresses). Everything else is dropped before the bridge
+// sees it.
+func redirectGuestFrames(tap, veth netlink.Link, mac net.HardwareAddr, ip4, ip6 net.IP) error {
 	if err := ensureIngress(tap); err != nil {
 		return err
 	}
 	redirect := func() []netlink.Action { return []netlink.Action{netlink.NewMirredAction(veth.Attrs().Index)} }
+	// Ethernet source at link offsets -8..-3 (the header sits before the
+	// network header the offsets are relative to).
+	fromMAC := []netlink.TcU32Key{
+		u32Key(-8, 0xffffffff, binary.BigEndian.Uint32(mac[0:4])),
+		u32Key(-4, 0xffff0000, binary.BigEndian.Uint32([]byte{mac[4], mac[5], 0, 0})),
+	}
+	allow := func(priority uint16, protocol uint16, keys ...netlink.TcU32Key) netlink.Filter {
+		return &netlink.U32{
+			FilterAttrs: ingressAttrs(tap, priority, protocol),
+			Sel:         u32Selector(append(append([]netlink.TcU32Key(nil), fromMAC...), keys...)),
+			Actions:     redirect(),
+		}
+	}
+	// ARP: sender hardware address at 8, sender protocol address at 14.
+	arpSender := func(spa net.IP) []netlink.TcU32Key {
+		return []netlink.TcU32Key{
+			u32Key(8, 0xffffffff, binary.BigEndian.Uint32(mac[0:4])),
+			u32Key(12, 0xffffffff, binary.BigEndian.Uint32([]byte{mac[4], mac[5], spa[0], spa[1]})),
+			u32Key(16, 0xffff0000, binary.BigEndian.Uint32([]byte{spa[2], spa[3], 0, 0})),
+		}
+	}
+	// ICMPv6: next header at 6, type at 40, neighbour advertisement target at 48.
+	icmp6 := func(icmpType byte) []netlink.TcU32Key {
+		return []netlink.TcU32Key{
+			u32Key(4, 0x0000ff00, uint32(unix.IPPROTO_ICMPV6)<<8),
+			u32Key(40, 0xff000000, uint32(icmpType)<<24),
+		}
+	}
+	linkLocal := u32Keys(net.ParseIP("fe80::").To16(), net.CIDRMask(10, 128), 8)
+	unspecified := u32Keys(net.IPv6unspecified.To16(), net.CIDRMask(128, 128), 8)
+	const (
+		icmp6RS = 133
+		icmp6NS = 135
+		icmp6NA = 136
+	)
 
-	filters := []netlink.Filter{
-		&netlink.MatchAll{FilterAttrs: ingressAttrs(tap, 1, unix.ETH_P_ARP), Actions: redirect()},
+	var filters []netlink.Filter
+	prio := uint16(1)
+	add := func(protocol uint16, keys ...netlink.TcU32Key) {
+		filters = append(filters, allow(prio, protocol, keys...))
+		prio++
 	}
 	if ip4 != nil {
-		filters = append(filters, &netlink.U32{
-			FilterAttrs: ingressAttrs(tap, 2, unix.ETH_P_IP),
-			Sel:         u32Selector(u32Keys(ip4.To4(), net.CIDRMask(32, 32), 12)),
-			Actions:     redirect(),
-		})
+		add(unix.ETH_P_ARP, arpSender(ip4.To4())...)
+		add(unix.ETH_P_ARP, arpSender(net.IPv4zero.To4())...) // address probe
+		add(unix.ETH_P_IP, u32Keys(ip4.To4(), net.CIDRMask(32, 32), 12)...)
 	}
 	if ip6 != nil {
-		filters = append(filters, &netlink.U32{
-			FilterAttrs: ingressAttrs(tap, 3, unix.ETH_P_IPV6),
-			Sel:         u32Selector(u32Keys(ip6.To16(), net.CIDRMask(128, 128), 8)),
-			Actions:     redirect(),
-		})
+		add(unix.ETH_P_IPV6, u32Keys(ip6.To16(), net.CIDRMask(128, 128), 8)...)
 	}
-	linkLocal := net.ParseIP("fe80::")
-	filters = append(filters,
-		&netlink.U32{
-			FilterAttrs: ingressAttrs(tap, 4, unix.ETH_P_IPV6),
-			Sel:         u32Selector(u32Keys(linkLocal.To16(), net.CIDRMask(10, 128), 8)),
-			Actions:     redirect(),
-		},
-		&netlink.U32{
-			FilterAttrs: ingressAttrs(tap, 5, unix.ETH_P_IPV6),
-			Sel:         u32Selector(u32Keys(net.IPv6unspecified.To16(), net.CIDRMask(128, 128), 8)),
-			Actions:     redirect(),
-		},
-		&netlink.MatchAll{
-			FilterAttrs: ingressAttrs(tap, 100, unix.ETH_P_ALL),
-			Actions:     []netlink.Action{&netlink.GenericAction{ActionAttrs: netlink.ActionAttrs{Action: netlink.TC_ACT_SHOT}}},
-		},
-	)
+	for _, t := range []byte{icmp6RS, icmp6NS} {
+		add(unix.ETH_P_IPV6, append(append([]netlink.TcU32Key(nil), linkLocal...), icmp6(t)...)...)
+	}
+	for _, target := range []net.IP{ip6, linkLocalFromMAC(mac)} {
+		if target == nil {
+			continue
+		}
+		keys := append(append([]netlink.TcU32Key(nil), linkLocal...), icmp6(icmp6NA)...)
+		add(unix.ETH_P_IPV6, append(keys, u32Keys(target.To16(), net.CIDRMask(128, 128), 48)...)...)
+	}
+	add(unix.ETH_P_IPV6, append(append([]netlink.TcU32Key(nil), unspecified...), icmp6(icmp6NS)...)...) // duplicate address detection
+	filters = append(filters, &netlink.MatchAll{
+		FilterAttrs: ingressAttrs(tap, 100, unix.ETH_P_ALL),
+		Actions:     []netlink.Action{&netlink.GenericAction{ActionAttrs: netlink.ActionAttrs{Action: netlink.TC_ACT_SHOT}}},
+	})
 	for _, filter := range filters {
 		if err := netlink.FilterAdd(filter); err != nil {
 			return fmt.Errorf("add tap filter prio %d: %w", filter.Attrs().Priority, err)
 		}
 	}
 	return nil
+}
+
+func u32Key(off int32, mask, val uint32) netlink.TcU32Key {
+	return netlink.TcU32Key{Off: off, Mask: mask, Val: val & mask}
+}
+
+// linkLocalFromMAC is the EUI-64 link-local address the guest kernel derives
+// from its MAC, the one it advertises for itself.
+func linkLocalFromMAC(mac net.HardwareAddr) net.IP {
+	if len(mac) != 6 {
+		return nil
+	}
+	ip := net.ParseIP("fe80::").To16()
+	copy(ip[8:], []byte{mac[0] ^ 0x02, mac[1], mac[2], 0xff, 0xfe, mac[3], mac[4], mac[5]})
+	return ip
 }
 
 // u32Keys builds u32 selector keys matching addr/mask at a byte offset into
@@ -1538,10 +1713,14 @@ func (c *microVMControl) request(ctx context.Context, msg microvm.Message) (micr
 	c.nextID++
 	msg.ID = c.nextID
 	c.pending[msg.ID] = ch
-	enc := c.enc
+	enc, conn := c.enc, c.conn
 	c.mu.Unlock()
 
-	if err := enc.Encode(msg); err != nil {
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetWriteDeadline(deadline)
+	err := enc.Encode(msg)
+	_ = conn.SetWriteDeadline(time.Time{})
+	if err != nil {
 		c.mu.Lock()
 		delete(c.pending, msg.ID)
 		c.mu.Unlock()
@@ -1658,10 +1837,11 @@ func (inst *microVMInstance) pid() int {
 
 func (inst *microVMInstance) killHypervisor() {
 	inst.mu.Lock()
-	cmd := inst.hypervisor
+	cmd, waited := inst.hypervisor, inst.waited
 	inst.killed = true
 	inst.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
+	// Once Wait has reaped it the pid may belong to someone else.
+	if cmd == nil || cmd.Process == nil || waited {
 		return
 	}
 	if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil && pgid > 0 {

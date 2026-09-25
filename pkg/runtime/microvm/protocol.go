@@ -8,8 +8,10 @@ package microvm
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 const (
@@ -74,12 +76,9 @@ type Spec struct {
 	// Docker asks the guest to bind the disk's docker directory over
 	// /var/lib/docker.
 	Docker bool `json:"docker,omitempty"`
-	// Binds are OCI bind mounts the host applied into the canvas; the guest
-	// re-applies them into the overlay because overlayfs does not follow
-	// mounts inside a lower layer.
-	Binds []Bind `json:"binds,omitempty"`
-	// Tmpfs are OCI tmpfs mounts the guest creates fresh.
-	Tmpfs []Tmpfs `json:"tmpfs,omitempty"`
+	// Mounts are the OCI mounts the guest applies into the new root, in spec
+	// order, after its own pseudo filesystems.
+	Mounts []Mount `json:"mounts,omitempty"`
 	// ControlPort overrides ControlPort when non-zero.
 	ControlPort uint32 `json:"control_port,omitempty"`
 }
@@ -102,18 +101,21 @@ type Disk struct {
 	ReadOnly  bool   `json:"readonly,omitempty"`
 }
 
-// Bind is a mount the guest binds from Source (a path under BindsDir in the
-// virtiofs root) to Destination in the new root.
-type Bind struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	File        bool   `json:"file,omitempty"`
-	ReadOnly    bool   `json:"readonly,omitempty"`
-}
+const (
+	// MountBind is bound from Source, a path under BindsDir in the virtiofs
+	// root; overlayfs does not follow mounts inside its lower layer.
+	MountBind = "bind"
+	// MountTmpfs is created fresh with Options.
+	MountTmpfs = "tmpfs"
+)
 
-// Tmpfs is a tmpfs the guest mounts inside the new root.
-type Tmpfs struct {
+// Mount is one OCI mount in the guest's new root.
+type Mount struct {
+	Type        string   `json:"type"`
+	Source      string   `json:"source,omitempty"`
 	Destination string   `json:"destination"`
+	File        bool     `json:"file,omitempty"`
+	ReadOnly    bool     `json:"readonly,omitempty"`
 	Options     []string `json:"options,omitempty"`
 }
 
@@ -133,6 +135,11 @@ const (
 	MsgThaw    = "thaw"    // FITHAW the same.
 	MsgNetwork = "network" // Payload: Network; reconfigure the NIC (after a restore, the container's new addresses).
 )
+
+// FreezeLimit is how long the guest keeps a filesystem frozen without a thaw
+// before thawing it itself: shorter than the host's request timeout, so a
+// freeze the host gave up on cannot outlive it.
+const FreezeLimit = 20 * time.Second
 
 // Filesystem operations the host performs inside the guest. The worker's
 // sandbox file RPCs use these because the guest's writable layer is a block
@@ -224,6 +231,20 @@ type Message struct {
 	Network *Network `json:"network,omitempty"`
 }
 
+// MaxLineBytes bounds a control message or filesystem header line; the
+// peer is not trusted to keep a line finite.
+const MaxLineBytes = 64 << 10
+
+// ReadLine returns the next line from r, without over-reading past it, or
+// an error when it exceeds MaxLineBytes. r must be sized at least MaxLineBytes.
+func ReadLine(r *bufio.Reader) ([]byte, error) {
+	line, err := r.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return nil, fmt.Errorf("line exceeds %d bytes", MaxLineBytes)
+	}
+	return line, err
+}
+
 // Encoder writes messages as one JSON object per line.
 type Encoder struct{ w io.Writer }
 
@@ -241,16 +262,16 @@ func (e *Encoder) Encode(m Message) error {
 // Decoder reads newline-delimited messages.
 type Decoder struct{ r *bufio.Reader }
 
-func NewDecoder(r io.Reader) *Decoder { return &Decoder{r: bufio.NewReader(r)} }
+func NewDecoder(r io.Reader) *Decoder { return &Decoder{r: bufio.NewReaderSize(r, MaxLineBytes)} }
 
 func (d *Decoder) Decode() (Message, error) {
-	line, err := d.r.ReadBytes('\n')
+	line, err := ReadLine(d.r)
 	if err != nil {
 		return Message{}, err
 	}
 	var m Message
 	if err := json.Unmarshal(line, &m); err != nil {
-		return Message{}, fmt.Errorf("decode control message %q: %w", line, err)
+		return Message{}, fmt.Errorf("decode control message: %w", err)
 	}
 	return m, nil
 }

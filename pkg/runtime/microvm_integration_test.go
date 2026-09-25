@@ -690,7 +690,16 @@ func TestMicroVMCheckpointLeaveRunning(t *testing.T) {
 	imagePath := filepath.Join(testWorkRoot, "checkpoint-live-"+vm.id)
 	require.NoError(t, os.RemoveAll(imagePath))
 	checkpointStart := time.Now()
-	require.NoError(t, rt.Checkpoint(context.Background(), vm.id, &CheckpointOpts{ImagePath: imagePath, LeaveRunning: true}))
+	// The worker seals qcow disks in WhilePaused; it must see the vCPUs
+	// stopped so disk and memory image are from the same instant.
+	pausedDuringHook := false
+	whilePaused := func(context.Context) error {
+		inst, _ := rt.instance(vm.id)
+		pausedDuringHook = inst.isPaused()
+		return nil
+	}
+	require.NoError(t, rt.Checkpoint(context.Background(), vm.id, &CheckpointOpts{ImagePath: imagePath, LeaveRunning: true, WhilePaused: whilePaused}))
+	require.True(t, pausedDuringHook, "WhilePaused must run before the guest resumes")
 	t.Logf("live checkpoint took %s", time.Since(checkpointStart).Round(time.Millisecond))
 	require.Equal(t, pid, inst.hypervisor.Process.Pid, "the hypervisor process is kept")
 
@@ -945,6 +954,17 @@ func TestMicroVMNetworkParity(t *testing.T) {
 	require.Equal(t, 0, code, out)
 	code, out = vm.sh(client, fmt.Sprintf("ip addr add 10.200.0.250/24 dev eth0 && nc -z -w 3 -s 10.200.0.250 %s %d", testBridgeIP4, port))
 	require.NotEqual(t, 0, code, "spoofed source must be dropped: %s", out)
+	// Nor a frame from another MAC, nor ARP claiming another address.
+	code, out = vm.sh(client, fmt.Sprintf("ip link set eth0 address 02:00:de:ad:be:ef && nc -z -w 3 %s %d; rc=$?; ip link set eth0 address %s; exit $rc", testBridgeIP4, port, vm.vethMAC))
+	require.NotEqual(t, 0, code, "spoofed MAC must be dropped: %s", out)
+	_, _ = vm.sh(client, fmt.Sprintf("arping -c 2 -w 2 -s 10.200.0.250 -I eth0 %s", testBridgeIP4))
+	neighbors, err = netlink.NeighList(bridge.Attrs().Index, netlink.FAMILY_V4)
+	require.NoError(t, err)
+	for _, n := range neighbors {
+		require.NotEqual(t, "10.200.0.250", n.IP.String(), "ARP naming another address must not reach the bridge")
+	}
+	code, out = vm.sh(client, fmt.Sprintf("nc -z -w 3 -s %s %s %d && echo own-ok", vm.ip4, testBridgeIP4, port))
+	require.Equal(t, 0, code, "own address still works after the spoof attempts: %s", out)
 
 	require.NoError(t, rt.Kill(context.Background(), vm.id, syscall.SIGKILL, nil))
 	vm.wait(30 * time.Second)

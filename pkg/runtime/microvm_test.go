@@ -28,26 +28,26 @@ func TestCPUMaxString(t *testing.T) {
 	assert.Equal(t, "50000 50000", cpuMaxString(quota(50000, 50000)), "1 core with a custom period")
 }
 
-func TestMicroVMMountPlanSplitsHostBindsFromGuestMounts(t *testing.T) {
-	binds, tmpfs := microVMMountPlan([]specs.Mount{
+func TestMicroVMMountPlanKeepsSpecOrder(t *testing.T) {
+	plan := microVMMountPlan([]specs.Mount{
 		{Destination: "/proc", Type: "proc", Source: "proc"},
 		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm"},
 		{Destination: "/sys/fs/cgroup", Type: "cgroup", Source: "cgroup"},
 		{Destination: "/tmp", Type: "tmpfs", Source: "none", Options: []string{"size=1g"}},
 		{Destination: "/usr/bin/goproc", Type: "bind", Source: "/usr/local/bin/goproc", Options: []string{"ro", "rbind"}},
-		{Destination: "/etc/resolv.conf", Type: "none", Source: "/workspace/etc/resolv.conf", Options: []string{"ro", "rbind"}},
+		{Destination: "/volumes", Type: "tmpfs", Source: "none"},
 		{Destination: "/volumes/data", Type: "bind", Source: "/data/volumes/x", Options: []string{"rbind", "rw"}},
 		{Destination: "relative", Type: "bind", Source: "/x"},
 		{Destination: "/dev/nvidia0", Type: "bind", Source: "/dev/nvidia0"},
 	})
 
-	require.Len(t, binds, 3)
-	assert.Equal(t, "/usr/bin/goproc", binds[0].Destination)
-	assert.Equal(t, "/etc/resolv.conf", binds[1].Destination)
-	assert.Equal(t, "/volumes/data", binds[2].Destination)
-
-	require.Len(t, tmpfs, 1, "/dev/shm is the guest's own; only /tmp is forwarded")
-	assert.Equal(t, "/tmp", tmpfs[0].Destination)
+	var order []string
+	for _, mount := range plan {
+		order = append(order, mount.Type+" "+mount.Destination)
+	}
+	// /dev/shm is the guest's own; the /volumes tmpfs must stay ahead of the
+	// bind beneath it or the guest would mount it over the volume.
+	assert.Equal(t, []string{"tmpfs /tmp", "bind /usr/bin/goproc", "tmpfs /volumes", "bind /volumes/data"}, order)
 }
 
 func TestMicroVMDiskPlanScratchRoot(t *testing.T) {
@@ -145,16 +145,18 @@ func TestMicroVMGuestSpec(t *testing.T) {
 	network := microvm.Network{MAC: "02:00:00:00:00:01", IPv4: "192.168.1.5/20", Gateway4: "192.168.0.1"}
 	root := microVMDisk{device: "/dev/vda"}
 	extra := []microVMDisk{{device: "/dev/vdb", mountPath: "/data", readOnly: true}}
-	binds := []microvm.Bind{{Destination: "/usr/bin/goproc", File: true, ReadOnly: true}}
-	tmpfs := []specs.Mount{{Destination: "/tmp/", Type: "tmpfs", Options: []string{"size=1g"}}}
+	mounts := []microvm.Mount{
+		tmpfsMount(specs.Mount{Destination: "/tmp/", Type: "tmpfs", Options: []string{"size=1g"}}),
+		{Type: microvm.MountBind, Source: "/.beam/binds/1", Destination: "/usr/bin/goproc", File: true, ReadOnly: true},
+	}
 
-	got := microVMGuestSpec(spec, network, root, extra, binds, tmpfs)
+	got := microVMGuestSpec(spec, network, root, extra, mounts)
 	assert.Equal(t, "sb-1", got.Hostname)
 	assert.True(t, got.Docker)
 	assert.Equal(t, "/dev/vda", got.RootDisk)
 	assert.Equal(t, []microvm.Disk{{Device: "/dev/vdb", MountPath: "/data", ReadOnly: true}}, got.Disks)
-	assert.Equal(t, binds, got.Binds)
-	assert.Equal(t, []microvm.Tmpfs{{Destination: "/tmp", Options: []string{"size=1g"}}}, got.Tmpfs)
+	assert.Equal(t, microvm.Mount{Type: microvm.MountTmpfs, Destination: "/tmp", Options: []string{"size=1g"}}, got.Mounts[0])
+	assert.Equal(t, mounts[1], got.Mounts[1])
 	assert.Equal(t, uint32(microvm.ControlPort), got.ControlPort)
 }
 

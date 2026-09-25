@@ -105,9 +105,7 @@ func run() (int, error) {
 	if err := pivotRoot(); err != nil {
 		return -1, fmt.Errorf("pivot root: %w", err)
 	}
-	if err := mountPseudo(); err != nil {
-		return -1, fmt.Errorf("mount pseudo filesystems: %w", err)
-	}
+	finishPseudo()
 	hostname := firstNonEmpty(spec.Hostname, vm.Hostname)
 	if hostname != "" {
 		if err := unix.Sethostname([]byte(hostname)); err != nil {
@@ -244,13 +242,21 @@ func assembleRoot(vm *microvm.Spec) error {
 		return fmt.Errorf("bind disk into new root: %w", err)
 	}
 
-	for _, bind := range vm.Binds {
-		if err := applyBind(newRoot, bind); err != nil {
-			return err
-		}
+	// The guest's own pseudo filesystems go in first so a spec mount under
+	// them (/run/beta9, /dev/shm) is not hidden later; then the spec's mounts
+	// in its order, so a tmpfs precedes the binds beneath it.
+	if err := mountPseudo(newRoot); err != nil {
+		return fmt.Errorf("mount pseudo filesystems: %w", err)
 	}
-	for _, tmpfs := range vm.Tmpfs {
-		if err := applyTmpfs(newRoot, tmpfs); err != nil {
+	for _, mount := range vm.Mounts {
+		var err error
+		switch mount.Type {
+		case microvm.MountTmpfs:
+			err = applyTmpfs(newRoot, mount)
+		default:
+			err = applyBind(newRoot, mount)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -299,7 +305,7 @@ func waitForDevice(device string) error {
 // a submount the kernel auto-mounts on first access, under BindsDir) to its
 // destination in the new root. The source path is resolved through the
 // virtio-fs mount, never through the overlay, which cannot cross submounts.
-func applyBind(newRoot string, bind microvm.Bind) error {
+func applyBind(newRoot string, bind microvm.Mount) error {
 	source := firstNonEmpty(bind.Source, bind.Destination)
 	target := filepath.Join(newRoot, bind.Destination)
 	if bind.File {
@@ -329,7 +335,7 @@ func applyBind(newRoot string, bind microvm.Bind) error {
 	return nil
 }
 
-func applyTmpfs(newRoot string, tmpfs microvm.Tmpfs) error {
+func applyTmpfs(newRoot string, tmpfs microvm.Mount) error {
 	target := filepath.Join(newRoot, tmpfs.Destination)
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return err
@@ -397,7 +403,7 @@ func pivotRoot() error {
 	return os.Remove(microvm.OldRoot)
 }
 
-func mountPseudo() error {
+func mountPseudo(root string) error {
 	mounts := []struct {
 		source, target, fstype string
 		flags                  uintptr
@@ -413,13 +419,14 @@ func mountPseudo() error {
 		{"cgroup2", "/sys/fs/cgroup", "cgroup2", unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC, "nsdelegate"},
 	}
 	for _, m := range mounts {
-		if err := os.MkdirAll(m.target, 0o755); err != nil {
+		target := filepath.Join(root, m.target)
+		if err := os.MkdirAll(target, 0o755); err != nil {
 			return err
 		}
-		if isMountpoint(m.target) {
+		if isMountpoint(target) {
 			continue
 		}
-		if err := unix.Mount(m.source, m.target, m.fstype, m.flags, m.data); err != nil {
+		if err := unix.Mount(m.source, target, m.fstype, m.flags, m.data); err != nil {
 			if m.fstype == "mqueue" || m.fstype == "devpts" {
 				logf("optional mount %s failed: %v", m.target, err)
 				continue
@@ -427,6 +434,11 @@ func mountPseudo() error {
 			return fmt.Errorf("mount %s on %s: %w", m.fstype, m.target, err)
 		}
 	}
+	return nil
+}
+
+// finishPseudo runs after pivot_root on the final root.
+func finishPseudo() {
 	// /dev/ptmx must point at this instance's devpts.
 	_ = os.Remove("/dev/ptmx")
 	_ = os.Symlink("pts/ptmx", "/dev/ptmx")
@@ -438,7 +450,6 @@ func mountPseudo() error {
 			_ = os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+"+controller), 0o644)
 		}
 	}
-	return nil
 }
 
 // --- network -----------------------------------------------------------------------
@@ -656,16 +667,12 @@ func (c *control) heartbeat(interval time.Duration) {
 // reconnects to the (new) host, reports itself started again and takes the
 // container's new network configuration from the host.
 func (c *control) serve(childPid func() int) {
-	frozen := map[string]*os.File{}
+	fr := &freezer{frozen: map[string]*frozenFS{}}
 	dec := microvm.NewDecoder(c.current())
 	for {
 		msg, err := dec.Decode()
 		if err != nil {
-			for path, dir := range frozen {
-				_ = unix.IoctlSetInt(int(dir.Fd()), ioctlFITHAW, 0)
-				dir.Close()
-				delete(frozen, path)
-			}
+			fr.thawAll()
 			logf("control connection lost (%v); reconnecting", err)
 			if err := c.connect(controlReconnectTimeout); err != nil {
 				logf("control reconnect failed: %v", err)
@@ -694,36 +701,77 @@ func (c *control) serve(childPid func() int) {
 			}
 			c.ack(msg.ID, unix.Kill(pid, syscall.Signal(msg.Signal)))
 		case microvm.MsgFreeze:
+			// Off the loop: FIFREEZE flushes the filesystem first, and
+			// signals must not queue behind it.
 			path := firstNonEmpty(msg.Text, microvm.DiskMount)
-			if _, ok := frozen[path]; ok {
-				c.ack(msg.ID, nil)
-				continue
-			}
-			dir, err := os.Open(path)
-			if err == nil {
-				unix.Sync()
-				err = unix.IoctlSetInt(int(dir.Fd()), ioctlFIFREEZE, 0)
-				if err != nil {
-					dir.Close()
-				} else {
-					frozen[path] = dir
-				}
-			}
-			c.ack(msg.ID, err)
+			go func(id uint64) { c.ack(id, fr.freeze(path)) }(msg.ID)
 		case microvm.MsgThaw:
 			path := firstNonEmpty(msg.Text, microvm.DiskMount)
-			dir, ok := frozen[path]
-			if !ok {
-				c.ack(msg.ID, nil)
-				continue
-			}
-			err := unix.IoctlSetInt(int(dir.Fd()), ioctlFITHAW, 0)
-			dir.Close()
-			delete(frozen, path)
-			c.ack(msg.ID, err)
+			go func(id uint64) { c.ack(id, fr.thaw(path)) }(msg.ID)
 		default:
 			c.ack(msg.ID, fmt.Errorf("unknown command %q", msg.Type))
 		}
+	}
+}
+
+// freezer holds the filesystems the host has frozen. A freeze the host never
+// thaws (it gave up waiting) is thawed here after microvm.FreezeLimit, so
+// root writes cannot hang for good.
+type freezer struct {
+	mu     sync.Mutex
+	frozen map[string]*frozenFS
+}
+
+type frozenFS struct {
+	dir   *os.File
+	timer *time.Timer
+}
+
+func (f *freezer) freeze(path string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.frozen[path]; ok {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := unix.IoctlSetInt(int(dir.Fd()), ioctlFIFREEZE, 0); err != nil {
+		dir.Close()
+		return err
+	}
+	f.frozen[path] = &frozenFS{dir: dir, timer: time.AfterFunc(microvm.FreezeLimit, func() {
+		if err := f.thaw(path); err == nil {
+			logf("thawed %s: no thaw request within %s", path, microvm.FreezeLimit)
+		}
+	})}
+	return nil
+}
+
+func (f *freezer) thaw(path string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.frozen[path]
+	if !ok {
+		return nil
+	}
+	entry.timer.Stop()
+	err := unix.IoctlSetInt(int(entry.dir.Fd()), ioctlFITHAW, 0)
+	entry.dir.Close()
+	delete(f.frozen, path)
+	return err
+}
+
+func (f *freezer) thawAll() {
+	f.mu.Lock()
+	paths := make([]string, 0, len(f.frozen))
+	for path := range f.frozen {
+		paths = append(paths, path)
+	}
+	f.mu.Unlock()
+	for _, path := range paths {
+		_ = f.thaw(path)
 	}
 }
 
@@ -770,8 +818,8 @@ func serveFS(port uint32) error {
 }
 
 func handleFSConn(conn *os.File) error {
-	reader := bufio.NewReaderSize(conn, 64<<10)
-	line, err := reader.ReadBytes('\n')
+	reader := bufio.NewReaderSize(conn, microvm.MaxLineBytes)
+	line, err := microvm.ReadLine(reader)
 	if err != nil {
 		return fmt.Errorf("read fs header: %w", err)
 	}
