@@ -29,6 +29,8 @@ type volumeState struct {
 	ReadOnly         bool   `json:"read_only"`
 	Mountpoint       string `json:"mountpoint,omitempty"`
 	Attached         bool   `json:"attached"`
+	// Owner is who attached the volume (see AttachSpec.Owner).
+	Owner string `json:"owner,omitempty"`
 	// Formatted records that mkfs ran on the base image; it prevents a reused
 	// but never-snapshotted disk from being wiped by a second mkfs.
 	Formatted bool `json:"formatted"`

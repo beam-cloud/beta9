@@ -119,6 +119,8 @@ func (v *Volume) adopt(ctx context.Context, spec AttachSpec) error {
 	v.state.QMPSocket = v.qsd.qmpSocket
 	v.state.NBDSocket = v.qsd.nbdSocket
 	v.state.Mountpoint = spec.Mountpoint
+	v.state.Owner = spec.Owner
+	v.owner = spec.Owner
 	if err := saveVolumeState(v.dir, v.state); err != nil {
 		return err
 	}

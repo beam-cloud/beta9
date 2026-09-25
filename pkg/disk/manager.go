@@ -263,13 +263,7 @@ func (m *Manager) Detach(ctx context.Context, key string) error {
 	if !ok || volume == nil {
 		return nil
 	}
-	if err := volume.detach(ctx); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	delete(m.volumes, key)
-	m.mu.Unlock()
-	return nil
+	return m.detachVolume(ctx, key, volume)
 }
 
 // DetachOwned is Detach for one attacher: it leaves the volume alone when it
@@ -282,7 +276,21 @@ func (m *Manager) DetachOwned(ctx context.Context, key, owner string) error {
 	if !ok || volume == nil || volume.owner != owner {
 		return nil
 	}
-	return m.Detach(ctx, key)
+	return m.detachVolume(ctx, key, volume)
+}
+
+// detachVolume takes volume offline and unregisters it, unless the key has
+// meanwhile been taken by another attach.
+func (m *Manager) detachVolume(ctx context.Context, key string, volume *Volume) error {
+	if err := volume.detach(ctx); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if m.volumes[key] == volume {
+		delete(m.volumes, key)
+	}
+	m.mu.Unlock()
+	return nil
 }
 
 // Close detaches every volume and destroys the spare pool. For worker
@@ -367,8 +375,13 @@ func (m *Manager) Recover(ctx context.Context) error {
 }
 
 // adoptVolume re-registers a volume whose daemon and mount survived a worker
-// restart. The NBD lock is re-acquired to fence out other processes.
+// restart. The NBD lock is re-acquired to fence out other processes. A
+// vhost-user volume is never adopted: its consumer, a VM, does not survive
+// the restart (the microvm runtime kills leftovers), so it is torn down.
 func (m *Manager) adoptVolume(dir string, state *volumeState) bool {
+	if state.exportMode() == ExportVhostUser {
+		return false
+	}
 	if !processAlive(state.QSDPid, m.binaries.qsdComm()) || !isMountpoint(state.Mountpoint) {
 		return false
 	}
@@ -382,6 +395,7 @@ func (m *Manager) adoptVolume(dir string, state *volumeState) bool {
 		manager: m,
 		dir:     dir,
 		state:   state,
+		owner:   state.Owner,
 		fmtNode: fmtNodeName(state.PivotCount),
 		qsd: &qsdProcess{
 			pid:        state.QSDPid,

@@ -155,6 +155,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 		log.Info().Str("volume", spec.Key).Int("layers", state.depth()).Msg("reusing local volume state")
 	}
 	state.Mountpoint = spec.Mountpoint
+	state.Owner = spec.Owner
 	state.ReadOnly = spec.ReadOnly
 	state.VirtualSizeBytes = spec.VirtualSizeBytes
 	state.Export = string(spec.Export)
