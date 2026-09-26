@@ -116,6 +116,10 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 	if err != nil {
 		return nil, err
 	}
+	if config.MaxOpenConns > 0 {
+		db.SetMaxOpenConns(config.MaxOpenConns)
+		db.SetMaxIdleConns(config.MaxOpenConns)
+	}
 
 	repo := &PostgresBackendRepository{
 		client:    db,
@@ -2609,8 +2613,10 @@ func (r *PostgresBackendRepository) CountApps(ctx context.Context, workspaceId u
 }
 
 // Use to update the updated_at field of app when stub and deployment is created with app_id
+// Skipped while the row is fresh so concurrent stub creations in one app
+// don't queue on its lock.
 func (r *PostgresBackendRepository) updateAppActivity(ctx context.Context, appId uint) error {
-	query := `UPDATE app set updated_at=NOW() where id=$1`
+	query := `UPDATE app SET updated_at = NOW() WHERE id = $1 AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')`
 
 	if _, err := r.client.ExecContext(ctx, query, appId); err != nil {
 		return err

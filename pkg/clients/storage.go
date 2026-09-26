@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -60,6 +61,7 @@ func NewWorkspaceStorageClientWithDefaultPresignEndpoint(ctx context.Context, wo
 
 func NewWorkspaceStorageClientWithPresignEndpoint(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage, presignEndpointUrl string) (*WorkspaceStorageClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithHTTPClient(common.AWSHTTPClient()),
 		config.WithRegion(*workspaceStorage.Region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			*workspaceStorage.AccessKey,
@@ -92,6 +94,7 @@ func NewWorkspaceStorageClientWithPresignEndpoint(ctx context.Context, workspace
 func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*StorageClient, error) {
 
 	s3Cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithHTTPClient(common.AWSHTTPClient()),
 		config.WithRegion(cfg.Storage.WorkspaceStorage.DefaultRegion),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			cfg.Storage.WorkspaceStorage.DefaultAccessKey,

@@ -130,6 +130,7 @@ class ContainerRequest(betterproto.Message):
     evict_drain_seconds: int = betterproto.uint32_field(43)
     drain_seconds: int = betterproto.uint32_field(44)
     evict_order: int = betterproto.int32_field(45)
+    use_vm: bool = betterproto.bool_field(46)
 
 
 @dataclass(eq=False, repr=False)

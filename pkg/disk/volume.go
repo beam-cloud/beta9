@@ -16,8 +16,8 @@ import (
 )
 
 // Volume is one attached qcow2-backed disk: a backing chain of immutable
-// layers, a writable head, one qemu-storage-daemon, and one NBD device
-// mounted as ext4 at Mountpoint.
+// layers, a writable head, one qemu-storage-daemon, and either one NBD device
+// mounted as ext4 at Mountpoint or a vhost-user-blk socket a VM consumes.
 type Volume struct {
 	manager *Manager
 	mu      sync.Mutex
@@ -28,6 +28,11 @@ type Volume struct {
 	nbd     *nbdDevice
 	fmtNode string
 
+	// freeze quiesces the filesystem before a pivot when the host has not
+	// mounted it (ExportVhostUser). Nil means crash-consistent pivots only.
+	freeze func(ctx context.Context) (func(), error)
+	owner  string
+
 	// freshHead is true when the current head file was created within this
 	// daemon session, which is what makes a zero write-offset on its file
 	// node a safe "nothing changed" signal. Reused heads and adopted volumes
@@ -35,6 +40,17 @@ type Volume struct {
 	// so their first seal is never skipped.
 	freshHead bool
 }
+
+// ExportMode selects how the daemon serves the writable head.
+type ExportMode string
+
+const (
+	// ExportNBD connects a kernel NBD device and mounts ext4 at Mountpoint.
+	ExportNBD ExportMode = ""
+	// ExportVhostUser serves the head over a vhost-user-blk socket for a
+	// virtual machine; nothing is connected or mounted on the host.
+	ExportVhostUser ExportMode = "vhost-user-blk"
+)
 
 // AttachSpec describes a volume attachment.
 type AttachSpec struct {
@@ -44,10 +60,19 @@ type AttachSpec struct {
 	VirtualSizeBytes int64
 	ReadOnly         bool
 	// Mountpoint is the host directory where the ext4 filesystem is mounted.
+	// Required for ExportNBD, ignored for ExportVhostUser.
 	Mountpoint string
 	// Chain is the published backing chain to materialize, base first. Empty
 	// means a fresh formatted disk (or reuse of whatever exists locally).
 	Chain []ChainLayer
+	// Export is the serving mode; the zero value is ExportNBD.
+	Export ExportMode
+	// Freeze is called before every pivot in ExportVhostUser mode so the
+	// consumer can quiesce the filesystem it has mounted; it returns the
+	// matching thaw. Optional.
+	Freeze func(ctx context.Context) (thaw func(), err error)
+	// Owner names who attached the volume (a container id); see DetachOwned.
+	Owner string
 }
 
 // ChainLayer is one published generation of a volume.
@@ -69,6 +94,10 @@ func (v *Volume) Mountpoint() string { return v.state.Mountpoint }
 func (v *Volume) Depth() int         { return v.state.depth() }
 func (v *Volume) ReadOnly() bool     { return v.state.ReadOnly }
 
+// ExportSocket is the vhost-user-blk socket path of an ExportVhostUser
+// volume; empty for NBD volumes.
+func (v *Volume) ExportSocket() string { return v.state.ExportSocket }
+
 // attach materializes the chain and brings the volume online. Called with the
 // manager registration already reserved for this key.
 func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSource) (*Volume, error) {
@@ -87,7 +116,9 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	}
 
 	fresh := state == nil && len(spec.Chain) == 0 && !spec.ReadOnly
-	if fresh {
+	// Spares are pre-connected NBD volumes; a vhost-user attach formats its
+	// own head instead.
+	if fresh && spec.Export == ExportNBD {
 		m.rememberSpareSize(spec.VirtualSizeBytes)
 		defer m.replenishSpares(spec.VirtualSizeBytes)
 		if volume := m.adoptSpare(ctx, spec); volume != nil {
@@ -120,10 +151,15 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 		log.Info().Str("volume", spec.Key).Int("layers", state.depth()).Msg("reusing local volume state")
 	}
 	state.Mountpoint = spec.Mountpoint
+	state.Owner = spec.Owner
 	state.ReadOnly = spec.ReadOnly
 	state.VirtualSizeBytes = spec.VirtualSizeBytes
+	state.Export = string(spec.Export)
+	if spec.Export == ExportVhostUser {
+		state.Mountpoint = ""
+	}
 
-	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead}
+	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead, freeze: spec.Freeze, owner: spec.Owner}
 	if err := volume.start(ctx); err != nil {
 		return nil, err
 	}
@@ -225,8 +261,9 @@ func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersD
 	return state, nil
 }
 
-// start launches the daemon, connects the NBD device, formats fresh disks,
-// and mounts the filesystem. Spares have no mountpoint and stay unmounted.
+// start launches the daemon and either serves a vhost-user export or connects
+// the NBD device, formats a fresh disk and mounts it. Spares have no
+// mountpoint and stay unmounted.
 func (v *Volume) start(ctx context.Context) (err error) {
 	m := v.manager
 	state := v.state
@@ -247,11 +284,15 @@ func (v *Volume) start(ctx context.Context) (err error) {
 		if err != nil {
 			event, msg = log.Warn().Err(err), "qcow volume attach failed"
 		}
-		event.Str("volume", state.Key).Bool("fresh", freshDisk).Int("layers", len(state.Chain))
+		event.Str("volume", state.Key).Bool("fresh", freshDisk).Int("layers", len(state.Chain)).Str("export", string(state.exportMode()))
 		phases.Fields(event).Msg(msg)
 	}()
 
-	qsd, err := m.startQSD(ctx, m.runtimeDir(state.Key), openPath, v.fmtNode, state.ReadOnly)
+	if state.exportMode() == ExportVhostUser {
+		return v.startExported(ctx, openPath, freshDisk, phases)
+	}
+
+	qsd, err := m.startQSD(ctx, m.runtimeDir(state.Key), openPath, v.fmtNode, state.ReadOnly, ExportNBD)
 	if err != nil {
 		return err
 	}
@@ -301,6 +342,60 @@ func (v *Volume) start(ctx context.Context) (err error) {
 		return err
 	}
 	return nil
+}
+
+// startExported serves the head over vhost-user-blk for a VM. A fresh disk is
+// first formatted over a short-lived NBD attachment, since the guest init has
+// no mkfs.
+func (v *Volume) startExported(ctx context.Context, openPath string, freshDisk bool, phases *common.PhaseTimer) error {
+	m := v.manager
+	state := v.state
+	runtimeDir := m.runtimeDir(state.Key)
+
+	if freshDisk {
+		if err := m.formatViaNBD(ctx, runtimeDir, openPath, v.fmtNode, state.VirtualSizeBytes); err != nil {
+			return err
+		}
+		state.Formatted = true
+		phases.Mark("mkfs")
+	}
+
+	qsd, err := m.startQSD(ctx, runtimeDir, openPath, v.fmtNode, state.ReadOnly, ExportVhostUser)
+	if err != nil {
+		return err
+	}
+	phases.Mark("qsd")
+
+	v.qsd = qsd
+	state.Attached = true
+	state.QSDPid = qsd.pid
+	state.QMPSocket = qsd.qmpSocket
+	state.NBDSocket = ""
+	state.NBDDevice = ""
+	state.ExportSocket = qsd.exportSocket
+	if err := saveVolumeState(v.dir, state); err != nil {
+		_ = m.stopQSD(context.Background(), qsd)
+		return err
+	}
+	return nil
+}
+
+// formatViaNBD runs mkfs on a qcow2 head by serving it over NBD just long
+// enough to format it.
+func (m *Manager) formatViaNBD(ctx context.Context, runtimeDir, headPath, fmtNode string, sizeBytes int64) error {
+	qsd, err := m.startQSD(ctx, runtimeDir, headPath, fmtNode, false, ExportNBD)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = m.stopQSD(context.Background(), qsd) }()
+
+	nbd, err := m.acquireNBDDevice(ctx, qsd.nbdSocket, sizeBytes)
+	if err != nil {
+		return err
+	}
+	formatErr := m.formatExt4(ctx, nbd.Path)
+	disconnectErr := m.disconnectNBDDevice(context.Background(), nbd)
+	return errors.Join(formatErr, disconnectErr)
 }
 
 // Seal pivots the writable head onto a new empty overlay and returns every
@@ -358,7 +453,7 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, fmt.Errorf("add overlay for volume %s: %w", state.Key, err)
 	}
-	thaw, err := v.manager.freezeFS(ctx, state.Mountpoint)
+	thaw, err := v.quiesce(ctx)
 	if err != nil {
 		_ = client.removeNode(ctx, newNode)
 		v.rollbackSeal(previousState, newHeadPath)
@@ -391,6 +486,18 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		sealed = append(sealed, SealedLayer{Path: layer.Path, ParentSnapshotID: parentID})
 	}
 	return sealed, false, nil
+}
+
+// quiesce freezes the head's filesystem for the pivot: host fsfreeze for an
+// NBD mount, the consumer's Freeze hook for a vhost-user export.
+func (v *Volume) quiesce(ctx context.Context) (func(), error) {
+	if v.state.exportMode() == ExportVhostUser {
+		if v.freeze == nil {
+			return func() {}, nil
+		}
+		return v.freeze(ctx)
+	}
+	return v.manager.freezeFS(ctx, v.state.Mountpoint)
 }
 
 func (v *Volume) rollbackSeal(previous volumeState, newHeadPath string) {
@@ -536,6 +643,21 @@ func (v *Volume) detach(ctx context.Context) error {
 	defer v.mu.Unlock()
 	if !v.state.Attached {
 		return nil
+	}
+
+	if v.state.exportMode() == ExportVhostUser {
+		if err := v.manager.stopQSD(ctx, v.qsd); err != nil {
+			return err
+		}
+		v.qsd = nil
+		v.state.Attached = false
+		v.state.QSDPid = 0
+		v.state.QMPSocket = ""
+		v.state.ExportSocket = ""
+		if err := saveVolumeState(v.dir, v.state); err != nil {
+			return err
+		}
+		return os.RemoveAll(v.manager.runtimeDir(v.state.Key))
 	}
 
 	if err := v.manager.unmount(ctx, v.state.Mountpoint); err != nil {

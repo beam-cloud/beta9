@@ -1,0 +1,28 @@
+fuse: let submounts inherit SB_NOSEC from their parent
+
+When the server negotiates FUSE_HANDLE_KILLPRIV_V2 the client marks the
+root superblock SB_NOSEC so file_remove_privs() can cache "nothing to
+strip" in S_NOSEC and stop issuing a security.capability getxattr before
+every write. Submount superblocks (virtiofsd --announce-submounts) are
+built by fuse_fill_super_submount(), which starts from fuse_sb_defaults()
+and never copies the flag, so writes on a submount pay the getxattr on
+every call for the life of the mount. virtiofsd answers each one with an
+open/fgetxattr/close of the host file, which on FUSE-backed host
+filesystems is a full open-release cycle per write.
+
+Inherit the flag from the parent superblock; it is a property of the
+connection, not the mount.
+
+--- a/fs/fuse/inode.c
++++ b/fs/fuse/inode.c
+@@ -1595,6 +1595,10 @@ static int fuse_fill_super_submount(struct super_block *sb,
+ 	struct fuse_inode *fi;
+ 
+ 	fuse_sb_defaults(sb);
++	/* KILLPRIV_V2 is negotiated per connection; the parent already
++	 * applied it to its superblock. */
++	if (parent_sb->s_flags & SB_NOSEC)
++		sb->s_flags |= SB_NOSEC;
+ 	fm->sb = sb;
+ 
+ 	WARN_ON(sb->s_bdi != &noop_backing_dev_info);

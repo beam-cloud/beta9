@@ -47,6 +47,10 @@ const (
 	containerRuntimeStateTimeout             = 2 * time.Second
 	observedStoppingSignalTimeout            = 5 * time.Second
 	cpuQuotaApplyTimeout                     = 2 * time.Second
+	sandboxCPUQuotaGrace                     = 10 * time.Second
+	sandboxCPUQuotaRetryWindow               = 30 * time.Second
+	sandboxCPUQuotaRetryDelay                = 250 * time.Millisecond
+	sandboxCPUQuotaMaxRetryDelay             = 2 * time.Second
 	runnerReadyTimeout                       = 30 * time.Second
 	runnerReadyPollInterval                  = 10 * time.Millisecond
 	restoredContainerPollInterval            = 500 * time.Millisecond
@@ -672,10 +676,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	}
 
 	var filesystemRestore *checkpointFilesystemRestore
-	// A machine-root disk hosts the upper layer, so the checkpoint filesystem
-	// cannot be staged in scratch space; it is reseeded onto the disk after
-	// mounts are prepared (see prepareRestoreFallback).
-	if s.canRestoreCheckpoint(request, s.runtime) && qcowRootDiskMount(request) == nil {
+	// A root disk already holds the checkpoint filesystem; only an overlay
+	// upper is staged here and reseeded (see prepareRestoreFallback).
+	if s.canRestoreCheckpoint(request, s.runtime) && !checkpointFilesystemOnDisk(request, s.runtime) {
 		filesystemRestore = s.startCheckpointFilesystemRestore(request, outputLogger)
 	}
 	filesystemRestoreHandedOff := false
@@ -1258,6 +1261,24 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 	}
 
+	// A microvm sizes its guest from the request whether or not the pool
+	// enforces cgroup limits, and consumes durable qcow disks as block
+	// devices rather than bind mounts.
+	if s.runtimeOwnsBlockRoot() {
+		if spec.Annotations == nil {
+			spec.Annotations = make(map[string]string)
+		}
+		if request.Memory > 0 {
+			spec.Annotations[runtime.MicroVMMemoryMiBAnnotation] = strconv.FormatInt(request.Memory, 10)
+		}
+		if cpus := requestedCPUCount(request.Cpu); cpus > 0 {
+			spec.Annotations[runtime.MicroVMVCPUAnnotation] = strconv.FormatInt(cpus, 10)
+		}
+		if err := s.annotateExportedDurableDisks(request, spec); err != nil {
+			return nil, err
+		}
+	}
+
 	deferredCPU := s.hasDeferredCPUThrottle(request.ContainerId)
 	runnerReadySignal := deferredCPU && request.Stub.Type.Kind() == types.StubTypeFunction
 	if runnerReadySignal {
@@ -1476,8 +1497,13 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 
 	// Durable disks were brought online during startup (prepareDurableDiskMounts).
 	// A machine-root disk is not bind-mounted; it hosts the container's
-	// overlay upper layer instead (see SetupWithWritable below).
+	// overlay upper layer instead (see SetupWithWritable below). A block-root
+	// runtime attaches every qcow disk to the guest directly; those are
+	// annotated onto the spec instead (annotateExportedDurableDisks).
 	if mount.MountType == types.StorageModeDurableDisk {
+		if isQcowDurableDiskMount(mount) && s.runtimeOwnsBlockRoot() {
+			return false, nil
+		}
 		return !isQcowRootDiskMount(mount), nil
 	}
 
@@ -1685,7 +1711,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 	phaseStart := time.Now()
-	if rootDisk := qcowRootDiskMount(request); rootDisk != nil {
+	if rootDisk := qcowRootDiskMount(request); rootDisk != nil && !s.runtimeOwnsBlockRoot() {
 		// The whole machine filesystem persists: the overlay's writable layer
 		// lives on the qcow volume, so every root filesystem change is part of
 		// the disk snapshot.
@@ -1694,6 +1720,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			filepath.Join(rootDisk.LocalPath, "overlay", "work"),
 		)
 	} else {
+		// Under a block-root runtime the guest keeps its writable layer on its own
+		// disk, and this overlay only shares the image and bind mounts.
 		err = containerInstance.Overlay.Setup()
 	}
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
@@ -1811,6 +1839,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Add Docker capabilities if enabled for sandbox containers.
 	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox {
 		runtime.AddDockerInDockerCapabilities(spec)
+		if s.runtimeOwnsBlockRoot() {
+			if spec.Annotations == nil {
+				spec.Annotations = make(map[string]string)
+			}
+			spec.Annotations[runtime.MicroVMDockerAnnotation] = "true"
+		}
 		log.Info().Str("container_id", containerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
 	}
 
@@ -1851,7 +1885,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	configPath := filepath.Join(spec.Root.Path, specBaseName)
 	phaseStart = time.Now()
-	err = os.WriteFile(configPath, configContents, 0644)
+	// The rootfs is image content; never follow a symlink the image put here.
+	err = writeFileNoFollow(configPath, configContents, 0644)
 	metrics.RecordWorkerStartupPhase("config_write", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleConfigWrite, phaseStart, err == nil, nil)
 	if err != nil {
@@ -1906,20 +1941,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			if fresh, exists := s.containerInstances.Get(containerId); exists {
 				instance = fresh
 			}
-			if processManagerReady {
-				phaseStart = time.Now()
-				err := s.applyDeferredCPUThrottle(request, instance)
-				metrics.RecordWorkerStartupPhase("sandbox_apply_cpu_quota", time.Since(phaseStart), request, map[string]string{
-					"success": fmt.Sprintf("%t", err == nil),
-				})
-				s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxApplyCPUQuota, phaseStart, err == nil, nil)
-				if err != nil {
-					log.Error().Err(err).Str("container_id", containerId).Msg("failed to apply sandbox CPU quota")
-					processManagerReady = false
-				} else if fresh, exists := s.containerInstances.Get(containerId); exists {
-					instance = fresh
-				}
-			}
+			// Runs before the CPU quota lands: it forks inside gVisor, which
+			// crawls at a fractional-CPU quota.
 			if processManagerReady {
 				phaseStart = time.Now()
 				err := s.exposeSandboxMemoryLimit(ctx, request, instance, processManagerClient)
@@ -1941,6 +1964,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
+			go s.applyDeferredSandboxCPUThrottle(ctx, request, sandboxCPUQuotaGrace)
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
 			}
@@ -2152,9 +2176,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			request.Checkpoint = nil
 		}
 		var seedUpper func(string) error
-		// A qcow root disk already holds the checkpoint filesystem; Reset
+		// A root disk already holds the checkpoint filesystem; Reset
 		// preserves its persistent upper, so no reseed is needed (or safe).
-		if reseedCheckpointFilesystem && qcowRootDiskMount(request) == nil {
+		if reseedCheckpointFilesystem && !checkpointFilesystemOnDisk(request, s.runtime) {
 			seedUpper = func(upperPath string) error {
 				return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
 			}
@@ -2259,10 +2283,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			restoreErr = filesystemRestore.wait()
 		} else if originalConfigErr != nil {
 			restoreErr = fmt.Errorf("checkpoint filesystem restore requires the original container config: %w", originalConfigErr)
-		} else if qcowRootDiskMount(request) != nil {
-			// The root disk is sealed after the CRIU dump, so the restored
-			// disk already holds the checkpoint filesystem; reseeding would
-			// wipe it and re-extract the same bytes.
+		} else if checkpointFilesystemOnDisk(request, s.runtime) {
+			// The restored disk already holds the checkpoint filesystem;
+			// reseeding would wipe it and re-extract the same bytes.
 			restoreErr = s.prepareRestoreFallback(request, originalConfig, nil)
 		} else {
 			restoreErr = s.prepareRestoreFallback(request, originalConfig, func(upperPath string) error {
@@ -2676,6 +2699,52 @@ func (s *Worker) applyDeferredCPUThrottle(request *types.ContainerRequest, insta
 	instance.DeferredCPUQuota = nil
 	s.containerInstances.Set(request.ContainerId, instance)
 	return nil
+}
+
+// applyDeferredSandboxCPUThrottle applies the quota a sandbox booted without,
+// grace after it is ready: a gVisor sentry throttled inside the kernel stalls
+// every boot on the node, and a new sandbox's first commands are CPU-bound. A
+// slow runtime update is retried; a sandbox that still cannot be throttled is
+// stopped rather than left running unbounded.
+func (s *Worker) applyDeferredSandboxCPUThrottle(ctx context.Context, request *types.ContainerRequest, grace time.Duration) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(grace):
+	}
+	phaseStart := time.Now()
+	deadline := phaseStart.Add(sandboxCPUQuotaRetryWindow)
+	delay := sandboxCPUQuotaRetryDelay
+	for {
+		instance, exists := s.containerInstances.Get(request.ContainerId)
+		if !exists {
+			return
+		}
+		err := s.applyDeferredCPUThrottle(request, instance)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil || time.Now().After(deadline) {
+			metrics.RecordWorkerStartupPhase("sandbox_apply_cpu_quota", time.Since(phaseStart), request, map[string]string{
+				"success": fmt.Sprintf("%t", err == nil),
+			})
+			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxApplyCPUQuota, phaseStart, err == nil, nil)
+			if err != nil {
+				log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to apply sandbox CPU quota; stopping the sandbox")
+				if stopErr := s.stopContainer(request.ContainerId, true); stopErr != nil {
+					log.Error().Err(stopErr).Str("container_id", request.ContainerId).Msg("failed to stop unthrottled sandbox")
+				}
+			}
+			return
+		}
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("sandbox CPU quota not applied yet; retrying")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, sandboxCPUQuotaMaxRetryDelay)
+	}
 }
 
 func (s *Worker) hasDeferredCPUThrottle(containerID string) bool {

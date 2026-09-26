@@ -52,7 +52,7 @@ const (
 	terminalCheckpointStopWait      = 5 * time.Second
 	checkpointStatePublicationTTL   = 5 * time.Second
 	checkpointFilesystemOnlyFile    = "filesystem-only"
-	checkpointFilesystemOnDiskFile  = "filesystem-on-disk" // Upper layer lives on the sealed qcow root disk.
+	checkpointFilesystemOnDiskFile  = "filesystem-on-disk" // Upper layer lives on a disk the checkpoint carries.
 	checkpointFilesystemOnDiskV1    = "v1\n"
 	checkpointFilesystemOnlyV1      = "v1\n"
 	checkpointForcedRuncProfileFile = "beam-forced-runc-profile"
@@ -441,6 +441,18 @@ type RestoreOpts struct {
 	validate     func(context.Context, runtime.Runtime) error
 }
 
+// checkpointHookRuntime hands the runtime the work to run while the
+// container is stopped for its checkpoint.
+type checkpointHookRuntime struct {
+	runtime.Runtime
+	whilePaused func(context.Context) error
+}
+
+func (r checkpointHookRuntime) Checkpoint(ctx context.Context, containerID string, opts *runtime.CheckpointOpts) error {
+	opts.WhilePaused = r.whilePaused
+	return r.Runtime.Checkpoint(ctx, containerID, opts)
+}
+
 type CRIUManager interface {
 	Available() bool
 	CreateCheckpoint(ctx context.Context, runtime runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error)
@@ -531,6 +543,13 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	}
 	if instance.Runtime == nil {
 		return -1, false, false, fmt.Errorf("container runtime not found")
+	}
+	if checkpointFilesystemOnDisk(request, instance.Runtime) {
+		// No filesystem restore ran for this checkpoint, so nothing has
+		// fetched it yet; a peer's cache may still be writing it here.
+		if _, err := s.ensureCheckpointMaterializedWithLogger(ctx, request, checkpoint, outputLogger); err != nil {
+			return -1, false, false, fmt.Errorf("materialize checkpoint: %w", err)
+		}
 	}
 	if checkpointPath := s.checkpointPath(checkpoint.CheckpointId); checkpointPath != "" {
 		if err := validateCheckpointRuntimePayload(checkpointPath, instance.Runtime.Name()); err != nil {
@@ -871,7 +890,11 @@ func captureCheckpointFilesystem(ctx context.Context, instance *ContainerInstanc
 		}
 	}
 
-	upperDir := instance.Overlay.TopLayerUpperDir()
+	upperDir, cleanupUpper, err := containerUpperDir(ctx, instance)
+	if err != nil {
+		return fmt.Errorf("read checkpoint filesystem state: %w", err)
+	}
+	defer cleanupUpper()
 	legacyPath := filepath.Join(checkpointPath, checkpointFsDir)
 	archivePath := filepath.Join(checkpointPath, checkpointFsArchive)
 	copyErr := copyDirectoryContext(ctx, upperDir, legacyPath, []string{"config.json", "outputs", "snapshot"})
@@ -1008,7 +1031,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 	runtimeName = instance.Runtime.Name()
 	opts.CheckpointRuntime = runtimeName
-	filesystemFallback := filesystemCheckpointFallbackAllowed(opts)
+	// A block-root runtime's filesystem lives on a disk the stopped guest no
+	// longer serves, so there is nothing to fall back to.
+	filesystemFallback := filesystemCheckpointFallbackAllowed(opts) && !instance.Runtime.Capabilities().BlockRoot
 	criuErr := s.requireCRIUManager()
 	filesystemOnly := filesystemFallback && (!opts.Request.CheckpointEnabled ||
 		!instance.Runtime.Capabilities().CheckpointRestore || !supportsTerminalCheckpoint(instance.Runtime) || criuErr != nil)
@@ -1116,6 +1141,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	checkpointPath := ""
+	disksSealed := false
 	if filesystemOnly {
 		runtimeName = types.CheckpointRuntimeFilesystem
 		opts.CheckpointRuntime = runtimeName
@@ -1127,7 +1153,17 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 			return err
 		}
 	} else {
-		checkpointPath, err = s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, terminateRuntime)
+		// Runtimes that stop the container to checkpoint seal the disks while
+		// it is stopped, so disk and memory image are from the same instant.
+		sealDisks := func(sealCtx context.Context) error {
+			snapshots, sealErr := s.syncDurableDiskMounts(sealCtx, opts.Request, durableDiskSyncExplicit)
+			if sealErr != nil {
+				return sealErr
+			}
+			opts.DiskSnapshots, disksSealed = snapshots, true
+			return nil
+		}
+		checkpointPath, err = s.criuManager.CreateCheckpoint(checkpointCtx, checkpointHookRuntime{Runtime: instance.Runtime, whilePaused: sealDisks}, opts.CheckpointId, opts.Request, terminateRuntime)
 		if err != nil {
 			checkpointErr := err
 			if filesystemFallback {
@@ -1170,11 +1206,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	if !filesystemOnly {
-		// A qcow root disk hosts the upper layer and is sealed alongside this
-		// checkpoint below; restore takes the filesystem from the disk and never
-		// from the checkpoint, so copying the upper dir here only costs time and
-		// inflates the archive.
-		if qcowRootDiskMount(opts.Request) != nil {
+		if checkpointFilesystemOnDisk(opts.Request, instance.Runtime) {
 			err = os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile), []byte(checkpointFilesystemOnDiskV1), 0644)
 		} else {
 			err = captureCheckpointFilesystem(checkpointCtx, instance, checkpointPath, false)
@@ -1196,12 +1228,14 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	// A checkpoint must never outrun its disks: capture every durable disk at
 	// the same boundary as the memory image so a restore pairs the two.
-	if opts.DiskSnapshots, err = s.syncDurableDiskMounts(checkpointCtx, opts.Request, durableDiskSyncExplicit); err != nil {
-		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to snapshot durable disks with checkpoint: %v", err)
-		if opts.OutputLogger != nil {
-			opts.OutputLogger.Error(fmt.Sprintf("Failed to snapshot durable disks with checkpoint: %v", err))
+	if !disksSealed {
+		if opts.DiskSnapshots, err = s.syncDurableDiskMounts(checkpointCtx, opts.Request, durableDiskSyncExplicit); err != nil {
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to snapshot durable disks with checkpoint: %v", err)
+			if opts.OutputLogger != nil {
+				opts.OutputLogger.Error(fmt.Sprintf("Failed to snapshot durable disks with checkpoint: %v", err))
+			}
+			return err
 		}
-		return err
 	}
 
 	if opts.OutputLogger != nil {
@@ -2106,7 +2140,8 @@ func supportsTerminalCheckpoint(rt runtime.Runtime) bool {
 		return false
 	}
 	return rt.Name() == types.ContainerRuntimeRunc.String() ||
-		rt.Name() == types.ContainerRuntimeGvisor.String()
+		rt.Name() == types.ContainerRuntimeGvisor.String() ||
+		rt.Name() == types.ContainerRuntimeMicroVM.String()
 }
 
 func checkpointRuntimeHasStopped(ctx context.Context, rt runtime.Runtime, containerID string) bool {

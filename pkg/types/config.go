@@ -156,6 +156,8 @@ type PostgresConfig struct {
 	TimeZone      string `key:"timezone" json:"timezone"`
 	EnableTLS     bool   `key:"enableTLS" json:"enable_tls"`
 	EncryptionKey string `key:"encryptionKey" json:"encryption_key"`
+	// MaxOpenConns caps this process's database connections; 0 is unbounded.
+	MaxOpenConns int `key:"maxOpenConns" json:"max_open_conns"`
 }
 
 type S2Config struct {
@@ -682,7 +684,7 @@ func (m PoolMode) AgentHosted() bool {
 type WorkerPoolConfig struct {
 	GPUType                   string                            `key:"gpuType" json:"gpu_type"`
 	Runtime                   string                            `key:"runtime" json:"runtime"`                                 // Kubernetes RuntimeClass for pod (e.g., "nvidia")
-	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc" or "gvisor"
+	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc", "gvisor", or "microvm"
 	ContainerRuntimeConfig    RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"` // Pool-specific container runtime configuration
 	CPUAffinityEnforced       bool                              `key:"cpuAffinityEnforced" json:"cpu_affinity_enforced"`
 	GPUVirtualized            bool                              `key:"gpuVirtualized" json:"gpu_virtualized"`

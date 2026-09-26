@@ -357,7 +357,9 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		AuthKey:    s.appConfig.Tailscale.AgentAuthKey,
 		ControlUrl: s.appConfig.Tailscale.ControlURL,
 		Hostname:   types.AgentTailnetHostnamePrefix + agentState.MachineID,
-		Ephemeral:  true,
+		// Non-ephemeral so a restarted agent resumes its persisted node (hostnames
+		// are per machine) and keeps the tailnet IP gateway clients dial.
+		Ephemeral: false,
 	}, nil
 }
 

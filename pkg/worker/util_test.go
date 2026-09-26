@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
@@ -211,6 +212,25 @@ func TestCopyDirectoryContextHonorsCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestCreateTarWithSHA256KeepsSparseFilesSparse(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs GNU tar")
+	}
+	root := t.TempDir()
+	src := filepath.Join(root, "checkpoint")
+	require.NoError(t, os.MkdirAll(src, 0755))
+	disk, err := os.Create(filepath.Join(src, "root.img"))
+	require.NoError(t, err)
+	require.NoError(t, disk.Truncate(1<<30))
+	_, err = disk.WriteAt([]byte("data"), 1<<29)
+	require.NoError(t, err)
+	require.NoError(t, disk.Close())
+
+	_, size, err := createTarWithSHA256(src, filepath.Join(root, "checkpoint.tar"))
+	require.NoError(t, err)
+	require.Less(t, size, int64(1<<20), "a 1 GiB image holding 4 bytes archives to a few KiB")
+}
+
 func TestCreateTarWithSHA256ReturnsArchiveHashAndSize(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "checkpoint")
@@ -254,4 +274,47 @@ func TestCreateTarWithSHA256HonorsCancellation(t *testing.T) {
 	_, _, err := createTarWithSHA256Progress(ctx, t.TempDir(), archivePath, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.NoFileExists(t, archivePath)
+}
+
+// Spec files are copied into trees the container controls: a symlink it
+// planted at the destination is replaced, and one at the source is refused.
+func TestCopyFileDoesNotFollowPlantedSymlinks(t *testing.T) {
+	hostFile := filepath.Join(t.TempDir(), "host.conf")
+	require.NoError(t, os.WriteFile(hostFile, []byte("host"), 0o600))
+	src := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.WriteFile(src, []byte(`{"ociVersion":"1.0.2"}`), 0o644))
+	root := t.TempDir()
+
+	dst := filepath.Join(root, "config.json")
+	require.NoError(t, os.Symlink(hostFile, dst))
+	require.NoError(t, copyFile(src, dst))
+	data, err := os.ReadFile(hostFile)
+	require.NoError(t, err)
+	require.Equal(t, "host", string(data), "the copy must not write through the symlink")
+	info, err := os.Lstat(dst)
+	require.NoError(t, err)
+	require.True(t, info.Mode().IsRegular())
+
+	planted := filepath.Join(root, "initial_config.json")
+	require.NoError(t, os.Symlink(hostFile, planted))
+	require.Error(t, copyFile(planted, filepath.Join(t.TempDir(), "initial_config.json")), "a symlinked source would copy a host file into the archive")
+}
+
+func TestSpecFilesDoNotFollowPlantedSymlinks(t *testing.T) {
+	hostFile := filepath.Join(t.TempDir(), "cron")
+	path := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.Symlink(hostFile, path))
+
+	require.NoError(t, writeSpecFile(path, specs.Spec{Version: "1.0.2"}))
+	_, err := os.Lstat(hostFile)
+	require.True(t, os.IsNotExist(err), "the spec must not land on the host")
+	data, err := readFileNoFollow(path)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "1.0.2")
+
+	require.NoError(t, os.WriteFile(hostFile, []byte("{}"), 0o600))
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Symlink(hostFile, path))
+	_, err = readFileNoFollow(path)
+	require.Error(t, err, "reading a planted symlink would pull a host file into the spec")
 }

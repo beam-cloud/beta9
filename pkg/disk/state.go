@@ -29,6 +29,8 @@ type volumeState struct {
 	ReadOnly         bool   `json:"read_only"`
 	Mountpoint       string `json:"mountpoint,omitempty"`
 	Attached         bool   `json:"attached"`
+	// Owner is who attached the volume (see AttachSpec.Owner).
+	Owner string `json:"owner,omitempty"`
 	// Formatted records that mkfs ran on the base image; it prevents a reused
 	// but never-snapshotted disk from being wiped by a second mkfs.
 	Formatted bool `json:"formatted"`
@@ -48,6 +50,18 @@ type volumeState struct {
 	QMPSocket string `json:"qmp_socket,omitempty"`
 	NBDSocket string `json:"nbd_socket,omitempty"`
 	NBDDevice string `json:"nbd_device,omitempty"`
+
+	// Export is the ExportMode the volume was attached with ("" = NBD).
+	// For vhost-user-blk, ExportSocket is the socket the VM connects to.
+	Export       string `json:"export,omitempty"`
+	ExportSocket string `json:"export_socket,omitempty"`
+}
+
+func (s *volumeState) exportMode() ExportMode {
+	if s.Export == string(ExportVhostUser) {
+		return ExportVhostUser
+	}
+	return ExportNBD
 }
 
 type stateLayer struct {

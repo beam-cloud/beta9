@@ -15,6 +15,9 @@ type Capabilities struct {
 	OOMEvents         bool // Runtime-native OOM events (use cgroup poller as fallback)
 	JoinExistingNetNS bool // Can join existing network namespace
 	CDI               bool // Container Device Interface support
+	// BlockRoot: the runtime attaches its own writable block device; the
+	// host only provides a read-only rootfs and does not mount durable disks.
+	BlockRoot bool
 }
 
 // State represents the current state of a container
@@ -64,6 +67,9 @@ type CheckpointOpts struct {
 	LinkRemap    bool         // Enable link remapping
 	FileLocks    bool         // Preserve file locks held by container processes
 	OutputWriter OutputWriter // Writer for checkpoint output
+	// WhilePaused runs after the image is written and before the container
+	// resumes or ends (microvm only), so a disk sealed there matches the memory image.
+	WhilePaused func(ctx context.Context) error
 }
 
 // RestoreOpts contains options for restoring a container from checkpoint
@@ -83,6 +89,12 @@ type RestoreOpts struct {
 // OutputWriter is an interface for writing container output
 type OutputWriter interface {
 	Write(p []byte) (n int, err error)
+}
+
+// NetworkSlotPreparer is implemented by runtimes that plumb a pooled network
+// namespace ahead of the container that will use it.
+type NetworkSlotPreparer interface {
+	PrepareNetworkSlot(netnsPath string) error
 }
 
 // Runtime defines the interface for different container/microvm runtime implementations
@@ -130,13 +142,21 @@ type Runtime interface {
 
 // Config contains configuration for creating a runtime
 type Config struct {
-	Type           string // "runc" | "gvisor"
+	Type           string // "runc" | "gvisor" | "microvm"
 	RuncPath       string // Path to runc binary (default: "runc")
 	RunscPath      string // Path to runsc binary (default: "runsc")
 	RunscPlatform  string // "kvm" | "systrap" | "ptrace" (optional)
 	RunscRoot      string // Root directory for runsc state (default: "/run/gvisor")
 	RunscExtraArgs []string
 	Debug          bool // Enable debug mode
+
+	// MicroVM settings. Empty fields take the defaults baked into the worker
+	// image (see microvm.go).
+	MicroVMHypervisorPath string // cloud-hypervisor binary (default: "cloud-hypervisor")
+	MicroVMVirtiofsdPath  string // virtiofsd binary (default: "virtiofsd")
+	MicroVMKernelPath     string // guest vmlinux (default: DefaultMicroVMKernelPath)
+	MicroVMInitPath       string // static guest init copied into the canvas (default: DefaultMicroVMInitPath)
+	MicroVMStateRoot      string // per-VM sockets, restore staging and network slot records (default: DefaultMicroVMStateRoot)
 }
 
 // New creates a new Runtime based on the provided configuration
@@ -146,6 +166,8 @@ func New(cfg Config) (Runtime, error) {
 		return NewRunc(cfg)
 	case types.ContainerRuntimeGvisor.String():
 		return NewRunsc(cfg)
+	case types.ContainerRuntimeMicroVM.String():
+		return NewMicroVM(cfg)
 	default:
 		return nil, ErrUnsupportedRuntime{Runtime: cfg.Type}
 	}

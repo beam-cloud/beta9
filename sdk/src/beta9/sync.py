@@ -36,6 +36,8 @@ from .config import get_settings
 from .env import is_local
 
 _sync_lock = threading.Lock()
+# The sync-nothing object is looked up once per gateway identity.
+_empty_sync_results: Dict[str, "FileSyncResult"] = {}
 
 CHUNK_SIZE = 1024 * 1024 * 4
 
@@ -222,6 +224,13 @@ class FileSyncer:
         if ignore_patterns != ["*"]:
             terminal.debug(f"Collected object is {terminal.humanize_memory(size, base=10)}")
 
+        empty_key = None
+        identity = getattr(getattr(self.gateway_stub, "channel", None), "cache_key", None)
+        if sync_nothing and identity:
+            empty_key = f"{identity}:{hash}"
+            if cached := _empty_sync_results.get(empty_key):
+                return cached
+
         object_id = None
         head_response: HeadObjectResponse = self.gateway_stub.head_object(
             HeadObjectRequest(hash=hash, supports_put_headers=True)
@@ -229,7 +238,10 @@ class FileSyncer:
         if head_response.exists and head_response.ok:
             if not sync_nothing:
                 cache.save(head_response.object_id, manifest)
-            return FileSyncResult(success=True, object_id=head_response.object_id)
+            result = FileSyncResult(success=True, object_id=head_response.object_id)
+            if empty_key:
+                _empty_sync_results[empty_key] = result
+            return result
 
         if not head_response.use_workspace_storage:
             object_id = self._upload_stream(manifest, hash, size)
@@ -245,7 +257,10 @@ class FileSyncer:
 
         if not sync_nothing:
             cache.save(object_id, manifest)
-        return FileSyncResult(success=True, object_id=object_id)
+        result = FileSyncResult(success=True, object_id=object_id)
+        if empty_key:
+            _empty_sync_results[empty_key] = result
+        return result
 
     def _build_manifest(self, cache: "_SyncCache") -> "_Manifest":
         """Hash every file to sync, reusing cached hashes for files whose size,

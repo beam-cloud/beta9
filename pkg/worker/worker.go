@@ -585,6 +585,17 @@ func NewWorker() (_ *Worker, err error) {
 				Str("root", gvisorRoot).
 				Msg("gVisor runtime initialized successfully")
 		}
+	case types.ContainerRuntimeMicroVM.String():
+		// A pool declared as microvm must be one: falling back to runc would
+		// silently downgrade the isolation the sandbox asked for.
+		defaultRuntime, err = runtime.New(runtime.Config{
+			Type:  types.ContainerRuntimeMicroVM.String(),
+			Debug: config.DebugMode,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create microvm runtime: %w", err)
+		}
+		log.Info().Str("pool", workerPoolName).Msg("microvm runtime initialized")
 	default:
 		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")
 		defaultRuntime = runcRuntime
@@ -624,7 +635,7 @@ func NewWorker() (_ *Worker, err error) {
 		}
 	}
 
-	baseContainerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
+	baseContainerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit, networkSlotPreparer(defaultRuntime))
 	if err != nil {
 		cancel()
 		return nil, err
@@ -1850,4 +1861,14 @@ func workerShutdownDrainTimeout(configuredSeconds int64) time.Duration {
 		return shutdownDrainMax
 	}
 	return drain
+}
+
+// networkSlotPreparer returns the pool runtime's slot hook, or nil when the
+// runtime has no namespace work to do ahead of time.
+func networkSlotPreparer(rt runtime.Runtime) func(string) error {
+	preparer, ok := rt.(runtime.NetworkSlotPreparer)
+	if !ok {
+		return nil
+	}
+	return preparer.PrepareNetworkSlot
 }

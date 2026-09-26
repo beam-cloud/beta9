@@ -215,8 +215,14 @@ func (m *Manager) Attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	if spec.VirtualSizeBytes <= 0 {
 		return nil, fmt.Errorf("volume %s requires a positive size", spec.Key)
 	}
-	if spec.Mountpoint == "" {
-		return nil, fmt.Errorf("volume %s requires a mountpoint", spec.Key)
+	switch spec.Export {
+	case ExportNBD:
+		if spec.Mountpoint == "" {
+			return nil, fmt.Errorf("volume %s requires a mountpoint", spec.Key)
+		}
+	case ExportVhostUser:
+	default:
+		return nil, fmt.Errorf("volume %s: unsupported export mode %q", spec.Key, spec.Export)
 	}
 
 	m.mu.Lock()
@@ -257,11 +263,32 @@ func (m *Manager) Detach(ctx context.Context, key string) error {
 	if !ok || volume == nil {
 		return nil
 	}
+	return m.detachVolume(ctx, key, volume)
+}
+
+// DetachOwned is Detach for one attacher: it leaves the volume alone when it
+// is currently held by a different owner, which happens when a container's
+// final cleanup runs after its successor re-attached the same key.
+func (m *Manager) DetachOwned(ctx context.Context, key, owner string) error {
+	m.mu.Lock()
+	volume, ok := m.volumes[key]
+	m.mu.Unlock()
+	if !ok || volume == nil || volume.owner != owner {
+		return nil
+	}
+	return m.detachVolume(ctx, key, volume)
+}
+
+// detachVolume takes volume offline and unregisters it, unless the key has
+// meanwhile been taken by another attach.
+func (m *Manager) detachVolume(ctx context.Context, key string, volume *Volume) error {
 	if err := volume.detach(ctx); err != nil {
 		return err
 	}
 	m.mu.Lock()
-	delete(m.volumes, key)
+	if m.volumes[key] == volume {
+		delete(m.volumes, key)
+	}
 	m.mu.Unlock()
 	return nil
 }
@@ -348,8 +375,13 @@ func (m *Manager) Recover(ctx context.Context) error {
 }
 
 // adoptVolume re-registers a volume whose daemon and mount survived a worker
-// restart. The NBD lock is re-acquired to fence out other processes.
+// restart. The NBD lock is re-acquired to fence out other processes. A
+// vhost-user volume is never adopted: its consumer, a VM, does not survive
+// the restart (the microvm runtime kills leftovers), so it is torn down.
 func (m *Manager) adoptVolume(dir string, state *volumeState) bool {
+	if state.exportMode() == ExportVhostUser {
+		return false
+	}
 	if !processAlive(state.QSDPid, m.binaries.qsdComm()) || !isMountpoint(state.Mountpoint) {
 		return false
 	}
@@ -363,6 +395,7 @@ func (m *Manager) adoptVolume(dir string, state *volumeState) bool {
 		manager: m,
 		dir:     dir,
 		state:   state,
+		owner:   state.Owner,
 		fmtNode: fmtNodeName(state.PivotCount),
 		qsd: &qsdProcess{
 			pid:        state.QSDPid,

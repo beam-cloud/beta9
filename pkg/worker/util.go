@@ -27,6 +27,18 @@ func tarCommandError(action string, err error, stderr bytes.Buffer) error {
 	return fmt.Errorf("%s: %w: %s", action, err, message)
 }
 
+func writeFileNoFollow(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 // Creates a symlink, but will remove any existing symlinks, files, or directories
 // before doing so.
 func forceSymlink(source, link string) error {
@@ -262,8 +274,28 @@ func copyDirectoryWalkContext(ctx context.Context, src, dst string, excludePaths
 	})
 }
 
+// createFileNoFollow creates path afresh: whatever is there is removed first,
+// so a symlink a container planted in its own tree is replaced, not written
+// through.
+func createFileNoFollow(path string, perm os.FileMode) (*os.File, error) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, perm)
+}
+
+// readFileNoFollow reads path, refusing a symlink at its last component.
+func readFileNoFollow(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
 func copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
+	srcFile, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return fmt.Errorf("open source file %s: %w", src, err)
 	}
@@ -278,7 +310,7 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("create destination parent %s: %w", filepath.Dir(dst), err)
 	}
 
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	dstFile, err := createFileNoFollow(dst, info.Mode().Perm())
 	if err != nil {
 		return fmt.Errorf("open destination file %s: %w", dst, err)
 	}
@@ -320,7 +352,7 @@ func createTarWithSHA256Progress(ctx context.Context, srcDir, destTar string, pr
 
 		hasher := sha256.New()
 		counter := &countingWriter{progress: progress}
-		tarArgs := append(tarXattrArgs(), "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+		tarArgs := append(tarSparseArgs(), "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
 		cmd := exec.CommandContext(ctx, "tar", tarArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdout = io.MultiWriter(out, hasher, counter)
@@ -380,6 +412,16 @@ func tarXattrArgs() []string {
 	args := []string{"--xattrs"}
 	if runtime.GOOS == "linux" {
 		args = append(args, "--xattrs-include=*")
+	}
+	return args
+}
+
+// tarSparseArgs stores holes as holes (GNU tar only); VM checkpoints carry
+// mostly-empty root disk and memory images.
+func tarSparseArgs() []string {
+	args := tarXattrArgs()
+	if runtime.GOOS == "linux" {
+		args = append(args, "--sparse")
 	}
 	return args
 }

@@ -2,6 +2,7 @@ import json
 import os
 import shlex
 import sys
+import threading
 from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, Union
 
@@ -50,6 +51,14 @@ _image_build_cache = TTLCache(
     ttl_env_var="BETA9_IMAGE_BUILD_CACHE_TTL_SECONDS",
     disabled=lambda: env_enabled("BETA9_DISABLE_IMAGE_BUILD_CACHE"),
 )
+# Concurrent first lookups of one image take turns; one check fills the cache.
+_image_lookup_locks: Dict[str, threading.Lock] = {}
+_image_lookup_locks_guard = threading.Lock()
+
+
+def _image_lookup_lock(cache_key: str) -> threading.Lock:
+    with _image_lookup_locks_guard:
+        return _image_lookup_locks.setdefault(cache_key, threading.Lock())
 
 
 ImageCredentialKeys = Literal[
@@ -564,23 +573,24 @@ class Image(BaseAbstraction):
         self._prepare_context()
 
         cache_key = self._cache_key()
-        if cached_result := self._cached_build_result(cache_key):
-            terminal.header("Using cached image", cached_result.image_id)
-            self.image_id = cached_result.image_id
-            self.python_version = cached_result.python_version
-            return cached_result
+        with _image_lookup_lock(cache_key):
+            if cached_result := self._cached_build_result(cache_key):
+                terminal.header("Using cached image", cached_result.image_id)
+                self.image_id = cached_result.image_id
+                self.python_version = cached_result.python_version
+                return cached_result
 
-        terminal.detail("Checking image cache...", dim=False)
-        exists, exists_response = self._exists()
-        if exists:
-            terminal.header("Using cached image", exists_response.image_id)
-            result = ImageBuildResult(
-                success=True,
-                image_id=exists_response.image_id,
-                python_version=exists_response.python_version,
-            )
-            self._remember_build_result(cache_key, result)
-            return result
+            terminal.detail("Checking image cache...", dim=False)
+            exists, exists_response = self._exists()
+            if exists:
+                terminal.header("Using cached image", exists_response.image_id)
+                result = ImageBuildResult(
+                    success=True,
+                    image_id=exists_response.image_id,
+                    python_version=exists_response.python_version,
+                )
+                self._remember_build_result(cache_key, result)
+                return result
 
         if self._explicit_image_id:
             return ImageBuildResult(

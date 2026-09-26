@@ -13,6 +13,8 @@
 !deploy/github-builder/**
 !docker/patches
 !docker/patches/**
+!docker/microvm
+!docker/microvm/**
 !bin/volume_cache_*
 !bin/ipbind_*
 !bin/beta9-cli

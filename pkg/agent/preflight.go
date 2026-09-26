@@ -173,6 +173,19 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Message:  fuseMessage,
 			Severity: severity(fuseOK),
 		})
+
+		// Only microvm pools need /dev/kvm.
+		kvm := pathExists("/dev/kvm")
+		kvmMessage := "available; the worker can run microvm (Cloud Hypervisor) sandbox pools"
+		if !kvm {
+			kvmMessage = "not available; this machine cannot join microvm sandbox pools"
+		}
+		checks = append(checks, check{
+			Name:     "kvm",
+			Ok:       kvm,
+			Message:  kvmMessage,
+			Severity: types.AgentPreflightSeverityInfo,
+		})
 	}
 
 	gpuDevices := detectNvidiaGPUDevices()

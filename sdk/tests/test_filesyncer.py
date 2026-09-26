@@ -13,7 +13,7 @@ from beta9.clients.gateway import (
     HeadObjectResponse,
     ObjectUploadPart,
 )
-from beta9.sync import FileSyncer, _Manifest, _ManifestEntry, _SyncCache
+from beta9.sync import FileSyncer, FileSyncResult, _Manifest, _ManifestEntry, _SyncCache
 
 
 class _FakeGateway:
@@ -166,6 +166,37 @@ class TestIncrementalSync(TestCase):
         self.assertEqual(
             len(gw.created), 2, "only the empty sync-nothing object, no second full upload"
         )
+
+    def test_sync_nothing_resolves_its_object_once_per_gateway_identity(self):
+        # Every sandbox without sync_local_dir syncs the same empty manifest.
+        # Channels to one gateway and token share a cache_key, so after the first
+        # lookup the rest of a burst must not each pay a head_object round trip.
+        class _Channel:
+            cache_key = "gateway-a"
+
+        class _IdentifiedGateway(_FakeGateway):
+            channel = _Channel()
+
+            def __init__(self):
+                super().__init__(known_hashes=(_Manifest({}).hash(),))
+                self.heads = 0
+
+            def head_object(self, req):
+                self.heads += 1
+                return super().head_object(req)
+
+        gw = _IdentifiedGateway()
+        for _ in range(3):
+            result = FileSyncer(gateway_stub=gw, root_dir=str(self.root)).sync(
+                ignore_patterns=["*"]
+            )
+            self.assertEqual(result, FileSyncResult(success=True, object_id="obj-known"))
+        self.assertEqual(gw.heads, 1)
+
+        other = _IdentifiedGateway()
+        other.channel = type("C", (), {"cache_key": "gateway-b"})()
+        FileSyncer(gateway_stub=other, root_dir=str(self.root)).sync(ignore_patterns=["*"])
+        self.assertEqual(other.heads, 1, "a different gateway identity is looked up on its own")
 
     def test_first_sync_uploads_everything_and_seeds_cache(self):
         gw = _FakeGateway()

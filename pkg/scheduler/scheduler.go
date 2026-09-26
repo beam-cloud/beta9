@@ -1019,7 +1019,8 @@ func filterControllersByFlagsForFailover(controllers []WorkerPoolController, req
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
-		if !runtimeMatchesCheckpoint(request, controllerRuntime(controller)) {
+		runtimeName := controllerRuntime(controller)
+		if !runtimeMatchesCheckpoint(request, runtimeName) || !runtimeAcceptsRequest(request, runtimeName) {
 			continue
 		}
 		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
@@ -1137,7 +1138,8 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	}
 
 	for _, worker := range workers {
-		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) {
+		runtimeName := workerRuntime(worker)
+		if !runtimeMatchesCheckpoint(request, runtimeName) || !runtimeAcceptsRequest(request, runtimeName) {
 			continue
 		}
 		if !acceleratorMatchesCheckpoint(request, worker.Gpu) {
@@ -1219,6 +1221,16 @@ func checkpointRuntime(request *types.ContainerRequest) string {
 func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName string) bool {
 	requiredRuntime := checkpointRuntime(request)
 	return requiredRuntime == "" || runtimeName == requiredRuntime
+}
+
+// runtimeAcceptsRequest reserves microvm workers for use_vm CPU sandboxes and
+// keeps use_vm requests off every other runtime, so they fail closed.
+// Checkpoint runtimes are matched separately by runtimeMatchesCheckpoint.
+func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) bool {
+	if runtimeName != types.ContainerRuntimeMicroVM.String() {
+		return !request.UseVM
+	}
+	return request.UseVM && request.Stub.Type.Kind() == types.StubTypeSandbox && !request.RequiresGPU()
 }
 
 func checkpointAccelerator(request *types.ContainerRequest) string {

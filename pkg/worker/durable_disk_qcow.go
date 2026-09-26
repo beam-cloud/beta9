@@ -15,8 +15,10 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/disk"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 )
@@ -48,6 +50,13 @@ func qcowRootDiskMount(request *types.ContainerRequest) *types.Mount {
 		}
 	}
 	return nil
+}
+
+// checkpointFilesystemOnDisk reports whether the container's writable layer
+// lives on a disk the checkpoint already carries: a sealed qcow root disk,
+// or the scratch disk of a block-root runtime.
+func checkpointFilesystemOnDisk(request *types.ContainerRequest, rt runtime.Runtime) bool {
+	return qcowRootDiskMount(request) != nil || (rt != nil && rt.Capabilities().BlockRoot)
 }
 
 // qcowVolumeKey is stable across container restarts for writable volumes so
@@ -114,13 +123,21 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	phaseStart = time.Now()
 
 	sizeBytes = max(sizeBytes, qcowChainVirtualSize(manifests))
-	_, err = s.diskManager.Attach(ctx, disk.AttachSpec{
+	attachSpec := disk.AttachSpec{
 		Key:              key,
 		VirtualSizeBytes: sizeBytes,
 		ReadOnly:         mount.ReadOnly,
 		Mountpoint:       mount.LocalPath,
 		Chain:            chain,
-	}, &qcowChunkSource{cacheReader: s.durableDiskSnapshotCacheReader(), stores: stores})
+		Owner:            request.ContainerId,
+	}
+	if s.runtimeOwnsBlockRoot() {
+		// The guest consumes the volume as a block device; nothing is mounted
+		// on the host, and the pre-pivot freeze runs inside the guest.
+		attachSpec.Export = disk.ExportVhostUser
+		attachSpec.Freeze = s.guestDiskFreezer(request.ContainerId, mount)
+	}
+	_, err = s.diskManager.Attach(ctx, attachSpec, &qcowChunkSource{cacheReader: s.durableDiskSnapshotCacheReader(), stores: stores})
 	if err != nil {
 		return fmt.Errorf("attach qcow durable disk %q: %w", mount.DurableDisk.Name, err)
 	}
@@ -138,6 +155,68 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	// flattened publish that bounds restore chains.
 	s.qcowChains.Store(key, entries)
 	s.reportQcowChainContent(request, entries)
+	return nil
+}
+
+// runtimeOwnsBlockRoot reports whether the pool runtime attaches qcow disks to
+// the guest as block devices instead of mounting them on the host.
+func (s *Worker) runtimeOwnsBlockRoot() bool {
+	return s.runtime != nil && s.runtime.Capabilities().BlockRoot
+}
+
+// guestDiskFreezer quiesces a qcow disk's filesystem inside the guest before
+// a seal pivots the chain. The root disk is frozen by default; other disks
+// by their guest mount path. A guest that has already exited has nothing to
+// flush, and the runtime reports that as a no-op.
+func (s *Worker) guestDiskFreezer(containerID string, mount *types.Mount) func(context.Context) (func(), error) {
+	mountPath := ""
+	if !isQcowRootDiskMount(mount) {
+		mountPath = mount.MountPath
+	}
+	return func(ctx context.Context) (func(), error) {
+		rt := s.runtime
+		if instance, exists := s.containerInstances.Get(containerID); exists && instance.Runtime != nil {
+			rt = instance.Runtime
+		}
+		freezer, ok := rt.(runtime.DiskFreezer)
+		if !ok {
+			return nil, fmt.Errorf("runtime %s cannot freeze guest disks", rt.Name())
+		}
+		return freezer.FreezeDisk(ctx, containerID, mountPath)
+	}
+}
+
+// annotateExportedDurableDisks tells a block-root runtime which vhost-user
+// sockets to attach and where the guest mounts them. The root disk is the
+// guest's writable layer; the rest are ordered so device names are stable.
+func (s *Worker) annotateExportedDurableDisks(request *types.ContainerRequest, spec *specs.Spec) error {
+	if s.diskManager == nil {
+		return nil
+	}
+	if spec.Annotations == nil {
+		spec.Annotations = make(map[string]string)
+	}
+	index := 0
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
+		if !isQcowDurableDiskMount(mount) {
+			continue
+		}
+		volume, ok := s.diskManager.Volume(s.qcowVolumeKey(request, mount))
+		if !ok || volume.ExportSocket() == "" {
+			return fmt.Errorf("qcow durable disk %q is not exported for the microvm", mount.DurableDisk.Name)
+		}
+		if isQcowRootDiskMount(mount) {
+			spec.Annotations[runtime.MicroVMRootDiskAnnotation] = volume.ExportSocket()
+			continue
+		}
+		value := volume.ExportSocket() + ":" + mount.MountPath
+		if mount.ReadOnly {
+			value += ":ro"
+		}
+		spec.Annotations[fmt.Sprintf("%s%03d", runtime.MicroVMDiskAnnotationPrefix, index)] = value
+		index++
+	}
 	return nil
 }
 
@@ -542,7 +621,7 @@ func (s *Worker) detachQcowDurableDiskMount(ctx context.Context, request *types.
 	if s.diskManager == nil {
 		return nil
 	}
-	return s.diskManager.Detach(ctx, s.qcowVolumeKey(request, mount))
+	return s.diskManager.DetachOwned(ctx, s.qcowVolumeKey(request, mount), request.ContainerId)
 }
 
 // qcowChunkSink adapts the workspace bucket store, reporting progress so the

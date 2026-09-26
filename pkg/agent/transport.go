@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -16,6 +19,8 @@ import (
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netmon"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 )
@@ -26,6 +31,8 @@ const (
 	tsnetFullSnapshotEvery        = 5
 	tsnetSnapshotFailureThreshold = 3
 	tsnetSnapshotFailureInterval  = 10 * time.Minute
+	tailnetGatewayPingInterval    = 30 * time.Second
+	tailnetGatewayPingTimeout     = 10 * time.Second
 )
 
 type tsnetStatusClient interface {
@@ -58,6 +65,16 @@ func runRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentTok
 	}
 }
 
+// agentTSNetDir keeps tsnet state on the agent's persistent state disk so a
+// restart resumes the same tailnet node; "" leaves tsnet's default dir.
+func agentTSNetDir() string {
+	stateDir, err := agentStateDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(stateDir, "tsnet")
+}
+
 func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentToken, machineID, transport string, workers *workerRuntimeManager, telemetry *agentTelemetry, stdout, stderr io.Writer) error {
 	credential, err := requestTransportCredential(ctx, client, agentToken, transport)
 	if err != nil {
@@ -67,7 +84,9 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		return fmt.Errorf("%s", credential.ErrMsg)
 	}
 
+	netmon.RegisterInterfaceGetter(hostInterfacesWithoutWorkerLinks)
 	server := &tsnet.Server{
+		Dir:        agentTSNetDir(),
 		Hostname:   credential.Hostname,
 		AuthKey:    credential.AuthKey,
 		ControlURL: credential.ControlURL,
@@ -80,12 +99,10 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		return err
 	}
 
-	hostname := credential.Hostname
+	routeHost := credential.Hostname
 	if localClient, err := server.LocalClient(); err == nil {
 		if status, err := localClient.Status(ctx); err == nil {
-			if status.Self != nil && status.Self.DNSName != "" {
-				hostname = strings.TrimSuffix(status.Self.DNSName, ".")
-			}
+			routeHost = tailnetRouteHost(status, routeHost)
 		}
 	}
 	poolVirtualized, err := requestAgentPoolGPUVirtualized(ctx, client, agentToken)
@@ -110,14 +127,77 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		return err
 	}
 
-	proxyTarget := net.JoinHostPort(hostname, port)
+	proxyTarget := net.JoinHostPort(routeHost, port)
 	statusf(stdout, "Network ready")
 	statusf(stdout, "Agent running; leave this terminal open")
 	verbosef(stdout, "agent route listener ready at %s\n", proxyTarget)
 	if localClient, err := server.LocalClient(); err == nil {
 		go emitTSNetSnapshots(ctx, telemetry, localClient, proxyTarget)
+		go keepGatewayPathsWarm(ctx, localClient, stderr)
 	}
 	return newRouteProxy(client, agentToken, machineID, listener, proxyTarget, workers, stdout, stderr).run(ctx)
+}
+
+type tailnetPinger interface {
+	Status(context.Context) (*ipnstate.Status, error)
+	Ping(context.Context, netip.Addr, tailcfg.PingType) (*ipnstate.PingResult, error)
+}
+
+// keepGatewayPathsWarm pings every gateway node now and then every
+// tailnetGatewayPingInterval. A gateway's own handshake to an agent it has
+// not heard from lately can be lost for several 5s WireGuard retries; while
+// the agent keeps sending, each gateway has a live session and path back.
+func keepGatewayPathsWarm(ctx context.Context, client tailnetPinger, stderr io.Writer) {
+	for {
+		pingTailnetGateways(ctx, client, stderr)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(tailnetGatewayPingInterval):
+		}
+	}
+}
+
+func pingTailnetGateways(ctx context.Context, client tailnetPinger, stderr io.Writer) {
+	status, err := client.Status(ctx)
+	if err != nil {
+		verbosef(stderr, "tailnet gateway ping skipped: %v\n", err)
+		return
+	}
+	var wg sync.WaitGroup
+	for _, peer := range status.Peer {
+		if peer == nil || !peer.Online || len(peer.TailscaleIPs) == 0 || !types.IsGatewayTailnetHostname(peer.HostName) {
+			continue
+		}
+		wg.Add(1)
+		go func(ip netip.Addr) {
+			defer wg.Done()
+			pingCtx, cancel := context.WithTimeout(ctx, tailnetGatewayPingTimeout)
+			defer cancel()
+			if _, err := client.Ping(pingCtx, ip, tailcfg.PingTSMP); err != nil {
+				verbosef(stderr, "tailnet gateway ping %s failed: %v\n", ip, err)
+			}
+		}(peer.TailscaleIPs[0])
+	}
+	wg.Wait()
+}
+
+// hostInterfacesWithoutWorkerLinks is tailscale's view of the host minus the
+// worker's container links. Each veth the worker adds or removes is otherwise
+// a link change: a dump of every interface, then a netcheck and re-STUN.
+func hostInterfacesWithoutWorkerLinks() ([]netmon.Interface, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	kept := make([]netmon.Interface, 0, len(ifaces))
+	for i := range ifaces {
+		if strings.HasPrefix(ifaces[i].Name, types.WorkerLinkPrefix) {
+			continue
+		}
+		kept = append(kept, netmon.Interface{Interface: &ifaces[i]})
+	}
+	return kept, nil
 }
 
 func logThunderNodeEnrollmentSkipped(stderr io.Writer, err error) {
@@ -220,6 +300,31 @@ func tsnetSnapshotFailure(err error) (string, string) {
 		return "deadline_exceeded", "transport snapshot timed out"
 	}
 	return "status_unavailable", "transport snapshot unavailable"
+}
+
+// tailnetRouteHost is the address the gateway dials for this node: the
+// tailnet IP, not the MagicDNS name, whose cached answers can outlive a node
+// that re-registered with a new IP.
+func tailnetRouteHost(status *ipnstate.Status, fallback string) string {
+	if status == nil {
+		return fallback
+	}
+	host := ""
+	for _, ip := range status.TailscaleIPs {
+		if ip.Is4() {
+			return ip.String()
+		}
+		if host == "" {
+			host = ip.String()
+		}
+	}
+	if host != "" {
+		return host
+	}
+	if status.Self != nil && status.Self.DNSName != "" {
+		return strings.TrimSuffix(status.Self.DNSName, ".")
+	}
+	return fallback
 }
 
 func tsnetSnapshotAttrs(status *ipnstate.Status, proxyTarget string, full bool) map[string]string {

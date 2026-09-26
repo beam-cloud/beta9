@@ -52,7 +52,7 @@ const (
 	podRoutePrefix         string = "/pod"
 	sandboxRoutePrefix     string = "/sandbox"
 	podProxyBufferSize            = 300
-	podStubLoadTimeout            = time.Second
+	podStubLoadTimeout            = 5 * time.Second
 )
 
 type PodService interface {
@@ -680,7 +680,8 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		stub, err = s.loadStub(ctx, in.StubId)
 		if err != nil {
 			return &pb.CreatePodResponse{
-				Ok: false,
+				Ok:       false,
+				ErrorMsg: fmt.Sprintf("load stub %s: %v", in.StubId, err),
 			}, nil
 		}
 	}

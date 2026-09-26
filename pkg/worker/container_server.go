@@ -458,9 +458,30 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 	}()
 
 	if layered {
-		err = s.imageClient.ArchiveLayer(ctx, instance.Request, instance.Overlay.TopLayerUpperDir(), req.ImageId, progressChan)
+		var upperDir string
+		var cleanup func()
+		if upperDir, cleanup, err = containerUpperDir(ctx, instance); err == nil {
+			defer cleanup()
+			err = s.imageClient.ArchiveLayer(ctx, instance.Request, upperDir, req.ImageId, progressChan)
+		}
 	} else {
-		err = s.imageClient.Archive(ctx, NewPathInfo(instance.Overlay.TopLayerPath()), req.ImageId, progressChan)
+		var rootDir string
+		var cleanup func()
+		if rootDir, cleanup, err = containerRootDir(ctx, instance); err == nil {
+			defer cleanup()
+			// An exported guest root is read after the specs were written into
+			// the host merged root; carry them over so the archive has them.
+			if rootDir != instance.Overlay.TopLayerPath() {
+				for _, name := range []string{initialSpecBaseName, specBaseName} {
+					if err = copyFile(filepath.Join(instance.Overlay.TopLayerPath(), name), filepath.Join(rootDir, name)); err != nil {
+						break
+					}
+				}
+			}
+			if err == nil {
+				err = s.imageClient.Archive(ctx, NewPathInfo(rootDir), req.ImageId, progressChan)
+			}
+		}
 	}
 	if err != nil {
 		log.Error().Err(err).Str("container_id", req.ContainerId).Str("image_id", req.ImageId).Msg("filesystem snapshot failed")
@@ -503,13 +524,21 @@ func (s *ContainerRuntimeServer) writeArchiveSpecs(ctx context.Context, instance
 }
 
 // writeSpecFile serializes an OCI spec the way every spec on disk is written:
-// indented JSON, world-readable.
+// indented JSON, world-readable. path is in the container's own tree.
 func writeSpecFile(path string, spec specs.Spec) error {
 	b, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0644)
+	f, err := createFileNoFollow(path, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // writeInitialSpecFromImage builds an initial_config.json using the base runc config
@@ -573,7 +602,7 @@ func (s *ContainerRuntimeServer) addRequestEnvToInitialSpec(instance *ContainerI
 
 	specPath := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
 
-	bytes, err := os.ReadFile(specPath)
+	bytes, err := readFileNoFollow(specPath)
 	if err != nil {
 		return err
 	}
@@ -1236,6 +1265,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestUploadFile(ctx, gfs, in, containerPath)
+	}
 
 	// For gVisor: write to external mount, then mv inside container to avoid caching issues
 	// External mounts are always shared (no caching) per gVisor docs
@@ -1319,6 +1351,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Con
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestCreateDirectory(ctx, gfs, in, containerPath)
+	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
 	if err != nil {
@@ -1345,6 +1380,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteDirectory(ctx context.Con
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestDeleteDirectory(ctx, gfs, in, containerPath)
 	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
@@ -1376,6 +1414,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxDownloadFile(ctx context.Contex
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestDownloadFile(ctx, gfs, in, containerPath)
 	}
 
 	root, name, err := containerRoot(instance, containerPath, false)
@@ -1418,6 +1459,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteFile(ctx context.Context,
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestDeleteFile(ctx, gfs, in, containerPath)
+	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
 	if err != nil {
@@ -1446,6 +1490,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatFile(ctx context.Context, i
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestStatFile(ctx, gfs, in, containerPath)
 	}
 
 	root, name, err := containerRoot(instance, containerPath, false)
@@ -1484,6 +1531,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxListFiles(ctx context.Context, 
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestListFiles(ctx, gfs, in, containerPath)
 	}
 
 	root, name, err := containerRoot(instance, containerPath, false)
@@ -1685,6 +1735,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxReplaceInFiles(ctx context.Cont
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestReplaceInFiles(ctx, gfs, in, containerPath)
+	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
 	if err != nil {
@@ -1720,6 +1773,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxFindInFiles(ctx context.Context
 	containerPath := in.ContainerPath
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+	if gfs, ok := guestFS(instance); ok {
+		return s.guestFindInFiles(ctx, gfs, in, containerPath)
 	}
 
 	regex, err := regexp.Compile(in.Pattern)

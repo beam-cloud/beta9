@@ -17,6 +17,17 @@ func TestDefaultWorkspaceGeeseHTTPTimeout(t *testing.T) {
 	require.Equal(t, time.Minute, manager.GetConfig().Storage.WorkspaceStorage.Geese.HTTPTimeout)
 }
 
+// The embedded default config is what every gateway boots from; a malformed
+// edit there (a duplicate key, for one) is fatal at startup.
+func TestEmbeddedDefaultConfigLoads(t *testing.T) {
+	t.Setenv("CONFIG_PATH", "")
+	t.Setenv(types.WorkerMinimalConfigEnv, "")
+
+	manager, err := NewConfigManager[types.AppConfig]()
+	require.NoError(t, err)
+	require.Equal(t, 0, manager.GetConfig().Database.Postgres.MaxOpenConns, "the pool stays unbounded unless configured")
+}
+
 func TestMinimalConfigEnabled(t *testing.T) {
 	for _, value := range []string{"1", "true", "yes", "on", " TRUE "} {
 		t.Setenv(types.WorkerMinimalConfigEnv, value)
