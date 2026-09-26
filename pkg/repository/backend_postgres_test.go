@@ -436,8 +436,6 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 			updatedAt,
 			uint(13),
 		))
-	// The activity touch only rewrites a stale row, so concurrent stub
-	// creations in one app stop queueing on its lock.
 	mock.ExpectExec(`UPDATE app SET updated_at = NOW\(\) WHERE id = \$1 AND \(updated_at IS NULL OR updated_at < NOW\(\) - INTERVAL '1 second'\)`).
 		WithArgs(uint(13)).
 		WillReturnResult(sqlmock.NewResult(0, 0))

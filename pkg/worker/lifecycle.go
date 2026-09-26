@@ -1720,9 +1720,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			filepath.Join(rootDisk.LocalPath, "overlay", "work"),
 		)
 	} else {
-		// A block-root runtime attaches the qcow volume to the guest directly
-		// and the guest puts its overlay upper on it; this host overlay is only
-		// the read-only canvas the image and bind mounts are shared from.
+		// Under a block-root runtime the guest keeps its writable layer on its own
+		// disk, and this overlay only shares the image and bind mounts.
 		err = containerInstance.Overlay.Setup()
 	}
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
@@ -1841,8 +1840,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox {
 		runtime.AddDockerInDockerCapabilities(spec)
 		if s.runtimeOwnsBlockRoot() {
-			// The guest binds its block device's docker directory over
-			// /var/lib/docker so overlay2 runs on a real filesystem.
 			if spec.Annotations == nil {
 				spec.Annotations = make(map[string]string)
 			}

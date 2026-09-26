@@ -107,7 +107,7 @@ class Channel(InterceptorChannel):
 
         interceptor = AuthTokenInterceptor(token, metadata)
         super().__init__(channel=channel, interceptor=interceptor)
-        # Per-channel caches are shared across channels to the same gateway and token.
+        # Channels to the same gateway with the same token share caches keyed on this.
         self.cache_key = hashlib.sha256(f"{addr}\n{token or ''}".encode()).hexdigest()
         _channels.add(self)
 

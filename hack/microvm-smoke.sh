@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Stage 1 mechanics check for the microvm runtime on a bare-metal node.
+# Mechanics check for the microvm runtime on a bare-metal node.
 #
 # Syncs the Go tree to the node, overlays freshly built binaries plus the
 # Cloud Hypervisor tooling onto the runtime image that is already cached
@@ -13,8 +13,8 @@
 #   hack/microvm-smoke.sh shell        # privileged shell in the dev image
 #
 # Environment:
-#   MICROVM_HOST           ssh target            (ubuntu@192.94.119.22)
-#   MICROVM_SSH_KEY        ssh identity          (~/remote.pem)
+#   MICROVM_HOST           ssh target            (required)
+#   MICROVM_SSH_KEY        ssh identity          (required)
 #   MICROVM_REMOTE_DIR     remote checkout       (~/beta9-microvm)
 #   MICROVM_RUNTIME_IMAGE  cached runtime image  (public.ecr.aws/n4e0e1y0/beta9-worker:0.1.764)
 #   MICROVM_IMAGE_TAG      dev image tag         (localhost:5000/beta9-worker:microvm-dev)
@@ -23,8 +23,8 @@
 set -Eeuo pipefail
 
 beta9_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-host="${MICROVM_HOST:-ubuntu@192.94.119.22}"
-ssh_key="${MICROVM_SSH_KEY:-$HOME/remote.pem}"
+host="${MICROVM_HOST:?set MICROVM_HOST to the ssh target of the node}"
+ssh_key="${MICROVM_SSH_KEY:?set MICROVM_SSH_KEY to the ssh identity file}"
 remote_dir="${MICROVM_REMOTE_DIR:-\$HOME/beta9-microvm}"
 runtime_image="${MICROVM_RUNTIME_IMAGE:-public.ecr.aws/n4e0e1y0/beta9-worker:0.1.764}"
 image_tag="${MICROVM_IMAGE_TAG:-localhost:5000/beta9-worker:microvm-dev}"

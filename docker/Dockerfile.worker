@@ -222,7 +222,7 @@ EOT
 # Mainline longterm kernel with Cloud Hypervisor's reference config plus the
 # netfilter/bridge/IPv6 set Docker-in-VM needs (docker/microvm/). Everything
 # is built in: the guest boots straight from the virtio-fs root with no
-# initramfs or modules. amd64 only; ~40s on a large builder.
+# initramfs or modules. amd64 only.
 FROM debian:bookworm AS microvm-kernel
 
 ARG TARGETARCH

@@ -357,12 +357,8 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		AuthKey:    s.appConfig.Tailscale.AgentAuthKey,
 		ControlUrl: s.appConfig.Tailscale.ControlURL,
 		Hostname:   types.AgentTailnetHostnamePrefix + agentState.MachineID,
-		// Non-ephemeral: an agent restart reuses its persisted node, so its
-		// tailnet IP is stable. An ephemeral node is dropped on disconnect and
-		// comes back with a new IP, which long-lived gateway tsnet clients only
-		// learn once control garbage-collects the old node (~10-15m); until then
-		// the route target points at an address they cannot reach. A machine's
-		// hostname is deterministic, so a returning machine reuses its node.
+		// Non-ephemeral so a restarted agent resumes its persisted node (hostnames
+		// are per machine) and keeps the tailnet IP gateway clients dial.
 		Ephemeral: false,
 	}, nil
 }

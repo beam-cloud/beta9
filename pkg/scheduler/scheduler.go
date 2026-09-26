@@ -1010,7 +1010,8 @@ func filterControllersByFlagsForFailover(controllers []WorkerPoolController, req
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
-		if !runtimeMatchesCheckpoint(request, controllerRuntime(controller)) || !runtimeAcceptsRequest(request, controllerRuntime(controller)) {
+		runtimeName := controllerRuntime(controller)
+		if !runtimeMatchesCheckpoint(request, runtimeName) || !runtimeAcceptsRequest(request, runtimeName) {
 			continue
 		}
 		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
@@ -1128,7 +1129,8 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	}
 
 	for _, worker := range workers {
-		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) || !runtimeAcceptsRequest(request, workerRuntime(worker)) {
+		runtimeName := workerRuntime(worker)
+		if !runtimeMatchesCheckpoint(request, runtimeName) || !runtimeAcceptsRequest(request, runtimeName) {
 			continue
 		}
 		if !acceleratorMatchesCheckpoint(request, worker.Gpu) {
@@ -1212,15 +1214,10 @@ func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName strin
 	return requiredRuntime == "" || runtimeName == requiredRuntime
 }
 
-// runtimeAcceptsRequest is the two-way gate between the microvm runtime and
-// everything else. A microvm worker only takes a CPU sandbox that explicitly
-// asked for a VM (use_vm); every other runtime refuses use_vm requests, so a
-// sandbox that asked for a VM fails closed instead of quietly landing in a
-// container. Checkpoints are runtime-specific and matched by runtimeAccepts.
+// runtimeAcceptsRequest reserves microvm workers for use_vm CPU sandboxes and
+// keeps use_vm requests off every other runtime, so they fail closed.
+// Checkpoint runtimes are matched separately by runtimeMatchesCheckpoint.
 func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) bool {
-	if request == nil {
-		return true
-	}
 	if runtimeName != types.ContainerRuntimeMicroVM.String() {
 		return !request.UseVM
 	}

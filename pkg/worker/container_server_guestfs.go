@@ -15,7 +15,7 @@ import (
 // writable layer is not visible from the host (microVM root disks). The
 // sandbox file RPCs then run inside the guest instead of on the host overlay.
 func guestFS(instance *ContainerInstance) (runtime.GuestFilesystem, bool) {
-	if instance == nil || instance.Runtime == nil {
+	if instance == nil {
 		return nil, false
 	}
 	gfs, ok := instance.Runtime.(runtime.GuestFilesystem)

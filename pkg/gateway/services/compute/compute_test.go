@@ -2687,9 +2687,6 @@ func TestRequestAgentTransportCredentialVendsNonEphemeralNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestAgentTransportCredential() error = %v", err)
 	}
-	// A restart must reuse the same tailnet node so its IP is stable; an
-	// ephemeral node would come back with an address long-lived gateway
-	// clients cannot reach until control reaps the old one.
 	if !resp.GetOk() || resp.GetEphemeral() {
 		t.Fatalf("RequestAgentTransportCredential() = %+v, want ok non-ephemeral", resp)
 	}

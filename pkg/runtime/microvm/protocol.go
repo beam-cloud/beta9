@@ -1,5 +1,5 @@
 // Package microvm holds the contract between the worker's microvm runtime
-// (pkg/runtime/microvm.go) and the guest init (cmd/vminit): the VM spec the
+// (pkg/runtime) and the guest init (cmd/vminit): the VM spec the
 // host writes into the shared canvas, the control messages exchanged over
 // vsock, and the fixed paths both sides agree on. It must stay stdlib-only so
 // the guest init remains a small static binary.
@@ -33,11 +33,9 @@ const (
 	NewRoot = CanvasDir + "/newroot"
 	// OldRoot is where pivot_root parks the virtiofs root inside the new root.
 	OldRoot = CanvasDir + "/oldroot"
-	// BindsDir is where the host mounts the spec's bind mounts inside the
-	// canvas, one numbered entry each, instead of at their destinations.
-	// virtiofsd announces every bind as a submount and overlayfs refuses to
-	// look through a submount in its lower layer (EREMOTE), so the guest binds
-	// them from the virtiofs root into the assembled root instead.
+	// BindsDir holds the spec's bind mounts inside the canvas, one numbered
+	// entry each. virtiofsd exposes each as a submount, which overlayfs rejects
+	// in its lower layer (EREMOTE), so the guest binds them into the new root.
 	BindsDir = CanvasDir + "/binds"
 	// OCISpecFile is the bundle config.json; the worker writes it at the root
 	// of the rootfs, which is the canvas root.
@@ -47,8 +45,6 @@ const (
 	VirtiofsTag = "beamfs"
 	// ControlPort is the vsock port the guest connects to on the host (CID 2).
 	ControlPort = 1024
-	// HostCID is the well-known vsock CID of the host.
-	HostCID = 2
 	// GuestCID is the CID assigned to every VM (one VM per vsock device).
 	GuestCID = 3
 
@@ -63,11 +59,9 @@ const (
 	DockerDataRoot = "/var/lib/docker"
 )
 
-// Spec is what the host tells the guest init about this VM. It lives at
-// SpecFile inside the canvas next to the OCI config.json.
+// Spec is what the host tells the guest init about this VM, at SpecFile.
 type Spec struct {
-	Hostname string  `json:"hostname,omitempty"`
-	Network  Network `json:"network"`
+	Network Network `json:"network"`
 	// RootDisk is the block device holding the overlay upper (and Docker
 	// state). Always present.
 	RootDisk string `json:"root_disk"`
@@ -79,8 +73,6 @@ type Spec struct {
 	// Mounts are the OCI mounts the guest applies into the new root, in spec
 	// order, after its own pseudo filesystems.
 	Mounts []Mount `json:"mounts,omitempty"`
-	// ControlPort overrides ControlPort when non-zero.
-	ControlPort uint32 `json:"control_port,omitempty"`
 }
 
 // Network is the static configuration of the guest's single NIC. Addresses
@@ -102,8 +94,7 @@ type Disk struct {
 }
 
 const (
-	// MountBind is bound from Source, a path under BindsDir in the virtiofs
-	// root; overlayfs does not follow mounts inside its lower layer.
+	// MountBind is bound from Source, a path under BindsDir.
 	MountBind = "bind"
 	// MountTmpfs is created fresh with Options.
 	MountTmpfs = "tmpfs"
@@ -126,7 +117,6 @@ const (
 	MsgStarted = "started" // Payload: Pid of the container process.
 	MsgExit    = "exit"    // Payload: Code, the container process exit code.
 	MsgAck     = "ack"     // Payload: ID of the command, OK, Error.
-	MsgLog     = "log"     // Payload: Text; diagnostics from init.
 	MsgPing    = "ping"    // Keepalive; lets init notice a connection that died with a restore.
 
 	// Host -> guest.
@@ -149,7 +139,7 @@ const FreezeLimit = 20 * time.Second
 // opens one connection per operation to FSPort, writes an FSRequest as a
 // single JSON line, then (for write) the raw payload of exactly Length bytes.
 // The guest answers with an FSResponse as a single JSON line, then (for read)
-// the raw file bytes of exactly Length bytes. Nothing is base64-encoded.
+// the raw file bytes of exactly Length bytes.
 const (
 	FSPort = 1025
 
@@ -219,15 +209,14 @@ type FSResponse struct {
 
 // Message is one control frame.
 type Message struct {
-	Type   string `json:"type"`
-	ID     uint64 `json:"id,omitempty"`
-	Pid    int    `json:"pid,omitempty"`
-	Code   int    `json:"code,omitempty"`
-	Signal int    `json:"signal,omitempty"`
-	OK     bool   `json:"ok,omitempty"`
-	Error  string `json:"error,omitempty"`
-	Text   string `json:"text,omitempty"`
-	// Network is set on MsgNetwork.
+	Type    string   `json:"type"`
+	ID      uint64   `json:"id,omitempty"`
+	Pid     int      `json:"pid,omitempty"`
+	Code    int      `json:"code,omitempty"`
+	Signal  int      `json:"signal,omitempty"`
+	OK      bool     `json:"ok,omitempty"`
+	Error   string   `json:"error,omitempty"`
+	Text    string   `json:"text,omitempty"`
 	Network *Network `json:"network,omitempty"`
 }
 
@@ -235,8 +224,8 @@ type Message struct {
 // peer is not trusted to keep a line finite.
 const MaxLineBytes = 64 << 10
 
-// ReadLine returns the next line from r, without over-reading past it, or
-// an error when it exceeds MaxLineBytes. r must be sized at least MaxLineBytes.
+// ReadLine returns the next line from r without consuming past it. r's buffer
+// must be exactly MaxLineBytes; a longer line is an error.
 func ReadLine(r *bufio.Reader) ([]byte, error) {
 	line, err := r.ReadSlice('\n')
 	if errors.Is(err, bufio.ErrBufferFull) {

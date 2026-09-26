@@ -2548,8 +2548,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
 	defer cleanupCancel()
 
-	// Per container: nothing here touches shared state, and a node-wide lock
-	// made bursts of stops time out and leak the veth, namespace and address.
+	// Keyed per container so a burst of stops does not queue on one node-wide lock.
 	lockKey := m.containerNetworkLockKey(containerId)
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(cleanupCtx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: lockKey,

@@ -54,8 +54,7 @@ func qcowRootDiskMount(request *types.ContainerRequest) *types.Mount {
 
 // checkpointFilesystemOnDisk reports whether the container's writable layer
 // lives on a disk the checkpoint already carries: a sealed qcow root disk,
-// or the scratch disk of a block-root runtime. The worker then neither
-// copies the upper dir into the checkpoint nor reseeds it on restore.
+// or the scratch disk of a block-root runtime.
 func checkpointFilesystemOnDisk(request *types.ContainerRequest, rt runtime.Runtime) bool {
 	return qcowRootDiskMount(request) != nil || (rt != nil && rt.Capabilities().BlockRoot)
 }
@@ -136,7 +135,6 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 		// The guest consumes the volume as a block device; nothing is mounted
 		// on the host, and the pre-pivot freeze runs inside the guest.
 		attachSpec.Export = disk.ExportVhostUser
-		attachSpec.Mountpoint = ""
 		attachSpec.Freeze = s.guestDiskFreezer(request.ContainerId, mount)
 	}
 	_, err = s.diskManager.Attach(ctx, attachSpec, &qcowChunkSource{cacheReader: s.durableDiskSnapshotCacheReader(), stores: stores})
@@ -623,9 +621,6 @@ func (s *Worker) detachQcowDurableDiskMount(ctx context.Context, request *types.
 	if s.diskManager == nil {
 		return nil
 	}
-	// Keyed by owner: the final sync already detached this container's
-	// volume, and by the time the cleanup safety net runs the key may belong
-	// to a successor container that re-attached the same disk.
 	return s.diskManager.DetachOwned(ctx, s.qcowVolumeKey(request, mount), request.ContainerId)
 }
 

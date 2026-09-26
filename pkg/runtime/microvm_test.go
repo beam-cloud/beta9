@@ -151,13 +151,11 @@ func TestMicroVMGuestSpec(t *testing.T) {
 	}
 
 	got := microVMGuestSpec(spec, network, root, extra, mounts)
-	assert.Equal(t, "sb-1", got.Hostname)
 	assert.True(t, got.Docker)
 	assert.Equal(t, "/dev/vda", got.RootDisk)
 	assert.Equal(t, []microvm.Disk{{Device: "/dev/vdb", MountPath: "/data", ReadOnly: true}}, got.Disks)
 	assert.Equal(t, microvm.Mount{Type: microvm.MountTmpfs, Destination: "/tmp", Options: []string{"size=1g"}}, got.Mounts[0])
 	assert.Equal(t, mounts[1], got.Mounts[1])
-	assert.Equal(t, uint32(microvm.ControlPort), got.ControlPort)
 }
 
 func TestCpusetSize(t *testing.T) {
@@ -233,19 +231,4 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	assert.ErrorContains(t, err, "snapshot has 2 disks, this VM has 1")
 	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, microVMDisk{socket: "/x"}, extra)
 	assert.ErrorContains(t, err, "not a vhost-user export", "a scratch-root snapshot cannot be restored onto a durable root")
-}
-
-func TestMicroVMProtocolRoundTrip(t *testing.T) {
-	var buf strings.Builder
-	enc := microvm.NewEncoder(&buf)
-	require.NoError(t, enc.Encode(microvm.Message{Type: microvm.MsgSignal, ID: 7, Signal: 15}))
-	require.NoError(t, enc.Encode(microvm.Message{Type: microvm.MsgExit, Code: 3}))
-
-	dec := microvm.NewDecoder(strings.NewReader(buf.String()))
-	first, err := dec.Decode()
-	require.NoError(t, err)
-	assert.Equal(t, microvm.Message{Type: microvm.MsgSignal, ID: 7, Signal: 15}, first)
-	second, err := dec.Decode()
-	require.NoError(t, err)
-	assert.Equal(t, microvm.Message{Type: microvm.MsgExit, Code: 3}, second)
 }

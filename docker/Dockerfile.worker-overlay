@@ -42,7 +42,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Cloud Hypervisor + virtiofsd
 # ========================
 # Static release binaries, pinned and checksummed. virtiofsd publishes x86_64
-# only; arm64 workers would need it built from source.
+# only; on arm64 the hypervisor ships but NewMicroVM reports the runtime
+# unavailable ("virtiofsd not found in PATH") rather than failing the build.
 FROM debian:bookworm AS microvm-tools
 
 ARG TARGETARCH
@@ -69,9 +70,6 @@ case "$TARGETARCH" in
         install -m 0755 /tmp/virtiofsd/virtiofsd /out/virtiofsd
         ;;
     arm64)
-        # virtiofsd publishes no arm64 binary. The hypervisor is still shipped
-        # so the image layout matches; NewMicroVM fails at startup on arm64
-        # workers ("virtiofsd not found in PATH") instead of the build failing.
         curl -fsSL "${base}/cloud-hypervisor-static-aarch64" -o /out/cloud-hypervisor
         echo "${CLOUD_HYPERVISOR_ARM64_SHA256}  /out/cloud-hypervisor" | sha256sum -c -
         echo "virtiofsd ${VIRTIOFSD_VERSION} has no published arm64 binary; the microvm runtime is amd64-only" >&2
@@ -90,7 +88,7 @@ EOT
 # Mainline longterm kernel with Cloud Hypervisor's reference config plus the
 # netfilter/bridge/IPv6 set Docker-in-VM needs (docker/microvm/). Everything
 # is built in: the guest boots straight from the virtio-fs root with no
-# initramfs or modules.
+# initramfs or modules. amd64 only.
 FROM debian:bookworm AS microvm-kernel
 
 ARG TARGETARCH
@@ -104,8 +102,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 COPY docker/microvm/guest-kernel.config docker/microvm/guest-kernel.fragment docker/microvm/*.patch /build/beam/
 
-# The config is x86_64; an arm64 image gets no guest kernel and the runtime
-# reports itself unavailable there.
 RUN <<EOT
 set -eux
 mkdir -p /out

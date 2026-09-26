@@ -71,10 +71,7 @@ type AttachSpec struct {
 	// consumer can quiesce the filesystem it has mounted; it returns the
 	// matching thaw. Optional.
 	Freeze func(ctx context.Context) (thaw func(), err error)
-	// Owner names who attached the volume (a container id). DetachOwned only
-	// releases a volume still held by that owner, so a finished container's
-	// late cleanup cannot take down the same disk its successor just
-	// attached under the same key.
+	// Owner names who attached the volume (a container id); see DetachOwned.
 	Owner string
 }
 
@@ -94,7 +91,6 @@ type SealedLayer struct {
 }
 
 func (v *Volume) Mountpoint() string { return v.state.Mountpoint }
-func (v *Volume) Owner() string      { return v.owner }
 func (v *Volume) Depth() int         { return v.state.depth() }
 func (v *Volume) ReadOnly() bool     { return v.state.ReadOnly }
 
@@ -265,8 +261,9 @@ func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersD
 	return state, nil
 }
 
-// start launches the daemon, connects the NBD device, formats fresh disks,
-// and mounts the filesystem. Spares have no mountpoint and stay unmounted.
+// start launches the daemon and either serves a vhost-user export or connects
+// the NBD device, formats a fresh disk and mounts it. Spares have no
+// mountpoint and stay unmounted.
 func (v *Volume) start(ctx context.Context) (err error) {
 	m := v.manager
 	state := v.state
@@ -348,9 +345,8 @@ func (v *Volume) start(ctx context.Context) (err error) {
 }
 
 // startExported serves the head over vhost-user-blk for a VM. A fresh disk is
-// formatted first through a short-lived NBD attachment (mkfs needs a block
-// device and the guest init has none), then the daemon is started again with
-// the vhost-user export and nothing stays connected on the host.
+// first formatted over a short-lived NBD attachment, since the guest init has
+// no mkfs.
 func (v *Volume) startExported(ctx context.Context, openPath string, freshDisk bool, phases *common.PhaseTimer) error {
 	m := v.manager
 	state := v.state
@@ -492,10 +488,8 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	return sealed, false, nil
 }
 
-// quiesce makes the filesystem on the head consistent for the pivot: the host
-// fsfreeze on an NBD mount, or the consumer's Freeze hook (the guest's own
-// FIFREEZE) for a vhost-user export. Without a hook the pivot is
-// crash-consistent, which ext4's journal recovers from.
+// quiesce freezes the head's filesystem for the pivot: host fsfreeze for an
+// NBD mount, the consumer's Freeze hook for a vhost-user export.
 func (v *Volume) quiesce(ctx context.Context) (func(), error) {
 	if v.state.exportMode() == ExportVhostUser {
 		if v.freeze == nil {

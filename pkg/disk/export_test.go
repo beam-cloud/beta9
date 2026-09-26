@@ -186,7 +186,7 @@ func TestDetachOwnedLeavesSuccessorVolumeAlone(t *testing.T) {
 	}
 }
 
-func TestAttachRejectsUnknownExportAndAllowsNoMountpointForVhostUser(t *testing.T) {
+func TestAttachRejectsUnknownExportAndNBDWithoutMountpoint(t *testing.T) {
 	manager := NewManager(Config{Root: t.TempDir(), Runner: fakeRunner})
 	_, err := manager.Attach(context.Background(), AttachSpec{Key: "k", VirtualSizeBytes: 1, Export: ExportMode("bogus")}, nil)
 	if err == nil || !strings.Contains(err.Error(), "unsupported export mode") {

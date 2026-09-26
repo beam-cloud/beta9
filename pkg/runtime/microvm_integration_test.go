@@ -1,6 +1,6 @@
 //go:build linux && microvm
 
-// Stage 1 mechanics for the microvm runtime. These tests boot real Cloud
+// Integration tests for the microvm runtime. They boot real Cloud
 // Hypervisor VMs and therefore need KVM, the worker image's tooling on PATH
 // (cloud-hypervisor, virtiofsd, mkfs.ext4, iptables, qemu-storage-daemon), root,
 // and rootfs tarballs exported by hack/microvm-smoke.sh. They are compiled
@@ -169,7 +169,6 @@ type testVM struct {
 	id       string
 	rootfs   string // extracted image
 	canvas   string // overlay merged dir == bundle
-	netnsDir string
 	netns    string
 	ip4      net.IP
 	ip6      net.IP
@@ -436,7 +435,7 @@ func (vm *testVM) cleanup() {
 	_ = os.RemoveAll(filepath.Dir(vm.canvas))
 }
 
-// extractRootfs unpacks <image>.tar once per process and returns the directory.
+// extractRootfs unpacks <image>.tar once per work dir and returns the directory.
 func extractRootfs(t *testing.T, image string) string {
 	t.Helper()
 	tarball := filepath.Join(testRootfsDir, image+".tar")
@@ -667,8 +666,6 @@ func TestMicroVMCheckpointRestore(t *testing.T) {
 	// Restore returns only after the guest took its new identity.
 	code, out = vm.sh(client, "cat /marker; cat /counter; ip -4 -o addr show dev eth0 | awk '{print $4}'; cat /sys/class/net/eth0/address")
 	require.Equal(t, 0, code, out)
-	_, state := vm.sh(client, "ip -o addr; ip route; ip neigh")
-	t.Logf("restored guest network:\n%s", state)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	require.Len(t, lines, 4, out)
 	require.Equal(t, restored.vethMAC.String(), lines[3], "the guest took the new slot's MAC, which the worker pins its addresses to")
@@ -694,8 +691,8 @@ func TestMicroVMCheckpointRestore(t *testing.T) {
 }
 
 // A non-terminal checkpoint (the SDK's snapshot_memory) leaves the VM
-// serving: every device keeps working after the pause/snapshot/resume cycle
-// and the copied root disk stays sparse.
+// serving: every device keeps working after the pause, snapshot and in-place
+// restore, and the copied root disk stays sparse.
 func TestMicroVMCheckpointLeaveRunning(t *testing.T) {
 	rt := requireMicroVMEnv(t)
 	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true})

@@ -588,14 +588,13 @@ func NewWorker() (_ *Worker, err error) {
 	case types.ContainerRuntimeMicroVM.String():
 		// A pool declared as microvm must be one: falling back to runc would
 		// silently downgrade the isolation the sandbox asked for.
-		microvmRuntime, err := runtime.New(runtime.Config{
+		defaultRuntime, err = runtime.New(runtime.Config{
 			Type:  types.ContainerRuntimeMicroVM.String(),
 			Debug: config.DebugMode,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create microvm runtime: %w", err)
 		}
-		defaultRuntime = microvmRuntime
 		log.Info().Str("pool", workerPoolName).Msg("microvm runtime initialized")
 	default:
 		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")

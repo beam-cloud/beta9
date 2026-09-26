@@ -72,8 +72,7 @@ type qsdProcess struct {
 // startQSD launches one qemu-storage-daemon serving headPath either over an
 // NBD unix socket or as a vhost-user-blk device, and waits until the export
 // socket exists. fmtNode is the node name of the active qcow2 layer, which
-// changes on every pivot; both export types reference it and follow pivots
-// the same way.
+// changes on every pivot.
 func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode string, readOnly bool, export ExportMode) (*qsdProcess, error) {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return nil, err

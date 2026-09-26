@@ -396,8 +396,8 @@ func tarXattrArgs() []string {
 	return args
 }
 
-// tarSparseArgs stores holes as holes (GNU tar only): a VM checkpoint carries
-// a mostly-empty root disk and memory image at their allocated size.
+// tarSparseArgs stores holes as holes (GNU tar only); VM checkpoints carry
+// mostly-empty root disk and memory images.
 func tarSparseArgs() []string {
 	args := tarXattrArgs()
 	if runtime.GOOS == "linux" {

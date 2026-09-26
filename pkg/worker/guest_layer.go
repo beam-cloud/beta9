@@ -7,18 +7,16 @@ import (
 	"github.com/beam-cloud/beta9/pkg/runtime"
 )
 
-// guestTreeExcludes are the guest paths that are mounts or plumbing rather
-// than container state and must not end up in an image or checkpoint.
+// Guest paths that are mounts or plumbing rather than container state; they
+// must not end up in an image or checkpoint.
 var (
 	guestUpperExcludes = []string{".beam"}
 	guestRootExcludes  = []string{".beam", "proc", "sys", "dev"}
 )
 
 // containerUpperDir returns the container's writable layer as a host
-// directory. For host-overlay runtimes that is the overlay upper dir; for a
-// runtime that keeps its writable layer inside the guest it is exported to a
-// temporary directory first. cleanup removes any export and is always safe
-// to call.
+// directory, exporting it to a temp dir when the runtime keeps it in the
+// guest. cleanup is always safe to call.
 func containerUpperDir(ctx context.Context, instance *ContainerInstance) (string, func(), error) {
 	gfs, ok := guestFS(instance)
 	if !ok {

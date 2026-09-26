@@ -1,21 +1,11 @@
 //go:build linux
 
-// vminit is PID 1 inside a beam microvm. The kernel boots with the container
-// rootfs (the worker's overlay "canvas") mounted read-only over virtio-fs and
-// execs this binary from it. vminit then:
-//
-//  1. mounts the writable block device and layers an overlay (lower = the
-//     virtio-fs share, upper = the disk) as the real root,
-//  2. re-applies the OCI spec's bind and tmpfs mounts, binds the disk's docker
-//     directory over /var/lib/docker when asked, mounts extra disks,
-//  3. pivots into the new root, mounts the usual pseudo filesystems and
-//     cgroup2, configures the NIC statically, and
-//  4. runs the OCI process, reporting its pid and exit code to the host over
-//     vsock while accepting signals and filesystem freeze requests.
-//
-// Any failure powers the VM off so the host sees a prompt exit instead of a
-// hung guest. Everything here is the guest's own kernel and root; the VM is
-// the isolation boundary, so the process runs with full privileges.
+// vminit is PID 1 inside a beam microvm, exec'd from the virtio-fs canvas. It
+// layers the writable root disk over the canvas, mounts the guest's pseudo
+// filesystems and the OCI spec's mounts into the result, pivots into it, and
+// runs the container process, reporting to the host over vsock. Any failure
+// powers the VM off so the host sees a prompt exit, not a hung guest. The VM
+// is the isolation boundary, so init applies no namespaces or seccomp.
 package main
 
 import (
@@ -55,10 +45,6 @@ const (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "--version" {
-		fmt.Println("beam-vminit")
-		return
-	}
 	if os.Getpid() != 1 {
 		fmt.Fprintln(os.Stderr, "beam-vminit must run as PID 1 inside a microvm")
 		os.Exit(2)
@@ -110,7 +96,7 @@ func run() (int, error) {
 		return -1, fmt.Errorf("pivot root: %w", err)
 	}
 	finishPseudo()
-	hostname := firstNonEmpty(spec.Hostname, vm.Hostname)
+	hostname := spec.Hostname
 	if hostname != "" {
 		if err := unix.Sethostname([]byte(hostname)); err != nil {
 			logf("set hostname %q: %v", hostname, err)
@@ -123,7 +109,7 @@ func run() (int, error) {
 	if err := serveFS(microvm.FSPort); err != nil {
 		return -1, err
 	}
-	ctrl, err := dialControl(vm.ControlPort)
+	ctrl, err := dialControl(microvm.ControlPort)
 	if err != nil {
 		return -1, err
 	}
@@ -179,9 +165,6 @@ func readVMSpec() (*microvm.Spec, error) {
 	}
 	if vm.RootDisk == "" {
 		return nil, errors.New("vm spec has no root disk")
-	}
-	if vm.ControlPort == 0 {
-		vm.ControlPort = microvm.ControlPort
 	}
 	return &vm, nil
 }
@@ -246,9 +229,9 @@ func assembleRoot(vm *microvm.Spec) error {
 		return fmt.Errorf("bind disk into new root: %w", err)
 	}
 
-	// The guest's own pseudo filesystems go in first so a spec mount under
-	// them (/run/beta9, /dev/shm) is not hidden later; then the spec's mounts
-	// in its order, so a tmpfs precedes the binds beneath it.
+	// The guest's pseudo filesystems go first so a spec mount under one
+	// (/run/beta9) is not hidden; the spec's mounts follow in spec order so a
+	// tmpfs precedes the binds beneath it.
 	if err := mountPseudo(newRoot); err != nil {
 		return fmt.Errorf("mount pseudo filesystems: %w", err)
 	}
@@ -305,12 +288,11 @@ func waitForDevice(device string) error {
 	}
 }
 
-// applyBind binds a host-provided mount from the virtio-fs root (where it is
-// a submount the kernel auto-mounts on first access, under BindsDir) to its
-// destination in the new root. The source path is resolved through the
-// virtio-fs mount, never through the overlay, which cannot cross submounts.
+// applyBind binds a mount from its virtio-fs submount under BindsDir to its
+// destination in the new root, resolving the source through virtio-fs, not
+// the overlay.
 func applyBind(newRoot string, bind microvm.Mount) error {
-	source := firstNonEmpty(bind.Source, bind.Destination)
+	source := bind.Source
 	target := filepath.Join(newRoot, bind.Destination)
 	if bind.File {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -326,7 +308,7 @@ func applyBind(newRoot string, bind microvm.Mount) error {
 	}
 	// Touch the source so the virtio-fs submount is instantiated.
 	if _, err := os.Stat(source); err != nil {
-		return fmt.Errorf("bind source %s: %w", source, err)
+		return fmt.Errorf("stat bind source %s: %w", source, err)
 	}
 	if err := unix.Mount(source, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 		return fmt.Errorf("bind %s: %w", bind.Destination, err)
@@ -383,15 +365,14 @@ func parseMountOptions(options []string) (uintptr, string) {
 }
 
 func pivotRoot() error {
-	newRoot := microvm.NewRoot
-	oldRoot := filepath.Join(newRoot, strings.TrimPrefix(microvm.OldRoot, "/"))
-	if err := os.MkdirAll(oldRoot, 0o755); err != nil {
+	putOld := strings.TrimPrefix(microvm.OldRoot, "/")
+	if err := os.MkdirAll(filepath.Join(microvm.NewRoot, putOld), 0o755); err != nil {
 		return err
 	}
-	if err := unix.Chdir(newRoot); err != nil {
+	if err := unix.Chdir(microvm.NewRoot); err != nil {
 		return err
 	}
-	if err := unix.PivotRoot(".", strings.TrimPrefix(microvm.OldRoot, "/")); err != nil {
+	if err := unix.PivotRoot(".", putOld); err != nil {
 		return fmt.Errorf("pivot_root: %w", err)
 	}
 	if err := unix.Chroot("."); err != nil {
@@ -458,10 +439,9 @@ func finishPseudo() {
 
 // --- network -----------------------------------------------------------------------
 
-// reconfigureNetwork moves the NIC to cfg's MAC and addresses. After a
-// restore the guest still holds the checkpointed container's identity, and
-// the host pins each address to its slot's MAC, so all of it has to change
-// before the new addresses work.
+// reconfigureNetwork gives the NIC cfg's MAC and addresses and drops the old
+// ones and their neighbours: a restored guest still holds the checkpointed
+// container's identity, and the host pins each address to its slot's MAC.
 func reconfigureNetwork(cfg microvm.Network) error {
 	link, err := findNIC(cfg.MAC)
 	if err != nil {
@@ -522,7 +502,7 @@ func configureNetwork(cfg microvm.Network) error {
 			return fmt.Errorf("parse ipv4 %q: %w", cfg.IPv4, err)
 		}
 		if err := netlink.AddrReplace(link, addr); err != nil {
-			return fmt.Errorf("add %s: %w", cfg.IPv4, err)
+			return fmt.Errorf("add address %s: %w", cfg.IPv4, err)
 		}
 		if cfg.Gateway4 != "" {
 			gw := net.ParseIP(cfg.Gateway4)
@@ -538,7 +518,7 @@ func configureNetwork(cfg microvm.Network) error {
 		}
 		addr.Flags = unix.IFA_F_NODAD
 		if err := netlink.AddrReplace(link, addr); err != nil {
-			return fmt.Errorf("add %s: %w", cfg.IPv6, err)
+			return fmt.Errorf("add address %s: %w", cfg.IPv6, err)
 		}
 		if cfg.Gateway6 != "" {
 			gw := net.ParseIP(cfg.Gateway6)
@@ -551,8 +531,7 @@ func configureNetwork(cfg microvm.Network) error {
 	return nil
 }
 
-// waitOperUp returns once linkwatch has run for name (operstate "up"), which
-// takes a few milliseconds after LinkSetUp, or after limit.
+// waitOperUp waits up to limit for linkwatch to mark name operationally up.
 func waitOperUp(name string, limit time.Duration) {
 	path := "/sys/class/net/" + name + "/operstate"
 	deadline := time.Now().Add(limit)
@@ -630,9 +609,9 @@ func (c *control) connect(timeout time.Duration) error {
 	for {
 		fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 		if err != nil {
-			return fmt.Errorf("vsock socket: %w", err)
+			return fmt.Errorf("create vsock socket: %w", err)
 		}
-		err = unix.Connect(fd, &unix.SockaddrVM{CID: microvm.HostCID, Port: c.port})
+		err = unix.Connect(fd, &unix.SockaddrVM{CID: unix.VMADDR_CID_HOST, Port: c.port})
 		if err == nil {
 			file := os.NewFile(uintptr(fd), "vsock")
 			c.mu.Lock()
@@ -687,11 +666,9 @@ func (c *control) heartbeat(interval time.Duration) {
 	}
 }
 
-// serve handles host commands. Signals go to the container process;
-// freeze/thaw act on a mounted filesystem, the root disk by default. When
-// the stream dies the guest was most likely restored from a snapshot: init
-// reconnects to the (new) host, reports itself started again and takes the
-// container's new network configuration from the host.
+// serve handles host commands. A dead stream most likely means the guest was
+// restored from a snapshot, so init reconnects and reports started again,
+// which makes the new host push the container's network config.
 func (c *control) serve(childPid func() int) {
 	fr := &freezer{frozen: map[string]*frozenFS{}}
 	dec := microvm.NewDecoder(c.current())
@@ -710,14 +687,15 @@ func (c *control) serve(childPid func() int) {
 			continue
 		}
 		switch msg.Type {
-		case microvm.MsgPing:
 		case microvm.MsgNetwork:
 			if msg.Network == nil {
 				c.ack(msg.ID, errors.New("network config is missing"))
 				continue
 			}
 			err := reconfigureNetwork(*msg.Network)
-			logf("network reconfigured to %s %s: %v", msg.Network.IPv4, msg.Network.IPv6, err)
+			if err == nil {
+				logf("network reconfigured to %s %s", msg.Network.IPv4, msg.Network.IPv6)
+			}
 			c.ack(msg.ID, err)
 		case microvm.MsgSignal:
 			pid := childPid()
@@ -805,14 +783,13 @@ func (f *freezer) thawAll() {
 
 const maxSearchLineBytes = 16 << 20
 
-// serveFS accepts one vsock connection per filesystem operation from the
-// host: a JSON header line, raw payload bytes for writes, then a JSON reply
-// line and raw file bytes for reads. Started before the container process so
-// the worker's file RPCs work as soon as the sandbox is reachable.
+// serveFS answers the host's filesystem operations, one vsock connection each
+// (see microvm.FSPort). It starts before the container process so file RPCs
+// work as soon as the sandbox is reachable.
 func serveFS(port uint32) error {
 	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("vsock socket: %w", err)
+		return fmt.Errorf("create vsock socket: %w", err)
 	}
 	if err := unix.Bind(fd, &unix.SockaddrVM{CID: unix.VMADDR_CID_ANY, Port: port}); err != nil {
 		unix.Close(fd)
@@ -862,17 +839,17 @@ func handleFSConn(conn *os.File) error {
 	if _, err := conn.Write(append(header, '\n')); err != nil {
 		return err
 	}
-	if body != nil {
-		defer body.Close()
-		if reply.Length == microvm.FSStreamUntilEOF {
-			if _, err := io.Copy(conn, body); err != nil {
-				return fmt.Errorf("stream %s: %w", req.Path, err)
-			}
-			return nil
-		}
-		if _, err := io.CopyN(conn, body, reply.Length); err != nil {
-			return fmt.Errorf("stream %s: %w", req.Path, err)
-		}
+	if body == nil {
+		return nil
+	}
+	defer body.Close()
+	if reply.Length == microvm.FSStreamUntilEOF {
+		_, err = io.Copy(conn, body)
+	} else {
+		_, err = io.CopyN(conn, body, reply.Length)
+	}
+	if err != nil {
+		return fmt.Errorf("stream %s: %w", req.Path, err)
 	}
 	return nil
 }
@@ -884,9 +861,6 @@ func handleFSConn(conn *os.File) error {
 func handleFS(req microvm.FSRequest, payload io.Reader) (microvm.FSResponse, io.ReadCloser) {
 	reply, body, err := doFS(req, payload)
 	if err != nil {
-		if body != nil {
-			body.Close()
-		}
 		return microvm.FSResponse{Error: err.Error()}, nil
 	}
 	reply.OK = true
@@ -1034,12 +1008,10 @@ func doFS(req microvm.FSRequest, payload io.Reader) (microvm.FSResponse, io.Read
 	}
 }
 
-// writeTree streams root as a PAX tar the host can replay into an overlay
-// upper directory: ownership, modes, mtimes, symlinks, FIFOs, character and
-// block devices (overlay whiteouts are 0:0 character devices) and every
-// xattr (trusted.overlay.opaque marks opaque directories). Sockets are
-// skipped. Hard links become independent copies. A file that changes size
-// mid-stream is truncated or zero-padded to the size in its header.
+// writeTree streams root as a PAX tar the host replays into an overlay upper,
+// keeping ownership, modes, mtimes, symlinks, FIFOs, devices (whiteouts) and
+// xattrs (opaque dirs). Sockets are skipped and hard links become copies; a
+// file that changes size mid-stream is cut or zero-padded to its header size.
 func writeTree(w io.Writer, root string, exclude []string) error {
 	tw := tar.NewWriter(w)
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
@@ -1125,30 +1097,28 @@ func (zeroReader) Read(p []byte) (int, error) {
 }
 
 func listXattrs(path string) ([]string, error) {
-	buf := make([]byte, 4096)
-	for {
-		n, err := unix.Llistxattr(path, buf)
-		if err == unix.ERANGE {
-			buf = make([]byte, len(buf)*2)
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		var names []string
-		for _, name := range bytes.Split(buf[:n], []byte{0}) {
-			if len(name) > 0 {
-				names = append(names, string(name))
-			}
-		}
-		return names, nil
+	buf, err := xattrCall(func(b []byte) (int, error) { return unix.Llistxattr(path, b) })
+	if err != nil {
+		return nil, err
 	}
+	var names []string
+	for _, name := range bytes.Split(buf, []byte{0}) {
+		if len(name) > 0 {
+			names = append(names, string(name))
+		}
+	}
+	return names, nil
 }
 
 func getXattr(path, name string) ([]byte, error) {
+	return xattrCall(func(b []byte) (int, error) { return unix.Lgetxattr(path, name, b) })
+}
+
+// xattrCall retries call with a doubled buffer until the value fits.
+func xattrCall(call func([]byte) (int, error)) ([]byte, error) {
 	buf := make([]byte, 4096)
 	for {
-		n, err := unix.Lgetxattr(path, name, buf)
+		n, err := call(buf)
 		if err == unix.ERANGE {
 			buf = make([]byte, len(buf)*2)
 			continue
@@ -1209,15 +1179,17 @@ func searchFile(r io.Reader, regex *regexp.Regexp) ([]microvm.FSMatch, error) {
 
 func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 	env := proc.Env
-	if !envHas(env, "PATH=") {
-		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
-	}
-	// exec.LookPath consults this process's PATH, not the child's.
+	path, found := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", false
 	for _, kv := range env {
-		if key, value, ok := strings.Cut(kv, "="); ok && key == "PATH" {
-			os.Setenv("PATH", value)
+		if value, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path, found = value, true
 		}
 	}
+	if !found {
+		env = append(env, "PATH="+path)
+	}
+	// exec.LookPath consults this process's PATH, not the child's.
+	os.Setenv("PATH", path)
 	binary, err := exec.LookPath(proc.Args[0])
 	if err != nil {
 		return -1, fmt.Errorf("resolve %q: %w", proc.Args[0], err)
@@ -1226,7 +1198,6 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 	cmd := exec.Command(binary, proc.Args[1:]...)
 	cmd.Env = env
 	cmd.Dir = firstNonEmpty(proc.Cwd, "/")
-	cmd.Stdin = nil
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -1252,7 +1223,8 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 	go ctrl.heartbeat(controlHeartbeat)
 	logf("started %v as pid %d", proc.Args, pid)
 
-	for range sigchld {
+	for {
+		<-sigchld
 		for {
 			var status unix.WaitStatus
 			reaped, err := unix.Wait4(-1, &status, unix.WNOHANG, nil)
@@ -1263,11 +1235,9 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 				continue
 			}
 			code := exitCode(status)
-			// Flush before the host learns the process is gone: sync(2) sends
-			// FUSE_SYNCFS for every virtiofs superblock, which reaches the host
-			// filesystems behind the bind mounts (volumes on FUSE-backed object
-			// storage flush to the bucket here). Reporting first would let the
-			// host tear the VM down while that flush is still in flight.
+			// Sync before reporting: FUSE_SYNCFS flushes the host filesystems
+			// behind the virtio-fs binds (object-storage volumes upload here),
+			// and the host tears the VM down once it hears of the exit.
 			syncStart := time.Now()
 			unix.Sync()
 			if took := time.Since(syncStart); took > time.Second {
@@ -1277,7 +1247,6 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 			return code, nil
 		}
 	}
-	return -1, errors.New("signal channel closed")
 }
 
 func exitCode(status unix.WaitStatus) int {
@@ -1288,15 +1257,6 @@ func exitCode(status unix.WaitStatus) int {
 		return 128 + int(status.Signal())
 	}
 	return -1
-}
-
-func envHas(env []string, prefix string) bool {
-	for _, kv := range env {
-		if strings.HasPrefix(kv, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func firstNonEmpty(values ...string) string {

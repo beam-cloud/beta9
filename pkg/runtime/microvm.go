@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +23,7 @@ import (
 
 // The microvm runtime boots each container as a Cloud Hypervisor virtual
 // machine. The container rootfs (already an overlay merged directory holding
-// config.json) is shared read-only over virtio-fs; the guest init layers a
+// config.json) is shared over virtio-fs; the guest init layers a
 // writable block device over it, applies the spec's mounts, and runs the
 // container process. Network is the container's own namespace: a tap in that
 // namespace is L2-redirected to the veth so the guest owns the veth's
@@ -47,6 +48,9 @@ const (
 
 	microVMSysfsCgroupRoot       = "/sys/fs/cgroup"
 	microVMTapName               = "b9tap0"
+	microVMAPISocket             = "api.sock"
+	microVMVirtiofsSocket        = "virtiofs.sock"
+	microVMVsockSocket           = "vsock.sock"
 	microVMBootTimeout           = 90 * time.Second
 	microVMPowerOffTimeout       = 15 * time.Second
 	microVMControlRequestTimeout = 30 * time.Second
@@ -269,8 +273,8 @@ func microVMDiskPlan(spec *specs.Spec, scratchPath string) (root microVMDisk, ex
 			return root, nil, fmt.Errorf("annotation %s must be <socket>:<mount path>[:ro]", key)
 		}
 		readOnly := false
-		if path, flag, hasFlag := strings.Cut(mountPath, ":"); hasFlag {
-			mountPath = path
+		if dir, flag, hasFlag := strings.Cut(mountPath, ":"); hasFlag {
+			mountPath = dir
 			readOnly = flag == "ro"
 		}
 		if !filepath.IsAbs(mountPath) {
@@ -315,7 +319,7 @@ func microVMMountPlan(mounts []specs.Mount) []specs.Mount {
 			plan = append(plan, mount)
 			continue
 		}
-		if mount.Type == "bind" || mount.Type == "none" || mount.Type == "" || hasOption(mount.Options, "bind") || hasOption(mount.Options, "rbind") {
+		if mount.Type == "bind" || mount.Type == "none" || mount.Type == "" || slices.Contains(mount.Options, "bind") || slices.Contains(mount.Options, "rbind") {
 			if strings.TrimSpace(mount.Source) == "" || mount.Source == "none" {
 				continue
 			}
@@ -334,25 +338,14 @@ func underAny(path string, prefixes ...string) bool {
 	return false
 }
 
-func hasOption(options []string, name string) bool {
-	for _, option := range options {
-		if option == name {
-			return true
-		}
-	}
-	return false
-}
-
 // microVMGuestSpec is the vm.json the guest init reads: everything the host
 // decided that the guest has to act on.
 func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, mounts []microvm.Mount) *microvm.Spec {
 	vmSpec := &microvm.Spec{
-		Hostname:    spec.Hostname,
-		Network:     network,
-		RootDisk:    root.device,
-		Docker:      annotationBool(spec, MicroVMDockerAnnotation),
-		Mounts:      mounts,
-		ControlPort: microvm.ControlPort,
+		Network:  network,
+		RootDisk: root.device,
+		Docker:   annotationBool(spec, MicroVMDockerAnnotation),
+		Mounts:   mounts,
 	}
 	for _, disk := range extra {
 		vmSpec.Disks = append(vmSpec.Disks, microvm.Disk{Device: disk.device, MountPath: disk.mountPath, ReadOnly: disk.readOnly})
@@ -426,12 +419,12 @@ func microVMKernelCmdline() string {
 
 func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory int64, mac string, root microVMDisk, extra []microVMDisk) []string {
 	args := []string{
-		"--api-socket", "path=" + filepath.Join(stateDir, "api.sock"),
+		"--api-socket", "path=" + filepath.Join(stateDir, microVMAPISocket),
 		"--kernel", kernel,
 		"--cmdline", cmdline,
 		"--cpus", fmt.Sprintf("boot=%d", vcpus),
 		"--memory", fmt.Sprintf("size=%d,shared=on", memory),
-		"--fs", fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.VirtiofsTag, filepath.Join(stateDir, "virtiofs.sock")),
+		"--fs", fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.VirtiofsTag, filepath.Join(stateDir, microVMVirtiofsSocket)),
 		"--disk", root.arg,
 	}
 	for _, disk := range extra {
@@ -439,7 +432,7 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 	}
 	args = append(args,
 		"--net", fmt.Sprintf("tap=%s,mac=%s", microVMTapName, mac),
-		"--vsock", fmt.Sprintf("cid=%d,socket=%s", microvm.GuestCID, filepath.Join(stateDir, "vsock.sock")),
+		"--vsock", fmt.Sprintf("cid=%d,socket=%s", microvm.GuestCID, filepath.Join(stateDir, microVMVsockSocket)),
 		"--rng", "src=/dev/urandom",
 		// Pages the guest frees are punched out of its memory on the host,
 		// so idle VMs shrink and snapshots carry only live memory.
@@ -455,16 +448,14 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 // else from microVMHypervisorArgs is passed.
 func microVMRestoreArgs(stateDir, snapshotDir string) []string {
 	return []string{
-		"--api-socket", "path=" + filepath.Join(stateDir, "api.sock"),
+		"--api-socket", "path=" + filepath.Join(stateDir, microVMAPISocket),
 		"--restore", "source_url=file://" + snapshotDir + ",resume=true",
 	}
 }
 
 // rewriteSnapshotConfig points a snapshot's device config at this VM's
-// sockets, disk image and MAC. Cloud Hypervisor documents config.json as
-// editable between snapshot and restore for exactly this. Devices are
-// matched by position: our --disk order is root first, then the extra disks
-// in annotation order, and there is one net, one fs and one vsock device.
+// sockets, disk image and MAC. Devices are matched by position: --disk order
+// is root first, then the extra disks, and there is one net, fs and vsock.
 func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Network, root microVMDisk, extra []microVMDisk) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(config, &cfg); err != nil {
@@ -500,11 +491,11 @@ func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Netwo
 	}
 	if fs, _ := cfg["fs"].([]any); len(fs) == 1 {
 		if entry, ok := fs[0].(map[string]any); ok {
-			entry["socket"] = filepath.Join(stateDir, "virtiofs.sock")
+			entry["socket"] = filepath.Join(stateDir, microVMVirtiofsSocket)
 		}
 	}
 	if vsock, ok := cfg["vsock"].(map[string]any); ok {
-		vsock["socket"] = filepath.Join(stateDir, "vsock.sock")
+		vsock["socket"] = filepath.Join(stateDir, microVMVsockSocket)
 	}
 	return json.Marshal(cfg)
 }
@@ -514,7 +505,7 @@ func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Netwo
 // lineWriter reassembles the serial console into whole lines before handing
 // them to the worker's output writer, which treats each Write as one log
 // record; the guest writes the console a few bytes at a time. A partial line
-// is flushed once it exceeds maxLine or on Close.
+// is flushed once it reaches lineWriterMaxLine, or on Close.
 type lineWriter struct {
 	mu  sync.Mutex
 	dst io.Writer

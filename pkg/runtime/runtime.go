@@ -68,9 +68,7 @@ type CheckpointOpts struct {
 	FileLocks    bool         // Preserve file locks held by container processes
 	OutputWriter OutputWriter // Writer for checkpoint output
 	// WhilePaused runs after the image is written and before the container
-	// resumes or ends, for runtimes that stop it to checkpoint (microvm). A
-	// disk sealed here pairs with the memory image; one sealed after
-	// LeaveRunning resumed the guest would not.
+	// resumes or ends (microvm only), so a disk sealed there matches the memory image.
 	WhilePaused func(ctx context.Context) error
 }
 
@@ -157,8 +155,8 @@ type Config struct {
 	MicroVMHypervisorPath string // cloud-hypervisor binary (default: "cloud-hypervisor")
 	MicroVMVirtiofsdPath  string // virtiofsd binary (default: "virtiofsd")
 	MicroVMKernelPath     string // guest vmlinux (default: DefaultMicroVMKernelPath)
-	MicroVMInitPath       string // static guest init bind-mounted into the rootfs (default: DefaultMicroVMInitPath)
-	MicroVMStateRoot      string // per-VM sockets, scratch disks, pidfiles (default: DefaultMicroVMStateRoot)
+	MicroVMInitPath       string // static guest init copied into the canvas (default: DefaultMicroVMInitPath)
+	MicroVMStateRoot      string // per-VM sockets, restore staging and network slot records (default: DefaultMicroVMStateRoot)
 }
 
 // New creates a new Runtime based on the provided configuration

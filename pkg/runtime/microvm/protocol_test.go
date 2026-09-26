@@ -31,3 +31,21 @@ func TestReadLineDoesNotConsumePastTheLine(t *testing.T) {
 		t.Fatalf("payload after the header must remain readable, got %q", rest)
 	}
 }
+
+func TestEncoderDecoderRoundTrip(t *testing.T) {
+	var buf strings.Builder
+	enc := NewEncoder(&buf)
+	want := []Message{{Type: MsgSignal, ID: 7, Signal: 15}, {Type: MsgExit, Code: 3}}
+	for _, msg := range want {
+		if err := enc.Encode(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dec := NewDecoder(strings.NewReader(buf.String()))
+	for _, msg := range want {
+		got, err := dec.Decode()
+		if err != nil || got.Type != msg.Type || got.ID != msg.ID || got.Signal != msg.Signal || got.Code != msg.Code {
+			t.Fatalf("got %+v, %v; want %+v", got, err, msg)
+		}
+	}
+}

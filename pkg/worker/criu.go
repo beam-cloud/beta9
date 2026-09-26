@@ -52,7 +52,7 @@ const (
 	terminalCheckpointStopWait      = 5 * time.Second
 	checkpointStatePublicationTTL   = 5 * time.Second
 	checkpointFilesystemOnlyFile    = "filesystem-only"
-	checkpointFilesystemOnDiskFile  = "filesystem-on-disk" // Upper layer lives on the sealed qcow root disk.
+	checkpointFilesystemOnDiskFile  = "filesystem-on-disk" // Upper layer lives on a disk the checkpoint carries.
 	checkpointFilesystemOnDiskV1    = "v1\n"
 	checkpointFilesystemOnlyV1      = "v1\n"
 	checkpointForcedRuncProfileFile = "beam-forced-runc-profile"
@@ -1033,7 +1033,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	opts.CheckpointRuntime = runtimeName
 	// A block-root runtime's filesystem lives on a disk the stopped guest no
 	// longer serves, so there is nothing to fall back to.
-	filesystemFallback := filesystemCheckpointFallbackAllowed(opts) && !(instance.Runtime != nil && instance.Runtime.Capabilities().BlockRoot)
+	filesystemFallback := filesystemCheckpointFallbackAllowed(opts) && !instance.Runtime.Capabilities().BlockRoot
 	criuErr := s.requireCRIUManager()
 	filesystemOnly := filesystemFallback && (!opts.Request.CheckpointEnabled ||
 		!instance.Runtime.Capabilities().CheckpointRestore || !supportsTerminalCheckpoint(instance.Runtime) || criuErr != nil)
