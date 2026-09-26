@@ -1262,7 +1262,9 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 	// write costs a host open/getxattr/close, and on geesefs each such close
 	// uploads a half-written file.
 	// Without a thread pool virtiofsd serves the queue one request at a time,
-	// so one slow host read (a lazily fetched image file) stalls the guest.
+	// so one slow host read (a lazily fetched image file) stalls the guest. 16
+	// threads cover a guest's outstanding FUSE reads; 64 cost 40 MB per VM and
+	// 300ms of boot under a 96-VM burst.
 	cmd := exec.Command(m.cfg.MicroVMVirtiofsdPath,
 		"--socket-path="+socket,
 		"--shared-dir="+inst.canvas,
@@ -1271,7 +1273,7 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 		"--killpriv-v2",
 		"--cache=auto",
 		"--inode-file-handles=never",
-		"--thread-pool-size=64",
+		"--thread-pool-size=16",
 		"--sandbox=chroot",
 		"--log-level=warn",
 	)
