@@ -57,8 +57,9 @@ const (
 	networkSlotFillConcurrency                        = 16
 	// networkSlotPrimeCount is how many slots a worker creates synchronously at
 	// startup before it begins accepting containers; the rest fill in the
-	// background.
-	networkSlotPrimeCount                             = 4
+	// background. One round at networkSlotFillConcurrency covers a burst that
+	// lands during the first fill.
+	networkSlotPrimeCount                             = 16
 	networkSlotCleanupConcurrency                     = 16
 	sysClassNetPath                                   = "/sys/class/net"
 	networkSlotPoolLockTTL                            = 120
@@ -542,7 +543,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	go m.cleanupOrphanedNamespaces()
 	if m.slotPoolSize > 0 {
 		m.sweepStaleNetworkState()
-		// Prime just enough slots for the first containers that land on this
+		// Prime one round of slots for the first containers that land on this
 		// worker, then fill the rest of the pool in the background. A freshly
 		// provisioned worker only exists because requests are already waiting
 		// for it, so a full synchronous fill (64 slots ~= 1.5 s) goes straight
@@ -817,8 +818,16 @@ func (m *ContainerNetworkManager) withNetworkSlotPoolLock(fn func() error) error
 	return fn()
 }
 
+type staleNetworkSlot struct {
+	reservationID string
+	slot          *containerNetworkSlot
+}
+
 func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
-	return m.withNetworkSlotPoolLock(func() error {
+	var stale []staleNetworkSlot
+	var orphans []string
+	removed := 0
+	err := m.withNetworkSlotPoolLock(func() error {
 		response, err := handleGRPCResponse(m.workerRepoClient.GetContainerIpAssignments(m.ctx, &pb.GetContainerIpAssignmentsRequest{
 			NetworkPrefix: m.networkPrefix,
 		}))
@@ -826,12 +835,6 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 			return err
 		}
 
-		type staleSlot struct {
-			reservationID string
-			slot          *containerNetworkSlot
-		}
-		stale := make([]staleSlot, 0)
-		orphans := make([]string, 0)
 		assignedSlots := make(map[string]struct{}, len(response.Assignments))
 		activeIPs := make(map[string]struct{}, len(response.Assignments))
 		workerExists := map[string]bool{m.workerId: true}
@@ -864,13 +867,16 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 			if !shouldCleanup {
 				continue
 			}
-			stale = append(stale, staleSlot{reservationID: assignment.ContainerId, slot: &containerNetworkSlot{id: slotID, ip: assignment.IpAddress}})
+			stale = append(stale, staleNetworkSlot{reservationID: assignment.ContainerId, slot: &containerNetworkSlot{id: slotID, ip: assignment.IpAddress}})
 		}
 
 		entries, err := os.ReadDir(types.HostNetnsPath)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		// A namespace without a reservation goes under the lock: nothing
+		// stops a fill from handing out its IP.
+		var untracked []staleNetworkSlot
 		for _, entry := range entries {
 			slotID := entry.Name()
 			if !strings.HasPrefix(slotID, containerNetworkSlotNamespacePrefix) {
@@ -891,58 +897,74 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 				}
 				slot.ip = ip
 			}
-			stale = append(stale, staleSlot{slot: slot})
+			untracked = append(untracked, staleNetworkSlot{slot: slot})
 		}
-
-		removed := make(chan struct{}, len(stale))
-		limit := make(chan struct{}, networkSlotCleanupConcurrency)
-		var wg sync.WaitGroup
-		for _, item := range stale {
-			limit <- struct{}{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { <-limit }()
-
-				if err := errors.Join(m.clearNetworkSlotNeighbor(item.slot), m.deleteNetworkSlotResources(item.slot.id)); err != nil {
-					log.Debug().Str("network_slot", item.slot.id).Err(err).Msg("failed to retire stale network slot resources")
-					return
-				}
-				if item.reservationID != "" {
-					if err := m.removeContainerIPFromRepository(item.reservationID); err != nil {
-						log.Debug().Str("network_slot", item.slot.id).Str("reservation_id", item.reservationID).Err(err).Msg("failed to remove stale network slot reservation")
-						return
-					}
-				}
-				removed <- struct{}{}
-			}()
-		}
-		wg.Wait()
-
-		if len(removed) > 0 {
-			m.ipMu.Lock()
-			m.allocatedIPsLoaded = false
-			m.ipMu.Unlock()
-			log.Info().Int("removed", len(removed)).Str("network_prefix", m.networkPrefix).Msg("removed stale preallocated network slots")
-		}
-
-		for _, containerId := range orphans {
-			limit <- struct{}{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { <-limit }()
-				if err := m.TearDown(containerId); err != nil {
-					log.Warn().Str("container_id", containerId).Err(err).Msg("failed to release the network of a container that no longer exists")
-				}
-			}()
-		}
-		wg.Wait()
-		if len(orphans) > 0 {
-			log.Info().Int("released", len(orphans)).Str("network_prefix", m.networkPrefix).Msg("released network reservations of containers that no longer exist")
-		}
+		removed = m.retireStaleNetworkSlots(untracked)
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// A dead worker's reserved slots are nobody else's, and destroying their
+	// namespaces is slow under load: the lock is released first so the pool
+	// keeps filling meanwhile.
+	removed += m.retireStaleNetworkSlots(stale)
+	if removed > 0 {
+		m.ipMu.Lock()
+		m.allocatedIPsLoaded = false
+		m.ipMu.Unlock()
+		log.Info().Int("removed", removed).Str("network_prefix", m.networkPrefix).Msg("removed stale preallocated network slots")
+	}
+
+	limit := make(chan struct{}, networkSlotCleanupConcurrency)
+	var wg sync.WaitGroup
+	for _, containerId := range orphans {
+		limit <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-limit }()
+			if err := m.TearDown(containerId); err != nil {
+				log.Warn().Str("container_id", containerId).Err(err).Msg("failed to release the network of a container that no longer exists")
+			}
+		}()
+	}
+	wg.Wait()
+	if len(orphans) > 0 {
+		log.Info().Int("released", len(orphans)).Str("network_prefix", m.networkPrefix).Msg("released network reservations of containers that no longer exist")
+	}
+	return nil
+}
+
+// retireStaleNetworkSlots destroys the slots' namespaces and drops their
+// reservations, returning how many it removed.
+func (m *ContainerNetworkManager) retireStaleNetworkSlots(stale []staleNetworkSlot) int {
+	removed := make(chan struct{}, len(stale))
+	limit := make(chan struct{}, networkSlotCleanupConcurrency)
+	var wg sync.WaitGroup
+	for _, item := range stale {
+		limit <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-limit }()
+
+			if err := errors.Join(m.clearNetworkSlotNeighbor(item.slot), m.deleteNetworkSlotResources(item.slot.id)); err != nil {
+				log.Debug().Str("network_slot", item.slot.id).Err(err).Msg("failed to retire stale network slot resources")
+				return
+			}
+			if item.reservationID != "" {
+				if err := m.removeContainerIPFromRepository(item.reservationID); err != nil {
+					log.Debug().Str("network_slot", item.slot.id).Str("reservation_id", item.reservationID).Err(err).Msg("failed to remove stale network slot reservation")
+					return
+				}
+			}
+			removed <- struct{}{}
+		}()
+	}
+	wg.Wait()
+	return len(removed)
 }
 
 // containerGone reports a container this node can no longer be running: its
@@ -1090,26 +1112,35 @@ func (m *ContainerNetworkManager) Close() error {
 	m.stopAllPortExposures()
 
 	slots := m.drainFreeNetworkSlots()
-	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
-	defer cancel()
-
-	var errs error
-	for _, slot := range slots {
-		if err := m.releaseUnusedNetworkSlotWithContext(ctx, slot); err != nil {
-			errs = errors.Join(errs, err)
-		}
-	}
 	for {
 		select {
 		case pending := <-m.slotDiscards:
-			if err := m.releaseUnusedNetworkSlotWithContext(ctx, pending.slot); err != nil {
-				errs = errors.Join(errs, err)
-			}
+			slots = append(slots, pending.slot)
 			continue
 		default:
 		}
-		return errs
+		break
 	}
+
+	// Released together: one at a time, a full pool outruns the deadline and
+	// leaves reservations the next worker has to sweep.
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+	defer cancel()
+
+	errs := make([]error, len(slots))
+	limit := make(chan struct{}, networkSlotCleanupConcurrency)
+	var wg sync.WaitGroup
+	for i, slot := range slots {
+		limit <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-limit }()
+			errs[i] = m.releaseUnusedNetworkSlotWithContext(ctx, slot)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 func (m *ContainerNetworkManager) drainFreeNetworkSlots() []*containerNetworkSlot {
