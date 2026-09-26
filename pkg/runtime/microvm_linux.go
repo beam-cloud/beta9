@@ -1261,6 +1261,8 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 	// --killpriv-v2 lets the guest mark the share SB_NOSEC. Without it every
 	// write costs a host open/getxattr/close, and on geesefs each such close
 	// uploads a half-written file.
+	// Without a thread pool virtiofsd serves the queue one request at a time,
+	// so one slow host read (a lazily fetched image file) stalls the guest.
 	cmd := exec.Command(m.cfg.MicroVMVirtiofsdPath,
 		"--socket-path="+socket,
 		"--shared-dir="+inst.canvas,
@@ -1269,6 +1271,7 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 		"--killpriv-v2",
 		"--cache=auto",
 		"--inode-file-handles=never",
+		"--thread-pool-size=64",
 		"--sandbox=chroot",
 		"--log-level=warn",
 	)
