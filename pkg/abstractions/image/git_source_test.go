@@ -39,3 +39,33 @@ func TestGitSourceRequestHandling(t *testing.T) {
 	err := resolveGitCommit(t.Context(), &types.GitSource{RepoURL: "git@github.com:acme/app.git"})
 	assert.ErrorContains(t, err, "https")
 }
+
+func TestPickLsRemoteRefMatchesTheWholeRefName(t *testing.T) {
+	const (
+		copilotMain = "fd1b4f2a6d532779f516b8630abdbeee5e46af02"
+		main        = "7a72a0b242a1fb2e01bb2b96e0607ecf1c5f43ad"
+		tag         = "0123456789abcdef0123456789abcdef01234567"
+	)
+	// What `git ls-remote <url> main refs/heads/main refs/tags/main` prints for
+	// a repository that also has a copilot/main branch.
+	out := copilotMain + "\trefs/heads/copilot/main\n" + main + "\trefs/heads/main\n"
+
+	sha, ok := pickLsRemoteRef(out, "main", "refs/heads/main", "refs/tags/main")
+	assert.True(t, ok)
+	assert.Equal(t, main, sha, "ref main is refs/heads/main, not refs/heads/copilot/main")
+
+	sha, ok = pickLsRemoteRef(out, "copilot/main", "refs/heads/copilot/main", "refs/tags/copilot/main")
+	assert.True(t, ok)
+	assert.Equal(t, copilotMain, sha)
+
+	sha, ok = pickLsRemoteRef(tag+"\trefs/tags/v1.2\n", "v1.2", "refs/heads/v1.2", "refs/tags/v1.2")
+	assert.True(t, ok)
+	assert.Equal(t, tag, sha)
+
+	sha, ok = pickLsRemoteRef(main+"\tHEAD\n", "HEAD")
+	assert.True(t, ok)
+	assert.Equal(t, main, sha)
+
+	_, ok = pickLsRemoteRef(copilotMain+"\trefs/heads/copilot/main\n", "main", "refs/heads/main", "refs/tags/main")
+	assert.False(t, ok, "a branch that only ends in main is not main")
+}
