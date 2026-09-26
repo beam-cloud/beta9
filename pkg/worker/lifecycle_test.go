@@ -1345,6 +1345,23 @@ func TestApplyDeferredSandboxCPUThrottleSkipsSandboxStoppedDuringGrace(t *testin
 	require.Zero(t, rt.calls)
 }
 
+// A sandbox already being stopped when its grace ends has no runtime container
+// left to update, so it is neither retried nor stopped a second time.
+func TestApplyDeferredSandboxCPUThrottleSkipsSandboxBeingStopped(t *testing.T) {
+	rt := &flakyResourceRuntime{mockResourceRuntime: mockResourceRuntime{mockRuntime: mockRuntime{name: "gvisor"}}, failures: 100}
+	quota := int64(10000)
+	instance := &ContainerInstance{Id: "container-1", DeferredCPUQuota: &specs.LinuxCPU{Quota: &quota}, Runtime: rt}
+	instance.setStopReason(types.StopContainerReasonUser)
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container-1", instance)
+	worker := &Worker{containerInstances: instances}
+
+	worker.applyDeferredSandboxCPUThrottle(context.Background(), &types.ContainerRequest{ContainerId: "container-1"}, 0)
+
+	require.Zero(t, rt.calls)
+	require.Empty(t, rt.signals)
+}
+
 func TestDeferredFunctionCPUThrottleStopsContainerWhenUpdateFails(t *testing.T) {
 	containerID := "cpu-throttle-update-failure"
 	readyDir := runnerSignalDir(containerID)

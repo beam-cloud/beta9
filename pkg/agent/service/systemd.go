@@ -101,6 +101,8 @@ func SystemdUnit(spec Spec) string {
 		"Restart=always",
 		"RestartSec=30",
 		"KillSignal=SIGINT",
+		// The agent exits 130 when interrupted, which a stop always does.
+		"SuccessExitStatus=130",
 		"TimeoutStopSec=60",
 		"LimitNOFILE=1048576",
 		"",

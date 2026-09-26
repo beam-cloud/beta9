@@ -9,8 +9,14 @@ permissions:
   contents: read
 
 jobs:
+  microvm:
+    if: startsWith(github.ref, 'refs/tags/worker-')
+    uses: ./.github/workflows/microvm-image.yml
+    secrets: inherit
+
   build_and_release_worker:
     if: startsWith(github.ref, 'refs/tags/worker-')
+    needs: microvm
     environment: Release
     name: build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
@@ -59,6 +65,8 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ steps.set-version.outputs.TAG_NAME }}-${{ matrix.arch }}
           target: final
           platforms: ${{ matrix.platform }}
+          build-args: |
+            MICROVM_IMAGE=${{ needs.microvm.outputs.image }}
 
   publish_worker_manifest:
     if: startsWith(github.ref, 'refs/tags/worker-')
