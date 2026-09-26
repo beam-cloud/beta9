@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,6 +26,66 @@ func TestContainerClientWithDialerDoesNotBlockSharedCacheFill(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
 	require.Less(t, time.Since(started), 100*time.Millisecond)
+}
+
+type statusServer struct {
+	pb.UnimplementedContainerServiceServer
+}
+
+func (statusServer) ContainerSandboxStatus(context.Context, *pb.ContainerSandboxStatusRequest) (*pb.ContainerSandboxStatusResponse, error) {
+	return &pb.ContainerSandboxStatusResponse{Ok: true}, nil
+}
+
+// deadConn fails on its next use once cut, which is all a client learns of a
+// worker that died behind the tailnet.
+type deadConn struct {
+	net.Conn
+	cut *atomic.Bool
+}
+
+func (c *deadConn) Read(b []byte) (int, error) {
+	if c.cut.Load() {
+		_ = c.Conn.Close()
+		return 0, io.EOF
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *deadConn) Write(b []byte) (int, error) {
+	if c.cut.Load() {
+		_ = c.Conn.Close()
+		return 0, syscall.ECONNRESET
+	}
+	return c.Conn.Write(b)
+}
+
+// The cached channel to a worker survives its connection dying under it.
+func TestContainerClientWithDialerRetriesOnDeadConnection(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := grpc.NewServer()
+	pb.RegisterContainerServiceServer(srv, statusServer{})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	var cut atomic.Bool
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", lis.Addr().String())
+		if err != nil || cut.Load() {
+			return conn, err
+		}
+		return &deadConn{Conn: conn, cut: &cut}, nil
+	}
+	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", "token", dialer)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	_, err = client.SandboxStatusContext(context.Background(), "c", 1)
+	require.NoError(t, err)
+
+	cut.Store(true)
+	_, err = client.SandboxStatusContext(context.Background(), "c", 1)
+	require.NoError(t, err)
 }
 
 func TestContainerClientUsesTLS(t *testing.T) {
