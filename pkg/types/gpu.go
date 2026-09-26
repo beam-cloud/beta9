@@ -169,6 +169,9 @@ func NormalizeGPUType(value string) GpuType {
 	if strings.Contains(key, "A100") && strings.Contains(key, "40G") {
 		return GPU_A100_40
 	}
+	if strings.Contains(key, "V100") && strings.Contains(key, "32G") {
+		return GPU_V100_32
+	}
 	for _, alias := range gpuAliases {
 		if strings.Contains(key, alias.match) {
 			return alias.gpu
