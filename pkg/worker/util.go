@@ -274,8 +274,28 @@ func copyDirectoryWalkContext(ctx context.Context, src, dst string, excludePaths
 	})
 }
 
+// createFileNoFollow creates path afresh: whatever is there is removed first,
+// so a symlink a container planted in its own tree is replaced, not written
+// through.
+func createFileNoFollow(path string, perm os.FileMode) (*os.File, error) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, perm)
+}
+
+// readFileNoFollow reads path, refusing a symlink at its last component.
+func readFileNoFollow(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
 func copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
+	srcFile, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return fmt.Errorf("open source file %s: %w", src, err)
 	}
@@ -290,7 +310,7 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("create destination parent %s: %w", filepath.Dir(dst), err)
 	}
 
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	dstFile, err := createFileNoFollow(dst, info.Mode().Perm())
 	if err != nil {
 		return fmt.Errorf("open destination file %s: %w", dst, err)
 	}

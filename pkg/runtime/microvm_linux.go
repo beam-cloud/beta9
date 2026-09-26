@@ -740,14 +740,18 @@ func (m *MicroVM) ExportGuestTree(ctx context.Context, containerID, guestPath, h
 	return nil
 }
 
+// extractTree replays the guest's tar under dst. The guest controls every
+// name, type and link target, so nothing below dst is resolved through a
+// symlink: each entry's parent is walked one component at a time with
+// O_NOFOLLOW, and the entry is made relative to that directory's fd.
 func extractTree(r io.Reader, dst string) error {
-	dst = filepath.Clean(dst)
-	tr := tar.NewReader(r)
-	type dirTime struct {
-		path string
-		when time.Time
+	root, err := unix.Open(dst, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", dst, err)
 	}
-	var dirs []dirTime
+	x := &treeExtractor{root: root, parentFD: -1}
+	defer x.close()
+	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -756,84 +760,225 @@ func extractTree(r io.Reader, dst string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, filepath.Clean("/"+hdr.Name))
-		if target != dst && !strings.HasPrefix(target, dst+string(filepath.Separator)) {
-			return fmt.Errorf("entry %q escapes the export directory", hdr.Name)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		mode := os.FileMode(hdr.Mode) & 0o7777
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.Mkdir(target, 0o700); err != nil && !os.IsExist(err) {
-				return err
-			}
-			dirs = append(dirs, dirTime{target, hdr.ModTime})
-		case tar.TypeReg:
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(file, tr); err != nil {
-				file.Close()
-				return err
-			}
-			if err := file.Close(); err != nil {
-				return err
-			}
-		case tar.TypeSymlink:
-			_ = os.Remove(target)
-			if err := os.Symlink(hdr.Linkname, target); err != nil {
-				return err
-			}
-		case tar.TypeLink:
-			_ = os.Remove(target)
-			if err := os.Link(filepath.Join(dst, filepath.Clean("/"+hdr.Linkname)), target); err != nil {
-				return err
-			}
-		case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
-			kind := uint32(unix.S_IFCHR)
-			if hdr.Typeflag == tar.TypeBlock {
-				kind = unix.S_IFBLK
-			} else if hdr.Typeflag == tar.TypeFifo {
-				kind = unix.S_IFIFO
-			}
-			_ = os.Remove(target)
-			if err := unix.Mknod(target, kind|uint32(mode), int(unix.Mkdev(uint32(hdr.Devmajor), uint32(hdr.Devminor)))); err != nil {
-				return fmt.Errorf("mknod %s: %w", hdr.Name, err)
-			}
-		default:
-			continue
-		}
-		if err := os.Lchown(target, hdr.Uid, hdr.Gid); err != nil {
-			return fmt.Errorf("chown %s: %w", hdr.Name, err)
-		}
-		if hdr.Typeflag != tar.TypeSymlink {
-			if err := os.Chmod(target, mode); err != nil {
-				return err
-			}
-		}
-		for key, value := range hdr.PAXRecords {
-			name, ok := strings.CutPrefix(key, "SCHILY.xattr.")
-			if !ok || name == "security.selinux" {
-				continue
-			}
-			if err := unix.Lsetxattr(target, name, []byte(value), 0); err != nil && !errors.Is(err, unix.ENOTSUP) {
-				return fmt.Errorf("set xattr %s on %s: %w", name, hdr.Name, err)
-			}
-		}
-		if hdr.Typeflag != tar.TypeDir {
-			ts := unix.NsecToTimespec(hdr.ModTime.UnixNano())
-			_ = unix.UtimesNanoAt(unix.AT_FDCWD, target, []unix.Timespec{ts, ts}, unix.AT_SYMLINK_NOFOLLOW)
+		if err := x.extract(hdr, tr); err != nil {
+			return fmt.Errorf("extract %s: %w", hdr.Name, err)
 		}
 	}
 	// Creating children clobbers a directory's mtime, so directories go last.
-	for i := len(dirs) - 1; i >= 0; i-- {
-		ts := unix.NsecToTimespec(dirs[i].when.UnixNano())
-		_ = unix.UtimesNanoAt(unix.AT_FDCWD, dirs[i].path, []unix.Timespec{ts, ts}, 0)
+	for i := len(x.dirs) - 1; i >= 0; i-- {
+		dir := x.dirs[i]
+		if parent, err := x.parent(dir.path, false); err == nil {
+			ts := unix.NsecToTimespec(dir.modTime.UnixNano())
+			_ = unix.UtimesNanoAt(parent, dir.path[len(dir.path)-1], []unix.Timespec{ts, ts}, unix.AT_SYMLINK_NOFOLLOW)
+		}
 	}
 	return nil
+}
+
+type treeExtractor struct {
+	root int
+	// parentFD is the directory of the previous entry; the next one usually
+	// shares it.
+	parentPath string
+	parentFD   int
+	dirs       []treeDir
+}
+
+type treeDir struct {
+	path    []string
+	modTime time.Time
+}
+
+func (x *treeExtractor) close() {
+	if x.parentFD >= 0 {
+		unix.Close(x.parentFD)
+	}
+	unix.Close(x.root)
+}
+
+// treePath splits a tar name into its components below the root; "." and
+// ".." cannot survive the clean.
+func treePath(name string) []string {
+	clean := strings.Trim(filepath.Clean("/"+name), "/")
+	if clean == "" {
+		return nil
+	}
+	return strings.Split(clean, "/")
+}
+
+// parent returns the fd of the directory holding the last of components,
+// creating missing directories when create is set. x owns the fd.
+func (x *treeExtractor) parent(components []string, create bool) (int, error) {
+	dirPath := strings.Join(components[:len(components)-1], "/")
+	if x.parentFD >= 0 && dirPath == x.parentPath {
+		return x.parentFD, nil
+	}
+	fd, err := x.walk(components[:len(components)-1], create)
+	if err != nil {
+		return -1, err
+	}
+	if x.parentFD >= 0 {
+		unix.Close(x.parentFD)
+	}
+	x.parentPath, x.parentFD = dirPath, fd
+	return fd, nil
+}
+
+// walk opens the directory at components below the root; a symlink or
+// non-directory anywhere on the way is an error.
+func (x *treeExtractor) walk(components []string, create bool) (int, error) {
+	fd, err := unix.Openat(x.root, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
+	}
+	for _, name := range components {
+		if create {
+			if err := unix.Mkdirat(fd, name, 0o755); err != nil && err != unix.EEXIST {
+				unix.Close(fd)
+				return -1, fmt.Errorf("mkdir %s: %w", name, err)
+			}
+		}
+		next, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		unix.Close(fd)
+		if err != nil {
+			return -1, fmt.Errorf("open directory %s: %w", name, err)
+		}
+		fd = next
+	}
+	return fd, nil
+}
+
+func (x *treeExtractor) extract(hdr *tar.Header, content io.Reader) error {
+	components := treePath(hdr.Name)
+	switch {
+	case len(components) == 0:
+		return nil
+	case hdr.Typeflag == tar.TypeDir, hdr.Typeflag == tar.TypeReg, hdr.Typeflag == tar.TypeSymlink,
+		hdr.Typeflag == tar.TypeLink, hdr.Typeflag == tar.TypeChar, hdr.Typeflag == tar.TypeBlock, hdr.Typeflag == tar.TypeFifo:
+	default:
+		return nil
+	}
+	dir, err := x.parent(components, true)
+	if err != nil {
+		return err
+	}
+	name := components[len(components)-1]
+	mode := uint32(hdr.Mode) & 0o7777
+
+	if hdr.Typeflag == tar.TypeDir {
+		if err := unix.Mkdirat(dir, name, 0o700); err != nil && err != unix.EEXIST {
+			return err
+		}
+		fd, err := unix.Openat(dir, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return err
+		}
+		defer unix.Close(fd)
+		x.dirs = append(x.dirs, treeDir{path: components, modTime: hdr.ModTime})
+		return setTreeMetadata(fd, hdr, mode)
+	}
+
+	if err := unix.Unlinkat(dir, name, 0); err != nil && err != unix.ENOENT {
+		return err
+	}
+	switch hdr.Typeflag {
+	case tar.TypeReg:
+		fd, err := unix.Openat(dir, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+		if err != nil {
+			return err
+		}
+		file := os.NewFile(uintptr(fd), name)
+		defer file.Close()
+		if _, err := io.Copy(file, content); err != nil {
+			return err
+		}
+		if err := setTreeMetadata(fd, hdr, mode); err != nil {
+			return err
+		}
+	case tar.TypeSymlink:
+		if err := unix.Symlinkat(hdr.Linkname, dir, name); err != nil {
+			return err
+		}
+		if err := setTreeMetadataAt(dir, name, hdr, mode, false); err != nil {
+			return err
+		}
+	case tar.TypeLink:
+		source := treePath(hdr.Linkname)
+		if len(source) == 0 {
+			return fmt.Errorf("hard link to %q", hdr.Linkname)
+		}
+		sourceDir, err := x.walk(source[:len(source)-1], false)
+		if err != nil {
+			return err
+		}
+		defer unix.Close(sourceDir)
+		// Flags 0: a symlink source is linked itself, never followed.
+		return unix.Linkat(sourceDir, source[len(source)-1], dir, name, 0)
+	default:
+		kind := uint32(unix.S_IFIFO)
+		switch hdr.Typeflag {
+		case tar.TypeChar:
+			kind = unix.S_IFCHR
+		case tar.TypeBlock:
+			kind = unix.S_IFBLK
+		}
+		if err := unix.Mknodat(dir, name, kind|mode, int(unix.Mkdev(uint32(hdr.Devmajor), uint32(hdr.Devminor)))); err != nil {
+			return fmt.Errorf("mknod: %w", err)
+		}
+		if err := setTreeMetadataAt(dir, name, hdr, mode, true); err != nil {
+			return err
+		}
+	}
+	ts := unix.NsecToTimespec(hdr.ModTime.UnixNano())
+	_ = unix.UtimesNanoAt(dir, name, []unix.Timespec{ts, ts}, unix.AT_SYMLINK_NOFOLLOW)
+	return nil
+}
+
+// setTreeMetadata applies an entry's ownership, mode and xattrs through its fd.
+func setTreeMetadata(fd int, hdr *tar.Header, mode uint32) error {
+	if err := unix.Fchown(fd, hdr.Uid, hdr.Gid); err != nil {
+		return fmt.Errorf("chown: %w", err)
+	}
+	if err := unix.Fchmod(fd, mode); err != nil {
+		return fmt.Errorf("chmod: %w", err)
+	}
+	for name, value := range treeXattrs(hdr) {
+		if err := unix.Fsetxattr(fd, name, value, 0); err != nil && !errors.Is(err, unix.ENOTSUP) {
+			return fmt.Errorf("set xattr %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// setTreeMetadataAt is setTreeMetadata for entries that cannot be opened: a
+// symlink, or a device node or FIFO the extractor just created in dir.
+func setTreeMetadataAt(dir int, name string, hdr *tar.Header, mode uint32, chmod bool) error {
+	if err := unix.Fchownat(dir, name, hdr.Uid, hdr.Gid, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return fmt.Errorf("chown: %w", err)
+	}
+	if chmod {
+		if err := unix.Fchmodat(dir, name, mode, 0); err != nil {
+			return fmt.Errorf("chmod: %w", err)
+		}
+	}
+	// lsetxattr does not follow the last component; the fd path pins the parent.
+	path := fmt.Sprintf("/proc/self/fd/%d/%s", dir, name)
+	for key, value := range treeXattrs(hdr) {
+		if err := unix.Lsetxattr(path, key, value, 0); err != nil && !errors.Is(err, unix.ENOTSUP) {
+			return fmt.Errorf("set xattr %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func treeXattrs(hdr *tar.Header) map[string][]byte {
+	xattrs := map[string][]byte{}
+	for key, value := range hdr.PAXRecords {
+		if name, ok := strings.CutPrefix(key, "SCHILY.xattr."); ok && name != "security.selinux" {
+			xattrs[name] = []byte(value)
+		}
+	}
+	return xattrs
 }
 
 // dialGuestVsock opens a host-initiated vsock connection through Cloud

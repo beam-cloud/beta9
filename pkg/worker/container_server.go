@@ -524,13 +524,21 @@ func (s *ContainerRuntimeServer) writeArchiveSpecs(ctx context.Context, instance
 }
 
 // writeSpecFile serializes an OCI spec the way every spec on disk is written:
-// indented JSON, world-readable.
+// indented JSON, world-readable. path is in the container's own tree.
 func writeSpecFile(path string, spec specs.Spec) error {
 	b, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0644)
+	f, err := createFileNoFollow(path, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // writeInitialSpecFromImage builds an initial_config.json using the base runc config
@@ -594,7 +602,7 @@ func (s *ContainerRuntimeServer) addRequestEnvToInitialSpec(instance *ContainerI
 
 	specPath := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
 
-	bytes, err := os.ReadFile(specPath)
+	bytes, err := readFileNoFollow(specPath)
 	if err != nil {
 		return err
 	}
