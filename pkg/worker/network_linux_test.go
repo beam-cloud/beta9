@@ -6,64 +6,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 )
-
-// slotPoolWorkerRepoClient records the pool lock and reservation RPCs in order.
-type slotPoolWorkerRepoClient struct {
-	pb.WorkerRepositoryServiceClient
-	assignments []*pb.ContainerIpAssignment
-	removeDelay time.Duration
-
-	mu       sync.Mutex
-	calls    []string
-	inflight int
-	peak     int
-}
-
-func (c *slotPoolWorkerRepoClient) record(call string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.calls = append(c.calls, call)
-}
-
-func (c *slotPoolWorkerRepoClient) SetNetworkLock(context.Context, *pb.SetNetworkLockRequest, ...grpc.CallOption) (*pb.SetNetworkLockResponse, error) {
-	c.record("lock")
-	return &pb.SetNetworkLockResponse{Ok: true, Token: "token"}, nil
-}
-
-func (c *slotPoolWorkerRepoClient) RemoveNetworkLock(context.Context, *pb.RemoveNetworkLockRequest, ...grpc.CallOption) (*pb.RemoveNetworkLockResponse, error) {
-	c.record("unlock")
-	return &pb.RemoveNetworkLockResponse{Ok: true}, nil
-}
-
-func (c *slotPoolWorkerRepoClient) GetContainerIpAssignments(context.Context, *pb.GetContainerIpAssignmentsRequest, ...grpc.CallOption) (*pb.GetContainerIpAssignmentsResponse, error) {
-	c.record("list")
-	return &pb.GetContainerIpAssignmentsResponse{Ok: true, Assignments: c.assignments}, nil
-}
-
-func (c *slotPoolWorkerRepoClient) RemoveContainerIp(ctx context.Context, in *pb.RemoveContainerIpRequest, _ ...grpc.CallOption) (*pb.RemoveContainerIpResponse, error) {
-	c.mu.Lock()
-	c.inflight++
-	c.peak = max(c.peak, c.inflight)
-	c.mu.Unlock()
-	time.Sleep(c.removeDelay)
-	c.mu.Lock()
-	c.inflight--
-	c.mu.Unlock()
-	c.record("remove " + in.ContainerId)
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return &pb.RemoveContainerIpResponse{Ok: true}, nil
-}
 
 func TestCloseReleasesPooledSlotsTogether(t *testing.T) {
 	repoClient := &slotPoolWorkerRepoClient{removeDelay: 10 * time.Millisecond}

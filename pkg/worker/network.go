@@ -810,10 +810,16 @@ func (m *ContainerNetworkManager) withNetworkSlotPoolLock(fn func() error) error
 	if err != nil {
 		return err
 	}
-	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix + ":slot_pool",
-		Token:         lockResponse.Token,
-	})
+	defer func() {
+		// Shutdown cancels m.ctx while a fill or sweep may hold the lock; a
+		// lock left to its TTL stalls the next worker's pool for two minutes.
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
+		defer unlockCancel()
+		m.workerRepoClient.RemoveNetworkLock(unlockCtx, &pb.RemoveNetworkLockRequest{
+			NetworkPrefix: m.networkPrefix + ":slot_pool",
+			Token:         lockResponse.Token,
+		})
+	}()
 
 	return fn()
 }
