@@ -4,14 +4,19 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 type fakeTSNetStatusClient struct {
@@ -207,4 +212,56 @@ func TestTailnetRouteHostPrefersTailnetIPv4(t *testing.T) {
 	if got := tailnetRouteHost(nil, "fallback"); got != "fallback" {
 		t.Fatalf("route host = %q, want the requested hostname without a status", got)
 	}
+}
+
+func TestHostInterfacesHideWorkerLinks(t *testing.T) {
+	ifaces, err := hostInterfacesWithoutWorkerLinks()
+	require.NoError(t, err)
+	for _, iface := range ifaces {
+		require.False(t, strings.HasPrefix(iface.Name, types.WorkerLinkPrefix), iface.Name)
+	}
+	all, err := net.Interfaces()
+	require.NoError(t, err)
+	shown := 0
+	for _, iface := range all {
+		if !strings.HasPrefix(iface.Name, types.WorkerLinkPrefix) {
+			shown++
+		}
+	}
+	require.Len(t, ifaces, shown)
+}
+
+type fakeTailnetPinger struct {
+	status *ipnstate.Status
+	mu     sync.Mutex
+	pinged []netip.Addr
+}
+
+func (p *fakeTailnetPinger) Status(context.Context) (*ipnstate.Status, error) {
+	return p.status, nil
+}
+
+func (p *fakeTailnetPinger) Ping(_ context.Context, ip netip.Addr, pingType tailcfg.PingType) (*ipnstate.PingResult, error) {
+	if pingType != tailcfg.PingTSMP {
+		return nil, errors.New("want a TSMP ping, which goes through WireGuard")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pinged = append(p.pinged, ip)
+	return &ipnstate.PingResult{}, nil
+}
+
+func TestPingTailnetGatewaysPingsOnlyOnlineGateways(t *testing.T) {
+	gateway := netip.MustParseAddr("100.64.0.2")
+	pinger := &fakeTailnetPinger{status: &ipnstate.Status{Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+		key.NewNode().Public(): {HostName: "beam-gateway-beta9-gateway-1", Online: true, TailscaleIPs: []netip.Addr{gateway, netip.MustParseAddr("fd7a:115c:a1e0::2")}},
+		key.NewNode().Public(): {HostName: "beam-gateway-beta9-gateway-2", Online: false, TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.3")}},
+		key.NewNode().Public(): {HostName: "beam-gateway-beta9-gateway-3", Online: true},
+		key.NewNode().Public(): {HostName: "beam-agent-machine-2", Online: true, TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.4")}},
+		key.NewNode().Public(): {HostName: "beam-gatewayish", Online: true, TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.5")}},
+	}}}
+
+	pingTailnetGateways(context.Background(), pinger, &bytes.Buffer{})
+
+	require.Equal(t, []netip.Addr{gateway}, pinger.pinged)
 }

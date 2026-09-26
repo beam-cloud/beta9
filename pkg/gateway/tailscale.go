@@ -32,7 +32,7 @@ func gatewayTailscaleHostname() string {
 			return hostname
 		}
 	}
-	return "beam-gateway"
+	return types.GatewayTailnetHostname
 }
 
 func sanitizedGatewayTailscaleHostname(seed string) string {
@@ -62,7 +62,7 @@ func sanitizedGatewayTailscaleHostname(seed string) string {
 	}
 
 	const (
-		prefix          = "beam-gateway-"
+		prefix          = types.GatewayTailnetHostname + "-"
 		maxDNSLabelSize = 63
 	)
 	if len(prefix)+len(part) > maxDNSLabelSize {
@@ -70,7 +70,7 @@ func sanitizedGatewayTailscaleHostname(seed string) string {
 		part = strings.TrimLeft(part, "-")
 	}
 	if part == "" {
-		return "beam-gateway"
+		return types.GatewayTailnetHostname
 	}
 	return prefix + part
 }

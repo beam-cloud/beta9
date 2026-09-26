@@ -7,6 +7,7 @@ const (
 	DefaultAgentServiceName         = "beam-agent"
 	DefaultAgentServiceDescription  = "Beam Agent"
 	AgentTailnetHostnamePrefix      = "beam-agent-"
+	GatewayTailnetHostname          = "beam-gateway"
 	DefaultAgentBinaryPath          = "/usr/local/bin/beam-agent"
 	DefaultAgentBinaryPattern       = "/usr/local/bin/beam-agent-%s-%s"
 	DefaultAgentStateDir            = "/var/lib/beam/agent"
@@ -169,3 +170,8 @@ const (
 	PrivatePoolFallbackWait     = "wait"
 	PrivatePoolFallbackFail     = "fail"
 )
+
+// IsGatewayTailnetHostname reports whether a tailnet peer is a gateway.
+func IsGatewayTailnetHostname(name string) bool {
+	return name == GatewayTailnetHostname || strings.HasPrefix(name, GatewayTailnetHostname+"-")
+}
