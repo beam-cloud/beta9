@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestBackendHTTPURLUsesPlaceholderHostForRouteAddresses(t *testing.T) {
@@ -530,6 +531,83 @@ func TestStoppableContainersSkipsInFlightEndpointRequests(t *testing.T) {
 	}
 	if len(containers) != 1 || containers[0] != "container-1" {
 		t.Fatalf("stoppable containers = %v, want [container-1] after request token release", containers)
+	}
+}
+
+func TestStoppableContainersSkipsQueuedTasklessRequests(t *testing.T) {
+	rdb := newEndpointBufferTestRedis(t)
+	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
+	state := &types.ContainerState{
+		ContainerId: "container-1",
+		StubId:      "stub",
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusRunning,
+		ScheduledAt: time.Now().Unix(),
+		StartedAt:   time.Now().Unix(),
+	}
+	if err := containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+
+	crashedGatewayRequest := redis.Z{Score: float64(time.Now().Add(-time.Second).UnixMilli()), Member: "crashed-gateway-request"}
+	if err := rdb.ZAdd(context.Background(), Keys.endpointTasklessRequests("workspace", "stub"), crashedGatewayRequest).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The health request waits on one gateway's buffer, which nothing drains,
+	// while another gateway's autoscaler decides whether to scale down.
+	queueingBuffer := newEndpointRequestTokenTestBuffer(rdb, 1)
+	queueingBuffer.buffer = abstractions.NewRingBuffer[*request](1)
+	scalingInstance := &endpointInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{
+			Rdb:           rdb,
+			IsActive:      true,
+			Workspace:     &types.Workspace{Name: "workspace"},
+			Stub:          &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub", Type: types.StubType(types.StubTypeASGIDeployment)}},
+			StubConfig:    &types.StubConfigV1{},
+			ContainerRepo: containerRepo,
+		},
+		buffer: newEndpointRequestTokenTestBuffer(rdb, 1),
+	}
+	stoppable := func() int {
+		t.Helper()
+		containers, err := scalingInstance.stoppableContainers()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(containers)
+	}
+	if got := stoppable(); got != 1 {
+		t.Fatalf("stoppable containers = %d, want 1 before a request is queued", got)
+	}
+
+	clientCtx, cancelClient := context.WithCancel(context.Background())
+	defer cancelClient()
+	httpReq := httptest.NewRequest(http.MethodGet, "/health", nil).WithContext(clientCtx)
+	forwarded := make(chan error, 1)
+	go func() {
+		forwarded <- queueingBuffer.ForwardRequest(echo.New().NewContext(httpReq, httptest.NewRecorder()), nil)
+	}()
+
+	waitForCondition(t, time.Second, func() bool { return stoppable() == 0 })
+
+	scalingInstance.IsActive = false
+	if got := stoppable(); got != 1 {
+		t.Fatalf("stoppable containers = %d, want an inactive deployment stopped despite the queued request", got)
+	}
+	scalingInstance.IsActive = true
+
+	cancelClient()
+	select {
+	case err := <-forwarded:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued request did not return after the client disconnected")
+	}
+	if got := stoppable(); got != 1 {
+		t.Fatalf("stoppable containers = %d, want 1 once the queued request is gone", got)
 	}
 }
 
