@@ -82,6 +82,9 @@ const (
 	HostKubeletDevicePluginsPath    = "/var/lib/kubelet/device-plugins"
 	HostKubeletDeviceCheckpointPath = "/var/lib/kubelet/device-plugins/kubelet_internal_checkpoint"
 	HostNetnsPath                   = "/var/run/netns"
+	// WorkerLinkPrefix starts the name of every link a worker creates on its
+	// host, which the agent's tailnet ignores.
+	WorkerLinkPrefix                = "b9"
 	HostCgroupPath                  = "/sys/fs/cgroup"
 	HostFuseDevicePath              = "/dev/fuse"
 	HostKernelModulesPath           = "/lib/modules"

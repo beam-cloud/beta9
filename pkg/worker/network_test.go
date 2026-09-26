@@ -1062,3 +1062,56 @@ func containerNetworkAddress() string {
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
 	return ipNet.IP.String()
 }
+
+type moveIPWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+	moves []*pb.MoveContainerIpRequest
+}
+
+func (c *moveIPWorkerRepoClient) MoveContainerIp(_ context.Context, req *pb.MoveContainerIpRequest, _ ...grpc.CallOption) (*pb.MoveContainerIpResponse, error) {
+	c.moves = append(c.moves, req)
+	return &pb.MoveContainerIpResponse{Ok: true}, nil
+}
+
+// A stopped container lets go of its slot at once, but the slot's address
+// stays reserved (under the slot's own key) until its namespace is destroyed.
+func TestDeferNetworkSlotDiscardKeepsTheAddressReservedForTheSlot(t *testing.T) {
+	repo := &moveIPWorkerRepoClient{}
+	slot := &containerNetworkSlot{id: "slot-abc", ip: "192.168.0.7"}
+	m := &ContainerNetworkManager{
+		ctx:              context.Background(),
+		workerId:         "worker-a",
+		networkPrefix:    "cluster:beta9:node:m1",
+		workerRepoClient: repo,
+		containerIPs:     map[string]string{"c1": slot.ip},
+		allocatedIPs:     map[string]struct{}{slot.ip: {}},
+		containerSlots:   map[string]*containerNetworkSlot{"c1": slot},
+		totalSlots:       5,
+		slotPoolClosed:   true,
+		slotDiscards:     make(chan pendingSlotDiscard, 1),
+	}
+
+	require.True(t, m.deferNetworkSlotDiscard("c1", slot))
+
+	reservation := m.containerNetworkSlotReservationID(slot.id)
+	require.Len(t, repo.moves, 1)
+	require.Equal(t, "c1", repo.moves[0].FromContainerId)
+	require.Equal(t, reservation, repo.moves[0].ToContainerId)
+	require.Equal(t, slot.ip, repo.moves[0].IpAddress)
+	require.Equal(t, map[string]string{reservation: slot.ip}, m.containerIPs)
+	require.Contains(t, m.allocatedIPs, slot.ip)
+	require.NotContains(t, m.containerSlots, "c1")
+	require.Equal(t, 4, m.totalSlots, "a detached slot no longer counts toward the pool")
+	require.Same(t, slot, (<-m.slotDiscards).slot)
+}
+
+func TestRefillWaitsForStartsUnlessThePoolRunsLow(t *testing.T) {
+	m := &ContainerNetworkManager{slotPoolSize: 64, freeSlots: make([]*containerNetworkSlot, 16)}
+	require.False(t, m.refillDeferred(), "no container is starting")
+
+	m.lastNetworkSetup.Store(time.Now().UnixNano())
+	require.True(t, m.refillDeferred(), "starting, with a quarter of the pool free")
+
+	m.freeSlots = m.freeSlots[:15]
+	require.False(t, m.refillDeferred(), "below the reserve, refill runs during starts")
+}

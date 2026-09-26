@@ -47,6 +47,10 @@ const (
 	containerRuntimeStateTimeout             = 2 * time.Second
 	observedStoppingSignalTimeout            = 5 * time.Second
 	cpuQuotaApplyTimeout                     = 2 * time.Second
+	sandboxCPUQuotaGrace                     = 10 * time.Second
+	sandboxCPUQuotaRetryWindow               = 30 * time.Second
+	sandboxCPUQuotaRetryDelay                = 250 * time.Millisecond
+	sandboxCPUQuotaMaxRetryDelay             = 2 * time.Second
 	runnerReadyTimeout                       = 30 * time.Second
 	runnerReadyPollInterval                  = 10 * time.Millisecond
 	restoredContainerPollInterval            = 500 * time.Millisecond
@@ -1940,20 +1944,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			if fresh, exists := s.containerInstances.Get(containerId); exists {
 				instance = fresh
 			}
-			if processManagerReady {
-				phaseStart = time.Now()
-				err := s.applyDeferredCPUThrottle(request, instance)
-				metrics.RecordWorkerStartupPhase("sandbox_apply_cpu_quota", time.Since(phaseStart), request, map[string]string{
-					"success": fmt.Sprintf("%t", err == nil),
-				})
-				s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxApplyCPUQuota, phaseStart, err == nil, nil)
-				if err != nil {
-					log.Error().Err(err).Str("container_id", containerId).Msg("failed to apply sandbox CPU quota")
-					processManagerReady = false
-				} else if fresh, exists := s.containerInstances.Get(containerId); exists {
-					instance = fresh
-				}
-			}
+			// Runs before the CPU quota lands: it forks inside gVisor, which
+			// crawls at a fractional-CPU quota.
 			if processManagerReady {
 				phaseStart = time.Now()
 				err := s.exposeSandboxMemoryLimit(ctx, request, instance, processManagerClient)
@@ -1975,6 +1967,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
+			go s.applyDeferredSandboxCPUThrottle(ctx, request, sandboxCPUQuotaGrace)
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
 			}
@@ -2709,6 +2702,52 @@ func (s *Worker) applyDeferredCPUThrottle(request *types.ContainerRequest, insta
 	instance.DeferredCPUQuota = nil
 	s.containerInstances.Set(request.ContainerId, instance)
 	return nil
+}
+
+// applyDeferredSandboxCPUThrottle applies the quota a sandbox booted without,
+// grace after it is ready: a gVisor sentry throttled inside the kernel stalls
+// every boot on the node, and a new sandbox's first commands are CPU-bound. A
+// slow runtime update is retried; a sandbox that still cannot be throttled is
+// stopped rather than left running unbounded.
+func (s *Worker) applyDeferredSandboxCPUThrottle(ctx context.Context, request *types.ContainerRequest, grace time.Duration) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(grace):
+	}
+	phaseStart := time.Now()
+	deadline := phaseStart.Add(sandboxCPUQuotaRetryWindow)
+	delay := sandboxCPUQuotaRetryDelay
+	for {
+		instance, exists := s.containerInstances.Get(request.ContainerId)
+		if !exists {
+			return
+		}
+		err := s.applyDeferredCPUThrottle(request, instance)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil || time.Now().After(deadline) {
+			metrics.RecordWorkerStartupPhase("sandbox_apply_cpu_quota", time.Since(phaseStart), request, map[string]string{
+				"success": fmt.Sprintf("%t", err == nil),
+			})
+			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxApplyCPUQuota, phaseStart, err == nil, nil)
+			if err != nil {
+				log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to apply sandbox CPU quota; stopping the sandbox")
+				if stopErr := s.stopContainer(request.ContainerId, true); stopErr != nil {
+					log.Error().Err(stopErr).Str("container_id", request.ContainerId).Msg("failed to stop unthrottled sandbox")
+				}
+			}
+			return
+		}
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("sandbox CPU quota not applied yet; retrying")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, sandboxCPUQuotaMaxRetryDelay)
+	}
 }
 
 func (s *Worker) hasDeferredCPUThrottle(containerID string) bool {

@@ -1313,6 +1313,38 @@ func TestApplyDeferredSandboxCPUThrottleClearsQuotaAfterRuntimeUpdate(t *testing
 	require.Nil(t, updated.DeferredCPUQuota)
 }
 
+// A runtime update that fails once (a slow runsc under load) is retried after
+// the sandbox is ready instead of failing it.
+func TestApplyDeferredSandboxCPUThrottleRetriesFailedUpdate(t *testing.T) {
+	rt := &flakyResourceRuntime{mockResourceRuntime: mockResourceRuntime{mockRuntime: mockRuntime{name: "gvisor"}}, failures: 1}
+	quota := int64(10000)
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container-1", &ContainerInstance{Id: "container-1", DeferredCPUQuota: &specs.LinuxCPU{Quota: &quota}, Runtime: rt})
+	worker := &Worker{containerInstances: instances}
+
+	worker.applyDeferredSandboxCPUThrottle(context.Background(), &types.ContainerRequest{ContainerId: "container-1"}, 0)
+
+	require.Equal(t, 2, rt.calls)
+	updated, _ := instances.Get("container-1")
+	require.Nil(t, updated.DeferredCPUQuota)
+	require.Empty(t, rt.signals, "a sandbox whose quota eventually applied is not stopped")
+}
+
+// A sandbox that stops within its startup grace is never throttled.
+func TestApplyDeferredSandboxCPUThrottleSkipsSandboxStoppedDuringGrace(t *testing.T) {
+	rt := &flakyResourceRuntime{mockResourceRuntime: mockResourceRuntime{mockRuntime: mockRuntime{name: "gvisor"}}}
+	quota := int64(10000)
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container-1", &ContainerInstance{Id: "container-1", DeferredCPUQuota: &specs.LinuxCPU{Quota: &quota}, Runtime: rt})
+	worker := &Worker{containerInstances: instances}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	worker.applyDeferredSandboxCPUThrottle(ctx, &types.ContainerRequest{ContainerId: "container-1"}, time.Minute)
+
+	require.Zero(t, rt.calls)
+}
+
 func TestDeferredFunctionCPUThrottleStopsContainerWhenUpdateFails(t *testing.T) {
 	containerID := "cpu-throttle-update-failure"
 	readyDir := runnerSignalDir(containerID)
@@ -3984,6 +4016,20 @@ func (m *mockResourceRuntime) UpdateResources(ctx context.Context, containerID s
 	m.updateContainerID = containerID
 	m.updatedResources = resources
 	return m.updateErr
+}
+
+type flakyResourceRuntime struct {
+	mockResourceRuntime
+	failures int
+	calls    int
+}
+
+func (m *flakyResourceRuntime) UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error {
+	m.calls++
+	if m.calls <= m.failures {
+		return assert.AnError
+	}
+	return m.mockResourceRuntime.UpdateResources(ctx, containerID, resources)
 }
 
 type deleteContextRuntime struct {

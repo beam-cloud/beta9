@@ -35,10 +35,10 @@ import (
 )
 
 const (
-	containerBridgeLinkName             string = "b9_br0"
-	containerVethHostPrefix             string = "b9h"
-	containerVethContainerPrefix        string = "b9c"
-	legacyContainerVethHostPrefix       string = "b9_veth_h_"
+	containerBridgeLinkName             string = types.WorkerLinkPrefix + "_br0"
+	containerVethHostPrefix             string = types.WorkerLinkPrefix + "h"
+	containerVethContainerPrefix        string = types.WorkerLinkPrefix + "c"
+	legacyContainerVethHostPrefix       string = types.WorkerLinkPrefix + "_veth_h_"
 	networkInterfaceNameMaxLength              = 15
 	containerSubnet                     string = "192.168.0.0/20"
 	containerGatewayAddress             string = "192.168.0.1"
@@ -66,6 +66,18 @@ const (
 	containerNetworkCleanupLockRetries                = 14
 	containerNetworkSlotAcquireAttempts               = 3
 	buildahNetworkConfigPath                          = "/etc/cni/net.d/87-podman-bridge.conflist"
+)
+
+// Creating and destroying slots queues on the kernel's global rtnl lock, which
+// gVisor sandboxes also take while they boot. That churn waits until no
+// container network has been set up for networkChurnQuietWindow.
+// in6AddrGenModeNone is IN6_ADDR_GEN_MODE_NONE from linux/if_link.h.
+const in6AddrGenModeNone = 1
+
+const (
+	networkChurnQuietWindow       = 2 * time.Second
+	networkSlotDiscardMaxDelay    = 20 * time.Second
+	networkSlotDiscardConcurrency = 4
 )
 
 type ContainerNetworkManager struct {
@@ -109,7 +121,16 @@ type ContainerNetworkManager struct {
 	staleSweepDone      atomic.Bool
 	// slotPreparer, when set, plumbs a freshly created slot's namespace for the
 	// pool's runtime before the slot can be handed out.
-	slotPreparer func(netnsPath string) error
+	slotPreparer     func(netnsPath string) error
+	lastNetworkSetup atomic.Int64 // unix nanos
+	slotDiscards     chan pendingSlotDiscard
+}
+
+// pendingSlotDiscard is a used slot detached from its container whose
+// namespace is still to be destroyed.
+type pendingSlotDiscard struct {
+	slot     *containerNetworkSlot
+	deadline time.Time
 }
 
 type PortBinding struct {
@@ -527,8 +548,10 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		// for it, so a full synchronous fill (64 slots ~= 1.5 s) goes straight
 		// onto their cold-start time.
 		m.fillNetworkSlotPoolUpTo(networkSlotPrimeCount)
+		m.slotDiscards = make(chan pendingSlotDiscard, 1024)
 		go m.fillNetworkSlotPool()
 		go m.maintainNetworkSlotPool()
+		go m.discardDeferredSlots()
 	}
 
 	return m, nil
@@ -647,6 +670,9 @@ func (m *ContainerNetworkManager) fillNetworkSlotPool() {
 // fillNetworkSlotPoolUpTo tops the pool up towards slotPoolSize, creating at
 // most maxSlots new slots in this pass (0 means no cap).
 func (m *ContainerNetworkManager) fillNetworkSlotPoolUpTo(maxSlots int) {
+	if m.refillDeferred() {
+		return
+	}
 	m.slotMu.Lock()
 	if m.slotPoolClosed || m.slotFillRunning {
 		m.slotMu.Unlock()
@@ -681,6 +707,9 @@ func (m *ContainerNetworkManager) fillNetworkSlotPoolLocked(maxSlots int) error 
 	var wg sync.WaitGroup
 	limit := make(chan struct{}, min(needed, networkSlotFillConcurrency))
 	for range needed {
+		if m.refillDeferred() {
+			break
+		}
 		select {
 		case limit <- struct{}{}:
 		case <-m.ctx.Done():
@@ -725,6 +754,50 @@ func (m *ContainerNetworkManager) fillNetworkSlotPoolLocked(maxSlots int) error 
 	}
 	wg.Wait()
 	return nil
+}
+
+func (m *ContainerNetworkManager) networkSetupRecent() bool {
+	return time.Since(time.Unix(0, m.lastNetworkSetup.Load())) < networkChurnQuietWindow
+}
+
+// refillDeferred holds off creating slots while containers are starting,
+// unless the pool is running low.
+func (m *ContainerNetworkManager) refillDeferred() bool {
+	if !m.networkSetupRecent() {
+		return false
+	}
+	m.slotMu.Lock()
+	defer m.slotMu.Unlock()
+	return len(m.freeSlots) >= max(networkSlotPrimeCount, m.slotPoolSize/4)
+}
+
+// discardDeferredSlots destroys detached slots once container starts go quiet,
+// or at their deadline under sustained load.
+func (m *ContainerNetworkManager) discardDeferredSlots() {
+	limit := make(chan struct{}, networkSlotDiscardConcurrency)
+	for {
+		var pending pendingSlotDiscard
+		select {
+		case <-m.ctx.Done():
+			return
+		case pending = <-m.slotDiscards:
+		}
+		for m.networkSetupRecent() && time.Now().Before(pending.deadline) {
+			wait := min(networkChurnQuietWindow-time.Since(time.Unix(0, m.lastNetworkSetup.Load())), time.Until(pending.deadline))
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
+		limit <- struct{}{}
+		go func() {
+			defer func() { <-limit }()
+			if err := m.releaseUnusedNetworkSlot(pending.slot); err != nil {
+				log.Warn().Str("network_slot", pending.slot.id).Err(err).Msg("failed to discard network slot")
+			}
+		}()
+	}
 }
 
 func (m *ContainerNetworkManager) withNetworkSlotPoolLock(fn func() error) error {
@@ -1026,7 +1099,17 @@ func (m *ContainerNetworkManager) Close() error {
 			errs = errors.Join(errs, err)
 		}
 	}
-	return errs
+	for {
+		select {
+		case pending := <-m.slotDiscards:
+			if err := m.releaseUnusedNetworkSlotWithContext(ctx, pending.slot); err != nil {
+				errs = errors.Join(errs, err)
+			}
+			continue
+		default:
+		}
+		return errs
+	}
 }
 
 func (m *ContainerNetworkManager) drainFreeNetworkSlots() []*containerNetworkSlot {
@@ -1297,7 +1380,8 @@ func (m *ContainerNetworkManager) discardNetworkSlot(containerId string, slot *c
 	return err
 }
 
-func (m *ContainerNetworkManager) finishNetworkSlotDiscard(containerId string, slot *containerNetworkSlot, releaseIP bool, resourceErr error) error {
+// retireNetworkSlot takes a used slot out of the pool and off its container.
+func (m *ContainerNetworkManager) retireNetworkSlot(containerId string) {
 	m.slotMu.Lock()
 	if containerId != "" {
 		delete(m.containerSlots, containerId)
@@ -1308,6 +1392,10 @@ func (m *ContainerNetworkManager) finishNetworkSlotDiscard(containerId string, s
 	m.slotMu.Unlock()
 
 	m.clearContainerInstanceIP(containerId)
+}
+
+func (m *ContainerNetworkManager) finishNetworkSlotDiscard(containerId string, slot *containerNetworkSlot, releaseIP bool, resourceErr error) error {
+	m.retireNetworkSlot(containerId)
 
 	var cleanupErr error
 	if releaseIP && resourceErr == nil && m.workerRepoClient != nil {
@@ -1653,6 +1741,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	if spec == nil || spec.Linux == nil {
 		return errors.New("container network setup requires a Linux runtime spec")
 	}
+	m.lastNetworkSetup.Store(time.Now().UnixNano())
 
 	unlockContainer := m.lockContainerNetwork(containerId)
 	defer unlockContainer()
@@ -1807,8 +1896,12 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 		PeerName:         containerVethName,
 		PeerHardwareAddr: generateUniqueMAC(),
 	}
-
-	return netlink.LinkAdd(link)
+	if err := netlink.LinkAdd(link); err != nil {
+		return err
+	}
+	// A bridge port needs no IPv6 of its own; without a link-local address the
+	// host sees no DAD, addresses or routes for it come and go.
+	return netlink.LinkSetIP6AddrGenMode(link, in6AddrGenModeNone)
 }
 
 func (m *ContainerNetworkManager) getOrSetupBridge(bridgeName string) (netlink.Link, error) {
@@ -2545,6 +2638,10 @@ func (m *ContainerNetworkManager) tearDownPreallocatedNetworkSlot(containerId st
 	started := time.Now()
 	rulesErr := m.removePreallocatedNetworkSlotRules(slot)
 	rulesDuration := time.Since(started)
+	if rulesErr == nil && m.deferNetworkSlotDiscard(containerId, slot) {
+		log.Info().Str("container_id", containerId).Dur("rules", rulesDuration).Msg("network slot torn down; namespace discard deferred")
+		return nil
+	}
 	// A used namespace can contain container-owned state (including CRIU's
 	// terminal-checkpoint firewall lock), so it is never returned to the pool.
 	// Keep its IP quarantined if host-rule cleanup failed.
@@ -2554,6 +2651,42 @@ func (m *ContainerNetworkManager) tearDownPreallocatedNetworkSlot(containerId st
 	)
 	log.Info().Str("container_id", containerId).Dur("rules", rulesDuration).Dur("discard", time.Since(started)-rulesDuration).Msg("network slot torn down")
 	return err
+}
+
+// deferNetworkSlotDiscard detaches a used slot from its container and leaves
+// its namespace to discardDeferredSlots. The address moves back to the slot's
+// own reservation so it stays taken until the veth and bridge pins are gone.
+func (m *ContainerNetworkManager) deferNetworkSlotDiscard(containerId string, slot *containerNetworkSlot) bool {
+	if m.slotDiscards == nil || m.workerRepoClient == nil {
+		return false
+	}
+	reservationID := m.containerNetworkSlotReservationID(slot.id)
+	_, err := handleGRPCResponse(m.workerRepoClient.MoveContainerIp(m.ctx, &pb.MoveContainerIpRequest{
+		NetworkPrefix:   m.networkPrefix,
+		FromContainerId: containerId,
+		ToContainerId:   reservationID,
+		IpAddress:       slot.ip,
+	}))
+	if err != nil {
+		log.Debug().Str("container_id", containerId).Str("network_slot", slot.id).Err(err).Msg("discarding network slot inline")
+		return false
+	}
+
+	m.ipMu.Lock()
+	delete(m.containerIPs, containerId)
+	m.rememberContainerIPLocked(reservationID, slot.ip)
+	m.ipMu.Unlock()
+	m.retireNetworkSlot(containerId)
+
+	select {
+	case m.slotDiscards <- pendingSlotDiscard{slot: slot, deadline: time.Now().Add(networkSlotDiscardMaxDelay)}:
+	default:
+		if err := m.releaseUnusedNetworkSlot(slot); err != nil {
+			log.Warn().Str("network_slot", slot.id).Err(err).Msg("failed to discard network slot")
+		}
+	}
+	go m.fillNetworkSlotPool()
+	return true
 }
 
 func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *containerNetworkSlot) error {
