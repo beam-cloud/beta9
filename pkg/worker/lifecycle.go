@@ -2720,6 +2720,9 @@ func (s *Worker) applyDeferredSandboxCPUThrottle(ctx context.Context, request *t
 		if !exists {
 			return
 		}
+		if _, stopReason := instance.lifecycleState(); stopReason != "" {
+			return
+		}
 		err := s.applyDeferredCPUThrottle(request, instance)
 		if ctx.Err() != nil {
 			return

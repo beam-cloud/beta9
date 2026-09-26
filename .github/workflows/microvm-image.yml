@@ -1,0 +1,128 @@
+name: Build microvm image
+
+# Publishes public.ecr.aws/n4e0e1y0/beta9-microvm:<hack/microvm-image-tag.sh>
+# unless that tag already exists. Worker builds call this first, so the tag
+# their Dockerfile pins is always published before they copy from it.
+on:
+  workflow_call:
+    outputs:
+      image:
+        description: microvm image for the current inputs
+        value: ${{ jobs.resolve.outputs.image }}
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - docker/Dockerfile.microvm
+      - docker/microvm/**
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  resolve:
+    environment: Release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      image: ${{ steps.tag.outputs.image }}
+      exists: ${{ steps.exists.outputs.exists }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.1.1
+
+      - name: Compute tag
+        id: tag
+        run: |
+          tag="$(hack/microvm-image-tag.sh)"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "image=public.ecr.aws/n4e0e1y0/beta9-microvm:${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
+          aws-region: us-east-1
+
+      - name: Check for a published image
+        id: exists
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if aws ecr-public describe-images --repository-name beta9-microvm --image-ids imageTag="${TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "beta9-microvm:${TAG} is already published"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.exists != 'true'
+    environment: Release
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.1.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+          mask-password: "true"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          file: ./docker/Dockerfile.microvm
+          push: true
+          tags: ${{ needs.resolve.outputs.image }}-${{ matrix.arch }}
+          platforms: ${{ matrix.platform }}
+
+  publish:
+    needs: [resolve, build]
+    environment: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+          mask-password: "true"
+
+      - name: Publish multi-platform manifest
+        env:
+          IMAGE: ${{ needs.resolve.outputs.image }}
+        run: |
+          docker buildx imagetools create --tag "${IMAGE}" "${IMAGE}-amd64" "${IMAGE}-arm64"

@@ -25,6 +25,10 @@ const (
 	containerClientReconnectBaseDelay   = 20 * time.Millisecond
 	containerClientReconnectMaxDelay    = 100 * time.Millisecond
 	containerClientReconnectMinTimeout  = 2 * time.Second
+
+	// A worker restart kills the cached channel's connection; the RPC that
+	// finds out fails with Unavailable while the channel reconnects.
+	containerClientRetryPolicy = `{"methodConfig":[{"name":[{}],"retryPolicy":{"maxAttempts":3,"initialBackoff":"0.05s","maxBackoff":"0.5s","backoffMultiplier":2,"retryableStatusCodes":["UNAVAILABLE"]}}]}`
 )
 
 type ContainerClientDialer func(context.Context, string) (net.Conn, error)
@@ -83,6 +87,7 @@ func NewContainerClientWithDialer(
 			},
 			MinConnectTimeout: containerClientReconnectMinTimeout,
 		}),
+		grpc.WithDefaultServiceConfig(containerClientRetryPolicy),
 	)
 }
 

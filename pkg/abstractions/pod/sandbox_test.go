@@ -278,6 +278,35 @@ func (r *sandboxStatusContainerRepository) GetContainerRequestStatus(string) (ty
 	return r.requestStatus, r.requestStatusErr
 }
 
+// An exec against a sandbox the scheduler gave up on fails at once with an
+// error the SDK does not retry as a readiness failure.
+func TestSandboxExecFailsFastWhenSchedulingFailed(t *testing.T) {
+	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
+	repo := &sandboxStatusContainerRepository{
+		stateErr:      &types.ErrContainerStateNotFound{ContainerId: containerId},
+		requestStatus: types.ContainerRequestStatusFailed,
+	}
+	service := &GenericPodService{containerRepo: repo}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Token:     &types.Token{Key: "token"},
+		Workspace: &types.Workspace{ExternalId: "workspace-1"},
+	})
+
+	start := time.Now()
+	resp, err := service.SandboxExec(ctx, &pb.PodSandboxExecRequest{ContainerId: containerId, Command: "true"})
+	if err != nil || resp.Ok || resp.ErrorMsg != "Sandbox could not be scheduled" {
+		t.Fatalf("SandboxExec() = (%#v, %v)", resp, err)
+	}
+	if elapsed := time.Since(start); elapsed >= sandboxExecConnectRetryTimeout {
+		t.Fatalf("SandboxExec() took %v, want no connect retries", elapsed)
+	}
+
+	repo.requestStatus = ""
+	if service.sandboxRequestFailed(containerId, repo.stateErr) {
+		t.Fatal("a sandbox still being scheduled was reported as failed")
+	}
+}
+
 func TestSandboxContainerStatusAfterStateExpiry(t *testing.T) {
 	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
 	ownedStub := &types.StubWithRelated{Stub: types.Stub{WorkspaceId: 7}}

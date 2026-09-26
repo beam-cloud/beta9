@@ -128,6 +128,9 @@ func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in 
 		client, _, err := s.getClient(ctx, in.ContainerId, token, workspaceID)
 		retryable := false
 		if err != nil {
+			if s.sandboxRequestFailed(in.ContainerId, err) {
+				return nil, errSandboxNotScheduled
+			}
 			logSandboxConnectFailure(err, in.ContainerId)
 			lastErr = sandboxConnectionError{err: err}
 			retryable = isTransientSandboxConnectFailure(err)
@@ -152,6 +155,19 @@ func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in 
 		case <-timer.C:
 		}
 	}
+}
+
+var errSandboxNotScheduled = errors.New("sandbox could not be scheduled")
+
+// sandboxRequestFailed reports whether a sandbox with no container state is
+// one the scheduler gave up on: it never starts, so no connect retry helps.
+func (s *GenericPodService) sandboxRequestFailed(containerId string, err error) bool {
+	var stateNotFound *types.ErrContainerStateNotFound
+	if !errors.As(err, &stateNotFound) {
+		return false
+	}
+	requestStatus, statusErr := s.containerRepo.GetContainerRequestStatus(containerId)
+	return statusErr == nil && requestStatus == types.ContainerRequestStatusFailed
 }
 
 type sandboxConnectionError struct {
@@ -1037,6 +1053,9 @@ func sandboxConnectErrorMessage(_ error) string {
 }
 
 func sandboxExecFailureMessage(err error) string {
+	if errors.Is(err, errSandboxNotScheduled) {
+		return "Sandbox could not be scheduled"
+	}
 	var connectErr sandboxConnectionError
 	if errors.As(err, &connectErr) {
 		return sandboxConnectErrorMessage(err)

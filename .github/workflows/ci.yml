@@ -70,6 +70,18 @@ jobs:
         run: |
           make test-pkg
   
+  verify_microvm_image_pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Worker Dockerfiles pin the microvm image for docker/Dockerfile.microvm
+        run: |
+          want="ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:$(hack/microvm-image-tag.sh)"
+          for f in docker/Dockerfile.worker docker/Dockerfile.worker-overlay; do
+            grep -qxF "$want" "$f" || { echo "$f must contain: $want"; exit 1; }
+          done
+
   verify_protobufs:
     runs-on: ubuntu-latest
     steps:

@@ -54,6 +54,7 @@ func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 		`StartLimitIntervalSec=0`,
 		`Restart=always`,
 		`RestartSec=30`,
+		`SuccessExitStatus=130`,
 		`TimeoutStopSec=60`,
 		`Environment="XDG_CONFIG_HOME=` + filepath.Join(tmp, "state", ".config") + `"`,
 	} {
