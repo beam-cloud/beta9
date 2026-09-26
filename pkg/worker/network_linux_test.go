@@ -5,6 +5,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,8 @@ func TestCloseReleasesPooledSlotsTogether(t *testing.T) {
 	}
 	require.Equal(t, 2*networkSlotCleanupConcurrency+1, released, "every free and pending slot is released")
 	require.Greater(t, repoClient.peak, 1, "releases run concurrently")
+	first, last := slices.MinFunc(repoClient.deadlines, time.Time.Compare), slices.MaxFunc(repoClient.deadlines, time.Time.Compare)
+	require.GreaterOrEqual(t, last.Sub(first), repoClient.removeDelay, "later releases do not inherit an earlier deadline")
 	require.True(t, manager.slotPoolClosed)
 	require.Zero(t, manager.totalSlots)
 }

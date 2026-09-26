@@ -1126,6 +1126,7 @@ type slotPoolWorkerRepoClient struct {
 	calls        []string
 	inflight     int
 	peak         int
+	deadlines    []time.Time
 	unlockCtxErr error
 }
 
@@ -1155,6 +1156,9 @@ func (c *slotPoolWorkerRepoClient) RemoveContainerIp(ctx context.Context, in *pb
 	c.mu.Lock()
 	c.inflight++
 	c.peak = max(c.peak, c.inflight)
+	if deadline, ok := ctx.Deadline(); ok {
+		c.deadlines = append(c.deadlines, deadline)
+	}
 	c.mu.Unlock()
 	time.Sleep(c.removeDelay)
 	c.mu.Lock()
