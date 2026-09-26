@@ -1115,3 +1115,71 @@ func TestRefillWaitsForStartsUnlessThePoolRunsLow(t *testing.T) {
 	m.freeSlots = m.freeSlots[:15]
 	require.False(t, m.refillDeferred(), "below the reserve, refill runs during starts")
 }
+
+// slotPoolWorkerRepoClient records the pool lock and reservation RPCs in order.
+type slotPoolWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+	assignments []*pb.ContainerIpAssignment
+	removeDelay time.Duration
+
+	mu           sync.Mutex
+	calls        []string
+	inflight     int
+	peak         int
+	deadlines    []time.Time
+	unlockCtxErr error
+}
+
+func (c *slotPoolWorkerRepoClient) record(call string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, call)
+}
+
+func (c *slotPoolWorkerRepoClient) SetNetworkLock(context.Context, *pb.SetNetworkLockRequest, ...grpc.CallOption) (*pb.SetNetworkLockResponse, error) {
+	c.record("lock")
+	return &pb.SetNetworkLockResponse{Ok: true, Token: "token"}, nil
+}
+
+func (c *slotPoolWorkerRepoClient) RemoveNetworkLock(ctx context.Context, _ *pb.RemoveNetworkLockRequest, _ ...grpc.CallOption) (*pb.RemoveNetworkLockResponse, error) {
+	c.unlockCtxErr = ctx.Err()
+	c.record("unlock")
+	return &pb.RemoveNetworkLockResponse{Ok: true}, nil
+}
+
+func (c *slotPoolWorkerRepoClient) GetContainerIpAssignments(context.Context, *pb.GetContainerIpAssignmentsRequest, ...grpc.CallOption) (*pb.GetContainerIpAssignmentsResponse, error) {
+	c.record("list")
+	return &pb.GetContainerIpAssignmentsResponse{Ok: true, Assignments: c.assignments}, nil
+}
+
+func (c *slotPoolWorkerRepoClient) RemoveContainerIp(ctx context.Context, in *pb.RemoveContainerIpRequest, _ ...grpc.CallOption) (*pb.RemoveContainerIpResponse, error) {
+	c.mu.Lock()
+	c.inflight++
+	c.peak = max(c.peak, c.inflight)
+	if deadline, ok := ctx.Deadline(); ok {
+		c.deadlines = append(c.deadlines, deadline)
+	}
+	c.mu.Unlock()
+	time.Sleep(c.removeDelay)
+	c.mu.Lock()
+	c.inflight--
+	c.mu.Unlock()
+	c.record("remove " + in.ContainerId)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &pb.RemoveContainerIpResponse{Ok: true}, nil
+}
+
+func TestNetworkSlotPoolLockIsReleasedAfterShutdownCancelsTheWorker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	repoClient := &slotPoolWorkerRepoClient{}
+	manager := &ContainerNetworkManager{ctx: ctx, workerRepoClient: repoClient}
+
+	require.NoError(t, manager.withNetworkSlotPoolLock(func() error {
+		cancel()
+		return nil
+	}))
+	require.Equal(t, []string{"lock", "unlock"}, repoClient.calls)
+	require.NoError(t, repoClient.unlockCtxErr, "the lock is released on a context that outlives the worker's")
+}

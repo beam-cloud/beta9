@@ -810,10 +810,16 @@ func (m *ContainerNetworkManager) withNetworkSlotPoolLock(fn func() error) error
 	if err != nil {
 		return err
 	}
-	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix + ":slot_pool",
-		Token:         lockResponse.Token,
-	})
+	defer func() {
+		// Shutdown cancels m.ctx while a fill or sweep may hold the lock; a
+		// lock left to its TTL stalls the next worker's pool for two minutes.
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+		defer unlockCancel()
+		m.workerRepoClient.RemoveNetworkLock(unlockCtx, &pb.RemoveNetworkLockRequest{
+			NetworkPrefix: m.networkPrefix + ":slot_pool",
+			Token:         lockResponse.Token,
+		})
+	}()
 
 	return fn()
 }
@@ -1122,11 +1128,10 @@ func (m *ContainerNetworkManager) Close() error {
 		break
 	}
 
-	// Released together: one at a time, a full pool outruns the deadline and
-	// leaves reservations the next worker has to sweep.
-	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
-	defer cancel()
-
+	// Released together, each RPC on its own deadline: the kernel serializes
+	// namespace teardown at tens per second, so a full pool takes seconds and
+	// a deadline shared across the pool expires on its tail, leaving
+	// reservations the next worker has to sweep.
 	errs := make([]error, len(slots))
 	limit := make(chan struct{}, networkSlotCleanupConcurrency)
 	var wg sync.WaitGroup
@@ -1136,6 +1141,8 @@ func (m *ContainerNetworkManager) Close() error {
 		go func() {
 			defer wg.Done()
 			defer func() { <-limit }()
+			ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+			defer cancel()
 			errs[i] = m.releaseUnusedNetworkSlotWithContext(ctx, slot)
 		}()
 	}
