@@ -2150,6 +2150,43 @@ func validateEnvironmentVariableName(name string) error {
 	return nil
 }
 
+// signingKey returns the workspace's signing key, loading it when the caller's
+// Workspace does not carry one.
+//
+// The Workspace that reaches the secret methods is usually the one resolved on
+// the auth path, and GetWorkspaceByExternalId / GetWorkspace do not SELECT
+// signing_key -- so the field is nil even when the column is set in the
+// database. Dereferencing it unconditionally panicked the gateway on every
+// secret create, update and decrypt; under Kubernetes that is a CrashLoopBackOff
+// which takes the shared gateway down for every workspace, not just the caller's.
+//
+// Load the key on demand when it is missing, and return an error when it is
+// genuinely unset rather than taking the process down.
+func (r *PostgresBackendRepository) signingKey(ctx context.Context, workspace *types.Workspace) (string, error) {
+	if workspace == nil {
+		return "", errors.New("cannot resolve a signing key: workspace is nil")
+	}
+
+	if workspace.SigningKey != nil && *workspace.SigningKey != "" {
+		return *workspace.SigningKey, nil
+	}
+
+	if workspace.ExternalId == "" {
+		return "", fmt.Errorf("workspace %d has no signing key loaded and no external id to load one with", workspace.Id)
+	}
+
+	loaded, err := r.GetWorkspaceByExternalIdWithSigningKey(ctx, workspace.ExternalId)
+	if err != nil {
+		return "", err
+	}
+
+	if loaded.SigningKey == nil || *loaded.SigningKey == "" {
+		return "", fmt.Errorf("workspace %s has no signing key set", workspace.ExternalId)
+	}
+
+	return *loaded.SigningKey, nil
+}
+
 func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string, validateName bool) (*types.Secret, error) {
 	query := `
 	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
@@ -2164,7 +2201,12 @@ func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace 
 		}
 	}
 
-	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
+	signingKey, err := r.signingKey(ctx, workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	secretKey, err := pkgCommon.ParseSecretKey(signingKey)
 	if err != nil {
 		return nil, err
 	}
@@ -2212,7 +2254,12 @@ func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context
 		return nil, err
 	}
 
-	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
+	signingKey, err := r.signingKey(ctx, workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	secretKey, err := pkgCommon.ParseSecretKey(signingKey)
 	if err != nil {
 		return nil, err
 	}
@@ -2237,7 +2284,12 @@ func (r *PostgresBackendRepository) GetSecretsByNameDecrypted(ctx context.Contex
 		return nil, err
 	}
 
-	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
+	signingKey, err := r.signingKey(ctx, workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	secretKey, err := pkgCommon.ParseSecretKey(signingKey)
 	if err != nil {
 		return nil, err
 	}
@@ -2283,7 +2335,12 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
-	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
+	signingKey, err := r.signingKey(ctx, workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	secretKey, err := pkgCommon.ParseSecretKey(signingKey)
 	if err != nil {
 		return nil, err
 	}
