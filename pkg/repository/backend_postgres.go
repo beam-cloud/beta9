@@ -2284,12 +2284,7 @@ func (r *PostgresBackendRepository) GetSecretsByNameDecrypted(ctx context.Contex
 		return nil, err
 	}
 
-	signingKey, err := r.signingKey(ctx, workspace)
-	if err != nil {
-		return nil, err
-	}
-
-	secretKey, err := pkgCommon.ParseSecretKey(signingKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}

@@ -644,86 +644,80 @@ func receiveTaskEventStatus(t *testing.T, statuses <-chan types.TaskStatus) type
 
 const workspaceSigningKeyQueryPattern = `SELECT id, name, created_at, concurrency_limit_id, signing_key`
 
-// A Workspace resolved on the auth path carries no signing key, because
-// GetWorkspaceByExternalId does not SELECT the column. Every secret method used
-// to dereference it regardless, which panicked the whole gateway.
-func TestSigningKeyLoadsWhenWorkspaceHasNoneAttached(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	pg := repo.(*PostgresBackendRepository)
-	key := "test-signing-key"
-
-	mock.ExpectQuery(workspaceSigningKeyQueryPattern).
-		WithArgs("ws-external").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "created_at", "concurrency_limit_id", "signing_key", "volume_cache_enabled", "multi_gpu_enabled",
-		}).AddRow(uint(1), "ws", time.Now().UTC(), nil, key, false, false))
-
-	got, err := pg.signingKey(context.Background(), &types.Workspace{Id: 1, ExternalId: "ws-external"})
-
-	require.NoError(t, err)
-	require.Equal(t, key, got)
-	require.NoError(t, mock.ExpectationsWereMet())
+func workspaceWithoutSigningKey() *types.Workspace {
+	return &types.Workspace{Id: 1, ExternalId: "ws-external"}
 }
 
-func TestSigningKeyErrorsWhenGenuinelyUnset(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	pg := repo.(*PostgresBackendRepository)
-
-	mock.ExpectQuery(workspaceSigningKeyQueryPattern).
-		WithArgs("ws-external").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "created_at", "concurrency_limit_id", "signing_key", "volume_cache_enabled", "multi_gpu_enabled",
-		}).AddRow(uint(1), "ws", time.Now().UTC(), nil, nil, false, false))
-
-	_, err := pg.signingKey(context.Background(), &types.Workspace{Id: 1, ExternalId: "ws-external"})
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "no signing key")
+// signingKeyRows mocks GetWorkspaceByExternalIdWithSigningKey. Pass nil for a
+// workspace whose signing_key column is genuinely unset.
+func signingKeyRows(key interface{}) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"id", "name", "created_at", "concurrency_limit_id", "signing_key", "volume_cache_enabled", "multi_gpu_enabled",
+	}).AddRow(uint(1), "ws", time.Now().UTC(), nil, key, false, false)
 }
 
-func TestSigningKeyUsesAttachedValueWithoutQuerying(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	pg := repo.(*PostgresBackendRepository)
-	key := "already-loaded"
-
-	got, err := pg.signingKey(context.Background(), &types.Workspace{
-		Id:         1,
-		ExternalId: "ws-external",
-		SigningKey: &key,
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, key, got)
-	// No query should have been issued: the key was already there.
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSigningKeyRejectsNilWorkspace(t *testing.T) {
-	repo, _ := NewBackendPostgresRepositoryForTest()
-	pg := repo.(*PostgresBackendRepository)
-
-	_, err := pg.signingKey(context.Background(), nil)
-
-	require.Error(t, err)
-}
-
-// The regression this all exists for: a secret call whose workspace has no
-// signing key attached must return an error, not take the process down.
+// The Workspace that reaches the secret methods comes from the auth path, and
+// GetWorkspaceByExternalId does not SELECT signing_key -- so the pointer is nil
+// even when the column is set. These methods used to dereference it regardless,
+// which panicked the gateway process rather than returning an error.
 func TestCreateSecretDoesNotPanicWhenSigningKeyMissing(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
-
 	mock.ExpectQuery(workspaceSigningKeyQueryPattern).
 		WithArgs("ws-external").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "created_at", "concurrency_limit_id", "signing_key", "volume_cache_enabled", "multi_gpu_enabled",
-		}).AddRow(uint(1), "ws", time.Now().UTC(), nil, nil, false, false))
+		WillReturnRows(signingKeyRows(nil))
 
 	require.NotPanics(t, func() {
-		_, err := repo.CreateSecret(
-			context.Background(),
-			&types.Workspace{Id: 1, ExternalId: "ws-external"},
-			1, "MY_SECRET", "value", true,
-		)
+		_, err := repo.CreateSecret(context.Background(), workspaceWithoutSigningKey(), 1, "MY_SECRET", "value", true)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no signing key")
+	})
+}
+
+func TestUpdateSecretDoesNotPanicWhenSigningKeyMissing(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(workspaceSigningKeyQueryPattern).
+		WithArgs("ws-external").
+		WillReturnRows(signingKeyRows(nil))
+
+	require.NotPanics(t, func() {
+		_, err := repo.UpdateSecret(context.Background(), workspaceWithoutSigningKey(), 1, "MY_SECRET", "value")
 		require.Error(t, err)
 	})
+}
+
+// The other half: when the column IS set, the key must be loaded rather than
+// the call failing, so the fix cannot be "always refuse".
+func TestCreateSecretLoadsSigningKeyWhenWorkspaceHasNoneAttached(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(workspaceSigningKeyQueryPattern).
+		WithArgs("ws-external").
+		WillReturnRows(signingKeyRows("sk_pKz38fK8v7lz01AneJI8MJnR70akmP2CtDNf1IufKcY="))
+	mock.ExpectQuery(`INSERT INTO workspace_secret`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "external_id", "name", "workspace_id", "last_updated_by", "created_at", "updated_at",
+		}).AddRow(uint(1), "sec-ext", "MY_SECRET", uint(1), nil, time.Now().UTC(), time.Now().UTC()))
+
+	secret, err := repo.CreateSecret(context.Background(), workspaceWithoutSigningKey(), 1, "MY_SECRET", "value", true)
+
+	require.NoError(t, err)
+	require.Equal(t, "MY_SECRET", secret.Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// An already-attached key must be used as-is, with no extra round trip.
+func TestCreateSecretUsesAttachedSigningKeyWithoutQuerying(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	key := "sk_pKz38fK8v7lz01AneJI8MJnR70akmP2CtDNf1IufKcY="
+	mock.ExpectQuery(`INSERT INTO workspace_secret`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "external_id", "name", "workspace_id", "last_updated_by", "created_at", "updated_at",
+		}).AddRow(uint(1), "sec-ext", "MY_SECRET", uint(1), nil, time.Now().UTC(), time.Now().UTC()))
+
+	ws := workspaceWithoutSigningKey()
+	ws.SigningKey = &key
+
+	_, err := repo.CreateSecret(context.Background(), ws, 1, "MY_SECRET", "value", true)
+
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
