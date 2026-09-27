@@ -75,6 +75,7 @@ push_image() {
     --file "$beta9_dir/docker/Dockerfile.worker-overlay" \
     --platform linux/amd64,linux/arm64 \
     --build-arg "WORKER_RUNTIME_IMAGE=$runtime_image" \
+    --build-arg "MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:$("$beta9_dir/hack/microvm-image-tag.sh")" \
     --build-arg "SOURCE_REVISION=$revision" \
     --build-arg "SOURCE_HASH=$hash" \
     --provenance=false \

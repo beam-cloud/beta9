@@ -78,6 +78,7 @@ cmd_build() {
   remote "cd $remote_dir && sudo docker buildx build . \
     -f docker/Dockerfile.worker-overlay \
     --build-arg WORKER_RUNTIME_IMAGE=$runtime_image \
+    --build-arg MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:$("$beta9_dir/hack/microvm-image-tag.sh") \
     --build-arg MICROVM_DEV=1 \
     --build-arg SOURCE_REVISION=$(git -C "$beta9_dir" rev-parse --short HEAD 2>/dev/null || echo dev) \
     --load -t $image_tag --progress=plain" 2>&1 | tail -n 40

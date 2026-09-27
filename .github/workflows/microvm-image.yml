@@ -1,8 +1,9 @@
 name: Build microvm image
 
-# Publishes public.ecr.aws/n4e0e1y0/beta9-microvm:<hack/microvm-image-tag.sh>
-# unless that tag already exists. Worker builds call this first, so the tag
-# their Dockerfile pins is always published before they copy from it.
+# Publishes public.ecr.aws/n4e0e1y0/beta9-microvm:<hack/microvm-image-tag.sh>,
+# the microvm-assets stage of docker/Dockerfile.worker, unless that tag already
+# exists. Worker builds call this first and pass the image as MICROVM_IMAGE so
+# they never rebuild the kernel; a plain docker build builds the stage itself.
 on:
   workflow_call:
     outputs:
@@ -13,7 +14,7 @@ on:
   push:
     branches: [main]
     paths:
-      - docker/Dockerfile.microvm
+      - docker/Dockerfile.worker
       - docker/microvm/**
 
 permissions:
@@ -96,7 +97,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          file: ./docker/Dockerfile.microvm
+          file: ./docker/Dockerfile.worker
+          target: microvm-assets
           push: true
           tags: ${{ needs.resolve.outputs.image }}-${{ matrix.arch }}
           platforms: ${{ matrix.platform }}

@@ -3,8 +3,8 @@
 ARG GO_BUILD_IMAGE=docker.io/library/golang:1.25-bookworm@sha256:6359592445455f2dbe2412bed411336035bc019a50017720d77454ffdd6d0f82
 ARG WORKER_RUNTIME_IMAGE=public.ecr.aws/n4e0e1y0/beta9-worker@sha256:5792f3b5c2ce00e37165db3ed1f1d39b245da6ec922a3cf688f437280cae0308
 
-# Built from docker/Dockerfile.microvm; CI checks this matches hack/microvm-image-tag.sh.
-ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:f82b4d763772
+# Prebuilt microvm assets, public.ecr.aws/n4e0e1y0/beta9-microvm:<hack/microvm-image-tag.sh>.
+ARG MICROVM_IMAGE
 
 # MICROVM_DEV=1 also compiles the microvm integration test binary into the
 # image so hack/microvm-smoke.sh can run it in place with the worker's PATH.
