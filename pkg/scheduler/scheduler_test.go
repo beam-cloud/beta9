@@ -2972,6 +2972,37 @@ func TestCheckpointAcceleratorFiltersExistingWorkers(t *testing.T) {
 	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
 }
 
+func TestPlainV100RequestRetainsCompatibilityWith32GBWorkers(t *testing.T) {
+	worker := &types.Worker{
+		Id:           "v100-32",
+		Status:       types.WorkerStatusAvailable,
+		FreeCpu:      1000,
+		FreeMemory:   2000,
+		FreeGpuCount: 1,
+		Gpu:          string(types.GPU_V100_32),
+	}
+	plainRequest := &types.ContainerRequest{
+		Cpu:        1000,
+		Memory:     1000,
+		GpuRequest: types.GpuTypesToStrings(types.GPUTypesFromString("V100")),
+		GpuCount:   1,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Accelerator:  "V100",
+		},
+	}
+	assert.Equal(t, []*types.Worker{worker}, filterWorkersByResources([]*types.Worker{worker}, plainRequest, nil))
+
+	strictRequest := &types.ContainerRequest{
+		Cpu:        1000,
+		Memory:     1000,
+		GpuRequest: types.GpuTypesToStrings(types.GPUTypesFromString("V100-32")),
+		GpuCount:   1,
+	}
+	assert.Equal(t, []*types.Worker{worker}, filterWorkersByResources([]*types.Worker{worker}, strictRequest, nil))
+}
+
 func TestCheckpointAcceleratorFiltersProvisioningControllers(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)

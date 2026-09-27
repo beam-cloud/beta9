@@ -1234,7 +1234,18 @@ func normalizedAccelerator(accelerator string) string {
 
 func acceleratorMatchesCheckpoint(request *types.ContainerRequest, accelerator string) bool {
 	requiredAccelerator := checkpointAccelerator(request)
-	return requiredAccelerator == "" || strings.EqualFold(normalizedAccelerator(accelerator), normalizedAccelerator(requiredAccelerator))
+	if requiredAccelerator == "" {
+		return true
+	}
+	available := normalizedAccelerator(accelerator)
+	required := normalizedAccelerator(requiredAccelerator)
+	// Older checkpoints and requests name the whole V100 family as V100.
+	// Keep those compatible with 32GB workers after capacity reports the
+	// more specific V100-32 type.
+	if required == string(types.GPU_V100) && available == string(types.GPU_V100_32) {
+		return true
+	}
+	return strings.EqualFold(available, required)
 }
 
 func (s *Scheduler) filterControllersByCheckpointAccelerator(

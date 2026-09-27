@@ -70,3 +70,22 @@ func TestGPUTypesFromStringNormalizesAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestGPUTypesFromStringKeepsPlainV100CompatibleWith32GBVariants(t *testing.T) {
+	got := GPUTypesFromString("V100")
+	want := []GpuType{GPU_V100, GPU_V100_32}
+	if len(got) != len(want) {
+		t.Fatalf("GPUTypesFromString(\"V100\") = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("gpu[%d] = %q, want %q (all: %#v)", i, got[i], want[i], got)
+		}
+	}
+
+	got = GPUTypesFromString("V100-32")
+	want = []GpuType{GPU_V100_32}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("GPUTypesFromString(\"V100-32\") = %#v, want %#v", got, want)
+	}
+}
