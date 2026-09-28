@@ -114,7 +114,7 @@ type ContainerNetworkManager struct {
 	freeSlots           []*containerNetworkSlot
 	containerSlots      map[string]*containerNetworkSlot
 	portExposures       map[int]*containerPortExposure
-	portReservations    map[int]string
+	portReservations    map[int]portReservation
 	forcePortProxy      bool
 	totalSlots          int
 	slotFillRunning     bool
@@ -528,7 +528,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		containerIPs:        map[string]string{},
 		slotPoolSize:        containerNetworkSlotPoolSizeForPool(poolConfig, containerStartLimit),
 		containerSlots:      map[string]*containerNetworkSlot{},
-		portReservations:    map[int]string{},
+		portReservations:    map[int]portReservation{},
 	}
 
 	// Disable IPv6 if ip6tables is not supported
@@ -2834,24 +2834,34 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	return m.ExposePorts(containerId, []PortBinding{{HostPort: hostPort, ContainerPort: containerPort}})
 }
 
+// portReservation keeps the reserved host port bound until the exposure takes
+// it over, so the kernel cannot hand the port to another socket in between.
+type portReservation struct {
+	containerID string
+	listener    net.Listener
+}
+
 func (m *ContainerNetworkManager) ReservePorts(containerID string, count int) ([]int, error) {
 	m.portExposureMu.Lock()
 	defer m.portExposureMu.Unlock()
 	if m.portReservations == nil {
-		m.portReservations = map[int]string{}
+		m.portReservations = map[int]portReservation{}
 	}
 
+	network, address := containerPortProxyListenConfig(0, addressFamilyForHost(m.podAddr))
 	ports := make([]int, 0, count)
 	for len(ports) < count {
-		port, err := getRandomFreePort()
+		listener, err := net.Listen(network, address)
 		if err != nil {
 			m.releasePortReservationsLocked(containerID)
 			return nil, err
 		}
-		if m.portExposures[port] != nil || m.portReservations[port] != "" {
+		port := listener.Addr().(*net.TCPAddr).Port
+		if m.portExposures[port] != nil {
+			_ = listener.Close()
 			continue
 		}
-		m.portReservations[port] = containerID
+		m.portReservations[port] = portReservation{containerID: containerID, listener: listener}
 		ports = append(ports, port)
 	}
 	return ports, nil
@@ -2864,8 +2874,9 @@ func (m *ContainerNetworkManager) ReleasePortReservations(containerID string) {
 }
 
 func (m *ContainerNetworkManager) releasePortReservationsLocked(containerID string) {
-	for port, owner := range m.portReservations {
-		if owner == containerID {
+	for port, reservation := range m.portReservations {
+		if reservation.containerID == containerID {
+			_ = reservation.listener.Close()
 			delete(m.portReservations, port)
 		}
 	}
@@ -2913,11 +2924,13 @@ func (m *ContainerNetworkManager) startContainerPortExposure(containerId string,
 		}
 		return fmt.Errorf("host port %d is already proxied for container %s port %d", binding.HostPort, existing.containerID, existing.containerPort)
 	}
-	if owner := m.portReservations[binding.HostPort]; owner != "" && owner != containerId {
+	reservation := m.portReservations[binding.HostPort]
+	if reservation.containerID != "" && reservation.containerID != containerId {
 		m.portExposureMu.Unlock()
-		return fmt.Errorf("host port %d is reserved for container %s", binding.HostPort, owner)
+		return fmt.Errorf("host port %d is reserved for container %s", binding.HostPort, reservation.containerID)
 	}
 	delete(m.portReservations, binding.HostPort)
+	exposure.listener = reservation.listener
 	m.portExposures[binding.HostPort] = exposure
 	m.portExposureMu.Unlock()
 
@@ -2951,6 +2964,9 @@ func (m *ContainerNetworkManager) startContainerPortExposure(containerId string,
 		go m.runContainerPortProxyFallback(exposure, info, binding, family, native, fallback, true)
 		return nil
 	}
+
+	// Kernel forwarding serves the port from here.
+	exposure.releaseListener()
 
 	// DNAT cannot cross address families. When the pod's family is known and
 	// the container only ever answers on the other one, swap in the proxy.

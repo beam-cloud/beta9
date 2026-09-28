@@ -29,6 +29,9 @@ type containerPortExposure struct {
 	containerPort int
 	proxyMu       sync.Mutex
 	proxy         *containerPortProxy
+	// listener is the socket bound when the host port was reserved. It is
+	// handed to the proxy, or released once kernel forwarding serves the port.
+	listener net.Listener
 }
 
 type containerPortProxy struct {
@@ -37,13 +40,10 @@ type containerPortProxy struct {
 	containerID   string
 	hostPort      int
 	containerPort int
-	listenNetwork string
-	listenAddress string
+	listener      net.Listener
 	targets       []string
 	ready         chan struct{}
 	readyOnce     sync.Once
-	listenerMu    sync.Mutex
-	listener      net.Listener
 }
 
 func newContainerPortExposure(parent context.Context, containerID string, binding PortBinding) *containerPortExposure {
@@ -61,25 +61,48 @@ func newContainerPortExposure(parent context.Context, containerID string, bindin
 }
 
 func (e *containerPortExposure) startProxy(family addressFamily, targets []string) {
-	if len(targets) == 0 || e.ctx.Err() != nil {
+	if len(targets) == 0 {
 		return
 	}
-
-	proxy := newContainerPortProxy(e.ctx, e.containerID, PortBinding{
-		HostPort:      e.hostPort,
-		ContainerPort: e.containerPort,
-	}, family, targets)
 
 	e.proxyMu.Lock()
-	if e.ctx.Err() != nil {
-		e.proxyMu.Unlock()
-		proxy.close()
+	defer e.proxyMu.Unlock()
+	if e.ctx.Err() != nil || e.proxy != nil {
 		return
 	}
-	e.proxy = proxy
-	e.proxyMu.Unlock()
 
-	go proxy.run()
+	listener := e.listener
+	e.listener = nil
+	if listener == nil {
+		var err error
+		listener, err = net.Listen(containerPortProxyListenConfig(e.hostPort, family))
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("container_id", e.containerID).
+				Int("host_port", e.hostPort).
+				Int("container_port", e.containerPort).
+				Msg("failed to start container port proxy")
+			return
+		}
+	}
+
+	e.proxy = newContainerPortProxy(e.ctx, e.containerID, PortBinding{
+		HostPort:      e.hostPort,
+		ContainerPort: e.containerPort,
+	}, listener, targets)
+	go e.proxy.run()
+}
+
+// releaseListener drops the reserved socket when no proxy will use it.
+func (e *containerPortExposure) releaseListener() {
+	e.proxyMu.Lock()
+	listener := e.listener
+	e.listener = nil
+	e.proxyMu.Unlock()
+	if listener != nil {
+		_ = listener.Close()
+	}
 }
 
 func (e *containerPortExposure) close() {
@@ -91,22 +114,21 @@ func (e *containerPortExposure) close() {
 	if proxy != nil {
 		proxy.close()
 	}
+	e.releaseListener()
 }
 
-func newContainerPortProxy(parent context.Context, containerID string, binding PortBinding, family addressFamily, targets []string) *containerPortProxy {
+func newContainerPortProxy(parent context.Context, containerID string, binding PortBinding, listener net.Listener, targets []string) *containerPortProxy {
 	if parent == nil {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	listenNetwork, listenAddress := containerPortProxyListenConfig(binding.HostPort, family)
 	return &containerPortProxy{
 		ctx:           ctx,
 		cancel:        cancel,
 		containerID:   containerID,
 		hostPort:      binding.HostPort,
 		containerPort: binding.ContainerPort,
-		listenNetwork: listenNetwork,
-		listenAddress: listenAddress,
+		listener:      listener,
 		targets:       append([]string(nil), targets...),
 		ready:         make(chan struct{}),
 	}
@@ -185,34 +207,17 @@ func (p *containerPortProxy) run() {
 		return
 	}
 
-	listener, err := net.Listen(p.listenNetwork, p.listenAddress)
-	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("container_id", p.containerID).
-			Int("host_port", p.hostPort).
-			Int("container_port", p.containerPort).
-			Str("listen_network", p.listenNetwork).
-			Str("listen_address", p.listenAddress).
-			Msg("failed to start container port proxy")
-		return
-	}
-
-	p.listenerMu.Lock()
-	p.listener = listener
-	p.listenerMu.Unlock()
 	p.readyOnce.Do(func() { close(p.ready) })
 	log.Debug().
 		Str("container_id", p.containerID).
 		Int("host_port", p.hostPort).
 		Int("container_port", p.containerPort).
-		Str("listen_network", p.listenNetwork).
-		Str("listen_address", p.listenAddress).
+		Str("listen_address", p.listener.Addr().String()).
 		Strs("targets", p.targets).
 		Msg("container port proxy started")
 
 	for {
-		conn, err := listener.Accept()
+		conn, err := p.listener.Accept()
 		if err != nil {
 			select {
 			case <-p.ctx.Done():
@@ -341,10 +346,5 @@ func (p *containerPortProxy) dialBackend(timeout time.Duration) (net.Conn, error
 
 func (p *containerPortProxy) close() {
 	p.cancel()
-	p.listenerMu.Lock()
-	if p.listener != nil {
-		_ = p.listener.Close()
-		p.listener = nil
-	}
-	p.listenerMu.Unlock()
+	_ = p.listener.Close()
 }
