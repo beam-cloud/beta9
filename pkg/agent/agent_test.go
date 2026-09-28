@@ -572,6 +572,9 @@ func TestGVisorAgentWorkerConfigEnforcesMemory(t *testing.T) {
 	if !config.Worker.ContainerResourceLimits.MemoryEnforced {
 		t.Fatal("gVisor agent workloads must receive a bounded memory view")
 	}
+	if !config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("gVisor agent workloads must receive a bounded CPU view")
+	}
 
 	slot.ContainerRuntime = types.ContainerRuntimeRunc.String()
 	config = newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
