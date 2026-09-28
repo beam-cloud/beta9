@@ -216,9 +216,14 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	if priority == 0 && !slot.PrioritySet {
 		priority = 1000
 	}
+	gvisor := poolRuntime == types.ContainerRuntimeGvisor.String()
 	cpuAffinityEnforced := envBoolDefault(types.AgentCPUAffinityEnforcedEnv, true)
 	if poolMode == string(types.PoolModeExternal) {
 		cpuAffinityEnforced = slot.CpuAffinityEnforced
+	}
+	if gvisor {
+		// The sandbox reports the sentry's CPU count; the cpuset is what bounds it.
+		cpuAffinityEnforced = true
 	}
 	networkPreallocation := true
 	criuEnabled := true
@@ -274,7 +279,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			ContainerRuntime:  poolRuntime,
 			ContainerResourceLimits: agentConfigResourceLimits{
 				CPUAffinityEnforced: cpuAffinityEnforced,
-				MemoryEnforced:      poolRuntime == types.ContainerRuntimeGvisor.String(),
+				MemoryEnforced:      gvisor,
 			},
 			CacheEnabled:               cache.Enabled,
 			TerminationGracePeriod:     30,
