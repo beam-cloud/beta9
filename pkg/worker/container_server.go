@@ -755,7 +755,7 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 
 	if !instance.processManagerReady() {
 		instance.signalProcessManagerReadiness(true)
-		s.containerInstances.Set(in.ContainerId, instance)
+		s.containerInstances.Update(in.ContainerId, instance)
 	}
 
 	return resp, nil
@@ -1684,7 +1684,7 @@ func recordSandboxExposedPort(containerInstances *common.SafeMap[*ContainerInsta
 	}
 
 	instance.Request.Ports = append(instance.Request.Ports, port)
-	containerInstances.Set(containerId, instance)
+	containerInstances.Update(containerId, instance)
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxUpdateNetworkPermissions(ctx context.Context, in *pb.ContainerSandboxUpdateNetworkPermissionsRequest) (*pb.ContainerSandboxUpdateNetworkPermissionsResponse, error) {

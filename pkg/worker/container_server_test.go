@@ -689,6 +689,7 @@ func TestRecordSandboxExposedPortOnlyAppendsMissingPort(t *testing.T) {
 			Ports: []uint32{8000},
 		},
 	}
+	instances.Set(containerId, instance)
 
 	recordSandboxExposedPort(instances, containerId, instance, 8000)
 	recordSandboxExposedPort(instances, containerId, instance, 9000)
@@ -697,6 +698,11 @@ func TestRecordSandboxExposedPortOnlyAppendsMissingPort(t *testing.T) {
 	got, exists := instances.Get(containerId)
 	require.True(t, exists)
 	require.Equal(t, []uint32{8000, 9000}, got.Request.Ports)
+
+	// A sandbox finalized mid-request must not be re-created by the write-back.
+	instances.Delete(containerId)
+	recordSandboxExposedPort(instances, containerId, instance, 9100)
+	require.Equal(t, 0, instances.Len())
 }
 
 func TestContainerSandboxExposePortRegistersBackendRoute(t *testing.T) {

@@ -167,6 +167,43 @@ func TestWaitForProcessManagerStopsWithContainer(t *testing.T) {
 	require.Greater(t, stats.Attempts, 1)
 }
 
+// A sandbox stopped while its process manager was still starting is finalized
+// and removed before the wait returns. Writing the stale instance back would
+// leave a phantom container the worker counts forever, so it never idles out
+// or finishes draining (seen as cordoned workers with zero containers that
+// sat for hours).
+func TestAttachProcessManagerSkipsFinalizedSandbox(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "sandbox-gone"}
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	stale := &ContainerInstance{Id: request.ContainerId, Request: request}
+	stale.initializeProcessManagerReadiness()
+	worker.containerInstances.Set(request.ContainerId, stale)
+	worker.containerInstances.Delete(request.ContainerId)
+
+	_, attached := worker.attachProcessManager(context.Background(), request, nil, false)
+	require.False(t, attached)
+	require.Equal(t, 0, worker.containerInstances.Len(), "a finalized sandbox must not be re-created")
+}
+
+func TestAttachProcessManagerPublishesReadinessOnLiveSandbox(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "sandbox-live"}
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	live := &ContainerInstance{Id: request.ContainerId, Request: request}
+	live.initializeProcessManagerReadiness()
+	worker.containerInstances.Set(request.ContainerId, live)
+
+	instance, attached := worker.attachProcessManager(context.Background(), request, nil, true)
+	require.True(t, attached)
+	require.Same(t, live, instance)
+	require.True(t, instance.processManagerReady())
+	select {
+	case <-instance.processManagerReadyChannel():
+	default:
+		t.Fatal("exec waiters must be released once the process manager is attached")
+	}
+	require.Equal(t, 1, worker.containerInstances.Len())
+}
+
 func TestSandboxProcessManagerEndpointFallsBackToContainerIP(t *testing.T) {
 	endpoints := sandboxProcessManagerEndpoints(&ContainerInstance{
 		ContainerIp: "192.168.0.81",

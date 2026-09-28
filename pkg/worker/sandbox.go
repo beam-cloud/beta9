@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
@@ -596,6 +597,39 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		}
 		backoff = nextProcessManagerBackoff(backoff)
 	}
+}
+
+// attachProcessManager publishes the outcome of waitForProcessManager on the
+// sandbox's live instance: the cgroup limits land first, then readiness is
+// signalled so the first exec already sees them. It returns false when the
+// sandbox was stopped and finalized during the wait. The instance read before
+// the wait must not be written back then: that re-creates a container that no
+// longer exists, which the worker counts as running for the rest of its life,
+// so it never idles out or finishes draining.
+func (s *Worker) attachProcessManager(ctx context.Context, request *types.ContainerRequest, client *goproc.GoProcClient, ready bool) (*ContainerInstance, bool) {
+	containerId := request.ContainerId
+	instance, exists := s.containerInstances.Get(containerId)
+	if exists && ready {
+		// Runs before the CPU quota lands: it forks inside gVisor, which
+		// crawls at a fractional-CPU quota.
+		phaseStart := time.Now()
+		err := s.exposeSandboxMemoryLimit(ctx, request, instance, client)
+		metrics.RecordWorkerStartupPhase("sandbox_memory_limit_visible", time.Since(phaseStart), request, map[string]string{
+			"success": fmt.Sprintf("%t", err == nil),
+		})
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Str("container_id", containerId).Msg("failed to expose sandbox memory and cpu limits")
+		}
+	}
+	if exists {
+		instance.SandboxProcessManager = client
+		instance.signalProcessManagerReadiness(ready)
+		exists = s.containerInstances.Update(containerId, instance)
+	}
+	if !exists && client != nil {
+		_ = client.Cleanup()
+	}
+	return instance, exists
 }
 
 func nextProcessManagerBackoff(delay time.Duration) time.Duration {

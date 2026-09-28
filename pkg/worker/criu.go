@@ -2207,7 +2207,7 @@ func (s *Worker) markTerminalCheckpointStopped(request *types.ContainerRequest, 
 		if userInitiated {
 			instance.setStopReason(types.StopContainerReasonUser)
 		}
-		s.containerInstances.Set(request.ContainerId, instance)
+		s.containerInstances.Update(request.ContainerId, instance)
 	}
 	s.markTerminalCheckpointRuntimeStopped(request)
 }

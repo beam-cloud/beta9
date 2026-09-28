@@ -1938,25 +1938,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			metrics.RecordWorkerStartupPhase("sandbox_process_manager_ready", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", processManagerReady)})
 			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxProcessManagerReady, phaseStart, processManagerReady, processManagerStats.attrs())
 
-			if fresh, exists := s.containerInstances.Get(containerId); exists {
-				instance = fresh
+			instance, exists = s.attachProcessManager(ctx, request, processManagerClient, processManagerReady)
+			if !exists {
+				return
 			}
-			// Runs before the CPU quota lands: it forks inside gVisor, which
-			// crawls at a fractional-CPU quota.
-			if processManagerReady {
-				phaseStart = time.Now()
-				err := s.exposeSandboxMemoryLimit(ctx, request, instance, processManagerClient)
-				metrics.RecordWorkerStartupPhase("sandbox_memory_limit_visible", time.Since(phaseStart), request, map[string]string{
-					"success": fmt.Sprintf("%t", err == nil),
-				})
-				if err != nil && ctx.Err() == nil {
-					log.Error().Err(err).Str("container_id", containerId).Msg("failed to expose sandbox memory and cpu limits")
-				}
-			}
-			instance.SandboxProcessManager = processManagerClient
-			instance.signalProcessManagerReadiness(processManagerReady)
-			s.containerInstances.Set(containerId, instance)
-
 			if !processManagerReady {
 				if ctx.Err() == nil {
 					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
@@ -2697,7 +2682,7 @@ func (s *Worker) applyDeferredCPUThrottle(request *types.ContainerRequest, insta
 	}
 
 	instance.DeferredCPUQuota = nil
-	s.containerInstances.Set(request.ContainerId, instance)
+	s.containerInstances.Update(request.ContainerId, instance)
 	return nil
 }
 
