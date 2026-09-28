@@ -33,6 +33,20 @@ func (m *SafeMap[V]) Set(key string, value V) {
 	m._map[key] = value
 }
 
+// Update stores value under key only while key is present and reports
+// whether it did. Writing back an entry read earlier must use this rather
+// than Set: another goroutine may have deleted the entry in between, and Set
+// would silently re-create it.
+func (m *SafeMap[V]) Update(key string, value V) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m._map[key]; !exists {
+		return false
+	}
+	m._map[key] = value
+	return true
+}
+
 func (m *SafeMap[V]) Get(key string) (V, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
