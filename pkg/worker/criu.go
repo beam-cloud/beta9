@@ -498,6 +498,12 @@ func (s *Worker) startAutoCheckpoint(ctx context.Context, request *types.Contain
 	state, acquired := s.acquireCheckpointCreateLock(request)
 	if !acquired {
 		log.Info().Str("container_id", request.ContainerId).Str("stub_id", request.StubId).Msg("checkpoint creation already in progress")
+		// Only one container per stub is checkpointed. The runner in every
+		// checkpoint-enabled container waits for the complete marker before
+		// it serves, so release the others or they idle forever.
+		if err := writeCheckpointCompleteMarker(request.ContainerId); err != nil {
+			log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("failed to release checkpoint waiter")
+		}
 		return
 	}
 
