@@ -1238,13 +1238,20 @@ type OpenMeterConfig struct {
 }
 
 type TailscaleConfig struct {
-	ControlURL   string `key:"controlUrl" json:"control_url"`
-	User         string `key:"user" json:"user"`
-	AuthKey      string `key:"authKey" json:"auth_key"`
-	AgentAuthKey string `key:"agentAuthKey" json:"agent_auth_key"`
-	HostName     string `key:"hostName" json:"host_name"`
-	Enabled      bool   `key:"enabled" json:"enabled"`
-	Debug        bool   `key:"debug" json:"debug"`
+	ControlURL   string                  `key:"controlUrl" json:"control_url"`
+	User         string                  `key:"user" json:"user"`
+	AuthKey      string                  `key:"authKey" json:"auth_key"`
+	AgentAuthKey string                  `key:"agentAuthKey" json:"agent_auth_key"`
+	HostName     string                  `key:"hostName" json:"host_name"`
+	Enabled      bool                    `key:"enabled" json:"enabled"`
+	Debug        bool                    `key:"debug" json:"debug"`
+	AgentSSH     TailscaleAgentSSHConfig `key:"agentSsh" json:"agent_ssh"`
+}
+
+// TailscaleAgentSSHConfig runs Tailscale SSH on agent nodes in control-plane
+// owned pools. Workspace-owned private/BYOC machines never get it.
+type TailscaleAgentSSHConfig struct {
+	Enabled bool `key:"enabled" json:"enabled"`
 }
 
 type ProxyConfig struct {

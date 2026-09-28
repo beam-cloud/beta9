@@ -62,15 +62,6 @@ type telemetrySinkConfig struct {
 	StreamPrefix string `json:"streamPrefix"`
 }
 
-type transportCredentialResponse struct {
-	Ok         bool   `json:"ok"`
-	ErrMsg     string `json:"errMsg"`
-	AuthKey    string `json:"authKey"`
-	ControlURL string `json:"controlUrl"`
-	Hostname   string `json:"hostname"`
-	Ephemeral  bool   `json:"ephemeral"`
-}
-
 type check struct {
 	Name     string `json:"name"`
 	Ok       bool   `json:"ok"`

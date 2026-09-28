@@ -3532,7 +3532,7 @@ func TestRecordAgentMetricsEmitsNodeUsage(t *testing.T) {
 		WorkerCount:          1,
 		ContainerCount:       2,
 		FreeGpuCount:         1,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("recordAgentMetrics() error = %v", err)
 	}
@@ -3598,9 +3598,37 @@ func TestRecordAgentMetricsKeepsAgentAliveWhenNodeUsageMetricsFail(t *testing.T)
 	err := service.recordAgentMetrics(context.Background(), machine, &pb.AgentMetricSnapshot{
 		TimestampUnixNano: now.UnixNano(),
 		MemoryTotalMb:     8192,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("recordAgentMetrics() error = %v", err)
+	}
+}
+
+func TestApplyAgentNetworkKeepsKnownAddressesOnBadReport(t *testing.T) {
+	state := &model.AgentTokenState{}
+	if !applyAgentNetwork(state, &pb.AgentNetworkInfo{PublicIp: "203.0.113.7", TailnetIp: "100.64.0.7", TailnetHostname: "beam-agent-m1", TailnetSsh: true}) {
+		t.Fatal("first report must be a change")
+	}
+	// A failed lookup, a private address and garbage never erase what is known.
+	if applyAgentNetwork(state, &pb.AgentNetworkInfo{PublicIp: "10.0.0.5", TailnetIp: "nope", TailnetHostname: "bad host", TailnetSsh: true}) {
+		t.Fatal("invalid report must not change state")
+	}
+	want := model.AgentMachineNetwork{PublicIP: "203.0.113.7", TailnetIP: "100.64.0.7", TailnetHostname: "beam-agent-m1", TailnetSSH: true}
+	if state.Network != want {
+		t.Fatalf("network = %+v, want %+v", state.Network, want)
+	}
+}
+
+func TestAgentTailnetSSHEnabledOnlyForControlPlanePools(t *testing.T) {
+	enabled := types.TailscaleConfig{AgentSSH: types.TailscaleAgentSSHConfig{Enabled: true}}
+	if !agentTailnetSSHEnabled(enabled, &model.AgentTokenState{ManagedPoolInstanceID: "inst-1"}) {
+		t.Fatal("managed pools must get tailnet SSH")
+	}
+	if agentTailnetSSHEnabled(enabled, &model.AgentTokenState{Mode: string(types.PoolModePrivate)}) ||
+		agentTailnetSSHEnabled(enabled, &model.AgentTokenState{Mode: string(types.PoolModeExternal)}) ||
+		agentTailnetSSHEnabled(enabled, &model.AgentTokenState{Mode: string(types.PoolModeProvider)}) ||
+		agentTailnetSSHEnabled(types.TailscaleConfig{}, &model.AgentTokenState{ManagedPoolInstanceID: "inst-1"}) {
+		t.Fatal("workspace hardware (including provider pools) and disabled config must never get tailnet SSH")
 	}
 }
 

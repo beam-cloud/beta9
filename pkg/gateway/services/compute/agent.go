@@ -359,8 +359,17 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		Hostname:   types.AgentTailnetHostnamePrefix + agentState.MachineID,
 		// Non-ephemeral so a restarted agent resumes its persisted node (hostnames
 		// are per machine) and keeps the tailnet IP gateway clients dial.
-		Ephemeral: false,
+		Ephemeral:  false,
+		TailnetSsh: agentTailnetSSHEnabled(s.appConfig.Tailscale, agentState),
 	}, nil
+}
+
+// agentTailnetSSHEnabled limits Tailscale SSH to machines in control-plane
+// managed pools. Workspace hardware never gets it, whatever the tailnet policy
+// allows; that includes provider pools, which run platform workloads on
+// machines the workspace owns.
+func agentTailnetSSHEnabled(config types.TailscaleConfig, agentState *model.AgentTokenState) bool {
+	return config.AgentSSH.Enabled && agentState.ManagedPoolInstanceID != ""
 }
 
 func (s *Service) GetAgentPoolVirtualization(ctx context.Context, in *pb.GetAgentPoolVirtualizationRequest) (*pb.GetAgentPoolVirtualizationResponse, error) {

@@ -1171,6 +1171,10 @@ class RequestAgentTransportCredentialResponse(betterproto.Message):
     control_url: str = betterproto.string_field(4)
     hostname: str = betterproto.string_field(5)
     ephemeral: bool = betterproto.bool_field(6)
+    tailnet_ssh: bool = betterproto.bool_field(7)
+    """
+    Run Tailscale SSH on the node; the tailnet policy decides who may log in.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -1321,11 +1325,20 @@ class AgentEventRecord(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class AgentNetworkInfo(betterproto.Message):
+    public_ip: str = betterproto.string_field(1)
+    tailnet_ip: str = betterproto.string_field(2)
+    tailnet_hostname: str = betterproto.string_field(3)
+    tailnet_ssh: bool = betterproto.bool_field(4)
+
+
+@dataclass(eq=False, repr=False)
 class AgentTelemetryRequest(betterproto.Message):
     agent_token: str = betterproto.string_field(1)
     logs: List["AgentLogRecord"] = betterproto.message_field(2)
     metrics: "AgentMetricSnapshot" = betterproto.message_field(3)
     events: List["AgentEventRecord"] = betterproto.message_field(4)
+    network: "AgentNetworkInfo" = betterproto.message_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -1353,6 +1366,10 @@ class Machine(betterproto.Message):
     machine_metrics: "MachineMetrics" = betterproto.message_field(15)
     user_data: str = betterproto.string_field(16)
     ssh: "MachineSshAccess" = betterproto.message_field(17)
+    public_ip: str = betterproto.string_field(18)
+    tailnet_hostname: str = betterproto.string_field(19)
+    tailnet_ip: str = betterproto.string_field(20)
+    tailnet_ssh: bool = betterproto.bool_field(21)
 
 
 @dataclass(eq=False, repr=False)

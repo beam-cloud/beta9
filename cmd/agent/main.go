@@ -10,6 +10,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/agent"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"tailscale.com/cmd/tailscaled/childproc"
 )
 
 type commandFunc func(context.Context, []string) error
@@ -28,6 +29,16 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Tailscale SSH re-execs this binary as `be-child ssh|sftp` per session;
+	// the child owns its own signal handling.
+	if os.Args[1] == "be-child" {
+		if err := runBeChild(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cmd, ok := commands[os.Args[1]]
 	if !ok {
 		usage()
@@ -44,6 +55,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func runBeChild(args []string) error {
+	if len(args) == 0 {
+		return errors.New("be-child: missing mode argument")
+	}
+	fn, ok := childproc.Code[args[0]]
+	if !ok {
+		return fmt.Errorf("be-child: unknown mode %q", args[0])
+	}
+	return fn(args[1:])
 }
 
 func commandExitCode(err error) (int, bool) {

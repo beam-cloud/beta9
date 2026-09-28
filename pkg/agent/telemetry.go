@@ -37,6 +37,10 @@ type agentTelemetry struct {
 	stats      func() agentWorkerStats
 	dropped    atomic.Uint64
 
+	// network rides along with every metrics snapshot so the gateway's copy
+	// heals after a lost write or a reconnect.
+	network atomic.Pointer[pb.AgentNetworkInfo]
+
 	ch chan *pb.AgentTelemetryRequest
 }
 
@@ -65,6 +69,12 @@ func newAgentTelemetry(client pb.GatewayServiceClient, agentToken string, bootst
 func (t *agentTelemetry) setStatsProvider(stats func() agentWorkerStats) {
 	if t != nil {
 		t.stats = stats
+	}
+}
+
+func (t *agentTelemetry) setNetwork(info *pb.AgentNetworkInfo) {
+	if t != nil {
+		t.network.Store(info)
 	}
 }
 
@@ -142,6 +152,7 @@ func (t *agentTelemetry) runOnce(ctx context.Context) error {
 		case <-ticker.C:
 			if metrics := t.collectMetrics(); metrics != nil {
 				batch.Metrics = metrics
+				batch.Network = t.network.Load()
 			}
 			if batch.size() == 0 {
 				continue
@@ -218,6 +229,7 @@ type telemetryBatch struct {
 	Logs    []*pb.AgentLogRecord
 	Metrics *pb.AgentMetricSnapshot
 	Events  []*pb.AgentEventRecord
+	Network *pb.AgentNetworkInfo
 }
 
 func (b *telemetryBatch) add(req *pb.AgentTelemetryRequest) {
@@ -241,6 +253,7 @@ func (b *telemetryBatch) request(agentToken string) *pb.AgentTelemetryRequest {
 		Logs:       b.Logs,
 		Metrics:    b.Metrics,
 		Events:     b.Events,
+		Network:    b.Network,
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
@@ -28,7 +27,6 @@ const (
 	managedSSHListenPort     = 22
 	managedSSHStatusRefresh  = 5 * time.Minute
 	managedSSHCommandTimeout = 2 * time.Minute
-	managedSSHPublicIPLookup = "https://api.ipify.org?format=text"
 	managedSSHAuthorizedKeys = "/home/beam/.ssh/authorized_keys"
 	managedSSHHushLogin      = "/home/beam/.hushlogin"
 	managedSSHSudoers        = "/etc/sudoers.d/90-beam-managed"
@@ -48,8 +46,6 @@ type hostSSHManager struct {
 	agentToken  string
 	machineID   string
 	stderr      io.Writer
-	httpClient  *http.Client
-	publicIPURL string
 	isListening func() bool
 
 	mu             sync.Mutex
@@ -102,8 +98,6 @@ func newHostSSHManager(client pb.GatewayServiceClient, agentToken, machineID str
 		agentToken:  agentToken,
 		machineID:   machineID,
 		stderr:      stderr,
-		httpClient:  &http.Client{Timeout: 3 * time.Second},
-		publicIPURL: managedSSHPublicIPLookup,
 		isListening: managedSSHListening,
 	}
 }
@@ -143,20 +137,20 @@ func (m *hostSSHManager) run(ctx context.Context) {
 		m.mu.Unlock()
 
 		if applied != desired.Generation {
-			m.report(ctx, desired.Generation, compute.MachineSSHStatusInstalling, "", "", "")
+			m.report(ctx, desired.Generation, compute.MachineSSHStatusInstalling, "", "")
 			hostFingerprint, err := m.apply(ctx, desired)
 			if err != nil {
 				fmt.Fprintf(m.stderr, "managed SSH reconcile failed: %v\n", err)
-				m.report(ctx, desired.Generation, compute.MachineSSHStatusError, discoverPublicIP(ctx, m.httpClient, m.publicIPURL), "", err.Error())
+				m.report(ctx, desired.Generation, compute.MachineSSHStatusError, "", err.Error())
 				return
 			}
 			m.mu.Lock()
 			m.applied = desired.Generation
 			m.mu.Unlock()
-			m.report(ctx, desired.Generation, compute.MachineSSHStatusReady, discoverPublicIP(ctx, m.httpClient, m.publicIPURL), hostFingerprint, "")
+			m.report(ctx, desired.Generation, compute.MachineSSHStatusReady, hostFingerprint, "")
 		} else {
 			hostFingerprint, _ := managedSSHHostFingerprint()
-			m.report(ctx, desired.Generation, compute.MachineSSHStatusReady, discoverPublicIP(ctx, m.httpClient, m.publicIPURL), hostFingerprint, "")
+			m.report(ctx, desired.Generation, compute.MachineSSHStatusReady, hostFingerprint, "")
 		}
 
 		m.mu.Lock()
@@ -688,36 +682,13 @@ func managedSSHHostFingerprint() (string, error) {
 	return ssh.FingerprintSHA256(key), nil
 }
 
-func discoverPublicIP(ctx context.Context, client *http.Client, url string) string {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return ""
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return ""
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return ""
-	}
-	var buffer [64]byte
-	n, _ := response.Body.Read(buffer[:])
-	value := strings.TrimSpace(string(buffer[:n]))
-	if net.ParseIP(value) == nil {
-		return ""
-	}
-	return value
-}
-
-func (m *hostSSHManager) report(ctx context.Context, generation uint64, status, publicIP, hostFingerprint, errMessage string) {
+func (m *hostSSHManager) report(ctx context.Context, generation uint64, status, hostFingerprint, errMessage string) {
 	reportCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	response, err := m.client.UpdateAgentSSHStatus(reportCtx, &pb.UpdateAgentSSHStatusRequest{
 		AgentToken:         m.agentToken,
 		Generation:         generation,
 		Status:             status,
-		PublicIp:           publicIP,
 		HostKeyFingerprint: hostFingerprint,
 		Error:              errMessage,
 		ListenPort:         managedSSHListenPort,

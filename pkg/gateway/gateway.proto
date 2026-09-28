@@ -1320,6 +1320,8 @@ message RequestAgentTransportCredentialResponse {
   string control_url = 4;
   string hostname = 5;
   bool ephemeral = 6;
+  // Run Tailscale SSH on the node; the tailnet policy decides who may log in.
+  bool tailnet_ssh = 7;
 }
 
 message CreateNodeEnrollmentRequest { string agent_token = 1; }
@@ -1436,11 +1438,19 @@ message AgentEventRecord {
   string event_type = 6;
 }
 
+message AgentNetworkInfo {
+  string public_ip = 1;
+  string tailnet_ip = 2;
+  string tailnet_hostname = 3;
+  bool tailnet_ssh = 4;
+}
+
 message AgentTelemetryRequest {
   string agent_token = 1;
   repeated AgentLogRecord logs = 2;
   AgentMetricSnapshot metrics = 3;
   repeated AgentEventRecord events = 4;
+  AgentNetworkInfo network = 5;
 }
 
 message AgentTelemetryResponse {
@@ -1466,6 +1476,10 @@ message Machine {
   MachineMetrics machine_metrics = 15;
   string user_data = 16;
   MachineSSHAccess ssh = 17;
+  string public_ip = 18;
+  string tailnet_hostname = 19;
+  string tailnet_ip = 20;
+  bool tailnet_ssh = 21;
 }
 
 message MachineMetrics {
