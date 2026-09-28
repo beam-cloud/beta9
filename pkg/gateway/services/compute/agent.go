@@ -364,12 +364,12 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 	}, nil
 }
 
-// agentTailnetSSHEnabled limits Tailscale SSH to control-plane owned inventory
-// (managed and provider pools); workspace-owned private/BYOC hardware never
-// gets it, whatever the tailnet policy allows.
+// agentTailnetSSHEnabled limits Tailscale SSH to machines in control-plane
+// managed pools. Workspace hardware never gets it, whatever the tailnet policy
+// allows; that includes provider pools, which run platform workloads on
+// machines the workspace owns.
 func agentTailnetSSHEnabled(config types.TailscaleConfig, agentState *model.AgentTokenState) bool {
-	return config.AgentSSH.Enabled &&
-		(agentState.ManagedPoolInstanceID != "" || agentState.Mode == string(types.PoolModeProvider))
+	return config.AgentSSH.Enabled && agentState.ManagedPoolInstanceID != ""
 }
 
 func (s *Service) GetAgentPoolVirtualization(ctx context.Context, in *pb.GetAgentPoolVirtualizationRequest) (*pb.GetAgentPoolVirtualizationResponse, error) {

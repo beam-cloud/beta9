@@ -3621,14 +3621,14 @@ func TestApplyAgentNetworkKeepsKnownAddressesOnBadReport(t *testing.T) {
 
 func TestAgentTailnetSSHEnabledOnlyForControlPlanePools(t *testing.T) {
 	enabled := types.TailscaleConfig{AgentSSH: types.TailscaleAgentSSHConfig{Enabled: true}}
-	if !agentTailnetSSHEnabled(enabled, &model.AgentTokenState{ManagedPoolInstanceID: "inst-1"}) ||
-		!agentTailnetSSHEnabled(enabled, &model.AgentTokenState{Mode: string(types.PoolModeProvider)}) {
-		t.Fatal("managed and provider pools must get tailnet SSH")
+	if !agentTailnetSSHEnabled(enabled, &model.AgentTokenState{ManagedPoolInstanceID: "inst-1"}) {
+		t.Fatal("managed pools must get tailnet SSH")
 	}
 	if agentTailnetSSHEnabled(enabled, &model.AgentTokenState{Mode: string(types.PoolModePrivate)}) ||
 		agentTailnetSSHEnabled(enabled, &model.AgentTokenState{Mode: string(types.PoolModeExternal)}) ||
+		agentTailnetSSHEnabled(enabled, &model.AgentTokenState{Mode: string(types.PoolModeProvider)}) ||
 		agentTailnetSSHEnabled(types.TailscaleConfig{}, &model.AgentTokenState{ManagedPoolInstanceID: "inst-1"}) {
-		t.Fatal("workspace hardware and disabled config must never get tailnet SSH")
+		t.Fatal("workspace hardware (including provider pools) and disabled config must never get tailnet SSH")
 	}
 }
 
