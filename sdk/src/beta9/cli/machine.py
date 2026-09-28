@@ -38,7 +38,7 @@ from ..clients.gateway import (
     PrivatePool,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
-from .machine_format import gpu_inventory_table, machine_table
+from .machine_format import gpu_inventory_table, machine_table, tailnet_ssh_hint
 from .worker_management import apply_worker_action, worker_ids_for_machine
 
 
@@ -205,6 +205,9 @@ def list_machines(
         terminal.detail(
             f"  hint: reserve on-demand hardware with '{cli_name()} machine reserve --gpu <type>'"
         )
+        ssh_hint = tailnet_ssh_hint(res.machines)
+        if ssh_hint:
+            terminal.detail(ssh_hint)
 
 
 @management.command(

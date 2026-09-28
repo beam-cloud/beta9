@@ -342,7 +342,9 @@ func (s *Service) UpdateAgentSSHStatus(ctx context.Context, in *pb.UpdateAgentSS
 	if in.Generation == 0 {
 		return &pb.UpdateAgentSSHStatusResponse{Ok: false, ErrMsg: "SSH generation is required"}, nil
 	}
-	publicIP := strings.TrimSpace(in.PublicIp)
+	// Current agents report the public IP through telemetry; older ones send
+	// it with the SSH status.
+	publicIP := firstNonEmpty(strings.TrimSpace(in.PublicIp), agentState.Network.PublicIP)
 	if publicIP != "" && normalizePublicIP(publicIP) == "" {
 		return &pb.UpdateAgentSSHStatusResponse{Ok: false, ErrMsg: "invalid public IP"}, nil
 	}

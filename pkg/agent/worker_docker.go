@@ -185,14 +185,6 @@ func inspectDockerContainer(name string) (*dockerContainerInspect, bool, error) 
 	return &inspect, true, nil
 }
 
-func dockerContainerInspectOwnedByAgent(data []byte, slot *pb.AgentWorkerSlot) (bool, error) {
-	var inspect dockerContainerInspect
-	if err := json.Unmarshal(data, &inspect); err != nil {
-		return false, err
-	}
-	return dockerContainerInspectMatchesSlot(&inspect, slot)
-}
-
 func dockerContainerInspectMatchesSlot(inspect *dockerContainerInspect, slot *pb.AgentWorkerSlot) (bool, error) {
 	if inspect == nil {
 		return false, nil

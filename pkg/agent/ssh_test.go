@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -267,34 +265,10 @@ func fakeLookPath(available map[string]bool) func(string) (string, error) {
 	}
 }
 
-func TestDiscoverPublicIP(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "198.51.100.9\n")
-	}))
-	defer server.Close()
-	if got := discoverPublicIP(context.Background(), server.Client(), server.URL); got != "198.51.100.9" {
-		t.Fatalf("discoverPublicIP() = %q", got)
-	}
-
-	invalid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "not-an-ip")
-	}))
-	defer invalid.Close()
-	if got := discoverPublicIP(context.Background(), invalid.Client(), invalid.URL); got != "" {
-		t.Fatalf("invalid discoverPublicIP() = %q, want empty", got)
-	}
-}
-
 func TestHostSSHManagerRefreshIsNonFatal(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "203.0.113.8")
-	}))
-	defer server.Close()
 	client := &recordingSSHStatusClient{requests: make(chan *pb.UpdateAgentSSHStatusRequest, 1)}
 	manager := newHostSSHManager(client, "agent-token", "machine-one", io.Discard)
 	manager.applied = 7
-	manager.httpClient = server.Client()
-	manager.publicIPURL = server.URL
 	manager.isListening = func() bool { return true }
 	manager.reconcile(context.Background(), &pb.AgentSSHConfig{
 		Enabled: true, Username: "beam", PublicKey: "ssh-ed25519 public", Generation: 7,
@@ -302,7 +276,7 @@ func TestHostSSHManagerRefreshIsNonFatal(t *testing.T) {
 
 	select {
 	case request := <-client.requests:
-		if request.Generation != 7 || request.Status != "ready" || request.PublicIp != "203.0.113.8" {
+		if request.Generation != 7 || request.Status != "ready" {
 			t.Fatalf("status request = %+v", request)
 		}
 	case <-time.After(2 * time.Second):

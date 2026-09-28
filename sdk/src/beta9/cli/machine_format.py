@@ -78,6 +78,7 @@ def machine_table(machines: Sequence[Machine]) -> Table:
         Column("State"),
         Column("Capacity", no_wrap=True),
         Column("Load", no_wrap=True),
+        Column("Public IP", no_wrap=True),
         Column("Last seen"),
         Column("Agent"),
         box=box.SIMPLE,
@@ -89,6 +90,7 @@ def machine_table(machines: Sequence[Machine]) -> Table:
             machine_status(machine.status),
             machine_capacity(machine),
             machine_load(machine),
+            machine.public_ip or "-",
             machine_last_keepalive(machine.last_keepalive),
             f"v{machine.agent_version}" if machine.agent_version else "-",
         )
@@ -97,6 +99,13 @@ def machine_table(machines: Sequence[Machine]) -> Table:
     count, suffix = terminal.pluralize(machines, "s")
     table.add_row(f"[bold]{count} machine{suffix}")
     return table
+
+
+def tailnet_ssh_hint(machines: Sequence[Machine]) -> Optional[str]:
+    host = next(
+        (m.tailnet_hostname for m in machines if m.tailnet_ssh and m.tailnet_hostname), None
+    )
+    return f"  hint: tailscale ssh root@{host}" if host else None
 
 
 def format_cpu(millicores: int) -> str:

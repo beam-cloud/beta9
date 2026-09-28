@@ -45,6 +45,7 @@ def test_machine_list_shows_inventory_and_machines():
                 status="available",
                 pool_name="gpu-pool",
                 machine_metrics=MachineMetrics(free_gpu_count=1),
+                public_ip="203.0.113.7",
             )
         ],
     )
@@ -67,6 +68,7 @@ def test_machine_list_shows_inventory_and_machines():
     assert "Your machines" in text
     assert "machine-one" in text
     assert "gpu-pool" in text
+    assert "203.0.113.7" in text
 
 
 def test_gpu_inventory_collapses_empty_gpu_types():

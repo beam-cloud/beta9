@@ -80,16 +80,13 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	if err != nil {
 		return err
 	}
-	if !credential.Ok {
-		return fmt.Errorf("%s", credential.ErrMsg)
-	}
 
 	netmon.RegisterInterfaceGetter(hostInterfacesWithoutWorkerLinks)
 	server := &tsnet.Server{
 		Dir:        agentTSNetDir(),
 		Hostname:   credential.Hostname,
 		AuthKey:    credential.AuthKey,
-		ControlURL: credential.ControlURL,
+		ControlURL: credential.ControlUrl,
 		Ephemeral:  credential.Ephemeral,
 		Logf:       agentTSNetLogf(stderr),
 		UserLogf:   agentTSNetLogf(stderr),
@@ -100,10 +97,14 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	}
 
 	routeHost := credential.Hostname
-	if localClient, err := server.LocalClient(); err == nil {
+	localClient, localClientErr := server.LocalClient()
+	if localClientErr == nil {
 		if status, err := localClient.Status(ctx); err == nil {
 			routeHost = tailnetRouteHost(status, routeHost)
 		}
+		ssh := newTailnetSSH(localClient, credential.TailnetSsh, stderr)
+		go ssh.run(ctx)
+		go newNetworkReporter(telemetry, localClient, credential.Hostname, ssh.enabled).run(ctx)
 	}
 	poolVirtualized, err := requestAgentPoolGPUVirtualized(ctx, client, agentToken)
 	if err != nil {
@@ -131,7 +132,7 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	statusf(stdout, "Network ready")
 	statusf(stdout, "Agent running; leave this terminal open")
 	verbosef(stdout, "agent route listener ready at %s\n", proxyTarget)
-	if localClient, err := server.LocalClient(); err == nil {
+	if localClientErr == nil {
 		go emitTSNetSnapshots(ctx, telemetry, localClient, proxyTarget)
 		go keepGatewayPathsWarm(ctx, localClient, stderr)
 	}
@@ -459,7 +460,7 @@ func requestAgentPoolGPUVirtualized(ctx context.Context, client agentPoolVirtual
 	return res.GetGpuVirtualized(), nil
 }
 
-func requestTransportCredential(ctx context.Context, client pb.GatewayServiceClient, agentToken, transport string) (*transportCredentialResponse, error) {
+func requestTransportCredential(ctx context.Context, client pb.GatewayServiceClient, agentToken, transport string) (*pb.RequestAgentTransportCredentialResponse, error) {
 	res, err := client.RequestAgentTransportCredential(ctx, &pb.RequestAgentTransportCredentialRequest{
 		AgentToken: agentToken,
 		Transport:  transport,
@@ -467,14 +468,10 @@ func requestTransportCredential(ctx context.Context, client pb.GatewayServiceCli
 	if err != nil {
 		return nil, err
 	}
-	return &transportCredentialResponse{
-		Ok:         res.Ok,
-		ErrMsg:     res.ErrMsg,
-		AuthKey:    res.AuthKey,
-		ControlURL: res.ControlUrl,
-		Hostname:   res.Hostname,
-		Ephemeral:  res.Ephemeral,
-	}, nil
+	if !res.Ok {
+		return nil, fmt.Errorf("%s", res.ErrMsg)
+	}
+	return res, nil
 }
 
 func normalizeTransport(transport string) string {

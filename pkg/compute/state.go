@@ -128,6 +128,7 @@ type AgentTokenState struct {
 	AvailabilityUpdatedAt     time.Time             `json:"availability_updated_at,omitempty"`
 	Preflight                 []PreflightCheckState `json:"preflight"`
 	Metrics                   AgentMachineMetrics   `json:"metrics"`
+	Network                   AgentMachineNetwork   `json:"network,omitempty"`
 	CreatedAt                 time.Time             `json:"created_at"`
 	LastJoinAt                time.Time             `json:"last_join_at"`
 	LastHeartbeatAt           time.Time             `json:"last_heartbeat_at"`
@@ -188,6 +189,15 @@ type AgentMachineMetrics struct {
 	ContainerCount       uint32            `json:"container_count"`
 	FreeGPUCount         uint32            `json:"free_gpu_count"`
 	PathMetrics          []AgentPathMetric `json:"path_metrics,omitempty"`
+}
+
+// AgentMachineNetwork is agent-reported reachability: the machine's public IP
+// and its node on the control plane's tailnet.
+type AgentMachineNetwork struct {
+	PublicIP        string `json:"public_ip,omitempty"`
+	TailnetIP       string `json:"tailnet_ip,omitempty"`
+	TailnetHostname string `json:"tailnet_hostname,omitempty"`
+	TailnetSSH      bool   `json:"tailnet_ssh,omitempty"`
 }
 
 type AgentPathMetric struct {

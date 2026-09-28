@@ -468,6 +468,11 @@ tailscale:
   enabled: false
   debug: false
   hostName: headscale.internal
+  # Run Tailscale SSH on agents in control-plane owned pools (never on workspace
+  # hardware): `tailscale ssh root@beam-agent-<machine id>`. The tailnet policy
+  # needs an acls rule to tag:<agent tag>:22 and an ssh rule to tag:<agent tag>.
+  agentSsh:
+    enabled: false
 monitoring:
   containerMetricsInterval: 3s
   metricsCollector: prometheus

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,11 +73,33 @@ func (s *Service) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelem
 		s.recordAgentLogs(agentState, req.Logs)
 		s.recordAgentEvents(agentState, req.Events)
 		if req.Metrics != nil {
-			if err := s.recordAgentMetrics(ctx, agentState, req.Metrics); err != nil {
+			if err := s.recordAgentMetrics(ctx, agentState, req.Metrics, req.Network); err != nil {
 				return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: false, ErrMsg: err.Error()})
 			}
 		}
 	}
+}
+
+// applyAgentNetwork merges a report into the machine state. Invalid or empty
+// values never clear a known address: a failed public IP lookup is not a new IP.
+func applyAgentNetwork(state *model.AgentTokenState, in *pb.AgentNetworkInfo) (changed bool) {
+	if in == nil {
+		return false
+	}
+	next := state.Network
+	if ip := normalizePublicIP(in.PublicIp); ip != "" {
+		next.PublicIP = ip
+	}
+	if addr, err := netip.ParseAddr(strings.TrimSpace(in.TailnetIp)); err == nil && addr.IsGlobalUnicast() {
+		next.TailnetIP = addr.String()
+	}
+	if host := normalizeSSHHost(in.TailnetHostname); host != "" {
+		next.TailnetHostname = host
+	}
+	next.TailnetSSH = in.TailnetSsh
+	changed = next != state.Network
+	state.Network = next
+	return changed
 }
 
 func (s *Service) recordAgentLogs(agentState *model.AgentTokenState, logs []*pb.AgentLogRecord) {
@@ -135,7 +159,7 @@ func (s *Service) recordAgentEvents(agentState *model.AgentTokenState, events []
 	}
 }
 
-func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.AgentTokenState, snapshot *pb.AgentMetricSnapshot) error {
+func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.AgentTokenState, snapshot *pb.AgentMetricSnapshot, network *pb.AgentNetworkInfo) error {
 	if agentState == nil || snapshot == nil {
 		return nil
 	}
@@ -170,6 +194,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		poolState, _ = s.getAgentPoolState(ctx, agentState)
 	}
 	agentState.Metrics = metrics
+	networkChanged := applyAgentNetwork(agentState, network)
 
 	// Liveness is always tracked on the gateway clock: agent-supplied
 	// timestamps can be skewed or stale (buffered telemetry after a
@@ -181,6 +206,21 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	agentState.LastDisconnectAt = time.Time{}
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return err
+	}
+	if networkChanged {
+		s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
+			Timestamp:   now,
+			WorkspaceID: agentState.WorkspaceID,
+			PoolName:    agentState.PoolName,
+			MachineID:   agentState.MachineID,
+			Action:      types.EventComputeActionMachineNetworkUpdated,
+			Attrs: map[string]string{
+				"public_ip":        agentState.Network.PublicIP,
+				"tailnet_ip":       agentState.Network.TailnetIP,
+				"tailnet_hostname": agentState.Network.TailnetHostname,
+				"tailnet_ssh":      strconv.FormatBool(agentState.Network.TailnetSSH),
+			},
+		})
 	}
 	worker := s.agentMachineStatusWorker(agentState)
 	capacityMetrics := agentMachineMetrics(agentState, worker)

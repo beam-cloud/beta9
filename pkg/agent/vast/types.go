@@ -63,8 +63,6 @@ type ControllerOptions struct {
 	Stderr            io.Writer
 }
 
-type HostOptions = ControllerOptions
-
 type SentinelOptions struct {
 	HostURL        string
 	Token          string

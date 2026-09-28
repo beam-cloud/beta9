@@ -47,20 +47,12 @@ type sentinelEvent struct {
 	PID      int    `json:"pid"`
 }
 
-func RunHost(ctx context.Context, opts HostOptions) error {
-	return RunController(ctx, opts)
-}
-
 func RunController(ctx context.Context, opts ControllerOptions) error {
 	controller, err := newController(ctx, opts)
 	if err != nil {
 		return err
 	}
 	return controller.run(ctx)
-}
-
-func newHostServer(ctx context.Context, opts HostOptions) (*compatController, error) {
-	return newController(ctx, opts)
 }
 
 func newController(ctx context.Context, opts ControllerOptions) (*compatController, error) {

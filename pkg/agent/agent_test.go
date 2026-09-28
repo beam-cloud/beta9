@@ -767,6 +767,14 @@ func TestAgentCacheLocalityScopesPoolByWorkspace(t *testing.T) {
 	}
 }
 
+func dockerContainerInspectOwnedByAgent(data []byte, slot *pb.AgentWorkerSlot) (bool, error) {
+	var inspect dockerContainerInspect
+	if err := json.Unmarshal(data, &inspect); err != nil {
+		return false, err
+	}
+	return dockerContainerInspectMatchesSlot(&inspect, slot)
+}
+
 func TestDockerContainerInspectOwnedByAgentAcceptsLabelsAndLegacyEnv(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{
 		WorkerId:  "worker-one",

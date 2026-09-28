@@ -2138,6 +2138,23 @@
         }
       }
     },
+    "gatewayAgentNetworkInfo": {
+      "type": "object",
+      "properties": {
+        "publicIp": {
+          "type": "string"
+        },
+        "tailnetIp": {
+          "type": "string"
+        },
+        "tailnetHostname": {
+          "type": "string"
+        },
+        "tailnetSsh": {
+          "type": "boolean"
+        }
+      }
+    },
     "gatewayAgentPoolCacheConfig": {
       "type": "object",
       "properties": {
@@ -4109,6 +4126,18 @@
         },
         "ssh": {
           "$ref": "#/definitions/gatewayMachineSSHAccess"
+        },
+        "publicIp": {
+          "type": "string"
+        },
+        "tailnetHostname": {
+          "type": "string"
+        },
+        "tailnetIp": {
+          "type": "string"
+        },
+        "tailnetSsh": {
+          "type": "boolean"
         }
       }
     },
@@ -4727,6 +4756,10 @@
         },
         "ephemeral": {
           "type": "boolean"
+        },
+        "tailnetSsh": {
+          "type": "boolean",
+          "description": "Run Tailscale SSH on the node; the tailnet policy decides who may log in."
         }
       }
     },

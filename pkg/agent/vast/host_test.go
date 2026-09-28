@@ -51,7 +51,7 @@ func TestHostStartsAndPreemptsPerGPUService(t *testing.T) {
 
 	services := &fakeServices{}
 	cleaner := &fakeCleaner{}
-	host, err := newHostServer(context.Background(), HostOptions{
+	host, err := newController(context.Background(), ControllerOptions{
 		GatewayURL:      gateway.URL,
 		StateDir:        stateDir,
 		SentinelToken:   "sentinel-token",
@@ -90,7 +90,7 @@ func TestHostStartsAndPreemptsPerGPUService(t *testing.T) {
 }
 
 func TestHostHeartbeatRequiresKnownGPU(t *testing.T) {
-	host, err := newHostServer(context.Background(), HostOptions{
+	host, err := newController(context.Background(), ControllerOptions{
 		GatewayURL:    "http://gateway.example",
 		SentinelToken: "sentinel-token",
 		Services:      &fakeServices{},
@@ -110,7 +110,7 @@ func TestHostHeartbeatRequiresKnownGPU(t *testing.T) {
 func TestHostStopsUnknownServiceOnceWithoutLease(t *testing.T) {
 	gpu := GPU{Index: "0", UUID: "GPU-one"}
 	services := &fakeServices{}
-	host, err := newHostServer(context.Background(), HostOptions{
+	host, err := newController(context.Background(), ControllerOptions{
 		GatewayURL:      "http://gateway.example",
 		SentinelToken:   "sentinel-token",
 		Services:        services,
@@ -133,7 +133,7 @@ func TestHostStopsUnknownServiceOnceWithoutLease(t *testing.T) {
 func TestHostPreemptRejectsStaleSentinelIdentity(t *testing.T) {
 	gpu := GPU{Index: "0", UUID: "GPU-one"}
 	services := &fakeServices{}
-	host, err := newHostServer(context.Background(), HostOptions{
+	host, err := newController(context.Background(), ControllerOptions{
 		GatewayURL:      "http://gateway.example",
 		StateDir:        t.TempDir(),
 		SentinelToken:   "sentinel-token",
@@ -176,7 +176,7 @@ func TestHostPreemptRejectsStaleSentinelIdentity(t *testing.T) {
 func TestHostRetriesStopAfterTransientFailure(t *testing.T) {
 	gpu := GPU{Index: "0", UUID: "GPU-one"}
 	services := &fakeServices{stopErrs: []error{fmt.Errorf("transient systemctl failure")}}
-	host, err := newHostServer(context.Background(), HostOptions{
+	host, err := newController(context.Background(), ControllerOptions{
 		GatewayURL:      "http://gateway.example",
 		StateDir:        t.TempDir(),
 		SentinelToken:   "sentinel-token",
