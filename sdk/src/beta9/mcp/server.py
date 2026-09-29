@@ -101,7 +101,10 @@ class StdioProxy:
         self.context_name: str = context_name
         self.remote: Optional[RemoteMCP] = None
         self.tools: LocalTools = LocalTools(
-            cwd=cwd, on_login=self._on_login, signed_in=lambda: self.remote is not None
+            cwd=cwd,
+            on_login=self._on_login,
+            signed_in=lambda: self.remote is not None,
+            context_name=context_name,
         )
         self._out_lock: threading.Lock = threading.Lock()
         self._stdout: BinaryIO = sys.stdout.buffer

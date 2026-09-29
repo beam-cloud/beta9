@@ -10,7 +10,7 @@ import sys
 import time
 import webbrowser
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import requests
 
@@ -18,6 +18,9 @@ from .config import DEFAULT_CONTEXT_NAME, ConfigContext, get_settings, load_conf
 
 GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 REQUEST_TIMEOUT = 15
+# Consecutive polls that may fail to reach the service (network errors, 5xx)
+# before the sign-in is given up; one blip must not end a ten-minute wait.
+MAX_TRANSIENT_FAILURES = 5
 
 
 class LoginError(Exception):
@@ -66,10 +69,18 @@ def _post(path: str, payload: Dict[str, str]) -> requests.Response:
         raise LoginError(f"Could not reach the sign-in service: {exc}", "AUTH_UNAVAILABLE")
 
 
-def _message(response: requests.Response, fallback: str) -> str:
+def _json(response: requests.Response) -> Dict[str, Any]:
+    """The JSON object in a response; {} for an empty or non-JSON body (an HTML 502, say)."""
     try:
         data = response.json()
     except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _message(response: requests.Response, fallback: str) -> str:
+    data = _json(response)
+    if not data:
         return f"{fallback} (HTTP {response.status_code})"
     return data.get("error_description") or data.get("message") or data.get("error") or fallback
 
@@ -83,13 +94,14 @@ class DeviceLogin:
     expires_at: float
     interval: int
     workspace_name: str = ""  # set once approved
+    failures: int = 0  # consecutive polls that did not reach the service
 
     @classmethod
     def start(cls) -> "DeviceLogin":
         response = _post("device/code", {"client_name": client_name()})
-        if response.status_code >= 400:
+        data = _json(response)
+        if response.status_code >= 400 or not data.get("device_code"):
             raise LoginError(_message(response, "Could not start sign-in"), "AUTH_UNAVAILABLE")
-        data = response.json()
         return cls(
             device_code=data["device_code"],
             user_code=data["user_code"],
@@ -109,10 +121,19 @@ class DeviceLogin:
             return False
 
     def poll(self) -> Optional[ConfigContext]:
-        """The context once approved; None while pending."""
-        response = _post("token", {"grant_type": GRANT_TYPE, "device_code": self.device_code})
-        data = response.json() if response.content else {}
-        if response.status_code == 200:
+        """The context once approved; None while pending or while the service is briefly unreachable."""
+        try:
+            response = _post("token", {"grant_type": GRANT_TYPE, "device_code": self.device_code})
+        except LoginError as exc:
+            if exc.code != "AUTH_UNAVAILABLE":
+                raise
+            return self._transient(str(exc))
+        if response.status_code >= 500:
+            return self._transient(_message(response, "The sign-in service is unavailable"))
+        self.failures = 0
+
+        data = _json(response)
+        if response.status_code == 200 and data.get("access_token"):
             settings = get_settings()
             self.workspace_name = data.get("workspace_name", "")
             return ConfigContext(
@@ -132,6 +153,12 @@ class DeviceLogin:
         if error == "access_denied":
             raise LoginError("Sign-in was denied in the browser.", "LOGIN_DENIED")
         raise LoginError(_message(response, "Sign-in failed"))
+
+    def _transient(self, message: str) -> None:
+        self.failures += 1
+        if self.failures >= MAX_TRANSIENT_FAILURES:
+            raise LoginError(message, "AUTH_UNAVAILABLE")
+        return None
 
     def wait(self, timeout: Optional[float] = None) -> ConfigContext:
         deadline = (

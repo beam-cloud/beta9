@@ -162,10 +162,11 @@ def common(**_):
     Workspace tools come from the gateway; `deploy` and `login` run here.
     """,
 )
+@extraclick.config_context_option  # `mcp install --context X` registers `mcp --context X`
 @click.pass_context
-def mcp(ctx: click.Context):
+def mcp(ctx: click.Context, context: Optional[str]):
     if ctx.invoked_subcommand is None:
-        ctx.invoke(serve)
+        ctx.invoke(serve, context=context)
 
 
 @mcp.command(name="serve", help="Serve MCP over stdio.")

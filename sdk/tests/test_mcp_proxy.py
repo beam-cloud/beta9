@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from beta9 import auth
-from beta9.config import SDKSettings, set_settings
+from beta9.config import SDKSettings, load_config, set_settings
 from beta9.mcp import server as mcp_server
 from beta9.mcp import tools as mcp_tools
 
@@ -324,9 +324,14 @@ def test_login_tool_drives_device_flow_and_saves_context(settings, monkeypatch, 
 
     monkeypatch.setattr(auth.requests, "post", fake_post)
     monkeypatch.setattr(auth, "has_browser", lambda: False)
+    # The proxy serves `mcp --context staging`; the default context belongs to someone else.
+    (tmp_path / "config.ini").write_text("[default]\ntoken = keep-me\n")
     events = []
     tools = mcp_tools.LocalTools(
-        cwd=str(tmp_path), on_login=lambda: events.append("login"), signed_in=lambda: False
+        cwd=str(tmp_path),
+        on_login=lambda: events.append("login"),
+        signed_in=lambda: False,
+        context_name="staging",
     )
 
     started = tools.login({})
@@ -336,8 +341,9 @@ def test_login_tool_drives_device_flow_and_saves_context(settings, monkeypatch, 
     status = tools.login_status({"wait_seconds": 5})
     assert status["structuredContent"]["status"] == "signed_in"
     assert events == ["login"]
-    saved = (tmp_path / "config.ini").read_text()
-    assert "token = " + "t" * 64 in saved
+    contexts = load_config()
+    assert contexts["staging"].token == "t" * 64
+    assert contexts["default"].token == "keep-me"
 
 
 def test_login_tool_reports_denial(settings, monkeypatch, tmp_path):

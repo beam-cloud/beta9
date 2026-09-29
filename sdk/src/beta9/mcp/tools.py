@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .. import auth
-from ..config import get_settings
+from ..config import DEFAULT_CONTEXT_NAME, get_settings
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
@@ -146,11 +146,18 @@ class LocalTools:
     """Deploy tools appear once signed in; login tools whenever an auth server is configured."""
 
     def __init__(
-        self, cwd: Optional[str], on_login: Callable[[], None], signed_in: Callable[[], bool]
+        self,
+        cwd: Optional[str],
+        on_login: Callable[[], None],
+        signed_in: Callable[[], bool],
+        context_name: str = DEFAULT_CONTEXT_NAME,
     ):
         self.cwd: str = cwd or os.getcwd()
         self.on_login: Callable[[], None] = on_login
         self.signed_in: Callable[[], bool] = signed_in
+        self.context_name: str = (
+            context_name  # where login_status saves; the proxy reconnects with it
+        )
         self.jobs: Dict[str, DeployJob] = {}
         self.login_flow: Optional[auth.DeviceLogin] = None
         self.login_available: bool = auth.login_configured()
@@ -386,7 +393,7 @@ class LocalTools:
             while True:
                 context = flow.poll()
                 if context is not None:
-                    auth.save_login(context)
+                    auth.save_login(context, name=self.context_name)
                     self.login_flow = None
                     self.on_login()
                     where = f" to {flow.workspace_name}" if flow.workspace_name else ""
