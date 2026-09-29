@@ -1,0 +1,62 @@
+# Operate
+
+Everything here is an MCP tool; the CLI equivalent is noted where one exists.
+Mutations deploy a new version; nothing edits a running container in place.
+
+## Look
+
+| Question | Tool |
+|---|---|
+| What's here? | `list_apps`, `get_app` (config, env, URL) · `{{cli}} status --json` |
+| Versions of an app | `list_deployments`, `get_deployment` · `{{cli}} deployment list` |
+| Why is it failing? | `logs` (by app / deployment / task / container; `stream: stdout`, `stderr`, `system`) · `{{cli}} logs --deployment-id <id> -f` |
+| Is it healthy / slow? | `metrics` (CPU, memory, GPU memory, containers over a window), `request_stats` (count, 5xx share, p50/p95/p99) |
+| One invocation | `get_task`, `list_tasks`, `stop_task` |
+| Inside a container | `{{cli}} shell --container-id <id>` |
+
+Read logs before proposing a fix. `stream: system` shows image pulls,
+mounts, and exits, which is where "it never started" lives.
+
+## Change
+
+| Intent | Tool |
+|---|---|
+| Env vars (values may be references) | `set_env { name, env: {...}, unset: [...] }` |
+| Resources and scaling | `update_config { name, fields: { "runtime.cpu": 2000, "runtime.memory": 4096, "runtime.gpu": "A10G", "autoscaler.max_containers": 4, "keep_warm_seconds": -1, "ports": [8000] } }` |
+| Wire two services | `connect_services { source, target }` |
+| Replicas of a pod | `scale_deployment { name, containers }` |
+| Restart with the same config | `redeploy { name }` |
+| Roll back | `redeploy { deployment_id: <older version> }` |
+| Pause / resume | `stop_deployment`, `start_deployment` |
+| Call it | `invoke { name, path, method, body }` |
+
+## Secrets
+
+`list_secrets`, `create_secret { name, value }`, `update_secret`,
+`delete_secret` (confirm). Bind a secret to an app by name in `secrets`, or
+reference it in env as `${{secret.NAME}}`. Deployments pick up a changed
+value on their next container start.
+
+## Stacks
+
+A stack is a named board of apps. `create_stack { name, apps: [...] }`,
+`update_stack { name, add: [...], remove: [...] }`, `list_stacks`,
+`delete_stack` (apps are untouched). After deploying a multi-service app,
+put its apps in one stack named after the project so the user sees the
+whole thing and the references between the pieces.
+
+## Money and capacity
+
+- `insufficient_credits`: the workspace has no prepaid credit. Stop, show
+  the user the credits link from the error (or `{{dashboard_url}}/settings/credits`),
+  and continue when they confirm. Never loop on retries.
+- Capacity errors name the GPU that is not available now: offer another
+  type or a priority list.
+- Prefer scale-to-zero for anything not user-facing; say what a change
+  costs in resources when you make it.
+
+## Anything else
+
+`api_routes` lists every REST route the gateway has; `api { method, path,
+body }` calls one (non-GET needs `confirm: true`). Use it for the rare
+operation without a tool, and mention it so the user knows it happened.
