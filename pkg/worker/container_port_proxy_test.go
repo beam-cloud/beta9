@@ -48,73 +48,67 @@ func TestContainerPortProxyListenConfigUsesAdvertisedFamily(t *testing.T) {
 
 func TestContainerPortProxyFallsBackToReachableBackendFamily(t *testing.T) {
 	backend := startLineServer(t, "tcp4", "127.0.0.1:0", "proxy-ok\n")
-	hostPort := freeTCPPortForNetwork(t, "tcp4", "127.0.0.1:0")
 	unusedIPv6Port, err := getRandomFreePort()
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	proxy := newContainerPortProxy(ctx, "container-one", PortBinding{
-		HostPort:      hostPort,
-		ContainerPort: 8781,
-	}, addressFamilyIPv4, []string{
+	listener := listenForTest(t, "tcp4", "127.0.0.1:0")
+	proxy := startTestPortProxy(t, listener, []string{
 		net.JoinHostPort("::1", fmt.Sprintf("%d", unusedIPv6Port)),
 		backend.Addr().String(),
 	})
 	defer proxy.close()
-	go proxy.run()
 
-	select {
-	case <-proxy.ready:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for port proxy to become ready")
-	}
-
-	conn, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", hostPort)), time.Second)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	_, err = conn.Write([]byte("ping\n"))
-	require.NoError(t, err)
-
-	line, err := bufio.NewReader(conn).ReadString('\n')
-	require.NoError(t, err)
+	line := dialLineServer(t, "tcp4", listener.Addr().String())
 	require.Equal(t, "proxy-ok\n", line)
 }
 
 func TestContainerPortProxyAcceptsIPv6ForIPv4Backend(t *testing.T) {
 	backend := startLineServer(t, "tcp4", "127.0.0.1:0", "ipv6-to-ipv4-ok\n")
-	hostPort := freeTCPPortForNetwork(t, "tcp6", "[::1]:0")
+	listener := listenForTest(t, "tcp6", "[::1]:0")
 
-	proxy := startTestPortProxy(t, hostPort, addressFamilyIPv6, []string{backend.Addr().String()})
+	proxy := startTestPortProxy(t, listener, []string{backend.Addr().String()})
 	defer proxy.close()
 
-	line := dialLineServer(t, "tcp6", net.JoinHostPort("::1", fmt.Sprintf("%d", hostPort)))
+	line := dialLineServer(t, "tcp6", listener.Addr().String())
 	require.Equal(t, "ipv6-to-ipv4-ok\n", line)
 }
 
 func TestContainerPortProxyAcceptsIPv4ForIPv6Backend(t *testing.T) {
 	backend := startLineServer(t, "tcp6", "[::1]:0", "ipv4-to-ipv6-ok\n")
-	hostPort := freeTCPPortForNetwork(t, "tcp4", "127.0.0.1:0")
+	listener := listenForTest(t, "tcp4", "127.0.0.1:0")
 
-	proxy := startTestPortProxy(t, hostPort, addressFamilyIPv4, []string{backend.Addr().String()})
+	proxy := startTestPortProxy(t, listener, []string{backend.Addr().String()})
 	defer proxy.close()
 
-	line := dialLineServer(t, "tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", hostPort)))
+	line := dialLineServer(t, "tcp4", listener.Addr().String())
 	require.Equal(t, "ipv4-to-ipv6-ok\n", line)
 }
 
-func startTestPortProxy(t *testing.T, hostPort int, family addressFamily, targets []string) *containerPortProxy {
+func TestReservePortsHoldsPortUntilReleased(t *testing.T) {
+	manager := &ContainerNetworkManager{podAddr: "127.0.0.1"}
+	ports, err := manager.ReservePorts("container-one", 1)
+	require.NoError(t, err)
+	address := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", ports[0]))
+
+	_, err = net.Listen("tcp4", address)
+	require.Error(t, err, "reserved port must stay bound")
+
+	manager.ReleasePortReservations("container-one")
+	listener, err := net.Listen("tcp4", address)
+	require.NoError(t, err, "released port must be free")
+	_ = listener.Close()
+}
+
+func startTestPortProxy(t *testing.T, listener net.Listener, targets []string) *containerPortProxy {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	proxy := newContainerPortProxy(ctx, "container-one", PortBinding{
-		HostPort:      hostPort,
+		HostPort:      listener.Addr().(*net.TCPAddr).Port,
 		ContainerPort: 8781,
-	}, family, targets)
+	}, listener, targets)
 	go proxy.run()
 
 	select {
@@ -154,7 +148,7 @@ func startLineServer(t *testing.T, network, address, response string) net.Listen
 	return listener
 }
 
-func freeTCPPortForNetwork(t *testing.T, network, address string) int {
+func listenForTest(t *testing.T, network, address string) net.Listener {
 	t.Helper()
 
 	listener, err := net.Listen(network, address)
@@ -162,9 +156,7 @@ func freeTCPPortForNetwork(t *testing.T, network, address string) int {
 		t.Skipf("IPv6 loopback is unavailable: %v", err)
 	}
 	require.NoError(t, err)
-	defer listener.Close()
-
-	return listener.Addr().(*net.TCPAddr).Port
+	return listener
 }
 
 func dialLineServer(t *testing.T, network, address string) string {
