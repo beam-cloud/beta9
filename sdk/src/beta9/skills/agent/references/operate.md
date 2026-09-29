@@ -47,8 +47,10 @@ whole thing and the references between the pieces.
 
 ## Money and capacity
 
-- `insufficient_credits`: the workspace has no prepaid credit. Stop, show
-  the user the credits link from the error (or `{{dashboard_url}}/settings/credits`),
+- `INSUFFICIENT_CREDITS`: the workspace has no prepaid credit. `whoami`
+  reports it before you start (`credit.ok: false`), and `deploy`,
+  `create_database` and the CLI refuse with the same message. Stop, show
+  the user the link in the message (or `{{dashboard_url}}/settings/credits`),
   and continue when they confirm. Never loop on retries.
 - Capacity errors name the GPU that is not available now: offer another
   type or a priority list.

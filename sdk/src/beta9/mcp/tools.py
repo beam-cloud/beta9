@@ -229,7 +229,7 @@ class LocalTools:
                         "ports": {
                             "type": "array",
                             "items": integer,
-                            "description": "Ports the server listens on.",
+                            "description": "Ports the server listens on; [] for a worker with no URL. Omit to use the Dockerfile's EXPOSE.",
                         },
                         "env": {"type": "object", "additionalProperties": string},
                         "secrets": {**strings, "description": "Workspace secret names to inject."},
@@ -304,6 +304,8 @@ class LocalTools:
                 "--entrypoint",
                 entry if isinstance(entry, str) else shlex.join(map(str, entry)),
             ]
+        if args.get("ports") == []:
+            command.append("--no-ports")  # a worker: no URL, even with EXPOSE in the Dockerfile
         for port in args.get("ports") or []:
             command += ["--port", str(int(port))]
         for key, value in (args.get("env") or {}).items():

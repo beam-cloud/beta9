@@ -349,6 +349,12 @@ class TestCreditErrorHint(TestCase):
             self.assertIn("https://platform.beam.cloud/settings/credits", hint)
             self.assertIsNone(capacity.credit_error_hint("pool name is required"))
             self.assertIsNone(capacity.credit_error_hint(""))
+            # The gateway's message already says where to add credits.
+            self.assertIsNone(
+                capacity.credit_error_hint(
+                    "insufficient_credits: add credits at https://platform.beam.cloud/settings/credits"
+                )
+            )
 
     def test_credits_url_follows_environment(self):
         import beta9.abstractions.base.capacity as capacity

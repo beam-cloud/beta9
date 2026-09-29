@@ -43,7 +43,9 @@ workspace tools appear. With those tools you can do the whole job through MCP.
 
 1. `whoami` (MCP) or `{{cli}} whoami --json`: confirm the workspace. If it says
    you are not signed in, run {{login_hint}}. **Never ask the user to paste a
-   token**; sign-in is a link they click.
+   token**; sign-in is a link they click. When the result has `credit` with
+   `ok: false`, nothing will run yet: show the user `credit.message` (it has
+   the link to add credits) and wait for them before deploying anything.
 2. `list_apps` / `{{cli}} status --json`: what already exists. App names are
    workspace-wide, so reuse or pick a distinct name.
 3. Read [references/deploy.md](references/deploy.md) before the first deploy of
@@ -76,9 +78,10 @@ web apps; a GPU only when the code needs one) and say what you chose.
 
 - Read logs before guessing: MCP `logs` by app, deployment, task, or container
   (`stream: system` shows image pulls and container exits), or `{{cli}} logs`.
-- `insufficient_credits` / `credits` in an error means the workspace has no
-  prepaid credit. Do not retry in a loop. Tell the user, give them the credits
-  link from the error or the dashboard, and continue once they confirm.
+- Code `INSUFFICIENT_CREDITS` (or `insufficient_credits` in a message) means
+  the workspace has no prepaid credit; deploys and database creation are
+  refused up front. Do not retry in a loop. Tell the user, give them the
+  credits link from the message, and continue once they confirm.
 - Capacity errors name the GPU; offer a fallback type or a list, e.g.
   `gpu: ["A10G", "A100-40"]`.
 - Roll back with `redeploy` and an older `deployment_id`; stop a bad version

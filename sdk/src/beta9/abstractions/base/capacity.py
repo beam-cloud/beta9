@@ -75,9 +75,10 @@ def credits_url() -> Optional[str]:
 
 
 def credit_error_hint(message: str) -> Optional[str]:
-    """A purchase link for credit-related failures; None for everything else."""
+    """A purchase link for credit-related failures that do not already name one."""
     url = credits_url()
-    if url and "credit" in (message or "").lower():
+    text = (message or "").lower()
+    if url and "credit" in text and "http" not in text:
         return f"purchase credits at {url}"
     return None
 

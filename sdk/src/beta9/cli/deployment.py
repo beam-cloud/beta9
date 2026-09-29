@@ -107,6 +107,13 @@ def common(**_):
     default=None,
     help="Set a fixed replica count (equivalent to matching min/max replicas).",
 )
+@click.option(
+    "--no-ports",
+    "no_ports",
+    is_flag=True,
+    default=False,
+    help="Expose no port (a background worker), even if the Dockerfile has EXPOSE.",
+)
 @override_config_options
 @extraclick.config_context_option
 @click.pass_context
@@ -338,7 +345,10 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
         if value is not None and value != ():
             service_kwargs[key] = list(value) if key == "disks" else value
 
-    return Service(**service_kwargs)
+    service = Service(**service_kwargs)
+    if kwargs.get("no_ports"):
+        service.clear_ports()
+    return service
 
 
 @management.command(
@@ -391,6 +401,13 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
     default="auto",
     show_default=True,
     help="Rollout strategy for always-on deployments.",
+)
+@click.option(
+    "--no-ports",
+    "no_ports",
+    is_flag=True,
+    default=False,
+    help="Expose no port (a background worker), even if the Dockerfile has EXPOSE.",
 )
 @override_config_options
 @extraclick.pass_service_client

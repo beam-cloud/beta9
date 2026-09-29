@@ -225,6 +225,20 @@ def test_deploy_tool_runs_cli_in_directory_and_reports_url(settings, monkeypatch
     ]
 
 
+def test_deploy_tool_maps_empty_ports_to_a_worker(settings, monkeypatch, tmp_path):
+    cli = fake_cli(tmp_path, 'printf \'{"deployment_id":"d","stub_id":"s","invoke_url":""}\\n\'')
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
+
+    body = tools.deploy(
+        {"name": "worker", "entrypoint": ["python", "worker.py"], "ports": [], "wait_seconds": 10}
+    )
+    job = tools.jobs[body["structuredContent"]["job_id"]]
+
+    assert "--no-ports" in job.command and "--port" not in job.command
+    assert "Deployed worker (deployment d)" in body["content"][0]["text"]
+
+
 def test_deploy_tool_surfaces_cli_failure(settings, monkeypatch, tmp_path):
     # Machine mode prints the cause as a pretty-printed object, then a generic one.
     cli = fake_cli(

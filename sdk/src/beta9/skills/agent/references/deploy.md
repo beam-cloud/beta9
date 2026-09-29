@@ -35,9 +35,9 @@ MCP server's working directory, which is not necessarily the project.
 
 The call returns a `job_id` after ~20 s; poll `deploy_status` with
 `wait_seconds: 50` and the returned `log_cursor` until `status` is
-`deployed` (then `url` is set) or `failed` (then `error` says why).
-Containers run unprivileged: bind ports above 1024 (an image that listens on
-80 fails with `bind: permission denied`; check `logs` when a new app answers 503).
+`deployed` (then `url` is set) or `failed` (then `error` says why). When a
+new app answers 503, read its `logs` (`stream: system` shows container
+exits) before changing anything.
 
 ## From the CLI
 
