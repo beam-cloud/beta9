@@ -94,6 +94,17 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 	return creds
 }
 
+// freshOriginCredentials drops the cached answer and fetches again. Presigned
+// URLs outlive the cache entry but not a long wait for the archive lock, so a
+// failed download retries with URLs the gateway signed just now.
+func (c *ImageClient) freshOriginCredentials(ctx context.Context, request *types.ContainerRequest, imageID, registry string) *originCredentials {
+	key := strings.Join([]string{cacheRequestWorkspaceID(request), cacheRequestStubID(request), imageID, registry}, "\x00")
+	c.originCredsMu.Lock()
+	delete(c.originCredsCache, key)
+	c.originCredsMu.Unlock()
+	return c.originCredentials(ctx, request, imageID, registry)
+}
+
 type gatewayRegistryCredentialProvider struct {
 	client         *ImageClient
 	request        *types.ContainerRequest

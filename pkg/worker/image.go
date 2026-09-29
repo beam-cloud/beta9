@@ -536,6 +536,12 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 			archive.path = localArchivePath
 			archive.sourceRegistry = nil
 			archive.storageMode = string(clipCommon.StorageModeLocal)
+		} else if archive.storageMode == string(clipCommon.StorageModeS3) &&
+			(archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "") &&
+			c.brokeredImageAccessRequest(request) {
+			// The data is in S3 and this worker has no credentials for it; the
+			// mount would fail minutes later inside the AWS credential chain.
+			return lazyImageArchive{}, fmt.Errorf("image %s data archive is unavailable from the gateway-brokered origin", request.ImageId)
 		}
 	}
 	return archive, nil
@@ -956,7 +962,7 @@ func (c *ImageClient) downloadV1ArchiveDataFromBrokeredURL(ctx context.Context, 
 	tempPath := targetPath + ".url.tmp"
 	defer os.Remove(tempPath)
 	if err := downloadImageArchiveURL(ctx, creds.imageArchiveDataURL, tempPath); err != nil {
-		log.Debug().Err(err).Str("image_id", request.ImageId).Msg("v1 image data archive brokered url fetch failed")
+		log.Warn().Err(err).Str("image_id", request.ImageId).Msg("v1 image data archive brokered url fetch failed")
 		return false
 	}
 	if err := os.Rename(tempPath, targetPath); err != nil {
