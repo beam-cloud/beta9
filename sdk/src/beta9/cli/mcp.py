@@ -48,47 +48,52 @@ _CLAUDE_DESKTOP = (
     else "~/.config/Claude/claude_desktop_config.json"
 )
 
-CLIENTS: List[AgentClient] = [
-    AgentClient(
-        "cursor",
-        "Cursor",
-        ["~/.cursor"],
-        "~/.cursor/mcp.json",
-        ".cursor/mcp.json",
-        "~/.cursor/skills",
-    ),
-    AgentClient(
-        "claude-code",
-        "Claude Code",
-        ["~/.claude"],
-        "~/.claude.json",
-        ".mcp.json",
-        "~/.claude/skills",
-        "claude",
-    ),
-    AgentClient("codex", "Codex", ["~/.codex"], "~/.codex/config.toml", None, "~/.codex/skills"),
-    AgentClient(
-        "windsurf",
-        "Windsurf",
-        ["~/.codeium/windsurf", "~/.windsurf"],
-        "~/.codeium/windsurf/mcp_config.json",
-    ),
-    AgentClient(
-        "claude-desktop",
-        "Claude Desktop",
-        ["~/Library/Application Support/Claude", "~/.config/Claude"],
-        _CLAUDE_DESKTOP,
-    ),
-]
-CLIENT_IDS = tuple(c.id for c in CLIENTS)
-
-
-def client_by_id(client_id: str) -> AgentClient:
-    return next(c for c in CLIENTS if c.id == client_id)
+CLIENTS: Dict[str, AgentClient] = {
+    c.id: c
+    for c in [
+        AgentClient(
+            id="cursor",
+            label="Cursor",
+            markers=["~/.cursor"],
+            config="~/.cursor/mcp.json",
+            project_config=".cursor/mcp.json",
+            skills_dir="~/.cursor/skills",
+        ),
+        AgentClient(
+            id="claude-code",
+            label="Claude Code",
+            markers=["~/.claude"],
+            config="~/.claude.json",
+            project_config=".mcp.json",
+            skills_dir="~/.claude/skills",
+            binary="claude",
+        ),
+        AgentClient(
+            id="codex",
+            label="Codex",
+            markers=["~/.codex"],
+            config="~/.codex/config.toml",
+            skills_dir="~/.codex/skills",
+        ),
+        AgentClient(
+            id="windsurf",
+            label="Windsurf",
+            markers=["~/.codeium/windsurf", "~/.windsurf"],
+            config="~/.codeium/windsurf/mcp_config.json",
+        ),
+        AgentClient(
+            id="claude-desktop",
+            label="Claude Desktop",
+            markers=["~/Library/Application Support/Claude", "~/.config/Claude"],
+            config=_CLAUDE_DESKTOP,
+        ),
+    ]
+}
+CLIENT_IDS = tuple(CLIENTS)
 
 
 def detected_clients() -> List[AgentClient]:
-    return [c for c in CLIENTS if c.installed()]
+    return [c for c in CLIENTS.values() if c.installed()]
 
 
 def server_name() -> str:
@@ -201,7 +206,7 @@ def install(clients: Sequence[str], project: bool, print_only: bool, context: Op
         click.echo(codex_block(command), nl=False)
         return
 
-    targets = [client_by_id(c) for c in clients] if clients else detected_clients()
+    targets = [CLIENTS[c] for c in clients] if clients else detected_clients()
     if not targets:
         terminal.error(
             f"No supported agent found ({', '.join(CLIENT_IDS)}).",
@@ -215,7 +220,7 @@ def install(clients: Sequence[str], project: bool, print_only: bool, context: Op
         terminal.print_json({"server": server_name(), "command": command, "installed": written})
         return
     for client_id, path in written.items():
-        terminal.success(f"{client_by_id(client_id).label}: {path}")
+        terminal.success(f"{CLIENTS[client_id].label}: {path}")
     terminal.detail("Restart the client to pick it up.")
 
 
@@ -231,7 +236,7 @@ def status():
             "configured": configured(c),
             "config": str(c.config_path()),
         }
-        for c in CLIENTS
+        for c in CLIENTS.values()
     ]
     if terminal.json_output():
         terminal.print_json({"server": server_name(), "clients": rows})

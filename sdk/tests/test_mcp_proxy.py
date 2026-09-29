@@ -113,7 +113,7 @@ def test_unauthenticated_proxy_without_login_points_at_config_create(settings):
 def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch):
     remote = FakeRemote()
     monkeypatch.setattr(mcp_server, "context_or_none", lambda name: object())
-    monkeypatch.setattr(mcp_server.RemoteMCP, "from_context", classmethod(lambda cls, ctx: remote))
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remote)
 
     proxy = mcp_server.StdioProxy(cwd=os.getcwd())
     out = run_proxy(
@@ -139,7 +139,7 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
 def test_rejected_token_drops_remote_and_announces_tool_change(settings, monkeypatch):
     remote = FakeRemote(status=401)
     monkeypatch.setattr(mcp_server, "context_or_none", lambda name: object())
-    monkeypatch.setattr(mcp_server.RemoteMCP, "from_context", classmethod(lambda cls, ctx: remote))
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remote)
 
     proxy = mcp_server.StdioProxy(cwd=os.getcwd())
     out = run_proxy(proxy, rpc("tools/call", 1, name="whoami", arguments={}), rpc("tools/list", 2))

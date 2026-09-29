@@ -65,26 +65,23 @@ def _sdk_version() -> str:
 
 
 class RemoteMCP:
-    def __init__(self, url: str, token: str):
-        self.url: str = url
+    """The gateway's MCP endpoint for one context; `call` posts one message."""
+
+    def __init__(self, context: ConfigContext):
+        client = ServiceClient(context)
+        try:
+            self.url: str = f"{client.http.base_url}/api/v1/mcp"
+        finally:
+            client.close()
         self.session: requests.Session = requests.Session()
         self.session.headers.update(
             {
-                "Authorization": f"Bearer {token}",
+                "Authorization": f"Bearer {context.token or ''}",
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/event-stream",
                 "MCP-Protocol-Version": PROTOCOL_VERSION,
             }
         )
-
-    @classmethod
-    def from_context(cls, context: ConfigContext) -> "RemoteMCP":
-        client = ServiceClient(context)
-        try:
-            base_url = client.http.base_url
-        finally:
-            client.close()
-        return cls(f"{base_url}/api/v1/mcp", context.token or "")
 
     def call(self, message: Any) -> Tuple[int, Any]:
         response = self.session.post(self.url, data=json.dumps(message), timeout=REMOTE_TIMEOUT)
@@ -165,34 +162,28 @@ class StdioProxy:
         return self._forward(message)
 
     def _initialize(self, msg_id: Any) -> Dict[str, Any]:
-        cli = get_settings().name.lower()
-        instructions = ""
+        product = get_settings().name
+        cli = product.lower()
         if self.remote is not None:
+            params = {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": f"{cli}-mcp", "version": _sdk_version()},
+            }
             _, body = self._remote_call(
-                {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": PROTOCOL_VERSION,
-                        "capabilities": {},
-                        "clientInfo": {"name": f"{cli}-mcp", "version": _sdk_version()},
-                    },
-                }
+                {"jsonrpc": "2.0", "id": msg_id, "method": "initialize", "params": params}
+            )
+            remote = (
+                body.get("result", {}).get("instructions", "") if isinstance(body, dict) else ""
             )
             instructions = (
-                (body or {}).get("result", {}).get("instructions", "")
-                if isinstance(body, dict)
-                else ""
-            )
-            instructions += (
-                f" Local tools run on this machine: `deploy` ships a project directory with the {cli} CLI "
-                "(Dockerfile, image, or file:function handler) and returns a job; poll `deploy_status` until "
-                "deployed, then wire it with connect_services or set_env."
+                f"{remote} Local tools run on this machine: `deploy` ships a project directory with the "
+                f"{cli} CLI (Dockerfile, image, or file:function handler) and returns a job; poll "
+                "`deploy_status` until deployed, then wire it with connect_services or set_env."
             )
         elif self.tools.login_available:
             instructions = (
-                f"Not signed in to {get_settings().name}. Call `login`, show the user the link, then call "
+                f"Not signed in to {product}. Call `login`, show the user the link, then call "
                 "`login_status` until signed in; the workspace tools appear after that."
             )
         else:
@@ -217,9 +208,10 @@ class StdioProxy:
 
     def _tools_call(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         name = params.get("name", "")
-        if self.tools.has(name):
+        handler = self.tools.handler(name)
+        if handler is not None:
             try:
-                return _result(msg_id, self.tools.call(name, params.get("arguments") or {}))
+                return _result(msg_id, handler(params.get("arguments") or {}))
             except Exception as exc:
                 return _result(msg_id, error_result(f"{name} failed: {exc}"))
         if self.remote is None:
@@ -239,7 +231,7 @@ class StdioProxy:
             self.remote = None
             return
         try:
-            self.remote = RemoteMCP.from_context(context)
+            self.remote = RemoteMCP(context)
         except Exception as exc:
             self.remote = None
             log(f"workspace unavailable: {exc}")
