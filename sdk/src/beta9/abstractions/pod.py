@@ -422,7 +422,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             "stub_id": self.stub_id,
             "status": "accepted" if deploy_response.ok else "failed",
             "deployment_name": self.name,
-            "invoke_url": invoke_url,
+            "invoke_url": invoke_url if self.ports else "",  # nothing listens on a portless pod
             "version": deploy_response.version,
             "warning": warn_msg,
             "rollout_action": rollout_action,

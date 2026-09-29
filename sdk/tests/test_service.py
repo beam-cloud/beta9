@@ -333,6 +333,24 @@ class TestService(TestCase):
         self.assertEqual(service.checkpoint_readiness_timeout, 120)
         self.assertEqual(service.checkpoint_readiness_interval, 3)
 
+    def test_no_ports_flag_makes_a_worker_out_of_an_exposing_dockerfile(self):
+        image = Image()
+        image.dockerfile = "FROM python:3.12\nEXPOSE 8000\n"
+        kwargs = {
+            "dockerfile": image,
+            "image": None,
+            "entrypoint": "python worker.py",
+            "ports": [],
+            "no_ports": True,
+            "env": (),
+        }
+
+        service = _generate_service_module("worker", kwargs)
+        self.assertTrue(handle_config_override(service, kwargs))
+
+        self.assertEqual(service.ports, [])
+        self.assertNotIn("PORT=8000", service.env)
+
     def test_empty_cli_port_override_preserves_inferred_service_port(self):
         image = Image.from_id("img-123")
         kwargs = {

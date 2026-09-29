@@ -23,6 +23,7 @@ from . import (
     disk,
     endpoints,
     image,
+    login,
     logs,
     machine,
     mcp,
@@ -30,6 +31,7 @@ from . import (
     run,
     secret,
     serve,
+    setup,
     shell,
     status,
     task,
@@ -77,10 +79,20 @@ class CLI:
         if hasattr(module, "management"):
             self.management_group.add_command(module.management)
 
+    # Commands that work without credentials or establish them; the first-run
+    # prompt would only get in their way.
+    NO_FIRST_AUTH_PROMPT = ("mcp", "login", "setup", "config", "configure")
+
     def check_config(self) -> None:
         if os.getenv("CI") or any(
-            arg in ("--help", "-h", "--help-all", "--version") for arg in sys.argv[1:]
+            arg in ("--help", "-h", "--help-all", "--version", "--json") for arg in sys.argv[1:]
         ):
+            return
+        if sys.argv[1:2] and sys.argv[1] in self.NO_FIRST_AUTH_PROMPT:
+            return
+        # A pipe (an agent, a script) cannot answer prompts; let the command
+        # fail with a NOT_AUTHENTICATED error that says how to sign in.
+        if not sys.stdin.isatty():
             return
         if is_config_empty(self.settings.config_path):
             prompt_first_auth(self.settings)
@@ -129,6 +141,8 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(run)
     cli.register(dev)
     cli.register(endpoints)
+    cli.register(login)
+    cli.register(setup)
 
     if check_config:
         cli.check_config()

@@ -57,6 +57,12 @@ class SDKSettings:
     # "https://platform.beam.cloud/app/{app_id}/overview". Empty when there is
     # no dashboard to link to (plain beta9 installs without one).
     app_url_template: str = os.getenv("BETA9_APP_URL_TEMPLATE", "")
+    # OAuth 2.0 authorization server for `login` (RFC 8628 device grant):
+    # POST {auth_url}/device/code and POST {auth_url}/token. Empty means the
+    # install has no browser sign-in and tokens are entered by hand.
+    auth_url: str = os.getenv("BETA9_AUTH_URL", "")
+    # Public documentation, quoted in the agent skill; empty omits the links.
+    docs_url: str = os.getenv("BETA9_DOCS_URL", "")
 
     @property
     def api_url(self) -> str:
@@ -79,13 +85,18 @@ class SDKSettings:
             self.use_defaults_in_prompt = True
             self.api_token = os.getenv("BEAM_TOKEN")
 
-            # The dashboard lives at platform.<domain>, mirroring the api host
-            # at app.<domain> (e.g. app.beam.cloud -> platform.beam.cloud)
+            # The dashboard lives at platform.<domain> and the account API at
+            # api.<domain>, mirroring the api host at app.<domain>
+            # (e.g. app.beam.cloud -> platform.beam.cloud, api.beam.cloud).
             host = self.api_host.split(":")[0]
             if not self.app_url_template and host.startswith("app."):
                 self.app_url_template = (
                     f"https://platform.{host[len('app.') :]}/app/{{app_id}}/overview"
                 )
+            self.auth_url = os.getenv("BEAM_AUTH_URL", self.auth_url)
+            if not self.auth_url and host.startswith("app."):
+                self.auth_url = f"https://api.{host[len('app.') :]}/v2/oauth"
+            self.docs_url = self.docs_url or "https://docs.beam.cloud"
 
 
 @dataclass
@@ -101,7 +112,7 @@ class ConfigContext:
             return self.api_url.rstrip("/")
         port = int(self.gateway_port or DEFAULT_GATEWAY_PORT)
         port = DEFAULT_API_PORT if port == DEFAULT_GATEWAY_PORT else port
-        return _http_url(self.gateway_host, port)
+        return _http_url(self.gateway_host or DEFAULT_GATEWAY_HOST, port)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ConfigContext":
@@ -211,8 +222,12 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
         )
 
     if not sys.stdin.isatty():
+        cli = settings.name.lower()
+        how = f"{cli} login" if settings.auth_url else f"{cli} config create"
         terminal.error(
-            f"Context '{name}' does not exist. Configure it with {settings.name.lower()} config create."
+            f"Not signed in: context '{name}' does not exist.",
+            hint=f"Run `{how}`, or set {cli.upper()}_TOKEN.",
+            code="NOT_AUTHENTICATED",
         )
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
     contexts[name] = prompt_for_config_context(name=name, require_token=True)[1]

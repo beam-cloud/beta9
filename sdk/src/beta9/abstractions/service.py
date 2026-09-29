@@ -255,6 +255,11 @@ class Service(Pod):
             always_on=always_on,
         )
 
+    def clear_ports(self) -> None:
+        """Run without an exposed port (a worker), undoing any inferred port and its PORT env."""
+        self.ports = []
+        self.env = [entry for entry in self.env if not entry.startswith("PORT=")]
+
     def configure_replicas(
         self,
         *,

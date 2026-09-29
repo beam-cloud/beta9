@@ -33,6 +33,9 @@ description = ""
 [project.scripts]
 beta9 = "beta9.cli.main:start"
 
+[tool.setuptools.package-data]
+beta9 = ["skills/**/*.md"]
+
 [dependency-groups]
 dev = [
     "pytest<9.0.0,>=8.2.0",
