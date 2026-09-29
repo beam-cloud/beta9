@@ -2613,7 +2613,8 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 }
 
 func (s *Worker) containerOverlayBasePath(request *types.ContainerRequest) string {
-	if s.useMemoryOverlay(request) {
+	// Builds keep their layer on tmpfs for speed; a container's rootfs writes stay on disk as reclaimable page cache.
+	if request.IsBuildRequest() {
 		return "/dev/shm"
 	}
 	return baseConfigPath

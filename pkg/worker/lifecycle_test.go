@@ -264,24 +264,45 @@ func TestRequiresPostBuildImageMaterialization(t *testing.T) {
 	}
 }
 
-func TestCreateOverlayUsesTmpfsForAgentWorkers(t *testing.T) {
-	worker := &Worker{
+func TestCreateOverlayBasePath(t *testing.T) {
+	dockerfile := "FROM scratch"
+	agentWorker := &Worker{
 		persistent:     true,
 		machineID:      "machine-one",
 		routeTransport: types.BackendRouteTransportTSNet,
 	}
-	request := &types.ContainerRequest{ContainerId: "container-agent"}
 
-	overlay := worker.createOverlay(request, t.TempDir())
-	require.Equal(t, "/dev/shm", overlay.OverlayPath())
-}
+	tests := []struct {
+		name    string
+		worker  *Worker
+		request *types.ContainerRequest
+		want    string
+	}{
+		{
+			name:    "build request",
+			worker:  agentWorker,
+			request: &types.ContainerRequest{ContainerId: "container-build", BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+			want:    "/dev/shm",
+		},
+		{
+			name:    "agent worker",
+			worker:  agentWorker,
+			request: &types.ContainerRequest{ContainerId: "container-agent"},
+			want:    baseConfigPath,
+		},
+		{
+			name:    "kubernetes worker",
+			worker:  &Worker{},
+			request: &types.ContainerRequest{ContainerId: "container-default"},
+			want:    baseConfigPath,
+		},
+	}
 
-func TestCreateOverlayKeepsDefaultPathForNormalWorkers(t *testing.T) {
-	worker := &Worker{}
-	request := &types.ContainerRequest{ContainerId: "container-default"}
-
-	overlay := worker.createOverlay(request, t.TempDir())
-	require.Equal(t, baseConfigPath, overlay.OverlayPath())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.worker.createOverlay(tt.request, t.TempDir()).OverlayPath())
+		})
+	}
 }
 
 func TestSetupBuildahDirsUsesPersistentLayerCache(t *testing.T) {
