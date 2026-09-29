@@ -11,7 +11,7 @@
   <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-purple">
   </a>
-  <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
+  <a href="https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA">
     <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-orange?logo=slack">
   </a>
     <a href="https://twitter.com/beam_cloud">
@@ -195,7 +195,7 @@ make setup-sdk
 
 サポートが必要な場合は、これらのチャネルのいずれかを通じてお問い合わせください：
 
-- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(メンテナーやコミュニティメンバーとライブチャット\)
+- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA) \(メンテナーやコミュニティメンバーとライブチャット\)
 - [GitHub issues](https://github.com/beam-cloud/issues) \(バグレポート、機能リクエスト、ロードマップに関連するものなど\)
 - [Twitter](https://twitter.com/beam_cloud) \(リリースやその他の更新情報\)
 

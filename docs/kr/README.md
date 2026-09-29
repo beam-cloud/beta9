@@ -11,7 +11,7 @@
   <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
   </a>
-  <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
+  <a href="https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA">
     <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
   </a>
     <a href="https://twitter.com/beam_cloud">
@@ -132,7 +132,7 @@ Beam은 클라우드 GPU에서 코드를 실행하고, API 뒤에 해당 코드�
 
 지원이 필요한 경우 다음 채널 중 하나를 통해 문의할 수 있습니다.
 
-- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(엔지니어링 팀과 실시간 채팅\)
+- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA) \(엔지니어링 팀과 실시간 채팅\)
 - [GitHub 문제](https://github.com/beam-cloud/issues) \(버그 보고서, 기능 요청 및 로드맵과 관련된 모든 것)
 - [Twitter](https://twitter.com/beam_cloud) \(릴리스 업데이트)
 
