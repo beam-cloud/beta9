@@ -11,7 +11,7 @@
    <a href="https://docs.beam.cloud">
      <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
    </a>
-   <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
+   <a href="https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA">
      <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
    </a>
      <a href="https://twitter.com/beam_cloud">
@@ -132,7 +132,7 @@ Beam 為您提供了在雲端 GPU 上運行程式碼、在 API 後面公開程�
 
 如果您需要支持，可以透過以下任一管道聯繫：
 
-- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(與我們的工程團隊即時聊天\)
+- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA) \(與我們的工程團隊即時聊天\)
 - [GitHub 問題](https://github.com/beam-cloud/issues) \（錯誤回報、功能請求和任何與路線圖相關的內容）
 - [Twitter](https://twitter.com/beam_cloud) \（版本更新）
 

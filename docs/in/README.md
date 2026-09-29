@@ -11,7 +11,7 @@
   <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
   </a>
-  <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
+  <a href="https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA">
     <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
   </a>
     <a href="https://twitter.com/beam_cloud">
@@ -134,7 +134,7 @@ def main():
 
 यदि आपको सहायता की आवश्यकता है, तो आप इनमें से किसी भी चैनल के माध्यम से संपर्क कर सकते हैं:
 
-- [स्लैक](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(हमारी इंजीनियरिंग टीम के साथ लाइव चैट करें\)
+- [स्लैक](https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA) \(हमारी इंजीनियरिंग टीम के साथ लाइव चैट करें\)
 - [गिटहब मुद्दे](https://github.com/beam-cloud/issues) \(बग रिपोर्ट, फीचर अनुरोध और रोडमैप से संबंधित कुछ भी)
 - [ट्विटर](https://twitter.com/beam_cloud) \(रिलीज़ पर अपडेट)
 

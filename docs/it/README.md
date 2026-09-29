@@ -11,7 +11,7 @@
   <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
   </a>
-  <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
+  <a href="https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA">
     <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
   </a>
     <a href="https://twitter.com/beam_cloud">
@@ -132,7 +132,7 @@ Beam ti offre tutti gli strumenti necessari per eseguire codice su GPU cloud, es
 
 Se hai bisogno di supporto, puoi contattarci attraverso uno di questi canali:
 
-- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(Chatta dal vivo con il nostro team di ingegneri\)
+- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA) \(Chatta dal vivo con il nostro team di ingegneri\)
 - [Problemi di GitHub](https://github.com/beam-cloud/issues) \(Segnalazioni di bug, richieste di funzionalità e qualsiasi cosa relativa alla roadmap)
 - [Twitter](https://twitter.com/beam_cloud) \(Aggiornamenti sulle versioni)
 

@@ -11,7 +11,7 @@
   <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
   </a>
-  <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
+  <a href="https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA">
     <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
   </a>
     <a href="https://twitter.com/beam_cloud">
@@ -132,7 +132,7 @@ Beam, bulut GPU'larda kod çalıştırmak, bu kodu bir API'nin arkasında kullan
 
 Desteğe ihtiyacınız varsa aşağıdaki kanallardan herhangi biri aracılığıyla bize ulaşabilirsiniz:
 
-- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(Mühendislik ekibimizle canlı sohbet edin\)
+- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-4bf7jalhy-KI0ebGXk4vKpcDofwDjCLA) \(Mühendislik ekibimizle canlı sohbet edin\)
 - [GitHub sorunları](https://github.com/beam-cloud/issues) \(Hata raporları, özellik istekleri ve yol haritasıyla ilgili her şey)
 - [Twitter](https://twitter.com/beam_cloud) \(Yayınlarla ilgili güncellemeler)
 
