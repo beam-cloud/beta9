@@ -47,6 +47,21 @@ func TestMCPCallGates(t *testing.T) {
 	res := g.call(ctx, nil, g.byName["get_app"], nil)
 	require.Equal(t, "INVALID_ARGS", res["structuredContent"].(map[string]any)["code"])
 
+	res = g.call(ctx, nil, g.byName["logs"], map[string]any{"name": "x", "stream": "console"})
+	require.Equal(t, "INVALID_ARGS", res["structuredContent"].(map[string]any)["code"])
+	require.Contains(t, res["structuredContent"].(map[string]any)["error"], "stdout, stderr, system")
+
+	for stubType, counted := range map[string]bool{
+		types.StubTypeEndpointDeployment:  true,
+		types.StubTypeASGIDeployment:      true,
+		types.StubTypeEndpointServe:       true,
+		types.StubTypePodDeployment:       false,
+		types.StubTypeFunctionDeployment:  false,
+		types.StubTypeTaskQueueDeployment: false,
+	} {
+		require.Equal(t, counted, servesRequests(types.StubType(stubType)), stubType)
+	}
+
 	res = g.call(ctx, nil, g.byName["delete_app"], map[string]any{"name": "x"})
 	require.Equal(t, "NEEDS_CONFIRMATION", res["structuredContent"].(map[string]any)["code"])
 

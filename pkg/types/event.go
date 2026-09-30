@@ -546,6 +546,7 @@ const (
 	EventCauseClientContextDone = "client_context_done"
 	EventLogStreamStdout        = "stdout"
 	EventLogStreamStderr        = "stderr"
+	EventLogStreamSystem        = "system"
 	EventStreamSourceContainer  = "container_stream"
 	EventStreamSourceClient     = "client_stream"
 	RunnerEventTypeLifecycle    = "lifecycle"

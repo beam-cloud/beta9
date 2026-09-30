@@ -315,3 +315,13 @@ func strList(description string) map[string]any {
 }
 
 var databaseKind = map[string]any{"type": "string", "enum": []string{"postgres", "redis", "mysql", "mongo"}}
+
+var logStreams = []string{types.EventLogStreamStdout, types.EventLogStreamStderr, types.EventLogStreamSystem}
+
+var logStream = map[string]any{"type": "string", "enum": logStreams, "description": "Keep only this stream; default all"}
+
+// servesRequests: only the endpoint abstraction records request stats.
+func servesRequests(t types.StubType) bool {
+	kind := t.Kind()
+	return kind == types.StubTypeEndpoint || kind == types.StubTypeASGI
+}
