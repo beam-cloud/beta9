@@ -1,7 +1,8 @@
 """
 Browser sign-in for the CLI: the OAuth 2.0 device grant (RFC 8628) against the
-authorization server in `SDKSettings.auth_url`. The issued token is a
-workspace token, so the saved context is the one `config create` would write.
+authorization server of the target context (`ConfigContext.auth_url`; the
+settings' for the default one). The issued token is a workspace token, so the
+saved context is the one `config create` would write.
 """
 
 import os
@@ -9,12 +10,20 @@ import socket
 import sys
 import time
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Optional
 
 import requests
 
-from .config import DEFAULT_CONTEXT_NAME, ConfigContext, get_settings, load_config, save_config
+from .config import (
+    DEFAULT_CONTEXT_NAME,
+    DEFAULT_GATEWAY_PORT,
+    ConfigContext,
+    context_defaults,
+    get_settings,
+    load_config,
+    save_config,
+)
 
 GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 REQUEST_TIMEOUT = 15
@@ -29,8 +38,8 @@ class LoginError(Exception):
         self.code: str = code
 
 
-def login_configured() -> bool:
-    return bool(get_settings().auth_url)
+def login_configured(name: str = DEFAULT_CONTEXT_NAME) -> bool:
+    return bool(context_defaults(name).auth_url)
 
 
 def client_name() -> str:
@@ -54,16 +63,15 @@ def save_login(context: ConfigContext, name: str = DEFAULT_CONTEXT_NAME) -> None
     save_config(contexts)
 
 
-def _post(path: str, payload: Dict[str, str]) -> requests.Response:
-    settings = get_settings()
-    if not settings.auth_url:
+def _post(auth_url: Optional[str], path: str, payload: Dict[str, str]) -> requests.Response:
+    if not auth_url:
         raise LoginError(
             "This install has no browser sign-in; create a token in the dashboard and run `config create`.",
             "LOGIN_NOT_CONFIGURED",
         )
     try:
         return requests.post(
-            f"{settings.auth_url.rstrip('/')}/{path}", json=payload, timeout=REQUEST_TIMEOUT
+            f"{auth_url.rstrip('/')}/{path}", json=payload, timeout=REQUEST_TIMEOUT
         )
     except requests.RequestException as exc:
         raise LoginError(f"Could not reach the sign-in service: {exc}", "AUTH_UNAVAILABLE")
@@ -87,6 +95,7 @@ def _message(response: requests.Response, fallback: str) -> str:
 
 @dataclass
 class DeviceLogin:
+    target: ConfigContext  # where the token will be used; its auth_url issues it
     device_code: str
     user_code: str
     verification_uri: str
@@ -97,12 +106,14 @@ class DeviceLogin:
     failures: int = 0  # consecutive polls that did not reach the service
 
     @classmethod
-    def start(cls) -> "DeviceLogin":
-        response = _post("device/code", {"client_name": client_name()})
+    def start(cls, target: Optional[ConfigContext] = None) -> "DeviceLogin":
+        target = target or context_defaults()
+        response = _post(target.auth_url, "device/code", {"client_name": client_name()})
         data = _json(response)
         if response.status_code >= 400 or not data.get("device_code"):
             raise LoginError(_message(response, "Could not start sign-in"), "AUTH_UNAVAILABLE")
         return cls(
+            target=target,
             device_code=data["device_code"],
             user_code=data["user_code"],
             verification_uri=data["verification_uri"],
@@ -123,7 +134,11 @@ class DeviceLogin:
     def poll(self) -> Optional[ConfigContext]:
         """The context once approved; None while pending or while the service is briefly unreachable."""
         try:
-            response = _post("token", {"grant_type": GRANT_TYPE, "device_code": self.device_code})
+            response = _post(
+                self.target.auth_url,
+                "token",
+                {"grant_type": GRANT_TYPE, "device_code": self.device_code},
+            )
         except LoginError as exc:
             if exc.code != "AUTH_UNAVAILABLE":
                 raise
@@ -134,13 +149,15 @@ class DeviceLogin:
 
         data = _json(response)
         if response.status_code == 200 and data.get("access_token"):
-            settings = get_settings()
             self.workspace_name = data.get("workspace_name", "")
-            return ConfigContext(
+            return replace(
+                self.target,
                 token=data["access_token"],
-                gateway_host=data.get("gateway_host") or settings.gateway_host,
-                gateway_port=int(data.get("gateway_port") or settings.gateway_port),
-                api_url=data.get("api_url") or settings.api_url,
+                gateway_host=data.get("gateway_host") or self.target.gateway_host,
+                gateway_port=int(
+                    data.get("gateway_port") or self.target.gateway_port or DEFAULT_GATEWAY_PORT
+                ),
+                api_url=data.get("api_url") or self.target.api_url,
             )
         error = data.get("error", "")
         if error == "authorization_pending":

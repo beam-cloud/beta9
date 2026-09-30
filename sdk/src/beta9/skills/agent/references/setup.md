@@ -21,7 +21,10 @@ Check who you are with `whoami` (MCP) or `{{cli}} whoami --json`.
 Credentials live in a config file as named contexts; `default` is used unless
 `--context <name>` is given. `{{cli}} config list` shows them, `{{cli}} config
 select <name>` switches. Sign in to a second workspace with
-`{{cli}} login --name <context>`.
+`{{cli}} login --name <context>`; signing in under an existing name renews it
+where it already points. CLIs built for several clusters name them:
+`{{cli}} login --environment <name>` signs in there (saved as `<name>` unless
+`--name` says otherwise), and every command takes `--context <name>` after that.
 
 ## Unattended (CI, scripts)
 

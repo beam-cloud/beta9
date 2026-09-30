@@ -59,7 +59,9 @@ def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Op
     product = get_settings().name
     cli = product.lower()
     targets = [CLIENTS[c] for c in clients] if clients else detected_clients()
-    signed_in = context_or_none(context or extraclick.selected_context()) is not None
+    name = context or extraclick.selected_context()
+    signed_in = context_or_none(name) is not None
+    can_login = login_configured(name)
 
     # Skills go to the universal directory plus every client that has its own.
     skills = {}
@@ -102,12 +104,12 @@ def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Op
     terminal.print("\n[bold]Next steps[/bold]")
     steps = []
     if not signed_in:
-        how = f"{cli} login" if login_configured() else f"{cli} config create"
+        how = f"{cli} login" if can_login else f"{cli} config create"
         steps.append(f"Run [bold]{how}[/bold] to connect your {product} account")
     steps.append("Restart your agent and ask it to [bold]'Deploy this application'[/bold]")
     for number, step in enumerate(steps, start=1):
         terminal.print(f"  {number}  {step}")
-    if not signed_in and login_configured():
+    if not signed_in and can_login:
         terminal.detail(
             "Agents can also sign you in themselves: the MCP server offers a `login` tool."
         )

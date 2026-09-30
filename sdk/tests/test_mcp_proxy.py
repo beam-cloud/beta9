@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from beta9 import auth
-from beta9.config import SDKSettings, load_config, set_settings
+from beta9.config import ConfigContext, SDKSettings, load_config, set_settings
 from beta9.mcp import server as mcp_server
 from beta9.mcp import tools as mcp_tools
 
@@ -306,6 +306,9 @@ def test_login_tool_drives_device_flow_and_saves_context(settings, monkeypatch, 
 
     def fake_post(url: str, json: Optional[Dict[str, Any]] = None, timeout: Optional[float] = None):
         json = json or {}
+        assert url.startswith(
+            "https://auth.stage.example/oauth/"
+        )  # staging's server, not default's
         if url.endswith("/device/code"):
             assert json["client_name"].startswith("beta9 CLI on")
             return FakeResponse(
@@ -324,7 +327,13 @@ def test_login_tool_drives_device_flow_and_saves_context(settings, monkeypatch, 
 
     monkeypatch.setattr(auth.requests, "post", fake_post)
     monkeypatch.setattr(auth, "has_browser", lambda: False)
-    # The proxy serves `mcp --context staging`; the default context belongs to someone else.
+    # The proxy serves `mcp --context staging`, a built-in environment nobody has
+    # signed in to on this machine yet; the default context belongs to someone else.
+    settings.environments["staging"] = ConfigContext(
+        gateway_host="gw.stage.example",
+        gateway_port=443,
+        auth_url="https://auth.stage.example/oauth",
+    )
     (tmp_path / "config.ini").write_text("[default]\ntoken = keep-me\n")
     events = []
     tools = mcp_tools.LocalTools(
@@ -343,6 +352,8 @@ def test_login_tool_drives_device_flow_and_saves_context(settings, monkeypatch, 
     assert events == ["login"]
     contexts = load_config()
     assert contexts["staging"].token == "t" * 64
+    assert contexts["staging"].gateway_host == "gw.stage.example"
+    assert contexts["staging"].auth_url == "https://auth.stage.example/oauth"
     assert contexts["default"].token == "keep-me"
 
 

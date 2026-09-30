@@ -5,9 +5,9 @@ import ipaddress
 import os
 import socket
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Optional, Tuple, Union
+from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple, Union
 
 from . import terminal
 from .env import is_remote
@@ -63,6 +63,10 @@ class SDKSettings:
     auth_url: str = os.getenv("BETA9_AUTH_URL", "")
     # Public documentation, quoted in the agent skill; empty omits the links.
     docs_url: str = os.getenv("BETA9_DOCS_URL", "")
+    # Other clusters this CLI is built for, by name (a staging cluster, say):
+    # `login --environment X` signs in there and `--context X` uses it.
+    # Tokenless; sign-in saves the token. The fields above are the default.
+    environments: Dict[str, "ConfigContext"] = field(default_factory=dict)
 
     @property
     def api_url(self) -> str:
@@ -105,6 +109,9 @@ class ConfigContext:
     gateway_host: Optional[str] = None
     gateway_port: Optional[int] = None
     api_url: Optional[str] = None
+    # OAuth device-grant server that issues this context's tokens; empty when
+    # tokens are created in a dashboard and pasted in.
+    auth_url: Optional[str] = None
 
     @property
     def http_url(self) -> str:
@@ -153,10 +160,12 @@ def load_config(path: Optional[Union[str, Path]] = None) -> MutableMapping[str, 
     if not path.exists():
         return {}
 
-    parser = configparser.ConfigParser(default_section=DEFAULT_CONTEXT_NAME)
+    # `[default]` is an ordinary context; nothing inherits from it, or a
+    # staging context missing a key would silently pick up the default's.
+    parser = configparser.ConfigParser()
     parser.read(path)
 
-    return {k: ConfigContext.from_dict(v) for k, v in parser.items()}  # type:ignore
+    return {k: ConfigContext.from_dict(v) for k, v in parser.items() if k != parser.default_section}
 
 
 def save_config(
@@ -171,7 +180,7 @@ def save_config(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    parser = configparser.ConfigParser(default_section=DEFAULT_CONTEXT_NAME)
+    parser = configparser.ConfigParser()
     parser.read_dict({k: v.to_dict() for k, v in contexts.items()})
 
     with open(path, "w") as file:
@@ -194,36 +203,68 @@ def is_config_empty(path: Optional[Union[Path, str]] = None) -> bool:
     return True
 
 
+def settings_context() -> ConfigContext:
+    """The default environment: the gateway and sign-in the settings describe."""
+    settings = get_settings()
+    return ConfigContext(
+        gateway_host=settings.gateway_host,
+        gateway_port=settings.gateway_port,
+        api_url=settings.api_url,
+        auth_url=settings.auth_url,
+    )
+
+
+def context_defaults(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
+    """
+    Where context `name` connects, with or without a token: the saved context,
+    else the environment of that name, else the settings. A context saved
+    before it recorded an `auth_url` borrows the one of the environment at
+    its gateway, so `login` can renew it.
+    """
+    known = [settings_context(), *get_settings().environments.values()]
+    saved = load_config().get(name)
+    if saved is None:
+        return get_settings().environments.get(name, known[0])
+    if not saved.auth_url:
+        for environment in known:
+            if environment.gateway_host == saved.gateway_host:
+                return replace(saved, auth_url=environment.auth_url)
+    return saved
+
+
 def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
     contexts = load_config()
     if name in contexts:
         return contexts[name]
 
     settings = get_settings()
+    defaults = context_defaults(name)
 
-    gateway_host = os.getenv("BETA9_GATEWAY_HOST", settings.gateway_host)
-    gateway_port = int(os.getenv("BETA9_GATEWAY_PORT", settings.gateway_port))
+    gateway_host = os.getenv("BETA9_GATEWAY_HOST") or defaults.gateway_host
+    gateway_port = int(os.getenv("BETA9_GATEWAY_PORT") or defaults.gateway_port or 0)
     token = os.getenv("BETA9_TOKEN", settings.api_token)
 
     # Inside a container the gateway address is always injected; a token is
     # not (managed endpoint replicas authenticate with their replica secret
     # instead), so build a tokenless context rather than prompting.
     if gateway_host and gateway_port and (token or is_remote()):
+        same_gateway = (gateway_host, gateway_port) == (
+            defaults.gateway_host,
+            defaults.gateway_port,
+        )
         return ConfigContext(
             token=token,
             gateway_host=gateway_host,
             gateway_port=gateway_port,
-            api_url=os.getenv("BETA9_API_URL")
-            or (
-                settings.api_url
-                if (gateway_host, gateway_port) == (settings.gateway_host, settings.gateway_port)
-                else None
-            ),
+            api_url=os.getenv("BETA9_API_URL") or (defaults.api_url if same_gateway else None),
+            auth_url=defaults.auth_url if same_gateway else None,
         )
 
     if not sys.stdin.isatty():
         cli = settings.name.lower()
-        how = f"{cli} login" if settings.auth_url else f"{cli} config create"
+        how = f"{cli} login" if defaults.auth_url else f"{cli} config create"
+        if name != DEFAULT_CONTEXT_NAME:
+            how += f" --name {name}" if defaults.auth_url else f" {name}"
         terminal.error(
             f"Not signed in: context '{name}' does not exist.",
             hint=f"Run `{how}`, or set {cli.upper()}_TOKEN.",
@@ -247,20 +288,22 @@ def prompt_for_config_context(
     prompt_name = functools.partial(
         terminal.prompt, text="Context Name", default=name or DEFAULT_CONTEXT_NAME
     )
-    prompt_gateway_host = functools.partial(
-        terminal.prompt, text="Gateway Host", default=gateway_host or settings.gateway_host
-    )
-    prompt_gateway_port = functools.partial(
-        terminal.prompt, text="Gateway Port", default=gateway_port or settings.gateway_port
-    )
 
     try:
         while not name and not (name := prompt_name()):
             terminal.warn("Name is invalid.")
 
+        defaults = context_defaults(name)
+        prompt_gateway_host = functools.partial(
+            terminal.prompt, text="Gateway Host", default=gateway_host or defaults.gateway_host
+        )
+        prompt_gateway_port = functools.partial(
+            terminal.prompt, text="Gateway Port", default=gateway_port or defaults.gateway_port
+        )
+
         if settings.use_defaults_in_prompt:
-            gateway_host = settings.gateway_host
-            gateway_port = settings.gateway_port
+            gateway_host = defaults.gateway_host
+            gateway_port = defaults.gateway_port
         else:
             while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(
                 gateway_host
@@ -279,13 +322,16 @@ def prompt_for_config_context(
     except (KeyboardInterrupt, EOFError):
         os._exit(1)
 
+    same_gateway = (gateway_host, int(gateway_port or 0)) == (
+        defaults.gateway_host,
+        defaults.gateway_port,
+    )
     return name, ConfigContext(
         token=token,
         gateway_host=gateway_host,
         gateway_port=gateway_port,
-        api_url=settings.api_url
-        if (gateway_host, int(gateway_port)) == (settings.gateway_host, settings.gateway_port)
-        else None,
+        api_url=defaults.api_url if same_gateway else None,
+        auth_url=defaults.auth_url if same_gateway else None,
     )
 
 
