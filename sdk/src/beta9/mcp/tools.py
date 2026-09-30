@@ -7,7 +7,6 @@ the CLI as a background job (builds can outlast a client's tool timeout), and
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import threading
@@ -17,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .. import auth
-from ..config import DEFAULT_CONTEXT_NAME, context_defaults, get_settings
+from ..config import DEFAULT_CONTEXT_NAME, cli_path, context_defaults, get_settings
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
@@ -40,7 +39,7 @@ def error_result(text: str) -> Dict[str, Any]:
 
 
 def _cli_command() -> List[str]:
-    path = shutil.which(get_settings().name.lower())
+    path = cli_path()
     return [path] if path else [sys.executable, "-m", "beta9"]
 
 

@@ -3,6 +3,7 @@ import functools
 import inspect
 import ipaddress
 import os
+import shutil
 import socket
 import sys
 from dataclasses import asdict, dataclass, field, replace
@@ -150,6 +151,15 @@ def get_settings() -> SDKSettings:
         set_settings()
 
     return _SETTINGS  # type: ignore
+
+
+def cli_path() -> Optional[str]:
+    """This install's executable, not whichever copy is first on PATH."""
+    name = get_settings().name.lower()
+    entry = Path(sys.argv[0]) if sys.argv and sys.argv[0] else None
+    if entry is not None and entry.name == name and entry.is_file():
+        return str(entry.absolute())
+    return shutil.which(name)
 
 
 def load_config(path: Optional[Union[str, Path]] = None) -> MutableMapping[str, ConfigContext]:

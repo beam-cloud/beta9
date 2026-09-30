@@ -3,19 +3,25 @@
 agent on this machine, then say what is left (at most: signing in).
 """
 
-import shutil
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 import click
 
 from .. import terminal
 from ..auth import login_configured
-from ..config import get_settings
+from ..config import cli_path, get_settings
 from ..skills import install_skill, skill_name
 from . import extraclick
 from .extraclick import ClickCommonGroup
-from .mcp import CLIENT_IDS, CLIENTS, detected_clients, install_client, server_command
+from .mcp import (
+    CLIENT_IDS,
+    CLIENTS,
+    detected_clients,
+    install_clients,
+    report_failures,
+    server_command,
+)
 
 UNIVERSAL_SKILLS_DIR = "~/.agents/skills"
 
@@ -70,36 +76,40 @@ def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Op
         for c in targets:
             if c.skills_dir:
                 skills[c.label] = install_skill(Path(c.skills_dir).expanduser())
-    mcp = {}
+    mcp: Dict[str, Path] = {}
+    failed: Dict[str, str] = {}
     if not skip_mcp:
-        command = server_command(context)
-        mcp = {c.id: install_client(c, command) for c in targets}
+        mcp, failed = install_clients(targets, server_command(context))
 
     if terminal.json_output():
         terminal.print_json(
             {
-                "cli": shutil.which(cli) or cli,
+                "cli": cli_path() or cli,
                 "clients": [c.id for c in targets],
                 "signed_in": signed_in,
                 "skills": [str(p) for p in skills.values()],
                 "mcp": {k: str(v) for k, v in mcp.items()},
+                "failed": failed,
             }
         )
+        if failed:
+            raise click.exceptions.Exit(1)
         return
 
     terminal.header(f"Setting up {product} for agents")
-    terminal.success(f"CLI — {shutil.which(cli) or cli}")
+    terminal.success(f"CLI — {cli_path() or cli}")
     if skills:
         terminal.success(f"Agent skill `{skill_name()}` — {', '.join(skills)}")
     if not skip_mcp:
-        if targets:
-            terminal.success(f"{product} MCP — {', '.join(c.label for c in targets)}")
-        else:
+        if mcp:
+            terminal.success(f"{product} MCP — {', '.join(CLIENTS[c].label for c in mcp)}")
+        elif not targets:
             terminal.success(
                 f"{product} MCP — no agent clients found; later: {cli} mcp install --client <name>"
             )
+        report_failures(failed)
     terminal.print("")
-    terminal.success("Setup complete")
+    terminal.success("Setup complete" if not failed else "Setup finished with errors")
 
     terminal.print("\n[bold]Next steps[/bold]")
     steps = []
@@ -113,3 +123,5 @@ def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Op
         terminal.detail(
             "Agents can also sign you in themselves: the MCP server offers a `login` tool."
         )
+    if failed:
+        raise click.exceptions.Exit(1)

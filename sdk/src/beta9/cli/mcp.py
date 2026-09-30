@@ -11,12 +11,12 @@ import platform
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import click
 
 from .. import terminal
-from ..config import DEFAULT_CONTEXT_NAME, get_settings
+from ..config import DEFAULT_CONTEXT_NAME, cli_path, get_settings
 from . import extraclick
 from .extraclick import ClickCommonGroup
 
@@ -102,11 +102,70 @@ def server_name() -> str:
 
 def server_command(context: Optional[str]) -> List[str]:
     """Absolute path when known: GUI clients often launch without the shell's PATH."""
-    name = server_name()
-    command = [shutil.which(name) or name, "mcp"]
+    command = [cli_path() or server_name(), "mcp"]
     if context and context != DEFAULT_CONTEXT_NAME:
         command += ["--context", context]
     return command
+
+
+class ConfigError(Exception):
+    pass
+
+
+def _jsonc_to_json(text: str) -> str:
+    """Drop the comments and trailing commas Cursor and Windsurf allow; line numbers survive."""
+
+    def strip(text: str, comments: bool) -> str:
+        out: List[str] = []
+        i, n = 0, len(text)
+        while i < n:
+            ch = text[i]
+            if ch == '"':
+                j = i + 1
+                while j < n and text[j] != '"':
+                    j += 2 if text[j] == "\\" else 1
+                out.append(text[i : j + 1])
+                i = j + 1
+            elif comments and text.startswith("//", i):
+                j = text.find("\n", i)
+                i = n if j < 0 else j
+            elif comments and text.startswith("/*", i):
+                j = text.find("*/", i + 2)
+                j = n if j < 0 else j + 2
+                out.append("\n" * text.count("\n", i, j))
+                i = j
+            elif not comments and ch == ",":
+                j = i + 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if not (j < n and text[j] in "}]"):
+                    out.append(ch)
+                i += 1
+            else:
+                out.append(ch)
+                i += 1
+        return "".join(out)
+
+    return strip(strip(text, comments=True), comments=False)
+
+
+def load_json_config(path: Path) -> Dict[str, Any]:
+    """{} when the file is absent or blank."""
+    text = path.read_text() if path.exists() else ""
+    if not text.strip():
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            data = json.loads(_jsonc_to_json(text))
+        except json.JSONDecodeError as e:
+            raise ConfigError(
+                f"{path} is not valid JSON (line {e.lineno}, column {e.colno}: {e.msg})."
+            ) from None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path} must hold a JSON object.")
+    return data
 
 
 def mcp_entry(command: List[str]) -> Dict[str, Any]:
@@ -129,27 +188,48 @@ def install_client(client: AgentClient, command: List[str], project: bool = Fals
             )
         return path
 
-    data: Dict[str, Any] = {}
-    if path.exists() and path.read_text().strip():
-        try:
-            data = json.loads(path.read_text())
-        except json.JSONDecodeError:
-            terminal.error(f"{path} is not valid JSON; fix it or use --print to install by hand.")
-    data.setdefault("mcpServers", {})[server_name()] = mcp_entry(command)
+    data = load_json_config(path)
+    servers = data.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise ConfigError(f"{path}: mcpServers must be an object.")
+    servers[server_name()] = mcp_entry(command)
     path.write_text(json.dumps(data, indent=2) + "\n")
     return path
+
+
+def install_clients(
+    targets: Sequence[AgentClient], command: List[str], project: bool = False
+) -> Tuple[Dict[str, Path], Dict[str, str]]:
+    """A config that cannot be edited fails only its own client."""
+    written: Dict[str, Path] = {}
+    failed: Dict[str, str] = {}
+    for client in targets:
+        try:
+            written[client.id] = install_client(client, command, project)
+        except ConfigError as e:
+            failed[client.id] = str(e)
+    return written, failed
+
+
+def report_failures(failed: Dict[str, str]) -> None:
+    for client_id, reason in failed.items():
+        terminal.warn(f"{CLIENTS[client_id].label}: {reason}")
+    if failed:
+        clients = " ".join(f"--client {c}" for c in failed)
+        terminal.detail(
+            f"Fix the file, then run `{server_name()} mcp install {clients}`; add --print to see the entry to paste."
+        )
 
 
 def configured(client: AgentClient) -> bool:
     path = client.config_path()
     if not path.exists():
         return False
-    text = path.read_text()
     if client.id == "codex":
-        return f"[mcp_servers.{server_name()}]" in text
+        return f"[mcp_servers.{server_name()}]" in path.read_text()
     try:
-        return server_name() in (json.loads(text).get("mcpServers") or {})
-    except (json.JSONDecodeError, AttributeError):
+        return server_name() in (load_json_config(path).get("mcpServers") or {})
+    except (ConfigError, TypeError):
         return False
 
 
@@ -215,13 +295,24 @@ def install(clients: Sequence[str], project: bool, print_only: bool, context: Op
         )
         return
 
-    written = {c.id: str(install_client(c, command, project)) for c in targets}
+    written, failed = install_clients(targets, command, project)
     if terminal.json_output():
-        terminal.print_json({"server": server_name(), "command": command, "installed": written})
-        return
-    for client_id, path in written.items():
-        terminal.success(f"{CLIENTS[client_id].label}: {path}")
-    terminal.detail("Restart the client to pick it up.")
+        terminal.print_json(
+            {
+                "server": server_name(),
+                "command": command,
+                "installed": {k: str(v) for k, v in written.items()},
+                "failed": failed,
+            }
+        )
+    else:
+        for client_id, path in written.items():
+            terminal.success(f"{CLIENTS[client_id].label}: {path}")
+        report_failures(failed)
+        if written:
+            terminal.detail("Restart the client to pick it up.")
+    if failed:
+        raise click.exceptions.Exit(1)
 
 
 @mcp.command(
