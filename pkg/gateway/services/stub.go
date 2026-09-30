@@ -42,6 +42,17 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	// The scheduler decides again at placement; asking here turns "deployed,
+	// but nothing starts" into an immediate error. Same exemptions as there.
+	if !resourcePolicy.privatePoolTargeted && !types.StubType(in.StubType).IsPlatformWorkload() {
+		if err := gws.scheduler.CreditGate().Check(ctx, authInfo.Workspace.ExternalId); err != nil {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: err.Error(),
+			}, nil
+		}
+	}
+
 	gpus := gpuTypesForStubRequest(in)
 
 	if errMsg := validateUseVM(in, gpus); errMsg != "" {

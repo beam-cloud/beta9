@@ -62,6 +62,10 @@ func (g *DatabaseGroup) Create(ctx echo.Context) error {
 		if errors.Is(err, types.ErrDatabaseExists) {
 			return HTTPConflict(err.Error())
 		}
+		var insufficient *types.InsufficientCreditsError
+		if errors.As(err, &insufficient) {
+			return NewHTTPError(http.StatusPaymentRequired, err.Error())
+		}
 		return HTTPBadRequest(err.Error())
 	}
 	return ctx.JSON(http.StatusCreated, info)

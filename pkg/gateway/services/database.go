@@ -172,6 +172,9 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 	if err := validateDatabaseName(p.Name); err != nil {
 		return nil, err
 	}
+	if err := gws.scheduler.CreditGate().Check(ctx, authInfo.Workspace.ExternalId); err != nil {
+		return nil, err
+	}
 	if existing, err := gws.deploymentsByName(ctx, authInfo.Workspace, p.Name); err != nil {
 		return nil, err
 	} else if len(existing) > 0 {

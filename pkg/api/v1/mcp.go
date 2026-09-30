@@ -37,6 +37,7 @@ type MCPGateway interface {
 	RedeployWithConfig(ctx context.Context, authInfo *auth.AuthInfo, appName string, mutate func(*types.StubConfigV1) error) (*pb.DeployStubResponse, error)
 	SecretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error)
 	DeploymentURL(d *types.DeploymentWithRelated) (string, error)
+	WorkspaceCredit(ctx context.Context, workspace *types.Workspace) *types.CreditStatus
 }
 
 type MCPGroup struct {
@@ -266,8 +267,11 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 	if err != nil {
 		code := "ERROR"
 		var te *toolError
+		var insufficient *types.InsufficientCreditsError
 		if errors.As(err, &te) {
 			code = te.Code
+		} else if errors.As(err, &insufficient) {
+			code = "INSUFFICIENT_CREDITS"
 		}
 		return toolResult(map[string]any{"error": err.Error(), "code": code}, true)
 	}

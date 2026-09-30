@@ -102,7 +102,7 @@ func (g *MCPGroup) catalog() []mcpTool {
 
 	return []mcpTool{
 		// workspace
-		{Name: "whoami", Description: "Workspace id, name and gateway URL for this token.", Schema: schema(props{}), Run: g.whoami},
+		{Name: "whoami", Description: "Workspace id, name and gateway URL for this token. Where prepaid credit applies, `credit.ok` says whether work can run and `credit.message` where to add credits when it cannot.", Schema: schema(props{}), Run: g.whoami},
 		{Name: "list_apps", Description: "Apps in the workspace with their newest active deployment and URL.", Schema: schema(props{}), Run: g.listApps},
 		{Name: "get_app", Description: "One app: its config (resources, scaling, env, secret bindings, ports, disks) and URL.", Schema: name, Run: g.getApp},
 		{Name: "delete_app", Description: "Delete an app and every version of it. Requires confirm=true.", Schema: nameConfirm, Confirm: "delete_app removes every deployment of the app.", Run: g.deleteApp},
@@ -155,12 +155,16 @@ func (g *MCPGroup) catalog() []mcpTool {
 
 // --- workspace ----------------------------------------------------------------------------
 
-func (g *MCPGroup) whoami(_ context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
-	return map[string]any{
+func (g *MCPGroup) whoami(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+	out := map[string]any{
 		"workspace_id":   a.Workspace.ExternalId,
 		"workspace_name": a.Workspace.Name,
 		"gateway_http":   g.config.GatewayService.HTTP.GetExternalURL(),
-	}, nil
+	}
+	if credit := g.gws.WorkspaceCredit(ctx, a.Workspace); credit != nil {
+		out["credit"] = credit
+	}
+	return out, nil
 }
 
 func (g *MCPGroup) listApps(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {

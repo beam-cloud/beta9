@@ -168,6 +168,26 @@ func (g *CreditGate) Check(ctx context.Context, workspaceId string) error {
 	return decision.Deny(workspaceId)
 }
 
+// Status is the decision as a report, for surfaces such as `whoami`. Nil without a gate.
+func (g *CreditGate) Status(ctx context.Context, workspaceId string) *types.CreditStatus {
+	if g == nil || workspaceId == "" {
+		return nil
+	}
+
+	decision, err := g.Decision(ctx, workspaceId)
+	var denied *types.InsufficientCreditsError
+	if errors.As(err, &denied) {
+		return &types.CreditStatus{Code: denied.Code, Message: denied.Reason}
+	}
+	return &types.CreditStatus{
+		OK:             decision.OK,
+		AvailableCents: decision.AvailableCents,
+		RequiredCents:  decision.RequiredCents,
+		Code:           decision.ErrorCode,
+		Message:        decision.Message,
+	}
+}
+
 // Decision returns the current decision for a workspace. Fresh decisions are
 // served from cache. Stale approvals are served while a background refresh
 // runs so billing latency does not block container admission; stale denials
