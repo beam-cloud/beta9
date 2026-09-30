@@ -3,18 +3,29 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	_ "embed"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 )
+
+//go:embed postgres.sh
+var managedPostgresScript string
 
 // A managed database service is a pod deployment of the upstream image on a
 // durable disk, reached over TLS through the TCP gateway, with credentials in
@@ -50,9 +61,8 @@ var databaseProducts = map[string]databaseProduct{
 		DefaultSize:       "10Gi",
 		ReadinessProbe:    "pg_isready",
 		ConnectionEnvName: "DATABASE_URL",
-		DurabilityMode:    "snapshot_wal",
+		DurabilityMode:    "object-store-flush",
 		HasDatabase:       true,
-		Entrypoint:        postgresEntrypoint,
 	},
 	"redis": {
 		Kind:              "redis",
@@ -62,7 +72,7 @@ var databaseProducts = map[string]databaseProduct{
 		DefaultSize:       "5Gi",
 		ReadinessProbe:    "PING",
 		ConnectionEnvName: "REDIS_URL",
-		DurabilityMode:    "aof_tail",
+		DurabilityMode:    "object-store-flush",
 		Entrypoint:        redisEntrypoint,
 	},
 	"mysql": {
@@ -91,26 +101,17 @@ var databaseProducts = map[string]databaseProduct{
 	},
 }
 
-// Entrypoints read credentials from the bound secrets and sync the role
-// password on start, so a rotation is a restart. `$USER_SECRET` and friends
-// are replaced with the secret names. Postgres treats SIGTERM as a smart
-// shutdown that waits for clients, so the worker's stop is relayed as SIGINT
-// (fast shutdown) to keep stops inside the grace period.
+// Entrypoints read bound secrets and apply credential changes on restart.
+// Postgres uses the embedded lifecycle script; the other products substitute
+// secret names into the upstream image's startup command.
 const (
-	postgresEntrypoint = `export PATH=/usr/lib/postgresql/16/bin:$PATH POSTGRES_USER="${USER_SECRET}" POSTGRES_PASSWORD="${PASSWORD_SECRET}" POSTGRES_DB="${DATABASE_SECRET}" PGDATA=/var/lib/postgresql/data/pgdata;
-if [ -s "$PGDATA/PG_VERSION" ]; then
-  ESCAPED=$(printf %s "$POSTGRES_PASSWORD" | sed "s/'/''/g");
-  printf 'ALTER USER "%s" PASSWORD '"'"'%s'"'"';\n' "$POSTGRES_USER" "$ESCAPED" | gosu postgres postgres --single -D "$PGDATA" postgres >/dev/null 2>&1 || true;
-fi;
-docker-entrypoint.sh postgres -c wal_compression=on & PG=$!;
-trap 'kill -INT "$PG"' TERM INT;
-wait "$PG"; wait "$PG"`
-
+	// Redis 7 replays AOF transactions using the disabled default user's permissions.
 	redisEntrypoint = `if [ "${USER_SECRET}" = "default" ]; then
   printf 'appendonly yes\nappendfsync always\ndir /data\nuser default on >%s ~* &* +@all\n' "${PASSWORD_SECRET}" > /tmp/redis.conf;
 else
-  printf 'appendonly yes\nappendfsync always\ndir /data\nuser default off\nuser %s on >%s ~* &* +@all\n' "${USER_SECRET}" "${PASSWORD_SECRET}" > /tmp/redis.conf;
+  printf 'appendonly yes\nappendfsync always\ndir /data\nuser default off ~* &* +@all\nuser %s on >%s ~* &* +@all\n' "${USER_SECRET}" "${PASSWORD_SECRET}" > /tmp/redis.conf;
 fi;
+printf 'maxmemory %s\nmaxmemory-policy noeviction\n' "$BETA9_REDIS_MAXMEMORY_BYTES" >> /tmp/redis.conf;
 exec redis-server /tmp/redis.conf`
 
 	mysqlEntrypoint = `export MYSQL_USER="${USER_SECRET}" MYSQL_PASSWORD="${PASSWORD_SECRET}" MYSQL_DATABASE="${DATABASE_SECRET}" MYSQL_ROOT_PASSWORD="${PASSWORD_SECRET}";
@@ -134,7 +135,7 @@ exec docker-entrypoint.sh mongod --auth --bind_ip_all`
 
 // databaseSecretNames: BETA9_<KIND>_<NAME>_{USERNAME,PASSWORD,DATABASE,URL}.
 type databaseSecretNames struct {
-	Username, Password, Database, URL string
+	Username, Password, Database, URL, PooledURL string
 }
 
 func databaseSecrets(product databaseProduct, name string) databaseSecretNames {
@@ -147,14 +148,21 @@ func databaseSecrets(product databaseProduct, name string) databaseSecretNames {
 	if product.HasDatabase {
 		names.Database = prefix + "_DATABASE"
 	}
+	if product.Kind == "postgres" {
+		names.PooledURL = prefix + "_POOLED_URL"
+	}
 	return names
 }
 
 // bound excludes the URL, written after deploy once the host is known.
-func (n databaseSecretNames) all() []string   { return append(n.bound(), n.URL) }
+func (n databaseSecretNames) all() []string   { return append(n.bound(), compact(n.URL, n.PooledURL)...) }
 func (n databaseSecretNames) bound() []string { return compact(n.Username, n.Password, n.Database) }
 
 func (n databaseSecretNames) entrypoint(product databaseProduct) []string {
+	if product.Kind == "postgres" {
+		script := base64.StdEncoding.EncodeToString([]byte(managedPostgresScript))
+		return []string{"sh", "-lc", "printf %s " + script + " | base64 -d > /tmp/beam-postgres; exec sh /tmp/beam-postgres"}
+	}
 	script := strings.NewReplacer(
 		"USER_SECRET", n.Username,
 		"PASSWORD_SECRET", n.Password,
@@ -180,6 +188,19 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 	} else if len(existing) > 0 {
 		return nil, types.ErrDatabaseExists
 	}
+	if p.SnapshotID != "" {
+		if err := gws.prepareDatabaseRestore(ctx, authInfo.Workspace, product, &p); err != nil {
+			return nil, err
+		}
+	}
+	var restoreVolume string
+	if p.RestoreFrom != "" || p.RestoreTime != "" {
+		var err error
+		restoreVolume, err = gws.preparePointInTimeRestore(ctx, authInfo.Workspace, product, &p)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	identifier := strings.ReplaceAll(p.Name, "-", "_")
 	if p.Username == "" {
@@ -187,6 +208,9 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 	}
 	if product.HasDatabase && p.Database == "" {
 		p.Database = identifier
+	}
+	if !databaseIdentifier.MatchString(p.Username) || (product.HasDatabase && !databaseIdentifier.MatchString(p.Database)) {
+		return nil, errors.New("username and database must be identifiers of 1–63 letters, digits or underscores, starting with a letter or underscore")
 	}
 	if p.Password == "" {
 		password, err := randomString(32, defaultSecretAlphabet)
@@ -213,11 +237,34 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 		}
 	}
 
-	imageId, err := gws.ensureRegistryImage(ctx, product.Image)
+	var commands []string
+	if product.Kind == "postgres" {
+		commands = []string{"apt-get update && apt-get install -y --no-install-recommends pgbackrest pgbouncer jq && rm -rf /var/lib/apt/lists/*"}
+	}
+	imageId, err := gws.ensureRegistryImage(ctx, product.Image, commands)
 	if err != nil {
 		return nil, err
 	}
-	stubRes, err := gws.GetOrCreateStub(ctx, databaseStubRequest(product, names, p, imageId))
+	request := databaseStubRequest(product, names, p, imageId)
+	if product.Kind == "postgres" {
+		volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, p.Name+"-backups")
+		if err != nil {
+			return nil, fmt.Errorf("create backup volume: %w", err)
+		}
+		request.Volumes = []*pb.Volume{{Id: volume.ExternalId, MountPath: "beam-backups"}}
+		request.Ports = append(request.Ports, 6432)
+		request.Secrets = nil
+		request.Env = append(request.Env,
+			"POSTGRES_USER=${{secret."+names.Username+"}}",
+			"POSTGRES_PASSWORD=${{secret."+names.Password+"}}",
+			"POSTGRES_DB=${{secret."+names.Database+"}}",
+		)
+		if restoreVolume != "" {
+			request.Volumes = append(request.Volumes, &pb.Volume{Id: restoreVolume, MountPath: "beam-restore"})
+			request.Env = append(request.Env, "BEAM_RESTORE_TIME="+p.RestoreTime)
+		}
+	}
+	stubRes, err := gws.GetOrCreateStub(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -233,21 +280,14 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 		return nil, errors.New(deployRes.ErrMsg)
 	}
 
-	host, err := gws.databaseHost(ctx, stubRes.StubId, deployRes.DeploymentId)
-	if err != nil {
-		return nil, err
-	}
-	connection := databaseConnectionString(product.Kind, p.Username, p.Password, host, p.Database)
-	if err := gws.upsertSecret(ctx, authInfo, names.URL, connection); err != nil {
-		return nil, err
-	}
-
 	deployment, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, deployRes.DeploymentId)
 	if err != nil {
 		return nil, fmt.Errorf("read deployment: %w", err)
 	}
 	info := databaseInfo(product, names, deployment)
-	info.Host, info.Username, info.Database, info.ConnectionString = host, p.Username, p.Database, connection
+	if err := gws.setDatabaseConnections(ctx, authInfo, &info, p.Username, p.Password, p.Database); err != nil {
+		return nil, err
+	}
 	return &info, nil
 }
 
@@ -276,6 +316,7 @@ func databaseStubRequest(product databaseProduct, names databaseSecretNames, p t
 		Workers:            1,
 		MaxPendingTasks:    100,
 		Secrets:            secrets,
+		Env:                []string{fmt.Sprintf("BETA9_REDIS_MAXMEMORY_BYTES=%d", p.Memory*(1<<20)/2)},
 		Autoscaler:         &pb.Autoscaler{Type: "queue_depth", MaxContainers: 1, TasksPerContainer: 1, MinContainers: minContainers},
 		TaskPolicy:         &pb.TaskPolicy{Timeout: 3600, MaxRetries: 3},
 		ConcurrentRequests: 1,
@@ -302,8 +343,205 @@ func databaseStubRequest(product databaseProduct, names databaseSecretNames, p t
 				ConnectionUrlSecretName: names.URL,
 			},
 		},
-		Disks: []*pb.DurableDisk{{Name: p.Name + "-data", Size: p.Size, MountPath: product.MountPath, Filesystem: databaseDiskFilesystem}},
+		Disks: []*pb.DurableDisk{{
+			Name: p.Name + "-data", Size: p.Size, MountPath: product.MountPath,
+			Filesystem: databaseDiskFilesystem, Driver: databaseDiskDriver(product),
+			SourceSnapshotId: p.SnapshotID,
+		}},
 	}
+}
+
+var databaseIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
+
+func (gws *GatewayService) DatabaseBackups(ctx context.Context, workspace *types.Workspace, name string) (*types.DatabaseBackupStatus, error) {
+	volume, err := gws.backendRepo.GetVolume(ctx, workspace.Id, name+"-backups")
+	if err != nil {
+		return nil, fmt.Errorf("find backup volume: %w", err)
+	}
+	storage, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
+	if err != nil {
+		return nil, err
+	}
+	data, _, err := storage.ReadVersion(ctx, "volumes/"+volume.ExternalId+"/status.json")
+	if err != nil {
+		return nil, fmt.Errorf("read backup status: %w", err)
+	}
+	status := &types.DatabaseBackupStatus{Status: "initializing"}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, status); err != nil {
+			return nil, fmt.Errorf("invalid backup status: %w", err)
+		}
+	}
+	status.VolumeID = volume.ExternalId
+	status.Stale = time.Now().Unix()-status.ObservedAt > 180
+	if status.Kind == "postgres" && len(status.Repository) > 0 {
+		var repositories []struct {
+			Backup []struct {
+				Error     bool `json:"error"`
+				Timestamp struct {
+					Stop int64 `json:"stop"`
+				} `json:"timestamp"`
+			} `json:"backup"`
+		}
+		if err := json.Unmarshal(status.Repository, &repositories); err != nil {
+			return nil, fmt.Errorf("invalid Postgres backup catalog: %w", err)
+		}
+		var first int64
+		for _, repository := range repositories {
+			for _, backup := range repository.Backup {
+				if !backup.Error && backup.Timestamp.Stop > 0 && (first == 0 || backup.Timestamp.Stop < first) {
+					first = backup.Timestamp.Stop
+				}
+			}
+		}
+		// pgBackRest chooses a base backup whose stop precedes the target.
+		if first == 0 {
+			return status, nil
+		}
+		first = max(first+1, time.Now().Add(-7*24*time.Hour).Unix())
+		if status.ArchiveThrough >= first {
+			start, end := time.Unix(first, 0).UTC(), time.Unix(status.ArchiveThrough, 0).UTC()
+			status.RecoverableFrom, status.RecoverableUntil = &start, &end
+		}
+	}
+	return status, nil
+}
+
+func (gws *GatewayService) preparePointInTimeRestore(ctx context.Context, workspace *types.Workspace, product databaseProduct, p *types.CreateDatabaseParams) (string, error) {
+	if product.Kind != "postgres" || p.RestoreFrom == "" || p.RestoreTime == "" || p.SnapshotID != "" {
+		return "", errors.New("Postgres PITR requires restore_from and restore_time, without snapshot_id")
+	}
+	if _, err := gws.backendRepo.GetDisk(ctx, workspace.Id, p.Name+"-data"); err == nil {
+		return "", errors.New("restore requires a new disk name; the existing disk is retained")
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	status, err := gws.DatabaseBackups(ctx, workspace, p.RestoreFrom)
+	if err != nil {
+		return "", err
+	}
+	target, err := time.Parse(time.RFC3339Nano, p.RestoreTime)
+	if err != nil {
+		return "", errors.New("restore_time must be an RFC3339 timestamp including its time zone")
+	}
+	if status.Kind != "postgres" || status.RecoverableFrom == nil || status.RecoverableUntil == nil || target.Before(*status.RecoverableFrom) || target.After(*status.RecoverableUntil) {
+		return "", errors.New("restore_time is outside the verified recovery window; inspect database_backups")
+	}
+	source, err := gws.backendRepo.GetDisk(ctx, workspace.Id, p.RestoreFrom+"-data")
+	if err != nil {
+		return "", fmt.Errorf("read retained source disk: %w", err)
+	}
+	if p.Size == "" {
+		p.Size = source.Size
+	}
+	sourceSize, err := resource.ParseQuantity(source.Size)
+	if err != nil {
+		return "", fmt.Errorf("invalid source disk size: %w", err)
+	}
+	size, err := resource.ParseQuantity(p.Size)
+	if err != nil || size.Value() < sourceSize.Value() {
+		return "", errors.New("restore disk cannot be smaller than the source disk")
+	}
+	p.Username, p.Database = status.Username, status.Database
+	p.RestoreTime = target.UTC().Format("2006-01-02 15:04:05.999999999-07:00")
+	return status.VolumeID, nil
+}
+
+// BackupDatabase wakes the existing deployment, then runs its native backup.
+// A timeout is an uncertain outcome: callers must read database_backups first.
+func (gws *GatewayService) BackupDatabase(ctx context.Context, authInfo *auth.AuthInfo, name string) (*types.DatabaseBackupStatus, error) {
+	deployments, product, err := gws.databaseDeployments(ctx, authInfo.Workspace, name)
+	if err != nil {
+		return nil, err
+	}
+	if product.Kind != "postgres" {
+		return nil, errors.New("native backup is currently supported for Postgres")
+	}
+	deployment := newestDeployment(deployments)
+	if !deployment.Active {
+		return nil, errors.New("start the database before requesting a backup")
+	}
+	// Legacy services must be upgraded before a native backup can be requested.
+	config, err := deployment.Stub.UnmarshalConfig()
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(strings.Join(config.EntryPoint, " "), "/tmp/beam-postgres") {
+		return nil, errors.New("this deployment predates native backups; upgrade it before requesting a backup")
+	}
+	response, err := gws.ScaleDeployment(ctx, &pb.ScaleDeploymentRequest{Id: deployment.ExternalId, Containers: 1})
+	if err != nil {
+		return nil, err
+	}
+	if !response.Ok {
+		return nil, errors.New(response.ErrMsg)
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
+		if err != nil {
+			return nil, err
+		}
+		for _, container := range containers {
+			if container.Status != types.ContainerStatusRunning {
+				continue
+			}
+			client, _, err := gws.getClient(ctx, container.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+			if err != nil {
+				return nil, err
+			}
+			result, err := client.ExecContext(ctx, container.ContainerId, "sh /tmp/beam-postgres backup", nil)
+			if err != nil {
+				return nil, fmt.Errorf("backup outcome uncertain; inspect database_backups and logs before retrying: %w", err)
+			}
+			if !result.Ok {
+				return nil, errors.New("backup failed or another backup is running; inspect database_backups and database logs")
+			}
+			return gws.DatabaseBackups(ctx, authInfo.Workspace, name)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (gws *GatewayService) prepareDatabaseRestore(ctx context.Context, workspace *types.Workspace, product databaseProduct, p *types.CreateDatabaseParams) error {
+	if product.Kind != "postgres" && product.Kind != "redis" {
+		return errors.New("snapshot restore supports Postgres and Redis")
+	}
+	if product.Kind == "postgres" && (p.Username == "" || p.Database == "") {
+		return errors.New("Postgres restore requires the original username and database name; a fresh password is generated")
+	}
+	if _, err := gws.backendRepo.GetDisk(ctx, workspace.Id, p.Name+"-data"); err == nil {
+		return errors.New("restore requires a new disk name; the existing disk is retained")
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	snapshot, err := gws.backendRepo.GetDiskSnapshot(ctx, workspace.Id, p.SnapshotID)
+	if err != nil {
+		return err
+	}
+	if snapshot == nil || snapshot.Status != types.DiskSnapshotStatusAvailable || snapshot.Driver != types.DurableDiskDriverQcow {
+		return errors.New("restore requires an available qcow snapshot in this workspace")
+	}
+	if p.Size == "" {
+		p.Size = strconv.FormatInt(snapshot.SizeBytes, 10)
+	}
+	size, err := resource.ParseQuantity(p.Size)
+	if err != nil || size.Value() < snapshot.SizeBytes {
+		return errors.New("restore disk cannot be smaller than the source snapshot")
+	}
+	return nil
+}
+
+func databaseDiskDriver(product databaseProduct) string {
+	if product.DurabilityMode == "object-store-flush" {
+		return types.DurableDiskDriverQcow
+	}
+	return types.DurableDiskDriverSnapshot
 }
 
 // RotateDatabaseCredentials sets a new password and recycles the container.
@@ -333,12 +571,8 @@ func (gws *GatewayService) RotateDatabaseCredentials(ctx context.Context, authIn
 		return nil, err
 	}
 
-	host, err := gws.databaseHost(ctx, deployment.Stub.ExternalId, deployment.ExternalId)
-	if err != nil {
-		return nil, err
-	}
-	connection := databaseConnectionString(product.Kind, username, password, host, database)
-	if err := gws.upsertSecret(ctx, authInfo, names.URL, connection); err != nil {
+	info := databaseInfo(product, names, deployment)
+	if err := gws.setDatabaseConnections(ctx, authInfo, &info, username, password, database); err != nil {
 		return nil, err
 	}
 
@@ -352,9 +586,37 @@ func (gws *GatewayService) RotateDatabaseCredentials(ctx context.Context, authIn
 		return nil, err
 	}
 
-	info := databaseInfo(product, names, deployment)
-	info.Host, info.Username, info.Database, info.ConnectionString = host, username, database, connection
 	return &info, nil
+}
+
+// setDatabaseConnections keeps direct and pooled credentials in sync.
+func (gws *GatewayService) setDatabaseConnections(ctx context.Context, authInfo *auth.AuthInfo, info *types.DatabaseServiceInfo, username, password, database string) error {
+	product := databaseProducts[info.Kind]
+	info.Username, info.Database = username, database
+	for _, endpoint := range []struct {
+		port       uint32
+		secret     string
+		connection *string
+	}{
+		{product.Port, info.ConnectionStringSecret, &info.ConnectionString},
+		{6432, info.PooledConnectionStringSecret, &info.PooledConnectionString},
+	} {
+		if endpoint.secret == "" {
+			continue
+		}
+		host, err := gws.databasePortHost(ctx, info.StubID, info.DeploymentID, endpoint.port)
+		if err != nil {
+			return err
+		}
+		if endpoint.port == product.Port {
+			info.Host = host
+		}
+		*endpoint.connection = databaseConnectionString(info.Kind, username, password, host, database, gws.appConfig.Abstractions.Pod.TCP.CertFile != "")
+		if err := gws.upsertSecret(ctx, authInfo, endpoint.secret, *endpoint.connection); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // recycleDependents restarts every other active deployment bound to a secret with this prefix.
@@ -430,7 +692,7 @@ func (gws *GatewayService) ListDatabaseServices(ctx context.Context, authInfo *a
 
 // databaseInfo is the public view of one database deployment.
 func databaseInfo(product databaseProduct, names databaseSecretNames, d *types.DeploymentWithRelated) types.DatabaseServiceInfo {
-	return types.DatabaseServiceInfo{
+	info := types.DatabaseServiceInfo{
 		Name:                   d.Name,
 		Kind:                   product.Kind,
 		DeploymentID:           d.ExternalId,
@@ -444,6 +706,14 @@ func databaseInfo(product databaseProduct, names databaseSecretNames, d *types.D
 		PasswordSecret:         names.Password,
 		DatabaseSecret:         names.Database,
 	}
+	if config, err := d.Stub.UnmarshalConfig(); err == nil && product.Kind == "postgres" {
+		for _, port := range config.Ports {
+			if port == 6432 {
+				info.PooledConnectionStringSecret = names.PooledURL
+			}
+		}
+	}
+	return info
 }
 
 func validateDatabaseName(name string) error {
@@ -590,6 +860,15 @@ func databaseKind(stub *types.Stub) string {
 
 // databaseHost is the TCP gateway host:port clients connect to.
 func (gws *GatewayService) databaseHost(ctx context.Context, stubId, deploymentId string) (string, error) {
+	stub, err := gws.backendRepo.GetStubByExternalId(ctx, stubId)
+	if err != nil {
+		return "", err
+	}
+	product := databaseProducts[databaseKind(&stub.Stub)]
+	return gws.databasePortHost(ctx, stubId, deploymentId, product.Port)
+}
+
+func (gws *GatewayService) databasePortHost(ctx context.Context, stubId, deploymentId string, port uint32) (string, error) {
 	res, err := gws.GetURL(ctx, &pb.GetURLRequest{StubId: stubId, DeploymentId: deploymentId})
 	if err != nil {
 		return "", err
@@ -597,7 +876,7 @@ func (gws *GatewayService) databaseHost(ctx context.Context, stubId, deploymentI
 	if !res.Ok {
 		return "", errors.New(res.ErrMsg)
 	}
-	return tcpHostFromURL(res.Url), nil
+	return tcpHostFromURL(strings.ReplaceAll(res.Url, "<PORT>", strconv.FormatUint(uint64(port), 10))), nil
 }
 
 func tcpHostFromURL(raw string) string {
@@ -615,28 +894,33 @@ func tcpHostFromURL(raw string) string {
 	return host
 }
 
-// databaseConnectionString requires TLS to the TCP gateway but, like Postgres's
-// sslmode=require, does not pin the certificate: clusters without a CA-signed
-// cert (local, air-gapped) must still connect.
-func databaseConnectionString(kind, username, password, host, database string) string {
+// Configured gateway certificates require hostname and chain verification.
+// Development gateways without a certificate generate an ephemeral self-signed
+// certificate; their connection URLs explicitly opt out of verification.
+func databaseConnectionString(kind, username, password, host, database string, verifyTLS bool) string {
 	user, pass, db := url.QueryEscape(username), url.QueryEscape(password), url.QueryEscape(database)
+	postgresTLS, mysqlTLS, mongoTLS, redisTLS := "require", "REQUIRED", "true", "none"
+	if verifyTLS {
+		postgresTLS = "verify-full&sslrootcert=system"
+		mysqlTLS, mongoTLS, redisTLS = "VERIFY_IDENTITY", "false", "required&ssl_check_hostname=true"
+	}
 	switch kind {
 	case "postgres":
-		return fmt.Sprintf("postgresql://%s:%s@%s/%s?sslmode=require", user, pass, host, db)
+		return fmt.Sprintf("postgresql://%s:%s@%s/%s?sslmode=%s", user, pass, host, db, postgresTLS)
 	case "mysql":
-		return fmt.Sprintf("mysql://%s:%s@%s/%s?ssl-mode=REQUIRED", user, pass, host, db)
+		return fmt.Sprintf("mysql://%s:%s@%s/%s?ssl-mode=%s", user, pass, host, db, mysqlTLS)
 	case "mongo":
-		return fmt.Sprintf("mongodb://%s:%s@%s/%s?tls=true&tlsAllowInvalidCertificates=true&authSource=admin", user, pass, host, db)
+		return fmt.Sprintf("mongodb://%s:%s@%s/%s?tls=true&tlsAllowInvalidCertificates=%s&authSource=admin", user, pass, host, db, mongoTLS)
 	default:
 		if username != "" && username != "default" {
-			return fmt.Sprintf("rediss://%s:%s@%s/0?ssl_cert_reqs=none", user, pass, host)
+			return fmt.Sprintf("rediss://%s:%s@%s/0?ssl_cert_reqs=%s", user, pass, host, redisTLS)
 		}
-		return fmt.Sprintf("rediss://:%s@%s/0?ssl_cert_reqs=none", pass, host)
+		return fmt.Sprintf("rediss://:%s@%s/0?ssl_cert_reqs=%s", pass, host, redisTLS)
 	}
 }
 
 // ensureRegistryImage returns the image id for a registry image, pulling it if needed.
-func (gws *GatewayService) ensureRegistryImage(ctx context.Context, imageURI string) (string, error) {
+func (gws *GatewayService) ensureRegistryImage(ctx context.Context, imageURI string, commands []string) (string, error) {
 	if gws.imageService == nil {
 		return "", types.ErrDatabaseImageUnsupported
 	}
@@ -644,6 +928,7 @@ func (gws *GatewayService) ensureRegistryImage(ctx context.Context, imageURI str
 		PythonVersion:    databasePythonVersion,
 		ExistingImageUri: imageURI,
 		IgnorePython:     true,
+		Commands:         commands,
 	})
 	if err != nil {
 		return "", fmt.Errorf("verify image: %w", err)
@@ -657,6 +942,7 @@ func (gws *GatewayService) ensureRegistryImage(ctx context.Context, imageURI str
 		PythonVersion:    databasePythonVersion,
 		ExistingImageUri: imageURI,
 		IgnorePython:     true,
+		Commands:         commands,
 	}, stream)
 	if err != nil {
 		return "", fmt.Errorf("build image: %w", err)

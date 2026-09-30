@@ -2207,6 +2207,10 @@ func (r *PostgresBackendRepository) GetSecretsByName(ctx context.Context, worksp
 }
 
 func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
+	if workspace == nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
+		return nil, fmt.Errorf("workspace signing key is required to decrypt secrets")
+	}
+
 	secret, err := r.GetSecretByName(ctx, workspace, name)
 	if err != nil {
 		return nil, err
@@ -2314,17 +2318,44 @@ func (r *PostgresBackendRepository) ListStacks(ctx context.Context, workspaceId 
 }
 
 func (r *PostgresBackendRepository) CreateStack(ctx context.Context, workspaceId uint, name string, spec json.RawMessage) (*types.Stack, error) {
+	// Coordinate create-by-name across gateway replicas without relying on a
+	// client-side list/create race. Existing stacks keep their spec and layout.
+	tx, err := r.client.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	lockKey := fmt.Sprintf("stack:%d:%s", workspaceId, name)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return nil, err
+	}
+
 	query := `
+	SELECT ` + stackColumns + ` FROM workspace_stack
+	WHERE workspace_id = $1 AND name = $2
+	ORDER BY id LIMIT 1;
+	`
+
+	var stack types.Stack
+	err = tx.GetContext(ctx, &stack, query, workspaceId, name)
+	if err == nil {
+		return &stack, tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	query = `
 	INSERT INTO workspace_stack (workspace_id, name, spec)
 	VALUES ($1, $2, $3)
 	RETURNING ` + stackColumns + `;
 	`
 
-	var stack types.Stack
-	if err := r.client.GetContext(ctx, &stack, query, workspaceId, name, spec); err != nil {
+	if err := tx.GetContext(ctx, &stack, query, workspaceId, name, spec); err != nil {
 		return nil, err
 	}
-	return &stack, nil
+	return &stack, tx.Commit()
 }
 
 func (r *PostgresBackendRepository) UpdateStack(ctx context.Context, workspaceId uint, externalId, name string, spec json.RawMessage) (*types.Stack, error) {
@@ -2337,6 +2368,23 @@ func (r *PostgresBackendRepository) UpdateStack(ctx context.Context, workspaceId
 
 	var stack types.Stack
 	if err := r.client.GetContext(ctx, &stack, query, externalId, workspaceId, name, spec); err != nil {
+		return nil, err
+	}
+	return &stack, nil
+}
+
+// UpdateStackIfUnchanged serializes agent checkpoints across gateway replicas.
+// Comparing the previous JSON also detects concurrent dashboard edits.
+func (r *PostgresBackendRepository) UpdateStackIfUnchanged(ctx context.Context, workspaceId uint, externalId, name string, previous, spec json.RawMessage) (*types.Stack, error) {
+	query := `
+	UPDATE workspace_stack
+	SET name = $3, spec = $4, updated_at = CURRENT_TIMESTAMP
+	WHERE external_id = $1 AND workspace_id = $2 AND spec = $5::jsonb
+	RETURNING ` + stackColumns + `;
+	`
+
+	var stack types.Stack
+	if err := r.client.GetContext(ctx, &stack, query, externalId, workspaceId, name, spec, previous); err != nil {
 		return nil, err
 	}
 	return &stack, nil

@@ -217,13 +217,20 @@ func (m *Manager) tryLockNBDDevice(name string) (*nbdDevice, bool) {
 }
 
 func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSocket string, expectedSizeBytes int64) error {
-	if _, err := m.run(ctx, m.binaries.NBDClient, "-unix", nbdSocket, "-N", qsdExportName, device.Path, "-b", strconv.Itoa(nbdBlockSize)); err != nil {
+	// Netlink connections outlive their server and leave devices occupied when
+	// a worker pod disappears. The ioctl client owns the connection for its
+	// lifetime, so a dead server or pod releases the kernel device as well.
+	_, err := m.run(ctx, m.binaries.NBDClient,
+		"-unix", nbdSocket, "-N", qsdExportName, device.Path,
+		"-b", strconv.Itoa(nbdBlockSize), "-nonetlink", "-timeout", "30",
+	)
+	if err != nil {
 		return fmt.Errorf("connect %s: %w", device.Path, err)
 	}
 	// The device is usable once the kernel records a server pid and the
 	// virtual size is visible.
 	expectedSectors := expectedSizeBytes / sectorSize
-	err := waitFor(ctx, nbdSettleTimeout, func() bool {
+	err = waitFor(ctx, nbdSettleTimeout, func() bool {
 		if !m.nbdDeviceBusy(device.name) {
 			return false
 		}

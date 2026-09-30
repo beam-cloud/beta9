@@ -883,7 +883,7 @@ func durableDiskSizeBytes(size string) (int64, error) {
 	for _, unit := range units {
 		if strings.HasSuffix(size, unit.suffix) {
 			n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(size, unit.suffix)), 10, 64)
-			if err != nil || n <= 0 {
+			if err != nil || n <= 0 || n > math.MaxInt64/unit.factor {
 				return 0, fmt.Errorf("invalid size")
 			}
 			return n * unit.factor, nil

@@ -29,6 +29,7 @@ type volumeState struct {
 	ReadOnly         bool   `json:"read_only"`
 	Mountpoint       string `json:"mountpoint,omitempty"`
 	Attached         bool   `json:"attached"`
+	Journal          bool   `json:"journal,omitempty"`
 	// Owner is who attached the volume (see AttachSpec.Owner).
 	Owner string `json:"owner,omitempty"`
 	// Formatted records that mkfs ran on the base image; it prevents a reused
@@ -67,8 +68,9 @@ func (s *volumeState) exportMode() ExportMode {
 type stateLayer struct {
 	// SnapshotID is the published DiskSnapshot external ID, empty while the
 	// layer is still pending.
-	SnapshotID string `json:"snapshot_id,omitempty"`
-	Path       string `json:"path"`
+	SnapshotID      string `json:"snapshot_id,omitempty"`
+	JournalSequence uint64 `json:"journal_sequence,omitempty"`
+	Path            string `json:"path"`
 }
 
 func (s *volumeState) publishedIDs() map[string]bool {
@@ -146,5 +148,13 @@ func writeFileAtomic(path string, data []byte) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }

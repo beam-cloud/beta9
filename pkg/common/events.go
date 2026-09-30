@@ -300,6 +300,6 @@ func PublishReloadInstance(rdb *RedisClient, stubId, stubType string) {
 	NewEventBus(rdb).Send(&Event{Type: EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
 		"stub_id":   stubId,
 		"stub_type": stubType,
-		"timestamp": time.Now().Unix(),
+		"timestamp": time.Now().UnixNano(),
 	}})
 }

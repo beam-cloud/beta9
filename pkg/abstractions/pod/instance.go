@@ -86,7 +86,18 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		}
 	}
 
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.StubConfig)
+	// A restart can beat the asynchronous instance reload after credential
+	// rotation. Read current values at launch, preserving each binding's name.
+	config := *i.StubConfig
+	config.Secrets = append([]types.Secret(nil), config.Secrets...)
+	for index, secret := range config.Secrets {
+		fresh, err := i.BackendRepo.GetSecretByName(i.Ctx, i.Workspace, secret.Name)
+		if err != nil {
+			return fmt.Errorf("refresh secret %s: %w", secret.Name, err)
+		}
+		config.Secrets[index].Value = fresh.Value
+	}
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, config)
 	if err != nil {
 		return err
 	}

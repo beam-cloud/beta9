@@ -4,14 +4,17 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,7 +42,36 @@ func (g *MCPGroup) deploymentURL(d *types.DeploymentWithRelated) string {
 	return url
 }
 
+// exactDeploymentURL never uses the mutable latest alias.
+func (g *MCPGroup) exactDeploymentURL(d *types.DeploymentWithRelated, port int) (string, error) {
+	cfg, err := d.Stub.UnmarshalConfig()
+	if err != nil {
+		return "", err
+	}
+	stub := &types.StubWithRelated{Stub: d.Stub, Workspace: d.Workspace, App: &d.App}
+	host := g.config.GatewayService.HTTP.GetExternalURL()
+	urlType := g.config.GatewayService.InvokeURLType
+	if d.Stub.Type.Kind() != types.StubTypePod {
+		return common.BuildDeploymentURL(host, urlType, stub, &d.Deployment), nil
+	}
+	if len(cfg.Ports) == 0 {
+		return "", fail("NO_HTTP_PORT", "deployment has no exposed port")
+	}
+	if port == 0 && len(cfg.Ports) == 1 {
+		port = int(cfg.Ports[0])
+	}
+	if !slices.Contains(cfg.Ports, uint32(port)) {
+		return "", fail("INVALID_ARGS", "select an exposed port from %v", cfg.Ports)
+	}
+	cfg.Ports = []uint32{uint32(port)}
+	if cfg.TCP {
+		host, urlType = g.config.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost
+	}
+	return common.BuildPodURL(host, urlType, stub, cfg), nil
+}
+
 func (g *MCPGroup) deploymentView(d *types.DeploymentWithRelated) map[string]any {
+	exactURL, _ := g.exactDeploymentURL(d, 0)
 	return map[string]any{
 		"name":          d.Name,
 		"deployment_id": d.ExternalId,
@@ -49,7 +81,8 @@ func (g *MCPGroup) deploymentView(d *types.DeploymentWithRelated) map[string]any
 		"version":       d.Version,
 		"active":        d.Active,
 		"created_at":    d.CreatedAt.Time,
-		"url":           g.deploymentURL(d),
+		"url":           exactURL,
+		"latest_url":    g.deploymentURL(d),
 	}
 }
 
@@ -78,14 +111,21 @@ func (g *MCPGroup) latestByApp(ctx context.Context, ws *types.Workspace) (map[st
 }
 
 func (g *MCPGroup) appByName(ctx context.Context, ws *types.Workspace, name string) (*types.App, error) {
-	page, err := g.backendRepo.ListAppsPaginated(ctx, ws.Id, types.AppFilter{Name: name, Limit: 50})
-	if err != nil {
-		return nil, err
-	}
-	for i := range page.Data {
-		if page.Data[i].Name == name {
-			return &page.Data[i], nil
+	cursor := ""
+	for {
+		page, err := g.backendRepo.ListAppsPaginated(ctx, ws.Id, types.AppFilter{Name: name, Limit: 100, Cursor: cursor})
+		if err != nil {
+			return nil, err
 		}
+		for i := range page.Data {
+			if page.Data[i].Name == name {
+				return &page.Data[i], nil
+			}
+		}
+		if page.Next == "" || page.Next == cursor {
+			break
+		}
+		cursor = page.Next
 	}
 	return nil, fail("NOT_FOUND", "no app named %q", name)
 }
@@ -99,27 +139,79 @@ func (g *MCPGroup) catalog() []mcpTool {
 	nameConfirm := schema(props{"name": str(""), "confirm": boolean()}, "name")
 	database := schema(props{"kind": databaseKind, "name": str("")}, "kind", "name")
 	window := schema(props{"name": str("App name"), "stub_id": str("Or a stub id"), "window_minutes": integer(60)})
-	request := props{"name": str("App name: its newest active version"), "deployment_id": str("A specific version instead"), "path": str("Path under the app URL, e.g. /predict"), "method": str("HTTP method; default POST"), "body": map[string]any{"description": "JSON body"}, "headers": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}}
+	request := props{
+		"name":          str("App name: its newest active version"),
+		"deployment_id": str("A specific version instead"),
+		"path":          str("Path under the app URL, e.g. /predict"),
+		"method":        str("HTTP method; default POST"),
+		"body":          map[string]any{"description": "JSON body"},
+		"headers":       map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		"body_base64":   str("Binary request body, exclusive with body"),
+		"port":          integer(0),
+	}
 
 	return []mcpTool{
 		// workspace
+		{
+			Name:        "capabilities",
+			Description: "Live workspace limits, GPU inventory and transport capabilities. Availability is advisory, not a reservation.",
+			Schema:      schema(props{}),
+			Run:         g.capabilities,
+		},
+		{
+			Name:        "wait_deployment",
+			Description: "Verify HTTP application readiness on the exact revision using a safe health path. TCP and portless workloads require their protocol-specific check.",
+			Schema: schema(props{
+				"name":          str("App name"),
+				"deployment_id": str("Exact revision"),
+				"path":          str("Safe GET health endpoint; default /health"),
+				"port":          integer(0),
+				"wait_seconds":  integer(20),
+			}),
+			Run: g.waitDeployment,
+		},
 		{Name: "whoami", Description: "Workspace id, name and gateway URL for this token. Where prepaid credit applies, `credit.ok` says whether work can run and `credit.message` where to add credits when it cannot.", Schema: schema(props{}), Run: g.whoami},
-		{Name: "list_apps", Description: "Apps in the workspace with their newest active deployment and URL.", Schema: schema(props{}), Run: g.listApps},
-		{Name: "get_app", Description: "One app: its config (resources, scaling, env, secret bindings, ports, disks) and URL.", Schema: name, Run: g.getApp},
+		{
+			Name:        "list_apps",
+			Description: "Apps in the workspace with their newest active deployment and URL.",
+			Schema:      schema(props{"name": str("Filter by name"), "cursor": str("Next page cursor"), "limit": integer(50)}),
+			Run:         g.listApps,
+		},
+		{
+			Name:        "get_app",
+			Description: "One app: its config (resources, scaling, env, secret bindings, ports, disks) and URL.",
+			Schema:      target,
+			Run:         g.getApp,
+		},
 		{Name: "delete_app", Description: "Delete an app and every version of it. Requires confirm=true.", Schema: nameConfirm, Confirm: "delete_app removes every deployment of the app.", Run: g.deleteApp},
 		// deployments
-		{Name: "list_deployments", Description: "Deployment versions; filter by name and active.", Schema: schema(props{"name": str(""), "active": boolean(), "limit": integer(50)}), Run: g.listDeployments},
+		{
+			Name:        "list_deployments",
+			Description: "Deployment versions; filter by name and active.",
+			Schema:      schema(props{"name": str(""), "active": boolean(), "limit": integer(50), "offset": integer(0)}),
+			Run:         g.listDeployments,
+		},
 		{Name: "get_deployment", Description: "One deployment version: active, URL, stub.", Schema: target, Run: g.getDeployment},
-		{Name: "redeploy", Description: "Deploy a new version from an existing version's config: a restart with fresh containers, or a rollback when deployment_id is an older version.", Schema: target, Destructive: true, Run: g.redeploy},
+		{
+			Name:        "redeploy",
+			Description: "Deploy an existing configuration again, or roll back using an older deployment_id. Choose rollout=replace to retire previous revisions; auto preserves them.",
+			Schema: schema(props{
+				"name":          str("App name"),
+				"deployment_id": str("Specific configuration to deploy"),
+				"rollout":       map[string]any{"type": "string", "enum": []string{"auto", "blue-green", "replace"}},
+			}),
+			Destructive: true,
+			Run:         g.redeploy,
+		},
 		{Name: "stop_deployment", Description: "Stop a deployment version; its containers drain and requests fail until started.", Schema: target, Destructive: true, Run: g.stopDeployment},
 		{Name: "start_deployment", Description: "Start a stopped deployment version.", Schema: target, Destructive: true, Run: g.startDeployment},
 		{Name: "delete_deployment", Description: "Delete one deployment version. Requires confirm=true.", Schema: targetConfirm, Confirm: "delete_deployment is irreversible.", Run: g.deleteDeployment},
 		{Name: "scale_deployment", Description: "Set the replica count of a pod deployment.", Schema: schema(props{"name": str(""), "deployment_id": str(""), "containers": integer(1)}, "containers"), Destructive: true, Run: g.scaleDeployment},
-		{Name: "invoke", Description: "Call a deployed app through the gateway with this token (works for authorized apps). Returns status and body.", Schema: schema(request), Destructive: true, Run: g.invoke},
+		{Name: "invoke", Description: "Call an exact HTTP revision. Beam credentials authenticate private apps; public apps receive only caller-supplied Authorization headers. Returns status, headers, and body.", Schema: schema(request), Destructive: true, Run: g.invoke},
 		// settings
 		{Name: "update_config", Description: "Change settings and deploy a new version: dotted paths such as runtime.cpu (millicores), runtime.memory (MB), runtime.gpu, runtime.gpu_count, autoscaler.max_containers, autoscaler.min_containers, autoscaler.tasks_per_container, keep_warm_seconds, concurrent_requests, workers, max_pending_tasks, task_policy.timeout, task_policy.max_retries, authorized, ports, entry_point. Use set_env for variables.", Schema: schema(props{"name": str("App name"), "fields": map[string]any{"type": "object", "description": "path -> value"}}, "name", "fields"), Destructive: true, Run: g.updateConfig},
 		{Name: "set_env", Description: "Set or remove environment variables on an app and deploy a new version. Values may be ${{secret.NAME}}, ${{db.NAME.DATABASE_URL}} (or HOST, PORT, USERNAME, PASSWORD, DATABASE) or ${{app.NAME.URL}}.", Schema: schema(props{"name": str("App name"), "env": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}, "unset": strList("Variables to remove")}, "name"), Destructive: true, Run: g.setEnv},
-		{Name: "connect_services", Description: "Wire `target` to `source`: a database's URL and parts, or an app's URL, as env references on target; deploys a new version of target.", Schema: schema(props{"source": str("Database or app name"), "target": str("App that receives the variables"), "env_name": str("Single variable name instead of the standard set")}, "source", "target"), Destructive: true, Run: g.connectServices},
+		{Name: "connect_services", Description: "Wire `target` to `source`: a database's URL and parts, or an app's URL, as env references on target; deploys a new version of target.", Schema: schema(props{"source": str("Database or app name"), "target": str("App that receives the variables"), "env_name": str("URL variable name instead of the standard set; authenticated applications also receive <prefix>_TOKEN"), "rotate_credentials": boolean()}, "source", "target"), Destructive: true, Run: g.connectServices},
 		// secrets
 		{Name: "list_secrets", Description: "Workspace secret names.", Schema: schema(props{}), Run: g.listSecrets},
 		{Name: "create_secret", Description: "Create a workspace secret; reference it with ${{secret.NAME}}.", Schema: schema(props{"name": str(""), "value": str("")}, "name", "value"), Destructive: true, Run: g.createSecret},
@@ -127,30 +219,92 @@ func (g *MCPGroup) catalog() []mcpTool {
 		{Name: "delete_secret", Description: "Delete a workspace secret. Requires confirm=true.", Schema: nameConfirm, Confirm: "delete_secret breaks deployments still bound to it.", Run: g.deleteSecret},
 		// databases
 		{Name: "list_databases", Description: "Managed database services and their state.", Schema: schema(props{}), Run: g.listDatabases},
-		{Name: "create_database", Description: "Create a managed Postgres, Redis, MySQL or MongoDB service on a durable disk. Credentials become secrets; reference them with ${{db.<name>.DATABASE_URL}}.", Schema: schema(props{"kind": databaseKind, "name": str(""), "always_on": boolean()}, "kind", "name"), Destructive: true, Run: g.createDatabase},
+		{
+			Name:        "create_database",
+			Description: "Create a managed Postgres, Redis, MySQL or MongoDB service on a durable disk. Credentials become secrets; reference them with ${{db.<name>.DATABASE_URL}}.",
+			Schema: schema(props{
+				"kind":         databaseKind,
+				"name":         str(""),
+				"always_on":    boolean(),
+				"size":         str("Disk capacity, e.g. 10Gi"),
+				"cpu":          integer(1000),
+				"memory":       integer(512),
+				"pool":         str("Optional worker pool"),
+				"snapshot_id":  str("Restore an available qcow snapshot into a new database; the source is retained"),
+				"restore_from": str("Postgres source name, including deleted services whose backups are retained"),
+				"restore_time": str("Point-in-time restore target (RFC3339); must lie in database_backups' recovery window"),
+				"username":     str("Original Postgres role when restoring"),
+				"database":     str("Original Postgres database name when restoring"),
+			}, "kind", "name"),
+			Destructive: true,
+			Run:         g.createDatabase,
+		},
 		{Name: "database_credentials", Description: "Connection string and parts for a database service.", Schema: database, Run: g.databaseCredentials},
+		{Name: "database_backups", Description: "Read native backup inventory, failures, freshness, and the verified Postgres recovery window, even after service deletion. A stale observation can still describe usable historical backups.", Schema: name, Run: g.databaseBackups},
+		{Name: "backup_database", Description: "Wake a managed database and take an on-demand native backup. On timeout, inspect database_backups before retrying. Readiness and backup completion are separate states.", Schema: name, Destructive: true, Run: g.backupDatabase},
 		{Name: "rotate_database_credentials", Description: "Rotate a database's password; the database and every app bound to it restart with the new credentials.", Schema: database, Destructive: true, Run: g.rotateDatabase},
-		{Name: "delete_database", Description: "Delete a database service and its credential secrets. Requires confirm=true.", Schema: schema(props{"kind": databaseKind, "name": str(""), "confirm": boolean()}, "kind", "name"), Confirm: "delete_database removes the service and its data.", Run: g.deleteDatabase},
+		{
+			Name:        "delete_database",
+			Description: "Delete a database service and its credential secrets. Requires confirm=true.",
+			Schema:      schema(props{"kind": databaseKind, "name": str(""), "confirm": boolean()}, "kind", "name"),
+			Confirm:     "delete_database removes the service and credentials; its durable disk is retained.",
+			Run:         g.deleteDatabase,
+		},
 		// storage
 		{Name: "list_volumes", Description: "Persistent volumes (mount with Volume(name, mount_path) in app code).", Schema: schema(props{}), Run: g.listVolumes},
 		{Name: "create_volume", Description: "Create a persistent volume.", Schema: name, Destructive: true, Run: g.createVolume},
 		// stacks
 		{Name: "list_stacks", Description: "Stacks: named groups of apps shown together on the dashboard board.", Schema: schema(props{}), Run: g.listStacks},
 		{Name: "create_stack", Description: "Create a stack, optionally with apps (by name).", Schema: schema(props{"name": str(""), "apps": strList("App names")}, "name"), Destructive: true, Run: g.createStack},
-		{Name: "update_stack", Description: "Add or remove apps (by name) on a stack; the apps themselves are untouched.", Schema: schema(props{"name": str(""), "add": strList(""), "remove": strList("")}, "name"), Destructive: true, Run: g.updateStack},
+		{
+			Name:        "update_stack",
+			Description: "Add or remove apps (by name) on a stack; the apps themselves are untouched.",
+			Schema: schema(props{
+				"name":              str(""),
+				"add":               strList(""),
+				"remove":            strList(""),
+				"spec":              map[string]any{"type": "object", "description": "Merge fields into the existing stack spec; preserves dashboard fields"},
+				"expected_revision": str("Revision from list_stacks; prevents stale updates"),
+			}, "name"),
+			Destructive: true,
+			Run:         g.updateStack,
+		},
 		{Name: "delete_stack", Description: "Delete a stack; its apps are untouched.", Schema: name, Destructive: true, Run: g.deleteStack},
 		// observe
 		{Name: "logs", Description: "Recent logs, newest last. By app name (every version), or one deployment, stub, task or container. Each line carries its stream: stdout, stderr or system (container lifecycle: image pulls, mounts, exits); `stream` keeps one of them out of the `tail` newest lines.", Schema: schema(props{"name": str("App name"), "deployment_id": str(""), "stub_id": str(""), "task_id": str(""), "container_id": str(""), "tail": integer(100), "since_minutes": integer(0), "search": str("Substring filter"), "stream": logStream}), Run: g.logs},
 		{Name: "list_tasks", Description: "Recent tasks (invocations), newest first.", Schema: schema(props{"stub_id": str(""), "status": str("Comma-separated: pending, running, complete, error, cancelled, timeout"), "limit": integer(20)}), Run: g.listTasks},
-		{Name: "get_task", Description: "Status, timing and container of one task.", Schema: schema(props{"task_id": str("")}, "task_id"), Run: g.getTask},
+		{
+			Name:        "get_task",
+			Description: "Status, results, artifacts and failure details of a task. Optionally wait up to 55 seconds.",
+			Schema:      schema(props{"task_id": str(""), "wait_seconds": integer(0)}, "task_id"),
+			Run:         g.getTask,
+		},
 		{Name: "stop_task", Description: "Stop a running or pending task.", Schema: schema(props{"task_id": str("")}, "task_id"), Destructive: true, Run: g.stopTask},
 		{Name: "metrics", Description: "CPU, memory, GPU memory, network and container count for an app over a window, per 1m or 1h bucket, plus the latest bucket as `now`. Averages are per container; memory_limit and cpu_limit are the configured resources.", Schema: schema(props{"name": str("App name"), "deployment_id": str(""), "stub_id": str(""), "window_minutes": integer(60), "interval": str("1m (default) or 1h")}), Run: g.metrics},
 		{Name: "request_stats", Description: "Request count, 5xx share and p50/p95/p99 latency for an endpoint over a window (upper bounds from a fixed histogram). Endpoints only: pods, functions and queues have `metrics` and `logs`.", Schema: window, Run: g.requestStats},
 		{Name: "list_webhooks", Description: "Workspace webhooks (URL, event types, enabled).", Schema: schema(props{}), Run: g.listWebhooks},
 		{Name: "create_webhook", Description: "Register a signed HTTP webhook for workspace events (stub.*, task.*, endpoint.request_stats). Returns the signing secret once.", Schema: schema(props{"url": str(""), "event_types": strList(""), "description": str("")}, "url"), Destructive: true, Run: g.createWebhook},
 		// everything else
-		{Name: "api_routes", Description: "Every gateway REST route, for use with `api`: containers, metrics timeseries, event history, tokens, webhooks, volumes, disks, pods and more.", Schema: schema(props{}), Run: g.apiRoutes},
-		{Name: "api", Description: "Call any gateway REST route with this token. Methods other than GET need confirm=true. {ws} in the path becomes your workspace id.", Schema: schema(props{"method": str("Default GET"), "path": str("e.g. /api/v1/container/{ws}"), "body": map[string]any{"description": "JSON body"}, "headers": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}, "confirm": boolean()}, "path"), Destructive: true, Run: g.api},
+		{
+			Name:        "api_routes",
+			Description: "Every gateway REST route, for use with `api`: containers, metrics timeseries, event history, tokens, webhooks, volumes, disks, pods and more.",
+			Schema:      schema(props{"path": str("Filter path or RPC name; includes schemas when supplied")}),
+			Run:         g.apiRoutes,
+		},
+		{
+			Name:        "api",
+			Description: "Call any gateway REST route with this token. Methods other than GET need confirm=true. {ws} in the path becomes your workspace id.",
+			Schema: schema(props{
+				"method":      str("Default GET"),
+				"path":        str("e.g. /api/v1/container/{ws}"),
+				"body":        map[string]any{"description": "JSON body"},
+				"headers":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+				"body_base64": str("Binary request body"),
+				"confirm":     boolean(),
+			}, "path"),
+			Destructive: true,
+			Run:         g.api,
+		},
 	}
 }
 
@@ -168,27 +322,30 @@ func (g *MCPGroup) whoami(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (an
 	return out, nil
 }
 
-func (g *MCPGroup) listApps(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
-	latest, err := g.latestByApp(ctx, a.Workspace)
+func (g *MCPGroup) listApps(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	page, err := g.backendRepo.ListAppsPaginated(ctx, a.Workspace.Id, types.AppFilter{Name: args.str("name"), Cursor: args.str("cursor"), Limit: uint32(args.num("limit", 50))})
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(latest))
-	for n := range latest {
-		names = append(names, n)
+	out := make([]map[string]any, 0, len(page.Data))
+	for _, app := range page.Data {
+		item := map[string]any{"app_id": app.ExternalId, "name": app.Name}
+		deployments, err := g.deployments(ctx, a.Workspace, types.DeploymentFilter{AppId: app.ExternalId, BaseFilter: types.BaseFilter{Limit: 1}})
+		if err != nil {
+			return nil, err
+		}
+		if len(deployments) > 0 {
+			item = g.deploymentView(&deployments[0])
+		}
+		out = append(out, item)
 	}
-	sort.Strings(names)
-	out := make([]map[string]any, 0, len(names))
-	for _, n := range names {
-		out = append(out, g.deploymentView(latest[n]))
-	}
-	return out, nil
+	return map[string]any{"items": out, "next_cursor": page.Next}, nil
 }
 
 func (g *MCPGroup) getApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	d, err := g.gws.ActiveDeploymentByName(ctx, a.Workspace, args.str("name"))
+	d, err := g.target(ctx, a, args)
 	if err != nil {
-		return nil, fail("NOT_FOUND", "%s", err)
+		return nil, err
 	}
 	cfg, err := d.Stub.UnmarshalConfig()
 	if err != nil {
@@ -232,7 +389,10 @@ func (g *MCPGroup) deleteApp(ctx context.Context, a *auth.AuthInfo, args toolArg
 // --- deployments ------------------------------------------------------------------------
 
 func (g *MCPGroup) listDeployments(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	filter := types.DeploymentFilter{Name: args.str("name"), BaseFilter: types.BaseFilter{Limit: uint32(args.num("limit", 50))}}
+	filter := types.DeploymentFilter{
+		Name:       args.str("name"),
+		BaseFilter: types.BaseFilter{Limit: uint32(args.num("limit", 50)), Offset: int(args.num("offset", 0))},
+	}
 	if v, ok := args["active"].(bool); ok {
 		filter.Active = ptr.To(v)
 	}
@@ -265,8 +425,20 @@ func (g *MCPGroup) target(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	}
 	if name := args.str("name"); name != "" {
 		d, err := g.gws.ActiveDeploymentByName(ctx, a.Workspace, name)
-		if err != nil {
-			return nil, fail("NOT_FOUND", "%s", err)
+		if err == nil {
+			return d, nil
+		}
+		list, listErr := g.deployments(ctx, a.Workspace, types.DeploymentFilter{Name: name, BaseFilter: types.BaseFilter{Limit: 1000}})
+		if listErr != nil {
+			return nil, listErr
+		}
+		for i := range list {
+			if list[i].Name == name && (d == nil || list[i].Version > d.Version) {
+				d = &list[i]
+			}
+		}
+		if d == nil {
+			return nil, fail("NOT_FOUND", "no deployment named %q", name)
 		}
 		return d, nil
 	}
@@ -278,7 +450,7 @@ func (g *MCPGroup) getDeployment(ctx context.Context, a *auth.AuthInfo, args too
 	if err != nil {
 		return nil, err
 	}
-	return g.deploymentView(d), nil
+	return g.getApp(ctx, a, toolArgs{"deployment_id": d.ExternalId})
 }
 
 func (g *MCPGroup) redeploy(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
@@ -286,7 +458,7 @@ func (g *MCPGroup) redeploy(ctx context.Context, a *auth.AuthInfo, args toolArgs
 	if err != nil {
 		return nil, err
 	}
-	res, err := g.gws.DeployStub(ctx, &pb.DeployStubRequest{StubId: d.Stub.ExternalId, Name: d.Name})
+	res, err := g.gws.DeployStub(ctx, &pb.DeployStubRequest{StubId: d.Stub.ExternalId, Name: d.Name, Rollout: args.str("rollout")})
 	return deployed(res, err, d.Name)
 }
 
@@ -379,7 +551,10 @@ func connectionReferences(source, kind, envName string) map[string]string {
 	if kind == "" {
 		key := envName
 		if key == "" {
-			key = strings.Trim(strings.ToUpper(regexpNonAlnum.ReplaceAllString(source, "_")), "_") + "_URL"
+			key = strings.Trim(regexpNonAlnum.ReplaceAllString(strings.ToUpper(source), "_"), "_") + "_URL"
+			if key[0] >= '0' && key[0] <= '9' {
+				key = "APP_" + key
+			}
 		}
 		return map[string]string{key: fmt.Sprintf("${{app.%s.URL}}", source)}
 	}
@@ -411,17 +586,69 @@ func (g *MCPGroup) connectServices(ctx context.Context, a *auth.AuthInfo, args t
 		return nil, fail("NOT_FOUND", "%s", err)
 	}
 	kind := ""
-	if cfg, err := src.Stub.UnmarshalConfig(); err == nil && cfg.Serving != nil && cfg.Serving.Database != nil {
+	cfg, err := src.Stub.UnmarshalConfig()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Serving != nil && cfg.Serving.Database != nil {
 		kind = cfg.Serving.Database.NormalizedKind()
 	}
 	env := connectionReferences(source, kind, args.str("env_name"))
+	var authentication map[string]any
+	if kind == "" && cfg.Authorized {
+		secretName, err := g.serviceCredential(ctx, a, src.App.ExternalId, target, args.boolean("rotate_credentials"))
+		if err != nil {
+			return nil, err
+		}
+
+		var tokenEnv string
+		for urlEnv := range env {
+			tokenEnv = strings.TrimSuffix(urlEnv, "_URL") + "_TOKEN"
+		}
+		env[tokenEnv] = "${{secret." + secretName + "}}"
+		authentication = map[string]any{
+			"type":        "bearer",
+			"token_env":   tokenEnv,
+			"secret_name": secretName,
+			"app_id":      src.App.ExternalId,
+			"usage":       "Send Authorization: Bearer <token_env value>. Deleting the secret revokes access immediately.",
+		}
+	}
+
 	res, err := g.gws.SetDeploymentEnv(ctx, a, target, env, nil)
 	out, err := deployed(res, err, target)
 	if err != nil {
 		return nil, err
 	}
 	out.(map[string]any)["env"] = env
+	if authentication != nil {
+		out.(map[string]any)["authentication"] = authentication
+	}
 	return out, nil
+}
+
+func (g *MCPGroup) serviceCredential(ctx context.Context, a *auth.AuthInfo, appID, consumerName string, rotate bool) (string, error) {
+	consumer, err := g.appByName(ctx, a.Workspace, consumerName)
+	if err != nil {
+		return "", err
+	}
+	name, value, err := auth.NewServiceCredential(a.Workspace.ExternalId, appID, consumer.ExternalId)
+	if err != nil {
+		return "", err
+	}
+
+	_, err = g.backendRepo.GetSecretByName(ctx, a.Workspace, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = g.backendRepo.CreateSecret(ctx, a.Workspace, a.TokenId(), name, value, true)
+		if err != nil {
+			// A concurrent connection may have created the same binding.
+			_, err = g.backendRepo.GetSecretByName(ctx, a.Workspace, name)
+		}
+	}
+	if err == nil && rotate {
+		_, err = g.backendRepo.UpdateSecret(ctx, a.Workspace, a.TokenId(), name, value)
+	}
+	return name, err
 }
 
 // --- secrets --------------------------------------------------------------------------------
@@ -439,14 +666,14 @@ func (g *MCPGroup) listSecrets(ctx context.Context, a *auth.AuthInfo, _ toolArgs
 }
 
 func (g *MCPGroup) createSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	if _, err := g.backendRepo.CreateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.str("value"), true); err != nil {
+	if _, err := g.backendRepo.CreateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.rawString("value"), true); err != nil {
 		return nil, err
 	}
 	return map[string]any{"name": args.str("name"), "created": true}, nil
 }
 
 func (g *MCPGroup) updateSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	if _, err := g.backendRepo.UpdateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.str("value")); err != nil {
+	if _, err := g.backendRepo.UpdateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.rawString("value")); err != nil {
 		return nil, err
 	}
 	return map[string]any{"name": args.str("name"), "updated": true}, nil
@@ -463,6 +690,7 @@ func (g *MCPGroup) deleteSecret(ctx context.Context, a *auth.AuthInfo, args tool
 
 func databaseView(info types.DatabaseServiceInfo) map[string]any {
 	info.ConnectionString = ""
+	info.PooledConnectionString = ""
 	raw, _ := json.Marshal(info)
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
@@ -497,11 +725,34 @@ func (g *MCPGroup) listDatabases(ctx context.Context, a *auth.AuthInfo, _ toolAr
 func (g *MCPGroup) createDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	ctx, cancel := context.WithTimeout(ctx, databaseCreateTimeout)
 	defer cancel()
-	info, err := g.gws.CreateDatabaseService(ctx, a, types.CreateDatabaseParams{Kind: args.str("kind"), Name: args.str("name"), AlwaysOn: args.boolean("always_on")})
+	info, err := g.gws.CreateDatabaseService(ctx, a, types.CreateDatabaseParams{
+		Kind:        args.str("kind"),
+		Name:        args.str("name"),
+		AlwaysOn:    args.boolean("always_on"),
+		Size:        args.str("size"),
+		Cpu:         int64(args.num("cpu", 0)),
+		Memory:      int64(args.num("memory", 0)),
+		Pool:        args.str("pool"),
+		SnapshotID:  args.str("snapshot_id"),
+		RestoreFrom: args.str("restore_from"),
+		RestoreTime: args.str("restore_time"),
+		Username:    args.str("username"),
+		Database:    args.str("database"),
+	})
 	if err != nil {
 		return nil, err
 	}
 	return databaseView(*info), nil
+}
+
+func (g *MCPGroup) databaseBackups(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	return g.gws.DatabaseBackups(ctx, a.Workspace, args.str("name"))
+}
+
+func (g *MCPGroup) backupDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
+	defer cancel()
+	return g.gws.BackupDatabase(ctx, a, args.str("name"))
 }
 
 func (g *MCPGroup) databaseCredentials(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
@@ -509,23 +760,41 @@ func (g *MCPGroup) databaseCredentials(ctx context.Context, a *auth.AuthInfo, ar
 	if err != nil {
 		return nil, err
 	}
-	secret := func(name string) string {
-		if name == "" {
-			return ""
-		}
-		value, _ := g.gws.SecretValue(ctx, a.Workspace, name)
-		return value
-	}
 	out := map[string]any{
 		"name":                     info.Name,
 		"kind":                     info.Kind,
-		"username":                 secret(info.UsernameSecret),
-		"connection_string":        secret(info.ConnectionStringSecret),
+		"tls":                      true,
 		"connection_string_secret": info.ConnectionStringSecret,
 	}
-	if info.DatabaseSecret != "" {
-		out["database"] = secret(info.DatabaseSecret)
+	for field, name := range map[string]string{
+		"username":                 info.UsernameSecret,
+		"password":                 info.PasswordSecret,
+		"database":                 info.DatabaseSecret,
+		"connection_string":        info.ConnectionStringSecret,
+		"pooled_connection_string": info.PooledConnectionStringSecret,
+	} {
+		if name == "" {
+			continue
+		}
+		value, err := g.gws.SecretValue(ctx, a.Workspace, name)
+		if err != nil {
+			return nil, fmt.Errorf("read %s credential: %w", field, err)
+		}
+		out[field] = value
 	}
+	connection, err := url.Parse(out["connection_string"].(string))
+	if err != nil || connection.Hostname() == "" {
+		return nil, fail("INVALID_CONNECTION", "stored database connection URL has no valid host")
+	}
+	port := 443
+	if connection.Port() != "" {
+		port, err = strconv.Atoi(connection.Port())
+		if err != nil {
+			return nil, fail("INVALID_CONNECTION", "stored database connection URL has an invalid port")
+		}
+	}
+	out["host"], out["port"] = connection.Hostname(), port
+	out["tls_verification"] = connection.Query().Get("sslmode") == "verify-full" || connection.Query().Get("ssl_cert_reqs") == "required"
 	return out, nil
 }
 
@@ -537,17 +806,30 @@ func (g *MCPGroup) rotateDatabase(ctx context.Context, a *auth.AuthInfo, args to
 	if err != nil {
 		return nil, err
 	}
-	return databaseView(*info), nil
+	out := databaseView(*info)
+	out["effects"] = "Database and deployments bound to its credential secrets were recycled; active connections may drop. Readiness must be reverified."
+	return out, nil
 }
 
 func (g *MCPGroup) deleteDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	if _, err := g.database(ctx, a, args.str("kind"), args.str("name")); err != nil {
 		return nil, err
 	}
+	volume, err := g.backendRepo.GetVolume(ctx, a.Workspace.Id, args.str("name")+"-backups")
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	if err := g.gws.DeleteDatabaseService(ctx, a, args.str("name")); err != nil {
 		return nil, err
 	}
-	return map[string]any{"deleted": args.str("name"), "kind": args.str("kind")}, nil
+	return map[string]any{
+		"deleted":                args.str("name"),
+		"kind":                   args.str("kind"),
+		"disk_retained":          true,
+		"disk_name":              args.str("name") + "-data",
+		"backup_volume_retained": volume != nil,
+		"backup_volume_name":     args.str("name") + "-backups",
+	}, nil
 }
 
 // --- volumes ---------------------------------------------------------------------------------
@@ -582,14 +864,21 @@ type stackSpec struct {
 
 // appNames maps app ids to names and back, once per call.
 func (g *MCPGroup) appNames(ctx context.Context, ws *types.Workspace) (byID, byName map[string]string, err error) {
-	page, err := g.backendRepo.ListAppsPaginated(ctx, ws.Id, types.AppFilter{Limit: 1000})
-	if err != nil {
-		return nil, nil, err
-	}
 	byID, byName = map[string]string{}, map[string]string{}
-	for _, app := range page.Data {
-		byID[app.ExternalId] = app.Name
-		byName[app.Name] = app.ExternalId
+	cursor := ""
+	for {
+		page, err := g.backendRepo.ListAppsPaginated(ctx, ws.Id, types.AppFilter{Limit: 1000, Cursor: cursor})
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, app := range page.Data {
+			byID[app.ExternalId] = app.Name
+			byName[app.Name] = app.ExternalId
+		}
+		if page.Next == "" || page.Next == cursor {
+			break
+		}
+		cursor = page.Next
 	}
 	return byID, byName, nil
 }
@@ -603,7 +892,13 @@ func stackView(s *types.Stack, byID map[string]string) map[string]any {
 			apps = append(apps, name)
 		}
 	}
-	return map[string]any{"name": s.Name, "id": s.ExternalId, "apps": apps}
+	return map[string]any{
+		"name":     s.Name,
+		"id":       s.ExternalId,
+		"apps":     apps,
+		"spec":     json.RawMessage(s.Spec),
+		"revision": fmt.Sprintf("%x", sha256.Sum256(s.Spec)),
+	}
 }
 
 func (g *MCPGroup) stack(ctx context.Context, ws *types.Workspace, name string) (*types.Stack, error) {
@@ -669,6 +964,9 @@ func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolA
 	if err != nil {
 		return nil, err
 	}
+	if expected := args.str("expected_revision"); expected != "" && expected != fmt.Sprintf("%x", sha256.Sum256(s.Spec)) {
+		return nil, fail("STALE_PLAN", "stack changed; reload it before applying")
+	}
 	byID, byName, err := g.appNames(ctx, a.Workspace)
 	if err != nil {
 		return nil, err
@@ -701,8 +999,34 @@ func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolA
 			delete(spec.Positions, id)
 		}
 	}
-	raw, _ := json.Marshal(spec)
-	updated, err := g.backendRepo.UpdateStack(ctx, a.Workspace.Id, s.ExternalId, s.Name, raw)
+	// Merge owned fields into the original object rather than dropping desired
+	// configuration or fields written by a newer dashboard.
+	full := map[string]any{}
+	_ = json.Unmarshal(s.Spec, &full)
+	if patch, ok := args["spec"].(map[string]any); ok {
+		for key, value := range patch {
+			full[key] = value
+		}
+	}
+	full["appIds"] = ids
+	full["positions"] = spec.Positions
+	raw, err := json.Marshal(full)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > stackSpecMaxBytes {
+		return nil, fail("INVALID_ARGS", "stack spec exceeds 256 KiB")
+	}
+	writer, ok := g.backendRepo.(interface {
+		UpdateStackIfUnchanged(context.Context, uint, string, string, json.RawMessage, json.RawMessage) (*types.Stack, error)
+	})
+	if !ok {
+		return nil, fail("UNSUPPORTED", "atomic stack updates unavailable")
+	}
+	updated, err := writer.UpdateStackIfUnchanged(ctx, a.Workspace.Id, s.ExternalId, s.Name, s.Spec, raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fail("STALE_PLAN", "stack changed during update; reload before retrying: %s", err)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -764,6 +1088,10 @@ func (g *MCPGroup) logs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (a
 	default:
 		return nil, fail("INVALID_ARGS", "pass one of name, deployment_id, stub_id, task_id, container_id")
 	}
+	requested := int(query.Limit)
+	if stream != "" {
+		query.Limit = 10000
+	}
 	res, err := g.eventRepo.GetLogs(ctx, query)
 	if err != nil {
 		return nil, err
@@ -782,7 +1110,11 @@ func (g *MCPGroup) logs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (a
 		}
 		out = append(out, line)
 	}
-	return out, nil
+	complete := stream == "" || len(out) >= requested || len(res.Logs) < int(query.Limit)
+	if len(out) > requested {
+		out = out[len(out)-requested:]
+	}
+	return map[string]any{"items": out, "complete": complete, "scanned": len(res.Logs), "scan_limit": query.Limit}, nil
 }
 
 func (g *MCPGroup) listTasks(ctx context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
@@ -805,19 +1137,31 @@ func (g *MCPGroup) listTasks(ctx context.Context, _ *auth.AuthInfo, args toolArg
 }
 
 func (g *MCPGroup) getTask(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	task, err := g.backendRepo.GetTaskWithRelated(ctx, args.str("task_id"))
-	if err != nil || task == nil || task.Workspace.ExternalId != a.Workspace.ExternalId {
-		return nil, fail("NOT_FOUND", "no task %s", args.str("task_id"))
+	deadline := time.Now().Add(time.Duration(args.num("wait_seconds", 0)) * time.Second)
+	for {
+		task, err := g.backendRepo.GetTaskWithRelated(ctx, args.str("task_id"))
+		if err != nil || task == nil || task.Workspace.ExternalId != a.Workspace.ExternalId {
+			return nil, fail("NOT_FOUND", "no task %s", args.str("task_id"))
+		}
+		status := strings.ToLower(string(task.Status))
+		if (status != "pending" && status != "running" && status != "retry") || !time.Now().Before(deadline) {
+			response, err := g.serve(ctx, http.MethodGet, g.config.GatewayService.HTTP.GetExternalURL()+"/api/v1/task/"+a.Workspace.ExternalId+"/"+task.ExternalId, nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			envelope := response.(map[string]any)
+			if body, ok := envelope["body"].(map[string]any); ok && envelope["is_error"] == false {
+				body["task_id"] = task.ExternalId
+				return body, nil
+			}
+			return response, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
-	return map[string]any{
-		"task_id":      task.ExternalId,
-		"status":       task.Status,
-		"container_id": task.ContainerId,
-		"stub_id":      task.Stub.ExternalId,
-		"created_at":   task.CreatedAt.Time,
-		"started_at":   task.StartedAt.Time,
-		"ended_at":     task.EndedAt.Time,
-	}, nil
 }
 
 func (g *MCPGroup) stopTask(ctx context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
@@ -877,8 +1221,19 @@ func (g *MCPGroup) metrics(ctx context.Context, a *auth.AuthInfo, args toolArgs)
 	}
 	out := map[string]any{"stub_id": stubID, "interval": interval, "points": points}
 	if len(points) > 0 {
-		out["now"] = points[len(points)-1]
+		out["now"] = points[len(points)-1] // retained for compatibility; this is a historical bucket
+		out["latest"] = points[len(points)-1]
+		latest := points[len(points)-1]["time"].(time.Time)
+		out["sample_age_seconds"] = end.Sub(latest).Seconds()
+		threshold := 2 * time.Minute
+		if interval == "1h" {
+			threshold = 2 * time.Hour
+		}
+		out["stale"] = end.Sub(latest) > threshold
+	} else {
+		out["stale"] = true
 	}
+	out["observed_at"] = end
 	return out, nil
 }
 
@@ -951,6 +1306,8 @@ func (g *MCPGroup) requestStats(ctx context.Context, a *auth.AuthInfo, args tool
 		"stub_id":        stubID,
 		"window_minutes": minutes,
 		"requests":       total.Requests,
+		"complete":       len(history.Events) < 5000,
+		"event_limit":    5000,
 		"per_minute":     float64(total.Requests) / float64(minutes),
 		"status_4xx":     total.Status4xx,
 		"status_5xx":     total.Status5xx,
@@ -1003,4 +1360,86 @@ func (g *MCPGroup) createWebhook(ctx context.Context, a *auth.AuthInfo, args too
 		return nil, err
 	}
 	return webhook, nil
+}
+
+func (g *MCPGroup) capabilities(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+	out := map[string]any{
+		"serverless_default":                      true,
+		"always_on":                               "autoscaler.min_containers=1",
+		"inline_response_limit_bytes":             maxInProcessBody,
+		"local_bridge_required_for_source_deploy": true,
+		"gpu_inventory_is_reservation":            false,
+		"gateway_operations":                      gatewayOperations(""),
+	}
+	// Available recovery workflows and durability qualification are separate capabilities.
+	out["database_recovery"] = map[string]any{
+		"mode":                        "object-store-flush for new Postgres/Redis; snapshots for legacy disks",
+		"conditional_writes_required": true,
+		"postgres_pitr":               true,
+		"scheduled_redis_backups":     false,
+		"single_machine_failure_rpo_zero_qualified": false,
+	}
+	out["disk_capacity"] = map[string]any{
+		"qcow":     "bounded ext4 block device; growth on writable host reattachment",
+		"snapshot": "directory driver does not enforce configured size",
+	}
+	out["service_scoped_auth"] = true
+	for key, path := range map[string]string{
+		"gpu_inventory": "/api/v1/machine/" + a.Workspace.ExternalId + "/gpus",
+		"limits":        "/api/v1/workspace/" + a.Workspace.ExternalId + "/limits",
+	} {
+		response, err := g.serve(ctx, http.MethodGet, g.config.GatewayService.HTTP.GetExternalURL()+path, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		value := response.(map[string]any)
+		if value["is_error"] == true {
+			out[key] = value
+		} else {
+			out[key] = value["body"]
+		}
+	}
+	return out, nil
+}
+
+func (g *MCPGroup) waitDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	d, err := g.target(ctx, a, args)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := d.Stub.UnmarshalConfig()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.TCP || (d.Stub.Type.Kind() == types.StubTypePod && len(cfg.Ports) == 0) {
+		return nil, fail("UNSUPPORTED_PROTOCOL", "verify this workload using its native protocol or task status")
+	}
+	wait := time.Duration(args.num("wait_seconds", 20)) * time.Second
+	if wait == 0 {
+		wait = time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	call := toolArgs{
+		"deployment_id": d.ExternalId,
+		"method":        "GET",
+		"path":          cmp.Or(args.str("path"), "/health"),
+		"port":          args["port"],
+	}
+
+	for {
+		response, err := g.invoke(ctx, a, call)
+		if err != nil {
+			return nil, err
+		}
+		value := response.(map[string]any)
+		if status, ok := value["status"].(int); ok && status >= 200 && status < 300 && value["is_error"] == false {
+			return map[string]any{"deployment_id": d.ExternalId, "ready": true, "health": value}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return map[string]any{"deployment_id": d.ExternalId, "ready": false, "health": value, "is_error": true, "code": "NOT_READY"}, nil
+		case <-time.After(time.Second):
+		}
+	}
 }

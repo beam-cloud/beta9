@@ -118,7 +118,7 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 func (g *WorkspaceGroup) CurrentWorkspace(ctx echo.Context) error {
 	authContext, _ := ctx.(*auth.HttpAuthContext)
 
-	serializedWorkspace, err := serializer.Serialize(authContext.AuthInfo.Workspace)
+	serializedWorkspace, err := serializer.Serialize(authContext.AuthInfo.Workspace.WithoutPrivateCredentials())
 	if err != nil {
 		return HTTPInternalServerError("Unable to serialize workspace")
 	}

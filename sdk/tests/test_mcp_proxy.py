@@ -125,7 +125,10 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
         [rpc("ping", 4), rpc("ping", 5)],
     )
 
-    init, tools, call, batch = out
+    init = next(m for m in out if isinstance(m, dict) and m.get("id") == 1)
+    tools = next(m for m in out if isinstance(m, dict) and m.get("id") == 2)
+    call = next(m for m in out if isinstance(m, dict) and m.get("id") == 3)
+    batch = next(m for m in out if isinstance(m, list))
     assert init["result"]["serverInfo"]["name"] == "beta9"
     assert init["result"]["instructions"].startswith("remote says hi")
     names = [t["name"] for t in tools["result"]["tools"]]
@@ -199,13 +202,15 @@ def test_deploy_tool_runs_cli_in_directory_and_reports_url(settings, monkeypatch
     )
 
     body = result["structuredContent"]
-    assert body["status"] == "deployed"
+    assert body["status"] == "accepted"
     assert body["url"] == "https://x.example" and body["deployment_id"] == "dep-1"
-    assert "Deployed web at https://x.example" in result["content"][0]["text"]
+    assert "Deployment accepted for web at https://x.example" in result["content"][0]["text"]
     job = tools.jobs[body["job_id"]]
     assert job.directory == str(project)
     assert job.command[1:] == [
         "deploy",
+        "--context",
+        "default",
         "--json",
         "--name",
         "web",
@@ -236,7 +241,7 @@ def test_deploy_tool_maps_empty_ports_to_a_worker(settings, monkeypatch, tmp_pat
     job = tools.jobs[body["structuredContent"]["job_id"]]
 
     assert "--no-ports" in job.command and "--port" not in job.command
-    assert "Deployed worker (deployment d)" in body["content"][0]["text"]
+    assert "Deployment accepted for worker (deployment d)" in body["content"][0]["text"]
 
 
 def test_deploy_tool_surfaces_cli_failure(settings, monkeypatch, tmp_path):
@@ -280,8 +285,9 @@ def test_deploy_status_returns_new_log_lines_from_cursor(settings, monkeypatch, 
         )["structuredContent"]
         seen += view.get("logs", [])
 
-    assert view["status"] == "deployed" and view["url"] == "u"
-    assert "logs" not in view  # the build log is dropped once deployed
+    assert view["status"] == "accepted" and view["url"] == "u"
+    assert "logs" in view  # completion must retain unread log lines
+    assert seen == ["one", "two", "three"]
     assert seen == sorted(set(seen), key=seen.index)  # each progress line at most once
     assert all(line in {"one", "two", "three"} for line in seen)  # JSON tail excluded
 
