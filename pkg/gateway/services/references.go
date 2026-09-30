@@ -357,6 +357,9 @@ func (gws *GatewayService) deploymentURL(stub *types.Stub, deployment *types.Dep
 	if stub.Type.Kind() != types.StubTypePod {
 		return common.BuildDeploymentLatestURL(externalURL, urlType, stub, deployment)
 	}
+	if cfg == nil || len(cfg.Ports) == 0 {
+		return "" // a worker: nothing listens, so there is nothing to link to
+	}
 	if cfg.TCP {
 		return common.BuildPodDeploymentURL(gws.appConfig.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost, deployment, cfg)
 	}
