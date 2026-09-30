@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .. import auth
-from ..config import DEFAULT_CONTEXT_NAME, get_settings
+from ..config import DEFAULT_CONTEXT_NAME, context_defaults, get_settings
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
@@ -309,7 +309,7 @@ class LocalTools:
         )
         self.jobs: Dict[str, DeployJob] = {}
         self.login_flow: Optional[auth.DeviceLogin] = None
-        self.login_available: bool = auth.login_configured()
+        self.login_available: bool = auth.login_configured(context_name)
 
     def available(self) -> List[Tool]:
         """(definition, handler) for every tool offered right now."""
@@ -384,7 +384,7 @@ class LocalTools:
 
     def login(self, _args: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            flow = self.login_flow = auth.DeviceLogin.start()
+            flow = self.login_flow = auth.DeviceLogin.start(context_defaults(self.context_name))
         except auth.LoginError as exc:
             return error_result(str(exc))
         opened = flow.open_browser()

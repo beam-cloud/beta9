@@ -9,12 +9,13 @@ token arrives.
 import json
 import sys
 import threading
+from dataclasses import replace
 from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
 from ..channel import ServiceClient
-from ..config import DEFAULT_CONTEXT_NAME, ConfigContext, get_settings, load_config
+from ..config import DEFAULT_CONTEXT_NAME, ConfigContext, context_defaults, get_settings
 from .tools import LocalTools, error_result
 
 PROTOCOL_VERSION = "2025-03-26"
@@ -32,19 +33,12 @@ def log(message: str) -> None:
 
 
 def context_or_none(name: str) -> Optional[ConfigContext]:
-    """The saved context or one from the environment token; never prompts."""
-    contexts = load_config()
-    if name in contexts and contexts[name].token:
-        return contexts[name]
-    settings = get_settings()
-    if settings.api_token:
-        return ConfigContext(
-            token=settings.api_token,
-            gateway_host=settings.gateway_host,
-            gateway_port=settings.gateway_port,
-            api_url=settings.api_url,
-        )
-    return None
+    """The saved context, or its defaults with the environment token; never prompts."""
+    context = context_defaults(name)
+    if context.token:
+        return context
+    token = get_settings().api_token
+    return replace(context, token=token) if token else None
 
 
 def _result(msg_id: Any, result: Any) -> Dict[str, Any]:
