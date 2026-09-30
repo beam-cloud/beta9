@@ -101,6 +101,13 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 		return err
 	}
 	skipDetails, _ := strconv.ParseBool(ctx.QueryParam("skip_details"))
+	info := *cc.AuthInfo
+	if !skipDetails && filters.WorkspaceID != info.Workspace.Id {
+		info.Workspace, err = g.backendRepo.GetWorkspace(ctx.Request().Context(), filters.WorkspaceID)
+		if err != nil {
+			return HTTPInternalServerError("Failed to retrieve task workspace")
+		}
+	}
 
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
 		return HTTPInternalServerError("Failed to list tasks")
@@ -111,7 +118,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 			tasks.Data[i].Workspace = tasks.Data[i].Workspace.WithoutPrivateCredentials()
 			tasks.Data[i].Stub.SanitizeConfig()
 			if !skipDetails {
-				if details := g.taskDetails(ctx.Request().Context(), cc.AuthInfo, &tasks.Data[i], false); len(details) > 0 {
+				if details := g.taskDetails(ctx.Request().Context(), &info, &tasks.Data[i], false); len(details) > 0 {
 					retrievalErrors[tasks.Data[i].ExternalId] = details
 				}
 			}

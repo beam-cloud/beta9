@@ -156,6 +156,8 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(
+		ctx,
+		t.fs.backendRepo,
 		&stub.Workspace,
 		stubConfig,
 	)

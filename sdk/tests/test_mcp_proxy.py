@@ -302,6 +302,42 @@ class FakeResponse:
         return self._payload
 
 
+def test_remote_retries_only_tools_advertised_as_read_only(monkeypatch):
+    remote = object.__new__(mcp_server.RemoteMCP)
+    remote.url = "http://gateway.example/api/v1/mcp"
+    remote.session = mcp_server.requests.Session()
+    remote.read_only_tools = set()
+    calls = []
+
+    def post(url, data, timeout):
+        message = json.loads(data)
+        if message["method"] == "tools/list":
+            return FakeResponse(
+                200,
+                {
+                    "result": {
+                        "tools": [
+                            {"name": "inspect", "annotations": {"readOnlyHint": True}},
+                            {"name": "get_or_create", "annotations": {"readOnlyHint": False}},
+                        ]
+                    }
+                },
+            )
+
+        calls.append(message["params"]["name"])
+        raise mcp_server.requests.ConnectionError("response lost after request")
+
+    monkeypatch.setattr(remote.session, "post", post)
+    monkeypatch.setattr(mcp_server.time, "sleep", lambda _: None)
+    remote.call(rpc("tools/list"))
+
+    for name, attempts in [("inspect", 3), ("get_or_create", 1), ("get_unknown", 1)]:
+        calls.clear()
+        with pytest.raises(mcp_server.requests.ConnectionError):
+            remote.call(rpc("tools/call", name=name))
+        assert calls == [name] * attempts
+
+
 def test_login_tool_drives_device_flow_and_saves_context(settings, monkeypatch, tmp_path):
     polls = iter(
         [

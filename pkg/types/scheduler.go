@@ -22,7 +22,7 @@ const (
 	WorkerStatusAvailable WorkerStatus = "available"
 	WorkerStatusPending   WorkerStatus = "pending"
 	WorkerStatusDisabled  WorkerStatus = "disabled"
-	WorkerStateTtlS       int          = 30
+	WorkerStateTtlS       int          = 60
 )
 
 const (
@@ -854,10 +854,7 @@ const (
 )
 const ContainerStateTtlSWhilePending int64 = 1800
 const ContainerStateTtlSWhileStopping int64 = 300
-
-// Running containers renew every ten seconds. Expire after three missed
-// heartbeats so replacement services can recover within a minute.
-const ContainerStateTtlS int64 = 30
+const ContainerStateTtlS int64 = 120
 
 // Managed endpoint processes are long-lived and report engine liveness through
 // their controller. Keep their ownership record across a bounded gateway outage;

@@ -117,7 +117,7 @@ SQL
 $POSTGRES_DB = host=127.0.0.1 port=5432 dbname=$POSTGRES_DB
 [pgbouncer]
 listen_addr=*
-listen_port=6432
+listen_port=$BEAM_DATABASE_POOL_PORT
 unix_socket_dir=/tmp
 auth_type=scram-sha-256
 auth_file=/tmp/pgbouncer-users

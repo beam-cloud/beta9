@@ -22,6 +22,10 @@ from .tools import LocalTools, error_result
 
 PROTOCOL_VERSION = "2025-03-26"
 REMOTE_TIMEOUT = 120
+# Database creation can include the gateway's ten-minute image build.
+TOOL_TIMEOUTS = {"create_database": 660}
+READ_RETRIES = 3
+RETRY_DELAY = 0.3
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -70,6 +74,7 @@ class RemoteMCP:
         finally:
             client.close()
         self.session: requests.Session = requests.Session()
+        self.read_only_tools = set()
         self.session.headers.update(
             {
                 "Authorization": f"Bearer {context.token or ''}",
@@ -80,39 +85,39 @@ class RemoteMCP:
         )
 
     def call(self, message: Any) -> Tuple[int, Any]:
-        timeout = REMOTE_TIMEOUT
         params = message.get("params", {}) if isinstance(message, dict) else {}
         name = params.get("name", "")
-        if name == "create_database":
-            timeout = 660  # The gateway allows ten minutes for the first image build.
-        read_only = name.startswith(("get_", "list_")) or name in {
-            "whoami",
-            "capabilities",
-            "logs",
-            "metrics",
-            "database_credentials",
-            "api_routes",
-        }
-        if name == "api":
-            read_only = params.get("arguments", {}).get("method", "GET").upper() in {
-                "GET",
-                "HEAD",
-                "OPTIONS",
-            }
-        for attempt in range(3):
+        timeout = TOOL_TIMEOUTS.get(name, REMOTE_TIMEOUT)
+        attempts = READ_RETRIES if name in self.read_only_tools else 1
+
+        for attempt in range(attempts):
             try:
                 response = self.session.post(self.url, data=json.dumps(message), timeout=timeout)
                 break
             except requests.ConnectionError:
-                if not read_only or attempt == 2:
+                if attempt == attempts - 1:
                     raise
-                time.sleep(0.3 * (attempt + 1))
+                time.sleep(RETRY_DELAY * (attempt + 1))
         if response.status_code == 202 or not response.content:
             return response.status_code, None
         try:
-            return response.status_code, response.json()
+            body = response.json()
         except ValueError:
             return response.status_code, None
+
+        # Trust the gateway's catalog, not tool-name prefixes. Unknown calls
+        # are never retried: their side effects may already have happened.
+        if (
+            isinstance(message, dict)
+            and message.get("method") == "tools/list"
+            and isinstance(body, dict)
+        ):
+            self.read_only_tools = {
+                tool["name"]
+                for tool in body.get("result", {}).get("tools", [])
+                if tool.get("annotations", {}).get("readOnlyHint") is True
+            }
+        return response.status_code, body
 
 
 class StdioProxy:
@@ -136,7 +141,7 @@ class StdioProxy:
         self, stdin: Optional[Iterable[bytes]] = None, stdout: Optional[BinaryIO] = None
     ) -> int:
         self._stdout = stdout or sys.stdout.buffer
-        with ThreadPoolExecutor(max_workers=8, thread_name_prefix="beam-mcp") as executor:
+        with ThreadPoolExecutor(max_workers=8, thread_name_prefix="mcp") as executor:
             for raw in stdin or sys.stdin.buffer:
                 line = raw.strip()
                 if not line:
@@ -167,8 +172,11 @@ class StdioProxy:
                 with self._request_lock:
                     self._requests.pop(message.get("id"), None)
 
-    def notify(self, method: str) -> None:
-        self._write({"jsonrpc": "2.0", "method": method})
+    def notify(self, method: str, params: Optional[Dict[str, Any]] = None) -> None:
+        message = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        self._write(message)
 
     def _write(self, message: Any) -> None:
         if message is None:
@@ -191,6 +199,9 @@ class StdioProxy:
                 if cancelled is not None:
                     cancelled.set()
             return None
+        if self.remote is None and self.connection_error:
+            self._connect()
+
         if method == "initialize":
             return self._initialize(msg_id)
         if method == "ping":
@@ -252,8 +263,6 @@ class StdioProxy:
 
     def _tool_list(self) -> List[Dict[str, Any]]:
         tools: List[Dict[str, Any]] = []
-        if self.remote is None and self.connection_error:
-            self._connect()
         if self.remote is not None:
             _, body = self._remote_call({"jsonrpc": "2.0", "id": "tools", "method": "tools/list"})
             if isinstance(body, dict):
@@ -262,8 +271,6 @@ class StdioProxy:
 
     def _tools_call(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         name = params.get("name", "")
-        if self.remote is None and self.connection_error:
-            self._connect()
         handler = self.tools.handler(name)
         if handler is not None:
             with self._request_lock:
@@ -271,16 +278,13 @@ class StdioProxy:
             token = params.get("_meta", {}).get("progressToken")
             self.tools.request.progress = None
             if token is not None:
-                self.tools.request.progress = lambda progress, detail: self._write(
+                self.tools.request.progress = lambda progress, detail: self.notify(
+                    "notifications/progress",
                     {
-                        "jsonrpc": "2.0",
-                        "method": "notifications/progress",
-                        "params": {
-                            "progressToken": token,
-                            "progress": progress,
-                            "message": json.dumps(detail),
-                        },
-                    }
+                        "progressToken": token,
+                        "progress": progress,
+                        "message": json.dumps(detail),
+                    },
                 )
             try:
                 return _result(msg_id, handler(params.get("arguments") or {}))
