@@ -413,6 +413,71 @@ def test_mcp_install_writes_tokenless_config_for_each_client(settings, monkeypat
     assert mcp_cli.server_command("staging")[-2:] == ["--context", "staging"]
 
 
+def test_mcp_install_accepts_jsonc_and_blank_configs(settings, tmp_path):
+    from beta9.cli import mcp as mcp_cli
+
+    path = tmp_path / "mcp.json"
+    path.write_text(
+        textwrap.dedent(
+            """
+            // servers I use, see https://example.com/docs
+            {
+              "mcpServers": {
+                /* keep this one */
+                "github": {"command": "npx", "args": ["-y", "gh-mcp", "--flag=//not-a-comment"],},
+              },
+            }
+            """
+        )
+    )
+    client = mcp_cli.AgentClient(id="cursor", label="Cursor", markers=[], config=str(path))
+    mcp_cli.install_client(client, ["/opt/bin/beta9", "mcp"])
+    data = json.loads(path.read_text())
+    assert data["mcpServers"]["github"]["args"] == ["-y", "gh-mcp", "--flag=//not-a-comment"]
+    assert data["mcpServers"]["beta9"] == {"command": "/opt/bin/beta9", "args": ["mcp"]}
+    assert mcp_cli.configured(client)
+
+    path.write_text("\n\n")
+    mcp_cli.install_client(client, ["/opt/bin/beta9", "mcp"])
+    assert "beta9" in json.loads(path.read_text())["mcpServers"]
+
+
+def test_mcp_install_isolates_a_broken_config_to_its_client(settings, tmp_path):
+    from beta9.cli import mcp as mcp_cli
+
+    broken = tmp_path / "mcp.json"
+    broken.write_text('{\n  "mcpServers": {\n    "x": {"command": }\n  }\n}\n')
+    cursor = mcp_cli.AgentClient(id="cursor", label="Cursor", markers=[], config=str(broken))
+    codex = mcp_cli.AgentClient(
+        id="codex", label="Codex", markers=[], config=str(tmp_path / "config.toml")
+    )
+
+    written, failed = mcp_cli.install_clients([cursor, codex], ["/opt/bin/beta9", "mcp"])
+
+    assert list(written) == ["codex"]
+    assert "[mcp_servers.beta9]" in (tmp_path / "config.toml").read_text()
+    assert list(failed) == ["cursor"]
+    assert failed["cursor"].startswith(f"{broken} is not valid JSON (line 3, column ")
+    assert "Expecting value" in failed["cursor"]
+    assert broken.read_text().count("\n") == 5
+    assert not mcp_cli.configured(cursor)
+
+
+def test_cli_path_prefers_the_running_entry_point(settings, monkeypatch, tmp_path):
+    from beta9 import config
+
+    own = tmp_path / "bin" / "beta9"
+    own.parent.mkdir()
+    own.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(config.shutil, "which", lambda name: "/old/bin/beta9")
+
+    monkeypatch.setattr(sys, "argv", [str(own), "setup", "agent"])
+    assert config.cli_path() == str(own)
+
+    monkeypatch.setattr(sys, "argv", ["/usr/bin/python3", "-m", "beta9"])
+    assert config.cli_path() == "/old/bin/beta9"
+
+
 def test_skill_installs_rendered_for_cli_name(settings, tmp_path):
     from beta9.skills import install_skill
 
