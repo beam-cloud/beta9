@@ -228,3 +228,16 @@ func TestExpandStubReferencesResolvesOwnURLBeforeFirstDeploy(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"BASE_URL=https://app.example.com/pod/router/latest/20128"}, env)
 }
+
+func TestDeploymentURLIsEmptyForAPortlessPod(t *testing.T) {
+	gws := &GatewayService{}
+	gws.appConfig.GatewayService.HTTP.ExternalHost = "app.example.com"
+	gws.appConfig.GatewayService.HTTP.ExternalPort = 443
+	gws.appConfig.GatewayService.HTTP.TLS = true
+	gws.appConfig.GatewayService.InvokeURLType = common.InvokeUrlTypePath
+	stub := &types.Stub{Type: types.StubType(types.StubTypePodDeployment)}
+	deployment := &types.Deployment{Name: "worker", Subdomain: "worker-abc"}
+
+	require.Equal(t, "", gws.deploymentURL(stub, deployment, &types.StubConfigV1{}))
+	require.Equal(t, "https://app.example.com/pod/worker/latest/8000", gws.deploymentURL(stub, deployment, &types.StubConfigV1{Ports: []uint32{8000}}))
+}
