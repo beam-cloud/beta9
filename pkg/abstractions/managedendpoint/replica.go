@@ -352,7 +352,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 	if err != nil {
 		return nil, err
 	}
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(workspace, *stubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(ctx, c.s.backend, workspace, *stubConfig)
 	if err != nil {
 		return nil, err
 	}

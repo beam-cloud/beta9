@@ -248,7 +248,9 @@ func SetPublicURL(ctx context.Context, config types.AppConfig, backendRepo repos
 	fullPath := GetTaskOutputPath(authInfo.Workspace.Name, task, outputId, filename)
 
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClientWithDefaultPresignEndpoint(
+			ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage, config.Storage.WorkspaceStorage,
+		)
 		if err != nil {
 			return "", err
 		}

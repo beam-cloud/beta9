@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const defaultDiskSnapshotListLimit uint64 = 100
@@ -41,6 +43,42 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 	}
 
 	if existing, err := r.GetDisk(ctx, workspaceId, name); err == nil {
+		if disk.Driver != "" && types.NormalizeDurableDiskDriver(disk.Driver) != existing.Driver {
+			return nil, fmt.Errorf("disk %s uses driver %s; changing drivers requires an explicit data migration", name, existing.Driver)
+		}
+		if disk.Filesystem != "" && disk.Filesystem != existing.Filesystem {
+			return nil, fmt.Errorf("disk %s filesystem cannot be changed", name)
+		}
+
+		if disk.Size != "" && disk.Size != existing.Size {
+			requested, err := configuredDiskBytes(disk.Size)
+			if err != nil {
+				return nil, err
+			}
+
+			previous, err := configuredDiskBytes(existing.Size)
+			if err != nil {
+				return nil, fmt.Errorf("disk %s has an invalid stored size; reconcile it before resizing", name)
+			}
+			if requested < previous {
+				return nil, fmt.Errorf("disk %s cannot shrink from %s to %s", name, existing.Size, disk.Size)
+			}
+
+			// This records desired capacity. The worker must grow and verify the
+			// actual block device/filesystem on the next attachment.
+			query := `
+			UPDATE disk SET size = $1, updated_at = CURRENT_TIMESTAMP
+			WHERE id = $2 AND size = $3
+			RETURNING ` + diskColumns + `;
+			`
+
+			var updated types.Disk
+			if err := r.client.GetContext(ctx, &updated, query, strings.TrimSpace(disk.Size), existing.Id, existing.Size); err != nil {
+				return nil, fmt.Errorf("disk size changed concurrently or could not be saved: %w", err)
+			}
+			return &updated, nil
+		}
+
 		return existing, nil
 	} else if err != sql.ErrNoRows {
 		return nil, err
@@ -56,6 +94,9 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 	}
 	if driver != types.DurableDiskDriverSnapshot && driver != types.DurableDiskDriverQcow {
 		return nil, fmt.Errorf("unsupported durable disk driver %q", driver)
+	}
+	if _, err := configuredDiskBytes(disk.Size); err != nil {
+		return nil, err
 	}
 
 	query := fmt.Sprintf(`
@@ -79,6 +120,31 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 		return nil, err
 	}
 	return &created, nil
+}
+
+var diskSizePattern = regexp.MustCompile(`^[1-9][0-9]*(Ki|Mi|Gi|Ti|K|M|G|T)?$`)
+
+func configuredDiskBytes(size string) (int64, error) {
+	size = strings.TrimSpace(size)
+	if !diskSizePattern.MatchString(size) {
+		return 0, fmt.Errorf("invalid disk size %q; use positive bytes or Ki/Mi/Gi/Ti/K/M/G/T", size)
+	}
+
+	normalized := size
+	if strings.HasSuffix(size, "K") {
+		normalized = strings.TrimSuffix(size, "K") + "k"
+	}
+
+	quantity, err := resource.ParseQuantity(normalized)
+	if err != nil {
+		return 0, fmt.Errorf("invalid disk size %q: %w", size, err)
+	}
+
+	value, ok := quantity.AsInt64()
+	if !ok || value <= 0 {
+		return 0, fmt.Errorf("disk size %q is out of range", size)
+	}
+	return value, nil
 }
 
 func (r *PostgresBackendRepository) DeleteDisk(ctx context.Context, workspaceId uint, name string) error {

@@ -509,6 +509,8 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(
+		ctx,
+		ss.backendRepo,
 		authInfo.Workspace,
 		stubConfig,
 	)

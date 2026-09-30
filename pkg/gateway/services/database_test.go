@@ -13,7 +13,7 @@ func TestDatabaseConnectionString(t *testing.T) {
 		{"redis", "bob", "rediss://bob:p%40ss@h:443/0?ssl_cert_reqs=none"},
 	}
 	for _, tt := range tests {
-		if got := databaseConnectionString(tt.kind, tt.user, "p@ss", "h:443", "db"); got != tt.want {
+		if got := databaseConnectionString(tt.kind, tt.user, "p@ss", "h:443", "db", false); got != tt.want {
 			t.Errorf("%s/%s = %q, want %q", tt.kind, tt.user, got, tt.want)
 		}
 	}
@@ -24,7 +24,7 @@ func TestDatabaseConnectionString(t *testing.T) {
 
 func TestDatabaseSecretNames(t *testing.T) {
 	pg := databaseSecrets(databaseProducts["postgres"], "app-db")
-	if pg.URL != "BETA9_POSTGRES_APP_DB_URL" || len(pg.all()) != 4 || len(pg.bound()) != 3 {
+	if pg.URL != "BETA9_POSTGRES_APP_DB_URL" || len(pg.all()) != 5 || len(pg.bound()) != 3 {
 		t.Fatalf("postgres names: %+v", pg)
 	}
 	rd := databaseSecrets(databaseProducts["redis"], "cache")

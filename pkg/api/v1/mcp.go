@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"strings"
@@ -24,6 +25,8 @@ const mcpProtocolVersion = "2025-03-26"
 // MCPGateway is what the tools need from the assembled gateway service.
 type MCPGateway interface {
 	DatabaseManager
+	DatabaseBackups(context.Context, *types.Workspace, string) (*types.DatabaseBackupStatus, error)
+	BackupDatabase(context.Context, *auth.AuthInfo, string) (*types.DatabaseBackupStatus, error)
 	ListDeployments(ctx context.Context, in *pb.ListDeploymentsRequest) (*pb.ListDeploymentsResponse, error)
 	StopDeployment(ctx context.Context, in *pb.StopDeploymentRequest) (*pb.StopDeploymentResponse, error)
 	StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error)
@@ -184,6 +187,12 @@ func (a toolArgs) str(key string) string {
 	return strings.TrimSpace(v)
 }
 
+// rawString preserves significant whitespace in credentials and request bodies.
+func (a toolArgs) rawString(key string) string {
+	v, _ := a[key].(string)
+	return v
+}
+
 func (a toolArgs) num(key string, fallback float64) float64 {
 	if v, ok := a[key].(float64); ok {
 		return v
@@ -260,9 +269,40 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 			}
 		}
 	}
+
+	// Validate shared bounded fields before any backend call or integer conversion.
+	bounds := map[string][2]float64{
+		"limit":          {1, 1000},
+		"offset":         {0, 1000000},
+		"tail":           {1, 10000},
+		"window_minutes": {1, 10080},
+		"since_minutes":  {0, 10080},
+		"wait_seconds":   {0, 55},
+		"containers":     {0, 1000},
+		"port":           {0, 65535},
+		"cpu":            {1, 1000000},
+		"memory":         {1, 10000000},
+	}
+	for key, bound := range bounds {
+		raw, exists := args[key]
+		if !exists {
+			continue
+		}
+
+		number, ok := raw.(float64)
+		valid := ok && math.Trunc(number) == number && number >= bound[0] && number <= bound[1]
+		if !valid {
+			return toolResult(map[string]any{
+				"code":  "INVALID_ARGS",
+				"error": fmt.Sprintf("%s must be an integer between %g and %g", key, bound[0], bound[1]),
+			}, true)
+		}
+	}
+
 	if tool.Confirm != "" && !toolArgs(args).boolean("confirm") {
 		return toolResult(map[string]any{"error": tool.Confirm + " Call again with confirm=true.", "code": "NEEDS_CONFIRMATION"}, true)
 	}
+
 	out, err := tool.Run(auth.ContextWithAuthInfo(ctx, authInfo), authInfo, toolArgs(args))
 	if err != nil {
 		code := "ERROR"
@@ -275,11 +315,19 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 		}
 		return toolResult(map[string]any{"error": err.Error(), "code": code}, true)
 	}
-	return toolResult(out, false)
+
+	failed := false
+	if response, ok := out.(map[string]any); ok {
+		failed, _ = response["is_error"].(bool)
+	}
+	return toolResult(out, failed)
 }
 
 // toolResult wraps a tool's value; structuredContent must be an object, so lists become {"items": [...]}.
 func toolResult(value any, isError bool) map[string]any {
+	if value == nil {
+		value = map[string]any{}
+	}
 	if reflect.ValueOf(value).Kind() == reflect.Slice {
 		value = map[string]any{"items": value}
 	}

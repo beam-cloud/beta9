@@ -18,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
@@ -70,7 +71,7 @@ func (s *Worker) qcowVolumeKey(request *types.ContainerRequest, mount *types.Mou
 	return key
 }
 
-func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) error {
+func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (retErr error) {
 	if s.diskManager == nil {
 		return fmt.Errorf("qcow durable disks are not enabled on this worker")
 	}
@@ -87,6 +88,18 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	newest, err := s.latestQcowSnapshotRow(ctx, request, mount)
 	if err != nil {
 		return err
+	}
+	journal, committed, err := s.openDatabaseDiskJournal(ctx, request, mount, newest, sizeBytes)
+	if err != nil {
+		return err
+	}
+	if journal != nil {
+		newest = committed
+		defer func() {
+			if retErr != nil {
+				_ = journal.Close()
+			}
+		}()
 	}
 	entries := s.qcowChain(key)
 	rows := make([]*types.DiskSnapshot, 0, len(entries))
@@ -122,7 +135,9 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	manifestDuration := time.Since(phaseStart)
 	phaseStart = time.Now()
 
-	sizeBytes = max(sizeBytes, qcowChainVirtualSize(manifests))
+	if publishedSize := qcowChainVirtualSize(manifests); sizeBytes < publishedSize {
+		return fmt.Errorf("durable disk %q cannot shrink from %d to %d bytes", mount.DurableDisk.Name, publishedSize, sizeBytes)
+	}
 	attachSpec := disk.AttachSpec{
 		Key:              key,
 		VirtualSizeBytes: sizeBytes,
@@ -130,6 +145,7 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 		Mountpoint:       mount.LocalPath,
 		Chain:            chain,
 		Owner:            request.ContainerId,
+		Journal:          journal,
 	}
 	if s.runtimeOwnsBlockRoot() {
 		// The guest consumes the volume as a block device; nothing is mounted
@@ -137,7 +153,7 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 		attachSpec.Export = disk.ExportVhostUser
 		attachSpec.Freeze = s.guestDiskFreezer(request.ContainerId, mount)
 	}
-	_, err = s.diskManager.Attach(ctx, attachSpec, &qcowChunkSource{cacheReader: s.durableDiskSnapshotCacheReader(), stores: stores})
+	volume, err := s.diskManager.Attach(ctx, attachSpec, &qcowChunkSource{cacheReader: s.durableDiskSnapshotCacheReader(), stores: stores})
 	if err != nil {
 		return fmt.Errorf("attach qcow durable disk %q: %w", mount.DurableDisk.Name, err)
 	}
@@ -155,7 +171,105 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	// flattened publish that bounds restore chains.
 	s.qcowChains.Store(key, entries)
 	s.reportQcowChainContent(request, entries)
+	if journal != nil {
+		go s.checkpointDatabaseDisk(request, mount, volume, journal)
+	}
 	return nil
+}
+
+// openDatabaseDiskJournal resolves the authoritative head before consulting
+// snapshot caches. Catalog rows published by an old owner cannot override it.
+func (s *Worker) openDatabaseDiskJournal(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, newest *types.DiskSnapshot, size int64) (*disk.Journal, *types.DiskSnapshot, error) {
+	config := requestStubConfig(request)
+	if mount.ReadOnly || config == nil || config.EffectiveDatabaseConfig() == nil {
+		return nil, newest, nil
+	}
+	if config.EffectiveDatabaseConfig().DurabilityMode != "object-store-flush" {
+		return nil, newest, nil
+	}
+	if s.runtimeOwnsBlockRoot() {
+		return nil, nil, fmt.Errorf("database flush durability requires a host-mounted disk on this worker")
+	}
+	if newest == nil && mount.DurableDisk.SourceSnapshotId != "" {
+		var err error
+		newest, err = s.seedDurableDiskSnapshot(ctx, request, mount)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	store, err := newDurableDiskSnapshotWriteStore(ctx, request)
+	if err != nil {
+		return nil, nil, err
+	}
+	prefix := path.Join("durable-disks", types.SafeDurableDiskName(mount.DurableDisk.Name), "journal")
+	owner := request.ContainerId + "/" + uuid.NewString()
+	journal, err := disk.OpenJournal(ctx, store.client, prefix, owner, durableDiskSnapshotExternalID(newest), size)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshotID, _, _ := journal.State()
+	if snapshotID == "" {
+		return journal, nil, nil
+	}
+	if newest != nil && newest.ExternalId == snapshotID {
+		return journal, newest, nil
+	}
+	response, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{
+		WorkspaceId: cacheRequestWorkspaceID(request), SnapshotId: snapshotID,
+	}))
+	if err != nil {
+		_ = journal.Close()
+		return nil, nil, err
+	}
+	committed := durableDiskSnapshotFromProto(response.Snapshot)
+	if committed == nil || committed.ManifestKey == "" {
+		_ = journal.Close()
+		return nil, nil, fmt.Errorf("committed database snapshot %s is unavailable", snapshotID)
+	}
+	return journal, committed, nil
+}
+
+func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *types.Mount, volume *disk.Volume, journal *disk.Journal) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	key := s.qcowVolumeKey(request, mount)
+	lastCheckpoint := time.Now()
+	for {
+		requested := false
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-journal.Checkpoints():
+			requested = true
+		case <-ticker.C:
+		}
+		current, attached := s.diskManager.Volume(key)
+		if !attached || current != volume {
+			return
+		}
+		if err := journal.Check(); err != nil {
+			log.Error().Err(err).Str("disk", mount.DurableDisk.Name).Msg("stopping database after disk persistence failure")
+			if err := s.stopContainer(request.ContainerId, true); err != nil {
+				log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to stop database")
+			}
+			return
+		}
+		_, _, pending := journal.State()
+		if pending == 0 || (!requested && pending < 32<<20 && time.Since(lastCheckpoint) < 5*time.Minute) {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
+		err := withDurableDiskLock(ctx, mount, func() error {
+			_, err := s.snapshotQcowDurableDiskMount(ctx, request, mount, durableDiskSyncExplicit)
+			return err
+		})
+		cancel()
+		if err != nil {
+			log.Error().Err(err).Str("disk", mount.DurableDisk.Name).Msg("database checkpoint failed; committed journal retained")
+		} else {
+			lastCheckpoint = time.Now()
+		}
+	}
 }
 
 // runtimeOwnsBlockRoot reports whether the pool runtime attaches qcow disks to

@@ -86,7 +86,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		}
 	}
 
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.StubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Ctx, i.BackendRepo, i.Workspace, *i.StubConfig)
 	if err != nil {
 		return err
 	}

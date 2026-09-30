@@ -63,6 +63,7 @@ def common(**_):
     help="Run on a specific reserved machine.",
 )
 @override_config_options
+@click.option("--name", default=None, help="Application name for this one-off workload.")
 @click.option(
     "--json", "json_output", is_flag=True, help="Return detached container metadata as JSON."
 )

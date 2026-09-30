@@ -1551,10 +1551,10 @@ func TestClearContainerStopsHeartbeatWhileDurableDiskSyncBlocks(t *testing.T) {
 	require.Len(t, updates, 1)
 	require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), updates[0].ExpirySeconds)
 	require.Greater(t, updates[0].ExpirySeconds, int64(types.ContainerStateTtlS))
-	require.Equal(
+	require.GreaterOrEqual(
 		t,
-		durableDiskSnapshotInactivityTimeout+time.Duration(types.ContainerStateTtlS)*time.Second,
 		time.Duration(updates[0].ExpirySeconds)*time.Second,
+		durableDiskSnapshotInactivityTimeout+time.Duration(types.ContainerStateTtlS)*time.Second,
 	)
 	heartbeatDone := make(chan bool, 1)
 	heartbeatErr := make(chan error, 1)

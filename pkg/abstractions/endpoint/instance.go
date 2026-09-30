@@ -50,7 +50,7 @@ func (i *endpointInstance) ensureReadyForTasklessRequest() error {
 
 func (i *endpointInstance) startContainers(containersToRun int) error {
 	// i.StubConfig is what Sync refreshes; the buffer keeps the copy it was created with.
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.StubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Ctx, i.BackendRepo, i.Workspace, *i.StubConfig)
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/output"
@@ -100,21 +101,26 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 		return err
 	}
 	skipDetails, _ := strconv.ParseBool(ctx.QueryParam("skip_details"))
-
-	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), ctx.Param("workspaceId"))
-	if err != nil {
-		return HTTPBadRequest("Invalid workspace ID")
+	info := *cc.AuthInfo
+	if !skipDetails && filters.WorkspaceID != info.Workspace.Id {
+		info.Workspace, err = g.backendRepo.GetWorkspace(ctx.Request().Context(), filters.WorkspaceID)
+		if err != nil {
+			return HTTPInternalServerError("Failed to retrieve task workspace")
+		}
 	}
 
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
 		return HTTPInternalServerError("Failed to list tasks")
 	} else {
 
+		retrievalErrors := map[string]map[string]string{}
 		for i := range tasks.Data {
+			tasks.Data[i].Workspace = tasks.Data[i].Workspace.WithoutPrivateCredentials()
 			tasks.Data[i].Stub.SanitizeConfig()
 			if !skipDetails {
-				g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, &tasks.Data[i])
-				g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+				if details := g.taskDetails(ctx.Request().Context(), &info, &tasks.Data[i], false); len(details) > 0 {
+					retrievalErrors[tasks.Data[i].ExternalId] = details
+				}
 			}
 		}
 
@@ -123,7 +129,10 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 			return HTTPInternalServerError("Failed to serialize response")
 		}
 
-		return ctx.JSON(http.StatusOK, serializedTasks)
+		response := serializedTasks.(map[string]interface{})
+		response["retrieval_complete"] = len(retrievalErrors) == 0
+		response["retrieval_errors"] = retrievalErrors
+		return ctx.JSON(http.StatusOK, response)
 	}
 }
 
@@ -181,18 +190,20 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 				return HTTPNotFound()
 			}
 
-			task.Workspace = *cc.AuthInfo.Workspace
+			task.Workspace = cc.AuthInfo.Workspace.WithoutPrivateCredentials()
 			task.Stub.SanitizeConfig()
 
-			g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
-			g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
-			g.addResultToTask(ctx.Request().Context(), task, cc.AuthInfo)
+			retrievalErrors := g.taskDetails(ctx.Request().Context(), cc.AuthInfo, task, true)
 
 			serializedTask, err := serializer.Serialize(task)
 			if err != nil {
 				return HTTPInternalServerError("Failed to serialize task")
 			}
-			jsonBytes, err := json.Marshal(serializedTask)
+			response := serializedTask.(map[string]interface{})
+			response["retrieval_complete"] = len(retrievalErrors) == 0
+			response["retrieval_errors"] = retrievalErrors
+			response["result_available"] = len(task.Result) > 0
+			jsonBytes, err := json.Marshal(response)
 			if err != nil {
 				return HTTPInternalServerError("Failed to marshal task to JSON")
 			}
@@ -234,20 +245,39 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 			return HTTPNotFound()
 		}
 
-		task.Workspace = *cc.AuthInfo.Workspace
+		task.Workspace = cc.AuthInfo.Workspace.WithoutPrivateCredentials()
 		task.Stub.SanitizeConfig()
 
-		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
-		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
-		g.addResultToTask(ctx.Request().Context(), task, cc.AuthInfo)
+		retrievalErrors := g.taskDetails(ctx.Request().Context(), cc.AuthInfo, task, true)
 
 		serializedTask, err := serializer.Serialize(task)
 		if err != nil {
 			return err
 		}
 
-		return ctx.JSON(http.StatusOK, serializedTask)
+		response := serializedTask.(map[string]interface{})
+		response["retrieval_complete"] = len(retrievalErrors) == 0
+		response["retrieval_errors"] = retrievalErrors
+		response["result_available"] = len(task.Result) > 0
+		return ctx.JSON(http.StatusOK, response)
 	}
+}
+
+// taskDetails keeps partial task metadata usable while reporting failed reads.
+func (g *TaskGroup) taskDetails(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated, includeResult bool) map[string]string {
+	failures := map[string]string{}
+	if err := g.addOutputsToTask(ctx, authInfo, task); err != nil {
+		failures["outputs"] = "Artifact retrieval failed; retry get_task."
+	}
+	if err := g.addStatsToTask(ctx, authInfo.Workspace.Name, task); err != nil {
+		failures["stats"] = "Live task statistics are unavailable; retry get_task."
+	}
+	if includeResult {
+		if err := g.addResultToTask(ctx, task, authInfo); err != nil {
+			failures["result"] = "Result retrieval failed; retry get_task."
+		}
+	}
+	return failures
 }
 
 func (g *TaskGroup) addOutputsToTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
@@ -303,6 +333,10 @@ func (g *TaskGroup) addResultToTask(ctx context.Context, t *types.TaskWithRelate
 		fullPath := task.GetTaskResultPath(t.ExternalId)
 		result, err := storageClient.Download(ctx, fullPath)
 		if err != nil {
+			var apiError smithy.APIError
+			if errors.As(err, &apiError) && apiError.ErrorCode() == "NoSuchKey" {
+				return nil // One-off containers and pending tasks may have no return value.
+			}
 			return err
 		}
 

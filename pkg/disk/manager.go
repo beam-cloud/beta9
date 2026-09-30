@@ -282,7 +282,11 @@ func (m *Manager) DetachOwned(ctx context.Context, key, owner string) error {
 // detachVolume takes volume offline and unregisters it, unless the key has
 // meanwhile been taken by another attach.
 func (m *Manager) detachVolume(ctx context.Context, key string, volume *Volume) error {
-	if err := volume.detach(ctx); err != nil {
+	err := volume.detach(ctx)
+	volume.mu.Lock()
+	attached := volume.state.Attached
+	volume.mu.Unlock()
+	if attached {
 		return err
 	}
 	m.mu.Lock()
@@ -290,7 +294,7 @@ func (m *Manager) detachVolume(ctx context.Context, key string, volume *Volume) 
 		delete(m.volumes, key)
 	}
 	m.mu.Unlock()
-	return nil
+	return err
 }
 
 // Close detaches every volume and destroys the spare pool. For worker
@@ -379,7 +383,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 // vhost-user volume is never adopted: its consumer, a VM, does not survive
 // the restart (the microvm runtime kills leftovers), so it is torn down.
 func (m *Manager) adoptVolume(dir string, state *volumeState) bool {
-	if state.exportMode() == ExportVhostUser {
+	if state.Journal || state.exportMode() == ExportVhostUser {
 		return false
 	}
 	if !processAlive(state.QSDPid, m.binaries.qsdComm()) || !isMountpoint(state.Mountpoint) {

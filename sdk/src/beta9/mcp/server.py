@@ -9,6 +9,8 @@ token arrives.
 import json
 import sys
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Tuple
 
@@ -20,6 +22,10 @@ from .tools import LocalTools, error_result
 
 PROTOCOL_VERSION = "2025-03-26"
 REMOTE_TIMEOUT = 120
+# Database creation can include the gateway's ten-minute image build.
+TOOL_TIMEOUTS = {"create_database": 660}
+READ_RETRIES = 3
+RETRY_DELAY = 0.3
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -68,6 +74,7 @@ class RemoteMCP:
         finally:
             client.close()
         self.session: requests.Session = requests.Session()
+        self.read_only_tools = set()
         self.session.headers.update(
             {
                 "Authorization": f"Bearer {context.token or ''}",
@@ -78,19 +85,46 @@ class RemoteMCP:
         )
 
     def call(self, message: Any) -> Tuple[int, Any]:
-        response = self.session.post(self.url, data=json.dumps(message), timeout=REMOTE_TIMEOUT)
+        params = message.get("params", {}) if isinstance(message, dict) else {}
+        name = params.get("name", "")
+        timeout = TOOL_TIMEOUTS.get(name, REMOTE_TIMEOUT)
+        attempts = READ_RETRIES if name in self.read_only_tools else 1
+
+        for attempt in range(attempts):
+            try:
+                response = self.session.post(self.url, data=json.dumps(message), timeout=timeout)
+                break
+            except requests.ConnectionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(RETRY_DELAY * (attempt + 1))
         if response.status_code == 202 or not response.content:
             return response.status_code, None
         try:
-            return response.status_code, response.json()
+            body = response.json()
         except ValueError:
             return response.status_code, None
+
+        # Trust the gateway's catalog, not tool-name prefixes. Unknown calls
+        # are never retried: their side effects may already have happened.
+        if (
+            isinstance(message, dict)
+            and message.get("method") == "tools/list"
+            and isinstance(body, dict)
+        ):
+            self.read_only_tools = {
+                tool["name"]
+                for tool in body.get("result", {}).get("tools", [])
+                if tool.get("annotations", {}).get("readOnlyHint") is True
+            }
+        return response.status_code, body
 
 
 class StdioProxy:
     def __init__(self, context_name: str = DEFAULT_CONTEXT_NAME, cwd: Optional[str] = None):
         self.context_name: str = context_name
         self.remote: Optional[RemoteMCP] = None
+        self.connection_error: Optional[str] = None
         self.tools: LocalTools = LocalTools(
             cwd=cwd,
             on_login=self._on_login,
@@ -98,6 +132,8 @@ class StdioProxy:
             context_name=context_name,
         )
         self._out_lock: threading.Lock = threading.Lock()
+        self._request_lock = threading.Lock()
+        self._requests: Dict[Any, threading.Event] = {}
         self._stdout: BinaryIO = sys.stdout.buffer
         self._connect()
 
@@ -105,24 +141,42 @@ class StdioProxy:
         self, stdin: Optional[Iterable[bytes]] = None, stdout: Optional[BinaryIO] = None
     ) -> int:
         self._stdout = stdout or sys.stdout.buffer
-        for raw in stdin or sys.stdin.buffer:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                message = json.loads(line)
-            except ValueError:
-                self._write(_error(None, PARSE_ERROR, "parse error"))
-                continue
-            if isinstance(message, list):
-                responses = [r for r in map(self._dispatch, message) if r is not None]
-                self._write(responses or None)
-            else:
-                self._write(self._dispatch(message))
+        with ThreadPoolExecutor(max_workers=8, thread_name_prefix="mcp") as executor:
+            for raw in stdin or sys.stdin.buffer:
+                line = raw.strip()
+                if not line:
+                    continue
+
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    self._write(_error(None, PARSE_ERROR, "parse error"))
+                    continue
+
+                if isinstance(message, list):
+                    responses = [r for r in map(self._dispatch, message) if r is not None]
+                    self._write(responses or None)
+                elif isinstance(message, dict) and message.get("method") == "tools/call":
+                    with self._request_lock:
+                        self._requests[message.get("id")] = threading.Event()
+                    executor.submit(self._respond, message)
+                else:
+                    self._respond(message)
         return 0
 
-    def notify(self, method: str) -> None:
-        self._write({"jsonrpc": "2.0", "method": method})
+    def _respond(self, message: Any) -> None:
+        try:
+            self._write(self._dispatch(message))
+        finally:
+            if isinstance(message, dict) and message.get("method") == "tools/call":
+                with self._request_lock:
+                    self._requests.pop(message.get("id"), None)
+
+    def notify(self, method: str, params: Optional[Dict[str, Any]] = None) -> None:
+        message = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        self._write(message)
 
     def _write(self, message: Any) -> None:
         if message is None:
@@ -138,6 +192,15 @@ class StdioProxy:
         if method is None:
             return None  # a response to a server-initiated request; none are sent
         notification = msg_id is None
+
+        if method == "notifications/cancelled":
+            with self._request_lock:
+                cancelled = self._requests.get(message.get("params", {}).get("requestId"))
+                if cancelled is not None:
+                    cancelled.set()
+            return None
+        if self.remote is None and self.connection_error:
+            self._connect()
 
         if method == "initialize":
             return self._initialize(msg_id)
@@ -173,7 +236,13 @@ class StdioProxy:
             instructions = (
                 f"{remote} Local tools run on this machine: `deploy` ships a project directory with the "
                 f"{cli} CLI (Dockerfile, image, or file:function handler) and returns a job; poll "
-                "`deploy_status` until deployed, then wire it with connect_services or set_env."
+                "`deploy_status` until accepted, then verify readiness with wait_deployment "
+                "and wire it with connect_services or set_env."
+            )
+        elif self.connection_error:
+            instructions = (
+                f"Context {self.context_name} is configured but its gateway is unavailable. "
+                "Tool calls retry the connection; do not request a new sign-in for a transport failure."
             )
         elif self.tools.login_available:
             instructions = (
@@ -204,11 +273,34 @@ class StdioProxy:
         name = params.get("name", "")
         handler = self.tools.handler(name)
         if handler is not None:
+            with self._request_lock:
+                self.tools.request.cancelled = self._requests.get(msg_id, threading.Event())
+            token = params.get("_meta", {}).get("progressToken")
+            self.tools.request.progress = None
+            if token is not None:
+                self.tools.request.progress = lambda progress, detail: self.notify(
+                    "notifications/progress",
+                    {
+                        "progressToken": token,
+                        "progress": progress,
+                        "message": json.dumps(detail),
+                    },
+                )
             try:
                 return _result(msg_id, handler(params.get("arguments") or {}))
             except Exception as exc:
                 return _result(msg_id, error_result(f"{name} failed: {exc}"))
+            finally:
+                self.tools.request.__dict__.clear()
         if self.remote is None:
+            if self.connection_error:
+                return _result(
+                    msg_id,
+                    error_result(
+                        f"Context {self.context_name}: gateway unavailable: {self.connection_error}. "
+                        "Retry when the gateway is reachable; sign-in is not required."
+                    ),
+                )
             how = (
                 "Call `login` first."
                 if self.tools.login_available
@@ -220,6 +312,7 @@ class StdioProxy:
         )
 
     def _connect(self) -> None:
+        self.connection_error = None
         context = context_or_none(self.context_name)
         if context is None:
             self.remote = None
@@ -228,6 +321,7 @@ class StdioProxy:
             self.remote = RemoteMCP(context)
         except Exception as exc:
             self.remote = None
+            self.connection_error = str(exc)
             log(f"workspace unavailable: {exc}")
 
     def _on_login(self) -> None:

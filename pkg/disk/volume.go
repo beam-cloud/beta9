@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -22,11 +23,13 @@ type Volume struct {
 	manager *Manager
 	mu      sync.Mutex
 
-	dir     string
-	state   *volumeState
-	qsd     *qsdProcess
-	nbd     *nbdDevice
-	fmtNode string
+	dir        string
+	state      *volumeState
+	qsd        *qsdProcess
+	nbd        *nbdDevice
+	fmtNode    string
+	journal    *Journal
+	journalNBD *journalNBD
 
 	// freeze quiesces the filesystem before a pivot when the host has not
 	// mounted it (ExportVhostUser). Nil means crash-consistent pivots only.
@@ -73,6 +76,8 @@ type AttachSpec struct {
 	Freeze func(ctx context.Context) (thaw func(), err error)
 	// Owner names who attached the volume (a container id); see DetachOwned.
 	Owner string
+	// Journal makes flush completion conditional on remote persistence.
+	Journal *Journal
 }
 
 // ChainLayer is one published generation of a volume.
@@ -118,7 +123,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	fresh := state == nil && len(spec.Chain) == 0 && !spec.ReadOnly
 	// Spares are pre-connected NBD volumes; a vhost-user attach formats its
 	// own head instead.
-	if fresh && spec.Export == ExportNBD {
+	if fresh && spec.Export == ExportNBD && spec.Journal == nil {
 		m.rememberSpareSize(spec.VirtualSizeBytes)
 		defer m.replenishSpares(spec.VirtualSizeBytes)
 		if volume := m.adoptSpare(ctx, spec); volume != nil {
@@ -132,7 +137,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	}
 
 	freshHead := false
-	if !reusableState(state, spec) {
+	if spec.Journal != nil || !reusableState(state, spec) {
 		if state != nil {
 			log.Info().Str("volume", spec.Key).Msg("discarding stale local volume state")
 		}
@@ -150,16 +155,28 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	} else {
 		log.Info().Str("volume", spec.Key).Int("layers", state.depth()).Msg("reusing local volume state")
 	}
+	if state.VirtualSizeBytes > spec.VirtualSizeBytes {
+		return nil, fmt.Errorf("volume %s cannot shrink from %d to %d bytes", spec.Key, state.VirtualSizeBytes, spec.VirtualSizeBytes)
+	}
+	if state.VirtualSizeBytes < spec.VirtualSizeBytes {
+		if spec.ReadOnly || spec.Export == ExportVhostUser {
+			return nil, fmt.Errorf("volume %s: growth requires a writable host-mounted filesystem", spec.Key)
+		}
+		if _, err := m.run(ctx, m.binaries.QemuImg, "resize", "-q", state.HeadPath, strconv.FormatInt(spec.VirtualSizeBytes, 10)); err != nil {
+			return nil, fmt.Errorf("grow volume %s: %w", spec.Key, err)
+		}
+	}
 	state.Mountpoint = spec.Mountpoint
 	state.Owner = spec.Owner
 	state.ReadOnly = spec.ReadOnly
 	state.VirtualSizeBytes = spec.VirtualSizeBytes
 	state.Export = string(spec.Export)
+	state.Journal = spec.Journal != nil
 	if spec.Export == ExportVhostUser {
 		state.Mountpoint = ""
 	}
 
-	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead, freeze: spec.Freeze, owner: spec.Owner}
+	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead, freeze: spec.Freeze, owner: spec.Owner, journal: spec.Journal}
 	if err := volume.start(ctx); err != nil {
 		return nil, err
 	}
@@ -268,6 +285,13 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	m := v.manager
 	state := v.state
 	freshDisk := !state.ReadOnly && len(state.Chain) == 0 && !state.Formatted
+	if v.journal != nil {
+		freshDisk = !v.journal.Initialized()
+		state.Formatted = !freshDisk
+		if state.exportMode() != ExportNBD {
+			return fmt.Errorf("synchronous durable disks require a host-mounted NBD export")
+		}
+	}
 
 	openPath := state.HeadPath
 	if state.ReadOnly {
@@ -303,10 +327,23 @@ func (v *Volume) start(ctx context.Context) (err error) {
 			_ = m.disconnectNBDDevice(context.Background(), v.nbd)
 			v.nbd = nil
 		}
+		if v.journalNBD != nil {
+			v.journalNBD.Close()
+			v.journalNBD = nil
+		}
 		_ = m.stopQSD(context.Background(), qsd)
 	}
 
-	nbd, err := m.acquireNBDDevice(ctx, qsd.nbdSocket, state.VirtualSizeBytes)
+	nbdSocket := qsd.nbdSocket
+	if v.journal != nil {
+		nbdSocket = filepath.Join(m.runtimeDir(state.Key), "durable.sock")
+		v.journalNBD, err = startJournalNBD(ctx, nbdSocket, qsd.nbdSocket, v.journal)
+		if err != nil {
+			cleanupOnError()
+			return err
+		}
+	}
+	nbd, err := m.acquireNBDDevice(ctx, nbdSocket, state.VirtualSizeBytes)
 	if err != nil {
 		cleanupOnError()
 		return err
@@ -319,6 +356,16 @@ func (v *Volume) start(ctx context.Context) (err error) {
 			cleanupOnError()
 			return err
 		}
+		if v.journal != nil {
+			if _, err := m.run(ctx, "blockdev", "--flushbufs", nbd.Path); err != nil {
+				cleanupOnError()
+				return err
+			}
+			if err := v.journal.Initialize(ctx); err != nil {
+				cleanupOnError()
+				return err
+			}
+		}
 		state.Formatted = true
 		phases.Mark("mkfs")
 	}
@@ -326,6 +373,15 @@ func (v *Volume) start(ctx context.Context) (err error) {
 		if err := m.mountExt4(ctx, nbd.Path, state.Mountpoint, state.ReadOnly); err != nil {
 			cleanupOnError()
 			return err
+		}
+		if !freshDisk && !state.ReadOnly {
+			// The overlay may have grown, including when restored onto a new worker.
+			// Grow ext4 too; changing only the advertised block size leaves the old limit.
+			if _, err := m.run(ctx, "resize2fs", nbd.Path); err != nil {
+				_ = m.unmount(context.Background(), state.Mountpoint)
+				cleanupOnError()
+				return fmt.Errorf("grow filesystem for %s: %w", state.Key, err)
+			}
 		}
 		phases.Mark("mount")
 	}
@@ -459,6 +515,15 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, err
 	}
+	if v.journal != nil {
+		_, position, _ := v.journal.State()
+		state.Pending[len(state.Pending)-1].JournalSequence = position
+		if err := saveVolumeState(v.dir, state); err != nil {
+			thaw()
+			v.rollbackSeal(previousState, newHeadPath)
+			return nil, false, err
+		}
+	}
 	pivotErr := client.pivot(ctx, v.fmtNode, newNode)
 	thaw()
 
@@ -577,6 +642,13 @@ func (v *Volume) MarkPublished(sealedPath, snapshotID string) error {
 	if len(v.state.Pending) == 0 || v.state.Pending[0].Path != sealedPath {
 		return fmt.Errorf("sealed layer %s is not the oldest pending layer of volume %s", sealedPath, v.state.Key)
 	}
+	if v.journal != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), journalTimeout)
+		defer cancel()
+		if err := v.journal.Checkpoint(ctx, v.state.Pending[0].JournalSequence, snapshotID); err != nil {
+			return err
+		}
+	}
 	v.state.Chain = append(v.state.Chain, stateLayer{SnapshotID: snapshotID, Path: sealedPath})
 	v.state.Pending = v.state.Pending[1:]
 	return saveVolumeState(v.dir, v.state)
@@ -671,6 +743,14 @@ func (v *Volume) detach(ctx context.Context) error {
 			v.nbd = nil
 		}
 	}
+	if v.journalNBD != nil {
+		v.journalNBD.Close()
+		v.journalNBD = nil
+	}
+	var journalErr error
+	if v.journal != nil {
+		journalErr = v.journal.Close()
+	}
 	stopErr := v.manager.stopQSD(ctx, v.qsd)
 	if stopErr == nil {
 		v.qsd = nil
@@ -682,7 +762,7 @@ func (v *Volume) detach(ctx context.Context) error {
 		disconnectErr = nil
 	}
 	if err := errors.Join(disconnectErr, stopErr); err != nil {
-		return err
+		return errors.Join(err, journalErr)
 	}
 
 	v.state.Attached = false
@@ -691,7 +771,7 @@ func (v *Volume) detach(ctx context.Context) error {
 	v.state.NBDSocket = ""
 	v.state.NBDDevice = ""
 	if err := saveVolumeState(v.dir, v.state); err != nil {
-		return err
+		return errors.Join(err, journalErr)
 	}
-	return os.RemoveAll(v.manager.runtimeDir(v.state.Key))
+	return errors.Join(journalErr, os.RemoveAll(v.manager.runtimeDir(v.state.Key)))
 }

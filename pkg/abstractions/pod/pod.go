@@ -453,7 +453,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		return "", err
 	}
 
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(workspace, stubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(ctx, s.backendRepo, workspace, stubConfig)
 	if err != nil {
 		return "", err
 	}

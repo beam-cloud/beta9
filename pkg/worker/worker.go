@@ -39,7 +39,7 @@ const (
 	containerLogsPath              string        = types.AgentLogsPath
 	defaultWorkerSpindownTimeS     float64       = 300 // 5 minutes
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
-	containerStatusUpdateInterval  time.Duration = 30 * time.Second
+	containerStatusUpdateInterval  time.Duration = 10 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
 	containerRequestAckTimeout     time.Duration = 5 * time.Second
 	completedRequestRetryTimeout   time.Duration = 30 * time.Second
@@ -214,6 +214,12 @@ func (i *ContainerInstance) setExitCode(exitCode int) {
 	i.stateMu.Lock()
 	defer i.stateMu.Unlock()
 	i.ExitCode = exitCode
+}
+
+func (i *ContainerInstance) startupError() error {
+	i.stateMu.RLock()
+	defer i.stateMu.RUnlock()
+	return i.Err
 }
 
 func (i *ContainerInstance) setStopReason(reason types.StopContainerReason) {
@@ -1064,6 +1070,12 @@ func (s *Worker) releaseUnclaimedContainer(request *types.ContainerRequest) {
 }
 
 func (s *Worker) failContainerRequest(containerId string, request *types.ContainerRequest, runErr error) {
+	if instance, exists := s.containerInstances.Get(containerId); exists {
+		instance.stateMu.Lock()
+		instance.Err = runErr
+		instance.stateMu.Unlock()
+	}
+
 	// Set a non-zero exit code for the container (both in memory, and in repo)
 	exitCode := 1
 

@@ -20,6 +20,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -671,6 +672,87 @@ func (c *WorkspaceStorageClient) Exists(ctx context.Context, key string) (bool, 
 
 func (c *WorkspaceStorageClient) Download(ctx context.Context, key string) ([]byte, error) {
 	return c.StorageClient.Download(ctx, key, *c.WorkspaceStorage.BucketName)
+}
+
+// ReadVersion returns one object's contents and the ETag used for conditional
+// replacement. A missing object has an empty version; other failures propagate.
+func (c *WorkspaceStorageClient) ReadVersion(ctx context.Context, key string) ([]byte, string, error) {
+	result, err := c.StorageClient.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: c.WorkspaceStorage.BucketName,
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchKey" {
+			return nil, "", nil
+		}
+		return nil, "", err
+	}
+	defer result.Body.Close()
+	const maxMetadataBytes = 4 << 20
+	data, err := io.ReadAll(io.LimitReader(result.Body, maxMetadataBytes+1))
+	if len(data) > maxMetadataBytes {
+		return nil, "", fmt.Errorf("versioned metadata exceeds %d bytes", maxMetadataBytes)
+	}
+	if aws.ToString(result.ETag) == "" {
+		return nil, "", fmt.Errorf("object store returned no version for %s", key)
+	}
+	return data, aws.ToString(result.ETag), err
+}
+
+// WriteVersion atomically creates or replaces an object. An empty version
+// means create-only. Never retry a failed condition as an unconditional write.
+func (c *WorkspaceStorageClient) WriteVersion(ctx context.Context, key string, data []byte, version string) (string, error) {
+	input := &s3.PutObjectInput{
+		Bucket: c.WorkspaceStorage.BucketName,
+		Key:    aws.String(key),
+		Body:   bytes.NewReader(data),
+	}
+	if version == "" {
+		input.IfNoneMatch = aws.String("*")
+	} else {
+		input.IfMatch = aws.String(version)
+	}
+	result, err := c.StorageClient.s3Client.PutObject(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	if aws.ToString(result.ETag) == "" {
+		return "", fmt.Errorf("object store returned no version for %s", key)
+	}
+	return aws.ToString(result.ETag), nil
+}
+
+// VerifyConditionalWrites rejects S3-compatible stores that silently ignore
+// preconditions. Such a store cannot fence writers using an object-store head.
+func (c *WorkspaceStorageClient) VerifyConditionalWrites(ctx context.Context) error {
+	key := "durable-disks/conditional-probes/" + uuid.NewString()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = c.Delete(cleanupCtx, key)
+	}()
+	first, err := c.WriteVersion(ctx, key, []byte("first"), "")
+	if err != nil {
+		return err
+	}
+	if _, err := c.WriteVersion(ctx, key, []byte("duplicate"), ""); err == nil {
+		return fmt.Errorf("object store ignores If-None-Match; synchronous disks require conditional writes")
+	}
+	if _, err := c.WriteVersion(ctx, key, []byte("second"), first); err != nil {
+		return err
+	}
+	if _, err := c.WriteVersion(ctx, key, []byte("stale"), first); err == nil {
+		return fmt.Errorf("object store ignores If-Match; synchronous disks require conditional writes")
+	}
+	data, _, err := c.ReadVersion(ctx, key)
+	if err != nil {
+		return err
+	}
+	if string(data) != "second" {
+		return fmt.Errorf("object store did not preserve the conditional replacement")
+	}
+	return nil
 }
 
 func (c WorkspaceStorageClient) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {

@@ -311,6 +311,9 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	} else {
 		flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
 	}
+	// The worker mounts as root, but application containers may use any UID.
+	// Their bind mounts and filesystem modes still bound access to the volume.
+	flags.MountOptions = withDefaultMountOption(flags.MountOptions, "allow_other", "")
 	// Smaller parts let a flush of one large file fan out over more
 	// concurrent uploads (a 1 GiB file is 16 parts of 64 MiB, 64 of 16 MiB).
 	partSize := uint64(defaultGeeseFSPartSizeBytes)

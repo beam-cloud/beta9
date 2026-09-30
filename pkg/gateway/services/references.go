@@ -287,6 +287,11 @@ func (s *referenceScope) databaseSecretName(name, field string) (string, error) 
 	switch field {
 	case "URL", "DATABASE_URL", "REDIS_URL":
 		return db.names.URL, nil
+	case "POOLED_DATABASE_URL":
+		if databaseInfo(db.product, db.names, db.deployment).PooledConnectionStringSecret == "" {
+			return "", fmt.Errorf("database %q has no pooler; use DATABASE_URL", name)
+		}
+		return db.names.PooledURL, nil
 	case "USERNAME":
 		return db.names.Username, nil
 	case "PASSWORD":
@@ -297,7 +302,7 @@ func (s *referenceScope) databaseSecretName(name, field string) (string, error) 
 		}
 		return db.names.Database, nil
 	}
-	return "", fmt.Errorf("unknown database field %q; use DATABASE_URL, USERNAME, PASSWORD, DATABASE, HOST or PORT", field)
+	return "", fmt.Errorf("unknown database field %q; use DATABASE_URL, POOLED_DATABASE_URL, USERNAME, PASSWORD, DATABASE, HOST or PORT", field)
 }
 
 // sanitizeSecretName upper-cases and keeps [A-Z0-9], collapsing the rest to '_'.

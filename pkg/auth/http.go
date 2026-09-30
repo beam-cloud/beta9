@@ -17,10 +17,14 @@ type HttpAuthContext struct {
 func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			var tokenKey string
+			// WithAssumedStubAuth checks visibility; the app owns this header.
+			if kind, route := serviceInvocationRoute(c.Path()); kind != "" && route == "public" {
+				return next(c)
+			}
+
 			req := c.Request()
 			authHeader := req.Header.Get("Authorization")
-			tokenKey = strings.TrimPrefix(authHeader, "Bearer ")
+			tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
 
 			if authHeader == "" || tokenKey == "" {
 				// Check query param for token
@@ -30,10 +34,15 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				}
 			}
 
-			var token *types.Token
-			var workspace *types.Workspace
-			var err error
-			token, workspace, err = workspaceRepo.AuthorizeToken(tokenKey)
+			if strings.HasPrefix(tokenKey, serviceCredentialPrefix) {
+				authInfo, err := authorizeServiceCredential(c, backendRepo, tokenKey)
+				if err != nil {
+					return echo.NewHTTPError(http.StatusUnauthorized, "invalid service credential")
+				}
+				return next(&HttpAuthContext{c, authInfo})
+			}
+
+			token, workspace, err := workspaceRepo.AuthorizeToken(tokenKey)
 			if err != nil {
 				token, workspace, err = backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
 				if err != nil {
@@ -62,8 +71,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				},
 			}
 
-			cc := &HttpAuthContext{c, authInfo}
-			return next(cc)
+			return next(&HttpAuthContext{c, authInfo})
 		}
 	}
 }

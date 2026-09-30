@@ -334,6 +334,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			MountPath:  durableDisk.MountPath,
 		}); err != nil {
 			log.Error().Err(err).Str("disk_name", durableDisk.Name).Msg("failed to register durable disk record")
+			return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: fmt.Sprintf("register disk %s: %s", durableDisk.Name, err)}, nil
 		}
 	}
 

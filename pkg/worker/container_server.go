@@ -930,6 +930,9 @@ func (s *ContainerRuntimeServer) waitForSandboxProcessManager(ctx context.Contex
 			if instance.processManagerReady() {
 				return instance, nil
 			}
+			if err := instance.startupError(); err != nil {
+				return instance, fmt.Errorf("sandbox startup failed: %w", err)
+			}
 			return instance, errors.New("Process manager failed to become ready")
 		case <-ticker.C:
 		case <-ctx.Done():

@@ -28,7 +28,7 @@ const (
 )
 
 // ServiceProxy lets containers reach TCP services (<name>.<tcp externalHost>:
-// databases and TCP pods, never HTTP apps) where that host does not resolve
+// databases and TCP pods) where that host does not resolve
 // for them, by pinning it in /etc/hosts to a worker-side listener that
 // forwards to the gateway's TCP listener. Bytes are untouched; the gateway
 // terminates TLS and routes by SNI. Pinning is best effort: if the target is
@@ -40,8 +40,9 @@ type ServiceProxy struct {
 	suffix    string // "." + the TCP gateway's external host, lower-cased; empty disables the proxy
 	mu        sync.Mutex
 	listeners []net.Listener
-	addresses []string  // bridge addresses that accepted a listener
-	retryAt   time.Time // after a failed start
+	addresses []string      // bridge addresses that accepted a listener
+	retryAt   time.Time     // after a failed start
+	httpProxy *ServiceProxy // local HTTP sibling URLs share the localhost suffix
 }
 
 func NewServiceProxy(ctx context.Context, config types.AppConfig) *ServiceProxy {
@@ -49,12 +50,27 @@ func NewServiceProxy(ctx context.Context, config types.AppConfig) *ServiceProxy 
 	if !tcp.Enabled || tcp.ServiceProxyTarget == "" || tcp.ExternalHost == "" || net.ParseIP(tcp.ExternalHost) != nil {
 		return &ServiceProxy{}
 	}
-	return &ServiceProxy{
+	proxy := &ServiceProxy{
 		ctx:    ctx,
 		target: tcp.ServiceProxyTarget,
 		port:   tcp.ExternalPort,
 		suffix: "." + strings.ToLower(tcp.ExternalHost),
 	}
+
+	// In a local cluster both HTTP apps and databases use *.localhost.
+	// Pinning that suffix for databases also pins HTTP references, so provide
+	// the HTTP listener before publishing those hosts to a container.
+	http := config.GatewayService.HTTP
+	httpEnabled := http.ExternalPort > 0 && http.Port > 0 && config.GatewayService.Host != ""
+	if strings.EqualFold(tcp.ExternalHost, "localhost") && httpEnabled && http.ExternalPort != tcp.ExternalPort {
+		proxy.httpProxy = &ServiceProxy{
+			ctx:    ctx,
+			target: net.JoinHostPort(config.GatewayService.Host, strconv.Itoa(http.Port)),
+			port:   http.ExternalPort,
+		}
+	}
+
+	return proxy
 }
 
 // Attach pins sibling hostnames from the env to the bridge address via /etc/hosts.
@@ -69,6 +85,11 @@ func (p *ServiceProxy) Attach(request *types.ContainerRequest, spec *specs.Spec)
 	if err := p.start(); err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("service proxy unavailable; sibling hosts resolve over DNS")
 		return nil
+	}
+	if p.httpProxy != nil {
+		if err := p.httpProxy.start(); err != nil {
+			return fmt.Errorf("local HTTP service proxy unavailable: %w", err)
+		}
 	}
 
 	path := filepath.Join(baseConfigPath, request.ContainerId, containerHostsFileName)
@@ -203,6 +224,9 @@ func (p *ServiceProxy) forward(client net.Conn) {
 }
 
 func (p *ServiceProxy) Stop() {
+	if p.httpProxy != nil {
+		p.httpProxy.Stop()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, ln := range p.listeners {
