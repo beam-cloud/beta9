@@ -1033,6 +1033,15 @@ func (e *InsufficientCreditsError) Error() string {
 	return code + ": " + e.Reason
 }
 
+// CreditStatus is a workspace's prepaid-credit position as the gate sees it.
+type CreditStatus struct {
+	OK             bool   `json:"ok"`
+	AvailableCents int64  `json:"available_cents"`
+	RequiredCents  int64  `json:"required_cents"`
+	Code           string `json:"code,omitempty"`
+	Message        string `json:"message,omitempty"`
+}
+
 type QuotaDoesNotExistError struct{}
 
 func (e *QuotaDoesNotExistError) Error() string {

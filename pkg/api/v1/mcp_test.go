@@ -69,6 +69,36 @@ func TestMCPCallGates(t *testing.T) {
 	require.Equal(t, -32602, resp.Error.Code)
 }
 
+type creditGateway struct {
+	MCPGateway
+	status *types.CreditStatus
+}
+
+func (c creditGateway) WorkspaceCredit(context.Context, *types.Workspace) *types.CreditStatus {
+	return c.status
+}
+
+func TestMCPSurfacesCredit(t *testing.T) {
+	ctx := context.Background()
+	a := &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-1"}}
+	denied := &types.CreditStatus{Code: "insufficient_credits", Message: "add credits at https://example/credits"}
+
+	g := newTestMCPGroup()
+	g.gws = creditGateway{status: denied}
+	out, err := g.whoami(ctx, a, nil)
+	require.NoError(t, err)
+	require.Equal(t, denied, out.(map[string]any)["credit"])
+
+	g.gws = creditGateway{}
+	out, _ = g.whoami(ctx, a, nil)
+	require.NotContains(t, out.(map[string]any), "credit")
+
+	refused := mcpTool{Name: "refused", Schema: schema(props{}), Run: func(context.Context, *auth.AuthInfo, toolArgs) (any, error) {
+		return nil, &types.InsufficientCreditsError{WorkspaceId: "ws-1", Reason: denied.Message}
+	}}
+	require.Equal(t, "INSUFFICIENT_CREDITS", g.call(ctx, a, &refused, nil)["structuredContent"].(map[string]any)["code"])
+}
+
 // api runs through the gateway router with the caller's identity; anything the
 // router serves is reachable without a dedicated tool.
 func TestMCPApiInProcess(t *testing.T) {

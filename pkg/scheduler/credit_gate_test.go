@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -288,10 +289,37 @@ func TestNilCreditGateAllowsEverything(t *testing.T) {
 	var gate *CreditGate
 	assert.False(t, gate.Enabled())
 	assert.NoError(t, gate.Check(context.Background(), "ws-1"))
+	assert.Nil(t, gate.Status(context.Background(), "ws-1"))
 
 	decision, err := gate.Decision(context.Background(), "ws-1")
 	assert.NoError(t, err)
 	assert.True(t, decision.OK)
+}
+
+func TestCreditGateStatusReportsTheDecision(t *testing.T) {
+	denied := creditDecision{ErrorCode: "insufficient_credits", Message: "add credits at https://example/credits", RequiredCents: 100}
+	gate, _ := newTestCreditGate(t, &fakeCreditBackend{decision: denied}, types.CreditGateConfig{})
+	assert.Equal(t, &types.CreditStatus{Code: denied.ErrorCode, Message: denied.Message, RequiredCents: 100}, gate.Status(context.Background(), "ws-1"))
+
+	gate, _ = newTestCreditGate(t, &fakeCreditBackend{decision: creditDecision{OK: true, AvailableCents: 500}}, types.CreditGateConfig{})
+	assert.Equal(t, &types.CreditStatus{OK: true, AvailableCents: 500}, gate.Status(context.Background(), "ws-2"))
+}
+
+// A burst of admissions on a cold cache asks billing once.
+func TestCreditGateCollapsesConcurrentChecks(t *testing.T) {
+	backend := &fakeCreditBackend{decision: creditDecision{OK: true}}
+	gate, _ := newTestCreditGate(t, backend, types.CreditGateConfig{})
+
+	var wg sync.WaitGroup
+	for range 1000 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, gate.Check(context.Background(), "ws-1"))
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, int32(1), backend.calls.Load())
 }
 
 func TestNewCreditGateRespectsConfig(t *testing.T) {
