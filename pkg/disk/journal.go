@@ -168,6 +168,14 @@ func (j *Journal) persist(ctx context.Context) error {
 	data, err := json.Marshal(j.head)
 	if err == nil {
 		j.version, err = j.store.WriteVersion(ctx, j.headKey(), data, j.version)
+		if err != nil {
+			// A committed PUT can lose its response, then fail its SDK retry's
+			// condition. Only our exact head (including owner and lease) is safe.
+			stored, version, readErr := j.store.ReadVersion(ctx, j.headKey())
+			if readErr == nil && version != "" && bytes.Equal(stored, data) {
+				j.version, err = version, nil
+			}
+		}
 	}
 	if err != nil {
 		j.failed = fmt.Errorf("disk ownership or persistence lost: %w", err)

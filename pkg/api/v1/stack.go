@@ -3,15 +3,17 @@ package apiv1
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
 
-const stackSpecMaxBytes = 256 << 10
+const stackSpecMaxBytes = types.StackSpecMaxBytes
 
 type StackGroup struct {
 	routerGroup *echo.Group
@@ -42,8 +44,9 @@ func (req *StackRequest) validate() error {
 	if len(req.Spec) == 0 {
 		req.Spec = json.RawMessage("{}")
 	}
-	if len(req.Spec) > stackSpecMaxBytes || !json.Valid(req.Spec) {
-		return HTTPBadRequest("spec must be a JSON object under 256KB")
+	var spec map[string]json.RawMessage
+	if len(req.Spec) > stackSpecMaxBytes || json.Unmarshal(req.Spec, &spec) != nil || spec == nil {
+		return HTTPBadRequest("spec must be a JSON object no larger than 256 KiB")
 	}
 	return nil
 }
@@ -84,6 +87,9 @@ func (g *StackGroup) Update(ctx echo.Context) error {
 	}
 	stack, err := g.backendRepo.UpdateStack(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, ctx.Param("stackId"), req.Name, req.Spec)
 	if err != nil {
+		if errors.Is(err, types.ErrStackSpecTooLarge) {
+			return HTTPBadRequest(err.Error())
+		}
 		if err == sql.ErrNoRows {
 			return HTTPNotFound()
 		}

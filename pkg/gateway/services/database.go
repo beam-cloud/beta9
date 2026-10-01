@@ -985,7 +985,7 @@ func databaseConnectionString(kind, username, password, host, database string, v
 	user, pass, db := url.QueryEscape(username), url.QueryEscape(password), url.QueryEscape(database)
 	postgresTLS, mysqlTLS, mongoTLS, redisTLS := "require", "REQUIRED", "true", "none"
 	if verifyTLS {
-		postgresTLS = "verify-full&sslrootcert=system"
+		postgresTLS = "verify-full"
 		mysqlTLS, mongoTLS, redisTLS = "VERIFY_IDENTITY", "false", "required&ssl_check_hostname=true"
 	}
 	switch kind {

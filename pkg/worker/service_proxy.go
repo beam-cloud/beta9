@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,8 @@ const (
 	serviceProxyProbeTimeout = 2 * time.Second
 	serviceProxyRetryAfter   = 30 * time.Second
 	containerHostsFileName   = "hosts"
+	serviceTrustBundle       = "/etc/beam/ca-certificates.crt"
+	workerTrustBundle        = "/etc/ssl/certs/ca-certificates.crt"
 )
 
 // ServiceProxy lets containers reach TCP services (<name>.<tcp externalHost>:
@@ -47,7 +50,7 @@ type ServiceProxy struct {
 
 func NewServiceProxy(ctx context.Context, config types.AppConfig) *ServiceProxy {
 	tcp := config.Abstractions.Pod.TCP
-	if !tcp.Enabled || tcp.ServiceProxyTarget == "" || tcp.ExternalHost == "" || net.ParseIP(tcp.ExternalHost) != nil {
+	if !tcp.Enabled || tcp.ExternalHost == "" || net.ParseIP(tcp.ExternalHost) != nil {
 		return &ServiceProxy{}
 	}
 	proxy := &ServiceProxy{
@@ -82,6 +85,12 @@ func (p *ServiceProxy) Attach(request *types.ContainerRequest, spec *specs.Spec)
 	if len(hostnames) == 0 {
 		return nil
 	}
+	if err := p.attachTrust(spec); err != nil {
+		return err
+	}
+	if p.target == "" {
+		return nil
+	}
 	if err := p.start(); err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("service proxy unavailable; sibling hosts resolve over DNS")
 		return nil
@@ -103,6 +112,58 @@ func (p *ServiceProxy) Attach(request *types.ContainerRequest, spec *specs.Spec)
 		Options:     []string{"ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"},
 	})
 	log.Debug().Str("container_id", request.ContainerId).Strs("hostnames", hostnames).Msg("pinned sibling services to the service proxy")
+	return nil
+}
+
+// Managed Postgres URLs use ordinary verified TLS across libpq and other drivers.
+// Supply roots independently of the image and preserve explicit client settings.
+func (p *ServiceProxy) attachTrust(spec *specs.Spec) error {
+	needed := false
+	root := serviceTrustBundle
+	for _, env := range spec.Process.Env {
+		if value, ok := strings.CutPrefix(env, "PGSSLROOTCERT="); ok && value != "" && value != "system" {
+			root = value
+		}
+	}
+	for index, env := range spec.Process.Env {
+		name, value, _ := strings.Cut(env, "=")
+		connection, err := url.Parse(value)
+		if err != nil {
+			continue
+		}
+		scheme, _, _ := strings.Cut(connection.Scheme, "+")
+		if (scheme != "postgres" && scheme != "postgresql") ||
+			!strings.HasSuffix(strings.ToLower(connection.Hostname()), p.suffix) {
+			continue
+		}
+		query := connection.Query()
+		if query.Get("sslmode") != "verify-full" {
+			continue
+		}
+		certificate := query.Get("sslrootcert")
+		if certificate != "" && certificate != "system" {
+			continue
+		}
+		// A filename works across drivers, including those without libpq's "system" value.
+		certificate = root
+		if query.Get("sslrootcert") == "system" {
+			certificate = serviceTrustBundle
+		}
+		query.Set("sslrootcert", certificate)
+		connection.RawQuery = query.Encode()
+		spec.Process.Env[index] = name + "=" + connection.String()
+		needed = needed || certificate == serviceTrustBundle
+	}
+	if !needed {
+		return nil
+	}
+	if _, err := os.Stat(workerTrustBundle); err != nil {
+		return fmt.Errorf("managed service trust bundle: %w", err)
+	}
+	spec.Mounts = append(spec.Mounts, specs.Mount{
+		Type: "bind", Source: workerTrustBundle, Destination: serviceTrustBundle,
+		Options: []string{"ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"},
+	})
 	return nil
 }
 

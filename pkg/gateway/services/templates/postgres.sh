@@ -178,6 +178,13 @@ EOF
     done
     [ "$ready" = true ] || { echo "Database recovery did not finish within 600 seconds" >&2; exit 1; }
 
+    # PG_VERSION can survive a failed initdb; do not expose a partial cluster.
+    if ! sql --dbname="$POSTGRES_DB" -Atc 'SELECT 1' >/dev/null; then
+        echo "Managed database is missing or inaccessible; inspect initialization/recovery logs before restoring it." >&2
+        shutdown
+        exit 1
+    fi
+
     sql --set=role="$POSTGRES_USER" --set=password="$POSTGRES_PASSWORD" <<'SQL'
 ALTER ROLE :"role" PASSWORD :'password';
 SQL

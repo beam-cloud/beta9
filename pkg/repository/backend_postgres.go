@@ -2359,18 +2359,28 @@ func (r *PostgresBackendRepository) CreateStack(ctx context.Context, workspaceId
 }
 
 func (r *PostgresBackendRepository) UpdateStack(ctx context.Context, workspaceId uint, externalId, name string, spec json.RawMessage) (*types.Stack, error) {
+	tx, err := r.client.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Dashboard saves cannot overwrite checkpoints owned by the agent's CAS path.
 	query := `
 	UPDATE workspace_stack
-	SET name = $3, spec = $4, updated_at = CURRENT_TIMESTAMP
+	SET name = $3, spec = spec || ($4::jsonb - 'desired' - 'operation'), updated_at = CURRENT_TIMESTAMP
 	WHERE external_id = $1 AND workspace_id = $2
 	RETURNING ` + stackColumns + `;
 	`
 
 	var stack types.Stack
-	if err := r.client.GetContext(ctx, &stack, query, externalId, workspaceId, name, spec); err != nil {
+	if err := tx.GetContext(ctx, &stack, query, externalId, workspaceId, name, spec); err != nil {
 		return nil, err
 	}
-	return &stack, nil
+	if len(stack.Spec) > types.StackSpecMaxBytes {
+		return nil, types.ErrStackSpecTooLarge
+	}
+	return &stack, tx.Commit()
 }
 
 // UpdateStackIfUnchanged serializes agent checkpoints across gateway replicas.

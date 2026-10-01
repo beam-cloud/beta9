@@ -1085,7 +1085,11 @@ func (s Secret) EnvVarName() string {
 	return s.Name
 }
 
-// Stack is a dashboard board; Spec is opaque JSON the gateway does not interpret.
+const StackSpecMaxBytes = 256 << 10
+
+var ErrStackSpecTooLarge = fmt.Errorf("stack spec exceeds 256 KiB")
+
+// Stack holds dashboard layout and agent deployment state in Spec.
 type Stack struct {
 	Id          uint            `db:"id" json:"-"`
 	ExternalId  string          `db:"external_id" json:"id"`
