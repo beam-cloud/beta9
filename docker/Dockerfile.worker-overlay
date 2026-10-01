@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
       go build -trimpath -o /out/worker ./cmd/worker/main.go && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
-      go build -trimpath -gcflags="all=-N -l" -o /out/worker-debug ./cmd/worker/main.go && \
+      go build -trimpath -gcflags="all=-N -l" -gcflags="gvisor.dev/gvisor/pkg/cpuid=" -o /out/worker-debug ./cmd/worker/main.go && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
       go build -trimpath -o /out/agent ./cmd/agent && \
     ln /out/agent /out/beam-agent && \
