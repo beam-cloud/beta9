@@ -220,9 +220,13 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 	// Netlink connections outlive their server and leave devices occupied when
 	// a worker pod disappears. The ioctl client owns the connection for its
 	// lifetime, so a dead server or pod releases the kernel device as well.
+	// The kernel fails the device if one request is outstanding for the
+	// timeout; a journaled flush may legitimately wait a whole lease for a
+	// struggling store, so the timeout must outlast that.
+	timeout := strconv.Itoa(int((journalLease + journalLease/2) / time.Second))
 	_, err := m.run(ctx, m.binaries.NBDClient,
 		"-unix", nbdSocket, "-N", qsdExportName, device.Path,
-		"-b", strconv.Itoa(nbdBlockSize), "-nonetlink", "-timeout", "30",
+		"-b", strconv.Itoa(nbdBlockSize), "-nonetlink", "-timeout", timeout,
 	)
 	if err != nil {
 		return fmt.Errorf("connect %s: %w", device.Path, err)

@@ -643,7 +643,7 @@ func (v *Volume) MarkPublished(sealedPath, snapshotID string) error {
 		return fmt.Errorf("sealed layer %s is not the oldest pending layer of volume %s", sealedPath, v.state.Key)
 	}
 	if v.journal != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), journalTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), journalLease)
 		defer cancel()
 		if err := v.journal.Checkpoint(ctx, v.state.Pending[0].JournalSequence, snapshotID); err != nil {
 			return err
