@@ -190,7 +190,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY --exclude=sdk . .
 
-RUN go build -gcflags "all=-N" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
+# gVisor's nosplit CPU probes need optimization to stay within Go's stack limit.
+RUN go build -gcflags "all=-N" -gcflags "gvisor.dev/gvisor/pkg/cpuid=" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
 RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 RUN go build -o /usr/local/bin/agent ./cmd/agent
 # Guest init for microvm sandboxes: static, PID 1 inside the VM.
