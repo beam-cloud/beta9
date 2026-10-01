@@ -366,8 +366,9 @@ func (i *AutoscaledInstance) Sync() error {
 			return err
 		}
 
-		if len(deployments) == 1 {
-			i.IsActive = deployments[0].Active
+		i.IsActive = false
+		for _, deployment := range deployments {
+			i.IsActive = i.IsActive || deployment.Active
 		}
 
 		stubConfigRaw := deployments[0].Stub.Config
@@ -548,8 +549,17 @@ func (c *InstanceController) Load(filter *types.DeploymentFilter) error {
 		return err
 	}
 
+	activeStubs := make(map[string]bool, len(stubs))
+	for _, stub := range stubs {
+		activeStubs[stub.Stub.ExternalId] = activeStubs[stub.Stub.ExternalId] || stub.Active
+	}
+
 	for _, stub := range stubs {
 		if !stub.Active {
+			// Rollbacks can leave inactive revisions sharing an active stub.
+			if activeStubs[stub.Stub.ExternalId] {
+				continue
+			}
 			if err := c.deactivateInactiveDeployment(stub); err != nil {
 				log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to deactivate inactive deployment")
 			}
