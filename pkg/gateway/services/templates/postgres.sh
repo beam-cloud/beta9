@@ -126,6 +126,9 @@ default_pool_size=20
 max_client_conn=100
 max_prepared_statements=100
 pidfile=/tmp/pgbouncer.pid
+# The proxy probes this port several times a second; keep those out of the log.
+log_connections=0
+log_disconnections=0
 EOF
     gosu postgres pgbouncer /tmp/pgbouncer.ini &
     POOLER=$!

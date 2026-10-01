@@ -201,6 +201,9 @@ func (s *Worker) openDatabaseDiskJournal(ctx context.Context, request *types.Con
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := s.verifyJournalStore(ctx, store.client); err != nil {
+		return nil, nil, err
+	}
 	prefix := path.Join("durable-disks", types.SafeDurableDiskName(mount.DurableDisk.Name), "journal")
 	owner := request.ContainerId + "/" + uuid.NewString()
 	journal, err := disk.OpenJournal(ctx, store.client, prefix, owner, durableDiskSnapshotExternalID(newest), size)
@@ -229,11 +232,40 @@ func (s *Worker) openDatabaseDiskJournal(ctx context.Context, request *types.Con
 	return journal, committed, nil
 }
 
+// verifyJournalStore checks, once per bucket for the life of this worker,
+// that the store honours the conditional writes the journal's ownership
+// fence depends on. The probe is several conditional writes, so a store that
+// is merely slow to settle gets a few tries before the attach fails.
+func (s *Worker) verifyJournalStore(ctx context.Context, client *clients.WorkspaceStorageClient) error {
+	bucket := client.BucketName()
+	if _, verified := s.verifiedJournalBuckets.Load(bucket); verified {
+		return nil
+	}
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = client.VerifyConditionalWrites(ctx); err == nil {
+			s.verifiedJournalBuckets.Store(bucket, struct{}{})
+			return nil
+		}
+	}
+	return fmt.Errorf("verify conditional writes on bucket %s: %w", bucket, err)
+}
+
+// A database disk is checkpointed when its journal asks (recovery bounds) or
+// when it has been this long since the last published generation, so forks
+// and restores start from something recent. Every publish is a generation in
+// the disk's snapshot chain, so the floor is deliberately coarse.
+const databaseCheckpointInterval = 15 * time.Minute
+
 func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *types.Mount, volume *disk.Volume, journal *disk.Journal) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	key := s.qcowVolumeKey(request, mount)
 	lastCheckpoint := time.Now()
+	// Each attempt seals a new layer, so failures back off instead of
+	// re-sealing every tick until the publish path recovers.
+	var retryAfter time.Time
+	backoff := 30 * time.Second
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -253,7 +285,10 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 			return
 		}
 		_, _, pending := journal.State()
-		if pending == 0 || (!journal.NeedsCheckpoint() && time.Since(lastCheckpoint) < 5*time.Minute) {
+		if pending == 0 || time.Now().Before(retryAfter) {
+			continue
+		}
+		if !journal.NeedsCheckpoint() && time.Since(lastCheckpoint) < databaseCheckpointInterval {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
@@ -263,10 +298,13 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 		})
 		cancel()
 		if err != nil {
-			log.Error().Err(err).Str("disk", mount.DurableDisk.Name).Msg("database checkpoint failed; committed journal retained")
-		} else {
-			lastCheckpoint = time.Now()
+			log.Error().Err(err).Str("disk", mount.DurableDisk.Name).Dur("retry_in", backoff).
+				Msg("database checkpoint failed; committed journal retained")
+			retryAfter = time.Now().Add(backoff)
+			backoff = min(backoff*2, databaseCheckpointInterval)
+			continue
 		}
+		lastCheckpoint, retryAfter, backoff = time.Now(), time.Time{}, 30*time.Second
 	}
 }
 

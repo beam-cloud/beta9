@@ -235,6 +235,11 @@ func (p *journalNBD) flush() error {
 	if _, err := p.exchange(blockRequest{Command: nbdCommandFlush}, nil); err != nil {
 		return err
 	}
+	// Everything acknowledged so far was committed by the flush that drained
+	// it, and request already checked the lease: nothing to send.
+	if p.pending.Len() == 0 {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), journalTimeout)
 	defer cancel()
 	if err := p.journal.Commit(ctx, p.pending.Bytes()); err != nil {

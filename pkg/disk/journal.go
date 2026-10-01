@@ -16,22 +16,27 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
-	journalLease           = 30 * time.Second
-	journalTimeout         = 10 * time.Second
-	journalWriteAttempts   = 5
-	journalRetryDelay      = 100 * time.Millisecond
-	journalMaxBytes        = 512 << 20
-	journalCheckpointBytes = 128 << 20
-	journalMaxSegments     = 16384
+	journalLease              = 30 * time.Second
+	journalTimeout            = 10 * time.Second
+	journalWriteAttempts      = 5
+	journalRetryDelay         = 100 * time.Millisecond
+	journalMaxBytes           = 512 << 20
+	journalCheckpointBytes    = 128 << 20
+	journalMaxSegments        = 16384
+	journalCheckpointSegments = 4096
+	journalReplayConcurrency  = 16
 )
 
 // JournalStore is the disk's existing object store. WriteVersion must provide
-// atomic compare-and-set: an empty version creates, a nonempty version replaces.
+// atomic compare-and-set against the latest committed version: an empty
+// version creates, a nonempty version replaces. The caller is responsible for
+// checking that a store honours those preconditions before trusting it with a
+// journal; a store that ignores them cannot fence writers.
 type JournalStore interface {
-	VerifyConditionalWrites(context.Context) error
 	ReadVersion(context.Context, string) ([]byte, string, error)
 	WriteVersion(context.Context, string, []byte, string) (string, error)
 	Upload(context.Context, string, []byte) error
@@ -74,9 +79,6 @@ type Journal struct {
 func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapshot string, size int64) (*Journal, error) {
 	if size <= 0 || owner == "" || prefix == "" {
 		return nil, fmt.Errorf("disk journal requires an owner, prefix, and positive capacity")
-	}
-	if err := store.VerifyConditionalWrites(ctx); err != nil {
-		return nil, err
 	}
 	j := &Journal{
 		store: store, prefix: prefix, done: make(chan struct{}), checkpoint: make(chan struct{}, 1),
@@ -170,43 +172,57 @@ func (j *Journal) persist(ctx context.Context) error {
 	}
 	j.head.Expires = time.Now().Add(journalLease)
 	data, err := json.Marshal(j.head)
-	if err == nil {
-		previous := j.version
-		for attempt := 0; attempt < journalWriteAttempts; attempt++ {
-			var version string
-			version, err = j.store.WriteVersion(ctx, j.headKey(), data, previous)
-			if err == nil {
-				j.version = version
-				break
-			}
-			stored, version, readErr := j.store.ReadVersion(ctx, j.headKey())
-			if readErr == nil && version != "" && bytes.Equal(stored, data) {
-				j.version, err = version, nil
-				break
-			}
-			var remote journalHead
-			_ = json.Unmarshal(stored, &remote)
-			log.Warn().Err(err).AnErr("read_error", readErr).
-				Str("disk", j.prefix).Str("expected_version", previous).Str("stored_version", version).
-				Str("owner", j.head.Owner).Str("stored_owner", remote.Owner).
-				Uint64("sequence", j.head.Sequence).Uint64("stored_sequence", remote.Sequence).
-				Int("attempt", attempt).Msg("disk journal conditional write rejected")
-			if readErr != nil || remote.Owner != j.head.Owner || ctx.Err() != nil || attempt+1 == journalWriteAttempts {
-				break
-			}
-			// Retry the identical conditional write; never adopt a conflicting version.
-			timer := time.NewTimer(time.Duration(attempt+1) * journalRetryDelay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-			case <-timer.C:
-			}
-		}
-	}
 	if err != nil {
 		j.failed = fmt.Errorf("disk ownership or persistence lost: %w", err)
+		return j.failed
 	}
-	return j.failed
+	version, err := j.writeHead(ctx, data)
+	if err != nil {
+		j.failed = fmt.Errorf("disk ownership or persistence lost: %w", err)
+		return j.failed
+	}
+	j.version = version
+	return nil
+}
+
+// writeHead replaces the head conditionally on the version this journal last
+// observed; that condition is the ownership fence. The store can reject a
+// precondition that did hold and serve readbacks behind the latest write, and
+// a committed PUT can lose its response and fail the SDK's own retry. No
+// readback distinguishes those from a genuine conflict: during acquisition
+// the stored head still names the previous owner. So the unchanged
+// conditional write is retried; it can only succeed while the object is still
+// the observed version. A readback identical to the pending head adopts the
+// version that write already committed.
+func (j *Journal) writeHead(ctx context.Context, data []byte) (string, error) {
+	previous := j.version
+	for attempt := 0; ; attempt++ {
+		version, err := j.store.WriteVersion(ctx, j.headKey(), data, previous)
+		if err == nil {
+			return version, nil
+		}
+		stored, version, readErr := j.store.ReadVersion(ctx, j.headKey())
+		if readErr == nil && version != "" && bytes.Equal(stored, data) {
+			return version, nil
+		}
+		var remote journalHead
+		_ = json.Unmarshal(stored, &remote)
+		log.Warn().Err(err).AnErr("read_error", readErr).
+			Str("disk", j.prefix).Str("expected_version", previous).Str("stored_version", version).
+			Str("owner", j.head.Owner).Str("stored_owner", remote.Owner).
+			Uint64("sequence", j.head.Sequence).Uint64("stored_sequence", remote.Sequence).
+			Int("attempt", attempt).Msg("disk journal conditional write rejected")
+		if attempt+1 == journalWriteAttempts {
+			return "", err
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * journalRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", err
+		case <-timer.C:
+		}
+	}
 }
 
 func (j *Journal) renew(ctx context.Context) {
@@ -284,7 +300,7 @@ func (j *Journal) needsCheckpoint() bool {
 	for _, segment := range j.head.Segments {
 		pending += segment.Bytes
 	}
-	return pending >= journalCheckpointBytes || len(j.head.Segments) >= 1024
+	return pending >= journalCheckpointBytes || len(j.head.Segments) >= journalCheckpointSegments
 }
 
 func (j *Journal) requestCheckpoint() {
@@ -341,37 +357,58 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 	return nil
 }
 
+// Replay applies every committed segment in order. Segments are small and
+// numerous, so they are fetched a window at a time; writes stay sequential.
 func (j *Journal) Replay(ctx context.Context, write func(uint64, []byte) error) error {
 	j.mu.Lock()
 	segments := append([]journalSegment(nil), j.head.Segments...)
 	size := j.head.Size
 	j.mu.Unlock()
-	for _, segment := range segments {
-		if err := j.Check(); err != nil {
+	for start := 0; start < len(segments); start += journalReplayConcurrency {
+		window := segments[start:min(start+journalReplayConcurrency, len(segments))]
+		fetched := make([][]byte, len(window))
+		fetches, fetchCtx := errgroup.WithContext(ctx)
+		for i, segment := range window {
+			fetches.Go(func() error {
+				var err error
+				fetched[i], err = j.fetchSegment(fetchCtx, segment)
+				return err
+			})
+		}
+		if err := fetches.Wait(); err != nil {
 			return err
 		}
-		data, err := j.store.Download(ctx, j.segmentKey(segment.Digest))
-		if err != nil {
-			return err
-		}
-		digest := sha256.Sum256(data)
-		if hex.EncodeToString(digest[:]) != segment.Digest {
-			return fmt.Errorf("disk journal checksum mismatch at %d", segment.Sequence)
-		}
-		reader, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return err
-		}
-		records, err := io.ReadAll(io.LimitReader(reader, int64(segment.Bytes)+1))
-		reader.Close()
-		if err != nil || len(records) != segment.Bytes {
-			return fmt.Errorf("invalid disk journal length at %d", segment.Sequence)
-		}
-		if err := replayRecords(records, uint64(size), write); err != nil {
-			return err
+		for _, records := range fetched {
+			if err := j.Check(); err != nil {
+				return err
+			}
+			if err := replayRecords(records, uint64(size), write); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func (j *Journal) fetchSegment(ctx context.Context, segment journalSegment) ([]byte, error) {
+	data, err := j.store.Download(ctx, j.segmentKey(segment.Digest))
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(data)
+	if hex.EncodeToString(digest[:]) != segment.Digest {
+		return nil, fmt.Errorf("disk journal checksum mismatch at %d", segment.Sequence)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	records, err := io.ReadAll(io.LimitReader(reader, int64(segment.Bytes)+1))
+	reader.Close()
+	if err != nil || len(records) != segment.Bytes {
+		return nil, fmt.Errorf("invalid disk journal length at %d", segment.Sequence)
+	}
+	return records, nil
 }
 
 func replayRecords(records []byte, size uint64, write func(uint64, []byte) error) error {
@@ -419,6 +456,8 @@ func (j *Journal) Close() error {
 	if j.failed != nil {
 		return j.failed
 	}
+	// Releasing the lease lets the next owner start without waiting it out,
+	// so the release write deserves the same retries as any other.
 	j.head.Expires = time.Time{}
 	data, err := json.Marshal(j.head)
 	if err != nil {
@@ -426,7 +465,7 @@ func (j *Journal) Close() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), journalTimeout)
 	defer cancel()
-	_, err = j.store.WriteVersion(ctx, j.headKey(), data, j.version)
+	_, err = j.writeHead(ctx, data)
 	j.failed = errors.New("disk journal is closed")
 	return err
 }
