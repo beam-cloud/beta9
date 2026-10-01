@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	_ "embed"
 	"encoding/base64"
@@ -19,6 +20,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -39,11 +42,12 @@ const (
 	databasePythonVersion   = "python3.10"
 	databaseDiskFilesystem  = "ext4"
 
-	postgresScriptPath = "/tmp/beam-postgres"
-	backupVolumeMount  = "beam-backups"
-	restoreVolumeMount = "beam-restore"
-	backupStatusMaxAge = 3 * time.Minute
-	postgresRetention  = 7 * 24 * time.Hour
+	postgresScriptPath   = "/tmp/beam-postgres"
+	backupVolumeMount    = "beam-backups"
+	restoreVolumeMount   = "beam-restore"
+	backupStatusMaxAge   = 3 * time.Minute
+	postgresRetention    = 7 * 24 * time.Hour
+	databaseProbeTimeout = 5 * time.Second
 )
 
 type databaseProduct struct {
@@ -60,6 +64,104 @@ type databaseProduct struct {
 	DurabilityMode    string
 	HasDatabase       bool // a named database next to user/password (not Redis)
 	Entrypoint        string
+}
+
+func (p databaseProduct) probe(ctx context.Context, connection url.URL, verifyTLS bool) error {
+	switch p.Kind {
+	case types.DatabaseKindPostgres:
+		mode := "require"
+		if verifyTLS {
+			mode = "verify-full"
+		}
+		// lib/pq uses system roots when sslrootcert is empty.
+		connection.RawQuery = url.Values{
+			"sslmode": {mode}, "sslrootcert": {""},
+			"connect_timeout": {strconv.Itoa(int(databaseProbeTimeout.Seconds()))},
+		}.Encode()
+		connector, err := pq.NewConnector(connection.String())
+		if err != nil {
+			return errors.New("invalid Postgres connection configuration")
+		}
+		client := sql.OpenDB(connector)
+		defer client.Close()
+		var result int
+		return client.QueryRowContext(ctx, "SELECT 1").Scan(&result)
+	case types.DatabaseKindRedis:
+		password, _ := connection.User.Password()
+		client := redis.NewClient(&redis.Options{
+			Addr:                  connection.Host,
+			Username:              connection.User.Username(),
+			Password:              password,
+			DialTimeout:           databaseProbeTimeout,
+			ReadTimeout:           databaseProbeTimeout,
+			WriteTimeout:          databaseProbeTimeout,
+			ContextTimeoutEnabled: true,
+			MaxRetries:            -1,
+			TLSConfig: &tls.Config{
+				ServerName:         connection.Hostname(),
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: !verifyTLS, // Only development gateways use self-signed certificates.
+			},
+		})
+		defer client.Close()
+		return client.Ping(ctx).Err()
+	default:
+		return errors.New("readiness supports Postgres and Redis")
+	}
+}
+
+// CheckDatabaseReadiness authenticates through the public endpoint without creating a task.
+func (gws *GatewayService) CheckDatabaseReadiness(ctx context.Context, authInfo *auth.AuthInfo, name, deploymentID string) (*types.DatabaseReadiness, error) {
+	ctx, cancel := context.WithTimeout(ctx, databaseProbeTimeout)
+	defer cancel()
+	deployments, product, err := gws.databaseDeployments(ctx, authInfo.Workspace, name)
+	if err != nil {
+		return nil, err
+	}
+	deployment := newestDeployment(deployments)
+	if product.Kind != types.DatabaseKindPostgres && product.Kind != types.DatabaseKindRedis {
+		return nil, errors.New("readiness supports Postgres and Redis")
+	}
+	if deploymentID != "" && deployment.ExternalId != deploymentID {
+		return nil, errors.New("database revision changed; refresh the deployment before checking readiness")
+	}
+	result := &types.DatabaseReadiness{DeploymentID: deployment.ExternalId}
+	if !deployment.Active {
+		result.Error = "database is stopped; start it before checking readiness"
+		return result, nil
+	}
+	value, err := gws.SecretValue(ctx, authInfo.Workspace, databaseSecrets(product, name).URL)
+	if err != nil {
+		return nil, err
+	}
+	connection, err := url.Parse(value)
+	if err != nil || connection.User == nil {
+		return nil, errors.New("invalid stored database connection URL")
+	}
+	host, err := gws.databasePortHost(ctx, deployment.Stub.ExternalId, deployment.ExternalId, product.Port)
+	if err != nil {
+		return nil, err
+	}
+	pinnedHost, err := gws.databasePortHost(ctx, deployment.Stub.ExternalId, "", product.Port)
+	if err != nil {
+		return nil, err
+	}
+	// A workspace can edit its secrets; never probe an arbitrary destination.
+	if connection.Host != host && connection.Host != pinnedHost {
+		return nil, errors.New("stored database URL does not match the deployment endpoint")
+	}
+	connection.Host = pinnedHost
+	verifyTLS := gws.appConfig.Abstractions.Pod.TCP.CertFile != ""
+	if err := product.probe(ctx, *connection, verifyTLS); err != nil {
+		result.Error = err.Error()
+		if password, _ := connection.User.Password(); password != "" {
+			result.Error = strings.ReplaceAll(result.Error, password, "[redacted]")
+		}
+	} else {
+		result.Ready = true
+		result.TLSVerified = verifyTLS
+	}
+	return result, nil
 }
 
 var databaseProducts = map[string]databaseProduct{

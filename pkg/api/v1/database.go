@@ -17,6 +17,7 @@ type DatabaseManager interface {
 	RotateDatabaseCredentials(ctx context.Context, authInfo *auth.AuthInfo, name string) (*types.DatabaseServiceInfo, error)
 	DeleteDatabaseService(ctx context.Context, authInfo *auth.AuthInfo, name string) error
 	ListDatabaseServices(ctx context.Context, authInfo *auth.AuthInfo) ([]types.DatabaseServiceInfo, error)
+	CheckDatabaseReadiness(ctx context.Context, authInfo *auth.AuthInfo, name, deploymentID string) (*types.DatabaseReadiness, error)
 }
 
 const databaseCreateTimeout = 10 * time.Minute
@@ -32,9 +33,20 @@ func NewDatabaseGroup(g *echo.Group, gws DatabaseManager) *DatabaseGroup {
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.List))
 	g.POST("/:workspaceId", auth.WithWorkspaceAuth(group.Create))
 	g.POST("/:workspaceId/:name/rotate", auth.WithWorkspaceAuth(group.Rotate))
+	g.POST("/:workspaceId/:name/readiness", auth.WithWorkspaceAuth(group.Readiness))
 	g.DELETE("/:workspaceId/:name", auth.WithWorkspaceAuth(group.Delete))
 
 	return group
+}
+
+func (g *DatabaseGroup) Readiness(ctx echo.Context) error {
+	cc := ctx.(*auth.HttpAuthContext)
+	reqCtx := auth.ContextWithAuthInfo(ctx.Request().Context(), cc.AuthInfo)
+	result, err := g.gws.CheckDatabaseReadiness(reqCtx, cc.AuthInfo, ctx.Param("name"), ctx.QueryParam("deployment_id"))
+	if err != nil {
+		return HTTPBadRequest(err.Error())
+	}
+	return ctx.JSON(http.StatusOK, result)
 }
 
 func (g *DatabaseGroup) List(ctx echo.Context) error {
