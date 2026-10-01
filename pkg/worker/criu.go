@@ -649,7 +649,9 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		if hostIncompatible {
 			outputLogger.Info("Checkpoint was created on an incompatible host; starting container normally")
 			// Preserve the saved checkpoint instead of replacing it from this host.
-			request.CheckpointEnabled = false
+			if request.Stub.Type.IsDeployment() {
+				request.CheckpointEnabled = false
+			}
 		} else if runscVersionFallback {
 			outputLogger.Info("Checkpoint uses an incompatible runsc version; starting from its saved filesystem")
 		} else {

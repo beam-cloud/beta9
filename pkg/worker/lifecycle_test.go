@@ -2532,6 +2532,8 @@ func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *tes
 			CheckpointId: "checkpoint-incompatible-host",
 			Status:       string(types.CheckpointStatusAvailable),
 		},
+		CheckpointEnabled: true,
+		Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
 	}
 	var output strings.Builder
 
@@ -2550,84 +2552,101 @@ func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *tes
 	require.Equal(t, -1, exitCode)
 	require.Equal(t, 0, backendRepoClient.updateCalls)
 	require.Contains(t, output.String(), "incompatible host")
+	require.True(t, request.CheckpointEnabled, "explicit restore requests must remain unchanged")
 }
 
 func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 	t.Setenv("WORKER_POOL_NAME", "default")
 
-	restoreErr := &ErrCheckpointHostIncompatible{Stderr: "CPU capabilities do not match run time"}
-	containerID := "container-restore-fallback"
-	checkpointID := "checkpoint-restore-fallback"
-	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointID, checkpointFsDir), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointID, "inventory.img"), []byte("runtime payload"), 0644))
+	for _, tc := range []struct {
+		name              string
+		restoreErr        error
+		checkpointEnabled bool
+	}{
+		{"generic", assert.AnError, true},
+		{"host incompatible", &ErrCheckpointHostIncompatible{Stderr: "CPU capabilities do not match run time"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			containerID := "container-restore-fallback"
+			checkpointID := "checkpoint-restore-fallback"
+			tmpDir := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointID, checkpointFsDir), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointID, "inventory.img"), []byte("runtime payload"), 0644))
 
-	rt := &restoreFallbackRuntime{
-		mockRuntime: mockRuntime{
-			name:         "runc",
-			capabilities: runtime.Capabilities{CheckpointRestore: true},
-		},
-	}
-	criuManager := &observingRestoreErrorCRIUManager{err: restoreErr, removeConfig: true}
-	backendRepoClient := &fakeBackendRepoClient{}
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
-	}
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"default": {CRIUEnabled: true},
-		}}},
-		podAddr:             "10.42.0.10",
-		criuManager:         criuManager,
-		containerRepoClient: repoClient,
-		backendRepoClient:   backendRepoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: rt,
-	})
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	configContents := []byte(runtime.GetBaseConfig("runc"))
-	require.NoError(t, os.WriteFile(configPath, configContents, 0644))
-	require.NoError(t, addEnvToSpec(configPath, []string{"CHECKPOINT_ENABLED=true"}))
-	rt.runConfigPath = configPath
-	request := &types.ContainerRequest{
-		ContainerId:       containerID,
-		ConfigPath:        configPath,
-		Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
-		CheckpointEnabled: true,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: checkpointID,
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-	}
+			rt := &restoreFallbackRuntime{
+				mockRuntime: mockRuntime{
+					name:         "runc",
+					capabilities: runtime.Capabilities{CheckpointRestore: true},
+				},
+			}
+			criuManager := &observingRestoreErrorCRIUManager{err: tc.restoreErr, removeConfig: true}
+			backendRepoClient := &fakeBackendRepoClient{}
+			repoClient := &fakeContainerRepoClient{
+				state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
+			}
+			worker := &Worker{
+				config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+					"default": {CRIUEnabled: true},
+				}}},
+				podAddr:             "10.42.0.10",
+				criuManager:         criuManager,
+				containerRepoClient: repoClient,
+				backendRepoClient:   backendRepoClient,
+				containerInstances:  common.NewSafeMap[*ContainerInstance](),
+				cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+			}
+			worker.containerInstances.Set(containerID, &ContainerInstance{
+				Id:      containerID,
+				Runtime: rt,
+			})
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			configContents := []byte(runtime.GetBaseConfig("runc"))
+			require.NoError(t, os.WriteFile(configPath, configContents, 0644))
+			require.NoError(t, addEnvToSpec(configPath, []string{"CHECKPOINT_ENABLED=true"}))
+			rt.runConfigPath = configPath
+			request := &types.ContainerRequest{
+				ContainerId:       containerID,
+				ConfigPath:        configPath,
+				Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
+				CheckpointEnabled: true,
+				Checkpoint: &types.Checkpoint{
+					CheckpointId: checkpointID,
+					Status:       string(types.CheckpointStatusAvailable),
+				},
+			}
 
-	exitCode, err := worker.runContainer(
-		context.Background(),
-		request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		common.NewOutputWriter(func(string) {}),
-		make(chan int, 1),
-		make(chan int, 1),
-		time.Now(),
-		registeredAddresses(),
-		completedCheckpointFilesystemRestore(),
-	)
+			exitCode, err := worker.runContainer(
+				context.Background(),
+				request,
+				slog.New(slog.NewTextHandler(io.Discard, nil)),
+				common.NewOutputWriter(func(string) {}),
+				make(chan int, 1),
+				make(chan int, 1),
+				time.Now(),
+				registeredAddresses(),
+				completedCheckpointFilesystemRestore(),
+			)
 
-	require.NoError(t, err)
-	require.Equal(t, 0, exitCode)
-	require.True(t, rt.runCalled)
-	require.Equal(t, 0, criuManager.deleteCallsAtRestore)
-	require.Equal(t, 1, rt.deleteCallsAtRun)
-	require.Zero(t, backendRepoClient.updateCalls)
-	require.Nil(t, request.Checkpoint)
-	require.False(t, request.CheckpointEnabled)
-	require.Equal(t, 1, repoClient.updateStatusCalls)
-	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
-	require.Contains(t, string(rt.runConfigContents), `"ociVersion"`)
-	require.Contains(t, string(rt.runConfigContents), "CHECKPOINT_ENABLED=false")
+			require.NoError(t, err)
+			require.Equal(t, 0, exitCode)
+			require.True(t, rt.runCalled)
+			require.Equal(t, 0, criuManager.deleteCallsAtRestore)
+			require.Equal(t, 1, rt.deleteCallsAtRun)
+			if tc.checkpointEnabled {
+				require.Equal(t, 1, backendRepoClient.updateCalls)
+				require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
+				require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+			} else {
+				require.Zero(t, backendRepoClient.updateCalls)
+			}
+			require.Nil(t, request.Checkpoint)
+			require.Equal(t, tc.checkpointEnabled, request.CheckpointEnabled)
+			require.Equal(t, 1, repoClient.updateStatusCalls)
+			require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
+			require.Contains(t, string(rt.runConfigContents), `"ociVersion"`)
+			require.Contains(t, string(rt.runConfigContents), fmt.Sprintf("CHECKPOINT_ENABLED=%t", tc.checkpointEnabled))
+		})
+	}
 }
 
 func TestRunContainerMigratesLegacyForcedRuncCheckpointBeforeRestore(t *testing.T) {

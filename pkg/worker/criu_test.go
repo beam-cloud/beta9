@@ -1930,7 +1930,8 @@ func TestClassifyRestoreErrorDetectsHostIncompatibility(t *testing.T) {
 	require.True(t, IsCheckpointHostIncompatible(err))
 	require.False(t, IsCRIURestoreError(err))
 	err = classifyRestoreError("gvisor", assert.AnError, `"Mounts" does not match across checkpoint restore`)
-	require.True(t, IsCheckpointHostIncompatible(err))
+	require.False(t, IsCheckpointHostIncompatible(err), "mount mismatch alone does not establish host incompatibility")
+	require.ErrorIs(t, err, assert.AnError)
 	require.False(t, IsCheckpointHostIncompatible(classifyRestoreError("gvisor", assert.AnError, "invalid image header")))
 }
 
