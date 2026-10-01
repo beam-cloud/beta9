@@ -34,15 +34,22 @@ def worker_ids_for_machine(service: ServiceClient, machine_id: str) -> List[str]
     return ids
 
 
-def apply_worker_action(service: ServiceClient, worker_ids: Sequence[str], action: str) -> None:
+def apply_worker_action(
+    service: ServiceClient, worker_ids: Sequence[str], action: str, *, restart: bool = False
+) -> None:
     request_type, method, completed = {
         "cordon": (CordonWorkerRequest, "cordon_worker", "Cordoned"),
         "uncordon": (UncordonWorkerRequest, "uncordon_worker", "Uncordoned"),
         "drain": (DrainWorkerRequest, "drain_worker", "Cordoned and drained"),
     }[action]
+    if restart:
+        completed = "Requested drain and restart for"
     failures = []
     for worker_id in worker_ids:
-        res = getattr(service.gateway, method)(request_type(worker_id=worker_id))
+        request = request_type(worker_id=worker_id)
+        if restart:
+            request.restart = True
+        res = getattr(service.gateway, method)(request)
         if not res.ok:
             failures.append(worker_id)
             terminal.warn(f"{worker_id}: {res.err_msg}")

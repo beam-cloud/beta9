@@ -210,7 +210,10 @@ type AgentPathMetric struct {
 }
 
 type AgentWorkerSlotState struct {
-	Generation                string              `json:"generation"`
+	Generation string `json:"generation"`
+	// RestartNonce changes the desired generation without changing the image.
+	// Until drained, Generation still identifies the running slot.
+	RestartNonce              string              `json:"restart_nonce,omitempty"`
 	WorkerID                  string              `json:"worker_id"`
 	WorkerTokenID             string              `json:"worker_token_id"`
 	WorkerTokenHash           string              `json:"worker_token_hash"`

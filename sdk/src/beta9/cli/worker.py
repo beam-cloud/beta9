@@ -202,15 +202,19 @@ def uncordon_worker(service: ServiceClient, worker_ids: List[str]):
     help="Cordon workers and stop their active containers for maintenance.",
     epilog="""
     Drained workers remain cordoned. Run `worker uncordon` after maintenance.
+    With --restart, agent-managed workers are recreated after draining and
+    reload their configuration. Restart is asynchronous; check `worker list`.
 
     Examples:
 
       {cli_name} worker drain 675a65c3
       {cli_name} worker drain 675a65c3 9c1b7bae
+      {cli_name} worker drain --restart 675a65c3
       {cli_name} worker list --pool my-pool --format json | jq -r '.[].id' | {cli_name} worker drain -
     """,
 )
 @click.argument("worker_ids", nargs=-1, required=True)
+@click.option("--restart", is_flag=True, help="Recreate agent-managed workers after draining.")
 @extraclick.pass_service_client
-def drain_worker(service: ServiceClient, worker_ids: List[str]):
-    apply_worker_action(service, worker_ids_from_args(worker_ids), "drain")
+def drain_worker(service: ServiceClient, worker_ids: List[str], restart: bool):
+    apply_worker_action(service, worker_ids_from_args(worker_ids), "drain", restart=restart)
