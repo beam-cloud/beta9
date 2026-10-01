@@ -20,17 +20,40 @@ import (
 
 // retryJournalStore reproduces a lost PUT response: storage commits the first
 // attempt, then the SDK retries with the old condition and receives HTTP 412.
+// Its first readback lags that committed write, as observed in production.
 type retryJournalStore struct {
 	*clients.WorkspaceStorageClient
-	retry atomic.Bool
+	retry        atomic.Bool
+	reject       atomic.Bool
+	prior        []byte
+	priorVersion string
 }
 
 func (s *retryJournalStore) WriteVersion(ctx context.Context, key string, data []byte, version string) (string, error) {
+	if s.reject.CompareAndSwap(true, false) {
+		return s.WorkspaceStorageClient.WriteVersion(ctx, key, data, "stale")
+	}
+	if s.retry.Load() {
+		var err error
+		s.prior, s.priorVersion, err = s.WorkspaceStorageClient.ReadVersion(ctx, key)
+		if err != nil {
+			return "", err
+		}
+	}
 	next, err := s.WorkspaceStorageClient.WriteVersion(ctx, key, data, version)
 	if err == nil && s.retry.CompareAndSwap(true, false) {
 		return s.WorkspaceStorageClient.WriteVersion(ctx, key, data, version)
 	}
 	return next, err
+}
+
+func (s *retryJournalStore) ReadVersion(ctx context.Context, key string) ([]byte, string, error) {
+	if s.prior != nil {
+		data := s.prior
+		s.prior = nil
+		return data, s.priorVersion, nil
+	}
+	return s.WorkspaceStorageClient.ReadVersion(ctx, key)
 }
 
 // BEAM_TEST_STORAGE points to a WorkspaceStorage JSON file, or "-" for stdin.
@@ -81,6 +104,13 @@ func TestJournalConditionalRetry(t *testing.T) {
 	require.NoError(t, journal.Commit(ctx, records.Bytes()))
 	require.False(t, store.retry.Load(), "the retry must actually be exercised")
 	require.NoError(t, journal.Commit(ctx, nil), "reconciliation must retain the new version")
+
+	// A transient rejection leaves the previous head in place. Retrying must
+	// keep its original condition, never replace it with an observed version.
+	store.reject.Store(true)
+	require.NoError(t, journal.Commit(ctx, nil))
+	require.False(t, store.reject.Load(), "the rejected write must be exercised")
+	require.NoError(t, journal.Commit(ctx, nil))
 
 	// A genuinely different head must still fence the old writer.
 	key := prefix + "/head.json"

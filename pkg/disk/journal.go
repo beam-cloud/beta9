@@ -14,13 +14,17 @@ import (
 	"path"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
 	journalLease           = 30 * time.Second
 	journalTimeout         = 10 * time.Second
+	journalWriteAttempts   = 5
+	journalRetryDelay      = 100 * time.Millisecond
 	journalMaxBytes        = 512 << 20
-	journalCheckpointBytes = 32 << 20
+	journalCheckpointBytes = 128 << 20
 	journalMaxSegments     = 16384
 )
 
@@ -167,13 +171,35 @@ func (j *Journal) persist(ctx context.Context) error {
 	j.head.Expires = time.Now().Add(journalLease)
 	data, err := json.Marshal(j.head)
 	if err == nil {
-		j.version, err = j.store.WriteVersion(ctx, j.headKey(), data, j.version)
-		if err != nil {
-			// A committed PUT can lose its response, then fail its SDK retry's
-			// condition. Only our exact head (including owner and lease) is safe.
+		previous := j.version
+		for attempt := 0; attempt < journalWriteAttempts; attempt++ {
+			var version string
+			version, err = j.store.WriteVersion(ctx, j.headKey(), data, previous)
+			if err == nil {
+				j.version = version
+				break
+			}
 			stored, version, readErr := j.store.ReadVersion(ctx, j.headKey())
 			if readErr == nil && version != "" && bytes.Equal(stored, data) {
 				j.version, err = version, nil
+				break
+			}
+			var remote journalHead
+			_ = json.Unmarshal(stored, &remote)
+			log.Warn().Err(err).AnErr("read_error", readErr).
+				Str("disk", j.prefix).Str("expected_version", previous).Str("stored_version", version).
+				Str("owner", j.head.Owner).Str("stored_owner", remote.Owner).
+				Uint64("sequence", j.head.Sequence).Uint64("stored_sequence", remote.Sequence).
+				Int("attempt", attempt).Msg("disk journal conditional write rejected")
+			if readErr != nil || remote.Owner != j.head.Owner || ctx.Err() != nil || attempt+1 == journalWriteAttempts {
+				break
+			}
+			// Retry the identical conditional write; never adopt a conflicting version.
+			timer := time.NewTimer(time.Duration(attempt+1) * journalRetryDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+			case <-timer.C:
 			}
 		}
 	}
@@ -247,12 +273,22 @@ func (j *Journal) State() (snapshot string, sequence uint64, pendingBytes int) {
 // limit leaves room for writes made while sealing and uploading a checkpoint.
 func (j *Journal) Checkpoints() <-chan struct{} { return j.checkpoint }
 
-func (j *Journal) requestCheckpoint() {
+func (j *Journal) NeedsCheckpoint() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.needsCheckpoint()
+}
+
+func (j *Journal) needsCheckpoint() bool {
 	pending := 0
 	for _, segment := range j.head.Segments {
 		pending += segment.Bytes
 	}
-	if pending < journalCheckpointBytes && len(j.head.Segments) < 1024 {
+	return pending >= journalCheckpointBytes || len(j.head.Segments) >= 1024
+}
+
+func (j *Journal) requestCheckpoint() {
+	if !j.needsCheckpoint() {
 		return
 	}
 	select {

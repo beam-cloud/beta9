@@ -235,12 +235,10 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 	key := s.qcowVolumeKey(request, mount)
 	lastCheckpoint := time.Now()
 	for {
-		requested := false
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-journal.Checkpoints():
-			requested = true
 		case <-ticker.C:
 		}
 		current, attached := s.diskManager.Volume(key)
@@ -255,7 +253,7 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 			return
 		}
 		_, _, pending := journal.State()
-		if pending == 0 || (!requested && pending < 32<<20 && time.Since(lastCheckpoint) < 5*time.Minute) {
+		if pending == 0 || (!journal.NeedsCheckpoint() && time.Since(lastCheckpoint) < 5*time.Minute) {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)

@@ -14,9 +14,9 @@ const (
 	postgresReadinessUser          = "postgres"
 )
 
-func (pb *PodProxyBuffer) checkContainerReady(address string, timeout time.Duration) bool {
+func (pb *PodProxyBuffer) checkContainerReady(port int32, address string, timeout time.Duration) bool {
 	if pb.stubConfig != nil {
-		if database := pb.stubConfig.EffectiveDatabaseConfig(); database != nil && database.IsPostgres() {
+		if database := pb.stubConfig.EffectiveDatabaseConfig(); database != nil && database.IsPostgres() && uint32(port) == database.Port {
 			return pb.checkPostgresContainerReady(address, timeout)
 		}
 	}

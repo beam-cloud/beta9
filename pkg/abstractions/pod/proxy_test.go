@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -1869,5 +1870,43 @@ func (r *blockingKeepWarmRepo) SetPodKeepWarmLock(ctx context.Context, workspace
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func TestDatabaseReadinessDoesNotAuthenticateToPooler(t *testing.T) {
+	for _, port := range []int32{5432, 6432} {
+		t.Run(fmt.Sprint(port), func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			probe := make(chan int, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					probe <- -1
+					return
+				}
+				defer conn.Close()
+				conn.SetDeadline(time.Now().Add(time.Second))
+				n, _ := conn.Read(make([]byte, 512))
+				// Postgres is listening but still recovering.
+				conn.Write(append([]byte{'E', 0, 0, 0, 15}, []byte("starting up")...))
+				probe <- n
+			}()
+			buffer := &PodProxyBuffer{stubConfig: &types.StubConfigV1{
+				Serving: &types.ServingConfig{Database: &types.DatabaseServingConfig{
+					Kind: types.DatabaseKindPostgres, Port: 5432,
+				}},
+			}}
+			ready := buffer.checkContainerReady(port, listener.Addr().String(), time.Second)
+			if ready != (port == 6432) {
+				t.Fatalf("port %d readiness = %v", port, ready)
+			}
+			if n := <-probe; n < 0 || (n == 0) != (port == 6432) {
+				t.Fatalf("port %d received %d probe bytes", port, n)
+			}
+		})
 	}
 }

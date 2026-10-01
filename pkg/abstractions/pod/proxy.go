@@ -1245,7 +1245,7 @@ func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32
 		wg.Add(1)
 		go func(port int32, address string) {
 			defer wg.Done()
-			if !pb.checkContainerReady(address, containerAvailableTimeout) {
+			if !pb.checkContainerReady(port, address, containerAvailableTimeout) {
 				return
 			}
 
