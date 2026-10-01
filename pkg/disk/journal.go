@@ -19,17 +19,62 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// journalLease is the one fence. A dead owner blocks its replacement for at
+// most this long, and a live owner keeps retrying a failing store for this
+// long before it fences itself: every store operation here is idempotent, so
+// until the lease lapses retrying is always safe and giving up never is. The
+// kernel's NBD request timeout must outlast it (see connectNBDDevice). Tests
+// shorten it.
+var journalLease = 60 * time.Second
+
 const (
-	journalLease              = 30 * time.Second
-	journalTimeout            = 10 * time.Second
-	journalWriteAttempts      = 5
+	journalTimeout            = 10 * time.Second // one store round trip
 	journalRetryDelay         = 100 * time.Millisecond
+	journalRetryMaxDelay      = time.Second
 	journalMaxBytes           = 512 << 20
 	journalCheckpointBytes    = 128 << 20
 	journalMaxSegments        = 16384
 	journalCheckpointSegments = 4096
 	journalReplayConcurrency  = 16
 )
+
+// errFenced ends retries early: another owner holds a newer lease on the disk.
+var errFenced = errors.New("disk is owned by another journal")
+
+// retry runs op until it succeeds, until passes, or ctx ends. Each attempt
+// gets one round trip; attempts back off up to a second apart. A fenced
+// error is final. The error returned is the last attempt's.
+func retry(ctx context.Context, until time.Time, op func(context.Context, int) error) error {
+	for attempt := 0; ; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, journalTimeout)
+		err := op(attemptCtx, attempt)
+		cancel()
+		if err == nil || errors.Is(err, errFenced) {
+			return err
+		}
+		delay := min(time.Duration(attempt+1)*journalRetryDelay, journalRetryMaxDelay)
+		if ctx.Err() != nil || !time.Now().Add(delay).Before(until) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return err
+		case <-timer.C:
+		}
+	}
+}
+
+// retryUntil is how long a store operation may keep failing: until the lease
+// the store currently records lapses. Without a live lease, while acquiring,
+// nothing can be lost by trying for one lease period.
+func retryUntil(committed time.Time) time.Time {
+	if now := time.Now(); !committed.After(now) {
+		return now.Add(journalLease)
+	}
+	return committed
+}
 
 // JournalStore is the disk's existing object store. WriteVersion must provide
 // atomic compare-and-set against the latest committed version: an empty
@@ -109,9 +154,13 @@ func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapsho
 func (j *Journal) waitForReleasedHead(ctx context.Context) error {
 	deadline := time.Now().Add(journalLease)
 	for {
-		readCtx, cancel := context.WithTimeout(ctx, journalTimeout)
-		data, version, err := j.store.ReadVersion(readCtx, j.headKey())
-		cancel()
+		var data []byte
+		var version string
+		err := retry(ctx, deadline, func(ctx context.Context, _ int) error {
+			var err error
+			data, version, err = j.store.ReadVersion(ctx, j.headKey())
+			return err
+		})
 		if err != nil || version == "" {
 			return err
 		}
@@ -166,44 +215,53 @@ func (j *Journal) validate() error {
 func (j *Journal) headKey() string                 { return path.Join(j.prefix, "head.json") }
 func (j *Journal) segmentKey(digest string) string { return path.Join(j.prefix, "segments", digest) }
 
+// persist commits the head with a fresh lease. Failing means the lease lapsed
+// or the disk was taken over, so the attachment is poisoned.
 func (j *Journal) persist(ctx context.Context) error {
 	if j.failed != nil {
 		return j.failed
 	}
-	j.head.Expires = time.Now().Add(journalLease)
-	data, err := json.Marshal(j.head)
-	if err != nil {
+	if err := j.writeHead(ctx, false); err != nil {
 		j.failed = fmt.Errorf("disk ownership or persistence lost: %w", err)
 		return j.failed
 	}
-	version, err := j.writeHead(ctx, data)
-	if err != nil {
-		j.failed = fmt.Errorf("disk ownership or persistence lost: %w", err)
-		return j.failed
-	}
-	j.version = version
 	return nil
 }
 
 // writeHead replaces the head conditionally on the version this journal last
 // observed; that condition is the ownership fence. The store can reject a
-// precondition that did hold and serve readbacks behind the latest write, and
-// a committed PUT can lose its response and fail the SDK's own retry. No
-// readback distinguishes those from a genuine conflict: during acquisition
-// the stored head still names the previous owner. So the unchanged
-// conditional write is retried; it can only succeed while the object is still
-// the observed version. A readback identical to the pending head adopts the
-// version that write already committed.
-func (j *Journal) writeHead(ctx context.Context, data []byte) (string, error) {
-	previous := j.version
-	for attempt := 0; ; attempt++ {
+// precondition that did hold, serve readbacks behind the latest write, or
+// commit a write whose response was lost. Each attempt carries a fresh lease
+// and remembers its digest, so a readback matching any attempt is this call's
+// own committed write and is adopted. A head from another owner whose lease
+// outlives the one we hold can only mean the disk was taken over after ours
+// lapsed; that fails at once. Anything else, including a stale readback that
+// still names a previous owner during acquisition, is retried until our lease
+// lapses: the unchanged conditional write can only succeed while the object
+// is still at the observed version.
+func (j *Journal) writeHead(ctx context.Context, release bool) error {
+	previous, committed := j.version, j.head.Expires
+	until := retryUntil(committed)
+	attempts := make(map[[sha256.Size]byte]time.Time)
+	return retry(ctx, until, func(ctx context.Context, attempt int) error {
+		j.head.Expires = time.Time{}
+		if !release {
+			j.head.Expires = time.Now().Add(journalLease)
+		}
+		data, err := json.Marshal(j.head)
+		if err != nil {
+			return err
+		}
+		attempts[sha256.Sum256(data)] = j.head.Expires
 		version, err := j.store.WriteVersion(ctx, j.headKey(), data, previous)
 		if err == nil {
-			return version, nil
+			j.version = version
+			return nil
 		}
 		stored, version, readErr := j.store.ReadVersion(ctx, j.headKey())
-		if readErr == nil && version != "" && bytes.Equal(stored, data) {
-			return version, nil
+		if expires, ours := attempts[sha256.Sum256(stored)]; readErr == nil && version != "" && ours {
+			j.version, j.head.Expires = version, expires
+			return nil
 		}
 		var remote journalHead
 		_ = json.Unmarshal(stored, &remote)
@@ -211,18 +269,12 @@ func (j *Journal) writeHead(ctx context.Context, data []byte) (string, error) {
 			Str("disk", j.prefix).Str("expected_version", previous).Str("stored_version", version).
 			Str("owner", j.head.Owner).Str("stored_owner", remote.Owner).
 			Uint64("sequence", j.head.Sequence).Uint64("stored_sequence", remote.Sequence).
-			Int("attempt", attempt).Msg("disk journal conditional write rejected")
-		if attempt+1 == journalWriteAttempts {
-			return "", err
+			Int("attempt", attempt).Time("retry_until", until).Msg("disk journal head write failed")
+		if remote.Owner != "" && remote.Owner != j.head.Owner && remote.Expires.After(committed) {
+			return fmt.Errorf("%w: %s until %s", errFenced, remote.Owner, remote.Expires.Format(time.RFC3339))
 		}
-		timer := time.NewTimer(time.Duration(attempt+1) * journalRetryDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return "", err
-		case <-timer.C:
-		}
-	}
+		return err
+	})
 }
 
 func (j *Journal) renew(ctx context.Context) {
@@ -235,15 +287,19 @@ func (j *Journal) renew(ctx context.Context) {
 			return
 		case <-ticker.C:
 			j.mu.Lock()
-			updateCtx, cancel := context.WithTimeout(ctx, journalTimeout)
-			err := j.persist(updateCtx)
-			cancel()
+			err := j.persist(ctx)
 			j.mu.Unlock()
 			if err != nil {
 				return
 			}
 		}
 	}
+}
+
+func (j *Journal) leaseEnd() time.Time {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.head.Expires
 }
 
 func (j *Journal) Check() error {
@@ -344,7 +400,11 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 	}
 	digest := sha256.Sum256(compressed.Bytes())
 	segment := journalSegment{Sequence: j.head.Sequence + 1, Digest: hex.EncodeToString(digest[:]), Bytes: len(records)}
-	if err := j.store.Upload(ctx, j.segmentKey(segment.Digest), compressed.Bytes()); err != nil {
+	// Segments are content-addressed, so a repeated upload is harmless.
+	err = retry(ctx, retryUntil(j.head.Expires), func(ctx context.Context, _ int) error {
+		return j.store.Upload(ctx, j.segmentKey(segment.Digest), compressed.Bytes())
+	})
+	if err != nil {
 		j.failed = fmt.Errorf("persist disk writes: %w", err)
 		return j.failed
 	}
@@ -391,7 +451,12 @@ func (j *Journal) Replay(ctx context.Context, write func(uint64, []byte) error) 
 }
 
 func (j *Journal) fetchSegment(ctx context.Context, segment journalSegment) ([]byte, error) {
-	data, err := j.store.Download(ctx, j.segmentKey(segment.Digest))
+	var data []byte
+	err := retry(ctx, retryUntil(j.leaseEnd()), func(ctx context.Context, _ int) error {
+		var err error
+		data, err = j.store.Download(ctx, j.segmentKey(segment.Digest))
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -457,15 +522,10 @@ func (j *Journal) Close() error {
 		return j.failed
 	}
 	// Releasing the lease lets the next owner start without waiting it out,
-	// so the release write deserves the same retries as any other.
-	j.head.Expires = time.Time{}
-	data, err := json.Marshal(j.head)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), journalTimeout)
+	// so the release gets the same retries as any other head write.
+	ctx, cancel := context.WithTimeout(context.Background(), journalLease)
 	defer cancel()
-	_, err = j.writeHead(ctx, data)
+	err := j.writeHead(ctx, true)
 	j.failed = errors.New("disk journal is closed")
 	return err
 }

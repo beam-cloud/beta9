@@ -232,30 +232,53 @@ func (s *Worker) openDatabaseDiskJournal(ctx context.Context, request *types.Con
 	return journal, committed, nil
 }
 
-// verifyJournalStore checks, once per bucket for the life of this worker,
+// verifyJournalStore checks, once per store for the life of this worker,
 // that the store honours the conditional writes the journal's ownership
 // fence depends on. The probe is several conditional writes, so a store that
 // is merely slow to settle gets a few tries before the attach fails.
 func (s *Worker) verifyJournalStore(ctx context.Context, client *clients.WorkspaceStorageClient) error {
-	bucket := client.BucketName()
-	if _, verified := s.verifiedJournalBuckets.Load(bucket); verified {
+	key := journalStoreKey(client.WorkspaceStorage)
+	if _, verified := s.verifiedJournalStores.Load(key); verified {
 		return nil
 	}
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
 		if err = client.VerifyConditionalWrites(ctx); err == nil {
-			s.verifiedJournalBuckets.Store(bucket, struct{}{})
+			s.verifiedJournalStores.Store(key, struct{}{})
 			return nil
 		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("verify conditional writes on %s: %w", key, err)
+		case <-time.After(time.Second):
+		}
 	}
-	return fmt.Errorf("verify conditional writes on bucket %s: %w", bucket, err)
+	return fmt.Errorf("verify conditional writes on %s: %w", key, err)
+}
+
+// journalStoreKey identifies the backend a probe result belongs to. Bucket
+// names repeat across endpoints, so the name alone would let one store's
+// pass vouch for another.
+func journalStoreKey(storage *types.WorkspaceStorage) string {
+	value := func(field *string) string {
+		if field == nil {
+			return ""
+		}
+		return *field
+	}
+	return value(storage.EndpointUrl) + "/" + value(storage.Region) + "/" + value(storage.BucketName)
 }
 
 // A database disk is checkpointed when its journal asks (recovery bounds) or
 // when it has been this long since the last published generation, so forks
 // and restores start from something recent. Every publish is a generation in
-// the disk's snapshot chain, so the floor is deliberately coarse.
-const databaseCheckpointInterval = 15 * time.Minute
+// the disk's snapshot chain, so the floor is deliberately coarse. Failed
+// publishes retry with backoff capped well under the interval: the journal
+// keeps growing toward its hard limit until a checkpoint succeeds.
+const (
+	databaseCheckpointInterval = 15 * time.Minute
+	databaseCheckpointRetryMax = 2 * time.Minute
+)
 
 func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *types.Mount, volume *disk.Volume, journal *disk.Journal) {
 	ticker := time.NewTicker(10 * time.Second)
@@ -301,7 +324,7 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 			log.Error().Err(err).Str("disk", mount.DurableDisk.Name).Dur("retry_in", backoff).
 				Msg("database checkpoint failed; committed journal retained")
 			retryAfter = time.Now().Add(backoff)
-			backoff = min(backoff*2, databaseCheckpointInterval)
+			backoff = min(backoff*2, databaseCheckpointRetryMax)
 			continue
 		}
 		lastCheckpoint, retryAfter, backoff = time.Now(), time.Time{}, 30*time.Second
