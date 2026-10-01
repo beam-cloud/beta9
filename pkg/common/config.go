@@ -136,7 +136,43 @@ func (cm *ConfigManager[T]) LoadConfig(format ConfigFormat, provider koanf.Provi
 		return err
 	}
 
-	return cm.kf.Load(provider, parser)
+	config := cm.kf.Copy()
+	if err := config.Load(provider, parser); err != nil {
+		return err
+	}
+
+	// Preserve numeric YAML/JSON permissions before weak decoding turns them
+	// into decimal strings that the filesystem would interpret as octal.
+	for _, path := range config.Keys() {
+		_, field, _ := strings.Cut(path, ".geese.")
+		switch field {
+		case "dirMode", "fileMode", "dir_mode", "file_mode":
+		default:
+			continue
+		}
+
+		var mode int
+		switch value := config.Get(path).(type) {
+		case int:
+			mode = value
+		case float64:
+			mode = int(value)
+			if value != float64(mode) {
+				return fmt.Errorf("%s must be an integer file mode", path)
+			}
+		default:
+			continue
+		}
+		if mode < 0 || mode > 07777 {
+			return fmt.Errorf("%s file mode is out of range: %d", path, mode)
+		}
+		if err := config.Set(path, fmt.Sprintf("%#o", mode)); err != nil {
+			return err
+		}
+	}
+
+	cm.kf = config
+	return nil
 }
 
 var (

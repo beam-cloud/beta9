@@ -53,6 +53,13 @@ type DatabaseServiceInfo struct {
 	PooledConnectionStringSecret string `json:"pooled_connection_string_secret,omitempty"`
 }
 
+type DatabaseReadiness struct {
+	DeploymentID string `json:"deployment_id"`
+	Ready        bool   `json:"ready"`
+	TLSVerified  bool   `json:"tls_verified"`
+	Error        string `json:"error,omitempty"`
+}
+
 // DatabaseBackupStatus is read from the backup volume, including after deletion.
 type DatabaseBackupStatus struct {
 	Kind             string          `json:"kind"`

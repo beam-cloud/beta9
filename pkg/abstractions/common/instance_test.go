@@ -190,6 +190,17 @@ func TestSyncMirrorsDeploymentActiveState(t *testing.T) {
 		t.Fatal("expected active deployment to reactivate the instance")
 	}
 
+	historical := backendRepo.deployments[0]
+	historical.Active = false
+	backendRepo.deployments = append(backendRepo.deployments, historical)
+	instance.IsActive = false
+	if err := instance.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if !instance.IsActive {
+		t.Fatal("expected rollback to reactivate a stub with an inactive historical deployment")
+	}
+
 	backendRepo.deployments[0].Active = false
 	if err := instance.Sync(); err != nil {
 		t.Fatal(err)
@@ -241,6 +252,9 @@ func TestInstanceControllerSyncsActiveDeploymentAndQueuesScale(t *testing.T) {
 	controller, _ := newTestInstanceController(t, types.DeploymentWithRelated{
 		Deployment: types.Deployment{Active: true},
 		Stub:       types.Stub{ExternalId: "stub-active", Type: types.StubType(types.StubTypePodDeployment)},
+	}, types.DeploymentWithRelated{
+		Deployment: types.Deployment{Active: false},
+		Stub:       types.Stub{ExternalId: "stub-active", Type: types.StubType(types.StubTypePodDeployment)},
 	})
 
 	if err := controller.Load(&types.DeploymentFilter{ShowDeleted: true}); err != nil {
@@ -257,6 +271,9 @@ func TestInstanceControllerSyncsActiveDeploymentAndQueuesScale(t *testing.T) {
 	}
 	if len(instance.scaleResults) != 1 || instance.scaleResults[0] != 0 {
 		t.Fatalf("scale results = %v, want [0]", instance.scaleResults)
+	}
+	if len(instance.scalingEvents) != 0 {
+		t.Fatalf("historical deployment stopped an active instance: %v", instance.scalingEvents)
 	}
 }
 

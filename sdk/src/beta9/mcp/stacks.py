@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -384,154 +385,110 @@ def _operation_state(
     return {"plan_id": plan_id, "status": "applying", "services": reusable}
 
 
-def _task_status(tools: LocalTools, task_id: str, step: Dict[str, Any]) -> None:
-    task = tools.remote("get_task", {"task_id": task_id})
-    status = str(task.get("status", "")).lower()
-    if status == "complete":
-        step["status"] = "complete"
-    elif status not in TASK_ACTIVE_STATUSES:
-        step["status"] = "failed"
-        step["error"] = (
-            f"Task {task_id} {status}: {task.get('failure_reason') or 'inspect task logs'}"
-        )
+@dataclass
+class StackService:
+    tools: LocalTools
+    name: str
+    node: Dict[str, Any]
+    state: Dict[str, Any]
 
+    @property
+    def kind(self) -> str:
+        return self.node.get("type", "application")
 
-def _database_check(service: str, kind: str, plan_id: str) -> Dict[str, Any]:
-    if kind == "postgres":
-        image = "postgres:16"
-        command = 'exec psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "SELECT 1"'
-        env = {"DATABASE_URL": "${{db." + service + ".DATABASE_URL}}"}
-    else:
-        image = "redis:7"
-        command = """\
-insecure=
-case "$REDIS_URL" in
-    *ssl_cert_reqs=none*) insecure=--insecure ;;
-esac
-test "$(redis-cli -u "$REDIS_URL" --sni "$REDIS_HOST" $insecure PING)" = PONG
-"""
-        env = {
-            "REDIS_URL": "${{db." + service + ".REDIS_URL}}",
-            "REDIS_HOST": "${{db." + service + ".HOST}}",
-        }
+    def submit(self, planned: Dict[str, Any], key: str) -> Dict[str, Any]:
+        if self.kind == "database":
+            if planned["existing"].get(self.name):
+                raise ValueError("database already exists; use explicit database operations")
+            return self.tools.database_job(self.node["deploy"], key)
 
-    return {
-        "name": service + "-check",
-        "image": image,
-        "entrypoint": ["sh", "-c", command],
-        "env": env,
-        "cpu": 0.1,
-        "memory": "128Mi",
-        "idempotency_key": f"stack:{plan_id}:{service}:health",
-        "wait_seconds": 0,
-    }
+        options = {**self.node["deploy"], "idempotency_key": key, "wait_seconds": 0}
+        if self.name in planned["sources"]:
+            source = planned["sources"][self.name]
+            directory = self.tools.job_dir / "builds" / digest(key)
+            # The CLI writes build files; keep the reviewed snapshot immutable.
+            _copy_source(source["snapshot_directory"], directory, source["fingerprint"])
+            options["directory"] = str(directory)
 
+        return self.tools.deploy(options, operation="run" if self.kind == "job" else "deploy")
 
-def _check_database(
-    tools: LocalTools, service: str, kind: str, plan_id: str, step: Dict[str, Any]
-) -> None:
-    if not step.get("health_job_id"):
-        result = tools.deploy(_database_check(service, kind, plan_id), operation="run")
-        if result.get("isError"):
-            raise ValueError(str(result))
-        step["health_job_id"] = result["structuredContent"]["job_id"]
+    def readiness(self) -> Dict[str, Any]:
+        revision = {"deployment_id": self.state["deployment_id"]}
+        if self.kind == "database":
+            return self.tools.remote("database_readiness", {"name": self.name, **revision})
+        if self.node.get("health_path"):
+            return {
+                **self.tools.remote(
+                    "wait_deployment",
+                    {**revision, "path": self.node["health_path"], "wait_seconds": 5},
+                ),
+                "ready": True,
+            }
 
-    result = tools.deploy_status({"job_id": step["health_job_id"]})
-    if result.get("isError"):
-        step["status"] = "failed"
-        step["error"] = result
-        return
-
-    job = result["structuredContent"]
-    if job["status"] == "accepted":
-        _task_status(tools, job["task_id"], step)
-        if step["status"] == "complete":
-            step["readiness"] = "verified_connection"
-
-
-def _check_application(tools: LocalTools, node: Dict[str, Any], step: Dict[str, Any]) -> None:
-    if not node.get("health_path"):
-        deployment = tools.remote("get_deployment", {"deployment_id": step["deployment_id"]})
-        containers = tools.remote("api", {"path": "/api/v1/container/{ws}", "method": "GET"})
+        deployment = self.tools.remote("get_deployment", revision)
+        containers = self.tools.remote("api", {"path": "/api/v1/container/{ws}", "method": "GET"})
         running = [
             item["container_id"]
             for item in containers["body"]
             if item["stub_id"] == deployment["stub_id"] and item["status"] == "RUNNING"
         ]
-        step["status"] = "complete" if running else "starting"
-        step["health"] = {"check": "running_process", "containers": running}
-        return
+        return {"ready": bool(running), "check": "running_process", "containers": running}
 
-    try:
-        health = tools.remote(
-            "wait_deployment",
-            {
-                "deployment_id": step["deployment_id"],
-                "path": node["health_path"],
-                "wait_seconds": 5,
-            },
-        )
-        step["status"] = "complete"
-        step["health"] = health
-        step.pop("last_health_error", None)
-    except RuntimeError as exc:
-        step["status"] = "starting"
-        step["last_health_error"] = str(exc)
-
-
-def _advance_service(
-    tools: LocalTools, planned: Dict[str, Any], plan_id: str, service: str, step: Dict[str, Any]
-) -> None:
-    if step["status"] in ("failed", "uncertain"):
-        raise ValueError(
-            f"{service} requires reconciliation: {step.get('error', 'unknown outcome')}"
-        )
-
-    node = planned["desired"]["services"][service]
-    kind = node.get("type", "application")
-    if not step.get("job_id"):
-        key = f"stack:{plan_id}:{service}"
-        if step.get("attempt", 0):
-            key += f":attempt:{step['attempt']}"
-        if kind == "database":
-            if planned["existing"].get(service):
-                raise ValueError(
-                    "database already exists; use explicit database operations for changes"
-                )
-            result = tools.database_job(node["deploy"], key)
+    def check_task(self) -> None:
+        task_id = self.state["task_id"]
+        task = self.tools.remote("get_task", {"task_id": task_id})
+        status = str(task["status"]).lower()
+        if status == "complete":
+            self.state["status"] = "complete"
+        elif status in TASK_ACTIVE_STATUSES:
+            self.state["status"] = "submitted"
         else:
-            options = {**node["deploy"], "idempotency_key": key, "wait_seconds": 0}
-            if service in planned["sources"]:
-                source = planned["sources"][service]
-                directory = tools.job_dir / "builds" / digest(key)
-                # The CLI writes ignore/build files; keep the reviewed snapshot immutable.
-                _copy_source(source["snapshot_directory"], directory, source["fingerprint"])
-                options["directory"] = str(directory)
-            result = tools.deploy(options, operation="run" if kind == "job" else "deploy")
+            self.state.update(
+                status="failed",
+                error=f"Task {task_id} {status}: {task.get('failure_reason') or 'inspect task logs'}",
+            )
 
-    else:
-        result = tools.deploy_status(
-            {"job_id": step["job_id"], "wait_seconds": 0, "log_cursor": step.get("log_cursor", 0)}
-        )
+    def advance(self, planned: Dict[str, Any], plan_id: str) -> None:
+        state = self.state
+        # Older plans used disposable readiness jobs. Recheck without recreating the database.
+        if self.kind == "database" and state.pop("health_job_id", None):
+            state["status"] = "starting"
+            state.pop("error", None)
+        if state["status"] in ("failed", "uncertain"):
+            raise ValueError(f"{self.name} requires reconciliation: {state.get('error')}")
 
-    job = result.get("structuredContent", {})
-    # Logs and the CLI response live with the job, not in every stack checkpoint.
-    step.update({key: value for key, value in job.items() if key in JOB_FIELDS})
-    if result.get("isError"):
-        step["status"] = "uncertain"
-        step["error"] = result
-        return
+        if state.get("job_id"):
+            result = self.tools.deploy_status(
+                {
+                    "job_id": state["job_id"],
+                    "wait_seconds": 0,
+                    "log_cursor": state.get("log_cursor", 0),
+                }
+            )
+        else:
+            key = f"stack:{plan_id}:{self.name}"
+            if state.get("attempt", 0):
+                key += f":attempt:{state['attempt']}"
+            result = self.submit(planned, key)
 
-    if job["status"] == "running":
-        return
+        job = result.get("structuredContent", {})
+        state.update({key: value for key, value in job.items() if key in JOB_FIELDS})
+        if result.get("isError"):
+            state.update(status="uncertain", error=result)
+            return
+        if job["status"] == "running":
+            return
+        if self.kind == "job":
+            self.check_task()
+            return
 
-    if kind == "job":
-        step["status"] = "submitted"
-        _task_status(tools, job["task_id"], step)
-    elif kind == "database":
-        _check_database(tools, service, node["deploy"]["kind"], plan_id, step)
-    else:
-        _check_application(tools, node, step)
+        try:
+            health = self.readiness()
+        except RuntimeError as exc:
+            health = {"ready": False, "error": str(exc)}
+        state.update(status="complete" if health["ready"] else "starting", health=health)
+        if self.kind == "database" and health["ready"]:
+            state["readiness"] = "verified_connection"
 
 
 def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -577,9 +534,10 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
             if step["status"] == "complete":
                 continue
 
-            _advance_service(tools, planned, plan_id, service, step)
-            kind = planned["desired"]["services"][service].get("type", "application")
-            if step["status"] == "complete" or (kind == "job" and step.get("task_id")):
+            node = planned["desired"]["services"][service]
+            resource = StackService(tools, service, node, step)
+            resource.advance(planned, plan_id)
+            if step["status"] == "complete" or (resource.kind == "job" and step.get("task_id")):
                 added.append(service)
             break
 
