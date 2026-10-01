@@ -597,9 +597,9 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 	require.Equal(t, types.ContainerRuntimeGvisor.String(), checkpoint.Runtime)
 	require.Equal(t, "host-a", checkpoint.CompatibilityKey)
 	mock.ExpectQuery(`c\.compatibility_key = \$3`).
-		WithArgs("stub-123", string(types.CheckpointStatusAvailable), "host-a").
+		WithArgs("stub-123", string(types.CheckpointStatusAvailable), "host-b").
 		WillReturnError(sql.ErrNoRows)
-	_, err = postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123", "host-a")
+	_, err = postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123", "host-b")
 	require.IsType(t, &types.ErrCheckpointNotFound{}, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
