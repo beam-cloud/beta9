@@ -4,11 +4,56 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/stretchr/testify/require"
 )
+
+func TestServiceProxyPostgresTrust(t *testing.T) {
+	for _, root := range []string{"", "system", "/app/custom-ca.pem"} {
+		t.Run("root="+root, func(t *testing.T) {
+			cfg := testServiceProxyConfig("svc.beam.cloud")
+			cfg.Abstractions.Pod.TCP.ServiceProxyTarget = ""
+			proxy := NewServiceProxy(context.Background(), cfg)
+			u := "postgresql://u:p%40ss@db.svc.beam.cloud:443/app?sslmode=verify-full"
+			if root != "" {
+				u += "&sslrootcert=" + url.QueryEscape(root)
+			}
+			spec := &specs.Spec{Process: &specs.Process{Env: []string{"DATABASE_URL=" + u}}}
+			require.NoError(t, proxy.Attach(&types.ContainerRequest{}, spec))
+			if root != "/app/custom-ca.pem" {
+				require.Len(t, spec.Mounts, 1)
+				require.Equal(t, serviceTrustBundle, spec.Mounts[0].Destination)
+				require.Contains(t, spec.Mounts[0].Options, "ro")
+			} else {
+				require.Empty(t, spec.Mounts)
+			}
+			connection, err := url.Parse(strings.TrimPrefix(spec.Process.Env[0], "DATABASE_URL="))
+			require.NoError(t, err)
+			password, _ := connection.User.Password()
+			require.Equal(t, "p@ss", password)
+			if root == "system" || root == "" {
+				root = serviceTrustBundle
+			}
+			require.Equal(t, root, connection.Query().Get("sslrootcert"))
+			require.Equal(t, "verify-full", connection.Query().Get("sslmode"))
+		})
+	}
+	proxy := NewServiceProxy(context.Background(), testServiceProxyConfig("svc.beam.cloud"))
+	spec := &specs.Spec{Process: &specs.Process{Env: []string{
+		"DATABASE_URL=postgresql://db.svc.beam.cloud/app?sslmode=verify-full",
+		"PGSSLROOTCERT=/app/private-ca.pem",
+	}}}
+	require.NoError(t, proxy.attachTrust(spec))
+	require.Len(t, spec.Process.Env, 2)
+	require.Contains(t, spec.Process.Env, "PGSSLROOTCERT=/app/private-ca.pem")
+	require.Empty(t, spec.Mounts)
+	require.Contains(t, spec.Process.Env[0], "sslrootcert=%2Fapp%2Fprivate-ca.pem")
+}
 
 func testServiceProxyConfig(externalHost string) types.AppConfig {
 	cfg := types.AppConfig{}
