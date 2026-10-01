@@ -95,11 +95,13 @@ type Worker struct {
 	WorkspaceId         string `json:"-" redis:"workspace_id" go2proto:"ignore"`
 	ControlPlaneManaged bool   `json:"-" redis:"control_plane_managed" go2proto:"ignore"`
 	// Keep internal fields after wire fields: go2proto numbers by struct position.
-	RolloutPreviousStatus WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
+	RolloutPreviousStatus      WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
+	CheckpointCompatibilityKey string       `json:"-" redis:"checkpoint_compatibility_key" go2proto:"ignore"`
 }
 
 type WorkerKeepAlive struct {
-	MachineId string `json:"machine_id"`
+	MachineId                  string `json:"machine_id"`
+	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key"`
 }
 
 func StableStorageNodeID(machineID, workerID string) string {

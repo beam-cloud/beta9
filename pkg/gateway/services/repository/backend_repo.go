@@ -56,12 +56,16 @@ func (s *BackendRepositoryService) GetCheckpointById(ctx context.Context, req *p
 }
 
 func (s *BackendRepositoryService) GetLatestCheckpointByStubId(ctx context.Context, req *pb.GetLatestCheckpointByStubIdRequest) (*pb.GetLatestCheckpointByStubIdResponse, error) {
-	checkpoint, err := s.backendRepo.GetLatestCheckpointByStubId(ctx, req.StubId)
+	checkpoint, err := s.backendRepo.GetLatestCheckpointByStubId(ctx, req.StubId, req.CompatibilityKey)
 	if err != nil {
+		var notFound *types.ErrCheckpointNotFound
+		if req.CompatibilityKey != "" && errors.As(err, &notFound) {
+			return &pb.GetLatestCheckpointByStubIdResponse{Ok: true, CompatibilityKey: req.CompatibilityKey}, nil
+		}
 		return &pb.GetLatestCheckpointByStubIdResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.GetLatestCheckpointByStubIdResponse{Ok: true, Checkpoint: checkpoint.ToProto()}, nil
+	return &pb.GetLatestCheckpointByStubIdResponse{Ok: true, Checkpoint: checkpoint.ToProto(), CompatibilityKey: req.CompatibilityKey}, nil
 }
 
 func (s *BackendRepositoryService) ListCheckpoints(ctx context.Context, req *pb.ListCheckpointsRequest) (*pb.ListCheckpointsResponse, error) {
@@ -101,7 +105,7 @@ func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb
 		Locality:          req.Locality,
 		Accelerator:       req.Accelerator,
 		Runtime:           req.Runtime,
-	})
+	}, req.CompatibilityKey)
 	if err != nil {
 		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}

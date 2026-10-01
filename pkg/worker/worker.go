@@ -83,6 +83,8 @@ func ensureGVisorShmemTHP(path string) (bool, error) {
 }
 
 type Worker struct {
+	checkpointCompatibilityKey string
+
 	workerId                string
 	workerToken             string
 	workerGeneration        string
@@ -825,6 +827,9 @@ containerRequestStream:
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
 				request.DeliveryToken = response.DeliveryToken
+				if request.Checkpoint != nil {
+					request.Checkpoint.CompatibilityKey = response.CheckpointCompatibilityKey
+				}
 				if request.MachineId == "" {
 					request.MachineId = s.machineID
 				}
@@ -1583,9 +1588,10 @@ func (s *Worker) setWorkerKeepAlive() error {
 
 	idle := s.containerInstances == nil || s.containerInstances.Len() == 0
 	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
-		WorkerId:  s.workerId,
-		MachineId: s.machineID,
-		Idle:      idle,
+		WorkerId:                   s.workerId,
+		MachineId:                  s.machineID,
+		CheckpointCompatibilityKey: s.checkpointCompatibilityKey,
+		Idle:                       idle,
 	}))
 	if err != nil {
 		return err
@@ -1628,6 +1634,9 @@ func (s *Worker) profile() {
 
 func (s *Worker) startup() error {
 	log.Info().Msg("worker starting up")
+	if s.poolConfig.CRIUEnabled && (s.runtime.Name() == types.ContainerRuntimeRunc.String() || s.runtime.Name() == types.ContainerRuntimeGvisor.String()) {
+		s.initializeCheckpointCompatibility()
+	}
 
 	if err := s.setWorkerKeepAlive(); err != nil {
 		return err

@@ -758,6 +758,17 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	workerRequest := request.Clone()
 	s.attachLatestCheckpoint(workerRequest)
+	if canSkipCheckpoint(workerRequest) {
+		compatible := runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) &&
+			acceleratorMatchesCheckpoint(workerRequest, worker.Gpu) &&
+			hostMatchesCheckpoint(workerRequest.Checkpoint, worker)
+		if !compatible {
+			workerLog(requestLog(log.Info(), workerRequest), worker).
+				Str("checkpoint_id", workerRequest.Checkpoint.CheckpointId).
+				Msg("attached checkpoint is incompatible with selected worker")
+			workerRequest.Checkpoint = nil
+		}
+	}
 	normalizeGPURequest(workerRequest)
 	workerRequest.Gpu = worker.Gpu
 
@@ -1121,6 +1132,10 @@ func workerPoolSelector(worker *types.Worker) string {
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
+	var checkpoint *types.Checkpoint
+	if canSkipCheckpoint(request) {
+		checkpoint = request.Checkpoint
+	}
 	requiresGPU := request.RequiresGPU()
 	gpuCount := gpuCountForScheduling(request)
 
@@ -1142,7 +1157,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		if !runtimeMatchesCheckpoint(request, runtimeName) || !runtimeAcceptsRequest(request, runtimeName) {
 			continue
 		}
-		if !acceleratorMatchesCheckpoint(request, worker.Gpu) {
+		if !acceleratorMatchesCheckpoint(request, worker.Gpu) || !hostMatchesCheckpoint(checkpoint, worker) {
 			continue
 		}
 		isGpuWorker := worker.Gpu != ""
@@ -1208,6 +1223,19 @@ func availableCheckpoint(request *types.ContainerRequest) *types.Checkpoint {
 		return nil
 	}
 	return request.Checkpoint
+}
+
+// Only deployment startup checkpoints may be skipped for placement.
+func canSkipCheckpoint(request *types.ContainerRequest) bool {
+	checkpoint := availableCheckpoint(request)
+	return checkpoint != nil && !checkpoint.IsFilesystemOnly() &&
+		request.CheckpointEnabled && request.Stub.Type.IsDeployment()
+}
+
+func hostMatchesCheckpoint(checkpoint *types.Checkpoint, worker *types.Worker) bool {
+	// Pending hosts have not reported their profile yet; the worker rechecks it.
+	return checkpoint == nil || (checkpoint.CompatibilityKey != "" && checkpoint.CompatibilityKey == worker.CheckpointCompatibilityKey) ||
+		(worker.Status == types.WorkerStatusPending && worker.CheckpointCompatibilityKey == "")
 }
 
 func checkpointRuntime(request *types.ContainerRequest) string {
@@ -1373,6 +1401,13 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 }
 
 func (s *Scheduler) selectWorkerFromWorkers(workers []*types.Worker, request *types.ContainerRequest) (*types.Worker, error) {
+	worker, err := s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusAvailable)
+	if err == nil || !canSkipCheckpoint(request) {
+		return worker, err
+	}
+	request = request.Clone()
+	request.Checkpoint = nil
+	request.CheckpointEnabled = false
 	return s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusAvailable)
 }
 

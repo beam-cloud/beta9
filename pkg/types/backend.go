@@ -459,6 +459,8 @@ type Checkpoint struct {
 	Locality          string   `db:"locality" json:"locality" serializer:"locality"`
 	Accelerator       string   `db:"accelerator" json:"accelerator" serializer:"accelerator"`
 	Runtime           string   `db:"runtime" json:"runtime" serializer:"runtime"`
+	// Internal placement metadata, carried separately by worker RPCs.
+	CompatibilityKey string `db:"compatibility_key" json:"compatibility_key,omitempty" go2proto:"ignore"`
 }
 
 const CheckpointRuntimeFilesystem = "filesystem"

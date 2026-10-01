@@ -2828,14 +2828,14 @@ func (r *PostgresBackendRepository) GetImageCredentials(ctx context.Context, wor
 	return registry.MarshalCredentials("", registry.DetectCredentialType("", creds), creds)
 }
 
-func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {
+func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint, compatibilityKey string) (*types.Checkpoint, error) {
 	query := `
 		INSERT INTO checkpoint (
 			checkpoint_id, source_container_id, container_ip, status, remote_key,
 			workspace_id, stub_id, stub_type, app_id, exposed_ports,
-			cache_hash, cache_size_bytes, origin_key, locality, accelerator, runtime
+			cache_hash, cache_size_bytes, origin_key, locality, accelerator, runtime, compatibility_key
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 		)
 		RETURNING checkpoint_id, external_id, source_container_id, container_ip, status, remote_key,
 		          workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at,
@@ -2865,6 +2865,7 @@ func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkp
 		checkpoint.Locality,
 		checkpoint.Accelerator,
 		checkpoint.Runtime,
+		compatibilityKey,
 	).Scan(
 		&created.CheckpointId,
 		&created.ExternalId,
@@ -3066,20 +3067,24 @@ func (r *PostgresBackendRepository) GetCheckpointById(ctx context.Context, check
 	return &checkpoint, nil
 }
 
-func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error) {
+func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string, compatibilityKeys ...string) (*types.Checkpoint, error) {
+	compatibilityKey := ""
+	if len(compatibilityKeys) > 0 {
+		compatibilityKey = compatibilityKeys[0]
+	}
 	query := `
 		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
-		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator, c.runtime
+		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator, c.runtime, c.compatibility_key
 		FROM checkpoint c
 		INNER JOIN stub s ON c.stub_id = s.id
-		WHERE s.external_id = $1 AND c.deleted_at IS NULL AND c.status = $2
+		WHERE s.external_id = $1 AND c.deleted_at IS NULL AND c.status = $2 AND ($3 = '' OR c.compatibility_key = $3)
 		ORDER BY c.created_at DESC
 		LIMIT 1;`
 
 	var checkpoint types.Checkpoint
 	var exposedPortsInt32 []int32
-	err := r.client.QueryRowxContext(ctx, query, stubExternalId, string(types.CheckpointStatusAvailable)).Scan(
+	err := r.client.QueryRowxContext(ctx, query, stubExternalId, string(types.CheckpointStatusAvailable), compatibilityKey).Scan(
 		&checkpoint.CheckpointId,
 		&checkpoint.ExternalId,
 		&checkpoint.SourceContainerId,
@@ -3099,6 +3104,7 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 		&checkpoint.Locality,
 		&checkpoint.Accelerator,
 		&checkpoint.Runtime,
+		&checkpoint.CompatibilityKey,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {

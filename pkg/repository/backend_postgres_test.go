@@ -542,8 +542,8 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 	createdAt := time.Now().Add(-time.Minute)
 	restoredAt := time.Now()
 
-	mock.ExpectQuery(`c\.status = \$2`).
-		WithArgs("stub-123", string(types.CheckpointStatusAvailable)).
+	mock.ExpectQuery(`c\.status = \$2 AND \(\$3 = '' OR c\.compatibility_key = \$3\)`).
+		WithArgs("stub-123", string(types.CheckpointStatusAvailable), "").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"checkpoint_id",
 			"external_id",
@@ -564,6 +564,7 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 			"locality",
 			"accelerator",
 			"runtime",
+			"compatibility_key",
 		}).AddRow(
 			"checkpoint-available",
 			"external-available",
@@ -584,6 +585,7 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 			"default",
 			"cpu",
 			types.ContainerRuntimeGvisor.String(),
+			"host-a",
 		))
 
 	checkpoint, err := postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123")
@@ -593,6 +595,12 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 	require.Equal(t, string(types.CheckpointStatusAvailable), checkpoint.Status)
 	require.Equal(t, []uint32{8001}, checkpoint.ExposedPorts)
 	require.Equal(t, types.ContainerRuntimeGvisor.String(), checkpoint.Runtime)
+	require.Equal(t, "host-a", checkpoint.CompatibilityKey)
+	mock.ExpectQuery(`c\.compatibility_key = \$3`).
+		WithArgs("stub-123", string(types.CheckpointStatusAvailable), "host-b").
+		WillReturnError(sql.ErrNoRows)
+	_, err = postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123", "host-b")
+	require.IsType(t, &types.ErrCheckpointNotFound{}, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

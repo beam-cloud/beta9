@@ -2829,3 +2829,120 @@ func TestCheckpointHookRuntimeHandsTheSealToTheRuntime(t *testing.T) {
 	require.True(t, inner.sawHook, "the runtime must receive WhilePaused")
 	require.True(t, sealed, "the seal runs inside the runtime's paused window")
 }
+
+type compatibilityBackend struct {
+	fakeBackendRepoClient
+	response *pb.GetLatestCheckpointByStubIdResponse
+	err      error
+	key      string
+}
+
+func (b *compatibilityBackend) GetLatestCheckpointByStubId(_ context.Context, in *pb.GetLatestCheckpointByStubIdRequest, _ ...grpc.CallOption) (*pb.GetLatestCheckpointByStubIdResponse, error) {
+	b.key = in.CompatibilityKey
+	return b.response, b.err
+}
+
+func TestCheckpointSelectionBeforeDownload(t *testing.T) {
+	variant := &pb.Checkpoint{CheckpointId: "compatible", Runtime: "gvisor", Status: "available"}
+	for _, tc := range []struct {
+		name, echoedKey, attachedKey string
+		checkpoint                   *pb.Checkpoint
+		err                          error
+		enabled                      bool
+	}{
+		{"attached matching variant", "", "host", variant, nil, true},
+		{"reuse host variant", "host", "other-host", variant, nil, true},
+		{"seed missing variant", "host", "", nil, nil, true},
+		{"old gateway", "", "", variant, nil, false},
+		{"old gateway missing variant", "", "", nil, nil, false},
+		{"lookup failure", "", "", nil, errors.New("unavailable"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &compatibilityBackend{response: &pb.GetLatestCheckpointByStubIdResponse{
+				Ok: true, CompatibilityKey: tc.echoedKey, Checkpoint: tc.checkpoint}, err: tc.err}
+			worker := &Worker{checkpointCompatibilityKey: "host", backendRepoClient: backend,
+				runtime: &mockRuntime{name: "gvisor", capabilities: runtime.Capabilities{CheckpointRestore: true}}}
+			request := &types.ContainerRequest{StubId: "stub", CheckpointEnabled: true,
+				Checkpoint: &types.Checkpoint{CheckpointId: "attached", Runtime: "gvisor", Status: "available", CompatibilityKey: tc.attachedKey}}
+			worker.prepareCheckpointForWorker(context.Background(), request)
+			if tc.attachedKey == "host" {
+				require.Empty(t, backend.key, "compatible scheduling needs no additional lookup")
+				require.Equal(t, "attached", request.Checkpoint.CheckpointId)
+				return
+			}
+			require.Equal(t, "host", backend.key)
+			require.Equal(t, tc.enabled, request.CheckpointEnabled)
+			if tc.enabled && tc.checkpoint != nil {
+				require.Equal(t, "compatible", request.Checkpoint.CheckpointId)
+			} else {
+				require.Nil(t, request.Checkpoint)
+			}
+			require.Zero(t, backend.updateCalls, "other host variants remain available")
+		})
+	}
+}
+
+func TestCheckpointHostProfile(t *testing.T) {
+	gpu, err := checkpointGPUProfile("NVIDIA GeForce RTX 4090, 580.126.18\n")
+	require.NoError(t, err)
+	p := checkpointHostProfile{CPU: []string{"avx", "xsaves"}, XstateSize: 832, GPU: gpu,
+		Runtime: "gvisor", Version: "runsc version release-test.1"}
+	key := p.key()
+	p.GPU, err = checkpointGPUProfile(" NVIDIA GeForce RTX 4090 , 580.126.18\nNVIDIA GeForce RTX 4090,580.126.18\n")
+	require.NoError(t, err)
+	require.Equal(t, key, p.key(), "GPU count and output formatting do not affect compatibility")
+
+	for name, change := range map[string]func(*checkpointHostProfile){
+		"CPU features":    func(p *checkpointHostProfile) { p.CPU = []string{"avx"} },
+		"CPU saved state": func(p *checkpointHostProfile) { p.XstateSize = 2688 },
+		"driver":          func(p *checkpointHostProfile) { p.GPU, _ = checkpointGPUProfile("NVIDIA GeForce RTX 4090, 595.99.02") },
+		"physical GPU":    func(p *checkpointHostProfile) { p.GPU, _ = checkpointGPUProfile("NVIDIA A10G, 580.126.18") },
+		"runtime version": func(p *checkpointHostProfile) { p.Version = "runsc version release-test.2" },
+		"runtime":         func(p *checkpointHostProfile) { p.Runtime = "runc" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := p
+			change(&changed)
+			require.NotEqual(t, key, changed.key())
+		})
+	}
+	_, err = checkpointGPUProfile("")
+	require.Error(t, err)
+}
+
+func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {
+	dir := t.TempDir()
+	for tool, output := range map[string]string{
+		"runsc":      "runsc version release-test.1",
+		"criu":       "Version: 4.2",
+		"nvidia-smi": "NVIDIA GeForce RTX 4090, 580.126.18",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\necho '"+output+"'\n"), 0755))
+	}
+	t.Setenv("PATH", dir)
+	for _, name := range []string{"runc", "gvisor"} {
+		t.Run(name, func(t *testing.T) {
+			worker := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: name}, gpuCount: 1}
+			before, err := worker.readCheckpointHostProfile()
+			require.NoError(t, err)
+			require.NotEmpty(t, before.CPU)
+			worker.config.Worker.ImageTag = "next-worker-release"
+			worker.config.Worker.ContainerResourceLimits.MemoryEnforced = true
+			worker.gpuCount = 8
+			after, err := worker.readCheckpointHostProfile()
+			require.NoError(t, err)
+			require.Equal(t, before.key(), after.key())
+		})
+	}
+}
+
+func TestCheckpointDiscoveryFailureIsProcessSpecific(t *testing.T) {
+	t.Setenv("PATH", "")
+	first := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: "gvisor"}}
+	second := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: "gvisor"}}
+	first.initializeCheckpointCompatibility()
+	second.initializeCheckpointCompatibility()
+	require.True(t, strings.HasPrefix(first.checkpointCompatibilityKey, "unknown:"))
+	require.True(t, strings.HasPrefix(second.checkpointCompatibilityKey, "unknown:"))
+	require.NotEqual(t, first.checkpointCompatibilityKey, second.checkpointCompatibilityKey)
+}

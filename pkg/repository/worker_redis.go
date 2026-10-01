@@ -553,6 +553,10 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 	if oldWorker != nil {
 		incomingControlState := worker.CordonRequested || worker.RolloutGeneration != ""
 		oldControlState := oldWorker.CordonRequested || oldWorker.RolloutGeneration != ""
+		// Worker keepalives own host metadata; controller snapshots may be stale.
+		if oldWorker.CheckpointCompatibilityKey != "" {
+			worker.CheckpointCompatibilityKey = oldWorker.CheckpointCompatibilityKey
+		}
 		worker.CordonRequested = oldWorker.CordonRequested
 		worker.RolloutGeneration = oldWorker.RolloutGeneration
 		worker.RolloutPreviousStatus = oldWorker.RolloutPreviousStatus
@@ -950,6 +954,13 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	pipe := r.rdb.TxPipeline()
 	if worker.MachineId != oldMachineID {
 		pipe.HSet(ctx, stateKey, "machine_id", worker.MachineId)
+	}
+	// Older workers omit the key; their keepalives must not erase a known profile.
+	keyChanged := keepAlive.CheckpointCompatibilityKey != "" && keepAlive.CheckpointCompatibilityKey != worker.CheckpointCompatibilityKey
+	if keyChanged {
+		pipe.HSet(ctx, stateKey, "checkpoint_compatibility_key", keepAlive.CheckpointCompatibilityKey)
+	}
+	if worker.MachineId != oldMachineID || keyChanged {
 		pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
 	}
 	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
@@ -1319,6 +1330,8 @@ func workerFromHash(key string, res map[string]string) *types.Worker {
 			worker.RolloutGeneration = v
 		case "rollout_previous_status":
 			worker.RolloutPreviousStatus = types.WorkerStatus(v)
+		case "checkpoint_compatibility_key":
+			worker.CheckpointCompatibilityKey = v
 		case "worker_image_override":
 			worker.WorkerImageOverride = v
 		case "evictable_cpu":

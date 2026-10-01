@@ -31,12 +31,17 @@ message GetCheckpointByIdResponse {
   string error_msg = 3;
 }
 
-message GetLatestCheckpointByStubIdRequest { string stub_id = 1; }
+message GetLatestCheckpointByStubIdRequest {
+  string stub_id = 1;
+  string compatibility_key = 2;
+}
 
 message GetLatestCheckpointByStubIdResponse {
   bool ok = 1;
   types.Checkpoint checkpoint = 2;
   string error_msg = 3;
+  // Echo the applied filter so workers can detect an older gateway.
+  string compatibility_key = 4;
 }
 
 message ListCheckpointsRequest { string workspace_id = 1; }
@@ -61,6 +66,7 @@ message CreateCheckpointRequest {
   string locality = 11;
   string accelerator = 12;
   string runtime = 13;
+  string compatibility_key = 14;
 }
 
 message CreateCheckpointResponse {

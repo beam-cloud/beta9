@@ -36,6 +36,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gvisor.dev/gvisor/pkg/cpuid"
 )
 
 const (
@@ -145,6 +146,122 @@ func (r *checkpointFilesystemRestore) discard() error {
 		return os.RemoveAll(r.stagingPath)
 	}
 	return nil
+}
+
+// Match restore capabilities, not worker releases or host-specific identities.
+type checkpointHostProfile struct {
+	CPU, GPU         []string
+	XstateSize       uint
+	Runtime, Version string
+}
+
+func (p checkpointHostProfile) key() string {
+	data, _ := json.Marshal(p)
+	return fmt.Sprintf("v1:%x", sha256.Sum256(data))
+}
+
+func checkpointSortedUnique(values []string) []string {
+	slices.Sort(values)
+	return slices.Compact(values)
+}
+
+func checkpointGPUProfile(output string) ([]string, error) {
+	var profiles []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		model, driver, ok := strings.Cut(line, ",")
+		model, driver = strings.TrimSpace(model), strings.TrimSpace(driver)
+		if !ok || model == "" || driver == "" {
+			return nil, fmt.Errorf("missing physical GPU model or driver version")
+		}
+		profiles = append(profiles, model+", "+driver)
+	}
+	return checkpointSortedUnique(profiles), nil
+}
+
+func (s *Worker) readCheckpointHostProfile() (checkpointHostProfile, error) {
+	p := checkpointHostProfile{Runtime: s.runtime.Name()}
+	cpuid.Initialize()
+	features := cpuid.HostFeatureSet()
+	for _, feature := range cpuid.AllFeatures() {
+		if features.HasFeature(feature) {
+			p.CPU = append(p.CPU, feature.String())
+		}
+	}
+	p.CPU = checkpointSortedUnique(p.CPU)
+	p.XstateSize, _ = features.ExtendedStateSize()
+	executable := "criu"
+	if p.Runtime == types.ContainerRuntimeGvisor.String() {
+		executable = "runsc"
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, executable, "--version").Output()
+	if err != nil {
+		return p, fmt.Errorf("read %s version: %w", executable, err)
+	}
+	p.Version = strings.TrimSpace(string(output))
+	if p.Version == "" {
+		return p, fmt.Errorf("missing %s version", executable)
+	}
+	if s.gpuCount == 0 {
+		return p, nil
+	}
+	output, err = exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader").Output()
+	if err != nil {
+		return p, fmt.Errorf("read physical GPU and driver: %w", err)
+	}
+	if p.GPU, err = checkpointGPUProfile(string(output)); err != nil {
+		return p, err
+	}
+	return p, nil
+}
+
+func (s *Worker) initializeCheckpointCompatibility() {
+	profile, err := s.readCheckpointHostProfile()
+	if err != nil {
+		// Never advertise a legacy/empty key when discovery fails.
+		s.checkpointCompatibilityKey = "unknown:" + uuid.NewString()
+		log.Warn().Err(err).Msg("checkpoint host discovery failed; restricting new checkpoints to this worker process")
+	} else {
+		s.checkpointCompatibilityKey = profile.key()
+	}
+	log.Info().Str("worker_id", s.workerId).Str("checkpoint_compatibility_key", s.checkpointCompatibilityKey).
+		Strs("physical_gpus", profile.GPU).Msg("checkpoint host compatibility initialized")
+}
+
+// Deployment snapshots are selected for this host before any archive download.
+func (s *Worker) prepareCheckpointForWorker(ctx context.Context, request *types.ContainerRequest) {
+	if request.Checkpoint.IsFilesystemOnly() {
+		return
+	}
+	if hasAvailableCheckpoint(request) && request.Checkpoint.CompatibilityKey != "" &&
+		request.Checkpoint.CompatibilityKey == s.checkpointCompatibilityKey && validateCheckpointRestoreRuntime(request, s.runtime) == nil {
+		return
+	}
+	request.Checkpoint = nil
+	if s.checkpointCompatibilityKey == "" {
+		request.CheckpointEnabled = false
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, checkpointStatePublicationTTL)
+	defer cancel()
+	response, err := handleGRPCResponse(s.backendRepoClient.GetLatestCheckpointByStubId(ctx, &pb.GetLatestCheckpointByStubIdRequest{
+		StubId: request.StubId, CompatibilityKey: s.checkpointCompatibilityKey,
+	}))
+	if err != nil || response.CompatibilityKey != s.checkpointCompatibilityKey {
+		// Failed lookups and older gateways cannot establish compatibility.
+		request.CheckpointEnabled = false
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("checkpoint compatibility lookup unavailable; starting normally")
+		return
+	}
+	if response.Checkpoint != nil {
+		request.Checkpoint = types.NewCheckpointFromProto(response.Checkpoint)
+		request.Checkpoint.CompatibilityKey = response.CompatibilityKey
+		if !hasAvailableCheckpoint(request) || validateCheckpointRestoreRuntime(request, s.runtime) != nil {
+			request.Checkpoint = nil
+			request.CheckpointEnabled = false
+		}
+	}
 }
 
 func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
@@ -2281,6 +2398,9 @@ func checkpointStatePublicationContext(ctx context.Context) (context.Context, co
 
 func (s *Worker) createCheckpointState(ctx context.Context, checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp, runtimeName string, metadata *checkpointCacheMetadata) error {
 	req := checkpointStateRequest(checkpointId, request, status, containerIp, runtimeName)
+	if runtimeName == types.ContainerRuntimeRunc.String() || runtimeName == types.ContainerRuntimeGvisor.String() {
+		req.CompatibilityKey = s.checkpointCompatibilityKey
+	}
 	if metadata != nil {
 		req.CacheHash = metadata.hash
 		req.CacheSizeBytes = metadata.sizeBytes

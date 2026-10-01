@@ -313,11 +313,11 @@ type BackendRepository interface {
 	CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error)
 	SetImageCredentialSecretNames(ctx context.Context, imageId string, names []string) error
 	GetImageCredentials(ctx context.Context, workspace *types.Workspace, imageId string) (string, error)
-	CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
+	CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint, compatibilityKey string) (*types.Checkpoint, error)
 	UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
 	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
 	GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error)
-	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
+	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string, compatibilityKey ...string) (*types.Checkpoint, error)
 	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error)
 	PruneCheckpoints(ctx context.Context, checkpointIds []string) ([]types.Checkpoint, error)
 	CreateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
