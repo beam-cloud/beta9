@@ -758,13 +758,16 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	workerRequest := request.Clone()
 	s.attachLatestCheckpoint(workerRequest)
-	if canSkipCheckpoint(workerRequest) &&
-		(!runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) || !acceleratorMatchesCheckpoint(workerRequest, worker.Gpu) ||
-			!hostMatchesCheckpoint(workerRequest.Checkpoint, worker)) {
-		workerLog(requestLog(log.Info(), workerRequest), worker).
-			Str("checkpoint_id", workerRequest.Checkpoint.CheckpointId).
-			Msg("attached checkpoint is incompatible with selected worker")
-		workerRequest.Checkpoint = nil
+	if canSkipCheckpoint(workerRequest) {
+		compatible := runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) &&
+			acceleratorMatchesCheckpoint(workerRequest, worker.Gpu) &&
+			hostMatchesCheckpoint(workerRequest.Checkpoint, worker)
+		if !compatible {
+			workerLog(requestLog(log.Info(), workerRequest), worker).
+				Str("checkpoint_id", workerRequest.Checkpoint.CheckpointId).
+				Msg("attached checkpoint is incompatible with selected worker")
+			workerRequest.Checkpoint = nil
+		}
 	}
 	normalizeGPURequest(workerRequest)
 	workerRequest.Gpu = worker.Gpu
