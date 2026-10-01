@@ -30,7 +30,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	cdispecs "tags.cncf.io/container-device-interface/specs-go"
 )
 
 // MockRuntime is a mock implementation of runtime.Runtime for testing
@@ -2883,44 +2882,23 @@ func TestCheckpointSelectionBeforeDownload(t *testing.T) {
 	}
 }
 
-const checkpointTestCPU = "vendor_id: AuthenticAMD\ncpu family: 25\nmodel: 1\nstepping: 1\nmodel name: AMD EPYC 7B13\nflags: fpu fxsr xsave xsaves avx avx2\n"
-
 func TestCheckpointHostProfile(t *testing.T) {
-	cpu, err := checkpointCPUProfile(checkpointTestCPU)
-	require.NoError(t, err)
 	gpu, err := checkpointGPUProfile("NVIDIA GeForce RTX 4090, 580.126.18\n")
 	require.NoError(t, err)
-	p := checkpointHostProfile{CPU: cpu, GPU: gpu, Binaries: map[string]string{"worker": "worker-a", "runsc": "runtime-a"}}
+	p := checkpointHostProfile{CPU: []string{"avx", "xsaves"}, XstateSize: 832, GPU: gpu,
+		Runtime: "gvisor", Version: "runsc version release-test.1"}
 	key := p.key()
-	// CPU numbering/count and flag enumeration order are not capabilities.
-	reordered := strings.Replace(checkpointTestCPU, "fpu fxsr xsave xsaves avx avx2", "avx2 avx xsaves xsave fxsr fpu", 1)
-	p.CPU, err = checkpointCPUProfile("processor: 5\n" + reordered + "\nprocessor: 2\n" + reordered)
-	require.NoError(t, err)
 	p.GPU, err = checkpointGPUProfile(" NVIDIA GeForce RTX 4090 , 580.126.18\nNVIDIA GeForce RTX 4090,580.126.18\n")
 	require.NoError(t, err)
-	require.Equal(t, key, p.key())
+	require.Equal(t, key, p.key(), "GPU count and output formatting do not affect compatibility")
 
 	for name, change := range map[string]func(*checkpointHostProfile){
-		"CPU features": func(p *checkpointHostProfile) {
-			p.CPU, _ = checkpointCPUProfile(strings.Replace(checkpointTestCPU, "xsaves ", "", 1))
-		},
-		"CPU model": func(p *checkpointHostProfile) {
-			p.CPU, _ = checkpointCPUProfile(strings.Replace(checkpointTestCPU, "model: 1", "model: 2", 1))
-		},
-		"driver":       func(p *checkpointHostProfile) { p.GPU, _ = checkpointGPUProfile("NVIDIA GeForce RTX 4090, 595.99.02") },
-		"physical GPU": func(p *checkpointHostProfile) { p.GPU, _ = checkpointGPUProfile("NVIDIA A10G, 580.126.18") },
-		"runtime build": func(p *checkpointHostProfile) {
-			p.Binaries = map[string]string{"worker": "worker-a", "runsc": "runtime-b"}
-		},
-		"worker build": func(p *checkpointHostProfile) {
-			p.Binaries = map[string]string{"worker": "worker-b", "runsc": "runtime-a"}
-		},
-		"worker image":  func(p *checkpointHostProfile) { p.WorkerImage = "sdk-update" },
-		"worker config": func(p *checkpointHostProfile) { p.ResourceLimits.MemoryEnforced = true },
-		"runtime":       func(p *checkpointHostProfile) { p.Runtime = "gvisor" },
-		"platform":      func(p *checkpointHostProfile) { p.Platform = "kvm" },
-		"runtime flags": func(p *checkpointHostProfile) { p.RunscArgs = []string{"--file-access=shared"} },
-		"mounts":        func(p *checkpointHostProfile) { p.Mounts = []string{"/usr/lib/libcuda.so.595"} },
+		"CPU features":    func(p *checkpointHostProfile) { p.CPU = []string{"avx"} },
+		"CPU saved state": func(p *checkpointHostProfile) { p.XstateSize = 2688 },
+		"driver":          func(p *checkpointHostProfile) { p.GPU, _ = checkpointGPUProfile("NVIDIA GeForce RTX 4090, 595.99.02") },
+		"physical GPU":    func(p *checkpointHostProfile) { p.GPU, _ = checkpointGPUProfile("NVIDIA A10G, 580.126.18") },
+		"runtime version": func(p *checkpointHostProfile) { p.Version = "runsc version release-test.2" },
+		"runtime":         func(p *checkpointHostProfile) { p.Runtime = "runc" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := p
@@ -2928,34 +2906,40 @@ func TestCheckpointHostProfile(t *testing.T) {
 			require.NotEqual(t, key, changed.key())
 		})
 	}
-	_, err = checkpointCPUProfile("model name: unknown")
-	require.Error(t, err)
 	_, err = checkpointGPUProfile("")
 	require.Error(t, err)
 }
 
-func TestCheckpointCDIMountProfile(t *testing.T) {
-	mount := &cdispecs.Mount{HostPath: "/driver/libcuda", ContainerPath: "/usr/lib/libcuda", Type: "bind", Options: []string{"ro", "rbind"}}
-	spec := &cdispecs.Spec{ContainerEdits: cdispecs.ContainerEdits{Mounts: []*cdispecs.Mount{mount}}}
-	original := checkpointCDIMounts(spec)
-	mount.HostPath = "/another-host/libcuda"
-	mount.Options = []string{"rbind", "ro"}
-	spec.Devices = []cdispecs.Device{{Name: "GPU-another-uuid", ContainerEdits: spec.ContainerEdits}}
-	require.Equal(t, original, checkpointCDIMounts(spec))
-	for _, change := range []func(*cdispecs.Mount){
-		func(m *cdispecs.Mount) { m.ContainerPath = "/usr/lib/libcuda.so.595" },
-		func(m *cdispecs.Mount) { m.Type = "tmpfs" },
-		func(m *cdispecs.Mount) { m.Options = []string{"rw", "rbind"} },
+func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {
+	dir := t.TempDir()
+	for tool, output := range map[string]string{
+		"runsc":      "runsc version release-test.1",
+		"criu":       "Version: 4.2",
+		"nvidia-smi": "NVIDIA GeForce RTX 4090, 580.126.18",
 	} {
-		changed := *mount
-		change(&changed)
-		require.NotEqual(t, original, checkpointCDIMounts(&cdispecs.Spec{ContainerEdits: cdispecs.ContainerEdits{Mounts: []*cdispecs.Mount{&changed}}}))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\necho '"+output+"'\n"), 0755))
+	}
+	t.Setenv("PATH", dir)
+	for _, name := range []string{"runc", "gvisor"} {
+		t.Run(name, func(t *testing.T) {
+			worker := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: name}, gpuCount: 1}
+			before, err := worker.readCheckpointHostProfile()
+			require.NoError(t, err)
+			require.NotEmpty(t, before.CPU)
+			worker.config.Worker.ImageTag = "next-worker-release"
+			worker.config.Worker.ContainerResourceLimits.MemoryEnforced = true
+			worker.gpuCount = 8
+			after, err := worker.readCheckpointHostProfile()
+			require.NoError(t, err)
+			require.Equal(t, before.key(), after.key())
+		})
 	}
 }
 
 func TestCheckpointDiscoveryFailureIsProcessSpecific(t *testing.T) {
 	t.Setenv("PATH", "")
-	first, second := &Worker{}, &Worker{}
+	first := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: "gvisor"}}
+	second := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: "gvisor"}}
 	first.initializeCheckpointCompatibility()
 	second.initializeCheckpointCompatibility()
 	require.True(t, strings.HasPrefix(first.checkpointCompatibilityKey, "unknown:"))
