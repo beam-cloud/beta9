@@ -396,7 +396,7 @@ def _task_status(tools: LocalTools, task_id: str, step: Dict[str, Any]) -> None:
         )
 
 
-def _database_check(service: str, kind: str, plan_id: str) -> Dict[str, Any]:
+def _database_check(tools: LocalTools, service: str, kind: str, plan_id: str) -> Dict[str, Any]:
     if kind == "postgres":
         image = "postgres:16"
         command = 'exec psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "SELECT 1"'
@@ -415,9 +415,18 @@ test "$(redis-cli -u "$REDIS_URL" --sni "$REDIS_HOST" $insecure PING)" = PONG
             "REDIS_HOST": "${{db." + service + ".HOST}}",
         }
 
+    directory = tools.job_dir / "database-checks" / plan_id / service
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "Dockerfile").write_text(
+        f"FROM {image}\n"
+        "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates "
+        "&& rm -rf /var/lib/apt/lists/*\n"
+    )
+
     return {
         "name": service + "-check",
-        "image": image,
+        "directory": str(directory),
+        "dockerfile": "Dockerfile",
         "entrypoint": ["sh", "-c", command],
         "env": env,
         "cpu": 0.1,
@@ -431,7 +440,7 @@ def _check_database(
     tools: LocalTools, service: str, kind: str, plan_id: str, step: Dict[str, Any]
 ) -> None:
     if not step.get("health_job_id"):
-        result = tools.deploy(_database_check(service, kind, plan_id), operation="run")
+        result = tools.deploy(_database_check(tools, service, kind, plan_id), operation="run")
         if result.get("isError"):
             raise ValueError(str(result))
         step["health_job_id"] = result["structuredContent"]["job_id"]
