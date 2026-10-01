@@ -14,6 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,13 +55,20 @@ func TestJournalConditionalRetry(t *testing.T) {
 	require.NoError(t, err)
 	store := &retryJournalStore{WorkspaceStorageClient: client}
 	prefix := "durable-disks/conditional-probes/" + uuid.NewString()
-	defer func() {
-		objects, err := client.ListDirectory(ctx, prefix+"/")
-		require.NoError(t, err)
-		for _, object := range objects {
-			require.NoError(t, client.Delete(ctx, *object.Key))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		objects, err := client.ListWithPrefix(ctx, prefix+"/")
+		if !assert.NoError(t, err) {
+			return
 		}
-	}()
+		for _, object := range objects {
+			assert.NoError(t, client.Delete(ctx, *object.Key), "clean up %s", *object.Key)
+		}
+		remaining, err := client.ListWithPrefix(ctx, prefix+"/")
+		assert.NoError(t, err)
+		assert.Empty(t, remaining, "journal cleanup must remove nested segments")
+	})
 
 	journal, err := disk.OpenJournal(ctx, store, prefix, "first-owner", "", 4096)
 	require.NoError(t, err)

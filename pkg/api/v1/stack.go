@@ -46,7 +46,7 @@ func (req *StackRequest) validate() error {
 	}
 	var spec map[string]json.RawMessage
 	if len(req.Spec) > stackSpecMaxBytes || json.Unmarshal(req.Spec, &spec) != nil || spec == nil {
-		return HTTPBadRequest("spec must be a JSON object under 256KB")
+		return HTTPBadRequest("spec must be a JSON object no larger than 256 KiB")
 	}
 	return nil
 }

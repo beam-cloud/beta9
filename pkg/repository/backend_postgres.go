@@ -2365,9 +2365,10 @@ func (r *PostgresBackendRepository) UpdateStack(ctx context.Context, workspaceId
 	}
 	defer tx.Rollback()
 
+	// Dashboard saves cannot overwrite checkpoints owned by the agent's CAS path.
 	query := `
 	UPDATE workspace_stack
-	SET name = $3, spec = spec || $4::jsonb, updated_at = CURRENT_TIMESTAMP
+	SET name = $3, spec = spec || ($4::jsonb - 'desired' - 'operation'), updated_at = CURRENT_TIMESTAMP
 	WHERE external_id = $1 AND workspace_id = $2
 	RETURNING ` + stackColumns + `;
 	`

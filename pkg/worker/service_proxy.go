@@ -128,7 +128,11 @@ func (p *ServiceProxy) attachTrust(spec *specs.Spec) error {
 	for index, env := range spec.Process.Env {
 		name, value, _ := strings.Cut(env, "=")
 		connection, err := url.Parse(value)
-		if err != nil || (connection.Scheme != "postgres" && connection.Scheme != "postgresql") ||
+		if err != nil {
+			continue
+		}
+		scheme, _, _ := strings.Cut(connection.Scheme, "+")
+		if (scheme != "postgres" && scheme != "postgresql") ||
 			!strings.HasSuffix(strings.ToLower(connection.Hostname()), p.suffix) {
 			continue
 		}

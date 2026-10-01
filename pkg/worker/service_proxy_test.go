@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -14,26 +15,43 @@ import (
 )
 
 func TestServiceProxyPostgresTrust(t *testing.T) {
-	for _, root := range []string{"", "system", "/app/custom-ca.pem"} {
-		t.Run("root="+root, func(t *testing.T) {
+	for _, test := range []struct{ scheme, root string }{
+		{"postgres", ""},
+		{"postgresql", ""},
+		{"postgresql", "system"},
+		{"postgresql", "/app/custom-ca.pem"},
+		{"postgresql+psycopg", ""},
+		{"postgresql+psycopg2", "system"},
+	} {
+		t.Run(test.scheme+"/root="+test.root, func(t *testing.T) {
+			root := test.root
 			cfg := testServiceProxyConfig("svc.beam.cloud")
 			cfg.Abstractions.Pod.TCP.ServiceProxyTarget = ""
 			proxy := NewServiceProxy(context.Background(), cfg)
-			u := "postgresql://u:p%40ss@db.svc.beam.cloud:443/app?sslmode=verify-full"
+			u := test.scheme + "://u:p%40ss@db.svc.beam.cloud:443/app?sslmode=verify-full"
 			if root != "" {
 				u += "&sslrootcert=" + url.QueryEscape(root)
 			}
 			spec := &specs.Spec{Process: &specs.Process{Env: []string{"DATABASE_URL=" + u}}}
-			require.NoError(t, proxy.Attach(&types.ContainerRequest{}, spec))
+			err := proxy.Attach(&types.ContainerRequest{}, spec)
 			if root != "/app/custom-ca.pem" {
+				if _, bundleErr := os.Stat(workerTrustBundle); bundleErr != nil {
+					require.ErrorContains(t, err, "managed service trust bundle")
+					require.Empty(t, spec.Mounts)
+					return
+				}
+				require.NoError(t, err)
 				require.Len(t, spec.Mounts, 1)
+				require.Equal(t, workerTrustBundle, spec.Mounts[0].Source)
 				require.Equal(t, serviceTrustBundle, spec.Mounts[0].Destination)
 				require.Contains(t, spec.Mounts[0].Options, "ro")
 			} else {
+				require.NoError(t, err)
 				require.Empty(t, spec.Mounts)
 			}
 			connection, err := url.Parse(strings.TrimPrefix(spec.Process.Env[0], "DATABASE_URL="))
 			require.NoError(t, err)
+			require.Equal(t, test.scheme, connection.Scheme)
 			password, _ := connection.User.Password()
 			require.Equal(t, "p@ss", password)
 			if root == "system" || root == "" {
@@ -53,6 +71,24 @@ func TestServiceProxyPostgresTrust(t *testing.T) {
 	require.Contains(t, spec.Process.Env, "PGSSLROOTCERT=/app/private-ca.pem")
 	require.Empty(t, spec.Mounts)
 	require.Contains(t, spec.Process.Env[0], "sslrootcert=%2Fapp%2Fprivate-ca.pem")
+}
+
+func TestServiceProxyTrustIgnoresOtherConnections(t *testing.T) {
+	proxy := NewServiceProxy(context.Background(), testServiceProxyConfig("svc.beam.cloud"))
+	for _, value := range []string{
+		"postgresql://db.svc.beam.cloud/app?sslmode=require",
+		"redis://db.svc.beam.cloud/app?sslmode=verify-full",
+		"postgresql://db.example.com/app?sslmode=verify-full",
+		"postgresql://%/app?sslmode=verify-full",
+	} {
+		t.Run(value, func(t *testing.T) {
+			env := "DATABASE_URL=" + value
+			spec := &specs.Spec{Process: &specs.Process{Env: []string{env}}}
+			require.NoError(t, proxy.attachTrust(spec))
+			require.Equal(t, []string{env}, spec.Process.Env)
+			require.Empty(t, spec.Mounts)
+		})
+	}
 }
 
 func testServiceProxyConfig(externalHost string) types.AppConfig {

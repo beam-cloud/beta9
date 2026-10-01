@@ -15,11 +15,13 @@ import psycopg2
 
 url = os.environ["DATABASE_URL"]
 parts = urlsplit(url)
-wrong_host = urlunsplit(
-    parts._replace(
-        netloc=parts.netloc.replace(parts.hostname, "mismatch." + parts.hostname)
-    )
-)
+if not parts.hostname:
+    raise ValueError("DATABASE_URL must include a hostname")
+authority = parts.netloc.rsplit("@", 1)
+authority[-1] = os.environ.get("BAD_HOST") or "mismatch." + parts.hostname
+if parts.port:
+    authority[-1] += f":{parts.port}"
+wrong_host = urlunsplit(parts._replace(netloc="@".join(authority)))
 for driver in (psycopg, psycopg2):
     with driver.connect(url, connect_timeout=5) as connection:
         with connection.cursor() as cursor:
@@ -57,10 +59,8 @@ async function connect(connectionString) {
 
 (async () => {
   await connect(process.env.DATABASE_URL);
-  const bad = new URL(process.env.DATABASE_URL);
-  bad.hostname = "mismatch." + bad.hostname;
   try {
-    await connect(bad.toString());
+    await connect(process.env.BAD_DATABASE_URL);
     throw new Error("accepted the wrong TLS hostname");
   } catch (error) {
     if (!/certificate|altname/i.test(error.message)) throw error;
@@ -71,4 +71,8 @@ async function connect(connectionString) {
   process.exitCode = 1;
 });
 """
-subprocess.run(["node", "-e", script], check=True)
+subprocess.run(
+    ["node", "-e", script],
+    check=True,
+    env={**os.environ, "BAD_DATABASE_URL": wrong_host},
+)
