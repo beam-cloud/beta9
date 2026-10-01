@@ -625,6 +625,11 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	if request.DockerEnabled && forcedRuncCheckpointProfileRequired(request, s.runtime) {
 		return errors.New("forced runc containers do not support Docker-enabled mode")
 	}
+	if caps.CheckpointRestore && (s.runtime.Name() == types.ContainerRuntimeRunc.String() || s.runtime.Name() == types.ContainerRuntimeGvisor.String()) {
+		if err := s.prepareCheckpointForWorker(ctx, request); err != nil {
+			return err
+		}
+	}
 	if err := validateCheckpointRestoreRuntime(request, s.runtime); err != nil {
 		return err
 	}

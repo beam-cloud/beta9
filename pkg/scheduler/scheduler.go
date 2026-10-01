@@ -759,12 +759,13 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 	workerRequest := request.Clone()
 	s.attachLatestCheckpoint(workerRequest)
 	if canSkipCheckpoint(workerRequest) &&
-		(!runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) || !acceleratorMatchesCheckpoint(workerRequest, worker.Gpu)) {
+		(!runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) ||
+			!acceleratorMatchesCheckpoint(workerRequest, worker.Gpu) ||
+			!hostMatchesCheckpoint(checkpointHostConstraint(workerRequest), worker)) {
 		workerLog(requestLog(log.Info(), workerRequest), worker).
 			Str("checkpoint_id", workerRequest.Checkpoint.CheckpointId).
-			Msg("checkpoint incompatible with selected worker; starting normally")
+			Msg("attached checkpoint is incompatible with selected worker")
 		workerRequest.Checkpoint = nil
-		workerRequest.CheckpointEnabled = false
 	}
 	normalizeGPURequest(workerRequest)
 	workerRequest.Gpu = worker.Gpu
@@ -1129,6 +1130,7 @@ func workerPoolSelector(worker *types.Worker) string {
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
+	checkpoint := checkpointHostConstraint(request)
 	requiresGPU := request.RequiresGPU()
 	gpuCount := gpuCountForScheduling(request)
 
@@ -1150,7 +1152,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		if !runtimeMatchesCheckpoint(request, runtimeName) || !runtimeAcceptsRequest(request, runtimeName) {
 			continue
 		}
-		if !acceleratorMatchesCheckpoint(request, worker.Gpu) {
+		if !acceleratorMatchesCheckpoint(request, worker.Gpu) || !hostMatchesCheckpoint(checkpoint, worker) {
 			continue
 		}
 		isGpuWorker := worker.Gpu != ""

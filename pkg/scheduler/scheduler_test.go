@@ -2960,6 +2960,9 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 	assert.Error(t, err, "explicit restores must retain their checkpoint")
 
 	request.Stub.Type = types.StubType(types.StubTypeTaskQueueDeployment)
+	request.Checkpoint.CompatibilityKey = "source-host"
+	runc.CheckpointCompatibilityKey = "source-host"
+	gvisor.CheckpointCompatibilityKey = "other-host"
 	selected, err := scheduler.selectWorkerFromWorkers(workers, request)
 	assert.NoError(t, err)
 	assert.Equal(t, runc, selected, "prefer compatible capacity")
@@ -2969,7 +2972,7 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 	assert.Equal(t, gvisor, selected, "cold-start before provisioning")
 	workerRequest := scheduler.prepareWorkerRequest(gvisor, request)
 	assert.Nil(t, workerRequest.Checkpoint)
-	assert.False(t, workerRequest.CheckpointEnabled)
+	assert.True(t, workerRequest.CheckpointEnabled)
 	assert.NotNil(t, request.Checkpoint, "retries retain the checkpoint")
 	assert.True(t, request.CheckpointEnabled)
 
@@ -2978,6 +2981,17 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 	assert.Error(t, err, "cold starts still require free capacity")
 	gvisor.FreeGpuCount = 1
 
+	// Matching runtime and logical GPU do not imply a compatible host.
+	runc.CheckpointCompatibilityKey = "changed-driver-or-cpu"
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{runc}, request, nil))
+	selected, err = scheduler.selectWorkerFromWorkers([]*types.Worker{runc}, request)
+	assert.NoError(t, err)
+	assert.Equal(t, runc, selected, "use ready capacity for a compatible variant or cold start")
+	assert.Nil(t, scheduler.prepareWorkerRequest(runc, request).Checkpoint)
+
+	request.Checkpoint.CompatibilityKey = ""
+	assert.Empty(t, filterWorkersByResources(workers, request, nil), "legacy deployment snapshots need rebuilding")
+	request.Stub.Type = types.StubType(types.StubTypeSandbox)
 	request.Checkpoint.Runtime = types.ContainerRuntimeGvisor.String()
 	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request, nil))
 

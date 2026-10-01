@@ -240,6 +240,7 @@ message SetWorkerKeepAliveRequest {
   // spin down, so only an idle worker needs pool_headroom answered; busy
   // workers' keepalives skip the pool scan.
   bool idle = 3;
+  string checkpoint_compatibility_key = 4;
 }
 
 message SetWorkerKeepAliveResponse {

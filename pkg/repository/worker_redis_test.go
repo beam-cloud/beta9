@@ -752,6 +752,38 @@ func TestSetWorkerKeepAliveUpdatesMachineIndex(t *testing.T) {
 	assert.Equal(t, worker.Id, newWorkers[0].Id)
 }
 
+func TestWorkerCheckpointCompatibilityKey(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.Nil(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{Id: "checkpoint-worker", Status: types.WorkerStatusAvailable}
+	assert.Nil(t, repo.AddWorker(worker))
+
+	for _, tc := range []struct {
+		key, want string
+		version   int64
+	}{
+		{"host-a", "host-a", 1},
+		{"host-a", "host-a", 1},
+		{"host-b", "host-b", 2},
+		{"", "host-b", 2},
+	} {
+		assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{CheckpointCompatibilityKey: tc.key}))
+		updated, err := repo.GetWorkerById(worker.Id)
+		assert.Nil(t, err)
+		assert.Equal(t, tc.want, updated.CheckpointCompatibilityKey)
+		assert.Equal(t, tc.version, updated.ResourceVersion)
+	}
+
+	// A stale controller registration must preserve the worker's latest profile.
+	worker.CheckpointCompatibilityKey = "host-a"
+	assert.Nil(t, repo.AddWorker(worker))
+	updated, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, "host-b", updated.CheckpointCompatibilityKey)
+	assert.Equal(t, int64(2), updated.ResourceVersion)
+}
+
 func TestWorkerSecondaryIndexesRemoveStaleMembers(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

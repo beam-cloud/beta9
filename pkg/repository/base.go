@@ -317,7 +317,7 @@ type BackendRepository interface {
 	UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
 	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
 	GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error)
-	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
+	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string, compatibilityKeys ...string) (*types.Checkpoint, error)
 	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error)
 	PruneCheckpoints(ctx context.Context, checkpointIds []string) ([]types.Checkpoint, error)
 	CreateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)

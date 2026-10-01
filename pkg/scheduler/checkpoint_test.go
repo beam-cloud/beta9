@@ -15,7 +15,7 @@ type checkpointBackendRepoForTest struct {
 	calls  int
 }
 
-func (r *checkpointBackendRepoForTest) GetLatestCheckpointByStubId(context.Context, string) (*types.Checkpoint, error) {
+func (r *checkpointBackendRepoForTest) GetLatestCheckpointByStubId(context.Context, string, ...string) (*types.Checkpoint, error) {
 	r.calls++
 	return r.latest, nil
 }
@@ -123,8 +123,7 @@ func TestPrepareWorkerRequestRefreshesMissingCheckpoint(t *testing.T) {
 	request.Stub.Type = types.StubType(types.StubTypeTaskQueueDeployment)
 	backend.latest.Runtime = types.ContainerRuntimeRunc.String()
 	workerRequest = scheduler.prepareWorkerRequest(&types.Worker{Runtime: types.ContainerRuntimeGvisor.String()}, request)
-	scheduler.attachLatestCheckpoint(workerRequest)
 	assert.Nil(t, workerRequest.Checkpoint, "incompatible checkpoints attached after selection must be skipped")
-	assert.False(t, workerRequest.CheckpointEnabled)
+	assert.True(t, workerRequest.CheckpointEnabled, "the worker can select or create a compatible variant")
 	assert.True(t, request.CheckpointEnabled)
 }

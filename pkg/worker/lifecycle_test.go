@@ -2555,6 +2555,65 @@ func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *tes
 	require.True(t, request.CheckpointEnabled, "explicit restore requests must remain unchanged")
 }
 
+func TestPrepareCheckpointForWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name, sourceKey, storedKey, wantKey string
+		lookupErr                           error
+		wantEnabled                         bool
+	}{
+		{"matching attached snapshot", "host", "", "host", nil, true},
+		{"reuse matching variant", "other", "host", "host", nil, true},
+		{"legacy snapshot uses matching variant", "", "host", "host", nil, true},
+		{"legacy snapshot rebuilds", "", "", "", nil, true},
+		{"new host creates its own variant", "other", "", "", nil, true},
+		{"lookup failure skips creation", "other", "", "", assert.AnError, false},
+		{"old gateway ignores key", "other", "other", "", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &fakeBackendRepoClient{checkpointLookupErr: tc.lookupErr}
+			if tc.storedKey != "" {
+				backend.latestCheckpoint = &pb.Checkpoint{CheckpointId: "variant", Status: "available", Runtime: "gvisor", CompatibilityKey: tc.storedKey}
+			}
+			worker := &Worker{checkpointCompatibilityKey: "host", backendRepoClient: backend,
+				runtime: &mockRuntime{name: "gvisor", capabilities: runtime.Capabilities{CheckpointRestore: true}},
+			}
+			checkpoint := &types.Checkpoint{CheckpointId: "original", Status: "available", Runtime: "gvisor", CompatibilityKey: tc.sourceKey}
+			request := &types.ContainerRequest{StubId: "stub", Checkpoint: checkpoint, CheckpointEnabled: true,
+				Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
+			}
+			require.NoError(t, worker.prepareCheckpointForWorker(context.Background(), request))
+			require.Equal(t, tc.wantEnabled, request.CheckpointEnabled)
+			if tc.wantKey == "" {
+				require.Nil(t, request.Checkpoint)
+			} else {
+				require.Equal(t, tc.wantKey, request.Checkpoint.CompatibilityKey)
+			}
+			if tc.sourceKey == "host" {
+				require.Empty(t, backend.checkpointLookupKey, "matching snapshots need no lookup")
+			} else {
+				require.Equal(t, "host", backend.checkpointLookupKey)
+			}
+			require.Equal(t, "available", checkpoint.Status)
+			require.Zero(t, backend.updateCalls, "other host variants remain available")
+		})
+	}
+}
+
+func TestRunContainerRejectsCheckpointHostBeforeStartup(t *testing.T) {
+	worker := &Worker{checkpointCompatibilityKey: "host",
+		runtime: &mockRuntime{name: "gvisor", capabilities: runtime.Capabilities{CheckpointRestore: true}},
+	}
+	request := &types.ContainerRequest{CheckpointEnabled: true,
+		Checkpoint: &types.Checkpoint{Status: "available", Runtime: "gvisor", CompatibilityKey: "other"},
+		Stub:       types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+	checkpoint := request.Checkpoint
+	// No cache or download dependencies: incompatibility must fail before startup.
+	require.True(t, IsCheckpointHostIncompatible(worker.RunContainer(context.Background(), request)))
+	require.Same(t, checkpoint, request.Checkpoint)
+	require.True(t, request.CheckpointEnabled)
+}
+
 func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 	t.Setenv("WORKER_POOL_NAME", "default")
 
@@ -4007,6 +4066,9 @@ func (m *restoreFallbackRuntime) Run(ctx context.Context, containerID, bundlePat
 }
 
 type fakeBackendRepoClient struct {
+	latestCheckpoint    *pb.Checkpoint
+	checkpointLookupKey string
+	checkpointLookupErr error
 	updateCalls         int
 	lastUpdate          *pb.UpdateCheckpointRequest
 	createCalls         int
@@ -4022,7 +4084,8 @@ func (f *fakeBackendRepoClient) GetCheckpointById(ctx context.Context, in *pb.Ge
 }
 
 func (f *fakeBackendRepoClient) GetLatestCheckpointByStubId(ctx context.Context, in *pb.GetLatestCheckpointByStubIdRequest, opts ...grpc.CallOption) (*pb.GetLatestCheckpointByStubIdResponse, error) {
-	return &pb.GetLatestCheckpointByStubIdResponse{Ok: true}, nil
+	f.checkpointLookupKey = in.CompatibilityKey
+	return &pb.GetLatestCheckpointByStubIdResponse{Ok: true, Checkpoint: f.latestCheckpoint}, f.checkpointLookupErr
 }
 
 func (f *fakeBackendRepoClient) ListCheckpoints(ctx context.Context, in *pb.ListCheckpointsRequest, opts ...grpc.CallOption) (*pb.ListCheckpointsResponse, error) {

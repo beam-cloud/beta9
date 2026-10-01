@@ -79,9 +79,10 @@ type contextBoundCheckpointBackend struct {
 
 func (b *contextBoundCheckpointBackend) CreateCheckpoint(
 	ctx context.Context,
-	_ *pb.CreateCheckpointRequest,
+	in *pb.CreateCheckpointRequest,
 	_ ...grpc.CallOption,
 ) (*pb.CreateCheckpointResponse, error) {
+	b.lastCreate = in
 	b.started <- ctx
 	if b.release != nil {
 		select {
@@ -2429,7 +2430,7 @@ func TestCheckpointStatePublicationIsBoundedAndFailureContextIsWorkerOwned(t *te
 		fakeBackendRepoClient: &fakeBackendRepoClient{},
 		started:               make(chan context.Context, 1),
 	}
-	worker := &Worker{backendRepoClient: backend}
+	worker := &Worker{backendRepoClient: backend, checkpointCompatibilityKey: "host"}
 	request := &types.ContainerRequest{ContainerId: "container-state", Stub: types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-state"}}}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -2441,6 +2442,7 @@ func TestCheckpointStatePublicationIsBoundedAndFailureContextIsWorkerOwned(t *te
 	publicationCtx := <-backend.started
 	_, bounded := publicationCtx.Deadline()
 	require.True(t, bounded)
+	require.Equal(t, "host", backend.lastCreate.CompatibilityKey)
 
 	callerCtx, cancelCaller := context.WithCancel(context.Background())
 	cancelCaller()

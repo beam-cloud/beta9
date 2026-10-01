@@ -69,3 +69,21 @@ func (s *Scheduler) attachCheckpoint(request *types.ContainerRequest, checkpoint
 	}
 	request.Checkpoint = checkpoint
 }
+
+func checkpointHostConstraint(request *types.ContainerRequest) *types.Checkpoint {
+	checkpoint := availableCheckpoint(request)
+	if checkpoint == nil || checkpoint.IsFilesystemOnly() {
+		return nil
+	}
+	// Legacy explicit restores keep runtime validation; deployments rebuild them.
+	if checkpoint.CompatibilityKey == "" && !canSkipCheckpoint(request) {
+		return nil
+	}
+	return checkpoint
+}
+
+func hostMatchesCheckpoint(checkpoint *types.Checkpoint, worker *types.Worker) bool {
+	// Provisioning has not discovered the host yet. Recheck before downloading.
+	return checkpoint == nil || (checkpoint.CompatibilityKey != "" && checkpoint.CompatibilityKey == worker.CheckpointCompatibilityKey) ||
+		(worker.Status == types.WorkerStatusPending && worker.CheckpointCompatibilityKey == "")
+}
