@@ -14,6 +14,8 @@ import (
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.JoinAgentResponse, error) {
@@ -599,21 +601,91 @@ func agentCanManageRoute(agentState *model.AgentTokenState, route types.BackendR
 		route.MachineID == agentState.MachineID
 }
 
+// RequestAgentWorkerRestart cordons a worker and changes its desired generation.
+// Reconciliation publishes it after all outstanding work has drained.
+func (s *Service) RequestAgentWorkerRestart(ctx context.Context, worker *types.Worker) error {
+	if s == nil || s.computeRepo == nil || s.workerRepo == nil || worker == nil || worker.WorkspaceId == "" || worker.MachineId == "" {
+		return fmt.Errorf("restart requires an agent-managed worker")
+	}
+	err := s.withAgentWorkerSlotLock(ctx, worker.MachineId, func(ctx context.Context) error {
+		machine, err := s.computeRepo.GetAgentMachineState(ctx, worker.WorkspaceId, worker.PoolName, worker.MachineId)
+		if err != nil {
+			return err
+		}
+		if machine == nil || machine.Executor != types.DefaultAgentWorkerContainerMode || worker.Id != model.AgentMachineWorkerID(machine.MachineID) {
+			return fmt.Errorf("restart requires an agent-managed worker")
+		}
+		slots, err := s.computeRepo.ListAgentWorkerSlotStates(ctx, worker.WorkspaceId, worker.PoolName, worker.MachineId)
+		if err != nil {
+			return err
+		}
+		var existing *model.AgentWorkerSlotState
+		for _, slot := range slots {
+			if slot != nil && slot.WorkerID == worker.Id {
+				existing = slot
+				break
+			}
+		}
+		if existing == nil {
+			return fmt.Errorf("agent worker has no slot to restart")
+		}
+		current, err := s.workerRepo.GetWorkerById(worker.Id)
+		if err != nil {
+			return err
+		}
+		desired := *existing
+		if err := setAgentWorkerSlotGeneration(&desired); err != nil {
+			return err
+		}
+		// Coalesce retries while waiting for work to drain or for the replacement
+		// to acknowledge startup. A completed restart can be requested again.
+		pending := existing.RestartNonce != "" && (desired.Generation != existing.Generation || current.RolloutGeneration != "")
+		if _, err := s.SetAgentWorkerCordon(ctx, current, true); err != nil {
+			return err
+		}
+		if pending {
+			return nil
+		}
+		desired.RestartNonce = uuid.NewString()
+		if err := setAgentWorkerSlotGeneration(&desired); err != nil {
+			return err
+		}
+		if _, err := s.workerRepo.PrepareWorkerRollout(worker.Id, desired.Generation); err != nil {
+			return err
+		}
+		// Keep the published generation until reconciliation's drain gate opens.
+		// RestartNonce is storage-only; the agent still receives the old slot.
+		desired.Generation = existing.Generation
+		return s.computeRepo.SaveAgentWorkerSlotState(ctx, &desired)
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.notifyAgentPool(ctx, worker.WorkspaceId, worker.PoolName); err != nil {
+		log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to notify restarting agent; periodic refresh remains active")
+	}
+	return nil
+}
+
 func (s *Service) agentSlotsForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
+	var slots []*pb.AgentWorkerSlot
+	err := s.withAgentWorkerSlotLock(ctx, agentState.MachineID, func(ctx context.Context) error {
+		var err error
+		slots, err = s.agentSlotsForMachineLocked(ctx, agentState)
+		return err
+	})
+	return slots, err
+}
+
+func (s *Service) withAgentWorkerSlotLock(ctx context.Context, machineID string, fn func(context.Context) error) error {
 	// A published slot and its worker rollout target form one transition.
 	// Serialize snapshots across gateway replicas, including rollback.
 	if s.redisClient == nil {
-		return s.agentSlotsForMachineLocked(ctx, agentState)
+		return fn(ctx)
 	}
-	var slots []*pb.AgentWorkerSlot
-	err := common.NewRedisLock(s.redisClient).WithLease(ctx,
-		"compute:agent:slots:lock:"+agentState.MachineID,
-		common.RedisLockOptions{TtlS: 30, Retries: 3}, func(ctx context.Context) error {
-			var err error
-			slots, err = s.agentSlotsForMachineLocked(ctx, agentState)
-			return err
-		})
-	return slots, err
+	return common.NewRedisLock(s.redisClient).WithLease(ctx,
+		"compute:agent:slots:lock:"+machineID,
+		common.RedisLockOptions{TtlS: 30, Retries: 3}, fn)
 }
 
 func (s *Service) agentSlotsForMachineLocked(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
@@ -687,6 +759,9 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	}
 
 	slot := agentWorkerSlotState(s.appConfig, agentState, worker, poolConfig, tokenID, tokenHash)
+	if existing != nil {
+		slot.RestartNonce = existing.RestartNonce
+	}
 	if err := setAgentWorkerSlotGeneration(slot); err != nil {
 		return nil, "", err
 	}

@@ -1635,7 +1635,12 @@ message UncordonWorkerResponse {
   string err_msg = 2;
 }
 
-message DrainWorkerRequest { string worker_id = 1; }
+message DrainWorkerRequest {
+  string worker_id = 1;
+  // Recreate an agent-managed worker after its outstanding work has drained.
+  // The replacement remains cordoned until explicitly uncordoned.
+  bool restart = 2;
+}
 
 message DrainWorkerResponse {
   bool ok = 1;

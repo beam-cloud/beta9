@@ -216,7 +216,13 @@ func (gws *GatewayService) DrainWorker(ctx context.Context, in *pb.DrainWorkerRe
 	// Drain is a safe, one-step operation: stop new scheduling before asking
 	// existing containers to terminate. The cordon remains until an explicit
 	// uncordon, which makes the command predictable for maintenance scripts.
-	if err := gws.setWorkerCordon(ctx, worker, true); err != nil {
+	if in.GetRestart() {
+		// Validate restart support before cordoning or stopping any work.
+		err = gws.computeService.RequestAgentWorkerRestart(ctx, worker)
+	} else {
+		err = gws.setWorkerCordon(ctx, worker, true)
+	}
+	if err != nil {
 		return &pb.DrainWorkerResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),

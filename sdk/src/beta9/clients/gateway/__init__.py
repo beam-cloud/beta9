@@ -1582,6 +1582,11 @@ class UncordonWorkerResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class DrainWorkerRequest(betterproto.Message):
     worker_id: str = betterproto.string_field(1)
+    restart: bool = betterproto.bool_field(2)
+    """
+    Recreate an agent-managed worker after its outstanding work has drained.
+     The replacement remains cordoned until explicitly uncordoned.
+    """
 
 
 @dataclass(eq=False, repr=False)

@@ -1834,6 +1834,13 @@
             "in": "path",
             "required": true,
             "type": "string"
+          },
+          {
+            "name": "restart",
+            "description": "Recreate an agent-managed worker after its outstanding work has drained.\nThe replacement remains cordoned until explicitly uncordoned.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
           }
         ],
         "tags": [

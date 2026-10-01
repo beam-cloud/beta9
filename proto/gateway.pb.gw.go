@@ -2327,6 +2327,8 @@ func local_request_GatewayService_UncordonWorker_0(ctx context.Context, marshale
 	return msg, metadata, err
 }
 
+var filter_GatewayService_DrainWorker_0 = &utilities.DoubleArray{Encoding: map[string]int{"worker_id": 0}, Base: []int{1, 1, 0}, Check: []int{0, 1, 2}}
+
 func request_GatewayService_DrainWorker_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq DrainWorkerRequest
@@ -2343,6 +2345,12 @@ func request_GatewayService_DrainWorker_0(ctx context.Context, marshaler runtime
 	protoReq.WorkerId, err = runtime.String(val)
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "worker_id", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_DrainWorker_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.DrainWorker(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -2361,6 +2369,12 @@ func local_request_GatewayService_DrainWorker_0(ctx context.Context, marshaler r
 	protoReq.WorkerId, err = runtime.String(val)
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "worker_id", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_DrainWorker_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.DrainWorker(ctx, &protoReq)
 	return msg, metadata, err
