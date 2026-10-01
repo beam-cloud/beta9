@@ -504,7 +504,6 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 			"locality",
 			"accelerator",
 			"runtime",
-			"compatibility_key",
 		}).AddRow(
 			"checkpoint-123",
 			"external-123",
@@ -525,7 +524,6 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 			"default",
 			"cpu",
 			types.ContainerRuntimeRunc.String(),
-			"host-a",
 		))
 
 	checkpoints, err := postgresRepo.ListStaleCheckpoints(context.Background(), []string{"workspace|active-stub"}, cutoff)
@@ -535,7 +533,6 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 	require.Equal(t, "checkpoint-123", checkpoints[0].CheckpointId)
 	require.Equal(t, []uint32{8080}, checkpoints[0].ExposedPorts)
 	require.Equal(t, types.ContainerRuntimeRunc.String(), checkpoints[0].Runtime)
-	require.Equal(t, "host-a", checkpoints[0].CompatibilityKey)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -599,15 +596,10 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 	require.Equal(t, []uint32{8001}, checkpoint.ExposedPorts)
 	require.Equal(t, types.ContainerRuntimeGvisor.String(), checkpoint.Runtime)
 	require.Equal(t, "host-a", checkpoint.CompatibilityKey)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestGetLatestCheckpointByStubIdRequiresMatchingHost(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	mock.ExpectQuery(`c\.status = \$2 AND \(\$3 = '' OR c\.compatibility_key = \$3\)`).
+	mock.ExpectQuery(`c\.compatibility_key = \$3`).
 		WithArgs("stub-123", string(types.CheckpointStatusAvailable), "host-a").
 		WillReturnError(sql.ErrNoRows)
-	_, err := repo.GetLatestCheckpointByStubId(context.Background(), "stub-123", "host-a")
+	_, err = postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123", "host-a")
 	require.IsType(t, &types.ErrCheckpointNotFound{}, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

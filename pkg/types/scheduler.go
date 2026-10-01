@@ -89,16 +89,14 @@ type Worker struct {
 	// Evictable* is the share of used capacity held by evictable containers
 	// (managed endpoint replicas). Non-evictable requests may claim it; the
 	// scheduler stops the holders first.
-	EvictableCpu      int64  `json:"evictable_cpu" redis:"evictable_cpu"`
-	EvictableMemory   int64  `json:"evictable_memory" redis:"evictable_memory"`
-	EvictableGpuCount uint32 `json:"evictable_gpu_count" redis:"evictable_gpu_count"`
-
-	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key" redis:"checkpoint_compatibility_key"`
-
+	EvictableCpu        int64  `json:"evictable_cpu" redis:"evictable_cpu"`
+	EvictableMemory     int64  `json:"evictable_memory" redis:"evictable_memory"`
+	EvictableGpuCount   uint32 `json:"evictable_gpu_count" redis:"evictable_gpu_count"`
 	WorkspaceId         string `json:"-" redis:"workspace_id" go2proto:"ignore"`
 	ControlPlaneManaged bool   `json:"-" redis:"control_plane_managed" go2proto:"ignore"`
 	// Keep internal fields after wire fields: go2proto numbers by struct position.
-	RolloutPreviousStatus WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
+	RolloutPreviousStatus      WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
+	CheckpointCompatibilityKey string       `json:"-" redis:"checkpoint_compatibility_key" go2proto:"ignore"`
 }
 
 type WorkerKeepAlive struct {
@@ -146,8 +144,6 @@ func (w *Worker) ToProto() *pb.Worker {
 		RolloutGeneration:    w.RolloutGeneration,
 		RolloutBuildVersion:  w.RolloutBuildVersion,
 		WorkerImageOverride:  w.WorkerImageOverride,
-
-		CheckpointCompatibilityKey: w.CheckpointCompatibilityKey,
 	}
 }
 
@@ -184,8 +180,6 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		RolloutGeneration:    in.RolloutGeneration,
 		RolloutBuildVersion:  in.RolloutBuildVersion,
 		WorkerImageOverride:  in.WorkerImageOverride,
-
-		CheckpointCompatibilityKey: in.CheckpointCompatibilityKey,
 	}
 }
 

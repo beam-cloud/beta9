@@ -459,18 +459,14 @@ type Checkpoint struct {
 	Locality          string   `db:"locality" json:"locality" serializer:"locality"`
 	Accelerator       string   `db:"accelerator" json:"accelerator" serializer:"accelerator"`
 	Runtime           string   `db:"runtime" json:"runtime" serializer:"runtime"`
-	CompatibilityKey  string   `db:"compatibility_key" json:"compatibility_key" serializer:"compatibility_key"`
+	// Internal placement metadata, carried separately by worker RPCs.
+	CompatibilityKey string `db:"compatibility_key" json:"compatibility_key,omitempty" go2proto:"ignore"`
 }
 
 const CheckpointRuntimeFilesystem = "filesystem"
 
 func (c *Checkpoint) IsFilesystemOnly() bool {
 	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), CheckpointRuntimeFilesystem)
-}
-
-// MatchesHost requires a known host profile for runtime checkpoints.
-func (c *Checkpoint) MatchesHost(key string) bool {
-	return c == nil || c.IsFilesystemOnly() || (c.CompatibilityKey != "" && c.CompatibilityKey == key)
 }
 
 func (c *Checkpoint) ToProto() *pb.Checkpoint {
@@ -496,7 +492,6 @@ func (c *Checkpoint) ToProto() *pb.Checkpoint {
 		Locality:          c.Locality,
 		Accelerator:       c.Accelerator,
 		Runtime:           c.Runtime,
-		CompatibilityKey:  c.CompatibilityKey,
 	}
 }
 
@@ -523,7 +518,6 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 		Locality:          in.Locality,
 		Accelerator:       in.Accelerator,
 		Runtime:           in.Runtime,
-		CompatibilityKey:  in.CompatibilityKey,
 	}
 }
 

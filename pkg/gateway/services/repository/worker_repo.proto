@@ -95,6 +95,7 @@ message GetNextContainerRequestResponse {
   types.ContainerRequest container_request = 2;
   string error_msg = 3;
   string delivery_token = 4;
+  string checkpoint_compatibility_key = 5;
 }
 
 message StreamWorkerEventsRequest {

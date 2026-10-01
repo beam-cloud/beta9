@@ -759,9 +759,8 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 	workerRequest := request.Clone()
 	s.attachLatestCheckpoint(workerRequest)
 	if canSkipCheckpoint(workerRequest) &&
-		(!runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) ||
-			!acceleratorMatchesCheckpoint(workerRequest, worker.Gpu) ||
-			!hostMatchesCheckpoint(checkpointHostConstraint(workerRequest), worker)) {
+		(!runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) || !acceleratorMatchesCheckpoint(workerRequest, worker.Gpu) ||
+			!hostMatchesCheckpoint(workerRequest.Checkpoint, worker)) {
 		workerLog(requestLog(log.Info(), workerRequest), worker).
 			Str("checkpoint_id", workerRequest.Checkpoint.CheckpointId).
 			Msg("attached checkpoint is incompatible with selected worker")
@@ -1130,7 +1129,10 @@ func workerPoolSelector(worker *types.Worker) string {
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
-	checkpoint := checkpointHostConstraint(request)
+	var checkpoint *types.Checkpoint
+	if canSkipCheckpoint(request) {
+		checkpoint = request.Checkpoint
+	}
 	requiresGPU := request.RequiresGPU()
 	gpuCount := gpuCountForScheduling(request)
 
@@ -1225,6 +1227,12 @@ func canSkipCheckpoint(request *types.ContainerRequest) bool {
 	checkpoint := availableCheckpoint(request)
 	return checkpoint != nil && !checkpoint.IsFilesystemOnly() &&
 		request.CheckpointEnabled && request.Stub.Type.IsDeployment()
+}
+
+func hostMatchesCheckpoint(checkpoint *types.Checkpoint, worker *types.Worker) bool {
+	// Pending hosts have not reported their profile yet; the worker rechecks it.
+	return checkpoint == nil || (checkpoint.CompatibilityKey != "" && checkpoint.CompatibilityKey == worker.CheckpointCompatibilityKey) ||
+		(worker.Status == types.WorkerStatusPending && worker.CheckpointCompatibilityKey == "")
 }
 
 func checkpointRuntime(request *types.ContainerRequest) string {

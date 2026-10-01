@@ -1,12 +1,70 @@
 package worker
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	cdispecs "tags.cncf.io/container-device-interface/specs-go"
 )
+
+type compatibilityBackend struct {
+	fakeBackendRepoClient
+	response *pb.GetLatestCheckpointByStubIdResponse
+	err      error
+	key      string
+}
+
+func (b *compatibilityBackend) GetLatestCheckpointByStubId(_ context.Context, in *pb.GetLatestCheckpointByStubIdRequest, _ ...grpc.CallOption) (*pb.GetLatestCheckpointByStubIdResponse, error) {
+	b.key = in.CompatibilityKey
+	return b.response, b.err
+}
+
+func TestCheckpointSelectionBeforeDownload(t *testing.T) {
+	variant := &pb.Checkpoint{CheckpointId: "compatible", Runtime: "gvisor", Status: "available"}
+	for _, tc := range []struct {
+		name, echoedKey, attachedKey string
+		checkpoint                   *pb.Checkpoint
+		err                          error
+		enabled                      bool
+	}{
+		{"attached matching variant", "", "host", variant, nil, true},
+		{"reuse host variant", "host", "other-host", variant, nil, true},
+		{"seed missing variant", "host", "", nil, nil, true},
+		{"old gateway", "", "", variant, nil, false},
+		{"old gateway missing variant", "", "", nil, nil, false},
+		{"lookup failure", "", "", nil, errors.New("unavailable"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &compatibilityBackend{response: &pb.GetLatestCheckpointByStubIdResponse{
+				Ok: true, CompatibilityKey: tc.echoedKey, Checkpoint: tc.checkpoint}, err: tc.err}
+			worker := &Worker{checkpointCompatibilityKey: "host", backendRepoClient: backend,
+				runtime: &mockRuntime{name: "gvisor", capabilities: runtime.Capabilities{CheckpointRestore: true}}}
+			request := &types.ContainerRequest{StubId: "stub", CheckpointEnabled: true,
+				Checkpoint: &types.Checkpoint{CheckpointId: "attached", Runtime: "gvisor", Status: "available", CompatibilityKey: tc.attachedKey}}
+			worker.prepareCheckpointForWorker(context.Background(), request)
+			if tc.attachedKey == "host" {
+				require.Empty(t, backend.key, "compatible scheduling needs no additional lookup")
+				require.Equal(t, "attached", request.Checkpoint.CheckpointId)
+				return
+			}
+			require.Equal(t, "host", backend.key)
+			require.Equal(t, tc.enabled, request.CheckpointEnabled)
+			if tc.enabled && tc.checkpoint != nil {
+				require.Equal(t, "compatible", request.Checkpoint.CheckpointId)
+			} else {
+				require.Nil(t, request.Checkpoint)
+			}
+			require.Zero(t, backend.updateCalls, "other host variants remain available")
+		})
+	}
+}
 
 const checkpointTestCPU = "vendor_id: AuthenticAMD\ncpu family: 25\nmodel: 1\nstepping: 1\nmodel name: AMD EPYC 7B13\nflags: fpu fxsr xsave xsaves avx avx2\n"
 

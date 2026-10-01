@@ -45,7 +45,6 @@ message Checkpoint {
   string locality = 19;
   string accelerator = 20;
   string runtime = 21;
-  string compatibility_key = 22;
 }
 
 message CheckpointTrigger {
@@ -286,7 +285,6 @@ message Worker {
   int64 evictable_cpu = 24;
   int64 evictable_memory = 25;
   uint32 evictable_gpu_count = 26;
-  string checkpoint_compatibility_key = 27;
 }
 
 message WorkerPoolState {

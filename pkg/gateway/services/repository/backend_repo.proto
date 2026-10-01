@@ -40,6 +40,8 @@ message GetLatestCheckpointByStubIdResponse {
   bool ok = 1;
   types.Checkpoint checkpoint = 2;
   string error_msg = 3;
+  // Echo the applied filter so workers can detect an older gateway.
+  string compatibility_key = 4;
 }
 
 message ListCheckpointsRequest { string workspace_id = 1; }

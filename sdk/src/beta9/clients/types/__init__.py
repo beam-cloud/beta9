@@ -51,7 +51,6 @@ class Checkpoint(betterproto.Message):
     locality: str = betterproto.string_field(19)
     accelerator: str = betterproto.string_field(20)
     runtime: str = betterproto.string_field(21)
-    compatibility_key: str = betterproto.string_field(22)
 
 
 @dataclass(eq=False, repr=False)
@@ -312,7 +311,6 @@ class Worker(betterproto.Message):
     evictable_cpu: int = betterproto.int64_field(24)
     evictable_memory: int = betterproto.int64_field(25)
     evictable_gpu_count: int = betterproto.uint32_field(26)
-    checkpoint_compatibility_key: str = betterproto.string_field(27)
 
 
 @dataclass(eq=False, repr=False)

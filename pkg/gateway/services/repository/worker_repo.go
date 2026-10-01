@@ -91,10 +91,15 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 			}
 
 			for i, request := range requests {
+				compatibilityKey := ""
+				if request.Checkpoint != nil {
+					compatibilityKey = request.Checkpoint.CompatibilityKey
+				}
 				if err := stream.Send(&pb.GetNextContainerRequestResponse{
-					Ok:               true,
-					ContainerRequest: request.ToProto(),
-					DeliveryToken:    request.DeliveryToken,
+					Ok:                         true,
+					ContainerRequest:           request.ToProto(),
+					DeliveryToken:              request.DeliveryToken,
+					CheckpointCompatibilityKey: compatibilityKey,
 				}); err != nil {
 					if requeueErr := s.workerRepo.RequeueContainerRequests(req.WorkerId, requests[i:]); requeueErr != nil {
 						log.Error().Err(requeueErr).Str("worker_id", req.WorkerId).Msg("failed to requeue undelivered container requests")

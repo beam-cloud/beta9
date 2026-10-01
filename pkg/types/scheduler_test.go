@@ -45,16 +45,14 @@ func TestWorkerStartConcurrencyCapsByWorkerCPU(t *testing.T) {
 
 func TestWorkerProtoRoundTripPreservesRuntimeAndPoolSelector(t *testing.T) {
 	worker := &Worker{
-		Id:                         "worker-1",
-		Runtime:                    ContainerRuntimeRunc.String(),
-		PoolSelector:               "private-cpu",
-		CheckpointCompatibilityKey: "host-a",
+		Id:           "worker-1",
+		Runtime:      ContainerRuntimeRunc.String(),
+		PoolSelector: "private-cpu",
 	}
 
 	roundTrip := NewWorkerFromProto(worker.ToProto())
 	require.Equal(t, ContainerRuntimeRunc.String(), roundTrip.Runtime)
 	require.Equal(t, "private-cpu", roundTrip.PoolSelector)
-	require.Equal(t, worker.CheckpointCompatibilityKey, roundTrip.CheckpointCompatibilityKey)
 }
 
 func TestContainerRequestProtoRoundTripPreservesTaskID(t *testing.T) {
@@ -65,20 +63,12 @@ func TestContainerRequestProtoRoundTripPreservesTaskID(t *testing.T) {
 }
 
 func TestCheckpointProtoRoundTripPreservesRuntime(t *testing.T) {
-	checkpoint := &Checkpoint{CheckpointId: "checkpoint-1", Runtime: ContainerRuntimeGvisor.String(), CompatibilityKey: "host-a"}
+	checkpoint := &Checkpoint{CheckpointId: "checkpoint-1", Runtime: ContainerRuntimeGvisor.String()}
 
 	require.Equal(t, checkpoint.Runtime, NewCheckpointFromProto(checkpoint.ToProto()).Runtime)
-	require.Equal(t, checkpoint.CompatibilityKey, NewCheckpointFromProto(checkpoint.ToProto()).CompatibilityKey)
-	require.True(t, checkpoint.MatchesHost("host-a"))
-	require.False(t, checkpoint.MatchesHost("host-b"))
-	require.False(t, checkpoint.MatchesHost(""))
-	require.False(t, (&Checkpoint{}).MatchesHost(""))
-	require.False(t, (&Checkpoint{}).MatchesHost("host-a"))
-	require.True(t, (*Checkpoint)(nil).MatchesHost(""))
 	require.False(t, checkpoint.IsFilesystemOnly())
 	checkpoint.Runtime = " FILESYSTEM "
 	require.True(t, checkpoint.IsFilesystemOnly())
-	require.True(t, checkpoint.MatchesHost(""))
 }
 
 func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {

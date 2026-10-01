@@ -79,10 +79,9 @@ type contextBoundCheckpointBackend struct {
 
 func (b *contextBoundCheckpointBackend) CreateCheckpoint(
 	ctx context.Context,
-	in *pb.CreateCheckpointRequest,
+	_ *pb.CreateCheckpointRequest,
 	_ ...grpc.CallOption,
 ) (*pb.CreateCheckpointResponse, error) {
-	b.lastCreate = in
 	b.started <- ctx
 	if b.release != nil {
 		select {
@@ -1930,10 +1929,6 @@ func TestClassifyRestoreErrorDetectsHostIncompatibility(t *testing.T) {
 
 	require.True(t, IsCheckpointHostIncompatible(err))
 	require.False(t, IsCRIURestoreError(err))
-	err = classifyRestoreError("gvisor", assert.AnError, `"Mounts" does not match across checkpoint restore`)
-	require.False(t, IsCheckpointHostIncompatible(err), "mount mismatch alone does not establish host incompatibility")
-	require.ErrorIs(t, err, assert.AnError)
-	require.False(t, IsCheckpointHostIncompatible(classifyRestoreError("gvisor", assert.AnError, "invalid image header")))
 }
 
 func TestClassifyRestoreErrorDetectsRunscVersionMismatch(t *testing.T) {
@@ -2430,7 +2425,7 @@ func TestCheckpointStatePublicationIsBoundedAndFailureContextIsWorkerOwned(t *te
 		fakeBackendRepoClient: &fakeBackendRepoClient{},
 		started:               make(chan context.Context, 1),
 	}
-	worker := &Worker{backendRepoClient: backend, checkpointCompatibilityKey: "host"}
+	worker := &Worker{backendRepoClient: backend}
 	request := &types.ContainerRequest{ContainerId: "container-state", Stub: types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-state"}}}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -2442,7 +2437,6 @@ func TestCheckpointStatePublicationIsBoundedAndFailureContextIsWorkerOwned(t *te
 	publicationCtx := <-backend.started
 	_, bounded := publicationCtx.Deadline()
 	require.True(t, bounded)
-	require.Equal(t, "host", backend.lastCreate.CompatibilityKey)
 
 	callerCtx, cancelCaller := context.WithCancel(context.Background())
 	cancelCaller()

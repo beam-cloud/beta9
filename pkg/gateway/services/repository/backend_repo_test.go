@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -115,31 +114,4 @@ func TestGetCachedDiskSnapshotChunkKeys(t *testing.T) {
 
 	_, ok = service.getCachedDiskSnapshotChunkKeys(&types.DiskSnapshot{ExternalId: "snapshot", ManifestDigest: "digest"}, now.Add(time.Minute))
 	require.False(t, ok)
-}
-
-type checkpointLookupBackendRepo struct {
-	repository.BackendRepository
-	err error
-}
-
-func (r *checkpointLookupBackendRepo) GetLatestCheckpointByStubId(context.Context, string, ...string) (*types.Checkpoint, error) {
-	return nil, r.err
-}
-
-func TestGetLatestCheckpointByStubIdMissingVariant(t *testing.T) {
-	for _, tc := range []struct {
-		key string
-		err error
-		ok  bool
-	}{
-		{"host-a", &types.ErrCheckpointNotFound{}, true},
-		{"", &types.ErrCheckpointNotFound{}, false},
-		{"host-a", errors.New("backend unavailable"), false},
-	} {
-		service := &BackendRepositoryService{backendRepo: &checkpointLookupBackendRepo{err: tc.err}}
-		response, err := service.GetLatestCheckpointByStubId(context.Background(), &pb.GetLatestCheckpointByStubIdRequest{StubId: "stub", CompatibilityKey: tc.key})
-		require.NoError(t, err)
-		require.Equal(t, tc.ok, response.Ok)
-		require.Nil(t, response.Checkpoint)
-	}
 }

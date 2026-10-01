@@ -147,48 +147,39 @@ func (r *checkpointFilesystemRestore) discard() error {
 	return nil
 }
 
-// Select a compatible variant before any snapshot download or extraction.
-func (s *Worker) prepareCheckpointForWorker(ctx context.Context, request *types.ContainerRequest) error {
-	checkpoint := request.Checkpoint
-	if hasAvailableCheckpoint(request) && checkpoint.MatchesHost(s.checkpointCompatibilityKey) && validateCheckpointRestoreRuntime(request, s.runtime) == nil {
-		return nil
+// Deployment snapshots are selected for this host before any archive download.
+func (s *Worker) prepareCheckpointForWorker(ctx context.Context, request *types.ContainerRequest) {
+	if request.Checkpoint.IsFilesystemOnly() {
+		return
 	}
-	if !request.Stub.Type.IsDeployment() || !request.CheckpointEnabled {
-		// Legacy explicit restores retain their existing runtime validation.
-		if hasAvailableCheckpoint(request) && checkpoint.CompatibilityKey != "" && !checkpoint.MatchesHost(s.checkpointCompatibilityKey) {
-			return &ErrCheckpointHostIncompatible{Stderr: "checkpoint host fingerprint differs from this worker"}
-		}
-		return nil
+	if hasAvailableCheckpoint(request) && request.Checkpoint.CompatibilityKey != "" &&
+		request.Checkpoint.CompatibilityKey == s.checkpointCompatibilityKey && validateCheckpointRestoreRuntime(request, s.runtime) == nil {
+		return
 	}
-
 	request.Checkpoint = nil
 	if s.checkpointCompatibilityKey == "" {
 		request.CheckpointEnabled = false
-		return nil
+		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, checkpointStatePublicationTTL)
 	defer cancel()
 	response, err := handleGRPCResponse(s.backendRepoClient.GetLatestCheckpointByStubId(ctx, &pb.GetLatestCheckpointByStubIdRequest{
 		StubId: request.StubId, CompatibilityKey: s.checkpointCompatibilityKey,
 	}))
-	if err != nil {
-		// An unavailable metadata service is not evidence that a new snapshot is needed.
+	if err != nil || response.CompatibilityKey != s.checkpointCompatibilityKey {
+		// Failed lookups and older gateways cannot establish compatibility.
 		request.CheckpointEnabled = false
-		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("checkpoint lookup failed; starting normally without creating a replacement")
-		return nil
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("checkpoint compatibility lookup unavailable; starting normally")
+		return
 	}
 	if response.Checkpoint != nil {
-		candidate := types.NewCheckpointFromProto(response.Checkpoint)
-		request.Checkpoint = candidate
-		if !hasAvailableCheckpoint(request) || !candidate.MatchesHost(s.checkpointCompatibilityKey) || validateCheckpointRestoreRuntime(request, s.runtime) != nil {
-			// Older gateways may ignore the fingerprint filter during a rolling upgrade.
+		request.Checkpoint = types.NewCheckpointFromProto(response.Checkpoint)
+		request.Checkpoint.CompatibilityKey = response.CompatibilityKey
+		if !hasAvailableCheckpoint(request) || validateCheckpointRestoreRuntime(request, s.runtime) != nil {
 			request.Checkpoint = nil
 			request.CheckpointEnabled = false
 		}
 	}
-	log.Info().Str("container_id", request.ContainerId).Str("checkpoint_compatibility_key", s.checkpointCompatibilityKey).
-		Bool("checkpoint_found", request.Checkpoint != nil).Msg("selected checkpoint for worker host")
-	return nil
 }
 
 func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
@@ -691,11 +682,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		var mountValidationErr *checkpointDurableMountValidationError
 		durableMountValidationFailed := errors.As(err, &mountValidationErr)
 		if hostIncompatible {
-			outputLogger.Info("Checkpoint was created on an incompatible host; starting container normally")
-			// Preserve the saved checkpoint instead of replacing it from this host.
-			if request.Stub.Type.IsDeployment() {
-				request.CheckpointEnabled = false
-			}
+			outputLogger.Info("Checkpoint was created on an incompatible CPU; starting container normally")
 		} else if runscVersionFallback {
 			outputLogger.Info("Checkpoint uses an incompatible runsc version; starting from its saved filesystem")
 		} else {

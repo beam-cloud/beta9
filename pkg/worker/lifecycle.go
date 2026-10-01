@@ -625,10 +625,8 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	if request.DockerEnabled && forcedRuncCheckpointProfileRequired(request, s.runtime) {
 		return errors.New("forced runc containers do not support Docker-enabled mode")
 	}
-	if caps.CheckpointRestore && (s.runtime.Name() == types.ContainerRuntimeRunc.String() || s.runtime.Name() == types.ContainerRuntimeGvisor.String()) {
-		if err := s.prepareCheckpointForWorker(ctx, request); err != nil {
-			return err
-		}
+	if request.CheckpointEnabled && request.Stub.Type.IsDeployment() && !request.UseVM {
+		s.prepareCheckpointForWorker(ctx, request)
 	}
 	if err := validateCheckpointRestoreRuntime(request, s.runtime); err != nil {
 		return err
@@ -2267,7 +2265,6 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	finishRuntimeStarted := startRuntimeStartedHandler()
 
 	// Handle restore from checkpoint if available
-	checkpointRequested := request.CheckpointEnabled
 	if restoringCheckpoint {
 		var restoreErr error
 		if filesystemRestore != nil {
@@ -2376,7 +2373,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		}
 	}
 
-	if checkpointRequested {
+	if request.CheckpointEnabled {
 		err := addEnvToSpec(request.ConfigPath, []string{fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount))})
 		if err != nil {
 			log.Warn().Str("container_id", request.ContainerId).Msgf("failed to add checkpoint env var to spec: %v", err)

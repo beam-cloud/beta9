@@ -5484,9 +5484,6 @@
         "evictableGpuCount": {
           "type": "integer",
           "format": "int64"
-        },
-        "checkpointCompatibilityKey": {
-          "type": "string"
         }
       }
     },
