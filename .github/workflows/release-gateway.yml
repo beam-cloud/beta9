@@ -18,6 +18,62 @@ jobs:
   build_and_release_gateway:
     if: startsWith(github.ref, 'refs/tags/gateway-') || inputs.app_version != ''
     environment: Release
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.1.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set version
+        id: set-version
+        run: |
+          if [[ ! -z "${{ inputs.app_version }}" ]]; then
+            echo "app_version=${{ inputs.app_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "app_version=${GITHUB_REF_NAME#gateway-}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        with:
+          registry-type: public
+          mask-password: 'true'
+
+      - name: Build and push gateway container image to Amazon ECR
+        uses: docker/build-push-action@v5
+        with:
+          file: ./docker/Dockerfile.gateway
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:${{ steps.set-version.outputs.app_version }}-${{ matrix.arch }}
+          target: release
+          platforms: ${{ matrix.platform }}
+
+  publish_gateway_manifest_and_chart:
+    if: startsWith(github.ref, 'refs/tags/gateway-') || inputs.app_version != ''
+    needs: build_and_release_gateway
+    environment: Release
     runs-on: ubuntu-latest
 
     steps:
@@ -35,7 +91,7 @@ jobs:
       - name: Set version
         id: set-version
         run: |
-          if [[ ! -z "${{ inputs.app_version }}" ]]; then
+          if [[ -n "${{ inputs.app_version }}" ]]; then
             echo "app_version=${{ inputs.app_version }}" >> $GITHUB_OUTPUT
           else
             echo "app_version=${GITHUB_REF_NAME#gateway-}" >> $GITHUB_OUTPUT
@@ -62,16 +118,20 @@ jobs:
           registry-type: public
           mask-password: 'true'
 
-      - name: Build and push gateway container image to Amazon ECR
-        uses: docker/build-push-action@v5
-        with:
-          file: ./docker/Dockerfile.gateway
-          push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:${{ steps.set-version.outputs.app_version }}
-            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:latest
-          target: release
-          platforms: linux/amd64
+      - name: Publish multi-platform image manifests
+        env:
+          IMAGE: ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway
+          TAG_NAME: ${{ steps.set-version.outputs.app_version }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${TAG_NAME}" \
+            "${IMAGE}:${TAG_NAME}-amd64" \
+            "${IMAGE}:${TAG_NAME}-arm64"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}:${TAG_NAME}-amd64" \
+            "${IMAGE}:${TAG_NAME}-arm64"
 
       - name: Package and push Helm chart to Amazon ECR
         env:
