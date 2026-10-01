@@ -758,6 +758,14 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	workerRequest := request.Clone()
 	s.attachLatestCheckpoint(workerRequest)
+	if canSkipCheckpoint(workerRequest) &&
+		(!runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) || !acceleratorMatchesCheckpoint(workerRequest, worker.Gpu)) {
+		workerLog(requestLog(log.Info(), workerRequest), worker).
+			Str("checkpoint_id", workerRequest.Checkpoint.CheckpointId).
+			Msg("checkpoint incompatible with selected worker; starting normally")
+		workerRequest.Checkpoint = nil
+		workerRequest.CheckpointEnabled = false
+	}
 	normalizeGPURequest(workerRequest)
 	workerRequest.Gpu = worker.Gpu
 
@@ -1210,6 +1218,13 @@ func availableCheckpoint(request *types.ContainerRequest) *types.Checkpoint {
 	return request.Checkpoint
 }
 
+// Only deployment startup checkpoints may be skipped for placement.
+func canSkipCheckpoint(request *types.ContainerRequest) bool {
+	checkpoint := availableCheckpoint(request)
+	return checkpoint != nil && !checkpoint.IsFilesystemOnly() &&
+		request.CheckpointEnabled && request.Stub.Type.IsDeployment()
+}
+
 func checkpointRuntime(request *types.ContainerRequest) string {
 	checkpoint := availableCheckpoint(request)
 	if checkpoint == nil || checkpoint.IsFilesystemOnly() {
@@ -1373,6 +1388,13 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 }
 
 func (s *Scheduler) selectWorkerFromWorkers(workers []*types.Worker, request *types.ContainerRequest) (*types.Worker, error) {
+	worker, err := s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusAvailable)
+	if err == nil || !canSkipCheckpoint(request) {
+		return worker, err
+	}
+	request = request.Clone()
+	request.Checkpoint = nil
+	request.CheckpointEnabled = false
 	return s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusAvailable)
 }
 

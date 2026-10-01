@@ -119,4 +119,12 @@ func TestPrepareWorkerRequestRefreshesMissingCheckpoint(t *testing.T) {
 	if workerRequest.Checkpoint != nil {
 		assert.Equal(t, "checkpoint-1", workerRequest.Checkpoint.CheckpointId)
 	}
+
+	request.Stub.Type = types.StubType(types.StubTypeTaskQueueDeployment)
+	backend.latest.Runtime = types.ContainerRuntimeRunc.String()
+	workerRequest = scheduler.prepareWorkerRequest(&types.Worker{Runtime: types.ContainerRuntimeGvisor.String()}, request)
+	scheduler.attachLatestCheckpoint(workerRequest)
+	assert.Nil(t, workerRequest.Checkpoint, "incompatible checkpoints attached after selection must be skipped")
+	assert.False(t, workerRequest.CheckpointEnabled)
+	assert.True(t, request.CheckpointEnabled)
 }

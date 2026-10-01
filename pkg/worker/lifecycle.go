@@ -2262,6 +2262,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	finishRuntimeStarted := startRuntimeStartedHandler()
 
 	// Handle restore from checkpoint if available
+	checkpointRequested := request.CheckpointEnabled
 	if restoringCheckpoint {
 		var restoreErr error
 		if filesystemRestore != nil {
@@ -2370,7 +2371,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		}
 	}
 
-	if request.CheckpointEnabled {
+	if checkpointRequested {
 		err := addEnvToSpec(request.ConfigPath, []string{fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount))})
 		if err != nil {
 			log.Warn().Str("container_id", request.ContainerId).Msgf("failed to add checkpoint env var to spec: %v", err)

@@ -2549,13 +2549,13 @@ func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *tes
 	require.False(t, started)
 	require.Equal(t, -1, exitCode)
 	require.Equal(t, 0, backendRepoClient.updateCalls)
-	require.Contains(t, output.String(), "incompatible CPU")
+	require.Contains(t, output.String(), "incompatible host")
 }
 
 func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 	t.Setenv("WORKER_POOL_NAME", "default")
 
-	restoreErr := assert.AnError
+	restoreErr := &ErrCheckpointHostIncompatible{Stderr: "CPU capabilities do not match run time"}
 	containerID := "container-restore-fallback"
 	checkpointID := "checkpoint-restore-fallback"
 	tmpDir := t.TempDir()
@@ -2591,6 +2591,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	configContents := []byte(runtime.GetBaseConfig("runc"))
 	require.NoError(t, os.WriteFile(configPath, configContents, 0644))
+	require.NoError(t, addEnvToSpec(configPath, []string{"CHECKPOINT_ENABLED=true"}))
 	rt.runConfigPath = configPath
 	request := &types.ContainerRequest{
 		ContainerId:       containerID,
@@ -2620,15 +2621,13 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 	require.True(t, rt.runCalled)
 	require.Equal(t, 0, criuManager.deleteCallsAtRestore)
 	require.Equal(t, 1, rt.deleteCallsAtRun)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
-	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
-	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+	require.Zero(t, backendRepoClient.updateCalls)
 	require.Nil(t, request.Checkpoint)
-	require.True(t, request.CheckpointEnabled)
+	require.False(t, request.CheckpointEnabled)
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
 	require.Contains(t, string(rt.runConfigContents), `"ociVersion"`)
-	require.Contains(t, string(rt.runConfigContents), "CHECKPOINT_ENABLED=true")
+	require.Contains(t, string(rt.runConfigContents), "CHECKPOINT_ENABLED=false")
 }
 
 func TestRunContainerMigratesLegacyForcedRuncCheckpointBeforeRestore(t *testing.T) {

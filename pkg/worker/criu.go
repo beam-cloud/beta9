@@ -647,7 +647,9 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		var mountValidationErr *checkpointDurableMountValidationError
 		durableMountValidationFailed := errors.As(err, &mountValidationErr)
 		if hostIncompatible {
-			outputLogger.Info("Checkpoint was created on an incompatible CPU; starting container normally")
+			outputLogger.Info("Checkpoint was created on an incompatible host; starting container normally")
+			// Preserve the saved checkpoint instead of replacing it from this host.
+			request.CheckpointEnabled = false
 		} else if runscVersionFallback {
 			outputLogger.Info("Checkpoint uses an incompatible runsc version; starting from its saved filesystem")
 		} else {

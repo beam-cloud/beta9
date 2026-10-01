@@ -313,6 +313,9 @@ func classifyRestoreError(runtimeName string, err error, stderr string) error {
 	if runtimeName == types.ContainerRuntimeGvisor.String() && strings.Contains(stderr, runscVersionMismatchMessage) {
 		return &ErrRunscCheckpointVersionMismatch{Stderr: stderr}
 	}
+	if runtimeName == types.ContainerRuntimeGvisor.String() && strings.Contains(stderr, `"Mounts" does not match across checkpoint restore`) {
+		return &ErrCheckpointHostIncompatible{Stderr: stderr}
+	}
 	if strings.Contains(stderr, "criu failed") && strings.Contains(stderr, "type RESTORE") {
 		if checkpointHostIncompatible(stderr) {
 			return &ErrCheckpointHostIncompatible{Stderr: stderr}

@@ -1929,6 +1929,9 @@ func TestClassifyRestoreErrorDetectsHostIncompatibility(t *testing.T) {
 
 	require.True(t, IsCheckpointHostIncompatible(err))
 	require.False(t, IsCRIURestoreError(err))
+	err = classifyRestoreError("gvisor", assert.AnError, `"Mounts" does not match across checkpoint restore`)
+	require.True(t, IsCheckpointHostIncompatible(err))
+	require.False(t, IsCheckpointHostIncompatible(classifyRestoreError("gvisor", assert.AnError, "invalid image header")))
 }
 
 func TestClassifyRestoreErrorDetectsRunscVersionMismatch(t *testing.T) {

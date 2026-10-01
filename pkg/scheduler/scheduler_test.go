@@ -2921,6 +2921,8 @@ func TestSelectorBoundAnyGPUAcceptsUncataloguedHardware(t *testing.T) {
 }
 
 func TestCheckpointRuntimeSelection(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
 	request := &types.ContainerRequest{
 		Cpu:               1000,
 		Memory:            1000,
@@ -2952,6 +2954,29 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 
 	request.Checkpoint.Runtime = types.ContainerRuntimeRunc.String()
 	assert.Equal(t, []*types.Worker{runc}, filterWorkersByResources(workers, request, nil))
+
+	request.Stub.Type = types.StubType(types.StubTypeSandbox)
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{gvisor}, request)
+	assert.Error(t, err, "explicit restores must retain their checkpoint")
+
+	request.Stub.Type = types.StubType(types.StubTypeTaskQueueDeployment)
+	selected, err := scheduler.selectWorkerFromWorkers(workers, request)
+	assert.NoError(t, err)
+	assert.Equal(t, runc, selected, "prefer compatible capacity")
+
+	selected, err = scheduler.selectWorkerFromWorkers([]*types.Worker{gvisor}, request)
+	assert.NoError(t, err)
+	assert.Equal(t, gvisor, selected, "cold-start before provisioning")
+	workerRequest := scheduler.prepareWorkerRequest(gvisor, request)
+	assert.Nil(t, workerRequest.Checkpoint)
+	assert.False(t, workerRequest.CheckpointEnabled)
+	assert.NotNil(t, request.Checkpoint, "retries retain the checkpoint")
+	assert.True(t, request.CheckpointEnabled)
+
+	gvisor.FreeGpuCount = 0
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{gvisor}, request)
+	assert.Error(t, err, "cold starts still require free capacity")
+	gvisor.FreeGpuCount = 1
 
 	request.Checkpoint.Runtime = types.ContainerRuntimeGvisor.String()
 	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request, nil))
