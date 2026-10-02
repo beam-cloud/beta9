@@ -44,7 +44,8 @@ func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRel
 			ReadOnly:  false,
 		},
 	}
-	if stub.Type.Kind() != types.StubTypeSandbox {
+	// A database's only storage is its durable disk.
+	if stub.Type.Kind() != types.StubTypeSandbox && config.EffectiveDatabaseConfig() == nil {
 		mounts = append(mounts, types.Mount{
 			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stub.ExternalId),
 			MountPath: types.WorkerUserOutputVolume,

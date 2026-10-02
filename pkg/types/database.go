@@ -1,10 +1,6 @@
 package types
 
-import (
-	"encoding/json"
-	"errors"
-	"time"
-)
+import "errors"
 
 // Managed database services.
 
@@ -16,17 +12,15 @@ var (
 )
 
 type CreateDatabaseParams struct {
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	Database    string `json:"database"`
-	Size        string `json:"size"`
-	Pool        string `json:"pool"`
-	AlwaysOn    bool   `json:"always_on"`
-	SnapshotID  string `json:"snapshot_id,omitempty"`
-	RestoreFrom string `json:"restore_from,omitempty"`
-	RestoreTime string `json:"restore_time,omitempty"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	Database   string `json:"database"`
+	Size       string `json:"size"`
+	Pool       string `json:"pool"`
+	AlwaysOn   bool   `json:"always_on"`
+	SnapshotID string `json:"snapshot_id,omitempty"`
 	// Millicores and megabytes; zero means the product default.
 	Cpu    int64 `json:"cpu"`
 	Memory int64 `json:"memory"`
@@ -58,21 +52,4 @@ type DatabaseReadiness struct {
 	Ready        bool   `json:"ready"`
 	TLSVerified  bool   `json:"tls_verified"`
 	Error        string `json:"error,omitempty"`
-}
-
-// DatabaseBackupStatus is read from the backup volume, including after deletion.
-type DatabaseBackupStatus struct {
-	Kind             string          `json:"kind"`
-	Status           string          `json:"status"`
-	Error            string          `json:"error,omitempty"`
-	Username         string          `json:"username,omitempty"`
-	Database         string          `json:"database,omitempty"`
-	ObservedAt       int64           `json:"observed_at"`
-	ArchiveThrough   int64           `json:"archive_through"`
-	RetentionDays    int             `json:"retention_days"`
-	Repository       json.RawMessage `json:"repository,omitempty"`
-	VolumeID         string          `json:"volume_id"`
-	Stale            bool            `json:"stale"`
-	RecoverableFrom  *time.Time      `json:"recoverable_from,omitempty"`
-	RecoverableUntil *time.Time      `json:"recoverable_until,omitempty"`
 }

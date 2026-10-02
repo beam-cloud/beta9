@@ -25,8 +25,6 @@ const mcpProtocolVersion = "2025-03-26"
 // MCPGateway is what the tools need from the assembled gateway service.
 type MCPGateway interface {
 	DatabaseManager
-	DatabaseBackups(context.Context, *types.Workspace, string) (*types.DatabaseBackupStatus, error)
-	BackupDatabase(context.Context, *auth.AuthInfo, string) (*types.DatabaseBackupStatus, error)
 	ListDeployments(ctx context.Context, in *pb.ListDeploymentsRequest) (*pb.ListDeploymentsResponse, error)
 	StopDeployment(ctx context.Context, in *pb.StopDeploymentRequest) (*pb.StopDeploymentResponse, error)
 	StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error)

@@ -34,8 +34,6 @@ DATABASE_OPTIONS = {
     "pool",
     "always_on",
     "snapshot_id",
-    "restore_from",
-    "restore_time",
     "username",
     "database",
 }

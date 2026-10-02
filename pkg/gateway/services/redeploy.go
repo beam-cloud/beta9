@@ -48,6 +48,7 @@ func (gws *GatewayService) RedeployWithConfig(ctx context.Context, authInfo *aut
 	if err := mutate(config); err != nil {
 		return nil, err
 	}
+	refreshManagedPostgres(config)
 	if valid, msg := types.ValidateCpuAndMemory(config.Runtime.Cpu, config.Runtime.Memory, gws.appConfig.GatewayService.StubLimits); !valid {
 		return nil, errors.New(msg)
 	}

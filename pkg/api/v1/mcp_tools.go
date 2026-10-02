@@ -223,32 +223,28 @@ func (g *MCPGroup) catalog() []mcpTool {
 			Name:        "create_database",
 			Description: "Create a managed Postgres, Redis, MySQL or MongoDB service on a durable disk. Credentials become secrets; reference them with ${{db.<name>.DATABASE_URL}}.",
 			Schema: schema(props{
-				"kind":         databaseKind,
-				"name":         str(""),
-				"always_on":    boolean(),
-				"size":         str("Disk capacity, e.g. 10Gi"),
-				"cpu":          integer(1000),
-				"memory":       integer(512),
-				"pool":         str("Optional worker pool"),
-				"snapshot_id":  str("Restore an available qcow snapshot into a new database; the source is retained"),
-				"restore_from": str("Postgres source name, including deleted services whose backups are retained"),
-				"restore_time": str("Point-in-time restore target (RFC3339); must lie in database_backups' recovery window"),
-				"username":     str("Original Postgres role when restoring"),
-				"database":     str("Original Postgres database name when restoring"),
+				"kind":        databaseKind,
+				"name":        str(""),
+				"always_on":   boolean(),
+				"size":        str("Disk capacity, e.g. 10Gi"),
+				"cpu":         integer(1000),
+				"memory":      integer(512),
+				"pool":        str("Optional worker pool"),
+				"snapshot_id": str("Restore an available qcow snapshot into a new database; the source is retained"),
+				"username":    str("Original Postgres role when restoring a snapshot"),
+				"database":    str("Original Postgres database name when restoring a snapshot"),
 			}, "kind", "name"),
 			Destructive: true,
 			Run:         g.createDatabase,
 		},
 		{Name: "database_credentials", Description: "Connection string and parts for a database service.", Schema: database, Run: g.databaseCredentials},
 		{Name: "database_readiness", Description: "Probe Postgres or Redis through its TLS endpoint with stored credentials (up to five seconds). May wake a serverless database. Repeat while ready=false; error explains the last failure. Pin deployment_id to reject a replaced revision.", Schema: schema(props{"name": str(""), "deployment_id": str("Expected deployment revision")}, "name"), Run: g.databaseReadiness},
-		{Name: "database_backups", Description: "Read native backup inventory, failures, freshness, and the verified Postgres recovery window, even after service deletion. The window advances about every two minutes while data changes, so it trails the newest commit by up to two minutes; a running backup holds it until the backup ends. An idle database's window ends shortly after its last change. A stale observation can still describe usable historical backups.", Schema: name, Run: g.databaseBackups},
-		{Name: "backup_database", Description: "Wake a managed database and take an on-demand native backup. On timeout, inspect database_backups before retrying. Readiness and backup completion are separate states.", Schema: name, Destructive: true, Run: g.backupDatabase},
 		{Name: "rotate_database_credentials", Description: "Rotate a database's password; the database and every app bound to it restart with the new credentials.", Schema: database, Destructive: true, Run: g.rotateDatabase},
 		{
 			Name:        "delete_database",
-			Description: "Delete a database service and its credential secrets. Requires confirm=true.",
+			Description: "Delete a database service, its credential secrets and its durable disk. Requires confirm=true.",
 			Schema:      schema(props{"kind": databaseKind, "name": str(""), "confirm": boolean()}, "kind", "name"),
-			Confirm:     "delete_database removes the service and credentials; its durable disk is retained.",
+			Confirm:     "delete_database removes the service, its credentials and its durable disk.",
 			Run:         g.deleteDatabase,
 		},
 		// storage
@@ -458,6 +454,11 @@ func (g *MCPGroup) redeploy(ctx context.Context, a *auth.AuthInfo, args toolArgs
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err
+	}
+	// Rebuilding a managed database's stub moves it to the current lifecycle.
+	if config, err := d.Stub.UnmarshalConfig(); err == nil && config.EffectiveDatabaseConfig() != nil {
+		res, err := g.gws.RedeployWithConfig(ctx, a, d.Name, func(*types.StubConfigV1) error { return nil })
+		return deployed(res, err, d.Name)
 	}
 	res, err := g.gws.DeployStub(ctx, &pb.DeployStubRequest{StubId: d.Stub.ExternalId, Name: d.Name, Rollout: args.str("rollout")})
 	return deployed(res, err, d.Name)
@@ -727,18 +728,16 @@ func (g *MCPGroup) createDatabase(ctx context.Context, a *auth.AuthInfo, args to
 	ctx, cancel := context.WithTimeout(ctx, databaseCreateTimeout)
 	defer cancel()
 	info, err := g.gws.CreateDatabaseService(ctx, a, types.CreateDatabaseParams{
-		Kind:        args.str("kind"),
-		Name:        args.str("name"),
-		AlwaysOn:    args.boolean("always_on"),
-		Size:        args.str("size"),
-		Cpu:         int64(args.num("cpu", 0)),
-		Memory:      int64(args.num("memory", 0)),
-		Pool:        args.str("pool"),
-		SnapshotID:  args.str("snapshot_id"),
-		RestoreFrom: args.str("restore_from"),
-		RestoreTime: args.str("restore_time"),
-		Username:    args.str("username"),
-		Database:    args.str("database"),
+		Kind:       args.str("kind"),
+		Name:       args.str("name"),
+		AlwaysOn:   args.boolean("always_on"),
+		Size:       args.str("size"),
+		Cpu:        int64(args.num("cpu", 0)),
+		Memory:     int64(args.num("memory", 0)),
+		Pool:       args.str("pool"),
+		SnapshotID: args.str("snapshot_id"),
+		Username:   args.str("username"),
+		Database:   args.str("database"),
 	})
 	if err != nil {
 		return nil, err
@@ -746,18 +745,8 @@ func (g *MCPGroup) createDatabase(ctx context.Context, a *auth.AuthInfo, args to
 	return databaseView(*info), nil
 }
 
-func (g *MCPGroup) databaseBackups(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	return g.gws.DatabaseBackups(ctx, a.Workspace, args.str("name"))
-}
-
 func (g *MCPGroup) databaseReadiness(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.gws.CheckDatabaseReadiness(ctx, a, args.str("name"), args.str("deployment_id"))
-}
-
-func (g *MCPGroup) backupDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	defer cancel()
-	return g.gws.BackupDatabase(ctx, a, args.str("name"))
 }
 
 func (g *MCPGroup) databaseCredentials(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
@@ -820,21 +809,10 @@ func (g *MCPGroup) deleteDatabase(ctx context.Context, a *auth.AuthInfo, args to
 	if _, err := g.database(ctx, a, args.str("kind"), args.str("name")); err != nil {
 		return nil, err
 	}
-	volume, err := g.backendRepo.GetVolume(ctx, a.Workspace.Id, args.str("name")+"-backups")
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
 	if err := g.gws.DeleteDatabaseService(ctx, a, args.str("name")); err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"deleted":                args.str("name"),
-		"kind":                   args.str("kind"),
-		"disk_retained":          true,
-		"disk_name":              args.str("name") + "-data",
-		"backup_volume_retained": volume != nil,
-		"backup_volume_name":     args.str("name") + "-backups",
-	}, nil
+	return map[string]any{"deleted": args.str("name"), "kind": args.str("kind"), "disk_deleted": true}, nil
 }
 
 // --- volumes ---------------------------------------------------------------------------------
@@ -1380,8 +1358,6 @@ func (g *MCPGroup) capabilities(ctx context.Context, a *auth.AuthInfo, _ toolArg
 	out["database_recovery"] = map[string]any{
 		"mode":                        "object-store-flush for new Postgres/Redis; snapshots for legacy disks",
 		"conditional_writes_required": true,
-		"postgres_pitr":               true,
-		"scheduled_redis_backups":     false,
 		"single_machine_failure_rpo_zero_qualified": false,
 	}
 	out["disk_capacity"] = map[string]any{

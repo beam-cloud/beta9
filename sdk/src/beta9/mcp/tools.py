@@ -102,16 +102,14 @@ DATABASE_JOB_DEFINITION: Dict[str, Any] = {
             "memory": {**INTEGER, "description": "Memory MiB; default 512."},
             "pool": STRING,
             "snapshot_id": {**STRING, "description": "Restore into a new disk from this snapshot."},
-            "restore_from": {
+            "username": {
                 **STRING,
-                "description": "Postgres source with retained native backups.",
+                "description": "Original Postgres role when restoring a snapshot.",
             },
-            "restore_time": {
+            "database": {
                 **STRING,
-                "description": "RFC3339 target within its verified recovery window.",
+                "description": "Original Postgres database when restoring a snapshot.",
             },
-            "username": {**STRING, "description": "Original Postgres role when restoring."},
-            "database": {**STRING, "description": "Original Postgres database when restoring."},
         },
         "additionalProperties": False,
     },
