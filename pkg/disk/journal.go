@@ -155,19 +155,9 @@ func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapsho
 func (j *Journal) waitForReleasedHead(ctx context.Context) error {
 	deadline := time.Now().Add(journalLease)
 	for {
-		var data []byte
-		var version string
-		err := retry(ctx, deadline, func(ctx context.Context, _ int) error {
-			var err error
-			data, version, err = j.store.ReadVersion(ctx, j.headKey())
-			return err
-		})
+		head, version, err := j.readHead(ctx, deadline)
 		if err != nil || version == "" {
 			return err
-		}
-		var head journalHead
-		if err := json.Unmarshal(data, &head); err != nil {
-			return fmt.Errorf("decode disk journal: %w", err)
 		}
 		j.head, j.version = head, version
 		if err := j.validate(); err != nil {
@@ -211,6 +201,25 @@ func (j *Journal) validate() error {
 		return fmt.Errorf("disk journal is incomplete")
 	}
 	return nil
+}
+
+// readHead reads the stored head, retrying until the deadline. An empty
+// version means no head has been written.
+func (j *Journal) readHead(ctx context.Context, until time.Time) (journalHead, string, error) {
+	var data []byte
+	var version string
+	err := retry(ctx, until, func(ctx context.Context, _ int) (err error) {
+		data, version, err = j.store.ReadVersion(ctx, j.headKey())
+		return err
+	})
+	var head journalHead
+	if err != nil || version == "" {
+		return head, version, err
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return head, version, fmt.Errorf("decode disk journal: %w", err)
+	}
+	return head, version, nil
 }
 
 func (j *Journal) headKey() string                 { return path.Join(j.prefix, "head.json") }
@@ -543,16 +552,10 @@ func (j *Journal) releaseCommitted(ctx context.Context) {
 	if j.version == "" {
 		return
 	}
-	var data []byte
-	var version string
 	deadline, _ := ctx.Deadline()
-	err := retry(ctx, deadline, func(ctx context.Context, _ int) (err error) {
-		data, version, err = j.store.ReadVersion(ctx, j.headKey())
-		return err
-	})
-	var committed journalHead
-	if err != nil || version != j.version || json.Unmarshal(data, &committed) != nil ||
-		committed.Owner != j.head.Owner || !committed.Expires.After(time.Now()) {
+	committed, version, err := j.readHead(ctx, deadline)
+	if err != nil || version != j.version || committed.Owner != j.head.Owner ||
+		!committed.Expires.After(time.Now()) {
 		return
 	}
 	j.head = committed

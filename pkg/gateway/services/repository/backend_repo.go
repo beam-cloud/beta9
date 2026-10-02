@@ -171,14 +171,7 @@ func (s *BackendRepositoryService) FailDiskSnapshot(ctx context.Context, req *pb
 }
 
 func (s *BackendRepositoryService) failDiskSnapshot(ctx context.Context, req *pb.FailDiskSnapshotRequest) error {
-	if err := authorizeDiskSnapshotWorkspace(ctx, req.WorkspaceId); err != nil {
-		return err
-	}
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
-	if err != nil {
-		return err
-	}
-	snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, req.SnapshotId)
+	workspace, snapshot, err := s.workspaceDiskSnapshot(ctx, req.WorkspaceId, req.SnapshotId)
 	if err != nil {
 		return err
 	}
@@ -225,15 +218,7 @@ func (s *BackendRepositoryService) diskSnapshotDownloadURL(ctx context.Context, 
 	if req == nil {
 		return "", fmt.Errorf("request is required")
 	}
-	if err := authorizeDiskSnapshotWorkspace(ctx, req.WorkspaceId); err != nil {
-		return "", err
-	}
-
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
-	if err != nil {
-		return "", err
-	}
-	snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, req.SnapshotId)
+	_, snapshot, err := s.workspaceDiskSnapshot(ctx, req.WorkspaceId, req.SnapshotId)
 	if err != nil {
 		return "", err
 	}
@@ -260,6 +245,23 @@ func (s *BackendRepositoryService) diskSnapshotDownloadURL(ctx context.Context, 
 		return "", fmt.Errorf("disk snapshot object is unavailable")
 	}
 	return storageClient.StorageClient.GeneratePresignedGetURL(ctx, req.ObjectKey, int64(diskSnapshotURLExpiry.Seconds()), snapshot.BucketName)
+}
+
+// workspaceDiskSnapshot returns a workspace the caller may act for and a
+// snapshot that workspace can read: its own, or another workspace's public one.
+func (s *BackendRepositoryService) workspaceDiskSnapshot(ctx context.Context, workspaceID, snapshotID string) (types.Workspace, *types.DiskSnapshot, error) {
+	if err := authorizeDiskSnapshotWorkspace(ctx, workspaceID); err != nil {
+		return types.Workspace{}, nil, err
+	}
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceID)
+	if err != nil {
+		return types.Workspace{}, nil, err
+	}
+	snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, snapshotID)
+	if err != nil {
+		return types.Workspace{}, nil, err
+	}
+	return workspace, snapshot, nil
 }
 
 func authorizeDiskSnapshotWorkspace(ctx context.Context, workspaceID string) error {

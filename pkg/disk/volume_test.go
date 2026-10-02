@@ -292,17 +292,25 @@ func TestSealPivotsAndPublishes(t *testing.T) {
 	}
 }
 
-// A volume whose journal failed must not seal: its head can hold writes whose
-// flush failed, and a published layer would offer them as a restore point.
-func TestSealRefusesFailedJournal(t *testing.T) {
+// newTestVolumeWithJournal returns a journaled test volume with a written
+// block, so a seal has a layer to cut.
+func newTestVolumeWithJournal(t *testing.T) (*Volume, *fakeQMP, *Journal) {
+	t.Helper()
 	volume, server := newTestVolume(t)
 	server.writtenB.Store(4096)
 	journal, err := OpenJournal(context.Background(), newMemoryJournalStore(), "disk", "owner", "", 1<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	t.Cleanup(func() { journal.Close() })
 	volume.journal = journal
+	return volume, server, journal
+}
+
+// A volume whose journal failed must not seal: its head can hold writes whose
+// flush failed, and a published layer would offer them as a restore point.
+func TestSealRefusesFailedJournal(t *testing.T) {
+	volume, server, journal := newTestVolumeWithJournal(t)
 	journal.Fail(errors.New("block device request failed"))
 
 	if _, _, err := volume.Seal(context.Background(), true); err == nil {
@@ -316,14 +324,7 @@ func TestSealRefusesFailedJournal(t *testing.T) {
 // A journal can fail between a layer's upload and its checkpoint; the caller
 // must be able to tell that the published snapshot never became the disk's.
 func TestMarkPublishedReportsMissedCheckpoint(t *testing.T) {
-	volume, server := newTestVolume(t)
-	server.writtenB.Store(4096)
-	journal, err := OpenJournal(context.Background(), newMemoryJournalStore(), "disk", "owner", "", 1<<30)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer journal.Close()
-	volume.journal = journal
+	volume, _, journal := newTestVolumeWithJournal(t)
 	sealed, _, err := volume.Seal(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)

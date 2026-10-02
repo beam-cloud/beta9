@@ -32,15 +32,9 @@ func startTestBlockExport(t *testing.T, socket string, size int) {
 			}
 			go func() {
 				defer conn.Close()
-				greeting := struct {
-					Magic, Options uint64
-					Flags          uint16
-				}{nbdHandshakeMagic, nbdOptionMagic, 3}
+				greeting := nbdGreeting{nbdHandshakeMagic, nbdOptionMagic, 3}
 				var flags uint32
-				var option struct {
-					Magic        uint64
-					Kind, Length uint32
-				}
+				var option nbdOption
 				if binary.Write(conn, binary.BigEndian, greeting) != nil ||
 					binary.Read(conn, binary.BigEndian, &flags) != nil ||
 					binary.Read(conn, binary.BigEndian, &option) != nil {
@@ -49,10 +43,7 @@ func startTestBlockExport(t *testing.T, socket string, size int) {
 				if _, err := io.CopyN(io.Discard, conn, int64(option.Length)); err != nil {
 					return
 				}
-				export := struct {
-					Size  uint64
-					Flags uint16
-				}{uint64(size), 1 | 4}
+				export := nbdExport{uint64(size), 1 | 4}
 				if binary.Write(conn, binary.BigEndian, export) != nil {
 					return
 				}
@@ -102,18 +93,9 @@ func dialTestNBDClient(t *testing.T, socket string) *testNBDClient {
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
 	conn.SetDeadline(time.Now().Add(2 * journalLease))
-	var greeting struct {
-		Magic, Options uint64
-		Flags          uint16
-	}
-	option := struct {
-		Magic        uint64
-		Kind, Length uint32
-	}{nbdOptionMagic, 1, uint32(len(qsdExportName))}
-	var export struct {
-		Size  uint64
-		Flags uint16
-	}
+	var greeting nbdGreeting
+	option := nbdOption{nbdOptionMagic, 1, uint32(len(qsdExportName))}
+	var export nbdExport
 	require.NoError(t, binary.Read(conn, binary.BigEndian, &greeting))
 	require.NoError(t, binary.Write(conn, binary.BigEndian, uint32(3)))
 	require.NoError(t, binary.Write(conn, binary.BigEndian, option))
