@@ -21,6 +21,8 @@ SOURCE_BLOCK_BYTES = 1 << 20
 SOURCE_IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache"}
 APPLY_LEASE_SECONDS = 180
 TASK_ACTIVE_STATUSES = {"pending", "running", "retry"}
+# Steps whose deploy job or migration task may still change the services.
+IN_FLIGHT_STATUSES = {"running", "submitted"}
 SERVICE_FIELDS = {"type", "deploy", "depends_on", "health_path"}
 JOB_FIELDS = {"job_id", "status", "deployment_id", "stub_id", "task_id", "log_cursor"}
 DATABASE_OPTIONS = {
@@ -155,7 +157,8 @@ def definitions(tools: LocalTools) -> List[Tool]:
                 "description": (
                     "Advance a reviewed plan by one bounded step; repeat until complete. "
                     "Preserves successful steps, checks source changes, and checkpoints in "
-                    "stack.spec. Jobs are never blindly rerun after an uncertain outcome."
+                    "stack.spec. Jobs are never blindly rerun after an uncertain outcome. A "
+                    "newer plan replaces one stopped on a failed or unready service."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -370,18 +373,28 @@ def _operation_state(
     if state.get("plan_id") == plan_id:
         return state
     if state.get("status") == "applying":
-        raise ValueError("another plan is applying")
+        # A plan stopped on a failed or unready service gives way to a newer
+        # one, so a fix never waits on resolving the broken attempt.
+        if state.get("lease_until", 0) > time.time():
+            raise ValueError("another plan is applying")
+        for name, step in state.get("services", {}).items():
+            if step.get("status") in IN_FLIGHT_STATUSES:
+                raise ValueError(
+                    f"another plan is applying {name} ({step['status']}); call stack_apply "
+                    f"with plan {state.get('plan_id')} until it settles, then apply this plan"
+                )
     if planned["base_revision"] and current["revision"] != planned["base_revision"]:
         raise ValueError("stack changed; create a new plan")
     if not planned["base_revision"] and current.get("spec", {}).get("desired"):
         raise ValueError("stack was created by another plan; create a new plan")
 
+    # An unchanged database keeps its progress, failures included: it is never
+    # recreated, and an unresolved outcome still needs stack_resolve.
     previous = state.get("services", {})
     reusable = {
         name: previous[name]
         for name in planned.get("reusable", [])
-        if previous.get(name, {}).get("status") == "complete"
-        and planned["desired"]["services"][name].get("type") == "database"
+        if name in previous and planned["desired"]["services"][name].get("type") == "database"
     }
     return {"plan_id": plan_id, "status": "applying", "services": reusable}
 
@@ -457,7 +470,7 @@ class StackService:
             state.pop("error", None)
         if state["status"] in ("failed", "uncertain"):
             raise ValueError(
-                f"{self.name} requires reconciliation with stack_resolve: {state.get('error')}"
+                f"{self.name} requires stack_resolve or a corrected plan: {state.get('error')}"
             )
 
         if state.get("job_id"):
@@ -477,7 +490,7 @@ class StackService:
         job = result.get("structuredContent", {})
         state.update({key: value for key, value in job.items() if key in JOB_FIELDS})
         if result.get("isError"):
-            state.update(status="uncertain", error=result)
+            state.update(status="uncertain", error=result["content"][0]["text"])
             return
         if job["status"] == "running":
             return
@@ -540,7 +553,9 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
             node = planned["desired"]["services"][service]
             resource = StackService(tools, service, node, step)
             resource.advance(planned, plan_id)
-            if step["status"] == "complete" or (resource.kind == "job" and step.get("task_id")):
+            # A service joins once it exists, ready or not, so a corrected
+            # plan can redeploy it.
+            if step.get("deployment_id") or step.get("task_id") or step["status"] == "complete":
                 added.append(service)
             break
 
@@ -565,7 +580,8 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
         status = state["services"].get(name, {}).get("status", "pending")
         if status in ("failed", "uncertain"):
             return text_result(
-                f"{name} is {status}; inspect it, then call stack_resolve", **current
+                f"{name} is {status}; inspect it, then call stack_resolve or apply a corrected plan",
+                **current,
             )
         if status != "complete":
             return text_result(f"{name} is {status}; call stack_apply again", **current)

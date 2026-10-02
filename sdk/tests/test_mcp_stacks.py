@@ -17,6 +17,9 @@ class FakeStackTools:
         self.stack: Dict[str, Any] = {}
         self.submitted: List[str] = []
         self.failures = 0
+        self.deployed: List[str] = []
+        self.deploy_outcomes: List[str] = []
+        self.ready = True
 
     def remote(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if name == "list_stacks":
@@ -36,18 +39,53 @@ class FakeStackTools:
             return copy.deepcopy(self.stack)
         if name == "database_readiness":
             return {"ready": True}
+        if name == "wait_deployment":
+            if not self.ready:
+                raise RuntimeError("no healthy replica")
+            return {"status": 200}
         raise AssertionError(f"unexpected remote call {name}")
 
     def database_job(self, deploy: Dict[str, Any], key: str) -> Dict[str, Any]:
         self.submitted.append(key)
         if self.failures:
             self.failures -= 1
-            return {"isError": True, "structuredContent": {"job_id": key, "status": "failed"}}
+            return failed(key, "Database job failed")
         return {"structuredContent": {"job_id": key, "status": "accepted", "deployment_id": "d1"}}
+
+    def deploy(self, options: Dict[str, Any], operation: str) -> Dict[str, Any]:
+        key = options["idempotency_key"]
+        self.deployed.append(key)
+        outcome = self.deploy_outcomes.pop(0) if self.deploy_outcomes else "accepted"
+        if outcome == "failed":
+            return failed(key, f"Deploy of {options['name']} failed: build exited with code 1")
+        job = {"job_id": key, "status": outcome}
+        if outcome == "accepted":
+            job["deployment_id"] = f"web-{len(self.deployed)}"
+        return {"structuredContent": job}
+
+
+def failed(key: str, message: str) -> Dict[str, Any]:
+    return {
+        "isError": True,
+        "content": [{"type": "text", "text": message}],
+        "structuredContent": {"job_id": key, "status": "failed"},
+    }
 
 
 def database_stack(tools: FakeStackTools) -> str:
     spec = {"version": 1, "services": {"db": {"type": "database", "deploy": {"kind": "postgres"}}}}
+    return stacks.plan(tools, {"name": "app", "spec": spec})["structuredContent"]["plan_id"]
+
+
+def web_stack(tools: FakeStackTools, image: str) -> str:
+    services = {
+        "db": {"type": "database", "deploy": {"kind": "postgres"}},
+        "web": {
+            "health_path": "/health",
+            "deploy": {"image": image, "env": {"DATABASE_URL": "${{db.db.DATABASE_URL}}"}},
+        },
+    }
+    spec = {"version": 1, "services": services}
     return stacks.plan(tools, {"name": "app", "spec": spec})["structuredContent"]["plan_id"]
 
 
@@ -63,9 +101,9 @@ def test_a_failed_database_service_is_resolved_and_retried(tmp_path):
     plan_id = database_stack(tools)
 
     assert text(stacks.apply(tools, {"plan_id": plan_id})) == (
-        "db is uncertain; inspect it, then call stack_resolve"
+        "db is uncertain; inspect it, then call stack_resolve or apply a corrected plan"
     )
-    with pytest.raises(ValueError, match="requires reconciliation with stack_resolve"):
+    with pytest.raises(ValueError, match="requires stack_resolve .*: Database job failed$"):
         stacks.apply(tools, {"plan_id": plan_id})
 
     resolution = {"plan_id": plan_id, "service": "db", "evidence": "list_databases shows no db"}
@@ -87,3 +125,49 @@ def test_an_accepted_resolution_adds_the_service_to_the_stack(tmp_path):
     assert text(stacks.apply(tools, {"plan_id": plan_id})) == "Stack applied"
     assert tools.stack["apps"] == ["db"]
     assert tools.submitted == [f"stack:{plan_id}:db"]
+
+
+# Retrying a failed build reruns the reviewed source, so the fix for a
+# deterministic failure has to arrive as a new plan.
+def test_a_corrected_plan_replaces_one_stopped_on_a_failed_service(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    tools.deploy_outcomes = ["failed"]
+    broken = web_stack(tools, "web:broken")
+    stacks.apply(tools, {"plan_id": broken})
+    assert text(stacks.apply(tools, {"plan_id": broken})).startswith("web is uncertain")
+
+    fixed = web_stack(tools, "web:fixed")
+    assert text(stacks.apply(tools, {"plan_id": fixed})) == "Stack applied"
+
+    assert tools.submitted == [f"stack:{broken}:db"]  # the database is never recreated
+    assert tools.deployed == [f"stack:{broken}:web", f"stack:{fixed}:web"]
+    assert tools.stack["apps"] == ["db", "web"]
+    with pytest.raises(ValueError, match="create a new plan"):
+        stacks.apply(tools, {"plan_id": broken})
+
+
+def test_a_corrected_plan_replaces_one_waiting_on_an_unready_service(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    tools.ready = False
+    crashing = web_stack(tools, "web:crashing")
+    stacks.apply(tools, {"plan_id": crashing})
+    assert text(stacks.apply(tools, {"plan_id": crashing})).startswith("web is starting")
+    assert tools.stack["apps"] == ["db", "web"]  # deployed, so a new plan may redeploy it
+
+    tools.ready = True
+    fixed = web_stack(tools, "web:fixed")
+    assert text(stacks.apply(tools, {"plan_id": fixed})) == "Stack applied"
+    assert tools.deployed == [f"stack:{crashing}:web", f"stack:{fixed}:web"]
+
+
+def test_a_plan_with_a_deploy_in_flight_is_not_replaced(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    tools.deploy_outcomes = ["running"]
+    first = web_stack(tools, "web:first")
+    stacks.apply(tools, {"plan_id": first})
+    assert text(stacks.apply(tools, {"plan_id": first})).startswith("web is running")
+
+    second = web_stack(tools, "web:second")
+    with pytest.raises(ValueError, match=f"applying web \\(running\\).* plan {first}"):
+        stacks.apply(tools, {"plan_id": second})
+    assert tools.deployed == [f"stack:{first}:web"]
