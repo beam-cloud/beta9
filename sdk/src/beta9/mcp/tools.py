@@ -521,6 +521,12 @@ class DeployJob:
             "log_file": str(self.log_path) if self.log_path else None,
             **self.deployed,
         }
+        if self.status == "accepted" and not self.deployed.get("deployment_id"):
+            text = (
+                f"Task {self.deployed.get('task_id')} submitted for {self.name}. "
+                "Use get_task for its status and result, and logs with task_id for its output."
+            )
+            return text_result(text, **view)
         if self.status == "accepted":
             where = f" at {self.deployed['url']}" if self.deployed.get("url") else ""
             check = "wait_deployment with an application health path"
@@ -832,7 +838,9 @@ class LocalTools:
         items = []
         for path in paths[:100]:
             job = DeployJob.load(path)
-            items.append({"job_id": job.id, "name": job.name, "status": job.status, **job.deployed})
+            # deploy_status carries the build log; a listing of 100 jobs must stay small.
+            deployed = {k: v for k, v in job.deployed.items() if k != "deployment"}
+            items.append({"job_id": job.id, "name": job.name, "status": job.status, **deployed})
 
         return text_result("Local deployment jobs", items=items)
 

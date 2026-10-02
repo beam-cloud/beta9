@@ -255,6 +255,15 @@ def test_deploy_tool_maps_empty_ports_to_a_worker(settings, local_tools, monkeyp
     assert "Deployment accepted for worker (deployment d)" in body["content"][0]["text"]
 
 
+def test_run_tool_points_at_its_task(settings, local_tools, monkeypatch, tmp_path):
+    cli = fake_cli(tmp_path, 'printf \'{"container_id":"c","task_id":"t1","stub_id":"s"}\\n\'')
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+
+    body = local_tools.run({"name": "once", "entrypoint": ["true"], "wait_seconds": 10})
+
+    assert body["content"][0]["text"].startswith("Task t1 submitted for once. Use get_task")
+
+
 def test_deploy_tool_surfaces_cli_failure(settings, local_tools, monkeypatch, tmp_path):
     # Machine mode prints the cause as a pretty-printed object, then a generic one.
     cli = fake_cli(
@@ -399,6 +408,18 @@ def test_reusing_the_key_of_a_failed_job_that_deployed_does_not_redeploy(
     assert first["isError"] is True and second["isError"] is True
     assert second["structuredContent"]["deployment_id"] == "d3"
     assert runs.read_text() == "x"
+
+
+def test_listed_jobs_name_their_deployment_without_its_build_log(
+    two_profiles, local_tools, tmp_path
+):
+    helper = "import json; print(json.dumps({'deployment_id': 'd4', 'logs': ['x' * 4096]}))"
+    local_tools.start_command("app", str(tmp_path), [sys.executable, "-c", helper], "k-list", 30)
+
+    [job] = local_tools.list_jobs({})["structuredContent"]["items"]
+
+    assert job["deployment_id"] == "d4"
+    assert "deployment" not in job
 
 
 def test_job_results_show_the_same_fields_as_text(two_profiles, local_tools, tmp_path):
