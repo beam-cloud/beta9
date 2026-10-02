@@ -338,6 +338,63 @@ func shortLease(t *testing.T, lease time.Duration) {
 	t.Cleanup(func() { journalLease = previous })
 }
 
+// shortRoomWait shrinks how long a full journal holds a write.
+func shortRoomWait(t *testing.T, wait time.Duration) {
+	t.Helper()
+	previous := journalRoomWait
+	journalRoomWait = wait
+	t.Cleanup(func() { journalRoomWait = previous })
+}
+
+// A full journal holds writes until a checkpoint makes room rather than
+// failing the disk, but never holds a seal: its freeze flushes through here.
+func TestJournalFullWaitsForACheckpoint(t *testing.T) {
+	ctx := context.Background()
+	write := journalRecord(t, 0, "wal")
+	store := newMemoryJournalStore()
+	seedJournalBacklog(t, store, "disk", journalMaxBytes)
+	journal, err := OpenJournal(ctx, store, "disk", "owner", "", 1<<30)
+	require.NoError(t, err)
+	defer journal.Close()
+
+	waitForRoom := func() chan error {
+		waited := make(chan error, 1)
+		go func() { waited <- journal.WaitForRoom(len(write)) }()
+		select {
+		case err := <-waited:
+			t.Fatalf("a write past the limit must wait, got %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+		return waited
+	}
+
+	waited := waitForRoom()
+	journal.Sealing(true)
+	require.NoError(t, <-waited, "a seal must pass a full journal")
+	require.NoError(t, journal.Commit(ctx, write))
+	journal.Sealing(false)
+
+	waited = waitForRoom()
+	_, sequence, _ := journal.State()
+	require.NoError(t, journal.Checkpoint(ctx, sequence, "snap-1"))
+	require.NoError(t, <-waited)
+	require.NoError(t, journal.Commit(ctx, write))
+}
+
+// Recovery accepts any backlog a seal can leave, and not even a seal takes it
+// further.
+func TestJournalSealCannotPassTheCeiling(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	seedJournalBacklog(t, store, "disk", journalSealFactor*journalMaxBytes)
+	journal, err := OpenJournal(ctx, store, "disk", "owner", "", 1<<30)
+	require.NoError(t, err)
+	defer journal.Close()
+
+	journal.Sealing(true)
+	require.Error(t, journal.Commit(ctx, journalRecord(t, 0, "wal")))
+}
+
 func journalRecord(t *testing.T, offset uint64, payload string) []byte {
 	t.Helper()
 	var records bytes.Buffer

@@ -1393,6 +1393,24 @@ func TestQcowUploadChunksSkipsChunksKnownToTheChain(t *testing.T) {
 	require.Len(t, full.Chunks, 3)
 }
 
+// Writers wait on a backlogged journal's checkpoint, so it publishes its small
+// layer instead of the whole flattened disk, but stops deferring well before
+// the chain gets too long to attach.
+func TestFlattenQcowChainDefersWhileBacklogged(t *testing.T) {
+	for _, tc := range []struct {
+		depth      int
+		backlogged bool
+		flatten    bool
+	}{
+		{disk.DefaultFlattenDepth - 2, false, false},
+		{disk.DefaultFlattenDepth - 1, false, true},
+		{disk.DefaultFlattenDepth - 1, true, false},
+		{disk.DefaultMaxChainDepth/2 - 1, true, true},
+	} {
+		require.Equal(t, tc.flatten, flattenQcowChain(tc.depth, tc.backlogged), "depth %d backlogged %v", tc.depth, tc.backlogged)
+	}
+}
+
 func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing.T) {
 	source := t.TempDir()
 	payload := []byte(strings.Repeat("parallel restore ", durableDiskRestoreConcurrency))

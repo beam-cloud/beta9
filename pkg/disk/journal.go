@@ -27,14 +27,22 @@ import (
 // shorten it.
 var journalLease = 60 * time.Second
 
+// journalRoomWait bounds how long a write waits for a checkpoint to make room
+// in a full journal before the journal fails. Tests shorten it.
+var journalRoomWait = 2 * time.Minute
+
 const (
-	journalTimeout            = 10 * time.Second // one store round trip
-	journalRetryDelay         = 100 * time.Millisecond
-	journalRetryMaxDelay      = time.Second
+	journalTimeout       = 10 * time.Second // one store round trip
+	journalRetryDelay    = 100 * time.Millisecond
+	journalRetryMaxDelay = time.Second
+	// Writes that would take the backlog past the max limits wait for a
+	// checkpoint (see WaitForRoom). A seal's freeze cannot wait, so it may take
+	// the backlog up to journalSealFactor times the limits.
 	journalMaxBytes           = 512 << 20
 	journalCheckpointBytes    = 128 << 20
 	journalMaxSegments        = 16384
 	journalCheckpointSegments = 4096
+	journalSealFactor         = 2
 	journalReplayConcurrency  = 16
 )
 
@@ -117,6 +125,8 @@ type Journal struct {
 	version    string
 	held       bool // a head naming this owner has committed
 	failed     error
+	sealing    bool
+	room       *sync.Cond // wakes writers waiting for the backlog to shrink
 	cancel     context.CancelFunc
 	done       chan struct{}
 	checkpoint chan struct{}
@@ -130,6 +140,7 @@ func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapsho
 		store: store, prefix: prefix, done: make(chan struct{}), checkpoint: make(chan struct{}, 1),
 		head: journalHead{Version: 1, Size: size, Snapshot: snapshot, Formatted: snapshot != ""},
 	}
+	j.room = sync.NewCond(&j.mu)
 	if err := j.waitForReleasedHead(ctx); err != nil {
 		return nil, err
 	}
@@ -191,13 +202,13 @@ func (j *Journal) validate() error {
 		if segment.Sequence != next || err != nil || len(digest) != sha256.Size || segment.Bytes <= 0 {
 			return fmt.Errorf("invalid disk journal segment %d", next)
 		}
-		if segment.Bytes > journalMaxBytes-pending {
+		if segment.Bytes > journalSealFactor*journalMaxBytes-pending {
 			return fmt.Errorf("disk journal exceeds its recovery limit")
 		}
 		pending += segment.Bytes
 		next++
 	}
-	if next-1 != j.head.Sequence || len(j.head.Segments) > journalMaxSegments {
+	if next-1 != j.head.Sequence || len(j.head.Segments) > journalSealFactor*journalMaxSegments {
 		return fmt.Errorf("disk journal is incomplete")
 	}
 	return nil
@@ -233,6 +244,7 @@ func (j *Journal) persist(ctx context.Context) error {
 	}
 	if err := j.writeHead(ctx, false); err != nil {
 		j.failed = fmt.Errorf("disk ownership or persistence lost: %w", err)
+		j.room.Broadcast()
 		return j.failed
 	}
 	return nil
@@ -328,6 +340,7 @@ func (j *Journal) Fail(err error) {
 	if j.failed == nil {
 		j.failed = err
 	}
+	j.room.Broadcast()
 }
 
 func (j *Journal) Initialized() bool {
@@ -370,6 +383,58 @@ func (j *Journal) needsCheckpoint() bool {
 	return pending >= journalCheckpointBytes || len(j.head.Segments) >= journalCheckpointSegments
 }
 
+// full reports whether a write of n bytes would take the backlog past factor
+// times its limits.
+func (j *Journal) full(n, factor int) bool {
+	for _, segment := range j.head.Segments {
+		n += segment.Bytes
+	}
+	return n > factor*journalMaxBytes || len(j.head.Segments) >= factor*journalMaxSegments
+}
+
+// WaitForRoom holds a write of n bytes for as long as it would take the
+// backlog past its limits, until a checkpoint makes room. A seal is let
+// through: its freeze flushes the filesystem through the journal and cannot
+// finish while those writes wait. A journal still full after journalRoomWait
+// fails.
+func (j *Journal) WaitForRoom(n int) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.failed != nil || j.sealing || !j.full(n, 1) {
+		return j.failed
+	}
+	j.requestCheckpoint()
+	start, expired := time.Now(), false
+	timer := time.AfterFunc(journalRoomWait, func() {
+		j.mu.Lock()
+		expired = true
+		j.mu.Unlock()
+		j.room.Broadcast()
+	})
+	defer timer.Stop()
+	for j.failed == nil && !j.sealing && j.full(n, 1) {
+		if expired {
+			j.failed = fmt.Errorf("disk checkpoint backlog exceeded its recovery limit")
+			break
+		}
+		j.room.Wait()
+	}
+	if j.failed == nil {
+		log.Info().Str("disk", j.prefix).Dur("waited", time.Since(start)).
+			Msg("disk writes waited for a checkpoint to shrink the journal")
+	}
+	return j.failed
+}
+
+// Sealing brackets a seal's freeze and pivot. While it lasts, writes past the
+// limits proceed, since the freeze flushes the filesystem through the journal.
+func (j *Journal) Sealing(active bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.sealing = active
+	j.room.Broadcast()
+}
+
 func (j *Journal) requestCheckpoint() {
 	if !j.needsCheckpoint() {
 		return
@@ -391,12 +456,9 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 	if len(records) == 0 {
 		return j.persist(ctx)
 	}
-	pending := len(records)
-	for _, segment := range j.head.Segments {
-		pending += segment.Bytes
-	}
-	if pending > journalMaxBytes || len(j.head.Segments) >= journalMaxSegments {
+	if j.full(len(records), journalSealFactor) {
 		j.failed = fmt.Errorf("disk checkpoint backlog exceeded its recovery limit")
+		j.room.Broadcast()
 		return j.failed
 	}
 
@@ -521,6 +583,7 @@ func (j *Journal) Checkpoint(ctx context.Context, sequence uint64, snapshot stri
 		}
 	}
 	j.head.Snapshot, j.head.Checkpoint, j.head.Segments = snapshot, sequence, retained
+	defer j.room.Broadcast()
 	return j.persist(ctx)
 }
 
@@ -539,6 +602,7 @@ func (j *Journal) Close() error {
 	}
 	err := j.writeHead(ctx, true)
 	j.failed = errors.New("disk journal is closed")
+	j.room.Broadcast()
 	return err
 }
 

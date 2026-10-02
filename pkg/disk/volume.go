@@ -108,6 +108,10 @@ func (v *Volume) ExportSocket() string { return v.state.ExportSocket }
 // nothing about the journal's health; Check does.
 func (v *Volume) Journaled() bool { return v.journal != nil }
 
+// Backlogged reports whether the volume's journal holds enough writes to want
+// a checkpoint.
+func (v *Volume) Backlogged() bool { return v.journal != nil && v.journal.NeedsCheckpoint() }
+
 // Check reports why the volume's journal stopped committing writes. From
 // then on nothing may be sealed or published: the head can hold writes whose
 // flush failed, and the journal can no longer checkpoint a published layer.
@@ -526,6 +530,10 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	if err := client.addOverlay(ctx, newNode, qsdFileNodePrefix+newNode, newHeadPath); err != nil {
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, fmt.Errorf("add overlay for volume %s: %w", state.Key, err)
+	}
+	if v.journal != nil {
+		v.journal.Sealing(true)
+		defer v.journal.Sealing(false)
 	}
 	thaw, err := v.quiesce(ctx)
 	if err != nil {

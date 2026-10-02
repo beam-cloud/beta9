@@ -251,6 +251,9 @@ func (p *journalNBD) flush() error {
 	if p.pending.Len() == 0 {
 		return nil
 	}
+	if err := p.journal.WaitForRoom(p.pending.Len()); err != nil {
+		return err
+	}
 	// The commit retries until the lease lapses; the kernel's request timeout
 	// is longer still, so a slow store stalls this flush rather than failing it.
 	ctx, cancel := context.WithTimeout(context.Background(), journalLease)

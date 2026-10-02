@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // nbdDevice is an attached kernel NBD device. The flock is held for the whole
@@ -27,6 +30,10 @@ const (
 	// nbdBlockSize is the device block size requested from nbd-client.
 	nbdBlockSize = 4096
 	sectorSize   = 512
+	// nbdSendBuffer holds every request the kernel can have in flight on a
+	// connection (128 tags of max_sectors_kb, 128 KiB) with room to spare. The
+	// kernel doubles the requested size.
+	nbdSendBuffer = 32 << 20
 )
 
 // acquireNBDDevice picks a free /dev/nbdN, locks it, and connects it to the
@@ -221,9 +228,10 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 	// a worker pod disappears. The ioctl client owns the connection for its
 	// lifetime, so a dead server or pod releases the kernel device as well.
 	// The kernel fails the device if one request is outstanding for the
-	// timeout; a journaled flush may legitimately wait a whole lease for a
-	// struggling store, so the timeout must outlast that.
-	timeout := strconv.Itoa(int((journalLease + journalLease/2) / time.Second))
+	// timeout. A journaled flush may legitimately wait for a checkpoint to make
+	// room and then a whole lease for a struggling store, so the timeout must
+	// outlast both.
+	timeout := strconv.Itoa(int((journalRoomWait + journalLease + journalLease/2) / time.Second))
 	_, err := m.run(ctx, m.binaries.NBDClient,
 		"-unix", nbdSocket, "-N", qsdExportName, device.Path,
 		"-b", strconv.Itoa(nbdBlockSize), "-nonetlink", "-timeout", timeout,
@@ -246,8 +254,71 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 		if errors.Is(err, errTimeout) {
 			return fmt.Errorf("%s did not settle at %d bytes within %s", device.Path, expectedSizeBytes, nbdSettleTimeout)
 		}
+		return err
 	}
-	return err
+	if m.execs {
+		if err := widenNBDSendBuffer(device.Path); err != nil {
+			log.Error().Err(err).Str("device", device.Path).
+				Msg("nbd connection keeps the default send buffer; a signal during a blocked send can fail the disk with EIO")
+		}
+	}
+	return nil
+}
+
+// widenNBDSendBuffer lets the kernel queue every in-flight request on the
+// connection without blocking. A send that blocks can be interrupted by a
+// signal to the process submitting the I/O. Kernels without the upstream fix
+// "nbd: fix partial sending" then requeue the half-sent request under a new
+// tag; the server's reply to the old tag lands on another request, and the
+// kernel drops the connection, failing every request with EIO.
+func widenNBDSendBuffer(devicePath string) error {
+	pid, sockets, err := nbdClientSockets("/proc", devicePath)
+	if err != nil {
+		return err
+	}
+	return widenSocketSendBuffers(pid, sockets, nbdSendBuffer)
+}
+
+// nbdClientSockets finds the nbd-client serving devicePath and the socket
+// descriptors it holds.
+func nbdClientSockets(procPath, devicePath string) (int, []int, error) {
+	entries, err := os.ReadDir(procPath)
+	if err != nil {
+		return 0, nil, err
+	}
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join(procPath, entry.Name(), "cmdline"))
+		if err != nil {
+			continue
+		}
+		args := strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")
+		if filepath.Base(args[0]) != "nbd-client" || !slices.Contains(args, devicePath) || slices.Contains(args, "-d") {
+			continue
+		}
+		fdPath := filepath.Join(procPath, entry.Name(), "fd")
+		fds, err := os.ReadDir(fdPath)
+		if err != nil {
+			return 0, nil, fmt.Errorf("list nbd-client %d descriptors: %w", pid, err)
+		}
+		var sockets []int
+		for _, fd := range fds {
+			number, err := strconv.Atoi(fd.Name())
+			if err != nil {
+				continue
+			}
+			if target, err := os.Readlink(filepath.Join(fdPath, fd.Name())); err == nil && strings.HasPrefix(target, "socket:") {
+				sockets = append(sockets, number)
+			}
+		}
+		if len(sockets) > 0 {
+			return pid, sockets, nil
+		}
+	}
+	return 0, nil, fmt.Errorf("no nbd-client holds a socket for %s", devicePath)
 }
 
 func (m *Manager) disconnectNBDDevice(ctx context.Context, device *nbdDevice) error {

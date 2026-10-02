@@ -341,12 +341,15 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 		if !journal.NeedsCheckpoint() && time.Since(lastCheckpoint) < databaseCheckpointInterval {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
+		// Writers wait on this checkpoint once the journal fills, so a large
+		// publish runs as long as it keeps making progress.
+		started := time.Now()
+		ctx, stopWatchdog := withDurableDiskInactivityWatchdog(s.ctx, durableDiskSnapshotInactivityTimeout)
 		err := withDurableDiskLock(ctx, mount, func() error {
 			_, err := s.snapshotQcowDurableDiskMount(ctx, request, mount, durableDiskSyncExplicit)
 			return err
 		})
-		cancel()
+		stopWatchdog()
 		if err != nil {
 			log.Error().Err(err).Str("disk", mount.DurableDisk.Name).Dur("retry_in", backoff).
 				Msg("database checkpoint failed; committed journal retained")
@@ -354,6 +357,8 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 			backoff = min(backoff*2, databaseCheckpointRetryMax)
 			continue
 		}
+		log.Info().Str("disk", mount.DurableDisk.Name).Int("journal_bytes", pending).
+			Dur("duration", time.Since(started)).Msg("database checkpoint published")
 		lastCheckpoint, retryAfter, backoff = time.Now(), time.Time{}, 30*time.Second
 	}
 }
@@ -738,6 +743,18 @@ func (s *Worker) latestQcowSnapshotRow(ctx context.Context, request *types.Conta
 	return durableDiskSnapshotFromProto(resp.Snapshot), nil
 }
 
+// flattenQcowChain reports whether a publish at this published chain depth
+// uploads the whole flattened chain instead of the sealed layer. A backlogged
+// journal keeps growing until the publish lands, so it publishes the small
+// layer and defers the flatten, though never past half the chain attach
+// accepts.
+func flattenQcowChain(depth int, backlogged bool) bool {
+	if depth+1 < disk.DefaultFlattenDepth {
+		return false
+	}
+	return !backlogged || depth+1 >= disk.DefaultMaxChainDepth/2
+}
+
 // publishQcowLayer uploads one sealed layer (or its flattened chain when the
 // published chain is deep) plus its manifest, then creates the repository row.
 // The manifest upload is the durability boundary, mirroring the dir.v1 driver.
@@ -745,7 +762,7 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	depth := len(s.qcowChain(s.qcowVolumeKey(request, mount)))
 
 	uploadPath := sealedPath
-	if parentID != "" && depth+1 >= disk.DefaultFlattenDepth {
+	if parentID != "" && flattenQcowChain(depth, volume.Backlogged()) {
 		// Publish a parentless flattened generation so restore chains stay
 		// short. The local chain is untouched; only the artifact differs.
 		flatPath := sealedPath + ".flat"

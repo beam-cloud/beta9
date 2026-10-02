@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -339,20 +340,20 @@ func TestMarkPublishedReportsMissedCheckpoint(t *testing.T) {
 	}
 }
 
-// A journal recovered at its hard limit can be checkpointed only before its
-// disk takes a write. The first write fails the journal, a failed journal
-// never seals, and the refused write leaves the backlog where it was, so every
-// later attachment whose database writes first fails the same way.
-func TestJournalAtItsLimitCheckpointsOnlyBeforeWriting(t *testing.T) {
+// A journal recovered at its limit holds the first write until a checkpoint
+// makes room. Without one the write fails the journal, a failed journal never
+// seals, and the backlog survives for the next attachment to checkpoint.
+func TestJournalAtItsLimitWaitsForACheckpoint(t *testing.T) {
 	ctx := context.Background()
 	write := journalRecord(t, 0, "wal")
 
-	t.Run("writing first", func(t *testing.T) {
+	t.Run("never checkpointed", func(t *testing.T) {
+		shortRoomWait(t, 20*time.Millisecond)
 		store := newMemoryJournalStore()
 		seedJournalBacklog(t, store, "disk", journalMaxBytes)
 		volume, _, journal := newTestVolumeWithJournal(t, store)
-		if err := journal.Commit(ctx, write); err == nil {
-			t.Fatal("a write past the recovery limit must fail the journal")
+		if err := journal.WaitForRoom(len(write)); err == nil {
+			t.Fatal("a write no checkpoint makes room for must fail the journal")
 		}
 		if _, _, err := volume.Seal(ctx, true); err == nil {
 			t.Fatal("a failed journal must not seal")
@@ -366,9 +367,6 @@ func TestJournalAtItsLimitCheckpointsOnlyBeforeWriting(t *testing.T) {
 		defer next.Close()
 		if !next.NeedsCheckpoint() {
 			t.Fatal("the backlog must outlive the refused write")
-		}
-		if err := next.Commit(ctx, write); err == nil {
-			t.Fatal("the next attachment's first write must fail the same way")
 		}
 	})
 
