@@ -49,6 +49,11 @@ const (
 	// holds every acknowledged write, and a crash-looping database would
 	// otherwise add a generation on every restart.
 	durableDiskSyncFailed
+	// A database checkpoint publishes the layers its failed attempts sealed
+	// before it seals another; sealing on every retry would walk a long
+	// publishing outage to the chain depth cap. The disk's journal keeps every
+	// newer write. Only checkpointDatabaseDisk uses it.
+	durableDiskSyncCheckpoint
 )
 
 type durableDiskProgressEvent struct {

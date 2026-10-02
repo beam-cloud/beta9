@@ -317,8 +317,8 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 	defer ticker.Stop()
 	key := s.qcowVolumeKey(request, mount)
 	lastCheckpoint := time.Now()
-	// Each attempt seals a new layer, so failures back off instead of
-	// re-sealing every tick until the publish path recovers.
+	// Failures back off until the publish path recovers, and each retry
+	// publishes what the failed attempts sealed before sealing more.
 	var failedAt time.Time
 	backoff := databaseCheckpointRetryMin
 	for {
@@ -360,7 +360,7 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 		started := time.Now()
 		ctx, stopWatchdog := withDurableDiskInactivityWatchdog(s.ctx, durableDiskSnapshotInactivityTimeout)
 		err := withDurableDiskLock(ctx, mount, func() error {
-			_, err := s.snapshotQcowDurableDiskMount(ctx, request, mount, durableDiskSyncExplicit)
+			_, err := s.snapshotQcowDurableDiskMount(ctx, request, mount, durableDiskSyncCheckpoint)
 			return err
 		})
 		stopWatchdog()
@@ -682,13 +682,19 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 	// on the final sync: the last generation is already durable, and a stop
 	// that follows a terminal checkpoint would otherwise publish an empty
 	// layer every time, doubling the chain depth each restore has to resolve.
-	sealed, skipped, err := volume.Seal(ctx, latest == nil)
-	if err != nil {
-		return nil, err
+	var sealed []disk.SealedLayer
+	if mode == durableDiskSyncCheckpoint {
+		sealed = volume.Unpublished()
 	}
-	if skipped {
-		log.Debug().Str("disk", mount.DurableDisk.Name).Msg("qcow durable disk is unchanged; keeping the last generation")
-		return latest, nil
+	if len(sealed) == 0 {
+		var skipped bool
+		if sealed, skipped, err = sealQcowVolume(ctx, volume, latest == nil); err != nil {
+			return nil, err
+		}
+		if skipped {
+			log.Debug().Str("disk", mount.DurableDisk.Name).Msg("qcow durable disk is unchanged; keeping the last generation")
+			return latest, nil
+		}
 	}
 
 	parentID := sealed[0].ParentSnapshotID
@@ -718,6 +724,20 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		}
 	}
 	return published, nil
+}
+
+// sealQcowVolume seals the volume, compacting first when its chain is at the
+// depth cap: compaction follows each publish, so nothing else would retry the
+// failed ones that left it there.
+func sealQcowVolume(ctx context.Context, volume *disk.Volume, force bool) ([]disk.SealedLayer, bool, error) {
+	sealed, skipped, err := volume.Seal(ctx, force)
+	if !errors.Is(err, disk.ErrMaxChainDepth) {
+		return sealed, skipped, err
+	}
+	if err := volume.Compact(ctx); err != nil {
+		return nil, false, err
+	}
+	return volume.Seal(ctx, force)
 }
 
 const qcowSnapshotWithdrawTimeout = 30 * time.Second

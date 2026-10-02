@@ -139,7 +139,7 @@ func (v *Volume) Changed() bool {
 	v.mu.Lock()
 	pending, thawed := len(v.state.Pending) > 0, v.thawed
 	v.mu.Unlock()
-	_, written := v.journal.FirstAfter(thawed)
+	_, written := v.journal.firstAfter(thawed)
 	return pending || written
 }
 
@@ -534,7 +534,7 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	}
 
 	if state.depth() >= v.manager.maxChainDepth {
-		return nil, false, fmt.Errorf("volume %s reached the maximum chain depth of %d; compaction is failing or falling behind", state.Key, v.manager.maxChainDepth)
+		return nil, false, fmt.Errorf("volume %s reached the maximum chain depth of %d: %w", state.Key, v.manager.maxChainDepth, ErrMaxChainDepth)
 	}
 
 	// Pre-create the empty overlay, then record the intent before asking the
@@ -602,14 +602,36 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	v.fmtNode = newNode
 	v.freshHead = true
 	if v.journal != nil {
-		// Thawing the host-mounted ext4 rewrites its superblock before any
-		// writer resumes, so the first commit after the seal is the thaw's.
+		// Thawing the host-mounted ext4 rewrites its superblock with FUA
+		// before any writer resumes, so the first commit after the seal is
+		// that block alone. A larger one would carry writes, which count.
 		v.thawed = position
-		if first, ok := v.journal.FirstAfter(position); ok && state.exportMode() == ExportNBD {
-			v.thawed = first
+		if first, ok := v.journal.firstAfter(position); ok && state.exportMode() == ExportNBD && first.Bytes <= thawCommitBytes {
+			v.thawed = first.Sequence
 		}
 	}
+	return v.sealedLayers(), false, nil
+}
 
+// thawCommitBytes bounds the journal commit of an ext4 thaw: one record (an
+// 8-byte offset and a 4-byte length) holding the block with the superblock.
+const thawCommitBytes = 12 + 4096
+
+// ErrMaxChainDepth is returned by Seal when the local backing chain is at its
+// cap. Compaction follows a publish, so only failed compactions or publishes
+// leave a chain there, and nothing more seals until it shrinks.
+var ErrMaxChainDepth = errors.New("layers are not being compacted or published")
+
+// Unpublished returns the layers earlier seals left awaiting publication,
+// oldest first, without sealing another.
+func (v *Volume) Unpublished() []SealedLayer {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.sealedLayers()
+}
+
+func (v *Volume) sealedLayers() []SealedLayer {
+	state := v.state
 	sealed := make([]SealedLayer, 0, len(state.Pending))
 	parentID := ""
 	if n := len(state.Chain); n > 0 {
@@ -621,7 +643,7 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		}
 		sealed = append(sealed, SealedLayer{Path: layer.Path, ParentSnapshotID: parentID})
 	}
-	return sealed, false, nil
+	return sealed
 }
 
 // quiesce freezes the head's filesystem for the pivot: host fsfreeze for an

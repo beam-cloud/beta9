@@ -125,26 +125,35 @@ func (c *testNBDClient) request(t *testing.T, command uint16, offset uint64, len
 	return reply.Error
 }
 
+// startTestJournalNBD serves a journal on store through the NBD proxy in front
+// of a size-byte export, and connects to it as the kernel would.
+func startTestJournalNBD(t *testing.T, store *memoryJournalStore, size int) (*testNBDClient, *Journal) {
+	t.Helper()
+	ctx := context.Background()
+	// Unix socket paths are limited to ~104 bytes on macOS; t.TempDir names
+	// can exceed that.
+	dir, err := os.MkdirTemp("", "jnbd")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	upstream, socket := filepath.Join(dir, "qsd.sock"), filepath.Join(dir, "nbd.sock")
+	startTestBlockExport(t, upstream, size)
+
+	journal, err := OpenJournal(ctx, store, "disk", "owner", "", int64(size))
+	require.NoError(t, err)
+	t.Cleanup(func() { journal.Close() })
+	proxy, err := startJournalNBD(ctx, socket, upstream, journal)
+	require.NoError(t, err)
+	t.Cleanup(func() { proxy.Close() })
+	return dialTestNBDClient(t, socket), journal
+}
+
 // The kernel sizes a discard up to the whole disk. It carries no payload, so
 // one past the payload limit must be answered rather than cost the device its
 // connection. Write-zeroes, sized the same way but journaled as data, is not
 // offered.
 func TestJournalNBDAnswersDiskSizedDiscard(t *testing.T) {
-	ctx := context.Background()
-	dir, err := os.MkdirTemp("", "jnbd")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-	upstream, socket := filepath.Join(dir, "qsd.sock"), filepath.Join(dir, "nbd.sock")
 	const size = 2 * nbdMaxRequest
-	startTestBlockExport(t, upstream, size)
-
-	journal, err := OpenJournal(ctx, newMemoryJournalStore(), "disk", "owner", "", size)
-	require.NoError(t, err)
-	defer journal.Close()
-	proxy, err := startJournalNBD(ctx, socket, upstream, journal)
-	require.NoError(t, err)
-	defer proxy.Close()
-	client := dialTestNBDClient(t, socket)
+	client, _ := startTestJournalNBD(t, newMemoryJournalStore(), size)
 	require.Equal(t, uint16(32), client.flags&(32|64), "trim must be offered and write-zeroes not")
 
 	require.Zero(t, client.request(t, nbdCommandTrim, 0, size, nil))
@@ -164,23 +173,8 @@ func TestJournalNBDFlushSurvivesRejectedHeadWrite(t *testing.T) {
 		{name: "rejected head write with a lagging readback", staleReads: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			// Unix socket paths are limited to ~104 bytes on macOS; t.TempDir
-			// names can exceed that.
-			dir, err := os.MkdirTemp("", "jnbd")
-			require.NoError(t, err)
-			defer os.RemoveAll(dir)
-			upstream, socket := filepath.Join(dir, "qsd.sock"), filepath.Join(dir, "nbd.sock")
-			startTestBlockExport(t, upstream, 1<<20)
-
 			store := newMemoryJournalStore()
-			journal, err := OpenJournal(ctx, store, "disk", "owner", "", 1<<20)
-			require.NoError(t, err)
-			defer journal.Close()
-			proxy, err := startJournalNBD(ctx, socket, upstream, journal)
-			require.NoError(t, err)
-			defer proxy.Close()
-			client := dialTestNBDClient(t, socket)
+			client, journal := startTestJournalNBD(t, store, 1<<20)
 
 			block := bytes.Repeat([]byte{7}, 4096)
 			require.Zero(t, client.do(t, nbdCommandWrite, 0, block))

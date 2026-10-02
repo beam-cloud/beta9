@@ -368,13 +368,22 @@ func (j *Journal) State() (snapshot string, sequence uint64, pendingBytes int) {
 
 // backlogAfter sums the uncheckpointed writes committed after sequence.
 func (j *Journal) backlogAfter(sequence uint64) (pending, segments int) {
-	for _, segment := range j.head.Segments {
+	after := j.after(sequence)
+	for _, segment := range after {
+		pending += segment.Bytes
+	}
+	return pending, len(after)
+}
+
+// after returns the uncheckpointed commits after sequence, oldest first.
+// Commits append in sequence order, so they are a suffix of the log.
+func (j *Journal) after(sequence uint64) []journalSegment {
+	for i, segment := range j.head.Segments {
 		if segment.Sequence > sequence {
-			pending += segment.Bytes
-			segments++
+			return j.head.Segments[i:]
 		}
 	}
-	return pending, segments
+	return nil
 }
 
 // Checkpoints wakes the publisher after a burst of writes.
@@ -397,17 +406,14 @@ func (j *Journal) needsCheckpointAfter(sequence uint64) bool {
 	return pending >= journalCheckpointBytes || segments >= journalCheckpointSegments
 }
 
-// FirstAfter returns the sequence of the first uncheckpointed commit after
-// sequence, and false when there is none.
-func (j *Journal) FirstAfter(sequence uint64) (uint64, bool) {
+// firstAfter returns the oldest uncheckpointed commit after sequence.
+func (j *Journal) firstAfter(sequence uint64) (journalSegment, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	for _, segment := range j.head.Segments {
-		if segment.Sequence > sequence {
-			return segment.Sequence, true
-		}
+	if after := j.after(sequence); len(after) > 0 {
+		return after[0], true
 	}
-	return 0, false
+	return journalSegment{}, false
 }
 
 // full reports whether a write of n bytes would take the backlog past its
@@ -617,12 +623,7 @@ func (j *Journal) Checkpoint(ctx context.Context, sequence uint64, snapshot stri
 	if sequence < j.head.Checkpoint || sequence > j.head.Sequence || snapshot == "" {
 		return fmt.Errorf("invalid disk checkpoint position")
 	}
-	retained := make([]journalSegment, 0, len(j.head.Segments))
-	for _, segment := range j.head.Segments {
-		if segment.Sequence > sequence {
-			retained = append(retained, segment)
-		}
-	}
+	retained := append([]journalSegment{}, j.after(sequence)...)
 	j.head.Snapshot, j.head.Checkpoint, j.head.Segments = snapshot, sequence, retained
 	defer j.room.Broadcast()
 	return j.persist(ctx)

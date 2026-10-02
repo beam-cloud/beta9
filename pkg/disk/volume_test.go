@@ -448,18 +448,32 @@ func TestBackloggedCountsWritesSinceTheNewestSeal(t *testing.T) {
 	}
 }
 
+// newThawingVolume returns a journaled volume whose filesystem thaw commits
+// records to the journal, as an ext4 thaw commits its superblock.
+func newThawingVolume(t *testing.T, records []byte) (*Volume, *Journal) {
+	t.Helper()
+	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
+	volume.manager = NewManager(Config{Root: volume.manager.root, Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "fsfreeze" && args[0] == "--unfreeze" {
+			return nil, journal.Commit(ctx, records)
+		}
+		return fakeRunner(ctx, name, args...)
+	}})
+	return volume, journal
+}
+
+// superblockRewrite is the journal record of an ext4 thaw: the 4 KiB block
+// holding the superblock.
+func superblockRewrite(t *testing.T) []byte {
+	return journalRecord(t, 0, strings.Repeat("s", 4096))
+}
+
 // Thawing ext4 rewrites its superblock, so every seal leaves a commit in the
 // journal. Counted as a change, it gave idle databases an empty generation on
 // every checkpoint interval, forever.
 func TestChangedIgnoresTheThawsSuperblockRewrite(t *testing.T) {
 	ctx := context.Background()
-	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
-	volume.manager = NewManager(Config{Root: volume.manager.root, Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name == "fsfreeze" && args[0] == "--unfreeze" {
-			return nil, journal.Commit(ctx, journalRecord(t, 1024, "superblock"))
-		}
-		return fakeRunner(ctx, name, args...)
-	}})
+	volume, journal := newThawingVolume(t, superblockRewrite(t))
 	if err := journal.Commit(ctx, journalRecord(t, 0, "wal")); err != nil {
 		t.Fatal(err)
 	}
@@ -489,6 +503,60 @@ func TestChangedIgnoresTheThawsSuperblockRewrite(t *testing.T) {
 	}
 	if !volume.Changed() {
 		t.Fatal("a write after the thaw is a change")
+	}
+}
+
+// Without FUA the thaw's rewrite would reach the journal in the same commit as
+// the writes after it, and those must not go unpublished.
+func TestChangedCountsAThawCommitCarryingWrites(t *testing.T) {
+	ctx := context.Background()
+	volume, _ := newThawingVolume(t, append(superblockRewrite(t), journalRecord(t, 8192, "wal")...))
+	sealed, _, err := volume.Seal(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := volume.MarkPublished(sealed[0].Path, "snap-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !volume.Changed() {
+		t.Fatal("a thaw commit carrying other writes is a change")
+	}
+}
+
+// Compaction follows a publish, so a chain at the cap needs one before the
+// caller can seal again; the caller has to be able to tell.
+func TestSealAtTheChainDepthCapReportsIt(t *testing.T) {
+	volume, server := newTestVolume(t)
+	server.writtenB.Store(4096)
+	volume.manager.maxChainDepth = volume.Depth()
+
+	if _, _, err := volume.Seal(context.Background(), true); !errors.Is(err, ErrMaxChainDepth) {
+		t.Fatalf("a seal at the cap must report ErrMaxChainDepth, got %v", err)
+	}
+	if server.pivots.Load() != 0 {
+		t.Fatal("a refused seal must not pivot")
+	}
+}
+
+// A retried checkpoint publishes what its failed attempts sealed instead of
+// cutting another layer on every retry.
+func TestUnpublishedLeavesTheHeadAlone(t *testing.T) {
+	volume, server := newTestVolume(t)
+	server.writtenB.Store(4096)
+	if layers := volume.Unpublished(); len(layers) != 0 {
+		t.Fatalf("nothing is sealed yet, got %v", layers)
+	}
+	sealed, _, err := volume.Seal(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	layers := volume.Unpublished()
+	if len(layers) != 1 || layers[0] != sealed[0] {
+		t.Fatalf("expected the sealed layer %v, got %v", sealed, layers)
+	}
+	if server.pivots.Load() != 1 || len(volume.state.Pending) != 1 {
+		t.Fatalf("Unpublished must not seal: pivots=%d pending=%d", server.pivots.Load(), len(volume.state.Pending))
 	}
 }
 
