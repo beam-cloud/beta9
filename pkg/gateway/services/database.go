@@ -168,7 +168,7 @@ var databaseProducts = map[string]databaseProduct{
 	types.DatabaseKindPostgres: {
 		Kind:              types.DatabaseKindPostgres,
 		Image:             "docker.io/library/postgres:16",
-		BuildCommands:     []string{"apt-get update && apt-get install -y --no-install-recommends pgbackrest pgbouncer jq && rm -rf /var/lib/apt/lists/*"},
+		BuildCommands:     []string{"apt-get update && apt-get install -y --no-install-recommends pgbackrest pgbouncer jq eatmydata && rm -rf /var/lib/apt/lists/*"},
 		SecretEnv:         []string{"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"},
 		Port:              5432,
 		PoolPort:          6432,

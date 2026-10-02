@@ -181,7 +181,12 @@ EOF
         mkdir -p "$PGDATA"
         chown postgres:postgres "$PGDATA"
         repository_config /volumes/beam-restore
-        backrest --type=time --target="$BEAM_RESTORE_TIME" --target-action=promote restore
+        # pgBackRest syncs each file it writes, and every sync on the durable
+        # disk is a remote commit: thousands of them for an empty cluster. The
+        # restore is discarded unless it completes, so it syncs once instead.
+        eatmydata gosu postgres pgbackrest --config="$CONFIG" --stanza=db \
+            --type=time --target="$BEAM_RESTORE_TIME" --target-action=promote restore
+        sync -f "$PGDATA"
     fi
 
     # A new cluster is built beside PGDATA and renamed into place only after
