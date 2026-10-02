@@ -315,6 +315,7 @@ class DeployJob:
     pid: int = 0
     context_name: str = DEFAULT_CONTEXT_NAME
     env: Dict[str, str] = field(default_factory=dict)  # for the helper; never saved
+    supervisor: Optional[subprocess.Popen] = field(default=None, repr=False)  # never saved
 
     @property
     def log_path(self) -> Optional[Path]:
@@ -356,6 +357,8 @@ class DeployJob:
         if self.state_path is None or not self.state_path.exists():
             return
 
+        # Polled before reading the record: a supervisor saves its result before it exits.
+        exited = self.supervisor is not None and self.supervisor.poll() is not None
         payload = json.loads(self.state_path.read_text())
         for key, value in payload.items():
             setattr(self, key, value)
@@ -363,6 +366,12 @@ class DeployJob:
             # Ignore an append still in progress; the next poll sees that line.
             content = self.log_path.read_text()
             self.lines = content[: content.rfind("\n") + 1].splitlines()
+        if self.status == "running" and not self.pid and exited:
+            self.status = "failed"
+            self.error = "Job runner exited before starting" + (
+                f": {self.lines[-1]}" if self.lines else ""
+            )
+            self.save()
         if self.status == "running" and self.pid:
             try:
                 os.kill(self.pid, 0)
@@ -388,14 +397,15 @@ class DeployJob:
         self.save()
         # The supervisor owns the CLI pipe and terminal record independently of
         # the MCP client's lifetime. Job files are private to this context.
-        subprocess.Popen(
-            [sys.executable, "-m", "beta9.mcp", str(self.state_path)],
-            env={**os.environ, **self.env},
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        with open(self.log_path, "a", opener=_private_file) as log:
+            self.supervisor = subprocess.Popen(
+                [sys.executable, "-m", "beta9.mcp", str(self.state_path)],
+                env={**os.environ, **self.env},
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=log,
+                start_new_session=True,
+            )
 
     def _run(self) -> None:
         # Machine mode: errors are JSON objects and prompts fail instead of blocking.
@@ -1050,6 +1060,12 @@ def main() -> None:
     if sys.argv[1] == "create-database":
         # The job supervisor parses the JSON objects printed here; one with an
         # `error` key fails the job with that message.
+        if JOB_CONTEXT_ENV not in os.environ:
+            # Servers older than JOB_CONTEXT_ENV pass only a context name, which
+            # this interpreter would resolve against the wrong config file.
+            message = "This MCP server is older than the installed CLI; restart it in your agent, then retry with the same request_key."
+            print(json.dumps({"error": message}))
+            sys.exit(1)
         try:
             context = ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
             print(json.dumps(call_remote(context, "create_database", json.loads(sys.argv[3]))))
@@ -1062,3 +1078,8 @@ def main() -> None:
         return
 
     DeployJob.load(Path(sys.argv[1]))._run()
+
+
+# MCP servers started before an upgrade still launch jobs as `python -m beta9.mcp.tools`.
+if __name__ == "__main__":
+    main()

@@ -499,7 +499,43 @@ def test_database_helper_process_reports_only_its_result(monkeypatch):
 
     assert helper.returncode == 1
     assert helper.stderr == ""
-    assert json.loads(helper.stdout)["error"].startswith("create_database failed")
+    assert "restart it in your agent" in json.loads(helper.stdout)["error"]
+
+
+def test_jobs_launched_the_way_older_servers_launch_them_still_run(tmp_path):
+    # An MCP server started before an upgrade keeps running `python -m beta9.mcp.tools`.
+    state = tmp_path / "job.json"
+    helper = "import json; print(json.dumps({'deployment_id': 'd1'}))"
+    mcp_tools.DeployJob(
+        id="j1",
+        name="app",
+        directory=str(tmp_path),
+        command=[sys.executable, "-c", helper],
+        state_path=state,
+    ).save()
+    source = str(Path(mcp_tools.__file__).parents[2])
+    path = os.pathsep.join(filter(None, [source, os.environ.get("PYTHONPATH")]))
+
+    subprocess.run(
+        [sys.executable, "-m", "beta9.mcp.tools", str(state)],
+        timeout=60,
+        env={**os.environ, "PYTHONPATH": path},
+        check=True,
+    )
+
+    assert mcp_tools.DeployJob.load(state).status == "accepted"
+
+
+def test_a_job_whose_runner_dies_before_starting_fails_with_its_error(
+    settings, local_tools, monkeypatch, tmp_path
+):
+    runner = fake_cli(tmp_path, "echo 'ModuleNotFoundError: beta9.mcp' >&2; exit 1")
+    monkeypatch.setattr(sys, "executable", str(runner))
+
+    result = local_tools.start_command("app", str(tmp_path), ["true"], "k-dead", 10)
+
+    assert result["structuredContent"]["status"] == "failed"
+    assert result["structuredContent"]["error"].endswith("ModuleNotFoundError: beta9.mcp")
 
 
 def test_deploy_status_returns_new_log_lines_from_cursor(
