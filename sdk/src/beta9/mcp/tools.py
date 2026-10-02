@@ -537,13 +537,11 @@ class DeployJob:
         if self.status in ("failed", "cancelled", "interrupted"):
             view["error"] = self.error
             text = f"Deploy of {self.name} failed: {self.error}"
+            if self.deployed:
+                text += " It was accepted first; reconcile what it created before deploying again."
         else:
             text = f"Deploying {self.name} (job {self.id}, {view['elapsed_seconds']}s). Poll deploy_status with log_cursor={view['log_cursor']}."
-        if view["logs"]:
-            text += "\n\n" + "\n".join(view["logs"])
-        # The text already shows the log lines.
-        result = text_result(text, **{k: v for k, v in view.items() if k != "logs"})
-        result["structuredContent"] = view
+        result = text_result(text, **view)
         if self.status in ("failed", "cancelled", "interrupted"):
             result["isError"] = True
         return result
@@ -748,8 +746,10 @@ class LocalTools:
                 return error_result(
                     "idempotency_key already belongs to a different deployment request"
                 )
-            # An interrupted job may have deployed; only a definite failure is safe to rerun.
-            if job is None or job.status in ("failed", "cancelled"):
+            # Rerun only a job that definitely deployed nothing: an interrupted job
+            # may have deployed, and a failed or cancelled one can still hold an
+            # accepted deployment.
+            if job is None or (job.status in ("failed", "cancelled") and not job.deployed):
                 for leftover in (".log", ".cancel"):
                     state_path.with_suffix(leftover).unlink(missing_ok=True)
                 job = DeployJob(
@@ -963,13 +963,14 @@ class LocalTools:
                 value["isError"] = response.status >= 400
                 return value
         except Exception as exc:
-            result = error_result(str(exc))
-            result["structuredContent"] = {
-                "path": str(destination),
-                "complete": False,
-                "bytes_received": count,
-                "cancelled": cancelled.is_set(),
-            }
+            result = text_result(
+                str(exc),
+                path=str(destination),
+                complete=False,
+                bytes_received=count,
+                cancelled=cancelled.is_set(),
+            )
+            result["isError"] = True
             return result
         finally:
             finished.set()

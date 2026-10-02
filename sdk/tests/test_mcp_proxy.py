@@ -276,7 +276,8 @@ def test_deploy_tool_surfaces_cli_failure(settings, local_tools, monkeypatch, tm
         "Deploy of web failed: insufficient_credits (purchase credits at https://p)"
     )
     assert result["structuredContent"]["logs"] == ["Syncing files..."]  # JSON kept out of the log
-    assert "Syncing files..." not in result["content"][1]["text"]  # shown once, in the text
+    assert "Syncing files..." not in text  # shown once, with the other fields
+    assert json.loads(result["content"][1]["text"]) == result["structuredContent"]
 
 
 @pytest.fixture
@@ -358,7 +359,37 @@ def test_reusing_a_failed_jobs_key_retries_it(two_profiles, local_tools, tmp_pat
     assert first["isError"] is True
     assert second["structuredContent"]["status"] == "accepted"
     assert second["structuredContent"]["job_id"] == first["structuredContent"]["job_id"]
-    assert "connection reset" not in second["content"][0]["text"]
+    assert "connection reset" not in second["structuredContent"]["logs"]
+
+
+def test_reusing_the_key_of_a_failed_job_that_deployed_does_not_redeploy(
+    two_profiles, local_tools, tmp_path
+):
+    runs = tmp_path / "runs"
+    helper = (
+        "import json, pathlib, sys; runs = pathlib.Path(sys.argv[1])\n"
+        "runs.write_text(runs.read_text() + 'x' if runs.exists() else 'x')\n"
+        "print(json.dumps({'deployment_id': 'd3'})); print('health check failed'); sys.exit(1)"
+    )
+    command = [sys.executable, "-c", helper, str(runs)]
+
+    first = local_tools.start_command("app", str(tmp_path), command, "k-deployed", 30)
+    second = local_tools.start_command("app", str(tmp_path), command, "k-deployed", 30)
+
+    assert first["isError"] is True and second["isError"] is True
+    assert second["structuredContent"]["deployment_id"] == "d3"
+    assert runs.read_text() == "x"
+
+
+def test_job_results_show_the_same_fields_as_text(two_profiles, local_tools, tmp_path):
+    helper = "print('step one'); raise SystemExit(1)"
+
+    result = local_tools.start_command(
+        "app", str(tmp_path), [sys.executable, "-c", helper], "k-text", 30
+    )
+
+    assert json.loads(result["content"][1]["text"]) == result["structuredContent"]
+    assert result["structuredContent"]["logs"] == ["step one"]
 
 
 def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch, capsys):
@@ -401,11 +432,15 @@ def test_local_results_show_their_fields_as_text():
 def test_database_helper_process_reports_only_its_result(monkeypatch):
     # A failed job shows the helper's output; nothing but its JSON belongs there.
     monkeypatch.delenv(mcp_tools.JOB_CONTEXT_ENV, raising=False)
+    # The helper imports the same beta9 as this test, installed or not.
+    source = str(Path(mcp_tools.__file__).parents[2])
+    path = os.pathsep.join(filter(None, [source, os.environ.get("PYTHONPATH")]))
     helper = subprocess.run(
         [sys.executable, "-m", "beta9.mcp", "create-database", "default", '{"name": "db"}'],
         capture_output=True,
         text=True,
         timeout=60,
+        env={**os.environ, "PYTHONPATH": path},
     )
 
     assert helper.returncode == 1
