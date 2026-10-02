@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -117,7 +119,7 @@ func TestFinalizeDurableDiskMountsWithCanceledContextReportsFailure(t *testing.T
 func TestDurableDiskProgressRefreshIsAsynchronousAndCoalesced(t *testing.T) {
 	repoClient := &fakeContainerRepoClient{updateStatusStarted: make(chan struct{}, 1)}
 	worker := &Worker{containerRepoClient: repoClient}
-	ctx, stop := worker.durableDiskStoppingProgressContext(context.Background(), "container-progress", time.Hour)
+	ctx, stop := worker.durableDiskStoppingProgressContext(context.Background(), "container-progress", snapshotLeaseEvery(time.Hour))
 
 	started := time.Now()
 	for range 100 {
@@ -139,7 +141,7 @@ func TestDurableDiskProgressRefreshIsAsynchronousAndCoalesced(t *testing.T) {
 func TestDurableDiskProgressRetriesLeaseRefreshAfterTransientFailure(t *testing.T) {
 	repoClient := &fakeContainerRepoClient{updateStatusErrors: []error{errors.New("transient repository failure")}}
 	worker := &Worker{containerRepoClient: repoClient}
-	ctx, stop := worker.durableDiskStoppingProgressContext(context.Background(), "container-progress-retry", 10*time.Millisecond)
+	ctx, stop := worker.durableDiskStoppingProgressContext(context.Background(), "container-progress-retry", snapshotLeaseEvery(10*time.Millisecond))
 	defer stop()
 
 	reportDurableDiskProgress(ctx, durableDiskProgressEvent{logicalBytes: 1})
@@ -161,10 +163,91 @@ func TestDurableDiskProgressRetriesLeaseRefreshAfterTransientFailure(t *testing.
 func TestDurableDiskProgressDoesNotRefreshAStaticStoppingState(t *testing.T) {
 	repoClient := &fakeContainerRepoClient{}
 	worker := &Worker{containerRepoClient: repoClient}
-	_, stop := worker.durableDiskStoppingProgressContext(context.Background(), "container-static", 10*time.Millisecond)
+	_, stop := worker.durableDiskStoppingProgressContext(context.Background(), "container-static", snapshotLeaseEvery(10*time.Millisecond))
 
 	time.Sleep(30 * time.Millisecond)
 	stop()
 
 	require.Empty(t, repoClient.containerStatusUpdates())
+}
+
+// A dead worker cannot renew a journaled disk's lease, so its replacement
+// waits about one journal lease. A live worker renews it while finalization
+// is quiet, so the gateway never starts a replacement the journal would fence.
+func TestJournaledDiskStoppingLeaseRenewsWithoutProgress(t *testing.T) {
+	lease := journaledDiskStoppingLease
+	require.Less(t, 2*lease.refresh, time.Duration(lease.expirySeconds)*time.Second, "one missed renewal must not lapse the lease")
+	require.Less(t, lease.expirySeconds, types.ContainerStateTtlSWhileStopping)
+
+	repoClient := &fakeContainerRepoClient{}
+	worker := &Worker{containerRepoClient: repoClient}
+	lease.refresh = 10 * time.Millisecond
+	_, stop := worker.durableDiskStoppingProgressContext(context.Background(), "container-journaled", lease)
+	require.Eventually(t, func() bool {
+		return len(repoClient.containerStatusUpdates()) >= 2
+	}, time.Second, time.Millisecond)
+	stop()
+
+	for _, update := range repoClient.containerStatusUpdates() {
+		require.Equal(t, string(types.ContainerStatusStopping), update.Status)
+		require.Equal(t, journaledDiskStoppingLease.expirySeconds, update.ExpirySeconds)
+	}
+}
+
+func TestDurableDiskStoppingLeaseIsShortOnlyWhenEveryWritableDiskIsJournaled(t *testing.T) {
+	journaled := types.Mount{MountPath: "/data", DurableDisk: &types.DurableDiskMountConfig{Name: "db", Size: "1Gi", Driver: types.DurableDiskDriverQcow}}
+	snapshot := types.Mount{MountPath: "/files", DurableDisk: &types.DurableDiskMountConfig{Name: "files", Size: "1Gi", Driver: types.DurableDiskDriverSnapshot}}
+	readOnly := types.Mount{MountPath: "/seed", ReadOnly: true, DurableDisk: &types.DurableDiskMountConfig{Name: "seed", Size: "1Gi", Driver: types.DurableDiskDriverSnapshot}}
+
+	for _, test := range []struct {
+		name    string
+		request *types.ContainerRequest
+		want    stoppingLease
+	}{
+		{"journaled database disk", databaseRequest(t, "object-store-flush", journaled), journaledDiskStoppingLease},
+		{"journaled disk beside a read-only disk", databaseRequest(t, "object-store-flush", journaled, readOnly), journaledDiskStoppingLease},
+		{"journaled disk beside a snapshot disk", databaseRequest(t, "object-store-flush", journaled, snapshot), snapshotDiskStoppingLease},
+		{"database without flush durability", databaseRequest(t, "", journaled), snapshotDiskStoppingLease},
+		{"snapshot database disk", databaseRequest(t, "object-store-flush", snapshot), snapshotDiskStoppingLease},
+		{"application disk", &types.ContainerRequest{Mounts: []types.Mount{journaled}}, snapshotDiskStoppingLease},
+		{"no request", nil, snapshotDiskStoppingLease},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, durableDiskStoppingLease(test.request))
+		})
+	}
+}
+
+func TestClearContainerPublishesTheJournaledLease(t *testing.T) {
+	request := databaseRequest(t, "object-store-flush", types.Mount{
+		MountPath:   "/data",
+		DurableDisk: &types.DurableDiskMountConfig{Name: "db", Size: "1Gi", Driver: types.DurableDiskDriverQcow},
+	})
+	repoClient := &fakeContainerRepoClient{}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+	worker.diskManager = disk.NewManager(disk.Config{Root: t.TempDir()})
+
+	worker.clearContainer(request.ContainerId, request, 0, false)
+
+	updates := repoClient.containerStatusUpdates()
+	require.NotEmpty(t, updates)
+	require.Equal(t, string(types.ContainerStatusStopping), updates[0].Status)
+	require.Equal(t, journaledDiskStoppingLease.expirySeconds, updates[0].ExpirySeconds)
+}
+
+func snapshotLeaseEvery(refresh time.Duration) stoppingLease {
+	lease := snapshotDiskStoppingLease
+	lease.refresh = refresh
+	return lease
+}
+
+func databaseRequest(t *testing.T, durability string, mounts ...types.Mount) *types.ContainerRequest {
+	t.Helper()
+	config, err := json.Marshal(types.StubConfigV1{Serving: &types.ServingConfig{
+		Database: &types.DatabaseServingConfig{DurabilityMode: durability},
+	}})
+	require.NoError(t, err)
+	request := &types.ContainerRequest{ContainerId: "container-database", Mounts: mounts}
+	request.Stub.Config = string(config)
+	return request
 }

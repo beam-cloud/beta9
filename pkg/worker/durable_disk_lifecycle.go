@@ -16,6 +16,46 @@ const (
 	durableDiskProgressRefreshInterval = 30 * time.Second
 )
 
+// stoppingLease is how a durable-disk container's STOPPING state outlives its
+// worker. The gateway starts no replacement while it lasts.
+type stoppingLease struct {
+	expirySeconds int64
+	refresh       time.Duration
+	// heartbeat renews on every refresh rather than only after progress.
+	heartbeat bool
+}
+
+// A snapshot disk's long lease keeps its replacement from restoring an older
+// snapshot than the one being published, so it lapses only once progress
+// stops. A journal fences its own writers, so a journaled disk's lease only
+// has to show that its worker is alive: a dead worker's replacement then waits
+// about one journal lease rather than the snapshot disk's lease.
+var (
+	snapshotDiskStoppingLease  = stoppingLease{types.ContainerStateTtlSWhileStopping, durableDiskProgressRefreshInterval, false}
+	journaledDiskStoppingLease = stoppingLease{60, 20 * time.Second, true}
+)
+
+func durableDiskStoppingLease(request *types.ContainerRequest) stoppingLease {
+	if request == nil {
+		return snapshotDiskStoppingLease
+	}
+	journaled := false
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
+		if mount.DurableDisk == nil || mount.ReadOnly {
+			continue
+		}
+		if !journaledDiskMount(request, mount) {
+			return snapshotDiskStoppingLease
+		}
+		journaled = true
+	}
+	if journaled {
+		return journaledDiskStoppingLease
+	}
+	return snapshotDiskStoppingLease
+}
+
 func (s *Worker) durableDiskCleanupContext() context.Context {
 	return context.WithoutCancel(s.durableDiskContext(nil))
 }
@@ -58,11 +98,7 @@ func (s *Worker) finalizeDurableDiskMounts(containerID string, request *types.Co
 
 func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, containerID string, request *types.ContainerRequest, exitCode int, exitReported bool) (finalExitCode int, finalExitReported bool) {
 	finalExitCode, finalExitReported = exitCode, exitReported
-	progressCtx, stopProgress := s.durableDiskStoppingProgressContext(
-		ctx,
-		containerID,
-		durableDiskProgressRefreshInterval,
-	)
+	progressCtx, stopProgress := s.durableDiskStoppingProgressContext(ctx, containerID, durableDiskStoppingLease(request))
 	defer stopProgress()
 
 	_, syncErr := s.syncDurableDiskMounts(progressCtx, request, durableDiskFinalSyncMode(exitCode))
@@ -146,7 +182,8 @@ func durableDiskSyncFailureExitCode(exitCode int) int {
 	return exitCode
 }
 
-func (s *Worker) durableDiskStoppingProgressContext(ctx context.Context, containerID string, refreshInterval time.Duration) (context.Context, func()) {
+func (s *Worker) durableDiskStoppingProgressContext(ctx context.Context, containerID string, lease stoppingLease) (context.Context, func()) {
+	refreshInterval := lease.refresh
 	if refreshInterval <= 0 {
 		refreshInterval = durableDiskProgressRefreshInterval
 	}
@@ -172,7 +209,7 @@ func (s *Worker) durableDiskStoppingProgressContext(ctx context.Context, contain
 		dirty := false
 		first := true
 		refresh := func() {
-			s.refreshDurableDiskStoppingLeaseOnce(containerID)
+			s.refreshDurableDiskStoppingLeaseOnce(containerID, lease.expirySeconds)
 			log.Info().
 				Str("container_id", containerID).
 				Int64("logical_bytes", logicalBytes.Load()).
@@ -193,6 +230,8 @@ func (s *Worker) durableDiskStoppingProgressContext(ctx context.Context, contain
 				if dirty {
 					refresh()
 					dirty = false
+				} else if lease.heartbeat {
+					s.refreshDurableDiskStoppingLeaseOnce(containerID, lease.expirySeconds)
 				}
 			case <-progressCtx.Done():
 				return
@@ -206,7 +245,7 @@ func (s *Worker) durableDiskStoppingProgressContext(ctx context.Context, contain
 	}
 }
 
-func (s *Worker) refreshDurableDiskStoppingLeaseOnce(containerID string) {
+func (s *Worker) refreshDurableDiskStoppingLeaseOnce(containerID string, expirySeconds int64) {
 	if s.containerRepoClient == nil {
 		return
 	}
@@ -215,7 +254,7 @@ func (s *Worker) refreshDurableDiskStoppingLeaseOnce(containerID string) {
 	_, err := handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(ctx, &pb.UpdateContainerStatusRequest{
 		ContainerId:   containerID,
 		Status:        string(types.ContainerStatusStopping),
-		ExpirySeconds: types.ContainerStateTtlSWhileStopping,
+		ExpirySeconds: expirySeconds,
 	}))
 	if err != nil && !(&types.ErrContainerStateNotFound{}).From(err) {
 		log.Debug().Str("container_id", containerID).Err(err).Msg("failed to refresh durable disk finalization lease")

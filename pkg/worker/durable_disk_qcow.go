@@ -197,14 +197,21 @@ func (s *Worker) checkpointRecoveredJournal(ctx context.Context, request *types.
 	}
 }
 
+// journaledDiskMount reports whether a mount is a database disk that commits
+// every flush to its journal.
+func journaledDiskMount(request *types.ContainerRequest, mount *types.Mount) bool {
+	if !isQcowDurableDiskMount(mount) || mount.ReadOnly {
+		return false
+	}
+	config := requestStubConfig(request)
+	return config != nil && config.EffectiveDatabaseConfig() != nil &&
+		config.EffectiveDatabaseConfig().DurabilityMode == "object-store-flush"
+}
+
 // openDatabaseDiskJournal resolves the authoritative head before consulting
 // snapshot caches. Catalog rows published by an old owner cannot override it.
 func (s *Worker) openDatabaseDiskJournal(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, newest *types.DiskSnapshot, size int64) (*disk.Journal, *types.DiskSnapshot, error) {
-	config := requestStubConfig(request)
-	if mount.ReadOnly || config == nil || config.EffectiveDatabaseConfig() == nil {
-		return nil, newest, nil
-	}
-	if config.EffectiveDatabaseConfig().DurabilityMode != "object-store-flush" {
+	if !journaledDiskMount(request, mount) {
 		return nil, newest, nil
 	}
 	if s.runtimeOwnsBlockRoot() {
