@@ -179,14 +179,12 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	return nil
 }
 
-// checkpointRecoveredJournal publishes a recovered backlog before the
-// container starts. A container that fails on its own publishes nothing, so a
-// crash-looping database carries its writes forward in the journal. Once the
-// container runs, a checkpoint races its writes, and at the journal's hard
-// limit the first write fails the journal, which then never seals: every later
-// start would fail the same way. Nothing writes yet, so this checkpoint cannot
-// lose that race. If it fails, the container starts anyway and the running
-// checkpointer retries.
+// checkpointRecoveredJournal publishes the backlog a crash-looping database
+// carried forward in its journal (failed exits publish nothing) before the
+// container can write. At the journal's hard limit the first write fails the
+// journal for good, so a checkpoint racing the running database could lose on
+// every restart. If this one fails, the container starts anyway and the
+// running checkpointer retries.
 func (s *Worker) checkpointRecoveredJournal(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, journal *disk.Journal) {
 	if !journal.NeedsCheckpoint() {
 		return
