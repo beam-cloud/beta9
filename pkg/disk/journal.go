@@ -125,6 +125,7 @@ type Journal struct {
 	failed     error
 	recovering bool
 	sealing    bool
+	waiting    int        // writes held by WaitForRoom
 	room       *sync.Cond // wakes writers waiting for the backlog to shrink
 	cancel     context.CancelFunc
 	done       chan struct{}
@@ -240,11 +241,19 @@ func (j *Journal) persist(ctx context.Context) error {
 		return j.failed
 	}
 	if err := j.writeHead(ctx, false); err != nil {
-		j.failed = fmt.Errorf("disk ownership or persistence lost: %w", err)
-		j.room.Broadcast()
-		return j.failed
+		return j.fail(fmt.Errorf("disk ownership or persistence lost: %w", err))
 	}
 	return nil
+}
+
+// fail records the journal's first failure, which every later write returns,
+// and wakes the writers waiting for room to return it now. Callers hold j.mu.
+func (j *Journal) fail(err error) error {
+	if j.failed == nil {
+		j.failed = err
+	}
+	j.room.Broadcast()
+	return j.failed
 }
 
 // writeHead replaces the head conditionally on the version this journal last
@@ -326,7 +335,7 @@ func (j *Journal) Check() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.failed == nil && time.Now().After(j.head.Expires) {
-		j.failed = fmt.Errorf("disk ownership lease expired")
+		j.fail(fmt.Errorf("disk ownership lease expired"))
 	}
 	return j.failed
 }
@@ -334,10 +343,7 @@ func (j *Journal) Check() error {
 func (j *Journal) Fail(err error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.failed == nil {
-		j.failed = err
-	}
-	j.room.Broadcast()
+	j.fail(err)
 }
 
 func (j *Journal) Initialized() bool {
@@ -356,10 +362,19 @@ func (j *Journal) Initialize(ctx context.Context) error {
 func (j *Journal) State() (snapshot string, sequence uint64, pendingBytes int) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	for _, segment := range j.head.Segments {
-		pendingBytes += segment.Bytes
-	}
+	pendingBytes, _ = j.backlogAfter(0)
 	return j.head.Snapshot, j.head.Sequence, pendingBytes
+}
+
+// backlogAfter sums the uncheckpointed writes committed after sequence.
+func (j *Journal) backlogAfter(sequence uint64) (pending, segments int) {
+	for _, segment := range j.head.Segments {
+		if segment.Sequence > sequence {
+			pending += segment.Bytes
+			segments++
+		}
+	}
+	return pending, segments
 }
 
 // Checkpoints wakes the publisher after a burst of writes.
@@ -378,23 +393,23 @@ func (j *Journal) NeedsCheckpointAfter(sequence uint64) bool {
 }
 
 func (j *Journal) needsCheckpointAfter(sequence uint64) bool {
-	pending, segments := 0, 0
-	for _, segment := range j.head.Segments {
-		if segment.Sequence > sequence {
-			pending += segment.Bytes
-			segments++
-		}
-	}
+	pending, segments := j.backlogAfter(sequence)
 	return pending >= journalCheckpointBytes || segments >= journalCheckpointSegments
 }
 
 // full reports whether a write of n bytes would take the backlog past its
 // limits.
 func (j *Journal) full(n int) bool {
-	for _, segment := range j.head.Segments {
-		n += segment.Bytes
-	}
-	return n > journalMaxBytes || len(j.head.Segments) >= journalMaxSegments
+	pending, segments := j.backlogAfter(0)
+	return n+pending > journalMaxBytes || segments >= journalMaxSegments
+}
+
+// Waiting reports whether writes are held for a checkpoint to make room. They
+// fail the journal if none does within journalRoomWait.
+func (j *Journal) Waiting() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.waiting > 0
 }
 
 // WaitForRoom holds a write of n bytes for as long as it would take the
@@ -410,6 +425,8 @@ func (j *Journal) WaitForRoom(n int) error {
 	if j.failed != nil || j.recovering || j.sealing || !j.full(n) {
 		return j.failed
 	}
+	j.waiting++
+	defer func() { j.waiting-- }()
 	j.requestCheckpoint()
 	start, expired := time.Now(), false
 	timer := time.AfterFunc(journalRoomWait, func() {
@@ -421,7 +438,7 @@ func (j *Journal) WaitForRoom(n int) error {
 	defer timer.Stop()
 	for j.failed == nil && !j.sealing && j.full(n) {
 		if expired {
-			j.failed = fmt.Errorf("disk checkpoints made no room in the journal for %s", journalRoomWait)
+			j.fail(fmt.Errorf("disk checkpoints made no room in the journal for %s", journalRoomWait))
 			break
 		}
 		j.room.Wait()
@@ -433,8 +450,8 @@ func (j *Journal) WaitForRoom(n int) error {
 	return j.failed
 }
 
-// Sealing brackets a seal's freeze and pivot. While it lasts, writes past the
-// limits proceed, since the freeze flushes the filesystem through the journal.
+// Sealing brackets a seal's freeze. While it lasts, writes past the limits
+// proceed, since the freeze flushes the filesystem through the journal.
 func (j *Journal) Sealing(active bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -490,8 +507,7 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 		return j.store.Upload(ctx, j.segmentKey(segment.Digest), compressed.Bytes())
 	})
 	if err != nil {
-		j.failed = fmt.Errorf("persist disk writes: %w", err)
-		return j.failed
+		return j.fail(fmt.Errorf("persist disk writes: %w", err))
 	}
 	j.head.Sequence = segment.Sequence
 	j.head.Segments = append(j.head.Segments, segment)

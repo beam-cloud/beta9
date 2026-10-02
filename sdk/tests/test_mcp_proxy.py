@@ -264,6 +264,19 @@ def test_run_tool_points_at_its_task(settings, local_tools, monkeypatch, tmp_pat
     assert body["content"][0]["text"].startswith("Task t1 submitted for once. Use get_task")
 
 
+def test_run_tool_without_a_task_points_at_its_container(
+    settings, local_tools, monkeypatch, tmp_path
+):
+    cli = fake_cli(tmp_path, 'printf \'{"container_id":"c","task_id":"","stub_id":"s"}\\n\'')
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+
+    body = local_tools.run({"name": "once", "entrypoint": ["true"], "wait_seconds": 10})
+
+    text = body["content"][0]["text"]
+    assert text.startswith("Container c submitted for once without a task.")
+    assert "logs with container_id" in text and "get_task" not in text
+
+
 def test_deploy_tool_surfaces_cli_failure(settings, local_tools, monkeypatch, tmp_path):
     # Machine mode prints the cause as a pretty-printed object, then a generic one.
     cli = fake_cli(

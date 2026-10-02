@@ -301,9 +301,13 @@ func journalStoreKey(storage *types.WorkspaceStorage) string {
 // and restores start from something recent. Every publish is a generation in
 // the disk's snapshot chain, so the floor is deliberately coarse. Failed
 // publishes retry with backoff capped well under the interval: the journal
-// keeps growing toward its hard limit until a checkpoint succeeds.
+// keeps growing toward its limits until a checkpoint succeeds. Writes held at
+// the limits fail the disk unless a checkpoint makes room within the
+// journal's two-minute room wait, so while any are held, retries come at the
+// shortest backoff.
 const (
 	databaseCheckpointInterval = 15 * time.Minute
+	databaseCheckpointRetryMin = 30 * time.Second
 	databaseCheckpointRetryMax = 2 * time.Minute
 )
 
@@ -314,8 +318,8 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 	lastCheckpoint := time.Now()
 	// Each attempt seals a new layer, so failures back off instead of
 	// re-sealing every tick until the publish path recovers.
-	var retryAfter time.Time
-	backoff := 30 * time.Second
+	var failedAt time.Time
+	backoff := databaseCheckpointRetryMin
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -335,8 +339,17 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 			return
 		}
 		_, _, pending := journal.State()
-		if pending == 0 || time.Now().Before(retryAfter) {
+		if pending == 0 {
 			continue
+		}
+		if !failedAt.IsZero() {
+			retry := backoff
+			if journal.Waiting() {
+				retry = databaseCheckpointRetryMin
+			}
+			if time.Since(failedAt) < retry {
+				continue
+			}
 		}
 		if !journal.NeedsCheckpoint() && time.Since(lastCheckpoint) < databaseCheckpointInterval {
 			continue
@@ -351,15 +364,17 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 		})
 		stopWatchdog()
 		if err != nil {
+			if !failedAt.IsZero() {
+				backoff = min(backoff*2, databaseCheckpointRetryMax)
+			}
 			log.Error().Err(err).Str("disk", mount.DurableDisk.Name).Dur("retry_in", backoff).
 				Msg("database checkpoint failed; committed journal retained")
-			retryAfter = time.Now().Add(backoff)
-			backoff = min(backoff*2, databaseCheckpointRetryMax)
+			failedAt = time.Now()
 			continue
 		}
 		log.Info().Str("disk", mount.DurableDisk.Name).Int("journal_bytes", pending).
 			Dur("duration", time.Since(started)).Msg("database checkpoint published")
-		lastCheckpoint, retryAfter, backoff = time.Now(), time.Time{}, 30*time.Second
+		lastCheckpoint, failedAt, backoff = time.Now(), time.Time{}, databaseCheckpointRetryMin
 	}
 }
 
@@ -697,10 +712,7 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 	// merge holds off the next seal, so it runs just after a checkpoint, when
 	// a journal has the most room for the writes that arrive meanwhile.
 	if volume.Depth() > disk.DefaultFlattenDepth {
-		stopHeartbeat := durableDiskPhaseHeartbeat(ctx, durableDiskPhaseHeartbeatInterval)
-		err := volume.Compact(ctx)
-		stopHeartbeat()
-		if err != nil {
+		if err := volume.Compact(ctx); err != nil {
 			log.Warn().Err(err).Str("disk", mount.DurableDisk.Name).Msg("failed to compact qcow backing chain")
 		}
 	}
@@ -898,10 +910,7 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 }
 
 func (s *Worker) uploadFlattenedQcowLayer(ctx context.Context, mount *types.Mount, volume *disk.Volume, store *durableDiskSnapshotBucketStore, key, sealedPath, flatPath string) (*types.DiskSnapshotFile, error) {
-	stopHeartbeat := durableDiskPhaseHeartbeat(ctx, durableDiskPhaseHeartbeatInterval)
-	err := volume.Flatten(ctx, sealedPath, flatPath)
-	stopHeartbeat()
-	if err != nil {
+	if err := volume.Flatten(ctx, sealedPath, flatPath); err != nil {
 		return nil, fmt.Errorf("flatten qcow chain: %w", err)
 	}
 	return s.uploadQcowLayer(ctx, mount, store, key, flatPath)
@@ -911,11 +920,9 @@ func (s *Worker) uploadFlattenedQcowLayer(ctx context.Context, mount *types.Moun
 // chain does not already hold.
 func (s *Worker) uploadQcowLayer(ctx context.Context, mount *types.Mount, store *durableDiskSnapshotBucketStore, key, imagePath string) (*types.DiskSnapshotFile, error) {
 	chunkPrefix := durableDiskChunkPrefix(mount)
-	stopHeartbeat := durableDiskPhaseHeartbeat(ctx, durableDiskPhaseHeartbeatInterval)
-	layer, err := disk.ScanLayer(imagePath, func(digest string) string {
+	layer, err := disk.ScanLayer(ctx, imagePath, func(digest string) string {
 		return path.Join(chunkPrefix, strings.TrimPrefix(digest, "sha256:"))
 	})
-	stopHeartbeat()
 	if err != nil {
 		return nil, fmt.Errorf("scan qcow layer: %w", err)
 	}

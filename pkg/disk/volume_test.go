@@ -28,6 +28,7 @@ type fakeQMP struct {
 	mu          sync.Mutex
 	images      map[string][]string // node -> backing chain filenames, head first
 	failCommits bool
+	commitPolls int // query-jobs polls a commit job reports running before it concludes
 	commits     []fakeCommit
 	job         *fakeJob
 }
@@ -35,8 +36,10 @@ type fakeQMP struct {
 type fakeCommit struct{ device, top, base string }
 
 type fakeJob struct {
-	id  string
-	err string
+	id       string
+	err      string
+	running  int
+	progress int
 }
 
 func newFakeQMP(t *testing.T, socketPath string) *fakeQMP {
@@ -120,7 +123,7 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			_ = json.Unmarshal(request.Arguments, &args)
 			f.mu.Lock()
 			f.commits = append(f.commits, fakeCommit{device: args.Device, top: args.Top, base: args.Base})
-			f.job = &fakeJob{id: args.JobID}
+			f.job = &fakeJob{id: args.JobID, running: f.commitPolls}
 			if f.failCommits {
 				f.job.err = "injected commit failure"
 			} else {
@@ -147,11 +150,21 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			fmt.Fprintf(conn, `{"return":{}}`)
 		case types.QMPCommandQueryJobs:
 			f.mu.Lock()
-			job := f.job
+			var job *fakeJob
+			if f.job != nil {
+				copied := *f.job
+				job = &copied
+				if f.job.running > 0 {
+					f.job.running--
+					f.job.progress++
+				}
+			}
 			f.mu.Unlock()
 			switch {
 			case job == nil:
 				fmt.Fprintf(conn, `{"return":[]}`)
+			case job.running > 0:
+				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"running","current-progress":%d}]}`, job.id, job.progress+1)
 			case job.err != "":
 				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"concluded","error":%q}]}`, job.id, job.err)
 			default:
@@ -349,7 +362,7 @@ func TestJournalAtItsLimitWaitsForACheckpoint(t *testing.T) {
 	write := journalRecord(t, 0, "wal")
 
 	t.Run("never checkpointed", func(t *testing.T) {
-		shortRoomWait(t, 20*time.Millisecond)
+		shorten(t, &journalRoomWait, 20*time.Millisecond)
 		store := newMemoryJournalStore()
 		seedJournalBacklog(t, store, "disk", journalMaxBytes)
 		volume, _, journal := newTestVolumeWithJournal(t, store)
@@ -390,6 +403,32 @@ func TestJournalAtItsLimitWaitsForACheckpoint(t *testing.T) {
 			t.Fatalf("a write after the checkpoint must commit: %v", err)
 		}
 	})
+}
+
+// The bypass that lets a freeze flush past a full journal ends with the
+// freeze: writes after the thaw, even while an uncertain pivot is checked,
+// wait for room like any other.
+func TestSealEndsTheJournalBypassWithTheFreeze(t *testing.T) {
+	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
+	sealing := func() bool {
+		journal.mu.Lock()
+		defer journal.mu.Unlock()
+		return journal.sealing
+	}
+	volume.state.Export = string(ExportVhostUser)
+	volume.state.Mountpoint = ""
+	var duringFreeze, atThaw bool
+	volume.freeze = func(ctx context.Context) (func(), error) {
+		duringFreeze = sealing()
+		return func() { atThaw = sealing() }, nil
+	}
+
+	if _, _, err := volume.Seal(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !duringFreeze || atThaw {
+		t.Fatalf("the bypass must cover the freeze and only the freeze: during=%v at thaw=%v", duringFreeze, atThaw)
+	}
 }
 
 // Writes a seal holds are being published; only newer ones make a volume
@@ -549,6 +588,23 @@ func TestCompactMergesPublishedChainIntoBase(t *testing.T) {
 	}
 	if !fileExists(paths[0]) {
 		t.Fatal("base layer must survive compaction")
+	}
+}
+
+// A live commit uploads nothing, so its job's progress is what tells a
+// caller's watchdog that a long merge is still working.
+func TestCompactReportsCommitProgress(t *testing.T) {
+	volume, server, _ := newCompactVolume(t)
+	server.mu.Lock()
+	server.commitPolls = 3
+	server.mu.Unlock()
+
+	var reports atomic.Int64
+	if err := volume.Compact(WithProgress(context.Background(), func() { reports.Add(1) })); err != nil {
+		t.Fatal(err)
+	}
+	if reports.Load() != 3 {
+		t.Fatalf("each advance of the commit job must report progress once, got %d reports", reports.Load())
 	}
 }
 

@@ -74,7 +74,7 @@ func TestLayerScanUploadFetchRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	layer, err := ScanLayer(sourcePath, chunkKey)
+	layer, err := ScanLayer(context.Background(), sourcePath, chunkKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,11 +153,11 @@ func TestScanLayerChunksSurviveContentShift(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	layerA, err := ScanLayer(pathA, chunkKey)
+	layerA, err := ScanLayer(context.Background(), pathA, chunkKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	layerB, err := ScanLayer(pathB, chunkKey)
+	layerB, err := ScanLayer(context.Background(), pathB, chunkKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestFetchLayerSharesChunkGateAcrossLayers(t *testing.T) {
 	if err := os.WriteFile(sourcePath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	layer, err := ScanLayer(sourcePath, chunkKey)
+	layer, err := ScanLayer(context.Background(), sourcePath, chunkKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestFetchLayerRejectsCorruptChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	layer, err := ScanLayer(sourcePath, chunkKey)
+	layer, err := ScanLayer(context.Background(), sourcePath, chunkKey)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -543,11 +543,16 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, fmt.Errorf("add overlay for volume %s: %w", state.Key, err)
 	}
+	// The freeze flushes every dirty page through the journal and cannot wait
+	// for room; once it returns, nothing writes until the thaw, and writes
+	// after it wait like any other.
 	if v.journal != nil {
 		v.journal.Sealing(true)
-		defer v.journal.Sealing(false)
 	}
 	thaw, err := v.quiesce(ctx)
+	if v.journal != nil {
+		v.journal.Sealing(false)
+	}
 	if err != nil {
 		_ = client.removeNode(ctx, newNode)
 		v.rollbackSeal(previousState, newHeadPath)

@@ -257,7 +257,7 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 		return err
 	}
 	if m.execs {
-		if err := widenNBDSendBuffer(device.Path); err != nil {
+		if err := widenNBDSendBuffer(m.binaries.NBDClient, device.Path); err != nil {
 			log.Error().Err(err).Str("device", device.Path).
 				Msg("nbd connection keeps the default send buffer; a signal during a blocked send can fail the disk with EIO")
 		}
@@ -271,17 +271,17 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 // "nbd: fix partial sending" then requeue the half-sent request under a new
 // tag; the server's reply to the old tag lands on another request, and the
 // kernel drops the connection, failing every request with EIO.
-func widenNBDSendBuffer(devicePath string) error {
-	pid, sockets, err := nbdClientSockets("/proc", devicePath)
+func widenNBDSendBuffer(client, devicePath string) error {
+	pid, sockets, err := nbdClientSockets("/proc", filepath.Base(client), devicePath)
 	if err != nil {
 		return err
 	}
 	return widenSocketSendBuffers(pid, sockets, nbdSendBuffer)
 }
 
-// nbdClientSockets finds the nbd-client serving devicePath and the socket
-// descriptors it holds.
-func nbdClientSockets(procPath, devicePath string) (int, []int, error) {
+// nbdClientSockets finds the process of the configured NBD client binary that
+// serves devicePath, and the socket descriptors it holds.
+func nbdClientSockets(procPath, client, devicePath string) (int, []int, error) {
 	entries, err := os.ReadDir(procPath)
 	if err != nil {
 		return 0, nil, err
@@ -296,13 +296,13 @@ func nbdClientSockets(procPath, devicePath string) (int, []int, error) {
 			continue
 		}
 		args := strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")
-		if filepath.Base(args[0]) != "nbd-client" || !slices.Contains(args, devicePath) || slices.Contains(args, "-d") {
+		if filepath.Base(args[0]) != client || !slices.Contains(args, devicePath) || slices.Contains(args, "-d") {
 			continue
 		}
 		fdPath := filepath.Join(procPath, entry.Name(), "fd")
 		fds, err := os.ReadDir(fdPath)
 		if err != nil {
-			return 0, nil, fmt.Errorf("list nbd-client %d descriptors: %w", pid, err)
+			return 0, nil, fmt.Errorf("list %s %d descriptors: %w", client, pid, err)
 		}
 		var sockets []int
 		for _, fd := range fds {
@@ -318,7 +318,7 @@ func nbdClientSockets(procPath, devicePath string) (int, []int, error) {
 			return pid, sockets, nil
 		}
 	}
-	return 0, nil, fmt.Errorf("no nbd-client holds a socket for %s", devicePath)
+	return 0, nil, fmt.Errorf("no %s holds a socket for %s", client, devicePath)
 }
 
 func (m *Manager) disconnectNBDDevice(ctx context.Context, device *nbdDevice) error {

@@ -371,29 +371,26 @@ func TestDurableDiskInactivityWatchdogResetsOnlyOnProgress(t *testing.T) {
 	}
 }
 
-// Prevents this: flattening or committing a many-gigabyte qcow chain uploads
-// nothing for minutes, the watchdog read the silence as a stall, and snapshots
-// of exactly the heaviest disks always failed around the inactivity deadline.
-func TestDurableDiskPhaseHeartbeatKeepsTheWatchdogFed(t *testing.T) {
+// Flattening, hashing, or committing a many-gigabyte qcow chain uploads
+// nothing for minutes, so the work's own progress must keep the watchdog fed;
+// once it stops, silence must still fail a stalled snapshot rather than hold
+// a checkpoint open.
+func TestDurableDiskWorkProgressFeedsTheWatchdog(t *testing.T) {
+	layer := filepath.Join(t.TempDir(), "layer")
+	require.NoError(t, os.WriteFile(layer, bytes.Repeat([]byte{1}, 4096), 0o600))
 	ctx, stop := withDurableDiskInactivityWatchdog(context.Background(), 80*time.Millisecond)
 	defer stop()
 
-	stopHeartbeat := durableDiskPhaseHeartbeat(ctx, 20*time.Millisecond)
-	time.Sleep(300 * time.Millisecond)
-	select {
-	case <-ctx.Done():
-		t.Fatal("watchdog expired during a heartbeat-covered phase")
-	default:
+	for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		_, err := disk.ScanLayer(ctx, layer, func(digest string) string { return digest })
+		require.NoError(t, err, "the watchdog must not expire while the work progresses")
 	}
 
-	// Once the phase ends the watchdog is armed again: silence after the
-	// heartbeat stops must still catch a genuinely stalled snapshot.
-	stopHeartbeat()
 	select {
 	case <-ctx.Done():
 		require.ErrorIs(t, context.Cause(ctx), errDurableDiskSnapshotInactive)
 	case <-time.After(400 * time.Millisecond):
-		t.Fatal("watchdog did not cancel after the heartbeat stopped")
+		t.Fatal("watchdog did not cancel once the work stopped progressing")
 	}
 }
 

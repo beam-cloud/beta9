@@ -71,7 +71,7 @@ type ChunkSource interface {
 // holes and all-zero regions. Object keys are assigned by keyForDigest.
 // Boundaries are found in one sequential pass, then chunks are read and
 // hashed in parallel: this pass dominates publish latency on large images.
-func ScanLayer(path string, keyForDigest func(digest string) string) (*types.DiskSnapshotFile, error) {
+func ScanLayer(ctx context.Context, path string, keyForDigest func(digest string) string) (*types.DiskSnapshotFile, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -90,7 +90,7 @@ func ScanLayer(path string, keyForDigest func(digest string) string) (*types.Dis
 		SizeBytes: fileSize,
 	}
 
-	spans, err := chunkSpans(file, fileSize)
+	spans, err := chunkSpans(ctx, file, fileSize)
 	if err != nil {
 		return nil, err
 	}
@@ -99,10 +99,14 @@ func ScanLayer(path string, keyForDigest func(digest string) string) (*types.Dis
 	group.SetLimit(scanConcurrency)
 	for i, span := range spans {
 		group.Go(func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			data := make([]byte, span.size)
 			if _, err := file.ReadAt(data, span.offset); err != nil && err != io.EOF {
 				return fmt.Errorf("read layer chunk at %d: %w", span.offset, err)
 			}
+			reportProgress(ctx)
 			if isZero(data) {
 				return nil
 			}
@@ -137,7 +141,7 @@ type chunkSpan struct{ offset, size int64 }
 // whole file on filesystems without support) and splits each at content
 // defined boundaries. Extents reset the boundary state, so sparse layouts
 // chunk identically regardless of surrounding holes.
-func chunkSpans(file *os.File, fileSize int64) ([]chunkSpan, error) {
+func chunkSpans(ctx context.Context, file *os.File, fileSize int64) ([]chunkSpan, error) {
 	var spans []chunkSpan
 	buffer := make([]byte, LayerChunkSize)
 	for offset := int64(0); offset < fileSize; {
@@ -147,7 +151,7 @@ func chunkSpans(file *os.File, fileSize int64) ([]chunkSpan, error) {
 				break // Nothing but holes remain.
 			}
 			// No SEEK_DATA support: treat the rest of the file as one extent.
-			extent, err := splitExtent(file, buffer, offset, fileSize)
+			extent, err := splitExtent(ctx, file, buffer, offset, fileSize)
 			if err != nil {
 				return nil, err
 			}
@@ -157,7 +161,7 @@ func chunkSpans(file *os.File, fileSize int64) ([]chunkSpan, error) {
 		if err != nil {
 			dataEnd = fileSize
 		}
-		extent, err := splitExtent(file, buffer, dataStart, min(dataEnd, fileSize))
+		extent, err := splitExtent(ctx, file, buffer, dataStart, min(dataEnd, fileSize))
 		if err != nil {
 			return nil, err
 		}
@@ -170,9 +174,13 @@ func chunkSpans(file *os.File, fileSize int64) ([]chunkSpan, error) {
 // splitExtent cuts one data extent at gear-hash boundaries: the hash rolls
 // byte-wise (skipping the guaranteed minimum) and a chunk ends where the low
 // bits clear, giving LayerChunkSize chunks on average within [min, max].
-func splitExtent(file *os.File, buffer []byte, start, end int64) ([]chunkSpan, error) {
+func splitExtent(ctx context.Context, file *os.File, buffer []byte, start, end int64) ([]chunkSpan, error) {
 	var spans []chunkSpan
 	for chunkStart := start; chunkStart < end; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		reportProgress(ctx)
 		if end-chunkStart <= chunkMinSize {
 			spans = append(spans, chunkSpan{offset: chunkStart, size: end - chunkStart})
 			break

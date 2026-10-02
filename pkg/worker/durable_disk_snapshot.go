@@ -22,6 +22,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"golang.org/x/sync/errgroup"
@@ -68,6 +69,10 @@ func withDurableDiskInactivityWatchdog(ctx context.Context, timeout time.Duratio
 		}
 	}
 	watchCtx = withDurableDiskProgressReporter(watchCtx, report)
+	// Flattening, hashing, or committing a many-gigabyte chain uploads nothing
+	// for minutes; those operations report their own progress, so silence is
+	// a stall there too.
+	watchCtx = disk.WithProgress(watchCtx, func() { report(durableDiskProgressEvent{}) })
 
 	go func() {
 		defer close(done)
@@ -103,34 +108,6 @@ func withDurableDiskInactivityWatchdog(ctx context.Context, timeout time.Duratio
 		cancel(context.Canceled)
 		<-done
 	}
-}
-
-// durableDiskPhaseHeartbeat reports snapshot progress on an interval until the
-// returned stop function is called. Long single operations — a block-commit or
-// qemu-img convert of a many-gigabyte chain, hashing a sealed layer — do real
-// work for minutes with nothing uploaded to report, and without a heartbeat
-// the inactivity watchdog reads that silence as a stall and fails healthy
-// snapshots of exactly the disks that take longest to capture. The phases fed
-// this way run supervised subprocesses or QMP jobs bounded by the caller's
-// context, so a genuine hang still has an owner.
-func durableDiskPhaseHeartbeat(ctx context.Context, interval time.Duration) func() {
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				reportDurableDiskProgress(ctx, durableDiskProgressEvent{})
-			}
-		}
-	}()
-	var once sync.Once
-	return func() { once.Do(func() { close(done) }) }
 }
 
 type durableDiskSnapshotStore interface {

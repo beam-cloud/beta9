@@ -243,7 +243,7 @@ func TestAcquireNBDDeviceContinuesAfterKernelContention(t *testing.T) {
 }
 
 // The send buffer must be widened on the socket the kernel sends requests
-// through: the one held by the nbd-client serving that exact device.
+// through: the one held by the configured client serving that exact device.
 func TestNBDClientSocketsFindsTheServingClient(t *testing.T) {
 	proc := t.TempDir()
 	process := func(pid string, args []string, fds map[string]string) {
@@ -265,15 +265,20 @@ func TestNBDClientSocketsFindsTheServingClient(t *testing.T) {
 	process("12", []string{"mkfs.ext4", "/dev/nbd1"}, map[string]string{"4": "socket:[102]"})
 	process("13", []string{"/usr/sbin/nbd-client", "-unix", "/run/b.sock", "-N", "vol", "/dev/nbd1"},
 		map[string]string{"0": "/dev/null", "3": "/dev/nbd1", "4": "socket:[103]", "5": "pipe:[104]"})
+	process("14", []string{"/opt/nbd/nbd-client-3.26", "-unix", "/run/c.sock", "-N", "vol", "/dev/nbd3"},
+		map[string]string{"5": "socket:[105]"})
 
-	pid, sockets, err := nbdClientSockets(proc, "/dev/nbd1")
+	pid, sockets, err := nbdClientSockets(proc, "nbd-client", "/dev/nbd1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pid != 13 || len(sockets) != 1 || sockets[0] != 4 {
 		t.Fatalf("found pid %d sockets %v, want pid 13 socket 4", pid, sockets)
 	}
-	if _, _, err := nbdClientSockets(proc, "/dev/nbd2"); err == nil {
+	if _, _, err := nbdClientSockets(proc, "nbd-client", "/dev/nbd2"); err == nil {
 		t.Fatal("a device without a client must not resolve")
+	}
+	if pid, sockets, err := nbdClientSockets(proc, "nbd-client-3.26", "/dev/nbd3"); err != nil || pid != 14 || len(sockets) != 1 || sockets[0] != 5 {
+		t.Fatalf("a configured client binary must resolve: pid %d sockets %v err %v", pid, sockets, err)
 	}
 }

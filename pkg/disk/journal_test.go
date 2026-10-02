@@ -330,25 +330,19 @@ func seedJournalBacklog(t *testing.T, store *memoryJournalStore, prefix string, 
 	require.NoError(t, err)
 }
 
-// shortLease shrinks the lease so lease-bounded behaviour fits in a test.
-func shortLease(t *testing.T, lease time.Duration) {
+// shorten overrides a package duration, such as the journal's lease or room
+// wait, so the behaviour it bounds fits in a test.
+func shorten(t *testing.T, setting *time.Duration, value time.Duration) {
 	t.Helper()
-	previous := journalLease
-	journalLease = lease
-	t.Cleanup(func() { journalLease = previous })
-}
-
-// shortRoomWait shrinks how long a full journal holds a write.
-func shortRoomWait(t *testing.T, wait time.Duration) {
-	t.Helper()
-	previous := journalRoomWait
-	journalRoomWait = wait
-	t.Cleanup(func() { journalRoomWait = previous })
+	previous := *setting
+	*setting = value
+	t.Cleanup(func() { *setting = previous })
 }
 
 // A full journal holds writes until a checkpoint makes room rather than
 // failing the disk, but never holds a seal: its freeze flushes through here.
 func TestJournalFullWaitsForACheckpoint(t *testing.T) {
+	shorten(t, &journalRoomWait, 10*time.Second)
 	ctx := context.Background()
 	write := journalRecord(t, 0, "wal")
 	store := newMemoryJournalStore()
@@ -358,28 +352,64 @@ func TestJournalFullWaitsForACheckpoint(t *testing.T) {
 	defer journal.Close()
 	journal.Recovered()
 
-	waitForRoom := func() chan error {
-		waited := make(chan error, 1)
-		go func() { waited <- journal.WaitForRoom(len(write)) }()
-		select {
-		case err := <-waited:
-			t.Fatalf("a write past the limit must wait, got %v", err)
-		case <-time.After(50 * time.Millisecond):
-		}
-		return waited
-	}
-
-	waited := waitForRoom()
+	waited := holdWrite(t, journal, len(write))
 	journal.Sealing(true)
 	require.NoError(t, <-waited, "a seal must pass a full journal")
 	require.NoError(t, journal.Commit(ctx, write))
 	journal.Sealing(false)
 
-	waited = waitForRoom()
+	waited = holdWrite(t, journal, len(write))
 	_, sequence, _ := journal.State()
 	require.NoError(t, journal.Checkpoint(ctx, sequence, "snap-1"))
 	require.NoError(t, <-waited)
 	require.NoError(t, journal.Commit(ctx, write))
+}
+
+// holdWrite starts a write of n bytes past a full journal's limits and
+// returns once it is held. A held write asks for a checkpoint under the lock
+// that sealing and checkpointing take, then waits; seeing the request means
+// it is held.
+func holdWrite(t *testing.T, journal *Journal, n int) chan error {
+	t.Helper()
+	select {
+	case <-journal.Checkpoints():
+	default:
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- journal.WaitForRoom(n) }()
+	select {
+	case <-journal.Checkpoints():
+	case err := <-waited:
+		t.Fatalf("a write past the limit must wait, got %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("a write past the limit neither waited nor returned")
+	}
+	require.True(t, journal.Waiting())
+	return waited
+}
+
+// A failure found by Check, such as a lapsed lease, must reach writes held
+// for room at once, not after they wait out journalRoomWait.
+func TestJournalCheckFailureReleasesHeldWrites(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	seedJournalBacklog(t, store, "disk", journalMaxBytes)
+	journal, err := OpenJournal(ctx, store, "disk", "owner", "", 1<<30)
+	require.NoError(t, err)
+	defer journal.Close()
+	journal.Recovered()
+
+	waited := holdWrite(t, journal, 1)
+	journal.mu.Lock()
+	journal.head.Expires = time.Now().Add(-time.Second)
+	journal.mu.Unlock()
+	require.Error(t, journal.Check())
+	select {
+	case err := <-waited:
+		require.ErrorContains(t, err, "lease expired")
+	case <-time.After(5 * time.Second):
+		t.Fatal("a held write must return the journal's failure at once")
+	}
 }
 
 // A backlog of any size opens, and the writes that mount it pass until
@@ -396,7 +426,7 @@ func TestJournalRecoveryPassesAFullJournal(t *testing.T) {
 	require.NoError(t, journal.WaitForRoom(len(write)))
 	require.NoError(t, journal.Commit(ctx, write))
 
-	shortRoomWait(t, 20*time.Millisecond)
+	shorten(t, &journalRoomWait, 20*time.Millisecond)
 	journal.Recovered()
 	require.Error(t, journal.WaitForRoom(len(write)), "a recovered journal must hold writes past its limits")
 }
@@ -509,7 +539,7 @@ func (s *racingJournalStore) WriteVersion(ctx context.Context, key string, data 
 // Retrying an acquisition never lets it overwrite a competitor that acquired
 // the disk first; it fails once its lease period ends.
 func TestJournalAcquisitionLosesToCompetitor(t *testing.T) {
-	shortLease(t, time.Second)
+	shorten(t, &journalLease, time.Second)
 	ctx := context.Background()
 	store := newMemoryJournalStore()
 	first, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)
@@ -536,7 +566,7 @@ func TestJournalAcquisitionLosesToCompetitor(t *testing.T) {
 // acknowledged write is recovered. The outages last longer than a handful of
 // backoff steps, so an attempt-capped retry would not pass.
 func TestJournalSurvivesOutageShorterThanLease(t *testing.T) {
-	shortLease(t, 4*time.Second)
+	shorten(t, &journalLease, 4*time.Second)
 	const outage = 1600 * time.Millisecond
 	ctx := context.Background()
 	store := newMemoryJournalStore()
@@ -573,7 +603,7 @@ func TestJournalSurvivesOutageShorterThanLease(t *testing.T) {
 // dropped, and a replacement acquires the disk with everything that was
 // acknowledged before the outage.
 func TestJournalOutageLongerThanLeaseFences(t *testing.T) {
-	shortLease(t, time.Second)
+	shorten(t, &journalLease, time.Second)
 	ctx := context.Background()
 	store := newMemoryJournalStore()
 	first, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)
@@ -689,7 +719,7 @@ func TestJournalFailedCloseLeavesReplacedHead(t *testing.T) {
 // earlier owner, so it is retried like any other rejection, but it is never
 // adopted and the retries stop when the lease lapses.
 func TestJournalStaleForeignHeadIsRetriedNotAdopted(t *testing.T) {
-	shortLease(t, 3*time.Second)
+	shorten(t, &journalLease, 3*time.Second)
 	ctx := context.Background()
 	store := newMemoryJournalStore()
 	journal, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)

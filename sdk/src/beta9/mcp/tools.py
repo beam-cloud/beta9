@@ -522,10 +522,16 @@ class DeployJob:
             **self.deployed,
         }
         if self.status == "accepted" and not self.deployed.get("deployment_id"):
-            text = (
-                f"Task {self.deployed.get('task_id')} submitted for {self.name}. "
-                "Use get_task for its status and result, and logs with task_id for its output."
-            )
+            if self.deployed.get("task_id"):
+                text = (
+                    f"Task {self.deployed['task_id']} submitted for {self.name}. "
+                    "Use get_task for its status and result, and logs with task_id for its output."
+                )
+            else:
+                text = (
+                    f"Container {self.deployed.get('container_id')} submitted for {self.name} "
+                    "without a task. Use logs with container_id for its output."
+                )
             return text_result(text, **view)
         if self.status == "accepted":
             where = f" at {self.deployed['url']}" if self.deployed.get("url") else ""
