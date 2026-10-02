@@ -7,6 +7,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import textwrap
 from typing import Any, Dict, Optional
@@ -352,6 +353,21 @@ def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch
     assert exited.value.code == 1
     assert json.loads(capsys.readouterr().out) == refused
     assert calls == ["served-token", "served-token"]
+
+
+def test_database_helper_process_reports_only_its_result(monkeypatch):
+    # A failed job shows the helper's output; nothing but its JSON belongs there.
+    monkeypatch.delenv(mcp_tools.JOB_CONTEXT_ENV, raising=False)
+    helper = subprocess.run(
+        [sys.executable, "-m", "beta9.mcp", "create-database", "default", '{"name": "db"}'],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert helper.returncode == 1
+    assert helper.stderr == ""
+    assert json.loads(helper.stdout)["error"].startswith("create_database failed")
 
 
 def test_deploy_status_returns_new_log_lines_from_cursor(

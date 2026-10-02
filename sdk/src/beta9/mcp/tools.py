@@ -386,7 +386,7 @@ class DeployJob:
         # The supervisor owns the CLI pipe and terminal record independently of
         # the MCP client's lifetime. Job files are private to this context.
         subprocess.Popen(
-            [sys.executable, "-m", "beta9.mcp.tools", str(self.state_path)],
+            [sys.executable, "-m", "beta9.mcp", str(self.state_path)],
             env={**os.environ, **self.env},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -796,7 +796,7 @@ class LocalTools:
         command = [
             sys.executable,
             "-m",
-            "beta9.mcp.tools",
+            "beta9.mcp",
             "create-database",
             self.context_name,
             json.dumps(arguments),
@@ -1033,7 +1033,3 @@ def main() -> None:
         return
 
     DeployJob.load(Path(sys.argv[1]))._run()
-
-
-if __name__ == "__main__":
-    main()
