@@ -17,6 +17,19 @@ sql() {
     gosu postgres psql -X -q -v ON_ERROR_STOP=1 "$@"
 }
 
+# initdb creates only template1, template0 and postgres (base/1, 4 and 5), and
+# numbers every relation file it writes below 16384. Any other database,
+# tablespace or relation was created after initialization.
+holds_data() {
+    for database in "$1"/base/*; do
+        [ -e "$database" ] || continue
+        case ${database##*/} in 1 | 4 | 5 | pgsql_tmp) ;; *) return 0 ;; esac
+    done
+    [ -z "$(ls -A "$1/pg_tblspc" 2>/dev/null)" ] || return 0
+    find "$1/base" -type f -name '[0-9]*' 2>/dev/null | sed 's|.*/||; s|[._].*||' |
+        awk '$1 >= 16384 { found = 1 } END { exit !found }'
+}
+
 backrest() {
     gosu postgres pgbackrest --config="$CONFIG" --stanza=db "$@"
 }
@@ -166,7 +179,17 @@ EOF
     # A new cluster is built beside PGDATA and renamed into place only after
     # its database exists and it shut down cleanly. initdb leaves PG_VERSION
     # behind when it cannot remove a failed attempt, and the entrypoint would
-    # then boot those partial files as a database on every restart.
+    # then boot those partial files as a database on every restart. Clusters
+    # built in place before this can be such partial files: one that holds
+    # nothing initdb did not create and lacks either a whole control file
+    # (always 8192 bytes) or the application database, which the entrypoint
+    # creates last, never finished.
+    if [ -s "$CLUSTER/PG_VERSION" ] && ! holds_data "$CLUSTER" &&
+        { [ "$POSTGRES_DB" != postgres ] ||
+            [ "$(stat -c %s "$CLUSTER/global/pg_control" 2>/dev/null)" != 8192 ]; }; then
+        echo "Discarding a database cluster whose initialization never finished" >&2
+        rm -rf "$CLUSTER"
+    fi
     if [ ! -s "$CLUSTER/PG_VERSION" ]; then
         rm -rf "$CLUSTER" "$INITIALIZING"
         export PGDATA=$INITIALIZING
@@ -181,25 +204,24 @@ EOF
     failures=0
     for attempt in $(seq 1 600); do
         kill -0 "$POSTGRES" || { wait "$POSTGRES"; exit 1; }
-        if gosu postgres pg_isready -h 127.0.0.1 >/dev/null 2>&1; then
-            if state=$(sql -Atc 'SELECT NOT pg_is_in_recovery()' 2>/tmp/beam-readiness); then
-                failures=0
-                if [ "$state" = t ]; then
-                    ready=true
-                    break
-                fi
-            else
-                # A server that accepts connections but fails this query for
-                # half a minute is damaged, not recovering.
-                failures=$((failures + 1))
-                if [ "$failures" -ge 30 ]; then
-                    echo "Database accepts connections but cannot be queried: $(cat /tmp/beam-readiness)" >&2
-                    shutdown
-                    exit 1
-                fi
-            fi
-        fi
         sleep 1
+        gosu postgres pg_isready -h 127.0.0.1 >/dev/null 2>&1 || continue
+        if ! state=$(sql -Atc 'SELECT NOT pg_is_in_recovery()' 2>/tmp/beam-readiness); then
+            # A server that accepts connections but fails this query for half
+            # a minute is damaged, not recovering.
+            failures=$((failures + 1))
+            if [ "$failures" -ge 30 ]; then
+                echo "Database accepts connections but cannot be queried: $(cat /tmp/beam-readiness)" >&2
+                shutdown
+                exit 1
+            fi
+            continue
+        fi
+        failures=0
+        if [ "$state" = t ]; then
+            ready=true
+            break
+        fi
     done
     [ "$ready" = true ] || { echo "Database recovery did not finish within 600 seconds" >&2; exit 1; }
 
