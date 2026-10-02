@@ -165,16 +165,18 @@ func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time
 }
 
 func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
-	minContainers := int(i.StubConfig.Autoscaler.MinContainers)
-	if i.Stub.Type.IsServe() {
-		minContainers = 0
-	}
+	i.sendLatestScaleEvent(max(result.DesiredContainers, i.minContainers()))
+}
 
-	if string(i.Stub.Type) == types.StubTypeTaskQueue {
-		minContainers = 0
+// minContainers is how many containers the instance keeps running without traffic.
+func (i *AutoscaledInstance) minContainers() int {
+	if i.Stub.Type.IsServe() || string(i.Stub.Type) == types.StubTypeTaskQueue {
+		return 0
 	}
-
-	i.sendLatestScaleEvent(max(result.DesiredContainers, minContainers))
+	if i.StubConfig == nil || i.StubConfig.Autoscaler == nil {
+		return 0
+	}
+	return int(i.StubConfig.Autoscaler.MinContainers)
 }
 
 func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
@@ -298,7 +300,8 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
-	if i.FailedContainerThreshold > 0 && len(state.FailedContainers) >= i.FailedContainerThreshold {
+	failing := i.FailedContainerThreshold > 0 && len(state.FailedContainers) >= i.FailedContainerThreshold
+	if failing {
 		desiredContainers = 0
 		if err := i.ContainerRepo.SetContainerFailureCooldown(state.FailedContainers); err != nil {
 			log.Warn().Err(err).Str("stub_id", i.Stub.ExternalId).Msg("failed to set container failure cooldown")
@@ -309,8 +312,11 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		desiredContainers = 0
 	}
 
+	// Only traffic or a deploy recreates a cancelled instance, so an always-on
+	// deployment waits out its failure cooldown and then starts again.
+	retryAfterCooldown := failing && i.IsActive && i.minContainers() > 0
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)
-	if desiredContainers == 0 && noContainersRunning {
+	if desiredContainers == 0 && noContainersRunning && !retryAfterCooldown {
 		i.CancelFunc()
 		return nil
 	}

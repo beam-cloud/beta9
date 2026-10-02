@@ -3,6 +3,7 @@ package abstractions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -94,7 +95,7 @@ func TestConsumeScaleResultLetsServeScaleToZero(t *testing.T) {
 }
 
 func TestHandleScalingEventInactiveStopsRunningContainers(t *testing.T) {
-	instance, containerRepo := newTestAutoscaledInstance(t, false, nil)
+	instance, containerRepo, _ := newTestAutoscaledInstance(t, false, nil)
 	seedTestContainer(t, containerRepo, types.ContainerStatusRunning)
 	stopped := make(chan int, 1)
 	instance.StopContainersFunc = func(containersToStop int) error {
@@ -119,7 +120,7 @@ func TestHandleScalingEventInactiveStopsRunningContainers(t *testing.T) {
 // A stopping container remains the writer of a writable durable disk until its
 // final snapshot is published, so its replacement starts only once it is gone.
 func TestHandleScalingEventWaitsForStoppingDiskWriter(t *testing.T) {
-	instance, containerRepo := newTestAutoscaledInstance(t, true, []*pb.DurableDisk{{Name: "home"}})
+	instance, containerRepo, _ := newTestAutoscaledInstance(t, true, []*pb.DurableDisk{{Name: "home"}})
 	writer := seedTestContainer(t, containerRepo, types.ContainerStatusStopping)
 	started := countStarts(t, instance)
 
@@ -150,7 +151,7 @@ func TestHandleScalingEventStartsBesideStoppingContainerWithoutWritableDisk(t *t
 		{name: "no disk"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			instance, containerRepo := newTestAutoscaledInstance(t, true, tc.disks)
+			instance, containerRepo, _ := newTestAutoscaledInstance(t, true, tc.disks)
 			seedTestContainer(t, containerRepo, types.ContainerStatusStopping)
 			started := countStarts(t, instance)
 
@@ -159,6 +160,72 @@ func TestHandleScalingEventStartsBesideStoppingContainerWithoutWritableDisk(t *t
 			}
 			if *started != 1 {
 				t.Fatalf("started %d containers, want 1", *started)
+			}
+		})
+	}
+}
+
+// An always-on app that crash-loops while its database restarts must start
+// again once the database is back, though nothing sends it traffic.
+func TestHandleScalingEventRetriesAlwaysOnDeploymentAfterFailureCooldown(t *testing.T) {
+	instance, containerRepo, server := newTestAutoscaledInstance(t, true, nil)
+	instance.FailedContainerThreshold = types.FailedDeploymentContainerThreshold
+	seedFailedContainers(t, containerRepo, instance.FailedContainerThreshold)
+	events := &stubStateEvents{states: make(chan string, 1)}
+	instance.EventRepo = events
+	started := countStarts(t, instance)
+
+	if err := instance.HandleScalingEvent(1); err != nil {
+		t.Fatal(err)
+	}
+	if instance.Ctx.Err() != nil {
+		t.Fatal("cancelled the always-on instance during its failure cooldown")
+	}
+	if *started != 0 {
+		t.Fatalf("started %d containers during the failure cooldown, want 0", *started)
+	}
+	select {
+	case state := <-events.states:
+		if state != types.StubStateDegraded {
+			t.Fatalf("stub state = %q, want %q", state, types.StubStateDegraded)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected the failing deployment to report itself degraded")
+	}
+
+	server.FastForward(types.ContainerFailureCooldown)
+	if err := instance.HandleScalingEvent(1); err != nil {
+		t.Fatal(err)
+	}
+	if *started != 1 {
+		t.Fatalf("started %d containers after the failure cooldown, want 1", *started)
+	}
+}
+
+func TestHandleScalingEventStopsFailingInstanceWithoutMinimum(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		active        bool
+		minContainers uint
+	}{
+		{name: "scale to zero", active: true, minContainers: 0},
+		{name: "inactive", active: false, minContainers: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			instance, containerRepo, _ := newTestAutoscaledInstance(t, tc.active, nil)
+			instance.StubConfig.Autoscaler.MinContainers = tc.minContainers
+			instance.FailedContainerThreshold = types.FailedDeploymentContainerThreshold
+			seedFailedContainers(t, containerRepo, instance.FailedContainerThreshold)
+			started := countStarts(t, instance)
+
+			if err := instance.HandleScalingEvent(1); err != nil {
+				t.Fatal(err)
+			}
+			if instance.Ctx.Err() == nil {
+				t.Fatal("expected the idle failing instance to stop")
+			}
+			if *started != 0 {
+				t.Fatalf("started %d containers, want 0", *started)
 			}
 		})
 	}
@@ -417,7 +484,7 @@ type testInstanceController struct {
 
 // newTestRedis starts an in-memory Redis for one test and returns a client and
 // a container repository on it.
-func newTestRedis(t *testing.T) (*common.RedisClient, repository.ContainerRepository) {
+func newTestRedis(t *testing.T) (*miniredis.Miniredis, *common.RedisClient, repository.ContainerRepository) {
 	t.Helper()
 	server, err := miniredis.Run()
 	if err != nil {
@@ -429,14 +496,14 @@ func newTestRedis(t *testing.T) (*common.RedisClient, repository.ContainerReposi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return rdb, repository.NewContainerRedisRepositoryForTest(rdb)
+	return server, rdb, repository.NewContainerRedisRepositoryForTest(rdb)
 }
 
 // newTestAutoscaledInstance builds the instance of a single-container pod
 // deployment, "test-stub", on its own Redis.
-func newTestAutoscaledInstance(t *testing.T, active bool, disks []*pb.DurableDisk) (*AutoscaledInstance, repository.ContainerRepository) {
+func newTestAutoscaledInstance(t *testing.T, active bool, disks []*pb.DurableDisk) (*AutoscaledInstance, repository.ContainerRepository, *miniredis.Miniredis) {
 	t.Helper()
-	rdb, containerRepo := newTestRedis(t)
+	server, rdb, containerRepo := newTestRedis(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	return &AutoscaledInstance{
@@ -445,10 +512,48 @@ func newTestAutoscaledInstance(t *testing.T, active bool, disks []*pb.DurableDis
 		Lock:            common.NewRedisLock(rdb),
 		InstanceLockKey: "test-instance-lock",
 		IsActive:        active,
+		Workspace:       &types.Workspace{ExternalId: "test-workspace"},
 		Stub:            &types.StubWithRelated{Stub: types.Stub{ExternalId: "test-stub", Type: types.StubType(types.StubTypePodDeployment)}},
 		StubConfig:      &types.StubConfigV1{Autoscaler: &types.Autoscaler{MinContainers: 1, MaxContainers: 1}, Disks: disks},
 		ContainerRepo:   containerRepo,
-	}, containerRepo
+	}, containerRepo, server
+}
+
+// seedFailedContainers records count containers of "test-stub" that exited
+// with an error.
+func seedFailedContainers(t *testing.T, containerRepo repository.ContainerRepository, count int) {
+	t.Helper()
+	for n := range count {
+		containerId := fmt.Sprintf("pod-test-stub-failed-%d", n)
+		state := &types.ContainerState{
+			ContainerId: containerId,
+			StubId:      "test-stub",
+			WorkspaceId: "test-workspace",
+			Status:      types.ContainerStatusRunning,
+			ScheduledAt: time.Now().Unix(),
+			Cpu:         100,
+			Memory:      128,
+		}
+		if err := containerRepo.SetContainerState(containerId, state); err != nil {
+			t.Fatal(err)
+		}
+		if err := containerRepo.SetContainerExitCode(containerId, int(types.ContainerExitCodeUnknownError)); err != nil {
+			t.Fatal(err)
+		}
+		if err := containerRepo.DeleteContainerState(containerId); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// stubStateEvents records the unhealthy states an instance reports for its stub.
+type stubStateEvents struct {
+	repository.EventRepository
+	states chan string
+}
+
+func (e *stubStateEvents) PushStubStateUnhealthy(workspaceId, stubId, currentState, previousState, reason string, failedContainers []string) {
+	e.states <- currentState
 }
 
 // seedTestContainer records a container of "test-stub" in the given status.
@@ -486,7 +591,7 @@ func countStarts(t *testing.T, instance *AutoscaledInstance) *int {
 
 func newTestInstanceController(t *testing.T, deployments ...types.DeploymentWithRelated) (*testInstanceController, repository.ContainerRepository) {
 	t.Helper()
-	rdb, containerRepo := newTestRedis(t)
+	_, rdb, containerRepo := newTestRedis(t)
 	testController := &testInstanceController{instances: map[string]*testAutoscaledInstance{}}
 	backendRepo := &testInstanceControllerBackendRepo{deployments: deployments}
 
