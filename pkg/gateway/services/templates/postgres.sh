@@ -55,6 +55,7 @@ default_pool_size=20
 max_client_conn=100
 max_prepared_statements=100
 pidfile=/tmp/pgbouncer.pid
+log_stats=0
 EOF
     gosu postgres pgbouncer /tmp/pgbouncer.ini &
     POOLER=$!
