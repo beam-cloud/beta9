@@ -12,6 +12,7 @@ export PGHOST=/var/run/postgresql PGUSER="$POSTGRES_USER" PGDATABASE=postgres
 BACKUPS=/volumes/beam-backups
 CONFIG=/tmp/pgbackrest.conf
 RESTORED=/var/lib/postgresql/data/.beam-restore-complete
+ARCHIVED=/tmp/beam-archive-checkpoint
 
 sql() {
     gosu postgres psql -X -q -v ON_ERROR_STOP=1 "$@"
@@ -64,9 +65,12 @@ publish_status() {
     state=$1
     error=$2
     info=$(backrest --output=json info) || return
+    # Only a verified archive checkpoint moves the recovery window.
+    read -r _ through 2>/dev/null <"$ARCHIVED" ||
+        through=$(jq '.archive_through // 0' "$BACKUPS/status.json" 2>/dev/null) || through=0
     jq -n --arg status "$state" --arg error "$error" \
         --arg username "$POSTGRES_USER" --arg database "$POSTGRES_DB" \
-        --argjson observed_at "$(date +%s)" --argjson archive_through "${ARCHIVE_THROUGH:-0}" \
+        --argjson observed_at "$(date +%s)" --argjson archive_through "$through" \
         --argjson repository "$info" \
         '{kind:"postgres",status:$status,error:$error,username:$username,database:$database,
           observed_at:$observed_at,archive_through:$archive_through,retention_days:7,
@@ -79,10 +83,10 @@ publish_status() {
 archive_checkpoint() {
     # A commit after the advertised timestamp lets recovery stop at that
     # timestamp even when the application itself has been idle.
-    ARCHIVE_THROUGH=$(sql -Atc 'SELECT floor(extract(epoch FROM clock_timestamp()))::bigint') || return
-    sql -c "SELECT pg_logical_emit_message(true, 'beam.backup', 'checkpoint')" >/dev/null || return
+    through=$(sql -Atc 'SELECT floor(extract(epoch FROM clock_timestamp()))::bigint') || return
+    xid=$(sql -Atc "SELECT txid_current() % 4294967296 FROM pg_logical_emit_message(true, 'beam.backup', 'checkpoint')") || return
     backrest check || return
-    export ARCHIVE_THROUGH
+    echo "$xid $through" >"$ARCHIVED"
 }
 
 backup() (
@@ -100,6 +104,15 @@ backup() (
 checkpoint() (
     exec 9>/tmp/beam-postgres-backup.lock
     flock -n 9 || return 0
+    # Each archive checkpoint ends a WAL segment, which Postgres pads to 16MB:
+    # on a durable disk, a new generation every few minutes. While the newest
+    # commit is still the last checkpoint's, that checkpoint still recovers the
+    # current data.
+    if read -r xid _ 2>/dev/null <"$ARCHIVED" &&
+        [ "$(sql -Atc 'SELECT xid FROM pg_last_committed_xact()')" = "$xid" ]; then
+        publish_status ready ""
+        return
+    fi
     if archive_checkpoint; then
         publish_status ready ""
     else
@@ -274,7 +287,7 @@ SQL
 
     docker-entrypoint.sh postgres -c listen_addresses='*' -c wal_compression=on \
         -c hba_file=/tmp/beam-pg_hba.conf \
-        -c fsync=on -c synchronous_commit=on -c full_page_writes=on \
+        -c fsync=on -c synchronous_commit=on -c full_page_writes=on -c track_commit_timestamp=on \
         -c archive_mode=on -c archive_timeout=60 \
         -c "archive_command=pgbackrest --config=$CONFIG --stanza=db archive-push %p" &
     POSTGRES=$!
