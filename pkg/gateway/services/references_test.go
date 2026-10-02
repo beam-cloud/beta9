@@ -284,6 +284,13 @@ func TestExpandReferencesAddressesEachPortOfAMultiPortApp(t *testing.T) {
 		_, _, err = gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{"X=${{" + bad + "}}"})
 		require.ErrorContains(t, err, "invalid app reference", bad)
 	}
+
+	gws.appConfig.Abstractions.Pod.TCP.Enabled = false
+	_, _, err = gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{"X=${{app.clickhouse.TCP.9000}}"})
+	require.ErrorContains(t, err, "TCP references need the TCP gateway")
+	env, _, err = gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{"X=${{app.clickhouse.URL.8123}}"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"X=https://clickhouse-abc1234-latest-8123.app.example.com"}, env)
 }
 
 func TestExpandStubReferencesResolvesOwnPortsBeforeFirstDeploy(t *testing.T) {

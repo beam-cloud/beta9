@@ -414,7 +414,11 @@ func (gws *GatewayService) appAddress(target *addressedDeployment, ref appRefere
 	if ref.kind == "URL" {
 		return gws.deploymentURL(&target.stub, &target.deployment, &onePort), nil
 	}
-	tcpURL := common.BuildPodDeploymentURL(gws.appConfig.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost, &target.deployment, &onePort)
+	tcp := gws.appConfig.Abstractions.Pod.TCP
+	if !tcp.Enabled || tcp.ExternalHost == "" {
+		return "", fmt.Errorf("app %q: TCP references need the TCP gateway, which is not enabled", ref.name)
+	}
+	tcpURL := common.BuildPodDeploymentURL(tcp.GetExternalURL(), common.InvokeUrlTypeHost, &target.deployment, &onePort)
 	return tcpHostFromURL(tcpURL), nil
 }
 
