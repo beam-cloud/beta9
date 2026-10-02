@@ -13,6 +13,10 @@ BACKUPS=/volumes/beam-backups
 CONFIG=/tmp/pgbackrest.conf
 RESTORED=/var/lib/postgresql/data/.beam-restore-complete
 ARCHIVED=/tmp/beam-archive-checkpoint
+# Each archive checkpoint ends a WAL segment, which Postgres pads to 16MB, and
+# every 128MB written to the durable disk is a new generation. Checkpoints are
+# at least this far apart: every other run of the minute schedule.
+ARCHIVE_INTERVAL=100
 
 sql() {
     gosu postgres psql -X -q -v ON_ERROR_STOP=1 "$@"
@@ -104,12 +108,11 @@ backup() (
 checkpoint() (
     exec 9>/tmp/beam-postgres-backup.lock
     flock -n 9 || return 0
-    # Each archive checkpoint ends a WAL segment, which Postgres pads to 16MB:
-    # on a durable disk, a new generation every few minutes. While the newest
-    # commit is still the last checkpoint's, that checkpoint still recovers the
-    # current data.
-    if read -r xid _ 2>/dev/null <"$ARCHIVED" &&
-        [ "$(sql -Atc 'SELECT xid FROM pg_last_committed_xact()')" = "$xid" ]; then
+    # While the newest commit is still the last checkpoint's, that checkpoint
+    # still recovers the current data.
+    if read -r xid through 2>/dev/null <"$ARCHIVED" &&
+        { [ "$(($(date +%s) - through))" -lt "$ARCHIVE_INTERVAL" ] ||
+            [ "$(sql -Atc 'SELECT xid FROM pg_last_committed_xact()')" = "$xid" ]; }; then
         publish_status ready ""
         return
     fi
@@ -290,7 +293,7 @@ SQL
     docker-entrypoint.sh postgres -c listen_addresses='*' -c wal_compression=on \
         -c hba_file=/tmp/beam-pg_hba.conf \
         -c fsync=on -c synchronous_commit=on -c full_page_writes=on -c track_commit_timestamp=on \
-        -c archive_mode=on -c archive_timeout=60 \
+        -c archive_mode=on -c archive_timeout=600 \
         -c "archive_command=pgbackrest --config=$CONFIG --stanza=db archive-push %p" &
     POSTGRES=$!
     for attempt in $(seq 1 60); do
