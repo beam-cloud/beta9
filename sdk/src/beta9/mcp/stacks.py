@@ -558,7 +558,11 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
             },
         )
 
-    return text_result("Stack progress; call stack_apply again while applying", **current)
+    for name in planned["order"]:
+        status = state["services"].get(name, {}).get("status", "pending")
+        if status != "complete":
+            return text_result(f"{name} is {status}; call stack_apply again", **current)
+    return text_result("Stack applied", **current)
 
 
 def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
