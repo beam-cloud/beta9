@@ -3,6 +3,7 @@ The stdio MCP proxy: what a client sees before and after sign-in, how remote
 calls are forwarded, and the local deploy/login tools.
 """
 
+import importlib.machinery
 import io
 import json
 import os
@@ -10,6 +11,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import types
 from typing import Any, Dict, Optional
 from pathlib import Path
 
@@ -113,7 +115,8 @@ def test_unauthenticated_proxy_without_login_points_at_config_create(settings):
 
 def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch):
     remote = FakeRemote()
-    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: object())
+    context = ConfigContext(token="t")
+    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: context)
     monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remote)
 
     proxy = mcp_server.StdioProxy(context_name="prod3", cwd=os.getcwd())
@@ -145,7 +148,8 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
 
 def test_rejected_token_drops_remote_and_announces_tool_change(settings, monkeypatch):
     remote = FakeRemote(status=401)
-    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: object())
+    context = ConfigContext(token="t")
+    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: context)
     monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remote)
 
     proxy = mcp_server.StdioProxy(cwd=os.getcwd())
@@ -157,6 +161,45 @@ def test_rejected_token_drops_remote_and_announces_tool_change(settings, monkeyp
     assert call["result"]["isError"] is True
     tools = next(m for m in out if m.get("id") == 2)
     assert "whoami" not in [t["name"] for t in tools["result"]["tools"]]
+
+
+def test_proxy_acts_as_the_latest_sign_in_saved_anywhere(settings, monkeypatch):
+    # `beam login` in a terminal, or another agent's login, while this server runs.
+    remotes = []
+
+    def remote(context):
+        remotes.append((context.token, FakeRemote()))
+        return remotes[-1][1]
+
+    def sign_in(token):
+        settings.config_path.write_text(
+            f"[default]\ntoken = {token}\ngateway_host = gateway.example\ngateway_port = 443\n"
+        )
+
+    def messages():
+        yield rpc("tools/list", 1)
+        sign_in("first")
+        yield rpc("tools/list", 2)
+        sign_in("second")
+        yield rpc("tools/call", 3, name="whoami", arguments={})
+
+    monkeypatch.setattr(mcp_server, "RemoteMCP", remote)
+    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
+    stdout = io.BytesIO()
+    proxy.run(stdin=(json.dumps(m).encode() + b"\n" for m in messages()), stdout=stdout)
+    out = [json.loads(line) for line in stdout.getvalue().decode().splitlines()]
+
+    unsigned, signed = (
+        [t["name"] for t in next(m for m in out if m.get("id") == i)["result"]["tools"]]
+        for i in (1, 2)
+    )
+    assert "whoami" not in unsigned and "whoami" in signed
+    assert [token for token, _ in remotes] == ["first", "second"]
+    assert remotes[1][1].calls[-1]["params"]["name"] == "whoami"
+    assert proxy.tools.signed_in_context().token == "second"
+    assert [m["method"] for m in out if "method" in m].count(
+        "notifications/tools/list_changed"
+    ) == 2
 
 
 def test_parse_error_is_reported_not_fatal(settings):
@@ -474,6 +517,39 @@ def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch
     assert calls == ["served-token", "served-token"]
 
 
+def test_database_helper_of_an_older_server_uses_the_installed_clis_config(
+    monkeypatch, tmp_path, capsys
+):
+    # Servers from before the handed context pass only its name; this
+    # interpreter's defaults would read ~/.beta9/config.ini, another account.
+    for folder, token in ((".beam", "beam-token"), (".beta9", "other-token")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "config.ini").write_text(
+            f"[default]\ntoken = {token}\ngateway_host = gateway.example\ngateway_port = 443\n"
+        )
+    beam = types.ModuleType("beam")
+    beam.__spec__ = importlib.machinery.ModuleSpec("beam", None)
+    monkeypatch.setitem(sys.modules, "beam", beam)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for variable in ("CONFIG_PATH", "BEAM_TOKEN", "BETA9_TOKEN", mcp_tools.JOB_CONTEXT_ENV):
+        monkeypatch.delenv(variable, raising=False)
+    calls = []
+
+    def call_remote(context, name, arguments):
+        calls.append(context.token)
+        return {"deployment_id": "d1"}
+
+    monkeypatch.setattr(mcp_tools, "call_remote", call_remote)
+    monkeypatch.setattr(sys, "argv", ["tools", "create-database", "default", '{"name": "db"}'])
+    try:
+        mcp_tools.main()
+    finally:
+        set_settings(None)
+
+    assert calls == ["beam-token"]
+    assert json.loads(capsys.readouterr().out) == {"deployment_id": "d1"}
+
+
 def test_local_results_show_their_fields_as_text():
     result = mcp_tools.text_result("Review this plan", plan_id="p1")
 
@@ -483,9 +559,10 @@ def test_local_results_show_their_fields_as_text():
     assert result["structuredContent"] == {"plan_id": "p1"}
 
 
-def test_database_helper_process_reports_only_its_result(monkeypatch):
+def test_database_helper_process_reports_only_its_result(tmp_path):
     # A failed job shows the helper's output; nothing but its JSON belongs there.
-    monkeypatch.delenv(mcp_tools.JOB_CONTEXT_ENV, raising=False)
+    hidden = (mcp_tools.JOB_CONTEXT_ENV, "BETA9_TOKEN", "BEAM_TOKEN")
+    env = {k: v for k, v in os.environ.items() if k not in hidden}
     # The helper imports the same beta9 as this test, installed or not.
     source = str(Path(mcp_tools.__file__).parents[2])
     path = os.pathsep.join(filter(None, [source, os.environ.get("PYTHONPATH")]))
@@ -494,12 +571,12 @@ def test_database_helper_process_reports_only_its_result(monkeypatch):
         capture_output=True,
         text=True,
         timeout=60,
-        env={**os.environ, "PYTHONPATH": path},
+        env={**env, "PYTHONPATH": path, "HOME": str(tmp_path), "CONFIG_PATH": str(tmp_path / "x")},
     )
 
     assert helper.returncode == 1
     assert helper.stderr == ""
-    assert "restart it in your agent" in json.loads(helper.stdout)["error"]
+    assert json.loads(helper.stdout)["code"] == "UNAUTHENTICATED"
 
 
 def test_jobs_launched_the_way_older_servers_launch_them_still_run(tmp_path):

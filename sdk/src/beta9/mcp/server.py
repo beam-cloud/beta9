@@ -123,8 +123,10 @@ class RemoteMCP:
 class StdioProxy:
     def __init__(self, context_name: str = DEFAULT_CONTEXT_NAME, cwd: Optional[str] = None):
         self.context_name: str = context_name
+        self.context: Optional[ConfigContext] = None  # the sign-in `remote` uses
         self.remote: Optional[RemoteMCP] = None
         self.connection_error: Optional[str] = None
+        self._connect_lock = threading.Lock()
         self.tools: LocalTools = LocalTools(
             cwd=cwd,
             on_login=self._on_login,
@@ -135,7 +137,8 @@ class StdioProxy:
         self._request_lock = threading.Lock()
         self._requests: Dict[Any, threading.Event] = {}
         self._stdout: BinaryIO = sys.stdout.buffer
-        self._connect()
+        with self._connect_lock:
+            self._connect()
 
     def run(
         self, stdin: Optional[Iterable[bytes]] = None, stdout: Optional[BinaryIO] = None
@@ -199,8 +202,7 @@ class StdioProxy:
                 if cancelled is not None:
                     cancelled.set()
             return None
-        if self.remote is None and self.connection_error:
-            self._connect()
+        self._follow_sign_in()
 
         if method == "initialize":
             return self._initialize(msg_id)
@@ -317,19 +319,33 @@ class StdioProxy:
 
     def _connect(self) -> None:
         self.connection_error = None
-        context = context_or_none(self.context_name)
-        if context is None:
+        self.context = context_or_none(self.context_name)
+        if self.context is None:
             self.remote = None
             return
         try:
-            self.remote = RemoteMCP(context)
+            self.remote = RemoteMCP(self.context)
         except Exception as exc:
             self.remote = None
             self.connection_error = str(exc)
             log(f"workspace unavailable: {exc}")
 
+    def _follow_sign_in(self) -> None:
+        """Act as the context's latest saved sign-in, whether this server, a
+        terminal `login` or another agent saved it."""
+        with self._connect_lock:
+            context, signed_in = self.context, self.remote is not None
+            current = context_or_none(self.context_name)
+            if current == context and (signed_in or not self.connection_error):
+                return
+            self._connect()
+            changed = current != context or (self.remote is not None) != signed_in
+        if changed:
+            self.notify("notifications/tools/list_changed")
+
     def _on_login(self) -> None:
-        self._connect()
+        with self._connect_lock:
+            self._connect()
         if self.remote is not None:
             self.notify("notifications/tools/list_changed")
 

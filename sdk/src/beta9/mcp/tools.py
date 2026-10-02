@@ -8,6 +8,8 @@ import base64
 import fcntl
 import hashlib
 import http.client
+import importlib
+import importlib.util
 import json
 import os
 import shlex
@@ -29,9 +31,11 @@ from .. import auth
 from ..config import (
     DEFAULT_CONTEXT_NAME,
     ConfigContext,
+    SDKSettings,
     cli_path,
     context_defaults,
     get_settings,
+    set_settings,
 )
 
 WAIT_DEFAULT = 20
@@ -648,16 +652,20 @@ class LocalTools:
         )
         self.jobs: Dict[str, DeployJob] = {}
         self.request = threading.local()
-
-        context = context_defaults(context_name)
-        identity = hashlib.sha256(
-            f"{context_name}:{context.gateway_host}:{context.token}".encode()
-        ).hexdigest()[:24]
-        self.job_dir = get_settings().config_path.parent / "mcp-jobs" / identity
-        self.job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self.job_dir, 0o700)
         self.login_flow: Optional[auth.DeviceLogin] = None
         self.login_available: bool = auth.login_configured(context_name)
+
+    @property
+    def job_dir(self) -> Path:
+        """Records of the context's current sign-in; a later sign-in to another account gets its own."""
+        context = context_defaults(self.context_name)
+        identity = hashlib.sha256(
+            f"{self.context_name}:{context.gateway_host}:{context.token}".encode()
+        ).hexdigest()[:24]
+        path = get_settings().config_path.parent / "mcp-jobs" / identity
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(path, 0o700)
+        return path
 
     def available(self) -> List[Tool]:
         """(definition, handler) for every tool offered right now."""
@@ -796,9 +804,9 @@ class LocalTools:
         job_id = str(args.get("job_id") or "")
         if len(job_id) != 24 or any(c not in "0123456789abcdef" for c in job_id):
             return error_result("invalid job_id")
+        path = self.job_dir / f"{job_id}.json"
         job = self.jobs.get(job_id)
-        if job is None:
-            path = self.job_dir / f"{job_id}.json"
+        if job is None or job.state_path != path:
             if not path.exists():
                 return error_result("unknown job_id in this context")
             job = DeployJob.load(path)
@@ -1056,18 +1064,30 @@ class LocalTools:
             return error_result(str(exc))
 
 
+def _helper_context(name: str) -> ConfigContext:
+    if JOB_CONTEXT_ENV in os.environ:
+        return ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
+
+    # Servers from before JOB_CONTEXT_ENV pass only the context's name. They
+    # served the CLI installed alongside, and SDKSettings picks Beam's config
+    # file once the beam package is loaded.
+    if importlib.util.find_spec("beam") is not None:
+        importlib.import_module("beam")
+        set_settings(SDKSettings())
+    from .server import context_or_none
+
+    context = context_or_none(name)
+    if context is None:
+        raise RemoteToolError({"error": "Not signed in", "code": "UNAUTHENTICATED"})
+    return context
+
+
 def main() -> None:
     if sys.argv[1] == "create-database":
         # The job supervisor parses the JSON objects printed here; one with an
         # `error` key fails the job with that message.
-        if JOB_CONTEXT_ENV not in os.environ:
-            # Servers older than JOB_CONTEXT_ENV pass only a context name, which
-            # this interpreter would resolve against the wrong config file.
-            message = "This MCP server is older than the installed CLI; restart it in your agent, then retry with the same request_key."
-            print(json.dumps({"error": message}))
-            sys.exit(1)
         try:
-            context = ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
+            context = _helper_context(sys.argv[2])
             print(json.dumps(call_remote(context, "create_database", json.loads(sys.argv[3]))))
         except RemoteToolError as exc:
             print(json.dumps(exc.payload if exc.payload.get("error") else {"error": str(exc)}))
