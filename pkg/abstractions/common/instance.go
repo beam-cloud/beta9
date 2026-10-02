@@ -317,7 +317,15 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 
 	containerDelta := desiredContainers - (state.RunningContainers + state.PendingContainers)
 	if containerDelta > 0 {
-		err = i.StartContainersFunc(containerDelta)
+		// A writable durable disk has one writer, and a stopping container
+		// stays that writer until its final snapshot is published. A
+		// replacement started sooner restores the snapshot before that one.
+		if i.StubConfig != nil && !durableDisksReadOnly(i.StubConfig.Disks) {
+			containerDelta -= state.StoppingContainers
+		}
+		if containerDelta > 0 {
+			err = i.StartContainersFunc(containerDelta)
+		}
 	} else if containerDelta < 0 {
 		err = i.StopContainersFunc(-containerDelta)
 	}
