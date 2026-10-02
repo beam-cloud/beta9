@@ -541,20 +541,18 @@ def _private_file(path: str, flags: int) -> int:
 
 
 class RemoteToolError(RuntimeError):
-    """A gateway tool's error result; `payload` carries its `error` and `code`."""
+    """A gateway tool's error. `payload` carries its `error` and `code`; `result`
+    is the error result the gateway sent, if it sent one."""
 
-    def __init__(self, payload: Dict[str, Any]):
+    def __init__(self, payload: Dict[str, Any], result: Optional[Dict[str, Any]] = None):
         super().__init__(json.dumps(payload))
         self.payload: Dict[str, Any] = payload
+        self.result: Optional[Dict[str, Any]] = result
 
 
-def call_remote(
-    context: Optional[ConfigContext], name: str, arguments: Dict[str, Any]
-) -> Dict[str, Any]:
+def call_remote(context: ConfigContext, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     from .server import RemoteMCP
 
-    if context is None:
-        raise RemoteToolError({"error": "Not signed in", "code": "UNAUTHENTICATED"})
     _, body = RemoteMCP(context).call(
         {
             "jsonrpc": "2.0",
@@ -569,7 +567,8 @@ def call_remote(
         error = body.get("error") or {}
         raise RemoteToolError(
             result.get("structuredContent")
-            or {"error": error.get("message") or "no response from the gateway"}
+            or {"error": error.get("message") or "no response from the gateway"},
+            result if result.get("isError") else None,
         )
     return result.get("structuredContent", {})
 
@@ -778,17 +777,22 @@ class LocalTools:
 
         return job.result(cursor)
 
-    def remote(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        from .server import context_or_none
-
-        return call_remote(context_or_none(self.context_name), name, arguments)
-
-    def database_job(self, arguments: Dict[str, Any], key: str) -> Dict[str, Any]:
+    def signed_in_context(self) -> ConfigContext:
         from .server import context_or_none
 
         context = context_or_none(self.context_name)
         if context is None:
-            return error_result("Not signed in")
+            raise RemoteToolError({"error": "Not signed in", "code": "UNAUTHENTICATED"})
+        return context
+
+    def remote(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        return call_remote(self.signed_in_context(), name, arguments)
+
+    def database_job(self, arguments: Dict[str, Any], key: str) -> Dict[str, Any]:
+        try:
+            context = self.signed_in_context()
+        except RemoteToolError as exc:
+            return error_result(exc.payload["error"])
         command = [
             sys.executable,
             "-m",
@@ -832,29 +836,16 @@ class LocalTools:
         )
 
     def http_artifact(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        from .server import RemoteMCP, context_or_none
+        try:
+            context = self.signed_in_context()
+            deployment = call_remote(
+                context,
+                "get_deployment",
+                {k: args[k] for k in ("name", "deployment_id") if k in args},
+            )
+        except RemoteToolError as exc:
+            return exc.result or error_result(exc.payload.get("error") or str(exc))
 
-        context = context_or_none(self.context_name)
-        if context is None:
-            return error_result("Not signed in")
-
-        remote = RemoteMCP(context)
-        _, message = remote.call(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "get_deployment",
-                    "arguments": {k: args[k] for k in ("name", "deployment_id") if k in args},
-                },
-            }
-        )
-        result = message.get("result", {})
-        if result.get("isError"):
-            return result
-
-        deployment = result.get("structuredContent", {})
         if deployment.get("config", {}).get("tcp"):
             return error_result("Use a native TCP client for this deployment")
         address = deployment.get("url")

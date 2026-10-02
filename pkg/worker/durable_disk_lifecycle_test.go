@@ -50,6 +50,7 @@ func TestDurableDiskSyncFailureExitCode(t *testing.T) {
 		{name: "ttl stop", got: int(types.ContainerExitCodeTtl), want: int(types.ContainerExitCodeUnknownError)},
 		{name: "user stop", got: int(types.ContainerExitCodeUser), want: int(types.ContainerExitCodeUnknownError)},
 		{name: "admin stop", got: int(types.ContainerExitCodeAdmin), want: int(types.ContainerExitCodeUnknownError)},
+		{name: "eviction", got: int(types.ContainerExitCodeEvicted), want: int(types.ContainerExitCodeEvicted)},
 		{name: "oom", got: int(types.ContainerExitCodeOomKill), want: int(types.ContainerExitCodeOomKill)},
 		{name: "existing failure", got: 42, want: 42},
 	} {

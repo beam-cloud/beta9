@@ -314,8 +314,9 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 			result["code"] = "INSUFFICIENT_CREDITS"
 			// A client holding several saved profiles must be able to tell which
 			// workspace was refused; another profile's balance says nothing here.
+			// Job results keep only the message, so it carries both identifiers.
 			if authInfo != nil && authInfo.Workspace != nil {
-				result["error"] = fmt.Sprintf("%s (workspace %s)", err.Error(), authInfo.Workspace.Name)
+				result["error"] = fmt.Sprintf("%s (workspace %s, id %s)", err.Error(), authInfo.Workspace.Name, authInfo.Workspace.ExternalId)
 				result["workspace_id"] = authInfo.Workspace.ExternalId
 				result["workspace_name"] = authInfo.Workspace.Name
 			}

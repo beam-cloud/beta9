@@ -100,7 +100,7 @@ func TestMCPSurfacesCredit(t *testing.T) {
 	require.Equal(t, "INSUFFICIENT_CREDITS", result["code"])
 	require.Equal(t, "ws-1", result["workspace_id"])
 	require.Equal(t, "36dc7a", result["workspace_name"])
-	require.Contains(t, result["error"], "(workspace 36dc7a)")
+	require.Contains(t, result["error"], "(workspace 36dc7a, id ws-1)")
 }
 
 // api runs through the gateway router with the caller's identity; anything the

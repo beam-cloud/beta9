@@ -113,9 +113,9 @@ func (s *Worker) cleanupIdleQcowVolumes() {
 	}
 }
 
-// durableDiskFinalSyncMode separates a container that failed on its own from
-// one that exited cleanly or was stopped by the platform.
-func durableDiskFinalSyncMode(exitCode int) durableDiskSyncMode {
+// exitedCleanly separates a container that exited cleanly or was stopped by
+// the platform from one that failed on its own.
+func exitedCleanly(exitCode int) bool {
 	switch types.ContainerExitCode(exitCode) {
 	case types.ContainerExitCodeSuccess,
 		types.ContainerExitCodeScheduler,
@@ -123,23 +123,27 @@ func durableDiskFinalSyncMode(exitCode int) durableDiskSyncMode {
 		types.ContainerExitCodeUser,
 		types.ContainerExitCodeAdmin,
 		types.ContainerExitCodeEvicted:
-		return durableDiskSyncFinal
+		return true
 	default:
-		return durableDiskSyncFailed
+		return false
 	}
 }
 
+func durableDiskFinalSyncMode(exitCode int) durableDiskSyncMode {
+	if exitedCleanly(exitCode) {
+		return durableDiskSyncFinal
+	}
+	return durableDiskSyncFailed
+}
+
+// durableDiskSyncFailureExitCode reports a failed final sync as a failure
+// unless the container already failed. An eviction keeps its code: replica
+// controllers read it as the authoritative sign of an eviction.
 func durableDiskSyncFailureExitCode(exitCode int) int {
-	switch types.ContainerExitCode(exitCode) {
-	case types.ContainerExitCodeSuccess,
-		types.ContainerExitCodeScheduler,
-		types.ContainerExitCodeTtl,
-		types.ContainerExitCodeUser,
-		types.ContainerExitCodeAdmin:
-		return int(types.ContainerExitCodeUnknownError)
-	default:
+	if !exitedCleanly(exitCode) || types.ContainerExitCode(exitCode) == types.ContainerExitCodeEvicted {
 		return exitCode
 	}
+	return int(types.ContainerExitCodeUnknownError)
 }
 
 func (s *Worker) durableDiskStoppingProgressContext(ctx context.Context, containerID string, refreshInterval time.Duration) (context.Context, func()) {

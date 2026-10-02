@@ -176,7 +176,16 @@ def fake_cli(tmp_path: Path, script: str) -> Path:
     return path
 
 
-def test_deploy_tool_runs_cli_in_directory_and_reports_url(settings, monkeypatch, tmp_path):
+@pytest.fixture
+def local_tools(tmp_path):
+    """Signed-in local tools. Request after `settings` or `two_profiles`: the job
+    directory follows the settings in force when the tools are built."""
+    return mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
+
+
+def test_deploy_tool_runs_cli_in_directory_and_reports_url(
+    settings, local_tools, monkeypatch, tmp_path
+):
     project = tmp_path / "project"
     project.mkdir()
     cli = fake_cli(
@@ -189,8 +198,7 @@ def test_deploy_tool_runs_cli_in_directory_and_reports_url(settings, monkeypatch
     )
     monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
 
-    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
-    result = tools.deploy(
+    result = local_tools.deploy(
         {
             "name": "web",
             "directory": str(project),
@@ -208,7 +216,7 @@ def test_deploy_tool_runs_cli_in_directory_and_reports_url(settings, monkeypatch
     assert body["status"] == "accepted"
     assert body["url"] == "https://x.example" and body["deployment_id"] == "dep-1"
     assert "Deployment accepted for web at https://x.example" in result["content"][0]["text"]
-    job = tools.jobs[body["job_id"]]
+    job = local_tools.jobs[body["job_id"]]
     assert job.directory == str(project)
     assert job.command[1:] == [
         "deploy",
@@ -233,21 +241,20 @@ def test_deploy_tool_runs_cli_in_directory_and_reports_url(settings, monkeypatch
     ]
 
 
-def test_deploy_tool_maps_empty_ports_to_a_worker(settings, monkeypatch, tmp_path):
+def test_deploy_tool_maps_empty_ports_to_a_worker(settings, local_tools, monkeypatch, tmp_path):
     cli = fake_cli(tmp_path, 'printf \'{"deployment_id":"d","stub_id":"s","invoke_url":""}\\n\'')
     monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
-    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
 
-    body = tools.deploy(
+    body = local_tools.deploy(
         {"name": "worker", "entrypoint": ["python", "worker.py"], "ports": [], "wait_seconds": 10}
     )
-    job = tools.jobs[body["structuredContent"]["job_id"]]
+    job = local_tools.jobs[body["structuredContent"]["job_id"]]
 
     assert "--no-ports" in job.command and "--port" not in job.command
     assert "Deployment accepted for worker (deployment d)" in body["content"][0]["text"]
 
 
-def test_deploy_tool_surfaces_cli_failure(settings, monkeypatch, tmp_path):
+def test_deploy_tool_surfaces_cli_failure(settings, local_tools, monkeypatch, tmp_path):
     # Machine mode prints the cause as a pretty-printed object, then a generic one.
     cli = fake_cli(
         tmp_path,
@@ -259,9 +266,8 @@ def test_deploy_tool_surfaces_cli_failure(settings, monkeypatch, tmp_path):
         """,
     )
     monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
-    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
 
-    result = tools.deploy({"name": "web", "wait_seconds": 10})
+    result = local_tools.deploy({"name": "web", "wait_seconds": 10})
 
     assert result["isError"] is True
     text = result["content"][0]["text"]
@@ -292,31 +298,29 @@ def two_profiles(monkeypatch, tmp_path):
     set_settings(None)
 
 
-def test_database_job_hands_its_helper_the_serving_context(two_profiles, monkeypatch, tmp_path):
+def test_database_job_hands_its_helper_the_serving_context(two_profiles, local_tools, monkeypatch):
     started = []
     monkeypatch.setattr(mcp_tools.DeployJob, "start", lambda job: started.append(job) or job.save())
-    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
 
-    tools.create_database_job(
+    local_tools.create_database_job(
         {"kind": "postgres", "name": "db", "request_key": "k1", "wait_seconds": 0}
     )
 
     context = json.loads(started[0].env[mcp_tools.JOB_CONTEXT_ENV])
     assert (context["gateway_host"], context["token"]) == ("served.example", "served-token")
-    assert "served-token" not in next(tools.job_dir.glob("*.json")).read_text()
+    assert "served-token" not in next(local_tools.job_dir.glob("*.json")).read_text()
 
 
-def test_job_supervisor_passes_its_environment_to_the_helper(two_profiles, tmp_path):
-    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
+def test_job_supervisor_passes_its_environment_to_the_helper(two_profiles, local_tools, tmp_path):
     helper = (
         "import json, os; context = json.loads(os.environ['BETA9_MCP_JOB_CONTEXT']);"
         "print(json.dumps({'deployment_id': 'd1', 'token': context['token']}))"
     )
     env = {mcp_tools.JOB_CONTEXT_ENV: json.dumps({"token": "served-token"})}
 
-    view = tools.start_command("db", str(tmp_path), [sys.executable, "-c", helper], "k2", 30, env)[
-        "structuredContent"
-    ]
+    view = local_tools.start_command(
+        "db", str(tmp_path), [sys.executable, "-c", helper], "k2", 30, env
+    )["structuredContent"]
 
     assert view["status"] == "accepted", view
     assert view["deployment"]["token"] == "served-token"
@@ -324,7 +328,10 @@ def test_job_supervisor_passes_its_environment_to_the_helper(two_profiles, tmp_p
 
 def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch, capsys):
     calls = []
-    refused = {"error": "insufficient_credits (workspace 36dc7a)", "code": "INSUFFICIENT_CREDITS"}
+    refused = {
+        "error": "insufficient_credits (workspace 36dc7a, id ws-1)",
+        "code": "INSUFFICIENT_CREDITS",
+    }
 
     def call_remote(context, name, arguments):
         calls.append(context.token)
@@ -347,19 +354,20 @@ def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch
     assert calls == ["served-token", "served-token"]
 
 
-def test_deploy_status_returns_new_log_lines_from_cursor(settings, monkeypatch, tmp_path):
+def test_deploy_status_returns_new_log_lines_from_cursor(
+    settings, local_tools, monkeypatch, tmp_path
+):
     cli = fake_cli(
         tmp_path,
         'echo one; echo two; sleep 1; echo three; printf \'{"deployment_id":"d","stub_id":"s","invoke_url":"u"}\\n\'',
     )
     monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
-    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
 
-    first = tools.deploy({"name": "web", "wait_seconds": 0})["structuredContent"]
+    first = local_tools.deploy({"name": "web", "wait_seconds": 0})["structuredContent"]
     assert first["status"] == "running"
     seen, view = list(first.get("logs", [])), first
     while view["status"] == "running":
-        view = tools.deploy_status(
+        view = local_tools.deploy_status(
             {"job_id": first["job_id"], "log_cursor": view["log_cursor"], "wait_seconds": 10}
         )["structuredContent"]
         seen += view.get("logs", [])
@@ -478,7 +486,7 @@ def test_login_tool_drives_device_flow_and_saves_context(settings, monkeypatch, 
     assert contexts["default"].token == "keep-me"
 
 
-def test_login_tool_reports_denial(settings, monkeypatch, tmp_path):
+def test_login_tool_reports_denial(settings, local_tools, monkeypatch):
     def fake_post(url, json=None, timeout=None):
         if url.endswith("/device/code"):
             return FakeResponse(
@@ -495,11 +503,10 @@ def test_login_tool_reports_denial(settings, monkeypatch, tmp_path):
 
     monkeypatch.setattr(auth.requests, "post", fake_post)
     monkeypatch.setattr(auth, "has_browser", lambda: False)
-    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
-    tools.login({})
-    result = tools.login_status({})
+    local_tools.login({})
+    result = local_tools.login_status({})
     assert result["isError"] is True and "denied" in result["content"][0]["text"]
-    assert tools.login_flow is None
+    assert local_tools.login_flow is None
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="posix paths")

@@ -94,49 +94,12 @@ func TestConsumeScaleResultLetsServeScaleToZero(t *testing.T) {
 }
 
 func TestHandleScalingEventInactiveStopsRunningContainers(t *testing.T) {
-	server, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-
-	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
-	state := &types.ContainerState{
-		ContainerId: "pod-test-stub-00000000",
-		StubId:      "test-stub",
-		WorkspaceId: "test-workspace",
-		Status:      types.ContainerStatusRunning,
-		ScheduledAt: time.Now().Unix(),
-		StartedAt:   time.Now().Unix(),
-		Cpu:         100,
-		Memory:      128,
-	}
-	if err := containerRepo.SetContainerState(state.ContainerId, state); err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	instance, containerRepo := newTestAutoscaledInstance(t, false, nil)
+	seedTestContainer(t, containerRepo, types.ContainerStatusRunning)
 	stopped := make(chan int, 1)
-	instance := &AutoscaledInstance{
-		Ctx:             ctx,
-		CancelFunc:      cancel,
-		Lock:            common.NewRedisLock(rdb),
-		InstanceLockKey: "test-instance-lock",
-		IsActive:        false,
-		Stub:            &types.StubWithRelated{Stub: types.Stub{ExternalId: state.StubId, Type: types.StubType(types.StubTypePodDeployment)}},
-		StubConfig:      &types.StubConfigV1{Autoscaler: &types.Autoscaler{MinContainers: 1, MaxContainers: 1}},
-		ContainerRepo:   containerRepo,
-		StopContainersFunc: func(containersToStop int) error {
-			stopped <- containersToStop
-			return nil
-		},
+	instance.StopContainersFunc = func(containersToStop int) error {
+		stopped <- containersToStop
+		return nil
 	}
 
 	if err := instance.HandleScalingEvent(1); err != nil {
@@ -154,74 +117,48 @@ func TestHandleScalingEventInactiveStopsRunningContainers(t *testing.T) {
 }
 
 // A stopping container remains the writer of a writable durable disk until its
-// final snapshot is published, so its replacement must not start before then.
+// final snapshot is published, so its replacement starts only once it is gone.
 func TestHandleScalingEventWaitsForStoppingDiskWriter(t *testing.T) {
-	writable := []*pb.DurableDisk{{Name: "home"}}
-	readOnly := []*pb.DurableDisk{{Name: "models", ReadOnly: true}}
+	instance, containerRepo := newTestAutoscaledInstance(t, true, []*pb.DurableDisk{{Name: "home"}})
+	writer := seedTestContainer(t, containerRepo, types.ContainerStatusStopping)
+	started := countStarts(t, instance)
+
+	if err := instance.HandleScalingEvent(1); err != nil {
+		t.Fatal(err)
+	}
+	if *started != 0 {
+		t.Fatalf("started %d containers beside the stopping writer, want 0", *started)
+	}
+
+	if err := containerRepo.DeleteContainerState(writer); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.HandleScalingEvent(1); err != nil {
+		t.Fatal(err)
+	}
+	if *started != 1 {
+		t.Fatalf("started %d containers once the writer was gone, want 1", *started)
+	}
+}
+
+func TestHandleScalingEventStartsBesideStoppingContainerWithoutWritableDisk(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		disks    []*pb.DurableDisk
-		stopping bool
-		want     int
+		name  string
+		disks []*pb.DurableDisk
 	}{
-		{name: "writable disk waits for the stopping writer", disks: writable, stopping: true, want: 0},
-		{name: "writable disk starts once the writer is gone", disks: writable, want: 1},
-		{name: "read-only disk does not wait", disks: readOnly, stopping: true, want: 1},
-		{name: "no disk does not wait", stopping: true, want: 1},
+		{name: "read-only disk", disks: []*pb.DurableDisk{{Name: "models", ReadOnly: true}}},
+		{name: "no disk"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server, err := miniredis.Run()
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer server.Close()
-			rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
-			if tc.stopping {
-				state := &types.ContainerState{
-					ContainerId: "pod-test-stub-00000000",
-					StubId:      "test-stub",
-					WorkspaceId: "test-workspace",
-					Status:      types.ContainerStatusStopping,
-					ScheduledAt: time.Now().Unix(),
-					StartedAt:   time.Now().Unix(),
-				}
-				if err := containerRepo.SetContainerState(state.ContainerId, state); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			started := 0
-			instance := &AutoscaledInstance{
-				Ctx:             ctx,
-				CancelFunc:      cancel,
-				Lock:            common.NewRedisLock(rdb),
-				InstanceLockKey: "test-instance-lock",
-				IsActive:        true,
-				Stub:            &types.StubWithRelated{Stub: types.Stub{ExternalId: "test-stub", Type: types.StubType(types.StubTypePodDeployment)}},
-				StubConfig:      &types.StubConfigV1{Autoscaler: &types.Autoscaler{MinContainers: 1, MaxContainers: 1}, Disks: tc.disks},
-				ContainerRepo:   containerRepo,
-				StartContainersFunc: func(containersToStart int) error {
-					started += containersToStart
-					return nil
-				},
-				StopContainersFunc: func(int) error {
-					t.Fatal("a stopping container must not cause another to stop")
-					return nil
-				},
-			}
+			instance, containerRepo := newTestAutoscaledInstance(t, true, tc.disks)
+			seedTestContainer(t, containerRepo, types.ContainerStatusStopping)
+			started := countStarts(t, instance)
 
 			if err := instance.HandleScalingEvent(1); err != nil {
 				t.Fatal(err)
 			}
-			if started != tc.want {
-				t.Fatalf("started %d containers, want %d", started, tc.want)
+			if *started != 1 {
+				t.Fatalf("started %d containers, want 1", *started)
 			}
 		})
 	}
@@ -478,9 +415,10 @@ type testInstanceController struct {
 	instances map[string]*testAutoscaledInstance
 }
 
-func newTestInstanceController(t *testing.T, deployments ...types.DeploymentWithRelated) (*testInstanceController, repository.ContainerRepository) {
+// newTestRedis starts an in-memory Redis for one test and returns a client and
+// a container repository on it.
+func newTestRedis(t *testing.T) (*common.RedisClient, repository.ContainerRepository) {
 	t.Helper()
-
 	server, err := miniredis.Run()
 	if err != nil {
 		t.Fatal(err)
@@ -491,8 +429,64 @@ func newTestInstanceController(t *testing.T, deployments ...types.DeploymentWith
 	if err != nil {
 		t.Fatal(err)
 	}
+	return rdb, repository.NewContainerRedisRepositoryForTest(rdb)
+}
 
-	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
+// newTestAutoscaledInstance builds the instance of a single-container pod
+// deployment, "test-stub", on its own Redis.
+func newTestAutoscaledInstance(t *testing.T, active bool, disks []*pb.DurableDisk) (*AutoscaledInstance, repository.ContainerRepository) {
+	t.Helper()
+	rdb, containerRepo := newTestRedis(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &AutoscaledInstance{
+		Ctx:             ctx,
+		CancelFunc:      cancel,
+		Lock:            common.NewRedisLock(rdb),
+		InstanceLockKey: "test-instance-lock",
+		IsActive:        active,
+		Stub:            &types.StubWithRelated{Stub: types.Stub{ExternalId: "test-stub", Type: types.StubType(types.StubTypePodDeployment)}},
+		StubConfig:      &types.StubConfigV1{Autoscaler: &types.Autoscaler{MinContainers: 1, MaxContainers: 1}, Disks: disks},
+		ContainerRepo:   containerRepo,
+	}, containerRepo
+}
+
+// seedTestContainer records a container of "test-stub" in the given status.
+func seedTestContainer(t *testing.T, containerRepo repository.ContainerRepository, status types.ContainerStatus) string {
+	t.Helper()
+	state := &types.ContainerState{
+		ContainerId: "pod-test-stub-00000000",
+		StubId:      "test-stub",
+		WorkspaceId: "test-workspace",
+		Status:      status,
+		ScheduledAt: time.Now().Unix(),
+		StartedAt:   time.Now().Unix(),
+		Cpu:         100,
+		Memory:      128,
+	}
+	if err := containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+	return state.ContainerId
+}
+
+// countStarts records the containers the instance starts; it must not stop any.
+func countStarts(t *testing.T, instance *AutoscaledInstance) *int {
+	started := new(int)
+	instance.StartContainersFunc = func(containersToStart int) error {
+		*started += containersToStart
+		return nil
+	}
+	instance.StopContainersFunc = func(int) error {
+		t.Error("a stopping container must not cause another to stop")
+		return nil
+	}
+	return started
+}
+
+func newTestInstanceController(t *testing.T, deployments ...types.DeploymentWithRelated) (*testInstanceController, repository.ContainerRepository) {
+	t.Helper()
+	rdb, containerRepo := newTestRedis(t)
 	testController := &testInstanceController{instances: map[string]*testAutoscaledInstance{}}
 	backendRepo := &testInstanceControllerBackendRepo{deployments: deployments}
 
