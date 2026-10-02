@@ -405,29 +405,29 @@ func TestJournalAtItsLimitWaitsForACheckpoint(t *testing.T) {
 	})
 }
 
-// The bypass that lets a freeze flush past a full journal ends with the
-// freeze: writes after the thaw, even while an uncertain pivot is checked,
-// wait for room like any other.
-func TestSealEndsTheJournalBypassWithTheFreeze(t *testing.T) {
+// The bypass that lets a seal flush past a full journal covers the freeze and
+// the thaw, which the seal waits for, and ends with the thaw: writes after
+// it, even while an uncertain pivot is checked, wait for room like any other.
+func TestSealEndsTheJournalBypassWithTheThaw(t *testing.T) {
 	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
-	sealing := func() bool {
+	flushing := func() bool {
 		journal.mu.Lock()
 		defer journal.mu.Unlock()
-		return journal.sealing
+		return journal.flushing
 	}
 	volume.state.Export = string(ExportVhostUser)
 	volume.state.Mountpoint = ""
-	var duringFreeze, atThaw bool
+	var duringFreeze, duringThaw bool
 	volume.freeze = func(ctx context.Context) (func(), error) {
-		duringFreeze = sealing()
-		return func() { atThaw = sealing() }, nil
+		duringFreeze = flushing()
+		return func() { duringThaw = flushing() }, nil
 	}
 
 	if _, _, err := volume.Seal(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	if !duringFreeze || atThaw {
-		t.Fatalf("the bypass must cover the freeze and only the freeze: during=%v at thaw=%v", duringFreeze, atThaw)
+	if !duringFreeze || !duringThaw || flushing() {
+		t.Fatalf("the bypass must cover the freeze and the thaw and end with them: freeze=%v thaw=%v after=%v", duringFreeze, duringThaw, flushing())
 	}
 }
 
@@ -448,13 +448,17 @@ func TestBackloggedCountsWritesSinceTheNewestSeal(t *testing.T) {
 	}
 }
 
-// newThawingVolume returns a journaled volume whose filesystem thaw commits
-// records to the journal, as an ext4 thaw commits its superblock.
-func newThawingVolume(t *testing.T, records []byte) (*Volume, *Journal) {
+// newThawingVolume returns a journaled volume on store whose filesystem thaw
+// commits records through the journal the way the NBD export does, as an ext4
+// thaw commits its superblock.
+func newThawingVolume(t *testing.T, store *memoryJournalStore, records []byte) (*Volume, *Journal) {
 	t.Helper()
-	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
+	volume, _, journal := newTestVolumeWithJournal(t, store)
 	volume.manager = NewManager(Config{Root: volume.manager.root, Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if name == "fsfreeze" && args[0] == "--unfreeze" {
+			if err := journal.WaitForRoom(len(records)); err != nil {
+				return nil, err
+			}
 			return nil, journal.Commit(ctx, records)
 		}
 		return fakeRunner(ctx, name, args...)
@@ -473,7 +477,7 @@ func superblockRewrite(t *testing.T) []byte {
 // every checkpoint interval, forever.
 func TestChangedIgnoresTheThawsSuperblockRewrite(t *testing.T) {
 	ctx := context.Background()
-	volume, journal := newThawingVolume(t, superblockRewrite(t))
+	volume, journal := newThawingVolume(t, newMemoryJournalStore(), superblockRewrite(t))
 	if err := journal.Commit(ctx, journalRecord(t, 0, "wal")); err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +514,7 @@ func TestChangedIgnoresTheThawsSuperblockRewrite(t *testing.T) {
 // the writes after it, and those must not go unpublished.
 func TestChangedCountsAThawCommitCarryingWrites(t *testing.T) {
 	ctx := context.Background()
-	volume, _ := newThawingVolume(t, append(superblockRewrite(t), journalRecord(t, 8192, "wal")...))
+	volume, _ := newThawingVolume(t, newMemoryJournalStore(), append(superblockRewrite(t), journalRecord(t, 8192, "wal")...))
 	sealed, _, err := volume.Seal(ctx, true)
 	if err != nil {
 		t.Fatal(err)
@@ -520,6 +524,27 @@ func TestChangedCountsAThawCommitCarryingWrites(t *testing.T) {
 	}
 	if !volume.Changed() {
 		t.Fatal("a thaw commit carrying other writes is a change")
+	}
+}
+
+// The thaw rewrites the superblock before writers resume, and the seal waits
+// for the thaw. Held for room in a full journal, that write waited on the
+// checkpoint it was part of until the journal failed, and the disk with it.
+func TestSealThawsThroughAFullJournal(t *testing.T) {
+	shorten(t, &journalRoomWait, 200*time.Millisecond)
+	store := newMemoryJournalStore()
+	seedJournalBacklog(t, store, "disk", journalMaxBytes)
+	volume, journal := newThawingVolume(t, store, superblockRewrite(t))
+	journal.Recovered()
+
+	if _, _, err := volume.Seal(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Check(); err != nil {
+		t.Fatalf("the thaw must not wait for the room its seal makes: %v", err)
+	}
+	if _, sequence, _ := journal.State(); volume.thawed != sequence {
+		t.Fatal("the thaw's superblock rewrite must reach the journal")
 	}
 }
 

@@ -340,7 +340,7 @@ func shorten(t *testing.T, setting *time.Duration, value time.Duration) {
 }
 
 // A full journal holds writes until a checkpoint makes room rather than
-// failing the disk, but never holds a seal: its freeze flushes through here.
+// failing the disk, but never holds a flush its volume waits for.
 func TestJournalFullWaitsForACheckpoint(t *testing.T) {
 	shorten(t, &journalRoomWait, 10*time.Second)
 	ctx := context.Background()
@@ -353,10 +353,10 @@ func TestJournalFullWaitsForACheckpoint(t *testing.T) {
 	journal.Recovered()
 
 	waited := holdWrite(t, journal, len(write))
-	journal.Sealing(true)
-	require.NoError(t, <-waited, "a seal must pass a full journal")
+	journal.Flushing(true)
+	require.NoError(t, <-waited, "a flush must pass a full journal")
 	require.NoError(t, journal.Commit(ctx, write))
-	journal.Sealing(false)
+	journal.Flushing(false)
 
 	waited = holdWrite(t, journal, len(write))
 	_, sequence, _ := journal.State()

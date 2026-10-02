@@ -562,16 +562,7 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, fmt.Errorf("add overlay for volume %s: %w", state.Key, err)
 	}
-	// The freeze flushes every dirty page through the journal and cannot wait
-	// for room; once it returns, nothing writes until the thaw, and writes
-	// after it wait like any other.
-	if v.journal != nil {
-		v.journal.Sealing(true)
-	}
-	thaw, err := v.quiesce(ctx)
-	if v.journal != nil {
-		v.journal.Sealing(false)
-	}
+	thaw, err := v.quiesceFlushing(ctx)
 	if err != nil {
 		_ = client.removeNode(ctx, newNode)
 		v.rollbackSeal(previousState, newHeadPath)
@@ -644,6 +635,27 @@ func (v *Volume) sealedLayers() []SealedLayer {
 		sealed = append(sealed, SealedLayer{Path: layer.Path, ParentSnapshotID: parentID})
 	}
 	return sealed
+}
+
+// quiesceFlushing quiesces the head with its journal letting writes past its
+// limits until the returned thaw has run. The freeze flushes every dirty page
+// through the journal and the thaw rewrites the superblock before writers
+// resume; the seal waits for both, so neither can wait for the room the seal
+// is about to make. Writes after the thaw wait like any other.
+func (v *Volume) quiesceFlushing(ctx context.Context) (func(), error) {
+	if v.journal == nil {
+		return v.quiesce(ctx)
+	}
+	v.journal.Flushing(true)
+	thaw, err := v.quiesce(ctx)
+	if err != nil {
+		v.journal.Flushing(false)
+		return nil, err
+	}
+	return func() {
+		thaw()
+		v.journal.Flushing(false)
+	}, nil
 }
 
 // quiesce freezes the head's filesystem for the pivot: host fsfreeze for an
@@ -835,6 +847,12 @@ func (v *Volume) detach(ctx context.Context) error {
 		return os.RemoveAll(v.manager.runtimeDir(v.state.Key))
 	}
 
+	// Nothing checkpoints a detaching volume, so the unmount's flush cannot
+	// wait for room; the next owner recovers what it adds.
+	if v.journal != nil {
+		v.journal.Flushing(true)
+		defer v.journal.Flushing(false)
+	}
 	if err := v.manager.unmount(ctx, v.state.Mountpoint); err != nil {
 		return err
 	}

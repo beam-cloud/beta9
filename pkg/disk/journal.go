@@ -124,7 +124,7 @@ type Journal struct {
 	held       bool // a head naming this owner has committed
 	failed     error
 	recovering bool
-	sealing    bool
+	flushing   bool
 	waiting    int        // writes held by WaitForRoom
 	room       *sync.Cond // wakes writers waiting for the backlog to shrink
 	cancel     context.CancelFunc
@@ -434,14 +434,13 @@ func (j *Journal) Waiting() bool {
 // WaitForRoom holds a write of n bytes for as long as it would take the
 // backlog past its limits, until a checkpoint makes room. Writes no
 // checkpoint could make room for are let through: those made while
-// recovering (see Recovered), and those of a seal's freeze, which flushes
-// every dirty page through the journal and cannot finish while they wait.
-// What they add is bounded by the filesystem's dirty pages, and the seal
+// recovering (see Recovered) or flushing (see Flushing). What they add is
+// bounded by the filesystem's dirty pages, and the next seal or owner
 // publishes it. A journal still full after journalRoomWait fails.
 func (j *Journal) WaitForRoom(n int) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.failed != nil || j.recovering || j.sealing || !j.full(n) {
+	if j.failed != nil || j.recovering || j.flushing || !j.full(n) {
 		return j.failed
 	}
 	j.waiting++
@@ -455,7 +454,7 @@ func (j *Journal) WaitForRoom(n int) error {
 		j.room.Broadcast()
 	})
 	defer timer.Stop()
-	for j.failed == nil && !j.sealing && j.full(n) {
+	for j.failed == nil && !j.flushing && j.full(n) {
 		if expired {
 			j.fail(fmt.Errorf("disk checkpoints made no room in the journal for %s", journalRoomWait))
 			break
@@ -469,12 +468,13 @@ func (j *Journal) WaitForRoom(n int) error {
 	return j.failed
 }
 
-// Sealing brackets a seal's freeze. While it lasts, writes past the limits
-// proceed, since the freeze flushes the filesystem through the journal.
-func (j *Journal) Sealing(active bool) {
+// Flushing brackets a filesystem flush its volume waits for while nothing can
+// checkpoint: a seal's freeze and thaw, or a detach's unmount. While it
+// lasts, writes past the limits proceed.
+func (j *Journal) Flushing(active bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.sealing = active
+	j.flushing = active
 	j.room.Broadcast()
 }
 
