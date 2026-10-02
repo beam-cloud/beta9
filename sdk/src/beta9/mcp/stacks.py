@@ -296,6 +296,13 @@ def _existing_services(
         if not any(app["name"] == service for app in apps):
             continue
         if not current or service not in current.get("apps", []):
+            operation = (current or {}).get("spec", {}).get("operation", {})
+            status = operation.get("services", {}).get(service, {}).get("status")
+            if status in ("failed", "uncertain"):
+                raise ValueError(
+                    f"{service} exists but plan {operation['plan_id']} left it {status}; "
+                    "call stack_resolve for it first"
+                )
             raise ValueError(f"service name belongs to an app outside this stack: {service}")
 
         existing[service] = True
@@ -566,15 +573,7 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         state.pop("lease_until", None)
         state.pop("owner", None)
-        current = tools.remote(
-            "update_stack",
-            {
-                "name": planned["name"],
-                "expected_revision": current["revision"],
-                "add": added,
-                "spec": {"operation": state},
-            },
-        )
+        current = _save_operation(tools, planned["name"], current, state, added)
 
     for name in planned["order"]:
         status = state["services"].get(name, {}).get("status", "pending")
@@ -628,13 +627,24 @@ def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
     step["resolutions"] = history
     state["services"][service] = step
-    current = tools.remote(
+    added = [service] if resolution == "complete" else []
+    current = _save_operation(tools, planned["name"], current, state, added)
+    return text_result("Resolution recorded; continue with stack_apply", **current)
+
+
+def _save_operation(
+    tools: LocalTools,
+    name: str,
+    current: Dict[str, Any],
+    state: Dict[str, Any],
+    added: List[str],
+) -> Dict[str, Any]:
+    return tools.remote(
         "update_stack",
         {
-            "name": planned["name"],
+            "name": name,
             "expected_revision": current["revision"],
-            "add": [service] if resolution == "complete" else [],
+            "add": added,
             "spec": {"operation": state},
         },
     )
-    return text_result("Resolution recorded; continue with stack_apply", **current)

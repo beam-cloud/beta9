@@ -20,12 +20,13 @@ class FakeStackTools:
         self.deployed: List[str] = []
         self.deploy_outcomes: List[str] = []
         self.ready = True
+        self.outside: List[str] = []  # workspace apps no stack owns
 
     def remote(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if name == "list_stacks":
             return {"items": [copy.deepcopy(self.stack)] if self.stack else []}
         if name == "list_apps":
-            return {"items": [{"name": app} for app in self.stack.get("apps", [])]}
+            return {"items": [{"name": app} for app in self.stack.get("apps", []) + self.outside]}
         if name == "create_stack":
             self.stack = {"name": args["name"], "revision": "0", "spec": {}, "apps": []}
             return copy.deepcopy(self.stack)
@@ -111,6 +112,20 @@ def test_a_failed_database_service_is_resolved_and_retried(tmp_path):
     assert text(stacks.apply(tools, {"plan_id": plan_id})) == "Stack applied"
     assert tools.submitted == [f"stack:{plan_id}:db", f"stack:{plan_id}:db:attempt:1"]
     assert tools.stack["apps"] == ["db"]
+
+
+# A create that failed after making the database leaves it outside the stack.
+# A corrected plan must send the caller to stack_resolve, never create it again.
+def test_a_database_left_by_an_unresolved_create_must_be_resolved(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    tools.failures = 1
+    plan_id = database_stack(tools)
+    stacks.apply(tools, {"plan_id": plan_id})
+    tools.outside.append("db")
+
+    with pytest.raises(ValueError, match=f"db exists but plan {plan_id} left it uncertain; call"):
+        database_stack(tools)
+    assert tools.submitted == [f"stack:{plan_id}:db"]
 
 
 def test_an_accepted_resolution_adds_the_service_to_the_stack(tmp_path):
