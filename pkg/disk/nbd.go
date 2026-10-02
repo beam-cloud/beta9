@@ -50,6 +50,10 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 	if len(names) == 0 {
 		return nil, fmt.Errorf("no nbd devices present; is the nbd kernel module loaded?")
 	}
+	// Scan from the highest device. A worker that connects devices without
+	// claiming them takes the lowest free one, so the two meet only on a host
+	// that is nearly out of devices.
+	slices.Reverse(names)
 	var contentionErr error
 	// A spare holds a device too. When every device is taken, one spare is
 	// released and the scan runs once more before the attach fails.

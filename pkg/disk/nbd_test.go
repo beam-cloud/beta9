@@ -206,6 +206,7 @@ func TestAcquireNBDDeviceContinuesAfterKernelContention(t *testing.T) {
 		}
 	}
 
+	var connects []string
 	manager := NewManager(Config{
 		Root:         t.TempDir(),
 		SysBlockPath: sysBlock,
@@ -219,10 +220,11 @@ func TestAcquireNBDDeviceContinuesAfterKernelContention(t *testing.T) {
 				return []byte("6180:2b:1\n"), nil
 			case "nbd-client":
 				deviceName := filepath.Base(args[4])
+				connects = append(connects, deviceName)
 				if err := os.WriteFile(filepath.Join(sysBlock, deviceName, "pid"), []byte("123\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				if deviceName == "nbd0" {
+				if deviceName == "nbd1" {
 					return []byte("Failed to setup device, check dmesg"), fmt.Errorf("exit status 1")
 				}
 				return nil, nil
@@ -237,8 +239,10 @@ func TestAcquireNBDDeviceContinuesAfterKernelContention(t *testing.T) {
 		t.Fatalf("acquire after contention: %v", err)
 	}
 	defer device.release()
-	if device.name != "nbd1" {
-		t.Fatalf("acquired %s after nbd0 contention, want nbd1", device.name)
+	// Workers that do not claim devices take the lowest free one, so the scan
+	// starts at the highest.
+	if strings.Join(connects, ",") != "nbd1,nbd0" || device.name != "nbd0" {
+		t.Fatalf("connected %v and acquired %s, want nbd1 then nbd0 after its contention", connects, device.name)
 	}
 }
 
