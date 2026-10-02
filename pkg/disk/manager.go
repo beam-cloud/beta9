@@ -98,7 +98,7 @@ type Manager struct {
 	sysBlockPath  string
 	devPath       string
 	run           runner
-	execs         bool // run is the real exec runner, so binaries must exist
+	execs         bool // run is the real exec runner, so binaries and devices are the host's
 	maxChainDepth int
 
 	mu      sync.Mutex

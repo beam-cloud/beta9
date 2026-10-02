@@ -19,9 +19,10 @@ import (
 // nbdDevice is an attached kernel NBD device. The flock is held for the whole
 // attachment so concurrent work inside this worker never races on a device.
 type nbdDevice struct {
-	Path string // e.g. /dev/nbd3
-	name string // e.g. nbd3
-	lock *os.File
+	Path  string // e.g. /dev/nbd3
+	name  string // e.g. nbd3
+	lock  *os.File
+	claim *os.File // held until the device is connected; see claimNBDDevice
 }
 
 const (
@@ -59,10 +60,9 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 				continue
 			}
 			if err := m.connectNBDDevice(ctx, device, nbdSocket, expectedSizeBytes); err != nil {
-				// The kernel is the final arbiter across workers whose host mounts
-				// may not share a lock directory. If another worker connected this
-				// device after our free check, keep scanning instead of failing the
-				// container attach.
+				// A process that connects devices without claiming them may
+				// have taken this one after our free check. Keep scanning
+				// instead of failing the container attach.
 				contended := m.nbdDeviceBusy(name)
 				device.release()
 				if contended {
@@ -71,6 +71,9 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 				}
 				return nil, err
 			}
+			// Connected, the device is busy to every other worker, and mount and
+			// mkfs need the exclusive open for themselves.
+			device.unclaim()
 			return device, nil
 		}
 		if attempt == 0 && m.reclaimSpare() {
@@ -216,11 +219,31 @@ func (m *Manager) tryLockNBDDevice(name string) (*nbdDevice, bool) {
 	if !ok {
 		return nil, false
 	}
-	if m.nbdDeviceBusy(name) {
+	// Checking before the claim leaves devices connected and waiting for
+	// their mount alone; checking after catches one connected in between.
+	if m.nbdDeviceBusy(name) || !m.claimNBDDevice(device) || m.nbdDeviceBusy(name) {
 		device.release()
 		return nil, false
 	}
 	return device, true
+}
+
+// claimNBDDevice opens the device exclusively. Workers on one host lock
+// devices in their own directories, and nbd-client resets the device it is
+// given before connecting it, so a second worker connecting a device fails
+// the first one's I/O with EIO. The kernel grants one exclusive open of a
+// block device host-wide and refuses it for a mounted one, while nbd-client
+// opens the device shared, so only the claimant connects it.
+func (m *Manager) claimNBDDevice(device *nbdDevice) bool {
+	if !m.execs {
+		return true
+	}
+	claim, err := os.OpenFile(device.Path, os.O_RDONLY|syscall.O_EXCL, 0)
+	if err != nil {
+		return false
+	}
+	device.claim = claim
+	return true
 }
 
 func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSocket string, expectedSizeBytes int64) error {
@@ -342,10 +365,18 @@ func flockNB(lock *os.File) error {
 }
 
 func (d *nbdDevice) release() {
+	d.unclaim()
 	if d.lock != nil {
 		_ = syscall.Flock(int(d.lock.Fd()), syscall.LOCK_UN)
 		d.lock.Close()
 		d.lock = nil
+	}
+}
+
+func (d *nbdDevice) unclaim() {
+	if d.claim != nil {
+		d.claim.Close()
+		d.claim = nil
 	}
 }
 
