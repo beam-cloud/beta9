@@ -80,6 +80,7 @@ def _clamp(value: Any, default: int) -> int:
 STRING = {"type": "string"}
 INTEGER = {"type": "integer"}
 STRINGS = {"type": "array", "items": STRING}
+DATABASE_KINDS = ["postgres", "redis", "mysql", "mongo"]
 
 DATABASE_JOB_DEFINITION: Dict[str, Any] = {
     "name": "create_database_job",
@@ -91,7 +92,7 @@ DATABASE_JOB_DEFINITION: Dict[str, Any] = {
         "type": "object",
         "required": ["kind", "name", "request_key"],
         "properties": {
-            "kind": {"type": "string", "enum": ["postgres", "redis", "mysql", "mongo"]},
+            "kind": {"type": "string", "enum": DATABASE_KINDS},
             "name": STRING,
             "request_key": {**STRING, "description": "Stable idempotency key for this creation."},
             "always_on": {"type": "boolean"},
@@ -520,9 +521,15 @@ class DeployJob:
         }
         if self.status == "accepted":
             where = f" at {self.deployed['url']}" if self.deployed.get("url") else ""
+            check = "wait_deployment with an application health path"
+            kind = self.deployed["deployment"].get("kind")
+            if kind in ("postgres", "redis"):
+                check = "database_readiness"
+            elif kind in DATABASE_KINDS:
+                check = "database_credentials and a client connection"
             text = (
                 f"Deployment accepted for {self.name}{where} (deployment {self.deployed['deployment_id']}). "
-                "Readiness is not yet verified; use wait_deployment with an application health path."
+                f"Readiness is not yet verified; use {check}."
             )
             return text_result(text, **view)
 

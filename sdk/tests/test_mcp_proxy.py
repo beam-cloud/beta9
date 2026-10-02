@@ -328,6 +328,22 @@ def test_job_supervisor_passes_its_environment_to_the_helper(two_profiles, local
     assert view["deployment"]["token"] == "served-token"
 
 
+@pytest.mark.parametrize(
+    "kind,check",
+    [("postgres", "database_readiness"), ("mysql", "database_credentials and a client connection")],
+)
+def test_accepted_database_names_its_readiness_check(
+    two_profiles, local_tools, tmp_path, kind, check
+):
+    helper = f"import json; print(json.dumps({{'deployment_id': 'd1', 'kind': '{kind}'}}))"
+
+    result = local_tools.start_command(
+        "db", str(tmp_path), [sys.executable, "-c", helper], f"k-{kind}", 30
+    )
+
+    assert f"use {check}." in result["content"][0]["text"]
+
+
 def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch, capsys):
     calls = []
     refused = {
