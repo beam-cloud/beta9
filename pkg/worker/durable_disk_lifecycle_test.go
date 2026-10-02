@@ -218,21 +218,38 @@ func TestDurableDiskStoppingLeaseIsShortOnlyWhenEveryWritableDiskIsJournaled(t *
 	}
 }
 
-func TestClearContainerPublishesTheJournaledLease(t *testing.T) {
-	request := databaseRequest(t, "object-store-flush", types.Mount{
-		MountPath:   "/data",
-		DurableDisk: &types.DurableDiskMountConfig{Name: "db", Size: "1Gi", Driver: types.DurableDiskDriverQcow},
-	})
-	repoClient := &fakeContainerRepoClient{}
-	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
-	worker.diskManager = disk.NewManager(disk.Config{Root: t.TempDir()})
+func TestClearContainerPublishesTheStoppingLease(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		reason types.StopContainerReason
+		want   stoppingLease
+	}{
+		{"journaled disk", "", journaledDiskStoppingLease},
+		// The scheduler counts an eviction victim's resources only while its
+		// state exists, and the victim holds them until finalization ends.
+		{"eviction victim with a journaled disk", types.StopContainerReasonEvicted, snapshotDiskStoppingLease},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := databaseRequest(t, "object-store-flush", types.Mount{
+				MountPath:   "/data",
+				DurableDisk: &types.DurableDiskMountConfig{Name: "db", Size: "1Gi", Driver: types.DurableDiskDriverQcow},
+			})
+			repoClient := &fakeContainerRepoClient{}
+			worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+			worker.diskManager = disk.NewManager(disk.Config{Root: t.TempDir()})
+			instance, exists := worker.containerInstances.Get(request.ContainerId)
+			require.True(t, exists)
+			instance.setStopReason(test.reason)
 
-	worker.clearContainer(request.ContainerId, request, 0, false)
+			require.Equal(t, test.want, worker.containerStoppingLease(request.ContainerId, request))
+			worker.clearContainer(request.ContainerId, request, 0, false)
 
-	updates := repoClient.containerStatusUpdates()
-	require.NotEmpty(t, updates)
-	require.Equal(t, string(types.ContainerStatusStopping), updates[0].Status)
-	require.Equal(t, journaledDiskStoppingLease.expirySeconds, updates[0].ExpirySeconds)
+			updates := repoClient.containerStatusUpdates()
+			require.NotEmpty(t, updates)
+			require.Equal(t, string(types.ContainerStatusStopping), updates[0].Status)
+			require.Equal(t, test.want.expirySeconds, updates[0].ExpirySeconds)
+		})
+	}
 }
 
 func snapshotLeaseEvery(refresh time.Duration) stoppingLease {

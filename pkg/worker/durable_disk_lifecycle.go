@@ -35,6 +35,21 @@ var (
 	journaledDiskStoppingLease = stoppingLease{60, 20 * time.Second, true}
 )
 
+// containerStoppingLease is the lease of an exited durable-disk container. An
+// eviction victim keeps the long lease whatever its disks: it holds its
+// resources until finalization ends, and the worker's capacity counts them
+// only while its state exists.
+func (s *Worker) containerStoppingLease(containerID string, request *types.ContainerRequest) stoppingLease {
+	if s.containerInstances != nil {
+		if instance, exists := s.containerInstances.Get(containerID); exists && instance != nil {
+			if _, reason := instance.lifecycleState(); reason == types.StopContainerReasonEvicted {
+				return snapshotDiskStoppingLease
+			}
+		}
+	}
+	return durableDiskStoppingLease(request)
+}
+
 func durableDiskStoppingLease(request *types.ContainerRequest) stoppingLease {
 	if request == nil {
 		return snapshotDiskStoppingLease
@@ -98,7 +113,7 @@ func (s *Worker) finalizeDurableDiskMounts(containerID string, request *types.Co
 
 func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, containerID string, request *types.ContainerRequest, exitCode int, exitReported bool) (finalExitCode int, finalExitReported bool) {
 	finalExitCode, finalExitReported = exitCode, exitReported
-	progressCtx, stopProgress := s.durableDiskStoppingProgressContext(ctx, containerID, durableDiskStoppingLease(request))
+	progressCtx, stopProgress := s.durableDiskStoppingProgressContext(ctx, containerID, s.containerStoppingLease(containerID, request))
 	defer stopProgress()
 
 	_, syncErr := s.syncDurableDiskMounts(progressCtx, request, durableDiskFinalSyncMode(exitCode))

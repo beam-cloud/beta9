@@ -396,7 +396,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	if hasDurableDisk {
 		// Publish the finalization lease while the heartbeat fence prevents a stale overwrite.
-		s.markContainerStopping(containerId, durableDiskStoppingLease(request).expirySeconds)
+		s.markContainerStopping(containerId, s.containerStoppingLease(containerId, request).expirySeconds)
 	}
 	s.setLocalContainerExitCode(containerId, exitCode)
 	if exists {
