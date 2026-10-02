@@ -36,6 +36,7 @@ type MCPGateway interface {
 	ActiveDeploymentByName(ctx context.Context, workspace *types.Workspace, name string) (*types.DeploymentWithRelated, error)
 	SetDeploymentEnv(ctx context.Context, authInfo *auth.AuthInfo, appName string, set map[string]string, unset []string) (*pb.DeployStubResponse, error)
 	RedeployWithConfig(ctx context.Context, authInfo *auth.AuthInfo, appName string, mutate func(*types.StubConfigV1) error) (*pb.DeployStubResponse, error)
+	RedeployStub(ctx context.Context, authInfo *auth.AuthInfo, deployment *types.DeploymentWithRelated, mutate func(*types.StubConfigV1) error) (*pb.DeployStubResponse, error)
 	SecretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error)
 	DeploymentURL(d *types.DeploymentWithRelated) (string, error)
 	WorkspaceCredit(ctx context.Context, workspace *types.Workspace) *types.CreditStatus

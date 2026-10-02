@@ -457,7 +457,7 @@ func (g *MCPGroup) redeploy(ctx context.Context, a *auth.AuthInfo, args toolArgs
 	}
 	// Rebuilding a managed database's stub moves it to the current lifecycle.
 	if config, err := d.Stub.UnmarshalConfig(); err == nil && config.EffectiveDatabaseConfig() != nil {
-		res, err := g.gws.RedeployWithConfig(ctx, a, d.Name, func(*types.StubConfigV1) error { return nil })
+		res, err := g.gws.RedeployStub(ctx, a, d, func(*types.StubConfigV1) error { return nil })
 		return deployed(res, err, d.Name)
 	}
 	res, err := g.gws.DeployStub(ctx, &pb.DeployStubRequest{StubId: d.Stub.ExternalId, Name: d.Name, Rollout: args.str("rollout")})

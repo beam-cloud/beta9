@@ -37,6 +37,12 @@ func (gws *GatewayService) RedeployWithConfig(ctx context.Context, authInfo *aut
 	if err != nil {
 		return nil, err
 	}
+	return gws.RedeployStub(ctx, authInfo, deployment, mutate)
+}
+
+// RedeployStub deploys a new version of the app from one deployment's config
+// after `mutate` edits it.
+func (gws *GatewayService) RedeployStub(ctx context.Context, authInfo *auth.AuthInfo, deployment *types.DeploymentWithRelated, mutate func(*types.StubConfigV1) error) (*pb.DeployStubResponse, error) {
 	stub, err := gws.backendRepo.GetStubByExternalId(ctx, deployment.Stub.ExternalId)
 	if err != nil {
 		return nil, fmt.Errorf("load stub: %w", err)
