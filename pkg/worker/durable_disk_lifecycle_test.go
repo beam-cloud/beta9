@@ -59,6 +59,29 @@ func TestDurableDiskSyncFailureExitCode(t *testing.T) {
 	}
 }
 
+// Only a container that failed on its own leaves a database disk's writes in
+// its journal; clean exits and platform stops still publish a generation.
+func TestDurableDiskFinalSyncMode(t *testing.T) {
+	for _, code := range []types.ContainerExitCode{
+		types.ContainerExitCodeSuccess,
+		types.ContainerExitCodeScheduler,
+		types.ContainerExitCodeTtl,
+		types.ContainerExitCodeUser,
+		types.ContainerExitCodeAdmin,
+		types.ContainerExitCodeEvicted,
+	} {
+		require.Equal(t, durableDiskSyncFinal, durableDiskFinalSyncMode(int(code)), "exit code %d", code)
+	}
+	for _, code := range []types.ContainerExitCode{
+		types.ContainerExitCodeUnknownError,
+		types.ContainerExitCodeOomKill,
+		types.ContainerExitCodeInvalidCustomImage,
+		42,
+	} {
+		require.Equal(t, durableDiskSyncFailed, durableDiskFinalSyncMode(int(code)), "exit code %d", code)
+	}
+}
+
 func TestFinalizeDurableDiskMountsWithCanceledContextReportsFailure(t *testing.T) {
 	request := &types.ContainerRequest{
 		ContainerId: "container-canceled-durable-finalization",

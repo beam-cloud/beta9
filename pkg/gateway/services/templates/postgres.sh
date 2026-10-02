@@ -4,7 +4,9 @@
 set -eu
 
 export PATH=/usr/lib/postgresql/16/bin:$PATH
-export PGDATA=/var/lib/postgresql/data/pgdata
+CLUSTER=/var/lib/postgresql/data/pgdata
+INITIALIZING=/var/lib/postgresql/data/pgdata.initializing
+export PGDATA=$CLUSTER
 export POSTGRES_INITDB_ARGS=--data-checksums
 export PGHOST=/var/run/postgresql PGUSER="$POSTGRES_USER" PGDATABASE=postgres
 BACKUPS=/volumes/beam-backups
@@ -161,18 +163,41 @@ EOF
         backrest --type=time --target="$BEAM_RESTORE_TIME" --target-action=promote restore
     fi
 
+    # A new cluster is built beside PGDATA and renamed into place only after
+    # its database exists and it shut down cleanly. initdb leaves PG_VERSION
+    # behind when it cannot remove a failed attempt, and the entrypoint would
+    # then boot those partial files as a database on every restart.
+    if [ ! -s "$CLUSTER/PG_VERSION" ]; then
+        rm -rf "$CLUSTER" "$INITIALIZING"
+        export PGDATA=$INITIALIZING
+    fi
+
     trap shutdown TERM INT
     # Keep clients out while crash/PITR recovery and password rotation finish.
     docker-entrypoint.sh postgres -c listen_addresses=127.0.0.1 -c archive_mode=off \
         -c hba_file=/tmp/beam-pg_hba.conf &
     POSTGRES=$!
     ready=false
+    failures=0
     for attempt in $(seq 1 600); do
         kill -0 "$POSTGRES" || { wait "$POSTGRES"; exit 1; }
-        if gosu postgres pg_isready -h 127.0.0.1 >/dev/null 2>&1 &&
-            [ "$(sql -Atc 'SELECT NOT pg_is_in_recovery()' 2>/dev/null || true)" = t ]; then
-            ready=true
-            break
+        if gosu postgres pg_isready -h 127.0.0.1 >/dev/null 2>&1; then
+            if state=$(sql -Atc 'SELECT NOT pg_is_in_recovery()' 2>/tmp/beam-readiness); then
+                failures=0
+                if [ "$state" = t ]; then
+                    ready=true
+                    break
+                fi
+            else
+                # A server that accepts connections but fails this query for
+                # half a minute is damaged, not recovering.
+                failures=$((failures + 1))
+                if [ "$failures" -ge 30 ]; then
+                    echo "Database accepts connections but cannot be queried: $(cat /tmp/beam-readiness)" >&2
+                    shutdown
+                    exit 1
+                fi
+            fi
         fi
         sleep 1
     done
@@ -190,6 +215,15 @@ ALTER ROLE :"role" PASSWORD :'password';
 SQL
     gosu postgres pg_ctl -D "$PGDATA" -m fast -w stop
     wait "$POSTGRES"
+    if [ "$PGDATA" = "$INITIALIZING" ]; then
+        if ! gosu postgres pg_controldata "$PGDATA" | grep -q '^Database cluster state: *shut down$'; then
+            echo "The new database did not shut down cleanly; it is initialized again on restart." >&2
+            exit 1
+        fi
+        mv "$INITIALIZING" "$CLUSTER"
+        sync /var/lib/postgresql/data
+        export PGDATA=$CLUSTER
+    fi
     if [ -n "${BEAM_RESTORE_TIME:-}" ]; then
         touch "$RESTORED"
         sync "$RESTORED" /var/lib/postgresql/data

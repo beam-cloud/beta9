@@ -457,6 +457,56 @@ func TestJournalTakeoverFencesImmediately(t *testing.T) {
 	require.JSONEq(t, string(foreign), string(stored))
 }
 
+// A journal that fails while it still holds its lease releases the head it
+// last committed on close, so the replacement neither waits out the lease nor
+// sees the checkpoint that was attempted after the failure.
+func TestJournalFailedCloseReleasesCommittedHead(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	first, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)
+	require.NoError(t, err)
+	require.NoError(t, first.Commit(ctx, journalRecord(t, 0, "saved")))
+	committed, _ := store.head(t, "disk/head.json")
+
+	first.Fail(errors.New("block device request failed"))
+	require.Error(t, first.Checkpoint(ctx, committed.Sequence, "uncommitted-snapshot"))
+	require.Error(t, first.Close())
+
+	released, _ := store.head(t, "disk/head.json")
+	require.True(t, released.Expires.IsZero(), "a failed owner must release its lease")
+	committed.Expires = released.Expires
+	require.Equal(t, committed, released, "only the lease may change")
+
+	start := time.Now()
+	second, err := OpenJournal(ctx, store, "disk", "second-owner", "", 4096)
+	require.NoError(t, err)
+	defer second.Close()
+	require.Less(t, time.Since(start), journalLease/2, "the replacement must not wait out the failed lease")
+	require.Equal(t, "saved", replaySaved(t, second))
+}
+
+// A failed journal whose head was replaced leaves the replacement's head alone.
+func TestJournalFailedCloseLeavesReplacedHead(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	journal, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)
+	require.NoError(t, err)
+
+	key := "disk/head.json"
+	head, version := store.head(t, key)
+	head.Owner, head.Expires = "replacement-owner", time.Now().Add(2*journalLease)
+	foreign, err := json.Marshal(head)
+	require.NoError(t, err)
+	_, err = store.WriteVersion(ctx, key, foreign, version)
+	require.NoError(t, err)
+
+	require.ErrorIs(t, journal.Commit(ctx, nil), errFenced)
+	require.Error(t, journal.Close())
+	stored, _, err := store.ReadVersion(ctx, key)
+	require.NoError(t, err)
+	require.JSONEq(t, string(foreign), string(stored))
+}
+
 // A foreign head without a newer lease could be a lagging readback of an
 // earlier owner, so it is retried like any other rejection, but it is never
 // adopted and the retries stop when the lease lapses.

@@ -65,7 +65,7 @@ func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, conta
 	)
 	defer stopProgress()
 
-	_, syncErr := s.syncDurableDiskMounts(progressCtx, request, durableDiskSyncFinal)
+	_, syncErr := s.syncDurableDiskMounts(progressCtx, request, durableDiskFinalSyncMode(exitCode))
 	// Final sync can consume or cancel its transfer budget. Detach gets a fresh
 	// cleanup context so the NBD is still released after the container exits.
 	detachErr := s.detachFinalQcowDurableDisks(request)
@@ -110,6 +110,22 @@ func (s *Worker) cleanupIdleQcowVolumes() {
 	defer cancel()
 	if err := s.diskManager.DetachAll(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to detach idle qcow volumes")
+	}
+}
+
+// durableDiskFinalSyncMode separates a container that failed on its own from
+// one that exited cleanly or was stopped by the platform.
+func durableDiskFinalSyncMode(exitCode int) durableDiskSyncMode {
+	switch types.ContainerExitCode(exitCode) {
+	case types.ContainerExitCodeSuccess,
+		types.ContainerExitCodeScheduler,
+		types.ContainerExitCodeTtl,
+		types.ContainerExitCodeUser,
+		types.ContainerExitCodeAdmin,
+		types.ContainerExitCodeEvicted:
+		return durableDiskSyncFinal
+	default:
+		return durableDiskSyncFailed
 	}
 }
 

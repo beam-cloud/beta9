@@ -20,18 +20,29 @@ import threading
 import time
 import uuid
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
 from .. import auth
-from ..config import DEFAULT_CONTEXT_NAME, cli_path, context_defaults, get_settings
+from ..config import (
+    DEFAULT_CONTEXT_NAME,
+    ConfigContext,
+    cli_path,
+    context_defaults,
+    get_settings,
+)
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
 LOG_TAIL = 40
 GENERIC_FAILURE = "Deployment failed"
+# The context a job's helper process calls the gateway with. The helper is a
+# fresh interpreter without the serving CLI's settings (a `beam` install reads
+# ~/.beam/config.ini, bare beta9 ~/.beta9/config.ini), so resolving the context
+# name again there can land in a different workspace.
+JOB_CONTEXT_ENV = "BETA9_MCP_JOB_CONTEXT"
 
 Handler = Callable[[Dict[str, Any]], Dict[str, Any]]
 Tool = Tuple[Dict[str, Any], Handler]  # definition, handler
@@ -300,6 +311,7 @@ class DeployJob:
     state_path: Optional[Path] = None
     pid: int = 0
     context_name: str = DEFAULT_CONTEXT_NAME
+    env: Dict[str, str] = field(default_factory=dict)  # for the helper; never saved
 
     @property
     def log_path(self) -> Optional[Path]:
@@ -375,6 +387,7 @@ class DeployJob:
         # the MCP client's lifetime. Job files are private to this context.
         subprocess.Popen(
             [sys.executable, "-m", "beta9.mcp.tools", str(self.state_path)],
+            env={**os.environ, **self.env},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -383,7 +396,7 @@ class DeployJob:
 
     def _run(self) -> None:
         # Machine mode: errors are JSON objects and prompts fail instead of blocking.
-        env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "BETA9_JSON": "1"}
+        env = {**os.environ, **self.env, "NO_COLOR": "1", "TERM": "dumb", "BETA9_JSON": "1"}
         self.pid = os.getpid()
         self.save()
 
@@ -525,6 +538,40 @@ class DeployJob:
 
 def _private_file(path: str, flags: int) -> int:
     return os.open(path, flags, 0o600)
+
+
+class RemoteToolError(RuntimeError):
+    """A gateway tool's error result; `payload` carries its `error` and `code`."""
+
+    def __init__(self, payload: Dict[str, Any]):
+        super().__init__(json.dumps(payload))
+        self.payload: Dict[str, Any] = payload
+
+
+def call_remote(
+    context: Optional[ConfigContext], name: str, arguments: Dict[str, Any]
+) -> Dict[str, Any]:
+    from .server import RemoteMCP
+
+    if context is None:
+        raise RemoteToolError({"error": "Not signed in", "code": "UNAUTHENTICATED"})
+    _, body = RemoteMCP(context).call(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+    )
+    body = body if isinstance(body, dict) else {}
+    result = body.get("result", {})
+    if "error" in body or result.get("isError") or not result:
+        error = body.get("error") or {}
+        raise RemoteToolError(
+            result.get("structuredContent")
+            or {"error": error.get("message") or "no response from the gateway"}
+        )
+    return result.get("structuredContent", {})
 
 
 def _json_objects(lines: List[str]) -> Tuple[List[Dict[str, Any]], Set[int]]:
@@ -677,6 +724,7 @@ class LocalTools:
         command: List[str],
         key: Optional[str] = None,
         wait_seconds: Optional[int] = 0,
+        env: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         key = str(key or uuid.uuid4().hex)
         job_id = hashlib.sha256(key.encode()).hexdigest()[:24]
@@ -697,6 +745,7 @@ class LocalTools:
                     command=command,
                     state_path=state_path,
                     context_name=self.context_name,
+                    env=env or {},
                 )
                 job.start()
 
@@ -730,24 +779,16 @@ class LocalTools:
         return job.result(cursor)
 
     def remote(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        from .server import RemoteMCP, context_or_none
+        from .server import context_or_none
 
-        remote = RemoteMCP(context_or_none(self.context_name))
-        _, body = remote.call(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {"name": name, "arguments": arguments},
-            }
-        )
-        result = body.get("result", {})
-        if "error" in body or result.get("isError"):
-            raise RuntimeError(json.dumps(result.get("structuredContent") or body.get("error")))
-
-        return result.get("structuredContent", {})
+        return call_remote(context_or_none(self.context_name), name, arguments)
 
     def database_job(self, arguments: Dict[str, Any], key: str) -> Dict[str, Any]:
+        from .server import context_or_none
+
+        context = context_or_none(self.context_name)
+        if context is None:
+            return error_result("Not signed in")
         command = [
             sys.executable,
             "-m",
@@ -756,7 +797,8 @@ class LocalTools:
             self.context_name,
             json.dumps(arguments),
         ]
-        return self.start_command(arguments["name"], self.cwd, command, key)
+        env = {JOB_CONTEXT_ENV: json.dumps(asdict(context))}
+        return self.start_command(arguments["name"], self.cwd, command, key, env=env)
 
     def create_database_job(self, args: Dict[str, Any]) -> Dict[str, Any]:
         arguments = dict(args)
@@ -986,14 +1028,17 @@ class LocalTools:
 
 def main() -> None:
     if sys.argv[1] == "create-database":
-        tools = LocalTools(
-            cwd=None,
-            on_login=lambda: None,
-            signed_in=lambda: True,
-            context_name=sys.argv[2],
-        )
-        result = tools.remote("create_database", json.loads(sys.argv[3]))
-        print(json.dumps(result))
+        # The job supervisor parses the JSON objects printed here; one with an
+        # `error` key fails the job with that message.
+        try:
+            context = ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
+            print(json.dumps(call_remote(context, "create_database", json.loads(sys.argv[3]))))
+        except RemoteToolError as exc:
+            print(json.dumps(exc.payload if exc.payload.get("error") else {"error": str(exc)}))
+            sys.exit(1)
+        except Exception as exc:
+            print(json.dumps({"error": f"create_database failed: {exc}"}))
+            sys.exit(1)
         return
 
     DeployJob.load(Path(sys.argv[1]))._run()

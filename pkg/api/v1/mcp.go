@@ -305,15 +305,22 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 
 	out, err := tool.Run(auth.ContextWithAuthInfo(ctx, authInfo), authInfo, toolArgs(args))
 	if err != nil {
-		code := "ERROR"
+		result := map[string]any{"error": err.Error(), "code": "ERROR"}
 		var te *toolError
 		var insufficient *types.InsufficientCreditsError
 		if errors.As(err, &te) {
-			code = te.Code
+			result["code"] = te.Code
 		} else if errors.As(err, &insufficient) {
-			code = "INSUFFICIENT_CREDITS"
+			result["code"] = "INSUFFICIENT_CREDITS"
+			// A client holding several saved profiles must be able to tell which
+			// workspace was refused; another profile's balance says nothing here.
+			if authInfo != nil && authInfo.Workspace != nil {
+				result["error"] = fmt.Sprintf("%s (workspace %s)", err.Error(), authInfo.Workspace.Name)
+				result["workspace_id"] = authInfo.Workspace.ExternalId
+				result["workspace_name"] = authInfo.Workspace.Name
+			}
 		}
-		return toolResult(map[string]any{"error": err.Error(), "code": code}, true)
+		return toolResult(result, true)
 	}
 
 	failed := false

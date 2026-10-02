@@ -518,14 +518,38 @@ func (j *Journal) Close() error {
 	<-j.done
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.failed != nil {
-		return j.failed
-	}
 	// Releasing the lease lets the next owner start without waiting it out,
 	// so the release gets the same retries as any other head write.
 	ctx, cancel := context.WithTimeout(context.Background(), journalLease)
 	defer cancel()
+	if j.failed != nil {
+		j.releaseCommitted(ctx)
+		return j.failed
+	}
 	err := j.writeHead(ctx, true)
 	j.failed = errors.New("disk journal is closed")
 	return err
+}
+
+// releaseCommitted releases a failed journal's lease. Its in-memory head may
+// hold writes or a checkpoint that never committed, so only the head it last
+// committed is written back, unchanged but for the lease, and only while
+// nothing has replaced that head and its lease still runs: a replacement
+// starts writing only once the lease has lapsed.
+func (j *Journal) releaseCommitted(ctx context.Context) {
+	if j.version == "" {
+		return
+	}
+	readCtx, cancel := context.WithTimeout(ctx, journalTimeout)
+	data, version, err := j.store.ReadVersion(readCtx, j.headKey())
+	cancel()
+	var committed journalHead
+	if err != nil || version != j.version || json.Unmarshal(data, &committed) != nil ||
+		committed.Owner != j.head.Owner || !committed.Expires.After(time.Now()) {
+		return
+	}
+	j.head = committed
+	if err := j.writeHead(ctx, true); err != nil {
+		log.Warn().Err(err).Str("disk", j.prefix).Msg("failed disk journal could not release its lease")
+	}
 }

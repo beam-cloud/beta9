@@ -103,6 +103,20 @@ func (v *Volume) ReadOnly() bool     { return v.state.ReadOnly }
 // volume; empty for NBD volumes.
 func (v *Volume) ExportSocket() string { return v.state.ExportSocket }
 
+// Journaled reports whether every acknowledged write is already durable in
+// the volume's journal, independent of published generations.
+func (v *Volume) Journaled() bool { return v.journal != nil }
+
+// Check reports why the volume's journal stopped committing writes. From
+// then on nothing may be sealed or published: the head can hold writes whose
+// flush failed, and the journal can no longer checkpoint a published layer.
+func (v *Volume) Check() error {
+	if v.journal == nil {
+		return nil
+	}
+	return v.journal.Check()
+}
+
 // attach materializes the chain and brings the volume online. Called with the
 // manager registration already reserved for this key.
 func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSource) (*Volume, error) {
@@ -465,6 +479,9 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	state := v.state
 	if !state.Attached || state.ReadOnly {
 		return nil, false, fmt.Errorf("volume %s is not attached writable", state.Key)
+	}
+	if err := v.Check(); err != nil {
+		return nil, false, fmt.Errorf("seal volume %s: %w", state.Key, err)
 	}
 
 	client, err := dialQMP(ctx, state.QMPSocket)

@@ -115,7 +115,7 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
     monkeypatch.setattr(mcp_server, "context_or_none", lambda name: object())
     monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remote)
 
-    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
+    proxy = mcp_server.StdioProxy(context_name="prod3", cwd=os.getcwd())
     out = run_proxy(
         proxy,
         rpc("initialize", 1),
@@ -131,6 +131,9 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
     batch = next(m for m in out if isinstance(m, list))
     assert init["result"]["serverInfo"]["name"] == "beta9"
     assert init["result"]["instructions"].startswith("remote says hi")
+    # An agent juggling profiles must know which one these tools use.
+    assert "acts on context prod3" in init["result"]["instructions"]
+    assert "mcp install --context NAME" in init["result"]["instructions"]
     names = [t["name"] for t in tools["result"]["tools"]]
     assert names[0] == "whoami" and "deploy" in names and "login" in names
     assert call["result"]["content"][0]["text"] == "called whoami"
@@ -266,6 +269,82 @@ def test_deploy_tool_surfaces_cli_failure(settings, monkeypatch, tmp_path):
         "Deploy of web failed: insufficient_credits (purchase credits at https://p)"
     )
     assert result["structuredContent"]["logs"] == ["Syncing files..."]  # JSON kept out of the log
+
+
+@pytest.fixture
+def two_profiles(monkeypatch, tmp_path):
+    # The serving CLI's settings name one config file (as `beam` does with
+    # ~/.beam/config.ini); a fresh interpreter's defaults find another whose
+    # `default` context is a different workspace.
+    monkeypatch.delenv("CONFIG_PATH", raising=False)
+    monkeypatch.delenv("BETA9_TOKEN", raising=False)
+    served = tmp_path / "served.ini"
+    served.write_text(
+        "[default]\ntoken = served-token\ngateway_host = served.example\ngateway_port = 443\n"
+    )
+    other = tmp_path / "other.ini"
+    other.write_text(
+        "[default]\ntoken = other-token\ngateway_host = other.example\ngateway_port = 443\n"
+    )
+    set_settings(SDKSettings(name="Beam", config_path=served, api_token=None))
+    monkeypatch.setenv("CONFIG_PATH", str(other))
+    yield
+    set_settings(None)
+
+
+def test_database_job_hands_its_helper_the_serving_context(two_profiles, monkeypatch, tmp_path):
+    started = []
+    monkeypatch.setattr(mcp_tools.DeployJob, "start", lambda job: started.append(job) or job.save())
+    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
+
+    tools.create_database_job(
+        {"kind": "postgres", "name": "db", "request_key": "k1", "wait_seconds": 0}
+    )
+
+    context = json.loads(started[0].env[mcp_tools.JOB_CONTEXT_ENV])
+    assert (context["gateway_host"], context["token"]) == ("served.example", "served-token")
+    assert "served-token" not in next(tools.job_dir.glob("*.json")).read_text()
+
+
+def test_job_supervisor_passes_its_environment_to_the_helper(two_profiles, tmp_path):
+    tools = mcp_tools.LocalTools(cwd=str(tmp_path), on_login=lambda: None, signed_in=lambda: True)
+    helper = (
+        "import json, os; context = json.loads(os.environ['BETA9_MCP_JOB_CONTEXT']);"
+        "print(json.dumps({'deployment_id': 'd1', 'token': context['token']}))"
+    )
+    env = {mcp_tools.JOB_CONTEXT_ENV: json.dumps({"token": "served-token"})}
+
+    view = tools.start_command("db", str(tmp_path), [sys.executable, "-c", helper], "k2", 30, env)[
+        "structuredContent"
+    ]
+
+    assert view["status"] == "accepted", view
+    assert view["deployment"]["token"] == "served-token"
+
+
+def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch, capsys):
+    calls = []
+    refused = {"error": "insufficient_credits (workspace 36dc7a)", "code": "INSUFFICIENT_CREDITS"}
+
+    def call_remote(context, name, arguments):
+        calls.append(context.token)
+        if arguments["name"] == "refused":
+            raise mcp_tools.RemoteToolError(refused)
+        return {"deployment_id": "d1"}
+
+    monkeypatch.setattr(mcp_tools, "call_remote", call_remote)
+    monkeypatch.setenv(mcp_tools.JOB_CONTEXT_ENV, json.dumps({"token": "served-token"}))
+
+    monkeypatch.setattr(sys, "argv", ["tools", "create-database", "default", '{"name": "db"}'])
+    mcp_tools.main()
+    assert json.loads(capsys.readouterr().out) == {"deployment_id": "d1"}
+
+    monkeypatch.setattr(sys, "argv", ["tools", "create-database", "default", '{"name": "refused"}'])
+    with pytest.raises(SystemExit) as exited:
+        mcp_tools.main()
+    assert exited.value.code == 1
+    assert json.loads(capsys.readouterr().out) == refused
+    assert calls == ["served-token", "served-token"]
 
 
 def test_deploy_status_returns_new_log_lines_from_cursor(settings, monkeypatch, tmp_path):

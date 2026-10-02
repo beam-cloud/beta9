@@ -610,6 +610,11 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 	if !ok {
 		return nil, fmt.Errorf("qcow durable disk %q is not attached", mount.DurableDisk.Name)
 	}
+	if mode == durableDiskSyncFailed && volume.Journaled() {
+		log.Info().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).
+			Msg("container failed; its disk writes stay in the journal without a new generation")
+		return nil, nil
+	}
 
 	// Fold published layers into the base so a long-running machine can be
 	// snapshotted indefinitely without hitting the local chain depth cap.
@@ -772,6 +777,11 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		SourcePool:          s.poolName,
 		SourceWorkerId:      s.workerId,
 		SourceStorageNodeId: s.storageNodeID(),
+	}
+	// A journal that failed during the upload can no longer checkpoint this
+	// layer; its row would be an orphan that the next publish forks around.
+	if err := volume.Check(); err != nil {
+		return nil, nil, err
 	}
 	resp, err := handleGRPCResponse(s.backendRepoClient.CreateDiskSnapshot(ctx, &pb.CreateDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),

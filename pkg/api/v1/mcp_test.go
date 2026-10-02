@@ -80,7 +80,7 @@ func (c creditGateway) WorkspaceCredit(context.Context, *types.Workspace) *types
 
 func TestMCPSurfacesCredit(t *testing.T) {
 	ctx := context.Background()
-	a := &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-1"}}
+	a := &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-1", Name: "36dc7a"}}
 	denied := &types.CreditStatus{Code: "insufficient_credits", Message: "add credits at https://example/credits"}
 
 	g := newTestMCPGroup()
@@ -96,7 +96,11 @@ func TestMCPSurfacesCredit(t *testing.T) {
 	refused := mcpTool{Name: "refused", Schema: schema(props{}), Run: func(context.Context, *auth.AuthInfo, toolArgs) (any, error) {
 		return nil, &types.InsufficientCreditsError{WorkspaceId: "ws-1", Reason: denied.Message}
 	}}
-	require.Equal(t, "INSUFFICIENT_CREDITS", g.call(ctx, a, &refused, nil)["structuredContent"].(map[string]any)["code"])
+	result := g.call(ctx, a, &refused, nil)["structuredContent"].(map[string]any)
+	require.Equal(t, "INSUFFICIENT_CREDITS", result["code"])
+	require.Equal(t, "ws-1", result["workspace_id"])
+	require.Equal(t, "36dc7a", result["workspace_name"])
+	require.Contains(t, result["error"], "(workspace 36dc7a)")
 }
 
 // api runs through the gateway router with the caller's identity; anything the

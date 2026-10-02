@@ -3,6 +3,7 @@ package disk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -288,6 +289,27 @@ func TestSealPivotsAndPublishes(t *testing.T) {
 	}
 	if len(reloaded.Chain) != 2 || reloaded.Chain[0].SnapshotID != "snap-a" {
 		t.Fatalf("reloaded state mismatch: %+v", reloaded)
+	}
+}
+
+// A volume whose journal failed must not seal: its head can hold writes whose
+// flush failed, and a published layer would offer them as a restore point.
+func TestSealRefusesFailedJournal(t *testing.T) {
+	volume, server := newTestVolume(t)
+	server.writtenB.Store(4096)
+	journal, err := OpenJournal(context.Background(), newMemoryJournalStore(), "disk", "owner", "", 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	volume.journal = journal
+	journal.Fail(errors.New("block device request failed"))
+
+	if _, _, err := volume.Seal(context.Background(), true); err == nil {
+		t.Fatal("a volume with a failed journal must not seal")
+	}
+	if server.pivots.Load() != 0 || len(volume.state.Pending) != 0 {
+		t.Fatalf("a refused seal must leave the volume untouched: pivots=%d pending=%d", server.pivots.Load(), len(volume.state.Pending))
 	}
 }
 
