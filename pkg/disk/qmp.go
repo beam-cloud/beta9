@@ -155,10 +155,12 @@ func (c *qmpClient) commitChain(ctx context.Context, device, topPath, basePath s
 	}
 
 	type jobInfo struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-		Error  string `json:"error"`
+		ID       string `json:"id"`
+		Status   string `json:"status"`
+		Error    string `json:"error"`
+		Progress int64  `json:"current-progress"`
 	}
+	var progress int64
 	for {
 		raw, err := c.execute(ctx, types.QMPCommandQueryJobs, nil)
 		if err != nil {
@@ -184,6 +186,10 @@ func (c *qmpClient) commitChain(ctx context.Context, device, topPath, basePath s
 				return fmt.Errorf("commit job: %s", job.Error)
 			}
 			return nil
+		}
+		if job.Progress > progress {
+			progress = job.Progress
+			reportProgress(ctx)
 		}
 		select {
 		case <-ctx.Done():

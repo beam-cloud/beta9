@@ -395,8 +395,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	if hasDurableDisk {
-		// Publish the long lease while the heartbeat fence prevents a stale overwrite.
-		s.markContainerStopping(containerId, types.ContainerStateTtlSWhileStopping)
+		// Publish the finalization lease while the heartbeat fence prevents a stale overwrite.
+		s.markContainerStopping(containerId, s.containerStoppingLease(containerId, request).expirySeconds)
 	}
 	s.setLocalContainerExitCode(containerId, exitCode)
 	if exists {
@@ -703,6 +703,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 			phaseStart := time.Now()
 			err := s.prepareDurableDiskMounts(startupCtx, request)
 			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleDurableDiskPrepare, phaseStart, err == nil, nil)
+			if err != nil && startupCtx.Err() == nil {
+				outputLogger.Error(fmt.Sprintf("%v\n", err))
+			}
 			return err
 		})
 	}

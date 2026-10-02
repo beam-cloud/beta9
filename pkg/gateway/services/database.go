@@ -6,10 +6,10 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -43,11 +43,16 @@ const (
 	databaseDiskFilesystem  = "ext4"
 
 	postgresScriptPath   = "/tmp/beam-postgres"
-	backupVolumeMount    = "beam-backups"
-	restoreVolumeMount   = "beam-restore"
-	backupStatusMaxAge   = 3 * time.Minute
-	postgresRetention    = 7 * 24 * time.Hour
 	databaseProbeTimeout = 5 * time.Second
+	databaseDiskSuffix   = "abcdefghijklmnopqrstuvwxyz0123456789"
+)
+
+// Object-backed volumes older managed Postgres stubs mount for pgBackRest: the
+// database's own backups and, after a restore, its source's. Nothing reads
+// them any more.
+const (
+	legacyBackupVolumeMount  = "beam-backups"
+	legacyRestoreVolumeMount = "beam-restore"
 )
 
 type databaseProduct struct {
@@ -168,7 +173,7 @@ var databaseProducts = map[string]databaseProduct{
 	types.DatabaseKindPostgres: {
 		Kind:              types.DatabaseKindPostgres,
 		Image:             "docker.io/library/postgres:16",
-		BuildCommands:     []string{"apt-get update && apt-get install -y --no-install-recommends pgbackrest pgbouncer jq && rm -rf /var/lib/apt/lists/*"},
+		BuildCommands:     []string{"apt-get update && apt-get install -y --no-install-recommends pgbouncer && rm -rf /var/lib/apt/lists/*"},
 		SecretEnv:         []string{"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"},
 		Port:              5432,
 		PoolPort:          6432,
@@ -275,9 +280,7 @@ func (n databaseSecretNames) bound() []string { return compact(n.Username, n.Pas
 
 func (n databaseSecretNames) entrypoint(product databaseProduct) []string {
 	if product.Kind == types.DatabaseKindPostgres {
-		script := base64.StdEncoding.EncodeToString([]byte(managedPostgresScript))
-		command := fmt.Sprintf("printf %%s %s | base64 -d > %s; exec sh %s", script, postgresScriptPath, postgresScriptPath)
-		return []string{"sh", "-lc", command}
+		return postgresEntrypoint()
 	}
 	script := strings.NewReplacer(
 		"USER_SECRET", n.Username,
@@ -285,6 +288,30 @@ func (n databaseSecretNames) entrypoint(product databaseProduct) []string {
 		"DATABASE_SECRET", n.Database,
 	).Replace(product.Entrypoint)
 	return []string{"sh", "-lc", script}
+}
+
+func postgresEntrypoint() []string {
+	script := base64.StdEncoding.EncodeToString([]byte(managedPostgresScript))
+	command := fmt.Sprintf("printf %%s %s | base64 -d > %s; exec sh %s", script, postgresScriptPath, postgresScriptPath)
+	return []string{"sh", "-lc", command}
+}
+
+// refreshManagedPostgres moves a stub that runs the managed lifecycle script
+// to the current one. The script is embedded in each stub, so a database keeps
+// the version it was created with until its stub is rebuilt.
+func refreshManagedPostgres(config *types.StubConfigV1) {
+	database := config.EffectiveDatabaseConfig()
+	if database == nil || types.NormalizeDatabaseKind(database.Kind) != types.DatabaseKindPostgres ||
+		!strings.Contains(strings.Join(config.EntryPoint, " "), postgresScriptPath) {
+		return
+	}
+	config.EntryPoint = postgresEntrypoint()
+	config.Volumes = slices.DeleteFunc(config.Volumes, func(volume *pb.Volume) bool {
+		return volume != nil && (volume.MountPath == legacyBackupVolumeMount || volume.MountPath == legacyRestoreVolumeMount)
+	})
+	config.Env = slices.DeleteFunc(config.Env, func(entry string) bool {
+		return strings.HasPrefix(entry, "BEAM_RESTORE_TIME=")
+	})
 }
 
 // CreateDatabaseService provisions a database. The password is only returned here.
@@ -306,14 +333,6 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 	}
 	if p.SnapshotID != "" {
 		if err := gws.prepareDatabaseRestore(ctx, authInfo.Workspace, product, &p); err != nil {
-			return nil, err
-		}
-	}
-	var restoreVolume string
-	if p.RestoreFrom != "" || p.RestoreTime != "" {
-		var err error
-		restoreVolume, err = gws.preparePointInTimeRestore(ctx, authInfo.Workspace, product, &p)
-		if err != nil {
 			return nil, err
 		}
 	}
@@ -357,18 +376,13 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 	if err != nil {
 		return nil, err
 	}
-	request := databaseStubRequest(product, names, p, imageId)
-	if product.Kind == types.DatabaseKindPostgres {
-		volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, p.Name+"-backups")
-		if err != nil {
-			return nil, fmt.Errorf("create backup volume: %w", err)
-		}
-		request.Volumes = []*pb.Volume{{Id: volume.ExternalId, MountPath: backupVolumeMount}}
-		if restoreVolume != "" {
-			request.Volumes = append(request.Volumes, &pb.Volume{Id: restoreVolume, MountPath: restoreVolumeMount})
-			request.Env = append(request.Env, "BEAM_RESTORE_TIME="+p.RestoreTime)
-		}
+	// A disk's snapshots, journal and worker caches are keyed by its name, so a
+	// database created under a deleted one's name must not reuse its disk name.
+	suffix, err := randomString(8, databaseDiskSuffix)
+	if err != nil {
+		return nil, err
 	}
+	request := databaseStubRequest(product, names, p, imageId, p.Name+"-data-"+suffix)
 	stubRes, err := gws.GetOrCreateStub(ctx, request)
 	if err != nil {
 		return nil, err
@@ -397,7 +411,7 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 }
 
 // databaseStubRequest is the pod stub a database runs as: one TCP container on a durable disk.
-func databaseStubRequest(product databaseProduct, names databaseSecretNames, p types.CreateDatabaseParams, imageId string) *pb.GetOrCreateStubRequest {
+func databaseStubRequest(product databaseProduct, names databaseSecretNames, p types.CreateDatabaseParams, imageId, diskName string) *pb.GetOrCreateStubRequest {
 	minContainers := uint32(0)
 	if p.AlwaysOn {
 		minContainers = 1
@@ -463,7 +477,7 @@ func databaseStubRequest(product databaseProduct, names databaseSecretNames, p t
 			},
 		},
 		Disks: []*pb.DurableDisk{{
-			Name: p.Name + "-data", Size: p.Size, MountPath: product.MountPath,
+			Name: diskName, Size: p.Size, MountPath: product.MountPath,
 			Filesystem: databaseDiskFilesystem, Driver: databaseDiskDriver(product),
 			SourceSnapshotId: p.SnapshotID,
 		}},
@@ -472,172 +486,12 @@ func databaseStubRequest(product databaseProduct, names databaseSecretNames, p t
 
 var databaseIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
-func (gws *GatewayService) DatabaseBackups(ctx context.Context, workspace *types.Workspace, name string) (*types.DatabaseBackupStatus, error) {
-	volume, err := gws.backendRepo.GetVolume(ctx, workspace.Id, name+"-backups")
-	if err != nil {
-		return nil, fmt.Errorf("find backup volume: %w", err)
-	}
-	storage, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
-	if err != nil {
-		return nil, err
-	}
-	data, _, err := storage.ReadVersion(ctx, "volumes/"+volume.ExternalId+"/status.json")
-	if err != nil {
-		return nil, fmt.Errorf("read backup status: %w", err)
-	}
-	status := &types.DatabaseBackupStatus{Status: "initializing"}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, status); err != nil {
-			return nil, fmt.Errorf("invalid backup status: %w", err)
-		}
-	}
-	status.VolumeID = volume.ExternalId
-	status.Stale = time.Since(time.Unix(status.ObservedAt, 0)) > backupStatusMaxAge
-	if status.Kind == types.DatabaseKindPostgres && len(status.Repository) > 0 {
-		var repositories []struct {
-			Backup []struct {
-				Error     bool `json:"error"`
-				Timestamp struct {
-					Stop int64 `json:"stop"`
-				} `json:"timestamp"`
-			} `json:"backup"`
-		}
-		if err := json.Unmarshal(status.Repository, &repositories); err != nil {
-			return nil, fmt.Errorf("invalid Postgres backup catalog: %w", err)
-		}
-		var first int64
-		for _, repository := range repositories {
-			for _, backup := range repository.Backup {
-				if !backup.Error && backup.Timestamp.Stop > 0 && (first == 0 || backup.Timestamp.Stop < first) {
-					first = backup.Timestamp.Stop
-				}
-			}
-		}
-		// pgBackRest chooses a base backup whose stop precedes the target.
-		if first == 0 {
-			return status, nil
-		}
-		first = max(first+1, time.Now().Add(-postgresRetention).Unix())
-		if status.ArchiveThrough >= first {
-			start, end := time.Unix(first, 0).UTC(), time.Unix(status.ArchiveThrough, 0).UTC()
-			status.RecoverableFrom, status.RecoverableUntil = &start, &end
-		}
-	}
-	return status, nil
-}
-
-func (gws *GatewayService) preparePointInTimeRestore(ctx context.Context, workspace *types.Workspace, product databaseProduct, p *types.CreateDatabaseParams) (string, error) {
-	if product.Kind != types.DatabaseKindPostgres || p.RestoreFrom == "" || p.RestoreTime == "" || p.SnapshotID != "" {
-		return "", errors.New("Postgres PITR requires restore_from and restore_time, without snapshot_id")
-	}
-	if _, err := gws.backendRepo.GetDisk(ctx, workspace.Id, p.Name+"-data"); err == nil {
-		return "", errors.New("restore requires a new disk name; the existing disk is retained")
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	status, err := gws.DatabaseBackups(ctx, workspace, p.RestoreFrom)
-	if err != nil {
-		return "", err
-	}
-	target, err := time.Parse(time.RFC3339Nano, p.RestoreTime)
-	if err != nil {
-		return "", errors.New("restore_time must be an RFC3339 timestamp including its time zone")
-	}
-	if status.Kind != types.DatabaseKindPostgres || status.RecoverableFrom == nil || status.RecoverableUntil == nil || target.Before(*status.RecoverableFrom) || target.After(*status.RecoverableUntil) {
-		return "", errors.New("restore_time is outside the verified recovery window; inspect database_backups")
-	}
-	source, err := gws.backendRepo.GetDisk(ctx, workspace.Id, p.RestoreFrom+"-data")
-	if err != nil {
-		return "", fmt.Errorf("read retained source disk: %w", err)
-	}
-	if p.Size == "" {
-		p.Size = source.Size
-	}
-	sourceSize, err := resource.ParseQuantity(source.Size)
-	if err != nil {
-		return "", fmt.Errorf("invalid source disk size: %w", err)
-	}
-	size, err := resource.ParseQuantity(p.Size)
-	if err != nil || size.Value() < sourceSize.Value() {
-		return "", errors.New("restore disk cannot be smaller than the source disk")
-	}
-	p.Username, p.Database = status.Username, status.Database
-	p.RestoreTime = target.UTC().Format("2006-01-02 15:04:05.999999999-07:00")
-	return status.VolumeID, nil
-}
-
-// BackupDatabase wakes the existing deployment, then runs its native backup.
-// A timeout is an uncertain outcome: callers must read database_backups first.
-func (gws *GatewayService) BackupDatabase(ctx context.Context, authInfo *auth.AuthInfo, name string) (*types.DatabaseBackupStatus, error) {
-	deployments, product, err := gws.databaseDeployments(ctx, authInfo.Workspace, name)
-	if err != nil {
-		return nil, err
-	}
-	if product.Kind != types.DatabaseKindPostgres {
-		return nil, errors.New("native backup is currently supported for Postgres")
-	}
-	deployment := newestDeployment(deployments)
-	if !deployment.Active {
-		return nil, errors.New("start the database before requesting a backup")
-	}
-	// Legacy services must be upgraded before a native backup can be requested.
-	config, err := deployment.Stub.UnmarshalConfig()
-	if err != nil {
-		return nil, err
-	}
-	if !strings.Contains(strings.Join(config.EntryPoint, " "), postgresScriptPath) {
-		return nil, errors.New("this deployment predates native backups; upgrade it before requesting a backup")
-	}
-	response, err := gws.ScaleDeployment(ctx, &pb.ScaleDeploymentRequest{Id: deployment.ExternalId, Containers: 1})
-	if err != nil {
-		return nil, err
-	}
-	if !response.Ok {
-		return nil, errors.New(response.ErrMsg)
-	}
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
-		if err != nil {
-			return nil, err
-		}
-		for _, container := range containers {
-			if container.Status != types.ContainerStatusRunning {
-				continue
-			}
-			client, _, err := gws.getClient(ctx, container.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
-			if err != nil {
-				return nil, err
-			}
-			result, err := client.ExecContext(ctx, container.ContainerId, "sh "+postgresScriptPath+" backup", nil)
-			if err != nil {
-				return nil, fmt.Errorf("backup outcome uncertain; inspect database_backups and logs before retrying: %w", err)
-			}
-			if !result.Ok {
-				return nil, errors.New("backup failed or another backup is running; inspect database_backups and database logs")
-			}
-			return gws.DatabaseBackups(ctx, authInfo.Workspace, name)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
 func (gws *GatewayService) prepareDatabaseRestore(ctx context.Context, workspace *types.Workspace, product databaseProduct, p *types.CreateDatabaseParams) error {
 	if product.Kind != types.DatabaseKindPostgres && product.Kind != types.DatabaseKindRedis {
 		return errors.New("snapshot restore supports Postgres and Redis")
 	}
 	if product.Kind == types.DatabaseKindPostgres && (p.Username == "" || p.Database == "") {
 		return errors.New("Postgres restore requires the original username and database name; a fresh password is generated")
-	}
-	if _, err := gws.backendRepo.GetDisk(ctx, workspace.Id, p.Name+"-data"); err == nil {
-		return errors.New("restore requires a new disk name; the existing disk is retained")
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
 	}
 	snapshot, err := gws.backendRepo.GetDiskSnapshot(ctx, workspace.Id, p.SnapshotID)
 	if err != nil {
@@ -758,11 +612,30 @@ func (gws *GatewayService) recycleDependents(ctx context.Context, workspace *typ
 	return nil
 }
 
-// DeleteDatabaseService removes the deployments, secrets and app record; the disk is kept.
+// DeleteDatabaseService removes the deployments, secrets, disks and app record.
+// Snapshots already taken of the disks stay, as for any deleted disk.
 func (gws *GatewayService) DeleteDatabaseService(ctx context.Context, authInfo *auth.AuthInfo, name string) error {
 	deployments, product, err := gws.databaseDeployments(ctx, authInfo.Workspace, name)
 	if err != nil {
 		return err
+	}
+	var disks []string
+	var volumes []string
+	for _, d := range deployments {
+		config, err := d.Stub.UnmarshalConfig()
+		if err != nil {
+			return fmt.Errorf("decode stub config: %w", err)
+		}
+		for _, disk := range config.Disks {
+			if disk != nil && disk.Name != "" && !slices.Contains(disks, disk.Name) {
+				disks = append(disks, disk.Name)
+			}
+		}
+		for _, volume := range config.Volumes {
+			if volume != nil && volume.MountPath == legacyBackupVolumeMount {
+				volumes = append(volumes, volume.Id)
+			}
+		}
 	}
 	for _, d := range deployments {
 		res, err := gws.DeleteDeployment(ctx, &pb.DeleteDeploymentRequest{Id: d.ExternalId})
@@ -778,7 +651,40 @@ func (gws *GatewayService) DeleteDatabaseService(ctx context.Context, authInfo *
 			return fmt.Errorf("delete secret %s: %w", secret, err)
 		}
 	}
+	for _, disk := range disks {
+		if err := gws.backendRepo.DeleteDisk(ctx, authInfo.Workspace.Id, disk); err != nil {
+			return fmt.Errorf("delete disk %s: %w", disk, err)
+		}
+	}
+	if err := gws.deleteLegacyBackupVolume(ctx, authInfo.Workspace, name+"-backups", volumes); err != nil {
+		return err
+	}
 	return gws.backendRepo.DeleteApp(ctx, deployments[0].App.ExternalId)
+}
+
+func (gws *GatewayService) deleteLegacyBackupVolume(ctx context.Context, workspace *types.Workspace, name string, mounted []string) error {
+	volume, err := gws.backendRepo.GetVolume(ctx, workspace.Id, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("find backup volume: %w", err)
+	}
+	if !slices.Contains(mounted, volume.ExternalId) {
+		return nil
+	}
+	if workspace.StorageAvailable() {
+		storage, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
+		if err != nil {
+			return err
+		}
+		if _, err := storage.DeleteWithPrefix(ctx, path.Join(types.DefaultVolumesPrefix, volume.ExternalId)); err != nil {
+			return fmt.Errorf("delete backup volume contents: %w", err)
+		}
+	}
+	if err := gws.backendRepo.DeleteVolume(ctx, workspace.Id, volume.Name); err != nil {
+		return fmt.Errorf("delete backup volume: %w", err)
+	}
+	return nil
 }
 
 // ListDatabaseServices returns the newest version of each database service.

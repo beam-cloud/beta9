@@ -3,6 +3,7 @@ package disk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -26,6 +28,7 @@ type fakeQMP struct {
 	mu          sync.Mutex
 	images      map[string][]string // node -> backing chain filenames, head first
 	failCommits bool
+	commitPolls int // query-jobs polls a commit job reports running before it concludes
 	commits     []fakeCommit
 	job         *fakeJob
 }
@@ -33,8 +36,10 @@ type fakeQMP struct {
 type fakeCommit struct{ device, top, base string }
 
 type fakeJob struct {
-	id  string
-	err string
+	id       string
+	err      string
+	running  int
+	progress int
 }
 
 func newFakeQMP(t *testing.T, socketPath string) *fakeQMP {
@@ -118,7 +123,7 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			_ = json.Unmarshal(request.Arguments, &args)
 			f.mu.Lock()
 			f.commits = append(f.commits, fakeCommit{device: args.Device, top: args.Top, base: args.Base})
-			f.job = &fakeJob{id: args.JobID}
+			f.job = &fakeJob{id: args.JobID, running: f.commitPolls}
 			if f.failCommits {
 				f.job.err = "injected commit failure"
 			} else {
@@ -145,11 +150,21 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			fmt.Fprintf(conn, `{"return":{}}`)
 		case types.QMPCommandQueryJobs:
 			f.mu.Lock()
-			job := f.job
+			var job *fakeJob
+			if f.job != nil {
+				copied := *f.job
+				job = &copied
+				if f.job.running > 0 {
+					f.job.running--
+					f.job.progress++
+				}
+			}
 			f.mu.Unlock()
 			switch {
 			case job == nil:
 				fmt.Fprintf(conn, `{"return":[]}`)
+			case job.running > 0:
+				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"running","current-progress":%d}]}`, job.id, job.progress+1)
 			case job.err != "":
 				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"concluded","error":%q}]}`, job.id, job.err)
 			default:
@@ -288,6 +303,285 @@ func TestSealPivotsAndPublishes(t *testing.T) {
 	}
 	if len(reloaded.Chain) != 2 || reloaded.Chain[0].SnapshotID != "snap-a" {
 		t.Fatalf("reloaded state mismatch: %+v", reloaded)
+	}
+}
+
+// newTestVolumeWithJournal returns a test volume journaled to store, with a
+// written block, so a seal has a layer to cut.
+func newTestVolumeWithJournal(t *testing.T, store *memoryJournalStore) (*Volume, *fakeQMP, *Journal) {
+	t.Helper()
+	volume, server := newTestVolume(t)
+	server.writtenB.Store(4096)
+	journal, err := OpenJournal(context.Background(), store, "disk", "owner", "", 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { journal.Close() })
+	volume.journal = journal
+	return volume, server, journal
+}
+
+// A volume whose journal failed must not seal: its head can hold writes whose
+// flush failed, and a published layer would offer them as a restore point.
+func TestSealRefusesFailedJournal(t *testing.T) {
+	volume, server, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
+	journal.Fail(errors.New("block device request failed"))
+
+	if _, _, err := volume.Seal(context.Background(), true); err == nil {
+		t.Fatal("a volume with a failed journal must not seal")
+	}
+	if server.pivots.Load() != 0 || len(volume.state.Pending) != 0 {
+		t.Fatalf("a refused seal must leave the volume untouched: pivots=%d pending=%d", server.pivots.Load(), len(volume.state.Pending))
+	}
+}
+
+// A journal can fail between a layer's upload and its checkpoint; the caller
+// must be able to tell that the published snapshot never became the disk's.
+func TestMarkPublishedReportsMissedCheckpoint(t *testing.T) {
+	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
+	sealed, _, err := volume.Seal(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.Fail(errors.New("disk ownership lost"))
+
+	if err := volume.MarkPublished(sealed[0].Path, "snap-a"); !errors.Is(err, ErrNotCheckpointed) {
+		t.Fatalf("a refused checkpoint must report ErrNotCheckpointed, got %v", err)
+	}
+	if len(volume.state.Chain) != 0 || len(volume.state.Pending) != 1 {
+		t.Fatalf("an unrecorded layer must stay pending: chain=%d pending=%d", len(volume.state.Chain), len(volume.state.Pending))
+	}
+}
+
+// A journal recovered at its limit holds the first write after recovery until
+// a checkpoint makes room. Without one the write fails the journal, a failed
+// journal never seals, and the backlog survives for the next attachment to
+// checkpoint.
+func TestJournalAtItsLimitWaitsForACheckpoint(t *testing.T) {
+	ctx := context.Background()
+	write := journalRecord(t, 0, "wal")
+
+	t.Run("never checkpointed", func(t *testing.T) {
+		shorten(t, &journalRoomWait, 20*time.Millisecond)
+		store := newMemoryJournalStore()
+		seedJournalBacklog(t, store, "disk", journalMaxBytes)
+		volume, _, journal := newTestVolumeWithJournal(t, store)
+		journal.Recovered()
+		if err := journal.WaitForRoom(len(write)); err == nil {
+			t.Fatal("a write no checkpoint makes room for must fail the journal")
+		}
+		if _, _, err := volume.Seal(ctx, true); err == nil {
+			t.Fatal("a failed journal must not seal")
+		}
+		journal.Close()
+
+		next, err := OpenJournal(ctx, store, "disk", "next-owner", "", 1<<30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer next.Close()
+		if !next.NeedsCheckpoint() {
+			t.Fatal("the backlog must outlive the refused write")
+		}
+	})
+
+	t.Run("checkpointing first", func(t *testing.T) {
+		store := newMemoryJournalStore()
+		seedJournalBacklog(t, store, "disk", journalMaxBytes)
+		volume, _, journal := newTestVolumeWithJournal(t, store)
+		sealed, _, err := volume.Seal(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := volume.MarkPublished(sealed[0].Path, "snap-1"); err != nil {
+			t.Fatal(err)
+		}
+		if journal.NeedsCheckpoint() {
+			t.Fatal("the checkpoint must empty the backlog")
+		}
+		if err := journal.Commit(ctx, write); err != nil {
+			t.Fatalf("a write after the checkpoint must commit: %v", err)
+		}
+	})
+}
+
+// The bypass that lets a seal flush past a full journal covers the freeze and
+// the thaw, which the seal waits for, and ends with the thaw: writes after
+// it, even while an uncertain pivot is checked, wait for room like any other.
+func TestSealEndsTheJournalBypassWithTheThaw(t *testing.T) {
+	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
+	flushing := func() bool {
+		journal.mu.Lock()
+		defer journal.mu.Unlock()
+		return journal.flushing
+	}
+	volume.state.Export = string(ExportVhostUser)
+	volume.state.Mountpoint = ""
+	var duringFreeze, duringThaw bool
+	volume.freeze = func(ctx context.Context) (func(), error) {
+		duringFreeze = flushing()
+		return func() { duringThaw = flushing() }, nil
+	}
+
+	if _, _, err := volume.Seal(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !duringFreeze || !duringThaw || flushing() {
+		t.Fatalf("the bypass must cover the freeze and the thaw and end with them: freeze=%v thaw=%v after=%v", duringFreeze, duringThaw, flushing())
+	}
+}
+
+// Writes a seal holds are being published; only newer ones make a volume
+// backlogged.
+func TestBackloggedCountsWritesSinceTheNewestSeal(t *testing.T) {
+	store := newMemoryJournalStore()
+	seedJournalBacklog(t, store, "disk", journalCheckpointBytes)
+	volume, _, journal := newTestVolumeWithJournal(t, store)
+	if !volume.Backlogged() {
+		t.Fatal("a checkpoint's worth of unsealed writes must count")
+	}
+	if _, _, err := volume.Seal(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if volume.Backlogged() || !journal.NeedsCheckpoint() {
+		t.Fatal("sealed writes must not count, though the journal holds them until they are published")
+	}
+}
+
+// newThawingVolume returns a journaled volume on store whose filesystem thaw
+// commits records through the journal the way the NBD export does, as an ext4
+// thaw commits its superblock.
+func newThawingVolume(t *testing.T, store *memoryJournalStore, records []byte) (*Volume, *Journal) {
+	t.Helper()
+	volume, _, journal := newTestVolumeWithJournal(t, store)
+	volume.manager = NewManager(Config{Root: volume.manager.root, Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "fsfreeze" && args[0] == "--unfreeze" {
+			if err := journal.WaitForRoom(len(records)); err != nil {
+				return nil, err
+			}
+			return nil, journal.Commit(ctx, records)
+		}
+		return fakeRunner(ctx, name, args...)
+	}})
+	return volume, journal
+}
+
+// superblockRewrite is the journal record of an ext4 thaw: the 4 KiB block
+// holding the superblock.
+func superblockRewrite(t *testing.T) []byte {
+	return journalRecord(t, 0, strings.Repeat("s", 4096))
+}
+
+// Thawing ext4 rewrites its superblock, so every seal leaves a commit in the
+// journal. Counted as a change, it gave idle databases an empty generation on
+// every checkpoint interval, forever.
+func TestChangedIgnoresTheThawsSuperblockRewrite(t *testing.T) {
+	ctx := context.Background()
+	volume, journal := newThawingVolume(t, newMemoryJournalStore(), superblockRewrite(t))
+	if err := journal.Commit(ctx, journalRecord(t, 0, "wal")); err != nil {
+		t.Fatal(err)
+	}
+	if !volume.Changed() {
+		t.Fatal("an unsealed write is a change")
+	}
+
+	sealed, _, err := volume.Seal(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !volume.Changed() {
+		t.Fatal("a sealed layer awaiting publication is a change")
+	}
+	if err := volume.MarkPublished(sealed[0].Path, "snap-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pending := journal.State(); pending == 0 {
+		t.Fatal("the thaw's rewrite must stay journaled")
+	}
+	if volume.Changed() {
+		t.Fatal("the thaw's rewrite alone is not a change")
+	}
+
+	if err := journal.Commit(ctx, journalRecord(t, 0, "wal")); err != nil {
+		t.Fatal(err)
+	}
+	if !volume.Changed() {
+		t.Fatal("a write after the thaw is a change")
+	}
+}
+
+// Without FUA the thaw's rewrite would reach the journal in the same commit as
+// the writes after it, and those must not go unpublished.
+func TestChangedCountsAThawCommitCarryingWrites(t *testing.T) {
+	ctx := context.Background()
+	volume, _ := newThawingVolume(t, newMemoryJournalStore(), append(superblockRewrite(t), journalRecord(t, 8192, "wal")...))
+	sealed, _, err := volume.Seal(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := volume.MarkPublished(sealed[0].Path, "snap-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !volume.Changed() {
+		t.Fatal("a thaw commit carrying other writes is a change")
+	}
+}
+
+// The thaw rewrites the superblock before writers resume, and the seal waits
+// for the thaw. Held for room in a full journal, that write waited on the
+// checkpoint it was part of until the journal failed, and the disk with it.
+func TestSealThawsThroughAFullJournal(t *testing.T) {
+	shorten(t, &journalRoomWait, 200*time.Millisecond)
+	store := newMemoryJournalStore()
+	seedJournalBacklog(t, store, "disk", journalMaxBytes)
+	volume, journal := newThawingVolume(t, store, superblockRewrite(t))
+	journal.Recovered()
+
+	if _, _, err := volume.Seal(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Check(); err != nil {
+		t.Fatalf("the thaw must not wait for the room its seal makes: %v", err)
+	}
+	if _, sequence, _ := journal.State(); volume.thawed != sequence {
+		t.Fatal("the thaw's superblock rewrite must reach the journal")
+	}
+}
+
+// Compaction follows a publish, so a chain at the cap needs one before the
+// caller can seal again; the caller has to be able to tell.
+func TestSealAtTheChainDepthCapReportsIt(t *testing.T) {
+	volume, server := newTestVolume(t)
+	server.writtenB.Store(4096)
+	volume.manager.maxChainDepth = volume.Depth()
+
+	if _, _, err := volume.Seal(context.Background(), true); !errors.Is(err, ErrMaxChainDepth) {
+		t.Fatalf("a seal at the cap must report ErrMaxChainDepth, got %v", err)
+	}
+	if server.pivots.Load() != 0 {
+		t.Fatal("a refused seal must not pivot")
+	}
+}
+
+// A retried checkpoint publishes what its failed attempts sealed instead of
+// cutting another layer on every retry.
+func TestUnpublishedLeavesTheHeadAlone(t *testing.T) {
+	volume, server := newTestVolume(t)
+	server.writtenB.Store(4096)
+	if layers := volume.Unpublished(); len(layers) != 0 {
+		t.Fatalf("nothing is sealed yet, got %v", layers)
+	}
+	sealed, _, err := volume.Seal(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	layers := volume.Unpublished()
+	if len(layers) != 1 || layers[0] != sealed[0] {
+		t.Fatalf("expected the sealed layer %v, got %v", sealed, layers)
+	}
+	if server.pivots.Load() != 1 || len(volume.state.Pending) != 1 {
+		t.Fatalf("Unpublished must not seal: pivots=%d pending=%d", server.pivots.Load(), len(volume.state.Pending))
 	}
 }
 
@@ -431,6 +725,23 @@ func TestCompactMergesPublishedChainIntoBase(t *testing.T) {
 	}
 	if !fileExists(paths[0]) {
 		t.Fatal("base layer must survive compaction")
+	}
+}
+
+// A live commit uploads nothing, so its job's progress is what tells a
+// caller's watchdog that a long merge is still working.
+func TestCompactReportsCommitProgress(t *testing.T) {
+	volume, server, _ := newCompactVolume(t)
+	server.mu.Lock()
+	server.commitPolls = 3
+	server.mu.Unlock()
+
+	var reports atomic.Int64
+	if err := volume.Compact(WithProgress(context.Background(), func() { reports.Add(1) })); err != nil {
+		t.Fatal(err)
+	}
+	if reports.Load() != 3 {
+		t.Fatalf("each advance of the commit job must report progress once, got %d reports", reports.Load())
 	}
 }
 

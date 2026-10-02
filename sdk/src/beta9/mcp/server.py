@@ -234,7 +234,11 @@ class StdioProxy:
                 body.get("result", {}).get("instructions", "") if isinstance(body, dict) else ""
             )
             instructions = (
-                f"{remote} Local tools run on this machine: `deploy` ships a project directory with the "
+                f"{remote} Every tool here acts on context {self.context_name}, the workspace "
+                f"`whoami` reports. CLI commands run with another `--context` act on a different "
+                f"workspace; to switch these tools, run `{cli} mcp install --context NAME` and "
+                "restart the client. "
+                f"Local tools run on this machine: `deploy` ships a project directory with the "
                 f"{cli} CLI (Dockerfile, image, or file:function handler) and returns a job; poll "
                 "`deploy_status` until accepted, then verify readiness with wait_deployment "
                 "and wire it with connect_services or set_env."

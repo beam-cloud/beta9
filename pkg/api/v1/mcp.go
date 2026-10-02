@@ -25,8 +25,6 @@ const mcpProtocolVersion = "2025-03-26"
 // MCPGateway is what the tools need from the assembled gateway service.
 type MCPGateway interface {
 	DatabaseManager
-	DatabaseBackups(context.Context, *types.Workspace, string) (*types.DatabaseBackupStatus, error)
-	BackupDatabase(context.Context, *auth.AuthInfo, string) (*types.DatabaseBackupStatus, error)
 	ListDeployments(ctx context.Context, in *pb.ListDeploymentsRequest) (*pb.ListDeploymentsResponse, error)
 	StopDeployment(ctx context.Context, in *pb.StopDeploymentRequest) (*pb.StopDeploymentResponse, error)
 	StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error)
@@ -38,6 +36,7 @@ type MCPGateway interface {
 	ActiveDeploymentByName(ctx context.Context, workspace *types.Workspace, name string) (*types.DeploymentWithRelated, error)
 	SetDeploymentEnv(ctx context.Context, authInfo *auth.AuthInfo, appName string, set map[string]string, unset []string) (*pb.DeployStubResponse, error)
 	RedeployWithConfig(ctx context.Context, authInfo *auth.AuthInfo, appName string, mutate func(*types.StubConfigV1) error) (*pb.DeployStubResponse, error)
+	RedeployStub(ctx context.Context, authInfo *auth.AuthInfo, deployment *types.DeploymentWithRelated, mutate func(*types.StubConfigV1) error) (*pb.DeployStubResponse, error)
 	SecretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error)
 	DeploymentURL(d *types.DeploymentWithRelated) (string, error)
 	WorkspaceCredit(ctx context.Context, workspace *types.Workspace) *types.CreditStatus
@@ -305,15 +304,23 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 
 	out, err := tool.Run(auth.ContextWithAuthInfo(ctx, authInfo), authInfo, toolArgs(args))
 	if err != nil {
-		code := "ERROR"
+		result := map[string]any{"error": err.Error(), "code": "ERROR"}
 		var te *toolError
 		var insufficient *types.InsufficientCreditsError
 		if errors.As(err, &te) {
-			code = te.Code
+			result["code"] = te.Code
 		} else if errors.As(err, &insufficient) {
-			code = "INSUFFICIENT_CREDITS"
+			result["code"] = "INSUFFICIENT_CREDITS"
+			// A client holding several saved profiles must be able to tell which
+			// workspace was refused; another profile's balance says nothing here.
+			// Job results keep only the message, so it carries both identifiers.
+			if authInfo != nil && authInfo.Workspace != nil {
+				result["error"] = fmt.Sprintf("%s (workspace %s, id %s)", err.Error(), authInfo.Workspace.Name, authInfo.Workspace.ExternalId)
+				result["workspace_id"] = authInfo.Workspace.ExternalId
+				result["workspace_name"] = authInfo.Workspace.Name
+			}
 		}
-		return toolResult(map[string]any{"error": err.Error(), "code": code}, true)
+		return toolResult(result, true)
 	}
 
 	failed := false

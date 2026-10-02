@@ -14,11 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
@@ -106,6 +108,24 @@ func TestDurableDiskSeedFallsBackToTheStubConfig(t *testing.T) {
 	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "fork-disk"}}
 
 	require.Equal(t, "snapshot-source", durableDiskSourceSnapshotFromStub(request, mount.DurableDisk.Name))
+}
+
+// A missed checkpoint usually surfaces while the container is stopping, after
+// the publish context is gone; the withdrawal must still reach the gateway.
+func TestWithdrawQcowSnapshotOutlivesTheCanceledPublish(t *testing.T) {
+	backendRepo := &fakeBackendRepoClient{}
+	worker := &Worker{ctx: context.Background(), backendRepoClient: backendRepo}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	worker.withdrawQcowSnapshot(ctx, &types.ContainerRequest{WorkspaceId: "workspace"},
+		&types.DiskSnapshot{ExternalId: "snapshot", DiskName: "db"}, disk.ErrNotCheckpointed)
+
+	require.Equal(t, &pb.FailDiskSnapshotRequest{
+		WorkspaceId: "workspace",
+		SnapshotId:  "snapshot",
+		Reason:      disk.ErrNotCheckpointed.Error(),
+	}, backendRepo.failedSnapshot)
 }
 
 func TestSeedDurableDiskSnapshotRefusesAnEmptyDiskWhenTheSourceIsGone(t *testing.T) {
@@ -351,29 +371,26 @@ func TestDurableDiskInactivityWatchdogResetsOnlyOnProgress(t *testing.T) {
 	}
 }
 
-// Prevents this: flattening or committing a many-gigabyte qcow chain uploads
-// nothing for minutes, the watchdog read the silence as a stall, and snapshots
-// of exactly the heaviest disks always failed around the inactivity deadline.
-func TestDurableDiskPhaseHeartbeatKeepsTheWatchdogFed(t *testing.T) {
+// Flattening, hashing, or committing a many-gigabyte qcow chain uploads
+// nothing for minutes, so the work's own progress must keep the watchdog fed;
+// once it stops, silence must still fail a stalled snapshot rather than hold
+// a checkpoint open.
+func TestDurableDiskWorkProgressFeedsTheWatchdog(t *testing.T) {
+	layer := filepath.Join(t.TempDir(), "layer")
+	require.NoError(t, os.WriteFile(layer, bytes.Repeat([]byte{1}, 4096), 0o600))
 	ctx, stop := withDurableDiskInactivityWatchdog(context.Background(), 80*time.Millisecond)
 	defer stop()
 
-	stopHeartbeat := durableDiskPhaseHeartbeat(ctx, 20*time.Millisecond)
-	time.Sleep(300 * time.Millisecond)
-	select {
-	case <-ctx.Done():
-		t.Fatal("watchdog expired during a heartbeat-covered phase")
-	default:
+	for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		_, err := disk.ScanLayer(ctx, layer, func(digest string) string { return digest })
+		require.NoError(t, err, "the watchdog must not expire while the work progresses")
 	}
 
-	// Once the phase ends the watchdog is armed again: silence after the
-	// heartbeat stops must still catch a genuinely stalled snapshot.
-	stopHeartbeat()
 	select {
 	case <-ctx.Done():
 		require.ErrorIs(t, context.Cause(ctx), errDurableDiskSnapshotInactive)
 	case <-time.After(400 * time.Millisecond):
-		t.Fatal("watchdog did not cancel after the heartbeat stopped")
+		t.Fatal("watchdog did not cancel once the work stopped progressing")
 	}
 }
 
@@ -1372,6 +1389,47 @@ func TestQcowUploadChunksSkipsChunksKnownToTheChain(t *testing.T) {
 	// nothing.
 	full := worker.qcowUploadChunks("other-volume", layer)
 	require.Len(t, full.Chunks, 3)
+}
+
+// Writers wait on a backlogged journal's checkpoint, so it publishes its small
+// layer instead of the whole flattened disk, but stops deferring well before
+// the chain gets too long to attach.
+func TestFlattenQcowChainDefersWhileBacklogged(t *testing.T) {
+	for _, tc := range []struct {
+		depth      int
+		backlogged bool
+		flatten    bool
+	}{
+		{disk.DefaultFlattenDepth - 2, false, false},
+		{disk.DefaultFlattenDepth - 1, false, true},
+		{disk.DefaultFlattenDepth - 1, true, false},
+		{disk.DefaultMaxChainDepth/2 - 1, true, true},
+	} {
+		require.Equal(t, tc.flatten, flattenQcowChain(tc.depth, tc.backlogged), "depth %d backlogged %v", tc.depth, tc.backlogged)
+	}
+}
+
+// A flatten under way gives way once the journal wants another checkpoint,
+// and the cause survives stopping it so the publish falls back to the sealed
+// layer.
+func TestUntilBackloggedDefersTheFlatten(t *testing.T) {
+	var backlogged atomic.Bool
+	ctx, stop := untilBacklogged(context.Background(), backlogged.Load)
+	defer stop()
+	select {
+	case <-ctx.Done():
+		t.Fatal("a quiet journal must let the flatten run")
+	case <-time.After(qcowFlattenBacklogPoll + 200*time.Millisecond):
+	}
+
+	backlogged.Store(true)
+	select {
+	case <-ctx.Done():
+	case <-time.After(3 * qcowFlattenBacklogPoll):
+		t.Fatal("a backlogged journal must cancel the flatten")
+	}
+	stop()
+	require.ErrorIs(t, context.Cause(ctx), errQcowFlattenDeferred)
 }
 
 func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing.T) {

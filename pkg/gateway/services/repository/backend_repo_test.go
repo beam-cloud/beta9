@@ -25,6 +25,57 @@ func (r *diskSnapshotDownloadBackendRepo) GetWorkspaceByExternalId(context.Conte
 	return types.Workspace{}, nil
 }
 
+type failDiskSnapshotBackendRepo struct {
+	repository.BackendRepository
+	snapshot *types.DiskSnapshot
+	updated  *types.DiskSnapshot
+}
+
+func (r *failDiskSnapshotBackendRepo) GetWorkspaceByExternalId(_ context.Context, externalID string) (types.Workspace, error) {
+	return types.Workspace{Id: 1, ExternalId: externalID}, nil
+}
+
+func (r *failDiskSnapshotBackendRepo) GetDiskSnapshot(context.Context, uint, string) (*types.DiskSnapshot, error) {
+	return r.snapshot, nil
+}
+
+func (r *failDiskSnapshotBackendRepo) UpdateDiskSnapshot(_ context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error) {
+	r.updated = snapshot
+	return snapshot, nil
+}
+
+func TestFailDiskSnapshotWithdrawsOnlyOwnSnapshots(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		token     types.Token
+		owner     uint
+		withdrawn bool
+	}{
+		{name: "worker", token: types.Token{TokenType: types.TokenTypeWorker}, owner: 1, withdrawn: true},
+		{name: "public snapshot of another workspace", token: types.Token{TokenType: types.TokenTypeWorker}, owner: 2},
+		{name: "token of another workspace", token: types.Token{TokenType: types.TokenTypeWorkspace}, owner: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &failDiskSnapshotBackendRepo{snapshot: &types.DiskSnapshot{ExternalId: "snap", WorkspaceId: tt.owner, Status: types.DiskSnapshotStatusAvailable}}
+			service := &BackendRepositoryService{backendRepo: repo}
+			ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+				Token:     &tt.token,
+				Workspace: &types.Workspace{ExternalId: "other"},
+			})
+
+			response, err := service.FailDiskSnapshot(ctx, &pb.FailDiskSnapshotRequest{WorkspaceId: "own", SnapshotId: "snap", Reason: "not checkpointed"})
+			require.NoError(t, err)
+			if !tt.withdrawn {
+				require.False(t, response.Ok)
+				require.Nil(t, repo.updated)
+				return
+			}
+			require.True(t, response.Ok, response.ErrorMsg)
+			require.Equal(t, &types.DiskSnapshot{ExternalId: "snap", Status: types.DiskSnapshotStatusFailed, Reason: "not checkpointed"}, repo.updated)
+		})
+	}
+}
+
 func TestDiskSnapshotPublicProtoRoundTrip(t *testing.T) {
 	snapshot := diskSnapshotFromProto(diskSnapshotToProto(&types.DiskSnapshot{Public: true}))
 	require.True(t, snapshot.Public)

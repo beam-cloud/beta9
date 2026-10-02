@@ -206,6 +206,7 @@ func TestAcquireNBDDeviceContinuesAfterKernelContention(t *testing.T) {
 		}
 	}
 
+	var connects []string
 	manager := NewManager(Config{
 		Root:         t.TempDir(),
 		SysBlockPath: sysBlock,
@@ -219,10 +220,11 @@ func TestAcquireNBDDeviceContinuesAfterKernelContention(t *testing.T) {
 				return []byte("6180:2b:1\n"), nil
 			case "nbd-client":
 				deviceName := filepath.Base(args[4])
+				connects = append(connects, deviceName)
 				if err := os.WriteFile(filepath.Join(sysBlock, deviceName, "pid"), []byte("123\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				if deviceName == "nbd0" {
+				if deviceName == "nbd1" {
 					return []byte("Failed to setup device, check dmesg"), fmt.Errorf("exit status 1")
 				}
 				return nil, nil
@@ -237,7 +239,50 @@ func TestAcquireNBDDeviceContinuesAfterKernelContention(t *testing.T) {
 		t.Fatalf("acquire after contention: %v", err)
 	}
 	defer device.release()
-	if device.name != "nbd1" {
-		t.Fatalf("acquired %s after nbd0 contention, want nbd1", device.name)
+	// Workers that do not claim devices take the lowest free one, so the scan
+	// starts at the highest.
+	if strings.Join(connects, ",") != "nbd1,nbd0" || device.name != "nbd0" {
+		t.Fatalf("connected %v and acquired %s, want nbd1 then nbd0 after its contention", connects, device.name)
+	}
+}
+
+// The send buffer must be widened on the socket the kernel sends requests
+// through: the one held by the configured client serving that exact device.
+func TestNBDClientSocketsFindsTheServingClient(t *testing.T) {
+	proc := t.TempDir()
+	process := func(pid string, args []string, fds map[string]string) {
+		dir := filepath.Join(proc, pid)
+		if err := os.MkdirAll(filepath.Join(dir, "fd"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(strings.Join(args, "\x00")+"\x00"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for fd, target := range fds {
+			if err := os.Symlink(target, filepath.Join(dir, "fd", fd)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	process("10", []string{"nbd-client", "-unix", "/run/a.sock", "-N", "vol", "/dev/nbd10"}, map[string]string{"4": "socket:[100]"})
+	process("11", []string{"nbd-client", "-d", "/dev/nbd1"}, map[string]string{"4": "socket:[101]"})
+	process("12", []string{"mkfs.ext4", "/dev/nbd1"}, map[string]string{"4": "socket:[102]"})
+	process("13", []string{"/usr/sbin/nbd-client", "-unix", "/run/b.sock", "-N", "vol", "/dev/nbd1"},
+		map[string]string{"0": "/dev/null", "3": "/dev/nbd1", "4": "socket:[103]", "5": "pipe:[104]"})
+	process("14", []string{"/opt/nbd/nbd-client-3.26", "-unix", "/run/c.sock", "-N", "vol", "/dev/nbd3"},
+		map[string]string{"5": "socket:[105]"})
+
+	pid, sockets, err := nbdClientSockets(proc, "nbd-client", "/dev/nbd1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pid != 13 || len(sockets) != 1 || sockets[0] != 4 {
+		t.Fatalf("found pid %d sockets %v, want pid 13 socket 4", pid, sockets)
+	}
+	if _, _, err := nbdClientSockets(proc, "nbd-client", "/dev/nbd2"); err == nil {
+		t.Fatal("a device without a client must not resolve")
+	}
+	if pid, sockets, err := nbdClientSockets(proc, "nbd-client-3.26", "/dev/nbd3"); err != nil || pid != 14 || len(sockets) != 1 || sockets[0] != 5 {
+		t.Fatalf("a configured client binary must resolve: pid %d sockets %v err %v", pid, sockets, err)
 	}
 }

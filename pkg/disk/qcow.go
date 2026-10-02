@@ -56,6 +56,8 @@ func (m *Manager) rebaseQcow(ctx context.Context, path, parentPath string) error
 // flattenQcow collapses an image and its entire backing chain into a single
 // parentless image, skipping zero regions so the output stays sparse.
 func (m *Manager) flattenQcow(ctx context.Context, sourcePath, destPath string) error {
+	stop := reportFileGrowth(ctx, destPath)
+	defer stop()
 	_, err := m.run(ctx, m.binaries.QemuImg,
 		"convert", "-q", "-f", "qcow2", "-O", "qcow2",
 		"-o", qcowCreateOpts, "-S", "4k",

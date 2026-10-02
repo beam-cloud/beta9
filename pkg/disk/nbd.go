@@ -6,19 +6,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // nbdDevice is an attached kernel NBD device. The flock is held for the whole
 // attachment so concurrent work inside this worker never races on a device.
 type nbdDevice struct {
-	Path string // e.g. /dev/nbd3
-	name string // e.g. nbd3
-	lock *os.File
+	Path  string // e.g. /dev/nbd3
+	name  string // e.g. nbd3
+	lock  *os.File
+	claim *os.File // held until the device is connected; see claimNBDDevice
 }
 
 const (
@@ -27,6 +31,10 @@ const (
 	// nbdBlockSize is the device block size requested from nbd-client.
 	nbdBlockSize = 4096
 	sectorSize   = 512
+	// nbdSendBuffer holds every request the kernel can have in flight on a
+	// connection (128 tags of max_sectors_kb, 128 KiB) with room to spare. The
+	// kernel doubles the requested size.
+	nbdSendBuffer = 32 << 20
 )
 
 // acquireNBDDevice picks a free /dev/nbdN, locks it, and connects it to the
@@ -42,6 +50,10 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 	if len(names) == 0 {
 		return nil, fmt.Errorf("no nbd devices present; is the nbd kernel module loaded?")
 	}
+	// Scan from the highest device. A worker that connects devices without
+	// claiming them takes the lowest free one, so the two meet only on a host
+	// that is nearly out of devices.
+	slices.Reverse(names)
 	var contentionErr error
 	// A spare holds a device too. When every device is taken, one spare is
 	// released and the scan runs once more before the attach fails.
@@ -52,10 +64,9 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 				continue
 			}
 			if err := m.connectNBDDevice(ctx, device, nbdSocket, expectedSizeBytes); err != nil {
-				// The kernel is the final arbiter across workers whose host mounts
-				// may not share a lock directory. If another worker connected this
-				// device after our free check, keep scanning instead of failing the
-				// container attach.
+				// A process that connects devices without claiming them may
+				// have taken this one after our free check. Keep scanning
+				// instead of failing the container attach.
 				contended := m.nbdDeviceBusy(name)
 				device.release()
 				if contended {
@@ -64,6 +75,9 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 				}
 				return nil, err
 			}
+			// Connected, the device is busy to every other worker, and mount and
+			// mkfs need the exclusive open for themselves.
+			device.unclaim()
 			return device, nil
 		}
 		if attempt == 0 && m.reclaimSpare() {
@@ -209,11 +223,31 @@ func (m *Manager) tryLockNBDDevice(name string) (*nbdDevice, bool) {
 	if !ok {
 		return nil, false
 	}
-	if m.nbdDeviceBusy(name) {
+	// Checking before the claim leaves devices connected and waiting for
+	// their mount alone; checking after catches one connected in between.
+	if m.nbdDeviceBusy(name) || !m.claimNBDDevice(device) || m.nbdDeviceBusy(name) {
 		device.release()
 		return nil, false
 	}
 	return device, true
+}
+
+// claimNBDDevice opens the device exclusively. Workers on one host lock
+// devices in their own directories, and nbd-client resets the device it is
+// given before connecting it, so a second worker connecting a device fails
+// the first one's I/O with EIO. The kernel grants one exclusive open of a
+// block device host-wide and refuses it for a mounted one, while nbd-client
+// opens the device shared, so only the claimant connects it.
+func (m *Manager) claimNBDDevice(device *nbdDevice) bool {
+	if !m.execs {
+		return true
+	}
+	claim, err := os.OpenFile(device.Path, os.O_RDONLY|syscall.O_EXCL, 0)
+	if err != nil {
+		return false
+	}
+	device.claim = claim
+	return true
 }
 
 func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSocket string, expectedSizeBytes int64) error {
@@ -221,9 +255,10 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 	// a worker pod disappears. The ioctl client owns the connection for its
 	// lifetime, so a dead server or pod releases the kernel device as well.
 	// The kernel fails the device if one request is outstanding for the
-	// timeout; a journaled flush may legitimately wait a whole lease for a
-	// struggling store, so the timeout must outlast that.
-	timeout := strconv.Itoa(int((journalLease + journalLease/2) / time.Second))
+	// timeout. A journaled flush may legitimately wait for a checkpoint to make
+	// room and then a whole lease for a struggling store, so the timeout must
+	// outlast both.
+	timeout := strconv.Itoa(int((journalRoomWait + journalLease + journalLease/2) / time.Second))
 	_, err := m.run(ctx, m.binaries.NBDClient,
 		"-unix", nbdSocket, "-N", qsdExportName, device.Path,
 		"-b", strconv.Itoa(nbdBlockSize), "-nonetlink", "-timeout", timeout,
@@ -246,8 +281,71 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 		if errors.Is(err, errTimeout) {
 			return fmt.Errorf("%s did not settle at %d bytes within %s", device.Path, expectedSizeBytes, nbdSettleTimeout)
 		}
+		return err
 	}
-	return err
+	if m.execs {
+		if err := widenNBDSendBuffer(m.binaries.NBDClient, device.Path); err != nil {
+			log.Error().Err(err).Str("device", device.Path).
+				Msg("nbd connection keeps the default send buffer; a signal during a blocked send can fail the disk with EIO")
+		}
+	}
+	return nil
+}
+
+// widenNBDSendBuffer lets the kernel queue every in-flight request on the
+// connection without blocking. A send that blocks can be interrupted by a
+// signal to the process submitting the I/O. Kernels without the upstream fix
+// "nbd: fix partial sending" then requeue the half-sent request under a new
+// tag; the server's reply to the old tag lands on another request, and the
+// kernel drops the connection, failing every request with EIO.
+func widenNBDSendBuffer(client, devicePath string) error {
+	pid, sockets, err := nbdClientSockets("/proc", filepath.Base(client), devicePath)
+	if err != nil {
+		return err
+	}
+	return widenSocketSendBuffers(pid, sockets, nbdSendBuffer)
+}
+
+// nbdClientSockets finds the process of the configured NBD client binary that
+// serves devicePath, and the socket descriptors it holds.
+func nbdClientSockets(procPath, client, devicePath string) (int, []int, error) {
+	entries, err := os.ReadDir(procPath)
+	if err != nil {
+		return 0, nil, err
+	}
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join(procPath, entry.Name(), "cmdline"))
+		if err != nil {
+			continue
+		}
+		args := strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")
+		if filepath.Base(args[0]) != client || !slices.Contains(args, devicePath) || slices.Contains(args, "-d") {
+			continue
+		}
+		fdPath := filepath.Join(procPath, entry.Name(), "fd")
+		fds, err := os.ReadDir(fdPath)
+		if err != nil {
+			return 0, nil, fmt.Errorf("list %s %d descriptors: %w", client, pid, err)
+		}
+		var sockets []int
+		for _, fd := range fds {
+			number, err := strconv.Atoi(fd.Name())
+			if err != nil {
+				continue
+			}
+			if target, err := os.Readlink(filepath.Join(fdPath, fd.Name())); err == nil && strings.HasPrefix(target, "socket:") {
+				sockets = append(sockets, number)
+			}
+		}
+		if len(sockets) > 0 {
+			return pid, sockets, nil
+		}
+	}
+	return 0, nil, fmt.Errorf("no %s holds a socket for %s", client, devicePath)
 }
 
 func (m *Manager) disconnectNBDDevice(ctx context.Context, device *nbdDevice) error {
@@ -271,10 +369,18 @@ func flockNB(lock *os.File) error {
 }
 
 func (d *nbdDevice) release() {
+	d.unclaim()
 	if d.lock != nil {
 		_ = syscall.Flock(int(d.lock.Fd()), syscall.LOCK_UN)
 		d.lock.Close()
 		d.lock = nil
+	}
+}
+
+func (d *nbdDevice) unclaim() {
+	if d.claim != nil {
+		d.claim.Close()
+		d.claim = nil
 	}
 }
 

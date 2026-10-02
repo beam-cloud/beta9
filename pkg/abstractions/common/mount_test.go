@@ -46,6 +46,17 @@ func TestConfigureContainerRequestMountsOmitsSandboxOutputs(t *testing.T) {
 	if podMounts[1].LocalPath != wantPersistentPath || podMounts[1].MountType != "" {
 		t.Fatalf("pod output mount = %#v, want persistent path %q", podMounts[1], wantPersistentPath)
 	}
+
+	stub.Type = types.StubType(types.StubTypePodDeployment)
+	databaseMounts, err := ConfigureContainerRequestMounts(
+		"pod-456",
+		stub,
+		workspace,
+		types.StubConfigV1{Serving: &types.ServingConfig{AppKind: "database", Database: &types.DatabaseServingConfig{Kind: "postgres"}}},
+	)
+	require.NoError(t, err)
+	require.Len(t, databaseMounts, 1, "a database container gets no outputs mount")
+	require.Equal(t, types.WorkerUserCodeVolume, databaseMounts[0].MountPath)
 }
 
 func TestValidateVolume(t *testing.T) {

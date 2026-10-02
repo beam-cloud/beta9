@@ -49,6 +49,23 @@ type blockReply struct {
 	Handle uint64
 }
 
+type nbdGreeting struct {
+	Magic, Options uint64
+	Flags          uint16
+}
+
+// nbdOption precedes Length bytes of option data.
+type nbdOption struct {
+	Magic        uint64
+	Kind, Length uint32
+}
+
+// nbdExport answers NBD_OPT_EXPORT_NAME.
+type nbdExport struct {
+	Size  uint64
+	Flags uint16
+}
+
 // journalNBD serializes one kernel connection through the existing QSD export.
 // Writes reach QSD first; FLUSH/FUA replies wait for the object-store commit.
 // Reads never bypass a failed ownership fence. Structured replies and multiple
@@ -100,10 +117,7 @@ func openBlockExport(ctx context.Context, socket string) (net.Conn, uint64, erro
 		return nil, 0, err
 	}
 	conn.SetDeadline(time.Now().Add(journalTimeout))
-	var greeting struct {
-		Magic, Options uint64
-		Flags          uint16
-	}
+	var greeting nbdGreeting
 	if err = binary.Read(conn, binary.BigEndian, &greeting); err != nil {
 		conn.Close()
 		return nil, 0, err
@@ -122,10 +136,7 @@ func openBlockExport(ctx context.Context, socket string) (net.Conn, uint64, erro
 		conn.Close()
 		return nil, 0, err
 	}
-	var export struct {
-		Size  uint64
-		Flags uint16
-	}
+	var export nbdExport
 	if err = binary.Read(conn, binary.BigEndian, &export); err != nil {
 		conn.Close()
 		return nil, 0, err
@@ -160,7 +171,8 @@ func (p *journalNBD) serve() {
 		if err := binary.Read(client, binary.BigEndian, &request); err != nil {
 			return
 		}
-		if request.Magic != nbdRequestMagic || request.Length > nbdMaxRequest {
+		// A discard carries no payload and may span the whole disk.
+		if request.Magic != nbdRequestMagic || request.Command != nbdCommandTrim && request.Length > nbdMaxRequest {
 			return
 		}
 		var data []byte
@@ -240,6 +252,9 @@ func (p *journalNBD) flush() error {
 	if p.pending.Len() == 0 {
 		return nil
 	}
+	if err := p.journal.WaitForRoom(p.pending.Len()); err != nil {
+		return err
+	}
 	// The commit retries until the lease lapses; the kernel's request timeout
 	// is longer still, so a slow store stalls this flush rather than failing it.
 	ctx, cancel := context.WithTimeout(context.Background(), journalLease)
@@ -276,10 +291,7 @@ func (p *journalNBD) exchange(request blockRequest, data []byte) ([]byte, error)
 }
 
 func (p *journalNBD) handshake(client net.Conn) error {
-	greeting := struct {
-		Magic, Options uint64
-		Flags          uint16
-	}{nbdHandshakeMagic, nbdOptionMagic, 3}
+	greeting := nbdGreeting{nbdHandshakeMagic, nbdOptionMagic, 3}
 	if err := binary.Write(client, binary.BigEndian, greeting); err != nil {
 		return err
 	}
@@ -291,10 +303,7 @@ func (p *journalNBD) handshake(client net.Conn) error {
 		return fmt.Errorf("unsupported NBD client flags")
 	}
 	for {
-		var option struct {
-			Magic        uint64
-			Kind, Length uint32
-		}
+		var option nbdOption
 		if err := binary.Read(client, binary.BigEndian, &option); err != nil {
 			return err
 		}
@@ -305,9 +314,12 @@ func (p *journalNBD) handshake(client net.Conn) error {
 		if _, err := io.ReadFull(client, data); err != nil {
 			return err
 		}
+		// Flags: has flags, flush, FUA, and trim. Write-zeroes is not offered:
+		// the kernel may size one to the whole disk, and the journal would
+		// record every zero as data anyway.
 		var export bytes.Buffer
 		binary.Write(&export, binary.BigEndian, p.size)
-		binary.Write(&export, binary.BigEndian, uint16(1|4|8|32|64))
+		binary.Write(&export, binary.BigEndian, uint16(1|4|8|32))
 		switch option.Kind {
 		case 1: // EXPORT_NAME
 			if string(data) != qsdExportName {

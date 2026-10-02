@@ -27,10 +27,16 @@ import (
 // shorten it.
 var journalLease = 60 * time.Second
 
+// journalRoomWait bounds how long a write waits for a checkpoint to make room
+// in a full journal before the journal fails. Tests shorten it.
+var journalRoomWait = 2 * time.Minute
+
 const (
-	journalTimeout            = 10 * time.Second // one store round trip
-	journalRetryDelay         = 100 * time.Millisecond
-	journalRetryMaxDelay      = time.Second
+	journalTimeout       = 10 * time.Second // one store round trip
+	journalRetryDelay    = 100 * time.Millisecond
+	journalRetryMaxDelay = time.Second
+	// Writes that would take the backlog past the max limits wait for a
+	// checkpoint (see WaitForRoom).
 	journalMaxBytes           = 512 << 20
 	journalCheckpointBytes    = 128 << 20
 	journalMaxSegments        = 16384
@@ -115,7 +121,12 @@ type Journal struct {
 	prefix     string
 	head       journalHead
 	version    string
+	held       bool // a head naming this owner has committed
 	failed     error
+	recovering bool
+	flushing   bool
+	waiting    int        // writes held by WaitForRoom
+	room       *sync.Cond // wakes writers waiting for the backlog to shrink
 	cancel     context.CancelFunc
 	done       chan struct{}
 	checkpoint chan struct{}
@@ -127,8 +138,10 @@ func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapsho
 	}
 	j := &Journal{
 		store: store, prefix: prefix, done: make(chan struct{}), checkpoint: make(chan struct{}, 1),
-		head: journalHead{Version: 1, Size: size, Snapshot: snapshot, Formatted: snapshot != ""},
+		head:       journalHead{Version: 1, Size: size, Snapshot: snapshot, Formatted: snapshot != ""},
+		recovering: true,
 	}
+	j.room = sync.NewCond(&j.mu)
 	if err := j.waitForReleasedHead(ctx); err != nil {
 		return nil, err
 	}
@@ -154,19 +167,9 @@ func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapsho
 func (j *Journal) waitForReleasedHead(ctx context.Context) error {
 	deadline := time.Now().Add(journalLease)
 	for {
-		var data []byte
-		var version string
-		err := retry(ctx, deadline, func(ctx context.Context, _ int) error {
-			var err error
-			data, version, err = j.store.ReadVersion(ctx, j.headKey())
-			return err
-		})
+		head, version, err := j.readHead(ctx, deadline)
 		if err != nil || version == "" {
 			return err
-		}
-		var head journalHead
-		if err := json.Unmarshal(data, &head); err != nil {
-			return fmt.Errorf("decode disk journal: %w", err)
 		}
 		j.head, j.version = head, version
 		if err := j.validate(); err != nil {
@@ -193,23 +196,39 @@ func (j *Journal) validate() error {
 	if j.head.Version != 1 || j.head.Size <= 0 || j.head.Sequence < j.head.Checkpoint {
 		return fmt.Errorf("invalid disk journal header")
 	}
+	// A backlog of any size stays recoverable: refusing to open one would
+	// strand every write it holds.
 	next := j.head.Checkpoint + 1
-	pending := 0
 	for _, segment := range j.head.Segments {
 		digest, err := hex.DecodeString(segment.Digest)
 		if segment.Sequence != next || err != nil || len(digest) != sha256.Size || segment.Bytes <= 0 {
 			return fmt.Errorf("invalid disk journal segment %d", next)
 		}
-		if segment.Bytes > journalMaxBytes-pending {
-			return fmt.Errorf("disk journal exceeds its recovery limit")
-		}
-		pending += segment.Bytes
 		next++
 	}
-	if next-1 != j.head.Sequence || len(j.head.Segments) > journalMaxSegments {
+	if next-1 != j.head.Sequence {
 		return fmt.Errorf("disk journal is incomplete")
 	}
 	return nil
+}
+
+// readHead reads the stored head, retrying until the deadline. An empty
+// version means no head has been written.
+func (j *Journal) readHead(ctx context.Context, until time.Time) (journalHead, string, error) {
+	var data []byte
+	var version string
+	err := retry(ctx, until, func(ctx context.Context, _ int) (err error) {
+		data, version, err = j.store.ReadVersion(ctx, j.headKey())
+		return err
+	})
+	var head journalHead
+	if err != nil || version == "" {
+		return head, version, err
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return head, version, fmt.Errorf("decode disk journal: %w", err)
+	}
+	return head, version, nil
 }
 
 func (j *Journal) headKey() string                 { return path.Join(j.prefix, "head.json") }
@@ -222,10 +241,19 @@ func (j *Journal) persist(ctx context.Context) error {
 		return j.failed
 	}
 	if err := j.writeHead(ctx, false); err != nil {
-		j.failed = fmt.Errorf("disk ownership or persistence lost: %w", err)
-		return j.failed
+		return j.fail(fmt.Errorf("disk ownership or persistence lost: %w", err))
 	}
 	return nil
+}
+
+// fail records the journal's first failure, which every later write returns,
+// and wakes the writers waiting for room to return it now. Callers hold j.mu.
+func (j *Journal) fail(err error) error {
+	if j.failed == nil {
+		j.failed = err
+	}
+	j.room.Broadcast()
+	return j.failed
 }
 
 // writeHead replaces the head conditionally on the version this journal last
@@ -233,12 +261,13 @@ func (j *Journal) persist(ctx context.Context) error {
 // precondition that did hold, serve readbacks behind the latest write, or
 // commit a write whose response was lost. Each attempt carries a fresh lease
 // and remembers its digest, so a readback matching any attempt is this call's
-// own committed write and is adopted. A head from another owner whose lease
-// outlives the one we hold can only mean the disk was taken over after ours
-// lapsed; that fails at once. Anything else, including a stale readback that
-// still names a previous owner during acquisition, is retried until our lease
-// lapses: the unchanged conditional write can only succeed while the object
-// is still at the observed version.
+// own committed write and is adopted. Once this journal has held the disk, a
+// head from another owner whose lease outlives ours can only mean the disk was
+// taken over after ours lapsed; that fails at once. While acquiring there is
+// no lease of ours to compare, and a lagging readback can show any earlier
+// owner's lease still running. Everything but a takeover is retried until our
+// lease lapses: the unchanged conditional write can only succeed while the
+// object is still at the observed version.
 func (j *Journal) writeHead(ctx context.Context, release bool) error {
 	previous, committed := j.version, j.head.Expires
 	until := retryUntil(committed)
@@ -255,12 +284,12 @@ func (j *Journal) writeHead(ctx context.Context, release bool) error {
 		attempts[sha256.Sum256(data)] = j.head.Expires
 		version, err := j.store.WriteVersion(ctx, j.headKey(), data, previous)
 		if err == nil {
-			j.version = version
+			j.version, j.held = version, true
 			return nil
 		}
 		stored, version, readErr := j.store.ReadVersion(ctx, j.headKey())
 		if expires, ours := attempts[sha256.Sum256(stored)]; readErr == nil && version != "" && ours {
-			j.version, j.head.Expires = version, expires
+			j.version, j.head.Expires, j.held = version, expires, true
 			return nil
 		}
 		var remote journalHead
@@ -270,7 +299,7 @@ func (j *Journal) writeHead(ctx context.Context, release bool) error {
 			Str("owner", j.head.Owner).Str("stored_owner", remote.Owner).
 			Uint64("sequence", j.head.Sequence).Uint64("stored_sequence", remote.Sequence).
 			Int("attempt", attempt).Time("retry_until", until).Msg("disk journal head write failed")
-		if remote.Owner != "" && remote.Owner != j.head.Owner && remote.Expires.After(committed) {
+		if j.held && remote.Owner != "" && remote.Owner != j.head.Owner && remote.Expires.After(committed) {
 			return fmt.Errorf("%w: %s until %s", errFenced, remote.Owner, remote.Expires.Format(time.RFC3339))
 		}
 		return err
@@ -306,7 +335,7 @@ func (j *Journal) Check() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.failed == nil && time.Now().After(j.head.Expires) {
-		j.failed = fmt.Errorf("disk ownership lease expired")
+		j.fail(fmt.Errorf("disk ownership lease expired"))
 	}
 	return j.failed
 }
@@ -314,9 +343,7 @@ func (j *Journal) Check() error {
 func (j *Journal) Fail(err error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.failed == nil {
-		j.failed = err
-	}
+	j.fail(err)
 }
 
 func (j *Journal) Initialized() bool {
@@ -335,32 +362,134 @@ func (j *Journal) Initialize(ctx context.Context) error {
 func (j *Journal) State() (snapshot string, sequence uint64, pendingBytes int) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	for _, segment := range j.head.Segments {
-		pendingBytes += segment.Bytes
-	}
+	pendingBytes, _ = j.backlogAfter(0)
 	return j.head.Snapshot, j.head.Sequence, pendingBytes
 }
 
-// Checkpoints wakes the publisher after a burst of writes. The hard recovery
-// limit leaves room for writes made while sealing and uploading a checkpoint.
+// backlogAfter sums the uncheckpointed writes committed after sequence.
+func (j *Journal) backlogAfter(sequence uint64) (pending, segments int) {
+	after := j.after(sequence)
+	for _, segment := range after {
+		pending += segment.Bytes
+	}
+	return pending, len(after)
+}
+
+// after returns the uncheckpointed commits after sequence, oldest first.
+// Commits append in sequence order, so they are a suffix of the log.
+func (j *Journal) after(sequence uint64) []journalSegment {
+	for i, segment := range j.head.Segments {
+		if segment.Sequence > sequence {
+			return j.head.Segments[i:]
+		}
+	}
+	return nil
+}
+
+// Checkpoints wakes the publisher after a burst of writes.
 func (j *Journal) Checkpoints() <-chan struct{} { return j.checkpoint }
 
 func (j *Journal) NeedsCheckpoint() bool {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.needsCheckpoint()
+	return j.NeedsCheckpointAfter(0)
 }
 
-func (j *Journal) needsCheckpoint() bool {
-	pending := 0
-	for _, segment := range j.head.Segments {
-		pending += segment.Bytes
+// NeedsCheckpointAfter reports whether the writes committed after sequence
+// are enough to want a checkpoint of their own.
+func (j *Journal) NeedsCheckpointAfter(sequence uint64) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.needsCheckpointAfter(sequence)
+}
+
+func (j *Journal) needsCheckpointAfter(sequence uint64) bool {
+	pending, segments := j.backlogAfter(sequence)
+	return pending >= journalCheckpointBytes || segments >= journalCheckpointSegments
+}
+
+// firstAfter returns the oldest uncheckpointed commit after sequence.
+func (j *Journal) firstAfter(sequence uint64) (journalSegment, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if after := j.after(sequence); len(after) > 0 {
+		return after[0], true
 	}
-	return pending >= journalCheckpointBytes || len(j.head.Segments) >= journalCheckpointSegments
+	return journalSegment{}, false
+}
+
+// full reports whether a write of n bytes would take the backlog past its
+// limits.
+func (j *Journal) full(n int) bool {
+	pending, segments := j.backlogAfter(0)
+	return n+pending > journalMaxBytes || segments >= journalMaxSegments
+}
+
+// Waiting reports whether writes are held for a checkpoint to make room. They
+// fail the journal if none does within journalRoomWait.
+func (j *Journal) Waiting() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.waiting > 0
+}
+
+// WaitForRoom holds a write of n bytes for as long as it would take the
+// backlog past its limits, until a checkpoint makes room. Writes no
+// checkpoint could make room for are let through: those made while
+// recovering (see Recovered) or flushing (see Flushing). What they add is
+// bounded by the filesystem's dirty pages, and the next seal or owner
+// publishes it. A journal still full after journalRoomWait fails.
+func (j *Journal) WaitForRoom(n int) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.failed != nil || j.recovering || j.flushing || !j.full(n) {
+		return j.failed
+	}
+	j.waiting++
+	defer func() { j.waiting-- }()
+	j.requestCheckpoint()
+	start, expired := time.Now(), false
+	timer := time.AfterFunc(journalRoomWait, func() {
+		j.mu.Lock()
+		expired = true
+		j.mu.Unlock()
+		j.room.Broadcast()
+	})
+	defer timer.Stop()
+	for j.failed == nil && !j.flushing && j.full(n) {
+		if expired {
+			j.fail(fmt.Errorf("disk checkpoints made no room in the journal for %s", journalRoomWait))
+			break
+		}
+		j.room.Wait()
+	}
+	if j.failed == nil {
+		log.Info().Str("disk", j.prefix).Dur("waited", time.Since(start)).
+			Msg("disk writes waited for a checkpoint to shrink the journal")
+	}
+	return j.failed
+}
+
+// Flushing brackets a filesystem flush its volume waits for while nothing can
+// checkpoint: a seal's freeze and thaw, or a detach's unmount. While it
+// lasts, writes past the limits proceed.
+func (j *Journal) Flushing(active bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.flushing = active
+	j.room.Broadcast()
+}
+
+// Recovered ends recovery; from then on writes wait for room. Until a
+// recovered disk is mounted nothing can checkpoint it, and mounting it writes:
+// a backlog left at the limit by the previous owner would otherwise fail every
+// attach.
+func (j *Journal) Recovered() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recovering = false
 }
 
 func (j *Journal) requestCheckpoint() {
-	if !j.needsCheckpoint() {
+	if !j.needsCheckpointAfter(0) {
 		return
 	}
 	select {
@@ -380,14 +509,6 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 	if len(records) == 0 {
 		return j.persist(ctx)
 	}
-	pending := len(records)
-	for _, segment := range j.head.Segments {
-		pending += segment.Bytes
-	}
-	if pending > journalMaxBytes || len(j.head.Segments) >= journalMaxSegments {
-		j.failed = fmt.Errorf("disk checkpoint backlog exceeded its recovery limit")
-		return j.failed
-	}
 
 	var compressed bytes.Buffer
 	writer := gzip.NewWriter(&compressed)
@@ -405,8 +526,7 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 		return j.store.Upload(ctx, j.segmentKey(segment.Digest), compressed.Bytes())
 	})
 	if err != nil {
-		j.failed = fmt.Errorf("persist disk writes: %w", err)
-		return j.failed
+		return j.fail(fmt.Errorf("persist disk writes: %w", err))
 	}
 	j.head.Sequence = segment.Sequence
 	j.head.Segments = append(j.head.Segments, segment)
@@ -503,13 +623,9 @@ func (j *Journal) Checkpoint(ctx context.Context, sequence uint64, snapshot stri
 	if sequence < j.head.Checkpoint || sequence > j.head.Sequence || snapshot == "" {
 		return fmt.Errorf("invalid disk checkpoint position")
 	}
-	retained := make([]journalSegment, 0, len(j.head.Segments))
-	for _, segment := range j.head.Segments {
-		if segment.Sequence > sequence {
-			retained = append(retained, segment)
-		}
-	}
+	retained := append([]journalSegment{}, j.after(sequence)...)
 	j.head.Snapshot, j.head.Checkpoint, j.head.Segments = snapshot, sequence, retained
+	defer j.room.Broadcast()
 	return j.persist(ctx)
 }
 
@@ -518,14 +634,38 @@ func (j *Journal) Close() error {
 	<-j.done
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.failed != nil {
-		return j.failed
-	}
 	// Releasing the lease lets the next owner start without waiting it out,
 	// so the release gets the same retries as any other head write.
 	ctx, cancel := context.WithTimeout(context.Background(), journalLease)
 	defer cancel()
+	if j.failed != nil {
+		j.releaseCommitted(ctx)
+		return j.failed
+	}
 	err := j.writeHead(ctx, true)
 	j.failed = errors.New("disk journal is closed")
+	j.room.Broadcast()
 	return err
+}
+
+// releaseCommitted releases a failed journal's lease. Its in-memory head may
+// hold writes or a checkpoint that never committed, so only the head it last
+// committed is written back, unchanged but for the lease, and only while
+// nothing has replaced that head and its lease still runs: a replacement
+// starts writing only once the lease has lapsed. The read is retried for as
+// long as ctx allows, which outlasts any lease the store can still hold.
+func (j *Journal) releaseCommitted(ctx context.Context) {
+	if j.version == "" {
+		return
+	}
+	deadline, _ := ctx.Deadline()
+	committed, version, err := j.readHead(ctx, deadline)
+	if err != nil || version != j.version || committed.Owner != j.head.Owner ||
+		!committed.Expires.After(time.Now()) {
+		return
+	}
+	j.head = committed
+	if err := j.writeHead(ctx, true); err != nil {
+		log.Warn().Err(err).Str("disk", j.prefix).Msg("failed disk journal could not release its lease")
+	}
 }

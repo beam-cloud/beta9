@@ -21,6 +21,8 @@ SOURCE_BLOCK_BYTES = 1 << 20
 SOURCE_IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache"}
 APPLY_LEASE_SECONDS = 180
 TASK_ACTIVE_STATUSES = {"pending", "running", "retry"}
+# Steps whose deploy job or migration task may still change the services.
+IN_FLIGHT_STATUSES = {"running", "submitted"}
 SERVICE_FIELDS = {"type", "deploy", "depends_on", "health_path"}
 JOB_FIELDS = {"job_id", "status", "deployment_id", "stub_id", "task_id", "log_cursor"}
 DATABASE_OPTIONS = {
@@ -32,8 +34,6 @@ DATABASE_OPTIONS = {
     "pool",
     "always_on",
     "snapshot_id",
-    "restore_from",
-    "restore_time",
     "username",
     "database",
 }
@@ -155,7 +155,8 @@ def definitions(tools: LocalTools) -> List[Tool]:
                 "description": (
                     "Advance a reviewed plan by one bounded step; repeat until complete. "
                     "Preserves successful steps, checks source changes, and checkpoints in "
-                    "stack.spec. Jobs are never blindly rerun after an uncertain outcome."
+                    "stack.spec. Jobs are never blindly rerun after an uncertain outcome. A "
+                    "newer plan replaces one stopped on a failed or unready service."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -181,9 +182,10 @@ def definitions(tools: LocalTools) -> List[Tool]:
             {
                 "name": "stack_resolve",
                 "description": (
-                    "Resolve a failed or uncertain migration after inspecting task logs and "
-                    "database state. Record evidence, then either accept the verified migration "
-                    "or explicitly permit one retry. Never use retry without checking its effects."
+                    "Resolve a failed or uncertain service after inspecting its logs and state "
+                    "(for a migration, its task logs and the database). Record evidence, then "
+                    "either accept the verified result or explicitly permit one retry of the "
+                    "planned source. Never use retry without checking its effects."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -292,11 +294,18 @@ def _existing_services(
         if not any(app["name"] == service for app in apps):
             continue
         if not current or service not in current.get("apps", []):
+            operation = (current or {}).get("spec", {}).get("operation", {})
+            status = operation.get("services", {}).get(service, {}).get("status")
+            if status in ("failed", "uncertain"):
+                raise ValueError(
+                    f"{service} exists but plan {operation['plan_id']} left it {status}; "
+                    "call stack_resolve for it first"
+                )
             raise ValueError(f"service name belongs to an app outside this stack: {service}")
 
         existing[service] = True
         previous = current.get("spec", {}).get("desired", {}).get("services", {})
-        if previous.get(service) == node:
+        if node.get("type") == "database" and previous.get(service) == node:
             reusable.append(service)
 
     return existing, reusable
@@ -339,8 +348,9 @@ def plan(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
         json.dump(planned, output)
 
     return text_result(
-        "Review this plan, then call stack_apply with plan_id. Removed services are retained; "
-        "migrations require explicit job services.",
+        "Review this plan, then call stack_apply with plan_id. Applying redeploys every "
+        "application and reruns every job, so migrations must be idempotent jobs; reusable "
+        "databases are kept and removed services are retained.",
         plan_id=plan_id,
         **planned,
     )
@@ -369,18 +379,28 @@ def _operation_state(
     if state.get("plan_id") == plan_id:
         return state
     if state.get("status") == "applying":
-        raise ValueError("another plan is applying")
+        # A plan stopped on a failed or unready service gives way to a newer
+        # one, so a fix never waits on resolving the broken attempt.
+        if state.get("lease_until", 0) > time.time():
+            raise ValueError("another plan is applying")
+        for name, step in state.get("services", {}).items():
+            if step.get("status") in IN_FLIGHT_STATUSES:
+                raise ValueError(
+                    f"another plan is applying {name} ({step['status']}); call stack_apply "
+                    f"with plan {state.get('plan_id')} until it settles, then apply this plan"
+                )
     if planned["base_revision"] and current["revision"] != planned["base_revision"]:
         raise ValueError("stack changed; create a new plan")
     if not planned["base_revision"] and current.get("spec", {}).get("desired"):
         raise ValueError("stack was created by another plan; create a new plan")
 
+    # An unchanged database keeps its progress, failures included: it is never
+    # recreated, and an unresolved outcome still needs stack_resolve.
     previous = state.get("services", {})
     reusable = {
         name: previous[name]
         for name in planned.get("reusable", [])
-        if previous.get(name, {}).get("status") == "complete"
-        and planned["desired"]["services"][name].get("type") == "database"
+        if name in previous and planned["desired"]["services"][name].get("type") == "database"
     }
     return {"plan_id": plan_id, "status": "applying", "services": reusable}
 
@@ -455,7 +475,9 @@ class StackService:
             state["status"] = "starting"
             state.pop("error", None)
         if state["status"] in ("failed", "uncertain"):
-            raise ValueError(f"{self.name} requires reconciliation: {state.get('error')}")
+            raise ValueError(
+                f"{self.name} requires stack_resolve or a corrected plan: {state.get('error')}"
+            )
 
         if state.get("job_id"):
             result = self.tools.deploy_status(
@@ -474,7 +496,7 @@ class StackService:
         job = result.get("structuredContent", {})
         state.update({key: value for key, value in job.items() if key in JOB_FIELDS})
         if result.get("isError"):
-            state.update(status="uncertain", error=result)
+            state.update(status="uncertain", error=result["content"][0]["text"])
             return
         if job["status"] == "running":
             return
@@ -537,7 +559,9 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
             node = planned["desired"]["services"][service]
             resource = StackService(tools, service, node, step)
             resource.advance(planned, plan_id)
-            if step["status"] == "complete" or (resource.kind == "job" and step.get("task_id")):
+            # A service joins once it exists, ready or not, so a corrected
+            # plan can redeploy it.
+            if step.get("deployment_id") or step.get("task_id") or step["status"] == "complete":
                 added.append(service)
             break
 
@@ -548,17 +572,18 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         state.pop("lease_until", None)
         state.pop("owner", None)
-        current = tools.remote(
-            "update_stack",
-            {
-                "name": planned["name"],
-                "expected_revision": current["revision"],
-                "add": added,
-                "spec": {"operation": state},
-            },
-        )
+        current = _save_operation(tools, planned["name"], current, state, added)
 
-    return text_result("Stack progress; call stack_apply again while applying", **current)
+    for name in planned["order"]:
+        status = state["services"].get(name, {}).get("status", "pending")
+        if status in ("failed", "uncertain"):
+            return text_result(
+                f"{name} is {status}; inspect it, then call stack_resolve or apply a corrected plan",
+                **current,
+            )
+        if status != "complete":
+            return text_result(f"{name} is {status}; call stack_apply again", **current)
+    return text_result("Stack applied", **current)
 
 
 def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -573,10 +598,10 @@ def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if state.get("plan_id") != args["plan_id"] or state.get("lease_until", 0) > time.time():
         raise ValueError("plan is not current or an apply call is still running")
-    if node.get("type") != "job" or step.get("status") not in ("failed", "uncertain"):
-        raise ValueError("only failed or uncertain migration jobs need resolution")
+    if not node or step.get("status") not in ("failed", "uncertain"):
+        raise ValueError("only failed or uncertain services need resolution")
     if resolution not in ("complete", "retry") or not evidence:
-        raise ValueError("resolution and evidence from inspecting the database are required")
+        raise ValueError("resolution and evidence from inspecting the service are required")
     if step.get("task_id"):
         task = tools.remote("get_task", {"task_id": step["task_id"]})
         if str(task.get("status", "")).lower() in TASK_ACTIVE_STATUSES:
@@ -601,12 +626,24 @@ def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
     step["resolutions"] = history
     state["services"][service] = step
-    current = tools.remote(
+    added = [service] if resolution == "complete" else []
+    current = _save_operation(tools, planned["name"], current, state, added)
+    return text_result("Resolution recorded; continue with stack_apply", **current)
+
+
+def _save_operation(
+    tools: LocalTools,
+    name: str,
+    current: Dict[str, Any],
+    state: Dict[str, Any],
+    added: List[str],
+) -> Dict[str, Any]:
+    return tools.remote(
         "update_stack",
         {
-            "name": planned["name"],
+            "name": name,
             "expected_revision": current["revision"],
+            "add": added,
             "spec": {"operation": state},
         },
     )
-    return text_result("Migration resolution recorded; continue with stack_apply", **current)

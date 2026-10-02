@@ -266,7 +266,9 @@ func podRunTaskTerminalStatus(code types.ContainerExitCode) (types.TaskStatus, s
 	case types.ContainerExitCodeOomKill:
 		return types.TaskStatusError, types.WorkerContainerExitCodeOomKillMessage
 	default:
-		if msg, ok := types.WorkerContainerExitCodes[code]; ok {
+		// Code 1 is far more often the command's own failure than the
+		// worker's unknown error, so report it as an exit code.
+		if msg, ok := types.WorkerContainerExitCodes[code]; ok && code != types.ContainerExitCodeUnknownError {
 			return types.TaskStatusError, msg
 		}
 		return types.TaskStatusError, fmt.Sprintf("Container exited with code %d", int(code))

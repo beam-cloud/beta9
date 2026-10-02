@@ -42,6 +42,9 @@ type Volume struct {
 	// may hold data written before the daemon's statistics started counting,
 	// so their first seal is never skipped.
 	freshHead bool
+
+	// thawed is the journal sequence of the newest seal's thaw (see Changed).
+	thawed uint64
 }
 
 // ExportMode selects how the daemon serves the writable head.
@@ -102,6 +105,53 @@ func (v *Volume) ReadOnly() bool     { return v.state.ReadOnly }
 // ExportSocket is the vhost-user-blk socket path of an ExportVhostUser
 // volume; empty for NBD volumes.
 func (v *Volume) ExportSocket() string { return v.state.ExportSocket }
+
+// Journaled reports whether the volume was attached with a journal, which
+// makes acknowledged writes durable without publishing a generation. It says
+// nothing about the journal's health; Check does.
+func (v *Volume) Journaled() bool { return v.journal != nil }
+
+// Backlogged reports whether the volume's journal took enough writes since
+// the newest seal to want another checkpoint. Sealed writes do not count:
+// publishing them is what the caller is doing.
+func (v *Volume) Backlogged() bool {
+	if v.journal == nil {
+		return false
+	}
+	v.mu.Lock()
+	var sealed uint64
+	if n := len(v.state.Pending); n > 0 {
+		sealed = v.state.Pending[n-1].JournalSequence
+	}
+	v.mu.Unlock()
+	return v.journal.NeedsCheckpointAfter(sealed)
+}
+
+// Changed reports whether the journaled volume holds writes its newest
+// published generation lacks: sealed layers awaiting publication, or writes
+// committed since the newest seal's thaw. The thaw's own superblock rewrite
+// does not count; it would otherwise give an idle disk a new generation on
+// every checkpoint interval, each sealed by a freeze whose thaw writes again.
+func (v *Volume) Changed() bool {
+	if v.journal == nil {
+		return true
+	}
+	v.mu.Lock()
+	pending, thawed := len(v.state.Pending) > 0, v.thawed
+	v.mu.Unlock()
+	_, written := v.journal.firstAfter(thawed)
+	return pending || written
+}
+
+// Check reports why the volume's journal stopped committing writes. From
+// then on nothing may be sealed or published: the head can hold writes whose
+// flush failed, and the journal can no longer checkpoint a published layer.
+func (v *Volume) Check() error {
+	if v.journal == nil {
+		return nil
+	}
+	return v.journal.Check()
+}
 
 // attach materializes the chain and brings the volume online. Called with the
 // manager registration already reserved for this key.
@@ -466,6 +516,9 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	if !state.Attached || state.ReadOnly {
 		return nil, false, fmt.Errorf("volume %s is not attached writable", state.Key)
 	}
+	if err := v.Check(); err != nil {
+		return nil, false, fmt.Errorf("seal volume %s: %w", state.Key, err)
+	}
 
 	client, err := dialQMP(ctx, state.QMPSocket)
 	if err != nil {
@@ -481,7 +534,7 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	}
 
 	if state.depth() >= v.manager.maxChainDepth {
-		return nil, false, fmt.Errorf("volume %s reached the maximum chain depth of %d; compaction is failing or falling behind", state.Key, v.manager.maxChainDepth)
+		return nil, false, fmt.Errorf("volume %s reached the maximum chain depth of %d: %w", state.Key, v.manager.maxChainDepth, ErrMaxChainDepth)
 	}
 
 	// Pre-create the empty overlay, then record the intent before asking the
@@ -509,14 +562,15 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, fmt.Errorf("add overlay for volume %s: %w", state.Key, err)
 	}
-	thaw, err := v.quiesce(ctx)
+	thaw, err := v.quiesceFlushing(ctx)
 	if err != nil {
 		_ = client.removeNode(ctx, newNode)
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, err
 	}
+	var position uint64
 	if v.journal != nil {
-		_, position, _ := v.journal.State()
+		_, position, _ = v.journal.State()
 		state.Pending[len(state.Pending)-1].JournalSequence = position
 		if err := saveVolumeState(v.dir, state); err != nil {
 			thaw()
@@ -538,7 +592,37 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	}
 	v.fmtNode = newNode
 	v.freshHead = true
+	if v.journal != nil {
+		// Thawing the host-mounted ext4 rewrites its superblock with FUA
+		// before any writer resumes, so the first commit after the seal is
+		// that block alone. A larger one would carry writes, which count.
+		v.thawed = position
+		if first, ok := v.journal.firstAfter(position); ok && state.exportMode() == ExportNBD && first.Bytes <= thawCommitBytes {
+			v.thawed = first.Sequence
+		}
+	}
+	return v.sealedLayers(), false, nil
+}
 
+// thawCommitBytes bounds the journal commit of an ext4 thaw: one record (an
+// 8-byte offset and a 4-byte length) holding the block with the superblock.
+const thawCommitBytes = 12 + 4096
+
+// ErrMaxChainDepth is returned by Seal when the local backing chain is at its
+// cap. Compaction follows a publish, so only failed compactions or publishes
+// leave a chain there, and nothing more seals until it shrinks.
+var ErrMaxChainDepth = errors.New("layers are not being compacted or published")
+
+// Unpublished returns the layers earlier seals left awaiting publication,
+// oldest first, without sealing another.
+func (v *Volume) Unpublished() []SealedLayer {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.sealedLayers()
+}
+
+func (v *Volume) sealedLayers() []SealedLayer {
+	state := v.state
 	sealed := make([]SealedLayer, 0, len(state.Pending))
 	parentID := ""
 	if n := len(state.Chain); n > 0 {
@@ -550,7 +634,28 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		}
 		sealed = append(sealed, SealedLayer{Path: layer.Path, ParentSnapshotID: parentID})
 	}
-	return sealed, false, nil
+	return sealed
+}
+
+// quiesceFlushing quiesces the head with its journal letting writes past its
+// limits until the returned thaw has run. The freeze flushes every dirty page
+// through the journal and the thaw rewrites the superblock before writers
+// resume; the seal waits for both, so neither can wait for the room the seal
+// is about to make. Writes after the thaw wait like any other.
+func (v *Volume) quiesceFlushing(ctx context.Context) (func(), error) {
+	if v.journal == nil {
+		return v.quiesce(ctx)
+	}
+	v.journal.Flushing(true)
+	thaw, err := v.quiesce(ctx)
+	if err != nil {
+		v.journal.Flushing(false)
+		return nil, err
+	}
+	return func() {
+		thaw()
+		v.journal.Flushing(false)
+	}, nil
 }
 
 // quiesce freezes the head's filesystem for the pivot: host fsfreeze for an
@@ -634,19 +739,29 @@ func (v *Volume) reconcileHeadNode(ctx context.Context) error {
 	return nil
 }
 
+// ErrNotCheckpointed reports that MarkPublished did not record a published
+// layer as its journal's checkpoint. The journal, not the snapshot catalog,
+// decides what a journaled disk restores, so the snapshot must not stand as
+// the disk's latest generation.
+var ErrNotCheckpointed = errors.New("published layer is not the journal's checkpoint")
+
 // MarkPublished records that a sealed layer was durably published as the
 // given snapshot, moving it from the pending list into the chain.
 func (v *Volume) MarkPublished(sealedPath, snapshotID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if len(v.state.Pending) == 0 || v.state.Pending[0].Path != sealedPath {
-		return fmt.Errorf("sealed layer %s is not the oldest pending layer of volume %s", sealedPath, v.state.Key)
+		err := fmt.Errorf("sealed layer %s is not the oldest pending layer of volume %s", sealedPath, v.state.Key)
+		if v.journal != nil {
+			return fmt.Errorf("%w: %w", ErrNotCheckpointed, err)
+		}
+		return err
 	}
 	if v.journal != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), journalLease)
 		defer cancel()
 		if err := v.journal.Checkpoint(ctx, v.state.Pending[0].JournalSequence, snapshotID); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrNotCheckpointed, err)
 		}
 	}
 	v.state.Chain = append(v.state.Chain, stateLayer{SnapshotID: snapshotID, Path: sealedPath})
@@ -732,6 +847,12 @@ func (v *Volume) detach(ctx context.Context) error {
 		return os.RemoveAll(v.manager.runtimeDir(v.state.Key))
 	}
 
+	// Nothing checkpoints a detaching volume, so the unmount's flush cannot
+	// wait for room; the next owner recovers what it adds.
+	if v.journal != nil {
+		v.journal.Flushing(true)
+		defer v.journal.Flushing(false)
+	}
 	if err := v.manager.unmount(ctx, v.state.Mountpoint); err != nil {
 		return err
 	}
