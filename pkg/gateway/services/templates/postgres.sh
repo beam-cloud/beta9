@@ -40,7 +40,7 @@ holds_data() {
 }
 
 backrest() {
-    gosu postgres pgbackrest --config="$CONFIG" --stanza=db "$@"
+    ${BACKREST_WRAPPER:-} gosu postgres pgbackrest --config="$CONFIG" --stanza=db "$@"
 }
 
 repository_config() {
@@ -197,8 +197,10 @@ EOF
         # pgBackRest syncs each file it writes, and every sync on the durable
         # disk is a remote commit: thousands of them for an empty cluster. The
         # restore is discarded unless it completes, so it syncs once instead.
-        eatmydata gosu postgres pgbackrest --config="$CONFIG" --stanza=db \
-            --type=time --target="$BEAM_RESTORE_TIME" --target-action=promote restore
+        (
+            BACKREST_WRAPPER=eatmydata
+            backrest --type=time --target="$BEAM_RESTORE_TIME" --target-action=promote restore
+        )
         sync -f "$PGDATA"
     fi
 
