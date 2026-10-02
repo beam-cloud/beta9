@@ -115,6 +115,7 @@ type Journal struct {
 	prefix     string
 	head       journalHead
 	version    string
+	held       bool // a head naming this owner has committed
 	failed     error
 	cancel     context.CancelFunc
 	done       chan struct{}
@@ -233,12 +234,13 @@ func (j *Journal) persist(ctx context.Context) error {
 // precondition that did hold, serve readbacks behind the latest write, or
 // commit a write whose response was lost. Each attempt carries a fresh lease
 // and remembers its digest, so a readback matching any attempt is this call's
-// own committed write and is adopted. A head from another owner whose lease
-// outlives the one we hold can only mean the disk was taken over after ours
-// lapsed; that fails at once. Anything else, including a stale readback that
-// still names a previous owner during acquisition, is retried until our lease
-// lapses: the unchanged conditional write can only succeed while the object
-// is still at the observed version.
+// own committed write and is adopted. Once this journal has held the disk, a
+// head from another owner whose lease outlives ours can only mean the disk was
+// taken over after ours lapsed; that fails at once. While acquiring there is
+// no lease of ours to compare, and a lagging readback can show any earlier
+// owner's lease still running. Everything but a takeover is retried until our
+// lease lapses: the unchanged conditional write can only succeed while the
+// object is still at the observed version.
 func (j *Journal) writeHead(ctx context.Context, release bool) error {
 	previous, committed := j.version, j.head.Expires
 	until := retryUntil(committed)
@@ -255,12 +257,12 @@ func (j *Journal) writeHead(ctx context.Context, release bool) error {
 		attempts[sha256.Sum256(data)] = j.head.Expires
 		version, err := j.store.WriteVersion(ctx, j.headKey(), data, previous)
 		if err == nil {
-			j.version = version
+			j.version, j.held = version, true
 			return nil
 		}
 		stored, version, readErr := j.store.ReadVersion(ctx, j.headKey())
 		if expires, ours := attempts[sha256.Sum256(stored)]; readErr == nil && version != "" && ours {
-			j.version, j.head.Expires = version, expires
+			j.version, j.head.Expires, j.held = version, expires, true
 			return nil
 		}
 		var remote journalHead
@@ -270,7 +272,7 @@ func (j *Journal) writeHead(ctx context.Context, release bool) error {
 			Str("owner", j.head.Owner).Str("stored_owner", remote.Owner).
 			Uint64("sequence", j.head.Sequence).Uint64("stored_sequence", remote.Sequence).
 			Int("attempt", attempt).Time("retry_until", until).Msg("disk journal head write failed")
-		if remote.Owner != "" && remote.Owner != j.head.Owner && remote.Expires.After(committed) {
+		if j.held && remote.Owner != "" && remote.Owner != j.head.Owner && remote.Expires.After(committed) {
 			return fmt.Errorf("%w: %s until %s", errFenced, remote.Owner, remote.Expires.Format(time.RFC3339))
 		}
 		return err
@@ -535,14 +537,19 @@ func (j *Journal) Close() error {
 // hold writes or a checkpoint that never committed, so only the head it last
 // committed is written back, unchanged but for the lease, and only while
 // nothing has replaced that head and its lease still runs: a replacement
-// starts writing only once the lease has lapsed.
+// starts writing only once the lease has lapsed. The read is retried for as
+// long as ctx allows, which outlasts any lease the store can still hold.
 func (j *Journal) releaseCommitted(ctx context.Context) {
 	if j.version == "" {
 		return
 	}
-	readCtx, cancel := context.WithTimeout(ctx, journalTimeout)
-	data, version, err := j.store.ReadVersion(readCtx, j.headKey())
-	cancel()
+	var data []byte
+	var version string
+	deadline, _ := ctx.Deadline()
+	err := retry(ctx, deadline, func(ctx context.Context, _ int) (err error) {
+		data, version, err = j.store.ReadVersion(ctx, j.headKey())
+		return err
+	})
 	var committed journalHead
 	if err != nil || version != j.version || json.Unmarshal(data, &committed) != nil ||
 		committed.Owner != j.head.Owner || !committed.Expires.After(time.Now()) {

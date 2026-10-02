@@ -296,6 +296,19 @@ func (s *memoryJournalStore) head(t *testing.T, key string) (journalHead, string
 }
 
 // shortLease shrinks the lease so lease-bounded behaviour fits in a test.
+// replaceHead rewrites the stored head under another owner and lease, as a
+// replacement or an earlier owner would, and returns what it stored.
+func replaceHead(t *testing.T, store *memoryJournalStore, key, owner string, expires time.Time) ([]byte, string) {
+	t.Helper()
+	head, version := store.head(t, key)
+	head.Owner, head.Expires = owner, expires
+	data, err := json.Marshal(head)
+	require.NoError(t, err)
+	replaced, err := store.WriteVersion(context.Background(), key, data, version)
+	require.NoError(t, err)
+	return data, replaced
+}
+
 func shortLease(t *testing.T, lease time.Duration) {
 	t.Helper()
 	previous := journalLease
@@ -358,6 +371,63 @@ func TestJournalRetriesRejectedHeadWrites(t *testing.T) {
 	require.Zero(t, store.pendingFaults(), "every injected fault must be exercised")
 	require.NoError(t, second.Commit(ctx, nil), "the adopted version must be the committed one")
 	require.Equal(t, "saved", replaySaved(t, second))
+}
+
+// While acquiring, a rejected write's readback can lag to the previous owner's
+// head from before it released, whose lease is still running. That owner never
+// writes again, so this is the store lagging, not a takeover.
+func TestJournalAcquisitionRetriesLaggingPreviousOwner(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	first, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)
+	require.NoError(t, err)
+	require.NoError(t, first.Commit(ctx, journalRecord(t, 0, "saved")))
+	require.NoError(t, first.Close())
+
+	store.freshReads, store.rejectWrites, store.staleReads = 1, 1, 1
+	second, err := OpenJournal(ctx, store, "disk", "second-owner", "", 4096)
+	require.NoError(t, err, "a lagging readback of the released owner is not a takeover")
+	defer second.Close()
+	require.Zero(t, store.pendingFaults(), "every injected fault must be exercised")
+	require.Equal(t, "saved", replaySaved(t, second))
+}
+
+// racingJournalStore lets another writer commit just before a head write.
+type racingJournalStore struct {
+	*memoryJournalStore
+	race func()
+}
+
+func (s *racingJournalStore) WriteVersion(ctx context.Context, key string, data []byte, version string) (string, error) {
+	if race := s.race; race != nil {
+		s.race = nil
+		race()
+	}
+	return s.memoryJournalStore.WriteVersion(ctx, key, data, version)
+}
+
+// Retrying an acquisition never lets it overwrite a competitor that acquired
+// the disk first; it fails once its lease period ends.
+func TestJournalAcquisitionLosesToCompetitor(t *testing.T) {
+	shortLease(t, time.Second)
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	first, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+
+	var competitor *Journal
+	racing := &racingJournalStore{memoryJournalStore: store, race: func() {
+		competitor, err = OpenJournal(ctx, store, "disk", "competitor", "", 4096)
+		require.NoError(t, err)
+	}}
+	_, lateErr := OpenJournal(ctx, racing, "disk", "late-owner", "", 4096)
+	require.Error(t, lateErr)
+	require.NotNil(t, competitor)
+	defer competitor.Close()
+	head, _ := store.head(t, "disk/head.json")
+	require.Equal(t, "competitor", head.Owner)
+	require.NoError(t, competitor.Commit(ctx, nil), "the competitor must still own the disk")
 }
 
 // A store outage shorter than the lease is absorbed everywhere the journal
@@ -440,12 +510,7 @@ func TestJournalTakeoverFencesImmediately(t *testing.T) {
 	defer journal.Close()
 
 	key := "disk/head.json"
-	head, version := store.head(t, key)
-	head.Owner, head.Expires = "replacement-owner", time.Now().Add(2*journalLease)
-	foreign, err := json.Marshal(head)
-	require.NoError(t, err)
-	foreignVersion, err := store.WriteVersion(ctx, key, foreign, version)
-	require.NoError(t, err)
+	foreign, foreignVersion := replaceHead(t, store, key, "replacement-owner", time.Now().Add(2*journalLease))
 
 	start := time.Now()
 	require.ErrorIs(t, journal.Commit(ctx, nil), errFenced)
@@ -485,6 +550,24 @@ func TestJournalFailedCloseReleasesCommittedHead(t *testing.T) {
 	require.Equal(t, "saved", replaySaved(t, second))
 }
 
+// The release outlasts a store outage shorter than the lease; a single failed
+// read would leave the replacement waiting out the whole lease.
+func TestJournalFailedCloseReleasesAfterOutage(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	first, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)
+	require.NoError(t, err)
+	require.NoError(t, first.Commit(ctx, journalRecord(t, 0, "saved")))
+
+	first.Fail(errors.New("block device request failed"))
+	store.outage(500 * time.Millisecond)
+	require.Error(t, first.Close())
+
+	require.Positive(t, store.refused(), "the release must have met the outage")
+	released, _ := store.head(t, "disk/head.json")
+	require.True(t, released.Expires.IsZero(), "a failed owner must release its lease once the store is back")
+}
+
 // A failed journal whose head was replaced leaves the replacement's head alone.
 func TestJournalFailedCloseLeavesReplacedHead(t *testing.T) {
 	ctx := context.Background()
@@ -493,12 +576,7 @@ func TestJournalFailedCloseLeavesReplacedHead(t *testing.T) {
 	require.NoError(t, err)
 
 	key := "disk/head.json"
-	head, version := store.head(t, key)
-	head.Owner, head.Expires = "replacement-owner", time.Now().Add(2*journalLease)
-	foreign, err := json.Marshal(head)
-	require.NoError(t, err)
-	_, err = store.WriteVersion(ctx, key, foreign, version)
-	require.NoError(t, err)
+	foreign, _ := replaceHead(t, store, key, "replacement-owner", time.Now().Add(2*journalLease))
 
 	require.ErrorIs(t, journal.Commit(ctx, nil), errFenced)
 	require.Error(t, journal.Close())
@@ -519,12 +597,7 @@ func TestJournalStaleForeignHeadIsRetriedNotAdopted(t *testing.T) {
 	defer journal.Close()
 
 	key := "disk/head.json"
-	head, version := store.head(t, key)
-	head.Owner, head.Expires = "earlier-owner", time.Time{}
-	foreign, err := json.Marshal(head)
-	require.NoError(t, err)
-	foreignVersion, err := store.WriteVersion(ctx, key, foreign, version)
-	require.NoError(t, err)
+	foreign, foreignVersion := replaceHead(t, store, key, "earlier-owner", time.Time{})
 
 	start := time.Now()
 	err = journal.Commit(ctx, nil)
