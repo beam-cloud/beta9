@@ -19,15 +19,23 @@ sql() {
 
 # initdb creates only template1, template0 and postgres (base/1, 4 and 5), and
 # numbers every relation file it writes below 16384. Any other database,
-# tablespace or relation was created after initialization.
+# tablespace or relation was created after initialization. Whatever cannot be
+# read is taken to hold data.
 holds_data() {
-    for database in "$1"/base/*; do
-        [ -e "$database" ] || continue
-        case ${database##*/} in 1 | 4 | 5 | pgsql_tmp) ;; *) return 0 ;; esac
-    done
-    [ -z "$(ls -A "$1/pg_tblspc" 2>/dev/null)" ] || return 0
-    find "$1/base" -type f -name '[0-9]*' 2>/dev/null | sed 's|.*/||; s|[._].*||' |
-        awk '$1 >= 16384 { found = 1 } END { exit !found }'
+    if [ -e "$1/base" ]; then
+        databases=$(ls -A "$1/base") || return 0
+        for database in $databases; do
+            case $database in 1 | 4 | 5 | pgsql_tmp) ;; *) return 0 ;; esac
+        done
+        relations=$(find "$1/base" -type f -name '[0-9]*') || return 0
+        printf '%s\n' "$relations" | sed 's|.*/||; s|[._].*||' |
+            awk '$1 >= 16384 { found = 1 } END { exit !found }' && return 0
+    fi
+    if [ -e "$1/pg_tblspc" ]; then
+        tablespaces=$(ls -A "$1/pg_tblspc") || return 0
+        [ -z "$tablespaces" ] || return 0
+    fi
+    return 1
 }
 
 backrest() {
@@ -184,13 +192,20 @@ EOF
     # nothing initdb did not create and lacks either a whole control file
     # (always 8192 bytes) or the application database, which the entrypoint
     # creates last, never finished.
-    if [ -s "$CLUSTER/PG_VERSION" ] && ! holds_data "$CLUSTER" &&
+    if [ -s "$CLUSTER/PG_VERSION" ] &&
         { [ "$POSTGRES_DB" != postgres ] ||
-            [ "$(stat -c %s "$CLUSTER/global/pg_control" 2>/dev/null)" != 8192 ]; }; then
+            [ "$(stat -c %s "$CLUSTER/global/pg_control" 2>/dev/null)" != 8192 ]; } &&
+        ! holds_data "$CLUSTER"; then
         echo "Discarding a database cluster whose initialization never finished" >&2
         rm -rf "$CLUSTER"
     fi
     if [ ! -s "$CLUSTER/PG_VERSION" ]; then
+        # Files without PG_VERSION are no cluster Postgres can start, but a
+        # database among them is still somebody's data.
+        if [ -e "$CLUSTER" ] && holds_data "$CLUSTER"; then
+            echo "$CLUSTER has no PG_VERSION but holds data; refusing to initialize over it" >&2
+            exit 1
+        fi
         rm -rf "$CLUSTER" "$INITIALIZING"
         export PGDATA=$INITIALIZING
     fi
