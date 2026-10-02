@@ -6,6 +6,7 @@ still starts and offers `login`, then announces the workspace tools once a
 token arrives.
 """
 
+import configparser
 import json
 import sys
 import threading
@@ -123,11 +124,13 @@ class RemoteMCP:
 class StdioProxy:
     def __init__(self, context_name: str = DEFAULT_CONTEXT_NAME, cwd: Optional[str] = None):
         self.context_name: str = context_name
+        self.context: Optional[ConfigContext] = None  # the sign-in `remote` uses
         self.remote: Optional[RemoteMCP] = None
         self.connection_error: Optional[str] = None
+        self._connect_lock = threading.Lock()
         self.tools: LocalTools = LocalTools(
             cwd=cwd,
-            on_login=self._on_login,
+            on_login=self._refresh_sign_in,
             signed_in=lambda: self.remote is not None,
             context_name=context_name,
         )
@@ -135,7 +138,7 @@ class StdioProxy:
         self._request_lock = threading.Lock()
         self._requests: Dict[Any, threading.Event] = {}
         self._stdout: BinaryIO = sys.stdout.buffer
-        self._connect()
+        self._follow_sign_in()
 
     def run(
         self, stdin: Optional[Iterable[bytes]] = None, stdout: Optional[BinaryIO] = None
@@ -199,8 +202,7 @@ class StdioProxy:
                 if cancelled is not None:
                     cancelled.set()
             return None
-        if self.remote is None and self.connection_error:
-            self._connect()
+        self._refresh_sign_in()
 
         if method == "initialize":
             return self._initialize(msg_id)
@@ -315,9 +317,9 @@ class StdioProxy:
             {"jsonrpc": "2.0", "id": msg_id, "method": "tools/call", "params": params}
         )
 
-    def _connect(self) -> None:
+    def _connect(self, context: Optional[ConfigContext]) -> None:
         self.connection_error = None
-        context = context_or_none(self.context_name)
+        self.context = context
         if context is None:
             self.remote = None
             return
@@ -328,9 +330,24 @@ class StdioProxy:
             self.connection_error = str(exc)
             log(f"workspace unavailable: {exc}")
 
-    def _on_login(self) -> None:
-        self._connect()
-        if self.remote is not None:
+    def _follow_sign_in(self) -> bool:
+        """Act as the context's latest saved sign-in, whether this server, a
+        terminal `login` or another agent saved it. True if the tools changed."""
+        with self._connect_lock:
+            context, signed_in = self.context, self.remote is not None
+            try:
+                current = context_or_none(self.context_name)
+            except configparser.Error as exc:
+                # Another program is writing it in place; keep the sign-in in use.
+                log(f"config unreadable: {exc}")
+                return False
+            if current == context and (signed_in or not self.connection_error):
+                return False
+            self._connect(current)
+            return current != context or (self.remote is not None) != signed_in
+
+    def _refresh_sign_in(self) -> None:
+        if self._follow_sign_in():
             self.notify("notifications/tools/list_changed")
 
     def _remote_call(self, message: Any) -> Tuple[int, Any]:
@@ -342,8 +359,13 @@ class StdioProxy:
         except requests.RequestException as exc:
             return 0, {"error": {"code": INTERNAL_ERROR, "message": f"gateway unreachable: {exc}"}}
         if status == 401:
-            self.remote = None
-            self.notify("notifications/tools/list_changed")
+            # A sign-in saved during the call has already replaced `remote`.
+            with self._connect_lock:
+                rejected = self.remote is remote
+                if rejected:
+                    self.remote = None
+            if rejected:
+                self.notify("notifications/tools/list_changed")
             return status, {
                 "error": {"code": INTERNAL_ERROR, "message": "token rejected; sign in again"}
             }

@@ -8,6 +8,8 @@ import base64
 import fcntl
 import hashlib
 import http.client
+import importlib
+import importlib.util
 import json
 import os
 import shlex
@@ -29,13 +31,17 @@ from .. import auth
 from ..config import (
     DEFAULT_CONTEXT_NAME,
     ConfigContext,
+    SDKSettings,
     cli_path,
     context_defaults,
     get_settings,
+    set_settings,
 )
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
+# Seconds. A job runner records its pid as it starts; one that has not by then never will.
+RUNNER_START_LIMIT = 600
 LOG_TAIL = 40
 GENERIC_FAILURE = "Deployment failed"
 # The context a job's helper process calls the gateway with. The helper is a
@@ -315,6 +321,7 @@ class DeployJob:
     pid: int = 0
     context_name: str = DEFAULT_CONTEXT_NAME
     env: Dict[str, str] = field(default_factory=dict)  # for the helper; never saved
+    supervisor: Optional[subprocess.Popen] = field(default=None, repr=False)  # never saved
 
     @property
     def log_path(self) -> Optional[Path]:
@@ -356,6 +363,12 @@ class DeployJob:
         if self.state_path is None or not self.state_path.exists():
             return
 
+        # Polled before reading the record: a supervisor saves its result before it exits.
+        # A job loaded from its record (a retried key, a restarted server) has no handle.
+        if self.supervisor is not None:
+            exited = self.supervisor.poll() is not None
+        else:
+            exited = time.time() - self.started_at > RUNNER_START_LIMIT
         payload = json.loads(self.state_path.read_text())
         for key, value in payload.items():
             setattr(self, key, value)
@@ -363,6 +376,12 @@ class DeployJob:
             # Ignore an append still in progress; the next poll sees that line.
             content = self.log_path.read_text()
             self.lines = content[: content.rfind("\n") + 1].splitlines()
+        if self.status == "running" and not self.pid and exited:
+            self.status = "failed"
+            self.error = "Job runner exited before starting" + (
+                f": {self.lines[-1]}" if self.lines else ""
+            )
+            self.save()
         if self.status == "running" and self.pid:
             try:
                 os.kill(self.pid, 0)
@@ -388,14 +407,15 @@ class DeployJob:
         self.save()
         # The supervisor owns the CLI pipe and terminal record independently of
         # the MCP client's lifetime. Job files are private to this context.
-        subprocess.Popen(
-            [sys.executable, "-m", "beta9.mcp", str(self.state_path)],
-            env={**os.environ, **self.env},
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        with open(self.log_path, "a", opener=_private_file) as log:
+            self.supervisor = subprocess.Popen(
+                [sys.executable, "-m", "beta9.mcp", str(self.state_path)],
+                env={**os.environ, **self.env},
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=log,
+                start_new_session=True,
+            )
 
     def _run(self) -> None:
         # Machine mode: errors are JSON objects and prompts fail instead of blocking.
@@ -638,16 +658,20 @@ class LocalTools:
         )
         self.jobs: Dict[str, DeployJob] = {}
         self.request = threading.local()
-
-        context = context_defaults(context_name)
-        identity = hashlib.sha256(
-            f"{context_name}:{context.gateway_host}:{context.token}".encode()
-        ).hexdigest()[:24]
-        self.job_dir = get_settings().config_path.parent / "mcp-jobs" / identity
-        self.job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self.job_dir, 0o700)
         self.login_flow: Optional[auth.DeviceLogin] = None
         self.login_available: bool = auth.login_configured(context_name)
+
+    @property
+    def job_dir(self) -> Path:
+        """Records of the context's current sign-in; a later sign-in to another account gets its own."""
+        context = context_defaults(self.context_name)
+        identity = hashlib.sha256(
+            f"{self.context_name}:{context.gateway_host}:{context.token}".encode()
+        ).hexdigest()[:24]
+        path = get_settings().config_path.parent / "mcp-jobs" / identity
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(path, 0o700)
+        return path
 
     def available(self) -> List[Tool]:
         """(definition, handler) for every tool offered right now."""
@@ -804,12 +828,7 @@ class LocalTools:
         return job.result(cursor)
 
     def signed_in_context(self) -> ConfigContext:
-        from .server import context_or_none
-
-        context = context_or_none(self.context_name)
-        if context is None:
-            raise RemoteToolError({"error": "Not signed in", "code": "UNAUTHENTICATED"})
-        return context
+        return _signed_in(self.context_name)
 
     def remote(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         return call_remote(self.signed_in_context(), name, arguments)
@@ -1046,12 +1065,36 @@ class LocalTools:
             return error_result(str(exc))
 
 
+def _signed_in(name: str) -> ConfigContext:
+    from .server import context_or_none
+
+    context = context_or_none(name)
+    if context is None:
+        raise RemoteToolError({"error": "Not signed in", "code": "UNAUTHENTICATED"})
+    return context
+
+
+def _helper_context(name: str) -> ConfigContext:
+    if JOB_CONTEXT_ENV in os.environ:
+        return ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
+
+    # Servers from before JOB_CONTEXT_ENV pass only the context's name. They
+    # served the CLI installed alongside, and SDKSettings picks Beam's config
+    # file once the beam package is loaded. `python -m` put the job's directory,
+    # the user's project, first on the path; a beam module there is not the CLI.
+    sys.path[:] = [p for p in sys.path if p not in ("", os.getcwd())]
+    if importlib.util.find_spec("beam") is not None:
+        importlib.import_module("beam")
+        set_settings(SDKSettings())
+    return _signed_in(name)
+
+
 def main() -> None:
     if sys.argv[1] == "create-database":
         # The job supervisor parses the JSON objects printed here; one with an
         # `error` key fails the job with that message.
         try:
-            context = ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
+            context = _helper_context(sys.argv[2])
             print(json.dumps(call_remote(context, "create_database", json.loads(sys.argv[3]))))
         except RemoteToolError as exc:
             print(json.dumps(exc.payload if exc.payload.get("error") else {"error": str(exc)}))
@@ -1062,3 +1105,8 @@ def main() -> None:
         return
 
     DeployJob.load(Path(sys.argv[1]))._run()
+
+
+# MCP servers started before an upgrade still launch jobs as `python -m beta9.mcp.tools`.
+if __name__ == "__main__":
+    main()
