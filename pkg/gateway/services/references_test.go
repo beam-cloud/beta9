@@ -23,7 +23,34 @@ func authFor(ws *types.Workspace) *auth.AuthInfo {
 type referenceBackendRepo struct {
 	repository.BackendRepository
 	secrets         map[string]string
+	apps            map[string]types.DeploymentWithRelated
 	deploymentLists int
+}
+
+// withPod adds an active pod deployment exposing ports.
+func (r *referenceBackendRepo) withPod(name, subdomain string, ports ...uint32) *referenceBackendRepo {
+	config, _ := json.Marshal(types.StubConfigV1{Ports: ports})
+	if r.apps == nil {
+		r.apps = map[string]types.DeploymentWithRelated{}
+	}
+	r.apps[name] = types.DeploymentWithRelated{
+		Deployment: types.Deployment{Name: name, Subdomain: subdomain, Active: true, Version: 1},
+		Stub:       types.Stub{Type: types.StubType(types.StubTypePodDeployment), Config: string(config)},
+	}
+	return r
+}
+
+// gatewayWithAddresses serves HTTP from app.example.com (host URLs) and TCP from tcp.example.com:443.
+func gatewayWithAddresses(repo repository.BackendRepository) *GatewayService {
+	gws := &GatewayService{backendRepo: repo}
+	gws.appConfig.GatewayService.HTTP.ExternalHost = "app.example.com"
+	gws.appConfig.GatewayService.HTTP.ExternalPort = 443
+	gws.appConfig.GatewayService.HTTP.TLS = true
+	gws.appConfig.GatewayService.InvokeURLType = common.InvokeUrlTypeHost
+	gws.appConfig.Abstractions.Pod.TCP.Enabled = true
+	gws.appConfig.Abstractions.Pod.TCP.ExternalHost = "tcp.example.com"
+	gws.appConfig.Abstractions.Pod.TCP.ExternalPort = 443
+	return gws
 }
 
 func newReferenceBackendRepo() *referenceBackendRepo {
@@ -45,6 +72,9 @@ func (r *referenceBackendRepo) CreateSecret(_ context.Context, _ *types.Workspac
 
 func (r *referenceBackendRepo) ListDeploymentsWithRelated(_ context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
 	r.deploymentLists++
+	if app, ok := r.apps[filters.Name]; ok {
+		return []types.DeploymentWithRelated{app}, nil
+	}
 	if filters.Name != "app-db" {
 		return nil, nil
 	}
@@ -227,6 +257,51 @@ func TestExpandStubReferencesResolvesOwnURLBeforeFirstDeploy(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"BASE_URL=https://app.example.com/pod/router/latest/20128"}, env)
+}
+
+func TestExpandReferencesAddressesEachPortOfAMultiPortApp(t *testing.T) {
+	repo := newReferenceBackendRepo().withPod("clickhouse", "clickhouse-abc1234", 8123, 9000).withPod("my.web", "my-web-abc1234", 3000)
+	gws := gatewayWithAddresses(repo)
+	ws := &types.Workspace{Id: 1}
+
+	env, bindings, err := gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{
+		"CLICKHOUSE_URL=${{app.clickhouse.URL.8123}}",
+		"CLICKHOUSE_MIGRATION_URL=clickhouse://${{app.clickhouse.TCP.9000}}",
+		"NEXTAUTH_URL=${{app.my.web.URL}}",
+	})
+	require.NoError(t, err)
+	require.Empty(t, bindings)
+	require.Equal(t, []string{
+		"CLICKHOUSE_URL=https://clickhouse-abc1234-latest-8123.app.example.com",
+		"CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse-abc1234-latest-9000.tcp.example.com:443",
+		"NEXTAUTH_URL=https://my-web-abc1234-latest-3000.app.example.com",
+	}, env)
+
+	_, _, err = gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{"X=${{app.clickhouse.URL.9440}}"})
+	require.ErrorContains(t, err, `app "clickhouse" does not expose port 9440`)
+
+	for _, bad := range []string{"app.clickhouse.HOST", "app.clickhouse.TCP", "app.clickhouse.TCP.0", "app.clickhouse.URL.http", "app..URL"} {
+		_, _, err = gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{"X=${{" + bad + "}}"})
+		require.ErrorContains(t, err, "invalid app reference", bad)
+	}
+}
+
+func TestExpandStubReferencesResolvesOwnPortsBeforeFirstDeploy(t *testing.T) {
+	gws := gatewayWithAddresses(newReferenceBackendRepo())
+	ws := &types.Workspace{Id: 1}
+	subdomain := repository.GenerateSubdomain("clickhouse", types.StubTypePodDeployment, ws.Id)
+
+	env, _, err := gws.expandStubReferences(context.Background(), authFor(ws), &pb.GetOrCreateStubRequest{
+		AppName:  "clickhouse",
+		StubType: types.StubTypePodDeployment,
+		Ports:    []uint32{8123, 9000},
+		Env:      []string{"SELF=${{app.clickhouse.URL.8123}}", "NATIVE=${{app.clickhouse.TCP.9000}}"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"SELF=https://" + subdomain + "-latest-8123.app.example.com",
+		"NATIVE=" + subdomain + "-latest-9000.tcp.example.com:443",
+	}, env)
 }
 
 func TestDeploymentURLIsEmptyForAPortlessPod(t *testing.T) {
