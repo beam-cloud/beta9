@@ -181,9 +181,10 @@ def definitions(tools: LocalTools) -> List[Tool]:
             {
                 "name": "stack_resolve",
                 "description": (
-                    "Resolve a failed or uncertain migration after inspecting task logs and "
-                    "database state. Record evidence, then either accept the verified migration "
-                    "or explicitly permit one retry. Never use retry without checking its effects."
+                    "Resolve a failed or uncertain service after inspecting its logs and state "
+                    "(for a migration, its task logs and the database). Record evidence, then "
+                    "either accept the verified result or explicitly permit one retry of the "
+                    "planned source. Never use retry without checking its effects."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -455,7 +456,9 @@ class StackService:
             state["status"] = "starting"
             state.pop("error", None)
         if state["status"] in ("failed", "uncertain"):
-            raise ValueError(f"{self.name} requires reconciliation: {state.get('error')}")
+            raise ValueError(
+                f"{self.name} requires reconciliation with stack_resolve: {state.get('error')}"
+            )
 
         if state.get("job_id"):
             result = self.tools.deploy_status(
@@ -560,6 +563,10 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
     for name in planned["order"]:
         status = state["services"].get(name, {}).get("status", "pending")
+        if status in ("failed", "uncertain"):
+            return text_result(
+                f"{name} is {status}; inspect it, then call stack_resolve", **current
+            )
         if status != "complete":
             return text_result(f"{name} is {status}; call stack_apply again", **current)
     return text_result("Stack applied", **current)
@@ -577,10 +584,10 @@ def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if state.get("plan_id") != args["plan_id"] or state.get("lease_until", 0) > time.time():
         raise ValueError("plan is not current or an apply call is still running")
-    if node.get("type") != "job" or step.get("status") not in ("failed", "uncertain"):
-        raise ValueError("only failed or uncertain migration jobs need resolution")
+    if not node or step.get("status") not in ("failed", "uncertain"):
+        raise ValueError("only failed or uncertain services need resolution")
     if resolution not in ("complete", "retry") or not evidence:
-        raise ValueError("resolution and evidence from inspecting the database are required")
+        raise ValueError("resolution and evidence from inspecting the service are required")
     if step.get("task_id"):
         task = tools.remote("get_task", {"task_id": step["task_id"]})
         if str(task.get("status", "")).lower() in TASK_ACTIVE_STATUSES:
@@ -610,7 +617,8 @@ def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
         {
             "name": planned["name"],
             "expected_revision": current["revision"],
+            "add": [service] if resolution == "complete" else [],
             "spec": {"operation": state},
         },
     )
-    return text_result("Migration resolution recorded; continue with stack_apply", **current)
+    return text_result("Resolution recorded; continue with stack_apply", **current)
