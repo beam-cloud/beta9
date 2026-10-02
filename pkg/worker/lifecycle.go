@@ -703,6 +703,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 			phaseStart := time.Now()
 			err := s.prepareDurableDiskMounts(startupCtx, request)
 			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleDurableDiskPrepare, phaseStart, err == nil, nil)
+			if err != nil && startupCtx.Err() == nil {
+				outputLogger.Error(fmt.Sprintf("%v\n", err))
+			}
 			return err
 		})
 	}

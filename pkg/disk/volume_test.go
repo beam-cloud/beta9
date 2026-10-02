@@ -448,6 +448,50 @@ func TestBackloggedCountsWritesSinceTheNewestSeal(t *testing.T) {
 	}
 }
 
+// Thawing ext4 rewrites its superblock, so every seal leaves a commit in the
+// journal. Counted as a change, it gave idle databases an empty generation on
+// every checkpoint interval, forever.
+func TestChangedIgnoresTheThawsSuperblockRewrite(t *testing.T) {
+	ctx := context.Background()
+	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
+	volume.manager = NewManager(Config{Root: volume.manager.root, Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "fsfreeze" && args[0] == "--unfreeze" {
+			return nil, journal.Commit(ctx, journalRecord(t, 1024, "superblock"))
+		}
+		return fakeRunner(ctx, name, args...)
+	}})
+	if err := journal.Commit(ctx, journalRecord(t, 0, "wal")); err != nil {
+		t.Fatal(err)
+	}
+	if !volume.Changed() {
+		t.Fatal("an unsealed write is a change")
+	}
+
+	sealed, _, err := volume.Seal(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !volume.Changed() {
+		t.Fatal("a sealed layer awaiting publication is a change")
+	}
+	if err := volume.MarkPublished(sealed[0].Path, "snap-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, pending := journal.State(); pending == 0 {
+		t.Fatal("the thaw's rewrite must stay journaled")
+	}
+	if volume.Changed() {
+		t.Fatal("the thaw's rewrite alone is not a change")
+	}
+
+	if err := journal.Commit(ctx, journalRecord(t, 0, "wal")); err != nil {
+		t.Fatal(err)
+	}
+	if !volume.Changed() {
+		t.Fatal("a write after the thaw is a change")
+	}
+}
+
 func TestSealRollsBackFailedPivot(t *testing.T) {
 	volume, server := newTestVolume(t)
 	server.writtenB.Store(4096)

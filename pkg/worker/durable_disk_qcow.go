@@ -297,9 +297,10 @@ func journalStoreKey(storage *types.WorkspaceStorage) string {
 }
 
 // A database disk is checkpointed when its journal asks (recovery bounds) or
-// when it has been this long since the last published generation, so forks
-// and restores start from something recent. Every publish is a generation in
-// the disk's snapshot chain, so the floor is deliberately coarse. Failed
+// when it changed and it has been this long since the last published
+// generation, so forks and restores start from something recent. Every
+// publish is a generation in the disk's snapshot chain, so the floor is
+// deliberately coarse, and an idle disk publishes nothing. Failed
 // publishes retry with backoff capped well under the interval: the journal
 // keeps growing toward its limits until a checkpoint succeeds. Writes held at
 // the limits fail the disk unless a checkpoint makes room within the
@@ -351,7 +352,7 @@ func (s *Worker) checkpointDatabaseDisk(request *types.ContainerRequest, mount *
 				continue
 			}
 		}
-		if !journal.NeedsCheckpoint() && time.Since(lastCheckpoint) < databaseCheckpointInterval {
+		if !journal.NeedsCheckpoint() && (time.Since(lastCheckpoint) < databaseCheckpointInterval || !volume.Changed()) {
 			continue
 		}
 		// Writers wait on this checkpoint once the journal fills, so a large

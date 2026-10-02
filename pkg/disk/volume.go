@@ -42,6 +42,9 @@ type Volume struct {
 	// may hold data written before the daemon's statistics started counting,
 	// so their first seal is never skipped.
 	freshHead bool
+
+	// thawed is the journal sequence of the newest seal's thaw (see Changed).
+	thawed uint64
 }
 
 // ExportMode selects how the daemon serves the writable head.
@@ -122,6 +125,22 @@ func (v *Volume) Backlogged() bool {
 	}
 	v.mu.Unlock()
 	return v.journal.NeedsCheckpointAfter(sealed)
+}
+
+// Changed reports whether the journaled volume holds writes its newest
+// published generation lacks: sealed layers awaiting publication, or writes
+// committed since the newest seal's thaw. The thaw's own superblock rewrite
+// does not count; it would otherwise give an idle disk a new generation on
+// every checkpoint interval, each sealed by a freeze whose thaw writes again.
+func (v *Volume) Changed() bool {
+	if v.journal == nil {
+		return true
+	}
+	v.mu.Lock()
+	pending, thawed := len(v.state.Pending) > 0, v.thawed
+	v.mu.Unlock()
+	_, written := v.journal.FirstAfter(thawed)
+	return pending || written
 }
 
 // Check reports why the volume's journal stopped committing writes. From
@@ -558,8 +577,9 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, err
 	}
+	var position uint64
 	if v.journal != nil {
-		_, position, _ := v.journal.State()
+		_, position, _ = v.journal.State()
 		state.Pending[len(state.Pending)-1].JournalSequence = position
 		if err := saveVolumeState(v.dir, state); err != nil {
 			thaw()
@@ -581,6 +601,14 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	}
 	v.fmtNode = newNode
 	v.freshHead = true
+	if v.journal != nil {
+		// Thawing the host-mounted ext4 rewrites its superblock before any
+		// writer resumes, so the first commit after the seal is the thaw's.
+		v.thawed = position
+		if first, ok := v.journal.FirstAfter(position); ok && state.exportMode() == ExportNBD {
+			v.thawed = first
+		}
+	}
 
 	sealed := make([]SealedLayer, 0, len(state.Pending))
 	parentID := ""

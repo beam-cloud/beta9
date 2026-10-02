@@ -397,6 +397,19 @@ func (j *Journal) needsCheckpointAfter(sequence uint64) bool {
 	return pending >= journalCheckpointBytes || segments >= journalCheckpointSegments
 }
 
+// FirstAfter returns the sequence of the first uncheckpointed commit after
+// sequence, and false when there is none.
+func (j *Journal) FirstAfter(sequence uint64) (uint64, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, segment := range j.head.Segments {
+		if segment.Sequence > sequence {
+			return segment.Sequence, true
+		}
+	}
+	return 0, false
+}
+
 // full reports whether a write of n bytes would take the backlog past its
 // limits.
 func (j *Journal) full(n int) bool {
