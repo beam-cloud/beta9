@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,6 +27,8 @@ import (
 //	KEY=${{db.NAME.HOST}}           inline the database's host (PORT likewise); not a secret
 //	KEY=${{secret(32)}}             generate a secret, store it as <APP>_<KEY>, bind to KEY
 //	KEY=...${{app.NAME.URL}}...     inline the public URL of deployment NAME
+//	KEY=...${{app.NAME.URL.8123}}... inline the URL of one of NAME's ports
+//	KEY=...${{app.NAME.TCP.9000}}... inline host:port of one of NAME's ports on the TCP (TLS) gateway
 //	KEY=...${{randomInt(1,100)}}... inline a random integer
 //
 // Secret-bearing references must be the whole value; the rest are inlined.
@@ -67,20 +70,29 @@ func (gws *GatewayService) expandReferences(ctx context.Context, authInfo *auth.
 }
 
 // expandStubReferences is expandReferences for a stub being created: the app
-// may reference its own URL before its first deployment exists.
+// may reference its own addresses before its first deployment exists.
 func (gws *GatewayService) expandStubReferences(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest) ([]string, []secretBinding, error) {
 	scope := &referenceScope{gws: gws, ctx: ctx, workspace: authInfo.Workspace, tokenId: authInfo.TokenId(), appName: in.AppName}
 	if types.StubType(in.StubType).IsDeployment() && in.AppName != "" {
-		scope.selfURL = gws.pendingDeploymentURL(authInfo.Workspace, in)
+		scope.self = pendingDeployment(authInfo.Workspace, in)
 	}
 	return gws.expandEnv(scope, in.Env)
 }
 
-// pendingDeploymentURL is the latest-alias URL the deployment will have.
-func (gws *GatewayService) pendingDeploymentURL(workspace *types.Workspace, in *pb.GetOrCreateStubRequest) string {
-	stub := types.Stub{Type: types.StubType(in.StubType)}
-	deployment := types.Deployment{Name: in.AppName, Subdomain: repository.GenerateSubdomain(in.AppName, in.StubType, workspace.Id)}
-	return gws.deploymentURL(&stub, &deployment, &types.StubConfigV1{Ports: in.Ports, TCP: in.Tcp})
+// pendingDeployment is the latest alias the deployment will have.
+func pendingDeployment(workspace *types.Workspace, in *pb.GetOrCreateStubRequest) *addressedDeployment {
+	return &addressedDeployment{
+		stub:       types.Stub{Type: types.StubType(in.StubType)},
+		deployment: types.Deployment{Name: in.AppName, Subdomain: repository.GenerateSubdomain(in.AppName, in.StubType, workspace.Id)},
+		config:     &types.StubConfigV1{Ports: in.Ports, TCP: in.Tcp},
+	}
+}
+
+// addressedDeployment is what app references resolve against; config is nil for non-pod stubs.
+type addressedDeployment struct {
+	stub       types.Stub
+	deployment types.Deployment
+	config     *types.StubConfigV1
 }
 
 func (gws *GatewayService) expandEnv(scope *referenceScope, env []string) ([]string, []secretBinding, error) {
@@ -122,7 +134,7 @@ type referenceScope struct {
 	workspace *types.Workspace
 	tokenId   uint
 	appName   string
-	selfURL   string // URL of appName once deployed; set while its stub is being created
+	self      *addressedDeployment // appName once deployed; set while its stub is being created
 	databases map[string]*referencedDatabase
 }
 
@@ -200,15 +212,18 @@ func (s *referenceScope) inline(value string) (string, error) {
 func (s *referenceScope) inlineOne(expr string) (string, error) {
 	switch {
 	case strings.HasPrefix(expr, "app."):
-		name, field, ok := strings.Cut(strings.TrimPrefix(expr, "app."), ".")
-		if !ok || field != "URL" {
-			return "", fmt.Errorf("invalid app reference %q; expected app.<name>.URL", expr)
+		ref, err := parseAppReference(expr)
+		if err != nil {
+			return "", err
 		}
-		url, err := s.gws.deploymentURLByName(s.ctx, s.workspace, name)
-		if err != nil && name == s.appName && s.selfURL != "" {
-			return s.selfURL, nil
+		target, err := s.gws.addressedDeploymentByName(s.ctx, s.workspace, ref.name)
+		if err != nil && ref.name == s.appName && s.self != nil {
+			target, err = s.self, nil
 		}
-		return url, err
+		if err != nil {
+			return "", err
+		}
+		return s.gws.appAddress(target, ref)
 	case strings.HasPrefix(expr, "db."):
 		name, field, ok := strings.Cut(strings.TrimPrefix(expr, "db."), ".")
 		if !ok || !isDatabaseAddressField(field) {
@@ -334,24 +349,85 @@ func generatedSecretName(appName, key string) string {
 	return app + "_" + sanitizeSecretName(key)
 }
 
-// deploymentURLByName is the stable (latest) URL of deployment name; it survives redeploys of the target.
-func (gws *GatewayService) deploymentURLByName(ctx context.Context, workspace *types.Workspace, name string) (string, error) {
+// appReference is app.<name>.URL (port 0), app.<name>.URL.<port> or app.<name>.TCP.<port>.
+type appReference struct {
+	name string
+	kind string // "URL" or "TCP"
+	port uint32
+}
+
+// parseAppReference reads the field from the end, so app names may contain dots.
+func parseAppReference(expr string) (appReference, error) {
+	parts := strings.Split(strings.TrimPrefix(expr, "app."), ".")
+	n := len(parts)
+	if n >= 2 && parts[n-1] == "URL" {
+		if name := strings.Join(parts[:n-1], "."); name != "" {
+			return appReference{name: name, kind: "URL"}, nil
+		}
+	}
+	if n >= 3 && (parts[n-2] == "URL" || parts[n-2] == "TCP") {
+		port, err := strconv.ParseUint(parts[n-1], 10, 16)
+		if name := strings.Join(parts[:n-2], "."); err == nil && port > 0 && name != "" {
+			return appReference{name: name, kind: parts[n-2], port: uint32(port)}, nil
+		}
+	}
+	return appReference{}, fmt.Errorf("invalid app reference %q; expected app.<name>.URL, app.<name>.URL.<port> or app.<name>.TCP.<port>", expr)
+}
+
+// addressedDeploymentByName is the active deployment name; its latest alias survives redeploys.
+func (gws *GatewayService) addressedDeploymentByName(ctx context.Context, workspace *types.Workspace, name string) (*addressedDeployment, error) {
 	d, err := gws.ActiveDeploymentByName(ctx, workspace, name)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return gws.DeploymentURL(d)
+	cfg, err := podConfig(&d.Stub)
+	if err != nil {
+		return nil, err
+	}
+	return &addressedDeployment{stub: d.Stub, deployment: d.Deployment, config: cfg}, nil
+}
+
+// podConfig is a pod's decoded stub config; other stubs have none.
+func podConfig(stub *types.Stub) (*types.StubConfigV1, error) {
+	if stub.Type.Kind() != types.StubTypePod {
+		return nil, nil
+	}
+	cfg, err := stub.UnmarshalConfig()
+	if err != nil {
+		return nil, fmt.Errorf("decode stub config: %w", err)
+	}
+	return cfg, nil
+}
+
+// appAddress is the address an app reference names. A port's URL is on the
+// gateway the app is served from; its TCP address is always the TCP gateway,
+// where clients connect with TLS and the port's hostname as SNI.
+func (gws *GatewayService) appAddress(target *addressedDeployment, ref appReference) (string, error) {
+	if ref.port == 0 {
+		return gws.deploymentURL(&target.stub, &target.deployment, target.config), nil
+	}
+	if target.config == nil || !slices.Contains(target.config.Ports, ref.port) {
+		return "", fmt.Errorf("app %q does not expose port %d", ref.name, ref.port)
+	}
+	onePort := *target.config
+	onePort.Ports = []uint32{ref.port}
+	if ref.kind == "URL" {
+		return gws.deploymentURL(&target.stub, &target.deployment, &onePort), nil
+	}
+	tcp := gws.appConfig.Abstractions.Pod.TCP
+	if !tcp.Enabled || tcp.ExternalHost == "" {
+		return "", fmt.Errorf("app %q: TCP references need the TCP gateway, which is not enabled", ref.name)
+	}
+	tcpURL := common.BuildPodDeploymentURL(tcp.GetExternalURL(), common.InvokeUrlTypeHost, &target.deployment, &onePort)
+	return tcpHostFromURL(tcpURL), nil
 }
 
 // DeploymentURL is the latest-alias URL of a deployment: TCP pods on the TCP
 // gateway, other pods and web stubs on the HTTP gateway.
 func (gws *GatewayService) DeploymentURL(d *types.DeploymentWithRelated) (string, error) {
-	var cfg *types.StubConfigV1
-	if d.Stub.Type.Kind() == types.StubTypePod {
-		var err error
-		if cfg, err = d.Stub.UnmarshalConfig(); err != nil {
-			return "", fmt.Errorf("decode stub config: %w", err)
-		}
+	cfg, err := podConfig(&d.Stub)
+	if err != nil {
+		return "", err
 	}
 	return gws.deploymentURL(&d.Stub, &d.Deployment, cfg), nil
 }
