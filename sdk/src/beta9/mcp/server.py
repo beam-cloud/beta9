@@ -138,8 +138,7 @@ class StdioProxy:
         self._request_lock = threading.Lock()
         self._requests: Dict[Any, threading.Event] = {}
         self._stdout: BinaryIO = sys.stdout.buffer
-        with self._connect_lock:
-            self._connect(context_or_none(context_name))
+        self._follow_sign_in()
 
     def run(
         self, stdin: Optional[Iterable[bytes]] = None, stdout: Optional[BinaryIO] = None
@@ -203,7 +202,8 @@ class StdioProxy:
                 if cancelled is not None:
                     cancelled.set()
             return None
-        self._follow_sign_in()
+        if self._follow_sign_in():
+            self.notify("notifications/tools/list_changed")
 
         if method == "initialize":
             return self._initialize(msg_id)
@@ -331,9 +331,9 @@ class StdioProxy:
             self.connection_error = str(exc)
             log(f"workspace unavailable: {exc}")
 
-    def _follow_sign_in(self) -> None:
+    def _follow_sign_in(self) -> bool:
         """Act as the context's latest saved sign-in, whether this server, a
-        terminal `login` or another agent saved it."""
+        terminal `login` or another agent saved it. True if the tools changed."""
         with self._connect_lock:
             context, signed_in = self.context, self.remote is not None
             try:
@@ -341,18 +341,14 @@ class StdioProxy:
             except configparser.Error as exc:
                 # Another program is writing it in place; keep the sign-in in use.
                 log(f"config unreadable: {exc}")
-                return
+                return False
             if current == context and (signed_in or not self.connection_error):
-                return
+                return False
             self._connect(current)
-            changed = current != context or (self.remote is not None) != signed_in
-        if changed:
-            self.notify("notifications/tools/list_changed")
+            return current != context or (self.remote is not None) != signed_in
 
     def _on_login(self) -> None:
-        with self._connect_lock:
-            self._connect(context_or_none(self.context_name))
-        if self.remote is not None:
+        if self._follow_sign_in():
             self.notify("notifications/tools/list_changed")
 
     def _remote_call(self, message: Any) -> Tuple[int, Any]:

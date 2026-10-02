@@ -5,6 +5,7 @@ settings' for the default one). The issued token is a workspace token, so the
 saved context is the one `config create` would write.
 """
 
+import configparser
 import os
 import socket
 import sys
@@ -39,7 +40,12 @@ class LoginError(Exception):
 
 
 def login_configured(name: str = DEFAULT_CONTEXT_NAME) -> bool:
-    return bool(context_defaults(name).auth_url)
+    try:
+        return bool(context_defaults(name).auth_url)
+    except configparser.Error:  # another program is writing it in place
+        settings = get_settings()
+        environment = settings.environments.get(name)
+        return bool(environment.auth_url if environment else settings.auth_url)
 
 
 def client_name() -> str:

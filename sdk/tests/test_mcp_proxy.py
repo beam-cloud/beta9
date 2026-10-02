@@ -197,16 +197,20 @@ def test_a_rejected_call_keeps_a_sign_in_saved_while_it_ran(settings, monkeypatc
     assert proxy.remote is newer
 
 
-def test_an_unreadable_config_keeps_the_sign_in_in_use(settings, monkeypatch):
+def test_an_unreadable_config_never_fails_the_server(settings, monkeypatch):
     # agents.sh and older CLIs rewrite the file in place; a read can land mid-write.
-    write_config(settings.config_path, "t")
     monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: FakeRemote())
-    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
     settings.config_path.write_text("[default\ntoken = t")
+    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
 
-    [tools] = run_proxy(proxy, rpc("tools/list", 1))
+    def tools():
+        [listed] = [m for m in run_proxy(proxy, rpc("tools/list", 1)) if m.get("id") == 1]
+        return [t["name"] for t in listed["result"]["tools"]]
 
-    assert "whoami" in [t["name"] for t in tools["result"]["tools"]]
+    write_config(settings.config_path, "t")
+    assert "whoami" in tools()
+    settings.config_path.write_text("[default\ntoken = t")
+    assert "whoami" in tools()
 
 
 def test_proxy_acts_as_the_latest_sign_in_saved_anywhere(settings, monkeypatch):
