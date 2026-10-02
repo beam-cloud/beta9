@@ -71,7 +71,14 @@ class CLI:
         )
 
     def __call__(self, **kwargs) -> Any:
-        return self.common_group.main(prog_name=self.settings.name.lower(), **kwargs)
+        # Wrapping CLIs such as `beam` call this directly; handling these here
+        # gives them the same reports, JSON errors in machine mode included.
+        try:
+            return self.common_group.main(prog_name=self.settings.name.lower(), **kwargs)
+        except grpc.RpcError as error:
+            handle_grpc_error(error=error)
+        except ImageBuildError as error:
+            terminal.error(str(error))
 
     def register(self, module: ModuleType) -> None:
         if hasattr(module, "common"):
@@ -155,10 +162,4 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
 def start():
     """Used as entrypoint in Poetry"""
     cli = load_cli()
-
-    try:
-        cli()
-    except grpc.RpcError as error:
-        handle_grpc_error(error=error)
-    except ImageBuildError as error:
-        terminal.error(str(error))
+    cli()

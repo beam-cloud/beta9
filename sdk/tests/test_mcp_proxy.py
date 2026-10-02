@@ -280,6 +280,26 @@ def test_deploy_tool_surfaces_cli_failure(settings, local_tools, monkeypatch, tm
     assert json.loads(result["content"][1]["text"]) == result["structuredContent"]
 
 
+def test_deploy_failure_without_a_json_error_reports_the_last_line(
+    settings, local_tools, monkeypatch, tmp_path
+):
+    # A crash prints a traceback longer than a log page and ends with its cause.
+    cli = fake_cli(
+        tmp_path,
+        """
+        for i in $(seq 1 100); do echo "traceback line $i"; done
+        echo 'Build failed: build container exited with code 1'
+        exit 1
+        """,
+    )
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+
+    result = local_tools.deploy({"name": "web", "wait_seconds": 10})
+
+    error = "Build failed: build container exited with code 1"
+    assert result["structuredContent"]["error"] == error
+
+
 @pytest.fixture
 def two_profiles(monkeypatch, tmp_path):
     # The serving CLI's settings name one config file (as `beam` does with

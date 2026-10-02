@@ -1,9 +1,11 @@
 import datetime
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from types import ModuleType
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -13,6 +15,7 @@ from beta9.cli import extraclick
 from beta9.cli import run as run_cli
 from beta9.cli.main import load_cli
 from beta9.config import SDKSettings
+from beta9.exceptions import ImageBuildError
 
 
 def test_disk_management_commands_registered():
@@ -113,6 +116,31 @@ def test_run_runtime_prepare_failure_exits_nonzero(monkeypatch):
     result = CliRunner().invoke(run_cli.common, ["run", "--entrypoint", "echo hi"])
 
     assert result.exit_code == 1
+
+
+def test_wrapping_cli_reports_an_image_build_failure_as_json(monkeypatch, capsys):
+    # `beam` calls the CLI with standalone_mode=False and handles only click's errors.
+    @click.group(cls=extraclick.ClickCommonGroup)
+    def common(**_):
+        pass
+
+    @common.command()
+    def build():
+        raise ImageBuildError("Image build failed:\nSTEP 2/5: RUN false\nexit status 1")
+
+    cli = load_cli(check_config=False)
+    cli.register(SimpleNamespace(common=common))
+    monkeypatch.setenv("BETA9_JSON", "1")
+
+    with pytest.raises(SystemExit) as exited:
+        cli(args=["build"], standalone_mode=False)
+
+    assert exited.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "error": "Image build failed:",
+        "code": "ERROR",
+        "details": "STEP 2/5: RUN false\nexit status 1",
+    }
 
 
 def test_database_kinds_share_one_command_set():

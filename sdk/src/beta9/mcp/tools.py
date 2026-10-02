@@ -490,7 +490,8 @@ class DeployJob:
         """The cause. The CLI prints it before a generic "Deployment failed"."""
         reason = next((e for e in errors if e["error"] != GENERIC_FAILURE), None)
         reason = reason or (errors[-1] if errors else {})
-        text = (reason.get("error") or (self.logs() or [f"exit code {code}"])[-1]).rstrip(":")
+        last = self.logs(max(0, len(self.lines) - LOG_TAIL)) or [f"exit code {code}"]
+        text = (reason.get("error") or last[-1]).rstrip(":")
         details = str(reason.get("details", "")).strip().splitlines()
         if details:  # a build log ends with the failing step
             text += f": {details[-1].strip()}"
