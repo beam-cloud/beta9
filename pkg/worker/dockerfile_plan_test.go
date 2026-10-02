@@ -13,6 +13,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	ggcrtypes "github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/stretchr/testify/require"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 func TestParseDockerfilePlanRenderedBuild(t *testing.T) {
@@ -211,6 +213,15 @@ func TestLayeredBuildRunIsIsolatedFromWorker(t *testing.T) {
 	require.Contains(t, lines, "LD_PRELOAD=/tenant.so", "the value is an argument to buildah")
 	require.Contains(t, lines, "BUILDAH_ISOLATION=oci", "the worker's default overrides the inherited one")
 	require.Equal(t, 1, strings.Count(string(record), "LD_PRELOAD="), "and not in buildah's environment")
+}
+
+// Builds on a node share one buildah store, and buildah refuses a working
+// container name already in use: two databases created together build the
+// same image at once.
+func TestLayeredBuildContainerNameIsPerBuild(t *testing.T) {
+	first := &layeredBuild{request: &types.ContainerRequest{ContainerId: "build-1", ImageId: "3ce0ebd7c4c722d5"}}
+	second := &layeredBuild{request: &types.ContainerRequest{ContainerId: "build-2", ImageId: "3ce0ebd7c4c722d5"}}
+	require.NotEqual(t, first.containerName(), second.containerName())
 }
 
 func TestUnescapeMountField(t *testing.T) {

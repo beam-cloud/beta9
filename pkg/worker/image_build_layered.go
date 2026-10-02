@@ -90,7 +90,7 @@ func (b *layeredBuild) execute() (upperDir string, err error) {
 	b.labels = map[string]string{}
 	b.exposed = map[string]struct{}{}
 
-	fromArgs := []string{"--name", "b9-build-" + b.request.ImageId, "--pull=missing"}
+	fromArgs := []string{"--name", b.containerName(), "--pull=missing"}
 	if b.c.config.ImageService.BuildRegistryInsecure {
 		fromArgs = append(fromArgs, "--tls-verify=false")
 	}
@@ -138,6 +138,13 @@ func (b *layeredBuild) execute() (upperDir string, err error) {
 		return "", fmt.Errorf("locate overlay upper dir of %s: %w", mountPoint, err)
 	}
 	return upperDir, nil
+}
+
+// containerName names the working container after the image and the build.
+// Builds on one node share the buildah store, and two builds of the same image
+// can run at once: two databases created together build one image.
+func (b *layeredBuild) containerName() string {
+	return "b9-" + b.request.ContainerId + "-" + b.request.ImageId
 }
 
 // cleanup unmounts and removes the working container.
@@ -461,7 +468,11 @@ func (c *ImageClient) buildLayeredImage(ctx context.Context, outputLogger *slog.
 	if spoolDir == "" {
 		spoolDir = os.TempDir()
 	}
-	layersDir := filepath.Join(spoolDir, "build-"+request.ImageId)
+	// Unique per build: another build of this image may be packing on this node.
+	layersDir, err := os.MkdirTemp(spoolDir, "build-"+request.ImageId+"-")
+	if err != nil {
+		return fmt.Errorf("create layer spool dir: %w", err)
+	}
 	defer os.RemoveAll(layersDir)
 	layers, err := packOverlayLayers(upperDir, layersDir, layerMediaTypeFor(base))
 	if err != nil {
