@@ -1073,6 +1073,124 @@ func (x *CreateDiskSnapshotResponse) GetErrorMsg() string {
 	return ""
 }
 
+type FailDiskSnapshotRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	WorkspaceId string `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	SnapshotId  string `protobuf:"bytes,2,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	Reason      string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+}
+
+func (x *FailDiskSnapshotRequest) Reset() {
+	*x = FailDiskSnapshotRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_backend_repo_proto_msgTypes[13]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *FailDiskSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FailDiskSnapshotRequest) ProtoMessage() {}
+
+func (x *FailDiskSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_backend_repo_proto_msgTypes[13]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FailDiskSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*FailDiskSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_backend_repo_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *FailDiskSnapshotRequest) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *FailDiskSnapshotRequest) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+func (x *FailDiskSnapshotRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type FailDiskSnapshotResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok       bool   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrorMsg string `protobuf:"bytes,2,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+}
+
+func (x *FailDiskSnapshotResponse) Reset() {
+	*x = FailDiskSnapshotResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_backend_repo_proto_msgTypes[14]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *FailDiskSnapshotResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FailDiskSnapshotResponse) ProtoMessage() {}
+
+func (x *FailDiskSnapshotResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_backend_repo_proto_msgTypes[14]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FailDiskSnapshotResponse.ProtoReflect.Descriptor instead.
+func (*FailDiskSnapshotResponse) Descriptor() ([]byte, []int) {
+	return file_backend_repo_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *FailDiskSnapshotResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *FailDiskSnapshotResponse) GetErrorMsg() string {
+	if x != nil {
+		return x.ErrorMsg
+	}
+	return ""
+}
+
 type GetLatestDiskSnapshotRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1085,7 +1203,7 @@ type GetLatestDiskSnapshotRequest struct {
 func (x *GetLatestDiskSnapshotRequest) Reset() {
 	*x = GetLatestDiskSnapshotRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_backend_repo_proto_msgTypes[13]
+		mi := &file_backend_repo_proto_msgTypes[15]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1098,7 +1216,7 @@ func (x *GetLatestDiskSnapshotRequest) String() string {
 func (*GetLatestDiskSnapshotRequest) ProtoMessage() {}
 
 func (x *GetLatestDiskSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_repo_proto_msgTypes[13]
+	mi := &file_backend_repo_proto_msgTypes[15]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1111,7 +1229,7 @@ func (x *GetLatestDiskSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLatestDiskSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*GetLatestDiskSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_backend_repo_proto_rawDescGZIP(), []int{13}
+	return file_backend_repo_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetLatestDiskSnapshotRequest) GetWorkspaceId() string {
@@ -1141,7 +1259,7 @@ type GetLatestDiskSnapshotResponse struct {
 func (x *GetLatestDiskSnapshotResponse) Reset() {
 	*x = GetLatestDiskSnapshotResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_backend_repo_proto_msgTypes[14]
+		mi := &file_backend_repo_proto_msgTypes[16]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1154,7 +1272,7 @@ func (x *GetLatestDiskSnapshotResponse) String() string {
 func (*GetLatestDiskSnapshotResponse) ProtoMessage() {}
 
 func (x *GetLatestDiskSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_repo_proto_msgTypes[14]
+	mi := &file_backend_repo_proto_msgTypes[16]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1167,7 +1285,7 @@ func (x *GetLatestDiskSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLatestDiskSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*GetLatestDiskSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_backend_repo_proto_rawDescGZIP(), []int{14}
+	return file_backend_repo_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetLatestDiskSnapshotResponse) GetOk() bool {
@@ -1203,7 +1321,7 @@ type GetDiskSnapshotRequest struct {
 func (x *GetDiskSnapshotRequest) Reset() {
 	*x = GetDiskSnapshotRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_backend_repo_proto_msgTypes[15]
+		mi := &file_backend_repo_proto_msgTypes[17]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1216,7 +1334,7 @@ func (x *GetDiskSnapshotRequest) String() string {
 func (*GetDiskSnapshotRequest) ProtoMessage() {}
 
 func (x *GetDiskSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_repo_proto_msgTypes[15]
+	mi := &file_backend_repo_proto_msgTypes[17]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1229,7 +1347,7 @@ func (x *GetDiskSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDiskSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*GetDiskSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_backend_repo_proto_rawDescGZIP(), []int{15}
+	return file_backend_repo_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetDiskSnapshotRequest) GetWorkspaceId() string {
@@ -1259,7 +1377,7 @@ type GetDiskSnapshotResponse struct {
 func (x *GetDiskSnapshotResponse) Reset() {
 	*x = GetDiskSnapshotResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_backend_repo_proto_msgTypes[16]
+		mi := &file_backend_repo_proto_msgTypes[18]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1272,7 +1390,7 @@ func (x *GetDiskSnapshotResponse) String() string {
 func (*GetDiskSnapshotResponse) ProtoMessage() {}
 
 func (x *GetDiskSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_repo_proto_msgTypes[16]
+	mi := &file_backend_repo_proto_msgTypes[18]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1285,7 +1403,7 @@ func (x *GetDiskSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDiskSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*GetDiskSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_backend_repo_proto_rawDescGZIP(), []int{16}
+	return file_backend_repo_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetDiskSnapshotResponse) GetOk() bool {
@@ -1322,7 +1440,7 @@ type GetDiskSnapshotDownloadURLRequest struct {
 func (x *GetDiskSnapshotDownloadURLRequest) Reset() {
 	*x = GetDiskSnapshotDownloadURLRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_backend_repo_proto_msgTypes[17]
+		mi := &file_backend_repo_proto_msgTypes[19]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1335,7 +1453,7 @@ func (x *GetDiskSnapshotDownloadURLRequest) String() string {
 func (*GetDiskSnapshotDownloadURLRequest) ProtoMessage() {}
 
 func (x *GetDiskSnapshotDownloadURLRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_repo_proto_msgTypes[17]
+	mi := &file_backend_repo_proto_msgTypes[19]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1348,7 +1466,7 @@ func (x *GetDiskSnapshotDownloadURLRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetDiskSnapshotDownloadURLRequest.ProtoReflect.Descriptor instead.
 func (*GetDiskSnapshotDownloadURLRequest) Descriptor() ([]byte, []int) {
-	return file_backend_repo_proto_rawDescGZIP(), []int{17}
+	return file_backend_repo_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetDiskSnapshotDownloadURLRequest) GetWorkspaceId() string {
@@ -1385,7 +1503,7 @@ type GetDiskSnapshotDownloadURLResponse struct {
 func (x *GetDiskSnapshotDownloadURLResponse) Reset() {
 	*x = GetDiskSnapshotDownloadURLResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_backend_repo_proto_msgTypes[18]
+		mi := &file_backend_repo_proto_msgTypes[20]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1398,7 +1516,7 @@ func (x *GetDiskSnapshotDownloadURLResponse) String() string {
 func (*GetDiskSnapshotDownloadURLResponse) ProtoMessage() {}
 
 func (x *GetDiskSnapshotDownloadURLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_backend_repo_proto_msgTypes[18]
+	mi := &file_backend_repo_proto_msgTypes[20]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1411,7 +1529,7 @@ func (x *GetDiskSnapshotDownloadURLResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use GetDiskSnapshotDownloadURLResponse.ProtoReflect.Descriptor instead.
 func (*GetDiskSnapshotDownloadURLResponse) Descriptor() ([]byte, []int) {
-	return file_backend_repo_proto_rawDescGZIP(), []int{18}
+	return file_backend_repo_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetDiskSnapshotDownloadURLResponse) GetOk() bool {
@@ -1616,6 +1734,18 @@ var file_backend_repo_proto_rawDesc = []byte{
 	0x01, 0x28, 0x0b, 0x32, 0x0d, 0x2e, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
 	0x6f, 0x74, 0x52, 0x08, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x1b, 0x0a, 0x09,
 	0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0x75, 0x0a, 0x17, 0x46, 0x61, 0x69,
+	0x6c, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63,
+	0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x77, 0x6f, 0x72, 0x6b,
+	0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1f, 0x0a, 0x0b, 0x73, 0x6e, 0x61, 0x70, 0x73,
+	0x68, 0x6f, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x73, 0x6e,
+	0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x49, 0x64, 0x12, 0x16, 0x0a, 0x06, 0x72, 0x65, 0x61, 0x73,
+	0x6f, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e,
+	0x22, 0x47, 0x0a, 0x18, 0x46, 0x61, 0x69, 0x6c, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70,
+	0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02,
+	0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x1b, 0x0a, 0x09,
+	0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
 	0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0x5e, 0x0a, 0x1c, 0x47, 0x65, 0x74,
 	0x4c, 0x61, 0x74, 0x65, 0x73, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
 	0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72,
@@ -1658,7 +1788,7 @@ var file_backend_repo_proto_rawDesc = []byte{
 	0x6f, 0x6b, 0x12, 0x10, 0x0a, 0x03, 0x75, 0x72, 0x6c, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
 	0x03, 0x75, 0x72, 0x6c, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73,
 	0x67, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73,
-	0x67, 0x32, 0xfc, 0x05, 0x0a, 0x18, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x52, 0x65, 0x70,
+	0x67, 0x32, 0xc5, 0x06, 0x0a, 0x18, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x52, 0x65, 0x70,
 	0x6f, 0x73, 0x69, 0x74, 0x6f, 0x72, 0x79, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x4a,
 	0x0a, 0x11, 0x47, 0x65, 0x74, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x42,
 	0x79, 0x49, 0x64, 0x12, 0x19, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x70, 0x6f,
@@ -1689,26 +1819,31 @@ var file_backend_repo_proto_rawDesc = []byte{
 	0x6f, 0x74, 0x12, 0x1a, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x44, 0x69, 0x73, 0x6b, 0x53,
 	0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b,
 	0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73,
-	0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x56, 0x0a, 0x15, 0x47,
+	0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x47, 0x0a, 0x10, 0x46,
+	0x61, 0x69, 0x6c, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12,
+	0x18, 0x2e, 0x46, 0x61, 0x69, 0x6c, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
+	0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x46, 0x61, 0x69, 0x6c,
+	0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x56, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x4c, 0x61, 0x74, 0x65, 0x73,
+	0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x1d, 0x2e,
+	0x47, 0x65, 0x74, 0x4c, 0x61, 0x74, 0x65, 0x73, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61,
+	0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x47,
 	0x65, 0x74, 0x4c, 0x61, 0x74, 0x65, 0x73, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70,
-	0x73, 0x68, 0x6f, 0x74, 0x12, 0x1d, 0x2e, 0x47, 0x65, 0x74, 0x4c, 0x61, 0x74, 0x65, 0x73, 0x74,
-	0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x47, 0x65, 0x74, 0x4c, 0x61, 0x74, 0x65, 0x73, 0x74, 0x44,
-	0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f,
-	0x6e, 0x73, 0x65, 0x12, 0x44, 0x0a, 0x0f, 0x47, 0x65, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e,
-	0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x17, 0x2e, 0x47, 0x65, 0x74, 0x44, 0x69, 0x73, 0x6b,
-	0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
-	0x18, 0x2e, 0x47, 0x65, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f,
-	0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x65, 0x0a, 0x1a, 0x47, 0x65, 0x74,
-	0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x44, 0x6f, 0x77, 0x6e,
-	0x6c, 0x6f, 0x61, 0x64, 0x55, 0x52, 0x4c, 0x12, 0x22, 0x2e, 0x47, 0x65, 0x74, 0x44, 0x69, 0x73,
-	0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x44, 0x6f, 0x77, 0x6e, 0x6c, 0x6f, 0x61,
-	0x64, 0x55, 0x52, 0x4c, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x23, 0x2e, 0x47, 0x65,
-	0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x44, 0x6f, 0x77,
-	0x6e, 0x6c, 0x6f, 0x61, 0x64, 0x55, 0x52, 0x4c, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x42, 0x23, 0x5a, 0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x62,
-	0x65, 0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39, 0x2f,
-	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x44, 0x0a, 0x0f,
+	0x47, 0x65, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12,
+	0x17, 0x2e, 0x47, 0x65, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f,
+	0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x47, 0x65, 0x74, 0x44, 0x69,
+	0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x65, 0x0a, 0x1a, 0x47, 0x65, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61,
+	0x70, 0x73, 0x68, 0x6f, 0x74, 0x44, 0x6f, 0x77, 0x6e, 0x6c, 0x6f, 0x61, 0x64, 0x55, 0x52, 0x4c,
+	0x12, 0x22, 0x2e, 0x47, 0x65, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
+	0x6f, 0x74, 0x44, 0x6f, 0x77, 0x6e, 0x6c, 0x6f, 0x61, 0x64, 0x55, 0x52, 0x4c, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x23, 0x2e, 0x47, 0x65, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x53, 0x6e,
+	0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x44, 0x6f, 0x77, 0x6e, 0x6c, 0x6f, 0x61, 0x64, 0x55, 0x52,
+	0x4c, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x23, 0x5a, 0x21, 0x67, 0x69, 0x74,
+	0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x62, 0x65, 0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f,
+	0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06,
+	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1723,7 +1858,7 @@ func file_backend_repo_proto_rawDescGZIP() []byte {
 	return file_backend_repo_proto_rawDescData
 }
 
-var file_backend_repo_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_backend_repo_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_backend_repo_proto_goTypes = []interface{}{
 	(*GetCheckpointByIdRequest)(nil),            // 0: GetCheckpointByIdRequest
 	(*GetCheckpointByIdResponse)(nil),           // 1: GetCheckpointByIdResponse
@@ -1738,25 +1873,27 @@ var file_backend_repo_proto_goTypes = []interface{}{
 	(*DiskSnapshot)(nil),                        // 10: DiskSnapshot
 	(*CreateDiskSnapshotRequest)(nil),           // 11: CreateDiskSnapshotRequest
 	(*CreateDiskSnapshotResponse)(nil),          // 12: CreateDiskSnapshotResponse
-	(*GetLatestDiskSnapshotRequest)(nil),        // 13: GetLatestDiskSnapshotRequest
-	(*GetLatestDiskSnapshotResponse)(nil),       // 14: GetLatestDiskSnapshotResponse
-	(*GetDiskSnapshotRequest)(nil),              // 15: GetDiskSnapshotRequest
-	(*GetDiskSnapshotResponse)(nil),             // 16: GetDiskSnapshotResponse
-	(*GetDiskSnapshotDownloadURLRequest)(nil),   // 17: GetDiskSnapshotDownloadURLRequest
-	(*GetDiskSnapshotDownloadURLResponse)(nil),  // 18: GetDiskSnapshotDownloadURLResponse
-	(*Checkpoint)(nil),                          // 19: types.Checkpoint
-	(*timestamppb.Timestamp)(nil),               // 20: google.protobuf.Timestamp
+	(*FailDiskSnapshotRequest)(nil),             // 13: FailDiskSnapshotRequest
+	(*FailDiskSnapshotResponse)(nil),            // 14: FailDiskSnapshotResponse
+	(*GetLatestDiskSnapshotRequest)(nil),        // 15: GetLatestDiskSnapshotRequest
+	(*GetLatestDiskSnapshotResponse)(nil),       // 16: GetLatestDiskSnapshotResponse
+	(*GetDiskSnapshotRequest)(nil),              // 17: GetDiskSnapshotRequest
+	(*GetDiskSnapshotResponse)(nil),             // 18: GetDiskSnapshotResponse
+	(*GetDiskSnapshotDownloadURLRequest)(nil),   // 19: GetDiskSnapshotDownloadURLRequest
+	(*GetDiskSnapshotDownloadURLResponse)(nil),  // 20: GetDiskSnapshotDownloadURLResponse
+	(*Checkpoint)(nil),                          // 21: types.Checkpoint
+	(*timestamppb.Timestamp)(nil),               // 22: google.protobuf.Timestamp
 }
 var file_backend_repo_proto_depIdxs = []int32{
-	19, // 0: GetCheckpointByIdResponse.checkpoint:type_name -> types.Checkpoint
-	19, // 1: GetLatestCheckpointByStubIdResponse.checkpoint:type_name -> types.Checkpoint
-	19, // 2: ListCheckpointsResponse.checkpoints:type_name -> types.Checkpoint
-	19, // 3: CreateCheckpointResponse.checkpoint:type_name -> types.Checkpoint
-	20, // 4: UpdateCheckpointRequest.last_restored_at:type_name -> google.protobuf.Timestamp
-	19, // 5: UpdateCheckpointResponse.checkpoint:type_name -> types.Checkpoint
-	20, // 6: DiskSnapshot.created_at:type_name -> google.protobuf.Timestamp
-	20, // 7: DiskSnapshot.updated_at:type_name -> google.protobuf.Timestamp
-	20, // 8: DiskSnapshot.completed_at:type_name -> google.protobuf.Timestamp
+	21, // 0: GetCheckpointByIdResponse.checkpoint:type_name -> types.Checkpoint
+	21, // 1: GetLatestCheckpointByStubIdResponse.checkpoint:type_name -> types.Checkpoint
+	21, // 2: ListCheckpointsResponse.checkpoints:type_name -> types.Checkpoint
+	21, // 3: CreateCheckpointResponse.checkpoint:type_name -> types.Checkpoint
+	22, // 4: UpdateCheckpointRequest.last_restored_at:type_name -> google.protobuf.Timestamp
+	21, // 5: UpdateCheckpointResponse.checkpoint:type_name -> types.Checkpoint
+	22, // 6: DiskSnapshot.created_at:type_name -> google.protobuf.Timestamp
+	22, // 7: DiskSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	22, // 8: DiskSnapshot.completed_at:type_name -> google.protobuf.Timestamp
 	10, // 9: CreateDiskSnapshotRequest.snapshot:type_name -> DiskSnapshot
 	10, // 10: CreateDiskSnapshotResponse.snapshot:type_name -> DiskSnapshot
 	10, // 11: GetLatestDiskSnapshotResponse.snapshot:type_name -> DiskSnapshot
@@ -1767,20 +1904,22 @@ var file_backend_repo_proto_depIdxs = []int32{
 	6,  // 16: BackendRepositoryService.CreateCheckpoint:input_type -> CreateCheckpointRequest
 	8,  // 17: BackendRepositoryService.UpdateCheckpoint:input_type -> UpdateCheckpointRequest
 	11, // 18: BackendRepositoryService.CreateDiskSnapshot:input_type -> CreateDiskSnapshotRequest
-	13, // 19: BackendRepositoryService.GetLatestDiskSnapshot:input_type -> GetLatestDiskSnapshotRequest
-	15, // 20: BackendRepositoryService.GetDiskSnapshot:input_type -> GetDiskSnapshotRequest
-	17, // 21: BackendRepositoryService.GetDiskSnapshotDownloadURL:input_type -> GetDiskSnapshotDownloadURLRequest
-	1,  // 22: BackendRepositoryService.GetCheckpointById:output_type -> GetCheckpointByIdResponse
-	3,  // 23: BackendRepositoryService.GetLatestCheckpointByStubId:output_type -> GetLatestCheckpointByStubIdResponse
-	5,  // 24: BackendRepositoryService.ListCheckpoints:output_type -> ListCheckpointsResponse
-	7,  // 25: BackendRepositoryService.CreateCheckpoint:output_type -> CreateCheckpointResponse
-	9,  // 26: BackendRepositoryService.UpdateCheckpoint:output_type -> UpdateCheckpointResponse
-	12, // 27: BackendRepositoryService.CreateDiskSnapshot:output_type -> CreateDiskSnapshotResponse
-	14, // 28: BackendRepositoryService.GetLatestDiskSnapshot:output_type -> GetLatestDiskSnapshotResponse
-	16, // 29: BackendRepositoryService.GetDiskSnapshot:output_type -> GetDiskSnapshotResponse
-	18, // 30: BackendRepositoryService.GetDiskSnapshotDownloadURL:output_type -> GetDiskSnapshotDownloadURLResponse
-	22, // [22:31] is the sub-list for method output_type
-	13, // [13:22] is the sub-list for method input_type
+	13, // 19: BackendRepositoryService.FailDiskSnapshot:input_type -> FailDiskSnapshotRequest
+	15, // 20: BackendRepositoryService.GetLatestDiskSnapshot:input_type -> GetLatestDiskSnapshotRequest
+	17, // 21: BackendRepositoryService.GetDiskSnapshot:input_type -> GetDiskSnapshotRequest
+	19, // 22: BackendRepositoryService.GetDiskSnapshotDownloadURL:input_type -> GetDiskSnapshotDownloadURLRequest
+	1,  // 23: BackendRepositoryService.GetCheckpointById:output_type -> GetCheckpointByIdResponse
+	3,  // 24: BackendRepositoryService.GetLatestCheckpointByStubId:output_type -> GetLatestCheckpointByStubIdResponse
+	5,  // 25: BackendRepositoryService.ListCheckpoints:output_type -> ListCheckpointsResponse
+	7,  // 26: BackendRepositoryService.CreateCheckpoint:output_type -> CreateCheckpointResponse
+	9,  // 27: BackendRepositoryService.UpdateCheckpoint:output_type -> UpdateCheckpointResponse
+	12, // 28: BackendRepositoryService.CreateDiskSnapshot:output_type -> CreateDiskSnapshotResponse
+	14, // 29: BackendRepositoryService.FailDiskSnapshot:output_type -> FailDiskSnapshotResponse
+	16, // 30: BackendRepositoryService.GetLatestDiskSnapshot:output_type -> GetLatestDiskSnapshotResponse
+	18, // 31: BackendRepositoryService.GetDiskSnapshot:output_type -> GetDiskSnapshotResponse
+	20, // 32: BackendRepositoryService.GetDiskSnapshotDownloadURL:output_type -> GetDiskSnapshotDownloadURLResponse
+	23, // [23:33] is the sub-list for method output_type
+	13, // [13:23] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
 	13, // [13:13] is the sub-list for extension extendee
 	0,  // [0:13] is the sub-list for field type_name
@@ -1950,7 +2089,7 @@ func file_backend_repo_proto_init() {
 			}
 		}
 		file_backend_repo_proto_msgTypes[13].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetLatestDiskSnapshotRequest); i {
+			switch v := v.(*FailDiskSnapshotRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -1962,7 +2101,7 @@ func file_backend_repo_proto_init() {
 			}
 		}
 		file_backend_repo_proto_msgTypes[14].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetLatestDiskSnapshotResponse); i {
+			switch v := v.(*FailDiskSnapshotResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -1974,7 +2113,7 @@ func file_backend_repo_proto_init() {
 			}
 		}
 		file_backend_repo_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetDiskSnapshotRequest); i {
+			switch v := v.(*GetLatestDiskSnapshotRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -1986,7 +2125,7 @@ func file_backend_repo_proto_init() {
 			}
 		}
 		file_backend_repo_proto_msgTypes[16].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetDiskSnapshotResponse); i {
+			switch v := v.(*GetLatestDiskSnapshotResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -1998,7 +2137,7 @@ func file_backend_repo_proto_init() {
 			}
 		}
 		file_backend_repo_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetDiskSnapshotDownloadURLRequest); i {
+			switch v := v.(*GetDiskSnapshotRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2010,6 +2149,30 @@ func file_backend_repo_proto_init() {
 			}
 		}
 		file_backend_repo_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetDiskSnapshotResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_backend_repo_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetDiskSnapshotDownloadURLRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_backend_repo_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetDiskSnapshotDownloadURLResponse); i {
 			case 0:
 				return &v.state
@@ -2028,7 +2191,7 @@ func file_backend_repo_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_backend_repo_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -313,6 +313,31 @@ func TestSealRefusesFailedJournal(t *testing.T) {
 	}
 }
 
+// A journal can fail between a layer's upload and its checkpoint; the caller
+// must be able to tell that the published snapshot never became the disk's.
+func TestMarkPublishedReportsMissedCheckpoint(t *testing.T) {
+	volume, server := newTestVolume(t)
+	server.writtenB.Store(4096)
+	journal, err := OpenJournal(context.Background(), newMemoryJournalStore(), "disk", "owner", "", 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	volume.journal = journal
+	sealed, _, err := volume.Seal(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.Fail(errors.New("disk ownership lost"))
+
+	if err := volume.MarkPublished(sealed[0].Path, "snap-a"); !errors.Is(err, ErrNotCheckpointed) {
+		t.Fatalf("a refused checkpoint must report ErrNotCheckpointed, got %v", err)
+	}
+	if len(volume.state.Chain) != 0 || len(volume.state.Pending) != 1 {
+		t.Fatalf("an unrecorded layer must stay pending: chain=%d pending=%d", len(volume.state.Chain), len(volume.state.Pending))
+	}
+}
+
 func TestSealRollsBackFailedPivot(t *testing.T) {
 	volume, server := newTestVolume(t)
 	server.writtenB.Store(4096)

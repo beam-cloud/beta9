@@ -16,6 +16,8 @@ service BackendRepositoryService {
       returns (UpdateCheckpointResponse);
   rpc CreateDiskSnapshot(CreateDiskSnapshotRequest)
       returns (CreateDiskSnapshotResponse);
+  rpc FailDiskSnapshot(FailDiskSnapshotRequest)
+      returns (FailDiskSnapshotResponse);
   rpc GetLatestDiskSnapshot(GetLatestDiskSnapshotRequest)
       returns (GetLatestDiskSnapshotResponse);
   rpc GetDiskSnapshot(GetDiskSnapshotRequest) returns (GetDiskSnapshotResponse);
@@ -125,6 +127,17 @@ message CreateDiskSnapshotResponse {
   bool ok = 1;
   DiskSnapshot snapshot = 2;
   string error_msg = 3;
+}
+
+message FailDiskSnapshotRequest {
+  string workspace_id = 1;
+  string snapshot_id = 2;
+  string reason = 3;
+}
+
+message FailDiskSnapshotResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }
 
 message GetLatestDiskSnapshotRequest {

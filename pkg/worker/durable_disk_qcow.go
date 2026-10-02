@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -662,12 +663,36 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 			return published, err
 		}
 		if err := volume.MarkPublished(layer.Path, row.ExternalId); err != nil {
+			if errors.Is(err, disk.ErrNotCheckpointed) {
+				s.withdrawQcowSnapshot(ctx, request, row, err)
+			}
 			return published, err
 		}
 		s.reportQcowChainContent(request, s.appendQcowChain(key, qcowChainEntry{row: row, manifest: manifest}))
 		published, latest, parentID = row, row, row.ExternalId
 	}
 	return published, nil
+}
+
+const qcowSnapshotWithdrawTimeout = 30 * time.Second
+
+// withdrawQcowSnapshot marks failed a generation its journal never recorded.
+// As an available row it would stand as the disk's latest generation, and
+// every later publish would fork the chain around it. A checkpoint that did
+// commit despite its error stays restorable: attach looks up the journal's
+// snapshot by ID, whatever its status.
+func (s *Worker) withdrawQcowSnapshot(ctx context.Context, request *types.ContainerRequest, row *types.DiskSnapshot, cause error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qcowSnapshotWithdrawTimeout)
+	defer cancel()
+	_, err := handleGRPCResponse(s.backendRepoClient.FailDiskSnapshot(ctx, &pb.FailDiskSnapshotRequest{
+		WorkspaceId: cacheRequestWorkspaceID(request),
+		SnapshotId:  row.ExternalId,
+		Reason:      cause.Error(),
+	}))
+	if err != nil {
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Str("disk", row.DiskName).
+			Str("snapshot_id", row.ExternalId).Msg("failed to withdraw a snapshot its journal never recorded")
+	}
 }
 
 func (s *Worker) latestQcowSnapshotRow(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
@@ -779,7 +804,8 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		SourceStorageNodeId: s.storageNodeID(),
 	}
 	// A journal that failed during the upload can no longer checkpoint this
-	// layer; its row would be an orphan that the next publish forks around.
+	// layer, so it gets no row. One that fails after this check has its row
+	// withdrawn once the checkpoint is refused.
 	if err := volume.Check(); err != nil {
 		return nil, nil, err
 	}

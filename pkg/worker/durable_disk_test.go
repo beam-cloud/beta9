@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
@@ -106,6 +107,24 @@ func TestDurableDiskSeedFallsBackToTheStubConfig(t *testing.T) {
 	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "fork-disk"}}
 
 	require.Equal(t, "snapshot-source", durableDiskSourceSnapshotFromStub(request, mount.DurableDisk.Name))
+}
+
+// A missed checkpoint usually surfaces while the container is stopping, after
+// the publish context is gone; the withdrawal must still reach the gateway.
+func TestWithdrawQcowSnapshotOutlivesTheCanceledPublish(t *testing.T) {
+	backendRepo := &fakeBackendRepoClient{}
+	worker := &Worker{ctx: context.Background(), backendRepoClient: backendRepo}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	worker.withdrawQcowSnapshot(ctx, &types.ContainerRequest{WorkspaceId: "workspace"},
+		&types.DiskSnapshot{ExternalId: "snapshot", DiskName: "db"}, disk.ErrNotCheckpointed)
+
+	require.Equal(t, &pb.FailDiskSnapshotRequest{
+		WorkspaceId: "workspace",
+		SnapshotId:  "snapshot",
+		Reason:      disk.ErrNotCheckpointed.Error(),
+	}, backendRepo.failedSnapshot)
 }
 
 func TestSeedDurableDiskSnapshotRefusesAnEmptyDiskWhenTheSourceIsGone(t *testing.T) {

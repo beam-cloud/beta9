@@ -25,6 +25,7 @@ const (
 	BackendRepositoryService_CreateCheckpoint_FullMethodName            = "/BackendRepositoryService/CreateCheckpoint"
 	BackendRepositoryService_UpdateCheckpoint_FullMethodName            = "/BackendRepositoryService/UpdateCheckpoint"
 	BackendRepositoryService_CreateDiskSnapshot_FullMethodName          = "/BackendRepositoryService/CreateDiskSnapshot"
+	BackendRepositoryService_FailDiskSnapshot_FullMethodName            = "/BackendRepositoryService/FailDiskSnapshot"
 	BackendRepositoryService_GetLatestDiskSnapshot_FullMethodName       = "/BackendRepositoryService/GetLatestDiskSnapshot"
 	BackendRepositoryService_GetDiskSnapshot_FullMethodName             = "/BackendRepositoryService/GetDiskSnapshot"
 	BackendRepositoryService_GetDiskSnapshotDownloadURL_FullMethodName  = "/BackendRepositoryService/GetDiskSnapshotDownloadURL"
@@ -40,6 +41,7 @@ type BackendRepositoryServiceClient interface {
 	CreateCheckpoint(ctx context.Context, in *CreateCheckpointRequest, opts ...grpc.CallOption) (*CreateCheckpointResponse, error)
 	UpdateCheckpoint(ctx context.Context, in *UpdateCheckpointRequest, opts ...grpc.CallOption) (*UpdateCheckpointResponse, error)
 	CreateDiskSnapshot(ctx context.Context, in *CreateDiskSnapshotRequest, opts ...grpc.CallOption) (*CreateDiskSnapshotResponse, error)
+	FailDiskSnapshot(ctx context.Context, in *FailDiskSnapshotRequest, opts ...grpc.CallOption) (*FailDiskSnapshotResponse, error)
 	GetLatestDiskSnapshot(ctx context.Context, in *GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*GetLatestDiskSnapshotResponse, error)
 	GetDiskSnapshot(ctx context.Context, in *GetDiskSnapshotRequest, opts ...grpc.CallOption) (*GetDiskSnapshotResponse, error)
 	GetDiskSnapshotDownloadURL(ctx context.Context, in *GetDiskSnapshotDownloadURLRequest, opts ...grpc.CallOption) (*GetDiskSnapshotDownloadURLResponse, error)
@@ -107,6 +109,15 @@ func (c *backendRepositoryServiceClient) CreateDiskSnapshot(ctx context.Context,
 	return out, nil
 }
 
+func (c *backendRepositoryServiceClient) FailDiskSnapshot(ctx context.Context, in *FailDiskSnapshotRequest, opts ...grpc.CallOption) (*FailDiskSnapshotResponse, error) {
+	out := new(FailDiskSnapshotResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_FailDiskSnapshot_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *backendRepositoryServiceClient) GetLatestDiskSnapshot(ctx context.Context, in *GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*GetLatestDiskSnapshotResponse, error) {
 	out := new(GetLatestDiskSnapshotResponse)
 	err := c.cc.Invoke(ctx, BackendRepositoryService_GetLatestDiskSnapshot_FullMethodName, in, out, opts...)
@@ -144,6 +155,7 @@ type BackendRepositoryServiceServer interface {
 	CreateCheckpoint(context.Context, *CreateCheckpointRequest) (*CreateCheckpointResponse, error)
 	UpdateCheckpoint(context.Context, *UpdateCheckpointRequest) (*UpdateCheckpointResponse, error)
 	CreateDiskSnapshot(context.Context, *CreateDiskSnapshotRequest) (*CreateDiskSnapshotResponse, error)
+	FailDiskSnapshot(context.Context, *FailDiskSnapshotRequest) (*FailDiskSnapshotResponse, error)
 	GetLatestDiskSnapshot(context.Context, *GetLatestDiskSnapshotRequest) (*GetLatestDiskSnapshotResponse, error)
 	GetDiskSnapshot(context.Context, *GetDiskSnapshotRequest) (*GetDiskSnapshotResponse, error)
 	GetDiskSnapshotDownloadURL(context.Context, *GetDiskSnapshotDownloadURLRequest) (*GetDiskSnapshotDownloadURLResponse, error)
@@ -171,6 +183,9 @@ func (UnimplementedBackendRepositoryServiceServer) UpdateCheckpoint(context.Cont
 }
 func (UnimplementedBackendRepositoryServiceServer) CreateDiskSnapshot(context.Context, *CreateDiskSnapshotRequest) (*CreateDiskSnapshotResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateDiskSnapshot not implemented")
+}
+func (UnimplementedBackendRepositoryServiceServer) FailDiskSnapshot(context.Context, *FailDiskSnapshotRequest) (*FailDiskSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FailDiskSnapshot not implemented")
 }
 func (UnimplementedBackendRepositoryServiceServer) GetLatestDiskSnapshot(context.Context, *GetLatestDiskSnapshotRequest) (*GetLatestDiskSnapshotResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetLatestDiskSnapshot not implemented")
@@ -303,6 +318,24 @@ func _BackendRepositoryService_CreateDiskSnapshot_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BackendRepositoryService_FailDiskSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FailDiskSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackendRepositoryServiceServer).FailDiskSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackendRepositoryService_FailDiskSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackendRepositoryServiceServer).FailDiskSnapshot(ctx, req.(*FailDiskSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BackendRepositoryService_GetLatestDiskSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetLatestDiskSnapshotRequest)
 	if err := dec(in); err != nil {
@@ -387,6 +420,10 @@ var BackendRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateDiskSnapshot",
 			Handler:    _BackendRepositoryService_CreateDiskSnapshot_Handler,
+		},
+		{
+			MethodName: "FailDiskSnapshot",
+			Handler:    _BackendRepositoryService_FailDiskSnapshot_Handler,
 		},
 		{
 			MethodName: "GetLatestDiskSnapshot",

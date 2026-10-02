@@ -3997,6 +3997,7 @@ type fakeBackendRepoClient struct {
 	latestSnapshot      *pb.DiskSnapshot
 	getDiskSnapshotErr  error
 	requestedSnapshotId string
+	failedSnapshot      *pb.FailDiskSnapshotRequest
 }
 
 func (f *fakeBackendRepoClient) GetCheckpointById(ctx context.Context, in *pb.GetCheckpointByIdRequest, opts ...grpc.CallOption) (*pb.GetCheckpointByIdResponse, error) {
@@ -4025,6 +4026,14 @@ func (f *fakeBackendRepoClient) UpdateCheckpoint(ctx context.Context, in *pb.Upd
 
 func (f *fakeBackendRepoClient) CreateDiskSnapshot(ctx context.Context, in *pb.CreateDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.CreateDiskSnapshotResponse, error) {
 	return &pb.CreateDiskSnapshotResponse{Ok: true}, nil
+}
+
+func (f *fakeBackendRepoClient) FailDiskSnapshot(ctx context.Context, in *pb.FailDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.FailDiskSnapshotResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.failedSnapshot = in
+	return &pb.FailDiskSnapshotResponse{Ok: true}, nil
 }
 
 func (f *fakeBackendRepoClient) GetLatestDiskSnapshot(ctx context.Context, in *pb.GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetLatestDiskSnapshotResponse, error) {

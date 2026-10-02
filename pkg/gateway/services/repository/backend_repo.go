@@ -161,6 +161,38 @@ func (s *BackendRepositoryService) CreateDiskSnapshot(ctx context.Context, req *
 	return &pb.CreateDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(created)}, nil
 }
 
+// FailDiskSnapshot withdraws a snapshot whose publish did not complete, so it
+// is never taken as its disk's latest generation.
+func (s *BackendRepositoryService) FailDiskSnapshot(ctx context.Context, req *pb.FailDiskSnapshotRequest) (*pb.FailDiskSnapshotResponse, error) {
+	if err := s.failDiskSnapshot(ctx, req); err != nil {
+		return &pb.FailDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.FailDiskSnapshotResponse{Ok: true}, nil
+}
+
+func (s *BackendRepositoryService) failDiskSnapshot(ctx context.Context, req *pb.FailDiskSnapshotRequest) error {
+	if err := authorizeDiskSnapshotWorkspace(ctx, req.WorkspaceId); err != nil {
+		return err
+	}
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	if err != nil {
+		return err
+	}
+	snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, req.SnapshotId)
+	if err != nil {
+		return err
+	}
+	if snapshot.WorkspaceId != workspace.Id {
+		return fmt.Errorf("disk snapshot %s does not belong to workspace %s", req.SnapshotId, req.WorkspaceId)
+	}
+	_, err = s.backendRepo.UpdateDiskSnapshot(ctx, &types.DiskSnapshot{
+		ExternalId: snapshot.ExternalId,
+		Status:     types.DiskSnapshotStatusFailed,
+		Reason:     req.Reason,
+	})
+	return err
+}
+
 func (s *BackendRepositoryService) GetLatestDiskSnapshot(ctx context.Context, req *pb.GetLatestDiskSnapshotRequest) (*pb.GetLatestDiskSnapshotResponse, error) {
 	snapshot, err := s.findDiskSnapshot(ctx, req.WorkspaceId, func(ctx context.Context, workspaceID uint) (*types.DiskSnapshot, error) {
 		return s.backendRepo.GetLatestDiskSnapshot(ctx, workspaceID, req.DiskName)

@@ -103,8 +103,9 @@ func (v *Volume) ReadOnly() bool     { return v.state.ReadOnly }
 // volume; empty for NBD volumes.
 func (v *Volume) ExportSocket() string { return v.state.ExportSocket }
 
-// Journaled reports whether every acknowledged write is already durable in
-// the volume's journal, independent of published generations.
+// Journaled reports whether the volume was attached with a journal, which
+// makes acknowledged writes durable without publishing a generation. It says
+// nothing about the journal's health; Check does.
 func (v *Volume) Journaled() bool { return v.journal != nil }
 
 // Check reports why the volume's journal stopped committing writes. From
@@ -651,19 +652,29 @@ func (v *Volume) reconcileHeadNode(ctx context.Context) error {
 	return nil
 }
 
+// ErrNotCheckpointed reports that MarkPublished did not record a published
+// layer as its journal's checkpoint. The journal, not the snapshot catalog,
+// decides what a journaled disk restores, so the snapshot must not stand as
+// the disk's latest generation.
+var ErrNotCheckpointed = errors.New("published layer is not the journal's checkpoint")
+
 // MarkPublished records that a sealed layer was durably published as the
 // given snapshot, moving it from the pending list into the chain.
 func (v *Volume) MarkPublished(sealedPath, snapshotID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if len(v.state.Pending) == 0 || v.state.Pending[0].Path != sealedPath {
-		return fmt.Errorf("sealed layer %s is not the oldest pending layer of volume %s", sealedPath, v.state.Key)
+		err := fmt.Errorf("sealed layer %s is not the oldest pending layer of volume %s", sealedPath, v.state.Key)
+		if v.journal != nil {
+			return fmt.Errorf("%w: %w", ErrNotCheckpointed, err)
+		}
+		return err
 	}
 	if v.journal != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), journalLease)
 		defer cancel()
 		if err := v.journal.Checkpoint(ctx, v.state.Pending[0].JournalSequence, snapshotID); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrNotCheckpointed, err)
 		}
 	}
 	v.state.Chain = append(v.state.Chain, stateLayer{SnapshotID: snapshotID, Path: sealedPath})
