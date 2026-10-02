@@ -398,3 +398,7 @@ func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId, container
 func (k *keys) endpointRequestRelease(workspaceName, stubId, taskId, containerId string) string {
 	return common.RedisKeys.EndpointRequestRelease(workspaceName, stubId, taskId, containerId)
 }
+
+func (k *keys) endpointTasklessRequests(workspaceName, stubId string) string {
+	return common.RedisKeys.EndpointTasklessRequests(workspaceName, stubId)
+}
