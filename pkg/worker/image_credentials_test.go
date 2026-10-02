@@ -419,6 +419,32 @@ func TestPullImageArchiveFromBrokeredOriginUsesURL(t *testing.T) {
 	require.Equal(t, "image-a", repo.requests[0].ImageId)
 }
 
+// An agent worker has no S3 credentials. When the data archive of an S3-backed
+// image cannot be fetched through the brokered URL, the remote mount fails
+// minutes later inside the AWS credential chain; refuse it up front. A full
+// archive carries its own data and is unaffected.
+func TestPrepareLazyImageArchiveRefusesRemoteMountWithoutCredentials(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "image-a."+reg.RemoteImageFileExtension)
+	require.NoError(t, os.WriteFile(archivePath, []byte("index"), 0o644))
+
+	client := agentPoolImageClient(types.PoolModeExternal, &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{Ok: true}})
+	client.imageCachePath = dir
+	client.registry = &reg.ImageRegistry{ImageFileExtension: reg.RemoteImageFileExtension}
+	client.config.ImageService = types.ImageServiceConfig{RegistryStore: reg.S3ImageRegistryStore}
+	client.v2ArchiveMetadata = common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "image-a", PoolSelector: "agent-pool"}
+
+	client.v2ArchiveMetadata.Set("image-a", &clipCommon.ClipArchiveMetadata{StorageInfo: &clipCommon.S3StorageInfo{Bucket: "images"}})
+	_, err := client.prepareLazyImageArchive(context.Background(), request)
+	require.ErrorContains(t, err, "unavailable from the gateway-brokered origin")
+
+	client.v2ArchiveMetadata.Set("image-a", &clipCommon.ClipArchiveMetadata{})
+	archive, err := client.prepareLazyImageArchive(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, archivePath, archive.path)
+}
+
 func TestPullImageFromRegistryAgentPoolsRequireBrokeredOrigin(t *testing.T) {
 	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeProvider, types.PoolModeExternal} {
 		t.Run(string(mode), func(t *testing.T) {
