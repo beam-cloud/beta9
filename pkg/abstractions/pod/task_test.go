@@ -25,7 +25,8 @@ func TestPodRunTaskTerminalStatus(t *testing.T) {
 		{name: "stopped by scheduler", exitCode: types.ContainerExitCodeScheduler, expectedStatus: types.TaskStatusCancelled, expectReason: true},
 		{name: "ttl exceeded", exitCode: types.ContainerExitCodeTtl, expectedStatus: types.TaskStatusTimeout, expectReason: true},
 		{name: "oom killed", exitCode: types.ContainerExitCodeOomKill, expectedStatus: types.TaskStatusError, expectReason: true},
-		{name: "unknown non-zero exit", exitCode: types.ContainerExitCode(1), expectedStatus: types.TaskStatusError, expectReason: true},
+		{name: "command failure", exitCode: types.ContainerExitCode(1), expectedStatus: types.TaskStatusError, expectReason: true},
+		{name: "other non-zero exit", exitCode: types.ContainerExitCode(3), expectedStatus: types.TaskStatusError, expectReason: true},
 	}
 
 	for _, tt := range tests {
@@ -39,6 +40,9 @@ func TestPodRunTaskTerminalStatus(t *testing.T) {
 			}
 		})
 	}
+
+	_, reason := podRunTaskTerminalStatus(types.ContainerExitCode(1))
+	require.Equal(t, "Container exited with code 1", reason, "a command's own exit 1 must not read as an unknown platform error")
 }
 
 func TestPodRunTaskMappingRoundTrip(t *testing.T) {
