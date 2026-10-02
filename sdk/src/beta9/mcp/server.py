@@ -6,6 +6,7 @@ still starts and offers `login`, then announces the workspace tools once a
 token arrives.
 """
 
+import configparser
 import json
 import sys
 import threading
@@ -138,7 +139,7 @@ class StdioProxy:
         self._requests: Dict[Any, threading.Event] = {}
         self._stdout: BinaryIO = sys.stdout.buffer
         with self._connect_lock:
-            self._connect()
+            self._connect(context_or_none(context_name))
 
     def run(
         self, stdin: Optional[Iterable[bytes]] = None, stdout: Optional[BinaryIO] = None
@@ -317,14 +318,14 @@ class StdioProxy:
             {"jsonrpc": "2.0", "id": msg_id, "method": "tools/call", "params": params}
         )
 
-    def _connect(self) -> None:
+    def _connect(self, context: Optional[ConfigContext]) -> None:
         self.connection_error = None
-        self.context = context_or_none(self.context_name)
-        if self.context is None:
+        self.context = context
+        if context is None:
             self.remote = None
             return
         try:
-            self.remote = RemoteMCP(self.context)
+            self.remote = RemoteMCP(context)
         except Exception as exc:
             self.remote = None
             self.connection_error = str(exc)
@@ -335,17 +336,22 @@ class StdioProxy:
         terminal `login` or another agent saved it."""
         with self._connect_lock:
             context, signed_in = self.context, self.remote is not None
-            current = context_or_none(self.context_name)
+            try:
+                current = context_or_none(self.context_name)
+            except configparser.Error as exc:
+                # Another program is writing it in place; keep the sign-in in use.
+                log(f"config unreadable: {exc}")
+                return
             if current == context and (signed_in or not self.connection_error):
                 return
-            self._connect()
+            self._connect(current)
             changed = current != context or (self.remote is not None) != signed_in
         if changed:
             self.notify("notifications/tools/list_changed")
 
     def _on_login(self) -> None:
         with self._connect_lock:
-            self._connect()
+            self._connect(context_or_none(self.context_name))
         if self.remote is not None:
             self.notify("notifications/tools/list_changed")
 
@@ -358,8 +364,13 @@ class StdioProxy:
         except requests.RequestException as exc:
             return 0, {"error": {"code": INTERNAL_ERROR, "message": f"gateway unreachable: {exc}"}}
         if status == 401:
-            self.remote = None
-            self.notify("notifications/tools/list_changed")
+            # A sign-in saved during the call has already replaced `remote`.
+            with self._connect_lock:
+                rejected = self.remote is remote
+                if rejected:
+                    self.remote = None
+            if rejected:
+                self.notify("notifications/tools/list_changed")
             return status, {
                 "error": {"code": INTERNAL_ERROR, "message": "token rejected; sign in again"}
             }

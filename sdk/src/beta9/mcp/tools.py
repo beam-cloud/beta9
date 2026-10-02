@@ -40,6 +40,8 @@ from ..config import (
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
+# Seconds. A job runner records its pid as it starts; one that has not by then never will.
+RUNNER_START_LIMIT = 600
 LOG_TAIL = 40
 GENERIC_FAILURE = "Deployment failed"
 # The context a job's helper process calls the gateway with. The helper is a
@@ -362,7 +364,11 @@ class DeployJob:
             return
 
         # Polled before reading the record: a supervisor saves its result before it exits.
-        exited = self.supervisor is not None and self.supervisor.poll() is not None
+        # A job loaded from its record (a retried key, a restarted server) has no handle.
+        if self.supervisor is not None:
+            exited = self.supervisor.poll() is not None
+        else:
+            exited = time.time() - self.started_at > RUNNER_START_LIMIT
         payload = json.loads(self.state_path.read_text())
         for key, value in payload.items():
             setattr(self, key, value)
@@ -804,9 +810,9 @@ class LocalTools:
         job_id = str(args.get("job_id") or "")
         if len(job_id) != 24 or any(c not in "0123456789abcdef" for c in job_id):
             return error_result("invalid job_id")
-        path = self.job_dir / f"{job_id}.json"
         job = self.jobs.get(job_id)
-        if job is None or job.state_path != path:
+        if job is None:
+            path = self.job_dir / f"{job_id}.json"
             if not path.exists():
                 return error_result("unknown job_id in this context")
             job = DeployJob.load(path)
@@ -822,12 +828,7 @@ class LocalTools:
         return job.result(cursor)
 
     def signed_in_context(self) -> ConfigContext:
-        from .server import context_or_none
-
-        context = context_or_none(self.context_name)
-        if context is None:
-            raise RemoteToolError({"error": "Not signed in", "code": "UNAUTHENTICATED"})
-        return context
+        return _signed_in(self.context_name)
 
     def remote(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         return call_remote(self.signed_in_context(), name, arguments)
@@ -1064,22 +1065,28 @@ class LocalTools:
             return error_result(str(exc))
 
 
-def _helper_context(name: str) -> ConfigContext:
-    if JOB_CONTEXT_ENV in os.environ:
-        return ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
-
-    # Servers from before JOB_CONTEXT_ENV pass only the context's name. They
-    # served the CLI installed alongside, and SDKSettings picks Beam's config
-    # file once the beam package is loaded.
-    if importlib.util.find_spec("beam") is not None:
-        importlib.import_module("beam")
-        set_settings(SDKSettings())
+def _signed_in(name: str) -> ConfigContext:
     from .server import context_or_none
 
     context = context_or_none(name)
     if context is None:
         raise RemoteToolError({"error": "Not signed in", "code": "UNAUTHENTICATED"})
     return context
+
+
+def _helper_context(name: str) -> ConfigContext:
+    if JOB_CONTEXT_ENV in os.environ:
+        return ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
+
+    # Servers from before JOB_CONTEXT_ENV pass only the context's name. They
+    # served the CLI installed alongside, and SDKSettings picks Beam's config
+    # file once the beam package is loaded. `python -m` put the job's directory,
+    # the user's project, first on the path; a beam module there is not the CLI.
+    sys.path[:] = [p for p in sys.path if p not in ("", os.getcwd())]
+    if importlib.util.find_spec("beam") is not None:
+        importlib.import_module("beam")
+        set_settings(SDKSettings())
+    return _signed_in(name)
 
 
 def main() -> None:

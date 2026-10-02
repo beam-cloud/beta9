@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import sys
+import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple, Union
@@ -193,8 +194,16 @@ def save_config(
     parser = configparser.ConfigParser()
     parser.read_dict({k: v.to_dict() for k, v in contexts.items()})
 
-    with open(path, "w") as file:
-        parser.write(file)
+    # Replaced, never rewritten in place: running MCP servers reread this file
+    # on every request. Through a symlink, its target is replaced.
+    path = path.resolve()
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as file:
+            parser.write(file)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def is_config_empty(path: Optional[Union[Path, str]] = None) -> bool:

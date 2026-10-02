@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import time
 import types
 from typing import Any, Dict, Optional
 from pathlib import Path
@@ -44,6 +45,20 @@ def run_proxy(proxy: mcp_server.StdioProxy, *messages):
     stdout = io.BytesIO()
     proxy.run(stdin=stdin, stdout=stdout)
     return [json.loads(line) for line in stdout.getvalue().decode().splitlines() if line]
+
+
+def write_config(path: Path, token: str, gateway_host: str = "gateway.example") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"[default]\ntoken = {token}\ngateway_host = {gateway_host}\ngateway_port = 443\n"
+    )
+
+
+def child_env(**extra: str) -> Dict[str, str]:
+    """Environment for a child interpreter that imports this beta9, installed or not."""
+    source = str(Path(mcp_tools.__file__).parents[2])
+    path = os.pathsep.join(filter(None, [source, os.environ.get("PYTHONPATH")]))
+    return {**os.environ, "PYTHONPATH": path, **extra}
 
 
 def rpc(method, msg_id=1, **params):
@@ -163,6 +178,37 @@ def test_rejected_token_drops_remote_and_announces_tool_change(settings, monkeyp
     assert "whoami" not in [t["name"] for t in tools["result"]["tools"]]
 
 
+def test_a_rejected_call_keeps_a_sign_in_saved_while_it_ran(settings, monkeypatch):
+    write_config(settings.config_path, "old")
+    newer = FakeRemote()
+
+    class Rejected(FakeRemote):
+        def call(self, message):
+            write_config(settings.config_path, "new")
+            proxy._follow_sign_in()  # another request saw the new sign-in meanwhile
+            return 401, None
+
+    remotes = {"old": Rejected(), "new": newer}
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remotes[context.token])
+    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
+    out = run_proxy(proxy, rpc("tools/call", 1, name="whoami", arguments={}))
+
+    assert next(m for m in out if m.get("id") == 1)["result"]["isError"] is True
+    assert proxy.remote is newer
+
+
+def test_an_unreadable_config_keeps_the_sign_in_in_use(settings, monkeypatch):
+    # agents.sh and older CLIs rewrite the file in place; a read can land mid-write.
+    write_config(settings.config_path, "t")
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: FakeRemote())
+    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
+    settings.config_path.write_text("[default\ntoken = t")
+
+    [tools] = run_proxy(proxy, rpc("tools/list", 1))
+
+    assert "whoami" in [t["name"] for t in tools["result"]["tools"]]
+
+
 def test_proxy_acts_as_the_latest_sign_in_saved_anywhere(settings, monkeypatch):
     # `beam login` in a terminal, or another agent's login, while this server runs.
     remotes = []
@@ -171,16 +217,11 @@ def test_proxy_acts_as_the_latest_sign_in_saved_anywhere(settings, monkeypatch):
         remotes.append((context.token, FakeRemote()))
         return remotes[-1][1]
 
-    def sign_in(token):
-        settings.config_path.write_text(
-            f"[default]\ntoken = {token}\ngateway_host = gateway.example\ngateway_port = 443\n"
-        )
-
     def messages():
         yield rpc("tools/list", 1)
-        sign_in("first")
+        write_config(settings.config_path, "first")
         yield rpc("tools/list", 2)
-        sign_in("second")
+        write_config(settings.config_path, "second")
         yield rpc("tools/call", 3, name="whoami", arguments={})
 
     monkeypatch.setattr(mcp_server, "RemoteMCP", remote)
@@ -373,13 +414,9 @@ def two_profiles(monkeypatch, tmp_path):
     monkeypatch.delenv("CONFIG_PATH", raising=False)
     monkeypatch.delenv("BETA9_TOKEN", raising=False)
     served = tmp_path / "served.ini"
-    served.write_text(
-        "[default]\ntoken = served-token\ngateway_host = served.example\ngateway_port = 443\n"
-    )
+    write_config(served, "served-token", "served.example")
     other = tmp_path / "other.ini"
-    other.write_text(
-        "[default]\ntoken = other-token\ngateway_host = other.example\ngateway_port = 443\n"
-    )
+    write_config(other, "other-token", "other.example")
     set_settings(SDKSettings(name="Beam", config_path=served, api_token=None))
     monkeypatch.setenv("CONFIG_PATH", str(other))
     yield
@@ -489,65 +526,72 @@ def test_job_results_show_the_same_fields_as_text(two_profiles, local_tools, tmp
     assert result["structuredContent"]["logs"] == ["step one"]
 
 
-def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch, capsys):
-    calls = []
-    refused = {
-        "error": "insufficient_credits (workspace 36dc7a, id ws-1)",
-        "code": "INSUFFICIENT_CREDITS",
-    }
-
-    def call_remote(context, name, arguments):
-        calls.append(context.token)
-        if arguments["name"] == "refused":
-            raise mcp_tools.RemoteToolError(refused)
-        return {"deployment_id": "d1"}
-
-    monkeypatch.setattr(mcp_tools, "call_remote", call_remote)
-    monkeypatch.setenv(mcp_tools.JOB_CONTEXT_ENV, json.dumps({"token": "served-token"}))
-
-    monkeypatch.setattr(sys, "argv", ["tools", "create-database", "default", '{"name": "db"}'])
-    mcp_tools.main()
-    assert json.loads(capsys.readouterr().out) == {"deployment_id": "d1"}
-
-    monkeypatch.setattr(sys, "argv", ["tools", "create-database", "default", '{"name": "refused"}'])
-    with pytest.raises(SystemExit) as exited:
-        mcp_tools.main()
-    assert exited.value.code == 1
-    assert json.loads(capsys.readouterr().out) == refused
-    assert calls == ["served-token", "served-token"]
-
-
-def test_database_helper_of_an_older_server_uses_the_installed_clis_config(
-    monkeypatch, tmp_path, capsys
-):
-    # Servers from before the handed context pass only its name; this
-    # interpreter's defaults would read ~/.beta9/config.ini, another account.
-    for folder, token in ((".beam", "beam-token"), (".beta9", "other-token")):
-        (tmp_path / folder).mkdir()
-        (tmp_path / folder / "config.ini").write_text(
-            f"[default]\ntoken = {token}\ngateway_host = gateway.example\ngateway_port = 443\n"
-        )
-    beam = types.ModuleType("beam")
-    beam.__spec__ = importlib.machinery.ModuleSpec("beam", None)
-    monkeypatch.setitem(sys.modules, "beam", beam)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    for variable in ("CONFIG_PATH", "BEAM_TOKEN", "BETA9_TOKEN", mcp_tools.JOB_CONTEXT_ENV):
-        monkeypatch.delenv(variable, raising=False)
+def run_database_helper(monkeypatch, refusal: Optional[Dict[str, Any]] = None):
+    """`create-database` as a job runner invokes it, in this process: the tokens
+    it called the gateway with, and its exit code."""
     calls = []
 
     def call_remote(context, name, arguments):
         calls.append(context.token)
+        if refusal:
+            raise mcp_tools.RemoteToolError(refusal)
         return {"deployment_id": "d1"}
 
     monkeypatch.setattr(mcp_tools, "call_remote", call_remote)
     monkeypatch.setattr(sys, "argv", ["tools", "create-database", "default", '{"name": "db"}'])
     try:
         mcp_tools.main()
-    finally:
-        set_settings(None)
+    except SystemExit as exc:
+        return calls, exc.code
+    return calls, 0
 
-    assert calls == ["beam-token"]
+
+def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch, capsys):
+    refused = {
+        "error": "insufficient_credits (workspace 36dc7a, id ws-1)",
+        "code": "INSUFFICIENT_CREDITS",
+    }
+    monkeypatch.setenv(mcp_tools.JOB_CONTEXT_ENV, json.dumps({"token": "served-token"}))
+
+    assert run_database_helper(monkeypatch) == (["served-token"], 0)
     assert json.loads(capsys.readouterr().out) == {"deployment_id": "d1"}
+    assert run_database_helper(monkeypatch, refused) == (["served-token"], 1)
+    assert json.loads(capsys.readouterr().out) == refused
+
+
+@pytest.fixture
+def home(monkeypatch, tmp_path):
+    """What an older server's helper starts with: only a context name, and a HOME
+    whose ~/.beam and ~/.beta9 configs are different accounts."""
+    write_config(tmp_path / ".beam" / "config.ini", "beam-token")
+    write_config(tmp_path / ".beta9" / "config.ini", "beta9-token")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for variable in ("CONFIG_PATH", "BEAM_TOKEN", "BETA9_TOKEN", mcp_tools.JOB_CONTEXT_ENV):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr("beta9.config._SETTINGS", None)
+    return tmp_path
+
+
+def test_database_helper_of_an_older_server_uses_the_installed_clis_config(home, monkeypatch):
+    beam = types.ModuleType("beam")
+    beam.__spec__ = importlib.machinery.ModuleSpec("beam", None)
+    monkeypatch.setitem(sys.modules, "beam", beam)
+
+    assert run_database_helper(monkeypatch) == (["beam-token"], 0)
+
+
+def test_database_helper_does_not_run_a_beam_module_in_the_project(home, monkeypatch):
+    # Job runners start the helper in the agent's project; `python -m` puts it on the path.
+    project = home / "project"
+    project.mkdir()
+    (project / "beam.py").write_text("raise SystemExit('the project ran')")
+    monkeypatch.chdir(project)
+    sys.path.insert(0, str(project))
+    # SDKSettings expands its ~/.beta9 default at import, before HOME was replaced.
+    monkeypatch.setenv("CONFIG_PATH", str(home / ".beta9" / "config.ini"))
+
+    assert run_database_helper(monkeypatch) == (["beta9-token"], 0)
 
 
 def test_local_results_show_their_fields_as_text():
@@ -562,16 +606,13 @@ def test_local_results_show_their_fields_as_text():
 def test_database_helper_process_reports_only_its_result(tmp_path):
     # A failed job shows the helper's output; nothing but its JSON belongs there.
     hidden = (mcp_tools.JOB_CONTEXT_ENV, "BETA9_TOKEN", "BEAM_TOKEN")
-    env = {k: v for k, v in os.environ.items() if k not in hidden}
-    # The helper imports the same beta9 as this test, installed or not.
-    source = str(Path(mcp_tools.__file__).parents[2])
-    path = os.pathsep.join(filter(None, [source, os.environ.get("PYTHONPATH")]))
+    env = child_env(HOME=str(tmp_path), CONFIG_PATH=str(tmp_path / "x"))
     helper = subprocess.run(
         [sys.executable, "-m", "beta9.mcp", "create-database", "default", '{"name": "db"}'],
         capture_output=True,
         text=True,
         timeout=60,
-        env={**env, "PYTHONPATH": path, "HOME": str(tmp_path), "CONFIG_PATH": str(tmp_path / "x")},
+        env={k: v for k, v in env.items() if k not in hidden},
     )
 
     assert helper.returncode == 1
@@ -590,13 +631,11 @@ def test_jobs_launched_the_way_older_servers_launch_them_still_run(tmp_path):
         command=[sys.executable, "-c", helper],
         state_path=state,
     ).save()
-    source = str(Path(mcp_tools.__file__).parents[2])
-    path = os.pathsep.join(filter(None, [source, os.environ.get("PYTHONPATH")]))
 
     subprocess.run(
         [sys.executable, "-m", "beta9.mcp.tools", str(state)],
         timeout=60,
-        env={**os.environ, "PYTHONPATH": path},
+        env=child_env(),
         check=True,
     )
 
@@ -613,6 +652,42 @@ def test_a_job_whose_runner_dies_before_starting_fails_with_its_error(
 
     assert result["structuredContent"]["status"] == "failed"
     assert result["structuredContent"]["error"].endswith("ModuleNotFoundError: beta9.mcp")
+
+
+def test_a_runner_that_never_started_fails_its_job_for_a_server_that_did_not_launch_it(
+    settings, local_tools, monkeypatch, tmp_path
+):
+    command = [sys.executable, "-c", "import json; print(json.dumps({'deployment_id': 'd1'}))"]
+    with monkeypatch.context() as launch:
+        launch.setattr(mcp_tools.DeployJob, "start", lambda job: job.save())  # never runs
+        started = local_tools.start_command("app", str(tmp_path), command, "k-never", 0)
+    job_id = started["structuredContent"]["job_id"]
+    record = local_tools.job_dir / f"{job_id}.json"
+
+    def restart():  # the server knows only the record, not its supervisor
+        local_tools.jobs.clear()
+        return local_tools.deploy_status({"job_id": job_id})["structuredContent"]["status"]
+
+    assert restart() == "running"
+    launched_long_ago = time.time() - mcp_tools.RUNNER_START_LIMIT - 1
+    record.write_text(
+        json.dumps({**json.loads(record.read_text()), "started_at": launched_long_ago})
+    )
+    assert restart() == "failed"
+    retried = local_tools.start_command("app", str(tmp_path), command, "k-never", 30)
+    assert retried["structuredContent"]["status"] == "accepted"
+
+
+def test_a_job_stays_visible_after_the_account_changes(settings, local_tools, tmp_path):
+    write_config(settings.config_path, "first")
+    helper = "import json; print(json.dumps({'deployment_id': 'd1'}))"
+    command = [sys.executable, "-c", helper]
+    started = local_tools.start_command("app", str(tmp_path), command, "k-switch", 0)
+    write_config(settings.config_path, "second")
+
+    job_id = started["structuredContent"]["job_id"]
+    view = local_tools.deploy_status({"job_id": job_id, "wait_seconds": 10})
+    assert view["structuredContent"]["status"] == "accepted"
 
 
 def test_deploy_status_returns_new_log_lines_from_cursor(
