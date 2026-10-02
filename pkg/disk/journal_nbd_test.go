@@ -84,6 +84,7 @@ func startTestBlockExport(t *testing.T, socket string, size int) {
 // client does, and returns the error code of each reply.
 type testNBDClient struct {
 	conn   net.Conn
+	flags  uint16
 	handle uint64
 }
 
@@ -102,19 +103,53 @@ func dialTestNBDClient(t *testing.T, socket string) *testNBDClient {
 	_, err = conn.Write([]byte(qsdExportName))
 	require.NoError(t, err)
 	require.NoError(t, binary.Read(conn, binary.BigEndian, &export))
-	return &testNBDClient{conn: conn}
+	return &testNBDClient{conn: conn, flags: export.Flags}
 }
 
 func (c *testNBDClient) do(t *testing.T, command uint16, offset uint64, data []byte) uint32 {
 	t.Helper()
+	return c.request(t, command, offset, uint32(len(data)), data)
+}
+
+// request sends a request whose length need not match its payload, as a
+// discard's does not.
+func (c *testNBDClient) request(t *testing.T, command uint16, offset uint64, length uint32, data []byte) uint32 {
+	t.Helper()
 	c.handle++
-	request := blockRequest{Magic: nbdRequestMagic, Command: command, Handle: c.handle, Offset: offset, Length: uint32(len(data))}
+	request := blockRequest{Magic: nbdRequestMagic, Command: command, Handle: c.handle, Offset: offset, Length: length}
 	require.NoError(t, binary.Write(c.conn, binary.BigEndian, request))
 	_, err := c.conn.Write(data)
 	require.NoError(t, err)
 	var reply blockReply
 	require.NoError(t, binary.Read(c.conn, binary.BigEndian, &reply), "the device must keep answering")
 	return reply.Error
+}
+
+// The kernel sizes a discard up to the whole disk. It carries no payload, so
+// one past the payload limit must be answered rather than cost the device its
+// connection. Write-zeroes, sized the same way but journaled as data, is not
+// offered.
+func TestJournalNBDAnswersDiskSizedDiscard(t *testing.T) {
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("", "jnbd")
+	require.NoError(t, err)
+	defer os.RemoveAll(dir)
+	upstream, socket := filepath.Join(dir, "qsd.sock"), filepath.Join(dir, "nbd.sock")
+	const size = 2 * nbdMaxRequest
+	startTestBlockExport(t, upstream, size)
+
+	journal, err := OpenJournal(ctx, newMemoryJournalStore(), "disk", "owner", "", size)
+	require.NoError(t, err)
+	defer journal.Close()
+	proxy, err := startJournalNBD(ctx, socket, upstream, journal)
+	require.NoError(t, err)
+	defer proxy.Close()
+	client := dialTestNBDClient(t, socket)
+	require.Equal(t, uint16(32), client.flags&(32|64), "trim must be offered and write-zeroes not")
+
+	require.Zero(t, client.request(t, nbdCommandTrim, 0, size, nil))
+	require.Zero(t, client.do(t, nbdCommandWrite, 0, bytes.Repeat([]byte{7}, 4096)))
+	require.Zero(t, client.do(t, nbdCommandFlush, 0, nil))
 }
 
 // A head write rejected although its precondition held must cost the flush a

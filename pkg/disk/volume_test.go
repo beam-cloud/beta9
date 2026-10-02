@@ -340,9 +340,10 @@ func TestMarkPublishedReportsMissedCheckpoint(t *testing.T) {
 	}
 }
 
-// A journal recovered at its limit holds the first write until a checkpoint
-// makes room. Without one the write fails the journal, a failed journal never
-// seals, and the backlog survives for the next attachment to checkpoint.
+// A journal recovered at its limit holds the first write after recovery until
+// a checkpoint makes room. Without one the write fails the journal, a failed
+// journal never seals, and the backlog survives for the next attachment to
+// checkpoint.
 func TestJournalAtItsLimitWaitsForACheckpoint(t *testing.T) {
 	ctx := context.Background()
 	write := journalRecord(t, 0, "wal")
@@ -352,6 +353,7 @@ func TestJournalAtItsLimitWaitsForACheckpoint(t *testing.T) {
 		store := newMemoryJournalStore()
 		seedJournalBacklog(t, store, "disk", journalMaxBytes)
 		volume, _, journal := newTestVolumeWithJournal(t, store)
+		journal.Recovered()
 		if err := journal.WaitForRoom(len(write)); err == nil {
 			t.Fatal("a write no checkpoint makes room for must fail the journal")
 		}
@@ -388,6 +390,23 @@ func TestJournalAtItsLimitWaitsForACheckpoint(t *testing.T) {
 			t.Fatalf("a write after the checkpoint must commit: %v", err)
 		}
 	})
+}
+
+// Writes a seal holds are being published; only newer ones make a volume
+// backlogged.
+func TestBackloggedCountsWritesSinceTheNewestSeal(t *testing.T) {
+	store := newMemoryJournalStore()
+	seedJournalBacklog(t, store, "disk", journalCheckpointBytes)
+	volume, _, journal := newTestVolumeWithJournal(t, store)
+	if !volume.Backlogged() {
+		t.Fatal("a checkpoint's worth of unsealed writes must count")
+	}
+	if _, _, err := volume.Seal(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if volume.Backlogged() || !journal.NeedsCheckpoint() {
+		t.Fatal("sealed writes must not count, though the journal holds them until they are published")
+	}
 }
 
 func TestSealRollsBackFailedPivot(t *testing.T) {

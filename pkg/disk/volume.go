@@ -108,9 +108,21 @@ func (v *Volume) ExportSocket() string { return v.state.ExportSocket }
 // nothing about the journal's health; Check does.
 func (v *Volume) Journaled() bool { return v.journal != nil }
 
-// Backlogged reports whether the volume's journal holds enough writes to want
-// a checkpoint.
-func (v *Volume) Backlogged() bool { return v.journal != nil && v.journal.NeedsCheckpoint() }
+// Backlogged reports whether the volume's journal took enough writes since
+// the newest seal to want another checkpoint. Sealed writes do not count:
+// publishing them is what the caller is doing.
+func (v *Volume) Backlogged() bool {
+	if v.journal == nil {
+		return false
+	}
+	v.mu.Lock()
+	var sealed uint64
+	if n := len(v.state.Pending); n > 0 {
+		sealed = v.state.Pending[n-1].JournalSequence
+	}
+	v.mu.Unlock()
+	return v.journal.NeedsCheckpointAfter(sealed)
+}
 
 // Check reports why the volume's journal stopped committing writes. From
 // then on nothing may be sealed or published: the head can hold writes whose

@@ -36,13 +36,11 @@ const (
 	journalRetryDelay    = 100 * time.Millisecond
 	journalRetryMaxDelay = time.Second
 	// Writes that would take the backlog past the max limits wait for a
-	// checkpoint (see WaitForRoom). A seal's freeze cannot wait, so it may take
-	// the backlog up to journalSealFactor times the limits.
+	// checkpoint (see WaitForRoom).
 	journalMaxBytes           = 512 << 20
 	journalCheckpointBytes    = 128 << 20
 	journalMaxSegments        = 16384
 	journalCheckpointSegments = 4096
-	journalSealFactor         = 2
 	journalReplayConcurrency  = 16
 )
 
@@ -125,6 +123,7 @@ type Journal struct {
 	version    string
 	held       bool // a head naming this owner has committed
 	failed     error
+	recovering bool
 	sealing    bool
 	room       *sync.Cond // wakes writers waiting for the backlog to shrink
 	cancel     context.CancelFunc
@@ -138,7 +137,8 @@ func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapsho
 	}
 	j := &Journal{
 		store: store, prefix: prefix, done: make(chan struct{}), checkpoint: make(chan struct{}, 1),
-		head: journalHead{Version: 1, Size: size, Snapshot: snapshot, Formatted: snapshot != ""},
+		head:       journalHead{Version: 1, Size: size, Snapshot: snapshot, Formatted: snapshot != ""},
+		recovering: true,
 	}
 	j.room = sync.NewCond(&j.mu)
 	if err := j.waitForReleasedHead(ctx); err != nil {
@@ -195,20 +195,17 @@ func (j *Journal) validate() error {
 	if j.head.Version != 1 || j.head.Size <= 0 || j.head.Sequence < j.head.Checkpoint {
 		return fmt.Errorf("invalid disk journal header")
 	}
+	// A backlog of any size stays recoverable: refusing to open one would
+	// strand every write it holds.
 	next := j.head.Checkpoint + 1
-	pending := 0
 	for _, segment := range j.head.Segments {
 		digest, err := hex.DecodeString(segment.Digest)
 		if segment.Sequence != next || err != nil || len(digest) != sha256.Size || segment.Bytes <= 0 {
 			return fmt.Errorf("invalid disk journal segment %d", next)
 		}
-		if segment.Bytes > journalSealFactor*journalMaxBytes-pending {
-			return fmt.Errorf("disk journal exceeds its recovery limit")
-		}
-		pending += segment.Bytes
 		next++
 	}
-	if next-1 != j.head.Sequence || len(j.head.Segments) > journalSealFactor*journalMaxSegments {
+	if next-1 != j.head.Sequence {
 		return fmt.Errorf("disk journal is incomplete")
 	}
 	return nil
@@ -365,42 +362,52 @@ func (j *Journal) State() (snapshot string, sequence uint64, pendingBytes int) {
 	return j.head.Snapshot, j.head.Sequence, pendingBytes
 }
 
-// Checkpoints wakes the publisher after a burst of writes. The hard recovery
-// limit leaves room for writes made while sealing and uploading a checkpoint.
+// Checkpoints wakes the publisher after a burst of writes.
 func (j *Journal) Checkpoints() <-chan struct{} { return j.checkpoint }
 
 func (j *Journal) NeedsCheckpoint() bool {
+	return j.NeedsCheckpointAfter(0)
+}
+
+// NeedsCheckpointAfter reports whether the writes committed after sequence
+// are enough to want a checkpoint of their own.
+func (j *Journal) NeedsCheckpointAfter(sequence uint64) bool {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.needsCheckpoint()
+	return j.needsCheckpointAfter(sequence)
 }
 
-func (j *Journal) needsCheckpoint() bool {
-	pending := 0
+func (j *Journal) needsCheckpointAfter(sequence uint64) bool {
+	pending, segments := 0, 0
 	for _, segment := range j.head.Segments {
-		pending += segment.Bytes
+		if segment.Sequence > sequence {
+			pending += segment.Bytes
+			segments++
+		}
 	}
-	return pending >= journalCheckpointBytes || len(j.head.Segments) >= journalCheckpointSegments
+	return pending >= journalCheckpointBytes || segments >= journalCheckpointSegments
 }
 
-// full reports whether a write of n bytes would take the backlog past factor
-// times its limits.
-func (j *Journal) full(n, factor int) bool {
+// full reports whether a write of n bytes would take the backlog past its
+// limits.
+func (j *Journal) full(n int) bool {
 	for _, segment := range j.head.Segments {
 		n += segment.Bytes
 	}
-	return n > factor*journalMaxBytes || len(j.head.Segments) >= factor*journalMaxSegments
+	return n > journalMaxBytes || len(j.head.Segments) >= journalMaxSegments
 }
 
 // WaitForRoom holds a write of n bytes for as long as it would take the
-// backlog past its limits, until a checkpoint makes room. A seal is let
-// through: its freeze flushes the filesystem through the journal and cannot
-// finish while those writes wait. A journal still full after journalRoomWait
-// fails.
+// backlog past its limits, until a checkpoint makes room. Writes no
+// checkpoint could make room for are let through: those made while
+// recovering (see Recovered), and those of a seal's freeze, which flushes
+// every dirty page through the journal and cannot finish while they wait.
+// What they add is bounded by the filesystem's dirty pages, and the seal
+// publishes it. A journal still full after journalRoomWait fails.
 func (j *Journal) WaitForRoom(n int) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.failed != nil || j.sealing || !j.full(n, 1) {
+	if j.failed != nil || j.recovering || j.sealing || !j.full(n) {
 		return j.failed
 	}
 	j.requestCheckpoint()
@@ -412,9 +419,9 @@ func (j *Journal) WaitForRoom(n int) error {
 		j.room.Broadcast()
 	})
 	defer timer.Stop()
-	for j.failed == nil && !j.sealing && j.full(n, 1) {
+	for j.failed == nil && !j.sealing && j.full(n) {
 		if expired {
-			j.failed = fmt.Errorf("disk checkpoint backlog exceeded its recovery limit")
+			j.failed = fmt.Errorf("disk checkpoints made no room in the journal for %s", journalRoomWait)
 			break
 		}
 		j.room.Wait()
@@ -435,8 +442,18 @@ func (j *Journal) Sealing(active bool) {
 	j.room.Broadcast()
 }
 
+// Recovered ends recovery; from then on writes wait for room. Until a
+// recovered disk is mounted nothing can checkpoint it, and mounting it writes:
+// a backlog left at the limit by the previous owner would otherwise fail every
+// attach.
+func (j *Journal) Recovered() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recovering = false
+}
+
 func (j *Journal) requestCheckpoint() {
-	if !j.needsCheckpoint() {
+	if !j.needsCheckpointAfter(0) {
 		return
 	}
 	select {
@@ -455,11 +472,6 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 	}
 	if len(records) == 0 {
 		return j.persist(ctx)
-	}
-	if j.full(len(records), journalSealFactor) {
-		j.failed = fmt.Errorf("disk checkpoint backlog exceeded its recovery limit")
-		j.room.Broadcast()
-		return j.failed
 	}
 
 	var compressed bytes.Buffer

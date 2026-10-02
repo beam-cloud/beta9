@@ -356,6 +356,7 @@ func TestJournalFullWaitsForACheckpoint(t *testing.T) {
 	journal, err := OpenJournal(ctx, store, "disk", "owner", "", 1<<30)
 	require.NoError(t, err)
 	defer journal.Close()
+	journal.Recovered()
 
 	waitForRoom := func() chan error {
 		waited := make(chan error, 1)
@@ -381,18 +382,38 @@ func TestJournalFullWaitsForACheckpoint(t *testing.T) {
 	require.NoError(t, journal.Commit(ctx, write))
 }
 
-// Recovery accepts any backlog a seal can leave, and not even a seal takes it
-// further.
-func TestJournalSealCannotPassTheCeiling(t *testing.T) {
+// A backlog of any size opens, and the writes that mount it pass until
+// Recovered: nothing can checkpoint a disk before it is mounted.
+func TestJournalRecoveryPassesAFullJournal(t *testing.T) {
 	ctx := context.Background()
+	write := journalRecord(t, 0, "wal")
 	store := newMemoryJournalStore()
-	seedJournalBacklog(t, store, "disk", journalSealFactor*journalMaxBytes)
+	seedJournalBacklog(t, store, "disk", 3*journalMaxBytes)
 	journal, err := OpenJournal(ctx, store, "disk", "owner", "", 1<<30)
 	require.NoError(t, err)
 	defer journal.Close()
 
-	journal.Sealing(true)
-	require.Error(t, journal.Commit(ctx, journalRecord(t, 0, "wal")))
+	require.NoError(t, journal.WaitForRoom(len(write)))
+	require.NoError(t, journal.Commit(ctx, write))
+
+	shortRoomWait(t, 20*time.Millisecond)
+	journal.Recovered()
+	require.Error(t, journal.WaitForRoom(len(write)), "a recovered journal must hold writes past its limits")
+}
+
+// Only writes after the given sequence count toward another checkpoint.
+func TestJournalNeedsCheckpointAfter(t *testing.T) {
+	store := newMemoryJournalStore()
+	seedJournalBacklog(t, store, "disk", 3*journalCheckpointBytes)
+	journal, err := OpenJournal(context.Background(), store, "disk", "owner", "", 1<<30)
+	require.NoError(t, err)
+	defer journal.Close()
+
+	_, sequence, _ := journal.State()
+	require.True(t, journal.NeedsCheckpoint())
+	require.True(t, journal.NeedsCheckpointAfter(sequence-2), "the newest checkpoint's worth of writes")
+	require.False(t, journal.NeedsCheckpointAfter(sequence-1))
+	require.False(t, journal.NeedsCheckpointAfter(sequence))
 }
 
 func journalRecord(t *testing.T, offset uint64, payload string) []byte {

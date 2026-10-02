@@ -171,7 +171,8 @@ func (p *journalNBD) serve() {
 		if err := binary.Read(client, binary.BigEndian, &request); err != nil {
 			return
 		}
-		if request.Magic != nbdRequestMagic || request.Length > nbdMaxRequest {
+		// A discard carries no payload and may span the whole disk.
+		if request.Magic != nbdRequestMagic || request.Command != nbdCommandTrim && request.Length > nbdMaxRequest {
 			return
 		}
 		var data []byte
@@ -313,9 +314,12 @@ func (p *journalNBD) handshake(client net.Conn) error {
 		if _, err := io.ReadFull(client, data); err != nil {
 			return err
 		}
+		// Flags: has flags, flush, FUA, and trim. Write-zeroes is not offered:
+		// the kernel may size one to the whole disk, and the journal would
+		// record every zero as data anyway.
 		var export bytes.Buffer
 		binary.Write(&export, binary.BigEndian, p.size)
-		binary.Write(&export, binary.BigEndian, uint16(1|4|8|32|64))
+		binary.Write(&export, binary.BigEndian, uint16(1|4|8|32))
 		switch option.Kind {
 		case 1: // EXPORT_NAME
 			if string(data) != qsdExportName {

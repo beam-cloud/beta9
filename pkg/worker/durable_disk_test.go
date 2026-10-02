@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1409,6 +1410,29 @@ func TestFlattenQcowChainDefersWhileBacklogged(t *testing.T) {
 	} {
 		require.Equal(t, tc.flatten, flattenQcowChain(tc.depth, tc.backlogged), "depth %d backlogged %v", tc.depth, tc.backlogged)
 	}
+}
+
+// A flatten under way gives way once the journal wants another checkpoint,
+// and the cause survives stopping it so the publish falls back to the sealed
+// layer.
+func TestUntilBackloggedDefersTheFlatten(t *testing.T) {
+	var backlogged atomic.Bool
+	ctx, stop := untilBacklogged(context.Background(), backlogged.Load)
+	defer stop()
+	select {
+	case <-ctx.Done():
+		t.Fatal("a quiet journal must let the flatten run")
+	case <-time.After(qcowFlattenBacklogPoll + 200*time.Millisecond):
+	}
+
+	backlogged.Store(true)
+	select {
+	case <-ctx.Done():
+	case <-time.After(3 * qcowFlattenBacklogPoll):
+		t.Fatal("a backlogged journal must cancel the flatten")
+	}
+	stop()
+	require.ErrorIs(t, context.Cause(ctx), errQcowFlattenDeferred)
 }
 
 func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing.T) {
