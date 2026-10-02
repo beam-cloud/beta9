@@ -276,6 +276,7 @@ def test_deploy_tool_surfaces_cli_failure(settings, local_tools, monkeypatch, tm
         "Deploy of web failed: insufficient_credits (purchase credits at https://p)"
     )
     assert result["structuredContent"]["logs"] == ["Syncing files..."]  # JSON kept out of the log
+    assert "Syncing files..." not in result["content"][1]["text"]  # shown once, in the text
 
 
 @pytest.fixture
@@ -353,6 +354,15 @@ def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch
     assert exited.value.code == 1
     assert json.loads(capsys.readouterr().out) == refused
     assert calls == ["served-token", "served-token"]
+
+
+def test_local_results_show_their_fields_as_text():
+    result = mcp_tools.text_result("Review this plan", plan_id="p1")
+
+    texts = [block["text"] for block in result["content"]]
+    assert texts[0] == "Review this plan"
+    assert json.loads(texts[1]) == {"plan_id": "p1"}
+    assert result["structuredContent"] == {"plan_id": "p1"}
 
 
 def test_database_helper_process_reports_only_its_result(monkeypatch):

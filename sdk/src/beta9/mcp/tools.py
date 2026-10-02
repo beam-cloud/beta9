@@ -51,6 +51,9 @@ Tool = Tuple[Dict[str, Any], Handler]  # definition, handler
 def text_result(text: str, **structured: Any) -> Dict[str, Any]:
     result: Dict[str, Any] = {"content": [{"type": "text", "text": text}]}
     if structured:
+        # Clients that show the model only text content still need the fields,
+        # such as a stack plan's plan_id.
+        result["content"].append({"type": "text", "text": json.dumps(structured, default=str)})
         result["structuredContent"] = structured
     return result
 
@@ -530,7 +533,9 @@ class DeployJob:
             text = f"Deploying {self.name} (job {self.id}, {view['elapsed_seconds']}s). Poll deploy_status with log_cursor={view['log_cursor']}."
         if view["logs"]:
             text += "\n\n" + "\n".join(view["logs"])
-        result = text_result(text, **view)
+        # The text already shows the log lines.
+        result = text_result(text, **{k: v for k, v in view.items() if k != "logs"})
+        result["structuredContent"] = view
         if self.status in ("failed", "cancelled", "interrupted"):
             result["isError"] = True
         return result
