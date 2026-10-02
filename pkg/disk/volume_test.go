@@ -292,13 +292,13 @@ func TestSealPivotsAndPublishes(t *testing.T) {
 	}
 }
 
-// newTestVolumeWithJournal returns a journaled test volume with a written
-// block, so a seal has a layer to cut.
-func newTestVolumeWithJournal(t *testing.T) (*Volume, *fakeQMP, *Journal) {
+// newTestVolumeWithJournal returns a test volume journaled to store, with a
+// written block, so a seal has a layer to cut.
+func newTestVolumeWithJournal(t *testing.T, store *memoryJournalStore) (*Volume, *fakeQMP, *Journal) {
 	t.Helper()
 	volume, server := newTestVolume(t)
 	server.writtenB.Store(4096)
-	journal, err := OpenJournal(context.Background(), newMemoryJournalStore(), "disk", "owner", "", 1<<30)
+	journal, err := OpenJournal(context.Background(), store, "disk", "owner", "", 1<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func newTestVolumeWithJournal(t *testing.T) (*Volume, *fakeQMP, *Journal) {
 // A volume whose journal failed must not seal: its head can hold writes whose
 // flush failed, and a published layer would offer them as a restore point.
 func TestSealRefusesFailedJournal(t *testing.T) {
-	volume, server, journal := newTestVolumeWithJournal(t)
+	volume, server, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
 	journal.Fail(errors.New("block device request failed"))
 
 	if _, _, err := volume.Seal(context.Background(), true); err == nil {
@@ -324,7 +324,7 @@ func TestSealRefusesFailedJournal(t *testing.T) {
 // A journal can fail between a layer's upload and its checkpoint; the caller
 // must be able to tell that the published snapshot never became the disk's.
 func TestMarkPublishedReportsMissedCheckpoint(t *testing.T) {
-	volume, _, journal := newTestVolumeWithJournal(t)
+	volume, _, journal := newTestVolumeWithJournal(t, newMemoryJournalStore())
 	sealed, _, err := volume.Seal(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
@@ -337,6 +337,59 @@ func TestMarkPublishedReportsMissedCheckpoint(t *testing.T) {
 	if len(volume.state.Chain) != 0 || len(volume.state.Pending) != 1 {
 		t.Fatalf("an unrecorded layer must stay pending: chain=%d pending=%d", len(volume.state.Chain), len(volume.state.Pending))
 	}
+}
+
+// A journal recovered at its hard limit can be checkpointed only before its
+// disk takes a write. The first write fails the journal, a failed journal
+// never seals, and the refused write leaves the backlog where it was, so every
+// later attachment whose database writes first fails the same way.
+func TestJournalAtItsLimitCheckpointsOnlyBeforeWriting(t *testing.T) {
+	ctx := context.Background()
+	write := journalRecord(t, 0, "wal")
+
+	t.Run("writing first", func(t *testing.T) {
+		store := newMemoryJournalStore()
+		seedJournalBacklog(t, store, "disk", journalMaxBytes)
+		volume, _, journal := newTestVolumeWithJournal(t, store)
+		if err := journal.Commit(ctx, write); err == nil {
+			t.Fatal("a write past the recovery limit must fail the journal")
+		}
+		if _, _, err := volume.Seal(ctx, true); err == nil {
+			t.Fatal("a failed journal must not seal")
+		}
+		journal.Close()
+
+		next, err := OpenJournal(ctx, store, "disk", "next-owner", "", 1<<30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer next.Close()
+		if !next.NeedsCheckpoint() {
+			t.Fatal("the backlog must outlive the refused write")
+		}
+		if err := next.Commit(ctx, write); err == nil {
+			t.Fatal("the next attachment's first write must fail the same way")
+		}
+	})
+
+	t.Run("checkpointing first", func(t *testing.T) {
+		store := newMemoryJournalStore()
+		seedJournalBacklog(t, store, "disk", journalMaxBytes)
+		volume, _, journal := newTestVolumeWithJournal(t, store)
+		sealed, _, err := volume.Seal(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := volume.MarkPublished(sealed[0].Path, "snap-1"); err != nil {
+			t.Fatal(err)
+		}
+		if journal.NeedsCheckpoint() {
+			t.Fatal("the checkpoint must empty the backlog")
+		}
+		if err := journal.Commit(ctx, write); err != nil {
+			t.Fatalf("a write after the checkpoint must commit: %v", err)
+		}
+	})
 }
 
 func TestSealRollsBackFailedPivot(t *testing.T) {

@@ -3,11 +3,14 @@ package disk
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -295,7 +298,6 @@ func (s *memoryJournalStore) head(t *testing.T, key string) (journalHead, string
 	return head, version
 }
 
-// shortLease shrinks the lease so lease-bounded behaviour fits in a test.
 // replaceHead rewrites the stored head under another owner and lease, as a
 // replacement or an earlier owner would, and returns what it stored.
 func replaceHead(t *testing.T, store *memoryJournalStore, key, owner string, expires time.Time) ([]byte, string) {
@@ -309,6 +311,26 @@ func replaceHead(t *testing.T, store *memoryJournalStore, key, owner string, exp
 	return data, replaced
 }
 
+// seedJournalBacklog stores a released head whose segments, none of them
+// checkpointed, add up to backlog bytes, as runs that never published leave
+// it. The segments are never replayed, so their objects are not stored.
+func seedJournalBacklog(t *testing.T, store *memoryJournalStore, prefix string, backlog int) {
+	t.Helper()
+	head := journalHead{Version: 1, Formatted: true, Size: 1 << 30, Snapshot: "snap-0"}
+	for backlog > 0 {
+		head.Sequence++
+		digest := sha256.Sum256(binary.BigEndian.AppendUint64(nil, head.Sequence))
+		segment := journalSegment{Sequence: head.Sequence, Digest: hex.EncodeToString(digest[:]), Bytes: min(backlog, 64<<20)}
+		head.Segments = append(head.Segments, segment)
+		backlog -= segment.Bytes
+	}
+	data, err := json.Marshal(head)
+	require.NoError(t, err)
+	_, err = store.WriteVersion(context.Background(), path.Join(prefix, "head.json"), data, "")
+	require.NoError(t, err)
+}
+
+// shortLease shrinks the lease so lease-bounded behaviour fits in a test.
 func shortLease(t *testing.T, lease time.Duration) {
 	t.Helper()
 	previous := journalLease

@@ -173,9 +173,30 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	s.qcowChains.Store(key, entries)
 	s.reportQcowChainContent(request, entries)
 	if journal != nil {
+		s.checkpointRecoveredJournal(ctx, request, mount, journal)
 		go s.checkpointDatabaseDisk(request, mount, volume, journal)
 	}
 	return nil
+}
+
+// checkpointRecoveredJournal publishes a recovered backlog before the
+// container starts. A container that fails on its own publishes nothing, so a
+// crash-looping database carries its writes forward in the journal. Once the
+// container runs, a checkpoint races its writes, and at the journal's hard
+// limit the first write fails the journal, which then never seals: every later
+// start would fail the same way. Nothing writes yet, so this checkpoint cannot
+// lose that race. If it fails, the container starts anyway and the running
+// checkpointer retries.
+func (s *Worker) checkpointRecoveredJournal(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, journal *disk.Journal) {
+	if !journal.NeedsCheckpoint() {
+		return
+	}
+	ctx, stopWatchdog := withDurableDiskInactivityWatchdog(ctx, durableDiskSnapshotInactivityTimeout)
+	defer stopWatchdog()
+	if _, err := s.snapshotQcowDurableDiskMount(ctx, request, mount, durableDiskSyncExplicit); err != nil {
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).
+			Msg("failed to checkpoint the recovered disk journal before start; the running checkpointer retries")
+	}
 }
 
 // openDatabaseDiskJournal resolves the authoritative head before consulting
