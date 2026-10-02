@@ -380,13 +380,23 @@ func (gws *GatewayService) addressedDeploymentByName(ctx context.Context, worksp
 	if err != nil {
 		return nil, err
 	}
-	target := &addressedDeployment{stub: d.Stub, deployment: d.Deployment}
-	if d.Stub.Type.Kind() == types.StubTypePod {
-		if target.config, err = d.Stub.UnmarshalConfig(); err != nil {
-			return nil, fmt.Errorf("decode stub config: %w", err)
-		}
+	cfg, err := podConfig(&d.Stub)
+	if err != nil {
+		return nil, err
 	}
-	return target, nil
+	return &addressedDeployment{stub: d.Stub, deployment: d.Deployment, config: cfg}, nil
+}
+
+// podConfig is a pod's decoded stub config; other stubs have none.
+func podConfig(stub *types.Stub) (*types.StubConfigV1, error) {
+	if stub.Type.Kind() != types.StubTypePod {
+		return nil, nil
+	}
+	cfg, err := stub.UnmarshalConfig()
+	if err != nil {
+		return nil, fmt.Errorf("decode stub config: %w", err)
+	}
+	return cfg, nil
 }
 
 // appAddress is the address an app reference names. A port's URL is on the
@@ -411,12 +421,9 @@ func (gws *GatewayService) appAddress(target *addressedDeployment, ref appRefere
 // DeploymentURL is the latest-alias URL of a deployment: TCP pods on the TCP
 // gateway, other pods and web stubs on the HTTP gateway.
 func (gws *GatewayService) DeploymentURL(d *types.DeploymentWithRelated) (string, error) {
-	var cfg *types.StubConfigV1
-	if d.Stub.Type.Kind() == types.StubTypePod {
-		var err error
-		if cfg, err = d.Stub.UnmarshalConfig(); err != nil {
-			return "", fmt.Errorf("decode stub config: %w", err)
-		}
+	cfg, err := podConfig(&d.Stub)
+	if err != nil {
+		return "", err
 	}
 	return gws.deploymentURL(&d.Stub, &d.Deployment, cfg), nil
 }

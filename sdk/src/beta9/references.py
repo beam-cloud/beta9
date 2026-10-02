@@ -14,7 +14,7 @@ _SECRET_FN = re.compile(r"^secret\(\s*(\d+)?\s*(?:,\s*(\"[^\"]*\"|'[^']*'))?\s*\
 _RANDOM_FN = re.compile(r"^randomInt\(\s*(-?\d+)?\s*(?:,\s*(-?\d+))?\s*\)$")
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 # app.<name>.URL, or one port's URL / TCP gateway address; names may contain dots.
-_APP_REF = re.compile(r"^app\.[^.].*\.(URL|(URL|TCP)\.[1-9]\d{0,4})$")
+_APP_REF = re.compile(r"^app\.[^.].*\.(?:URL|(?:URL|TCP)\.([1-9]\d{0,4}))$")
 
 
 def find_references(value: str) -> List[str]:
@@ -34,11 +34,14 @@ def validate_expression(expr: str) -> List[str]:
             return [f"database field {parts[1]!r} is not one of {', '.join(DB_FIELDS)}"]
         return []
     if expr.startswith("app."):
-        if not _APP_REF.match(expr):
+        m = _APP_REF.match(expr)
+        if not m:
             return [
                 f"app reference {expr!r} must be app.<name>.URL, app.<name>.URL.<port> "
                 "or app.<name>.TCP.<port>"
             ]
+        if m.group(1) and int(m.group(1)) > 65535:
+            return [f"app reference {expr!r} has port {m.group(1)}; ports go up to 65535"]
         return []
     if expr.startswith("secret("):
         m = _SECRET_FN.match(expr)
