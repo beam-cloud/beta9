@@ -86,7 +86,8 @@ DATABASE_JOB_DEFINITION: Dict[str, Any] = {
     "name": "create_database_job",
     "description": (
         "Create a managed database in a recoverable local job. Poll deploy_status, then verify "
-        "database readiness. Reuse request_key after an interruption to resume the same operation."
+        "database readiness. Reuse request_key to resume the same operation after an "
+        "interruption, or to retry it after a failure."
     ),
     "inputSchema": {
         "type": "object",
@@ -188,7 +189,7 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                 },
                 "idempotency_key": {
                     **STRING,
-                    "description": "Reuse to recover the same deploy after interruption.",
+                    "description": "Reuse to recover the same deploy after interruption, or retry a failed one.",
                 },
                 "disks": {**STRINGS, "description": "Durable disks NAME:/mount[:SIZE]."},
                 "keep_warm_seconds": {**INTEGER, "description": "-1 always on; 0 scale to zero."},
@@ -742,13 +743,15 @@ class LocalTools:
         state_path = self.job_dir / f"{job_id}.json"
         with open(state_path.with_suffix(".lock"), "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            if state_path.exists():
-                job = DeployJob.load(state_path)
-                if job.command != command or job.directory != directory:
-                    return error_result(
-                        "idempotency_key already belongs to a different deployment request"
-                    )
-            else:
+            job = DeployJob.load(state_path) if state_path.exists() else None
+            if job and (job.command != command or job.directory != directory):
+                return error_result(
+                    "idempotency_key already belongs to a different deployment request"
+                )
+            # An interrupted job may have deployed; only a definite failure is safe to rerun.
+            if job is None or job.status in ("failed", "cancelled"):
+                for leftover in (".log", ".cancel"):
+                    state_path.with_suffix(leftover).unlink(missing_ok=True)
                 job = DeployJob(
                     id=job_id,
                     name=name,

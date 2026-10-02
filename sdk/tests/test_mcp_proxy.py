@@ -344,6 +344,23 @@ def test_accepted_database_names_its_readiness_check(
     assert f"use {check}." in result["content"][0]["text"]
 
 
+def test_reusing_a_failed_jobs_key_retries_it(two_profiles, local_tools, tmp_path):
+    helper = (
+        "import json, pathlib, sys; marker = pathlib.Path(sys.argv[1])\n"
+        "if not marker.exists(): marker.touch(); print('connection reset'); sys.exit(1)\n"
+        "print(json.dumps({'deployment_id': 'd2'}))"
+    )
+    command = [sys.executable, "-c", helper, str(tmp_path / "failed-once")]
+
+    first = local_tools.start_command("db", str(tmp_path), command, "k-retry", 30)
+    second = local_tools.start_command("db", str(tmp_path), command, "k-retry", 30)
+
+    assert first["isError"] is True
+    assert second["structuredContent"]["status"] == "accepted"
+    assert second["structuredContent"]["job_id"] == first["structuredContent"]["job_id"]
+    assert "connection reset" not in second["content"][0]["text"]
+
+
 def test_database_helper_calls_with_the_handed_context(two_profiles, monkeypatch, capsys):
     calls = []
     refused = {
