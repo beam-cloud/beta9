@@ -130,7 +130,7 @@ class StdioProxy:
         self._connect_lock = threading.Lock()
         self.tools: LocalTools = LocalTools(
             cwd=cwd,
-            on_login=self._on_login,
+            on_login=self._refresh_sign_in,
             signed_in=lambda: self.remote is not None,
             context_name=context_name,
         )
@@ -202,8 +202,7 @@ class StdioProxy:
                 if cancelled is not None:
                     cancelled.set()
             return None
-        if self._follow_sign_in():
-            self.notify("notifications/tools/list_changed")
+        self._refresh_sign_in()
 
         if method == "initialize":
             return self._initialize(msg_id)
@@ -347,7 +346,7 @@ class StdioProxy:
             self._connect(current)
             return current != context or (self.remote is not None) != signed_in
 
-    def _on_login(self) -> None:
+    def _refresh_sign_in(self) -> None:
         if self._follow_sign_in():
             self.notify("notifications/tools/list_changed")
 
