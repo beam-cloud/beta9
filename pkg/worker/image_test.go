@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -416,35 +417,58 @@ func TestTerminateImageProcessGroupKillsDescendants(t *testing.T) {
 }
 
 func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T) {
-	status, requests := http.StatusOK, 0
+	status, requests := http.StatusOK, []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+		requests = append(requests, r.Method+" "+r.URL.Path)
 		w.WriteHeader(status)
 	}))
 	defer server.Close()
 
 	cachePath := t.TempDir()
-	source := server.Listener.Addr().String() + "/org/app:v1"
-	c := &ImageClient{v2ImageRefs: common.NewSafeMap[string]()}
-	c.v2ImageRefs.Set("img", source)
-	request := &types.ContainerRequest{ImageId: "img"}
+	layer := "sha256:" + strings.Repeat("1", 64)
+	c := &ImageClient{}
 	options := clip.MountOptions{CachePath: cachePath, Metadata: &clipCommon.ClipArchiveMetadata{StorageInfo: &clipCommon.OCIStorageInfo{
-		Layers:                  []string{"sha256:1"},
-		DecompressedHashByLayer: map[string]string{"sha256:1": "hash-1"},
+		RegistryURL: server.Listener.Addr().String(),
+		Repository:  "org/app",
+		// Indexed from a local copy whose converted manifest the registry never had.
+		Reference:               "sha256:" + strings.Repeat("2", 64),
+		Layers:                  []string{layer},
+		DecompressedHashByLayer: map[string]string{layer: "hash-1"},
 	}}}
 
 	for _, status = range []int{http.StatusOK, http.StatusInternalServerError} {
-		require.NoError(t, c.verifyImageSource(context.Background(), request, options), status)
+		require.NoError(t, c.verifyImageSource(context.Background(), options), status)
 	}
+	require.Contains(t, requests, "HEAD /v2/org/app/blobs/"+layer)
 	for _, status = range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
-		require.ErrorContains(t, c.verifyImageSource(context.Background(), request, options), "image source "+source, status)
+		require.ErrorContains(t, c.verifyImageSource(context.Background(), options), "image source "+server.Listener.Addr().String()+"/org/app@"+layer, status)
 	}
 
 	// A layer already in the layer cache needs no registry at all.
 	require.NoError(t, os.WriteFile(filepath.Join(cachePath, "hash-1"), nil, 0o644))
-	requests = 0
-	require.NoError(t, c.verifyImageSource(context.Background(), request, options))
-	require.Zero(t, requests)
+	requests = nil
+	require.NoError(t, c.verifyImageSource(context.Background(), options))
+	require.Empty(t, requests)
+}
+
+func TestHasOCILayersRejectsDockerFormatImages(t *testing.T) {
+	image := func(mediaTypes ...string) common.ImageMetadata {
+		var meta common.ImageMetadata
+		for _, mediaType := range mediaTypes {
+			meta.LayersData = append(meta.LayersData, struct {
+				MIMEType    string `json:"MIMEType"`
+				Digest      string `json:"Digest"`
+				Size        int    `json:"Size"`
+				Annotations any    `json:"Annotations"`
+			}{MIMEType: mediaType})
+		}
+		return meta
+	}
+
+	require.True(t, hasOCILayers(image("application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.oci.image.layer.v1.tar")))
+	require.False(t, hasOCILayers(image("application/vnd.docker.image.rootfs.diff.tar.gzip")))
+	require.False(t, hasOCILayers(image("application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.docker.image.rootfs.diff.tar.gzip")))
+	require.False(t, hasOCILayers(image()))
 }
 
 func TestRemoteLayersSkipsLayersHeldLocally(t *testing.T) {

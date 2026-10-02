@@ -315,7 +315,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
 	if archive.usesOCIStorage() {
-		if err := c.verifyImageSource(ctx, request, mountOptions); err != nil {
+		if err := c.verifyImageSource(ctx, mountOptions); err != nil {
 			return time.Since(startTime), err
 		}
 		c.scheduleImageLayerPrepare(context.WithoutCancel(ctx), request, mountOptions)
@@ -408,13 +408,22 @@ func (c *ImageClient) holdsLayer(cachePath, hash string) bool {
 // verifyImageSource fails a lazy mount whose registry refuses the image, so a dead
 // credential surfaces at container start instead of as an EIO the runtime cannot
 // survive. Layers the node already holds need no registry; other failures stay lazy.
-func (c *ImageClient) verifyImageSource(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions) error {
+// It asks for a layer the mount will read, not the manifest: an archive indexed
+// from a converted local copy names a manifest digest the registry never had.
+func (c *ImageClient) verifyImageSource(ctx context.Context, options clip.MountOptions) error {
 	info, ok := ociStorageInfo(options.Metadata)
-	source, known := c.GetSourceImageRef(request.ImageId)
-	if !ok || !known || len(c.remoteLayers(info, options.CachePath)) == 0 {
+	if !ok {
 		return nil
 	}
-	ref, err := name.ParseReference(source)
+	remaining := c.remoteLayers(info, options.CachePath)
+	if len(remaining) == 0 {
+		return nil
+	}
+	source := ociLayerReference(info, remaining[0])
+	if source == "" {
+		return nil
+	}
+	ref, err := name.NewDigest(source)
 	if err != nil {
 		return err
 	}
@@ -426,7 +435,10 @@ func (c *ImageClient) verifyImageSource(ctx context.Context, request *types.Cont
 			opts = append(opts, remote.WithAuth(authn.FromConfig(*auth)))
 		}
 	}
-	_, err = remote.Head(ref, opts...)
+	layer, err := remote.Layer(ref, opts...)
+	if err == nil {
+		_, err = layer.Size()
+	}
 	var terr *transport.Error
 	if errors.As(err, &terr) && (terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden || terr.StatusCode == http.StatusNotFound) {
 		return fmt.Errorf("image source %s: %w", ref, err)
@@ -1935,20 +1947,20 @@ func imageArchiveLockBusy(err error) bool {
 	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
 }
 
-func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {
+func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) (common.ImageMetadata, error) {
 	imageMetadata, err := c.skopeoClient.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds, nil)
 	if err != nil {
-		return err
+		return imageMetadata, err
 	}
 
 	if imageMetadata.Architecture != runtime.GOARCH {
-		return &types.ExitCodeError{
+		return imageMetadata, &types.ExitCodeError{
 			ExitCode: types.ContainerExitCodeIncorrectImageArch,
 		}
 	}
 
 	if imageMetadata.Os != runtime.GOOS {
-		return &types.ExitCodeError{
+		return imageMetadata, &types.ExitCodeError{
 			ExitCode: types.ContainerExitCodeIncorrectImageOs,
 		}
 	}
@@ -1957,12 +1969,24 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		for _, layer := range imageMetadata.LayersData {
 			if strings.HasSuffix(layer.MIMEType, "+zstd") {
-				return fmt.Errorf("image %s has zstd-compressed layers, which cannot be indexed yet; push a gzip-compressed copy (skopeo copy --compression-format gzip) or pick a gzip-compressed tag", *request.BuildOptions.SourceImage)
+				return imageMetadata, fmt.Errorf("image %s has zstd-compressed layers, which cannot be indexed yet; push a gzip-compressed copy (skopeo copy --compression-format gzip) or pick a gzip-compressed tag", *request.BuildOptions.SourceImage)
 			}
 		}
 	}
 
-	return nil
+	return imageMetadata, nil
+}
+
+// hasOCILayers reports whether every layer of the image has an OCI media type.
+// skopeo inspect does not show the manifest's format, but a Docker-format
+// manifest lists Docker-format layers.
+func hasOCILayers(imageMetadata common.ImageMetadata) bool {
+	for _, layer := range imageMetadata.LayersData {
+		if !strings.HasPrefix(layer.MIMEType, "application/vnd.oci.image.layer.") {
+			return false
+		}
+	}
+	return len(imageMetadata.LayersData) > 0
 }
 
 // getBuildRegistry returns the registry to use for final and intermediate build images
@@ -2822,13 +2846,22 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	c.cacheV2SourceImageRef(request)
 
 	outputLogger.Info("Inspecting image name and verifying architecture...\n")
-	if err := c.inspectAndVerifyImage(ctx, request); err != nil {
+	sourceMetadata, err := c.inspectAndVerifyImage(ctx, request)
+	if err != nil {
 		// Non-exit-code errors would otherwise surface only as an exit code.
 		var exitErr *types.ExitCodeError
 		if !errors.As(err, &exitErr) {
 			outputLogger.Error(err.Error() + "\n")
 		}
 		return err
+	}
+
+	// The index records the manifest digest it reads as the image's registry
+	// reference. A local OCI layout holds only OCI manifests, so skopeo converts a
+	// Docker-format image's manifest, and the registry has no such digest.
+	clipV2 := c.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
+	if clipV2 && !hasOCILayers(sourceMetadata) {
+		return c.indexSourceImage(ctx, outputLogger, request, "")
 	}
 
 	baseTmpBundlePath := filepath.Join(c.imageBundlePath, baseImage.Repo)
@@ -2867,20 +2900,8 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
 	// Clip v2: Create index-only clip archive from the source image (no unpack needed)
-	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		archivePath := c.archiveScratchPath("/dev/shm", request.ImageId)
-
-		// Create index-only clip from the source docker image reference with progress reporting
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, copyDir, archivePath, 2); err != nil {
-			return err
-		}
-
-		// Upload the clip archive to the image registry
-		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
-			return err
-		}
-
-		return nil
+	if clipV2 {
+		return c.indexSourceImage(ctx, outputLogger, request, copyDir)
 	}
 
 	outputLogger.Info("Unpacking image...\n")
@@ -2899,6 +2920,16 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 
 	return nil
+}
+
+// indexSourceImage publishes the clip v2 index of the request's source image,
+// read from layoutDir when given and from its registry otherwise.
+func (c *ImageClient) indexSourceImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, layoutDir string) error {
+	archivePath := c.archiveScratchPath("/dev/shm", request.ImageId)
+	if err := c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, layoutDir, archivePath, 2); err != nil {
+		return err
+	}
+	return c.registry.Push(ctx, archivePath, request.ImageId)
 }
 
 // localOCILayoutRef converts an image digest (e.g. "sha256:abc...") into a
