@@ -307,7 +307,7 @@ def _existing_services(
 
         existing[service] = True
         previous = current.get("spec", {}).get("desired", {}).get("services", {})
-        if previous.get(service) == node:
+        if node.get("type") == "database" and previous.get(service) == node:
             reusable.append(service)
 
     return existing, reusable
@@ -350,8 +350,9 @@ def plan(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
         json.dump(planned, output)
 
     return text_result(
-        "Review this plan, then call stack_apply with plan_id. Removed services are retained; "
-        "migrations require explicit job services.",
+        "Review this plan, then call stack_apply with plan_id. Applying redeploys every "
+        "application and reruns every job, so migrations must be idempotent jobs; reusable "
+        "databases are kept and removed services are retained.",
         plan_id=plan_id,
         **planned,
     )

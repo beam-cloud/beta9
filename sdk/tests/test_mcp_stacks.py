@@ -175,6 +175,21 @@ def test_a_corrected_plan_replaces_one_waiting_on_an_unready_service(tmp_path):
     assert tools.deployed == [f"stack:{crashing}:web", f"stack:{fixed}:web"]
 
 
+# Only a database carries over between plans; everything else is redeployed or
+# rerun, so the plan must not call an unchanged application reusable.
+def test_only_unchanged_databases_are_reusable(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    first = web_stack(tools, "web:same")
+    stacks.apply(tools, {"plan_id": first})
+    assert text(stacks.apply(tools, {"plan_id": first})) == "Stack applied"
+
+    second = web_stack(tools, "web:same")
+    assert stacks._load_plan(tools, second)["reusable"] == ["db"]
+    assert text(stacks.apply(tools, {"plan_id": second})) == "Stack applied"
+    assert tools.submitted == [f"stack:{first}:db"]
+    assert tools.deployed == [f"stack:{first}:web", f"stack:{second}:web"]
+
+
 def test_a_plan_with_a_deploy_in_flight_is_not_replaced(tmp_path):
     tools = FakeStackTools(tmp_path)
     tools.deploy_outcomes = ["running"]
