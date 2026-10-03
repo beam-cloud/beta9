@@ -326,9 +326,11 @@ func newCheckpointCacheForTest(t *testing.T, ctx context.Context) (*cache.Server
 	require.NotNil(t, host)
 	host.Addr = addr
 	host.PrivateAddr = addr
+	hostSnapshot := *host
 
 	client, err := cache.NewClientWithHostDirectory(ctx, cfg, metadataStore, testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-		return []*cache.Host{host}, nil
+		host := hostSnapshot
+		return []*cache.Host{&host}, nil
 	}), "test")
 	require.NoError(t, err)
 	client.AttachLocalServer(server)
@@ -1142,8 +1144,7 @@ func TestMaterializeArchiveObjectUsesBrokeredURL(t *testing.T) {
 
 		require.Equal(t, types.CacheAuditStatusMaterialized, status)
 		require.True(t, server.HasCompleteContent(hash, int64(len(content))))
-		pathID := sha256.Sum256([]byte("/images/image-a." + extension))
-		entry, err := metadata.GetFsNode(ctx, hex.EncodeToString(pathID[:]))
+		entry, err := metadata.GetFsNode(ctx, cache.GenerateFsID("/images/image-a."+extension))
 		require.NoError(t, err)
 		require.Equal(t, hash, entry.Hash)
 		require.NotEmpty(t, workerRepo.requests)
@@ -1153,8 +1154,7 @@ func TestMaterializeArchiveObjectUsesBrokeredURL(t *testing.T) {
 	item := types.CacheRequiredContentItem{Hash: strings.Repeat("f", 64), Source: "image-a.rclip", Kind: types.CacheContentKindClipV1}
 	require.Equal(t, types.CacheAuditStatusOriginFailure, manager.materializeArchiveObject(ctx, server, stub, item, "/images/corrupt.rclip"))
 	require.False(t, server.HasCompleteContent(item.Hash, 0))
-	pathID := sha256.Sum256([]byte("/images/corrupt.rclip"))
-	_, err = metadata.GetFsNode(ctx, hex.EncodeToString(pathID[:]))
+	_, err = metadata.GetFsNode(ctx, cache.GenerateFsID("/images/corrupt.rclip"))
 	require.Error(t, err)
 }
 

@@ -2004,15 +2004,7 @@ func (m *WorkerCacheManager) materializeDerivedArchiveObject(ctx context.Context
 		return types.CacheAuditStatusOriginFailure
 	}
 	defer file.Close()
-	hash, size, err := server.StoreReader(ctx, file, item.Hash)
-	if err == nil {
-		err = server.StoreSyntheticContentInCacheFS(ctx, routingKey, hash, size)
-	}
-	if err != nil {
-		log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation derived metadata store failed")
-		return types.CacheAuditStatusOriginFailure
-	}
-	return types.CacheAuditStatusMaterialized
+	return storeArchiveObject(ctx, server, file, item.Hash, routingKey)
 }
 
 // materializeArchiveObjectFromURL streams an archive from its brokered URL into
@@ -2033,12 +2025,16 @@ func (m *WorkerCacheManager) materializeArchiveObjectFromURL(ctx context.Context
 		return types.CacheAuditStatusOriginFailure
 	}
 
-	hash, size, err := server.StoreReader(ctx, resp.Body, item.Hash)
+	return storeArchiveObject(ctx, server, resp.Body, item.Hash, routingKey)
+}
+
+func storeArchiveObject(ctx context.Context, server *cache.Server, reader io.Reader, expectedHash, routingKey string) string {
+	hash, size, err := server.StoreReader(ctx, reader, expectedHash)
 	if err == nil {
 		err = server.StoreSyntheticContentInCacheFS(ctx, routingKey, hash, size)
 	}
 	if err != nil {
-		log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive url store failed")
+		log.Debug().Err(err).Str("hash", expectedHash).Str("routing_key", routingKey).Msg("cache reconciliation image archive store failed")
 		return types.CacheAuditStatusOriginFailure
 	}
 	return types.CacheAuditStatusMaterialized

@@ -2951,6 +2951,9 @@ func (c *Client) RankedReadHosts(routingKey string) []*Host {
 // returns true when the content is complete locally afterward. A zero size
 // streams the complete object; its content hash validates the result.
 func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, hash, routingKey string, size int64) (bool, error) {
+	if size < 0 {
+		return false, fmt.Errorf("invalid content size: %d", size)
+	}
 	if server == nil {
 		return false, errors.New("local cache server is required")
 	}

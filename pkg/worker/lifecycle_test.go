@@ -57,14 +57,14 @@ func TestPruneUnreachableSDKMountsKeepsOnlyPresentSitePackages(t *testing.T) {
 
 func TestExplicitRestoreRejectsIncompatibleNativeGPUProfileBeforeEviction(t *testing.T) {
 	worker := &Worker{
-		runtime:                    NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{GPU: true, CheckpointRestore: true}),
-		checkpointCompatibilityKey: "v2:host",
+		runtime: NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{GPU: true, CheckpointRestore: true}),
 	}
-	for _, key := range []string{"v1:other", "v2:other", ""} {
+	for _, keys := range [][2]string{{"v2:host", "v1:other"}, {"v2:host", "v2:other"}, {"v2:host", ""}, {"v1:host", "v2:host"}, {"", "v2:host"}} {
+		worker.checkpointCompatibilityKey = keys[0]
 		request := &types.ContainerRequest{
 			Gpu: "RTX4090", GpuCount: 1,
 			Stub:       types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
-			Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String(), CompatibilityKey: key},
+			Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String(), CompatibilityKey: keys[1]},
 		}
 		checkpoint := request.Checkpoint
 		err := worker.runContainerWithEvictionBarrier(context.Background(), request, func() error {

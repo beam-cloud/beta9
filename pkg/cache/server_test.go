@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net"
+	"os"
 	"testing"
 
 	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -106,6 +108,7 @@ func TestStoreReaderValidatesExpectedHashInMemoryFallback(t *testing.T) {
 	InitLogger(false, false)
 	ctx := context.Background()
 	store, err := NewStore(ctx, &Host{HostId: "test-host"}, "test", NewMockCacheMetadataStore(), Config{
+		Disk: DiskConfig{MinFreeBytes: 1<<63 - 1},
 		Server: ServerConfig{
 			DiskCacheDir:         t.TempDir(),
 			DiskCacheMaxUsagePct: 90,
@@ -116,7 +119,6 @@ func TestStoreReaderValidatesExpectedHashInMemoryFallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(store.Cleanup)
-	store.diskCachedUsageExceeded = true
 
 	content := []byte("memory fallback content")
 	sum := sha256.Sum256(content)
@@ -136,6 +138,27 @@ func TestStoreReaderValidatesExpectedHashInMemoryFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, actualHash, hash)
 	require.Equal(t, uint64(len(content)), size)
+	store.cache.Wait()
+	_, err = os.Stat(store.completeMarkerPath(hash))
+	require.True(t, os.IsNotExist(err))
+	require.Equal(t, int64(len(content)), server.ContentSizeBytes(hash))
+	for _, offset := range []int64{0, 5} {
+		for _, length := range []int64{0, int64(len(content)) - offset} {
+			stream := &capturedContentStream{}
+			require.NoError(t, server.GetContentStream(&proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, stream))
+			require.Equal(t, content[offset:], stream.content)
+		}
+	}
+}
+
+type capturedContentStream struct {
+	grpc.ServerStream
+	content []byte
+}
+
+func (s *capturedContentStream) Send(resp *proto.CacheGetContentResponse) error {
+	s.content = append(s.content, resp.Content...)
+	return nil
 }
 
 func TestStoreSyntheticContentInCacheFSCreatesVolumeFilePath(t *testing.T) {

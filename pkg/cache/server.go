@@ -233,17 +233,26 @@ func (cs *Server) refreshDisk(evict bool) (DiskUsage, error) {
 	return usage, nil
 }
 
-// ContentSizeBytes is the on-disk size of hash as the local index knows it, or
-// 0 when the store does not hold it.
+// ContentSizeBytes returns the stored size of hash, or 0 when unavailable.
 func (cs *Server) ContentSizeBytes(hash string) int64 {
 	if cs == nil || cs.cas == nil {
 		return 0
 	}
 	entry, ok := cs.cas.index.get(hash)
-	if !ok {
-		return 0
+	if ok {
+		return entry.size
 	}
-	return entry.size
+	if cs.cas.memoryCacheEnabled {
+		marker, _ := cs.cas.cache.Get(hash)
+		keys, _ := marker.(string)
+		if keys != "" {
+			tail, _ := cs.cas.cache.Get(keys[strings.LastIndex(keys, ",")+1:])
+			if page, ok := tail.(cacheValue); ok {
+				return int64(strings.Count(keys, ","))*cs.cas.serverConfig.PageSizeBytes + int64(len(page.Content))
+			}
+		}
+	}
+	return 0
 }
 
 func (cs *Server) DiskPressureExceeded() bool {

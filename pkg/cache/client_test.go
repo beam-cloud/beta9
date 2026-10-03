@@ -2605,6 +2605,11 @@ func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
 	client.mu.RUnlock()
 	require.NotNil(t, pinned)
 	require.Equal(t, "host-c", pinned.host.HostId)
+	ranked := client.RankedReadHosts(hash)
+	materialized, err := client.MaterializeFromReplica(ctx, servers[0], hash, hash, -1)
+	require.ErrorContains(t, err, "invalid content size")
+	require.False(t, materialized)
+	require.Equal(t, ranked, client.RankedReadHosts(hash))
 
 	for _, length := range []int64{int64(len(content)), 0} {
 		client.removeLocalHostCache(hash)
@@ -2616,7 +2621,7 @@ func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
 		}
 		require.Equal(t, content, streamed)
 	}
-	materialized, err := client.MaterializeFromReplica(ctx, servers[0], hash, hash, 0)
+	materialized, err = client.MaterializeFromReplica(ctx, servers[0], hash, hash, 0)
 	require.NoError(t, err)
 	require.True(t, materialized)
 	require.True(t, servers[0].HasCompleteContent(hash, int64(len(content))))

@@ -176,12 +176,18 @@ type ImageClient struct {
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs       *common.SafeMap[string]
 	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
+	archiveMetadata   sync.Map // archive path -> parsedImageArchive
 	clipRuntimeMu     sync.RWMutex
 	clipActive        map[string]*types.ContainerRequest
 	clipRuntimePIDs   map[int]clipPIDReference
 	clipPIDCache      map[int]clipPIDReference
 	clipReadEvents    chan clipCommon.ReadTraceEvent
 	clipAggregates    map[string]*clipReadAggregate
+}
+
+type parsedImageArchive struct {
+	metadata *clipCommon.ClipArchiveMetadata
+	info     os.FileInfo
 }
 
 func NewImageClient(config types.AppConfig, workerId, workerPoolName string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -352,15 +358,15 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 		if c.contentReporter.shouldGenerateRequiredContent(stubID) {
 			requestCopy := &types.ContainerRequest{ImageId: request.ImageId, WorkspaceId: cacheRequestWorkspaceID(request), StubId: stubID}
 			go func() {
-				if report, ok := c.imageRequiredContent(context.WithoutCancel(ctx), requestCopy, meta); ok {
-					c.contentReporter.reportBatches(requestCopy.WorkspaceId, stubID, []requiredContentReport{report})
-				} else {
+				report, ok := c.imageRequiredContent(context.WithoutCancel(ctx), requestCopy, meta)
+				if !ok {
 					c.contentReporter.mu.Lock()
 					delete(c.contentReporter.reported, stubID)
 					c.contentReporter.mu.Unlock()
+					return
 				}
+				c.contentReporter.reportBatches(requestCopy.WorkspaceId, stubID, []requiredContentReport{report})
 			}()
-			return
 		}
 	} else {
 		c.queueV1ArchiveCache(request)
@@ -1194,15 +1200,20 @@ func waitForImageMount(ctx context.Context, mountPoint string, serverErrors <-ch
 }
 
 // processPulledArchive parses the archive metadata and caches it for OCI images.
-// Image ids are content hashes, so metadata cached by an earlier parse (a
-// restore from the content cache validates the archive by parsing it) is
-// reused instead of decoding the same archive twice.
+// Reuse a previous parse only while the same verified file remains unchanged.
+// Canonical and derived archives have independent metadata and file identities.
 func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipCommon.ClipArchiveMetadata, error) {
-	if c.v2ArchiveMetadata != nil {
-		if meta, ok := c.v2ArchiveMetadata.Get(imageId); ok && meta != nil {
-			return meta, nil
+	info, err := os.Stat(downloadPath)
+	if err != nil {
+		return nil, err
+	}
+	if value, ok := c.archiveMetadata.Load(downloadPath); ok {
+		cached := value.(parsedImageArchive)
+		if os.SameFile(info, cached.info) && info.Size() == cached.info.Size() && info.ModTime().Equal(cached.info.ModTime()) {
+			return cached.metadata, nil
 		}
 	}
+	c.archiveMetadata.Delete(downloadPath)
 	archiver := clip.NewClipArchiver()
 	meta, err := archiver.ExtractMetadata(downloadPath)
 	if err != nil {
@@ -1214,6 +1225,7 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 	}
 	if _, isOCI := ociStorageInfo(meta); isOCI {
 		c.cacheOCIMetadata(imageId, meta)
+		c.archiveMetadata.Store(downloadPath, parsedImageArchive{metadata: meta, info: info})
 	}
 	return meta, nil
 }
@@ -1222,10 +1234,6 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArchiveMetadata) {
 	if meta == nil {
 		return
-	}
-
-	if c.v2ArchiveMetadata != nil {
-		c.v2ArchiveMetadata.Set(imageId, meta)
 	}
 
 	ociInfo, ok := ociStorageInfo(meta)
@@ -1247,6 +1255,9 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 		sourceRef := registryHost + "/" + ociInfo.Repository + separator + ociInfo.Reference
 		c.v2ImageRefs.Set(imageId, sourceRef)
 		log.Info().Str("image_id", imageId).Str("source_ref", sourceRef).Msg("cached image reference from metadata")
+	}
+	if c.v2ArchiveMetadata != nil {
+		c.v2ArchiveMetadata.Set(imageId, meta)
 	}
 }
 
@@ -1922,6 +1933,7 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	tmpPath := tmp.Name()
 	f := tmp
 	defer os.Remove(tmpPath)
+	defer c.archiveMetadata.Delete(tmpPath)
 
 	hasher := sha256.New()
 	offset := int64(0)
@@ -1974,6 +1986,9 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	if err := os.Rename(tmpPath, archivePath); err != nil {
 		return err
 	}
+	if value, ok := c.archiveMetadata.LoadAndDelete(tmpPath); ok {
+		c.archiveMetadata.Store(archivePath, value)
+	}
 
 	log.Info().Str("image_id", imageId).Str("hash", hash).Str("routing_key", routingKey).Int64("size", size).Msg("loaded image archive from content cache")
 	return nil
@@ -2003,6 +2018,9 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 	}
 
 	c.cacheOCIMetadata(imageId, meta)
+	if info, err := os.Stat(archivePath); err == nil {
+		c.archiveMetadata.Store(archivePath, parsedImageArchive{metadata: meta, info: info})
+	}
 	return nil
 }
 
