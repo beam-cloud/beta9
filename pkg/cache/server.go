@@ -613,14 +613,23 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 		return status.Error(codes.InvalidArgument, "request is nil")
 	}
-	if req.Length < 0 {
+	if req.Length < 0 || req.Offset < 0 {
 		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
-		return status.Errorf(codes.InvalidArgument, "invalid content length: %d", req.Length)
+		return status.Errorf(codes.InvalidArgument, "invalid content range: offset=%d length=%d", req.Offset, req.Length)
 	}
 
 	const chunkSize = getContentStreamChunkSize
 	offset := req.Offset
 	remainingLength := req.Length
+	if remainingLength == 0 {
+		if !cs.HasCompleteContent(req.Hash, 0) {
+			return status.Error(codes.NotFound, "complete content not found")
+		}
+		remainingLength = cs.ContentSizeBytes(req.Hash) - offset
+		if remainingLength < 0 {
+			return status.Error(codes.InvalidArgument, "offset exceeds content size")
+		}
+	}
 
 	Logger.Debugf("GetContentStream[ACK] - [%s] - offset=%d, length=%d, %d bytes", req.Hash, offset, req.Length, remainingLength)
 
@@ -684,6 +693,9 @@ func (cs *Server) storeReaderWithExpectedHash(ctx context.Context, reader io.Rea
 
 	Logger.Debugf("Store[ACK] - [expected_hash=%s]", expectedHash)
 	hash, size, err := cs.cas.AddReaderWithExpectedHash(ctx, reader, expectedHash)
+	if err == nil && hash != expectedHash {
+		err = fmt.Errorf("content hash mismatch: expected %s, got %s", expectedHash, hash)
+	}
 	if err != nil {
 		Logger.Warnf("Store[ERR] - [expected_hash=%s actual=%s] - %v", expectedHash, hash, err)
 		return "", 0, status.Errorf(codes.Internal, "Failed to add content: %v", err)

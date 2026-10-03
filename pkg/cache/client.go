@@ -987,10 +987,6 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 		if host == nil || host.HostId == "" {
 			return false, nil
 		}
-		if _, ok := checked[host.HostId]; ok {
-			return false, nil
-		}
-		checked[host.HostId] = struct{}{}
 
 		c.mu.RLock()
 		client, exists := c.grpcClients[host.HostId]
@@ -1001,6 +997,9 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 
 		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
 			c.removeHost(host)
 			return false, err
 		}
@@ -1026,6 +1025,9 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 		checked[host.HostId] = struct{}{}
 		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
 			c.removeHost(host)
 			continue
 		}
@@ -1038,13 +1040,16 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 	}
 
 	for _, host := range c.remainingHostsForRequest(checked) {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
 		exists, _ := checkHost(host)
 		if exists {
 			return true, nil
 		}
 	}
 
-	return false, nil
+	return false, ctx.Err()
 }
 
 // IsCachedOnSelectedHost checks only the HRW-selected storage host for routingKey.
@@ -2943,8 +2948,8 @@ func (c *Client) RankedReadHosts(routingKey string) []*Host {
 
 // MaterializeFromReplica streams the content for (hash, routingKey) from a
 // reachable peer that already holds it into the given local server's store. It
-// returns true when the content is complete locally afterward. size must be
-// known (> 0); callers should fall back to an origin fetch otherwise.
+// returns true when the content is complete locally afterward. A zero size
+// streams the complete object; its content hash validates the result.
 func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, hash, routingKey string, size int64) (bool, error) {
 	if server == nil {
 		return false, errors.New("local cache server is required")
@@ -2955,10 +2960,6 @@ func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, has
 	if server.HasCompleteContent(hash, size) {
 		return true, nil
 	}
-	if size <= 0 {
-		return false, nil
-	}
-
 	reachable, err := c.IsCachedReachable(hash, routingKey)
 	if err != nil {
 		return false, err

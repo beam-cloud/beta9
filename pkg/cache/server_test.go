@@ -102,6 +102,42 @@ func TestStoreContentFromSourceWithExpectedHashIsIdempotent(t *testing.T) {
 	require.Equal(t, hash, resp.Hash)
 }
 
+func TestStoreReaderValidatesExpectedHashInMemoryFallback(t *testing.T) {
+	InitLogger(false, false)
+	ctx := context.Background()
+	store, err := NewStore(ctx, &Host{HostId: "test-host"}, "test", NewMockCacheMetadataStore(), Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			MaxCachePct:          1,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(store.Cleanup)
+	store.diskCachedUsageExceeded = true
+
+	content := []byte("memory fallback content")
+	sum := sha256.Sum256(content)
+	actualHash := hex.EncodeToString(sum[:])
+	wrongSum := sha256.Sum256([]byte("different content"))
+	wrongHash := hex.EncodeToString(wrongSum[:])
+	server := &Server{cas: store}
+
+	hash, size, err := server.StoreReader(ctx, bytes.NewReader(content), wrongHash)
+	require.Equal(t, codes.Internal, status.Code(err))
+	require.ErrorContains(t, err, "content hash mismatch")
+	require.Empty(t, hash)
+	require.Zero(t, size)
+	require.False(t, store.Exists(wrongHash))
+
+	hash, size, err = server.StoreReader(ctx, bytes.NewReader(content), actualHash)
+	require.NoError(t, err)
+	require.Equal(t, actualHash, hash)
+	require.Equal(t, uint64(len(content)), size)
+}
+
 func TestStoreSyntheticContentInCacheFSCreatesVolumeFilePath(t *testing.T) {
 	ctx := context.Background()
 	registry := NewMockCacheMetadataStore()

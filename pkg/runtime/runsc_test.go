@@ -198,6 +198,81 @@ func TestRunscPrepareMarksOnlyGPUBundles(t *testing.T) {
 	require.NotContains(t, cpuSpec.Annotations, runscGPUAnnotation)
 }
 
+func TestRunscPrepareUsesNativeCDIWithoutLegacyInjection(t *testing.T) {
+	devices := []specs.LinuxDevice{{Path: "/dev/nvidiactl", Type: "c", Major: 195, Minor: 255}, {Path: "/dev/nvidia3", Type: "c", Major: 195, Minor: 3}}
+	for _, test := range []struct {
+		name       string
+		devices    []specs.LinuxDevice
+		wantNative bool
+	}{
+		{name: "native CDI", devices: devices, wantNative: true},
+		{name: "drops host-specific DRM", devices: append(append([]specs.LinuxDevice(nil), devices...), specs.LinuxDevice{Path: "/dev/dri/renderD131"}), wantNative: true},
+		{name: "incomplete CDI keeps legacy injection", devices: devices[1:]},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := &specs.Spec{
+				Linux:   &specs.Linux{Devices: append([]specs.LinuxDevice(nil), test.devices...)},
+				Process: &specs.Process{Env: []string{"NVIDIA_VISIBLE_DEVICES=3", "WORKER_GPU_DEVICES=3", "CUDA_VISIBLE_DEVICES=0"}},
+			}
+			require.NoError(t, (&Runsc{}).Prepare(context.Background(), spec))
+			if test.wantNative {
+				require.Equal(t, devices, spec.Linux.Devices)
+				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=void")
+			} else {
+				require.Empty(t, spec.Linux.Devices)
+				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=3")
+			}
+			require.Contains(t, spec.Process.Env, "WORKER_GPU_DEVICES=3")
+			require.Contains(t, spec.Process.Env, "CUDA_VISIBLE_DEVICES=0")
+		})
+	}
+}
+
+func TestPrepareNvidiaHooks(t *testing.T) {
+	link := func(target string) specs.Hook {
+		return specs.Hook{Path: "/usr/bin/nvidia-cdi-hook", Args: []string{"nvidia-cdi-hook", "create-symlinks", "--link", target}}
+	}
+	first, second := link("libcuda.so.1::/lib/libcuda.so"), link("libcuda.so.580::/lib/libcuda.so.1")
+	drm := link("../card0::/dev/dri/by-path/gpu-card")
+	compat := specs.Hook{Path: first.Path, Args: []string{"nvidia-cdi-hook", "enable-cuda-compat"}}
+	profile := specs.Hook{Path: first.Path, Args: []string{"nvidia-cdi-hook", "update-application-profile"}}
+	mixed := link("../card0::/dev/dri/by-path/gpu-card")
+	mixed.Args = append(mixed.Args, "--link", "libcuda.so.1::/lib/libcuda.so")
+	custom := link("libcuda.so.1::/lib/libcuda.so")
+	custom.Args = append(custom.Args, "--root", "/custom")
+	timeout := 1
+	timed := link("libcuda.so.1::/lib/libcuda.so")
+	timed.Timeout = &timeout
+	malformed := link("../card0::/dev/dri/by-path/gpu-card::invalid")
+	unrelated := specs.Hook{Path: "/custom/hook", Args: []string{"hook"}}
+	hooks := &specs.Hooks{CreateContainer: []specs.Hook{first, second, drm, compat, profile, mixed, custom, timed, first, malformed, unrelated}}
+	prepareNvidiaHooks(hooks)
+	require.Len(t, hooks.CreateContainer, 9)
+	require.Equal(t, append(first.Args, second.Args[2:]...), hooks.CreateContainer[0].Args)
+	require.Equal(t, compat.Args, hooks.CreateContainer[1].Args)
+	require.Equal(t, profile.Args, hooks.CreateContainer[2].Args)
+	require.Equal(t, mixed.Args, hooks.CreateContainer[3].Args)
+	require.Equal(t, custom.Args, hooks.CreateContainer[4].Args)
+	require.Equal(t, timed.Timeout, hooks.CreateContainer[5].Timeout)
+	require.Equal(t, first.Args, hooks.CreateContainer[6].Args)
+	require.Equal(t, malformed.Args, hooks.CreateContainer[7].Args)
+	require.Equal(t, unrelated, hooks.CreateContainer[8])
+	for _, hook := range hooks.CreateContainer[:8] {
+		require.Contains(t, hook.Env, "GOMAXPROCS=1")
+	}
+	before, err := json.Marshal(hooks)
+	require.NoError(t, err)
+	prepareNvidiaHooks(hooks)
+	after, err := json.Marshal(hooks)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	// NVIDIA deduplicates full link values per invocation: A, B, A must end at A.
+	repeated := &specs.Hooks{CreateContainer: []specs.Hook{first, link("other.so::/lib/libcuda.so"), first}}
+	prepareNvidiaHooks(repeated)
+	require.Len(t, repeated.CreateContainer, 2)
+	require.Equal(t, first.Args, repeated.CreateContainer[1].Args)
+}
+
 func TestRunscCheckpointUsesNativeCUDAHookForGPUBundle(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -284,9 +359,14 @@ func writeRunscBundleWithMounts(t *testing.T, dir string, mounts ...specs.Mount)
 // opaque state data.
 func writeRunscCheckpointImage(t *testing.T, dir string, mounts ...specs.Mount) string {
 	t.Helper()
+	return writeRunscCheckpointSpec(t, dir, &specs.Spec{Mounts: mounts})
+}
+
+func writeRunscCheckpointSpec(t *testing.T, dir string, spec *specs.Spec) string {
+	t.Helper()
 	imagePath := filepath.Join(dir, "checkpoint")
 	require.NoError(t, os.MkdirAll(imagePath, 0o755))
-	containerSpecs, err := json.Marshal(map[string]*specs.Spec{"__no_name_0": {Mounts: mounts}})
+	containerSpecs, err := json.Marshal(map[string]*specs.Spec{"__no_name_0": spec})
 	require.NoError(t, err)
 	metadata, err := json.Marshal(map[string]string{"runsc_version": "test", runscCheckpointSpecsKey: string(containerSpecs)})
 	require.NoError(t, err)
@@ -310,7 +390,7 @@ func readBundleMounts(t *testing.T, bundlePath string) []specs.Mount {
 
 // Checkpoints taken before the base config requested /sys/fs/cgroup must keep
 // restoring: runsc rejects a restore whose mounts differ from the checkpoint.
-func TestAlignRestoreSpecCgroupMount(t *testing.T) {
+func TestAlignRestoreSpec(t *testing.T) {
 	tests := []struct {
 		name       string
 		checkpoint []specs.Mount
@@ -354,24 +434,58 @@ func TestAlignRestoreSpecCgroupMount(t *testing.T) {
 			bundlePath := writeRunscBundleWithMounts(t, dir, test.bundle...)
 			imagePath := writeRunscCheckpointImage(t, dir, test.checkpoint...)
 
-			require.NoError(t, alignRestoreSpecCgroupMount(bundlePath, imagePath))
+			require.NoError(t, alignRestoreSpec(bundlePath, imagePath))
 			require.Equal(t, test.want, readBundleMounts(t, bundlePath))
 		})
 	}
 }
 
-func TestAlignRestoreSpecCgroupMountLeavesBundleWhenCheckpointUnreadable(t *testing.T) {
+func TestAlignRestoreSpecPreservesLegacyGPUCheckpoints(t *testing.T) {
+	devices := []specs.LinuxDevice{{Path: "/dev/nvidiactl"}, {Path: "/dev/nvidia1"}}
+	for _, legacy := range []bool{true, false} {
+		dir := t.TempDir()
+		bundle := writeRunscBundle(t, dir, true)
+		spec := specs.Spec{
+			Linux: &specs.Linux{Devices: devices}, Annotations: map[string]string{runscGPUAnnotation: "true"},
+			Process: &specs.Process{Env: []string{"NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=1"}},
+		}
+		raw, err := json.Marshal(spec)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(bundle, "config.json"), raw, 0600))
+		saved := spec
+		saved.Linux = &specs.Linux{Devices: devices}
+		if legacy {
+			saved.Linux.Devices = nil
+		}
+		image := writeRunscCheckpointSpec(t, dir, &saved)
+		require.NoError(t, alignRestoreSpec(bundle, image))
+		raw, err = os.ReadFile(filepath.Join(bundle, "config.json"))
+		require.NoError(t, err)
+		spec = specs.Spec{}
+		require.NoError(t, json.Unmarshal(raw, &spec))
+		if legacy {
+			require.Empty(t, spec.Linux.Devices)
+			require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=1")
+		} else {
+			require.Equal(t, devices, spec.Linux.Devices)
+			require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=void")
+		}
+		require.Contains(t, spec.Process.Env, "WORKER_GPU_DEVICES=1")
+	}
+}
+
+func TestAlignRestoreSpecLeavesBundleWhenCheckpointUnreadable(t *testing.T) {
 	dir := t.TempDir()
 	bundlePath := writeRunscBundleWithMounts(t, dir, testProcMount, testCgroupMount)
 
 	missing := filepath.Join(dir, "missing")
-	require.Error(t, alignRestoreSpecCgroupMount(bundlePath, missing))
+	require.Error(t, alignRestoreSpec(bundlePath, missing))
 	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, readBundleMounts(t, bundlePath))
 
 	corrupt := filepath.Join(dir, "corrupt")
 	require.NoError(t, os.MkdirAll(corrupt, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(corrupt, runscCheckpointImageName), []byte("not a state file"), 0o644))
-	require.Error(t, alignRestoreSpecCgroupMount(bundlePath, corrupt))
+	require.Error(t, alignRestoreSpec(bundlePath, corrupt))
 	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, readBundleMounts(t, bundlePath))
 }
 

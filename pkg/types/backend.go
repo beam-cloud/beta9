@@ -469,6 +469,16 @@ func (c *Checkpoint) IsFilesystemOnly() bool {
 	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), CheckpointRuntimeFilesystem)
 }
 
+// CompatibleWithWorker allows native GPU workers to restore the same legacy
+// host profile; legacy workers cannot restore native GPU checkpoint specs.
+func (c *Checkpoint) CompatibleWithWorker(key string) bool {
+	if c == nil || c.CompatibilityKey == "" || key == "" {
+		return false
+	}
+	return c.CompatibilityKey == key || (strings.HasPrefix(c.CompatibilityKey, "v1:") &&
+		len(c.CompatibilityKey) > 3 && strings.HasPrefix(key, "v2:") && c.CompatibilityKey[3:] == key[3:])
+}
+
 func (c *Checkpoint) ToProto() *pb.Checkpoint {
 	exposedPorts := make([]uint32, len(c.ExposedPorts))
 	for i, port := range c.ExposedPorts {

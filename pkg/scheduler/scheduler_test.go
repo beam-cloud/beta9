@@ -3002,6 +3002,49 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
 }
 
+func TestNativeGPUCheckpointRequiresCompatibleWorker(t *testing.T) {
+	for _, test := range []struct {
+		checkpointKey, workerKey string
+		want                     bool
+	}{
+		{"v1:profile", "v1:profile", true},
+		{"v2:profile", "v2:profile", true},
+		{"v1:profile", "v2:profile", true},
+		{"v2:profile", "v1:profile", false},
+		{"v1:profile", "v2:other", false},
+		{"", "", false},
+		{"v2:profile", "", false},
+		{"v1:", "v2:", false},
+	} {
+		assert.Equal(t, test.want, (&types.Checkpoint{CompatibilityKey: test.checkpointKey}).CompatibleWithWorker(test.workerKey))
+	}
+	assert.False(t, (*types.Checkpoint)(nil).CompatibleWithWorker("v2:profile"))
+
+	request := &types.ContainerRequest{
+		Cpu: 1000, Memory: 1000, Gpu: "RTX5090", GpuCount: 1,
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+		Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable),
+			Runtime: types.ContainerRuntimeGvisor.String(), CompatibilityKey: "v2:profile"},
+	}
+	worker := func(key string, status types.WorkerStatus) *types.Worker {
+		return &types.Worker{Status: status, FreeCpu: 1000, FreeMemory: 2000, FreeGpuCount: 1,
+			Gpu: "RTX5090", Runtime: types.ContainerRuntimeGvisor.String(), CheckpointCompatibilityKey: key}
+	}
+	legacy := worker("v1:profile", types.WorkerStatusAvailable)
+	native := worker("v2:profile", types.WorkerStatusAvailable)
+	pending := worker("", types.WorkerStatusPending)
+	assert.Equal(t, []*types.Worker{native}, filterWorkersByResources([]*types.Worker{legacy, native, pending}, request, nil))
+	assert.False(t, hostMatchesCheckpoint(request.Checkpoint, pending))
+
+	request.Checkpoint.CompatibilityKey = "v1:profile"
+	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, native))
+	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, pending), "legacy pending routing remains unchanged")
+	assert.Equal(t, []*types.Worker{legacy, native, pending}, filterWorkersByResources([]*types.Worker{legacy, native, pending}, request, nil))
+	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
+	request.Checkpoint.CompatibilityKey = "v2:other"
+	assert.Equal(t, []*types.Worker{legacy, native, pending}, filterWorkersByResources([]*types.Worker{legacy, native, pending}, request, nil))
+}
+
 func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
 	runc := &LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()}
 	gvisor := &LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()}

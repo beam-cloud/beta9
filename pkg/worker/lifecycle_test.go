@@ -55,6 +55,28 @@ func TestPruneUnreachableSDKMountsKeepsOnlyPresentSitePackages(t *testing.T) {
 	}, kept)
 }
 
+func TestExplicitRestoreRejectsIncompatibleNativeGPUProfileBeforeEviction(t *testing.T) {
+	worker := &Worker{
+		runtime:                    NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{GPU: true, CheckpointRestore: true}),
+		checkpointCompatibilityKey: "v2:host",
+	}
+	for _, key := range []string{"v1:other", "v2:other", ""} {
+		request := &types.ContainerRequest{
+			Gpu: "RTX4090", GpuCount: 1,
+			Stub:       types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+			Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String(), CompatibilityKey: key},
+		}
+		checkpoint := request.Checkpoint
+		err := worker.runContainerWithEvictionBarrier(context.Background(), request, func() error {
+			t.Fatal("incompatible restore must not evict workloads")
+			return nil
+		})
+		var incompatible *ErrCheckpointHostIncompatible
+		require.ErrorAs(t, err, &incompatible)
+		require.Same(t, checkpoint, request.Checkpoint)
+	}
+}
+
 // Only a definite absence drops an SDK mount. A stat that fails for any other
 // reason (permissions, an I/O error from a lazily loaded image) keeps it, so a
 // transient read failure cannot silently ship a container without its SDK.

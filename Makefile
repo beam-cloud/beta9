@@ -165,6 +165,7 @@ verify-protocol:
 
 test-pkg:
 	go test -v ./pkg/...
+	go test github.com/beam-cloud/clip/pkg/clip -run '^TestBatchedCodecGolden$$'
 
 bench-pkg:
 	go test -run '^$$' -bench=. ./pkg/...

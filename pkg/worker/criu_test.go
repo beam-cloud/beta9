@@ -2888,6 +2888,13 @@ func TestCheckpointHostProfile(t *testing.T) {
 	p := checkpointHostProfile{CPU: []string{"avx", "xsaves"}, XstateSize: 832, GPU: gpu,
 		Runtime: "gvisor", Version: "runsc version release-test.1"}
 	key := p.key()
+	require.True(t, strings.HasPrefix(key, "v2:"))
+	cpuOnly := p
+	cpuOnly.GPU = nil
+	require.True(t, strings.HasPrefix(cpuOnly.key(), "v1:"))
+	runc := p
+	runc.Runtime = types.ContainerRuntimeRunc.String()
+	require.True(t, strings.HasPrefix(runc.key(), "v1:"))
 	p.GPU, err = checkpointGPUProfile(" NVIDIA GeForce RTX 4090 , 580.126.18\nNVIDIA GeForce RTX 4090,580.126.18\n")
 	require.NoError(t, err)
 	require.Equal(t, key, p.key(), "GPU count and output formatting do not affect compatibility")
@@ -2908,6 +2915,19 @@ func TestCheckpointHostProfile(t *testing.T) {
 	}
 	_, err = checkpointGPUProfile("")
 	require.Error(t, err)
+}
+
+func TestCheckpointSelectionKeepsCompatibleLegacyGPUVariant(t *testing.T) {
+	backend := &compatibilityBackend{}
+	worker := &Worker{checkpointCompatibilityKey: "v2:host", backendRepoClient: backend,
+		runtime: &mockRuntime{name: "gvisor", capabilities: runtime.Capabilities{CheckpointRestore: true}}}
+	checkpoint := &types.Checkpoint{CheckpointId: "legacy", Runtime: "gvisor", Status: "available", CompatibilityKey: "v1:host"}
+	request := &types.ContainerRequest{CheckpointEnabled: true, Checkpoint: checkpoint}
+	worker.prepareCheckpointForWorker(context.Background(), request)
+	require.Same(t, checkpoint, request.Checkpoint)
+	require.True(t, request.CheckpointEnabled)
+	require.Empty(t, backend.key, "compatible legacy checkpoints need no lookup or replacement")
+	require.Zero(t, backend.updateCalls)
 }
 
 func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {

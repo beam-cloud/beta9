@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -117,6 +118,13 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	}
 
 	spec.Linux.Seccomp = nil
+	nativeGPU := false
+	for _, device := range spec.Linux.Devices {
+		if device.Path == "/dev/nvidiactl" {
+			nativeGPU = true
+			break
+		}
+	}
 	if r.hasGPUDevices(spec) {
 		if spec.Annotations == nil {
 			spec.Annotations = make(map[string]string)
@@ -127,13 +135,76 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		delete(spec.Annotations, runscGPUAnnotation)
 	}
 
-	// gVisor does not use spec.Linux.Devices for device passthrough.
-	// For GPU workloads, nvproxy handles GPU access via its own virtualization layer
-	// using CDI annotations and mounts, not device entries.
-	// Clear devices to prevent conflicts with nvproxy
-	spec.Linux.Devices = nil
+	if nativeGPU && spec.Process != nil {
+		// CDI already supplies the devices, driver mounts and linker hooks.
+		// Keep its native device path and suppress duplicate legacy injection.
+		spec.Process.Env = nvidiaVisibleDevices(spec.Process.Env, "void")
+		// nvproxy virtualizes NVIDIA devices; DRM entries are host-specific.
+		spec.Linux.Devices = slices.DeleteFunc(spec.Linux.Devices, func(device specs.LinuxDevice) bool {
+			return !strings.HasPrefix(device.Path, "/dev/nvidia")
+		})
+		prepareNvidiaHooks(spec.Hooks)
+	} else {
+		spec.Linux.Devices = nil
+	}
 
 	return nil
+}
+
+func prepareNvidiaHooks(hooks *specs.Hooks) {
+	if hooks == nil {
+		return
+	}
+	filtered := hooks.CreateContainer[:0]
+	for _, hook := range hooks.CreateContainer {
+		if strings.HasSuffix(hook.Path, "/nvidia-cdi-hook") {
+			// These short filesystem hooks do not benefit from a host-sized Go scheduler.
+			if !slices.Contains(hook.Env, "GOMAXPROCS=1") {
+				hook.Env = append(hook.Env, "GOMAXPROCS=1")
+			}
+			links, drm := nvidiaSymlinkHook(hook)
+			if drm {
+				continue // nvproxy does not expose DRM devices.
+			}
+			if links && len(filtered) > 0 {
+				last := &filtered[len(filtered)-1]
+				lastLinks, _ := nvidiaSymlinkHook(*last)
+				overlap := false
+				for i := 3; i < len(hook.Args); i += 2 {
+					overlap = overlap || slices.Contains(last.Args, hook.Args[i])
+				}
+				if lastLinks && last.Path == hook.Path && last.Args[0] == hook.Args[0] &&
+					last.Timeout == nil && hook.Timeout == nil && slices.Equal(last.Env, hook.Env) && !overlap {
+					last.Args = append(last.Args, hook.Args[2:]...)
+					continue
+				}
+			}
+		}
+		filtered = append(filtered, hook)
+	}
+	hooks.CreateContainer = filtered
+}
+
+// Recognize only CDI's --link pairs; preserve custom flags and mixed DRM links.
+func nvidiaSymlinkHook(hook specs.Hook) (links, drm bool) {
+	if len(hook.Args) < 4 || len(hook.Args)%2 != 0 || hook.Args[1] != "create-symlinks" {
+		return false, false
+	}
+	drm = true
+	for i := 2; i < len(hook.Args); i += 2 {
+		_, destination, ok := strings.Cut(hook.Args[i+1], "::")
+		if hook.Args[i] != "--link" || !ok || strings.Contains(destination, "::") {
+			return false, false
+		}
+		drm = drm && strings.HasPrefix(filepath.Clean(destination), "/dev/dri/")
+	}
+	return true, drm
+}
+
+func nvidiaVisibleDevices(env []string, devices string) []string {
+	return append(slices.DeleteFunc(env, func(entry string) bool {
+		return strings.HasPrefix(entry, types.NvidiaVisibleDevicesEnv+"=")
+	}), types.NvidiaVisibleDevicesEnv+"="+devices)
 }
 
 // mountCudaCheckpoint bind-mounts cuda-checkpoint binary into the container
@@ -463,8 +534,8 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
-	if err := alignRestoreSpecCgroupMount(opts.BundlePath, opts.ImagePath); err != nil {
-		log.Warn().Err(err).Str("container_id", containerID).Msg("failed to align restore spec cgroup mount with checkpoint")
+	if err := alignRestoreSpec(opts.BundlePath, opts.ImagePath); err != nil {
+		log.Warn().Err(err).Str("container_id", containerID).Msg("failed to align restore spec with checkpoint")
 	}
 
 	// Ensure directories exist
@@ -659,13 +730,9 @@ func (r *Runsc) bundleUsesGPU(bundlePath string) (bool, error) {
 	return spec.Annotations[runscGPUAnnotation] == "true" || r.hasGPUDevices(&spec), nil
 }
 
-// alignRestoreSpecCgroupMount rewrites the bundle so its /sys/fs/cgroup mount
-// matches the spec saved in the checkpoint: present with the checkpoint's
-// definition, or absent. runsc refuses to restore when the two specs' mounts
-// differ, and the cgroupfs mount is virtual, so a checkpoint taken before the
-// base config requested it restores without it and one taken with it restores
-// with it. Every other mount is left alone so real mismatches still surface.
-func alignRestoreSpecCgroupMount(bundlePath, imagePath string) error {
+// alignRestoreSpec preserves the checkpoint's virtual cgroup mount and GPU
+// injection mode. Every other mount is left alone so real mismatches surface.
+func alignRestoreSpec(bundlePath, imagePath string) error {
 	if bundlePath == "" || imagePath == "" {
 		return nil
 	}
@@ -686,8 +753,29 @@ func alignRestoreSpecCgroupMount(bundlePath, imagePath string) error {
 		return fmt.Errorf("decode restore bundle: %w", err)
 	}
 	restoreMount, restoreHasMount := findMount(spec.Mounts, sandboxCgroupMountDestination)
-	if checkpointHasMount == restoreHasMount && (!restoreHasMount || mountsEqual(checkpointMount, restoreMount)) {
+	legacyGPU := false
+	if spec.Linux != nil && len(spec.Linux.Devices) > 0 && spec.Annotations[runscGPUAnnotation] == "true" {
+		for _, saved := range checkpointSpecs {
+			if saved != nil && saved.Annotations[runscGPUAnnotation] == "true" && (saved.Linux == nil || len(saved.Linux.Devices) == 0) {
+				legacyGPU = true
+			}
+		}
+	}
+	if !legacyGPU && checkpointHasMount == restoreHasMount && (!restoreHasMount || mountsEqual(checkpointMount, restoreMount)) {
 		return nil
+	}
+	if legacyGPU {
+		// Existing checkpoints used legacy injection. Keep their spec and select
+		// this worker's assigned GPU instead of the checkpoint's original GPU.
+		spec.Linux.Devices = nil
+		if spec.Process != nil {
+			for _, env := range spec.Process.Env {
+				if devices, ok := strings.CutPrefix(env, types.WorkerGPUDevicesEnv+"="); ok {
+					spec.Process.Env = nvidiaVisibleDevices(spec.Process.Env, devices)
+					break
+				}
+			}
+		}
 	}
 
 	mounts := make([]specs.Mount, 0, len(spec.Mounts)+1)
@@ -711,7 +799,8 @@ func alignRestoreSpecCgroupMount(bundlePath, imagePath string) error {
 	log.Info().
 		Str("bundle", bundlePath).
 		Bool("checkpoint_mounts_cgroup", checkpointHasMount).
-		Msg("aligned restore spec cgroup mount with checkpoint")
+		Bool("legacy_gpu", legacyGPU).
+		Msg("aligned restore spec with checkpoint")
 	return nil
 }
 
