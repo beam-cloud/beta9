@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -339,6 +340,22 @@ func TestFastMetadataCacheRestoreAndLegacyFallback(t *testing.T) {
 	report, ok = client.imageRequiredContent(ctx, request, testClipV2Metadata())
 	require.True(t, ok, "optional derived archive failure still retains canonical metadata and layers")
 	require.Len(t, report.items, 3)
+	memoCount := 0
+	client.archiveMetadata.Range(func(_, _ any) bool { memoCount++; return true })
+	require.Equal(t, 1, memoCount, "canonical and derived metadata share one memo per image")
+	var parses sync.WaitGroup
+	for _, meta := range []*clipCommon.ClipArchiveMetadata{fastMetadata, archive.metadata} {
+		parses.Go(func() {
+			for range 20 {
+				client.cacheOCIMetadata("image", meta, &parsedImageArchive{metadata: meta})
+			}
+		})
+	}
+	parses.Wait()
+	value, ok := client.archiveMetadata.Load("image")
+	require.True(t, ok)
+	cached, _ := client.v2ArchiveMetadata.Get("image")
+	require.Same(t, cached, value.(*parsedImageArchive).metadata, "concurrent source swaps retain one metadata tree")
 }
 
 func TestLocalImageArchiveReadyPreservesInProgressPlaceholder(t *testing.T) {
