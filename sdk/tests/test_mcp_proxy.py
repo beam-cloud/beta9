@@ -690,8 +690,13 @@ def test_a_job_stays_visible_after_the_account_changes(settings, local_tools, tm
     write_config(settings.config_path, "second")
 
     job_id = started["structuredContent"]["job_id"]
-    view = local_tools.deploy_status({"job_id": job_id, "wait_seconds": 10})
-    assert view["structuredContent"]["status"] == "accepted"
+    view = local_tools.deploy_status({"job_id": job_id})["structuredContent"]
+    deadline = time.monotonic() + 10
+    while view["status"] == "running" and time.monotonic() < deadline:
+        view = local_tools.deploy_status(
+            {"job_id": job_id, "log_cursor": view["log_cursor"], "wait_seconds": 1}
+        )["structuredContent"]
+    assert view["status"] == "accepted"
 
 
 def test_deploy_status_returns_new_log_lines_from_cursor(
