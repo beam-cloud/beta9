@@ -143,10 +143,14 @@ func TestStoreReaderValidatesExpectedHashInMemoryFallback(t *testing.T) {
 	require.True(t, os.IsNotExist(err))
 	require.Equal(t, int64(len(content)), server.ContentSizeBytes(hash))
 	for _, offset := range []int64{0, 5} {
-		for _, length := range []int64{0, int64(len(content)) - offset} {
+		for _, length := range []int64{0, 3, int64(len(content)) - offset} {
 			stream := &capturedContentStream{}
 			require.NoError(t, server.GetContentStream(&proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, stream))
-			require.Equal(t, content[offset:], stream.content)
+			expected := content[offset:]
+			if length > 0 {
+				expected = expected[:length]
+			}
+			require.Equal(t, expected, stream.content)
 		}
 	}
 }
