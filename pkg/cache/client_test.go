@@ -40,14 +40,20 @@ func requireTraceAttempt(t *testing.T, trace OperationTrace, source string, resu
 	require.Failf(t, "missing trace attempt", "source=%s result=%s status=%s attempts=%+v", source, result, status, trace.Attempts)
 }
 
-func TestHostsAvailableRequiresActiveEndpoint(t *testing.T) {
-	client := &Client{hostMap: NewHostMap(GlobalConfig{}, nil)}
+func TestHostsAvailableRequiresInitializedActiveEndpoint(t *testing.T) {
+	client := &Client{hostMap: NewHostMap(GlobalConfig{}, nil), grpcClients: make(map[string]proto.CacheClient)}
 
 	client.hostMap.Set((&Host{HostId: "logical-host"}).LogicalOnly())
 	require.False(t, client.HostsAvailable())
 
 	client.hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "127.0.0.1:2049"})
+	require.False(t, client.HostsAvailable())
+
+	client.grpcClients["logical-host"] = proto.NewCacheClient(nil)
 	require.True(t, client.HostsAvailable())
+
+	client.hostMap.Set((&Host{HostId: "logical-host"}).LogicalOnly())
+	require.False(t, client.HostsAvailable())
 }
 
 func (m *countingCacheMetadataStore) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {

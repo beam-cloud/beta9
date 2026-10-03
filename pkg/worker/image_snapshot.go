@@ -169,6 +169,7 @@ func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, reque
 	if err := c.registry.Push(ctx, archivePath, imageId); err != nil {
 		return nil, fmt.Errorf("publish index archive: %w", err)
 	}
+	c.publishImageRuntimeLayers(ctx, imageId, archivePath)
 	result.elapsed = time.Since(started)
 	return result, nil
 }
