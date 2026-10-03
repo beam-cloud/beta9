@@ -934,10 +934,21 @@ func (c *ImageClient) waitForV1ArchiveCache(imageID string) (types.CacheRequired
 	request := &types.ContainerRequest{ImageId: imageID}
 	localPath := c.clipV1ArchiveDataCachePath(imageID)
 	cachePath := c.clipV1ArchiveCachePath(imageID)
-	localReady, seeded := false, false
+	localReady, seeded, checkedReplica := false, false, false
 	for {
 		if item, ok := c.clipV1ArchiveRequiredContent(ctx, request); ok {
-			return item, nil
+			// Global metadata can outlive every replica in this locality.
+			cached := seeded
+			if !cached && !checkedReplica && c.cacheClient != nil {
+				checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				cached, _ = c.cacheClient.IsCachedReachableContext(checkCtx, item.Hash, cachePath)
+				cancel()
+				// Do not rescan cache hosts while CLIP finishes downloading.
+				checkedReplica = true
+			}
+			if cached {
+				return item, nil
+			}
 		}
 		if !localReady {
 			localReady = c.localImageArchiveReady(localPath, imageID)
@@ -1875,7 +1886,7 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 		return nil
 	}
 
-	const maxExpectedV2ArchiveSize = int64(128 * 1024 * 1024)
+	const maxExpectedV2ArchiveSize = int64(512 * 1024 * 1024)
 	if size > maxExpectedV2ArchiveSize {
 		return fmt.Errorf("restored v2 image archive is unexpectedly large: image_id=%s size=%d", imageId, size)
 	}

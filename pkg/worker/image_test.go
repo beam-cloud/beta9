@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -233,6 +234,73 @@ func TestLocalImageArchiveReadyPreservesInProgressPlaceholder(t *testing.T) {
 	client := &ImageClient{}
 	require.False(t, client.localImageArchiveReady(archivePath, "image"))
 	require.FileExists(t, archivePath)
+}
+
+func TestValidateRestoredOCIArchiveSizeLimit(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "image.rclip")
+	layer := "sha256:" + strings.Repeat("a", 64)
+	oci := &clipCommon.OCIStorageInfo{
+		Layers:                  []string{layer},
+		DecompressedHashByLayer: map[string]string{layer: strings.Repeat("b", 64)},
+		ImageMetadata:           &clipCommon.ImageMetadata{Architecture: "amd64", Os: "linux"},
+	}
+	metadata := testClipV1Metadata(t)
+	archiver := clip.NewClipArchiver()
+	require.NoError(t, archiver.CreateRemoteArchive(oci, metadata, archivePath))
+	client := &ImageClient{}
+	require.NoError(t, client.validateRestoredImageArchive(archivePath, "image", 512<<20))
+	require.ErrorContains(t, client.validateRestoredImageArchive(archivePath, "image", (512<<20)+1), "unexpectedly large")
+
+	oci.ImageMetadata = nil
+	require.NoError(t, archiver.CreateRemoteArchive(oci, metadata, archivePath))
+	require.ErrorContains(t, client.validateRestoredImageArchive(archivePath, "image", 512<<20), "missing embedded image metadata")
+}
+
+func TestWaitForV1ArchiveCacheSeedsExistingMetadata(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, contentCache := newCheckpointCacheForTest(t, ctx)
+	source, cacheDir := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "file"), []byte("image data"), 0o600))
+	archivePath := filepath.Join(cacheDir, "image.clip")
+	require.NoError(t, clip.NewClipArchiver().Create(clip.ClipArchiverOptions{
+		SourcePath: source, OutputFile: archivePath, ArchivePath: archivePath,
+	}))
+	data, err := os.ReadFile(archivePath)
+	require.NoError(t, err)
+	metadata := &cache.FSMetadata{Hash: fmt.Sprintf("%x", sha256.Sum256(data)), Size: uint64(len(data))}
+	client := &ImageClient{
+		imageCachePath: cacheDir,
+		cacheClient:    contentCache,
+		archiveContentMetadata: func(context.Context, string) (*cache.FSMetadata, error) {
+			return metadata, nil
+		},
+	}
+
+	require.False(t, server.HasCompleteContent(metadata.Hash, int64(metadata.Size)))
+	item, err := client.waitForV1ArchiveCache("image")
+	require.NoError(t, err)
+	require.Equal(t, metadata.Hash, item.Hash)
+	require.True(t, server.HasCompleteContent(item.Hash, item.SizeBytes))
+
+	peerCache, err := cache.NewClientWithHostDirectory(ctx, testCacheManagerConfig(t.TempDir()).Cache, nil,
+		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+			return []*cache.Host{server.Host()}, nil
+		}), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, peerCache.Cleanup()) })
+	require.NoError(t, peerCache.WaitForHosts(3*time.Second))
+	peer := &ImageClient{cacheClient: peerCache}
+	restoredPath := filepath.Join(t.TempDir(), "image.clip")
+	require.NoError(t, peer.writeImageArchiveFromContentCache(ctx, restoredPath, "image", item.Hash, item.SizeBytes, item.RoutingKey))
+	restored, err := os.ReadFile(restoredPath)
+	require.NoError(t, err)
+	require.Equal(t, data, restored)
+
+	require.NoError(t, os.Remove(archivePath))
+	cachedItem, err := client.waitForV1ArchiveCache("image")
+	require.NoError(t, err)
+	require.Equal(t, item, cachedItem)
 }
 
 func TestRestoreV1ArchiveDataCacheRemovesDirectoryTarget(t *testing.T) {
