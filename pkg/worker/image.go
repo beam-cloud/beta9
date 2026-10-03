@@ -937,7 +937,16 @@ func (c *ImageClient) waitForV1ArchiveCache(imageID string) (types.CacheRequired
 	localReady, seeded := false, false
 	for {
 		if item, ok := c.clipV1ArchiveRequiredContent(ctx, request); ok {
-			return item, nil
+			// Global metadata can outlive every replica in this locality.
+			cached := seeded
+			if !cached && c.cacheClient != nil {
+				checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				cached, _ = c.cacheClient.IsCachedReachableContext(checkCtx, item.Hash, cachePath)
+				cancel()
+			}
+			if cached {
+				return item, nil
+			}
 		}
 		if !localReady {
 			localReady = c.localImageArchiveReady(localPath, imageID)
