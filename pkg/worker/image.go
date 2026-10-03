@@ -2940,7 +2940,11 @@ func (c *ImageClient) indexSourceImage(ctx context.Context, outputLogger *slog.L
 	if err := c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, layoutDir, archivePath, 2); err != nil {
 		return err
 	}
-	return c.registry.Push(ctx, archivePath, request.ImageId)
+	if err := c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
+		return err
+	}
+	c.publishImageRuntimeLayers(ctx, request.ImageId, archivePath)
+	return nil
 }
 
 // localOCILayoutRef converts an image digest (e.g. "sha256:abc...") into a
@@ -3237,5 +3241,9 @@ func (c *ImageClient) publishFromStorage(ctx context.Context, outputLogger *slog
 	}
 
 	// Upload the clip archive to object storage
-	return c.registry.Push(ctx, archivePath, request.ImageId)
+	if err := c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
+		return err
+	}
+	c.publishImageRuntimeLayers(ctx, request.ImageId, archivePath)
+	return nil
 }
