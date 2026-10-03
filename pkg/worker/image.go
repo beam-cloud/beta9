@@ -1886,7 +1886,7 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 		return nil
 	}
 
-	const maxExpectedV2ArchiveSize = int64(128 * 1024 * 1024)
+	const maxExpectedV2ArchiveSize = int64(512 * 1024 * 1024)
 	if size > maxExpectedV2ArchiveSize {
 		return fmt.Errorf("restored v2 image archive is unexpectedly large: image_id=%s size=%d", imageId, size)
 	}

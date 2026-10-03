@@ -236,6 +236,26 @@ func TestLocalImageArchiveReadyPreservesInProgressPlaceholder(t *testing.T) {
 	require.FileExists(t, archivePath)
 }
 
+func TestValidateRestoredOCIArchiveSizeLimit(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "image.rclip")
+	layer := "sha256:" + strings.Repeat("a", 64)
+	oci := &clipCommon.OCIStorageInfo{
+		Layers:                  []string{layer},
+		DecompressedHashByLayer: map[string]string{layer: strings.Repeat("b", 64)},
+		ImageMetadata:           &clipCommon.ImageMetadata{Architecture: "amd64", Os: "linux"},
+	}
+	metadata := testClipV1Metadata(t)
+	archiver := clip.NewClipArchiver()
+	require.NoError(t, archiver.CreateRemoteArchive(oci, metadata, archivePath))
+	client := &ImageClient{}
+	require.NoError(t, client.validateRestoredImageArchive(archivePath, "image", 512<<20))
+	require.ErrorContains(t, client.validateRestoredImageArchive(archivePath, "image", (512<<20)+1), "unexpectedly large")
+
+	oci.ImageMetadata = nil
+	require.NoError(t, archiver.CreateRemoteArchive(oci, metadata, archivePath))
+	require.ErrorContains(t, client.validateRestoredImageArchive(archivePath, "image", 512<<20), "missing embedded image metadata")
+}
+
 func TestWaitForV1ArchiveCacheSeedsExistingMetadata(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -262,6 +282,20 @@ func TestWaitForV1ArchiveCacheSeedsExistingMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, metadata.Hash, item.Hash)
 	require.True(t, server.HasCompleteContent(item.Hash, item.SizeBytes))
+
+	peerCache, err := cache.NewClientWithHostDirectory(ctx, testCacheManagerConfig(t.TempDir()).Cache, nil,
+		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+			return []*cache.Host{server.Host()}, nil
+		}), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, peerCache.Cleanup()) })
+	require.NoError(t, peerCache.WaitForHosts(3*time.Second))
+	peer := &ImageClient{cacheClient: peerCache}
+	restoredPath := filepath.Join(t.TempDir(), "image.clip")
+	require.NoError(t, peer.writeImageArchiveFromContentCache(ctx, restoredPath, "image", item.Hash, item.SizeBytes, item.RoutingKey))
+	restored, err := os.ReadFile(restoredPath)
+	require.NoError(t, err)
+	require.Equal(t, data, restored)
 
 	require.NoError(t, os.Remove(archivePath))
 	cachedItem, err := client.waitForV1ArchiveCache("image")
