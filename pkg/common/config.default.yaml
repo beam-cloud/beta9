@@ -429,7 +429,7 @@ cache:
     maxBytesPerCycle: 2147483648 # 2GiB between disk-usage gate rechecks
     maxConcurrentFetches: 16
     volumeMinBytes: 134217728 # 128MiB; only large geesefs volume objects are reconciled
-    originFallbackEnabled: false
+    originFallbackEnabled: true
 
 providers:
   ec2:

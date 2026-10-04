@@ -35,6 +35,8 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -343,6 +345,13 @@ func (r *cacheContentReporter) flush() {
 	// with the next flush like a failed publish.
 	indexed := false
 	unindexed := make(map[reporterStubKey]struct{})
+	// A failed publish must not advance recency: peers cache required content
+	// by that score, so retrying the write alone would leave them stale.
+	for key := range failed {
+		stub := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
+		delete(recent, stub)
+		unindexed[stub] = struct{}{}
+	}
 	if r.metadata != nil {
 		for key := range recent {
 			if err := r.metadata.AddRecentStub(r.ctx, r.locality, key.workspaceID, key.stubID, r.recentStubTTL); err != nil {
@@ -510,16 +519,15 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 	stubCount = len(stubs)
 
 	stubContent, requiredContentComplete := m.loadRecentRequiredContent(stubs)
+	if !requiredContentComplete {
+		return // Keep the existing protection set when required content cannot be read.
+	}
 	protectedContent, activeCheckpointIDs := protectedContentFromRecentStubs(stubContent, m.accelerator)
 	server.SetProtectedContent(protectedContent)
 
 	if maintain {
-		// TTL pruning is only safe with a complete picture of what is
-		// required; a failed required-content read defers it to the next pass.
-		if requiredContentComplete {
-			m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
-		}
-		m.pruneOwnerImageCache(stubContent, server.EvictWatermarkPct(), server.DiskMinFreeBytes(), requiredContentComplete)
+		m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
+		m.pruneOwnerImageCache(stubContent, server.EvictWatermarkPct(), server.DiskMinFreeBytes(), true)
 		m.pruneOwnerStubCodeCache(server)
 	}
 
@@ -1057,7 +1065,7 @@ func protectedImageCache(stubs []recentStubContent, allowlist map[string]struct{
 		if imageID == "" {
 			return
 		}
-		for _, suffix := range []string{".clip", ".rclip", ".cache"} {
+		for _, suffix := range []string{".clip", ".rclip", ".rclip.batch", ".cache"} {
 			protected.names[imageID+suffix] = struct{}{}
 		}
 	}
@@ -1109,7 +1117,7 @@ func protectedImageCache(stubs []recentStubContent, allowlist map[string]struct{
 }
 
 func activeImageLayers(cacheRoot, imageID string) ([]string, bool) {
-	for _, suffix := range []string{".rclip", ".clip"} {
+	for _, suffix := range []string{".rclip.batch", ".rclip", ".clip"} {
 		path := filepath.Join(cacheRoot, imageID+suffix)
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
@@ -1189,6 +1197,10 @@ func listImageCacheEntries(root string) []imageCacheEntry {
 		if !layer {
 			switch filepath.Ext(name) {
 			case ".clip", ".rclip", ".cache":
+			case ".batch":
+				if !strings.HasSuffix(name, ".rclip.batch") {
+					continue
+				}
 			default:
 				continue
 			}
@@ -1558,6 +1570,8 @@ func (b *reconcileBudget) take(sizeBytes int64) bool {
 	b.remaining--
 	if sizeBytes > 0 {
 		b.bytesRemaining -= sizeBytes
+	} else if b.byteLimited {
+		b.bytesRemaining = 0 // Unknown layers may be huge; recheck disk before another.
 	}
 	return true
 }
@@ -1643,10 +1657,10 @@ func reconcileStatusIsFailure(status string) bool {
 }
 
 // Success backoff is only valid when the cache blob is the complete materialized
-// state. Checkpoints also require an extracted runtime/filesystem payload, which
-// can be pruned independently of the archive blob.
+// state. Checkpoints and image archives also require filesystem state that can
+// be pruned independently of the archive blob.
 func reconcileSuccessBackoffApplies(item types.CacheRequiredContentItem) bool {
-	return item.Kind != types.CacheContentKindCheckpoint
+	return item.Kind != types.CacheContentKindCheckpoint && item.Kind != types.CacheContentKindClipV1
 }
 
 // reconcileBackingOff reports whether an item failed to materialize recently and
@@ -1838,6 +1852,19 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation replica copy failed")
 	} else if ok {
+		if item.Kind == types.CacheContentKindClipV1 {
+			size := item.SizeBytes
+			if size <= 0 {
+				size = server.ContentSizeBytes(item.Hash)
+			}
+			if size <= 0 {
+				return types.CacheAuditStatusOriginFailure
+			}
+			if err := server.StoreSyntheticContentInCacheFS(ctx, routingKey, item.Hash, uint64(size)); err != nil {
+				log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation archive metadata publication failed")
+				return types.CacheAuditStatusOriginFailure
+			}
+		}
 		return types.CacheAuditStatusMaterialized
 	}
 
@@ -1863,13 +1890,17 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 	}
 }
 
-// materializeArchiveObject re-fetches the whole CLIP v1 archive from the image
+// materializeArchiveObject re-fetches a CLIP data or metadata archive from the image
 // registry and stores it as a single content object, mirroring the embedded
 // image-archive cache that the image-load path populates. It pulls from the same
 // source the load path uses: the S3 image registry for the S3 store, or the
 // mounted image volume for the local store. No credentials are persisted.
 func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
+	if strings.HasSuffix(routingKey, ".rclip.batch") {
+		return m.materializeDerivedArchiveObject(ctx, server, stub, item, routingKey)
+	}
 	source := &pb.CacheSource{
+		Path:         routingKey,
 		CachePath:    routingKey,
 		ExpectedHash: item.Hash,
 	}
@@ -1884,10 +1915,16 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 			creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "", imageID)
 			if creds != nil && creds.imageArchiveStorage != nil {
 				s3 = imageArchiveRegistryConfig(creds.imageArchiveStorage)
-			} else if creds != nil && creds.imageArchiveDataURL != "" {
+			} else if creds != nil {
 				// No S3 credentials are vended to private-pool workers; fetch
 				// the archive through the gateway-presigned URL instead.
-				return m.materializeArchiveObjectFromURL(ctx, server, item, routingKey, creds.imageArchiveDataURL)
+				url := creds.imageArchiveDataURL
+				if strings.HasSuffix(item.Source, "."+reg.RemoteImageFileExtension) {
+					url = creds.imageArchiveURL
+				}
+				if url != "" {
+					return m.materializeArchiveObjectFromURL(ctx, server, item, routingKey, url)
+				}
 			}
 		}
 		if s3.BucketName == "" || item.Source == "" {
@@ -1900,10 +1937,6 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 		source.AccessKey = s3.AccessKey
 		source.SecretKey = s3.SecretKey
 		source.ForcePathStyle = s3.ForcePathStyle
-	} else {
-		// Local registry store: the durable archive lives on the mounted image
-		// volume at the cachefs path; read it directly (no bucket/credentials).
-		source.Path = routingKey
 	}
 
 	resp, err := server.StoreContentFromSource(ctx, &pb.CacheStoreContentFromSourceRequest{Source: source})
@@ -1914,55 +1947,118 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 	return types.CacheAuditStatusOriginFailure
 }
 
-// materializeArchiveObjectFromURL downloads the CLIP v1 data archive through a
-// gateway-presigned URL into a temp file on the cache disk and stores it on the
-// local cache server under its content hash + cachefs path. Used by
-// private-pool workers, which hold no S3 credentials.
-func (m *WorkerCacheManager) materializeArchiveObjectFromURL(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey, url string) string {
-	tmp, err := os.CreateTemp(filepath.Dir(m.checkpointRoot), "archive-origin-*.tmp")
+// Derived metadata keeps the original archive as its origin. Rebuilding it uses
+// the same source credentials as the legacy archive, then verifies the derived
+// bytes against the reported hash before publishing its separate cachefs path.
+func (m *WorkerCacheManager) materializeDerivedArchiveObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
+	if m.metadataStore == nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	originalPath := strings.TrimSuffix(routingKey, ".batch")
+	original, _ := m.metadataStore.GetFsNode(ctx, cache.GenerateFsID(originalPath))
+	if original != nil && original.Hash != "" && !server.HasCompleteContent(original.Hash, int64(original.Size)) && m.client != nil {
+		_, _ = m.client.MaterializeFromReplica(ctx, server, original.Hash, originalPath, int64(original.Size))
+	}
+	if original == nil || original.Hash == "" || !server.HasCompleteContent(original.Hash, int64(original.Size)) {
+		originalItem := item
+		originalItem.Hash, originalItem.ExpectedHash = "", ""
+		originalItem.RoutingKey = originalPath
+		if status := m.materializeArchiveObject(ctx, server, stub, originalItem, originalPath); status != types.CacheAuditStatusMaterialized {
+			return status
+		}
+		var err error
+		original, err = m.metadataStore.GetFsNode(ctx, cache.GenerateFsID(originalPath))
+		if err != nil || original == nil || original.Hash == "" {
+			return types.CacheAuditStatusOriginFailure
+		}
+	}
+
+	tempRoot := ""
+	if m.checkpointRoot != "" {
+		tempRoot = filepath.Dir(m.checkpointRoot)
+	}
+	tempDir, err := os.MkdirTemp(tempRoot, ".archive-derive-")
 	if err != nil {
-		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation failed to create archive temp file")
 		return types.CacheAuditStatusOriginFailure
 	}
-	tmpPath := tmp.Name()
-	_ = tmp.Close()
-	defer os.Remove(tmpPath)
-
-	if err := downloadImageArchiveURL(ctx, url, tmpPath); err != nil {
-		log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive url fetch failed")
+	defer os.RemoveAll(tempDir)
+	originalFile := filepath.Join(tempDir, "original.rclip")
+	file, err := os.Create(originalFile)
+	if err != nil {
 		return types.CacheAuditStatusOriginFailure
 	}
-
-	resp, err := server.StoreContentFromSource(ctx, &pb.CacheStoreContentFromSourceRequest{
-		Source: &pb.CacheSource{
-			Path:         tmpPath,
-			CachePath:    routingKey,
-			ExpectedHash: item.Hash,
-		},
-	})
-	if err == nil && resp != nil && resp.Ok {
-		return types.CacheAuditStatusMaterialized
+	_, copyErr := io.Copy(file, newCheckpointCacheReader(ctx, original.Hash, int64(original.Size), server.ReadContentInto))
+	closeErr := file.Close()
+	if copyErr != nil || closeErr != nil {
+		return types.CacheAuditStatusOriginFailure
 	}
-	log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive url store failed")
-	return types.CacheAuditStatusOriginFailure
+	derivedFile := filepath.Join(tempDir, "derived.rclip.batch")
+	if err := clip.NewClipArchiver().TranscodeMetadata(originalFile, derivedFile, nil); err != nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	file, err = os.Open(derivedFile)
+	if err != nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	defer file.Close()
+	return storeArchiveObject(ctx, server, file, item.Hash, routingKey)
 }
 
-// imageIDFromArchiveSource derives the image ID from a CLIP v1 required-content
-// source descriptor (the data archive object key, "<imageId>.clip").
+// materializeArchiveObjectFromURL streams an archive from its brokered URL into
+// the local cache, verifies its content hash, and publishes the cachefs path.
+func (m *WorkerCacheManager) materializeArchiveObjectFromURL(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey, url string) string {
+	ctx, cancel := context.WithTimeout(ctx, imageArchiveDownloadTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	resp, err := imageArchiveHTTPClient.Do(req)
+	if err != nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return types.CacheAuditStatusOriginFailure
+	}
+
+	return storeArchiveObject(ctx, server, resp.Body, item.Hash, routingKey)
+}
+
+func storeArchiveObject(ctx context.Context, server *cache.Server, reader io.Reader, expectedHash, routingKey string) string {
+	hash, size, err := server.StoreReader(ctx, reader, expectedHash)
+	if err == nil {
+		err = server.StoreSyntheticContentInCacheFS(ctx, routingKey, hash, size)
+	}
+	if err != nil {
+		log.Debug().Err(err).Str("hash", expectedHash).Str("routing_key", routingKey).Msg("cache reconciliation image archive store failed")
+		return types.CacheAuditStatusOriginFailure
+	}
+	return types.CacheAuditStatusMaterialized
+}
+
+// imageIDFromArchiveSource derives the image ID from a .clip or .rclip object key.
 func imageIDFromArchiveSource(source string) string {
 	base := filepath.Base(source)
-	if !strings.HasSuffix(base, "."+reg.LocalImageFileExtension) {
+	ext := filepath.Ext(base)
+	if ext != "."+reg.LocalImageFileExtension && ext != "."+reg.RemoteImageFileExtension {
 		return ""
 	}
-	return strings.TrimSuffix(base, "."+reg.LocalImageFileExtension)
+	return strings.TrimSuffix(base, ext)
 }
 
 func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
-	if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" {
-		return server.HasCompleteContent(item.Hash, item.SizeBytes) &&
-			checkpointMaterialized(filepath.Join(m.checkpointRoot, item.CheckpointID))
+	if !server.HasCompleteContent(item.Hash, item.SizeBytes) {
+		return false
 	}
-	return server.HasCompleteContent(item.Hash, item.SizeBytes)
+	if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" {
+		return checkpointMaterialized(filepath.Join(m.checkpointRoot, item.CheckpointID))
+	}
+	if item.Kind == types.CacheContentKindClipV1 && m.metadataStore != nil {
+		entry, err := m.metadataStore.GetFsNode(m.ctx, cache.GenerateFsID(filepath.Join("/", filepath.Clean(routingKey))))
+		return err == nil && entry != nil && entry.Hash == item.Hash && int64(entry.Size) == server.ContentSizeBytes(item.Hash)
+	}
+	return true
 }
 
 func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {

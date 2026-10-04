@@ -233,17 +233,26 @@ func (cs *Server) refreshDisk(evict bool) (DiskUsage, error) {
 	return usage, nil
 }
 
-// ContentSizeBytes is the on-disk size of hash as the local index knows it, or
-// 0 when the store does not hold it.
+// ContentSizeBytes returns the stored size of hash, or 0 when unavailable.
 func (cs *Server) ContentSizeBytes(hash string) int64 {
 	if cs == nil || cs.cas == nil {
 		return 0
 	}
 	entry, ok := cs.cas.index.get(hash)
-	if !ok {
-		return 0
+	if ok {
+		return entry.size
 	}
-	return entry.size
+	if cs.cas.memoryCacheEnabled {
+		marker, _ := cs.cas.cache.Get(hash)
+		keys, _ := marker.(string)
+		if keys != "" {
+			tail, _ := cs.cas.cache.Get(keys[strings.LastIndex(keys, ",")+1:])
+			if page, ok := tail.(cacheValue); ok {
+				return int64(strings.Count(keys, ","))*cs.cas.serverConfig.PageSizeBytes + int64(len(page.Content))
+			}
+		}
+	}
+	return 0
 }
 
 func (cs *Server) DiskPressureExceeded() bool {
@@ -613,22 +622,28 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 		return status.Error(codes.InvalidArgument, "request is nil")
 	}
-	if req.Length < 0 {
+	if req.Length < 0 || req.Offset < 0 {
 		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
-		return status.Errorf(codes.InvalidArgument, "invalid content length: %d", req.Length)
+		return status.Errorf(codes.InvalidArgument, "invalid content range: offset=%d length=%d", req.Offset, req.Length)
 	}
 
 	const chunkSize = getContentStreamChunkSize
 	offset := req.Offset
 	remainingLength := req.Length
+	if remainingLength == 0 {
+		if !cs.HasCompleteContent(req.Hash, 0) {
+			return status.Error(codes.NotFound, "complete content not found")
+		}
+		remainingLength = cs.ContentSizeBytes(req.Hash) - offset
+		if remainingLength < 0 {
+			return status.Error(codes.InvalidArgument, "offset exceeds content size")
+		}
+	}
 
 	Logger.Debugf("GetContentStream[ACK] - [%s] - offset=%d, length=%d, %d bytes", req.Hash, offset, req.Length, remainingLength)
 
 	for remainingLength > 0 {
-		currentChunkSize := chunkSize
-		if remainingLength < int64(chunkSize) {
-			currentChunkSize = remainingLength
-		}
+		currentChunkSize := min(chunkSize, remainingLength)
 
 		dst := make([]byte, currentChunkSize)
 		n, err := cs.cas.Get(req.Hash, offset, currentChunkSize, dst)
@@ -684,6 +699,9 @@ func (cs *Server) storeReaderWithExpectedHash(ctx context.Context, reader io.Rea
 
 	Logger.Debugf("Store[ACK] - [expected_hash=%s]", expectedHash)
 	hash, size, err := cs.cas.AddReaderWithExpectedHash(ctx, reader, expectedHash)
+	if err == nil && hash != expectedHash {
+		err = fmt.Errorf("content hash mismatch: expected %s, got %s", expectedHash, hash)
+	}
 	if err != nil {
 		Logger.Warnf("Store[ERR] - [expected_hash=%s actual=%s] - %v", expectedHash, hash, err)
 		return "", 0, status.Errorf(codes.Internal, "Failed to add content: %v", err)

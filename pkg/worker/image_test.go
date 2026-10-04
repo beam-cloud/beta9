@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -227,6 +228,136 @@ func TestSuccessfulImageLoadActivatesExecutingLocality(t *testing.T) {
 	require.Contains(t, reporter.recent, reporterStubKey{workspaceID: "workspace", stubID: "stub"})
 }
 
+func TestOCIRequiredContentIncludesMetadataBeforeCachePublication(t *testing.T) {
+	fake := &fakeEventRepo{}
+	client := &ImageClient{
+		contentReporter: newTestReporter(fake), imageCachePath: t.TempDir(),
+		registry: &registry.ImageRegistry{ImageFileExtension: registry.RemoteImageFileExtension},
+	}
+	client.contentReporter.metadata = cache.NewMockCacheMetadataStore()
+	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub", ImageId: "image"}
+	metadata := testClipV2Metadata()
+	client.recordSuccessfulImageLoad(context.Background(), request, metadata)
+	require.Eventually(t, func() bool {
+		client.contentReporter.mu.Lock()
+		defer client.contentReporter.mu.Unlock()
+		return len(client.contentReporter.reported) == 0
+	}, time.Second, time.Millisecond)
+	client.contentReporter.mu.Lock()
+	_, recent := client.contentReporter.recent[reporterStubKey{workspaceID: "workspace", stubID: "stub"}]
+	client.contentReporter.mu.Unlock()
+	require.True(t, recent, "successful starts refresh recency even when required-content generation fails")
+	data := []byte("verified image metadata")
+	require.NoError(t, os.WriteFile(client.localArchivePath("image"), data, 0600))
+
+	client.recordSuccessfulImageLoad(context.Background(), request, metadata)
+	require.Eventually(t, func() bool {
+		client.contentReporter.mu.Lock()
+		defer client.contentReporter.mu.Unlock()
+		return len(client.contentReporter.pending) == 1
+	}, time.Second, time.Millisecond)
+	client.contentReporter.flush()
+	require.Len(t, fake.pushed, 1)
+	require.Len(t, fake.pushed[0].Items, 3)
+	for _, item := range fake.pushed[0].Items {
+		if item.Kind == types.CacheContentKindClipV1 {
+			require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(data)), item.Hash)
+			require.Equal(t, item.Hash, item.ExpectedHash)
+			require.Equal(t, int64(len(data)), item.SizeBytes)
+			require.Equal(t, "/images/image.rclip", item.RoutingKey)
+			require.Equal(t, "image.rclip", item.Source)
+			return
+		}
+	}
+	t.Fatal("required metadata archive is missing")
+}
+
+func TestFastMetadataCacheRestoreAndLegacyFallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, contentCache := newCheckpointCacheForTest(t, ctx)
+	archiver := clip.NewClipArchiver()
+	originalPath := filepath.Join(t.TempDir(), "image.rclip")
+	metadata := testClipV1Metadata(t)
+	oci := testClipV2Metadata().StorageInfo.(clipCommon.OCIStorageInfo)
+	oci.Layers = []string{"sha256:layer-a", "sha256:layer-b"}
+	oci.ImageMetadata = &clipCommon.ImageMetadata{Architecture: "amd64", Os: "linux"}
+	require.NoError(t, archiver.CreateRemoteArchive(oci, metadata, originalPath))
+	fastPath := originalPath + ".batch"
+	require.NoError(t, archiver.TranscodeMetadata(originalPath, fastPath, nil))
+	client := &ImageClient{
+		cacheClient: contentCache, imageCachePath: t.TempDir(),
+		registry:          &registry.ImageRegistry{ImageFileExtension: registry.RemoteImageFileExtension},
+		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+	}
+	client.publishImageArchiveToEmbeddedCache(fastPath, "image")
+	request := &types.ContainerRequest{ImageId: "image"}
+	archive, err := client.prepareLazyImageArchive(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, client.localArchivePath("image")+".batch", archive.path)
+	fastMetadata := archive.metadata
+	require.NoFileExists(t, client.localArchivePath("image"))
+	archive, err = client.prepareLazyImageArchive(ctx, request)
+	require.NoError(t, err)
+	require.Same(t, fastMetadata, archive.metadata, "unchanged verified archive reuses its decoded metadata")
+	report, ok := client.imageRequiredContent(ctx, request, archive.metadata)
+	require.True(t, ok)
+	require.Len(t, report.items, 4)
+	for _, item := range report.items[2:] {
+		require.Equal(t, "image.rclip", item.Source)
+		require.True(t, server.HasCompleteContent(item.Hash, item.SizeBytes) || item.RoutingKey == "/images/image.rclip")
+	}
+	original, err := os.ReadFile(originalPath)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(original)), report.items[2].Hash)
+	require.Equal(t, int64(len(original)), report.items[2].SizeBytes)
+
+	// Corrupt derived metadata falls back to the canonical archive.
+	client.imageCachePath = t.TempDir()
+	require.NoError(t, os.WriteFile(client.localArchivePath("image"), original, 0600))
+	require.NoError(t, os.WriteFile(client.localArchivePath("image")+".batch", []byte("partial"), 0600))
+	archive, err = client.prepareLazyImageArchive(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, client.localArchivePath("image"), archive.path)
+	require.NoFileExists(t, archive.path+".batch")
+	_, ok = client.imageRequiredContent(ctx, request, fastMetadata)
+	require.True(t, ok, "rebuild missing derived file with previously cached fast metadata")
+	require.FileExists(t, archive.path+".batch")
+	archive, err = client.prepareLazyImageArchive(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, client.localArchivePath("image")+".batch", archive.path)
+	info, err := os.Stat(archive.path)
+	require.NoError(t, err)
+	replacement := archive.path + ".replacement"
+	require.NoError(t, os.WriteFile(replacement, bytes.Repeat([]byte{'x'}, int(info.Size())), 0600))
+	require.NoError(t, os.Chtimes(replacement, info.ModTime(), info.ModTime()))
+	require.NoError(t, os.Rename(replacement, archive.path))
+	archive, err = client.prepareLazyImageArchive(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, client.localArchivePath("image"), archive.path, "same-size replacement invalidates the verified-file memo")
+	// A directory at the derived path deterministically prevents publication.
+	require.NoError(t, os.Mkdir(archive.path+".batch", 0700))
+	report, ok = client.imageRequiredContent(ctx, request, testClipV2Metadata())
+	require.True(t, ok, "optional derived archive failure still retains canonical metadata and layers")
+	require.Len(t, report.items, 3)
+	memoCount := 0
+	client.archiveMetadata.Range(func(_, _ any) bool { memoCount++; return true })
+	require.Equal(t, 1, memoCount, "canonical and derived metadata share one memo per image")
+	var parses sync.WaitGroup
+	for _, meta := range []*clipCommon.ClipArchiveMetadata{fastMetadata, archive.metadata} {
+		parses.Go(func() {
+			for range 20 {
+				client.cacheOCIMetadata("image", meta, &parsedImageArchive{metadata: meta})
+			}
+		})
+	}
+	parses.Wait()
+	value, ok := client.archiveMetadata.Load("image")
+	require.True(t, ok)
+	cached, _ := client.v2ArchiveMetadata.Get("image")
+	require.Same(t, cached, value.(*parsedImageArchive).metadata, "concurrent source swaps retain one metadata tree")
+}
+
 func TestLocalImageArchiveReadyPreservesInProgressPlaceholder(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "image.clip")
 	require.NoError(t, os.WriteFile(archivePath, nil, 0o600))
@@ -283,13 +414,7 @@ func TestWaitForV1ArchiveCacheSeedsExistingMetadata(t *testing.T) {
 	require.Equal(t, metadata.Hash, item.Hash)
 	require.True(t, server.HasCompleteContent(item.Hash, item.SizeBytes))
 
-	peerCache, err := cache.NewClientWithHostDirectory(ctx, testCacheManagerConfig(t.TempDir()).Cache, nil,
-		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-			return []*cache.Host{server.Host()}, nil
-		}), "test")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, peerCache.Cleanup()) })
-	require.NoError(t, peerCache.WaitForHosts(3*time.Second))
+	peerCache := newTestPeerClient(t, ctx, server.Host())
 	peer := &ImageClient{cacheClient: peerCache}
 	restoredPath := filepath.Join(t.TempDir(), "image.clip")
 	require.NoError(t, peer.writeImageArchiveFromContentCache(ctx, restoredPath, "image", item.Hash, item.SizeBytes, item.RoutingKey))
@@ -517,6 +642,41 @@ func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T)
 	requests = nil
 	require.NoError(t, c.verifyImageSource(context.Background(), options))
 	require.Empty(t, requests)
+
+	// A peer's complete layer also needs no origin credentials or HEAD request.
+	require.NoError(t, os.Remove(filepath.Join(cachePath, "hash-1")))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cacheServer, _ := newCheckpointCacheForTest(t, ctx)
+	hash, _, err := cacheServer.StoreReader(ctx, strings.NewReader("cached layer"), "")
+	require.NoError(t, err)
+	peer := newTestPeerClient(t, ctx, cacheServer.Host())
+	c.cacheClient = peer
+	info, _ := ociStorageInfo(options.Metadata)
+	info.DecompressedHashByLayer[layer] = hash
+	require.NoError(t, c.verifyImageSource(ctx, options))
+	require.Empty(t, requests)
+	bridge := newImageContentCache(peer, "image", "layer", nil)
+	cached, err := bridge.ContentExists(hash, struct{ RoutingKey string }{})
+	require.NoError(t, err)
+	require.True(t, cached)
+	cached, err = bridge.ContentExists(strings.Repeat("0", 64), struct{ RoutingKey string }{})
+	require.NoError(t, err)
+	require.False(t, cached)
+}
+
+func newTestPeerClient(t *testing.T, ctx context.Context, host *cache.Host) *cache.Client {
+	t.Helper()
+	hostSnapshot := *host
+	client, err := cache.NewClientWithHostDirectory(ctx, testCacheManagerConfig(t.TempDir()).Cache, nil,
+		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+			host := hostSnapshot
+			return []*cache.Host{&host}, nil
+		}), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+	require.NoError(t, client.WaitForHosts(3*time.Second))
+	return client
 }
 
 func TestHasOCILayersRejectsDockerFormatImages(t *testing.T) {

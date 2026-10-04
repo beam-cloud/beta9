@@ -50,6 +50,56 @@ func TestHostsAvailableRequiresActiveEndpoint(t *testing.T) {
 	require.True(t, client.HostsAvailable())
 }
 
+type testPresenceClient struct {
+	proto.CacheClient
+	cancel context.CancelFunc
+	exists bool
+}
+
+func (c testPresenceClient) HasContent(ctx context.Context, _ *proto.CacheHasContentRequest, _ ...grpc.CallOption) (*proto.CacheHasContentResponse, error) {
+	if c.cancel != nil {
+		c.cancel()
+		return nil, ctx.Err()
+	}
+	return &proto.CacheHasContentResponse{Exists: c.exists}, nil
+}
+
+func TestIsCachedReachableCancellationPreservesHost(t *testing.T) {
+	for _, topHosts := range []int{0, 1} {
+		t.Run(fmt.Sprintf("top_hosts_%d", topHosts), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			host := &Host{HostId: "healthy", Addr: "127.0.0.1:2050"}
+			client := newSharedLocalDiskClient(nil, host)
+			client.clientConfig.NTopHosts = topHosts
+			client.hostMap = NewHostMap(GlobalConfig{}, nil)
+			client.hostMap.Set(host)
+			client.grpcClients[host.HostId] = testPresenceClient{cancel: cancel}
+
+			exists, err := client.IsCachedReachableContext(ctx, "hash", "hash")
+			require.ErrorIs(t, err, context.Canceled)
+			require.False(t, exists)
+			require.Contains(t, client.grpcClients, host.HostId)
+			require.True(t, client.hostMap.Get(host.HostId).HasEndpoint())
+		})
+	}
+}
+
+func TestIsCachedReachableFindsOffRingContent(t *testing.T) {
+	selected := &Host{HostId: "selected", Addr: "127.0.0.1:2050"}
+	oldOwner := &Host{HostId: "old-owner", Addr: "127.0.0.1:2051"}
+	client := newSharedLocalDiskClient(nil, selected)
+	client.hostMap = NewHostMap(GlobalConfig{}, nil)
+	client.hostMap.Set(selected)
+	client.hostMap.Set(oldOwner)
+	client.grpcClients[selected.HostId] = testPresenceClient{}
+	client.grpcClients[oldOwner.HostId] = testPresenceClient{exists: true}
+
+	exists, err := client.IsCachedReachableContext(context.Background(), "hash", "hash")
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
 func (m *countingCacheMetadataStore) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
 	m.setStoreFromContentLockCalls++
 	return m.MockCacheMetadataStore.SetStoreFromContentLock(ctx, locality, sourcePath)
@@ -2555,15 +2605,26 @@ func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
 	client.mu.RUnlock()
 	require.NotNil(t, pinned)
 	require.Equal(t, "host-c", pinned.host.HostId)
+	ranked := client.RankedReadHosts(hash)
+	materialized, err := client.MaterializeFromReplica(ctx, servers[0], hash, hash, -1)
+	require.ErrorContains(t, err, "invalid content size")
+	require.False(t, materialized)
+	require.Equal(t, ranked, client.RankedReadHosts(hash))
 
-	client.removeLocalHostCache(hash)
-	chunks, err := client.GetContentStream(hash, 0, int64(len(content)), struct{ RoutingKey string }{RoutingKey: hash})
-	require.NoError(t, err)
-	var streamed []byte
-	for chunk := range chunks {
-		streamed = append(streamed, chunk...)
+	for _, length := range []int64{int64(len(content)), 0} {
+		client.removeLocalHostCache(hash)
+		chunks, err := client.GetContentStream(hash, 0, length, struct{ RoutingKey string }{RoutingKey: hash})
+		require.NoError(t, err)
+		var streamed []byte
+		for chunk := range chunks {
+			streamed = append(streamed, chunk...)
+		}
+		require.Equal(t, content, streamed)
 	}
-	require.Equal(t, content, streamed)
+	materialized, err = client.MaterializeFromReplica(ctx, servers[0], hash, hash, 0)
+	require.NoError(t, err)
+	require.True(t, materialized)
+	require.True(t, servers[0].HasCompleteContent(hash, int64(len(content))))
 
 	// A departed primary must not hide a surviving off-ring copy either.
 	require.NoError(t, servers[0].Close())

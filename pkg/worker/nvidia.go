@@ -68,9 +68,8 @@ type ContainerNvidiaManager struct {
 
 func NewContainerNvidiaManager(gpuCount uint32, runtimeName string) GPUManager {
 	if gpuCount > 0 {
-		// Only gvisor needs the sanitized spec: nvproxy cannot run
-		// createContainer hooks and agent-hosted machines lack nvidia-persistenced.
-		// runc workers keep the stock nvidia-ctk spec.
+		// gVisor skips linker-cache scans that defeat lazy image reads, and
+		// agent-hosted machines lack nvidia-persistenced. runc keeps the stock spec.
 		sanitizeForGvisor := runtimeName == types.ContainerRuntimeGvisor.String()
 		if err := ensureNvidiaCDIConfig(sanitizeForGvisor); err != nil {
 			log.Fatal().Msgf("failed to generate cdi config: %v", err)
