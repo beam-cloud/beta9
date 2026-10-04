@@ -1021,9 +1021,7 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
-		c.mu.RLock()
-		client, exists := c.grpcClients[host.HostId]
-		c.mu.RUnlock()
+		client, exists := c.grpcClientForHost(ctx, host)
 		if exists && checkHost(client, host) {
 			return true, nil
 		}
