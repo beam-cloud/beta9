@@ -71,6 +71,21 @@ exit 128
 	require.ErrorContains(t, err, "permission denied")
 }
 
+func TestRunscRestoreRejectsCreatedState(t *testing.T) {
+	runscPath := filepath.Join(t.TempDir(), "runsc")
+	require.NoError(t, os.WriteFile(runscPath, []byte(`#!/bin/sh
+printf '{"pid":4321,"status":"created"}'
+`), 0o755))
+
+	restoreErr := errors.New(`"Mounts" does not match across checkpoint restore`)
+	restoreDone := make(chan runscCommandResult, 1)
+	restoreDone <- runscCommandResult{exitCode: 128, err: restoreErr}
+	rt := &Runsc{cfg: Config{RunscPath: runscPath}}
+	_, err := rt.waitForRestoredContainerPID(context.Background(), "container-1", restoreDone)
+
+	require.ErrorIs(t, err, restoreErr)
+}
+
 func TestRunscRestoreSignalsStartedAfterStateRunning(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "runsc.log")

@@ -602,13 +602,13 @@ func (r *Runsc) waitForRestoredContainerPID(ctx context.Context, containerID str
 	var restoreResult *runscCommandResult
 	for {
 		state, err := r.State(ctx, containerID)
-		if err == nil && state.Pid > 0 {
+		if err == nil && state.Status == types.RuncContainerStatusRunning && state.Pid > 0 {
 			return state.Pid, nil
 		}
 		if err != nil {
 			lastErr = err
 		} else {
-			lastErr = fmt.Errorf("restored container state has no pid")
+			lastErr = fmt.Errorf("restored container is not running (status: %s, pid: %d)", state.Status, state.Pid)
 		}
 
 		select {
