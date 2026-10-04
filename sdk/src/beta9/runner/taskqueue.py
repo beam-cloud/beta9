@@ -375,7 +375,7 @@ class TaskQueueWorker:
                                         container_id=config.container_id,
                                         container_hostname=config.container_hostname,
                                         keep_warm_seconds=config.keep_warm_seconds,
-                                        result=serialize_result(result) if result else None,
+                                        result=serialize_result(result) if result is not None else None,
                                     )
                                 )
                             )
