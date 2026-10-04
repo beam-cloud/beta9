@@ -1134,7 +1134,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	gpuRequestsMap := map[string]int{}
 	var checkpoint *types.Checkpoint
 	if candidate := availableCheckpoint(request); canSkipCheckpoint(request) ||
-		(candidate != nil && !candidate.IsFilesystemOnly() && strings.HasPrefix(candidate.CompatibilityKey, "v2:")) {
+		(candidate.RequiresNativeGPUProfile() && !candidate.IsFilesystemOnly()) {
 		checkpoint = candidate
 	}
 	requiresGPU := request.RequiresGPU()
@@ -1235,8 +1235,11 @@ func canSkipCheckpoint(request *types.ContainerRequest) bool {
 
 func hostMatchesCheckpoint(checkpoint *types.Checkpoint, worker *types.Worker) bool {
 	// Native GPU checkpoints must wait for a reported profile during rolling upgrades.
-	return checkpoint == nil || checkpoint.CompatibleWithWorker(worker.CheckpointCompatibilityKey) ||
-		(worker.Status == types.WorkerStatusPending && worker.CheckpointCompatibilityKey == "" && !strings.HasPrefix(checkpoint.CompatibilityKey, "v2:"))
+	if checkpoint == nil || checkpoint.CompatibleWithWorker(worker.CheckpointCompatibilityKey) {
+		return true
+	}
+	return worker.Status == types.WorkerStatusPending && worker.CheckpointCompatibilityKey == "" &&
+		!checkpoint.RequiresNativeGPUProfile()
 }
 
 func checkpointRuntime(request *types.ContainerRequest) string {

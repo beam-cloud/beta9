@@ -157,12 +157,12 @@ type checkpointHostProfile struct {
 
 func (p checkpointHostProfile) key() string {
 	data, _ := json.Marshal(p)
-	version := "v1"
+	prefix := types.CheckpointCompatibilityLegacyPrefix
 	if p.Runtime == types.ContainerRuntimeGvisor.String() && len(p.GPU) > 0 {
 		// Native CDI retains NVIDIA devices in the spec; older workers cleared them.
-		version = "v2"
+		prefix = types.CheckpointCompatibilityNativeGPUPrefix
 	}
-	return fmt.Sprintf("%s:%x", version, sha256.Sum256(data))
+	return fmt.Sprintf("%s%x", prefix, sha256.Sum256(data))
 }
 
 func checkpointSortedUnique(values []string) []string {
