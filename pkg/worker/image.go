@@ -392,10 +392,9 @@ func (c *ImageClient) scheduleImageLayerPrepare(ctx context.Context, request *ty
 			checkCtx, cancel := context.WithTimeout(ctx, imageLayerCacheCheckTimeout)
 			missing := remaining[:0]
 			for _, layer := range remaining {
-				if c.imageLayerCached(checkCtx, ociInfo.DecompressedHashByLayer[layer]) {
-					continue
+				if !c.imageLayerCached(checkCtx, ociInfo.DecompressedHashByLayer[layer]) {
+					missing = append(missing, layer)
 				}
-				missing = append(missing, layer)
 			}
 			cancel()
 			remaining = missing
@@ -702,23 +701,19 @@ func (c *ImageClient) fastMetadataRequiredContent(ctx context.Context, imageID s
 			return types.CacheRequiredContentItem{}, err
 		}
 	}
-	item, err := c.imageMetadataRequiredContent(imageID, ".batch", meta)
-	if err != nil {
-		return types.CacheRequiredContentItem{}, err
-	}
-	item.Source = imageID + ".rclip"
-	return item, nil
+	return c.imageMetadataRequiredContent(imageID, ".batch", meta)
 }
 
 // Describe OCI metadata off the startup path. The ClipV1 cache kind represents
 // whole archive blobs, including these metadata files. Publication is async.
 func (c *ImageClient) imageMetadataRequiredContent(imageID, suffix string, meta *clipCommon.ClipArchiveMetadata) (types.CacheRequiredContentItem, error) {
+	archivePath := c.localArchivePath(imageID)
 	hash, size := "", int64(0)
 	if suffix == "" && meta != nil {
 		hash, size = meta.OriginalArchiveHash, meta.OriginalArchiveSize
 	}
 	if hash == "" {
-		file, err := os.Open(c.localArchivePath(imageID) + suffix)
+		file, err := os.Open(archivePath + suffix)
 		if err != nil {
 			return types.CacheRequiredContentItem{}, err
 		}
@@ -733,7 +728,7 @@ func (c *ImageClient) imageMetadataRequiredContent(imageID, suffix string, meta 
 	return types.CacheRequiredContentItem{
 		Hash: hash, ExpectedHash: hash, SizeBytes: size, ImageID: imageID,
 		RoutingKey: c.imageArchiveCachePath(imageID) + suffix,
-		Source:     filepath.Base(c.localArchivePath(imageID) + suffix),
+		Source:     filepath.Base(archivePath), // Both artifacts are repaired from the canonical archive.
 		Kind:       types.CacheContentKindClipV1,
 	}, nil
 }
@@ -1201,7 +1196,7 @@ func waitForImageMount(ctx context.Context, mountPoint string, serverErrors <-ch
 
 // processPulledArchive parses the archive metadata and caches it for OCI images.
 // Reuse a previous parse only while the same verified file remains unchanged.
-// Canonical and derived archives have independent metadata and file identities.
+// Each image retains one current parse, whether canonical or derived.
 func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipCommon.ClipArchiveMetadata, error) {
 	info, err := os.Stat(downloadPath)
 	if err != nil {
@@ -1230,10 +1225,6 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 
 // cacheOCIMetadata extracts and caches OCI image metadata
 func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArchiveMetadata, parsed ...*parsedImageArchive) {
-	if meta == nil {
-		return
-	}
-
 	ociInfo, ok := ociStorageInfo(meta)
 	if !ok {
 		return
@@ -2005,7 +1996,7 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 	}
 
 	ociInfo, ok := ociStorageInfo(meta)
-	if !ok || strings.ToLower(ociInfo.Type()) != string(clipCommon.StorageModeOCI) {
+	if !ok {
 		return nil
 	}
 

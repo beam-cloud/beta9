@@ -128,26 +128,26 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		delete(spec.Annotations, runscGPUAnnotation)
 	}
 
-	if spec.Process != nil && slices.ContainsFunc(spec.Linux.Devices, func(device specs.LinuxDevice) bool {
+	if spec.Process == nil || !slices.ContainsFunc(spec.Linux.Devices, func(device specs.LinuxDevice) bool {
 		return device.Path == "/dev/nvidiactl"
 	}) {
-		// CDI already supplies the devices, driver mounts and linker hooks.
-		// Keep its native device path and suppress duplicate legacy injection.
-		spec.Process.Env = nvidiaVisibleDevices(spec.Process.Env, "void")
-		// nvproxy virtualizes NVIDIA devices; DRM entries are host-specific.
-		spec.Linux.Devices = slices.DeleteFunc(spec.Linux.Devices, func(device specs.LinuxDevice) bool {
-			return !strings.HasPrefix(device.Path, "/dev/nvidia")
-		})
-		if spec.Hooks != nil {
-			for i := range spec.Hooks.CreateContainer {
-				hook := &spec.Hooks.CreateContainer[i]
-				if strings.HasSuffix(hook.Path, "/nvidia-cdi-hook") && !slices.Contains(hook.Env, "GOMAXPROCS=1") {
-					hook.Env = append(hook.Env, "GOMAXPROCS=1")
-				}
+		spec.Linux.Devices = nil
+		return nil
+	}
+
+	// CDI supplies the devices, driver mounts and linker hooks.
+	spec.Process.Env = nvidiaVisibleDevices(spec.Process.Env, "void")
+	// nvproxy virtualizes NVIDIA devices; DRM entries are host-specific.
+	spec.Linux.Devices = slices.DeleteFunc(spec.Linux.Devices, func(device specs.LinuxDevice) bool {
+		return !strings.HasPrefix(device.Path, "/dev/nvidia")
+	})
+	if spec.Hooks != nil {
+		for i := range spec.Hooks.CreateContainer {
+			hook := &spec.Hooks.CreateContainer[i]
+			if strings.HasSuffix(hook.Path, "/nvidia-cdi-hook") && !slices.Contains(hook.Env, "GOMAXPROCS=1") {
+				hook.Env = append(hook.Env, "GOMAXPROCS=1")
 			}
 		}
-	} else {
-		spec.Linux.Devices = nil
 	}
 
 	return nil
@@ -730,16 +730,12 @@ func alignRestoreSpec(bundlePath, imagePath string) error {
 		}
 	}
 
-	mounts := make([]specs.Mount, 0, len(spec.Mounts)+1)
-	for _, m := range spec.Mounts {
-		if filepath.Clean(m.Destination) != sandboxCgroupMountDestination {
-			mounts = append(mounts, m)
-		}
-	}
+	spec.Mounts = slices.DeleteFunc(spec.Mounts, func(m specs.Mount) bool {
+		return filepath.Clean(m.Destination) == sandboxCgroupMountDestination
+	})
 	if checkpointHasMount {
-		mounts = append(mounts, checkpointMount)
+		spec.Mounts = append(spec.Mounts, checkpointMount)
 	}
-	spec.Mounts = mounts
 
 	updated, err := json.Marshal(&spec)
 	if err != nil {

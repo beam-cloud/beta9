@@ -527,7 +527,7 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 
 	if maintain {
 		m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
-		m.pruneOwnerImageCache(stubContent, server.EvictWatermarkPct(), server.DiskMinFreeBytes(), true)
+		m.pruneOwnerImageCache(stubContent, server.EvictWatermarkPct(), server.DiskMinFreeBytes())
 		m.pruneOwnerStubCodeCache(server)
 	}
 
@@ -968,7 +968,7 @@ type imageCacheEntry struct {
 	modified time.Time
 }
 
-func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, softWatermark float64, minFreeBytes int64, protectedSetComplete bool) int64 {
+func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, softWatermark float64, minFreeBytes int64) int64 {
 	root := getImageCachePath()
 	usage, err := fastDiskUsage(root)
 	if err != nil {
@@ -983,10 +983,7 @@ func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, sof
 	mountSetComplete := m.pruneStaleImageMountPaths(mountRoot)
 	protected := protectedImageCache(stubs, allowlist, root, mountRoot)
 	protected.complete = protected.complete && mountSetComplete
-	cutoff := time.Time{}
-	if protectedSetComplete {
-		cutoff = time.Now().Add(-m.recentStubTTL())
-	}
+	cutoff := time.Now().Add(-m.recentStubTTL())
 	evicted, freed := evictImageCache(root, protected, cutoff, bytesToFree)
 	if evicted > 0 {
 		event := log.Info()

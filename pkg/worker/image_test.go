@@ -305,8 +305,11 @@ func TestFastMetadataCacheRestoreAndLegacyFallback(t *testing.T) {
 	require.Len(t, report.items, 4)
 	for _, item := range report.items[2:] {
 		require.Equal(t, "image.rclip", item.Source)
+		require.Equal(t, types.CacheContentKindClipV1, item.Kind)
 		require.True(t, server.HasCompleteContent(item.Hash, item.SizeBytes) || item.RoutingKey == "/images/image.rclip")
 	}
+	require.Equal(t, "/images/image.rclip", report.items[2].RoutingKey)
+	require.Equal(t, "/images/image.rclip.batch", report.items[3].RoutingKey)
 	original, err := os.ReadFile(originalPath)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(original)), report.items[2].Hash)

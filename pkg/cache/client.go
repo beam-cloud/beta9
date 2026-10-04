@@ -983,32 +983,18 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 	}
 
 	checked := make(map[string]struct{})
-	checkHost := func(host *Host) (bool, error) {
-		if host == nil || host.HostId == "" {
-			return false, nil
-		}
-
-		c.mu.RLock()
-		client, exists := c.grpcClients[host.HostId]
-		c.mu.RUnlock()
-		if !exists {
-			return false, nil
-		}
-
+	checkHost := func(client proto.CacheClient, host *Host) bool {
 		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
-			if ctx.Err() != nil {
-				return false, ctx.Err()
+			if ctx.Err() == nil {
+				c.removeHost(host)
 			}
-			c.removeHost(host)
-			return false, err
+			return false
 		}
-		if resp.Exists {
-			return true, nil
+		if !resp.Exists {
+			c.removeLocalHostCache(hash)
 		}
-
-		c.removeLocalHostCache(hash)
-		return false, nil
+		return resp.Exists
 	}
 
 	for hostIndex := 0; hostIndex < c.clientConfig.NTopHosts; hostIndex++ {
@@ -1023,28 +1009,22 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 		}
 
 		checked[host.HostId] = struct{}{}
-		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
-		if err != nil {
-			if ctx.Err() != nil {
-				return false, ctx.Err()
-			}
-			c.removeHost(host)
-			continue
-		}
-
-		if resp.Exists {
+		if checkHost(client, host) {
 			return true, nil
 		}
-
-		c.removeLocalHostCache(hash)
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
 	}
 
 	for _, host := range c.remainingHostsForRequest(checked) {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
-		exists, _ := checkHost(host)
-		if exists {
+		c.mu.RLock()
+		client, exists := c.grpcClients[host.HostId]
+		c.mu.RUnlock()
+		if exists && checkHost(client, host) {
 			return true, nil
 		}
 	}
