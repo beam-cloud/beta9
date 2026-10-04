@@ -652,10 +652,8 @@ func cacheRequestStubID(request *types.ContainerRequest) string {
 	return request.Stub.ExternalId
 }
 
-// imageRequiredContent returns the required-content batch for a stub's image:
-// per-layer decompressed hashes for CLIP v2, or the whole archive as a single
-// content object for CLIP v1 (reconciling the archive as one file avoids
-// re-materializing the thousands of per-file entries in the v1 index).
+// imageRequiredContent reports OCI layers and metadata, or a legacy data archive.
+// OCI metadata uses the existing whole-archive cache kind (ClipV1).
 func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (requiredContentReport, bool) {
 	if ociInfo, ok := ociStorageInfo(meta); ok && len(ociInfo.DecompressedHashByLayer) > 0 {
 		items := ociRequiredContentItems(request.ImageId, ociInfo)
@@ -698,7 +696,7 @@ func (c *ImageClient) fastMetadataRequiredContent(ctx context.Context, imageID s
 	defer unlock()
 	if !fileExists(path) {
 		if meta.OriginalArchiveHash != "" {
-			meta = nil // The source archive still uses the legacy header.
+			meta = nil // Read the canonical source rather than transcode a derived index.
 		}
 		if err := clip.NewClipArchiver().TranscodeMetadata(c.localArchivePath(imageID), path, meta); err != nil {
 			return types.CacheRequiredContentItem{}, err
@@ -712,8 +710,8 @@ func (c *ImageClient) fastMetadataRequiredContent(ctx context.Context, imageID s
 	return item, nil
 }
 
-// Hash the verified local archive off the startup path. Shared-cache publication
-// is asynchronous, so its metadata may not exist yet when this report is built.
+// Describe OCI metadata off the startup path. The ClipV1 cache kind represents
+// whole archive blobs, including these metadata files. Publication is async.
 func (c *ImageClient) imageMetadataRequiredContent(imageID, suffix string, meta *clipCommon.ClipArchiveMetadata) (types.CacheRequiredContentItem, error) {
 	hash, size := "", int64(0)
 	if suffix == "" && meta != nil {

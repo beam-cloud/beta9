@@ -1881,9 +1881,7 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 	case types.CacheContentKindVolume, types.CacheContentKindDiskSnapshot:
 		return m.materializeWorkspaceObject(ctx, server, stub, item)
 	case types.CacheContentKindClipV1:
-		// The v1 archive is one content-addressed object; re-fetch the whole
-		// archive from the image registry (the same source the image-load path
-		// pulls it from) and store it under its hash + cachefs path.
+		// Whole archive blobs include OCI metadata and legacy data archives.
 		return m.materializeArchiveObject(ctx, server, stub, item, routingKey)
 	default:
 		return types.CacheAuditStatusMiss
@@ -1948,7 +1946,7 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 }
 
 // Derived metadata keeps the original archive as its origin. Rebuilding it uses
-// the same source credentials as the legacy archive, then verifies the derived
+// the same source credentials as the canonical metadata archive, then verifies the derived
 // bytes against the reported hash before publishing its separate cachefs path.
 func (m *WorkerCacheManager) materializeDerivedArchiveObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
 	if m.metadataStore == nil {
