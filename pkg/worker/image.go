@@ -27,7 +27,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/registry"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
-	beta9Storage "github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/clip/pkg/clip"
@@ -1154,7 +1153,7 @@ func (c *ImageClient) mountLazyImageArchive(ctx context.Context, request *types.
 		"success":      fmt.Sprintf("%t", err == nil),
 	})
 	if err == nil {
-		err = waitForImageMount(ctx, options.MountPoint, serverErrors)
+		err = waitForImageMount(ctx, server, serverErrors)
 	}
 	if err != nil {
 		_ = server.Unmount()
@@ -1173,25 +1172,24 @@ func (c *ImageClient) mountLazyImageArchive(ctx context.Context, request *types.
 	return nil
 }
 
-func waitForImageMount(ctx context.Context, mountPoint string, serverErrors <-chan error) error {
+func waitForImageMount(ctx context.Context, server *fuse.Server, serverErrors <-chan error) error {
 	ctx, cancel := context.WithTimeout(ctx, imageMountReadyTimeout)
 	defer cancel()
 
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
-	for !beta9Storage.IsMounted(mountPoint) {
-		select {
-		case err, ok := <-serverErrors:
-			if ok && err != nil {
-				return fmt.Errorf("image mount failed: %w", err)
-			}
-			return fmt.Errorf("image mount stopped before it was ready")
-		case <-ticker.C:
-		case <-ctx.Done():
-			return fmt.Errorf("image mount was not ready: %w", ctx.Err())
+	// Complete go-fuse's poll handshake before reading the image in-process.
+	ready := make(chan error, 1)
+	go func() { ready <- server.WaitMount() }()
+	select {
+	case err := <-ready:
+		return err
+	case err, ok := <-serverErrors:
+		if ok && err != nil {
+			return fmt.Errorf("image mount failed: %w", err)
 		}
+		return fmt.Errorf("image mount stopped before it was ready")
+	case <-ctx.Done():
+		return fmt.Errorf("image mount was not ready: %w", ctx.Err())
 	}
-	return nil
 }
 
 // processPulledArchive parses the archive metadata and caches it for OCI images.
