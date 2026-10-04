@@ -3024,7 +3024,7 @@ func (c *Client) HostsAvailable() bool {
 		return false
 	}
 	for _, host := range c.hostMap.GetAll() {
-		if host.HasEndpoint() {
+		if host.HasEndpoint() && c.hasCacheClient(host.HostId) {
 			return true
 		}
 	}
