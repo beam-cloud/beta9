@@ -643,10 +643,7 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 	Logger.Debugf("GetContentStream[ACK] - [%s] - offset=%d, length=%d, %d bytes", req.Hash, offset, req.Length, remainingLength)
 
 	for remainingLength > 0 {
-		currentChunkSize := chunkSize
-		if remainingLength < int64(chunkSize) {
-			currentChunkSize = remainingLength
-		}
+		currentChunkSize := min(chunkSize, remainingLength)
 
 		dst := make([]byte, currentChunkSize)
 		n, err := cs.cas.Get(req.Hash, offset, currentChunkSize, dst)

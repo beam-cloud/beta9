@@ -1900,6 +1900,7 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 		return m.materializeDerivedArchiveObject(ctx, server, stub, item, routingKey)
 	}
 	source := &pb.CacheSource{
+		Path:         routingKey,
 		CachePath:    routingKey,
 		ExpectedHash: item.Hash,
 	}
@@ -1936,10 +1937,6 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 		source.AccessKey = s3.AccessKey
 		source.SecretKey = s3.SecretKey
 		source.ForcePathStyle = s3.ForcePathStyle
-	} else {
-		// Local registry store: the durable archive lives on the mounted image
-		// volume at the cachefs path; read it directly (no bucket/credentials).
-		source.Path = routingKey
 	}
 
 	resp, err := server.StoreContentFromSource(ctx, &pb.CacheStoreContentFromSourceRequest{Source: source})
@@ -2051,12 +2048,11 @@ func imageIDFromArchiveSource(source string) string {
 }
 
 func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
-	if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" {
-		return server.HasCompleteContent(item.Hash, item.SizeBytes) &&
-			checkpointMaterialized(filepath.Join(m.checkpointRoot, item.CheckpointID))
-	}
 	if !server.HasCompleteContent(item.Hash, item.SizeBytes) {
 		return false
+	}
+	if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" {
+		return checkpointMaterialized(filepath.Join(m.checkpointRoot, item.CheckpointID))
 	}
 	if item.Kind == types.CacheContentKindClipV1 && m.metadataStore != nil {
 		entry, err := m.metadataStore.GetFsNode(m.ctx, cache.GenerateFsID(filepath.Join("/", filepath.Clean(routingKey))))

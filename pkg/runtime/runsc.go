@@ -118,13 +118,6 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	}
 
 	spec.Linux.Seccomp = nil
-	nativeGPU := false
-	for _, device := range spec.Linux.Devices {
-		if device.Path == "/dev/nvidiactl" {
-			nativeGPU = true
-			break
-		}
-	}
 	if r.hasGPUDevices(spec) {
 		if spec.Annotations == nil {
 			spec.Annotations = make(map[string]string)
@@ -135,7 +128,9 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		delete(spec.Annotations, runscGPUAnnotation)
 	}
 
-	if nativeGPU && spec.Process != nil {
+	if spec.Process != nil && slices.ContainsFunc(spec.Linux.Devices, func(device specs.LinuxDevice) bool {
+		return device.Path == "/dev/nvidiactl"
+	}) {
 		// CDI already supplies the devices, driver mounts and linker hooks.
 		// Keep its native device path and suppress duplicate legacy injection.
 		spec.Process.Env = nvidiaVisibleDevices(spec.Process.Env, "void")

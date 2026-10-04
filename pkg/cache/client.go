@@ -2964,11 +2964,8 @@ func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, has
 		return true, nil
 	}
 	reachable, err := c.IsCachedReachable(hash, routingKey)
-	if err != nil {
+	if err != nil || !reachable {
 		return false, err
-	}
-	if !reachable {
-		return false, nil
 	}
 
 	contentChan, err := c.GetContentStream(hash, 0, size, struct{ RoutingKey string }{RoutingKey: routingKey})

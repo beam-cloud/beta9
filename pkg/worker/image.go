@@ -1933,13 +1933,13 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 		routingKey = hash
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(archivePath), filepath.Base(archivePath)+".*.tmp")
+	f, err := os.CreateTemp(filepath.Dir(archivePath), filepath.Base(archivePath)+".*.tmp")
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	f := tmp
+	tmpPath := f.Name()
 	defer os.Remove(tmpPath)
+	defer f.Close()
 	defer func() {
 		if value, ok := c.archiveMetadata.Load(imageId); ok && value.(*parsedImageArchive).path == tmpPath {
 			c.archiveMetadata.CompareAndDelete(imageId, value)
@@ -1952,35 +1952,27 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	buf := make([]byte, bufSize)
 	for offset < size {
 		if err := ctx.Err(); err != nil {
-			_ = f.Close()
 			return err
 		}
 
 		length := min(bufSize, size-offset)
 		n, err := c.cacheClient.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: routingKey})
 		if err != nil {
-			_ = f.Close()
 			return err
 		}
 		if n != length {
-			_ = f.Close()
 			return fmt.Errorf("short embedded image archive cache read: expected %d bytes, got %d", length, n)
 		}
 
 		content := buf[:n]
 		if _, err := f.Write(content); err != nil {
-			_ = f.Close()
 			return err
 		}
-		if _, err := hasher.Write(content); err != nil {
-			_ = f.Close()
-			return err
-		}
+		_, _ = hasher.Write(content)
 		offset += length
 	}
 
 	if err := f.Sync(); err != nil {
-		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
