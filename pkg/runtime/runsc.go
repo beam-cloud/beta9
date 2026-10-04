@@ -138,62 +138,19 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		spec.Linux.Devices = slices.DeleteFunc(spec.Linux.Devices, func(device specs.LinuxDevice) bool {
 			return !strings.HasPrefix(device.Path, "/dev/nvidia")
 		})
-		prepareNvidiaHooks(spec.Hooks)
+		if spec.Hooks != nil {
+			for i := range spec.Hooks.CreateContainer {
+				hook := &spec.Hooks.CreateContainer[i]
+				if strings.HasSuffix(hook.Path, "/nvidia-cdi-hook") && !slices.Contains(hook.Env, "GOMAXPROCS=1") {
+					hook.Env = append(hook.Env, "GOMAXPROCS=1")
+				}
+			}
+		}
 	} else {
 		spec.Linux.Devices = nil
 	}
 
 	return nil
-}
-
-func prepareNvidiaHooks(hooks *specs.Hooks) {
-	if hooks == nil {
-		return
-	}
-	filtered := hooks.CreateContainer[:0]
-	for _, hook := range hooks.CreateContainer {
-		if strings.HasSuffix(hook.Path, "/nvidia-cdi-hook") {
-			// These short filesystem hooks do not benefit from a host-sized Go scheduler.
-			if !slices.Contains(hook.Env, "GOMAXPROCS=1") {
-				hook.Env = append(hook.Env, "GOMAXPROCS=1")
-			}
-			links, drm := nvidiaSymlinkHook(hook)
-			if drm {
-				continue // nvproxy does not expose DRM devices.
-			}
-			if links && len(filtered) > 0 {
-				last := &filtered[len(filtered)-1]
-				lastLinks, _ := nvidiaSymlinkHook(*last)
-				overlap := false
-				for i := 3; i < len(hook.Args); i += 2 {
-					overlap = overlap || slices.Contains(last.Args, hook.Args[i])
-				}
-				if lastLinks && last.Path == hook.Path && last.Args[0] == hook.Args[0] &&
-					last.Timeout == nil && hook.Timeout == nil && slices.Equal(last.Env, hook.Env) && !overlap {
-					last.Args = append(last.Args, hook.Args[2:]...)
-					continue
-				}
-			}
-		}
-		filtered = append(filtered, hook)
-	}
-	hooks.CreateContainer = filtered
-}
-
-// Recognize only CDI's --link pairs; preserve custom flags and mixed DRM links.
-func nvidiaSymlinkHook(hook specs.Hook) (links, drm bool) {
-	if len(hook.Args) < 4 || len(hook.Args)%2 != 0 || hook.Args[1] != "create-symlinks" {
-		return false, false
-	}
-	drm = true
-	for i := 2; i < len(hook.Args); i += 2 {
-		_, destination, ok := strings.Cut(hook.Args[i+1], "::")
-		if hook.Args[i] != "--link" || !ok || strings.Contains(destination, "::") {
-			return false, false
-		}
-		drm = drm && strings.HasPrefix(filepath.Clean(destination), "/dev/dri/")
-	}
-	return true, drm
 }
 
 func nvidiaVisibleDevices(env []string, devices string) []string {

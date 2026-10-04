@@ -228,49 +228,22 @@ func TestRunscPrepareUsesNativeCDIWithoutLegacyInjection(t *testing.T) {
 	}
 }
 
-func TestPrepareNvidiaHooks(t *testing.T) {
-	link := func(target string) specs.Hook {
-		return specs.Hook{Path: "/usr/bin/nvidia-cdi-hook", Args: []string{"nvidia-cdi-hook", "create-symlinks", "--link", target}}
-	}
-	first, second := link("libcuda.so.1::/lib/libcuda.so"), link("libcuda.so.580::/lib/libcuda.so.1")
-	drm := link("../card0::/dev/dri/by-path/gpu-card")
-	compat := specs.Hook{Path: first.Path, Args: []string{"nvidia-cdi-hook", "enable-cuda-compat"}}
-	profile := specs.Hook{Path: first.Path, Args: []string{"nvidia-cdi-hook", "update-application-profile"}}
-	mixed := link("../card0::/dev/dri/by-path/gpu-card")
-	mixed.Args = append(mixed.Args, "--link", "libcuda.so.1::/lib/libcuda.so")
-	custom := link("libcuda.so.1::/lib/libcuda.so")
-	custom.Args = append(custom.Args, "--root", "/custom")
+func TestRunscPreparePreservesCDIHooks(t *testing.T) {
 	timeout := 1
-	timed := link("libcuda.so.1::/lib/libcuda.so")
-	timed.Timeout = &timeout
-	malformed := link("../card0::/dev/dri/by-path/gpu-card::invalid")
-	unrelated := specs.Hook{Path: "/custom/hook", Args: []string{"hook"}}
-	hooks := &specs.Hooks{CreateContainer: []specs.Hook{first, second, drm, compat, profile, mixed, custom, timed, first, malformed, unrelated}}
-	prepareNvidiaHooks(hooks)
-	require.Len(t, hooks.CreateContainer, 9)
-	require.Equal(t, append(first.Args, second.Args[2:]...), hooks.CreateContainer[0].Args)
-	require.Equal(t, compat.Args, hooks.CreateContainer[1].Args)
-	require.Equal(t, profile.Args, hooks.CreateContainer[2].Args)
-	require.Equal(t, mixed.Args, hooks.CreateContainer[3].Args)
-	require.Equal(t, custom.Args, hooks.CreateContainer[4].Args)
-	require.Equal(t, timed.Timeout, hooks.CreateContainer[5].Timeout)
-	require.Equal(t, first.Args, hooks.CreateContainer[6].Args)
-	require.Equal(t, malformed.Args, hooks.CreateContainer[7].Args)
-	require.Equal(t, unrelated, hooks.CreateContainer[8])
-	for _, hook := range hooks.CreateContainer[:8] {
-		require.Contains(t, hook.Env, "GOMAXPROCS=1")
+	want := &specs.Hooks{CreateContainer: []specs.Hook{
+		{Path: "/usr/bin/nvidia-cdi-hook", Args: []string{"nvidia-cdi-hook", "create-symlinks", "--link", "../card0::/dev/dri/by-path/gpu-card"}, Env: []string{"GOMAXPROCS=1"}},
+		{Path: "/usr/bin/nvidia-cdi-hook", Args: []string{"nvidia-cdi-hook", "enable-cuda-compat", "--root", "/custom"}, Env: []string{"GOMAXPROCS=1"}, Timeout: &timeout},
+		{Path: "/custom/hook", Args: []string{"hook"}, Env: []string{"CUSTOM=1"}},
+	}}
+	raw, err := json.Marshal(want)
+	require.NoError(t, err)
+	spec := &specs.Spec{Linux: &specs.Linux{Devices: []specs.LinuxDevice{{Path: "/dev/nvidiactl"}}}, Process: &specs.Process{}}
+	require.NoError(t, json.Unmarshal(raw, &spec.Hooks))
+	spec.Hooks.CreateContainer[0].Env = nil
+	for range 2 {
+		require.NoError(t, (&Runsc{}).Prepare(context.Background(), spec))
+		require.Equal(t, want, spec.Hooks)
 	}
-	before, err := json.Marshal(hooks)
-	require.NoError(t, err)
-	prepareNvidiaHooks(hooks)
-	after, err := json.Marshal(hooks)
-	require.NoError(t, err)
-	require.Equal(t, before, after)
-	// NVIDIA deduplicates full link values per invocation: A, B, A must end at A.
-	repeated := &specs.Hooks{CreateContainer: []specs.Hook{first, link("other.so::/lib/libcuda.so"), first}}
-	prepareNvidiaHooks(repeated)
-	require.Len(t, repeated.CreateContainer, 2)
-	require.Equal(t, first.Args, repeated.CreateContainer[1].Args)
 }
 
 func TestRunscCheckpointUsesNativeCUDAHookForGPUBundle(t *testing.T) {
