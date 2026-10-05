@@ -372,13 +372,11 @@ func writeRunscCheckpointSpec(t *testing.T, dir string, saved ...*specs.Spec) st
 	return imagePath
 }
 
-func readBundleMounts(t *testing.T, bundlePath string) []specs.Mount {
+func mustLoadRunscBundle(t *testing.T, bundlePath string) *runscBundle {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(bundlePath, "config.json"))
+	bundle, err := loadRunscBundle(bundlePath)
 	require.NoError(t, err)
-	var spec specs.Spec
-	require.NoError(t, json.Unmarshal(data, &spec))
-	return spec.Mounts
+	return bundle
 }
 
 // Checkpoints taken before the base config requested /sys/fs/cgroup must keep
@@ -427,10 +425,8 @@ func TestAlignRestoreSpec(t *testing.T) {
 			bundlePath := writeRunscBundleWithMounts(t, dir, test.bundle...)
 			imagePath := writeRunscCheckpointImage(t, dir, test.checkpoint...)
 
-			bundle, err := loadRunscBundle(bundlePath)
-			require.NoError(t, err)
-			require.NoError(t, bundle.alignRestore(imagePath))
-			require.Equal(t, test.want, readBundleMounts(t, bundlePath))
+			require.NoError(t, mustLoadRunscBundle(t, bundlePath).alignRestore(imagePath))
+			require.Equal(t, test.want, mustLoadRunscBundle(t, bundlePath).spec.Mounts)
 		})
 	}
 }
@@ -458,13 +454,8 @@ func TestAlignRestoreSpecMatchesSavedDeviceLayout(t *testing.T) {
 				saved.Linux.Devices = nil
 			}
 			image := writeRunscCheckpointSpec(t, dir, &saved)
-			loaded, err := loadRunscBundle(bundle)
-			require.NoError(t, err)
-			require.NoError(t, loaded.alignRestore(image))
-			raw, err = os.ReadFile(filepath.Join(bundle, "config.json"))
-			require.NoError(t, err)
-			spec = specs.Spec{}
-			require.NoError(t, json.Unmarshal(raw, &spec))
+			require.NoError(t, mustLoadRunscBundle(t, bundle).alignRestore(image))
+			spec = *mustLoadRunscBundle(t, bundle).spec
 			if withoutDevices {
 				require.Empty(t, spec.Linux.Devices)
 				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=1")
@@ -486,8 +477,7 @@ func TestAlignRestoreSpecLeavesBundleWhenCheckpointUnusable(t *testing.T) {
 	dir := t.TempDir()
 	bundlePath := writeRunscBundleWithMounts(t, dir, testProcMount, testCgroupMount)
 
-	bundle, err := loadRunscBundle(bundlePath)
-	require.NoError(t, err)
+	bundle := mustLoadRunscBundle(t, bundlePath)
 	corrupt := filepath.Join(dir, "corrupt")
 	require.NoError(t, os.MkdirAll(corrupt, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(corrupt, runscCheckpointImageName), []byte("not a state file"), 0o644))
@@ -498,7 +488,7 @@ func TestAlignRestoreSpecLeavesBundleWhenCheckpointUnusable(t *testing.T) {
 		writeRunscCheckpointSpec(t, t.TempDir(), &specs.Spec{}, &specs.Spec{}),
 	} {
 		require.Error(t, bundle.alignRestore(image))
-		require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, readBundleMounts(t, bundlePath))
+		require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, mustLoadRunscBundle(t, bundlePath).spec.Mounts)
 	}
 }
 
