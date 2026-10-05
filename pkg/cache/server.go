@@ -315,10 +315,7 @@ func (cs *Server) HasCompleteContent(hash string, expectedSize int64) bool {
 	if cs == nil || cs.cas == nil {
 		return false
 	}
-	if expectedSize > 0 {
-		return cs.cas.ContentStatus(hash, expectedSize) == contentStatusComplete
-	}
-	return cs.cas.ContentStatus(hash) == contentStatusComplete
+	return cs.cas.contentStatusForRead(hash, expectedSize) == contentStatusComplete
 }
 
 // StoreReader stores the full contents of reader into the local store,
@@ -606,10 +603,7 @@ func (cs *Server) HasContent(ctx context.Context, req *proto.CacheHasContentRequ
 	if err := cs.rejectIfDraining(); err != nil {
 		return nil, err
 	}
-	status := cs.cas.ContentStatus(req.Hash)
-	if req.ExpectedSize > 0 {
-		status = cs.cas.ContentStatus(req.Hash, req.ExpectedSize)
-	}
+	status := cs.cas.contentStatusForRead(req.Hash, req.ExpectedSize)
 	return &proto.CacheHasContentResponse{Exists: status == contentStatusComplete, Status: status, Ok: true}, nil
 }
 

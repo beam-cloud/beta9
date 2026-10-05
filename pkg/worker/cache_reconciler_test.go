@@ -323,6 +323,24 @@ func TestReporterGeneratesOncePerStub(t *testing.T) {
 	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.True(t, r.shouldGenerateRequiredContent("stub-b"))
+
+	started, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var startOnce sync.Once
+	guard := func() { startOnce.Do(func() { close(started) }); <-release }
+	go func() { r.guardFirstActivation("stub-c", guard); close(returned) }()
+	<-started
+	joined := make(chan struct{})
+	go func() { r.guardFirstActivation("stub-c", guard); close(joined) }()
+	select {
+	case <-joined:
+		t.Fatal("a concurrent activation skipped the in-flight owner checks")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-returned
+	<-joined
+	require.True(t, r.shouldGenerateRequiredContent("stub-c"))
+	r.guardFirstActivation("stub-c", func() { t.Fatal("a reported stub repeated its first-activation checks") })
 }
 
 func TestReporterCoalescesItemsPerStubKind(t *testing.T) {

@@ -43,6 +43,7 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -294,9 +295,9 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
 	startTime := time.Now()
 
-	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
+	if c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit") {
 		c.recordSuccessfulImageLoad(ctx, request, nil)
-		return elapsed, nil
+		return time.Since(startTime), nil
 	}
 
 	// One mutex per image serializes every mount attempt in this process, and
@@ -308,9 +309,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.local_mount_lock"), localLockStart, time.Since(localLockStart), true, nil)
 	defer unlockMount()
 
-	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_local_lock"); ok {
+	if c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_local_lock") {
 		c.recordSuccessfulImageLoad(ctx, request, nil)
-		return elapsed, nil
+		return time.Since(startTime), nil
 	}
 
 	archive, err := c.prepareLazyImageArchive(ctx, request)
@@ -351,6 +352,9 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 	if meta == nil {
 		meta = c.cachedImageMetadata(request.ImageId)
 	}
+	c.contentReporter.guardFirstActivation(cacheRequestStubID(request), func() {
+		c.guardCachedImageContent(ctx, request.ImageId, meta)
+	})
 	if _, isOCI := ociStorageInfo(meta); isOCI {
 		stubID := cacheRequestStubID(request)
 		if c.contentReporter.shouldGenerateRequiredContent(stubID) {
@@ -369,6 +373,54 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 		c.queueV1ArchiveCache(request)
 	}
 	c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
+}
+
+// Owner checks renew cached content's access guard while the required-content
+// report propagates. A worker's separate view of the same disk cannot do that.
+func (c *ImageClient) guardCachedImageContent(ctx context.Context, imageID string, meta *clipCommon.ClipArchiveMetadata) {
+	if c.cacheClient == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), imageLayerCacheCheckTimeout)
+	defer cancel()
+	var checks errgroup.Group
+	checks.SetLimit(imageLayerPrepareConcurrency)
+	check := func(hash, routingKey string) error {
+		if hash != "" {
+			_, _ = c.cacheClient.IsCachedReachableContext(ctx, hash, routingKey)
+		}
+		return nil
+	}
+	oci, isOCI := ociStorageInfo(meta)
+	if isOCI {
+		for _, hash := range oci.DecompressedHashByLayer {
+			checks.Go(func() error { return check(hash, hash) })
+		}
+	}
+	if c.registry != nil {
+		cachePath := c.imageArchiveCachePath(imageID)
+		paths := []string{cachePath}
+		if meta != nil && meta.OriginalArchiveHash != "" {
+			checks.Go(func() error { return check(meta.OriginalArchiveHash, cachePath) })
+			paths = nil
+		}
+		if isOCI {
+			paths = append(paths, cachePath+".batch")
+		} else {
+			paths = append(paths, c.clipV1ArchiveCachePath(imageID))
+		}
+		if c.archiveContentMetadata != nil {
+			for _, path := range paths {
+				checks.Go(func() error {
+					if metadata, err := c.archiveContentMetadata(ctx, path); err == nil && metadata != nil {
+						return check(metadata.Hash, path)
+					}
+					return nil
+				})
+			}
+		}
+	}
+	_ = checks.Wait()
 }
 
 // Prepare missing layers after mounting. Cached layers stay in the pool;
@@ -510,9 +562,9 @@ func (a lazyImageArchive) usesOCIStorage() bool {
 	return isOCIStorageMode(a.storageMode)
 }
 
-func (c *ImageClient) mountedImageHit(startTime time.Time, request *types.ContainerRequest, phase string) (time.Duration, bool) {
+func (c *ImageClient) mountedImageHit(startTime time.Time, request *types.ContainerRequest, phase string) bool {
 	if !c.mountedImageReady(request.ImageId) {
-		return 0, false
+		return false
 	}
 
 	elapsed := time.Since(startTime)
@@ -522,7 +574,7 @@ func (c *ImageClient) mountedImageHit(startTime time.Time, request *types.Contai
 	}
 	metrics.RecordWorkerStartupPhase(phase, elapsed, request, attrs)
 	c.recordImageLifecycle(request, types.ContainerLifecycleID("image."+phase), startTime, elapsed, true, attrs)
-	return elapsed, true
+	return true
 }
 
 func (c *ImageClient) recordImageLifecycle(request *types.ContainerRequest, id types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, attrs map[string]string) {

@@ -360,7 +360,7 @@ func (c *Client) preferredLocalStores() []clientLocalStore {
 // so callers can skip building their own on-disk replica of it.
 func (c *Client) LocalContentComplete(hash string) bool {
 	for _, candidate := range c.preferredLocalStores() {
-		if candidate.store.Exists(hash) {
+		if candidate.store.contentStatusForRead(hash) == contentStatusComplete {
 			return true
 		}
 	}

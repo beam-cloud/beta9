@@ -14,8 +14,8 @@ package cache
 // Content recency also persists as the complete marker's mtime, refreshed on
 // read (throttled), so it survives a restart. When filesystem usage crosses the
 // eviction watermark, the store first deletes unprotected stale content. If the
-// node remains under pressure, it can evict newer unprotected content while
-// preserving protected content even when new writes must be refused.
+// node remains under pressure, new writes are refused while recent reads,
+// fresh writes and protected content remain available.
 
 import (
 	"errors"
@@ -34,8 +34,7 @@ const (
 	// evictionAccessTouchInterval throttles per-hash marker mtime updates on
 	// the read path.
 	evictionAccessTouchInterval = 5 * time.Minute
-	// evictionRecentAccessGuard preserves hot content during normal eviction.
-	// Hard disk pressure may still evict it to keep the node healthy.
+	// evictionRecentAccessGuard bridges reads to required-content reconciliation.
 	evictionRecentAccessGuard = 10 * time.Minute
 	// evictionRecentStoreGuard orders content written this recently last in
 	// every pass: a volume write is read minutes later by another container,
@@ -69,6 +68,14 @@ type contentEntry struct {
 	// completedAt is when this process wrote the complete marker; zero for
 	// entries learned from a disk walk.
 	completedAt time.Time
+}
+
+func (entry contentEntry) matchesLayout(pageSize int64, expectedSize ...int64) bool {
+	if entry.pageSize != pageSize {
+		return false
+	}
+	return len(expectedSize) == 0 || expectedSize[0] <= 0 ||
+		(entry.size == expectedSize[0] && entry.pageCount == (expectedSize[0]+pageSize-1)/pageSize)
 }
 
 type contentIndex struct {
@@ -137,6 +144,23 @@ func (idx *contentIndex) touch(hash string, now time.Time, interval time.Duratio
 	entry.lastAccess = now
 	idx.entries[hash] = entry
 	return true, persist
+}
+
+// touchComplete validates and renews a read before eviction can forget it.
+func (idx *contentIndex) touchComplete(hash string, pageSize int64, now time.Time, expectedSize ...int64) (status string, persist bool) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	entry, ok := idx.entries[hash]
+	if !ok || !entry.complete {
+		return contentStatusMissing, false
+	}
+	if !entry.matchesLayout(pageSize, expectedSize...) {
+		return contentStatusSizeMismatch, false
+	}
+	persist = now.Sub(entry.lastAccess) >= evictionAccessTouchInterval
+	entry.lastAccess = now
+	idx.entries[hash] = entry
+	return contentStatusComplete, persist
 }
 
 // bytes is the size of every indexed object: the content on this disk that
@@ -313,7 +337,7 @@ func (cas *Store) maybeEvictDiskCache(snapshot diskUsageSnapshot) bool {
 
 	started := time.Now()
 	protected := cas.protectedContentSnapshot()
-	evicted, freed := cas.evictLRUWithProtected(bytesToFree, protected, true)
+	evicted, freed := cas.evictLRUWithProtected(bytesToFree, protected)
 
 	if evicted == 0 {
 		total, protectedCount, recentCount, evictableCount := cas.evictionCandidateStats(protected)
@@ -353,10 +377,10 @@ func (cas *Store) emitDiskEvictionChurn(status string, snapshot diskUsageSnapsho
 // have been reclaimed. Returns the number of objects evicted and the bytes
 // freed.
 func (cas *Store) evictLRU(bytesToFree int64) (int, int64) {
-	return cas.evictLRUWithProtected(bytesToFree, nil, false)
+	return cas.evictLRUWithProtected(bytesToFree, nil)
 }
 
-func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]struct{}, allowRecent bool) (int, int64) {
+func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]struct{}) (int, int64) {
 	if bytesToFree <= 0 {
 		return 0, 0
 	}
@@ -380,14 +404,9 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 		if _, ok := protected[candidate.hash]; ok {
 			continue
 		}
-		// A non-nil protection set also guards fresh writes. Only the
-		// unprotected pruning may evict them once their store guard expires.
-		if protected != nil && candidate.completedAt.After(storeCutoff) {
-			break
-		}
 		// Oldest-first order: once we reach recently-read content, nothing
 		// after it is evictable either.
-		if !allowRecent && (candidate.lastAccess.After(cutoff) || candidate.completedAt.After(storeCutoff)) {
+		if candidate.lastAccess.After(cutoff) || candidate.completedAt.After(storeCutoff) {
 			break
 		}
 		remove := cas.removeContent
@@ -526,7 +545,16 @@ var errContentTouched = errors.New("content touched since it was chosen for evic
 // behind is re-indexed as an abandoned write so the next pass retries it
 // rather than leaking it until the rescan.
 func (cas *Store) removeContent(candidate evictionCandidate) error {
-	defer cas.lockObject(candidate.hash)()
+	defer cas.lockObject(candidate.hash).Unlock()
+	// A local page-file view has its own index, but persists reads here.
+	if info, err := os.Stat(cas.completeMarkerPath(candidate.hash)); err == nil {
+		if info.ModTime().After(candidate.lastAccess) {
+			cas.index.touch(candidate.hash, info.ModTime(), evictionAccessTouchInterval)
+			return errContentTouched
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	if !cas.index.forgetIfUntouched(candidate.hash, candidate.lastAccess) {
 		return errContentTouched
 	}

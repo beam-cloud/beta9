@@ -159,13 +159,13 @@ func (cas *Store) pageFileBuckets() int {
 // until the complete marker is written; eviction holds it for a removal. That
 // way a removal never deletes pages out from under a completion, and a
 // completion never lands in a directory that is half deleted. Page reads and
-// on-demand single-page fills are unaffected. It returns the unlock.
-func (cas *Store) lockObject(hash string) func() {
+// on-demand single-page fills use their page lock. It returns the locked mutex.
+func (cas *Store) lockObject(hash string) *sync.Mutex {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(hash))
 	lock := &cas.objectLocks[h.Sum64()%objectLockStripeCount]
 	lock.Lock()
-	return lock.Unlock
+	return lock
 }
 
 func (cas *Store) pageLock(hash string, pageIdx int64) *sync.RWMutex {
@@ -259,7 +259,7 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 		return errDiskCacheCapacity
 	}
 	if writeToDisk {
-		defer cas.lockObject(hash)()
+		defer cas.lockObject(hash).Unlock()
 	}
 	if writeToDisk {
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
@@ -389,7 +389,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	}
 
 	hash := hex.EncodeToString(hasher.Sum(nil))
-	defer cas.lockObject(hash)()
+	defer cas.lockObject(hash).Unlock()
 	dirPath := cas.pageDir(hash)
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return "", size, fmt.Errorf("failed to create cache directory: %w", err)
@@ -550,8 +550,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		if actualHash != expectedHash {
 			return actualHash, 0, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
 		}
-		unlock := cas.lockObject(expectedHash)
-		defer unlock()
+		defer cas.lockObject(expectedHash).Unlock()
 		if err := os.MkdirAll(cas.pageDir(expectedHash), 0755); err != nil {
 			return "", 0, fmt.Errorf("failed to create cache directory: %w", err)
 		}
@@ -743,7 +742,7 @@ func writePrivateCacheChunk(path string, data []byte) error {
 // happens under the object lock so an eviction cannot slip between the pages
 // landing and the object being advertised.
 func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64, size int64) error {
-	defer cas.lockObject(hash)()
+	defer cas.lockObject(hash).Unlock()
 	finalDir := cas.pageDir(hash)
 	if err := os.MkdirAll(finalDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
@@ -1077,19 +1076,37 @@ func (cas *Store) ContentStatus(hash string, expectedSize ...int64) string {
 		}
 		return contentStatusMissing
 	}
-	if entry.pageSize != pageSize {
-		return contentStatusSizeMismatch
-	}
-	if !hasExpectedSize {
-		return contentStatusComplete
-	}
-
-	size := expectedSize[0]
-	pageCount := (size + pageSize - 1) / pageSize
-	if entry.size != size || entry.pageCount != pageCount {
+	if !entry.matchesLayout(pageSize, expectedSize...) {
 		return contentStatusSizeMismatch
 	}
 	return contentStatusComplete
+}
+
+// Completeness and recency change together under the index lock, without
+// waiting for the striped object lock held during a potentially long write.
+func (cas *Store) contentStatusForRead(hash string, expectedSize ...int64) string {
+	memoryHit := false
+	if cas.memoryCacheEnabled && (len(expectedSize) == 0 || expectedSize[0] <= 0) {
+		_, memoryHit = cas.cache.GetTTL(hash)
+	}
+	if cas.serverConfig.PageSizeBytes <= 0 {
+		if memoryHit {
+			return contentStatusComplete
+		}
+		return contentStatusIncomplete
+	}
+	now := time.Now()
+	status, persist := cas.index.touchComplete(hash, cas.serverConfig.PageSizeBytes, now, expectedSize...)
+	if persist {
+		_ = os.Chtimes(cas.completeMarkerPath(hash), now, now)
+	}
+	if memoryHit {
+		return contentStatusComplete
+	}
+	if status == contentStatusMissing && cas.hasAnyPages(hash) {
+		return contentStatusPartial
+	}
+	return status
 }
 
 // hasAnyPages reports whether an object directory holds at least one page. It
@@ -1355,7 +1372,6 @@ func (cas *Store) PageRegion(hash string, offset int64, length int64) (path stri
 		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, nil
 	}
-
 	pageLock := cas.pageLock(hash, pageIdx)
 	lockStarted := time.Now()
 	pageLock.RLock()
@@ -1380,6 +1396,7 @@ func (cas *Store) PageRegion(hash string, offset int64, length int64) (path stri
 	}
 	atomic.AddInt64(&cachePathStats.storePageRegionHits, 1)
 	atomic.AddInt64(&cachePathStats.storePageRegionBytes, readLength)
+	cas.touchContentAccess(hash)
 	return pagePath, pageOffset, int(readLength), true, nil
 }
 

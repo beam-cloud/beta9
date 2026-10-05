@@ -31,6 +31,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -134,10 +135,11 @@ type cacheContentReporter struct {
 	activeStubs    func(workspaceID string) []string
 	reconcileNow   func()
 
-	mu       sync.Mutex
-	pending  map[reporterKey]map[string]types.CacheRequiredContentItem
-	recent   map[reporterStubKey]struct{}
-	reported map[string]struct{}
+	mu         sync.Mutex
+	pending    map[reporterKey]map[string]types.CacheRequiredContentItem
+	recent     map[reporterStubKey]struct{}
+	reported   map[string]struct{}
+	activation singleflight.Group
 }
 
 type reporterKey struct {
@@ -191,6 +193,23 @@ func (r *cacheContentReporter) touchRecentStub(workspaceID, stubID string) {
 	r.mu.Lock()
 	r.recent[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
 	r.mu.Unlock()
+}
+
+// Concurrent starts must wait for the first owner checks before claiming the
+// report. The reporter mutex never spans those checks.
+func (r *cacheContentReporter) guardFirstActivation(stubID string, guard func()) {
+	if r == nil || stubID == "" {
+		return
+	}
+	r.activation.Do(stubID, func() (any, error) {
+		r.mu.Lock()
+		_, reported := r.reported[stubID]
+		r.mu.Unlock()
+		if !reported {
+			guard()
+		}
+		return nil, nil
+	})
 }
 
 // shouldGenerateRequiredContent reports whether this worker process has already

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,9 +28,11 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestLinkBlobInfoCacheAdoptsThenProtectsTheSharedCopy(t *testing.T) {
@@ -227,6 +230,91 @@ func TestSuccessfulImageLoadActivatesExecutingLocality(t *testing.T) {
 	reporter.mu.Lock()
 	defer reporter.mu.Unlock()
 	require.Contains(t, reporter.recent, reporterStubKey{workspaceID: "workspace", stubID: "stub"})
+}
+
+func TestMountedImageFirstActivationChecksAllCachedContentOwners(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	owner, _ := newCheckpointCacheForTest(t, ctx)
+	hashes := make(map[string]string)
+	for _, name := range []string{"layer-a", "layer-b", "canonical", "compact", "legacy"} {
+		hash, _, err := owner.StoreReader(ctx, strings.NewReader(name), "")
+		require.NoError(t, err)
+		hashes[name] = hash
+	}
+	var mu sync.Mutex
+	checked := make(map[string]bool)
+	rpc := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		response, err := handler(ctx, req)
+		if request, ok := req.(*pb.CacheHasContentRequest); ok && err == nil {
+			mu.Lock()
+			checked[request.Hash] = response.(*pb.CacheHasContentResponse).Exists
+			mu.Unlock()
+		}
+		return response, err
+	}))
+	pb.RegisterCacheServer(rpc, owner)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go rpc.Serve(listener)
+	t.Cleanup(rpc.Stop)
+	host := *owner.Host()
+	host.Addr, host.PrivateAddr = listener.Addr().String(), listener.Addr().String()
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	contentCache, err := cache.NewClientWithHostDirectory(ctx, cfg, cache.NewMockCacheMetadataStore(), testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{&host}, nil
+	}), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, contentCache.Cleanup()) })
+	require.Eventually(t, func() bool { return len(contentCache.RankedReadHosts("probe")) > 0 }, time.Second, time.Millisecond)
+
+	for _, format := range []string{"oci", "legacy"} {
+		t.Run(format, func(t *testing.T) {
+			client := &ImageClient{
+				cacheClient: contentCache, contentReporter: newTestReporter(&fakeEventRepo{}), imageCachePath: t.TempDir(),
+				registry:           &registry.ImageRegistry{ImageFileExtension: registry.RemoteImageFileExtension},
+				mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+				archiveContentMetadata: func(_ context.Context, path string) (*cache.FSMetadata, error) {
+					name := "canonical"
+					if strings.HasSuffix(path, ".batch") {
+						name = "compact"
+					} else if strings.HasSuffix(path, ".clip") {
+						name = "legacy"
+					}
+					return &cache.FSMetadata{Hash: hashes[name]}, nil
+				},
+			}
+			expected := []string{"canonical", "legacy"}
+			if format == "oci" {
+				meta := testClipV2Metadata()
+				info := meta.StorageInfo.(clipCommon.OCIStorageInfo)
+				info.DecompressedHashByLayer = map[string]string{"a": hashes["layer-a"], "b": hashes["layer-b"]}
+				meta.StorageInfo, meta.OriginalArchiveHash = info, hashes["canonical"]
+				client.archiveMetadata.Store("image", &imageRecord{metadata: meta})
+				expected = []string{"layer-a", "layer-b", "canonical", "compact"}
+			}
+			client.mountedFuseServers.Set("image", nil)
+			mu.Lock()
+			clear(checked)
+			mu.Unlock()
+			startCtx, stop := context.WithCancel(ctx)
+			stop() // A canceled first caller must not poison the shared activation.
+			_, err := client.PullLazy(startCtx, &types.ContainerRequest{ImageId: "image", StubId: format, WorkspaceId: "workspace"})
+			require.NoError(t, err)
+			mu.Lock()
+			for _, name := range expected {
+				require.True(t, checked[hashes[name]], "%s must reach its owning cache before the mounted hit returns", name)
+			}
+			mu.Unlock()
+			if format == "oci" {
+				require.Eventually(t, func() bool {
+					client.contentReporter.mu.Lock()
+					defer client.contentReporter.mu.Unlock()
+					return len(client.contentReporter.reported) == 0
+				}, time.Second, time.Millisecond)
+			}
+		})
+	}
 }
 
 func TestOCIRequiredContentIncludesMetadataBeforeCachePublication(t *testing.T) {

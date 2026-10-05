@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,6 +62,124 @@ func TestRemoveContentSkipsContentTouchedSinceItWasChosen(t *testing.T) {
 
 	require.NoError(t, store.removeContent(evictionCandidateFor(t, store, hash)))
 	require.False(t, store.Exists(hash))
+}
+
+func TestReadProbeKeepsOldContentUntilProtectionArrives(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "active-image", time.Now().Add(-2*time.Hour))
+	cold := addEvictionTestContent(t, store, "unused-image", time.Now().Add(-time.Hour))
+	candidate := evictionCandidateFor(t, store, hash)
+	server := &Server{cas: store}
+
+	response, err := server.HasContent(context.Background(), &proto.CacheHasContentRequest{Hash: hash, ExpectedSize: 999})
+	require.NoError(t, err)
+	require.False(t, response.Exists)
+	require.Equal(t, candidate.lastAccess, evictionCandidateFor(t, store, hash).lastAccess)
+	response, err = server.HasContent(context.Background(), &proto.CacheHasContentRequest{Hash: hash, ExpectedSize: int64(len("active-image"))})
+	require.NoError(t, err)
+	require.True(t, response.Exists)
+	require.ErrorIs(t, store.removeContent(candidate), errContentTouched)
+	store.SetProtectedContent(map[string]struct{}{}) // Report has not arrived yet.
+	require.True(t, store.maybeEvictDiskCache(diskUsageSnapshot{totalBytes: 1000, usedBytes: 850, availableBytes: 150, usagePct: .85}))
+	require.True(t, store.Exists(hash))
+	require.False(t, store.Exists(cold))
+}
+
+func TestMemoryHitRenewsCompleteDiskContent(t *testing.T) {
+	owner := newTestStore(t, 5)
+	cfg := owner.serverConfig
+	cfg.MaxCachePct = 1
+	store, err := NewStore(context.Background(), owner.currentHost, owner.locality, owner.metadataStore, Config{Server: cfg})
+	require.NoError(t, err)
+	t.Cleanup(store.Cleanup)
+	hash := addEvictionTestContent(t, store, "memory-and-disk", time.Now().Add(-2*time.Hour))
+	store.cache.Wait()
+	_, exists := store.cache.GetTTL(hash)
+	require.True(t, exists)
+	candidate := evictionCandidateFor(t, store, hash)
+	response, err := (&Server{cas: store}).HasContent(context.Background(), &proto.CacheHasContentRequest{Hash: hash})
+	require.NoError(t, err)
+	require.True(t, response.Exists)
+	require.ErrorIs(t, store.removeContent(candidate), errContentTouched)
+}
+
+func TestLocalViewReadKeepsOwnersEvictionCandidate(t *testing.T) {
+	for _, access := range []string{"complete", "page", "read"} {
+		t.Run(access, func(t *testing.T) {
+			owner := newTestStore(t, 5)
+			hash := addEvictionTestContent(t, owner, "shared-image", time.Now().Add(-2*time.Hour))
+			candidate := evictionCandidateFor(t, owner, hash)
+			view, err := NewStore(context.Background(), &Host{HostId: "view"}, "test", NewMockCacheMetadataStore(), Config{Server: owner.serverConfig})
+			require.NoError(t, err)
+			t.Cleanup(view.Cleanup)
+			switch access {
+			case "complete":
+				require.True(t, (&Client{localDiskStore: view}).LocalContentComplete(hash))
+			case "page":
+				_, _, n, ok, err := view.PageRegion(hash, 0, 1)
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, 1, n)
+			case "read":
+				_, err := view.ReadAt(hash, 0, make([]byte, 1))
+				require.NoError(t, err)
+			}
+			require.ErrorIs(t, owner.removeContent(candidate), errContentTouched)
+			require.True(t, owner.Exists(hash))
+			evicted, _ := owner.evictLRU(1 << 30)
+			require.Zero(t, evicted)
+		})
+	}
+}
+
+func TestMissingReadProbeDoesNotWaitForWriter(t *testing.T) {
+	store := newTestStore(t, 5)
+	defer store.lockObject("still-writing").Unlock()
+	completed := make(chan bool, 1)
+	go func() {
+		response, err := (&Server{cas: store}).HasContent(context.Background(), &proto.CacheHasContentRequest{Hash: "still-writing"})
+		completed <- err == nil && !response.Exists
+	}()
+	select {
+	case ok := <-completed:
+		require.True(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("negative completeness check blocked behind a writer")
+	}
+}
+
+func TestPageRegionPreservesIncompletePromotedPages(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := strings.Repeat("c", 64)
+	store.PutFullPages(hash, 0, []byte("firstsecond"))
+	require.False(t, store.Exists(hash))
+	path, offset, n, ok, err := store.PageRegion(hash, 0, 5)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Zero(t, offset)
+	require.Equal(t, 5, n)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "first", string(data))
+	require.False(t, store.Exists(hash))
+}
+
+func TestPositiveReadProbeDoesNotWaitForWriter(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "cached-image", time.Now().Add(-2*time.Hour))
+	defer store.lockObject(hash).Unlock() // Also held by any writer sharing this stripe.
+	completed := make(chan bool, 1)
+	go func() {
+		response, err := (&Server{cas: store}).HasContent(context.Background(), &proto.CacheHasContentRequest{Hash: hash})
+		_, _, n, ok, pageErr := store.PageRegion(hash, 0, 1)
+		completed <- err == nil && response.Exists && pageErr == nil && ok && n == 1
+	}()
+	select {
+	case ok := <-completed:
+		require.True(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("cached read blocked behind a writer")
+	}
 }
 
 func TestEvictLRURemovesOldestContentFirst(t *testing.T) {
@@ -114,17 +233,17 @@ func TestEvictLRUEvictsFreshlyStoredContentLast(t *testing.T) {
 	store.rebuildContentIndex()
 
 	// Normal pass: fresh content is guarded like recently-read content.
-	evicted, _ := store.evictLRUWithProtected(1<<30, nil, false)
+	evicted, _ := store.evictLRUWithProtected(1<<30, nil)
 	require.Equal(t, 1, evicted)
 	require.False(t, store.Exists(cold))
 	require.True(t, store.Exists(fresh))
 
-	// Under pressure the recently-read object goes before the fresh write.
-	evicted, _ = store.evictLRUWithProtected(int64(len("hot-content!")), nil, true)
-	require.Equal(t, 1, evicted)
-	require.False(t, store.Exists(hot))
+	// Pressure also keeps the read guard, even before stub protection arrives.
+	evicted, _ = store.evictLRUWithProtected(int64(len("hot-content!")), nil)
+	require.Zero(t, evicted)
+	require.True(t, store.Exists(hot))
 	require.True(t, store.Exists(fresh))
-	evicted, _ = store.evictLRUWithProtected(1<<30, map[string]struct{}{}, true)
+	evicted, _ = store.evictLRUWithProtected(1<<30, map[string]struct{}{})
 	require.Zero(t, evicted, "fresh writes survive normal pressure without any stub protection")
 }
 
@@ -135,7 +254,7 @@ func TestEvictWatermarkPctAcceptsWholePercent(t *testing.T) {
 	require.Equal(t, 0.80, store.evictWatermarkPct())
 }
 
-func TestMaybeEvictDiskCacheEvictsRecentUnprotectedBeforeProtectedContent(t *testing.T) {
+func TestMaybeEvictDiskCachePreservesRecentUnprotectedBeforeReport(t *testing.T) {
 	store := newTestStore(t, 5)
 	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
 	var events []CacheChurnEvent
@@ -156,13 +275,13 @@ func TestMaybeEvictDiskCacheEvictsRecentUnprotectedBeforeProtectedContent(t *tes
 		usagePct:       0.85,
 	})
 
-	require.True(t, evicted)
+	require.False(t, evicted)
 	require.True(t, store.Exists(protected))
-	require.False(t, store.Exists(unprotected))
+	require.True(t, store.Exists(unprotected))
 	require.Len(t, events, 1)
-	require.Equal(t, CacheChurnStatusEvicted, events[0].Status)
+	require.Equal(t, CacheChurnStatusNothingEvictable, events[0].Status)
 	require.Equal(t, CacheChurnOperationDiskEviction, events[0].Operation)
-	require.Equal(t, 1, events[0].EvictedObjects)
+	require.Zero(t, events[0].EvictedObjects)
 	require.Zero(t, events[0].ProtectedObjects)
 	require.False(t, events[0].Timestamp.IsZero())
 }
