@@ -15,6 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func stubDiskUsage(t *testing.T, stat func(string) (diskUsageSnapshot, error)) {
+	t.Helper()
+	previous := statDiskUsage
+	statDiskUsage = stat
+	t.Cleanup(func() { statDiskUsage = previous })
+}
+
 func addEvictionTestContent(t *testing.T, store *Store, content string, lastAccess time.Time) string {
 	t.Helper()
 	hash, _, err := store.AddReader(context.Background(), bytes.NewReader([]byte(content)))
@@ -455,8 +462,7 @@ func TestDiskWriteGuardEvictsBeforeRefusingAStore(t *testing.T) {
 	// The filesystem reports itself over the hard limit until something is
 	// evicted, then comfortably under it.
 	var stats, evictedAt int
-	prev := statDiskUsage
-	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 		stats++
 		if !store.Exists(old) {
 			if evictedAt == 0 {
@@ -465,8 +471,7 @@ func TestDiskWriteGuardEvictsBeforeRefusingAStore(t *testing.T) {
 			return diskUsageSnapshot{totalBytes: 1000, usedBytes: 700, availableBytes: 300, usagePct: 0.70}, nil
 		}
 		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 960, availableBytes: 40, usagePct: 0.96}, nil
-	}
-	t.Cleanup(func() { statDiskUsage = prev })
+	})
 
 	// A plain (non-evicting) refresh, as the periodic check would leave it.
 	_, err := store.refreshDiskCacheUsage(false)
@@ -492,14 +497,12 @@ func TestDiskWriteGuardEvictsStartupPressure(t *testing.T) {
 
 	old := addEvictionTestContent(t, store, "stale content nobody has read in a while", time.Now().Add(-time.Hour))
 
-	prev := statDiskUsage
-	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 		if !store.Exists(old) {
 			return diskUsageSnapshot{totalBytes: 1000, usedBytes: 700, availableBytes: 300, usagePct: 0.70}, nil
 		}
 		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 960, availableBytes: 40, usagePct: 0.96}, nil
-	}
-	t.Cleanup(func() { statDiskUsage = prev })
+	})
 
 	// What StartDiskMonitor leaves behind on a host that restarts over the
 	// limit: the gate set, no guard check on record yet.
@@ -526,8 +529,7 @@ func TestDiskWriteGuardConcurrentWritersWaitForInflightEviction(t *testing.T) {
 	evictingStat := make(chan struct{})
 	release := make(chan struct{})
 	var evictPasses int
-	prev := statDiskUsage
-	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 		if store.evictMu.TryLock() {
 			store.evictMu.Unlock()
 		} else if store.Exists(old) {
@@ -541,8 +543,7 @@ func TestDiskWriteGuardConcurrentWritersWaitForInflightEviction(t *testing.T) {
 			return diskUsageSnapshot{totalBytes: 1000, usedBytes: 700, availableBytes: 300, usagePct: 0.70}, nil
 		}
 		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 960, availableBytes: 40, usagePct: 0.96}, nil
-	}
-	t.Cleanup(func() { statDiskUsage = prev })
+	})
 
 	_, err := store.refreshDiskCacheUsage(false)
 	require.NoError(t, err)
@@ -569,11 +570,9 @@ func TestDiskWriteGuardConcurrentWritersWaitForInflightEviction(t *testing.T) {
 
 func TestDiskAdmissionAccountsForConcurrentWrites(t *testing.T) {
 	store := newTestStore(t, 5)
-	prev := statDiskUsage
-	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 		return diskUsageSnapshot{totalBytes: 1000, availableBytes: 1000}, nil
-	}
-	t.Cleanup(func() { statDiskUsage = prev })
+	})
 	first, err := store.reserveDiskWrite(600)
 	require.NoError(t, err)
 	_, err = store.reserveDiskWrite(600)
@@ -586,15 +585,14 @@ func TestDiskAdmissionAccountsForConcurrentWrites(t *testing.T) {
 }
 
 func TestDiskAdmissionStopsStreamsWithoutEvictingProtectedContent(t *testing.T) {
-	for _, method := range []string{"reader", "expected-hash", "parallel-pages"} {
+	for _, method := range []string{"reader", "expected-hash", "parallel-pages", "add"} {
 		t.Run(method, func(t *testing.T) {
 			store := newTestStore(t, 5)
 			store.serverConfig.DiskCacheMaxUsagePct = 0.95
 			protected := addEvictionTestContent(t, store, "keep", time.Now().Add(-time.Hour))
 			store.SetProtectedContent(map[string]struct{}{protected: {}})
 			store.lastDiskGuardCheckNanos.Store(time.Now().UnixNano())
-			prev := statDiskUsage
-			statDiskUsage = func(string) (diskUsageSnapshot, error) {
+			stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 				var written uint64
 				err := filepath.WalkDir(store.diskCacheDir, func(path string, entry fs.DirEntry, err error) error {
 					if err != nil {
@@ -613,12 +611,13 @@ func TestDiskAdmissionStopsStreamsWithoutEvictingProtectedContent(t *testing.T) 
 					return nil
 				})
 				return diskUsageSnapshot{totalBytes: 1000, usedBytes: 940 + written, availableBytes: 60 - written, usagePct: float64(940+written) / 1000}, err
-			}
-			t.Cleanup(func() { statDiskUsage = prev })
+			})
 			content := []byte("more-than-one-page")
 			hash := fmt.Sprintf("%x", sha256.Sum256(content))
 			var err error
 			switch method {
+			case "add":
+				err = store.Add(context.Background(), hash, content)
 			case "reader":
 				_, _, err = store.AddReader(context.Background(), bytes.NewReader(content))
 			case "expected-hash":
@@ -631,6 +630,10 @@ func TestDiskAdmissionStopsStreamsWithoutEvictingProtectedContent(t *testing.T) 
 			}
 			require.ErrorContains(t, err, "disk cache capacity exceeded")
 			require.False(t, store.Exists(hash), "refused content must not be advertised complete")
+			if method == "add" {
+				_, statErr := os.Stat(store.pageDir(hash))
+				require.True(t, os.IsNotExist(statErr), "mid-stream refusal must remove published partial pages")
+			}
 			require.True(t, store.Exists(protected))
 			require.Zero(t, store.diskWrites.pending)
 		})

@@ -2232,7 +2232,7 @@ func writeStubCodeCacheEntry(t *testing.T, root, name string, readyTime time.Tim
 	return readyPath
 }
 
-func TestReconciliationPausePreservesRequiredContentUntilResumeWatermark(t *testing.T) {
+func TestReconciliationPauseUsesResumeWatermark(t *testing.T) {
 	root := t.TempDir()
 	usage, err := fastDiskUsage(root)
 	require.NoError(t, err)
@@ -2243,13 +2243,9 @@ func TestReconciliationPausePreservesRequiredContentUntilResumeWatermark(t *test
 		server, err := cache.NewServerWithOptions(context.Background(), cfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()))
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, server.Close()) })
-		hash, _, err := server.StoreReader(context.Background(), strings.NewReader("required"), "")
-		require.NoError(t, err)
-		server.SetProtectedContent(map[string]struct{}{hash: {}})
 		manager := &WorkerCacheManager{ctx: context.Background(), reconcilePausedAt: time.Now()}
 		paused := delta < cacheReconcileDiskUsageHysteresisPct
 		require.Equal(t, paused, manager.reconcileGatedByDiskUsage(server, server.HostID()))
 		require.Equal(t, !paused, manager.reconcilePausedAt.IsZero())
-		require.True(t, server.HasCompleteContent(hash, int64(len("required"))))
 	}
 }

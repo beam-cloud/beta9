@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,9 +56,13 @@ type testPresenceClient struct {
 	proto.CacheClient
 	cancel context.CancelFunc
 	exists bool
+	calls  *atomic.Int32
 }
 
 func (c testPresenceClient) HasContent(ctx context.Context, _ *proto.CacheHasContentRequest, _ ...grpc.CallOption) (*proto.CacheHasContentResponse, error) {
+	if c.calls != nil {
+		c.calls.Add(1)
+	}
 	if c.cancel != nil {
 		c.cancel()
 		return nil, ctx.Err()
@@ -561,7 +567,7 @@ func TestReadContentIntoRecoversFromUnavailablePrimaryWithLocalReplica(t *testin
 	require.NoError(t, err)
 }
 
-func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.T) {
+func TestReadContentIntoReadsContentFromNewlyDiscoveredHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -635,8 +641,10 @@ func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.
 	readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer readCancel()
 	dst := make([]byte, len(content))
-	_, err = client.ReadContentInto(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
-	require.ErrorIs(t, err, ErrContentNotFound)
+	n, err := client.ReadContentInto(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
 }
 
 func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
@@ -2705,4 +2713,44 @@ func TestReadsRefreshDirectoryAfterKnownHostsMiss(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestMissingContentHostRefreshCoalescesAndBoundsMisses(t *testing.T) {
+	host := &Host{HostId: "known", Addr: "127.0.0.1:2050"}
+	client := newSharedLocalDiskClient(nil, host)
+	client.hostMap = NewHostMap(GlobalConfig{}, nil)
+	client.hostMap.Set(host)
+	var presence, refreshes atomic.Int32
+	client.grpcClients[host.HostId] = testPresenceClient{calls: &presence}
+	started, release := make(chan struct{}), make(chan struct{})
+	client.hostDirectory = testHostDirectoryFunc(func(ctx context.Context, _ string) ([]*Host, error) {
+		if refreshes.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-release:
+			return []*Host{host}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	const callers = 16
+	var ready, done sync.WaitGroup
+	ready.Add(callers)
+	done.Add(callers)
+	for range callers {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			ready.Wait()
+			exists, err := client.IsCachedReachableContext(context.Background(), "hash", "hash")
+			require.NoError(t, err)
+			require.False(t, exists)
+		}()
+	}
+	<-started
+	done.Wait() // Slow directory never blocks beyond the bounded miss refresh.
+	close(release)
+	require.EqualValues(t, 1, refreshes.Load())
+	require.EqualValues(t, callers, presence.Load(), "unchanged endpoints are never probed twice")
 }

@@ -400,11 +400,13 @@ func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {
 	store.diskCachedUsageExceeded = false
 	store.lastDiskGuardCheckNanos.Store(time.Now().UnixNano())
 	require.NoError(t, os.MkdirAll(cacheDir, 0700))
-	previous := statDiskUsage
-	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+	store.serverConfig.DiskCacheMaxUsagePct = 100
+	kept := []byte("old")
+	keptHash := fmt.Sprintf("%x", sha256.Sum256(kept))
+	require.NoError(t, store.Add(context.Background(), keptHash, kept))
+	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 940, availableBytes: 60, usagePct: .94}, nil
-	}
-	t.Cleanup(func() { statDiskUsage = previous })
+	})
 	store.serverConfig.DiskCacheMaxUsagePct = .95
 	for _, method := range []string{"reader", "add"} {
 		content := []byte(method)
@@ -417,6 +419,36 @@ func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {
 		require.ErrorIs(t, err, errDiskCacheCapacity)
 		store.cache.Wait()
 		require.False(t, store.Exists(hash), "refused completion must not advertise a RAM-only object")
+		_, err = os.Stat(store.pageDir(hash))
+		require.True(t, os.IsNotExist(err), "refused completion must remove new pages")
+	}
+	for _, unindexed := range []bool{false, true} {
+		if unindexed {
+			store.index.forget(keptHash) // A different Store can have published the marker.
+		}
+		require.ErrorIs(t, store.Add(context.Background(), keptHash, kept), errDiskCacheCapacity)
+		_, _, _, complete := store.completeMarker(keptHash)
+		require.True(t, complete, "failed replacement must retain the existing complete object")
+	}
+
+	store.diskConfig.Enabled = false
+	for _, used := range []uint64{940, 949} {
+		store.lastDiskGuardCheckNanos.Store(time.Now().UnixNano())
+		statDiskUsage = func(string) (diskUsageSnapshot, error) {
+			return diskUsageSnapshot{totalBytes: 1000, usedBytes: used, availableBytes: 1000 - used, usagePct: float64(used) / 1000}, nil
+		}
+		content := []byte(fmt.Sprintf("ram-only-%d", used))
+		hash := fmt.Sprintf("%x", sha256.Sum256(content))
+		require.NoError(t, store.Add(context.Background(), hash, content))
+		store.cache.Wait()
+		require.True(t, store.Exists(hash))
+		dst := make([]byte, len(content))
+		n, err := store.Get(hash, 0, int64(len(dst)), dst)
+		require.NoError(t, err)
+		require.Equal(t, int64(len(content)), n)
+		require.Equal(t, content, dst)
+		_, err = os.Stat(store.pageDir(hash))
+		require.True(t, os.IsNotExist(err))
 	}
 }
 

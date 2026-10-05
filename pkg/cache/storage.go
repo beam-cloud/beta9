@@ -285,11 +285,15 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 			filePath := filepath.Join(dirPath, chunkKey)
 			pageLock := cas.pageLock(hash, chunkIdx)
 			pageLock.Lock()
-			if err := cas.writeCachePage(filePath, chunk, true); err != nil {
-				pageLock.Unlock()
-				return fmt.Errorf("failed to write to disk cache: %w", err)
-			}
+			err := cas.writeCachePage(filePath, chunk, true)
 			pageLock.Unlock()
+			if err != nil {
+				cas.discardIncompleteContent(hash)
+				if !cas.canFallbackToMemory(err) {
+					return fmt.Errorf("failed to write to disk cache: %w", err)
+				}
+				writeToDisk = false
+			}
 		}
 
 		chunkKeys = append(chunkKeys, chunkKey)
@@ -311,7 +315,7 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	content = nil
 
 	if writeToDisk {
-		if err := cas.writeCompleteMarker(hash, size, int64(len(chunkKeys))); err != nil {
+		if err := cas.writeCompleteMarker(hash, size, int64(len(chunkKeys))); err != nil && !cas.canFallbackToMemory(err) {
 			return err
 		}
 	}
@@ -975,14 +979,36 @@ func (cas *Store) writeCompleteMarker(hash string, size int64, pageCount int64) 
 	marker := fmt.Sprintf("v1 size=%d page_size=%d pages=%d\n", size, cas.serverConfig.PageSizeBytes, pageCount)
 	reservation, err := cas.reserveDiskWrite(len(marker))
 	if err != nil {
+		cas.discardIncompleteContent(hash)
 		return err
 	}
 	defer reservation.release()
 	if err := writeCacheMetadataAtomic(cas.completeMarkerPath(hash), []byte(marker)); err != nil {
+		cas.discardIncompleteContent(hash)
 		return fmt.Errorf("failed to write cache complete marker: %w", err)
 	}
 	cas.indexCompleteContent(hash, size, pageCount)
 	return nil
+}
+
+func (cas *Store) canFallbackToMemory(err error) bool {
+	return cas.memoryCacheEnabled && !cas.diskConfig.Enabled && errors.Is(err, errDiskCacheCapacity)
+}
+
+// Caller holds the object lock; a failed replacement must retain prior content.
+func (cas *Store) discardIncompleteContent(hash string) {
+	if entry, ok := cas.index.get(hash); ok && entry.complete {
+		return
+	}
+	if _, _, _, complete := cas.completeMarker(hash); complete {
+		return
+	}
+	cas.index.forget(hash)
+	dir := cas.pageDir(hash)
+	if err := os.RemoveAll(dir); err != nil {
+		cas.retainForRetry(evictionCandidate{hash: hash, dir: dir}, dirSizeBytes(dir))
+		Logger.Warnf("failed to discard incomplete cache content %s: %v", hash, err)
+	}
 }
 
 func writeCacheMetadataAtomic(filePath string, data []byte) error {
