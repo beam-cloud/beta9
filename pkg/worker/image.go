@@ -590,12 +590,10 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
 	} else {
-		if localArchivePath, ok := c.restoreV1ArchiveDataCache(ctx, request, archive.sourceRegistry); ok {
+		if localArchivePath, ok := c.restoreV1ArchiveDataCache(ctx, request, &archive); ok {
 			archive.path = localArchivePath
 			archive.sourceRegistry = nil
 			archive.storageMode = string(clipCommon.StorageModeLocal)
-		} else if archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "" {
-			archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
 		}
 	}
 	return archive, nil
@@ -681,11 +679,15 @@ func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.C
 	if !ok {
 		return requiredContentReport{}, false
 	}
+	return c.clipV1ArchiveReport(request.ImageId, item)
+}
+
+func (c *ImageClient) clipV1ArchiveReport(imageID string, item types.CacheRequiredContentItem) (requiredContentReport, bool) {
 	report := requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}}
 	if c.usesRemoteMetadataArchive() {
-		metadata, err := c.imageMetadataRequiredContent(request.ImageId, "", nil)
+		metadata, err := c.imageMetadataRequiredContent(imageID, "", nil)
 		if err != nil {
-			log.Warn().Err(err).Str("image_id", request.ImageId).Msg("failed to describe required image metadata")
+			log.Warn().Err(err).Str("image_id", imageID).Msg("failed to describe required image metadata")
 			return report, false
 		}
 		report.items = append(report.items, metadata)
@@ -921,7 +923,7 @@ func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive 
 	return ""
 }
 
-func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, sourceRegistry *types.S3ImageRegistryConfig) (path string, ok bool) {
+func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, archive *lazyImageArchive) (path string, ok bool) {
 	if request == nil || c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
 		return "", false
 	}
@@ -954,9 +956,10 @@ func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *ty
 		}
 	}
 
-	if sourceRegistry == nil || sourceRegistry.BucketName == "" {
-		sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
+	if archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "" {
+		archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
 	}
+	sourceRegistry := archive.sourceRegistry
 	brokeredOnly := (sourceRegistry == nil || sourceRegistry.BucketName == "") && c.brokeredImageAccessRequest(request)
 	lockWait := embeddedImageCacheLockWaitTimeout
 	if brokeredOnly {
@@ -1052,7 +1055,7 @@ func (c *ImageClient) completeV1ArchiveCache(request *types.ContainerRequest) {
 			return
 		case outcome := <-result:
 			if item, ok := outcome.Val.(types.CacheRequiredContentItem); outcome.Err == nil && ok && item.Hash != "" {
-				report, complete := c.imageRequiredContent(ctx, request, nil)
+				report, complete := c.clipV1ArchiveReport(imageID, item)
 				if c.publishRequiredContent(request, report) && !complete {
 					c.contentReporter.mu.Lock()
 					delete(c.contentReporter.reported, cacheRequestStubID(request))

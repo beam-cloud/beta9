@@ -459,30 +459,35 @@ func TestWaitForV1ArchiveCacheSeedsExistingMetadata(t *testing.T) {
 	fake := &fakeEventRepo{}
 	client.contentReporter = newTestReporter(fake)
 	request := &types.ContainerRequest{ImageId: "image", WorkspaceId: "workspace", StubId: "stub"}
+	lookups := 0
+	client.archiveContentMetadata = func(context.Context, string) (*cache.FSMetadata, error) {
+		lookups++
+		if lookups > 1 {
+			return nil, errors.New("metadata unavailable")
+		}
+		return metadata, nil
+	}
 	client.completeV1ArchiveCache(request)
 	client.contentReporter.flush()
 	require.Len(t, fake.pushed, 1)
 	require.Len(t, fake.pushed[0].Items, 1)
+	require.Equal(t, 1, lookups, "retain the known data item without a second metadata lookup")
 	require.Empty(t, client.contentReporter.reported)
 	parsed, err := clip.NewClipArchiver().ExtractMetadata(restoredPath)
 	require.NoError(t, err)
 	require.NoError(t, clip.NewClipArchiver().CreateRemoteArchive(clipCommon.S3StorageInfo{Bucket: "images", Key: "image.clip"}, parsed, client.localArchivePath("image")))
 	metadataData, err := os.ReadFile(client.localArchivePath("image"))
 	require.NoError(t, err)
+	lookups = 0
 	client.completeV1ArchiveCache(request)
 	client.contentReporter.flush()
 	require.Len(t, fake.pushed, 2)
 	require.Len(t, fake.pushed[1].Items, 2)
-	var metadataItem types.CacheRequiredContentItem
-	for _, item := range fake.pushed[1].Items {
-		if item.RoutingKey == "/images/image.rclip" {
-			metadataItem = item
-		}
-	}
-	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(metadataData)), metadataItem.Hash)
-	require.Equal(t, int64(len(metadataData)), metadataItem.SizeBytes)
-	require.Equal(t, "/images/image.rclip", metadataItem.RoutingKey)
-	require.Equal(t, "image.rclip", metadataItem.Source)
+	metadataHash := fmt.Sprintf("%x", sha256.Sum256(metadataData))
+	require.Contains(t, fake.pushed[1].Items, types.CacheRequiredContentItem{
+		Hash: metadataHash, ExpectedHash: metadataHash, SizeBytes: int64(len(metadataData)),
+		RoutingKey: "/images/image.rclip", Source: "image.rclip", ImageID: "image", Kind: types.CacheContentKindClipV1,
+	})
 
 	// A complete local archive does not ask the gateway for origin credentials.
 	workerRepo := &fakeImageCredentialWorkerRepo{err: errFakeGatewayUnavailable}
@@ -507,7 +512,7 @@ func TestRestoreV1ArchiveDataCacheRemovesDirectoryTarget(t *testing.T) {
 			RegistryStore: registry.S3ImageRegistryStore,
 		}},
 	}
-	_, ok := client.restoreV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, nil)
+	_, ok := client.restoreV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, &lazyImageArchive{})
 
 	require.False(t, ok)
 	require.NoDirExists(t, targetPath)
@@ -526,14 +531,16 @@ func TestRestoreV1ArchiveDataCacheDefersLargeRemoteArchive(t *testing.T) {
 		},
 	}
 
+	archive := lazyImageArchive{}
 	path, ok := client.restoreV1ArchiveDataCache(
 		context.Background(),
 		&types.ContainerRequest{ImageId: "image"},
-		nil,
+		&archive,
 	)
 
 	require.False(t, ok)
 	require.Empty(t, path)
+	require.Equal(t, "images", archive.sourceRegistry.BucketName)
 }
 
 func TestGetBuildContextDoesNotFallBackToWorkspaceFuseMount(t *testing.T) {

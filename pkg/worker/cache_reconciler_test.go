@@ -2052,7 +2052,7 @@ func TestEnsureV1ArchiveDataCacheUsesExistingLocalArchive(t *testing.T) {
 			ImageService: types.ImageServiceConfig{RegistryStore: registry.S3ImageRegistryStore},
 		},
 	}
-	path, ok := client.restoreV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, nil)
+	path, ok := client.restoreV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, &lazyImageArchive{})
 	require.True(t, ok)
 	require.Equal(t, archivePath, path)
 }
