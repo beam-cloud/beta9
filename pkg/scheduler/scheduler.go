@@ -1134,7 +1134,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	gpuRequestsMap := map[string]int{}
 	var checkpoint *types.Checkpoint
 	if candidate := availableCheckpoint(request); canSkipCheckpoint(request) ||
-		(candidate.RequiresNativeGPUProfile() && !candidate.IsFilesystemOnly()) {
+		(candidate.RequiresGPUDeviceSpec() && !candidate.IsFilesystemOnly()) {
 		checkpoint = candidate
 	}
 	requiresGPU := request.RequiresGPU()
@@ -1239,7 +1239,7 @@ func hostMatchesCheckpoint(checkpoint *types.Checkpoint, worker *types.Worker) b
 		return true
 	}
 	return worker.Status == types.WorkerStatusPending && worker.CheckpointCompatibilityKey == "" &&
-		!checkpoint.RequiresNativeGPUProfile()
+		!checkpoint.RequiresGPUDeviceSpec()
 }
 
 func checkpointRuntime(request *types.ContainerRequest) string {

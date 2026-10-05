@@ -629,9 +629,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 		s.prepareCheckpointForWorker(ctx, request)
 	}
 	if !request.Stub.Type.IsDeployment() && hasAvailableCheckpoint(request) && !request.Checkpoint.IsFilesystemOnly() &&
-		(strings.HasPrefix(s.checkpointCompatibilityKey, types.CheckpointCompatibilityNativeGPUPrefix) || request.Checkpoint.RequiresNativeGPUProfile()) &&
+		(strings.HasPrefix(s.checkpointCompatibilityKey, types.CheckpointCompatibilityGPUDevicesPrefix) || request.Checkpoint.RequiresGPUDeviceSpec()) &&
 		!request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) {
-		return &ErrCheckpointHostIncompatible{Stderr: "checkpoint does not match this worker's native GPU profile"}
+		return &ErrCheckpointHostIncompatible{Stderr: "checkpoint does not match this worker's compatibility profile"}
 	}
 	if err := validateCheckpointRestoreRuntime(request, s.runtime); err != nil {
 		return err

@@ -159,8 +159,8 @@ func (p checkpointHostProfile) key() string {
 	data, _ := json.Marshal(p)
 	prefix := types.CheckpointCompatibilityLegacyPrefix
 	if p.Runtime == types.ContainerRuntimeGvisor.String() && len(p.GPU) > 0 {
-		// Native CDI retains NVIDIA devices in the spec; older workers cleared them.
-		prefix = types.CheckpointCompatibilityNativeGPUPrefix
+		// gVisor keeps NVIDIA device entries; older workers cleared them.
+		prefix = types.CheckpointCompatibilityGPUDevicesPrefix
 	}
 	return fmt.Sprintf("%s%x", prefix, sha256.Sum256(data))
 }

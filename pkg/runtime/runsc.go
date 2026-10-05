@@ -118,15 +118,16 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	}
 
 	spec.Linux.Seccomp = nil
-	if r.hasGPUDevices(spec) {
-		if spec.Annotations == nil {
-			spec.Annotations = make(map[string]string)
-		}
-		spec.Annotations[runscGPUAnnotation] = "true"
-		r.mountCudaCheckpoint(spec)
-	} else if spec.Annotations != nil {
+	if !r.hasGPUDevices(spec) {
 		delete(spec.Annotations, runscGPUAnnotation)
+		spec.Linux.Devices = nil
+		return nil
 	}
+	if spec.Annotations == nil {
+		spec.Annotations = make(map[string]string)
+	}
+	spec.Annotations[runscGPUAnnotation] = "true"
+	r.mountCudaCheckpoint(spec)
 
 	if spec.Process == nil || !slices.ContainsFunc(spec.Linux.Devices, func(device specs.LinuxDevice) bool {
 		return device.Path == "/dev/nvidiactl"
@@ -142,10 +143,9 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		return !strings.HasPrefix(device.Path, "/dev/nvidia")
 	})
 	if spec.Hooks != nil {
-		for i := range spec.Hooks.CreateContainer {
-			hook := &spec.Hooks.CreateContainer[i]
+		for i, hook := range spec.Hooks.CreateContainer {
 			if strings.HasSuffix(hook.Path, "/nvidia-cdi-hook") && !slices.Contains(hook.Env, "GOMAXPROCS=1") {
-				hook.Env = append(hook.Env, "GOMAXPROCS=1")
+				spec.Hooks.CreateContainer[i].Env = append(hook.Env, "GOMAXPROCS=1")
 			}
 		}
 	}
@@ -682,18 +682,18 @@ func (r *Runsc) bundleUsesGPU(bundlePath string) (bool, error) {
 	return spec.Annotations[runscGPUAnnotation] == "true" || r.hasGPUDevices(&spec), nil
 }
 
-// alignRestoreSpec preserves the checkpoint's virtual cgroup mount and GPU
-// injection mode. Every other mount is left alone so real mismatches surface.
+// alignRestoreSpec preserves the saved NVIDIA device layout and virtual cgroup
+// mount. Every other mount is left alone so real mismatches surface.
 func alignRestoreSpec(bundlePath, imagePath string) error {
 	if bundlePath == "" || imagePath == "" {
 		return nil
 	}
 
-	checkpointSpecs, err := readRunscCheckpointSpecs(imagePath)
+	saved, err := readRunscCheckpointSpec(imagePath)
 	if err != nil {
 		return err
 	}
-	checkpointMount, checkpointHasMount := findMount(mergeSpecMounts(checkpointSpecs), sandboxCgroupMountDestination)
+	checkpointMount, checkpointHasMount := findMount(saved.Mounts, sandboxCgroupMountDestination)
 
 	configPath := filepath.Join(bundlePath, "config.json")
 	config, err := os.ReadFile(configPath)
@@ -705,36 +705,32 @@ func alignRestoreSpec(bundlePath, imagePath string) error {
 		return fmt.Errorf("decode restore bundle: %w", err)
 	}
 	restoreMount, restoreHasMount := findMount(spec.Mounts, sandboxCgroupMountDestination)
-	legacyGPU := false
-	if spec.Linux != nil && len(spec.Linux.Devices) > 0 && spec.Annotations[runscGPUAnnotation] == "true" {
-		for _, saved := range checkpointSpecs {
-			if saved != nil && saved.Annotations[runscGPUAnnotation] == "true" && (saved.Linux == nil || len(saved.Linux.Devices) == 0) {
-				legacyGPU = true
-			}
-		}
+	devicesCleared := spec.Linux != nil && len(spec.Linux.Devices) > 0 && spec.Annotations[runscGPUAnnotation] == "true" &&
+		saved.Annotations[runscGPUAnnotation] == "true" && (saved.Linux == nil || len(saved.Linux.Devices) == 0)
+	if devicesCleared {
+		// Older checkpoints saved no NVIDIA device entries.
+		spec.Linux.Devices = nil
 	}
-	if !legacyGPU && checkpointHasMount == restoreHasMount && (!restoreHasMount || mountsEqual(checkpointMount, restoreMount)) {
+	mountChanged := checkpointHasMount != restoreHasMount || !mountsEqual(checkpointMount, restoreMount)
+	if !devicesCleared && !mountChanged {
 		return nil
 	}
-	if legacyGPU {
-		// Existing checkpoints used legacy injection. Keep their spec and select
-		// this worker's assigned GPU instead of the checkpoint's original GPU.
-		spec.Linux.Devices = nil
-		if spec.Process != nil {
-			for _, env := range spec.Process.Env {
-				if devices, ok := strings.CutPrefix(env, types.WorkerGPUDevicesEnv+"="); ok {
-					spec.Process.Env = nvidiaVisibleDevices(spec.Process.Env, devices)
-					break
-				}
+	if devicesCleared && spec.Process != nil {
+		for _, env := range spec.Process.Env {
+			if devices, ok := strings.CutPrefix(env, types.WorkerGPUDevicesEnv+"="); ok {
+				spec.Process.Env = nvidiaVisibleDevices(spec.Process.Env, devices)
+				break
 			}
 		}
 	}
 
-	spec.Mounts = slices.DeleteFunc(spec.Mounts, func(m specs.Mount) bool {
-		return filepath.Clean(m.Destination) == sandboxCgroupMountDestination
-	})
-	if checkpointHasMount {
-		spec.Mounts = append(spec.Mounts, checkpointMount)
+	if mountChanged {
+		spec.Mounts = slices.DeleteFunc(spec.Mounts, func(m specs.Mount) bool {
+			return filepath.Clean(m.Destination) == sandboxCgroupMountDestination
+		})
+		if checkpointHasMount {
+			spec.Mounts = append(spec.Mounts, checkpointMount)
+		}
 	}
 
 	updated, err := json.Marshal(&spec)
@@ -747,16 +743,16 @@ func alignRestoreSpec(bundlePath, imagePath string) error {
 	log.Info().
 		Str("bundle", bundlePath).
 		Bool("checkpoint_mounts_cgroup", checkpointHasMount).
-		Bool("legacy_gpu", legacyGPU).
+		Bool("devices_cleared", devicesCleared).
 		Msg("aligned restore spec with checkpoint")
 	return nil
 }
 
-// readRunscCheckpointSpecs returns the OCI specs runsc saved alongside a
-// checkpoint. A runsc state file opens with an 8-byte magic, an 8-byte
+// readRunscCheckpointSpec returns the outer container's saved OCI spec.
+// A runsc state file opens with an 8-byte magic, an 8-byte
 // big-endian metadata length and a JSON string map; the specs are the map's
 // "container_specs" entry, keyed by container name.
-func readRunscCheckpointSpecs(imagePath string) (map[string]*specs.Spec, error) {
+func readRunscCheckpointSpec(imagePath string) (*specs.Spec, error) {
 	image, err := os.Open(filepath.Join(imagePath, runscCheckpointImageName))
 	if err != nil {
 		return nil, fmt.Errorf("open checkpoint image: %w", err)
@@ -791,20 +787,15 @@ func readRunscCheckpointSpecs(imagePath string) (map[string]*specs.Spec, error) 
 	if err := json.Unmarshal([]byte(rawSpecs), &containerSpecs); err != nil {
 		return nil, fmt.Errorf("decode checkpoint container specs: %w", err)
 	}
-	if len(containerSpecs) == 0 {
-		return nil, fmt.Errorf("checkpoint metadata has no container specs")
+	if len(containerSpecs) != 1 {
+		return nil, fmt.Errorf("checkpoint requires one container spec, got %d", len(containerSpecs))
 	}
-	return containerSpecs, nil
-}
-
-func mergeSpecMounts(containerSpecs map[string]*specs.Spec) []specs.Mount {
-	var mounts []specs.Mount
 	for _, spec := range containerSpecs {
 		if spec != nil {
-			mounts = append(mounts, spec.Mounts...)
+			return spec, nil
 		}
 	}
-	return mounts
+	return nil, fmt.Errorf("checkpoint container spec is nil")
 }
 
 func findMount(mounts []specs.Mount, destination string) (specs.Mount, bool) {

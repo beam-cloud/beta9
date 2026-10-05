@@ -466,22 +466,22 @@ type Checkpoint struct {
 const CheckpointRuntimeFilesystem = "filesystem"
 
 const (
-	CheckpointCompatibilityLegacyPrefix    string = "v1:"
-	CheckpointCompatibilityNativeGPUPrefix string = "v2:"
+	CheckpointCompatibilityLegacyPrefix     string = "v1:"
+	CheckpointCompatibilityGPUDevicesPrefix string = "v2:"
 )
 
 func (c *Checkpoint) IsFilesystemOnly() bool {
 	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), CheckpointRuntimeFilesystem)
 }
 
-// RequiresNativeGPUProfile identifies checkpoints whose specs retain CDI's
-// NVIDIA devices, which older workers clear before restore.
-func (c *Checkpoint) RequiresNativeGPUProfile() bool {
-	return c != nil && strings.HasPrefix(c.CompatibilityKey, CheckpointCompatibilityNativeGPUPrefix)
+// RequiresGPUDeviceSpec identifies checkpoints with saved NVIDIA device entries.
+// Workers that clear those entries cannot restore them.
+func (c *Checkpoint) RequiresGPUDeviceSpec() bool {
+	return c != nil && strings.HasPrefix(c.CompatibilityKey, CheckpointCompatibilityGPUDevicesPrefix)
 }
 
-// CompatibleWithWorker allows native GPU workers to restore the same legacy
-// host profile; legacy workers cannot restore native GPU checkpoint specs.
+// CompatibleWithWorker lets workers retaining NVIDIA devices restore matching
+// older checkpoints; older workers cannot restore checkpoints retaining devices.
 func (c *Checkpoint) CompatibleWithWorker(key string) bool {
 	if c == nil || c.CompatibilityKey == "" || key == "" {
 		return false
@@ -493,8 +493,8 @@ func (c *Checkpoint) CompatibleWithWorker(key string) bool {
 	if !legacy || checkpointProfile == "" {
 		return false
 	}
-	workerProfile, native := strings.CutPrefix(key, CheckpointCompatibilityNativeGPUPrefix)
-	return native && checkpointProfile == workerProfile
+	workerProfile, retainsDevices := strings.CutPrefix(key, CheckpointCompatibilityGPUDevicesPrefix)
+	return retainsDevices && checkpointProfile == workerProfile
 }
 
 func (c *Checkpoint) ToProto() *pb.Checkpoint {

@@ -55,7 +55,7 @@ func TestPruneUnreachableSDKMountsKeepsOnlyPresentSitePackages(t *testing.T) {
 	}, kept)
 }
 
-func TestExplicitRestoreRejectsIncompatibleNativeGPUProfileBeforeEviction(t *testing.T) {
+func TestExplicitRestoreRejectsIncompatibleGPUDeviceSpecBeforeEviction(t *testing.T) {
 	worker := &Worker{
 		runtime: NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{GPU: true, CheckpointRestore: true}),
 	}

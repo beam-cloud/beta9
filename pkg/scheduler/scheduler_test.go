@@ -3002,7 +3002,7 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
 }
 
-func TestNativeGPUCheckpointRequiresCompatibleWorker(t *testing.T) {
+func TestGPUDeviceCheckpointRequiresCompatibleWorker(t *testing.T) {
 	for _, test := range []struct {
 		checkpointKey, workerKey string
 		want                     bool
@@ -3031,18 +3031,18 @@ func TestNativeGPUCheckpointRequiresCompatibleWorker(t *testing.T) {
 			Gpu: "RTX5090", Runtime: types.ContainerRuntimeGvisor.String(), CheckpointCompatibilityKey: key}
 	}
 	legacy := worker("v1:profile", types.WorkerStatusAvailable)
-	native := worker("v2:profile", types.WorkerStatusAvailable)
+	gpuDevices := worker("v2:profile", types.WorkerStatusAvailable)
 	pending := worker("", types.WorkerStatusPending)
-	assert.Equal(t, []*types.Worker{native}, filterWorkersByResources([]*types.Worker{legacy, native, pending}, request, nil))
+	assert.Equal(t, []*types.Worker{gpuDevices}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))
 	assert.False(t, hostMatchesCheckpoint(request.Checkpoint, pending))
 
 	request.Checkpoint.CompatibilityKey = "v1:profile"
-	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, native))
+	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, gpuDevices))
 	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, pending), "legacy pending routing remains unchanged")
-	assert.Equal(t, []*types.Worker{legacy, native, pending}, filterWorkersByResources([]*types.Worker{legacy, native, pending}, request, nil))
+	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
 	request.Checkpoint.CompatibilityKey = "v2:other"
-	assert.Equal(t, []*types.Worker{legacy, native, pending}, filterWorkersByResources([]*types.Worker{legacy, native, pending}, request, nil))
+	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))
 }
 
 func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
