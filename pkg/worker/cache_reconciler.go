@@ -1,34 +1,9 @@
 package worker
 
-// This file implements the cache required-content reconciliation that runs on
-// workers. Responsibilities are split to keep the worker boundary clear:
-//
-//   - cacheContentReporter: records, on the worker, which content a stub needs
-//     (coalesced to S2) and refreshes the per-stub recency window. It never
-//     decides placement or moves bytes.
-//   - WorkerCacheManager reconcile loop: on the node that currently hosts the
-//     cache server, materializes content the local host owns (HRW), except
-//     checkpoints and disk snapshots which materialize on every matching
-//     accelerator in locality. Ownership has hysteresis: an owner that is
-//     briefly endpoint-less (e.g. a rolling deploy) keeps its keys; only after
-//     a grace period do its keys fail over to the next-ranked live host.
-//
-// The loop runs at two cadences. A sync (every few seconds, and immediately
-// when this worker publishes) lists the locality's recent stubs, refreshes the
-// store's protected set and pulls what is missing; the store answers every
-// completeness check from memory, so a quiet sync costs one coordinator round
-// trip. A maintenance pass (the configured interval) does the work that walks
-// disks: TTL pruning of content, checkpoints, image and stub-code caches.
-//
-// Disk pressure is handled by one mechanism: the reconciler decides what is
-// protected and the store evicts everything else, LRU, when usage crosses the
-// eviction watermark. Recent required content remains protected under pressure;
-// materialization pauses above the watermark and resumes with hysteresis.
-//
-// The worker is trustless: all coordinator state (recent stubs, locks) is
-// brokered through the gateway, and all origin credentials are fetched from the
-// gateway on demand and held in memory only. Nothing secret is written to disk,
-// Redis, or S2.
+// Workers report each successfully loaded stub's required content and recency.
+// Reconciliation materializes owned content, protects all recent requirements
+// from eviction, and pauses new writes under disk pressure. Coordinator state
+// and short-lived origin credentials are brokered through the gateway.
 
 import (
 	"compress/gzip"

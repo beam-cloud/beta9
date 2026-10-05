@@ -590,28 +590,27 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
 	} else {
-		if archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "" {
-			archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
-		}
 		if localArchivePath, ok := c.restoreV1ArchiveDataCache(ctx, request, archive.sourceRegistry); ok {
 			archive.path = localArchivePath
 			archive.sourceRegistry = nil
 			archive.storageMode = string(clipCommon.StorageModeLocal)
+		} else if archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "" {
+			archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
 		}
 	}
 	return archive, nil
 }
 
-func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, report requiredContentReport) {
+func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, report requiredContentReport) bool {
 	if c.contentReporter == nil || request == nil {
-		return
+		return false
 	}
 
 	// Required content is immutable per stub, so publish it only the first time
 	// the stub loads, not on every container start.
 	stubID := cacheRequestStubID(request)
 	if !c.contentReporter.shouldGenerateRequiredContent(stubID) {
-		return
+		return false
 	}
 
 	workspaceID := cacheRequestWorkspaceID(request)
@@ -624,6 +623,7 @@ func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, re
 		Str("kind", string(report.kind)).
 		Int("item_count", len(report.items)).
 		Msg("reported image required content")
+	return true
 }
 
 func cacheRequestWorkspaceID(request *types.ContainerRequest) string {
@@ -646,7 +646,7 @@ func cacheRequestStubID(request *types.ContainerRequest) string {
 	return request.Stub.ExternalId
 }
 
-// imageRequiredContent reports OCI layers and metadata, or a legacy data archive.
+// imageRequiredContent reports all image data and metadata required by a new worker.
 // OCI metadata uses the existing whole-archive cache kind (ClipV1).
 // A partial report remains usable, but is retried on the next successful start.
 func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (requiredContentReport, bool) {
@@ -681,7 +681,16 @@ func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.C
 	if !ok {
 		return requiredContentReport{}, false
 	}
-	return requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}}, true
+	report := requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}}
+	if c.usesRemoteMetadataArchive() {
+		metadata, err := c.imageMetadataRequiredContent(request.ImageId, "", nil)
+		if err != nil {
+			log.Warn().Err(err).Str("image_id", request.ImageId).Msg("failed to describe required image metadata")
+			return report, false
+		}
+		report.items = append(report.items, metadata)
+	}
+	return report, true
 }
 
 func (c *ImageClient) fastMetadataRequiredContent(ctx context.Context, imageID string, meta *clipCommon.ClipArchiveMetadata) (types.CacheRequiredContentItem, error) {
@@ -934,6 +943,20 @@ func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *ty
 		}
 	}
 
+	if metadata != nil && metadata.Hash != "" && metadata.Size > 0 && c.config.Cache.Client.CacheFS.Enabled {
+		virtualPath := filepath.Join(c.config.Cache.Client.CacheFS.MountPoint, cachePath)
+		cached, _ := c.cacheClient.IsCachedReachableContext(ctx, metadata.Hash, cachePath)
+		if cached {
+			if info, err := os.Stat(virtualPath); err == nil && info.Mode().IsRegular() && uint64(info.Size()) == metadata.Size {
+				c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, time.Now(), 0, true, map[string]string{"source": "cachefs"})
+				return virtualPath, true
+			}
+		}
+	}
+
+	if sourceRegistry == nil || sourceRegistry.BucketName == "" {
+		sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
+	}
 	brokeredOnly := (sourceRegistry == nil || sourceRegistry.BucketName == "") && c.brokeredImageAccessRequest(request)
 	lockWait := embeddedImageCacheLockWaitTimeout
 	if brokeredOnly {
@@ -1029,7 +1052,12 @@ func (c *ImageClient) completeV1ArchiveCache(request *types.ContainerRequest) {
 			return
 		case outcome := <-result:
 			if item, ok := outcome.Val.(types.CacheRequiredContentItem); outcome.Err == nil && ok && item.Hash != "" {
-				c.publishRequiredContent(request, requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}})
+				report, complete := c.imageRequiredContent(ctx, request, nil)
+				if c.publishRequiredContent(request, report) && !complete {
+					c.contentReporter.mu.Lock()
+					delete(c.contentReporter.reported, cacheRequestStubID(request))
+					c.contentReporter.mu.Unlock()
+				}
 				return
 			}
 		}

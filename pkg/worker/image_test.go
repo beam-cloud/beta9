@@ -453,6 +453,47 @@ func TestWaitForV1ArchiveCacheSeedsExistingMetadata(t *testing.T) {
 	cachedItem, err := client.waitForV1ArchiveCache("image")
 	require.NoError(t, err)
 	require.Equal(t, item, cachedItem)
+
+	// Remote legacy metadata is a separate required object; retry a failed report.
+	client.registry = &registry.ImageRegistry{ImageFileExtension: registry.RemoteImageFileExtension}
+	fake := &fakeEventRepo{}
+	client.contentReporter = newTestReporter(fake)
+	request := &types.ContainerRequest{ImageId: "image", WorkspaceId: "workspace", StubId: "stub"}
+	client.completeV1ArchiveCache(request)
+	client.contentReporter.flush()
+	require.Len(t, fake.pushed, 1)
+	require.Len(t, fake.pushed[0].Items, 1)
+	require.Empty(t, client.contentReporter.reported)
+	parsed, err := clip.NewClipArchiver().ExtractMetadata(restoredPath)
+	require.NoError(t, err)
+	require.NoError(t, clip.NewClipArchiver().CreateRemoteArchive(clipCommon.S3StorageInfo{Bucket: "images", Key: "image.clip"}, parsed, client.localArchivePath("image")))
+	metadataData, err := os.ReadFile(client.localArchivePath("image"))
+	require.NoError(t, err)
+	client.completeV1ArchiveCache(request)
+	client.contentReporter.flush()
+	require.Len(t, fake.pushed, 2)
+	require.Len(t, fake.pushed[1].Items, 2)
+	var metadataItem types.CacheRequiredContentItem
+	for _, item := range fake.pushed[1].Items {
+		if item.RoutingKey == "/images/image.rclip" {
+			metadataItem = item
+		}
+	}
+	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(metadataData)), metadataItem.Hash)
+	require.Equal(t, int64(len(metadataData)), metadataItem.SizeBytes)
+	require.Equal(t, "/images/image.rclip", metadataItem.RoutingKey)
+	require.Equal(t, "image.rclip", metadataItem.Source)
+
+	// A complete local archive does not ask the gateway for origin credentials.
+	workerRepo := &fakeImageCredentialWorkerRepo{err: errFakeGatewayUnavailable}
+	client.workerRepoClient, client.workerPoolName = workerRepo, "private"
+	client.config.ImageService.RegistryStore = registry.S3ImageRegistryStore
+	client.config.Worker.Pools = map[string]types.WorkerPoolConfig{"private": {Mode: types.PoolModePrivate}}
+	require.NoError(t, os.WriteFile(client.clipV1ArchiveDataCachePath("image"), data, 0600))
+	archive, err := client.prepareLazyImageArchive(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, client.clipV1ArchiveDataCachePath("image"), archive.path)
+	require.Empty(t, workerRepo.requests)
 }
 
 func TestRestoreV1ArchiveDataCacheRemovesDirectoryTarget(t *testing.T) {
@@ -478,6 +519,7 @@ func TestRestoreV1ArchiveDataCacheDefersLargeRemoteArchive(t *testing.T) {
 		imageCachePath: t.TempDir(),
 		config: types.AppConfig{ImageService: types.ImageServiceConfig{
 			RegistryStore: registry.S3ImageRegistryStore,
+			Registries:    types.ImageRegistriesConfig{S3: types.S3ImageRegistryConfig{BucketName: "images"}},
 		}},
 		archiveContentMetadata: func(context.Context, string) (*cache.FSMetadata, error) {
 			return &cache.FSMetadata{Hash: "archive", Size: maxSyncV1ArchiveDataRestoreBytes + 1}, nil
@@ -487,7 +529,7 @@ func TestRestoreV1ArchiveDataCacheDefersLargeRemoteArchive(t *testing.T) {
 	path, ok := client.restoreV1ArchiveDataCache(
 		context.Background(),
 		&types.ContainerRequest{ImageId: "image"},
-		&types.S3ImageRegistryConfig{BucketName: "images"},
+		nil,
 	)
 
 	require.False(t, ok)
