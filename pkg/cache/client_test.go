@@ -780,7 +780,7 @@ func TestReadContentIntoDoesNotRetrySmallReadsBelowMinRetryLength(t *testing.T) 
 	}
 }
 
-func TestReadContentIntoDoesNotRefreshHostsOnContentMiss(t *testing.T) {
+func TestReadContentIntoRefreshesHostsOnceOnContentMiss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -835,8 +835,8 @@ func TestReadContentIntoDoesNotRefreshHostsOnContentMiss(t *testing.T) {
 	dst := make([]byte, 16)
 	_, trace, err := client.ReadContentIntoWithTrace(ctx, strings.Repeat("a", sha256.Size*2), 0, dst, ClientOptions{})
 	require.ErrorIs(t, err, ErrContentNotFound)
-	require.Equal(t, 0, refreshCalls)
-	require.Equal(t, 0, trace.HostRefreshes)
+	require.Equal(t, 1, refreshCalls)
+	require.Equal(t, 1, trace.HostRefreshes)
 	require.Equal(t, "miss", trace.Result)
 }
 
@@ -2635,4 +2635,74 @@ func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
+}
+
+func TestReadsRefreshDirectoryAfterKnownHostsMiss(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := Config{
+		Server: ServerConfig{DiskCacheMaxUsagePct: 99, PageSizeBytes: 4, ObjectTtlS: 300},
+		Client: ClientConfig{NTopHosts: 1},
+		Global: GlobalConfig{GRPCMessageSizeBytes: 1024 * 1024, GRPCDialTimeoutS: 1},
+	}
+	var servers []*Server
+	var hosts []*Host
+	for _, id := range []string{"known", "new"} {
+		serverCfg := cfg
+		serverCfg.Server.DiskCacheDir = t.TempDir()
+		server, err := NewServerWithOptions(ctx, serverCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID(id))
+		require.NoError(t, err)
+		addr, err := server.Serve("127.0.0.1:0", "")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, server.Close()) })
+		host := server.Host()
+		host.Addr, host.PrivateAddr = addr, addr
+		servers, hosts = append(servers, server), append(hosts, host)
+	}
+	content := []byte("sole cached replica")
+	hash, _, err := servers[1].cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	for _, sameID := range []bool{false, true} {
+		for _, operation := range []string{"presence", "read", "stream"} {
+			t.Run(fmt.Sprintf("same_id_%t/%s", sameID, operation), func(t *testing.T) {
+				newHost := *hosts[1]
+				if sameID {
+					newHost.HostId = hosts[0].HostId
+				}
+				refreshes := 0
+				client := newSharedLocalDiskClient(nil, hosts[0])
+				client.locality, client.globalConfig = "test", cfg.Global
+				client.hostMap = NewHostMap(cfg.Global, client.addHost)
+				client.hostDirectory = testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+					refreshes++
+					return []*Host{&newHost}, nil
+				})
+				client.hostMap.Set(hosts[0])
+				t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+				for repeat := 0; repeat < 2; repeat++ {
+					switch operation {
+					case "presence":
+						exists, err := client.IsCachedReachableContext(ctx, hash, hash)
+						require.NoError(t, err)
+						require.True(t, exists)
+					case "read":
+						dst := make([]byte, len(content))
+						n, err := client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{})
+						require.NoError(t, err)
+						require.Equal(t, int64(len(content)), n)
+						require.Equal(t, content, dst)
+					case "stream":
+						chunks, err := client.GetContentStream(hash, 0, 0, struct{ RoutingKey string }{hash})
+						require.NoError(t, err)
+						var got []byte
+						for chunk := range chunks {
+							got = append(got, chunk...)
+						}
+						require.Equal(t, content, got)
+					}
+					require.Equal(t, 1, refreshes)
+				}
+			})
+		}
+	}
 }

@@ -747,11 +747,7 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
-	refreshCtx := ctx
-	cancel := func() {}
-	if _, ok := ctx.Deadline(); !ok {
-		refreshCtx, cancel = context.WithTimeout(ctx, closestHostTimeout)
-	}
+	refreshCtx, cancel := context.WithTimeout(ctx, closestHostTimeout)
 	defer cancel()
 
 	hosts, err := c.hostDirectory.GetAvailableHosts(refreshCtx, c.locality)
@@ -1017,14 +1013,21 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 		}
 	}
 
-	for _, host := range c.remainingHostsForRequest(checked) {
-		if ctx.Err() != nil {
-			return false, ctx.Err()
+	for round := 0; round < 2; round++ {
+		for _, host := range c.remainingHostsForRequest(checked) {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			client, exists := c.grpcClientForHost(ctx, host)
+			if exists && checkHost(client, host) {
+				return true, nil
+			}
 		}
-		client, exists := c.grpcClientForHost(ctx, host)
-		if exists && checkHost(client, host) {
-			return true, nil
+		if round == 1 || ctx.Err() != nil || c.hostDirectory == nil || c.hostMap == nil {
+			break
 		}
+		_ = c.refreshRoutableHosts(ctx)
+		clear(checked) // A logical host may have registered a different endpoint.
 	}
 
 	return false, ctx.Err()
@@ -1665,7 +1668,7 @@ func (c *Client) readContentIntoFromPreferredLocalStores(hash string, offset int
 }
 
 func shouldRefreshReadContentIntoHosts(err error) bool {
-	return errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) || errors.Is(err, ErrClientNotFound) || errors.Is(err, ErrRawReadBusy)
+	return errors.Is(err, ErrContentNotFound) || errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) || errors.Is(err, ErrClientNotFound) || errors.Is(err, ErrRawReadBusy)
 }
 
 func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions, trace *OperationTrace) (int64, error) {
@@ -2065,23 +2068,30 @@ func (c *Client) GetContentStream(hash string, offset int64, length int64, opts 
 		// Not on any top-N host: the ring may have changed since the store.
 		// Ask the rest before the caller gives up on the cache (see
 		// tryReadContentIntoKnownHosts).
-		for _, host := range c.remainingHostsForRequest(checked) {
-			if ctx.Err() != nil {
-				return
+		for round := 0; round < 2; round++ {
+			for _, host := range c.remainingHostsForRequest(checked) {
+				if ctx.Err() != nil {
+					return
+				}
+				client, ok := c.grpcClientForHost(ctx, host)
+				if !ok {
+					continue
+				}
+				has, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
+				if err != nil || !has.Exists {
+					continue
+				}
+				c.rememberHostForContent(hash, opts.RoutingKey, host)
+				Logger.Debugf("cache stream found content off-ring: hash=%s host=%s", hash, host.HostId)
+				if streamFrom(client, host) {
+					return
+				}
 			}
-			client, ok := c.grpcClientForHost(ctx, host)
-			if !ok {
-				continue
+			if round == 1 || ctx.Err() != nil || c.hostDirectory == nil || c.hostMap == nil {
+				break
 			}
-			has, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
-			if err != nil || !has.Exists {
-				continue
-			}
-			c.rememberHostForContent(hash, opts.RoutingKey, host)
-			Logger.Debugf("cache stream found content off-ring: hash=%s host=%s", hash, host.HostId)
-			if streamFrom(client, host) {
-				return
-			}
+			_ = c.refreshRoutableHosts(ctx)
+			clear(checked) // Retry changed endpoints as well as newly discovered hosts.
 		}
 	}()
 
