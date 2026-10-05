@@ -70,6 +70,14 @@ type contentEntry struct {
 	completedAt time.Time
 }
 
+// renewAccess requests persistence once per interval bucket, including during
+// sustained reads that continually advance lastAccess.
+func (entry *contentEntry) renewAccess(now time.Time, interval time.Duration) bool {
+	persist := interval <= 0 || now.Truncate(interval).After(entry.lastAccess.Truncate(interval))
+	entry.lastAccess = now
+	return persist
+}
+
 func (entry contentEntry) matchesLayout(pageSize int64, expectedSize ...int64) bool {
 	if entry.pageSize != pageSize {
 		return false
@@ -140,8 +148,7 @@ func (idx *contentIndex) touch(hash string, now time.Time, interval time.Duratio
 	if !ok {
 		return false, false
 	}
-	persist = now.Sub(entry.lastAccess) >= interval
-	entry.lastAccess = now
+	persist = entry.renewAccess(now, interval)
 	idx.entries[hash] = entry
 	return true, persist
 }
@@ -157,8 +164,7 @@ func (idx *contentIndex) touchComplete(hash string, pageSize int64, now time.Tim
 	if !entry.matchesLayout(pageSize, expectedSize...) {
 		return contentStatusSizeMismatch, false
 	}
-	persist = now.Sub(entry.lastAccess) >= evictionAccessTouchInterval
-	entry.lastAccess = now
+	persist = entry.renewAccess(now, evictionAccessTouchInterval)
 	idx.entries[hash] = entry
 	return contentStatusComplete, persist
 }
@@ -300,7 +306,7 @@ func (cas *Store) evictWatermarkPct() float64 {
 
 // touchContentAccess records a successful read of hash so eviction prefers
 // newer content. The index is updated on every read; the marker mtime that
-// carries recency across restarts is refreshed at most once per interval.
+// carries recency across restarts is refreshed once per interval bucket.
 func (cas *Store) touchContentAccess(hash string) {
 	if hash == "" {
 		return
@@ -547,13 +553,13 @@ var errContentTouched = errors.New("content touched since it was chosen for evic
 func (cas *Store) removeContent(candidate evictionCandidate) error {
 	defer cas.lockObject(candidate.hash).Unlock()
 	// A local page-file view has its own index, but persists reads here.
-	if info, err := os.Stat(cas.completeMarkerPath(candidate.hash)); err == nil {
-		if info.ModTime().After(candidate.lastAccess) {
-			cas.index.touch(candidate.hash, info.ModTime(), evictionAccessTouchInterval)
-			return errContentTouched
-		}
-	} else if !os.IsNotExist(err) {
+	info, err := os.Stat(cas.completeMarkerPath(candidate.hash))
+	if err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if err == nil && info.ModTime().After(candidate.lastAccess) {
+		cas.index.touch(candidate.hash, info.ModTime(), evictionAccessTouchInterval)
+		return errContentTouched
 	}
 	if !cas.index.forgetIfUntouched(candidate.hash, candidate.lastAccess) {
 		return errContentTouched

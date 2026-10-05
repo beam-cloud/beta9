@@ -132,20 +132,24 @@ func TestLocalViewReadKeepsOwnersEvictionCandidate(t *testing.T) {
 	}
 }
 
-func TestMissingReadProbeDoesNotWaitForWriter(t *testing.T) {
-	store := newTestStore(t, 5)
-	defer store.lockObject("still-writing").Unlock()
-	completed := make(chan bool, 1)
-	go func() {
-		response, err := (&Server{cas: store}).HasContent(context.Background(), &proto.CacheHasContentRequest{Hash: "still-writing"})
-		completed <- err == nil && !response.Exists
-	}()
-	select {
-	case ok := <-completed:
-		require.True(t, ok)
-	case <-time.After(time.Second):
-		t.Fatal("negative completeness check blocked behind a writer")
+func TestSustainedLocalViewReadsPersistOwnersRecency(t *testing.T) {
+	owner := newTestStore(t, 5)
+	start := time.Now().Truncate(evictionAccessTouchInterval).Add(-4 * evictionAccessTouchInterval)
+	hash := addEvictionTestContent(t, owner, "continuously-read-image", start)
+	candidate := evictionCandidateFor(t, owner, hash)
+	view, err := NewStore(context.Background(), &Host{HostId: "view"}, "test", NewMockCacheMetadataStore(), Config{Server: owner.serverConfig})
+	require.NoError(t, err)
+	t.Cleanup(view.Cleanup)
+	for minute := 1; minute <= 20; minute++ {
+		now := start.Add(time.Duration(minute) * time.Minute)
+		status, persist := view.index.touchComplete(hash, view.serverConfig.PageSizeBytes, now)
+		require.Equal(t, contentStatusComplete, status)
+		if persist {
+			require.NoError(t, os.Chtimes(view.completeMarkerPath(hash), now, now))
+		}
 	}
+	require.ErrorIs(t, owner.removeContent(candidate), errContentTouched)
+	require.True(t, owner.Exists(hash))
 }
 
 func TestPageRegionPreservesIncompletePromotedPages(t *testing.T) {
@@ -164,21 +168,32 @@ func TestPageRegionPreservesIncompletePromotedPages(t *testing.T) {
 	require.False(t, store.Exists(hash))
 }
 
-func TestPositiveReadProbeDoesNotWaitForWriter(t *testing.T) {
-	store := newTestStore(t, 5)
-	hash := addEvictionTestContent(t, store, "cached-image", time.Now().Add(-2*time.Hour))
-	defer store.lockObject(hash).Unlock() // Also held by any writer sharing this stripe.
-	completed := make(chan bool, 1)
-	go func() {
-		response, err := (&Server{cas: store}).HasContent(context.Background(), &proto.CacheHasContentRequest{Hash: hash})
-		_, _, n, ok, pageErr := store.PageRegion(hash, 0, 1)
-		completed <- err == nil && response.Exists && pageErr == nil && ok && n == 1
-	}()
-	select {
-	case ok := <-completed:
-		require.True(t, ok)
-	case <-time.After(time.Second):
-		t.Fatal("cached read blocked behind a writer")
+func TestReadProbesDoNotWaitForWriter(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("complete=%t", complete), func(t *testing.T) {
+			store := newTestStore(t, 5)
+			hash := "still-writing"
+			if complete {
+				hash = addEvictionTestContent(t, store, "cached-image", time.Now().Add(-2*time.Hour))
+			}
+			defer store.lockObject(hash).Unlock() // Also held by writers sharing this stripe.
+			completed := make(chan bool, 1)
+			go func() {
+				response, err := (&Server{cas: store}).HasContent(context.Background(), &proto.CacheHasContentRequest{Hash: hash})
+				ok := err == nil && response.Exists == complete
+				if complete {
+					_, _, n, present, err := store.PageRegion(hash, 0, 1)
+					ok = ok && err == nil && present && n == 1
+				}
+				completed <- ok
+			}()
+			select {
+			case ok := <-completed:
+				require.True(t, ok)
+			case <-time.After(time.Second):
+				t.Fatal("read probe blocked behind a writer")
+			}
+		})
 	}
 }
 
@@ -346,23 +361,20 @@ func TestMaybeEvictDiskCachePreservesProtectedContentBelowHardReserve(t *testing
 	require.Zero(t, events[0].ProtectedFreedBytes)
 }
 
-func TestTouchContentAccessRefreshesMarkerAndThrottles(t *testing.T) {
+func TestIndexReadRenewalThrottlesMarkerPersistence(t *testing.T) {
 	store := newTestStore(t, 5)
-
-	stale := time.Now().Add(-time.Hour)
-	hash := addEvictionTestContent(t, store, "touched-content", stale)
-
-	store.touchContentAccess(hash)
+	start := time.Now().Truncate(evictionAccessTouchInterval)
+	hash := addEvictionTestContent(t, store, "touched-content", start.Add(-time.Hour))
+	for _, at := range []time.Time{start.Add(time.Minute), start.Add(2 * time.Minute)} {
+		known, persist := store.index.touch(hash, at, evictionAccessTouchInterval)
+		require.True(t, known)
+		if persist {
+			require.NoError(t, os.Chtimes(store.completeMarkerPath(hash), at, at))
+		}
+	}
 	info, err := os.Stat(store.completeMarkerPath(hash))
 	require.NoError(t, err)
-	require.WithinDuration(t, time.Now(), info.ModTime(), time.Minute)
-
-	// A second touch within the throttle window must not hit the filesystem
-	require.NoError(t, os.Chtimes(store.completeMarkerPath(hash), stale, stale))
-	store.touchContentAccess(hash)
-	info, err = os.Stat(store.completeMarkerPath(hash))
-	require.NoError(t, err)
-	require.WithinDuration(t, stale, info.ModTime(), time.Minute)
+	require.Equal(t, start.Add(time.Minute), info.ModTime())
 }
 
 func TestEvictionCandidateUsesInMemoryTouchWhenFresher(t *testing.T) {

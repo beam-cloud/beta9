@@ -394,7 +394,7 @@ func (c *ImageClient) guardCachedImageContent(ctx context.Context, imageID strin
 	oci, isOCI := ociStorageInfo(meta)
 	if isOCI {
 		for _, hash := range oci.DecompressedHashByLayer {
-			checks.Go(func() error { return check(hash, hash) })
+			checks.Go(func() error { c.imageLayerCached(ctx, hash); return nil })
 		}
 	}
 	if c.registry != nil {
