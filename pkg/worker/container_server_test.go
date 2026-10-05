@@ -431,7 +431,7 @@ func TestWriteInitialSpecFromImagePreservesBaseCwd(t *testing.T) {
 	baseSpec := specs.Spec{Process: &specs.Process{Cwd: "/workspace", Args: []string{"sh"}}}
 	server := &ContainerRuntimeServer{
 		baseConfigSpec: baseSpec,
-		imageClient:    &ImageClient{v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()},
+		imageClient:    &ImageClient{},
 	}
 	destPath := filepath.Join(t.TempDir(), "initial_config.json")
 
@@ -447,8 +447,8 @@ func TestWriteInitialSpecFromImagePreservesBaseCwd(t *testing.T) {
 
 func TestWriteInitialSpecFromImageUsesClipWorkingDirWithoutMutatingBase(t *testing.T) {
 	imageId := "image-with-workdir"
-	imageClient := &ImageClient{v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()}
-	imageClient.v2ArchiveMetadata.Set(imageId, &clipCommon.ClipArchiveMetadata{
+	imageClient := &ImageClient{}
+	imageClient.cacheOCIMetadata(imageId, &clipCommon.ClipArchiveMetadata{
 		StorageInfo: &clipCommon.OCIStorageInfo{
 			ImageMetadata: &clipCommon.ImageMetadata{
 				WorkingDir: "/app",
@@ -475,8 +475,8 @@ func TestWriteInitialSpecFromImageUsesClipWorkingDirWithoutMutatingBase(t *testi
 
 func TestWriteInitialSpecFromImageCombinesEntrypointAndCmd(t *testing.T) {
 	imageId := "image-with-entrypoint-and-cmd"
-	imageClient := &ImageClient{v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()}
-	imageClient.v2ArchiveMetadata.Set(imageId, &clipCommon.ClipArchiveMetadata{
+	imageClient := &ImageClient{}
+	imageClient.cacheOCIMetadata(imageId, &clipCommon.ClipArchiveMetadata{
 		StorageInfo: &clipCommon.OCIStorageInfo{
 			ImageMetadata: &clipCommon.ImageMetadata{
 				Entrypoint: []string{"vllm", "serve"},
@@ -507,7 +507,7 @@ func TestWriteInitialSpecFromImageCombinesEntrypointAndCmd(t *testing.T) {
 func TestWriteInitialSpecFromImageDefaultsEmptyCwd(t *testing.T) {
 	server := &ContainerRuntimeServer{
 		baseConfigSpec: specs.Spec{Process: &specs.Process{Args: []string{"sh"}}},
-		imageClient:    &ImageClient{v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()},
+		imageClient:    &ImageClient{},
 	}
 	destPath := filepath.Join(t.TempDir(), "initial_config.json")
 

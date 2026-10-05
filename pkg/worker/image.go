@@ -173,19 +173,17 @@ type ImageClient struct {
 	// it delegates to the cache client.
 	archiveContentMetadata func(ctx context.Context, cachePath string) (*cache.FSMetadata, error)
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
-	v2ImageRefs       *common.SafeMap[string]
-	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
-	archiveMetadata   sync.Map // image id -> *parsedImageArchive
-	archiveMetadataMu sync.Mutex
-	clipRuntimeMu     sync.RWMutex
-	clipActive        map[string]*types.ContainerRequest
-	clipRuntimePIDs   map[int]clipPIDReference
-	clipPIDCache      map[int]clipPIDReference
-	clipReadEvents    chan clipCommon.ReadTraceEvent
-	clipAggregates    map[string]*clipReadAggregate
+	v2ImageRefs     *common.SafeMap[string]
+	archiveMetadata sync.Map // image id -> *imageRecord
+	clipRuntimeMu   sync.RWMutex
+	clipActive      map[string]*types.ContainerRequest
+	clipRuntimePIDs map[int]clipPIDReference
+	clipPIDCache    map[int]clipPIDReference
+	clipReadEvents  chan clipCommon.ReadTraceEvent
+	clipAggregates  map[string]*clipReadAggregate
 }
 
-type parsedImageArchive struct {
+type imageRecord struct {
 	metadata *clipCommon.ClipArchiveMetadata
 	info     os.FileInfo
 	path     string
@@ -220,7 +218,6 @@ func NewImageClient(config types.AppConfig, workerId, workerPoolName string, wor
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		mountLocks:         make(map[string]*sync.Mutex),
 		v2ImageRefs:        common.NewSafeMap[string](),
-		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
 		clipActive:         make(map[string]*types.ContainerRequest),
 		clipRuntimePIDs:    make(map[int]clipPIDReference),
 		clipPIDCache:       make(map[int]clipPIDReference),
@@ -351,22 +348,21 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 	if c == nil || c.contentReporter == nil || request == nil {
 		return
 	}
-	if meta == nil && c.v2ArchiveMetadata != nil {
-		meta, _ = c.v2ArchiveMetadata.Get(request.ImageId)
+	if meta == nil {
+		meta = c.cachedImageMetadata(request.ImageId)
 	}
 	if _, isOCI := ociStorageInfo(meta); isOCI {
 		stubID := cacheRequestStubID(request)
 		if c.contentReporter.shouldGenerateRequiredContent(stubID) {
 			requestCopy := &types.ContainerRequest{ImageId: request.ImageId, WorkspaceId: cacheRequestWorkspaceID(request), StubId: stubID}
 			go func() {
-				report, ok := c.imageRequiredContent(context.WithoutCancel(ctx), requestCopy, meta)
-				if !ok {
+				report, complete := c.imageRequiredContent(context.WithoutCancel(ctx), requestCopy, meta)
+				c.contentReporter.reportBatches(requestCopy.WorkspaceId, stubID, []requiredContentReport{report})
+				if !complete {
 					c.contentReporter.mu.Lock()
 					delete(c.contentReporter.reported, stubID)
 					c.contentReporter.mu.Unlock()
-					return
 				}
-				c.contentReporter.reportBatches(requestCopy.WorkspaceId, stubID, []requiredContentReport{report})
 			}()
 		}
 	} else {
@@ -652,8 +648,10 @@ func cacheRequestStubID(request *types.ContainerRequest) string {
 
 // imageRequiredContent reports OCI layers and metadata, or a legacy data archive.
 // OCI metadata uses the existing whole-archive cache kind (ClipV1).
+// A partial report remains usable, but is retried on the next successful start.
 func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (requiredContentReport, bool) {
 	if ociInfo, ok := ociStorageInfo(meta); ok && len(ociInfo.DecompressedHashByLayer) > 0 {
+		complete := true
 		items := ociRequiredContentItems(request.ImageId, ociInfo)
 		if len(items) == 0 {
 			return requiredContentReport{}, false
@@ -668,6 +666,7 @@ func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.C
 			if c.cacheClient != nil && c.usesRemoteMetadataArchive() {
 				item, err := c.fastMetadataRequiredContent(ctx, request.ImageId, meta)
 				if err != nil {
+					complete = false
 					log.Warn().Err(err).Str("image_id", request.ImageId).Msg("failed to prepare fast image metadata")
 				} else {
 					go c.publishImageArchiveToEmbeddedCache(c.localArchivePath(request.ImageId)+".batch", request.ImageId)
@@ -675,7 +674,7 @@ func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.C
 				}
 			}
 		}
-		return requiredContentReport{kind: types.CacheContentKindClipV2, items: items}, true
+		return requiredContentReport{kind: types.CacheContentKindClipV2, items: items}, complete
 	}
 
 	item, ok := c.clipV1ArchiveRequiredContent(ctx, request)
@@ -1201,7 +1200,7 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 		return nil, err
 	}
 	if value, ok := c.archiveMetadata.Load(imageId); ok {
-		cached := value.(*parsedImageArchive)
+		cached := value.(*imageRecord)
 		if cached.path == downloadPath && os.SameFile(info, cached.info) && info.Size() == cached.info.Size() && info.ModTime().Equal(cached.info.ModTime()) {
 			return cached.metadata, nil
 		}
@@ -1216,13 +1215,13 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 		return nil, fmt.Errorf("metadata not available")
 	}
 	if _, isOCI := ociStorageInfo(meta); isOCI {
-		c.cacheOCIMetadata(imageId, meta, &parsedImageArchive{metadata: meta, info: info, path: downloadPath})
+		c.cacheOCIMetadata(imageId, meta, &imageRecord{metadata: meta, info: info, path: downloadPath})
 	}
 	return meta, nil
 }
 
 // cacheOCIMetadata extracts and caches OCI image metadata
-func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArchiveMetadata, parsed ...*parsedImageArchive) {
+func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArchiveMetadata, parsed ...*imageRecord) {
 	ociInfo, ok := ociStorageInfo(meta)
 	if !ok {
 		return
@@ -1243,16 +1242,11 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 		c.v2ImageRefs.Set(imageId, sourceRef)
 		log.Info().Str("image_id", imageId).Str("source_ref", sourceRef).Msg("cached image reference from metadata")
 	}
-	c.archiveMetadataMu.Lock()
-	defer c.archiveMetadataMu.Unlock()
+	record := &imageRecord{metadata: meta}
 	if len(parsed) > 0 {
-		c.archiveMetadata.Store(imageId, parsed[0])
-	} else {
-		c.archiveMetadata.Delete(imageId)
+		record = parsed[0]
 	}
-	if c.v2ArchiveMetadata != nil {
-		c.v2ArchiveMetadata.Set(imageId, meta)
-	}
+	c.archiveMetadata.Store(imageId, record)
 }
 
 // GetSourceImageRef retrieves the cached source image reference for a v2 image
@@ -1260,14 +1254,17 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
 }
 
+func (c *ImageClient) cachedImageMetadata(imageID string) *clipCommon.ClipArchiveMetadata {
+	if value, ok := c.archiveMetadata.Load(imageID); ok {
+		return value.(*imageRecord).metadata
+	}
+	return nil
+}
+
 // GetCLIPImageMetadata extracts CLIP image metadata from the archive
 func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
-	if c.v2ArchiveMetadata != nil {
-		if meta, ok := c.v2ArchiveMetadata.Get(imageId); ok {
-			if ociInfo, ok := ociStorageInfo(meta); ok && ociInfo.ImageMetadata != nil {
-				return ociInfo.ImageMetadata, true
-			}
-		}
+	if ociInfo, ok := ociStorageInfo(c.cachedImageMetadata(imageId)); ok && ociInfo.ImageMetadata != nil {
+		return ociInfo.ImageMetadata, true
 	}
 
 	// Determine the archive path for this image
@@ -1928,7 +1925,7 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	defer os.Remove(tmpPath)
 	defer f.Close()
 	defer func() {
-		if value, ok := c.archiveMetadata.Load(imageId); ok && value.(*parsedImageArchive).path == tmpPath {
+		if value, ok := c.archiveMetadata.Load(imageId); ok && value.(*imageRecord).path == tmpPath {
 			c.archiveMetadata.CompareAndDelete(imageId, value)
 		}
 	}()
@@ -1976,8 +1973,8 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	if err := os.Rename(tmpPath, archivePath); err != nil {
 		return err
 	}
-	if value, ok := c.archiveMetadata.Load(imageId); ok && value.(*parsedImageArchive).path == tmpPath {
-		cached := *value.(*parsedImageArchive)
+	if value, ok := c.archiveMetadata.Load(imageId); ok && value.(*imageRecord).path == tmpPath {
+		cached := *value.(*imageRecord)
 		cached.path = archivePath
 		c.archiveMetadata.CompareAndSwap(imageId, value, &cached)
 	}
@@ -2013,7 +2010,7 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 	if err != nil {
 		return err
 	}
-	c.cacheOCIMetadata(imageId, meta, &parsedImageArchive{metadata: meta, info: info, path: archivePath})
+	c.cacheOCIMetadata(imageId, meta, &imageRecord{metadata: meta, info: info, path: archivePath})
 	return nil
 }
 

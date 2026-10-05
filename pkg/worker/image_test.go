@@ -287,8 +287,7 @@ func TestFastMetadataCacheRestoreAndLegacyFallback(t *testing.T) {
 	require.NoError(t, archiver.TranscodeMetadata(originalPath, fastPath, nil))
 	client := &ImageClient{
 		cacheClient: contentCache, imageCachePath: t.TempDir(),
-		registry:          &registry.ImageRegistry{ImageFileExtension: registry.RemoteImageFileExtension},
-		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+		registry: &registry.ImageRegistry{ImageFileExtension: registry.RemoteImageFileExtension},
 	}
 	client.publishImageArchiveToEmbeddedCache(fastPath, "image")
 	request := &types.ContainerRequest{ImageId: "image"}
@@ -341,8 +340,33 @@ func TestFastMetadataCacheRestoreAndLegacyFallback(t *testing.T) {
 	// A directory at the derived path deterministically prevents publication.
 	require.NoError(t, os.Mkdir(archive.path+".batch", 0700))
 	report, ok = client.imageRequiredContent(ctx, request, testClipV2Metadata())
-	require.True(t, ok, "optional derived archive failure still retains canonical metadata and layers")
+	require.False(t, ok, "retain canonical content and retry failed derived metadata")
 	require.Len(t, report.items, 3)
+	fake := &fakeEventRepo{}
+	client.contentReporter = newTestReporter(fake)
+	request.WorkspaceId, request.StubId = "workspace", "stub"
+	client.recordSuccessfulImageLoad(ctx, request, archive.metadata)
+	require.Eventually(t, func() bool {
+		client.contentReporter.mu.Lock()
+		defer client.contentReporter.mu.Unlock()
+		return len(client.contentReporter.pending) == 1 && len(client.contentReporter.reported) == 0
+	}, time.Second, time.Millisecond)
+	client.contentReporter.flush()
+	require.Len(t, fake.pushed, 1)
+	require.Len(t, fake.pushed[0].Items, 3, "canonical metadata and layers remain available")
+	require.NoError(t, os.Remove(archive.path+".batch"))
+	client.recordSuccessfulImageLoad(ctx, request, archive.metadata)
+	require.Eventually(t, func() bool {
+		client.contentReporter.mu.Lock()
+		defer client.contentReporter.mu.Unlock()
+		for _, items := range client.contentReporter.pending {
+			return len(items) == 4 && len(client.contentReporter.reported) == 1
+		}
+		return false
+	}, time.Second, time.Millisecond)
+	client.contentReporter.flush()
+	require.Len(t, fake.pushed, 2)
+	require.Len(t, fake.pushed[1].Items, 4, "a later successful start retries compact metadata")
 	memoCount := 0
 	client.archiveMetadata.Range(func(_, _ any) bool { memoCount++; return true })
 	require.Equal(t, 1, memoCount, "canonical and derived metadata share one memo per image")
@@ -350,15 +374,15 @@ func TestFastMetadataCacheRestoreAndLegacyFallback(t *testing.T) {
 	for _, meta := range []*clipCommon.ClipArchiveMetadata{fastMetadata, archive.metadata} {
 		parses.Go(func() {
 			for range 20 {
-				client.cacheOCIMetadata("image", meta, &parsedImageArchive{metadata: meta})
+				client.cacheOCIMetadata("image", meta, &imageRecord{metadata: meta})
 			}
 		})
 	}
 	parses.Wait()
 	value, ok := client.archiveMetadata.Load("image")
 	require.True(t, ok)
-	cached, _ := client.v2ArchiveMetadata.Get("image")
-	require.Same(t, cached, value.(*parsedImageArchive).metadata, "concurrent source swaps retain one metadata tree")
+	cached := client.cachedImageMetadata("image")
+	require.Same(t, cached, value.(*imageRecord).metadata, "concurrent source swaps retain one metadata tree")
 }
 
 func TestLocalImageArchiveReadyPreservesInProgressPlaceholder(t *testing.T) {

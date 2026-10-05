@@ -427,7 +427,9 @@ func TestAlignRestoreSpec(t *testing.T) {
 			bundlePath := writeRunscBundleWithMounts(t, dir, test.bundle...)
 			imagePath := writeRunscCheckpointImage(t, dir, test.checkpoint...)
 
-			require.NoError(t, alignRestoreSpec(bundlePath, imagePath))
+			bundle, err := loadRunscBundle(bundlePath)
+			require.NoError(t, err)
+			require.NoError(t, bundle.alignRestore(imagePath))
 			require.Equal(t, test.want, readBundleMounts(t, bundlePath))
 		})
 	}
@@ -456,7 +458,9 @@ func TestAlignRestoreSpecMatchesSavedDeviceLayout(t *testing.T) {
 				saved.Linux.Devices = nil
 			}
 			image := writeRunscCheckpointSpec(t, dir, &saved)
-			require.NoError(t, alignRestoreSpec(bundle, image))
+			loaded, err := loadRunscBundle(bundle)
+			require.NoError(t, err)
+			require.NoError(t, loaded.alignRestore(image))
 			raw, err = os.ReadFile(filepath.Join(bundle, "config.json"))
 			require.NoError(t, err)
 			spec = specs.Spec{}
@@ -482,6 +486,8 @@ func TestAlignRestoreSpecLeavesBundleWhenCheckpointUnusable(t *testing.T) {
 	dir := t.TempDir()
 	bundlePath := writeRunscBundleWithMounts(t, dir, testProcMount, testCgroupMount)
 
+	bundle, err := loadRunscBundle(bundlePath)
+	require.NoError(t, err)
 	corrupt := filepath.Join(dir, "corrupt")
 	require.NoError(t, os.MkdirAll(corrupt, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(corrupt, runscCheckpointImageName), []byte("not a state file"), 0o644))
@@ -491,7 +497,7 @@ func TestAlignRestoreSpecLeavesBundleWhenCheckpointUnusable(t *testing.T) {
 		writeRunscCheckpointSpec(t, t.TempDir(), nil),
 		writeRunscCheckpointSpec(t, t.TempDir(), &specs.Spec{}, &specs.Spec{}),
 	} {
-		require.Error(t, alignRestoreSpec(bundlePath, image))
+		require.Error(t, bundle.alignRestore(image))
 		require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, readBundleMounts(t, bundlePath))
 	}
 }

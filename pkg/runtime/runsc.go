@@ -40,14 +40,16 @@ const (
 // runscStateFileMagic opens every runsc state file ("gVisorSF").
 var runscStateFileMagic = []byte{0x67, 0x56, 0x69, 0x73, 0x6f, 0x72, 0x53, 0x46}
 
-// Runsc implements Runtime using the gVisor runsc runtime
-//
-// CUDA Checkpoint/Restore is delegated to runsc. GPU bundles include the
-// cuda-checkpoint helper and are marked so each runtime operation can select
-// nvproxy without sharing mutable state across containers.
+// Runsc implements Runtime using the gVisor runsc runtime.
 type Runsc struct {
 	cfg                   Config
 	dockerPacketWriteFlag string
+}
+
+// runscBundle owns one operation's OCI spec; GPU state is never shared between containers.
+type runscBundle struct {
+	path string
+	spec *specs.Spec
 }
 
 type runscState struct {
@@ -118,7 +120,7 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	}
 
 	spec.Linux.Seccomp = nil
-	if !r.hasGPUDevices(spec) {
+	if !hasGPUDevices(spec) {
 		delete(spec.Annotations, runscGPUAnnotation)
 		spec.Linux.Devices = nil
 		return nil
@@ -174,8 +176,7 @@ func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 	})
 }
 
-// hasGPUDevices checks if the spec contains GPU device configurations
-func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
+func hasGPUDevices(spec *specs.Spec) bool {
 	if spec == nil || spec.Linux == nil {
 		return false
 	}
@@ -197,7 +198,7 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
 	dockerEnabled := opts != nil && opts.DockerEnabled
-	nvproxyEnabled, err := r.bundleUsesGPU(bundlePath)
+	bundle, err := loadRunscBundle(bundlePath)
 	if err != nil {
 		return -1, err
 	}
@@ -207,7 +208,7 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	}()
 
 	args := r.baseArgs(dockerEnabled)
-	if nvproxyEnabled {
+	if bundle.usesGPU() {
 		args = append(args, "--nvproxy=true")
 	}
 	args = append(args, "run", "--bundle", bundlePath, containerID)
@@ -414,7 +415,7 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 		return fmt.Errorf("checkpoint options cannot be nil")
 	}
 
-	nvproxyEnabled, err := r.containerUsesGPU(ctx, containerID)
+	bundle, err := r.containerBundle(ctx, containerID)
 	if err != nil {
 		return fmt.Errorf("failed to inspect container bundle: %w", err)
 	}
@@ -433,7 +434,7 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 
 	args := r.baseArgs(false)
 	args = append(args, "checkpoint")
-	if nvproxyEnabled {
+	if bundle.usesGPU() {
 		args = append(args, "--cuda-checkpoint-path", cudaCheckpointContainerPath)
 	}
 	if opts.ImagePath != "" {
@@ -481,12 +482,12 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, fmt.Errorf("restore options cannot be nil")
 	}
 
-	nvproxyEnabled, err := r.bundleUsesGPU(opts.BundlePath)
+	bundle, err := loadRunscBundle(opts.BundlePath)
 	if err != nil {
 		return -1, err
 	}
 
-	if err := alignRestoreSpec(opts.BundlePath, opts.ImagePath); err != nil {
+	if err := bundle.alignRestore(opts.ImagePath); err != nil {
 		log.Warn().Err(err).Str("container_id", containerID).Msg("failed to align restore spec with checkpoint")
 	}
 
@@ -498,7 +499,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	}
 
 	args := r.baseArgs(false)
-	if nvproxyEnabled {
+	if bundle.usesGPU() {
 		args = append(args, "--nvproxy=true")
 	}
 	args = append(args, "restore", "--background", "--direct")
@@ -656,36 +657,45 @@ func runscWaitResult(err error, stderr, operation string) runscCommandResult {
 	return runscCommandResult{exitCode: -1, err: err}
 }
 
-func (r *Runsc) containerUsesGPU(ctx context.Context, containerID string) (bool, error) {
+func (r *Runsc) containerBundle(ctx context.Context, containerID string) (*runscBundle, error) {
 	state, err := r.loadState(ctx, containerID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return r.bundleUsesGPU(state.Bundle)
+	return loadRunscBundle(state.Bundle)
 }
 
-func (r *Runsc) bundleUsesGPU(bundlePath string) (bool, error) {
+func loadRunscBundle(bundlePath string) (*runscBundle, error) {
 	if bundlePath == "" {
-		return false, fmt.Errorf("container bundle path is empty")
+		return nil, fmt.Errorf("container bundle path is empty")
 	}
-
-	config, err := os.Open(filepath.Join(bundlePath, "config.json"))
+	config, err := os.ReadFile(filepath.Join(bundlePath, "config.json"))
 	if err != nil {
-		return false, fmt.Errorf("failed to open container bundle: %w", err)
+		return nil, fmt.Errorf("read container bundle: %w", err)
 	}
-	defer config.Close()
-
 	var spec specs.Spec
-	if err := json.NewDecoder(config).Decode(&spec); err != nil {
-		return false, fmt.Errorf("failed to decode container bundle: %w", err)
+	if err := json.Unmarshal(config, &spec); err != nil {
+		return nil, fmt.Errorf("decode container bundle: %w", err)
 	}
-	return spec.Annotations[runscGPUAnnotation] == "true" || r.hasGPUDevices(&spec), nil
+	return &runscBundle{path: bundlePath, spec: &spec}, nil
 }
 
-// alignRestoreSpec preserves the saved NVIDIA device layout and virtual cgroup
+func (b *runscBundle) usesGPU() bool {
+	return b.spec.Annotations[runscGPUAnnotation] == "true" || hasGPUDevices(b.spec)
+}
+
+func (b *runscBundle) save() error {
+	config, err := json.Marshal(b.spec)
+	if err != nil {
+		return fmt.Errorf("encode restore bundle: %w", err)
+	}
+	return os.WriteFile(filepath.Join(b.path, "config.json"), config, 0644)
+}
+
+// alignRestore preserves the saved NVIDIA device layout and virtual cgroup
 // mount. Every other mount is left alone so real mismatches surface.
-func alignRestoreSpec(bundlePath, imagePath string) error {
-	if bundlePath == "" || imagePath == "" {
+func (b *runscBundle) alignRestore(imagePath string) error {
+	if imagePath == "" {
 		return nil
 	}
 
@@ -695,15 +705,7 @@ func alignRestoreSpec(bundlePath, imagePath string) error {
 	}
 	checkpointMount, checkpointHasMount := findMount(saved.Mounts, sandboxCgroupMountDestination)
 
-	configPath := filepath.Join(bundlePath, "config.json")
-	config, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("read restore bundle: %w", err)
-	}
-	var spec specs.Spec
-	if err := json.Unmarshal(config, &spec); err != nil {
-		return fmt.Errorf("decode restore bundle: %w", err)
-	}
+	spec := b.spec
 	restoreMount, restoreHasMount := findMount(spec.Mounts, sandboxCgroupMountDestination)
 	devicesCleared := spec.Linux != nil && len(spec.Linux.Devices) > 0 && spec.Annotations[runscGPUAnnotation] == "true" &&
 		saved.Annotations[runscGPUAnnotation] == "true" && (saved.Linux == nil || len(saved.Linux.Devices) == 0)
@@ -738,15 +740,11 @@ func alignRestoreSpec(bundlePath, imagePath string) error {
 		}
 	}
 
-	updated, err := json.Marshal(&spec)
-	if err != nil {
-		return fmt.Errorf("encode restore bundle: %w", err)
-	}
-	if err := os.WriteFile(configPath, updated, 0644); err != nil {
-		return fmt.Errorf("write restore bundle: %w", err)
+	if err := b.save(); err != nil {
+		return err
 	}
 	log.Info().
-		Str("bundle", bundlePath).
+		Str("bundle", b.path).
 		Bool("checkpoint_mounts_cgroup", checkpointHasMount).
 		Bool("devices_cleared", devicesCleared).
 		Msg("aligned restore spec with checkpoint")

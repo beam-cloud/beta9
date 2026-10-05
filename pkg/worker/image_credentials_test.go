@@ -238,11 +238,10 @@ func TestLazyMountOptionsForClipV2UsesGatewayRegistryCredentials(t *testing.T) {
 		},
 	}
 	client := &ImageClient{
-		imageCachePath:    "/images/cache",
-		workerRepoClient:  repo,
-		originCredsCache:  make(map[string]*originCredentials),
-		v2ImageRefs:       common.NewSafeMap[string](),
-		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+		imageCachePath:   "/images/cache",
+		workerRepoClient: repo,
+		originCredsCache: make(map[string]*originCredentials),
+		v2ImageRefs:      common.NewSafeMap[string](),
 	}
 	client.v2ImageRefs.Set("image-a", "registry.example.com/team/image:tag")
 	request := &types.ContainerRequest{

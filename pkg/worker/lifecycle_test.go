@@ -3662,10 +3662,9 @@ func TestGetCLIPImageMetadataUsesCachedV2ArchiveMetadata(t *testing.T) {
 	}
 
 	imageClient := &ImageClient{
-		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
-		v2ImageRefs:       common.NewSafeMap[string](),
+		v2ImageRefs: common.NewSafeMap[string](),
 	}
-	imageClient.v2ArchiveMetadata.Set(imageId, &clipCommon.ClipArchiveMetadata{
+	imageClient.cacheOCIMetadata(imageId, &clipCommon.ClipArchiveMetadata{
 		StorageInfo: &clipCommon.OCIStorageInfo{
 			ImageMetadata: imageMetadata,
 		},
@@ -3721,8 +3720,7 @@ func TestBuildSpecFromCLIPMetadataPreservesWorkingDir(t *testing.T) {
 func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
 	imageId := "v2-pointer-metadata"
 	imageClient := &ImageClient{
-		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
-		v2ImageRefs:       common.NewSafeMap[string](),
+		v2ImageRefs: common.NewSafeMap[string](),
 	}
 
 	meta := &clipCommon.ClipArchiveMetadata{
@@ -3734,8 +3732,8 @@ func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
 	}
 	imageClient.cacheOCIMetadata(imageId, meta)
 
-	cachedMeta, ok := imageClient.v2ArchiveMetadata.Get(imageId)
-	require.True(t, ok)
+	cachedMeta := imageClient.cachedImageMetadata(imageId)
+	require.NotNil(t, cachedMeta)
 	assert.Equal(t, meta, cachedMeta)
 
 	sourceRef, ok := imageClient.GetSourceImageRef(imageId)
