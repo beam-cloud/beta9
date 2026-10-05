@@ -24,6 +24,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/rs/zerolog"
@@ -498,6 +499,29 @@ func TestWaitForV1ArchiveCacheSeedsExistingMetadata(t *testing.T) {
 	archive, err := client.prepareLazyImageArchive(ctx, request)
 	require.NoError(t, err)
 	require.Equal(t, client.clipV1ArchiveDataCachePath("image"), archive.path)
+	require.Empty(t, workerRepo.requests)
+
+	// A local-store worker can still receive cached S3 metadata from the gateway.
+	client.config.ImageService.RegistryStore = registry.LocalImageRegistryStore
+	workerRepo.err = nil
+	workerRepo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true, ImageArchiveStorage: &pb.CacheWorkspaceStorageCredentials{
+		BucketName: "brokered-images", AccessKey: "access", SecretKey: "secret",
+	}}
+	archive, err = client.prepareLazyImageArchive(ctx, request)
+	require.NoError(t, err)
+	require.Len(t, workerRepo.requests, 1)
+	options := client.lazyMountOptions(ctx, request, archive)
+	require.NotNil(t, options.StorageInfo)
+	require.NotNil(t, options.Credentials.S3)
+	require.Equal(t, "brokered-images", options.StorageInfo.(*clipCommon.S3StorageInfo).Bucket)
+	require.Equal(t, "access", options.Credentials.S3.AccessKey)
+
+	// A full local archive needs no S3 override or gateway request.
+	workerRepo.requests = nil
+	require.NoError(t, os.WriteFile(client.localArchivePath("image"), data, 0600))
+	archive, err = client.prepareLazyImageArchive(ctx, request)
+	require.NoError(t, err)
+	require.Nil(t, client.lazyMountOptions(ctx, request, archive).StorageInfo)
 	require.Empty(t, workerRepo.requests)
 }
 

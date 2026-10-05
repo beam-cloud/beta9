@@ -925,6 +925,9 @@ func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive 
 
 func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, archive *lazyImageArchive) (path string, ok bool) {
 	if request == nil || c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
+		if request != nil && archive.storageMode == string(clipCommon.StorageModeS3) && (archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "") {
+			archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
+		}
 		return "", false
 	}
 
