@@ -3,6 +3,9 @@ package cache
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,7 +190,7 @@ func TestMaybeEvictDiskCachePreservesProtectedContentAboveSoftWatermark(t *testi
 	require.Equal(t, 1, events[0].RecentCandidates)
 }
 
-func TestMaybeEvictDiskCacheEvictsProtectedContentToClearHardReserve(t *testing.T) {
+func TestMaybeEvictDiskCachePreservesProtectedContentBelowHardReserve(t *testing.T) {
 	store := newTestStore(t, 5)
 	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
 	store.serverConfig.DiskCacheMaxUsagePct = 0.95
@@ -208,13 +211,13 @@ func TestMaybeEvictDiskCacheEvictsProtectedContentToClearHardReserve(t *testing.
 		usagePct:       0.85,
 	})
 
-	require.True(t, evicted)
-	require.False(t, store.Exists(protected))
-	require.False(t, store.Exists(fresh))
+	require.False(t, evicted)
+	require.True(t, store.Exists(protected))
+	require.True(t, store.Exists(fresh))
 	require.Len(t, events, 1)
-	require.Equal(t, CacheChurnStatusProtectedEvicted, events[0].Status)
-	require.Equal(t, 2, events[0].ProtectedObjects)
-	require.Positive(t, events[0].ProtectedFreedBytes)
+	require.Equal(t, CacheChurnStatusNothingEvictable, events[0].Status)
+	require.Zero(t, events[0].ProtectedObjects)
+	require.Zero(t, events[0].ProtectedFreedBytes)
 }
 
 func TestTouchContentAccessRefreshesMarkerAndThrottles(t *testing.T) {
@@ -562,4 +565,101 @@ func TestDiskWriteGuardConcurrentWritersWaitForInflightEviction(t *testing.T) {
 	require.True(t, <-second)
 	require.False(t, store.Exists(old))
 	require.Equal(t, 1, evictPasses, "the waiting writer must not start a second eviction pass")
+}
+
+func TestDiskAdmissionAccountsForConcurrentWrites(t *testing.T) {
+	store := newTestStore(t, 5)
+	prev := statDiskUsage
+	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+		return diskUsageSnapshot{totalBytes: 1000, availableBytes: 1000}, nil
+	}
+	t.Cleanup(func() { statDiskUsage = prev })
+	first, err := store.reserveDiskWrite(600)
+	require.NoError(t, err)
+	_, err = store.reserveDiskWrite(600)
+	require.ErrorIs(t, err, errDiskCacheCapacity)
+	first.release()
+	second, err := store.reserveDiskWrite(600)
+	require.NoError(t, err)
+	second.release()
+	require.Zero(t, store.diskWrites.pending)
+}
+
+func TestDiskAdmissionStopsStreamsWithoutEvictingProtectedContent(t *testing.T) {
+	for _, method := range []string{"reader", "expected-hash", "parallel-pages"} {
+		t.Run(method, func(t *testing.T) {
+			store := newTestStore(t, 5)
+			store.serverConfig.DiskCacheMaxUsagePct = 0.95
+			protected := addEvictionTestContent(t, store, "keep", time.Now().Add(-time.Hour))
+			store.SetProtectedContent(map[string]struct{}{protected: {}})
+			store.lastDiskGuardCheckNanos.Store(time.Now().UnixNano())
+			prev := statDiskUsage
+			statDiskUsage = func(string) (diskUsageSnapshot, error) {
+				var written uint64
+				err := filepath.WalkDir(store.diskCacheDir, func(path string, entry fs.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					if path == store.pageDir(protected) {
+						return filepath.SkipDir
+					}
+					if !entry.IsDir() {
+						info, err := entry.Info()
+						if err != nil {
+							return err
+						}
+						written += uint64(info.Size())
+					}
+					return nil
+				})
+				return diskUsageSnapshot{totalBytes: 1000, usedBytes: 940 + written, availableBytes: 60 - written, usagePct: float64(940+written) / 1000}, err
+			}
+			t.Cleanup(func() { statDiskUsage = prev })
+			content := []byte("more-than-one-page")
+			hash := fmt.Sprintf("%x", sha256.Sum256(content))
+			var err error
+			switch method {
+			case "reader":
+				_, _, err = store.AddReader(context.Background(), bytes.NewReader(content))
+			case "expected-hash":
+				_, _, err = store.AddReaderWithExpectedHash(context.Background(), bytes.NewReader(content), hash)
+			case "parallel-pages":
+				_, _, err = store.AddPageSourceWithExpectedHash(context.Background(), hash, int64(len(content)), 3,
+					func(_ context.Context, _ int64, offset int64, page []byte) (int, error) {
+						return copy(page, content[offset:]), nil
+					})
+			}
+			require.ErrorContains(t, err, "disk cache capacity exceeded")
+			require.False(t, store.Exists(hash), "refused content must not be advertised complete")
+			require.True(t, store.Exists(protected))
+			require.Zero(t, store.diskWrites.pending)
+		})
+	}
+}
+
+func TestReconciledCacheWaitsForProtectionBeforeEviction(t *testing.T) {
+	InitLogger(false, false)
+	store, err := NewStore(context.Background(), &Host{HostId: "test"}, "test", NewMockCacheMetadataStore(), Config{
+		Server: ServerConfig{PageSizeBytes: 5, DiskCacheDir: t.TempDir(), DiskCacheMaxUsagePct: 100},
+		Disk:   DiskConfig{Enabled: true}, Reconciliation: ReconciliationConfig{Enabled: true},
+	})
+	require.NoError(t, err)
+	t.Cleanup(store.Cleanup)
+	old := time.Now().Add(-24 * time.Hour)
+	required := addEvictionTestContent(t, store, "required", old)
+	unneeded := addEvictionTestContent(t, store, "unneeded", old)
+	snapshot := diskUsageSnapshot{totalBytes: 1000, usedBytes: 900, availableBytes: 100, usagePct: .9}
+	store.serverConfig.DiskCacheEvictWatermarkPct = .8
+	require.False(t, store.maybeEvictDiskCache(snapshot))
+	evicted, _ := store.PruneContentNotProtected(nil, time.Hour)
+	require.Zero(t, evicted)
+	require.True(t, store.Exists(required))
+	require.True(t, store.Exists(unneeded))
+
+	candidate := evictionCandidateFor(t, store, required)
+	store.SetProtectedContent(map[string]struct{}{required: {}})
+	require.ErrorIs(t, store.removeUnprotectedContent(candidate), errContentTouched)
+	require.True(t, store.maybeEvictDiskCache(snapshot))
+	require.True(t, store.Exists(required))
+	require.False(t, store.Exists(unneeded))
 }

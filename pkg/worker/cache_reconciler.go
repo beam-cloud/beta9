@@ -22,9 +22,8 @@ package worker
 //
 // Disk pressure is handled by one mechanism: the reconciler decides what is
 // protected and the store evicts everything else, LRU, when usage crosses the
-// eviction watermark. Above the watermark the protected set shrinks to the
-// newest stubs' content that fits below it and materialization pauses; the
-// pause lifts with hysteresis so the two never churn against each other.
+// eviction watermark. Recent required content remains protected under pressure;
+// materialization pauses above the watermark and resumes with hysteresis.
 //
 // The worker is trustless: all coordinator state (recent stubs, locks) is
 // brokered through the gateway, and all origin credentials are fetched from the
@@ -531,8 +530,7 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 		m.pruneOwnerStubCodeCache(server)
 	}
 
-	gated, reconcileAllowlist := m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, stubContent)
-	if gated {
+	if m.reconcileGatedByDiskUsage(server, localHostID) {
 		return
 	}
 
@@ -546,7 +544,7 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 			return
 		default:
 		}
-		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget, reconcileAllowlist, pool)
+		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget, pool)
 		if budget.exhausted() {
 			break
 		}
@@ -567,10 +565,10 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
 		return nil
 	}
-	return m.reconcileStubContent(server, localHostID, stub, items, budget, nil, nil)
+	return m.reconcileStubContent(server, localHostID, stub, items, budget, nil)
 }
 
-func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}, pool *reconcilePool) []string {
+func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, pool *reconcilePool) []string {
 	checkpointIDs := []string{}
 	for _, item := range orderedRequiredContentItems(items) {
 		select {
@@ -582,11 +580,6 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 		routingKey := item.RoutingKey
 		if routingKey == "" {
 			routingKey = item.Hash
-		}
-		if allowlist != nil {
-			if _, ok := allowlist[item.Hash]; !ok {
-				continue
-			}
 		}
 
 		if item.Kind == types.CacheContentKindCheckpoint {
@@ -842,70 +835,6 @@ func protectedContentFromRecentStubs(stubs []recentStubContent, accelerator stri
 	return protected, activeCheckpointIDs
 }
 
-// pressureProtectedContentFromRecentStubs ranks recent stubs' content, newest
-// stub first, and protects it until the budget is spent. An item's size is what
-// its report carried or, failing that, what localSize says is on disk: CLIP v2
-// layer reports carry no size, and letting them through unbudgeted protects
-// every layer on the node, which is exactly the state eviction cannot leave.
-func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelerator string, usage cache.DiskUsage, softWatermark float64, minFreeBytes int64, localSize func(hash string) int64) map[string]struct{} {
-	budget := pressureProtectionBudgetBytes(usage, softWatermark, minFreeBytes)
-	if budget <= 0 {
-		return map[string]struct{}{}
-	}
-
-	orderedStubs := append([]recentStubContent(nil), stubs...)
-	sort.SliceStable(orderedStubs, func(i, j int) bool {
-		return orderedStubs[i].stub.LastSeen.After(orderedStubs[j].stub.LastSeen)
-	})
-
-	protected := map[string]struct{}{}
-	var protectedBytes int64
-	for _, stub := range orderedStubs {
-		for _, item := range orderedRequiredContentItems(stub.items) {
-			if item.Hash == "" || !cacheContentAppliesToAccelerator(item, accelerator) {
-				continue
-			}
-			if _, ok := protected[item.Hash]; ok {
-				continue
-			}
-			sizeBytes := maxInt64(item.SizeBytes, 0)
-			if sizeBytes == 0 && localSize != nil {
-				sizeBytes = maxInt64(localSize(item.Hash), 0)
-			}
-			if sizeBytes > 0 && protectedBytes+sizeBytes > budget {
-				continue
-			}
-			protected[item.Hash] = struct{}{}
-			protectedBytes += sizeBytes
-		}
-	}
-	return protected
-}
-
-// pressureProtectionBudgetBytes is how much protected content may sit on the
-// disk for filesystem usage to come to rest at the resume watermark (and the
-// free-byte reserve). The watermark is measured on the whole filesystem but
-// eviction can only remove indexed cache content, so everything else on the
-// volume (OS, worker images, the uv and build caches) is taken off the top:
-// budgeting the cache as if it were alone parks the disk at watermark plus
-// that footprint, where every object is protected and nothing is evictable.
-func pressureProtectionBudgetBytes(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {
-	if usage.TotalBytes == 0 {
-		return 0
-	}
-	resumeWatermark := reconcileResumeDiskUsagePct(softWatermark)
-	budget := int64(resumeWatermark * float64(usage.TotalBytes))
-	if minFreeBytes > 0 {
-		if reserveBudget := int64(usage.TotalBytes) - minFreeBytes; reserveBudget < budget {
-			budget = reserveBudget
-		}
-	}
-	if usage.EvictableBytes > 0 && usage.UsedBytes > usage.EvictableBytes {
-		budget -= int64(usage.UsedBytes - usage.EvictableBytes)
-	}
-	return maxInt64(budget, 0)
-}
-
 func orderedRequiredContentItems(items []types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
 	ordered := append([]types.CacheRequiredContentItem(nil), items...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -975,13 +904,9 @@ func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, sof
 		return 0
 	}
 	bytesToFree := maxInt64(reconcilePressureBytesToFree(usage, softWatermark, minFreeBytes), 0)
-	var allowlist map[string]struct{}
-	if bytesToFree > 0 {
-		allowlist = pressureProtectedContentFromRecentStubs(stubs, m.accelerator, usage, softWatermark, minFreeBytes, nil)
-	}
 	mountRoot := filepath.Join(types.AgentImagesPath, "mnt")
 	mountSetComplete := m.pruneStaleImageMountPaths(mountRoot)
-	protected := protectedImageCache(stubs, allowlist, root, mountRoot)
+	protected := protectedImageCache(stubs, root, mountRoot)
 	protected.complete = protected.complete && mountSetComplete
 	cutoff := time.Now().Add(-m.recentStubTTL())
 	evicted, freed := evictImageCache(root, protected, cutoff, bytesToFree)
@@ -1056,7 +981,7 @@ func pruneStaleImageMountPathsWithLookup(mountRoot string, workerExists func(str
 	return pruned, complete
 }
 
-func protectedImageCache(stubs []recentStubContent, allowlist map[string]struct{}, cacheRoot, mountRoot string) imageCacheProtection {
+func protectedImageCache(stubs []recentStubContent, cacheRoot, mountRoot string) imageCacheProtection {
 	protected := imageCacheProtection{names: map[string]struct{}{}, complete: true}
 	protectImage := func(imageID string) {
 		if imageID == "" {
@@ -1069,11 +994,6 @@ func protectedImageCache(stubs []recentStubContent, allowlist map[string]struct{
 
 	for _, stub := range stubs {
 		for _, item := range stub.items {
-			if allowlist != nil {
-				if _, ok := allowlist[item.Hash]; !ok {
-					continue
-				}
-			}
 			protectImage(item.ImageID)
 			if item.Kind == types.CacheContentKindClipV2 && isSHA256HexDigest(item.Hash) {
 				protected.names[item.Hash] = struct{}{}
@@ -1375,14 +1295,9 @@ func fastDiskUsage(path string) (cache.DiskUsage, error) {
 	}, nil
 }
 
-// reconcileGatedByDiskUsage keeps materialization and eviction from churning
-// against each other on a mostly-full node. Above the eviction watermark the
-// protected set shrinks to the newest stubs' content that fits below it, the
-// store evicts everything else, and the cycle pauses; the pause holds until
-// usage falls below the resume watermark. Between the two watermarks
-// materialization is limited to that same ranked set, so nothing is pulled
-// that the next eviction would remove.
-func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, stubContent []recentStubContent) (bool, map[string]struct{}) {
+// Pause materialization under pressure without sacrificing recent required
+// content. The store reclaims only unprotected content and rejects new writes.
+func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string) bool {
 	usage, err := server.RefreshDiskUsage()
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Str("logical_host", localHostID).Msg("cache reconciliation failed to refresh disk usage")
@@ -1394,31 +1309,23 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 
 	watermark := server.EvictWatermarkPct()
 	resumeWatermark := reconcileResumeDiskUsagePct(watermark)
-	pressureMode := usage.UsagePct >= resumeWatermark
 	if !m.reconcilePausedAt.IsZero() {
 		if usage.UsagePct > resumeWatermark {
-			pressureMode = true
-		} else {
-			log.Info().
-				Str("locality", m.locality).
-				Str("logical_host", localHostID).
-				Dur("paused_for", time.Since(m.reconcilePausedAt)).
-				Float64("disk_usage_pct", usage.UsagePct).
-				Float64("resume_watermark_pct", resumeWatermark).
-				Msg("cache reconciliation resumed: disk usage below resume watermark")
-			m.reconcilePausedAt = time.Time{}
+			return true
 		}
-	}
-
-	var reconcileAllowlist map[string]struct{}
-	if pressureMode && usage.TotalBytes > 0 {
-		reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, watermark, server.DiskMinFreeBytes(), server.ContentSizeBytes)
-		server.SetProtectedContent(reconcileAllowlist)
+		log.Info().
+			Str("locality", m.locality).
+			Str("logical_host", localHostID).
+			Dur("paused_for", time.Since(m.reconcilePausedAt)).
+			Float64("disk_usage_pct", usage.UsagePct).
+			Float64("resume_watermark_pct", resumeWatermark).
+			Msg("cache reconciliation resumed: disk usage below resume watermark")
+		m.reconcilePausedAt = time.Time{}
 	}
 
 	minFreeBytes := server.DiskMinFreeBytes()
 	if reconcilePressureBytesToFree(usage, watermark, minFreeBytes) > 0 && m.reconcilePausedAt.IsZero() {
-		// The protected set just shrank; reclaim now rather than on the store
+		// Reclaim unprotected content now rather than on the store
 		// monitor's next tick. While a pause holds, the monitor owns eviction:
 		// repeating it every sync would only re-walk the same candidates and
 		// re-log the same outcome.
@@ -1436,10 +1343,9 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 				Uint64("available_bytes", usage.AvailableBytes).
 				Float64("watermark_pct", watermark).
 				Float64("resume_watermark_pct", resumeWatermark).
-				Int("protected_candidates", len(reconcileAllowlist)).
 				Msg("cache reconciliation paused: disk above eviction watermark")
 		}
-		return true, nil
+		return true
 	}
 
 	if server.DiskPressureExceeded() {
@@ -1453,10 +1359,10 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 				Int64("min_free_bytes", minFreeBytes).
 				Msg("cache reconciliation paused: hard disk write gate active")
 		}
-		return true, nil
+		return true
 	}
 
-	return false, reconcileAllowlist
+	return false
 }
 
 func reconcilePressureBytesToFree(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {

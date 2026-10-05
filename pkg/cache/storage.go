@@ -61,6 +61,7 @@ type Store struct {
 	diskAvailableBytes      atomic.Int64
 	diskMonitorStarted      atomic.Bool
 	lastDiskGuardCheckNanos atomic.Int64
+	diskWrites              diskWriteAdmission
 	// diskGuardEvictMu serializes the write guard's on-demand eviction (see
 	// diskWriteAllowed); lastDiskGuardEvictNanos is written under it.
 	diskGuardEvictMu        sync.Mutex
@@ -69,11 +70,12 @@ type Store struct {
 	// evictMu serializes eviction passes. The disk monitor and the embedded
 	// cache owner's ReclaimDisk both evict from a usage snapshot; two passes
 	// working from the same snapshot would each free the whole deficit.
-	evictMu          sync.Mutex
-	protectedMu      sync.RWMutex
-	protectedContent map[string]struct{}
-	churnMu          sync.RWMutex
-	churnSink        CacheChurnSink
+	evictMu           sync.Mutex
+	protectedMu       sync.RWMutex
+	protectedContent  map[string]struct{}
+	protectedSetReady bool
+	churnMu           sync.RWMutex
+	churnSink         CacheChurnSink
 }
 
 func NewStore(ctx context.Context, currentHost *Host, locality string, metadataStore CacheMetadataStore, config Config) (*Store, error) {
@@ -93,6 +95,7 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, metadataS
 		mu:                 sync.Mutex{},
 		index:              contentIndex{entries: map[string]contentEntry{}},
 		protectedContent:   make(map[string]struct{}),
+		protectedSetReady:  !config.Reconciliation.Enabled,
 	}
 
 	Logger.Infof("Disk cache directory located at: '%s'", cas.diskCacheDir)
@@ -252,8 +255,8 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 
 	dirPath := cas.pageDir(hash)
 	writeToDisk := cas.diskWriteAllowed()
-	if !writeToDisk && !cas.memoryCacheEnabled {
-		return errors.New("disk cache capacity exceeded")
+	if !writeToDisk && (!cas.memoryCacheEnabled || cas.diskConfig.Enabled) {
+		return errDiskCacheCapacity
 	}
 	if writeToDisk {
 		defer cas.lockObject(hash)()
@@ -282,7 +285,7 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 			filePath := filepath.Join(dirPath, chunkKey)
 			pageLock := cas.pageLock(hash, chunkIdx)
 			pageLock.Lock()
-			if err := writeCacheChunkAtomic(filePath, chunk); err != nil {
+			if err := cas.writeCachePage(filePath, chunk, true); err != nil {
 				pageLock.Unlock()
 				return fmt.Errorf("failed to write to disk cache: %w", err)
 			}
@@ -307,13 +310,13 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	// Release the large initial buffer
 	content = nil
 
-	if cas.memoryCacheEnabled && !cas.indexObjectInMemory(hash, int64(len(chunkKeys))) {
-		return errors.New("unable to cache: set dropped")
-	}
 	if writeToDisk {
 		if err := cas.writeCompleteMarker(hash, size, int64(len(chunkKeys))); err != nil {
 			return err
 		}
+	}
+	if cas.memoryCacheEnabled && !cas.indexObjectInMemory(hash, int64(len(chunkKeys))) {
+		return errors.New("unable to cache: set dropped")
 	}
 
 	Logger.Debugf("Added object: %s, size: %d bytes", hash, size)
@@ -328,8 +331,8 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 		return "", 0, errors.New("invalid page size")
 	}
 	if !cas.diskWriteAllowed() {
-		if !cas.memoryCacheEnabled {
-			return "", 0, errors.New("disk cache capacity exceeded")
+		if !cas.memoryCacheEnabled || cas.diskConfig.Enabled {
+			return "", 0, errDiskCacheCapacity
 		}
 		return cas.addReaderToMemory(ctx, reader)
 	}
@@ -364,7 +367,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 			}
 
 			tempChunkPath := filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkCount))
-			if err := writeCacheChunkAtomic(tempChunkPath, chunk); err != nil {
+			if err := cas.writeCachePage(tempChunkPath, chunk, true); err != nil {
 				return "", size, fmt.Errorf("failed to write temp cache chunk: %w", err)
 			}
 
@@ -418,12 +421,12 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 			}
 		}
 
-		if !cas.indexObjectInMemory(hash, chunkCount) {
-			return "", size, errors.New("unable to cache: set dropped")
-		}
 	}
 	if err := cas.writeCompleteMarker(hash, size, chunkCount); err != nil {
 		return "", size, err
+	}
+	if cas.memoryCacheEnabled && !cas.indexObjectInMemory(hash, chunkCount) {
+		return "", size, errors.New("unable to cache: set dropped")
 	}
 
 	Logger.Debugf("Added object: %s, size: %d bytes", hash, size)
@@ -444,8 +447,8 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 		return "", 0, errors.New("invalid page size")
 	}
 	if !cas.diskWriteAllowed() {
-		if !cas.memoryCacheEnabled {
-			return "", 0, errors.New("disk cache capacity exceeded")
+		if !cas.memoryCacheEnabled || cas.diskConfig.Enabled {
+			return "", 0, errDiskCacheCapacity
 		}
 		return cas.addReaderToMemory(ctx, reader)
 	}
@@ -480,7 +483,7 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 			}
 
 			filePath := filepath.Join(tmpDir, cas.pageKey(expectedHash, chunkCount))
-			if err := writeCacheChunkAtomic(filePath, chunk); err != nil {
+			if err := cas.writeCachePage(filePath, chunk, true); err != nil {
 				cleanupInstalled()
 				return "", size, fmt.Errorf("failed to install cache chunk: %w", err)
 			}
@@ -528,7 +531,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		return "", 0, errors.New("invalid page size")
 	}
 	if !cas.diskWriteAllowed() {
-		return "", 0, errors.New("disk cache capacity exceeded")
+		return "", 0, errDiskCacheCapacity
 	}
 	tmpDir, err := cas.newExpectedHashTempDir(expectedHash)
 	if err != nil {
@@ -614,7 +617,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 				}
 
 				tmpPath := filepath.Join(tmpDir, cas.pageKey(expectedHash, pageIdx))
-				if err := writePrivateCacheChunk(tmpPath, page); err != nil {
+				if err := cas.writeCachePage(tmpPath, page, false); err != nil {
 					select {
 					case results <- pageResult{pageIdx: pageIdx, err: err}:
 					case <-ctx.Done():
@@ -831,7 +834,7 @@ func (cas *Store) putPages(hash string, offset int64, data []byte, includePartia
 			pageLock.Unlock()
 			continue
 		}
-		err := writeCacheChunkAtomic(pagePath, data[start:end])
+		err := cas.writeCachePage(pagePath, data[start:end], true)
 		pageLock.Unlock()
 		if err != nil {
 			Logger.Warnf("cache local promotion write failed: hash=%s page=%d err=%v", hash, pageIdx, err)
@@ -970,6 +973,11 @@ func (cas *Store) writeCompleteMarker(hash string, size int64, pageCount int64) 
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
 	marker := fmt.Sprintf("v1 size=%d page_size=%d pages=%d\n", size, cas.serverConfig.PageSizeBytes, pageCount)
+	reservation, err := cas.reserveDiskWrite(len(marker))
+	if err != nil {
+		return err
+	}
+	defer reservation.release()
 	if err := writeCacheMetadataAtomic(cas.completeMarkerPath(hash), []byte(marker)); err != nil {
 		return fmt.Errorf("failed to write cache complete marker: %w", err)
 	}
@@ -1428,6 +1436,7 @@ type diskUsageSnapshot struct {
 	availableBytes uint64
 	usedBytes      uint64
 	usagePct       float64
+	blockSize      uint64
 }
 
 type DiskUsage struct {
@@ -1469,6 +1478,7 @@ func getFilesystemDiskUsage(path string) (diskUsageSnapshot, error) {
 	}
 	return diskUsageSnapshot{
 		path:           path,
+		blockSize:      uint64(stat.Bsize),
 		totalBytes:     totalBytes,
 		availableBytes: availableBytes,
 		usedBytes:      usedBytes,
@@ -1568,6 +1578,63 @@ func (cas *Store) diskWriteAllowed() bool {
 	exceeded = cas.diskCachedUsageExceeded
 	cas.mu.Unlock()
 	return !exceeded
+}
+
+// diskWriteAdmission accounts for pages admitted concurrently but not yet on
+// disk. Fresh filesystem accounting also includes temporary pages from streams.
+type diskWriteAdmission struct {
+	mu      sync.Mutex
+	pending uint64
+}
+
+type diskWriteReservation struct {
+	store *Store
+	bytes uint64
+}
+
+var errDiskCacheCapacity = errors.New("disk cache capacity exceeded")
+
+func (cas *Store) reserveDiskWrite(size int) (diskWriteReservation, error) {
+	cas.diskWrites.mu.Lock()
+	defer cas.diskWrites.mu.Unlock()
+	snapshot, err := statDiskUsage(cas.diskCacheDir)
+	if err != nil {
+		return diskWriteReservation{}, err
+	}
+	bytes := uint64(size)
+	if block := snapshot.blockSize; block > 0 {
+		bytes = ((bytes+block-1)/block + 2) * block // Page, temporary file and marker metadata.
+	}
+	requested := cas.diskWrites.pending + bytes
+	if snapshot.totalBytes == 0 || requested > snapshot.availableBytes {
+		return diskWriteReservation{}, errDiskCacheCapacity
+	}
+	snapshot.usedBytes += requested
+	snapshot.availableBytes -= requested
+	snapshot.usagePct = float64(snapshot.usedBytes) / float64(snapshot.totalBytes)
+	if cas.diskPressureExceeded(snapshot) {
+		return diskWriteReservation{}, errDiskCacheCapacity
+	}
+	cas.diskWrites.pending += bytes
+	return diskWriteReservation{store: cas, bytes: bytes}, nil
+}
+
+func (r diskWriteReservation) release() {
+	r.store.diskWrites.mu.Lock()
+	r.store.diskWrites.pending -= r.bytes
+	r.store.diskWrites.mu.Unlock()
+}
+
+func (cas *Store) writeCachePage(path string, data []byte, atomic bool) error {
+	reservation, err := cas.reserveDiskWrite(len(data))
+	if err != nil {
+		return err
+	}
+	defer reservation.release()
+	if atomic {
+		return writeCacheChunkAtomic(path, data)
+	}
+	return writePrivateCacheChunk(path, data)
 }
 
 func (cas *Store) refreshDiskCacheUsage(evict bool) (diskUsageSnapshot, error) {

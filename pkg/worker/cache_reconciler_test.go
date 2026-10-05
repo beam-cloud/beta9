@@ -182,7 +182,7 @@ func TestAuditCacheChurnEventUsesScopedS2WorkspacePrefix(t *testing.T) {
 	require.Equal(t, "machine-a", events.cacheEvents[0].MachineID)
 }
 
-func TestPressureProtectedContentPrioritizesNewestStubWorkingSet(t *testing.T) {
+func TestProtectedContentIncludesEveryRecentStubWorkingSet(t *testing.T) {
 	now := time.Now()
 	stubs := []recentStubContent{
 		{
@@ -201,113 +201,12 @@ func TestPressureProtectedContentPrioritizesNewestStubWorkingSet(t *testing.T) {
 		},
 	}
 
-	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 100}, 0.75, 0, nil)
+	protected, _ := protectedContentFromRecentStubs(stubs, "")
 
 	require.Contains(t, protected, "new-checkpoint")
 	require.Contains(t, protected, "new-volume")
-	require.NotContains(t, protected, "old-checkpoint")
-	require.NotContains(t, protected, "old-volume")
-}
-
-// TestPressureProtectionBudgetSubtractsNonEvictableUsage reproduces the staging
-// cache-server that parked at 81% with every object protected: 258.9 GB disk,
-// watermark 0.70 (resume 0.67), 40 GiB reserve, 168.6 GB of indexed content
-// and 41 GB of other usage (OS, uv/buildah caches) on the same volume.
-func TestPressureProtectionBudgetSubtractsNonEvictableUsage(t *testing.T) {
-	const gb = 1_000_000_000
-	total := uint64(258_906_374_144)
-	indexed := uint64(168_552_086_665)
-	other := uint64(41 * gb)
-	reserve := int64(42_949_672_960)
-	usage := cache.DiskUsage{
-		TotalBytes:     total,
-		UsedBytes:      indexed + other,
-		AvailableBytes: total - indexed - other,
-		EvictableBytes: indexed,
-	}
-	usage.UsagePct = float64(usage.UsedBytes) / float64(total)
-	require.InDelta(t, 0.81, usage.UsagePct, 0.005)
-
-	budget := pressureProtectionBudgetBytes(usage, 0.70, reserve)
-
-	// Protected content plus the other usage must land at the resume watermark.
-	resumeUsed := int64(0.67 * float64(total))
-	require.Equal(t, resumeUsed-int64(other), budget)
-	require.Less(t, budget, int64(indexed), "the budget must be below what is on disk, or nothing is ever evictable")
-	require.InDelta(t, 0.67, float64(budget+int64(other))/float64(total), 0.001)
-
-	// The reserve wins when it is the tighter bound, still net of other usage.
-	tight := pressureProtectionBudgetBytes(usage, 0.95, reserve)
-	require.Equal(t, int64(total)-reserve-int64(other), tight)
-
-	// Without an index reading the old whole-disk budget is used unchanged.
-	blind := usage
-	blind.EvictableBytes = 0
-	require.Equal(t, resumeUsed, pressureProtectionBudgetBytes(blind, 0.70, reserve))
-
-	// Other usage larger than the whole budget leaves nothing to protect.
-	swamped := usage
-	swamped.UsedBytes = total - 1*gb
-	swamped.EvictableBytes = 10 * gb
-	require.Equal(t, int64(0), pressureProtectionBudgetBytes(swamped, 0.70, reserve))
-}
-
-// TestPressureProtectedContentBudgetsUnsizedItemsByLocalSize reproduces the
-// staging cache-server that sat at 83% with "candidates=382 protected=382
-// eligible=0": CLIP v2 layer reports carry no SizeBytes, so every layer was
-// protected outside the budget. Sizes must come from the local index instead.
-func TestPressureProtectedContentBudgetsUnsizedItemsByLocalSize(t *testing.T) {
-	now := time.Now()
-	// Budget: resume watermark 0.67 of 1000 = 670, minus 100 of non-cache usage = 570.
-	usage := cache.DiskUsage{TotalBytes: 1000, UsedBytes: 900, EvictableBytes: 800}
-	stubs := []recentStubContent{
-		{
-			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "new", LastSeen: now},
-			items: []types.CacheRequiredContentItem{
-				{Hash: "new-layer-a", Kind: types.CacheContentKindClipV2},
-				{Hash: "new-layer-b", Kind: types.CacheContentKindClipV2},
-			},
-		},
-		{
-			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-time.Hour)},
-			items: []types.CacheRequiredContentItem{
-				{Hash: "old-layer", Kind: types.CacheContentKindClipV2},
-				{Hash: "old-absent-layer", Kind: types.CacheContentKindClipV2},
-			},
-		},
-	}
-	onDisk := map[string]int64{"new-layer-a": 300, "new-layer-b": 200, "old-layer": 300}
-	localSize := func(hash string) int64 { return onDisk[hash] }
-
-	// Without a size source every unsized item is protected and nothing is evictable.
-	all := pressureProtectedContentFromRecentStubs(stubs, "", usage, 0.70, 0, nil)
-	require.Len(t, all, 4)
-
-	protected := pressureProtectedContentFromRecentStubs(stubs, "", usage, 0.70, 0, localSize)
-	require.Contains(t, protected, "new-layer-a")
-	require.Contains(t, protected, "new-layer-b")
-	require.NotContains(t, protected, "old-layer", "300 more bytes would exceed the 570 budget")
-	// Content the store does not hold costs nothing to protect; it only
-	// bounds what may be materialized once pressure clears.
-	require.Contains(t, protected, "old-absent-layer")
-}
-
-func TestPressureProtectedContentPrioritizesCheckpointWithinStub(t *testing.T) {
-	now := time.Now()
-	stubs := []recentStubContent{
-		{
-			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "stub", LastSeen: now},
-			items: []types.CacheRequiredContentItem{
-				{Hash: "volume", Kind: types.CacheContentKindVolume, SizeBytes: 50},
-				{Hash: "checkpoint", Kind: types.CacheContentKindCheckpoint, SizeBytes: 50},
-			},
-		},
-	}
-
-	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 90}, 0.75, 0, nil)
-
-	require.Contains(t, protected, "checkpoint")
-	require.NotContains(t, protected, "volume")
+	require.Contains(t, protected, "old-checkpoint")
+	require.Contains(t, protected, "old-volume")
 }
 
 func newCheckpointCacheForTest(t *testing.T, ctx context.Context) (*cache.Server, *cache.Client) {
@@ -2242,7 +2141,7 @@ func TestEvictImageCacheProtectsRecentAndMountedImages(t *testing.T) {
 
 	protected := protectedImageCache([]recentStubContent{{items: []types.CacheRequiredContentItem{{
 		ImageID: "recent", Hash: recentHash, Kind: types.CacheContentKindClipV2,
-	}}}}, nil, cacheRoot, mountRoot)
+	}}}}, cacheRoot, mountRoot)
 	evicted, _ := evictImageCache(cacheRoot, protected, time.Now().Add(-time.Hour), 0)
 
 	require.True(t, protected.complete)
@@ -2284,7 +2183,7 @@ func TestEvictImageCacheProtectsLayersWithoutMountedMetadata(t *testing.T) {
 		require.NoError(t, os.Chtimes(entry.path, old, old))
 	}
 
-	protected := protectedImageCache(nil, nil, cacheRoot, mountRoot)
+	protected := protectedImageCache(nil, cacheRoot, mountRoot)
 	evicted, _ := evictImageCache(cacheRoot, protected, time.Now().Add(-time.Hour), 0)
 
 	require.False(t, protected.complete)
@@ -2331,4 +2230,26 @@ func writeStubCodeCacheEntry(t *testing.T, root, name string, readyTime time.Tim
 	require.NoError(t, os.WriteFile(readyPath, []byte("ok"), 0644))
 	require.NoError(t, os.Chtimes(readyPath, readyTime, readyTime))
 	return readyPath
+}
+
+func TestReconciliationPausePreservesRequiredContentUntilResumeWatermark(t *testing.T) {
+	root := t.TempDir()
+	usage, err := fastDiskUsage(root)
+	require.NoError(t, err)
+	for _, delta := range []float64{.02, .05} {
+		cfg := testCacheManagerConfig(root).Cache
+		cfg.Server.DiskCacheMaxUsagePct = 100
+		cfg.Server.DiskCacheEvictWatermarkPct = usage.UsagePct + delta
+		server, err := cache.NewServerWithOptions(context.Background(), cfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, server.Close()) })
+		hash, _, err := server.StoreReader(context.Background(), strings.NewReader("required"), "")
+		require.NoError(t, err)
+		server.SetProtectedContent(map[string]struct{}{hash: {}})
+		manager := &WorkerCacheManager{ctx: context.Background(), reconcilePausedAt: time.Now()}
+		paused := delta < cacheReconcileDiskUsageHysteresisPct
+		require.Equal(t, paused, manager.reconcileGatedByDiskUsage(server, server.HostID()))
+		require.Equal(t, !paused, manager.reconcilePausedAt.IsZero())
+		require.True(t, server.HasCompleteContent(hash, int64(len("required"))))
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -36,7 +37,7 @@ func newTestStore(t *testing.T, pageSize int64) *Store {
 	store, err := NewStore(context.Background(), &Host{HostId: "test-host"}, "test", NewMockCacheMetadataStore(), Config{
 		Server: ServerConfig{
 			DiskCacheDir:         t.TempDir(),
-			DiskCacheMaxUsagePct: 90,
+			DiskCacheMaxUsagePct: 100,
 			PageSizeBytes:        pageSize,
 			ObjectTtlS:           300,
 		},
@@ -367,6 +368,10 @@ func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {
 	t.Cleanup(store.Cleanup)
 
 	store.diskCachedUsageExceeded = true
+	store.diskConfig.Enabled = true
+	_, _, err = store.AddReader(context.Background(), bytes.NewReader([]byte("disk pressure")))
+	require.ErrorContains(t, err, "disk cache capacity exceeded")
+	store.diskConfig.Enabled = false // Explicit memory-only fallback remains supported.
 	content := []byte("memory fallback content")
 	sum := sha256.Sum256(content)
 	expectedHash := hex.EncodeToString(sum[:])
@@ -390,6 +395,29 @@ func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
+
+	store.diskConfig.Enabled = true
+	store.diskCachedUsageExceeded = false
+	store.lastDiskGuardCheckNanos.Store(time.Now().UnixNano())
+	require.NoError(t, os.MkdirAll(cacheDir, 0700))
+	previous := statDiskUsage
+	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 940, availableBytes: 60, usagePct: .94}, nil
+	}
+	t.Cleanup(func() { statDiskUsage = previous })
+	store.serverConfig.DiskCacheMaxUsagePct = .95
+	for _, method := range []string{"reader", "add"} {
+		content := []byte(method)
+		hash := fmt.Sprintf("%x", sha256.Sum256(content))
+		if method == "reader" {
+			_, _, err = store.AddReader(context.Background(), bytes.NewReader(content))
+		} else {
+			err = store.Add(context.Background(), hash, content)
+		}
+		require.ErrorIs(t, err, errDiskCacheCapacity)
+		store.cache.Wait()
+		require.False(t, store.Exists(hash), "refused completion must not advertise a RAM-only object")
+	}
 }
 
 func TestStoreAddReaderRejectsWhenDiskExceededWithoutMemory(t *testing.T) {
