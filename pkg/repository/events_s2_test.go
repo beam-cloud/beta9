@@ -5,16 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	s2pb "github.com/s2-streamstore/s2-sdk-go/generated"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
@@ -231,6 +236,51 @@ func TestS2StubCacheRequiredContentRequiresWorkspaceAndStub(t *testing.T) {
 			t.Fatalf("%s: expected no streams, got %#v", tc.name, streams)
 		}
 	}
+}
+
+func TestReadStubCacheRequiredContentCapResumesWithoutPartialSnapshot(t *testing.T) {
+	var lastSeq atomic.Uint64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		seq, _ := strconv.ParseUint(request.URL.Query().Get("seq_num"), 10, 64)
+		lastSeq.Store(seq)
+		count := defaultS2EventReadLimit
+		if seq >= maxStubCacheReadRecords {
+			count = 1
+		}
+		batch := &s2pb.ReadBatch{Records: make([]*s2pb.SequencedRecord, count)}
+		for i := range batch.Records {
+			batch.Records[i] = &s2pb.SequencedRecord{SeqNum: seq + uint64(i)}
+		}
+		if seq == 0 || seq == maxStubCacheReadRecords {
+			hash := "before-cap"
+			if seq > 0 {
+				hash = "after-cap"
+			}
+			batch.Records[0].Body = []byte(fmt.Sprintf(`{"type":"%s","data":{"kind":"clip_v2","items":[{"hash":"%s"}]}}`, types.EventStubCacheRequiredContent, hash))
+		}
+		body, err := proto.Marshal(batch)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	repo := &S2EventRepository{basin: s2.New("test", &s2.ClientOptions{
+		HTTPClient:       server.Client(),
+		MakeBasinBaseURL: func(string) string { return server.URL },
+	}).Basin("test")}
+
+	items, err := repo.ReadStubCacheRequiredContent(context.Background(), "workspace", "stub")
+	require.ErrorContains(t, err, "snapshot incomplete")
+	require.Nil(t, items)
+	require.EqualValues(t, maxStubCacheReadRecords, repo.stubCacheRequiredContentState(repo.stubCacheStreamName("workspace", "stub")).nextSeqNum)
+
+	items, err = repo.ReadStubCacheRequiredContent(context.Background(), "workspace", "stub")
+	require.NoError(t, err)
+	require.EqualValues(t, maxStubCacheReadRecords, lastSeq.Load())
+	require.Len(t, items, 2)
+	require.ElementsMatch(t, []string{"before-cap", "after-cap"}, []string{items[0].Hash, items[1].Hash})
 }
 
 func TestMergeStubCacheRequiredContentRecordKeepsLatestItem(t *testing.T) {

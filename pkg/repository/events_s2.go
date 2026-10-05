@@ -1668,7 +1668,7 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		}
 	}
 	if recordsRead >= maxStubCacheReadRecords {
-		log.Warn().Str("stream", string(streamName)).Int("records_read", recordsRead).Msg("stub cache required-content read hit record cap; result may be partial")
+		return nil, fmt.Errorf("stub cache required-content read reached record cap (%d); snapshot incomplete", maxStubCacheReadRecords)
 	}
 
 	return stubCacheRequiredContentItems(state.items), nil
