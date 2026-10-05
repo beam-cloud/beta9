@@ -503,6 +503,44 @@ func TestValidateRestoredOCIArchiveSizeLimit(t *testing.T) {
 	require.ErrorContains(t, client.validateRestoredImageArchive(archivePath, "image", 512<<20), "missing embedded image metadata")
 }
 
+func TestWaitForV1ArchiveCacheRetriesUnavailableReplica(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, contentCache := newCheckpointCacheForTest(t, ctx)
+	source, cacheDir := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "file"), []byte("image data"), 0o600))
+	archivePath := filepath.Join(t.TempDir(), "image.clip")
+	require.NoError(t, clip.NewClipArchiver().Create(clip.ClipArchiverOptions{
+		SourcePath: source, OutputFile: archivePath, ArchivePath: archivePath,
+	}))
+	data, err := os.ReadFile(archivePath)
+	require.NoError(t, err)
+	metadata := &cache.FSMetadata{Hash: fmt.Sprintf("%x", sha256.Sum256(data)), Size: uint64(len(data))}
+	localPath := filepath.Join(cacheDir, "image.clip")
+	lookups := 0
+	client := &ImageClient{
+		imageCachePath: cacheDir,
+		cacheClient:    contentCache,
+		archiveContentMetadata: func(context.Context, string) (*cache.FSMetadata, error) {
+			lookups++
+			if lookups == 2 {
+				_, _, err := server.StoreReader(ctx, bytes.NewReader(data), metadata.Hash)
+				require.NoError(t, err)
+			} else if lookups == 3 {
+				// Bound a broken replica retry without waiting for its 30-minute timeout.
+				require.NoError(t, os.WriteFile(localPath, data, 0o600))
+			}
+			return metadata, nil
+		},
+	}
+
+	item, err := client.waitForV1ArchiveCache("image")
+	require.NoError(t, err)
+	require.Equal(t, metadata.Hash, item.Hash)
+	require.Equal(t, 2, lookups, "retry the replica without requiring a local archive")
+	require.NoFileExists(t, localPath)
+}
+
 func TestWaitForV1ArchiveCacheSeedsExistingMetadata(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
