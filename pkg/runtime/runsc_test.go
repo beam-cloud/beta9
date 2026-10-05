@@ -436,36 +436,45 @@ func TestAlignRestoreSpec(t *testing.T) {
 func TestAlignRestoreSpecMatchesSavedDeviceLayout(t *testing.T) {
 	devices := []specs.LinuxDevice{{Path: "/dev/nvidiactl"}, {Path: "/dev/nvidia1"}}
 	for _, withoutDevices := range []bool{true, false} {
-		dir := t.TempDir()
-		bundle := writeRunscBundle(t, dir, true)
-		spec := specs.Spec{
-			Linux: &specs.Linux{Devices: devices}, Annotations: map[string]string{runscGPUAnnotation: "true"},
-			Process: &specs.Process{Env: []string{"NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=1"}},
-			Mounts:  []specs.Mount{testProcMount, testCgroupMount, {Destination: "/volumes/models", Type: "bind", Source: "/models"}},
+		for _, groups := range [][]uint32{nil, {1234}} {
+			umask := uint32(0o077)
+			wantUser := specs.User{UID: 1000, GID: 1001, Username: "requested", Umask: &umask, AdditionalGids: groups}
+			dir := t.TempDir()
+			bundle := writeRunscBundle(t, dir, true)
+			spec := specs.Spec{
+				Linux: &specs.Linux{Devices: devices}, Annotations: map[string]string{runscGPUAnnotation: "true"},
+				Process: &specs.Process{User: wantUser, Env: []string{"NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=1"}},
+				Mounts:  []specs.Mount{testProcMount, testCgroupMount, {Destination: "/volumes/models", Type: "bind", Source: "/models"}},
+			}
+			raw, err := json.Marshal(spec)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(bundle, "config.json"), raw, 0600))
+			saved := spec
+			saved.Process = &specs.Process{User: specs.User{AdditionalGids: []uint32{44, 110}}}
+			saved.Linux = &specs.Linux{Devices: devices}
+			if withoutDevices {
+				saved.Linux.Devices = nil
+			}
+			image := writeRunscCheckpointSpec(t, dir, &saved)
+			require.NoError(t, alignRestoreSpec(bundle, image))
+			raw, err = os.ReadFile(filepath.Join(bundle, "config.json"))
+			require.NoError(t, err)
+			spec = specs.Spec{}
+			require.NoError(t, json.Unmarshal(raw, &spec))
+			if withoutDevices {
+				require.Empty(t, spec.Linux.Devices)
+				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=1")
+			} else {
+				require.Equal(t, devices, spec.Linux.Devices)
+				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=void")
+			}
+			require.Contains(t, spec.Process.Env, "WORKER_GPU_DEVICES=1")
+			require.Equal(t, saved.Mounts, spec.Mounts)
+			if withoutDevices && len(groups) == 0 {
+				wantUser.AdditionalGids = saved.Process.User.AdditionalGids
+			}
+			require.Equal(t, wantUser, spec.Process.User)
 		}
-		raw, err := json.Marshal(spec)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(bundle, "config.json"), raw, 0600))
-		saved := spec
-		saved.Linux = &specs.Linux{Devices: devices}
-		if withoutDevices {
-			saved.Linux.Devices = nil
-		}
-		image := writeRunscCheckpointSpec(t, dir, &saved)
-		require.NoError(t, alignRestoreSpec(bundle, image))
-		raw, err = os.ReadFile(filepath.Join(bundle, "config.json"))
-		require.NoError(t, err)
-		spec = specs.Spec{}
-		require.NoError(t, json.Unmarshal(raw, &spec))
-		if withoutDevices {
-			require.Empty(t, spec.Linux.Devices)
-			require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=1")
-		} else {
-			require.Equal(t, devices, spec.Linux.Devices)
-			require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=void")
-		}
-		require.Contains(t, spec.Process.Env, "WORKER_GPU_DEVICES=1")
-		require.Equal(t, saved.Mounts, spec.Mounts)
 	}
 }
 

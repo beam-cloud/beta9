@@ -161,7 +161,9 @@ func sanitizeNvidiaCDIContainerEdits(edits *cdispecs.ContainerEdits) bool {
 		return false
 	}
 
-	changed := false
+	// NVIDIA devices are world-accessible; host DRM groups are unnecessary in nvproxy.
+	changed := len(edits.AdditionalGIDs) > 0
+	edits.AdditionalGIDs = nil
 
 	if len(edits.Mounts) > 0 {
 		count := len(edits.Mounts)

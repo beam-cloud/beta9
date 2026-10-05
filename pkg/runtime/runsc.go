@@ -716,6 +716,11 @@ func alignRestoreSpec(bundlePath, imagePath string) error {
 		return nil
 	}
 	if devicesCleared && spec.Process != nil {
+		// Older Beam workers added only CDI host groups to the empty base group list.
+		// Preserve those saved credentials without overriding requested groups or IDs.
+		if saved.Process != nil && len(spec.Process.User.AdditionalGids) == 0 {
+			spec.Process.User.AdditionalGids = saved.Process.User.AdditionalGids
+		}
 		for _, env := range spec.Process.Env {
 			if devices, ok := strings.CutPrefix(env, types.WorkerGPUDevicesEnv+"="); ok {
 				spec.Process.Env = nvidiaVisibleDevices(spec.Process.Env, devices)
