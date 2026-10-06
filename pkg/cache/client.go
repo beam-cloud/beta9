@@ -1035,23 +1035,8 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 		}
 	}
 
-	for round := 0; round < 2; round++ {
-		for _, host := range c.remainingHostsForRequest(checked) {
-			if ctx.Err() != nil {
-				return false, ctx.Err()
-			}
-			client, exists := c.grpcClientForHost(ctx, host)
-			if !exists {
-				delete(checked, host.HostId)
-			}
-			if exists && checkHost(client, host) {
-				return true, nil
-			}
-		}
-		if round == 1 || ctx.Err() != nil || c.hostDirectory == nil || c.hostMap == nil {
-			break
-		}
-		c.refreshMissingContentHosts(ctx)
+	if c.tryRemainingHosts(ctx, checked, checkHost) {
+		return true, nil
 	}
 
 	return false, ctx.Err()
@@ -2008,6 +1993,30 @@ func (c *Client) remainingHostsForRequest(checked map[string]*Host) []*Host {
 	return out
 }
 
+// Try known off-ring hosts, then refresh discovery once before giving up.
+func (c *Client) tryRemainingHosts(ctx context.Context, checked map[string]*Host, tryHost func(proto.CacheClient, *Host) bool) bool {
+	for round := 0; round < 2; round++ {
+		for _, host := range c.remainingHostsForRequest(checked) {
+			if ctx.Err() != nil {
+				return false
+			}
+			client, ok := c.grpcClientForHost(ctx, host)
+			if !ok {
+				delete(checked, host.HostId)
+				continue
+			}
+			if tryHost(client, host) {
+				return true
+			}
+		}
+		if round == 1 || ctx.Err() != nil || c.hostDirectory == nil || c.hostMap == nil {
+			break
+		}
+		c.refreshMissingContentHosts(ctx)
+	}
+	return false
+}
+
 func (c *Client) GetContent(hash string, offset int64, length int64, opts struct {
 	RoutingKey string
 }) ([]byte, error) {
@@ -2094,35 +2103,19 @@ func (c *Client) GetContentStream(hash string, offset int64, length int64, opts 
 		// Not on any top-N host: the ring may have changed since the store.
 		// Ask the rest before the caller gives up on the cache (see
 		// tryReadContentIntoKnownHosts).
-		for round := 0; round < 2; round++ {
-			for _, host := range c.remainingHostsForRequest(checked) {
-				if ctx.Err() != nil {
-					return
-				}
-				client, ok := c.grpcClientForHost(ctx, host)
-				if !ok {
-					delete(checked, host.HostId)
-					continue
-				}
-				has, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
-				if err != nil {
-					delete(checked, host.HostId)
-					continue
-				}
-				if !has.Exists {
-					continue
-				}
-				c.rememberHostForContent(hash, opts.RoutingKey, host)
-				Logger.Debugf("cache stream found content off-ring: hash=%s host=%s", hash, host.HostId)
-				if streamFrom(client, host) {
-					return
-				}
+		c.tryRemainingHosts(ctx, checked, func(client proto.CacheClient, host *Host) bool {
+			has, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
+			if err != nil {
+				delete(checked, host.HostId)
+				return false
 			}
-			if round == 1 || ctx.Err() != nil || c.hostDirectory == nil || c.hostMap == nil {
-				break
+			if !has.Exists {
+				return false
 			}
-			c.refreshMissingContentHosts(ctx)
-		}
+			c.rememberHostForContent(hash, opts.RoutingKey, host)
+			Logger.Debugf("cache stream found content off-ring: hash=%s host=%s", hash, host.HostId)
+			return streamFrom(client, host)
+		})
 	}()
 
 	return contentChan, nil
