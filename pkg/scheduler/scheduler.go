@@ -1234,7 +1234,7 @@ func canSkipCheckpoint(request *types.ContainerRequest) bool {
 }
 
 func hostMatchesCheckpoint(checkpoint *types.Checkpoint, worker *types.Worker) bool {
-	// Native GPU checkpoints must wait for a reported profile during rolling upgrades.
+	// Checkpoints with NVIDIA device entries need a reported profile during rolling upgrades.
 	if checkpoint == nil || checkpoint.CompatibleWithWorker(worker.CheckpointCompatibilityKey) {
 		return true
 	}
