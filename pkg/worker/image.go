@@ -1129,7 +1129,7 @@ func (c *ImageClient) waitForV1ArchiveCache(imageID string) (types.CacheRequired
 	ctx, cancel := context.WithTimeout(context.Background(), imageArchiveDownloadTimeout)
 	defer cancel()
 
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(reporterFlushInterval)
 	defer ticker.Stop()
 	request := &types.ContainerRequest{ImageId: imageID}
 	localPath := c.clipV1ArchiveDataCachePath(imageID)
