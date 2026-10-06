@@ -1,40 +1,16 @@
 package worker
 
-// This file implements the cache required-content reconciliation that runs on
-// workers. Responsibilities are split to keep the worker boundary clear:
-//
-//   - cacheContentReporter: records, on the worker, which content a stub needs
-//     (coalesced to S2) and refreshes the per-stub recency window. It never
-//     decides placement or moves bytes.
-//   - WorkerCacheManager reconcile loop: on the node that currently hosts the
-//     cache server, materializes content the local host owns (HRW), except
-//     checkpoints and disk snapshots which materialize on every matching
-//     accelerator in locality. Ownership has hysteresis: an owner that is
-//     briefly endpoint-less (e.g. a rolling deploy) keeps its keys; only after
-//     a grace period do its keys fail over to the next-ranked live host.
-//
-// The loop runs at two cadences. A sync (every few seconds, and immediately
-// when this worker publishes) lists the locality's recent stubs, refreshes the
-// store's protected set and pulls what is missing; the store answers every
-// completeness check from memory, so a quiet sync costs one coordinator round
-// trip. A maintenance pass (the configured interval) does the work that walks
-// disks: TTL pruning of content, checkpoints, image and stub-code caches.
-//
-// Disk pressure is handled by one mechanism: the reconciler decides what is
-// protected and the store evicts everything else, LRU, when usage crosses the
-// eviction watermark. Above the watermark the protected set shrinks to the
-// newest stubs' content that fits below it and materialization pauses; the
-// pause lifts with hysteresis so the two never churn against each other.
-//
-// The worker is trustless: all coordinator state (recent stubs, locks) is
-// brokered through the gateway, and all origin credentials are fetched from the
-// gateway on demand and held in memory only. Nothing secret is written to disk,
-// Redis, or S2.
+// Workers report each successfully loaded stub's required content and recency.
+// Reconciliation materializes owned content, protects all recent requirements
+// from eviction, and pauses new writes under disk pressure. Coordinator state
+// and short-lived origin credentials are brokered through the gateway.
 
 import (
 	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -55,6 +31,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -158,10 +135,11 @@ type cacheContentReporter struct {
 	activeStubs    func(workspaceID string) []string
 	reconcileNow   func()
 
-	mu       sync.Mutex
-	pending  map[reporterKey]map[string]types.CacheRequiredContentItem
-	recent   map[reporterStubKey]struct{}
-	reported map[string]struct{}
+	mu         sync.Mutex
+	pending    map[reporterKey]map[string]types.CacheRequiredContentItem
+	recent     map[reporterStubKey]struct{}
+	reported   map[string]struct{}
+	activation singleflight.Group
 }
 
 type reporterKey struct {
@@ -215,6 +193,23 @@ func (r *cacheContentReporter) touchRecentStub(workspaceID, stubID string) {
 	r.mu.Lock()
 	r.recent[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
 	r.mu.Unlock()
+}
+
+// Concurrent starts must wait for the first owner checks before claiming the
+// report. The reporter mutex never spans those checks.
+func (r *cacheContentReporter) guardFirstActivation(stubID string, guard func()) {
+	if r == nil || stubID == "" {
+		return
+	}
+	r.activation.Do(stubID, func() (any, error) {
+		r.mu.Lock()
+		_, reported := r.reported[stubID]
+		r.mu.Unlock()
+		if !reported {
+			guard()
+		}
+		return nil, nil
+	})
 }
 
 // shouldGenerateRequiredContent reports whether this worker process has already
@@ -343,6 +338,13 @@ func (r *cacheContentReporter) flush() {
 	// with the next flush like a failed publish.
 	indexed := false
 	unindexed := make(map[reporterStubKey]struct{})
+	// A failed publish must not advance recency: peers cache required content
+	// by that score, so retrying the write alone would leave them stale.
+	for key := range failed {
+		stub := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
+		delete(recent, stub)
+		unindexed[stub] = struct{}{}
+	}
 	if r.metadata != nil {
 		for key := range recent {
 			if err := r.metadata.AddRecentStub(r.ctx, r.locality, key.workspaceID, key.stubID, r.recentStubTTL); err != nil {
@@ -510,21 +512,19 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 	stubCount = len(stubs)
 
 	stubContent, requiredContentComplete := m.loadRecentRequiredContent(stubs)
+	if !requiredContentComplete {
+		return // Keep the existing protection set when required content cannot be read.
+	}
 	protectedContent, activeCheckpointIDs := protectedContentFromRecentStubs(stubContent, m.accelerator)
 	server.SetProtectedContent(protectedContent)
 
 	if maintain {
-		// TTL pruning is only safe with a complete picture of what is
-		// required; a failed required-content read defers it to the next pass.
-		if requiredContentComplete {
-			m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
-		}
-		m.pruneOwnerImageCache(stubContent, server.EvictWatermarkPct(), server.DiskMinFreeBytes(), requiredContentComplete)
+		m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
+		m.pruneOwnerImageCache(stubContent, server.EvictWatermarkPct(), server.DiskMinFreeBytes())
 		m.pruneOwnerStubCodeCache(server)
 	}
 
-	gated, reconcileAllowlist := m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, stubContent)
-	if gated {
+	if m.reconcileGatedByDiskUsage(server, localHostID) {
 		return
 	}
 
@@ -538,7 +538,7 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 			return
 		default:
 		}
-		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget, reconcileAllowlist, pool)
+		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget, pool)
 		if budget.exhausted() {
 			break
 		}
@@ -559,10 +559,10 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
 		return nil
 	}
-	return m.reconcileStubContent(server, localHostID, stub, items, budget, nil, nil)
+	return m.reconcileStubContent(server, localHostID, stub, items, budget, nil)
 }
 
-func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}, pool *reconcilePool) []string {
+func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, pool *reconcilePool) []string {
 	checkpointIDs := []string{}
 	for _, item := range orderedRequiredContentItems(items) {
 		select {
@@ -574,11 +574,6 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 		routingKey := item.RoutingKey
 		if routingKey == "" {
 			routingKey = item.Hash
-		}
-		if allowlist != nil {
-			if _, ok := allowlist[item.Hash]; !ok {
-				continue
-			}
 		}
 
 		if item.Kind == types.CacheContentKindCheckpoint {
@@ -834,70 +829,6 @@ func protectedContentFromRecentStubs(stubs []recentStubContent, accelerator stri
 	return protected, activeCheckpointIDs
 }
 
-// pressureProtectedContentFromRecentStubs ranks recent stubs' content, newest
-// stub first, and protects it until the budget is spent. An item's size is what
-// its report carried or, failing that, what localSize says is on disk: CLIP v2
-// layer reports carry no size, and letting them through unbudgeted protects
-// every layer on the node, which is exactly the state eviction cannot leave.
-func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelerator string, usage cache.DiskUsage, softWatermark float64, minFreeBytes int64, localSize func(hash string) int64) map[string]struct{} {
-	budget := pressureProtectionBudgetBytes(usage, softWatermark, minFreeBytes)
-	if budget <= 0 {
-		return map[string]struct{}{}
-	}
-
-	orderedStubs := append([]recentStubContent(nil), stubs...)
-	sort.SliceStable(orderedStubs, func(i, j int) bool {
-		return orderedStubs[i].stub.LastSeen.After(orderedStubs[j].stub.LastSeen)
-	})
-
-	protected := map[string]struct{}{}
-	var protectedBytes int64
-	for _, stub := range orderedStubs {
-		for _, item := range orderedRequiredContentItems(stub.items) {
-			if item.Hash == "" || !cacheContentAppliesToAccelerator(item, accelerator) {
-				continue
-			}
-			if _, ok := protected[item.Hash]; ok {
-				continue
-			}
-			sizeBytes := maxInt64(item.SizeBytes, 0)
-			if sizeBytes == 0 && localSize != nil {
-				sizeBytes = maxInt64(localSize(item.Hash), 0)
-			}
-			if sizeBytes > 0 && protectedBytes+sizeBytes > budget {
-				continue
-			}
-			protected[item.Hash] = struct{}{}
-			protectedBytes += sizeBytes
-		}
-	}
-	return protected
-}
-
-// pressureProtectionBudgetBytes is how much protected content may sit on the
-// disk for filesystem usage to come to rest at the resume watermark (and the
-// free-byte reserve). The watermark is measured on the whole filesystem but
-// eviction can only remove indexed cache content, so everything else on the
-// volume (OS, worker images, the uv and build caches) is taken off the top:
-// budgeting the cache as if it were alone parks the disk at watermark plus
-// that footprint, where every object is protected and nothing is evictable.
-func pressureProtectionBudgetBytes(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {
-	if usage.TotalBytes == 0 {
-		return 0
-	}
-	resumeWatermark := reconcileResumeDiskUsagePct(softWatermark)
-	budget := int64(resumeWatermark * float64(usage.TotalBytes))
-	if minFreeBytes > 0 {
-		if reserveBudget := int64(usage.TotalBytes) - minFreeBytes; reserveBudget < budget {
-			budget = reserveBudget
-		}
-	}
-	if usage.EvictableBytes > 0 && usage.UsedBytes > usage.EvictableBytes {
-		budget -= int64(usage.UsedBytes - usage.EvictableBytes)
-	}
-	return maxInt64(budget, 0)
-}
-
 func orderedRequiredContentItems(items []types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
 	ordered := append([]types.CacheRequiredContentItem(nil), items...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -960,25 +891,18 @@ type imageCacheEntry struct {
 	modified time.Time
 }
 
-func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, softWatermark float64, minFreeBytes int64, protectedSetComplete bool) int64 {
+func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, softWatermark float64, minFreeBytes int64) int64 {
 	root := getImageCachePath()
 	usage, err := fastDiskUsage(root)
 	if err != nil {
 		return 0
 	}
 	bytesToFree := maxInt64(reconcilePressureBytesToFree(usage, softWatermark, minFreeBytes), 0)
-	var allowlist map[string]struct{}
-	if bytesToFree > 0 {
-		allowlist = pressureProtectedContentFromRecentStubs(stubs, m.accelerator, usage, softWatermark, minFreeBytes, nil)
-	}
 	mountRoot := filepath.Join(types.AgentImagesPath, "mnt")
 	mountSetComplete := m.pruneStaleImageMountPaths(mountRoot)
-	protected := protectedImageCache(stubs, allowlist, root, mountRoot)
+	protected := protectedImageCache(stubs, root, mountRoot)
 	protected.complete = protected.complete && mountSetComplete
-	cutoff := time.Time{}
-	if protectedSetComplete {
-		cutoff = time.Now().Add(-m.recentStubTTL())
-	}
+	cutoff := time.Now().Add(-m.recentStubTTL())
 	evicted, freed := evictImageCache(root, protected, cutoff, bytesToFree)
 	if evicted > 0 {
 		event := log.Info()
@@ -1051,24 +975,19 @@ func pruneStaleImageMountPathsWithLookup(mountRoot string, workerExists func(str
 	return pruned, complete
 }
 
-func protectedImageCache(stubs []recentStubContent, allowlist map[string]struct{}, cacheRoot, mountRoot string) imageCacheProtection {
+func protectedImageCache(stubs []recentStubContent, cacheRoot, mountRoot string) imageCacheProtection {
 	protected := imageCacheProtection{names: map[string]struct{}{}, complete: true}
 	protectImage := func(imageID string) {
 		if imageID == "" {
 			return
 		}
-		for _, suffix := range []string{".clip", ".rclip", ".cache"} {
+		for _, suffix := range []string{".clip", ".rclip", ".rclip.batch", ".cache"} {
 			protected.names[imageID+suffix] = struct{}{}
 		}
 	}
 
 	for _, stub := range stubs {
 		for _, item := range stub.items {
-			if allowlist != nil {
-				if _, ok := allowlist[item.Hash]; !ok {
-					continue
-				}
-			}
 			protectImage(item.ImageID)
 			if item.Kind == types.CacheContentKindClipV2 && isSHA256HexDigest(item.Hash) {
 				protected.names[item.Hash] = struct{}{}
@@ -1109,7 +1028,7 @@ func protectedImageCache(stubs []recentStubContent, allowlist map[string]struct{
 }
 
 func activeImageLayers(cacheRoot, imageID string) ([]string, bool) {
-	for _, suffix := range []string{".rclip", ".clip"} {
+	for _, suffix := range []string{".rclip.batch", ".rclip", ".clip"} {
 		path := filepath.Join(cacheRoot, imageID+suffix)
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
@@ -1189,6 +1108,10 @@ func listImageCacheEntries(root string) []imageCacheEntry {
 		if !layer {
 			switch filepath.Ext(name) {
 			case ".clip", ".rclip", ".cache":
+			case ".batch":
+				if !strings.HasSuffix(name, ".rclip.batch") {
+					continue
+				}
 			default:
 				continue
 			}
@@ -1366,14 +1289,9 @@ func fastDiskUsage(path string) (cache.DiskUsage, error) {
 	}, nil
 }
 
-// reconcileGatedByDiskUsage keeps materialization and eviction from churning
-// against each other on a mostly-full node. Above the eviction watermark the
-// protected set shrinks to the newest stubs' content that fits below it, the
-// store evicts everything else, and the cycle pauses; the pause holds until
-// usage falls below the resume watermark. Between the two watermarks
-// materialization is limited to that same ranked set, so nothing is pulled
-// that the next eviction would remove.
-func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, stubContent []recentStubContent) (bool, map[string]struct{}) {
+// Pause materialization under pressure without sacrificing recent required
+// content. The store reclaims only unprotected content and rejects new writes.
+func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string) bool {
 	usage, err := server.RefreshDiskUsage()
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Str("logical_host", localHostID).Msg("cache reconciliation failed to refresh disk usage")
@@ -1385,31 +1303,23 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 
 	watermark := server.EvictWatermarkPct()
 	resumeWatermark := reconcileResumeDiskUsagePct(watermark)
-	pressureMode := usage.UsagePct >= resumeWatermark
 	if !m.reconcilePausedAt.IsZero() {
 		if usage.UsagePct > resumeWatermark {
-			pressureMode = true
-		} else {
-			log.Info().
-				Str("locality", m.locality).
-				Str("logical_host", localHostID).
-				Dur("paused_for", time.Since(m.reconcilePausedAt)).
-				Float64("disk_usage_pct", usage.UsagePct).
-				Float64("resume_watermark_pct", resumeWatermark).
-				Msg("cache reconciliation resumed: disk usage below resume watermark")
-			m.reconcilePausedAt = time.Time{}
+			return true
 		}
-	}
-
-	var reconcileAllowlist map[string]struct{}
-	if pressureMode && usage.TotalBytes > 0 {
-		reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, watermark, server.DiskMinFreeBytes(), server.ContentSizeBytes)
-		server.SetProtectedContent(reconcileAllowlist)
+		log.Info().
+			Str("locality", m.locality).
+			Str("logical_host", localHostID).
+			Dur("paused_for", time.Since(m.reconcilePausedAt)).
+			Float64("disk_usage_pct", usage.UsagePct).
+			Float64("resume_watermark_pct", resumeWatermark).
+			Msg("cache reconciliation resumed: disk usage below resume watermark")
+		m.reconcilePausedAt = time.Time{}
 	}
 
 	minFreeBytes := server.DiskMinFreeBytes()
 	if reconcilePressureBytesToFree(usage, watermark, minFreeBytes) > 0 && m.reconcilePausedAt.IsZero() {
-		// The protected set just shrank; reclaim now rather than on the store
+		// Reclaim unprotected content now rather than on the store
 		// monitor's next tick. While a pause holds, the monitor owns eviction:
 		// repeating it every sync would only re-walk the same candidates and
 		// re-log the same outcome.
@@ -1427,10 +1337,9 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 				Uint64("available_bytes", usage.AvailableBytes).
 				Float64("watermark_pct", watermark).
 				Float64("resume_watermark_pct", resumeWatermark).
-				Int("protected_candidates", len(reconcileAllowlist)).
 				Msg("cache reconciliation paused: disk above eviction watermark")
 		}
-		return true, nil
+		return true
 	}
 
 	if server.DiskPressureExceeded() {
@@ -1444,10 +1353,10 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 				Int64("min_free_bytes", minFreeBytes).
 				Msg("cache reconciliation paused: hard disk write gate active")
 		}
-		return true, nil
+		return true
 	}
 
-	return false, reconcileAllowlist
+	return false
 }
 
 func reconcilePressureBytesToFree(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {
@@ -1558,6 +1467,8 @@ func (b *reconcileBudget) take(sizeBytes int64) bool {
 	b.remaining--
 	if sizeBytes > 0 {
 		b.bytesRemaining -= sizeBytes
+	} else if b.byteLimited {
+		b.bytesRemaining = 0 // Unknown layers may be huge; recheck disk before another.
 	}
 	return true
 }
@@ -1643,10 +1554,10 @@ func reconcileStatusIsFailure(status string) bool {
 }
 
 // Success backoff is only valid when the cache blob is the complete materialized
-// state. Checkpoints also require an extracted runtime/filesystem payload, which
-// can be pruned independently of the archive blob.
+// state. Checkpoints and image archives also require filesystem state that can
+// be pruned independently of the archive blob.
 func reconcileSuccessBackoffApplies(item types.CacheRequiredContentItem) bool {
-	return item.Kind != types.CacheContentKindCheckpoint
+	return item.Kind != types.CacheContentKindCheckpoint && item.Kind != types.CacheContentKindClipV1
 }
 
 // reconcileBackingOff reports whether an item failed to materialize recently and
@@ -1838,6 +1749,19 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation replica copy failed")
 	} else if ok {
+		if item.Kind == types.CacheContentKindClipV1 {
+			size := item.SizeBytes
+			if size <= 0 {
+				size = server.ContentSizeBytes(item.Hash)
+			}
+			if size <= 0 {
+				return types.CacheAuditStatusOriginFailure
+			}
+			if err := server.StoreSyntheticContentInCacheFS(ctx, routingKey, item.Hash, uint64(size)); err != nil {
+				log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation archive metadata publication failed")
+				return types.CacheAuditStatusOriginFailure
+			}
+		}
 		return types.CacheAuditStatusMaterialized
 	}
 
@@ -1854,22 +1778,24 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 	case types.CacheContentKindVolume, types.CacheContentKindDiskSnapshot:
 		return m.materializeWorkspaceObject(ctx, server, stub, item)
 	case types.CacheContentKindClipV1:
-		// The v1 archive is one content-addressed object; re-fetch the whole
-		// archive from the image registry (the same source the image-load path
-		// pulls it from) and store it under its hash + cachefs path.
+		// Whole archive blobs include OCI metadata and legacy data archives.
 		return m.materializeArchiveObject(ctx, server, stub, item, routingKey)
 	default:
 		return types.CacheAuditStatusMiss
 	}
 }
 
-// materializeArchiveObject re-fetches the whole CLIP v1 archive from the image
+// materializeArchiveObject re-fetches a CLIP data or metadata archive from the image
 // registry and stores it as a single content object, mirroring the embedded
 // image-archive cache that the image-load path populates. It pulls from the same
 // source the load path uses: the S3 image registry for the S3 store, or the
 // mounted image volume for the local store. No credentials are persisted.
 func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
+	if strings.HasSuffix(routingKey, ".rclip.batch") {
+		return m.materializeDerivedArchiveObject(ctx, server, stub, item, routingKey)
+	}
 	source := &pb.CacheSource{
+		Path:         routingKey,
 		CachePath:    routingKey,
 		ExpectedHash: item.Hash,
 	}
@@ -1884,10 +1810,16 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 			creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "", imageID)
 			if creds != nil && creds.imageArchiveStorage != nil {
 				s3 = imageArchiveRegistryConfig(creds.imageArchiveStorage)
-			} else if creds != nil && creds.imageArchiveDataURL != "" {
+			} else if creds != nil {
 				// No S3 credentials are vended to private-pool workers; fetch
 				// the archive through the gateway-presigned URL instead.
-				return m.materializeArchiveObjectFromURL(ctx, server, item, routingKey, creds.imageArchiveDataURL)
+				url := creds.imageArchiveDataURL
+				if strings.HasSuffix(item.Source, "."+reg.RemoteImageFileExtension) {
+					url = creds.imageArchiveURL
+				}
+				if url != "" {
+					return m.materializeArchiveObjectFromURL(ctx, server, item, routingKey, url)
+				}
 			}
 		}
 		if s3.BucketName == "" || item.Source == "" {
@@ -1900,10 +1832,6 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 		source.AccessKey = s3.AccessKey
 		source.SecretKey = s3.SecretKey
 		source.ForcePathStyle = s3.ForcePathStyle
-	} else {
-		// Local registry store: the durable archive lives on the mounted image
-		// volume at the cachefs path; read it directly (no bucket/credentials).
-		source.Path = routingKey
 	}
 
 	resp, err := server.StoreContentFromSource(ctx, &pb.CacheStoreContentFromSourceRequest{Source: source})
@@ -1914,55 +1842,118 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 	return types.CacheAuditStatusOriginFailure
 }
 
-// materializeArchiveObjectFromURL downloads the CLIP v1 data archive through a
-// gateway-presigned URL into a temp file on the cache disk and stores it on the
-// local cache server under its content hash + cachefs path. Used by
-// private-pool workers, which hold no S3 credentials.
-func (m *WorkerCacheManager) materializeArchiveObjectFromURL(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey, url string) string {
-	tmp, err := os.CreateTemp(filepath.Dir(m.checkpointRoot), "archive-origin-*.tmp")
+// Derived metadata keeps the original archive as its origin. Rebuilding it uses
+// the same source credentials as the canonical metadata archive, then verifies the derived
+// bytes against the reported hash before publishing its separate cachefs path.
+func (m *WorkerCacheManager) materializeDerivedArchiveObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
+	if m.metadataStore == nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	originalPath := strings.TrimSuffix(routingKey, ".batch")
+	original, _ := m.metadataStore.GetFsNode(ctx, cache.GenerateFsID(originalPath))
+	if original != nil && original.Hash != "" && !server.HasCompleteContent(original.Hash, int64(original.Size)) && m.client != nil {
+		_, _ = m.client.MaterializeFromReplica(ctx, server, original.Hash, originalPath, int64(original.Size))
+	}
+	if original == nil || original.Hash == "" || !server.HasCompleteContent(original.Hash, int64(original.Size)) {
+		originalItem := item
+		originalItem.Hash, originalItem.ExpectedHash = "", ""
+		originalItem.RoutingKey = originalPath
+		if status := m.materializeArchiveObject(ctx, server, stub, originalItem, originalPath); status != types.CacheAuditStatusMaterialized {
+			return status
+		}
+		var err error
+		original, err = m.metadataStore.GetFsNode(ctx, cache.GenerateFsID(originalPath))
+		if err != nil || original == nil || original.Hash == "" {
+			return types.CacheAuditStatusOriginFailure
+		}
+	}
+
+	tempRoot := ""
+	if m.checkpointRoot != "" {
+		tempRoot = filepath.Dir(m.checkpointRoot)
+	}
+	tempDir, err := os.MkdirTemp(tempRoot, ".archive-derive-")
 	if err != nil {
-		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation failed to create archive temp file")
 		return types.CacheAuditStatusOriginFailure
 	}
-	tmpPath := tmp.Name()
-	_ = tmp.Close()
-	defer os.Remove(tmpPath)
-
-	if err := downloadImageArchiveURL(ctx, url, tmpPath); err != nil {
-		log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive url fetch failed")
+	defer os.RemoveAll(tempDir)
+	originalFile := filepath.Join(tempDir, "original.rclip")
+	file, err := os.Create(originalFile)
+	if err != nil {
 		return types.CacheAuditStatusOriginFailure
 	}
-
-	resp, err := server.StoreContentFromSource(ctx, &pb.CacheStoreContentFromSourceRequest{
-		Source: &pb.CacheSource{
-			Path:         tmpPath,
-			CachePath:    routingKey,
-			ExpectedHash: item.Hash,
-		},
-	})
-	if err == nil && resp != nil && resp.Ok {
-		return types.CacheAuditStatusMaterialized
+	_, copyErr := io.Copy(file, newCheckpointCacheReader(ctx, original.Hash, int64(original.Size), server.ReadContentInto))
+	closeErr := file.Close()
+	if copyErr != nil || closeErr != nil {
+		return types.CacheAuditStatusOriginFailure
 	}
-	log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive url store failed")
-	return types.CacheAuditStatusOriginFailure
+	derivedFile := filepath.Join(tempDir, "derived.rclip.batch")
+	if err := clip.NewClipArchiver().TranscodeMetadata(originalFile, derivedFile, nil); err != nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	file, err = os.Open(derivedFile)
+	if err != nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	defer file.Close()
+	return storeArchiveObject(ctx, server, file, item.Hash, routingKey)
 }
 
-// imageIDFromArchiveSource derives the image ID from a CLIP v1 required-content
-// source descriptor (the data archive object key, "<imageId>.clip").
+// materializeArchiveObjectFromURL streams an archive from its brokered URL into
+// the local cache, verifies its content hash, and publishes the cachefs path.
+func (m *WorkerCacheManager) materializeArchiveObjectFromURL(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey, url string) string {
+	ctx, cancel := context.WithTimeout(ctx, imageArchiveDownloadTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	resp, err := imageArchiveHTTPClient.Do(req)
+	if err != nil {
+		return types.CacheAuditStatusOriginFailure
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return types.CacheAuditStatusOriginFailure
+	}
+
+	return storeArchiveObject(ctx, server, resp.Body, item.Hash, routingKey)
+}
+
+func storeArchiveObject(ctx context.Context, server *cache.Server, reader io.Reader, expectedHash, routingKey string) string {
+	hash, size, err := server.StoreReader(ctx, reader, expectedHash)
+	if err == nil {
+		err = server.StoreSyntheticContentInCacheFS(ctx, routingKey, hash, size)
+	}
+	if err != nil {
+		log.Debug().Err(err).Str("hash", expectedHash).Str("routing_key", routingKey).Msg("cache reconciliation image archive store failed")
+		return types.CacheAuditStatusOriginFailure
+	}
+	return types.CacheAuditStatusMaterialized
+}
+
+// imageIDFromArchiveSource derives the image ID from a .clip or .rclip object key.
 func imageIDFromArchiveSource(source string) string {
 	base := filepath.Base(source)
-	if !strings.HasSuffix(base, "."+reg.LocalImageFileExtension) {
+	ext := filepath.Ext(base)
+	if ext != "."+reg.LocalImageFileExtension && ext != "."+reg.RemoteImageFileExtension {
 		return ""
 	}
-	return strings.TrimSuffix(base, "."+reg.LocalImageFileExtension)
+	return strings.TrimSuffix(base, ext)
 }
 
 func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
-	if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" {
-		return server.HasCompleteContent(item.Hash, item.SizeBytes) &&
-			checkpointMaterialized(filepath.Join(m.checkpointRoot, item.CheckpointID))
+	if !server.HasCompleteContent(item.Hash, item.SizeBytes) {
+		return false
 	}
-	return server.HasCompleteContent(item.Hash, item.SizeBytes)
+	if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" {
+		return checkpointMaterialized(filepath.Join(m.checkpointRoot, item.CheckpointID))
+	}
+	if item.Kind == types.CacheContentKindClipV1 && m.metadataStore != nil {
+		entry, err := m.metadataStore.GetFsNode(m.ctx, cache.GenerateFsID(filepath.Join("/", filepath.Clean(routingKey))))
+		return err == nil && entry != nil && entry.Hash == item.Hash && int64(entry.Size) == server.ContentSizeBytes(item.Hash)
+	}
+	return true
 }
 
 func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {

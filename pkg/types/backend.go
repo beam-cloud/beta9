@@ -465,8 +465,36 @@ type Checkpoint struct {
 
 const CheckpointRuntimeFilesystem = "filesystem"
 
+const (
+	CheckpointCompatibilityLegacyPrefix     string = "v1:"
+	CheckpointCompatibilityGPUDevicesPrefix string = "v2:"
+)
+
 func (c *Checkpoint) IsFilesystemOnly() bool {
 	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), CheckpointRuntimeFilesystem)
+}
+
+// RequiresGPUDeviceSpec identifies checkpoints with saved NVIDIA device entries.
+// Workers that clear those entries cannot restore them.
+func (c *Checkpoint) RequiresGPUDeviceSpec() bool {
+	return c != nil && strings.HasPrefix(c.CompatibilityKey, CheckpointCompatibilityGPUDevicesPrefix)
+}
+
+// CompatibleWithWorker lets workers retaining NVIDIA devices restore matching
+// older checkpoints; older workers cannot restore checkpoints retaining devices.
+func (c *Checkpoint) CompatibleWithWorker(key string) bool {
+	if c == nil || c.CompatibilityKey == "" || key == "" {
+		return false
+	}
+	if c.CompatibilityKey == key {
+		return true
+	}
+	checkpointProfile, legacy := strings.CutPrefix(c.CompatibilityKey, CheckpointCompatibilityLegacyPrefix)
+	if !legacy || checkpointProfile == "" {
+		return false
+	}
+	workerProfile, retainsDevices := strings.CutPrefix(key, CheckpointCompatibilityGPUDevicesPrefix)
+	return retainsDevices && checkpointProfile == workerProfile
 }
 
 func (c *Checkpoint) ToProto() *pb.Checkpoint {

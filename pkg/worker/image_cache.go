@@ -405,18 +405,13 @@ func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey s
 		c.maybeLogSummary()
 	}()
 
-	// CLIP's ContentExists hook does not include the decompressed layer size, so
-	// a positive response cannot distinguish a complete layer from a stale
-	// partially-published page directory. Let the following StoreContentFromLocalPath
-	// call do a size-aware selected-host completeness check before it decides
-	// whether the store can be skipped.
-	return false, nil
+	ctx, cancel := context.WithTimeout(context.Background(), imageLayerCacheCheckTimeout)
+	defer cancel()
+	return c.client.IsCachedReachableContext(ctx, hash, opts.RoutingKey)
 }
 
 // ContentExistsWithSize performs a size-aware completeness check on the
-// selected cache host. Unlike ContentExists, a positive response guarantees
-// the cached content is complete, so callers (e.g. CLIP's build-time layer
-// warm) can safely skip re-spooling and re-storing the layer.
+// selected cache host before a build-time layer store is skipped.
 func (c *imageContentCache) ContentExistsWithSize(hash string, size int64, opts struct{ RoutingKey string }) (exists bool, err error) {
 	if c == nil || c.client == nil {
 		return false, cache.ErrClientNotFound

@@ -182,7 +182,7 @@ func TestAuditCacheChurnEventUsesScopedS2WorkspacePrefix(t *testing.T) {
 	require.Equal(t, "machine-a", events.cacheEvents[0].MachineID)
 }
 
-func TestPressureProtectedContentPrioritizesNewestStubWorkingSet(t *testing.T) {
+func TestProtectedContentIncludesEveryRecentStubWorkingSet(t *testing.T) {
 	now := time.Now()
 	stubs := []recentStubContent{
 		{
@@ -201,113 +201,12 @@ func TestPressureProtectedContentPrioritizesNewestStubWorkingSet(t *testing.T) {
 		},
 	}
 
-	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 100}, 0.75, 0, nil)
+	protected, _ := protectedContentFromRecentStubs(stubs, "")
 
 	require.Contains(t, protected, "new-checkpoint")
 	require.Contains(t, protected, "new-volume")
-	require.NotContains(t, protected, "old-checkpoint")
-	require.NotContains(t, protected, "old-volume")
-}
-
-// TestPressureProtectionBudgetSubtractsNonEvictableUsage reproduces the staging
-// cache-server that parked at 81% with every object protected: 258.9 GB disk,
-// watermark 0.70 (resume 0.67), 40 GiB reserve, 168.6 GB of indexed content
-// and 41 GB of other usage (OS, uv/buildah caches) on the same volume.
-func TestPressureProtectionBudgetSubtractsNonEvictableUsage(t *testing.T) {
-	const gb = 1_000_000_000
-	total := uint64(258_906_374_144)
-	indexed := uint64(168_552_086_665)
-	other := uint64(41 * gb)
-	reserve := int64(42_949_672_960)
-	usage := cache.DiskUsage{
-		TotalBytes:     total,
-		UsedBytes:      indexed + other,
-		AvailableBytes: total - indexed - other,
-		EvictableBytes: indexed,
-	}
-	usage.UsagePct = float64(usage.UsedBytes) / float64(total)
-	require.InDelta(t, 0.81, usage.UsagePct, 0.005)
-
-	budget := pressureProtectionBudgetBytes(usage, 0.70, reserve)
-
-	// Protected content plus the other usage must land at the resume watermark.
-	resumeUsed := int64(0.67 * float64(total))
-	require.Equal(t, resumeUsed-int64(other), budget)
-	require.Less(t, budget, int64(indexed), "the budget must be below what is on disk, or nothing is ever evictable")
-	require.InDelta(t, 0.67, float64(budget+int64(other))/float64(total), 0.001)
-
-	// The reserve wins when it is the tighter bound, still net of other usage.
-	tight := pressureProtectionBudgetBytes(usage, 0.95, reserve)
-	require.Equal(t, int64(total)-reserve-int64(other), tight)
-
-	// Without an index reading the old whole-disk budget is used unchanged.
-	blind := usage
-	blind.EvictableBytes = 0
-	require.Equal(t, resumeUsed, pressureProtectionBudgetBytes(blind, 0.70, reserve))
-
-	// Other usage larger than the whole budget leaves nothing to protect.
-	swamped := usage
-	swamped.UsedBytes = total - 1*gb
-	swamped.EvictableBytes = 10 * gb
-	require.Equal(t, int64(0), pressureProtectionBudgetBytes(swamped, 0.70, reserve))
-}
-
-// TestPressureProtectedContentBudgetsUnsizedItemsByLocalSize reproduces the
-// staging cache-server that sat at 83% with "candidates=382 protected=382
-// eligible=0": CLIP v2 layer reports carry no SizeBytes, so every layer was
-// protected outside the budget. Sizes must come from the local index instead.
-func TestPressureProtectedContentBudgetsUnsizedItemsByLocalSize(t *testing.T) {
-	now := time.Now()
-	// Budget: resume watermark 0.67 of 1000 = 670, minus 100 of non-cache usage = 570.
-	usage := cache.DiskUsage{TotalBytes: 1000, UsedBytes: 900, EvictableBytes: 800}
-	stubs := []recentStubContent{
-		{
-			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "new", LastSeen: now},
-			items: []types.CacheRequiredContentItem{
-				{Hash: "new-layer-a", Kind: types.CacheContentKindClipV2},
-				{Hash: "new-layer-b", Kind: types.CacheContentKindClipV2},
-			},
-		},
-		{
-			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-time.Hour)},
-			items: []types.CacheRequiredContentItem{
-				{Hash: "old-layer", Kind: types.CacheContentKindClipV2},
-				{Hash: "old-absent-layer", Kind: types.CacheContentKindClipV2},
-			},
-		},
-	}
-	onDisk := map[string]int64{"new-layer-a": 300, "new-layer-b": 200, "old-layer": 300}
-	localSize := func(hash string) int64 { return onDisk[hash] }
-
-	// Without a size source every unsized item is protected and nothing is evictable.
-	all := pressureProtectedContentFromRecentStubs(stubs, "", usage, 0.70, 0, nil)
-	require.Len(t, all, 4)
-
-	protected := pressureProtectedContentFromRecentStubs(stubs, "", usage, 0.70, 0, localSize)
-	require.Contains(t, protected, "new-layer-a")
-	require.Contains(t, protected, "new-layer-b")
-	require.NotContains(t, protected, "old-layer", "300 more bytes would exceed the 570 budget")
-	// Content the store does not hold costs nothing to protect; it only
-	// bounds what may be materialized once pressure clears.
-	require.Contains(t, protected, "old-absent-layer")
-}
-
-func TestPressureProtectedContentPrioritizesCheckpointWithinStub(t *testing.T) {
-	now := time.Now()
-	stubs := []recentStubContent{
-		{
-			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "stub", LastSeen: now},
-			items: []types.CacheRequiredContentItem{
-				{Hash: "volume", Kind: types.CacheContentKindVolume, SizeBytes: 50},
-				{Hash: "checkpoint", Kind: types.CacheContentKindCheckpoint, SizeBytes: 50},
-			},
-		},
-	}
-
-	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 90}, 0.75, 0, nil)
-
-	require.Contains(t, protected, "checkpoint")
-	require.NotContains(t, protected, "volume")
+	require.Contains(t, protected, "old-checkpoint")
+	require.Contains(t, protected, "old-volume")
 }
 
 func newCheckpointCacheForTest(t *testing.T, ctx context.Context) (*cache.Server, *cache.Client) {
@@ -326,9 +225,11 @@ func newCheckpointCacheForTest(t *testing.T, ctx context.Context) (*cache.Server
 	require.NotNil(t, host)
 	host.Addr = addr
 	host.PrivateAddr = addr
+	hostSnapshot := *host
 
 	client, err := cache.NewClientWithHostDirectory(ctx, cfg, metadataStore, testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-		return []*cache.Host{host}, nil
+		host := hostSnapshot
+		return []*cache.Host{&host}, nil
 	}), "test")
 	require.NoError(t, err)
 	client.AttachLocalServer(server)
@@ -422,6 +323,24 @@ func TestReporterGeneratesOncePerStub(t *testing.T) {
 	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.True(t, r.shouldGenerateRequiredContent("stub-b"))
+
+	started, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var startOnce sync.Once
+	guard := func() { startOnce.Do(func() { close(started) }); <-release }
+	go func() { r.guardFirstActivation("stub-c", guard); close(returned) }()
+	<-started
+	joined := make(chan struct{})
+	go func() { r.guardFirstActivation("stub-c", guard); close(joined) }()
+	select {
+	case <-joined:
+		t.Fatal("a concurrent activation skipped the in-flight owner checks")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-returned
+	<-joined
+	require.True(t, r.shouldGenerateRequiredContent("stub-c"))
+	r.guardFirstActivation("stub-c", func() { t.Fatal("a reported stub repeated its first-activation checks") })
 }
 
 func TestReporterCoalescesItemsPerStubKind(t *testing.T) {
@@ -489,10 +408,12 @@ func TestReporterRetriesRequiredContentWhenEventWriteFails(t *testing.T) {
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	r.flush()
 	require.Empty(t, fake.pushed)
+	require.Zero(t, metadata.recent, "failed reports must not advance the required-content cache key")
 
 	fake.err = nil
 	r.flush()
 	require.Len(t, fake.pushed, 1)
+	require.Equal(t, 1, metadata.recent, "successful retry must refresh the required-content cache key")
 }
 
 func TestReporterVolumeRespectsSizeThreshold(t *testing.T) {
@@ -631,9 +552,8 @@ func TestReconcileBudgetCapsBytesPerCycle(t *testing.T) {
 	require.True(t, huge.take(1<<30))
 	require.False(t, huge.take(1))
 
-	// Items with unknown size only consume the item budget.
+	// Unknown-size items consume the remaining byte budget before another fetch.
 	unknown := newReconcileBudget(2, 10)
-	require.True(t, unknown.take(0))
 	require.True(t, unknown.take(0))
 	require.False(t, unknown.take(0))
 	require.True(t, unknown.exhausted())
@@ -681,6 +601,42 @@ func TestLoadRecentRequiredContentCachesByLastSeen(t *testing.T) {
 	_, complete = manager.loadRecentRequiredContent([]cache.RecentStub{{WorkspaceID: "ws", StubID: "stub-c", LastSeen: seenA}})
 	require.False(t, complete)
 	require.NotContains(t, manager.requiredContentCache, "ws|stub-c")
+}
+
+// An S2 outage must not turn a retained object into an eviction candidate.
+func TestReconcileKeepsProtectionWhenRequiredContentReadFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	cfg.Server.DiskCacheEvictWatermarkPct = 0.00001 // Force the soft eviction pass.
+	metadata := &localityRecentMetadataStore{MockCacheMetadataStore: cache.NewMockCacheMetadataStore(), stubs: map[string][]cache.RecentStub{"test": {{WorkspaceID: "ws", StubID: "stub", LastSeen: time.Now()}}}}
+	server, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(metadata), cache.WithServerHostID("local"))
+	require.NoError(t, err)
+	hash, _, err := server.StoreReader(ctx, strings.NewReader("recent required content"), "")
+	require.NoError(t, err)
+	require.NoError(t, server.Close())
+	// Reload a stale marker so the cache's fresh-write grace does not mask eviction.
+	require.NoError(t, filepath.WalkDir(cfg.Server.DiskCacheDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Name() == "_complete" {
+			return os.Chtimes(path, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour))
+		}
+		return nil
+	}))
+	server, err = cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(metadata), cache.WithServerHostID("local"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	server.SetProtectedContent(map[string]struct{}{hash: {}})
+	client, err := cache.NewClientWithHostDirectory(ctx, cfg, metadata, testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) { return nil, nil }), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+	manager := &WorkerCacheManager{ctx: ctx, locality: "test", client: client, server: server, metadataStore: metadata, eventRepo: &fakeEventRepo{readErr: errors.New("s2 unavailable")}}
+	manager.reconcileOnce(false)
+	_, err = server.ReclaimDisk()
+	require.NoError(t, err)
+	require.True(t, server.HasCompleteContent(hash, 0))
 }
 
 // windowedRecentMetadataStore honors the lookback the way the coordinator does.
@@ -961,7 +917,7 @@ func TestReconcileStubSkipsRecentlyMaterializedMissingContent(t *testing.T) {
 
 	hash := strings.Repeat("a", 64)
 	fake := &fakeEventRepo{items: []types.CacheRequiredContentItem{{
-		Kind:       types.CacheContentKindClipV1,
+		Kind:       types.CacheContentKindClipV2,
 		Hash:       hash,
 		RoutingKey: routingKey,
 		SizeBytes:  1,
@@ -985,23 +941,91 @@ func TestReconcileStubSkipsRecentlyMaterializedMissingContent(t *testing.T) {
 	require.False(t, localServer.HasCompleteContent(hash, 1))
 }
 
-// The gateway no longer vends S3 archive credentials; private-pool workers
-// must materialize CLIP v1 archives through the gateway-presigned data URL.
-func TestMaterializeArchiveObjectUsesBrokeredDataURL(t *testing.T) {
+type archivePublicationMetadataStore struct {
+	*cache.MockCacheMetadataStore
+	fail bool
+}
+
+func (m *archivePublicationMetadataStore) SetFsNode(ctx context.Context, id string, node *cache.FSMetadata) error {
+	if m.fail {
+		return errors.New("cachefs publication unavailable")
+	}
+	return m.MockCacheMetadataStore.SetFsNode(ctx, id, node)
+}
+
+func TestMaterializeImageArchivesRepairsMissingAndStaleCacheFS(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	metadata := &archivePublicationMetadataStore{MockCacheMetadataStore: cache.NewMockCacheMetadataStore()}
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	cfg.Client.NTopHosts = 2
+	newServer := func(id string) (*cache.Server, *cache.Host) {
+		serverCfg := cfg
+		serverCfg.Server.DiskCacheDir = t.TempDir()
+		server, err := cache.NewServerWithOptions(ctx, serverCfg, "test", cache.WithServerMetadataStore(metadata), cache.WithServerHostID(id))
+		require.NoError(t, err)
+		addr, err := server.Serve("127.0.0.1:0", "")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, server.Close()) })
+		host := server.Host()
+		host.Addr, host.PrivateAddr = addr, addr
+		return server, host
+	}
+	local, localHost := newServer("archive-local")
+	peer, peerHost := newServer("archive-peer")
+	clientCfg := cfg
+	clientCfg.Server.DiskCacheDir = t.TempDir()
+	client, err := cache.NewClientWithHostDirectory(ctx, clientCfg, metadata, testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{localHost, peerHost}, nil
+	}), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+	client.AttachLocalServer(local)
+	require.Eventually(t, func() bool { return len(client.RankedReadHosts("archive")) == 2 }, 3*time.Second, 20*time.Millisecond)
+	manager := &WorkerCacheManager{ctx: ctx, metadataStore: metadata, client: client}
+	for _, suffix := range []string{".rclip", ".rclip.batch"} {
+		for _, fromPeer := range []bool{false, true} {
+			route := fmt.Sprintf("/images/archive-%t%s", fromPeer, suffix)
+			source := local
+			if fromPeer {
+				source = peer
+			}
+			hash, size, err := source.StoreReader(ctx, strings.NewReader(route), "")
+			require.NoError(t, err)
+			item := types.CacheRequiredContentItem{Hash: hash, Kind: types.CacheContentKindClipV1}
+			require.False(t, reconcileSuccessBackoffApplies(item))
+			for _, stale := range []bool{false, true} {
+				if stale {
+					require.NoError(t, local.StoreSyntheticContentInCacheFS(ctx, route, strings.Repeat("f", 64), size+1))
+				}
+				require.False(t, manager.requiredContentComplete(local, item, route))
+				require.Equal(t, types.CacheAuditStatusMaterialized, manager.materialize(ctx, local, cache.RecentStub{}, item, route))
+				require.True(t, manager.requiredContentComplete(local, item, route))
+				entry, err := metadata.GetFsNode(ctx, cache.GenerateFsID(route))
+				require.NoError(t, err)
+				require.Equal(t, hash, entry.Hash)
+				require.Equal(t, size, entry.Size)
+			}
+			metadata.fail = true
+			require.Equal(t, types.CacheAuditStatusOriginFailure, manager.materialize(ctx, local, cache.RecentStub{}, item, route))
+			metadata.fail = false
+		}
+	}
+}
+
+// Private workers fetch image archives through gateway-presigned URLs.
+func TestMaterializeArchiveObjectUsesBrokeredURL(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	content := []byte("clip v1 archive data")
-	sum := sha256.Sum256(content)
-	hash := hex.EncodeToString(sum[:])
-
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(content)
+		_, _ = w.Write([]byte(r.URL.Path))
 	}))
 	defer origin.Close()
 
 	cfg := testCacheManagerConfig(t.TempDir()).Cache
-	server, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("local-host"))
+	metadata := cache.NewMockCacheMetadataStore()
+	server, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(metadata), cache.WithServerHostID("local-host"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 
@@ -1009,10 +1033,9 @@ func TestMaterializeArchiveObjectUsesBrokeredDataURL(t *testing.T) {
 		resp: &pb.GetCacheOriginCredentialsResponse{
 			Ok:                  true,
 			ImageArchiveDataUrl: origin.URL + "/image-a.clip",
+			ImageArchiveUrl:     origin.URL + "/image-a.rclip",
 		},
 	}
-	checkpointRoot := filepath.Join(t.TempDir(), "checkpoints")
-	require.NoError(t, os.MkdirAll(checkpointRoot, 0o755))
 	manager := &WorkerCacheManager{
 		ctx: ctx,
 		config: types.AppConfig{
@@ -1020,25 +1043,104 @@ func TestMaterializeArchiveObjectUsesBrokeredDataURL(t *testing.T) {
 		},
 		workerRepo:       workerRepo,
 		originCredsCache: make(map[string]*originCredentials),
-		checkpointRoot:   checkpointRoot,
 	}
 
 	stub := cache.RecentStub{WorkspaceID: "workspace-a", StubID: "stub-a"}
-	item := types.CacheRequiredContentItem{
-		Hash:      hash,
-		SizeBytes: int64(len(content)),
-		ImageID:   "image-a",
-		Source:    "image-a." + registry.LocalImageFileExtension,
-		Kind:      types.CacheContentKindClipV1,
+	for _, extension := range []string{registry.LocalImageFileExtension, registry.RemoteImageFileExtension} {
+		content := []byte("/image-a." + extension)
+		sum := sha256.Sum256(content)
+		hash := hex.EncodeToString(sum[:])
+		item := types.CacheRequiredContentItem{
+			Hash:      hash,
+			SizeBytes: int64(len(content)),
+			Source:    "image-a." + extension,
+			Kind:      types.CacheContentKindClipV1,
+		}
+
+		status := manager.materializeArchiveObject(ctx, server, stub, item, "/images/image-a."+extension)
+
+		require.Equal(t, types.CacheAuditStatusMaterialized, status)
+		require.True(t, server.HasCompleteContent(hash, int64(len(content))))
+		entry, err := metadata.GetFsNode(ctx, cache.GenerateFsID("/images/image-a."+extension))
+		require.NoError(t, err)
+		require.Equal(t, hash, entry.Hash)
+		require.NotEmpty(t, workerRepo.requests)
+		require.Equal(t, "image-a", workerRepo.requests[0].ImageId)
+		require.Equal(t, "workspace-a", workerRepo.requests[0].WorkspaceId)
 	}
+	item := types.CacheRequiredContentItem{Hash: strings.Repeat("f", 64), Source: "image-a.rclip", Kind: types.CacheContentKindClipV1}
+	require.Equal(t, types.CacheAuditStatusOriginFailure, manager.materializeArchiveObject(ctx, server, stub, item, "/images/corrupt.rclip"))
+	require.False(t, server.HasCompleteContent(item.Hash, 0))
+	_, err = metadata.GetFsNode(ctx, cache.GenerateFsID("/images/corrupt.rclip"))
+	require.Error(t, err)
+}
 
-	status := manager.materializeArchiveObject(ctx, server, stub, item, "/images/image-a.clip")
-
-	require.Equal(t, types.CacheAuditStatusMaterialized, status)
-	require.True(t, server.HasCompleteContent(hash, int64(len(content))))
-	require.NotEmpty(t, workerRepo.requests)
+func TestMaterializeDerivedArchivePreservesOriginalAndVerifiesHash(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root := t.TempDir()
+	originalPath := filepath.Join(root, "image-a.rclip")
+	archiver := clip.NewClipArchiver()
+	oci := &clipCommon.OCIStorageInfo{DecompressedHashByLayer: map[string]string{"sha256:layer": strings.Repeat("a", 64)}}
+	require.NoError(t, archiver.CreateRemoteArchive(oci, testClipV1Metadata(t), originalPath))
+	derivedPath := originalPath + ".batch"
+	require.NoError(t, archiver.TranscodeMetadata(originalPath, derivedPath, nil))
+	originalBytes, err := os.ReadFile(originalPath)
+	require.NoError(t, err)
+	derivedBytes, err := os.ReadFile(derivedPath)
+	require.NoError(t, err)
+	originalSum, derivedSum := sha256.Sum256(originalBytes), sha256.Sum256(derivedBytes)
+	originalHash, derivedHash := hex.EncodeToString(originalSum[:]), hex.EncodeToString(derivedSum[:])
+	var fetches atomic.Int32
+	var unavailable atomic.Bool
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		if unavailable.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		require.Equal(t, "/image-a.rclip", r.URL.Path)
+		_, _ = w.Write(originalBytes)
+	}))
+	defer origin.Close()
+	metadata := cache.NewMockCacheMetadataStore()
+	server, err := cache.NewServerWithOptions(ctx, testCacheManagerConfig(t.TempDir()).Cache, "test", cache.WithServerMetadataStore(metadata), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	workerRepo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{Ok: true, ImageArchiveUrl: origin.URL + "/image-a.rclip"}}
+	manager := &WorkerCacheManager{
+		ctx: ctx, metadataStore: metadata, checkpointRoot: filepath.Join(root, "checkpoints"), workerRepo: workerRepo,
+		config:           types.AppConfig{ImageService: types.ImageServiceConfig{RegistryStore: registry.S3ImageRegistryStore}},
+		originCredsCache: make(map[string]*originCredentials),
+	}
+	stub := cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"}
+	item := types.CacheRequiredContentItem{Hash: derivedHash, SizeBytes: int64(len(derivedBytes)), Source: "image-a.rclip", Kind: types.CacheContentKindClipV1}
+	route := "/images/image-a.rclip.batch"
+	require.Equal(t, types.CacheAuditStatusMaterialized, manager.materializeArchiveObject(ctx, server, stub, item, route))
+	require.EqualValues(t, 1, fetches.Load())
+	require.True(t, server.HasCompleteContent(originalHash, int64(len(originalBytes))))
+	require.True(t, server.HasCompleteContent(derivedHash, int64(len(derivedBytes))))
+	for path, hash := range map[string]string{strings.TrimSuffix(route, ".batch"): originalHash, route: derivedHash} {
+		entry, err := metadata.GetFsNode(ctx, cache.GenerateFsID(path))
+		require.NoError(t, err)
+		require.Equal(t, hash, entry.Hash)
+	}
 	require.Equal(t, "image-a", workerRepo.requests[0].ImageId)
-	require.Equal(t, "workspace-a", workerRepo.requests[0].WorkspaceId)
+
+	// Origin can disappear after the canonical archive is cached.
+	unavailable.Store(true)
+	require.Equal(t, types.CacheAuditStatusMaterialized, manager.materializeArchiveObject(ctx, server, stub, item, route))
+	require.EqualValues(t, 1, fetches.Load())
+	require.NoError(t, server.StoreSyntheticContentInCacheFS(ctx, "/images/bad.rclip", originalHash, uint64(len(originalBytes))))
+	item.Hash = strings.Repeat("f", 64)
+	require.Equal(t, types.CacheAuditStatusOriginFailure, manager.materializeArchiveObject(ctx, server, stub, item, "/images/bad.rclip.batch"))
+	require.False(t, server.HasCompleteContent(item.Hash, 0))
+	_, err = metadata.GetFsNode(ctx, cache.GenerateFsID("/images/bad.rclip.batch"))
+	require.Error(t, err)
+	require.EqualValues(t, 1, fetches.Load())
+	leftovers, err := filepath.Glob(filepath.Join(root, ".archive-derive-*"))
+	require.NoError(t, err)
+	require.Empty(t, leftovers)
 }
 
 func TestMaterializeOCILayerPrivateWorkerRequiresGatewayRegistryCredentials(t *testing.T) {
@@ -1968,7 +2070,7 @@ func TestEnsureV1ArchiveDataCacheUsesExistingLocalArchive(t *testing.T) {
 			ImageService: types.ImageServiceConfig{RegistryStore: registry.S3ImageRegistryStore},
 		},
 	}
-	path, ok := client.restoreV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, nil)
+	path, ok := client.restoreV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, &lazyImageArchive{})
 	require.True(t, ok)
 	require.Equal(t, archivePath, path)
 }
@@ -2047,7 +2149,7 @@ func TestEvictImageCacheProtectsRecentAndMountedImages(t *testing.T) {
 	meta := testClipV1Metadata(t)
 	meta.StorageInfo = oci
 	require.NoError(t, clip.NewClipArchiver().CreateRemoteArchive(oci, meta, filepath.Join(cacheRoot, "active.rclip")))
-	for _, name := range []string{activeHash, recentHash, staleHash, "recent.rclip", "stale.rclip"} {
+	for _, name := range []string{activeHash, recentHash, staleHash, "active.rclip.batch", "recent.rclip", "recent.rclip.batch", "stale.rclip", "stale.rclip.batch"} {
 		require.NoError(t, os.WriteFile(filepath.Join(cacheRoot, name), []byte("cached"), 0o600))
 	}
 	old := time.Now().Add(-2 * time.Hour)
@@ -2057,17 +2159,34 @@ func TestEvictImageCacheProtectsRecentAndMountedImages(t *testing.T) {
 
 	protected := protectedImageCache([]recentStubContent{{items: []types.CacheRequiredContentItem{{
 		ImageID: "recent", Hash: recentHash, Kind: types.CacheContentKindClipV2,
-	}}}}, nil, cacheRoot, mountRoot)
+	}}}}, cacheRoot, mountRoot)
 	evicted, _ := evictImageCache(cacheRoot, protected, time.Now().Add(-time.Hour), 0)
 
 	require.True(t, protected.complete)
-	require.Equal(t, 2, evicted)
+	require.Equal(t, 3, evicted)
 	require.FileExists(t, filepath.Join(cacheRoot, activeHash))
 	require.FileExists(t, filepath.Join(cacheRoot, recentHash))
 	require.FileExists(t, filepath.Join(cacheRoot, "active.rclip"))
+	require.FileExists(t, filepath.Join(cacheRoot, "active.rclip.batch"))
 	require.FileExists(t, filepath.Join(cacheRoot, "recent.rclip"))
+	require.FileExists(t, filepath.Join(cacheRoot, "recent.rclip.batch"))
 	require.NoFileExists(t, filepath.Join(cacheRoot, staleHash))
 	require.NoFileExists(t, filepath.Join(cacheRoot, "stale.rclip"))
+	require.NoFileExists(t, filepath.Join(cacheRoot, "stale.rclip.batch"))
+}
+
+func TestActiveImageLayersFromDerivedArchive(t *testing.T) {
+	root := t.TempDir()
+	hash := strings.Repeat("a", 64)
+	originalPath := filepath.Join(root, "active.rclip")
+	archiver := clip.NewClipArchiver()
+	oci := &clipCommon.OCIStorageInfo{DecompressedHashByLayer: map[string]string{"sha256:active": hash}}
+	require.NoError(t, archiver.CreateRemoteArchive(oci, testClipV1Metadata(t), originalPath))
+	require.NoError(t, archiver.TranscodeMetadata(originalPath, originalPath+".batch", nil))
+	require.NoError(t, os.Remove(originalPath))
+	layers, ok := activeImageLayers(root, "active")
+	require.True(t, ok)
+	require.Equal(t, []string{hash}, layers)
 }
 
 func TestEvictImageCacheProtectsLayersWithoutMountedMetadata(t *testing.T) {
@@ -2082,7 +2201,7 @@ func TestEvictImageCacheProtectsLayersWithoutMountedMetadata(t *testing.T) {
 		require.NoError(t, os.Chtimes(entry.path, old, old))
 	}
 
-	protected := protectedImageCache(nil, nil, cacheRoot, mountRoot)
+	protected := protectedImageCache(nil, cacheRoot, mountRoot)
 	evicted, _ := evictImageCache(cacheRoot, protected, time.Now().Add(-time.Hour), 0)
 
 	require.False(t, protected.complete)
@@ -2129,4 +2248,22 @@ func writeStubCodeCacheEntry(t *testing.T, root, name string, readyTime time.Tim
 	require.NoError(t, os.WriteFile(readyPath, []byte("ok"), 0644))
 	require.NoError(t, os.Chtimes(readyPath, readyTime, readyTime))
 	return readyPath
+}
+
+func TestReconciliationPauseUsesResumeWatermark(t *testing.T) {
+	root := t.TempDir()
+	usage, err := fastDiskUsage(root)
+	require.NoError(t, err)
+	for _, delta := range []float64{.02, .05} {
+		cfg := testCacheManagerConfig(root).Cache
+		cfg.Server.DiskCacheMaxUsagePct = 100
+		cfg.Server.DiskCacheEvictWatermarkPct = usage.UsagePct + delta
+		server, err := cache.NewServerWithOptions(context.Background(), cfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, server.Close()) })
+		manager := &WorkerCacheManager{ctx: context.Background(), reconcilePausedAt: time.Now()}
+		paused := delta < cacheReconcileDiskUsageHysteresisPct
+		require.Equal(t, paused, manager.reconcileGatedByDiskUsage(server, server.HostID()))
+		require.Equal(t, !paused, manager.reconcilePausedAt.IsZero())
+	}
 }

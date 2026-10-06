@@ -237,6 +237,9 @@ func TestSanitizeNvidiaCDIConfigRemovesIncompatibleGVisorEdits(t *testing.T) {
 	if strings.Contains(spec, "update-ldcache") {
 		t.Fatalf("ldcache hook was not removed:\n%s", spec)
 	}
+	if strings.Contains(spec, "additionalGids") {
+		t.Fatalf("host groups were not removed:\n%s", spec)
+	}
 	if !strings.Contains(spec, "/usr/bin/nvidia-persistenced") {
 		t.Fatalf("non-socket NVIDIA mount should remain:\n%s", spec)
 	}
@@ -255,6 +258,7 @@ kind: nvidia.com/gpu
 devices:
   - name: "0"
     containerEdits:
+      additionalGids: [44, 992]
       deviceNodes:
         - path: /dev/nvidia0
           major: 195
@@ -282,6 +286,7 @@ devices:
             - --link
             - ../libGLX_nvidia.so.0::/usr/lib/x86_64-linux-gnu/libGLX_indirect.so.0
 containerEdits:
+  additionalGids: [44, 992]
   mounts:
     - hostPath: /run/nvidia-persistenced/socket
       containerPath: /run/nvidia-persistenced/socket

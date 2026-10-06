@@ -27,7 +27,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/registry"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
-	beta9Storage "github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/clip/pkg/clip"
@@ -44,6 +43,7 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -57,6 +57,7 @@ const (
 	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
 	imageLayerPrepareConcurrency             = 8
 	imageLayerPrepareGrace                   = 2 * time.Second
+	imageLayerCacheCheckTimeout              = 3 * time.Second
 	imageMountReadyTimeout                   = 5 * time.Second
 	// baseImageWarmTimeout bounds a background base image layer warm, which
 	// outlives the build that started it and so needs its own deadline.
@@ -173,14 +174,20 @@ type ImageClient struct {
 	// it delegates to the cache client.
 	archiveContentMetadata func(ctx context.Context, cachePath string) (*cache.FSMetadata, error)
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
-	v2ImageRefs       *common.SafeMap[string]
-	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
-	clipRuntimeMu     sync.RWMutex
-	clipActive        map[string]*types.ContainerRequest
-	clipRuntimePIDs   map[int]clipPIDReference
-	clipPIDCache      map[int]clipPIDReference
-	clipReadEvents    chan clipCommon.ReadTraceEvent
-	clipAggregates    map[string]*clipReadAggregate
+	v2ImageRefs     *common.SafeMap[string]
+	archiveMetadata sync.Map // image id -> *imageRecord
+	clipRuntimeMu   sync.RWMutex
+	clipActive      map[string]*types.ContainerRequest
+	clipRuntimePIDs map[int]clipPIDReference
+	clipPIDCache    map[int]clipPIDReference
+	clipReadEvents  chan clipCommon.ReadTraceEvent
+	clipAggregates  map[string]*clipReadAggregate
+}
+
+type imageRecord struct {
+	metadata *clipCommon.ClipArchiveMetadata
+	info     os.FileInfo
+	path     string
 }
 
 func NewImageClient(config types.AppConfig, workerId, workerPoolName string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -212,7 +219,6 @@ func NewImageClient(config types.AppConfig, workerId, workerPoolName string, wor
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		mountLocks:         make(map[string]*sync.Mutex),
 		v2ImageRefs:        common.NewSafeMap[string](),
-		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
 		clipActive:         make(map[string]*types.ContainerRequest),
 		clipRuntimePIDs:    make(map[int]clipPIDReference),
 		clipPIDCache:       make(map[int]clipPIDReference),
@@ -289,9 +295,9 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
 	startTime := time.Now()
 
-	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
+	if c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit") {
 		c.recordSuccessfulImageLoad(ctx, request, nil)
-		return elapsed, nil
+		return time.Since(startTime), nil
 	}
 
 	// One mutex per image serializes every mount attempt in this process, and
@@ -303,9 +309,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.local_mount_lock"), localLockStart, time.Since(localLockStart), true, nil)
 	defer unlockMount()
 
-	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_local_lock"); ok {
+	if c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_local_lock") {
 		c.recordSuccessfulImageLoad(ctx, request, nil)
-		return elapsed, nil
+		return time.Since(startTime), nil
 	}
 
 	archive, err := c.prepareLazyImageArchive(ctx, request)
@@ -343,12 +349,25 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 	if c == nil || c.contentReporter == nil || request == nil {
 		return
 	}
-	if meta == nil && c.v2ArchiveMetadata != nil {
-		meta, _ = c.v2ArchiveMetadata.Get(request.ImageId)
+	if meta == nil {
+		meta = c.cachedImageMetadata(request.ImageId)
 	}
+	c.contentReporter.guardFirstActivation(cacheRequestStubID(request), func() {
+		c.guardCachedImageContent(ctx, request.ImageId, meta)
+	})
 	if _, isOCI := ociStorageInfo(meta); isOCI {
-		if report, ok := c.imageRequiredContent(ctx, request, meta); ok {
-			c.publishRequiredContent(request, report)
+		stubID := cacheRequestStubID(request)
+		if c.contentReporter.shouldGenerateRequiredContent(stubID) {
+			requestCopy := &types.ContainerRequest{ImageId: request.ImageId, WorkspaceId: cacheRequestWorkspaceID(request), StubId: stubID}
+			go func() {
+				report, complete := c.imageRequiredContent(context.WithoutCancel(ctx), requestCopy, meta)
+				c.contentReporter.reportBatches(requestCopy.WorkspaceId, stubID, []requiredContentReport{report})
+				if !complete {
+					c.contentReporter.mu.Lock()
+					delete(c.contentReporter.reported, stubID)
+					c.contentReporter.mu.Unlock()
+				}
+			}()
 		}
 	} else {
 		c.queueV1ArchiveCache(request)
@@ -356,16 +375,56 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 	c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
 }
 
-// scheduleImageLayerPrepare materializes, in the background, the layers this
-// node cannot already read locally. The mount serves reads page-wise from the
-// content cache, so nothing waits for whole layers: not the runtime, and not a
-// checkpoint, which captures only the overlay upper directory. A layer whose
-// pages are all in a store on this node is served as page-file descriptors, so
-// a second copy under the layer cache would only cost disk and the CPU to hash
-// it. The rest is copied in after a grace period so the container's first
-// reads are not competing with a multi-gigabyte write, and all at once so the
-// runtime does not discover layers one FUSE read at a time. The mount outlives
-// this request, and so does its content.
+// Owner checks renew cached content's access guard while the required-content
+// report propagates. A worker's separate view of the same disk cannot do that.
+func (c *ImageClient) guardCachedImageContent(ctx context.Context, imageID string, meta *clipCommon.ClipArchiveMetadata) {
+	if c.cacheClient == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), imageLayerCacheCheckTimeout)
+	defer cancel()
+	var checks errgroup.Group
+	checks.SetLimit(imageLayerPrepareConcurrency)
+	check := func(hash, routingKey string) error {
+		if hash != "" {
+			_, _ = c.cacheClient.IsCachedReachableContext(ctx, hash, routingKey)
+		}
+		return nil
+	}
+	oci, isOCI := ociStorageInfo(meta)
+	if isOCI {
+		for _, hash := range oci.DecompressedHashByLayer {
+			checks.Go(func() error { c.imageLayerCached(ctx, hash); return nil })
+		}
+	}
+	if c.registry != nil {
+		cachePath := c.imageArchiveCachePath(imageID)
+		paths := []string{cachePath}
+		if meta != nil && meta.OriginalArchiveHash != "" {
+			checks.Go(func() error { return check(meta.OriginalArchiveHash, cachePath) })
+			paths = nil
+		}
+		if isOCI {
+			paths = append(paths, cachePath+".batch")
+		} else {
+			paths = append(paths, c.clipV1ArchiveCachePath(imageID))
+		}
+		if c.archiveContentMetadata != nil {
+			for _, path := range paths {
+				checks.Go(func() error {
+					if metadata, err := c.archiveContentMetadata(ctx, path); err == nil && metadata != nil {
+						return check(metadata.Hash, path)
+					}
+					return nil
+				})
+			}
+		}
+	}
+	_ = checks.Wait()
+}
+
+// Prepare missing layers after mounting. Cached layers stay in the pool;
+// CLIP warms them to local disk only when the container reads enough of them.
 func (c *ImageClient) scheduleImageLayerPrepare(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions) {
 	ociInfo, ok := ociStorageInfo(options.Metadata)
 	if !ok {
@@ -375,14 +434,26 @@ func (c *ImageClient) scheduleImageLayerPrepare(ctx context.Context, request *ty
 	if len(remaining) == 0 {
 		return
 	}
-	if len(remaining) < len(ociInfo.Layers) {
+	time.AfterFunc(imageLayerPrepareGrace, func() {
+		if c.cacheClient != nil {
+			checkCtx, cancel := context.WithTimeout(ctx, imageLayerCacheCheckTimeout)
+			missing := remaining[:0]
+			for _, layer := range remaining {
+				if !c.imageLayerCached(checkCtx, ociInfo.DecompressedHashByLayer[layer]) {
+					missing = append(missing, layer)
+				}
+			}
+			cancel()
+			remaining = missing
+		}
+		if len(remaining) == 0 {
+			return
+		}
 		filtered := *ociInfo
 		filtered.Layers = remaining
 		meta := *options.Metadata
 		meta.StorageInfo = &filtered
 		options.Metadata = &meta
-	}
-	time.AfterFunc(imageLayerPrepareGrace, func() {
 		c.prepareImageLayers(ctx, request, options)
 	})
 }
@@ -405,9 +476,17 @@ func (c *ImageClient) holdsLayer(cachePath, hash string) bool {
 	return c.cacheClient != nil && c.cacheClient.LocalContentComplete(hash)
 }
 
+func (c *ImageClient) imageLayerCached(ctx context.Context, hash string) bool {
+	if c.cacheClient == nil || hash == "" || ctx.Err() != nil {
+		return false
+	}
+	cached, _ := c.cacheClient.IsCachedReachableContext(ctx, hash, hash)
+	return cached
+}
+
 // verifyImageSource fails a lazy mount whose registry refuses the image, so a dead
 // credential surfaces at container start instead of as an EIO the runtime cannot
-// survive. Layers the node already holds need no registry; other failures stay lazy.
+// survive. Layers already cached need no registry; other failures stay lazy.
 // It asks for a layer the mount will read, not the manifest: an archive indexed
 // from a converted local copy names a manifest digest the registry never had.
 func (c *ImageClient) verifyImageSource(ctx context.Context, options clip.MountOptions) error {
@@ -416,6 +495,11 @@ func (c *ImageClient) verifyImageSource(ctx context.Context, options clip.MountO
 		return nil
 	}
 	remaining := c.remoteLayers(info, options.CachePath)
+	checkCtx, stopCheck := context.WithTimeout(ctx, imageLayerCacheCheckTimeout)
+	for len(remaining) > 0 && c.imageLayerCached(checkCtx, info.DecompressedHashByLayer[remaining[0]]) {
+		remaining = remaining[1:]
+	}
+	stopCheck()
 	if len(remaining) == 0 {
 		return nil
 	}
@@ -478,9 +562,9 @@ func (a lazyImageArchive) usesOCIStorage() bool {
 	return isOCIStorageMode(a.storageMode)
 }
 
-func (c *ImageClient) mountedImageHit(startTime time.Time, request *types.ContainerRequest, phase string) (time.Duration, bool) {
+func (c *ImageClient) mountedImageHit(startTime time.Time, request *types.ContainerRequest, phase string) bool {
 	if !c.mountedImageReady(request.ImageId) {
-		return 0, false
+		return false
 	}
 
 	elapsed := time.Since(startTime)
@@ -490,7 +574,7 @@ func (c *ImageClient) mountedImageHit(startTime time.Time, request *types.Contai
 	}
 	metrics.RecordWorkerStartupPhase(phase, elapsed, request, attrs)
 	c.recordImageLifecycle(request, types.ContainerLifecycleID("image."+phase), startTime, elapsed, true, attrs)
-	return elapsed, true
+	return true
 }
 
 func (c *ImageClient) recordImageLifecycle(request *types.ContainerRequest, id types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, attrs map[string]string) {
@@ -505,6 +589,23 @@ func (c *ImageClient) recordImageLifecycle(request *types.ContainerRequest, id t
 
 func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *types.ContainerRequest) (lazyImageArchive, error) {
 	archivePath := c.localArchivePath(request.ImageId)
+	if c.usesRemoteMetadataArchive() && c.cacheClient != nil {
+		fastPath := archivePath + ".batch"
+		started := time.Now()
+		if !fileExists(fastPath) {
+			fastCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			_, _ = c.copyImageArchiveFromContentCachePath(fastCtx, fastPath, request.ImageId, c.imageArchiveCachePath(request.ImageId)+".batch")
+			cancel()
+		}
+		if fileExists(fastPath) {
+			meta, err := c.processPulledArchive(fastPath, request.ImageId)
+			if _, ok := ociStorageInfo(meta); err == nil && ok {
+				c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, started, time.Since(started), true, nil)
+				return lazyImageArchive{path: fastPath, storageMode: archiveStorageMode(meta), metadata: meta}, nil
+			}
+			_ = os.Remove(fastPath)
+		}
+	}
 	archiveAlreadyOnDisk := fileExists(archivePath)
 
 	phaseStart := time.Now()
@@ -541,10 +642,7 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
 	} else {
-		if archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "" {
-			archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
-		}
-		if localArchivePath, ok := c.restoreV1ArchiveDataCache(ctx, request, archive.sourceRegistry); ok {
+		if localArchivePath, ok := c.restoreV1ArchiveDataCache(ctx, request, &archive); ok {
 			archive.path = localArchivePath
 			archive.sourceRegistry = nil
 			archive.storageMode = string(clipCommon.StorageModeLocal)
@@ -553,16 +651,16 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	return archive, nil
 }
 
-func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, report requiredContentReport) {
+func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, report requiredContentReport) bool {
 	if c.contentReporter == nil || request == nil {
-		return
+		return false
 	}
 
 	// Required content is immutable per stub, so publish it only the first time
 	// the stub loads, not on every container start.
 	stubID := cacheRequestStubID(request)
 	if !c.contentReporter.shouldGenerateRequiredContent(stubID) {
-		return
+		return false
 	}
 
 	workspaceID := cacheRequestWorkspaceID(request)
@@ -575,6 +673,7 @@ func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, re
 		Str("kind", string(report.kind)).
 		Int("item_count", len(report.items)).
 		Msg("reported image required content")
+	return true
 }
 
 func cacheRequestWorkspaceID(request *types.ContainerRequest) string {
@@ -597,24 +696,102 @@ func cacheRequestStubID(request *types.ContainerRequest) string {
 	return request.Stub.ExternalId
 }
 
-// imageRequiredContent returns the required-content batch for a stub's image:
-// per-layer decompressed hashes for CLIP v2, or the whole archive as a single
-// content object for CLIP v1 (reconciling the archive as one file avoids
-// re-materializing the thousands of per-file entries in the v1 index).
+// imageRequiredContent reports all image data and metadata required by a new worker.
+// OCI metadata uses the existing whole-archive cache kind (ClipV1).
+// A partial report remains usable, but is retried on the next successful start.
 func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (requiredContentReport, bool) {
 	if ociInfo, ok := ociStorageInfo(meta); ok && len(ociInfo.DecompressedHashByLayer) > 0 {
+		complete := true
 		items := ociRequiredContentItems(request.ImageId, ociInfo)
 		if len(items) == 0 {
 			return requiredContentReport{}, false
 		}
-		return requiredContentReport{kind: types.CacheContentKindClipV2, items: items}, true
+		if c.registry != nil {
+			item, err := c.imageMetadataRequiredContent(request.ImageId, "", meta)
+			if err != nil {
+				log.Warn().Err(err).Str("image_id", request.ImageId).Msg("failed to describe required image metadata")
+				return requiredContentReport{}, false
+			}
+			items = append(items, item)
+			if c.cacheClient != nil && c.usesRemoteMetadataArchive() {
+				item, err := c.fastMetadataRequiredContent(ctx, request.ImageId, meta)
+				if err != nil {
+					complete = false
+					log.Warn().Err(err).Str("image_id", request.ImageId).Msg("failed to prepare fast image metadata")
+				} else {
+					go c.publishImageArchiveToEmbeddedCache(c.localArchivePath(request.ImageId)+".batch", request.ImageId)
+					items = append(items, item)
+				}
+			}
+		}
+		return requiredContentReport{kind: types.CacheContentKindClipV2, items: items}, complete
 	}
 
 	item, ok := c.clipV1ArchiveRequiredContent(ctx, request)
 	if !ok {
 		return requiredContentReport{}, false
 	}
-	return requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}}, true
+	return c.clipV1ArchiveReport(request.ImageId, item)
+}
+
+func (c *ImageClient) clipV1ArchiveReport(imageID string, item types.CacheRequiredContentItem) (requiredContentReport, bool) {
+	report := requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}}
+	if c.usesRemoteMetadataArchive() {
+		metadata, err := c.imageMetadataRequiredContent(imageID, "", nil)
+		if err != nil {
+			log.Warn().Err(err).Str("image_id", imageID).Msg("failed to describe required image metadata")
+			return report, false
+		}
+		report.items = append(report.items, metadata)
+	}
+	return report, true
+}
+
+func (c *ImageClient) fastMetadataRequiredContent(ctx context.Context, imageID string, meta *clipCommon.ClipArchiveMetadata) (types.CacheRequiredContentItem, error) {
+	path := c.localArchivePath(imageID) + ".batch"
+	unlock, err := lockImageArchiveFile(ctx, path)
+	if err != nil {
+		return types.CacheRequiredContentItem{}, err
+	}
+	defer unlock()
+	if !fileExists(path) {
+		if meta.OriginalArchiveHash != "" {
+			meta = nil // Read the canonical source rather than transcode a derived index.
+		}
+		if err := clip.NewClipArchiver().TranscodeMetadata(c.localArchivePath(imageID), path, meta); err != nil {
+			return types.CacheRequiredContentItem{}, err
+		}
+	}
+	return c.imageMetadataRequiredContent(imageID, ".batch", meta)
+}
+
+// Describe OCI metadata off the startup path. The ClipV1 cache kind represents
+// whole archive blobs, including these metadata files. Publication is async.
+func (c *ImageClient) imageMetadataRequiredContent(imageID, suffix string, meta *clipCommon.ClipArchiveMetadata) (types.CacheRequiredContentItem, error) {
+	archivePath := c.localArchivePath(imageID)
+	hash, size := "", int64(0)
+	if suffix == "" && meta != nil {
+		hash, size = meta.OriginalArchiveHash, meta.OriginalArchiveSize
+	}
+	if hash == "" {
+		file, err := os.Open(archivePath + suffix)
+		if err != nil {
+			return types.CacheRequiredContentItem{}, err
+		}
+		defer file.Close()
+		hasher := sha256.New()
+		size, err = io.Copy(hasher, file)
+		if err != nil {
+			return types.CacheRequiredContentItem{}, err
+		}
+		hash = hex.EncodeToString(hasher.Sum(nil))
+	}
+	return types.CacheRequiredContentItem{
+		Hash: hash, ExpectedHash: hash, SizeBytes: size, ImageID: imageID,
+		RoutingKey: c.imageArchiveCachePath(imageID) + suffix,
+		Source:     filepath.Base(archivePath), // Both artifacts are repaired from the canonical archive.
+		Kind:       types.CacheContentKindClipV1,
+	}, nil
 }
 
 // ociRequiredContentItems enumerates CLIP v2 decompressed layer hashes. The
@@ -798,8 +975,11 @@ func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive 
 	return ""
 }
 
-func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, sourceRegistry *types.S3ImageRegistryConfig) (path string, ok bool) {
+func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, archive *lazyImageArchive) (path string, ok bool) {
 	if request == nil || c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
+		if request != nil && archive.storageMode == string(clipCommon.StorageModeS3) && (archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "") {
+			archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
+		}
 		return "", false
 	}
 
@@ -820,6 +1000,21 @@ func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *ty
 		}
 	}
 
+	if metadata != nil && metadata.Hash != "" && metadata.Size > 0 && c.config.Cache.Client.CacheFS.Enabled {
+		virtualPath := filepath.Join(c.config.Cache.Client.CacheFS.MountPoint, cachePath)
+		cached, _ := c.cacheClient.IsCachedReachableContext(ctx, metadata.Hash, cachePath)
+		if cached {
+			if info, err := os.Stat(virtualPath); err == nil && info.Mode().IsRegular() && uint64(info.Size()) == metadata.Size {
+				c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, time.Now(), 0, true, map[string]string{"source": "cachefs"})
+				return virtualPath, true
+			}
+		}
+	}
+
+	if archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "" {
+		archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
+	}
+	sourceRegistry := archive.sourceRegistry
 	brokeredOnly := (sourceRegistry == nil || sourceRegistry.BucketName == "") && c.brokeredImageAccessRequest(request)
 	lockWait := embeddedImageCacheLockWaitTimeout
 	if brokeredOnly {
@@ -915,7 +1110,12 @@ func (c *ImageClient) completeV1ArchiveCache(request *types.ContainerRequest) {
 			return
 		case outcome := <-result:
 			if item, ok := outcome.Val.(types.CacheRequiredContentItem); outcome.Err == nil && ok && item.Hash != "" {
-				c.publishRequiredContent(request, requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}})
+				report, complete := c.clipV1ArchiveReport(imageID, item)
+				if c.publishRequiredContent(request, report) && !complete {
+					c.contentReporter.mu.Lock()
+					delete(c.contentReporter.reported, cacheRequestStubID(request))
+					c.contentReporter.mu.Unlock()
+				}
 				return
 			}
 		}
@@ -929,22 +1129,20 @@ func (c *ImageClient) waitForV1ArchiveCache(imageID string) (types.CacheRequired
 	ctx, cancel := context.WithTimeout(context.Background(), imageArchiveDownloadTimeout)
 	defer cancel()
 
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(reporterFlushInterval)
 	defer ticker.Stop()
 	request := &types.ContainerRequest{ImageId: imageID}
 	localPath := c.clipV1ArchiveDataCachePath(imageID)
 	cachePath := c.clipV1ArchiveCachePath(imageID)
-	localReady, seeded, checkedReplica := false, false, false
+	localReady, seeded := false, false
 	for {
 		if item, ok := c.clipV1ArchiveRequiredContent(ctx, request); ok {
 			// Global metadata can outlive every replica in this locality.
 			cached := seeded
-			if !cached && !checkedReplica && c.cacheClient != nil {
+			if !cached && c.cacheClient != nil {
 				checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 				cached, _ = c.cacheClient.IsCachedReachableContext(checkCtx, item.Hash, cachePath)
 				cancel()
-				// Do not rescan cache hosts while CLIP finishes downloading.
-				checkedReplica = true
 			}
 			if cached {
 				return item, nil
@@ -1038,7 +1236,7 @@ func (c *ImageClient) mountLazyImageArchive(ctx context.Context, request *types.
 		"success":      fmt.Sprintf("%t", err == nil),
 	})
 	if err == nil {
-		err = waitForImageMount(ctx, options.MountPoint, serverErrors)
+		err = waitForImageMount(ctx, server, serverErrors)
 	}
 	if err != nil {
 		_ = server.Unmount()
@@ -1057,35 +1255,38 @@ func (c *ImageClient) mountLazyImageArchive(ctx context.Context, request *types.
 	return nil
 }
 
-func waitForImageMount(ctx context.Context, mountPoint string, serverErrors <-chan error) error {
+func waitForImageMount(ctx context.Context, server *fuse.Server, serverErrors <-chan error) error {
 	ctx, cancel := context.WithTimeout(ctx, imageMountReadyTimeout)
 	defer cancel()
 
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
-	for !beta9Storage.IsMounted(mountPoint) {
-		select {
-		case err, ok := <-serverErrors:
-			if ok && err != nil {
-				return fmt.Errorf("image mount failed: %w", err)
-			}
-			return fmt.Errorf("image mount stopped before it was ready")
-		case <-ticker.C:
-		case <-ctx.Done():
-			return fmt.Errorf("image mount was not ready: %w", ctx.Err())
+	// Complete go-fuse's poll handshake before reading the image in-process.
+	ready := make(chan error, 1)
+	go func() { ready <- server.WaitMount() }()
+	select {
+	case err := <-ready:
+		return err
+	case err, ok := <-serverErrors:
+		if ok && err != nil {
+			return fmt.Errorf("image mount failed: %w", err)
 		}
+		return fmt.Errorf("image mount stopped before it was ready")
+	case <-ctx.Done():
+		return fmt.Errorf("image mount was not ready: %w", ctx.Err())
 	}
-	return nil
 }
 
 // processPulledArchive parses the archive metadata and caches it for OCI images.
-// Image ids are content hashes, so metadata cached by an earlier parse (a
-// restore from the content cache validates the archive by parsing it) is
-// reused instead of decoding the same archive twice.
+// Reuse a previous parse only while the same verified file remains unchanged.
+// Each image retains one current parse, whether canonical or derived.
 func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipCommon.ClipArchiveMetadata, error) {
-	if c.v2ArchiveMetadata != nil {
-		if meta, ok := c.v2ArchiveMetadata.Get(imageId); ok && meta != nil {
-			return meta, nil
+	info, err := os.Stat(downloadPath)
+	if err != nil {
+		return nil, err
+	}
+	if value, ok := c.archiveMetadata.Load(imageId); ok {
+		cached := value.(*imageRecord)
+		if cached.path == downloadPath && os.SameFile(info, cached.info) && info.Size() == cached.info.Size() && info.ModTime().Equal(cached.info.ModTime()) {
+			return cached.metadata, nil
 		}
 	}
 	archiver := clip.NewClipArchiver()
@@ -1094,38 +1295,17 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 		return nil, err
 	}
 
-	// Check if this is an OCI v2 image
-	isOCI := false
-	if meta != nil {
-		if ociInfo, ok := ociStorageInfo(meta); ok {
-			isOCI = ociInfo.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(ociInfo.Type()) == "oci"
-		} else if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
-			isOCI = t.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(t.Type()) == "oci"
-		}
-	} else {
+	if meta == nil {
 		return nil, fmt.Errorf("metadata not available")
 	}
-
-	if !isOCI {
-		return meta, nil
+	if _, isOCI := ociStorageInfo(meta); isOCI {
+		c.cacheOCIMetadata(imageId, meta, &imageRecord{metadata: meta, info: info, path: downloadPath})
 	}
-
-	// Cache OCI metadata for later use
-	c.cacheOCIMetadata(imageId, meta)
-
 	return meta, nil
 }
 
 // cacheOCIMetadata extracts and caches OCI image metadata
-func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArchiveMetadata) {
-	if meta == nil {
-		return
-	}
-
-	if c.v2ArchiveMetadata != nil {
-		c.v2ArchiveMetadata.Set(imageId, meta)
-	}
-
+func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArchiveMetadata, parsed ...*imageRecord) {
 	ociInfo, ok := ociStorageInfo(meta)
 	if !ok {
 		return
@@ -1146,6 +1326,11 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 		c.v2ImageRefs.Set(imageId, sourceRef)
 		log.Info().Str("image_id", imageId).Str("source_ref", sourceRef).Msg("cached image reference from metadata")
 	}
+	record := &imageRecord{metadata: meta}
+	if len(parsed) > 0 {
+		record = parsed[0]
+	}
+	c.archiveMetadata.Store(imageId, record)
 }
 
 // GetSourceImageRef retrieves the cached source image reference for a v2 image
@@ -1153,14 +1338,17 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
 }
 
+func (c *ImageClient) cachedImageMetadata(imageID string) *clipCommon.ClipArchiveMetadata {
+	if value, ok := c.archiveMetadata.Load(imageID); ok {
+		return value.(*imageRecord).metadata
+	}
+	return nil
+}
+
 // GetCLIPImageMetadata extracts CLIP image metadata from the archive
 func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
-	if c.v2ArchiveMetadata != nil {
-		if meta, ok := c.v2ArchiveMetadata.Get(imageId); ok {
-			if ociInfo, ok := ociStorageInfo(meta); ok && ociInfo.ImageMetadata != nil {
-				return ociInfo.ImageMetadata, true
-			}
-		}
+	if ociInfo, ok := ociStorageInfo(c.cachedImageMetadata(imageId)); ok && ociInfo.ImageMetadata != nil {
+		return ociInfo.ImageMetadata, true
 	}
 
 	// Determine the archive path for this image
@@ -1571,6 +1759,9 @@ func (c *ImageClient) publishImageArchiveToEmbeddedCache(archivePath, imageId st
 	}
 
 	cachePath := c.imageArchiveCachePath(imageId)
+	if strings.HasSuffix(archivePath, ".rclip.batch") {
+		cachePath += ".batch"
+	}
 	hash, err := c.cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
 		Path:      archivePath,
 		CachePath: cachePath,
@@ -1810,13 +2001,18 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 		routingKey = hash
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(archivePath), filepath.Base(archivePath)+".*.tmp")
+	f, err := os.CreateTemp(filepath.Dir(archivePath), filepath.Base(archivePath)+".*.tmp")
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	f := tmp
+	tmpPath := f.Name()
 	defer os.Remove(tmpPath)
+	defer f.Close()
+	defer func() {
+		if value, ok := c.archiveMetadata.Load(imageId); ok && value.(*imageRecord).path == tmpPath {
+			c.archiveMetadata.CompareAndDelete(imageId, value)
+		}
+	}()
 
 	hasher := sha256.New()
 	offset := int64(0)
@@ -1824,35 +2020,27 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	buf := make([]byte, bufSize)
 	for offset < size {
 		if err := ctx.Err(); err != nil {
-			_ = f.Close()
 			return err
 		}
 
 		length := min(bufSize, size-offset)
 		n, err := c.cacheClient.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: routingKey})
 		if err != nil {
-			_ = f.Close()
 			return err
 		}
 		if n != length {
-			_ = f.Close()
 			return fmt.Errorf("short embedded image archive cache read: expected %d bytes, got %d", length, n)
 		}
 
 		content := buf[:n]
 		if _, err := f.Write(content); err != nil {
-			_ = f.Close()
 			return err
 		}
-		if _, err := hasher.Write(content); err != nil {
-			_ = f.Close()
-			return err
-		}
+		_, _ = hasher.Write(content)
 		offset += length
 	}
 
 	if err := f.Sync(); err != nil {
-		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
@@ -1869,6 +2057,11 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	if err := os.Rename(tmpPath, archivePath); err != nil {
 		return err
 	}
+	if value, ok := c.archiveMetadata.Load(imageId); ok && value.(*imageRecord).path == tmpPath {
+		cached := *value.(*imageRecord)
+		cached.path = archivePath
+		c.archiveMetadata.CompareAndSwap(imageId, value, &cached)
+	}
 
 	log.Info().Str("image_id", imageId).Str("hash", hash).Str("routing_key", routingKey).Int64("size", size).Msg("loaded image archive from content cache")
 	return nil
@@ -1882,7 +2075,7 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 	}
 
 	ociInfo, ok := ociStorageInfo(meta)
-	if !ok || strings.ToLower(ociInfo.Type()) != string(clipCommon.StorageModeOCI) {
+	if !ok {
 		return nil
 	}
 
@@ -1897,7 +2090,11 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 		return fmt.Errorf("restored v2 image archive has no layer cache metadata: image_id=%s layers=%d hashes=%d", imageId, len(ociInfo.Layers), len(ociInfo.DecompressedHashByLayer))
 	}
 
-	c.cacheOCIMetadata(imageId, meta)
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return err
+	}
+	c.cacheOCIMetadata(imageId, meta, &imageRecord{metadata: meta, info: info, path: archivePath})
 	return nil
 }
 

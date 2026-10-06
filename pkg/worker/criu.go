@@ -157,7 +157,12 @@ type checkpointHostProfile struct {
 
 func (p checkpointHostProfile) key() string {
 	data, _ := json.Marshal(p)
-	return fmt.Sprintf("v1:%x", sha256.Sum256(data))
+	prefix := types.CheckpointCompatibilityLegacyPrefix
+	if p.Runtime == types.ContainerRuntimeGvisor.String() && len(p.GPU) > 0 {
+		// gVisor keeps NVIDIA device entries; older workers cleared them.
+		prefix = types.CheckpointCompatibilityGPUDevicesPrefix
+	}
+	return fmt.Sprintf("%s%x", prefix, sha256.Sum256(data))
 }
 
 func checkpointSortedUnique(values []string) []string {
@@ -234,8 +239,8 @@ func (s *Worker) prepareCheckpointForWorker(ctx context.Context, request *types.
 	if request.Checkpoint.IsFilesystemOnly() {
 		return
 	}
-	if hasAvailableCheckpoint(request) && request.Checkpoint.CompatibilityKey != "" &&
-		request.Checkpoint.CompatibilityKey == s.checkpointCompatibilityKey && validateCheckpointRestoreRuntime(request, s.runtime) == nil {
+	if hasAvailableCheckpoint(request) && request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) &&
+		validateCheckpointRestoreRuntime(request, s.runtime) == nil {
 		return
 	}
 	request.Checkpoint = nil

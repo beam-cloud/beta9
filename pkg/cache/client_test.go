@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +56,60 @@ func TestHostsAvailableRequiresInitializedActiveEndpoint(t *testing.T) {
 
 	client.hostMap.Set((&Host{HostId: "logical-host"}).LogicalOnly())
 	require.False(t, client.HostsAvailable())
+}
+
+type testPresenceClient struct {
+	proto.CacheClient
+	cancel context.CancelFunc
+	exists bool
+	calls  *atomic.Int32
+}
+
+func (c testPresenceClient) HasContent(ctx context.Context, _ *proto.CacheHasContentRequest, _ ...grpc.CallOption) (*proto.CacheHasContentResponse, error) {
+	if c.calls != nil {
+		c.calls.Add(1)
+	}
+	if c.cancel != nil {
+		c.cancel()
+		return nil, ctx.Err()
+	}
+	return &proto.CacheHasContentResponse{Exists: c.exists}, nil
+}
+
+func TestIsCachedReachableCancellationPreservesHost(t *testing.T) {
+	for _, topHosts := range []int{0, 1} {
+		t.Run(fmt.Sprintf("top_hosts_%d", topHosts), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			host := &Host{HostId: "healthy", Addr: "127.0.0.1:2050"}
+			client := newSharedLocalDiskClient(nil, host)
+			client.clientConfig.NTopHosts = topHosts
+			client.hostMap = NewHostMap(GlobalConfig{}, nil)
+			client.hostMap.Set(host)
+			client.grpcClients[host.HostId] = testPresenceClient{cancel: cancel}
+
+			exists, err := client.IsCachedReachableContext(ctx, "hash", "hash")
+			require.ErrorIs(t, err, context.Canceled)
+			require.False(t, exists)
+			require.Contains(t, client.grpcClients, host.HostId)
+			require.True(t, client.hostMap.Get(host.HostId).HasEndpoint())
+		})
+	}
+}
+
+func TestIsCachedReachableFindsOffRingContent(t *testing.T) {
+	selected := &Host{HostId: "selected", Addr: "127.0.0.1:2050"}
+	oldOwner := &Host{HostId: "old-owner", Addr: "127.0.0.1:2051"}
+	client := newSharedLocalDiskClient(nil, selected)
+	client.hostMap = NewHostMap(GlobalConfig{}, nil)
+	client.hostMap.Set(selected)
+	client.hostMap.Set(oldOwner)
+	client.grpcClients[selected.HostId] = testPresenceClient{}
+	client.grpcClients[oldOwner.HostId] = testPresenceClient{exists: true}
+
+	exists, err := client.IsCachedReachableContext(context.Background(), "hash", "hash")
+	require.NoError(t, err)
+	require.True(t, exists)
 }
 
 func (m *countingCacheMetadataStore) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
@@ -517,7 +573,7 @@ func TestReadContentIntoRecoversFromUnavailablePrimaryWithLocalReplica(t *testin
 	require.NoError(t, err)
 }
 
-func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.T) {
+func TestReadContentIntoReadsContentFromNewlyDiscoveredHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -591,8 +647,10 @@ func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.
 	readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer readCancel()
 	dst := make([]byte, len(content))
-	_, err = client.ReadContentInto(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
-	require.ErrorIs(t, err, ErrContentNotFound)
+	n, err := client.ReadContentInto(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
 }
 
 func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
@@ -736,7 +794,7 @@ func TestReadContentIntoDoesNotRetrySmallReadsBelowMinRetryLength(t *testing.T) 
 	}
 }
 
-func TestReadContentIntoDoesNotRefreshHostsOnContentMiss(t *testing.T) {
+func TestReadContentIntoRefreshesHostsOnceOnContentMiss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -791,8 +849,8 @@ func TestReadContentIntoDoesNotRefreshHostsOnContentMiss(t *testing.T) {
 	dst := make([]byte, 16)
 	_, trace, err := client.ReadContentIntoWithTrace(ctx, strings.Repeat("a", sha256.Size*2), 0, dst, ClientOptions{})
 	require.ErrorIs(t, err, ErrContentNotFound)
-	require.Equal(t, 0, refreshCalls)
-	require.Equal(t, 0, trace.HostRefreshes)
+	require.Equal(t, 1, refreshCalls)
+	require.Equal(t, 1, trace.HostRefreshes)
 	require.Equal(t, "miss", trace.Result)
 }
 
@@ -2561,15 +2619,26 @@ func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
 	client.mu.RUnlock()
 	require.NotNil(t, pinned)
 	require.Equal(t, "host-c", pinned.host.HostId)
+	ranked := client.RankedReadHosts(hash)
+	materialized, err := client.MaterializeFromReplica(ctx, servers[0], hash, hash, -1)
+	require.ErrorContains(t, err, "invalid content size")
+	require.False(t, materialized)
+	require.Equal(t, ranked, client.RankedReadHosts(hash))
 
-	client.removeLocalHostCache(hash)
-	chunks, err := client.GetContentStream(hash, 0, int64(len(content)), struct{ RoutingKey string }{RoutingKey: hash})
-	require.NoError(t, err)
-	var streamed []byte
-	for chunk := range chunks {
-		streamed = append(streamed, chunk...)
+	for _, length := range []int64{int64(len(content)), 0} {
+		client.removeLocalHostCache(hash)
+		chunks, err := client.GetContentStream(hash, 0, length, struct{ RoutingKey string }{RoutingKey: hash})
+		require.NoError(t, err)
+		var streamed []byte
+		for chunk := range chunks {
+			streamed = append(streamed, chunk...)
+		}
+		require.Equal(t, content, streamed)
 	}
-	require.Equal(t, content, streamed)
+	materialized, err = client.MaterializeFromReplica(ctx, servers[0], hash, hash, 0)
+	require.NoError(t, err)
+	require.True(t, materialized)
+	require.True(t, servers[0].HasCompleteContent(hash, int64(len(content))))
 
 	// A departed primary must not hide a surviving off-ring copy either.
 	require.NoError(t, servers[0].Close())
@@ -2580,4 +2649,114 @@ func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
+}
+
+func TestReadsRefreshDirectoryAfterKnownHostsMiss(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := Config{
+		Server: ServerConfig{DiskCacheMaxUsagePct: 99, PageSizeBytes: 4, ObjectTtlS: 300},
+		Client: ClientConfig{NTopHosts: 1},
+		Global: GlobalConfig{GRPCMessageSizeBytes: 1024 * 1024, GRPCDialTimeoutS: 1},
+	}
+	var servers []*Server
+	var hosts []*Host
+	for _, id := range []string{"known", "new"} {
+		serverCfg := cfg
+		serverCfg.Server.DiskCacheDir = t.TempDir()
+		server, err := NewServerWithOptions(ctx, serverCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID(id))
+		require.NoError(t, err)
+		addr, err := server.Serve("127.0.0.1:0", "")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, server.Close()) })
+		host := server.Host()
+		host.Addr, host.PrivateAddr = addr, addr
+		servers, hosts = append(servers, server), append(hosts, host)
+	}
+	content := []byte("sole cached replica")
+	hash, _, err := servers[1].cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	for _, sameID := range []bool{false, true} {
+		for _, operation := range []string{"presence", "read", "stream"} {
+			t.Run(fmt.Sprintf("same_id_%t/%s", sameID, operation), func(t *testing.T) {
+				newHost := *hosts[1]
+				if sameID {
+					newHost.HostId = hosts[0].HostId
+				}
+				refreshes := 0
+				client := newSharedLocalDiskClient(nil, hosts[0])
+				client.locality, client.globalConfig = "test", cfg.Global
+				client.hostMap = NewHostMap(cfg.Global, client.addHost)
+				client.hostDirectory = testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+					refreshes++
+					return []*Host{&newHost}, nil
+				})
+				client.hostMap.Set(hosts[0])
+				t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+				for repeat := 0; repeat < 2; repeat++ {
+					switch operation {
+					case "presence":
+						exists, err := client.IsCachedReachableContext(ctx, hash, hash)
+						require.NoError(t, err)
+						require.True(t, exists)
+					case "read":
+						dst := make([]byte, len(content))
+						n, err := client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{})
+						require.NoError(t, err)
+						require.Equal(t, int64(len(content)), n)
+						require.Equal(t, content, dst)
+					case "stream":
+						chunks, err := client.GetContentStream(hash, 0, 0, struct{ RoutingKey string }{hash})
+						require.NoError(t, err)
+						var got []byte
+						for chunk := range chunks {
+							got = append(got, chunk...)
+						}
+						require.Equal(t, content, got)
+					}
+					require.Equal(t, 1, refreshes)
+				}
+			})
+		}
+	}
+}
+
+func TestMissingContentHostRefreshCoalescesAndBoundsMisses(t *testing.T) {
+	host := &Host{HostId: "known", Addr: "127.0.0.1:2050"}
+	client := newSharedLocalDiskClient(nil, host)
+	client.hostMap = NewHostMap(GlobalConfig{}, nil)
+	client.hostMap.Set(host)
+	var presence, refreshes atomic.Int32
+	client.grpcClients[host.HostId] = testPresenceClient{calls: &presence}
+	started, release := make(chan struct{}), make(chan struct{})
+	client.hostDirectory = testHostDirectoryFunc(func(ctx context.Context, _ string) ([]*Host, error) {
+		if refreshes.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-release:
+			return []*Host{host}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	const callers = 16
+	var ready, done sync.WaitGroup
+	ready.Add(callers)
+	done.Add(callers)
+	for range callers {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			ready.Wait()
+			exists, err := client.IsCachedReachableContext(context.Background(), "hash", "hash")
+			require.NoError(t, err)
+			require.False(t, exists)
+		}()
+	}
+	<-started
+	done.Wait() // Slow directory never blocks beyond the bounded miss refresh.
+	close(release)
+	require.EqualValues(t, 1, refreshes.Load())
+	require.EqualValues(t, callers, presence.Load(), "unchanged endpoints are never probed twice")
 }

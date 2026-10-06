@@ -55,6 +55,28 @@ func TestPruneUnreachableSDKMountsKeepsOnlyPresentSitePackages(t *testing.T) {
 	}, kept)
 }
 
+func TestExplicitRestoreRejectsIncompatibleGPUDeviceSpecBeforeEviction(t *testing.T) {
+	worker := &Worker{
+		runtime: NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{GPU: true, CheckpointRestore: true}),
+	}
+	for _, keys := range [][2]string{{"v2:host", "v1:other"}, {"v2:host", "v2:other"}, {"v2:host", ""}, {"v1:host", "v2:host"}, {"", "v2:host"}} {
+		worker.checkpointCompatibilityKey = keys[0]
+		request := &types.ContainerRequest{
+			Gpu: "RTX4090", GpuCount: 1,
+			Stub:       types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+			Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String(), CompatibilityKey: keys[1]},
+		}
+		checkpoint := request.Checkpoint
+		err := worker.runContainerWithEvictionBarrier(context.Background(), request, func() error {
+			t.Fatal("incompatible restore must not evict workloads")
+			return nil
+		})
+		var incompatible *ErrCheckpointHostIncompatible
+		require.ErrorAs(t, err, &incompatible)
+		require.Same(t, checkpoint, request.Checkpoint)
+	}
+}
+
 // Only a definite absence drops an SDK mount. A stat that fails for any other
 // reason (permissions, an I/O error from a lazily loaded image) keeps it, so a
 // transient read failure cannot silently ship a container without its SDK.
@@ -3640,10 +3662,9 @@ func TestGetCLIPImageMetadataUsesCachedV2ArchiveMetadata(t *testing.T) {
 	}
 
 	imageClient := &ImageClient{
-		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
-		v2ImageRefs:       common.NewSafeMap[string](),
+		v2ImageRefs: common.NewSafeMap[string](),
 	}
-	imageClient.v2ArchiveMetadata.Set(imageId, &clipCommon.ClipArchiveMetadata{
+	imageClient.cacheOCIMetadata(imageId, &clipCommon.ClipArchiveMetadata{
 		StorageInfo: &clipCommon.OCIStorageInfo{
 			ImageMetadata: imageMetadata,
 		},
@@ -3699,8 +3720,7 @@ func TestBuildSpecFromCLIPMetadataPreservesWorkingDir(t *testing.T) {
 func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
 	imageId := "v2-pointer-metadata"
 	imageClient := &ImageClient{
-		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
-		v2ImageRefs:       common.NewSafeMap[string](),
+		v2ImageRefs: common.NewSafeMap[string](),
 	}
 
 	meta := &clipCommon.ClipArchiveMetadata{
@@ -3712,8 +3732,8 @@ func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
 	}
 	imageClient.cacheOCIMetadata(imageId, meta)
 
-	cachedMeta, ok := imageClient.v2ArchiveMetadata.Get(imageId)
-	require.True(t, ok)
+	cachedMeta := imageClient.cachedImageMetadata(imageId)
+	require.NotNil(t, cachedMeta)
 	assert.Equal(t, meta, cachedMeta)
 
 	sourceRef, ok := imageClient.GetSourceImageRef(imageId)

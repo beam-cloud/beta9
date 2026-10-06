@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,21 @@ exit 128
 	var notFound ErrContainerNotFound
 	require.False(t, errors.As(err, &notFound))
 	require.ErrorContains(t, err, "permission denied")
+}
+
+func TestRunscRestoreRejectsCreatedState(t *testing.T) {
+	runscPath := filepath.Join(t.TempDir(), "runsc")
+	require.NoError(t, os.WriteFile(runscPath, []byte(`#!/bin/sh
+printf '{"pid":4321,"status":"created"}'
+`), 0o755))
+
+	restoreErr := errors.New(`"Mounts" does not match across checkpoint restore`)
+	restoreDone := make(chan runscCommandResult, 1)
+	restoreDone <- runscCommandResult{exitCode: 128, err: restoreErr}
+	rt := &Runsc{cfg: Config{RunscPath: runscPath}}
+	_, err := rt.waitForRestoredContainerPID(context.Background(), "container-1", restoreDone)
+
+	require.ErrorIs(t, err, restoreErr)
 }
 
 func TestRunscRestoreSignalsStartedAfterStateRunning(t *testing.T) {
@@ -198,6 +214,54 @@ func TestRunscPrepareMarksOnlyGPUBundles(t *testing.T) {
 	require.NotContains(t, cpuSpec.Annotations, runscGPUAnnotation)
 }
 
+func TestRunscPrepareUsesNvidiaCDIDevices(t *testing.T) {
+	devices := []specs.LinuxDevice{{Path: "/dev/nvidiactl", Type: "c", Major: 195, Minor: 255}, {Path: "/dev/nvidia3", Type: "c", Major: 195, Minor: 3}}
+	for _, test := range []struct {
+		name        string
+		devices     []specs.LinuxDevice
+		wantDevices bool
+	}{
+		{name: "NVIDIA CDI devices", devices: devices, wantDevices: true},
+		{name: "drops host-specific DRM", devices: append(append([]specs.LinuxDevice(nil), devices...), specs.LinuxDevice{Path: "/dev/dri/renderD131"}), wantDevices: true},
+		{name: "missing control device uses driver setup", devices: devices[1:]},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := &specs.Spec{
+				Linux:   &specs.Linux{Devices: append([]specs.LinuxDevice(nil), test.devices...)},
+				Process: &specs.Process{Env: []string{"NVIDIA_VISIBLE_DEVICES=3", "WORKER_GPU_DEVICES=3", "CUDA_VISIBLE_DEVICES=0"}},
+			}
+			require.NoError(t, (&Runsc{}).Prepare(context.Background(), spec))
+			if test.wantDevices {
+				require.Equal(t, devices, spec.Linux.Devices)
+				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=void")
+			} else {
+				require.Empty(t, spec.Linux.Devices)
+				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=3")
+			}
+			require.Contains(t, spec.Process.Env, "WORKER_GPU_DEVICES=3")
+			require.Contains(t, spec.Process.Env, "CUDA_VISIBLE_DEVICES=0")
+		})
+	}
+}
+
+func TestRunscPreparePreservesCDIHooks(t *testing.T) {
+	timeout := 1
+	want := &specs.Hooks{CreateContainer: []specs.Hook{
+		{Path: "/usr/bin/nvidia-cdi-hook", Args: []string{"nvidia-cdi-hook", "create-symlinks", "--link", "../card0::/dev/dri/by-path/gpu-card"}, Env: []string{"GOMAXPROCS=1"}},
+		{Path: "/usr/bin/nvidia-cdi-hook", Args: []string{"nvidia-cdi-hook", "enable-cuda-compat", "--root", "/custom"}, Env: []string{"GOMAXPROCS=1"}, Timeout: &timeout},
+		{Path: "/custom/hook", Args: []string{"hook"}, Env: []string{"CUSTOM=1"}},
+	}}
+	raw, err := json.Marshal(want)
+	require.NoError(t, err)
+	spec := &specs.Spec{Linux: &specs.Linux{Devices: []specs.LinuxDevice{{Path: "/dev/nvidiactl"}}}, Process: &specs.Process{}}
+	require.NoError(t, json.Unmarshal(raw, &spec.Hooks))
+	spec.Hooks.CreateContainer[0].Env = nil
+	for range 2 {
+		require.NoError(t, (&Runsc{}).Prepare(context.Background(), spec))
+		require.Equal(t, want, spec.Hooks)
+	}
+}
+
 func TestRunscCheckpointUsesNativeCUDAHookForGPUBundle(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -284,11 +348,20 @@ func writeRunscBundleWithMounts(t *testing.T, dir string, mounts ...specs.Mount)
 // opaque state data.
 func writeRunscCheckpointImage(t *testing.T, dir string, mounts ...specs.Mount) string {
 	t.Helper()
+	return writeRunscCheckpointSpec(t, dir, &specs.Spec{Mounts: mounts})
+}
+
+func writeRunscCheckpointSpec(t *testing.T, dir string, saved ...*specs.Spec) string {
+	t.Helper()
 	imagePath := filepath.Join(dir, "checkpoint")
 	require.NoError(t, os.MkdirAll(imagePath, 0o755))
-	containerSpecs, err := json.Marshal(map[string]*specs.Spec{"__no_name_0": {Mounts: mounts}})
+	containerSpecs := make(map[string]*specs.Spec, len(saved))
+	for i, spec := range saved {
+		containerSpecs[fmt.Sprintf("__no_name_%d", i)] = spec
+	}
+	rawSpecs, err := json.Marshal(containerSpecs)
 	require.NoError(t, err)
-	metadata, err := json.Marshal(map[string]string{"runsc_version": "test", runscCheckpointSpecsKey: string(containerSpecs)})
+	metadata, err := json.Marshal(map[string]string{"runsc_version": "test", runscCheckpointSpecsKey: string(rawSpecs)})
 	require.NoError(t, err)
 	var image bytes.Buffer
 	image.Write(runscStateFileMagic)
@@ -299,18 +372,16 @@ func writeRunscCheckpointImage(t *testing.T, dir string, mounts ...specs.Mount) 
 	return imagePath
 }
 
-func readBundleMounts(t *testing.T, bundlePath string) []specs.Mount {
+func mustLoadRunscBundle(t *testing.T, bundlePath string) *runscBundle {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(bundlePath, "config.json"))
+	bundle, err := loadRunscBundle(bundlePath)
 	require.NoError(t, err)
-	var spec specs.Spec
-	require.NoError(t, json.Unmarshal(data, &spec))
-	return spec.Mounts
+	return bundle
 }
 
 // Checkpoints taken before the base config requested /sys/fs/cgroup must keep
 // restoring: runsc rejects a restore whose mounts differ from the checkpoint.
-func TestAlignRestoreSpecCgroupMount(t *testing.T) {
+func TestAlignRestoreSpec(t *testing.T) {
 	tests := []struct {
 		name       string
 		checkpoint []specs.Mount
@@ -354,35 +425,80 @@ func TestAlignRestoreSpecCgroupMount(t *testing.T) {
 			bundlePath := writeRunscBundleWithMounts(t, dir, test.bundle...)
 			imagePath := writeRunscCheckpointImage(t, dir, test.checkpoint...)
 
-			require.NoError(t, alignRestoreSpecCgroupMount(bundlePath, imagePath))
-			require.Equal(t, test.want, readBundleMounts(t, bundlePath))
+			require.NoError(t, mustLoadRunscBundle(t, bundlePath).alignRestore(imagePath))
+			require.Equal(t, test.want, mustLoadRunscBundle(t, bundlePath).spec.Mounts)
 		})
 	}
 }
 
-func TestAlignRestoreSpecCgroupMountLeavesBundleWhenCheckpointUnreadable(t *testing.T) {
+func TestAlignRestoreSpecMatchesSavedDeviceLayout(t *testing.T) {
+	devices := []specs.LinuxDevice{{Path: "/dev/nvidiactl"}, {Path: "/dev/nvidia1"}}
+	for _, withoutDevices := range []bool{true, false} {
+		for _, groups := range [][]uint32{nil, {1234}} {
+			umask := uint32(0o077)
+			wantUser := specs.User{UID: 1000, GID: 1001, Username: "requested", Umask: &umask, AdditionalGids: groups}
+			dir := t.TempDir()
+			bundle := writeRunscBundle(t, dir, true)
+			spec := specs.Spec{
+				Linux: &specs.Linux{Devices: devices}, Annotations: map[string]string{runscGPUAnnotation: "true"},
+				Process: &specs.Process{User: wantUser, Env: []string{"NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=1"}},
+				Mounts:  []specs.Mount{testProcMount, testCgroupMount, {Destination: "/volumes/models", Type: "bind", Source: "/models"}},
+			}
+			raw, err := json.Marshal(spec)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(bundle, "config.json"), raw, 0600))
+			saved := spec
+			saved.Process = &specs.Process{User: specs.User{AdditionalGids: []uint32{44, 110}}}
+			saved.Linux = &specs.Linux{Devices: devices}
+			if withoutDevices {
+				saved.Linux.Devices = nil
+			}
+			image := writeRunscCheckpointSpec(t, dir, &saved)
+			require.NoError(t, mustLoadRunscBundle(t, bundle).alignRestore(image))
+			spec = *mustLoadRunscBundle(t, bundle).spec
+			if withoutDevices {
+				require.Empty(t, spec.Linux.Devices)
+				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=1")
+			} else {
+				require.Equal(t, devices, spec.Linux.Devices)
+				require.Contains(t, spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=void")
+			}
+			require.Contains(t, spec.Process.Env, "WORKER_GPU_DEVICES=1")
+			require.Equal(t, saved.Mounts, spec.Mounts)
+			if withoutDevices && len(groups) == 0 {
+				wantUser.AdditionalGids = saved.Process.User.AdditionalGids
+			}
+			require.Equal(t, wantUser, spec.Process.User)
+		}
+	}
+}
+
+func TestAlignRestoreSpecLeavesBundleWhenCheckpointUnusable(t *testing.T) {
 	dir := t.TempDir()
 	bundlePath := writeRunscBundleWithMounts(t, dir, testProcMount, testCgroupMount)
 
-	missing := filepath.Join(dir, "missing")
-	require.Error(t, alignRestoreSpecCgroupMount(bundlePath, missing))
-	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, readBundleMounts(t, bundlePath))
-
+	bundle := mustLoadRunscBundle(t, bundlePath)
 	corrupt := filepath.Join(dir, "corrupt")
 	require.NoError(t, os.MkdirAll(corrupt, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(corrupt, runscCheckpointImageName), []byte("not a state file"), 0o644))
-	require.Error(t, alignRestoreSpecCgroupMount(bundlePath, corrupt))
-	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, readBundleMounts(t, bundlePath))
+	for _, image := range []string{
+		filepath.Join(dir, "missing"), corrupt,
+		writeRunscCheckpointSpec(t, t.TempDir()),
+		writeRunscCheckpointSpec(t, t.TempDir(), nil),
+		writeRunscCheckpointSpec(t, t.TempDir(), &specs.Spec{}, &specs.Spec{}),
+	} {
+		require.Error(t, bundle.alignRestore(image))
+		require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, mustLoadRunscBundle(t, bundlePath).spec.Mounts)
+	}
 }
 
-func TestReadRunscCheckpointSpecs(t *testing.T) {
+func TestReadRunscCheckpointSpec(t *testing.T) {
 	dir := t.TempDir()
 	imagePath := writeRunscCheckpointImage(t, dir, testProcMount, testCgroupMount)
 
-	containerSpecs, err := readRunscCheckpointSpecs(imagePath)
+	saved, err := readRunscCheckpointSpec(imagePath)
 	require.NoError(t, err)
-	require.Len(t, containerSpecs, 1)
-	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, containerSpecs["__no_name_0"].Mounts)
+	require.Equal(t, []specs.Mount{testProcMount, testCgroupMount}, saved.Mounts)
 }
 
 // The restore command must see the aligned bundle, not the one the worker wrote.
