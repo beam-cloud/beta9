@@ -717,6 +717,33 @@ func TestSpecFromRequestForcesCPUAndMemoryLimitsForGvisorGPU(t *testing.T) {
 	require.Equal(t, "2-9", mockRuntime.updatedResources.CPU.Cpus)
 }
 
+func TestSpecFromRequestRuncWorkloadCompatibility(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
+	request := &types.ContainerRequest{
+		ContainerId: "runc-workload-compatibility",
+		EntryPoint:  []string{"python3", "-c", "print('ok')"},
+		Env:         []string{"WORKLOAD_SETTING=preserved"},
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(baseConfigPath, request.ContainerId)) })
+	spec, err := worker.specFromRequest(request, &ContainerOptions{BindPorts: []int{8001}})
+	require.NoError(t, err)
+	require.Equal(t, request.EntryPoint, spec.Process.Args)
+	require.Contains(t, spec.Process.Env, "WORKLOAD_SETTING=preserved")
+	require.Zero(t, spec.Process.User.UID)
+	require.Zero(t, spec.Process.User.GID)
+	require.Contains(t, spec.Process.Capabilities.Effective, "CAP_SETUID")
+	require.Contains(t, spec.Linux.ReadonlyPaths, "/proc/sys")
+	for _, mount := range spec.Mounts {
+		if mount.Destination == "/proc" {
+			require.Equal(t, "proc", mount.Type)
+			require.Contains(t, mount.Options, "rw")
+			require.NotContains(t, mount.Options, "ro")
+			return
+		}
+	}
+	t.Fatal("runc workload spec must retain its proc mount")
+}
+
 func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
 	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
 	initialEnv := make([]string, 1, 8)
@@ -2876,24 +2903,28 @@ func TestRunContainerLegacyForcedRuncMigrationFailureDoesNotRestoreOrRun(t *test
 	require.NoDirExists(t, filepath.Join(overlayPath, containerID, "layer-0"), "failed reseed must remove partial upper state")
 }
 
-func TestRunContainerRejectsForcedRuncDockerModeBeforeLaunch(t *testing.T) {
-	instances := common.NewSafeMap[*ContainerInstance]()
-	worker := &Worker{
-		runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
-		containerInstances: instances,
-	}
-	request := &types.ContainerRequest{
-		ContainerId:   "forced-runc-docker",
-		DockerEnabled: true,
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			Config: `{"_beta9_force_resource_limits":true}`,
-		}},
-	}
+func TestRunContainerRejectsRuncDockerModeBeforeLaunch(t *testing.T) {
+	for _, stubConfig := range []string{"", `{"_beta9_force_resource_limits":true}`} {
+		t.Run(stubConfig, func(t *testing.T) {
+			instances := common.NewSafeMap[*ContainerInstance]()
+			worker := &Worker{
+				runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
+				containerInstances: instances,
+			}
+			request := &types.ContainerRequest{
+				ContainerId:   "runc-docker",
+				DockerEnabled: true,
+				Stub: types.StubWithRelated{Stub: types.Stub{
+					Config: stubConfig,
+				}},
+			}
 
-	err := worker.RunContainer(context.Background(), request)
-	require.ErrorContains(t, err, "do not support Docker-enabled mode")
-	_, exists := instances.Get(request.ContainerId)
-	require.False(t, exists, "rejected request must not create container state")
+			err := worker.RunContainer(context.Background(), request)
+			require.ErrorContains(t, err, "do not support Docker-enabled mode")
+			_, exists := instances.Get(request.ContainerId)
+			require.False(t, exists, "rejected request must not create container state")
+		})
+	}
 }
 
 func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {

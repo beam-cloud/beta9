@@ -374,6 +374,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
+	if !s.buildPoolAllowed(request.PoolSelector, request) {
+		requestLog(log.Info(), request).Msg("run request rejected: pool reserved for image builds")
+		return errors.New("pool does not support this request")
+	}
+
 	requestLog(log.Info(), request).
 		Str("stub_type", string(request.Stub.Type.Kind())).
 		Msg("received run request")
@@ -689,6 +694,9 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	// type before widening.
 	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
 	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
+	controllers = slices.DeleteFunc(controllers, func(controller WorkerPoolController) bool {
+		return !s.buildPoolAllowed(controller.Name(), request)
+	})
 	controllers = s.filterControllersByCheckpointAccelerator(controllers, request)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
@@ -1068,6 +1076,12 @@ func isManagedRequest(request *types.ContainerRequest) bool {
 	return request != nil && request.Stub.Type.IsManagedEndpoint()
 }
 
+// The configured image-build pool is reserved for build requests.
+func (s *Scheduler) buildPoolAllowed(poolName string, request *types.ContainerRequest) bool {
+	buildPool := s.config.ImageService.BuildContainerPoolSelector
+	return buildPool == "" || poolName != buildPool || request.IsBuildRequest()
+}
+
 // filterWorkersByMachine restricts machine-pinned requests to the pinned
 // machine's worker. The pin is stronger than any pool selector: it identifies
 // exactly one worker.
@@ -1254,6 +1268,9 @@ func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName strin
 // keeps use_vm requests off every other runtime, so they fail closed.
 // Checkpoint runtimes are matched separately by runtimeMatchesCheckpoint.
 func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) bool {
+	if request.DockerEnabled && runtimeName == types.ContainerRuntimeRunc.String() {
+		return false
+	}
 	if runtimeName != types.ContainerRuntimeMicroVM.String() {
 		return !request.UseVM
 	}
@@ -1350,6 +1367,9 @@ func capacityMemoryForScheduling(request *types.ContainerRequest) int64 {
 func (s *Scheduler) filterWorkersByFlags(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
+		if !s.buildPoolAllowed(worker.PoolName, request) || !s.buildPoolAllowed(workerPoolSelector(worker), request) {
+			continue
+		}
 		if !request.Preemptable && worker.Preemptable {
 			continue
 		}

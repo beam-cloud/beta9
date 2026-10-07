@@ -622,8 +622,8 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	if request.RequiresGPU() && !s.gpuVirtualizedForRequest(request) && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
-	if request.DockerEnabled && forcedRuncCheckpointProfileRequired(request, s.runtime) {
-		return errors.New("forced runc containers do not support Docker-enabled mode")
+	if request.DockerEnabled && s.runtime != nil && s.runtime.Name() == types.ContainerRuntimeRunc.String() {
+		return errors.New("runc containers do not support Docker-enabled mode")
 	}
 	if request.CheckpointEnabled && request.Stub.Type.IsDeployment() && !request.UseVM {
 		s.prepareCheckpointForWorker(ctx, request)
