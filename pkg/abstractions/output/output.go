@@ -100,7 +100,7 @@ func (o *OutputRedisService) writeToFile(ctx context.Context, contentCh <-chan O
 
 	for content := range contentCh {
 		if file == nil {
-			task, err := o.backendRepo.GetTaskWithRelated(ctx, content.TaskID)
+			task, err := getOutputTask(ctx, o.backendRepo, content.TaskID)
 			if err != nil {
 				return "", err
 			}
@@ -177,15 +177,23 @@ type Stat struct {
 	Mtime time.Time
 }
 
-func (o *OutputRedisService) statOutput(ctx context.Context, authInfo *auth.AuthInfo, taskId, outputId, filename string) (*Stat, error) {
-	workspaceName := authInfo.Workspace.Name
-
-	task, err := o.backendRepo.GetTaskWithRelated(ctx, taskId)
+func getOutputTask(ctx context.Context, backendRepo repository.BackendRepository, taskId string) (*types.TaskWithRelated, error) {
+	task, err := backendRepo.GetTaskWithRelated(ctx, taskId)
 	if err != nil {
 		return nil, err
 	}
 	if task == nil {
 		return nil, errors.New("task not found")
+	}
+	return task, nil
+}
+
+func (o *OutputRedisService) statOutput(ctx context.Context, authInfo *auth.AuthInfo, taskId, outputId, filename string) (*Stat, error) {
+	workspaceName := authInfo.Workspace.Name
+
+	task, err := getOutputTask(ctx, o.backendRepo, taskId)
+	if err != nil {
+		return nil, err
 	}
 
 	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(workspaceName), task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
@@ -243,7 +251,7 @@ func (o *OutputRedisService) getPublicURL(id string) (string, error) {
 }
 
 func SetPublicURL(ctx context.Context, config types.AppConfig, backendRepo repository.BackendRepository, redisClient *common.RedisClient, authInfo *auth.AuthInfo, taskId, outputId, filename string, expires uint32) (string, error) {
-	task, err := backendRepo.GetTaskWithRelated(ctx, taskId)
+	task, err := getOutputTask(ctx, backendRepo, taskId)
 	if err != nil {
 		return "", err
 	}
