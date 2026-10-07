@@ -184,6 +184,9 @@ func (o *OutputRedisService) statOutput(ctx context.Context, authInfo *auth.Auth
 	if err != nil {
 		return nil, err
 	}
+	if task == nil {
+		return nil, errors.New("task not found")
+	}
 
 	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(workspaceName), task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
 
