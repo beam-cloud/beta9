@@ -694,7 +694,9 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	// type before widening.
 	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
 	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
-	controllers = s.filterControllersByBuildPool(controllers, request)
+	controllers = slices.DeleteFunc(controllers, func(controller WorkerPoolController) bool {
+		return !s.buildPoolAllowed(controller.Name(), request)
+	})
 	controllers = s.filterControllersByCheckpointAccelerator(controllers, request)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
@@ -1078,16 +1080,6 @@ func isManagedRequest(request *types.ContainerRequest) bool {
 func (s *Scheduler) buildPoolAllowed(poolName string, request *types.ContainerRequest) bool {
 	buildPool := s.config.ImageService.BuildContainerPoolSelector
 	return buildPool == "" || poolName != buildPool || request.IsBuildRequest()
-}
-
-func (s *Scheduler) filterControllersByBuildPool(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
-	filtered := make([]WorkerPoolController, 0, len(controllers))
-	for _, controller := range controllers {
-		if s.buildPoolAllowed(controller.Name(), request) {
-			filtered = append(filtered, controller)
-		}
-	}
-	return filtered
 }
 
 // filterWorkersByMachine restricts machine-pinned requests to the pinned
