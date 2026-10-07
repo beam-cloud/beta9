@@ -3039,7 +3039,10 @@ func TestGPUDeviceCheckpointRequiresCompatibleWorker(t *testing.T) {
 	request.Checkpoint.CompatibilityKey = "v1:profile"
 	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, gpuDevices))
 	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, pending), "legacy pending routing remains unchanged")
-	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))
+	other := worker("v2:other", types.WorkerStatusAvailable)
+	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending, other}, request, nil))
+	request.Checkpoint.CompatibilityKey = ""
+	assert.Equal(t, []*types.Worker{other}, filterWorkersByResources([]*types.Worker{other}, request, nil), "keyless restores still use free capacity")
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
 	request.Checkpoint.CompatibilityKey = "v2:other"
 	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))

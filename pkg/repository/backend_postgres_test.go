@@ -504,6 +504,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 			"locality",
 			"accelerator",
 			"runtime",
+			"compatibility_key",
 		}).AddRow(
 			"checkpoint-123",
 			"external-123",
@@ -524,6 +525,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 			"default",
 			"cpu",
 			types.ContainerRuntimeRunc.String(),
+			"v1:profile-a",
 		))
 
 	checkpoints, err := postgresRepo.ListStaleCheckpoints(context.Background(), []string{"workspace|active-stub"}, cutoff)
@@ -533,6 +535,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 	require.Equal(t, "checkpoint-123", checkpoints[0].CheckpointId)
 	require.Equal(t, []uint32{8080}, checkpoints[0].ExposedPorts)
 	require.Equal(t, types.ContainerRuntimeRunc.String(), checkpoints[0].Runtime)
+	require.Equal(t, "v1:profile-a", checkpoints[0].CompatibilityKey)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -551,7 +554,7 @@ func checkpointQueryRows(key string) *sqlmock.Rows {
 
 func TestGetCheckpointByIdRetainsCompatibilityKey(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
-	mock.ExpectQuery(`runtime, compatibility_key FROM checkpoint`).
+	mock.ExpectQuery(`c\.runtime, c\.compatibility_key FROM checkpoint c`).
 		WithArgs("checkpoint-available").WillReturnRows(checkpointQueryRows("v1:profile-a"))
 
 	checkpoint, err := repo.GetCheckpointById(context.Background(), "checkpoint-available")
@@ -559,6 +562,38 @@ func TestGetCheckpointByIdRetainsCompatibilityKey(t *testing.T) {
 	require.Equal(t, "checkpoint-available", checkpoint.CheckpointId)
 	require.Equal(t, "v1:profile-a", checkpoint.CompatibilityKey)
 	require.Equal(t, []uint32{8001}, checkpoint.ExposedPorts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCheckpointWriteAndListResultsRetainCompatibilityKey(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	ctx := context.Background()
+	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-available", Status: "available"}
+	const key = "v1:profile-a"
+
+	mock.ExpectQuery(`INSERT INTO checkpoint AS c`).WillReturnRows(checkpointQueryRows(key))
+	created, err := repo.CreateCheckpoint(ctx, checkpoint, key)
+	require.NoError(t, err)
+	mock.ExpectQuery(`UPDATE checkpoint AS c SET status = \$1`).
+		WithArgs("available", checkpoint.CheckpointId).WillReturnRows(checkpointQueryRows(key))
+	updated, err := repo.UpdateCheckpoint(ctx, checkpoint)
+	require.NoError(t, err)
+	mock.ExpectQuery(`INNER JOIN workspace w`).WithArgs("workspace").WillReturnRows(checkpointQueryRows(key))
+	listed, err := repo.ListCheckpoints(ctx, "workspace")
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	mock.ExpectQuery(`UPDATE checkpoint c SET deleted_at`).
+		WithArgs(pq.StringArray{checkpoint.CheckpointId}).WillReturnRows(checkpointQueryRows(key))
+	pruned, err := repo.PruneCheckpoints(ctx, []string{checkpoint.CheckpointId})
+	require.NoError(t, err)
+	require.Len(t, pruned, 1)
+
+	for _, result := range []*types.Checkpoint{created, updated, &listed[0], &pruned[0]} {
+		require.Equal(t, checkpoint.CheckpointId, result.CheckpointId)
+		require.Equal(t, key, result.CompatibilityKey)
+		require.Equal(t, []uint32{8001}, result.ExposedPorts)
+		require.Equal(t, "gvisor", result.Runtime)
+	}
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

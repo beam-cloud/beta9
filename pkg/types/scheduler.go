@@ -451,6 +451,20 @@ func (c *ContainerRequest) RequiresGPU() bool {
 	return c.Gpu != "" && c.Gpu != string(NO_GPU)
 }
 
+// Keyless GPU restores can use idle capacity, but cannot evict workloads
+// before the runtime has validated their compatibility.
+func (c *ContainerRequest) MayEvict() bool {
+	if c == nil || c.Evictable || c.OpportunisticOnly {
+		return false
+	}
+	if c.Stub.Type.IsDeployment() || !c.RequiresGPU() {
+		return true
+	}
+	checkpoint := c.Checkpoint
+	return checkpoint == nil || checkpoint.Status != string(CheckpointStatusAvailable) ||
+		checkpoint.IsFilesystemOnly() || checkpoint.CompatibilityKey != ""
+}
+
 func WorkerStartConcurrencyForPool(poolConfig WorkerPoolConfig, globalRuntime, runtimeType string, workerCPU int64) int {
 	if runtimeType == "" {
 		runtimeType = poolConfig.ContainerRuntime

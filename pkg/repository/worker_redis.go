@@ -1707,7 +1707,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 				evictableMemory += requestMemory
 				evictableGPU += requestGPU
 			}
-			if requestMayEvict(request) {
+			if request.MayEvict() {
 				beneficiaries = append(beneficiaries, request.ContainerId)
 			} else {
 				idleOnlyCPU += request.Cpu

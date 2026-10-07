@@ -19,12 +19,6 @@ var ErrWorkerCapacityChanged = errors.New("worker capacity changed after selecti
 
 var ErrInsufficientEvictableCapacity = errors.New("unable to schedule container, worker out of free and evictable capacity")
 
-// requestMayEvict reports whether a request may displace evictable containers.
-// Evictable and opportunistic requests never do: they only fill idle capacity.
-func requestMayEvict(request *types.ContainerRequest) bool {
-	return request != nil && !request.Evictable && !request.OpportunisticOnly
-}
-
 // reclaimable is the one definition of capacity a non-evictable request may
 // take: an evictable container on the worker that is pending or running and
 // not already being evicted. Advertisement, victim selection and the Lua
@@ -210,12 +204,12 @@ func requestDependencies(queued []queuedContainerRequest, free [3]int64, victims
 	// fit idle capacity and must never be charged to a victim.
 	order := make([]*types.ContainerRequest, 0, len(queued))
 	for _, q := range queued {
-		if !requestMayEvict(q.request) {
+		if !q.request.MayEvict() {
 			order = append(order, q.request)
 		}
 	}
 	for _, q := range queued {
-		if requestMayEvict(q.request) {
+		if q.request.MayEvict() {
 			order = append(order, q.request)
 		}
 	}
@@ -227,7 +221,7 @@ func requestDependencies(queued []queuedContainerRequest, free [3]int64, victims
 			free[axis] -= take
 			need[axis] -= take
 		}
-		if !requestMayEvict(request) {
+		if !request.MayEvict() {
 			continue
 		}
 		for i := range victims {

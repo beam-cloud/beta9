@@ -75,6 +75,38 @@ func addRunningInstance(worker *Worker, rt runtime.Runtime, containerID string) 
 	return instance
 }
 
+func TestEvictForRequestRejectsUnverifiedExplicitGPUCheckpoint(t *testing.T) {
+	for _, key := range []string{"", "v1:other", "v2:other"} {
+		t.Run(key, func(t *testing.T) {
+			worker, rt := evictionWorkerForTest(false)
+			worker.checkpointCompatibilityKey = "v2:host"
+			victim := addRunningInstance(worker, rt, "victim")
+			cancelled := false
+			worker.containerCancels.Set("victim", func() { cancelled = true })
+			request := &types.ContainerRequest{
+				ContainerId: "incoming", Gpu: "RTX4090", GpuCount: 1, EvictContainerIds: []string{"victim"},
+				Stub:       types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+				Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: "gvisor", CompatibilityKey: key},
+			}
+			err := worker.evictForRequest(context.Background(), request)
+			if key == "" {
+				require.ErrorContains(t, err, "requires free capacity")
+			} else {
+				var incompatible *ErrCheckpointHostIncompatible
+				require.ErrorAs(t, err, &incompatible)
+			}
+			require.False(t, cancelled)
+			require.Empty(t, rt.observed("victim"))
+			require.False(t, victim.StopEscalationStarted.Load())
+			_, reason := victim.lifecycleState()
+			require.Empty(t, reason)
+			retained, exists := worker.containerInstances.Get("victim")
+			require.True(t, exists)
+			require.Same(t, victim, retained)
+		})
+	}
+}
+
 func TestEvictForRequestDrainsThenStartsWhenVictimsExit(t *testing.T) {
 	worker, rt := evictionWorkerForTest(true)
 	victim := addRunningInstance(worker, rt, "victim-1")

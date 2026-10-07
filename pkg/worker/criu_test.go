@@ -2857,6 +2857,8 @@ func TestCheckpointSelectionBeforeDownload(t *testing.T) {
 		{"reuse legacy GPU variant", "v1:host", "v1:other", "v2:host", variant, nil, true},
 		{"reject different GPU variant", "v1:other", "", "v2:host", variant, nil, false},
 		{"reject new GPU variant on old worker", "v2:host", "", "v1:host", variant, nil, false},
+		{"reject unavailable checkpoint", "host", "", "host", &pb.Checkpoint{Runtime: "gvisor", Status: "restore_failed"}, nil, false},
+		{"reject runtime mismatch", "host", "", "host", &pb.Checkpoint{Runtime: "runc", Status: "available"}, nil, false},
 		{"seed missing variant", "host", "", "host", nil, nil, true},
 		{"old gateway", "", "", "host", variant, nil, false},
 		{"old gateway missing variant", "", "", "host", nil, nil, false},
