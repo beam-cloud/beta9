@@ -7,6 +7,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestKeylessCheckpointMayEvict(t *testing.T) {
+	request := &ContainerRequest{Gpu: "RTX4090",
+		Checkpoint: &Checkpoint{Status: string(CheckpointStatusAvailable), Runtime: "gvisor"}}
+	require.False(t, request.MayEvict())
+	request.Checkpoint.CompatibilityKey = "v1:host"
+	require.True(t, request.MayEvict())
+	request.Checkpoint.CompatibilityKey = ""
+	request.Checkpoint.Runtime = CheckpointRuntimeFilesystem
+	require.True(t, request.MayEvict())
+	request.Checkpoint.Runtime = "gvisor"
+	request.Gpu = string(NO_GPU)
+	require.True(t, request.MayEvict())
+	request.Gpu = "RTX4090"
+	request.Stub.Type = StubType(StubTypeASGIDeployment)
+	require.True(t, request.MayEvict())
+}
+
 func TestWorkerStartConcurrencyUsesPoolAndRuntime(t *testing.T) {
 	worker := &Worker{
 		TotalCpu: 16000,

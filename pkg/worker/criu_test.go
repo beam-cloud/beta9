@@ -2835,45 +2835,55 @@ type compatibilityBackend struct {
 	response *pb.GetLatestCheckpointByStubIdResponse
 	err      error
 	key      string
+	calls    int
 }
 
 func (b *compatibilityBackend) GetLatestCheckpointByStubId(_ context.Context, in *pb.GetLatestCheckpointByStubIdRequest, _ ...grpc.CallOption) (*pb.GetLatestCheckpointByStubIdResponse, error) {
 	b.key = in.CompatibilityKey
+	b.calls++
 	return b.response, b.err
 }
 
 func TestCheckpointSelectionBeforeDownload(t *testing.T) {
 	variant := &pb.Checkpoint{CheckpointId: "compatible", Runtime: "gvisor", Status: "available"}
 	for _, tc := range []struct {
-		name, echoedKey, attachedKey string
-		checkpoint                   *pb.Checkpoint
-		err                          error
-		enabled                      bool
+		name, returnedKey, attachedKey, workerKey string
+		checkpoint                                *pb.Checkpoint
+		err                                       error
+		enabled                                   bool
 	}{
-		{"attached matching variant", "", "host", variant, nil, true},
-		{"reuse host variant", "host", "other-host", variant, nil, true},
-		{"seed missing variant", "host", "", nil, nil, true},
-		{"old gateway", "", "", variant, nil, false},
-		{"old gateway missing variant", "", "", nil, nil, false},
-		{"lookup failure", "", "", nil, errors.New("unavailable"), false},
+		{"attached matching variant", "", "host", "host", variant, nil, true},
+		{"reuse host variant", "host", "other-host", "host", variant, nil, true},
+		{"reuse legacy GPU variant", "v1:host", "v1:other", "v2:host", variant, nil, true},
+		{"reject different GPU variant", "v1:other", "", "v2:host", variant, nil, false},
+		{"reject new GPU variant on old worker", "v2:host", "", "v1:host", variant, nil, false},
+		{"reject unavailable checkpoint", "host", "", "host", &pb.Checkpoint{Runtime: "gvisor", Status: "restore_failed"}, nil, false},
+		{"reject runtime mismatch", "host", "", "host", &pb.Checkpoint{Runtime: "runc", Status: "available"}, nil, false},
+		{"seed missing variant", "host", "", "host", nil, nil, true},
+		{"old gateway", "", "", "host", variant, nil, false},
+		{"old gateway missing variant", "", "", "host", nil, nil, false},
+		{"lookup failure", "", "", "host", nil, errors.New("unavailable"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			backend := &compatibilityBackend{response: &pb.GetLatestCheckpointByStubIdResponse{
-				Ok: true, CompatibilityKey: tc.echoedKey, Checkpoint: tc.checkpoint}, err: tc.err}
-			worker := &Worker{checkpointCompatibilityKey: "host", backendRepoClient: backend,
+				Ok: true, CompatibilityKey: tc.returnedKey, Checkpoint: tc.checkpoint}, err: tc.err}
+			worker := &Worker{checkpointCompatibilityKey: tc.workerKey, backendRepoClient: backend,
 				runtime: &mockRuntime{name: "gvisor", capabilities: runtime.Capabilities{CheckpointRestore: true}}}
 			request := &types.ContainerRequest{StubId: "stub", CheckpointEnabled: true,
 				Checkpoint: &types.Checkpoint{CheckpointId: "attached", Runtime: "gvisor", Status: "available", CompatibilityKey: tc.attachedKey}}
 			worker.prepareCheckpointForWorker(context.Background(), request)
-			if tc.attachedKey == "host" {
+			if tc.attachedKey == tc.workerKey {
 				require.Empty(t, backend.key, "compatible scheduling needs no additional lookup")
+				require.Zero(t, backend.calls)
 				require.Equal(t, "attached", request.Checkpoint.CheckpointId)
 				return
 			}
-			require.Equal(t, "host", backend.key)
+			require.Equal(t, tc.workerKey, backend.key)
+			require.Equal(t, 1, backend.calls)
 			require.Equal(t, tc.enabled, request.CheckpointEnabled)
 			if tc.enabled && tc.checkpoint != nil {
 				require.Equal(t, "compatible", request.Checkpoint.CheckpointId)
+				require.Equal(t, tc.returnedKey, request.Checkpoint.CompatibilityKey)
 			} else {
 				require.Nil(t, request.Checkpoint)
 			}

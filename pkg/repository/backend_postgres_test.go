@@ -504,6 +504,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 			"locality",
 			"accelerator",
 			"runtime",
+			"compatibility_key",
 		}).AddRow(
 			"checkpoint-123",
 			"external-123",
@@ -524,6 +525,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 			"default",
 			"cpu",
 			types.ContainerRuntimeRunc.String(),
+			"v1:profile-a",
 		))
 
 	checkpoints, err := postgresRepo.ListStaleCheckpoints(context.Background(), []string{"workspace|active-stub"}, cutoff)
@@ -533,75 +535,102 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 	require.Equal(t, "checkpoint-123", checkpoints[0].CheckpointId)
 	require.Equal(t, []uint32{8080}, checkpoints[0].ExposedPorts)
 	require.Equal(t, types.ContainerRuntimeRunc.String(), checkpoints[0].Runtime)
+	require.Equal(t, "v1:profile-a", checkpoints[0].CompatibilityKey)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func checkpointQueryRows(key string) *sqlmock.Rows {
+	now := time.Now()
+	return sqlmock.NewRows([]string{
+		"checkpoint_id", "external_id", "source_container_id", "container_ip", "status", "remote_key",
+		"workspace_id", "stub_id", "stub_type", "app_id", "exposed_ports", "created_at", "last_restored_at",
+		"cache_hash", "cache_size_bytes", "origin_key", "locality", "accelerator", "runtime", "compatibility_key",
+	}).AddRow(
+		"checkpoint-available", "external-available", "container-available", "10.0.0.12", "available", "checkpoint-available",
+		uint(1), uint(2), types.StubTypeASGI, uint(3), "{8001}", now.Add(-time.Minute), now,
+		"sha256-cache", int64(128), "checkpoints/checkpoint-available.tar", "default", "cpu", "gvisor", key,
+	)
+}
+
+func TestGetCheckpointByIdRetainsCompatibilityKey(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`c\.runtime, c\.compatibility_key FROM checkpoint c`).
+		WithArgs("checkpoint-available").WillReturnRows(checkpointQueryRows("v1:profile-a"))
+
+	checkpoint, err := repo.GetCheckpointById(context.Background(), "checkpoint-available")
+	require.NoError(t, err)
+	require.Equal(t, "checkpoint-available", checkpoint.CheckpointId)
+	require.Equal(t, "v1:profile-a", checkpoint.CompatibilityKey)
+	require.Equal(t, []uint32{8001}, checkpoint.ExposedPorts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCheckpointWriteAndListResultsRetainCompatibilityKey(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	ctx := context.Background()
+	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-available", Status: "available"}
+	const key = "v1:profile-a"
+
+	mock.ExpectQuery(`INSERT INTO checkpoint AS c`).WillReturnRows(checkpointQueryRows(key))
+	created, err := repo.CreateCheckpoint(ctx, checkpoint, key)
+	require.NoError(t, err)
+	mock.ExpectQuery(`UPDATE checkpoint AS c SET status = \$1`).
+		WithArgs("available", checkpoint.CheckpointId).WillReturnRows(checkpointQueryRows(key))
+	updated, err := repo.UpdateCheckpoint(ctx, checkpoint)
+	require.NoError(t, err)
+	mock.ExpectQuery(`INNER JOIN workspace w`).WithArgs("workspace").WillReturnRows(checkpointQueryRows(key))
+	listed, err := repo.ListCheckpoints(ctx, "workspace")
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	mock.ExpectQuery(`UPDATE checkpoint c SET deleted_at`).
+		WithArgs(pq.StringArray{checkpoint.CheckpointId}).WillReturnRows(checkpointQueryRows(key))
+	pruned, err := repo.PruneCheckpoints(ctx, []string{checkpoint.CheckpointId})
+	require.NoError(t, err)
+	require.Len(t, pruned, 1)
+
+	for _, result := range []*types.Checkpoint{created, updated, &listed[0], &pruned[0]} {
+		require.Equal(t, checkpoint.CheckpointId, result.CheckpointId)
+		require.Equal(t, key, result.CompatibilityKey)
+		require.Equal(t, []uint32{8001}, result.ExposedPorts)
+		require.Equal(t, "gvisor", result.Runtime)
+	}
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	postgresRepo := repo.(*PostgresBackendRepository)
-	createdAt := time.Now().Add(-time.Minute)
-	restoredAt := time.Now()
-
-	mock.ExpectQuery(`c\.status = \$2 AND \(\$3 = '' OR c\.compatibility_key = \$3\)`).
-		WithArgs("stub-123", string(types.CheckpointStatusAvailable), "").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"checkpoint_id",
-			"external_id",
-			"source_container_id",
-			"container_ip",
-			"status",
-			"remote_key",
-			"workspace_id",
-			"stub_id",
-			"stub_type",
-			"app_id",
-			"exposed_ports",
-			"created_at",
-			"last_restored_at",
-			"cache_hash",
-			"cache_size_bytes",
-			"origin_key",
-			"locality",
-			"accelerator",
-			"runtime",
-			"compatibility_key",
-		}).AddRow(
-			"checkpoint-available",
-			"external-available",
-			"container-available",
-			"10.0.0.12",
-			string(types.CheckpointStatusAvailable),
-			"checkpoint-available",
-			uint(1),
-			uint(2),
-			types.StubTypeASGI,
-			uint(3),
-			"{8001}",
-			createdAt,
-			restoredAt,
-			"sha256-cache",
-			int64(128),
-			"checkpoints/checkpoint-available.tar",
-			"default",
-			"cpu",
-			types.ContainerRuntimeGvisor.String(),
-			"host-a",
-		))
-
-	checkpoint, err := postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123")
-
-	require.NoError(t, err)
-	require.Equal(t, "checkpoint-available", checkpoint.CheckpointId)
-	require.Equal(t, string(types.CheckpointStatusAvailable), checkpoint.Status)
-	require.Equal(t, []uint32{8001}, checkpoint.ExposedPorts)
-	require.Equal(t, types.ContainerRuntimeGvisor.String(), checkpoint.Runtime)
-	require.Equal(t, "host-a", checkpoint.CompatibilityKey)
-	mock.ExpectQuery(`c\.compatibility_key = \$3`).
-		WithArgs("stub-123", string(types.CheckpointStatusAvailable), "host-b").
-		WillReturnError(sql.ErrNoRows)
-	_, err = postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123", "host-b")
-	require.IsType(t, &types.ErrCheckpointNotFound{}, err)
-	require.NoError(t, mock.ExpectationsWereMet())
+	for _, tc := range []struct {
+		name, key, legacyKey, storedKey string
+	}{
+		{"unfiltered latest", "", "", "v1:profile-a"},
+		{"current device layout", "v2:profile-a", "v1:profile-a", "v2:profile-a"},
+		{"older compatible layout", "v2:profile-a", "v1:profile-a", "v1:profile-a"},
+		{"unrelated profile excluded", "v2:profile-b", "v1:profile-b", ""},
+		{"reverse migration excluded", "v1:profile-a", "v1:profile-a", ""},
+		{"empty profile not broadened", "v2:", "v2:", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, mock := NewBackendPostgresRepositoryForTest()
+			query := mock.ExpectQuery(`c\.status = \$2 AND \(\$3 = '' OR c\.compatibility_key IN \(\$3, \$4\)\) ORDER BY c\.created_at DESC LIMIT 1`).
+				WithArgs("stub-123", string(types.CheckpointStatusAvailable), tc.key, tc.legacyKey)
+			if tc.storedKey == "" {
+				query.WillReturnError(sql.ErrNoRows)
+			} else {
+				query.WillReturnRows(checkpointQueryRows(tc.storedKey))
+			}
+			checkpoint, err := repo.GetLatestCheckpointByStubId(context.Background(), "stub-123", tc.key)
+			if tc.storedKey == "" {
+				require.IsType(t, &types.ErrCheckpointNotFound{}, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "checkpoint-available", checkpoint.CheckpointId)
+				require.Equal(t, "available", checkpoint.Status)
+				require.Equal(t, tc.storedKey, checkpoint.CompatibilityKey)
+				require.Equal(t, []uint32{8001}, checkpoint.ExposedPorts)
+				require.Equal(t, "gvisor", checkpoint.Runtime)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func expectTaskWithRelatedQuery(mock sqlmock.Sqlmock, taskSnapshot types.Task, dbStatus types.TaskStatus) {

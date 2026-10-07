@@ -122,7 +122,7 @@ func TestScheduleEvictsToCoverShortfall(t *testing.T) {
 	assert.Equal(t, stored.EvictableGpuCount, worker.EvictableGpuCount)
 }
 
-func TestScheduleDoesNotEvictForOpportunisticOrEvictableRequests(t *testing.T) {
+func TestScheduleDoesNotEvictForIdleOnlyRequests(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NoError(t, err)
 	repo := NewWorkerRedisRepositoryForTest(rdb).(*WorkerRedisRepository)
@@ -138,6 +138,8 @@ func TestScheduleDoesNotEvictForOpportunisticOrEvictableRequests(t *testing.T) {
 	for _, request := range []*types.ContainerRequest{
 		{ContainerId: "replica-b", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 1, Evictable: true, OpportunisticOnly: true},
 		{ContainerId: "protected-b", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 1, OpportunisticOnly: true},
+		{ContainerId: "keyless-restore", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 1,
+			Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: "gvisor"}},
 	} {
 		setPendingContainerRequests(t, rdb, request)
 		err := repo.ScheduleContainerRequest(worker, request)

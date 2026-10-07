@@ -33,6 +33,9 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 	if request == nil || len(request.EvictContainerIds) == 0 {
 		return nil
 	}
+	if err := s.validateCheckpointRestorePlacement(request); err != nil {
+		return err
+	}
 
 	drain := min(time.Duration(request.EvictDrainSeconds)*time.Second, maxPreemptionDrain)
 	victims := make([]string, 0, len(request.EvictContainerIds))

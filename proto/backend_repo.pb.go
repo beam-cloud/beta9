@@ -194,7 +194,7 @@ type GetLatestCheckpointByStubIdResponse struct {
 	Ok         bool        `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
 	Checkpoint *Checkpoint `protobuf:"bytes,2,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
 	ErrorMsg   string      `protobuf:"bytes,3,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
-	// Echo the applied filter so workers can detect an older gateway.
+	// Stored checkpoint key, or the applied filter when no checkpoint is available.
 	CompatibilityKey string `protobuf:"bytes,4,opt,name=compatibility_key,json=compatibilityKey,proto3" json:"compatibility_key,omitempty"`
 }
 

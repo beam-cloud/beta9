@@ -1000,11 +1000,12 @@ func (s *Worker) runContainerRequestWithRunner(
 		// The no-victim path has no goroutine, channel or extra repository call.
 		var waitForEviction func() error
 		if len(request.EvictContainerIds) > 0 {
+			evictionRequest := *request
 			done := make(chan struct{})
 			var evictionErr error
 			go func() {
 				defer close(done)
-				evictionErr = s.evictForRequest(ctx, request)
+				evictionErr = s.evictForRequest(ctx, &evictionRequest)
 			}()
 			waitForEviction = func() error {
 				select {

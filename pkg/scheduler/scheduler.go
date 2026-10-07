@@ -1132,12 +1132,13 @@ func workerPoolSelector(worker *types.Worker) string {
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
+	requiresGPU := request.RequiresGPU()
 	var checkpoint *types.Checkpoint
 	if candidate := availableCheckpoint(request); canSkipCheckpoint(request) ||
-		(candidate.RequiresGPUDeviceSpec() && !candidate.IsFilesystemOnly()) {
+		(candidate != nil && !candidate.IsFilesystemOnly() &&
+			(candidate.RequiresGPUDeviceSpec() || requiresGPU && candidate.CompatibilityKey != "")) {
 		checkpoint = candidate
 	}
-	requiresGPU := request.RequiresGPU()
 	gpuCount := gpuCountForScheduling(request)
 
 	gpuRequests := gpuRequestsForScheduling(request)
@@ -1201,17 +1202,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	return filteredWorkers
 }
 
-// requestMayEvict reports whether a request may displace evictable containers.
-// Evictable and opportunistic requests never do: they only fill idle capacity.
-func requestMayEvict(request *types.ContainerRequest) bool {
-	return request != nil && !request.Evictable && !request.OpportunisticOnly
-}
-
 // schedulableCapacity is the capacity a request may claim on a worker: free
 // capacity, plus whatever evictable containers hold if the request may evict.
 func schedulableCapacity(worker *types.Worker, request *types.ContainerRequest) (int64, int64, uint32) {
 	cpu, memory, gpu := worker.FreeCpu, worker.FreeMemory, worker.FreeGpuCount
-	if requestMayEvict(request) {
+	if request.MayEvict() {
 		cpu += worker.EvictableCpu
 		memory += worker.EvictableMemory
 		gpu += worker.EvictableGpuCount
@@ -1487,7 +1482,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 // evictionRankForWorker is 0 when the request fits in the worker's free
 // capacity and 1 when it only fits by evicting containers.
 func evictionRankForWorker(worker *types.Worker, request *types.ContainerRequest) int32 {
-	if worker == nil || request == nil || !requestMayEvict(request) {
+	if worker == nil || request == nil || !request.MayEvict() {
 		return 0
 	}
 	if worker.FreeCpu < request.Cpu || worker.FreeMemory < capacityMemoryForScheduling(request) {

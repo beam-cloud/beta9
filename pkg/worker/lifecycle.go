@@ -628,10 +628,8 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	if request.CheckpointEnabled && request.Stub.Type.IsDeployment() && !request.UseVM {
 		s.prepareCheckpointForWorker(ctx, request)
 	}
-	if !request.Stub.Type.IsDeployment() && hasAvailableCheckpoint(request) && !request.Checkpoint.IsFilesystemOnly() &&
-		(strings.HasPrefix(s.checkpointCompatibilityKey, types.CheckpointCompatibilityGPUDevicesPrefix) || request.Checkpoint.RequiresGPUDeviceSpec()) &&
-		!request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) {
-		return &ErrCheckpointHostIncompatible{Stderr: "checkpoint does not match this worker's compatibility profile"}
+	if err := s.validateCheckpointRestorePlacement(request); err != nil {
+		return err
 	}
 	if err := validateCheckpointRestoreRuntime(request, s.runtime); err != nil {
 		return err
@@ -826,6 +824,21 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	logCaptureClosed = true
+	return nil
+}
+
+// Historical GPU checkpoints use the runtime's checks, but cannot displace
+// running workloads before their compatibility is known.
+func (s *Worker) validateCheckpointRestorePlacement(request *types.ContainerRequest) error {
+	if !request.Stub.Type.IsDeployment() && hasAvailableCheckpoint(request) && !request.Checkpoint.IsFilesystemOnly() &&
+		request.Checkpoint.CompatibilityKey != "" &&
+		(strings.HasPrefix(s.checkpointCompatibilityKey, types.CheckpointCompatibilityGPUDevicesPrefix) || request.Checkpoint.RequiresGPUDeviceSpec()) &&
+		!request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) {
+		return &ErrCheckpointHostIncompatible{Stderr: "checkpoint does not match this worker's compatibility profile"}
+	}
+	if len(request.EvictContainerIds) > 0 && !request.MayEvict() {
+		return errors.New("request requires free capacity and cannot evict running containers")
+	}
 	return nil
 }
 

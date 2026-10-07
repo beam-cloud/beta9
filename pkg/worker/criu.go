@@ -234,13 +234,17 @@ func (s *Worker) initializeCheckpointCompatibility() {
 		Strs("physical_gpus", profile.GPU).Msg("checkpoint host compatibility initialized")
 }
 
+func (s *Worker) checkpointMatchesWorker(request *types.ContainerRequest) bool {
+	return hasAvailableCheckpoint(request) && request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) &&
+		validateCheckpointRestoreRuntime(request, s.runtime) == nil
+}
+
 // Deployment snapshots are selected for this host before any archive download.
 func (s *Worker) prepareCheckpointForWorker(ctx context.Context, request *types.ContainerRequest) {
 	if request.Checkpoint.IsFilesystemOnly() {
 		return
 	}
-	if hasAvailableCheckpoint(request) && request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) &&
-		validateCheckpointRestoreRuntime(request, s.runtime) == nil {
+	if s.checkpointMatchesWorker(request) {
 		return
 	}
 	request.Checkpoint = nil
@@ -253,20 +257,24 @@ func (s *Worker) prepareCheckpointForWorker(ctx context.Context, request *types.
 	response, err := handleGRPCResponse(s.backendRepoClient.GetLatestCheckpointByStubId(ctx, &pb.GetLatestCheckpointByStubIdRequest{
 		StubId: request.StubId, CompatibilityKey: s.checkpointCompatibilityKey,
 	}))
-	if err != nil || response.CompatibilityKey != s.checkpointCompatibilityKey {
-		// Failed lookups and older gateways cannot establish compatibility.
-		request.CheckpointEnabled = false
-		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("checkpoint compatibility lookup unavailable; starting normally")
-		return
-	}
-	if response.Checkpoint != nil {
+	if err != nil {
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("checkpoint compatibility lookup failed; starting normally")
+	} else if response.Checkpoint == nil {
+		if response.CompatibilityKey == s.checkpointCompatibilityKey {
+			return
+		}
+		log.Warn().Str("container_id", request.ContainerId).Msg("gateway did not confirm checkpoint compatibility; starting normally")
+	} else {
 		request.Checkpoint = types.NewCheckpointFromProto(response.Checkpoint)
 		request.Checkpoint.CompatibilityKey = response.CompatibilityKey
-		if !hasAvailableCheckpoint(request) || validateCheckpointRestoreRuntime(request, s.runtime) != nil {
-			request.Checkpoint = nil
-			request.CheckpointEnabled = false
+		if s.checkpointMatchesWorker(request) {
+			return
 		}
+		log.Warn().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).
+			Msg("checkpoint is incompatible or not available; starting normally")
 	}
+	request.Checkpoint = nil
+	request.CheckpointEnabled = false
 }
 
 func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
