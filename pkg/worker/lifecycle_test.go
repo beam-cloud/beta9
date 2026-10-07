@@ -59,7 +59,7 @@ func TestExplicitRestoreRejectsIncompatibleGPUDeviceSpecBeforeEviction(t *testin
 	worker := &Worker{
 		runtime: NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{GPU: true, CheckpointRestore: true}),
 	}
-	for _, keys := range [][2]string{{"v2:host", "v1:other"}, {"v2:host", "v2:other"}, {"v2:host", ""}, {"v1:host", "v2:host"}, {"", "v2:host"}} {
+	for _, keys := range [][2]string{{"v2:host", "v1:other"}, {"v2:host", "v2:other"}, {"v1:host", "v2:host"}, {"", "v2:host"}} {
 		worker.checkpointCompatibilityKey = keys[0]
 		request := &types.ContainerRequest{
 			Gpu: "RTX4090", GpuCount: 1,
@@ -75,6 +75,24 @@ func TestExplicitRestoreRejectsIncompatibleGPUDeviceSpecBeforeEviction(t *testin
 		require.ErrorAs(t, err, &incompatible)
 		require.Same(t, checkpoint, request.Checkpoint)
 	}
+}
+
+func TestExplicitKeylessRestoreStillValidatesRuntime(t *testing.T) {
+	worker := &Worker{
+		checkpointCompatibilityKey: "v2:host",
+		runtime:                    NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{GPU: true}),
+	}
+	request := &types.ContainerRequest{
+		Gpu: "RTX4090", GpuCount: 1,
+		Stub:       types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+		Checkpoint: &types.Checkpoint{CheckpointId: "historical", Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String()},
+	}
+	err := worker.runContainerWithEvictionBarrier(context.Background(), request, func() error {
+		t.Fatal("unsupported runtime must not evict workloads")
+		return nil
+	})
+	require.EqualError(t, err, `cannot restore checkpoint "historical" with runtime "gvisor": checkpoint restore is unsupported`)
+	require.Empty(t, request.Checkpoint.CompatibilityKey)
 }
 
 // Only a definite absence drops an SDK mount. A stat that fails for any other

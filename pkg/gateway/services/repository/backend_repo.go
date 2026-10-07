@@ -65,7 +65,7 @@ func (s *BackendRepositoryService) GetLatestCheckpointByStubId(ctx context.Conte
 		return &pb.GetLatestCheckpointByStubIdResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.GetLatestCheckpointByStubIdResponse{Ok: true, Checkpoint: checkpoint.ToProto(), CompatibilityKey: req.CompatibilityKey}, nil
+	return &pb.GetLatestCheckpointByStubIdResponse{Ok: true, Checkpoint: checkpoint.ToProto(), CompatibilityKey: checkpoint.CompatibilityKey}, nil
 }
 
 func (s *BackendRepositoryService) ListCheckpoints(ctx context.Context, req *pb.ListCheckpointsRequest) (*pb.ListCheckpointsResponse, error) {

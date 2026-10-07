@@ -3026,7 +3026,7 @@ func (r *PostgresBackendRepository) GetCheckpointById(ctx context.Context, check
 	query := `
 		SELECT checkpoint_id, external_id, source_container_id, container_ip, status, remote_key,
 		       workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at,
-		       cache_hash, cache_size_bytes, origin_key, locality, accelerator, runtime
+		       cache_hash, cache_size_bytes, origin_key, locality, accelerator, runtime, compatibility_key
 		FROM checkpoint 
 		WHERE checkpoint_id = $1 AND deleted_at IS NULL
 		LIMIT 1;`
@@ -3053,6 +3053,7 @@ func (r *PostgresBackendRepository) GetCheckpointById(ctx context.Context, check
 		&checkpoint.Locality,
 		&checkpoint.Accelerator,
 		&checkpoint.Runtime,
+		&checkpoint.CompatibilityKey,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -3072,19 +3073,23 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 	if len(compatibilityKeys) > 0 {
 		compatibilityKey = compatibilityKeys[0]
 	}
+	legacyKey := compatibilityKey
+	if profile, retainsDevices := strings.CutPrefix(compatibilityKey, types.CheckpointCompatibilityGPUDevicesPrefix); retainsDevices && profile != "" {
+		legacyKey = types.CheckpointCompatibilityLegacyPrefix + profile
+	}
 	query := `
 		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
 		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator, c.runtime, c.compatibility_key
 		FROM checkpoint c
 		INNER JOIN stub s ON c.stub_id = s.id
-		WHERE s.external_id = $1 AND c.deleted_at IS NULL AND c.status = $2 AND ($3 = '' OR c.compatibility_key = $3)
+		WHERE s.external_id = $1 AND c.deleted_at IS NULL AND c.status = $2 AND ($3 = '' OR c.compatibility_key IN ($3, $4))
 		ORDER BY c.created_at DESC
 		LIMIT 1;`
 
 	var checkpoint types.Checkpoint
 	var exposedPortsInt32 []int32
-	err := r.client.QueryRowxContext(ctx, query, stubExternalId, string(types.CheckpointStatusAvailable), compatibilityKey).Scan(
+	err := r.client.QueryRowxContext(ctx, query, stubExternalId, string(types.CheckpointStatusAvailable), compatibilityKey, legacyKey).Scan(
 		&checkpoint.CheckpointId,
 		&checkpoint.ExternalId,
 		&checkpoint.SourceContainerId,

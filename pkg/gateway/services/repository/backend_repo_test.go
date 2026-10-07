@@ -15,6 +15,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type checkpointLookupBackendRepo struct {
+	repository.BackendRepository
+	checkpoint *types.Checkpoint
+	key        string
+}
+
+func (r *checkpointLookupBackendRepo) GetLatestCheckpointByStubId(_ context.Context, _ string, keys ...string) (*types.Checkpoint, error) {
+	r.key = keys[0]
+	if r.checkpoint == nil {
+		return nil, &types.ErrCheckpointNotFound{}
+	}
+	return r.checkpoint, nil
+}
+
+func TestGetLatestCheckpointReturnsStoredCompatibilityKey(t *testing.T) {
+	for _, key := range []string{"v2:profile", "v1:profile"} {
+		t.Run(key, func(t *testing.T) {
+			repo := &checkpointLookupBackendRepo{checkpoint: &types.Checkpoint{CheckpointId: "saved", CompatibilityKey: key}}
+			service := &BackendRepositoryService{backendRepo: repo}
+			request := &pb.GetLatestCheckpointByStubIdRequest{StubId: "stub", CompatibilityKey: "v2:profile"}
+			response, err := service.GetLatestCheckpointByStubId(context.Background(), request)
+			require.NoError(t, err)
+			require.True(t, response.Ok)
+			require.Equal(t, "saved", response.Checkpoint.CheckpointId)
+			require.Equal(t, key, response.CompatibilityKey)
+			require.Equal(t, request.CompatibilityKey, repo.key)
+
+			repo.checkpoint = nil
+			response, err = service.GetLatestCheckpointByStubId(context.Background(), request)
+			require.NoError(t, err)
+			require.True(t, response.Ok)
+			require.Nil(t, response.Checkpoint)
+			require.Equal(t, request.CompatibilityKey, response.CompatibilityKey)
+		})
+	}
+}
+
 type diskSnapshotDownloadBackendRepo struct {
 	repository.BackendRepository
 	workspaceLookups int

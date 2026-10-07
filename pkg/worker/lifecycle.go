@@ -628,7 +628,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	if request.CheckpointEnabled && request.Stub.Type.IsDeployment() && !request.UseVM {
 		s.prepareCheckpointForWorker(ctx, request)
 	}
+	// Historical checkpoints without a key still use the runtime's compatibility checks.
 	if !request.Stub.Type.IsDeployment() && hasAvailableCheckpoint(request) && !request.Checkpoint.IsFilesystemOnly() &&
+		request.Checkpoint.CompatibilityKey != "" &&
 		(strings.HasPrefix(s.checkpointCompatibilityKey, types.CheckpointCompatibilityGPUDevicesPrefix) || request.Checkpoint.RequiresGPUDeviceSpec()) &&
 		!request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) {
 		return &ErrCheckpointHostIncompatible{Stderr: "checkpoint does not match this worker's compatibility profile"}

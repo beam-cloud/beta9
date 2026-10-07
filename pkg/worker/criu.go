@@ -253,19 +253,19 @@ func (s *Worker) prepareCheckpointForWorker(ctx context.Context, request *types.
 	response, err := handleGRPCResponse(s.backendRepoClient.GetLatestCheckpointByStubId(ctx, &pb.GetLatestCheckpointByStubIdRequest{
 		StubId: request.StubId, CompatibilityKey: s.checkpointCompatibilityKey,
 	}))
-	if err != nil || response.CompatibilityKey != s.checkpointCompatibilityKey {
+	if err == nil && response.Checkpoint != nil {
+		request.Checkpoint = types.NewCheckpointFromProto(response.Checkpoint)
+		request.Checkpoint.CompatibilityKey = response.CompatibilityKey
+		if hasAvailableCheckpoint(request) && request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) &&
+			validateCheckpointRestoreRuntime(request, s.runtime) == nil {
+			return
+		}
+		request.Checkpoint = nil
+	}
+	if err != nil || response.CompatibilityKey != s.checkpointCompatibilityKey || response.Checkpoint != nil {
 		// Failed lookups and older gateways cannot establish compatibility.
 		request.CheckpointEnabled = false
 		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("checkpoint compatibility lookup unavailable; starting normally")
-		return
-	}
-	if response.Checkpoint != nil {
-		request.Checkpoint = types.NewCheckpointFromProto(response.Checkpoint)
-		request.Checkpoint.CompatibilityKey = response.CompatibilityKey
-		if !hasAvailableCheckpoint(request) || validateCheckpointRestoreRuntime(request, s.runtime) != nil {
-			request.Checkpoint = nil
-			request.CheckpointEnabled = false
-		}
 	}
 }
 
