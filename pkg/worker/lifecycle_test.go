@@ -717,6 +717,35 @@ func TestSpecFromRequestForcesCPUAndMemoryLimitsForGvisorGPU(t *testing.T) {
 	require.Equal(t, "2-9", mockRuntime.updatedResources.CPU.Cpus)
 }
 
+func TestSpecFromRequestRuncWorkloadCompatibility(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default-ovh")
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
+	request := &types.ContainerRequest{
+		ContainerId:  "runc-workload-compatibility",
+		PoolSelector: "default-ovh",
+		EntryPoint:   []string{"python3", "-c", "print('ok')"},
+		Env:          []string{"WORKLOAD_SETTING=preserved"},
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(baseConfigPath, request.ContainerId)) })
+	spec, err := worker.specFromRequest(request, &ContainerOptions{BindPorts: []int{8001}})
+	require.NoError(t, err)
+	require.Equal(t, request.EntryPoint, spec.Process.Args)
+	require.Contains(t, spec.Process.Env, "WORKLOAD_SETTING=preserved")
+	require.Zero(t, spec.Process.User.UID)
+	require.Zero(t, spec.Process.User.GID)
+	require.Contains(t, spec.Process.Capabilities.Effective, "CAP_SETUID")
+	require.Contains(t, spec.Linux.ReadonlyPaths, "/proc/sys")
+	for _, mount := range spec.Mounts {
+		if mount.Destination == "/proc" {
+			require.Equal(t, "proc", mount.Type)
+			require.Contains(t, mount.Options, "rw")
+			require.NotContains(t, mount.Options, "ro")
+			return
+		}
+	}
+	t.Fatal("runc workload spec must retain its proc mount")
+}
+
 func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
 	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
 	initialEnv := make([]string, 1, 8)

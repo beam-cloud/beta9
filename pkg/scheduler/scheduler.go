@@ -375,6 +375,7 @@ func firstNonEmpty(values ...string) string {
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	if !s.buildPoolAllowed(request.PoolSelector, request) {
+		requestLog(log.Info(), request).Msg("run request rejected: pool reserved for image builds")
 		return errors.New("pool does not support this request")
 	}
 
