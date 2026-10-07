@@ -232,7 +232,7 @@ func TestPrivateGPUWorkerCapacityRequiresRequestedGPUCount(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestDockerEnabledRequestsCanUseRuncWorkersAndControllers(t *testing.T) {
+func TestDockerEnabledRequestRuntimeSelection(t *testing.T) {
 	request := &types.ContainerRequest{DockerEnabled: true}
 
 	controllers := []WorkerPoolController{
@@ -241,16 +241,15 @@ func TestDockerEnabledRequestsCanUseRuncWorkersAndControllers(t *testing.T) {
 	}
 
 	filteredControllers := filterControllersByFlags(controllers, request)
-	assert.Equal(t, controllers, filteredControllers)
+	assert.Equal(t, controllers[1:], filteredControllers)
 
 	workers := []*types.Worker{
 		{Id: "runc-worker", Runtime: types.ContainerRuntimeRunc.String()},
 		{Id: "gvisor-worker", Runtime: types.ContainerRuntimeGvisor.String()},
 	}
 
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
-	filteredWorkers := scheduler.filterWorkersByFlags(workers, request)
-	assert.Equal(t, workers, filteredWorkers)
+	filteredWorkers := filterWorkersByResources(workers, request, nil)
+	assert.Equal(t, workers[1:], filteredWorkers)
 }
 
 // The microvm runtime is opt-in in both directions: only use_vm sandboxes

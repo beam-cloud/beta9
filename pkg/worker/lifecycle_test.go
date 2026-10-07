@@ -2876,24 +2876,28 @@ func TestRunContainerLegacyForcedRuncMigrationFailureDoesNotRestoreOrRun(t *test
 	require.NoDirExists(t, filepath.Join(overlayPath, containerID, "layer-0"), "failed reseed must remove partial upper state")
 }
 
-func TestRunContainerRejectsForcedRuncDockerModeBeforeLaunch(t *testing.T) {
-	instances := common.NewSafeMap[*ContainerInstance]()
-	worker := &Worker{
-		runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
-		containerInstances: instances,
-	}
-	request := &types.ContainerRequest{
-		ContainerId:   "forced-runc-docker",
-		DockerEnabled: true,
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			Config: `{"_beta9_force_resource_limits":true}`,
-		}},
-	}
+func TestRunContainerRejectsRuncDockerModeBeforeLaunch(t *testing.T) {
+	for _, stubConfig := range []string{"", `{"_beta9_force_resource_limits":true}`} {
+		t.Run(stubConfig, func(t *testing.T) {
+			instances := common.NewSafeMap[*ContainerInstance]()
+			worker := &Worker{
+				runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
+				containerInstances: instances,
+			}
+			request := &types.ContainerRequest{
+				ContainerId:   "runc-docker",
+				DockerEnabled: true,
+				Stub: types.StubWithRelated{Stub: types.Stub{
+					Config: stubConfig,
+				}},
+			}
 
-	err := worker.RunContainer(context.Background(), request)
-	require.ErrorContains(t, err, "do not support Docker-enabled mode")
-	_, exists := instances.Get(request.ContainerId)
-	require.False(t, exists, "rejected request must not create container state")
+			err := worker.RunContainer(context.Background(), request)
+			require.ErrorContains(t, err, "do not support Docker-enabled mode")
+			_, exists := instances.Get(request.ContainerId)
+			require.False(t, exists, "rejected request must not create container state")
+		})
+	}
 }
 
 func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {

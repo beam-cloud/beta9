@@ -8,11 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBaseRuncConfigProtectsHostDropCaches(t *testing.T) {
+func TestBaseRuncConfigReadonlySystemPaths(t *testing.T) {
 	var spec specs.Spec
 	require.NoError(t, json.Unmarshal([]byte(GetBaseConfig("runc")), &spec))
 	require.NotNil(t, spec.Linux)
 	require.Contains(t, spec.Linux.ReadonlyPaths, "/proc/sys/vm/drop_caches")
+	require.Contains(t, spec.Linux.ReadonlyPaths, "/proc/sys")
 }
 
 // gVisor only mounts its cgroupfs, which reports the sandbox memory limit to

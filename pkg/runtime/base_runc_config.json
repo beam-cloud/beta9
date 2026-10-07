@@ -721,7 +721,8 @@
 	"hooks": {},
 	"linux": {
 		"readonlyPaths": [
-			"/proc/sys/vm/drop_caches"
+			"/proc/sys/vm/drop_caches",
+			"/proc/sys"
 		],
 		"resources": {
 			"devices": [
