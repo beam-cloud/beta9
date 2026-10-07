@@ -718,13 +718,11 @@ func TestSpecFromRequestForcesCPUAndMemoryLimitsForGvisorGPU(t *testing.T) {
 }
 
 func TestSpecFromRequestRuncWorkloadCompatibility(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default-ovh")
 	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
 	request := &types.ContainerRequest{
-		ContainerId:  "runc-workload-compatibility",
-		PoolSelector: "default-ovh",
-		EntryPoint:   []string{"python3", "-c", "print('ok')"},
-		Env:          []string{"WORKLOAD_SETTING=preserved"},
+		ContainerId: "runc-workload-compatibility",
+		EntryPoint:  []string{"python3", "-c", "print('ok')"},
+		Env:         []string{"WORKLOAD_SETTING=preserved"},
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(baseConfigPath, request.ContainerId)) })
 	spec, err := worker.specFromRequest(request, &ContainerOptions{BindPorts: []int{8001}})
