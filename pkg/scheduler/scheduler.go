@@ -942,8 +942,8 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 // loadBuildRegistryCredentials generates and attaches build registry credentials to a container request.
 // These credentials are used for both build-time push and runtime CLIP layer mounting.
 func (s *Scheduler) loadBuildRegistryCredentials(request *types.ContainerRequest) (schedulerCredentialAttachResult, error) {
-	buildRegistry := s.config.ImageService.BuildRegistry
-	if buildRegistry == "" || isLocalBuildRegistry(buildRegistry) {
+	buildRegistry := s.config.ImageService.EffectiveBuildRegistry()
+	if isLocalBuildRegistry(buildRegistry) {
 		requestLog(log.Debug(), request).
 			Str("build_registry", buildRegistry).
 			Msg("no remote build registry configured, skipping credential generation")

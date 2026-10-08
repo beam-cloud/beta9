@@ -77,3 +77,27 @@ func TestBuildRegistryCredentialCacheKeyIncludesCredentialDigest(t *testing.T) {
 	secondKey := buildRegistryCredentialCacheKey("example.com", "repo", second)
 	assert.NotEqual(t, firstKey, secondKey)
 }
+
+func TestLoadBuildRegistryCredentialsUsesEffectiveRegistry(t *testing.T) {
+	for _, registry := range []string{"registry.example.com", ""} {
+		t.Run(registry, func(t *testing.T) {
+			image := types.ImageServiceConfig{
+				Runner: types.RunnerConfig{BaseImageRegistry: registry}, BuildRepositoryName: "stage/vms",
+				BuildRegistryCredentials: types.BuildRegistryCredentialsConfig{
+					Type: "basic", Credentials: map[string]string{"USERNAME": "user", "PASSWORD": "secret"},
+				},
+			}
+			scheduler := &Scheduler{config: types.AppConfig{ImageService: image}, credentials: newSchedulerCredentialCache()}
+			request := &types.ContainerRequest{}
+			_, err := scheduler.loadBuildRegistryCredentials(request)
+			assert.Nil(t, err)
+			if registry == "" {
+				assert.Equal(t, "", request.BuildRegistryCredentials)
+			} else {
+				assert.Equal(t, "user:secret", request.BuildRegistryCredentials)
+				_, hit := scheduler.credentials.get(buildRegistryCredentialCacheKey(registry, image.BuildRepositoryName, image.BuildRegistryCredentials))
+				assert.True(t, hit)
+			}
+		})
+	}
+}
