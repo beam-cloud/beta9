@@ -279,6 +279,10 @@ def fork_vm(service, source, name, as_json):
 def exec_vm(service, name, command, cwd, timeout=0):
     from .container import exec_container
 
+    if command[:1] == ("--",):
+        command = command[1:]
+    if not command:
+        raise click.UsageError("A command is required")
     vm = _vm(service, name)
     vm._action("touch")
     # The existing exec implementation streams both output channels, retains
@@ -440,6 +444,8 @@ def _ssh_options(vm):
 @click.argument("command", nargs=-1, type=click.UNPROCESSED)
 @extraclick.pass_service_client
 def ssh_vm(service, name, command):
+    if command[:1] == ("--",):
+        command = command[1:]
     vm = _vm(service, name)
     argv = ["ssh", *_ssh_options(vm), "-p", "2222", "--", "root@" + vm.name]
     if command:

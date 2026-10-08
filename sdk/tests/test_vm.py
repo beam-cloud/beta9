@@ -173,6 +173,14 @@ def test_exec_preserves_child_flags_that_match_cli_options(cli_service, monkeypa
     execute.assert_called_once_with(
         cli_service, "runtime", ("sh", "-c", "echo --context literal"), "/root", 0
     )
+    execute.reset_mock()
+    result = CliRunner().invoke(
+        vm_cli.management, ["exec", "dev", "--", "sh", "-c", "echo literal"]
+    )
+    assert result.exit_code == 0, result.output
+    execute.assert_called_once_with(
+        cli_service, "runtime", ("sh", "-c", "echo literal"), "/workspace", 0
+    )
 
 
 def test_ssh_preserves_child_flags_that_match_cli_options(cli_service, monkeypatch):
