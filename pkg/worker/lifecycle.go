@@ -67,14 +67,10 @@ type containerResourceUpdater interface {
 
 func (s *Worker) containerTerminationGrace(request *types.ContainerRequest) time.Duration {
 	grace := time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second
-	if request != nil && request.UseVM {
-		for _, value := range request.Env {
-			if value == "BEAM_VM_SYSTEMD=1" && grace < 120*time.Second {
-				// Standard systemd units default to 90 seconds to stop. Allow
-				// those units and then the guest agent to finish disk writes.
-				return 120 * time.Second
-			}
-		}
+	if request.IsPersistentVM() {
+		// Standard systemd units default to 90 seconds to stop. Allow
+		// those units and then the guest agent to finish disk writes.
+		return max(grace, 120*time.Second)
 	}
 	return grace
 }
@@ -1860,19 +1856,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.containerInstances.Set(containerId, instance)
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
-		if request.UseVM {
-			for _, env := range request.Env {
-				if env == "BEAM_VM_SYSTEMD=1" {
-					// Persistent VMs initialize SSH/terminal/desktop services and
-					// then exec the same process manager as ordinary sandboxes.
-					spec.Process.Args = []string{"/opt/beam-vm/boot", types.WorkerSandboxProcessManagerContainerPath}
-					// The VM boot agent administers a complete guest, even when
-					// the base container image declares a non-root USER.
-					spec.Process.User = specs.User{UID: 0, GID: 0}
-					spec.Process.Env = upsertEnvVars(spec.Process.Env, []string{"HOME=/root"})
-					break
-				}
-			}
+		if request.IsPersistentVM() {
+			// Persistent VMs initialize SSH/terminal/desktop services and
+			// then exec the same process manager as ordinary sandboxes.
+			spec.Process.Args = []string{"/opt/beam-vm/boot", types.WorkerSandboxProcessManagerContainerPath}
+			// The VM boot agent administers a complete guest, even when
+			// the base container image declares a non-root USER.
+			spec.Process.User = specs.User{UID: 0, GID: 0}
+			spec.Process.Env = upsertEnvVars(spec.Process.Env, []string{"HOME=/root"})
 		}
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Type:        "bind",

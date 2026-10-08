@@ -665,36 +665,7 @@ func TestProxyWebSocketReleasesBackendWhenTheClientVanishes(t *testing.T) {
 	}))
 	t.Cleanup(backend.Close)
 
-	rdb := newPodProxyTestRedis(t)
-	repo := repository.NewContainerRedisRepositoryForTest(rdb)
-	containerId := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
-	if err := repo.SetContainerAddressMap(containerId, map[int32]string{
-		8765: backend.Listener.Addr().String(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	pb := &PodProxyBuffer{
-		ctx:           context.Background(),
-		rdb:           rdb,
-		workspace:     &types.Workspace{Name: "workspace"},
-		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
-		stubConfig:    &types.StubConfigV1{},
-		containerRepo: repo,
-	}
-
-	e := echo.New()
-	e.GET("/:port/:subPath", func(ctx echo.Context) error {
-		return pb.ForwardContainerRequest(ctx, containerId)
-	})
-	front := httptest.NewServer(e)
-	t.Cleanup(front.Close)
-
-	frontHost := front.Listener.Addr().String()
-	client, _, err := websocket.DefaultDialer.Dial("ws://"+frontHost+"/8765/ws", http.Header{"Origin": {"http://" + frontHost}})
-	if err != nil {
-		t.Fatalf("dial through the proxy: %v", err)
-	}
+	client, frontHost := newWebSocketProxyClient(t, backend, 8765, "ws")
 	if got := <-host; got != frontHost {
 		t.Fatalf("backend host = %q, want %q", got, frontHost)
 	}
@@ -706,6 +677,29 @@ func TestProxyWebSocketReleasesBackendWhenTheClientVanishes(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("the backend is still holding a session open for a client that has gone")
 	}
+}
+
+func newWebSocketProxyClient(t *testing.T, backend *httptest.Server, port int32, path string) (*websocket.Conn, string) {
+	t.Helper()
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	cid := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	if err := repo.SetContainerAddressMap(cid, map[int32]string{port: backend.Listener.Addr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	buffer := &PodProxyBuffer{ctx: context.Background(), rdb: rdb, workspace: &types.Workspace{Name: "workspace"}, stubConfig: &types.StubConfigV1{}, containerRepo: repo}
+	e := echo.New()
+	e.GET("/:port/:subPath", func(ctx echo.Context) error { return buffer.ForwardContainerRequest(ctx, cid) })
+	front := httptest.NewServer(e)
+	t.Cleanup(front.Close)
+	host := front.Listener.Addr().String()
+	dialer := websocket.Dialer{WriteBufferSize: 512}
+	client, _, err := dialer.Dial(fmt.Sprintf("ws://%s/%d/%s", host, port, path), http.Header{"Origin": {"http://" + host}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return client, host
 }
 
 func TestProxyWebSocketStreamsFragmentedDesktopFrames(t *testing.T) {
@@ -723,50 +717,51 @@ func TestProxyWebSocketStreamsFragmentedDesktopFrames(t *testing.T) {
 			if err != nil {
 				return
 			}
-			writer, err := conn.NextWriter(kind)
+			prefix := make([]byte, len(payload)/4)
+			if _, err := io.ReadFull(reader, prefix); err != nil {
+				return
+			}
+			// A response before request EOF proves incremental forwarding.
+			if err := conn.WriteMessage(kind, []byte("prefix received")); err != nil {
+				return
+			}
+			rest, err := io.ReadAll(reader)
 			if err != nil {
 				return
 			}
-			if _, err := io.Copy(writer, reader); err != nil {
-				t.Errorf("backend echo: %v", err)
-				return
-			}
-			if err := writer.Close(); err != nil {
+			if err := conn.WriteMessage(kind, append(prefix, rest...)); err != nil {
 				return
 			}
 		}
 	}))
 	t.Cleanup(backend.Close)
-	repo := repository.NewContainerRedisRepositoryForTest(newPodProxyTestRedis(t))
-	cid := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
-	if err := repo.SetContainerAddressMap(cid, map[int32]string{8080: backend.Listener.Addr().String()}); err != nil {
-		t.Fatal(err)
-	}
-	buffer := &PodProxyBuffer{ctx: context.Background(), workspace: &types.Workspace{Name: "workspace"}, stubConfig: &types.StubConfigV1{}, containerRepo: repo}
-	e := echo.New()
-	e.GET("/:port/:subPath", func(ctx echo.Context) error { return buffer.ForwardContainerRequest(ctx, cid) })
-	front := httptest.NewServer(e)
-	t.Cleanup(front.Close)
-	host := front.Listener.Addr().String()
-	dialer := websocket.Dialer{WriteBufferSize: 512}
-	client, _, err := dialer.Dial("ws://"+host+"/8080/websockify", http.Header{"Origin": {"http://" + host}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
+	client, _ := newWebSocketProxyClient(t, backend, 8080, "websockify")
 	if err := client.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []int{websocket.BinaryMessage, websocket.TextMessage} {
-		// Read concurrently: the backend streams each message before the
-		// browser has finished writing all of its continuation frames.
-		writeDone := make(chan error, 1)
-		go func() { writeDone <- client.WriteMessage(kind, payload) }()
-		gotKind, got, err := client.ReadMessage()
+		writer, err := client.NextWriter(kind)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := <-writeDone; err != nil {
+		if _, err := writer.Write(payload[:len(payload)/2]); err != nil {
+			t.Fatal(err)
+		}
+		gotKind, ack, err := client.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotKind != kind || string(ack) != "prefix received" {
+			t.Fatal("no response before request EOF")
+		}
+		if _, err := writer.Write(payload[len(payload)/2:]); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		gotKind, got, err := client.ReadMessage()
+		if err != nil {
 			t.Fatal(err)
 		}
 		if gotKind != kind || !bytes.Equal(got, payload) {

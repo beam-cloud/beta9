@@ -1,6 +1,10 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from concurrent.futures import ThreadPoolExecutor
+import json
 import io
+import shutil
+import subprocess
 import threading
 
 import pytest
@@ -8,6 +12,8 @@ from click.testing import CliRunner
 
 from beta9.abstractions.image import Image
 from beta9.abstractions.vm import VM, prepare_image
+from beta9.abstractions import vm as vm_module
+from beta9.exceptions import SandboxProcessError
 from beta9.channel import GatewayHTTPError
 from beta9.cli import extraclick
 from beta9.cli import vm as vm_cli
@@ -16,7 +22,9 @@ from beta9.cli.main import load_cli
 
 
 def service():
-    return SimpleNamespace(channel=MagicMock(), gateway=MagicMock(), http=MagicMock())
+    return SimpleNamespace(
+        channel=MagicMock(), gateway=MagicMock(), http=MagicMock(), close=MagicMock()
+    )
 
 
 def test_vm_image_is_deterministic_and_uses_selected_profile():
@@ -173,12 +181,85 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
         vm_cli.management, ["new", "dev", "--template", "base", "--env", "VALUE=a=b c", "--json"]
     )
     assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == fake.info
     options = factory.call_args.kwargs
     assert options["env"] == {"VALUE": "a=b c"}
     assert options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
     fake.create.assert_called_once_with(wait=False)
     fake.wait.assert_called_once_with()
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="OpenSSH unavailable")
+def test_identity_is_atomic_and_never_replaces_existing_keys(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        vm_module, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config.ini")
+    )
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        paths = list(executor.map(lambda _: vm_module.identity(), range(8)))
+    assert len(set(paths)) == 1
+    path = paths[0]
+    private = path.read_bytes()
+    assert (
+        subprocess.check_output(["ssh-keygen", "-y", "-f", str(path)]).strip()
+        == path.with_suffix(".pub").read_bytes().strip()
+    )
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert vm_module.identity().read_bytes() == private
+
+
+def test_identity_reports_missing_openssh(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        vm_module, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config.ini")
+    )
+    monkeypatch.setattr(vm_module.subprocess, "run", MagicMock(side_effect=FileNotFoundError()))
+    with pytest.raises(RuntimeError, match="install ssh-keygen"):
+        vm_module.identity()
+
+
+@pytest.mark.parametrize("hung_command", ["systemctl", "python3"])
+def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command):
+    vm = VM(_service=service())._set({"name": "dev", "status": "running", "spec": {}})
+    monkeypatch.setattr(vm, "refresh", lambda: vm)
+    clock = [0.0]
+    monkeypatch.setattr(vm_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        vm_module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+    sandbox = SimpleNamespace(process=MagicMock())
+
+    def execute(command, *args):
+        process = MagicMock()
+        if command == hung_command:
+            process.wait.side_effect = SandboxProcessError("timed out")
+        else:
+            process.wait.return_value = 0
+        return process
+
+    sandbox.process.exec.side_effect = execute
+    monkeypatch.setattr(vm, "_sandbox", lambda: sandbox)
+    with pytest.raises(TimeoutError, match="VM did not become ready"):
+        vm.wait(timeout=1)
+    assert sandbox.process.exec.call_count >= 2
+
+
+def test_fork_connection_survives_parent_close(monkeypatch):
+    parent_service, child_service = service(), service()
+    config = SimpleNamespace()
+    parent_service.channel.config = config
+    clients = MagicMock(side_effect=[parent_service, child_service])
+    monkeypatch.setattr(vm_module, "ServiceClient", clients)
+    monkeypatch.setattr(vm_module, "public_key", lambda: "public-key")
+    parent_service.http.json.return_value = {"id": "child", "name": "child", "status": "starting"}
+    parent = VM("parent", context=config)
+    child = parent.fork(wait=False)
+    parent.close()
+    parent_service.close.assert_called_once()
+    child_service.close.assert_not_called()
+    assert child._service is child_service
+    child.close()
+    child_service.close.assert_called_once()
+    assert clients.call_args_list[1].args == (config,)
 
 
 def test_exec_preserves_child_flags_that_match_cli_options(cli_service, monkeypatch):
@@ -263,7 +344,9 @@ def test_private_bind_does_not_create_public_url():
     }
     vm = VM("dev", _service=selected)
     vm.bind(5432)
-    assert selected.http.json.call_args.args[:2] == ("POST", "/api/v1/vm/{ws}/dev/bind")
+    selected.http.json.assert_called_once_with(
+        "POST", "/api/v1/vm/{ws}/dev/bind", timeout=240, json={"port": 5432}
+    )
     assert "5432" not in vm.info["urls"]
 
 

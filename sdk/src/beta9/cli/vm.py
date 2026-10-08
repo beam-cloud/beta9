@@ -46,10 +46,23 @@ def management():
 
 
 def _vm(service, name):
-    try:
-        return VM.get(name, _service=service)
-    except GatewayHTTPError as exc:
-        raise click.ClickException(exc.message) from exc
+    return VM.get(name, _service=service)
+
+
+def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=()):
+    image = (
+        Image.from_dockerfile(dockerfile, build_context)
+        if dockerfile
+        else Image.from_id(image_id)
+        if image_id
+        else Image(base_image=image_uri or "ubuntu:22.04")
+    )
+    image.ignore_python = True
+    return image.with_secrets(list(secrets))
+
+
+def _command(command):
+    return command[1:] if command[:1] == ("--",) else command
 
 
 def _show(info, as_json):
@@ -142,21 +155,11 @@ def new(
         raise click.UsageError("--build-context requires --dockerfile")
     if no_ssh and sync_dir:
         raise click.UsageError("--sync requires SSH; remove --no-ssh")
-    env_map = {}
-    for assignment in env:
-        key, separator, value = assignment.partition("=")
-        if not separator or not key:
-            raise click.UsageError("--env requires KEY=VALUE")
-        env_map[key] = value
-    image = (
-        Image.from_dockerfile(dockerfile, build_context)
-        if dockerfile
-        else Image.from_id(image_id)
-        if image_id
-        else Image(base_image=image_uri or "ubuntu:22.04")
-    )
-    image.ignore_python = True
-    image.with_secrets(list(build_secret))
+    try:
+        env_map = extraclick.env_vars_to_dict(env)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+    image = _image(dockerfile, build_context, image_id, image_uri, build_secret)
     vm = VM(
         name,
         image=image,
@@ -176,8 +179,9 @@ def new(
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
         vm.create(wait=False)
-        terminal.header("Starting VM", vm.name)
-        terminal.detail("Waiting for systemd and VM services...")
+        if not as_json:
+            terminal.header("Starting VM", vm.name)
+            terminal.detail("Waiting for systemd and VM services...")
         vm.wait()
         if sync_dir:
             _sync(vm, sync_dir, False)
@@ -198,8 +202,7 @@ def image_group():
 @extraclick.pass_service_client
 def image_build(service, build_context, dockerfile, build_secret, desktop, as_json):
     dockerfile = dockerfile or str(Path(build_context) / "Dockerfile")
-    image = Image.from_dockerfile(dockerfile, build_context).with_secrets(list(build_secret))
-    image.ignore_python = True
+    image = _image(dockerfile, build_context, secrets=build_secret)
     with StoredStdoutInterceptor(capture_logs=as_json):
         result = prepare_image(image, service, desktop).build()
     if not result.success:
@@ -282,8 +285,7 @@ def fork_vm(service, source, name, as_json):
 def exec_vm(service, name, command, cwd, timeout=0):
     from .container import exec_container
 
-    if command[:1] == ("--",):
-        command = command[1:]
+    command = _command(command)
     if not command:
         raise click.UsageError("A command is required")
     vm = _vm(service, name)
@@ -303,22 +305,22 @@ def _url(service, name, field, open_url):
         webbrowser.open(url)
 
 
-@management.command("desktop")
-@click.argument("name")
-@click.option("--open/--no-open", "open_url", default=True)
-@click.option("--url", "url_only", is_flag=True, help="Print the URL without opening a browser.")
-@extraclick.pass_service_client
-def desktop_vm(service, name, open_url, url_only):
-    _url(service, name, "desktop_url", open_url and not url_only)
+def _url_command(feature):
+    @management.command(feature)
+    @click.argument("name")
+    @click.option("--open/--no-open", "open_url", default=True)
+    @click.option(
+        "--url", "url_only", is_flag=True, help="Print the URL without opening a browser."
+    )
+    @extraclick.pass_service_client
+    def command(service, name, open_url, url_only):
+        _url(service, name, feature + "_url", open_url and not url_only)
+
+    return command
 
 
-@management.command("terminal")
-@click.argument("name")
-@click.option("--open/--no-open", "open_url", default=True)
-@click.option("--url", "url_only", is_flag=True, help="Print the URL without opening a browser.")
-@extraclick.pass_service_client
-def terminal_vm(service, name, open_url, url_only):
-    _url(service, name, "terminal_url", open_url and not url_only)
+desktop_vm = _url_command("desktop")
+terminal_vm = _url_command("terminal")
 
 
 @management.command("ports")
@@ -447,8 +449,7 @@ def _ssh_options(vm):
 @click.argument("command", nargs=-1, type=click.UNPROCESSED)
 @extraclick.pass_service_client
 def ssh_vm(service, name, command):
-    if command[:1] == ("--",):
-        command = command[1:]
+    command = _command(command)
     vm = _vm(service, name)
     argv = ["ssh", *_ssh_options(vm), "-p", "2222", "--", "root@" + vm.name]
     if command:

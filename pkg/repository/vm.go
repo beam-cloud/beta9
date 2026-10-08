@@ -57,6 +57,8 @@ type vmRow struct {
 	LastActiveAt        time.Time `db:"last_active_at"`
 }
 
+const selectVM = `SELECT workspace_id,workspace_external_id,token_id,data,last_active_at FROM persistent_vm `
+
 func (row vmRow) vm() (*types.VM, error) {
 	var vm types.VM
 	if err := json.Unmarshal(row.Data, &vm); err != nil {
@@ -70,17 +72,16 @@ func (row vmRow) vm() (*types.VM, error) {
 }
 
 func (r *PostgresBackendRepository) GetVM(ctx context.Context, ws uint, name string) (*types.VM, error) {
-	var row vmRow
-	err := r.client.GetContext(ctx, &row, `SELECT workspace_id,workspace_external_id,token_id,data,last_active_at FROM persistent_vm WHERE workspace_id=$1 AND (name=$2 OR id::text=$2) ORDER BY (data->>'desired_state'='deleted') LIMIT 1`, ws, name)
-	if err != nil {
-		return nil, err
-	}
-	return row.vm()
+	return r.getVM(ctx, `WHERE workspace_id=$1 AND (name=$2 OR id::text=$2) ORDER BY (data->>'desired_state'='deleted') LIMIT 1`, ws, name)
 }
 
 func (r *PostgresBackendRepository) GetVMByHandle(ctx context.Context, handle string) (*types.VM, error) {
+	return r.getVM(ctx, `WHERE handle=$1`, handle)
+}
+
+func (r *PostgresBackendRepository) getVM(ctx context.Context, filter string, args ...any) (*types.VM, error) {
 	var row vmRow
-	err := r.client.GetContext(ctx, &row, `SELECT workspace_id,workspace_external_id,token_id,data,last_active_at FROM persistent_vm WHERE handle=$1`, handle)
+	err := r.client.GetContext(ctx, &row, selectVM+filter, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func (r *PostgresBackendRepository) GetVMByHandle(ctx context.Context, handle st
 
 func (r *PostgresBackendRepository) ListVMs(ctx context.Context, ws uint) ([]*types.VM, error) {
 	rows := []vmRow{}
-	err := r.client.SelectContext(ctx, &rows, `SELECT workspace_id,workspace_external_id,token_id,data,last_active_at FROM persistent_vm WHERE ($1=0 OR workspace_id=$1) ORDER BY data->>'created_at'`, ws)
+	err := r.client.SelectContext(ctx, &rows, selectVM+`WHERE ($1=0 OR workspace_id=$1) ORDER BY (data->>'created_at')::timestamptz`, ws)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +162,7 @@ func (r *PostgresBackendRepository) CreateVMArtifact(ctx context.Context, ws uin
 
 func (r *PostgresBackendRepository) ListVMArtifacts(ctx context.Context, ws uint, kind string) ([]types.VMArtifact, error) {
 	var rows [][]byte
-	err := r.client.SelectContext(ctx, &rows, `SELECT data FROM vm_artifact WHERE workspace_id=$1 AND kind=$2 ORDER BY data->>'created_at'`, ws, kind)
+	err := r.client.SelectContext(ctx, &rows, `SELECT data FROM vm_artifact WHERE workspace_id=$1 AND kind=$2 ORDER BY (data->>'created_at')::timestamptz`, ws, kind)
 	if err != nil {
 		return nil, err
 	}

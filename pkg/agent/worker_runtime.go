@@ -328,12 +328,12 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 		grace := newAgentWorkerConfig(r.bootstrap, slot).Worker.TerminationGracePeriod
 		if err := stopWorkerContainer(name, int64(grace)); err != nil {
 			fmt.Fprintf(r.statusErr, "failed to gracefully stop worker %s: %v\n", name, err)
-			_ = exec.Command("docker", "rm", "-f", name).Run()
+			_ = removeDockerContainer(name)
 		}
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			_ = exec.Command("docker", "rm", "-f", name).Run()
+			_ = removeDockerContainer(name)
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}

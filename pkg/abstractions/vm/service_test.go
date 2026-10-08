@@ -50,6 +50,17 @@ func (r *vmStore) GetVMByHandle(_ context.Context, handle string) (*types.VM, er
 	}
 	return nil, sql.ErrNoRows
 }
+
+func (r *vmStore) ListVMs(_ context.Context, workspace uint) ([]*types.VM, error) {
+	result := []*types.VM{}
+	for _, v := range r.rows {
+		if workspace == 0 || v.WorkspaceID == workspace {
+			copy := *v
+			result = append(result, &copy)
+		}
+	}
+	return result, nil
+}
 func (r *vmStore) LockVM(context.Context, string) (func(), error) { return func() {}, nil }
 func (r *vmStore) TouchVM(context.Context, string) error          { return nil }
 func (r *vmStore) CreateVMArtifact(_ context.Context, _ uint, a *types.VMArtifact) error {
@@ -175,7 +186,10 @@ func TestFinalizationErrorPreservesRuntimeForRecovery(t *testing.T) {
 
 type vmBackend struct {
 	repository.BackendRepository
-	latest string
+	latest       string
+	token        *types.Token
+	tokenError   error
+	deletedDisks int
 }
 
 func (b *vmBackend) GetWorkspaceByExternalId(_ context.Context, id string) (types.Workspace, error) {
@@ -183,7 +197,18 @@ func (b *vmBackend) GetWorkspaceByExternalId(_ context.Context, id string) (type
 }
 
 func (b *vmBackend) GetTokenByExternalId(_ context.Context, _ uint, id string) (*types.Token, error) {
+	if b.tokenError != nil {
+		return nil, b.tokenError
+	}
+	if b.token != nil {
+		return b.token, nil
+	}
 	return &types.Token{ExternalId: id, Active: true}, nil
+}
+
+func (b *vmBackend) DeleteDisk(context.Context, uint, string) error {
+	b.deletedDisks++
+	return nil
 }
 
 func (b *vmBackend) GetLatestDiskSnapshot(context.Context, uint, string) (*types.DiskSnapshot, error) {
@@ -198,6 +223,7 @@ type vmRuntime struct {
 	snapshots     int
 	forwarded     string
 	diskName      string
+	boundPorts    []int32
 }
 
 func (r *vmRuntime) RunVM(_ context.Context, _ *auth.AuthInfo, stub, cid string, _ []uint32) error {
@@ -210,6 +236,10 @@ func (r *vmRuntime) ForwardVM(c echo.Context, stub, cid string) error {
 	return c.String(200, "desktop")
 }
 func (r *vmRuntime) TunnelVM(echo.Context, string, uint32) error { return nil }
+func (r *vmRuntime) SandboxExposePort(_ context.Context, in *pb.PodSandboxExposePortRequest) (*pb.PodSandboxExposePortResponse, error) {
+	r.boundPorts = append(r.boundPorts, in.Port)
+	return &pb.PodSandboxExposePortResponse{Ok: true}, nil
+}
 func (r *vmRuntime) SandboxSnapshotDisks(_ context.Context, in *pb.PodSandboxSnapshotDisksRequest) (*pb.PodSandboxSnapshotDisksResponse, error) {
 	r.snapshots++
 	if r.snapshotError {
@@ -404,8 +434,119 @@ func TestTemplateOverridesRetainImageAndRoot(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &child))
 	require.Equal(t, int64(3000), child.Spec.CPU)
 	require.Equal(t, int64(2048), child.Spec.Memory)
+	require.Equal(t, "template-image", child.Spec.ImageID)
+	require.Equal(t, "template-image", gateway.stub.ImageId)
 	require.True(t, child.Spec.Desktop)
 	require.Equal(t, "template-root", gateway.stub.Disks[0].SourceSnapshotId)
 	require.NotEqual(t, rootDisk(v), gateway.stub.Disks[0].Name)
 	require.NotContains(t, child.Handle, strings.ReplaceAll(child.ID, "-", ""), "routing capability must be independent of the resource UUID")
+}
+
+func actionContext(info *auth.AuthInfo, name, action, body string) (*auth.HttpAuthContext, *httptest.ResponseRecorder) {
+	e := echo.New()
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("name", "action")
+	c.SetParamValues(name, action)
+	return &auth.HttpAuthContext{Context: c, AuthInfo: info}, rec
+}
+
+func TestFailedCaptureDoesNotChangeSourceLifecycle(t *testing.T) {
+	for _, action := range []string{"fork", "snapshot", "template"} {
+		t.Run(action, func(t *testing.T) {
+			s, v, info, runtime, _ := fixture()
+			runtime.snapshotError = true
+			c, _ := actionContext(info, v.Name, action, `{}`)
+			require.ErrorContains(t, s.action(c), "root snapshot failed")
+			saved, err := s.repo.GetVM(context.Background(), v.WorkspaceID, v.ID)
+			require.NoError(t, err)
+			require.Equal(t, "running", saved.Status)
+			require.Empty(t, saved.Error)
+		})
+	}
+}
+
+func TestPrivateBindDoesNotPublishURLsAndIsIdempotent(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	for range 2 {
+		c, rec := actionContext(info, v.Name, "bind", `{"port":5432}`)
+		require.NoError(t, s.action(c))
+		var response types.VM
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+		require.NotContains(t, response.URLs, uint32(5432))
+		require.NotContains(t, response.Spec.Ports, uint32(5432))
+		require.Equal(t, []uint32{5432}, response.Spec.PrivatePorts)
+	}
+	require.Equal(t, []int32{5432, 5432}, runtime.boundPorts)
+}
+
+func TestDisabledSSHPortIsRejected(t *testing.T) {
+	require.Error(t, validate(&types.VMSpec{ImageID: "image", Ports: []uint32{2222}}))
+}
+
+func TestManagementResponsesOmitEnvironmentWithoutChangingStoredSpec(t *testing.T) {
+	s, v, info, _, gateway := fixture()
+	v.Spec.Env = []string{"CREDENTIAL=private-value"}
+	c, rec := actionContext(info, v.Name, "touch", `{}`)
+	require.NoError(t, s.action(c))
+	require.NotContains(t, rec.Body.String(), "private-value")
+	for _, handler := range []func(echo.Context) error{s.get, s.list} {
+		c, rec = actionContext(info, v.Name, "", "")
+		require.NoError(t, handler(c))
+		require.NotContains(t, rec.Body.String(), "private-value")
+	}
+	childSpec := v.Spec
+	childSpec.SourceSnapshotID = "template-root"
+	child, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, "child", childSpec)
+	require.NoError(t, err)
+	require.Contains(t, gateway.stub.Env, "CREDENTIAL=private-value")
+	require.Nil(t, s.response(child).Spec.Env)
+	require.Equal(t, v.Spec.Env, child.Spec.Env)
+	a := artifact(v, uuid.NewString(), "template", "base", "")
+	require.NoError(t, s.repo.CreateVMArtifact(context.Background(), v.WorkspaceID, a))
+	c, rec = actionContext(info, v.Name, "", "")
+	c.SetParamNames("kind")
+	c.SetParamValues("template")
+	require.NoError(t, s.artifacts(c))
+	require.NotContains(t, rec.Body.String(), "private-value")
+	require.Equal(t, v.Spec.Env, s.repo.(*vmStore).artifacts[0].Spec.Env)
+}
+
+func TestRevocationStopsComputeAndAllowsDeletion(t *testing.T) {
+	for _, desired := range []string{"running", "stopped", "deleted"} {
+		for _, missing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/missing=%v", desired, missing), func(t *testing.T) {
+				s, v, _, runtime, gateway := fixture()
+				backend := s.backend.(*vmBackend)
+				backend.token = &types.Token{Active: false}
+				if missing {
+					backend.tokenError = sql.ErrNoRows
+				}
+				v.DesiredState = desired
+				require.NoError(t, s.reconcileVM(context.Background(), v))
+				require.Empty(t, v.ContainerID)
+				require.Equal(t, 1, gateway.stops)
+				require.Empty(t, runtime.requests)
+				if desired == "deleted" {
+					require.Equal(t, "deleted", v.Status)
+					require.Equal(t, 1, backend.deletedDisks)
+				} else {
+					require.Equal(t, "stopped", v.Status)
+					require.Equal(t, "stopped", v.DesiredState)
+				}
+			})
+		}
+	}
+}
+
+func TestRevokedOwnerCannotUseCapabilityURL(t *testing.T) {
+	s, v, _, runtime, _ := fixture()
+	s.backend.(*vmBackend).token = &types.Token{Active: false}
+	e := echo.New()
+	e.GET("/vm/:handle/:port/", s.proxy)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequest("GET", "/vm/"+v.Handle+"/8080/", nil))
+	require.Equal(t, 403, rec.Code)
+	require.Empty(t, runtime.forwarded)
 }

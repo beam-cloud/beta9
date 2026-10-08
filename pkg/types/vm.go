@@ -1,18 +1,21 @@
 package types
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // IsPersistentVM identifies a sandbox whose lifecycle belongs to the VM service.
 func (s *StubConfigV1) IsPersistentVM() bool {
-	if s == nil || !s.UseVM {
-		return false
-	}
-	for _, env := range s.Env {
-		if env == "BEAM_VM_SYSTEMD=1" {
-			return true
-		}
-	}
-	return false
+	return s != nil && isPersistentVM(s.UseVM, s.Env)
+}
+
+func (r *ContainerRequest) IsPersistentVM() bool {
+	return r != nil && isPersistentVM(r.UseVM, r.Env)
+}
+
+func isPersistentVM(useVM bool, env []string) bool {
+	return useVM && slices.Contains(env, "BEAM_VM_SYSTEMD=1")
 }
 
 // WorkerShutdownGraceSeconds covers task drain, systemd shutdown and disk cleanup.
@@ -41,6 +44,16 @@ type VMSpec struct {
 	SSHPublicKey     string   `json:"ssh_public_key,omitempty"`
 	IdleTimeout      int64    `json:"idle_timeout"`
 	SourceSnapshotID string   `json:"source_snapshot_id,omitempty"`
+}
+
+func (s VMSpec) RuntimePorts() []uint32 {
+	ports := append([]uint32{}, s.Ports...)
+	for _, port := range s.PrivatePorts {
+		if !slices.Contains(ports, port) {
+			ports = append(ports, port)
+		}
+	}
+	return ports
 }
 
 type VM struct {

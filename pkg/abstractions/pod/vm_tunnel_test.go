@@ -61,3 +61,53 @@ func TestVMStreamReadsResponseAfterInputEOF(t *testing.T) {
 	require.Equal(t, "response after EOF", string(body))
 	require.Equal(t, payload, <-received)
 }
+
+func TestVMStreamDisconnectAfterEOFCancelsIdleBackend(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	eof := make(chan struct{})
+	finish := make(chan struct{})
+	defer close(finish)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.ReadAll(conn)
+		close(eof)
+		<-finish // The service keeps its response side open after EOF.
+	}()
+	released := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend, err := net.Dial("tcp", listener.Addr().String())
+		if err != nil {
+			return
+		}
+		defer backend.Close()
+		client, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer client.Close()
+		bridgeVMStream(context.Background(), client, backend)
+		close(released)
+	}))
+	defer server.Close()
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+	defer client.Close()
+	require.NoError(t, client.WriteMessage(websocket.TextMessage, []byte("EOF")))
+	select {
+	case <-eof:
+	case <-time.After(5 * time.Second):
+		t.Fatal("EOF was not forwarded")
+	}
+	client.Close()
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("disconnected tunnel still holds the backend open")
+	}
+}

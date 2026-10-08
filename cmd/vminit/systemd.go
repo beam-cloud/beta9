@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
@@ -32,7 +31,7 @@ ExecStart=/.beam/init --systemd-agent
 Restart=no
 Delegate=yes
 KillMode=mixed
-TimeoutStopSec=30
+TimeoutStopSec=infinity
 StandardOutput=journal+console
 StandardError=journal+console
 
@@ -190,14 +189,5 @@ func runSystemdAgent() (int, error) {
 	if err := json.Unmarshal(data, &process); err != nil {
 		return 1, err
 	}
-	if err := serveFS(microvm.FSPort); err != nil {
-		return 1, err
-	}
-	ctrl, err := dialControl(microvm.ControlPort)
-	if err != nil {
-		return 1, err
-	}
-	defer ctrl.close()
-	ctrl.systemd = true
-	return runProcess(&process, ctrl)
+	return runAgent(&process, true)
 }

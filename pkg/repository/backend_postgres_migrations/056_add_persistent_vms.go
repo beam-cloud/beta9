@@ -17,7 +17,6 @@ CREATE TABLE persistent_vm (
  last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX persistent_vm_name ON persistent_vm (workspace_id,name) WHERE data->>'desired_state' <> 'deleted';
-CREATE INDEX persistent_vm_reconcile ON persistent_vm ((data->>'desired_state'));
 CREATE TABLE vm_artifact (
  id UUID PRIMARY KEY, workspace_id BIGINT NOT NULL REFERENCES workspace(id),
  name TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('snapshot','template')),

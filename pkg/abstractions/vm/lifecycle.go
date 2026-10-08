@@ -2,6 +2,8 @@ package vm
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -14,23 +16,6 @@ import (
 )
 
 func rootDisk(v *types.VM) string { return "vm-" + v.ID }
-
-func runtimePorts(spec types.VMSpec) []uint32 {
-	ports := append([]uint32{}, spec.Ports...)
-	for _, private := range spec.PrivatePorts {
-		found := false
-		for _, port := range ports {
-			if port == private {
-				found = true
-				break
-			}
-		}
-		if !found {
-			ports = append(ports, private)
-		}
-	}
-	return ports
-}
 
 func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 	v.Error = err.Error()
@@ -68,7 +53,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	req.Authorized = true
 	req.Env = env
 	req.Secrets = secrets
-	req.Ports = runtimePorts(v.Spec)
+	req.Ports = v.Spec.RuntimePorts()
 	req.CheckpointEnabled = false
 	req.DockerEnabled = v.Spec.DockerEnabled
 	req.Hostname = v.Name
@@ -89,28 +74,23 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
-	if v.ContainerID != "" {
-		state, err := s.containers.GetContainerState(v.ContainerID)
-		if err == nil {
-			if state.Status == types.ContainerStatusStopping {
-				return fmt.Errorf("VM is still stopping")
-			}
-			v.Status = "starting"
-			if state.Status == types.ContainerStatusRunning {
-				v.Status = "running"
-				v.EverRunning = true
-				v.LaunchAttempts = 0
-			}
-			return s.repo.SaveVM(ctx, v)
-		}
-		if !(&types.ErrContainerStateNotFound{}).From(err) {
-			return err
-		}
-		if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) {
-			return fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", v.ContainerID)
-		}
-		v.ContainerID = ""
+	state, err := s.runtimeState(v)
+	if err != nil {
+		return err
 	}
+	if state != nil {
+		if state.Status == types.ContainerStatusStopping {
+			return fmt.Errorf("VM is still stopping")
+		}
+		v.Status = "starting"
+		if state.Status == types.ContainerStatusRunning {
+			v.Status = "running"
+			v.EverRunning = true
+			v.LaunchAttempts = 0
+		}
+		return s.repo.SaveVM(ctx, v)
+	}
+	v.ContainerID = ""
 	v.LaunchAttempts++
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
@@ -128,7 +108,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
 	}
-	err := s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, runtimePorts(v.Spec))
+	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec.RuntimePorts())
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
 			v.ContainerID = ""
@@ -138,6 +118,24 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		}
 	}
 	return err
+}
+
+// Redis outages and finalization failures must never look like absent compute.
+func (s *Service) runtimeState(v *types.VM) (*types.ContainerState, error) {
+	if v.ContainerID == "" {
+		return nil, nil
+	}
+	state, err := s.containers.GetContainerState(v.ContainerID)
+	if err != nil {
+		if !(&types.ErrContainerStateNotFound{}).From(err) {
+			return nil, err
+		}
+		if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) {
+			return nil, fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", v.ContainerID)
+		}
+		return nil, nil
+	}
+	return state, nil
 }
 
 func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
@@ -173,11 +171,14 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 	if err := s.snapshotRoot(ctx, v); err != nil {
 		return nil, err
 	}
-	spec := v.Spec
-	spec.SSHPublicKey = ""
-	spec.SourceSnapshotID = ""
-	a := &types.VMArtifact{ID: uuid.NewString(), Name: name, VMID: v.ID, Kind: kind, RootSnapshotID: v.RootSnapshotID, Spec: spec, Description: description, CreatedAt: time.Now().UTC()}
+	a := artifact(v, uuid.NewString(), kind, name, description)
 	return a, s.repo.CreateVMArtifact(ctx, v.WorkspaceID, a)
+}
+
+func artifact(v *types.VM, id, kind, name, description string) *types.VMArtifact {
+	spec := v.Spec
+	spec.SSHPublicKey, spec.SourceSnapshotID = "", ""
+	return &types.VMArtifact{ID: id, Name: name, VMID: v.ID, Kind: kind, RootSnapshotID: v.RootSnapshotID, Spec: spec, Description: description, CreatedAt: time.Now().UTC()}
 }
 
 func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
@@ -266,14 +267,26 @@ func (s *Service) finishStop(ctx context.Context, v *types.VM) error {
 		return err
 	}
 	if v.StopSnapshotID != "" && v.RootSnapshotID != "" {
-		spec := v.Spec
-		spec.SSHPublicKey, spec.SourceSnapshotID = "", ""
-		a := &types.VMArtifact{ID: v.StopSnapshotID, Name: "stop-" + v.StopSnapshotID[:8], VMID: v.ID, Kind: "snapshot", RootSnapshotID: v.RootSnapshotID, Spec: spec, CreatedAt: time.Now().UTC()}
+		a := artifact(v, v.StopSnapshotID, "snapshot", "stop-"+v.StopSnapshotID[:8], "")
 		if err := s.repo.CreateVMArtifact(ctx, v.WorkspaceID, a); err != nil {
 			return err
 		}
 	}
 	v.StopSnapshotID = ""
+	return s.repo.SaveVM(ctx, v)
+}
+
+func (s *Service) stopOrDelete(ctx context.Context, v *types.VM) error {
+	if err := s.stop(ctx, v, false); err != nil {
+		return err
+	}
+	if v.DesiredState != "deleted" {
+		return nil
+	}
+	if err := s.backend.DeleteDisk(ctx, v.WorkspaceID, rootDisk(v)); err != nil {
+		return err
+	}
+	v.Status = "deleted"
 	return s.repo.SaveVM(ctx, v)
 }
 
@@ -332,75 +345,62 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	if err != nil {
 		return err
 	}
-	token, err := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
-	if err != nil {
-		return err
-	}
-	if !token.Active || token.DisabledByClusterAdmin {
-		return fmt.Errorf("VM owner token is inactive")
-	}
-	info := &auth.AuthInfo{Workspace: &workspace, Token: token}
+	// Shutdown is an internal, workspace-scoped operation. It must remain
+	// possible after revocation; no inactive credential authorizes a launch.
+	info := &auth.AuthInfo{Workspace: &workspace, Token: &types.Token{}}
 	ctx = auth.ContextWithAuthInfo(ctx, info)
 	if v.DesiredState != "running" {
-		if err := s.stop(ctx, v, false); err != nil {
+		return s.stopOrDelete(ctx, v)
+	}
+	token, err := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if token == nil || !token.Active || token.DisabledByClusterAdmin {
+		v.DesiredState = "stopped"
+		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return err
 		}
-		if v.DesiredState == "deleted" {
-			if err := s.backend.DeleteDisk(ctx, v.WorkspaceID, rootDisk(v)); err != nil {
-				return err
-			}
-			v.Status = "deleted"
-			return s.repo.SaveVM(ctx, v)
-		}
-		return nil
+		return s.stopOrDelete(ctx, v)
 	}
+	info.Token = token
 	if v.Status == "error" && (v.LaunchAttempts >= 5 || time.Since(v.UpdatedAt) < 30*time.Second) {
 		return nil
 	}
-	if v.ContainerID != "" {
-		state, err := s.containers.GetContainerState(v.ContainerID)
-		if err == nil {
-			if state.Status == types.ContainerStatusRunning {
-				v.EverRunning = true
-				v.LaunchAttempts = 0
-				if v.Status != "running" {
-					v.Status = "running"
-					v.Error = ""
+	state, err := s.runtimeState(v)
+	if err != nil {
+		return err
+	}
+	if state != nil {
+		if state.Status == types.ContainerStatusRunning {
+			v.EverRunning = true
+			v.LaunchAttempts = 0
+			if v.Status != "running" {
+				v.Status = "running"
+				v.Error = ""
+				if err := s.repo.SaveVM(ctx, v); err != nil {
+					return err
+				}
+			}
+			if v.Spec.IdleTimeout > 0 && time.Since(v.LastActiveAt) >= time.Duration(v.Spec.IdleTimeout)*time.Second {
+				claimed, err := s.repo.ClaimVMIdleStop(ctx, v.ID, time.Now().Add(-time.Duration(v.Spec.IdleTimeout)*time.Second))
+				if err != nil {
+					return err
+				}
+				if claimed {
+					v.DesiredState = "stopped"
 					if err := s.repo.SaveVM(ctx, v); err != nil {
 						return err
 					}
+					return s.stop(ctx, v, false)
 				}
-				if v.Spec.IdleTimeout > 0 && time.Since(v.LastActiveAt) >= time.Duration(v.Spec.IdleTimeout)*time.Second {
-					claimed, err := s.repo.ClaimVMIdleStop(ctx, v.ID, time.Now().Add(-time.Duration(v.Spec.IdleTimeout)*time.Second))
-					if err != nil {
-						return err
-					}
-					if claimed {
-						v.DesiredState = "stopped"
-						if err := s.repo.SaveVM(ctx, v); err != nil {
-							return err
-						}
-						return s.stop(ctx, v, false)
-					}
-				}
-				if time.Since(v.UpdatedAt) >= time.Minute {
-					return s.snapshotRoot(ctx, v)
-				}
-				return nil
+			}
+			if time.Since(v.UpdatedAt) >= time.Minute {
+				return s.snapshotRoot(ctx, v)
 			}
 			return nil
 		}
-		if !(&types.ErrContainerStateNotFound{}).From(err) {
-			return err
-		}
-		// After a lost runtime, use a new identity and the latest committed
-		// generation. Do not imply zero write loss on worker failure.
-		if v.Status != "starting" {
-			if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) {
-				return fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", v.ContainerID)
-			}
-			v.ContainerID = ""
-		}
+		return nil
 	}
 	return s.start(ctx, info, v)
 }

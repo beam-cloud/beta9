@@ -19,6 +19,7 @@ import (
 	"io"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -136,7 +137,7 @@ func validate(spec *types.VMSpec) error {
 	ports = append(ports, spec.Ports...)
 	spec.Ports = nil
 	for _, port := range ports {
-		if port == 0 || port > 65535 {
+		if port == 0 || port > 65535 || (port == 2222 && !spec.SSH) {
 			return fmt.Errorf("invalid port %d", port)
 		}
 		if !seen[port] {
@@ -206,19 +207,49 @@ func (s *Service) urls(v *types.VM) {
 	}
 }
 
+// Keep the complete launch spec in storage, but never return environment
+// values in management responses or template listings.
+func (s *Service) response(v *types.VM) types.VM {
+	copy := *v
+	copy.Spec.Env = nil
+	s.urls(&copy)
+	return copy
+}
+
+func artifactResponse(a types.VMArtifact) types.VMArtifact {
+	a.Spec.Env = nil
+	return a
+}
+
+func (s *Service) lockedVM(ctx context.Context, workspace uint, name string) (*types.VM, func(), error) {
+	v, err := s.repo.GetVM(ctx, workspace, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	unlock, err := s.repo.LockVM(ctx, v.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	v, err = s.repo.GetVM(ctx, workspace, v.ID)
+	if err != nil {
+		unlock()
+		return nil, nil, err
+	}
+	return v, unlock, nil
+}
+
 func (s *Service) list(c echo.Context) error {
 	ctx, info := requestContext(c)
 	vms, err := s.repo.ListVMs(ctx, info.Workspace.Id)
 	if err != nil {
 		return apiError(err)
 	}
-	result := []*types.VM{}
+	result := []types.VM{}
 	for _, v := range vms {
 		if v.DesiredState == "deleted" && c.QueryParam("all") != "true" {
 			continue
 		}
-		s.urls(v)
-		result = append(result, v)
+		result = append(result, s.response(v))
 	}
 	return c.JSON(200, result)
 }
@@ -232,8 +263,7 @@ func (s *Service) get(c echo.Context) error {
 	if v.DesiredState == "deleted" {
 		return echo.NewHTTPError(404, "VM removed")
 	}
-	s.urls(v)
-	return c.JSON(200, v)
+	return c.JSON(200, s.response(v))
 }
 
 type createRequest struct {
@@ -309,8 +339,7 @@ func (s *Service) create(c echo.Context) error {
 	if err != nil {
 		return apiError(err)
 	}
-	s.urls(v)
-	return c.JSON(201, v)
+	return c.JSON(201, s.response(v))
 }
 
 func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec) (*types.VM, error) {
@@ -349,19 +378,11 @@ func (s *Service) action(c echo.Context) error {
 	if err := decode(c, &req); err != nil {
 		return err
 	}
-	v, err := s.repo.GetVM(ctx, info.Workspace.Id, c.Param("name"))
-	if err != nil {
-		return apiError(err)
-	}
-	unlock, err := s.repo.LockVM(ctx, v.ID)
+	v, unlock, err := s.lockedVM(ctx, info.Workspace.Id, c.Param("name"))
 	if err != nil {
 		return apiError(err)
 	}
 	defer unlock()
-	v, err = s.repo.GetVM(ctx, info.Workspace.Id, v.ID)
-	if err != nil {
-		return apiError(err)
-	}
 	if v.DesiredState == "deleted" {
 		return echo.NewHTTPError(404, "VM removed")
 	}
@@ -377,28 +398,29 @@ func (s *Service) action(c echo.Context) error {
 		v.DesiredState = "running"
 		v.LaunchAttempts = 0
 		v.Error = ""
-		err = s.repo.TouchVM(ctx, v.ID)
-		if err == nil {
-			err = s.repo.SaveVM(ctx, v)
+		if err := s.repo.TouchVM(ctx, v.ID); err != nil {
+			return apiError(err)
 		}
-		if err == nil {
-			err = s.start(ctx, info, v)
+		if err := s.repo.SaveVM(ctx, v); err != nil {
+			return apiError(err)
 		}
+		err = s.start(ctx, info, v)
 	case "stop":
 		v.DesiredState = "stopped"
 		if !req.NoSnapshot && v.StopSnapshotID == "" && v.ContainerID != "" {
 			v.StopSnapshotID = uuid.NewString()
 		}
-		if err = s.repo.SaveVM(ctx, v); err == nil {
-			err = s.stop(ctx, v, !req.NoSnapshot)
+		if err := s.repo.SaveVM(ctx, v); err != nil {
+			return apiError(err)
 		}
+		err = s.stop(ctx, v, !req.NoSnapshot)
 	case "snapshot", "template":
 		kind := c.Param("action")
-		var a *types.VMArtifact
-		a, err = s.capture(ctx, v, kind, req.Name, req.Description)
-		if err == nil {
-			return c.JSON(201, a)
+		a, err := s.capture(ctx, v, kind, req.Name, req.Description)
+		if err != nil {
+			return apiError(err)
 		}
+		return c.JSON(201, artifactResponse(*a))
 	case "fork":
 		if req.Name == "" {
 			req.Name = "vm-" + uuid.NewString()[:8]
@@ -406,53 +428,51 @@ func (s *Service) action(c echo.Context) error {
 		if !validName.MatchString(req.Name) {
 			return echo.NewHTTPError(400, "valid fork name required")
 		}
-		if err = s.snapshotRoot(ctx, v); err == nil {
-			spec := v.Spec
-			spec.SourceSnapshotID = v.RootSnapshotID
-			spec.SSHPublicKey = req.SSHPublicKey
-			if err := validate(&spec); err != nil {
-				return apiError(err)
-			}
-			var child *types.VM
-			child, err = s.createVM(ctx, info, req.Name, spec)
-			if err == nil {
-				s.urls(child)
-				return c.JSON(201, child)
-			}
+		if err := s.snapshotRoot(ctx, v); err != nil {
+			return apiError(err)
 		}
+		spec := v.Spec
+		spec.SourceSnapshotID = v.RootSnapshotID
+		spec.SSHPublicKey = req.SSHPublicKey
+		if err := validate(&spec); err != nil {
+			return apiError(err)
+		}
+		child, err := s.createVM(ctx, info, req.Name, spec)
+		if err != nil {
+			return apiError(err)
+		}
+		return c.JSON(201, s.response(child))
 	case "expose", "unexpose", "bind":
 		if req.Port == 0 || req.Port > 65535 || req.Port == 2222 || req.Port == 7681 || (req.Port == 8080 && v.Spec.Desktop) {
 			return echo.NewHTTPError(400, "invalid or reserved port")
 		}
-		if v.ContainerID != "" {
-			if c.Param("action") == "expose" || c.Param("action") == "bind" {
-				resp, e := s.runtime.SandboxExposePort(ctx, &pb.PodSandboxExposePortRequest{ContainerId: v.ContainerID, StubId: v.StubID, Port: int32(req.Port)})
-				err = e
-				if err == nil && !resp.Ok {
-					err = fmt.Errorf("unable to expose port")
-				}
+		if v.ContainerID != "" && c.Param("action") != "unexpose" {
+			resp, err := s.runtime.SandboxExposePort(ctx, &pb.PodSandboxExposePortRequest{ContainerId: v.ContainerID, StubId: v.StubID, Port: int32(req.Port)})
+			if err != nil {
+				return apiError(err)
+			}
+			if !resp.Ok {
+				return echo.NewHTTPError(400, "unable to bind port")
 			}
 		}
-		if err == nil {
-			if c.Param("action") == "bind" {
+		if c.Param("action") == "bind" {
+			if !slices.Contains(v.Spec.PrivatePorts, req.Port) {
 				v.Spec.PrivatePorts = append(v.Spec.PrivatePorts, req.Port)
-				err = s.repo.SaveVM(ctx, v)
-				break
 			}
-			ports := []uint32{}
-			for _, p := range v.Spec.Ports {
-				if p != req.Port {
-					ports = append(ports, p)
-				}
-			}
+		} else {
+			ports := slices.DeleteFunc(slices.Clone(v.Spec.Ports), func(port uint32) bool { return port == req.Port })
 			if c.Param("action") == "expose" {
 				ports = append(ports, req.Port)
 			}
 			v.Spec.Ports = ports
-			err = s.repo.SaveVM(ctx, v)
+		}
+		if err := s.repo.SaveVM(ctx, v); err != nil {
+			return apiError(err)
 		}
 	case "touch":
-		err = s.repo.TouchVM(ctx, v.ID)
+		if err := s.repo.TouchVM(ctx, v.ID); err != nil {
+			return apiError(err)
+		}
 	default:
 		return echo.NewHTTPError(404, "unknown VM action")
 	}
@@ -460,37 +480,21 @@ func (s *Service) action(c echo.Context) error {
 		s.failed(ctx, v, err)
 		return apiError(err)
 	}
-	s.urls(v)
-	return c.JSON(200, v)
+	return c.JSON(200, s.response(v))
 }
 
 func (s *Service) remove(c echo.Context) error {
 	ctx, info := requestContext(c)
-	v, err := s.repo.GetVM(ctx, info.Workspace.Id, c.Param("name"))
-	if err != nil {
-		return apiError(err)
-	}
-	unlock, err := s.repo.LockVM(ctx, v.ID)
+	v, unlock, err := s.lockedVM(ctx, info.Workspace.Id, c.Param("name"))
 	if err != nil {
 		return apiError(err)
 	}
 	defer unlock()
-	v, err = s.repo.GetVM(ctx, info.Workspace.Id, v.ID)
-	if err != nil {
-		return apiError(err)
-	}
 	v.DesiredState = "deleted"
-	if err = s.repo.SaveVM(ctx, v); err == nil {
-		err = s.stop(ctx, v, false)
-	}
-	if err != nil {
+	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return apiError(err)
 	}
-	v.Status = "deleted"
-	if err := s.backend.DeleteDisk(ctx, info.Workspace.Id, rootDisk(v)); err != nil {
-		return apiError(err)
-	}
-	if err = s.repo.SaveVM(ctx, v); err != nil {
+	if err := s.stopOrDelete(ctx, v); err != nil {
 		return apiError(err)
 	}
 	return c.NoContent(204)
@@ -505,6 +509,9 @@ func (s *Service) artifacts(c echo.Context) error {
 	a, err := s.repo.ListVMArtifacts(ctx, info.Workspace.Id, kind)
 	if err != nil {
 		return apiError(err)
+	}
+	for i := range a {
+		a[i] = artifactResponse(a[i])
 	}
 	return c.JSON(200, a)
 }
@@ -563,18 +570,18 @@ func (s *Service) proxy(c echo.Context) error {
 	if err != nil || port == 2222 {
 		return echo.NewHTTPError(404)
 	}
-	allowed := false
-	for _, p := range v.Spec.Ports {
-		if p == uint32(port) {
-			allowed = true
-		}
-	}
-	if !allowed {
+	if !slices.Contains(v.Spec.Ports, uint32(port)) {
 		return echo.NewHTTPError(404)
 	}
-	if err := s.repo.TouchVM(ctx, v.ID); err != nil {
+	token, err := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
+	if err != nil || token == nil || !token.Active || token.DisabledByClusterAdmin {
+		return echo.NewHTTPError(403, "VM access is revoked")
+	}
+	release, err := s.keepActive(ctx, v.ID)
+	if err != nil {
 		return echo.NewHTTPError(503, "VM activity unavailable")
 	}
+	defer release()
 	// Capability URLs contain only the VM's random identity, never a workspace
 	// token. Authenticated management and raw SSH retain workspace auth.
 	if v.Status != "running" {
@@ -582,22 +589,6 @@ func (s *Service) proxy(c echo.Context) error {
 	}
 	// Hold activity while a desktop/terminal websocket is open, even when the
 	// user is watching without sending input.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		timer := time.NewTicker(15 * time.Second)
-		defer timer.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-				_ = s.repo.TouchVM(ctx, v.ID)
-			}
-		}
-	}()
 	subPath := c.Param("*")
 	c.SetParamNames("port", "subPath")
 	c.SetParamValues(strconv.Itoa(port), subPath)
@@ -620,20 +611,22 @@ func (s *Service) tunnel(c echo.Context) error {
 	if v.DesiredState != "running" || v.Status != "running" {
 		return echo.NewHTTPError(409, "VM is not running")
 	}
-	allowed := false
-	for _, p := range runtimePorts(v.Spec) {
-		if p == uint32(port) {
-			allowed = true
-		}
-	}
-	if !allowed {
+	if !slices.Contains(v.Spec.RuntimePorts(), uint32(port)) {
 		return echo.NewHTTPError(400, "expose the port before opening a tunnel")
 	}
-	if err := s.repo.TouchVM(ctx, v.ID); err != nil {
+	release, err := s.keepActive(ctx, v.ID)
+	if err != nil {
 		return apiError(err)
 	}
+	defer release()
+	return s.runtime.TunnelVM(c, v.ContainerID, uint32(port))
+}
+
+func (s *Service) keepActive(ctx context.Context, id string) (func(), error) {
+	if err := s.repo.TouchVM(ctx, id); err != nil {
+		return nil, err
+	}
 	done := make(chan struct{})
-	defer close(done)
 	go func() {
 		tick := time.NewTicker(15 * time.Second)
 		defer tick.Stop()
@@ -644,9 +637,9 @@ func (s *Service) tunnel(c echo.Context) error {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				_ = s.repo.TouchVM(ctx, v.ID)
+				_ = s.repo.TouchVM(ctx, id)
 			}
 		}
 	}()
-	return s.runtime.TunnelVM(c, v.ContainerID, uint32(port))
+	return func() { close(done) }, nil
 }

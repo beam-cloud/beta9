@@ -11,12 +11,15 @@ case "$arch" in amd64) ttyd_arch=x86_64 ;; arm64) ttyd_arch=aarch64 ;; *) echo "
 curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.$ttyd_arch" -o /usr/local/bin/ttyd
 chmod 0755 /usr/local/bin/ttyd
 install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /etc/apt/keyrings/nodesource.asc
-printf 'deb [arch=%s signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_22.x nodistro main\n' "$arch" > /etc/apt/sources.list.d/nodesource.list
 . /etc/os-release
 case "$ID" in ubuntu|debian) ;; *) echo 'Beam VM images require Debian/Ubuntu' >&2; exit 1 ;; esac
-curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc
-printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' "$arch" "$ID" "$VERSION_CODENAME" > /etc/apt/sources.list.d/docker.list
+apt_repository() {
+  local name=$1 key_url=$2 repository=$3 suite=$4 component=$5
+  curl -fsSL "$key_url" -o "/etc/apt/keyrings/$name.asc"
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/%s.asc] %s %s %s\n' "$arch" "$name" "$repository" "$suite" "$component" > "/etc/apt/sources.list.d/$name.list"
+}
+apt_repository nodesource https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key https://deb.nodesource.com/node_22.x nodistro main
+apt_repository docker "https://download.docker.com/linux/$ID/gpg" "https://download.docker.com/linux/$ID" "$VERSION_CODENAME" stable
 apt-get update
 apt-get install -y --no-install-recommends nodejs
 if ! command -v dockerd >/dev/null || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1 || ! docker buildx version >/dev/null 2>&1; then
@@ -41,14 +44,10 @@ AuthorizedKeysFile /run/beam-vm/authorized_keys
 PidFile /run/sshd/sshd.pid
 EOF
 if [ "$desktop" = true ]; then
-  . /etc/os-release
   [ "${VERSION_CODENAME:-}" = jammy ] || { echo 'Desktop currently requires Ubuntu 22.04 (jammy)' >&2; exit 1; }
-  arch=$(dpkg --print-architecture)
   version=1.5.0
   curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_jammy_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
-  install -d -m 0755 /etc/apt/keyrings
-  curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg -o /etc/apt/keyrings/mozilla.asc
-  echo 'deb [signed-by=/etc/apt/keyrings/mozilla.asc] https://packages.mozilla.org/apt mozilla main' > /etc/apt/sources.list.d/mozilla.list
+  apt_repository mozilla https://packages.mozilla.org/apt/repo-signing-key.gpg https://packages.mozilla.org/apt mozilla main
   printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
   apt-get update
   apt-get install -y --no-install-recommends /tmp/kasmvnc.deb firefox openbox dbus-x11 xterm x11-utils x11-xserver-utils xdotool fonts-ubuntu xfonts-base

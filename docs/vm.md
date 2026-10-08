@@ -76,6 +76,8 @@ Other root files, installed packages, enabled units, and `/workspace` persist.
 Standard systemd service, timer, socket, and target units are supported. The VM
 environment is supplied through a private transient systemd manager configuration,
 including workspace secrets. Services can override it using normal unit options.
+Management responses omit environment values; forks and private templates retain
+the stored launch environment.
 The scheduler configures the guest network; networkd, NetworkManager, and resolved
 are masked so they cannot replace that configuration. Systemd's guest agent is
 ordered before sysinit at startup and after ordinary services during shutdown.
@@ -121,6 +123,8 @@ boots and gateway restarts. Treat published URLs as access credentials: anyone
 with the URL can reach that guest service. Workspace tokens never appear in URLs.
 SSH stays behind workspace authentication. Removing a VM or unpublishing a port
 revokes routing immediately; forks never share a handle.
+Revoking the owning token also denies new URL access and stops the VM during
+reconciliation. Another active workspace token can explicitly start it again.
 
 Local configuration uses `vm.localhost:1994` and plain HTTP. The generic path
 fallback is `/vm/<handle>/<port>/`; applications using absolute browser paths

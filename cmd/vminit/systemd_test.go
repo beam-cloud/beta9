@@ -26,10 +26,7 @@ func TestSystemdBootConfiguration(t *testing.T) {
 		t.Fatalf("machine identity: %q, %v", id, err)
 	}
 	processFile := filepath.Join(root, systemdProcessFile)
-	stat, err := os.Stat(processFile)
-	if err != nil || stat.Mode().Perm() != 0600 {
-		t.Fatalf("process secrets permissions: %v, %v", stat, err)
-	}
+	assertPrivateFile(t, processFile)
 	data, err := os.ReadFile(processFile)
 	if err != nil {
 		t.Fatal(err)
@@ -60,9 +57,14 @@ func TestSystemdBootConfiguration(t *testing.T) {
 	if !strings.Contains(string(manager), `"TOKEN=spaces \"quotes\" \\ and %%m\nsecond line"`) {
 		t.Fatalf("unsafe systemd environment: %s", manager)
 	}
-	stat, err = os.Stat(managerPath)
+	assertPrivateFile(t, managerPath)
+}
+
+func assertPrivateFile(t *testing.T, path string) {
+	t.Helper()
+	stat, err := os.Stat(path)
 	if err != nil || stat.Mode().Perm() != 0600 {
-		t.Fatal("manager environment must be private")
+		t.Fatalf("%s must be private: %v, %v", path, stat, err)
 	}
 }
 
@@ -76,5 +78,8 @@ func TestSystemdRejectsInvalidMachineIdentity(t *testing.T) {
 func TestGuestAgentStopsAfterOrdinaryServices(t *testing.T) {
 	if !strings.Contains(guestAgentUnit, "Before=sysinit.target shutdown.target") || !strings.Contains(guestAgentUnit, "After=local-fs.target systemd-journald.service") || !strings.Contains(guestAgentUnit, "DefaultDependencies=no") {
 		t.Fatal("guest agent must outlive services and stop before local filesystems")
+	}
+	if !strings.Contains(guestAgentUnit, "TimeoutStopSec=infinity") || !strings.Contains(guestAgentUnit, "OnFailure=poweroff.target") {
+		t.Fatal("host owns shutdown deadline, and agent failures must power off the guest")
 	}
 }

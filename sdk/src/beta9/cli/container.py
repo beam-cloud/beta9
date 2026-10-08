@@ -104,7 +104,7 @@ def exec_container(service, container_id, command, cwd, timeout):
     try:
         with ThreadPoolExecutor(max_workers=3) as executor:
             try:
-                with rpc_timeout(timeout) if timeout else nullcontext():
+                with _rpc_timeout(timeout or None):
                     sandbox = _connect_sandbox(container_id, timeout)
                     process = sandbox.process.exec(
                         *command, cwd=cwd, stdin=None if sys.stdin.isatty() else sys.stdin.buffer
@@ -154,15 +154,19 @@ def exec_container(service, container_id, command, cwd, timeout):
 
 
 def _connect_sandbox(container_id, timeout):
-    with rpc_timeout(timeout) if timeout else nullcontext():
+    with _rpc_timeout(timeout or None):
         return Sandbox().connect(container_id)
 
 
 def _copy_output(stream, target, deadline):
-    with rpc_timeout(deadline - time.monotonic()) if deadline is not None else nullcontext():
+    with _rpc_timeout(deadline - time.monotonic() if deadline is not None else None):
         for chunk in stream:
             target.write(chunk)
             target.flush()
+
+
+def _rpc_timeout(timeout):
+    return rpc_timeout(timeout) if timeout is not None else nullcontext()
 
 
 @management.command("cp", help="Copy a file. Use CONTAINER_ID:/path for the remote side.")

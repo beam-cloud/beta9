@@ -1109,12 +1109,7 @@ func TestStopDeletesUnassignedPendingContainerState(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	_, err = wb.containerRepo.GetContainerState(containerId)
-	notFound := &types.ErrContainerStateNotFound{}
-	assert.True(t, notFound.From(err), "expected deleted pending state, got %v", err)
-	code, err := wb.containerRepo.GetContainerExitCode(containerId)
-	assert.NoError(t, err)
-	assert.Equal(t, int(types.ContainerExitCodeUser), code)
+	assertUnassignedStopRemoved(t, wb, containerId)
 
 	popped, err := wb.requestBacklog.Pop()
 	assert.NoError(t, err)
@@ -1128,8 +1123,13 @@ func TestStopRecoversInterruptedUnassignedCancellation(t *testing.T) {
 	id := "unassigned-stopping-container"
 	assert.NoError(t, wb.containerRepo.SetContainerState(id, &types.ContainerState{ContainerId: id, Status: types.ContainerStatusStopping, WorkspaceId: "workspace-1"}))
 	assert.NoError(t, wb.Stop(&types.StopContainerArgs{ContainerId: id, Reason: types.StopContainerReasonUser}))
-	_, err = wb.containerRepo.GetContainerState(id)
-	assert.True(t, (&types.ErrContainerStateNotFound{}).From(err))
+	assertUnassignedStopRemoved(t, wb, id)
+}
+
+func assertUnassignedStopRemoved(t *testing.T, wb *Scheduler, id string) {
+	t.Helper()
+	_, err := wb.containerRepo.GetContainerState(id)
+	assert.True(t, (&types.ErrContainerStateNotFound{}).From(err), "expected deleted pending state, got %v", err)
 	code, err := wb.containerRepo.GetContainerExitCode(id)
 	assert.NoError(t, err)
 	assert.Equal(t, int(types.ContainerExitCodeUser), code)

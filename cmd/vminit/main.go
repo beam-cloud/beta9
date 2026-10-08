@@ -117,6 +117,10 @@ func run() (int, error) {
 		return -1, bootSystemd(spec)
 	}
 
+	return runAgent(spec.Process, false)
+}
+
+func runAgent(process *specs.Process, systemd bool) (int, error) {
 	if err := serveFS(microvm.FSPort); err != nil {
 		return -1, err
 	}
@@ -125,8 +129,8 @@ func run() (int, error) {
 		return -1, err
 	}
 	defer ctrl.close()
-
-	return runProcess(spec.Process, ctrl)
+	ctrl.systemd = systemd
+	return runProcess(process, ctrl)
 }
 
 // --- early boot ------------------------------------------------------------------

@@ -4,8 +4,10 @@ import base64
 import copy
 import io
 import gzip
+import os
 import subprocess
 import tarfile
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +18,7 @@ from ...channel import Channel, GatewayHTTPError, ServiceClient
 from ...clients.image import ImageServiceStub
 from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
-from ...exceptions import ImageBuildError, SandboxConnectionError
+from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
 from ..image import Image
 from ..sandbox import SandboxInstance
 
@@ -25,9 +27,43 @@ def identity() -> Path:
     """One local SSH identity; private key never leaves this machine."""
     path = get_settings().config_path.parent / "ssh" / "vm_ed25519"
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not path.exists():
-        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)], check=True)
+    if path.exists() and path.with_suffix(".pub").exists():
+        return path
+    # Generate off-path and publish with an atomic, non-overwriting link.
+    # Concurrent processes always derive the public key from the winning key.
+    try:
+        with tempfile.TemporaryDirectory(dir=path.parent) as directory:
+            temporary = Path(directory) / "identity"
+            if not path.exists():
+                subprocess.run(
+                    ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(temporary)],
+                    stdin=subprocess.DEVNULL,
+                    check=True,
+                )
+                try:
+                    os.link(temporary, path)
+                except FileExistsError:
+                    pass
+            public = subprocess.check_output(
+                ["ssh-keygen", "-y", "-f", str(path)], stdin=subprocess.DEVNULL
+            )
+            temporary_public = Path(directory) / "identity.pub"
+            temporary_public.write_bytes(public)
+            try:
+                os.link(temporary_public, path.with_suffix(".pub"))
+            except FileExistsError:
+                pass
+    except FileNotFoundError as exc:
+        raise RuntimeError("VM SSH requires OpenSSH; install ssh-keygen and try again") from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"Unable to prepare VM SSH identity at {path}: ssh-keygen failed"
+        ) from exc
     return path
+
+
+def public_key() -> str:
+    return identity().with_suffix(".pub").read_text().strip()
 
 
 class _VMImage(Image):
@@ -173,7 +209,7 @@ class VM:
             ) from exc
         spec = dict(self._spec)
         if spec.get("ssh", True):
-            spec["ssh_public_key"] = identity().with_suffix(".pub").read_text().strip()
+            spec["ssh_public_key"] = public_key()
         if not (self.template or self._snapshot_source):
             spec.setdefault("ssh", True)
             image = self.image or Image(base_image="ubuntu:22.04")
@@ -236,33 +272,40 @@ class VM:
                 except SandboxConnectionError:
                     time.sleep(0.5)
                     continue
-                units = ["beam-terminal.service"]
-                if self.info["spec"].get("ssh"):
-                    units.append("ssh.service")
-                if self.info["spec"].get("desktop"):
-                    units.append("beam-desktop.service")
-                # is-active with several units succeeds if any is active.
-                ready = True
-                for unit in units:
-                    check = sandbox.process.exec("systemctl", "is-active", "--quiet", unit)
-                    if check.wait(10) != 0:
-                        ready = False
-                        break
-                if ready:
-                    # Active services may still be binding their sockets.
-                    ports = [7681]
-                    if self.info["spec"].get("ssh"):
-                        ports.append(2222)
-                    if self.info["spec"].get("desktop"):
-                        ports.append(8080)
-                    probe = (
-                        "import socket; "
-                        f"[socket.create_connection(('127.0.0.1', p), 1).close() for p in {ports!r}]"
-                    )
-                    if sandbox.process.exec("python3", "-c", probe).wait(10) == 0:
-                        return self
+                if self._services_ready(sandbox, deadline):
+                    return self
             time.sleep(0.5)
         raise TimeoutError("VM did not become ready; inspect vm get/logs")
+
+    def _services_ready(self, sandbox, deadline):
+        services = [("beam-terminal.service", 7681)]
+        for feature, unit, port in (
+            ("ssh", "ssh.service", 2222),
+            ("desktop", "beam-desktop.service", 8080),
+        ):
+            if self.info["spec"].get(feature):
+                services.append((unit, port))
+        try:
+            # is-active with several units succeeds if any is active.
+            for unit, _ in services:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                check = sandbox.process.exec("systemctl", "is-active", "--quiet", unit)
+                if check.wait(min(10, remaining)) != 0:
+                    return False
+            ports = [port for _, port in services]
+            probe = (
+                "import socket; "
+                f"[socket.create_connection(('127.0.0.1', p), 1).close() for p in {ports!r}]"
+            )
+            remaining = deadline - time.monotonic()
+            return (
+                remaining > 0
+                and sandbox.process.exec("python3", "-c", probe).wait(min(10, remaining)) == 0
+            )
+        except (SandboxConnectionError, SandboxProcessError):
+            return False
 
     def _action(self, action, **body):
         return self._api("POST", self._path() + "/" + action, json=body)
@@ -287,9 +330,14 @@ class VM:
         return self._action("template", name=name or self.name, description=description)
 
     def fork(self, name=None, wait=True) -> "VM":
-        key = identity().with_suffix(".pub").read_text().strip()
-        info = self._action("fork", name=name or "", ssh_public_key=key)
-        child = VM(name, _service=self._service)._set(info)
+        info = self._action("fork", name=name or "", ssh_public_key=public_key())
+        # SDK-owned children have independent connections; caller-owned
+        # clients retain their explicit shared lifetime.
+        child = (
+            VM(name, context=self._service.channel.config)
+            if self._owns_service
+            else VM(name, _service=self._service)
+        )._set(info)
         return child.wait() if wait else child
 
     def expose(self, port: int) -> str:

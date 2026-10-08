@@ -49,6 +49,7 @@ func (s *GenericPodService) TunnelVM(c echo.Context, containerID string, port ui
 // Binary messages are streamed, so their size does not determine memory use.
 func bridgeVMStream(ctx context.Context, client *websocket.Conn, backend net.Conn) error {
 	go func() {
+		halfClosed := false
 		for {
 			kind, r, err := client.NextReader()
 			if err != nil {
@@ -57,15 +58,16 @@ func bridgeVMStream(ctx context.Context, client *websocket.Conn, backend net.Con
 			}
 			if kind == websocket.TextMessage {
 				control, err := io.ReadAll(io.LimitReader(r, 4))
-				if err == nil && string(control) == "EOF" {
+				if !halfClosed && err == nil && string(control) == "EOF" {
 					if half, ok := backend.(interface{ CloseWrite() error }); ok && half.CloseWrite() == nil {
-						return
+						halfClosed = true
+						continue
 					}
 				}
 				backend.Close()
 				return
 			}
-			if kind != websocket.BinaryMessage {
+			if kind != websocket.BinaryMessage || halfClosed {
 				backend.Close()
 				return
 			}
