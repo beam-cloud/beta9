@@ -708,6 +708,73 @@ func TestProxyWebSocketReleasesBackendWhenTheClientVanishes(t *testing.T) {
 	}
 }
 
+func TestProxyWebSocketStreamsFragmentedDesktopFrames(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x00, 0xff, 0x31, 0x6a}, 1024*1024)
+	upgrader := websocket.Upgrader{ReadBufferSize: 512, WriteBufferSize: 512}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("backend upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			kind, reader, err := conn.NextReader()
+			if err != nil {
+				return
+			}
+			writer, err := conn.NextWriter(kind)
+			if err != nil {
+				return
+			}
+			if _, err := io.Copy(writer, reader); err != nil {
+				t.Errorf("backend echo: %v", err)
+				return
+			}
+			if err := writer.Close(); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(backend.Close)
+	repo := repository.NewContainerRedisRepositoryForTest(newPodProxyTestRedis(t))
+	cid := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	if err := repo.SetContainerAddressMap(cid, map[int32]string{8080: backend.Listener.Addr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	buffer := &PodProxyBuffer{ctx: context.Background(), workspace: &types.Workspace{Name: "workspace"}, stubConfig: &types.StubConfigV1{}, containerRepo: repo}
+	e := echo.New()
+	e.GET("/:port/:subPath", func(ctx echo.Context) error { return buffer.ForwardContainerRequest(ctx, cid) })
+	front := httptest.NewServer(e)
+	t.Cleanup(front.Close)
+	host := front.Listener.Addr().String()
+	dialer := websocket.Dialer{WriteBufferSize: 512}
+	client, _, err := dialer.Dial("ws://"+host+"/8080/websockify", http.Header{"Origin": {"http://" + host}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []int{websocket.BinaryMessage, websocket.TextMessage} {
+		// Read concurrently: the backend streams each message before the
+		// browser has finished writing all of its continuation frames.
+		writeDone := make(chan error, 1)
+		go func() { writeDone <- client.WriteMessage(kind, payload) }()
+		gotKind, got, err := client.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := <-writeDone; err != nil {
+			t.Fatal(err)
+		}
+		if gotKind != kind || !bytes.Equal(got, payload) {
+			t.Fatal("fragmented desktop message was corrupted")
+		}
+	}
+}
+
 func TestForwardContainerRequestRejectsImmediatelyWhenDraining(t *testing.T) {
 	drainCtx, cancel := context.WithCancel(context.Background())
 	cancel()

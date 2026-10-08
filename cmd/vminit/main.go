@@ -45,6 +45,13 @@ const (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--systemd-agent" {
+		code, err := runSystemdAgent()
+		if err != nil {
+			logf("guest agent: %v", err)
+		}
+		os.Exit(code)
+	}
 	if os.Getpid() != 1 {
 		fmt.Fprintln(os.Stderr, "beam-vminit must run as PID 1 inside a microvm")
 		os.Exit(2)
@@ -104,6 +111,10 @@ func run() (int, error) {
 	}
 	if err := configureNetwork(vm.Network); err != nil {
 		return -1, fmt.Errorf("configure network: %w", err)
+	}
+
+	if processEnv(spec.Process, "BEAM_VM_SYSTEMD") == "1" {
+		return -1, bootSystemd(spec)
 	}
 
 	if err := serveFS(microvm.FSPort); err != nil {
@@ -585,10 +596,11 @@ func writeSysctl(path, value string) {
 // --- control channel -------------------------------------------------------------------
 
 type control struct {
-	port uint32
-	mu   sync.Mutex
-	file *os.File
-	enc  *microvm.Encoder
+	port    uint32
+	systemd bool
+	mu      sync.Mutex
+	file    *os.File
+	enc     *microvm.Encoder
 }
 
 // controlReconnectTimeout bounds how long init keeps trying to reach the
@@ -698,6 +710,12 @@ func (c *control) serve(childPid func() int) {
 			}
 			c.ack(msg.ID, err)
 		case microvm.MsgSignal:
+			if c.systemd && (msg.Signal == int(unix.SIGTERM) || msg.Signal == int(unix.SIGINT)) {
+				// Shutdown ordinary units before the guest agent, which is
+				// ordered before sysinit and therefore stops after basic units.
+				c.ack(msg.ID, exec.Command("systemctl", "--no-block", "poweroff").Run())
+				continue
+			}
 			pid := childPid()
 			if pid <= 0 {
 				c.ack(msg.ID, errors.New("container process is not running"))
@@ -1218,6 +1236,14 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 		return -1, fmt.Errorf("start %v: %w", proc.Args, err)
 	}
 	pid := cmd.Process.Pid
+	if ctrl.systemd {
+		// systemd sends TERM to the agent after ordinary units have stopped.
+		// Reap the workload and report its exit only at that shutdown barrier.
+		stopping := make(chan os.Signal, 1)
+		signal.Notify(stopping, unix.SIGTERM)
+		defer signal.Stop(stopping)
+		go func() { <-stopping; _ = unix.Kill(pid, unix.SIGTERM) }()
+	}
 	ctrl.send(microvm.Message{Type: microvm.MsgStarted, Pid: pid})
 	go ctrl.serve(func() int { return pid })
 	go ctrl.heartbeat(controlHeartbeat)

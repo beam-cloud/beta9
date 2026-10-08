@@ -1,0 +1,57 @@
+#!/bin/bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+assets=/tmp/beam-vm-assets
+desktop=${1:-false}
+command -v apt-get >/dev/null || { echo 'Beam VM images require Debian/Ubuntu and systemd' >&2; exit 1; }
+apt-get update
+apt-get install -y --no-install-recommends systemd systemd-sysv dbus ca-certificates curl openssh-server rsync git sudo procps python3 python3-pip
+arch=$(dpkg --print-architecture)
+case "$arch" in amd64) ttyd_arch=x86_64 ;; arm64) ttyd_arch=aarch64 ;; *) echo "unsupported VM architecture: $arch" >&2; exit 1 ;; esac
+curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.$ttyd_arch" -o /usr/local/bin/ttyd
+chmod 0755 /usr/local/bin/ttyd
+install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /etc/apt/keyrings/nodesource.asc
+printf 'deb [arch=%s signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_22.x nodistro main\n' "$arch" > /etc/apt/sources.list.d/nodesource.list
+. /etc/os-release
+case "$ID" in ubuntu|debian) ;; *) echo 'Beam VM images require Debian/Ubuntu' >&2; exit 1 ;; esac
+curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc
+printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' "$arch" "$ID" "$VERSION_CODENAME" > /etc/apt/sources.list.d/docker.list
+apt-get update
+apt-get install -y --no-install-recommends nodejs
+if ! command -v dockerd >/dev/null; then
+  apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+fi
+npm install -g --no-fund --no-audit @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.226
+npm cache clean --force
+install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
+install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" /opt/beam-vm/
+install -m 0644 "$assets"/*.service /etc/systemd/system/
+# These are managed by Beam at boot, not by image build-time enablement.
+systemctl disable ssh.service ssh.socket getty@tty1.service serial-getty@hvc0.service docker.service docker.socket containerd.service systemd-resolved.service systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
+rm -f /etc/ssh/ssh_host_* /etc/machine-id /var/lib/dbus/machine-id
+touch /etc/machine-id
+ln -s /etc/machine-id /var/lib/dbus/machine-id
+cat > /etc/ssh/sshd_config.d/beam-vm.conf <<'EOF'
+Port 2222
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthorizedKeysFile /run/beam-vm/authorized_keys
+PidFile /run/sshd/sshd.pid
+EOF
+if [ "$desktop" = true ]; then
+  . /etc/os-release
+  [ "${VERSION_CODENAME:-}" = jammy ] || { echo 'Desktop currently requires Ubuntu 22.04 (jammy)' >&2; exit 1; }
+  arch=$(dpkg --print-architecture)
+  version=1.5.0
+  curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_jammy_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
+  install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg -o /etc/apt/keyrings/mozilla.asc
+  echo 'deb [signed-by=/etc/apt/keyrings/mozilla.asc] https://packages.mozilla.org/apt mozilla main' > /etc/apt/sources.list.d/mozilla.list
+  printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
+  apt-get update
+  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb firefox openbox dbus-x11 xterm x11-utils x11-xserver-utils xdotool fonts-ubuntu xfonts-base
+  rm -f /tmp/kasmvnc.deb
+fi
+rm -rf /var/lib/apt/lists/* "$assets"

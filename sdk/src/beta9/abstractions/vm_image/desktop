@@ -1,0 +1,35 @@
+#!/bin/bash
+set -euo pipefail
+# The server and all of its credentials, locks and config are transient. User
+# files and application configuration retain their normal durable locations.
+mkdir -p "$HOME/.vnc"
+cp /opt/beam-vm/xstartup "$HOME/.vnc/xstartup"
+cat > "$HOME/.vnc/kasmvnc.yaml" <<'EOF'
+network:
+  interface: 0.0.0.0
+  websocket_port: 8080
+  ssl:
+    require_ssl: false
+desktop:
+  resolution:
+    width: 1920
+    height: 1080
+  allow_resize: true
+runtime_configuration:
+  allow_client_to_override_kasm_server_settings: false
+encoding:
+  max_frame_rate: 60
+  rect_encoding_mode:
+    rectangle_compress_threads: auto
+  video_encoding_mode:
+    jpeg_quality: 7
+    webp_quality: -1
+    enter_video_encoding_mode:
+      time_threshold: 1
+      area_threshold: 45%
+EOF
+secret=$(openssl rand -base64 18)
+printf '%s\n%s\n' "$secret" "$secret" | vncpasswd -u desktop -w -o
+# Xvnc runs in the foreground so systemd observes failure and restarts the
+# entire desktop cgroup. No pgrep guesses or persistent PID files.
+exec vncserver :1 -fg -geometry 1920x1080 -depth 24 -interface 0.0.0.0 -websocketPort 8080 -disableBasicAuth -SecurityTypes None -select-de manual

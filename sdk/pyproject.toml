@@ -87,3 +87,6 @@ namespace = "beta9.vendor"
 [build-system]
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+beta9 = ["abstractions/vm_image/*"]

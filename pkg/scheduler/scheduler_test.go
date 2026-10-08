@@ -1112,11 +1112,27 @@ func TestStopDeletesUnassignedPendingContainerState(t *testing.T) {
 	_, err = wb.containerRepo.GetContainerState(containerId)
 	notFound := &types.ErrContainerStateNotFound{}
 	assert.True(t, notFound.From(err), "expected deleted pending state, got %v", err)
+	code, err := wb.containerRepo.GetContainerExitCode(containerId)
+	assert.NoError(t, err)
+	assert.Equal(t, int(types.ContainerExitCodeUser), code)
 
 	popped, err := wb.requestBacklog.Pop()
 	assert.NoError(t, err)
 	wb.processRequestBatch([]*types.ContainerRequest{popped}, nil)
 	assert.Equal(t, int64(0), wb.requestBacklog.Len())
+}
+
+func TestStopRecoversInterruptedUnassignedCancellation(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	id := "unassigned-stopping-container"
+	assert.NoError(t, wb.containerRepo.SetContainerState(id, &types.ContainerState{ContainerId: id, Status: types.ContainerStatusStopping, WorkspaceId: "workspace-1"}))
+	assert.NoError(t, wb.Stop(&types.StopContainerArgs{ContainerId: id, Reason: types.StopContainerReasonUser}))
+	_, err = wb.containerRepo.GetContainerState(id)
+	assert.True(t, (&types.ErrContainerStateNotFound{}).From(err))
+	code, err := wb.containerRepo.GetContainerExitCode(id)
+	assert.NoError(t, err)
+	assert.Equal(t, int(types.ContainerExitCodeUser), code)
 }
 
 func TestStopPreservesAssignedContainerForWorkerCancellation(t *testing.T) {

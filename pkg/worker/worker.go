@@ -1797,6 +1797,13 @@ func (s *Worker) stopActiveContainersForShutdown() {
 	}
 
 	grace := workerContainerStopGrace(s.config.Worker.TerminationGracePeriod)
+	for _, id := range ids {
+		if instance, exists := s.containerInstances.Get(id); exists {
+			if vmGrace := s.containerTerminationGrace(instance.Request); vmGrace > grace {
+				grace = vmGrace
+			}
+		}
+	}
 	if s.waitForActiveContainers(grace) {
 		return
 	}

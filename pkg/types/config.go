@@ -1292,6 +1292,13 @@ type NvidiaCRIUConfig struct {
 type AbstractionConfig struct {
 	Bot BotConfig `key:"bot" json:"bot"`
 	Pod PodConfig `key:"pod" json:"pod"`
+	VM  VMConfig  `key:"vm" json:"vm"`
+}
+
+type VMConfig struct {
+	// Wildcard DNS/ingress pointing at the gateway; <handle>-<port>.<domain>.
+	Domain  string `key:"domain" json:"domain"`
+	BaseURL string `key:"baseURL" json:"base_url"`
 }
 
 type BotConfig struct {
