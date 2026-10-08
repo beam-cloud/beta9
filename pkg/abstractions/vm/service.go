@@ -452,7 +452,7 @@ func (s *Service) action(c echo.Context) error {
 				return apiError(err)
 			}
 			if !resp.Ok {
-				return echo.NewHTTPError(400, "unable to bind port")
+				return echo.NewHTTPError(400, "unable to "+c.Param("action")+" port")
 			}
 		}
 		if c.Param("action") == "bind" {
@@ -574,7 +574,10 @@ func (s *Service) proxy(c echo.Context) error {
 		return echo.NewHTTPError(404)
 	}
 	token, err := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
-	if err != nil || token == nil || !token.Active || token.DisabledByClusterAdmin {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return echo.NewHTTPError(503, "VM authorization unavailable")
+	}
+	if token == nil || !token.Active || token.DisabledByClusterAdmin {
 		return echo.NewHTTPError(403, "VM access is revoked")
 	}
 	release, err := s.keepActive(ctx, v.ID)

@@ -40,19 +40,13 @@ def identity() -> Path:
                     stdin=subprocess.DEVNULL,
                     check=True,
                 )
-                try:
-                    os.link(temporary, path)
-                except FileExistsError:
-                    pass
+                _publish_identity(temporary, path)
             public = subprocess.check_output(
                 ["ssh-keygen", "-y", "-f", str(path)], stdin=subprocess.DEVNULL
             )
             temporary_public = Path(directory) / "identity.pub"
             temporary_public.write_bytes(public)
-            try:
-                os.link(temporary_public, path.with_suffix(".pub"))
-            except FileExistsError:
-                pass
+            _publish_identity(temporary_public, path.with_suffix(".pub"))
     except FileNotFoundError as exc:
         raise RuntimeError("VM SSH requires OpenSSH; install ssh-keygen and try again") from exc
     except subprocess.CalledProcessError as exc:
@@ -60,6 +54,13 @@ def identity() -> Path:
             f"Unable to prepare VM SSH identity at {path}: ssh-keygen failed"
         ) from exc
     return path
+
+
+def _publish_identity(source: Path, target: Path):
+    try:
+        os.link(source, target)
+    except FileExistsError:
+        pass
 
 
 def public_key() -> str:

@@ -540,13 +540,28 @@ func TestRevocationStopsComputeAndAllowsDeletion(t *testing.T) {
 	}
 }
 
-func TestRevokedOwnerCannotUseCapabilityURL(t *testing.T) {
-	s, v, _, runtime, _ := fixture()
-	s.backend.(*vmBackend).token = &types.Token{Active: false}
-	e := echo.New()
-	e.GET("/vm/:handle/:port/", s.proxy)
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequest("GET", "/vm/"+v.Handle+"/8080/", nil))
-	require.Equal(t, 403, rec.Code)
-	require.Empty(t, runtime.forwarded)
+func TestCapabilityAccessFailsClosedAndReportsTokenOutages(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		token  *types.Token
+		err    error
+		status int
+	}{
+		{"revoked", &types.Token{Active: false}, nil, 403},
+		{"disabled", &types.Token{Active: true, DisabledByClusterAdmin: true}, nil, 403},
+		{"missing", nil, sql.ErrNoRows, 403},
+		{"outage", nil, fmt.Errorf("token store unavailable"), 503},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, v, _, runtime, _ := fixture()
+			backend := s.backend.(*vmBackend)
+			backend.token, backend.tokenError = test.token, test.err
+			e := echo.New()
+			e.GET("/vm/:handle/:port/", s.proxy)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, httptest.NewRequest("GET", "/vm/"+v.Handle+"/8080/", nil))
+			require.Equal(t, test.status, rec.Code)
+			require.Empty(t, runtime.forwarded)
+		})
+	}
 }

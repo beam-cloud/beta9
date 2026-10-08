@@ -98,14 +98,19 @@ def test_runtime_connection_is_invalidated_on_resume():
     assert vm._connected is None
 
 
-def test_wait_checks_every_service_and_tcp_readiness(monkeypatch):
-    vm = VM(_service=service())._set(
-        {"name": "dev", "status": "running", "spec": {"ssh": True, "desktop": True}}
-    )
+@pytest.fixture
+def sandbox_vm(monkeypatch):
+    vm = VM(_service=service())._set({"name": "dev", "status": "running", "spec": {}})
     monkeypatch.setattr(vm, "refresh", lambda: vm)
     sandbox = SimpleNamespace(process=MagicMock())
-    sandbox.process.exec.return_value.wait.return_value = 0
     monkeypatch.setattr(vm, "_sandbox", lambda: sandbox)
+    return vm, sandbox
+
+
+def test_wait_checks_every_service_and_tcp_readiness(sandbox_vm):
+    vm, sandbox = sandbox_vm
+    vm.info["spec"].update(ssh=True, desktop=True)
+    sandbox.process.exec.return_value.wait.return_value = 0
     assert vm.wait() is vm
     calls = [call.args for call in sandbox.process.exec.call_args_list]
     assert calls[:3] == [
@@ -190,11 +195,15 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     fake.wait.assert_called_once_with()
 
 
-@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="OpenSSH unavailable")
-def test_identity_is_atomic_and_never_replaces_existing_keys(monkeypatch, tmp_path):
+@pytest.fixture
+def identity_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(
         vm_module, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config.ini")
     )
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="OpenSSH unavailable")
+def test_identity_is_atomic_and_never_replaces_existing_keys(identity_settings):
     with ThreadPoolExecutor(max_workers=8) as executor:
         paths = list(executor.map(lambda _: vm_module.identity(), range(8)))
     assert len(set(paths)) == 1
@@ -208,25 +217,20 @@ def test_identity_is_atomic_and_never_replaces_existing_keys(monkeypatch, tmp_pa
     assert vm_module.identity().read_bytes() == private
 
 
-def test_identity_reports_missing_openssh(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        vm_module, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config.ini")
-    )
+def test_identity_reports_missing_openssh(monkeypatch, identity_settings):
     monkeypatch.setattr(vm_module.subprocess, "run", MagicMock(side_effect=FileNotFoundError()))
     with pytest.raises(RuntimeError, match="install ssh-keygen"):
         vm_module.identity()
 
 
 @pytest.mark.parametrize("hung_command", ["systemctl", "python3"])
-def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command):
-    vm = VM(_service=service())._set({"name": "dev", "status": "running", "spec": {}})
-    monkeypatch.setattr(vm, "refresh", lambda: vm)
+def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command, sandbox_vm):
+    vm, sandbox = sandbox_vm
     clock = [0.0]
     monkeypatch.setattr(vm_module.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
         vm_module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
     )
-    sandbox = SimpleNamespace(process=MagicMock())
 
     def execute(command, *args):
         process = MagicMock()
@@ -237,7 +241,6 @@ def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command
         return process
 
     sandbox.process.exec.side_effect = execute
-    monkeypatch.setattr(vm, "_sandbox", lambda: sandbox)
     with pytest.raises(TimeoutError, match="VM did not become ready"):
         vm.wait(timeout=1)
     assert sandbox.process.exec.call_count >= 2
