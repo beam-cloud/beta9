@@ -400,6 +400,17 @@ type ImageServiceConfig struct {
 	BuildLayerCacheMaxPct float64 `key:"buildLayerCacheMaxPct" json:"build_layer_cache_max_pct"`
 }
 
+// EffectiveBuildRegistry resolves the publishing registry for gateway and agent workers.
+func (c ImageServiceConfig) EffectiveBuildRegistry() string {
+	if c.BuildRegistry != "" {
+		return c.BuildRegistry
+	}
+	if c.Runner.BaseImageRegistry != "" {
+		return c.Runner.BaseImageRegistry
+	}
+	return "localhost"
+}
+
 // BuildAptConfig is applied to apt during image builds whose base image has
 // apt installed. Public archives are slow or stall from some regions
 // (archive.ubuntu.com measured at ~90 KB/s from us-east-1, with apt's default

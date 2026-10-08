@@ -26,17 +26,30 @@ import (
 )
 
 func TestAgentBootstrapUsesConfiguredPublishingRegistry(t *testing.T) {
-	service := &Service{appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{
-		BuildRegistry: "registry.example.com", BuildRepositoryName: "stage/vms", BuildRegistryInsecure: false,
-	}}}
-	bootstrap, err := service.agentBootstrapConfig(context.Background(), "workspace-one", &model.PoolState{
-		Name: "vms", Config: &pb.PoolConfig{Name: "vms"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bootstrap.ImageBuildRegistry != "registry.example.com" || bootstrap.ImageBuildRepositoryName != "stage/vms" || bootstrap.ImageBuildRegistryInsecure {
-		t.Fatal("bootstrap did not preserve configured publishing settings")
+	for _, tt := range []struct {
+		name, configured, fallback, want string
+		insecure                         bool
+	}{
+		{"explicit insecure", "registry.example.com", "runner.example.com", "registry.example.com", true},
+		{"explicit secure", "registry.example.com", "", "registry.example.com", false},
+		{"runner fallback", "", "runner.example.com", "runner.example.com", true},
+		{"localhost fallback", "", "", "localhost", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &Service{appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{
+				BuildRegistry: tt.configured, BuildRepositoryName: "stage/vms", BuildRegistryInsecure: tt.insecure,
+				Runner: types.RunnerConfig{BaseImageRegistry: tt.fallback},
+			}}}
+			bootstrap, err := service.agentBootstrapConfig(context.Background(), "workspace-one", &model.PoolState{
+				Name: "vms", Config: &pb.PoolConfig{Name: "vms"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bootstrap.ImageBuildRegistry != tt.want || bootstrap.ImageBuildRepositoryName != "stage/vms" || bootstrap.ImageBuildRegistryInsecure != tt.insecure {
+				t.Fatal("bootstrap did not preserve resolved publishing settings")
+			}
+		})
 	}
 }
 

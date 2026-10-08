@@ -2199,15 +2199,7 @@ func hasOCILayers(imageMetadata common.ImageMetadata) bool {
 
 // getBuildRegistry returns the registry to use for final and intermediate build images
 func (c *ImageClient) getBuildRegistry() string {
-	if c.config.ImageService.BuildRegistry != "" {
-		return c.config.ImageService.BuildRegistry
-	}
-
-	if c.config.ImageService.Runner.BaseImageRegistry != "" {
-		return c.config.ImageService.Runner.BaseImageRegistry
-	}
-
-	return "localhost"
+	return c.config.ImageService.EffectiveBuildRegistry()
 }
 
 // setupBuildahDirs creates paths for buildah operations. The graphroot is where
