@@ -349,14 +349,15 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string
 	now := time.Now().UTC()
 	id := uuid.NewString()
 	v := &types.VM{ID: id, WorkspaceID: info.Workspace.Id, WorkspaceExternalID: info.Workspace.ExternalId, TokenID: info.Token.ExternalId, Name: name, Handle: name + "-" + strings.ReplaceAll(uuid.NewString(), "-", ""), Spec: spec, DesiredState: "running", Status: "starting", CreatedAt: now, UpdatedAt: now, LastActiveAt: now}
-	if err := s.repo.CreateVM(ctx, v); err != nil {
-		return nil, err
-	}
 	unlock, err := s.repo.LockVM(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	// Hold the lifecycle lock before publishing the row to the reconciler.
+	if err := s.repo.CreateVM(ctx, v); err != nil {
+		return nil, err
+	}
 	if err := s.start(ctx, info, v); err != nil {
 		s.failed(ctx, v, err)
 		return v, nil

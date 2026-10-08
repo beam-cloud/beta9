@@ -63,6 +63,42 @@ func (r *vmStore) ListVMs(_ context.Context, workspace uint) ([]*types.VM, error
 }
 func (r *vmStore) LockVM(context.Context, string) (func(), error) { return func() {}, nil }
 func (r *vmStore) TouchVM(context.Context, string) error          { return nil }
+
+type createRaceStore struct {
+	*vmStore
+	locked bool
+}
+
+func (r *createRaceStore) LockVM(context.Context, string) (func(), error) {
+	if r.locked {
+		return nil, fmt.Errorf("VM operation already in progress")
+	}
+	r.locked = true
+	return func() { r.locked = false }, nil
+}
+
+func (r *createRaceStore) CreateVM(ctx context.Context, v *types.VM) error {
+	if err := r.vmStore.CreateVM(ctx, v); err != nil {
+		return err
+	}
+	// Reconciliation can discover the row immediately after its insertion.
+	// It must not claim the VM before the creating request finishes launching.
+	_, err := r.LockVM(ctx, v.ID)
+	if err == nil {
+		return fmt.Errorf("reconciler claimed newly published VM")
+	}
+	return nil
+}
+
+func TestCreatePreventsReconcilerClaimingPublishedVM(t *testing.T) {
+	s, _, info, _, _ := fixture()
+	store := &createRaceStore{vmStore: s.repo.(*vmStore)}
+	s.repo = store
+	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, "created-vm", types.VMSpec{ImageID: "image"})
+	require.NoError(t, err)
+	require.NotEmpty(t, v.ContainerID)
+	require.False(t, store.locked)
+}
 func (r *vmStore) CreateVMArtifact(_ context.Context, _ uint, a *types.VMArtifact) error {
 	if r.artifactError {
 		return fmt.Errorf("artifact write unavailable")
