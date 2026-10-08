@@ -10,7 +10,10 @@ fi
 ssh-keygen -A
 printf '%s\n' "${BEAM_VM_SSH_PUBLIC_KEY:-}" > /run/beam-vm/authorized_keys
 chmod 0600 /run/beam-vm/authorized_keys
-systemctl set-environment HOME=/root LANG=C.UTF-8 DISPLAY=:1 XAUTHORITY=/run/beam-desktop/.Xauthority
+systemctl set-environment HOME=/root LANG=C.UTF-8
+if [ "${BEAM_VM_DESKTOP:-false}" = true ]; then
+  systemctl set-environment DISPLAY=:1 XAUTHORITY=/run/beam-desktop/.Xauthority
+fi
 systemctl --no-block start beam-terminal.service
 if [ "${BEAM_VM_SSH:-false}" = true ]; then systemctl --no-block start ssh.service; fi
 if [ "${BEAM_VM_DESKTOP:-false}" = true ]; then systemctl --no-block start beam-desktop.service; fi

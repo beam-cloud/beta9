@@ -2,6 +2,27 @@ package types
 
 import "time"
 
+// IsPersistentVM identifies a sandbox whose lifecycle belongs to the VM service.
+func (s *StubConfigV1) IsPersistentVM() bool {
+	if s == nil || !s.UseVM {
+		return false
+	}
+	for _, env := range s.Env {
+		if env == "BEAM_VM_SYSTEMD=1" {
+			return true
+		}
+	}
+	return false
+}
+
+// WorkerShutdownGraceSeconds covers task drain, systemd shutdown and disk cleanup.
+func WorkerShutdownGraceSeconds(stopGrace int64) int64 {
+	if stopGrace <= 0 {
+		stopGrace = 30
+	}
+	return stopGrace + max(stopGrace, 120) + 60
+}
+
 // VMSpec is CPU-only. Unknown fields (including GPU options) are rejected by
 // the API rather than silently changing the isolation or placement contract.
 type VMSpec struct {

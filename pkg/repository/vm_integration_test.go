@@ -24,7 +24,7 @@ func TestVMRepositoryIntegration(t *testing.T) {
 	require.NoError(t, err)
 	db, err := sqlx.Connect("postgres", dsn)
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	repo := &PostgresBackendRepository{client: db}
 	ctx := context.Background()
 	id := uuid.NewString()

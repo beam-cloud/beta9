@@ -267,15 +267,21 @@ def fork_vm(service, source, name, as_json):
 @click.argument("name")
 @click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
 @click.option("--cwd", default="/workspace")
+@click.option(
+    "--timeout",
+    type=click.IntRange(min=0),
+    default=0,
+    help="Command deadline in seconds; 0 waits indefinitely.",
+)
 @extraclick.pass_service_client
-def exec_vm(service, name, command, cwd):
+def exec_vm(service, name, command, cwd, timeout=0):
     from .container import exec_container
 
     vm = _vm(service, name)
     vm._action("touch")
     # The existing exec implementation streams both output channels, retains
     # argv boundaries, cancellation and the child's exit code.
-    exec_container.callback.__wrapped__(service, vm.info["container_id"], command, cwd, 300)
+    exec_container.callback.__wrapped__(service, vm.info["container_id"], command, cwd, timeout)
 
 
 def _url(service, name, field, open_url):
@@ -354,11 +360,10 @@ def _bridge(vm, port, source, target):
             while not stopped.is_set():
                 data = source.read1(65536) if hasattr(source, "read1") else source.read(65536)
                 if not data:
-                    break
+                    remote.send("EOF")
+                    return
                 remote.send_binary(data)
         except (OSError, websocket.WebSocketException):
-            pass
-        finally:
             stopped.set()
             remote.close()
 
@@ -470,8 +475,9 @@ def _sync(vm, directory, watch):
         str(Path(directory).resolve()) + "/",
         f"root@{vm.name}:/workspace/",
     ]
-    subprocess.run(args, check=True)
-    if watch:
+    if not watch:
+        subprocess.run(args, check=True)
+    else:
         from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer
 
@@ -485,6 +491,7 @@ def _sync(vm, directory, watch):
         observer.schedule(Handler(), str(directory), recursive=True)
         observer.start()
         try:
+            subprocess.run(args, check=True)
             while True:
                 if changed.wait(1):
                     time.sleep(0.2)
@@ -630,7 +637,7 @@ def prompt_vm(service, name, prompt, agent, background, cwd):
     command = ["claude", "-p", prompt] if agent == "claude" else ["codex", "exec", prompt]
     shell = f"mkdir -p {log_dir}; set -o pipefail; {shlex.join(command)} 2>&1 | tee {log_dir}/{session}.log"
     if background:
-        vm.process.exec(
+        process = vm.process.exec(
             "systemd-run",
             "--collect",
             "--unit=" + session,
@@ -638,7 +645,9 @@ def prompt_vm(service, name, prompt, agent, background, cwd):
             "bash",
             "-lc",
             shell,
-        ).wait()
+        )
+        if process.wait() != 0:
+            raise click.ClickException(process.stderr.read() or "Failed to launch prompt service")
         click.echo(session)
     else:
         exec_vm.callback.__wrapped__(service, name, ("bash", "-lc", shell), cwd)

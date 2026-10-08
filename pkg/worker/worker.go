@@ -1785,9 +1785,11 @@ func (s *Worker) stopActiveContainersForShutdown() {
 
 	ids := s.activeContainerIDs()
 	log.Info().Int("containers", len(ids)).Msg("stopping active containers before worker shutdown")
+	grace := workerContainerStopGrace(s.config.Worker.TerminationGracePeriod)
 
 	for _, id := range ids {
 		if instance, exists := s.containerInstances.Get(id); exists {
+			grace = max(grace, s.containerTerminationGrace(instance.Request))
 			instance.setStopReason(types.StopContainerReasonAdmin)
 			s.containerInstances.Set(id, instance)
 		}
@@ -1796,14 +1798,6 @@ func (s *Worker) stopActiveContainersForShutdown() {
 		}
 	}
 
-	grace := workerContainerStopGrace(s.config.Worker.TerminationGracePeriod)
-	for _, id := range ids {
-		if instance, exists := s.containerInstances.Get(id); exists {
-			if vmGrace := s.containerTerminationGrace(instance.Request); vmGrace > grace {
-				grace = vmGrace
-			}
-		}
-	}
 	if s.waitForActiveContainers(grace) {
 		return
 	}

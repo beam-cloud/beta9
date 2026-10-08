@@ -78,6 +78,7 @@ def main():
             " with open('/root/shutdown-marker', 'w') as f: f.write('committed-at-shutdown')\n"
             " raise SystemExit(0)\n"
             "signal.signal(signal.SIGTERM, stop)\n"
+            "with open('/root/unit-ready', 'w') as f: f.write('ready')\n"
             "while True: time.sleep(1)\n",
         )
         write(
@@ -89,6 +90,7 @@ def main():
         )
         execute(vm, "systemctl", "daemon-reload")
         execute(vm, "systemctl", "enable", "--now", "vm-smoke.service")
+        execute(vm, "sh", "-c", "for i in $(seq 1 100); do test -f /root/unit-ready && exit 0; sleep .1; done; exit 1")
         vm.stop(no_snapshot=True)
         vm.start()
         assert vm.info["container_id"] != runtime
@@ -104,6 +106,8 @@ def main():
             >= 2
         )
         report["root_systemd_shutdown_identity_urls"] = "passed"
+        if not args.no_desktop:
+            assert vm.desktop_url, "Desktop VM has no desktop URL"
         if vm.desktop_url:
             # localhost's wildcard DNS is browser-specific. Send the stable
             # desktop Host explicitly through this profile's local gateway.

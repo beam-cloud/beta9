@@ -41,6 +41,9 @@ func (i *podInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 }
 
 func (i *podInstance) ensureReadyForRequest() error {
+	if i.StubConfig.IsPersistentVM() {
+		return nil
+	}
 	if err := i.Sync(); err != nil {
 		return err
 	}
@@ -76,6 +79,9 @@ func (i *podInstance) ensureReadyForRequest() error {
 }
 
 func (i *podInstance) startContainers(containersToRun int) error {
+	if i.StubConfig.IsPersistentVM() {
+		return fmt.Errorf("persistent VM runtimes must be started by the VM service")
+	}
 	poolSelector := i.StubConfig.PoolSelector()
 	if err := abstractions.ConfigureDurableDiskPlacement(i.Ctx, i.durableDiskPlacementRepos, i.Workspace, i.StubConfig); err != nil {
 		return err
@@ -196,6 +202,9 @@ func (i *podInstance) startContainers(containersToRun int) error {
 }
 
 func (i *podInstance) stopContainers(containersToStop int) error {
+	if i.StubConfig.IsPersistentVM() {
+		return fmt.Errorf("persistent VM runtimes must be stopped by the VM service")
+	}
 	src := rand.NewSource(time.Now().UnixNano())
 	rnd := rand.New(src)
 

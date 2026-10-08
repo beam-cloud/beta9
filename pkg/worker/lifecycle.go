@@ -273,7 +273,7 @@ func (s *Worker) stopObservedContainer(containerID string, request *types.Contai
 			return
 		}
 		if needsStop {
-			log.Info().Str("container_id", containerID).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
+			log.Info().Str("container_id", containerID).Int64("grace_period_seconds", int64(grace/time.Second)).Msg("container still running after stop event")
 			_, stopReason := instance.lifecycleState()
 			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
 				ID:          types.ContainerEventWorkerStoppingGraceKill,
@@ -282,7 +282,7 @@ func (s *Worker) stopObservedContainer(containerID string, request *types.Contai
 				Source:      source.String(),
 				Message:     types.EventMessageStoppingGraceKill.String(),
 				Attrs: map[string]string{
-					types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
+					types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", int64(grace/time.Second)),
 				},
 			})
 		}

@@ -153,9 +153,37 @@ func TestStopAcceptsExplicitSchedulingFailureButNotMissingState(t *testing.T) {
 	}
 }
 
+func TestFinalizationErrorPreservesRuntimeForRecovery(t *testing.T) {
+	for _, reconcile := range []bool{false, true} {
+		s, v, info, runtime, _ := fixture()
+		containers := s.containers.(*vmContainers)
+		delete(containers.states, v.ContainerID)
+		containers.exitCode = int(types.ContainerExitCodeUnknownError)
+		original := v.ContainerID
+		ctx := auth.ContextWithAuthInfo(context.Background(), info)
+		var err error
+		if reconcile {
+			err = s.reconcileVM(ctx, v)
+		} else {
+			err = s.start(ctx, info, v)
+		}
+		require.ErrorContains(t, err, "finalization failed")
+		require.Equal(t, original, v.ContainerID)
+		require.Empty(t, runtime.requests)
+	}
+}
+
 type vmBackend struct {
 	repository.BackendRepository
 	latest string
+}
+
+func (b *vmBackend) GetWorkspaceByExternalId(_ context.Context, id string) (types.Workspace, error) {
+	return types.Workspace{Id: 7, ExternalId: id}, nil
+}
+
+func (b *vmBackend) GetTokenByExternalId(_ context.Context, _ uint, id string) (*types.Token, error) {
+	return &types.Token{ExternalId: id, Active: true}, nil
 }
 
 func (b *vmBackend) GetLatestDiskSnapshot(context.Context, uint, string) (*types.DiskSnapshot, error) {

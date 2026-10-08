@@ -116,6 +116,9 @@ func (r *PostgresBackendRepository) LockVM(ctx context.Context, id string) (func
 	var acquired bool
 	err = conn.GetContext(ctx, &acquired, `SELECT pg_try_advisory_lock(hashtextextended($1, 947))`, id)
 	if err != nil || !acquired {
+		if err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
 		conn.Close()
 		if err == nil {
 			err = fmt.Errorf("VM operation already in progress")

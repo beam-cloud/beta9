@@ -16,6 +16,9 @@ func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stub
 	if err != nil {
 		return err
 	}
+	if stub == nil {
+		return fmt.Errorf("VM sandbox stub not found")
+	}
 	var spec types.StubConfigV1
 	if err := json.Unmarshal([]byte(stub.Config), &spec); err != nil {
 		return err

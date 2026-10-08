@@ -106,6 +106,9 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		if !(&types.ErrContainerStateNotFound{}).From(err) {
 			return err
 		}
+		if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) {
+			return fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", v.ContainerID)
+		}
 		v.ContainerID = ""
 	}
 	v.LaunchAttempts++
@@ -393,6 +396,9 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 		// After a lost runtime, use a new identity and the latest committed
 		// generation. Do not imply zero write loss on worker failure.
 		if v.Status != "starting" {
+			if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) {
+				return fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", v.ContainerID)
+			}
 			v.ContainerID = ""
 		}
 	}

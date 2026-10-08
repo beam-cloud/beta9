@@ -24,6 +24,7 @@ DefaultDependencies=no
 After=local-fs.target systemd-journald.service
 Before=sysinit.target shutdown.target
 Conflicts=shutdown.target
+OnFailure=poweroff.target
 
 [Service]
 Type=exec

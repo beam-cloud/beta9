@@ -19,7 +19,7 @@ curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/dock
 printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' "$arch" "$ID" "$VERSION_CODENAME" > /etc/apt/sources.list.d/docker.list
 apt-get update
 apt-get install -y --no-install-recommends nodejs
-if ! command -v dockerd >/dev/null; then
+if ! command -v dockerd >/dev/null || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1 || ! docker buildx version >/dev/null 2>&1; then
   apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 npm install -g --no-fund --no-audit @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.226

@@ -713,8 +713,12 @@ func (c *control) serve(childPid func() int) {
 			if c.systemd && (msg.Signal == int(unix.SIGTERM) || msg.Signal == int(unix.SIGINT)) {
 				// Shutdown ordinary units before the guest agent, which is
 				// ordered before sysinit and therefore stops after basic units.
-				c.ack(msg.ID, exec.Command("systemctl", "--no-block", "poweroff").Run())
-				continue
+				if err := exec.Command("systemctl", "--no-block", "poweroff").Run(); err == nil {
+					c.ack(msg.ID, nil)
+					continue
+				} else {
+					logf("systemd poweroff failed; signaling workload: %v", err)
+				}
 			}
 			pid := childPid()
 			if pid <= 0 {

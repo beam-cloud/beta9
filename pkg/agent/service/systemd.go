@@ -103,7 +103,7 @@ func SystemdUnit(spec Spec) string {
 		"KillSignal=SIGINT",
 		// The agent exits 130 when interrupted, which a stop always does.
 		"SuccessExitStatus=130",
-		"TimeoutStopSec=60",
+		"TimeoutStopSec=infinity",
 		"LimitNOFILE=1048576",
 		"",
 		"[Install]",

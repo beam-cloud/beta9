@@ -1087,8 +1087,10 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 				break
 			}
 			_, err = io.CopyBuffer(writer, reader, buffer)
-			closeErr := writer.Close()
-			if err != nil || closeErr != nil {
+			if err != nil {
+				break
+			}
+			if err := writer.Close(); err != nil {
 				break
 			}
 		}

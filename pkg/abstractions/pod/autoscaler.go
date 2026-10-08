@@ -46,6 +46,11 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 
 // podScaleFunc scales based on the number of desired containers
 func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.AutoscalerResult {
+	// The VM service reserves each runtime identity and owns stop/restart.
+	// Sandbox autoscaling would otherwise create an untracked replacement.
+	if i.StubConfig.IsPersistentVM() {
+		return &abstractions.AutoscalerResult{ResultValid: false}
+	}
 	desiredContainers := desiredPodContainers(i, s)
 
 	return &abstractions.AutoscalerResult{

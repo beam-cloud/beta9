@@ -274,8 +274,10 @@ func (s *Service) create(c echo.Context) error {
 				if err := json.Unmarshal(base, &fields); err != nil {
 					return apiError(err)
 				}
-				if err := json.Unmarshal(req.Spec, &overrides); err != nil {
-					return apiError(err)
+				if len(req.Spec) > 0 {
+					if err := json.Unmarshal(req.Spec, &overrides); err != nil {
+						return apiError(err)
+					}
 				}
 				for key, value := range overrides {
 					fields[key] = value
