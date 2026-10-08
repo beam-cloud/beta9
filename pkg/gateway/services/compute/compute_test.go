@@ -25,6 +25,21 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+func TestAgentBootstrapUsesConfiguredPublishingRegistry(t *testing.T) {
+	service := &Service{appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{
+		BuildRegistry: "registry.example.com", BuildRepositoryName: "stage/vms", BuildRegistryInsecure: false,
+	}}}
+	bootstrap, err := service.agentBootstrapConfig(context.Background(), "workspace-one", &model.PoolState{
+		Name: "vms", Config: &pb.PoolConfig{Name: "vms"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bootstrap.ImageBuildRegistry != "registry.example.com" || bootstrap.ImageBuildRepositoryName != "stage/vms" || bootstrap.ImageBuildRegistryInsecure {
+		t.Fatal("bootstrap did not preserve configured publishing settings")
+	}
+}
+
 func TestPrivatePoolReadsAreWorkspaceScoped(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{
