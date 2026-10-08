@@ -34,7 +34,7 @@ description = ""
 beta9 = "beta9.cli.main:start"
 
 [tool.setuptools.package-data]
-beta9 = ["skills/**/*.md"]
+beta9 = ["skills/**/*.md", "abstractions/vm_image/*"]
 
 [dependency-groups]
 dev = [
@@ -87,6 +87,3 @@ namespace = "beta9.vendor"
 [build-system]
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools.package-data]
-beta9 = ["abstractions/vm_image/*"]
