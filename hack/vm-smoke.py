@@ -55,6 +55,7 @@ def main():
             memory=2048,
             disk_size="8GiB",
             desktop=not args.no_desktop,
+            docker_enabled=True,
             ssh=False,
             env={"VM_SMOKE_ENV": "inherited by systemd % literally"},
         )
@@ -63,6 +64,8 @@ def main():
         service = vm._service
         identity = execute(vm, "cat", "/etc/machine-id")
         assert execute(vm, "cat", "/proc/1/comm") == "systemd"
+        assert "x86_64" in execute(vm, "docker", "run", "--rm", "busybox:1.36.1", "uname", "-m")
+        report["nested_docker"] = "passed"
         urls = vm.refresh().info["urls"].copy()
         runtime = vm.info["container_id"]
         write(vm, "/root/persistent-marker", prefix)
