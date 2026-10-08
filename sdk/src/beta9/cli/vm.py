@@ -263,7 +263,9 @@ def fork_vm(service, source, name, as_json):
     _show(_vm(service, source).fork(name).info, as_json)
 
 
-@management.command("exec", context_settings={"ignore_unknown_options": True})
+@management.command(
+    "exec", context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False}
+)
 @click.argument("name")
 @click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
 @click.option("--cwd", default="/workspace")
@@ -431,7 +433,9 @@ def _ssh_options(vm):
     ]
 
 
-@management.command("ssh", context_settings={"ignore_unknown_options": True})
+@management.command(
+    "ssh", context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False}
+)
 @click.argument("name")
 @click.argument("command", nargs=-1, type=click.UNPROCESSED)
 @extraclick.pass_service_client

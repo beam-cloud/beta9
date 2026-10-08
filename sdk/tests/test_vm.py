@@ -11,6 +11,7 @@ from beta9.abstractions.vm import VM, prepare_image
 from beta9.channel import GatewayHTTPError
 from beta9.cli import extraclick
 from beta9.cli import vm as vm_cli
+from beta9.cli import container as container_cli
 from beta9.cli.main import load_cli
 
 
@@ -155,6 +156,36 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     assert options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
     fake.create.assert_called_once_with()
+
+
+def test_exec_preserves_child_flags_that_match_cli_options(cli_service, monkeypatch):
+    vm = MagicMock()
+    vm.info = {"container_id": "runtime"}
+    monkeypatch.setattr(vm_cli, "_vm", lambda *args: vm)
+    execute = MagicMock()
+    monkeypatch.setattr(
+        container_cli.exec_container, "callback", SimpleNamespace(__wrapped__=execute)
+    )
+    result = CliRunner().invoke(
+        vm_cli.management, ["exec", "--cwd", "/root", "dev", "sh", "-c", "echo --context literal"]
+    )
+    assert result.exit_code == 0, result.output
+    execute.assert_called_once_with(
+        cli_service, "runtime", ("sh", "-c", "echo --context literal"), "/root", 0
+    )
+
+
+def test_ssh_preserves_child_flags_that_match_cli_options(cli_service, monkeypatch):
+    vm = SimpleNamespace(name="dev")
+    monkeypatch.setattr(vm_cli, "_vm", lambda *args: vm)
+    monkeypatch.setattr(vm_cli, "_ssh_options", lambda vm: [])
+    call = MagicMock(return_value=0)
+    monkeypatch.setattr(vm_cli.subprocess, "call", call)
+    result = CliRunner().invoke(
+        vm_cli.management, ["ssh", "dev", "sh", "-c", "echo --context literal"]
+    )
+    assert result.exit_code == 0, result.output
+    assert call.call_args.args[0][-1] == "sh -c 'echo --context literal'"
 
 
 def test_cli_reports_api_failures_without_tracebacks(cli_service, monkeypatch):
