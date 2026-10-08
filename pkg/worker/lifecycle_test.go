@@ -2940,10 +2940,17 @@ func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {
 		runtimeName           string
 		archiveFilesystem     bool
 		forceResourceLimits   bool
+		persistentVM          bool
 		missingOverlay        bool
 		wantFallback          bool
 		wantCheckpointUpdates int
 	}{
+		{
+			name:                "persistent VM refuses durable mount cold fallback",
+			restoreErr:          fmt.Errorf("restore failed: %w", &checkpointDurableMountValidationError{mountPath: "/", err: assert.AnError}),
+			forceResourceLimits: true,
+			persistentVM:        true,
+		},
 		{
 			name: "forced sandbox durable mount validation error",
 			restoreErr: fmt.Errorf("restore failed: %w", &checkpointDurableMountValidationError{
@@ -3085,6 +3092,10 @@ func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {
 					CheckpointId: checkpointID,
 					Status:       string(types.CheckpointStatusAvailable),
 				},
+			}
+			if test.persistentVM {
+				request.UseVM = true
+				request.Env = []string{"BEAM_VM_SYSTEMD=1"}
 			}
 			if test.forceResourceLimits {
 				request.Stub.Config = `{"_beta9_force_resource_limits":true}`

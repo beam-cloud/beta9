@@ -19,6 +19,7 @@ import websocket
 from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.vm import VM, identity, prepare_image
+from ..abstractions.volume import Volume
 from ..channel import GatewayHTTPError, ServiceClient
 from ..config import SDKSettings, get_config_context, get_settings, set_settings
 from ..logging import StoredStdoutInterceptor
@@ -36,13 +37,23 @@ class VMGroup(ClickManagementGroup):
             raise
         except subprocess.CalledProcessError as exc:
             raise click.ClickException(f"{exc.cmd[0]} exited with status {exc.returncode}") from exc
-        except (RuntimeError, TimeoutError, OSError) as exc:
+        except (RuntimeError, TimeoutError, OSError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
 
 
 @click.group(name="vm", cls=VMGroup, help="Create and manage persistent CPU microVMs.")
 def management():
     pass
+
+
+def _key_values(values):
+    result = {}
+    for entry in values:
+        key, separator, value = entry.partition("=")
+        if not separator or not key:
+            raise click.UsageError("Expected KEY=VALUE")
+        result[key] = value
+    return result
 
 
 def _vm(service, name):
@@ -123,7 +134,26 @@ def _show(info, as_json):
     type=click.IntRange(min=0),
     help="Auto-stop after this many idle seconds; 0 disables it.",
 )
+@click.option("--idle-action", type=click.Choice(["stop", "pause"]))
 @click.option("--pool")
+@click.option("--metadata", multiple=True, metavar="KEY=VALUE")
+@click.option("--auto-resume/--no-auto-resume", default=None)
+@click.option("--block-network", is_flag=True, default=None)
+@click.option("--allow-network", multiple=True, metavar="CIDR")
+@click.option("--protected-port", multiple=True, type=click.IntRange(1, 65535))
+@click.option("--request-id", type=click.UUID)
+@click.option(
+    "--disk",
+    multiple=True,
+    type=extraclick.DurableDiskSpec(),
+    help="Additional durable disk NAME:/mount[:SIZE].",
+)
+@click.option(
+    "--volume",
+    multiple=True,
+    metavar="NAME:/mount",
+    help="Shared workspace volume; persists independently of the VM.",
+)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def new(
@@ -148,6 +178,15 @@ def new(
     ttl,
     pool,
     as_json,
+    metadata=(),
+    auto_resume=None,
+    block_network=None,
+    allow_network=(),
+    protected_port=(),
+    request_id=None,
+    disk=(),
+    volume=(),
+    idle_action=None,
 ):
     if sum(bool(v) for v in (image_uri, image_id, dockerfile, template)) > 1:
         raise click.UsageError("Choose one of --image, --image-id, --dockerfile or --template")
@@ -170,11 +209,20 @@ def new(
         docker_enabled=docker_enabled,
         env=env_map if env else None,
         secrets=list(secret) if secret else None,
-        ports=list(port) if port else None,
+        ports=list(dict.fromkeys((*port, *protected_port))) if port or protected_port else None,
         ssh=False if no_ssh else None,
         ttl=ttl,
+        idle_action=idle_action,
         pool=pool,
         template=template,
+        metadata=_key_values(metadata) if metadata else None,
+        auto_resume=auto_resume,
+        block_network=block_network,
+        allow_list=list(allow_network) if allow_network else None,
+        protected_ports=list(protected_port) if protected_port else None,
+        request_id=str(request_id) if request_id else None,
+        disks=list(disk) if disk else None,
+        volumes=_volumes(volume) if volume else None,
         _service=service,
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
@@ -186,6 +234,16 @@ def new(
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
+
+
+def _volumes(entries):
+    result = []
+    for entry in entries:
+        name, separator, mount = entry.partition(":")
+        if not separator or not name or not mount.startswith("/"):
+            raise click.UsageError("Expected volume NAME:/mount")
+        result.append(Volume(name=name, mount_path=mount))
+    return result
 
 
 @management.group("image")
@@ -214,11 +272,21 @@ def image_build(service, build_context, dockerfile, build_secret, desktop, as_js
 
 
 @management.command("list")
+@click.option("--metadata", multiple=True, metavar="KEY=VALUE")
+@click.option("--status")
 @click.option("--all", "include_all", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def list_vms(service, include_all, as_json):
-    _show(VM.list(all=include_all, _service=service), as_json)
+def list_vms(service, include_all, as_json, metadata=(), status=None):
+    _show(
+        VM.list(
+            all=include_all,
+            metadata=_key_values(metadata) if metadata else None,
+            status=status,
+            _service=service,
+        ),
+        as_json,
+    )
 
 
 @management.command("get")
@@ -229,15 +297,63 @@ def get_vm(service, name, as_json):
     _show(_vm(service, name).info, as_json)
 
 
-@management.command("start")
+@management.command("update")
 @click.argument("name")
+@click.option("--ttl", type=click.IntRange(0, 31536000))
+@click.option("--idle-action", type=click.Choice(["stop", "pause"]))
+@click.option("--auto-resume/--no-auto-resume", default=None)
+@click.option("--metadata", multiple=True, metavar="KEY=VALUE")
+@click.option("--clear-metadata", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def start_vm(service, name, as_json):
-    _show(_vm(service, name).start().info, as_json)
+def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json, idle_action=None):
+    if metadata and clear_metadata:
+        raise click.UsageError("Choose --metadata or --clear-metadata")
+    values = _key_values(metadata) if metadata or clear_metadata else None
+    vm = _vm(service, name).update(
+        ttl=ttl, idle_action=idle_action, auto_resume=auto_resume, metadata=values
+    )
+    _show(vm.info, as_json)
+
+
+@management.command("network")
+@click.argument("name")
+@click.option("--block/--open", default=False)
+@click.option("--allow", multiple=True, metavar="CIDR")
+@click.option("--json", "as_json", is_flag=True)
+@extraclick.pass_service_client
+def network_vm(service, name, block, allow, as_json):
+    vm = _vm(service, name).update_network_permissions(block_network=block, allow_list=list(allow))
+    _show(vm.info, as_json)
+
+
+@management.command("access-token")
+@click.argument("name")
+@click.option("--rotate", is_flag=True)
+@extraclick.pass_service_client
+def access_token_vm(service, name, rotate):
+    vm = _vm(service, name)
+    click.echo(vm.rotate_access_token() if rotate else vm.traffic_access_token)
+
+
+@management.command("start")
+@click.argument("name")
+@click.option("--cold", is_flag=True, help="Explicitly discard paused RAM and boot from disk.")
+@click.option("--json", "as_json", is_flag=True)
+@extraclick.pass_service_client
+def start_vm(service, name, as_json, cold=False):
+    _show(_vm(service, name).start(cold=cold).info, as_json)
 
 
 management.add_command(start_vm, "resume")
+
+
+@management.command("pause")
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True)
+@extraclick.pass_service_client
+def pause_vm(service, name, as_json):
+    _show(_vm(service, name).pause().info, as_json)
 
 
 @management.command("stop")
@@ -281,23 +397,83 @@ def fork_vm(service, source, name, as_json):
     default=0,
     help="Command deadline in seconds; 0 waits indefinitely.",
 )
+@click.option("--detach", is_flag=True, help="Return a reattachable process ID immediately.")
+@click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def exec_vm(service, name, command, cwd, timeout=0):
+def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False):
     from .container import exec_container
 
     command = _command(command)
     if not command:
         raise click.UsageError("A command is required")
     vm = _vm(service, name)
-    vm._action("touch")
+    sandbox = vm._sandbox()
+    if detach or as_json:
+        process = sandbox.process.exec(*command, cwd=cwd)
+        result = {"vm_id": vm.id, "container_id": vm.info["container_id"], "pid": process.pid}
+        if not detach:
+            result.update(
+                exit_code=process.wait(timeout or None),
+                stdout=process.stdout.read(),
+                stderr=process.stderr.read(),
+            )
+        if as_json:
+            terminal.print_json(result)
+        else:
+            click.echo(process.pid)
+        if not detach:
+            raise click.exceptions.Exit(result["exit_code"])
+        return
     # The existing exec implementation streams both output channels, retains
     # argv boundaries, cancellation and the child's exit code.
     exec_container.callback.__wrapped__(service, vm.info["container_id"], command, cwd, timeout)
 
 
+@management.command("ps")
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True)
+@extraclick.pass_service_client
+def processes_vm(service, name, as_json):
+    processes = _vm(service, name).process.list_processes()
+    rows = [
+        {"pid": p.pid, "args": p.args, "cwd": p.cwd, "exit_code": p.exit_code}
+        for p in processes.values()
+    ]
+    if as_json:
+        terminal.print_json(rows)
+    else:
+        for row in rows:
+            click.echo(f"{row['pid']}\t{row['exit_code']}\t{shlex.join(row['args'])}")
+
+
+@management.command("kill")
+@click.argument("name")
+@click.argument("pid", type=click.IntRange(1))
+@click.option(
+    "--container-id", help="Refuse to kill if the VM has restarted since this process was launched."
+)
+@extraclick.pass_service_client
+def kill_vm(service, name, pid, container_id):
+    vm = _vm(service, name)
+    sandbox = vm._sandbox()
+    if container_id and container_id != vm.info["container_id"]:
+        raise click.ClickException("The VM restarted; this process belongs to a previous runtime")
+    sandbox.process.get_process(pid).kill()
+
+
+@management.command("metrics")
+@click.argument("name")
+@extraclick.pass_service_client
+def metrics_vm(service, name):
+    terminal.print_json(_vm(service, name).metrics())
+
+
 def _url(service, name, field, open_url):
     vm = _vm(service, name)
     url = vm.info.get(field)
+    port = 8080 if field == "desktop_url" else 7681
+    if url and port in vm.info.get("spec", {}).get("protected_ports", []):
+        url = vm.access_url(port)
     if not url:
         raise click.ClickException(f"VM does not have {field.replace('_url', '')} enabled")
     click.echo(url)
@@ -337,11 +513,12 @@ def ports_vm(service, name, as_json):
 
 
 @management.command("expose")
+@click.option("--protected/--public", default=None)
 @click.argument("name")
 @click.argument("port", type=click.IntRange(1, 65535))
 @extraclick.pass_service_client
-def expose_vm(service, name, port):
-    click.echo(_vm(service, name).expose(port))
+def expose_vm(service, name, port, protected=None):
+    click.echo(_vm(service, name).expose(port, protected=protected))
 
 
 @management.command("unexpose")
@@ -593,6 +770,22 @@ def snapshot_list(service, vm_name, include_all, as_json):
     _show(items, as_json)
 
 
+@snapshot_group.command("rm")
+@click.argument("name")
+@extraclick.pass_service_client
+def snapshot_rm(service, name):
+    VM(_service=service).remove_snapshot(name)
+
+
+@management.command("screenshot")
+@click.argument("name")
+@click.argument("path", type=click.Path(dir_okay=False))
+@extraclick.pass_service_client
+def screenshot_vm(service, name, path):
+    _vm(service, name).desktop.screenshot(path)
+    click.echo(path)
+
+
 @management.group("template")
 def template_group():
     """Save reusable private VM roots, independently of the source VM."""
@@ -671,9 +864,21 @@ def prompt_vm(service, name, prompt, agent, background, cwd):
 @click.argument("name")
 @click.option("--unit", help="Read the systemd journal for this unit.")
 @click.option("--session", help="Read a prompt session's durable log.")
+@click.option("--pid", type=click.IntRange(1), help="Read a managed process's output.")
 @click.option("-f", "follow", is_flag=True)
 @extraclick.pass_service_client
-def logs_vm(service, name, unit, session, follow):
+def logs_vm(service, name, unit, session, follow, pid=None):
+    if pid is not None:
+        if unit or session:
+            raise click.UsageError("Choose one of --pid, --unit, or --session")
+        process = _vm(service, name).process.get_process(pid)
+        if follow:
+            for line in process.logs:
+                click.echo(line, nl=False)
+        else:
+            click.echo(process.stdout._fetch_next_chunk(), nl=False)
+            click.echo(process.stderr._fetch_next_chunk(), nl=False, err=True)
+        return
     if session:
         if not all(c.isalnum() or c in "-_" for c in session):
             raise click.UsageError("Invalid session")

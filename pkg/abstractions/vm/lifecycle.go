@@ -10,6 +10,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/protobuf/proto"
 	"strings"
 	"sync"
 	"time"
@@ -56,9 +57,17 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	req.Ports = v.Spec.RuntimePorts()
 	req.CheckpointEnabled = false
 	req.DockerEnabled = v.Spec.DockerEnabled
+	req.BlockNetwork = v.Spec.BlockNetwork
+	req.AllowList = v.Spec.AllowList
 	req.Hostname = v.Name
 	req.Entrypoint = []string{"/opt/beam-vm/boot"}
 	req.Disks = []*pb.DurableDisk{{Name: rootDisk(v), Size: v.Spec.DiskSize, MountPath: "/", Filesystem: "ext4", Driver: "qcow", SourceSnapshotId: v.Spec.SourceSnapshotID}}
+	for _, disk := range v.Spec.Disks {
+		req.Disks = append(req.Disks, proto.Clone(disk).(*pb.DurableDisk))
+	}
+	for _, volume := range v.Spec.Volumes {
+		req.Volumes = append(req.Volumes, proto.Clone(volume).(*pb.Volume))
+	}
 	if v.Spec.Pool != "" {
 		req.Pool = &pb.PoolConfig{Name: v.Spec.Pool}
 	}
@@ -87,10 +96,14 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 			v.Status = "running"
 			v.EverRunning = true
 			v.LaunchAttempts = 0
+			v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 		}
 		return s.repo.SaveVM(ctx, v)
 	}
 	v.ContainerID = ""
+	if err := s.validateMemoryDisks(ctx, v); err != nil {
+		return err
+	}
 	v.LaunchAttempts++
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
@@ -108,7 +121,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
 	}
-	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec.RuntimePorts())
+	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID)
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
 			v.ContainerID = ""
@@ -190,13 +203,16 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 	}
 	if v.ContainerID == "" {
 		v.Status = "stopped"
+		if v.DesiredState == "paused" {
+			v.Status = "paused"
+		}
 		return s.finishStop(ctx, v)
 	}
 	state, err := s.containers.GetContainerState(v.ContainerID)
 	if err != nil && !(&types.ErrContainerStateNotFound{}).From(err) {
 		return err
 	}
-	if err == nil && state.Status != types.ContainerStatusStopping {
+	if err == nil && state.Status != types.ContainerStatusStopping && v.DesiredState != "paused" {
 		// Commit the root before releasing compute. --no-snapshot skips only
 		// the named artifact, never filesystem durability.
 		if state.Status == types.ContainerStatusRunning {
@@ -246,6 +262,9 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 			}
 			v.ContainerID = ""
 			v.Status = "stopped"
+			if v.DesiredState == "paused" {
+				v.Status = "paused"
+			}
 			v.Error = ""
 			return s.finishStop(ctx, v)
 		}
@@ -350,6 +369,9 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	info := &auth.AuthInfo{Workspace: &workspace, Token: &types.Token{}}
 	ctx = auth.ContextWithAuthInfo(ctx, info)
 	if v.DesiredState != "running" {
+		if v.DesiredState == "paused" && v.MemoryCheckpointID == "" {
+			return nil
+		}
 		return s.stopOrDelete(ctx, v)
 	}
 	token, err := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
@@ -378,6 +400,7 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 			if v.Status != "running" {
 				v.Status = "running"
 				v.Error = ""
+				v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 				if err := s.repo.SaveVM(ctx, v); err != nil {
 					return err
 				}
@@ -388,6 +411,9 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 					return err
 				}
 				if claimed {
+					if v.Spec.IdleAction == "pause" {
+						return s.pause(ctx, v)
+					}
 					v.DesiredState = "stopped"
 					if err := s.repo.SaveVM(ctx, v); err != nil {
 						return err

@@ -50,7 +50,7 @@ if [ "$desktop" = true ]; then
   apt_repository mozilla https://packages.mozilla.org/apt/repo-signing-key.gpg https://packages.mozilla.org/apt mozilla main
   printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
   apt-get update
-  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb firefox openbox dbus-x11 xterm x11-utils x11-xserver-utils xdotool fonts-ubuntu xfonts-base
+  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb firefox openbox dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot ffmpeg fonts-ubuntu xfonts-base
   rm -f /tmp/kasmvnc.deb
 fi
 rm -rf /var/lib/apt/lists/* "$assets"

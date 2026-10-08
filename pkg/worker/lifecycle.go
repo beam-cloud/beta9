@@ -645,6 +645,10 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 		return err
 	}
 
+	if request.IsPersistentVM() && request.Checkpoint != nil && !s.canRestoreCheckpoint(request, s.runtime) {
+		return fmt.Errorf("persistent VM memory restore is unavailable on this worker; cold boot requires an explicit VM start with cold=true")
+	}
+
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		instance = &ContainerInstance{
@@ -2187,6 +2191,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		}
 	}
 	fallbackFromCheckpoint := func(reseedCheckpointFilesystem bool) error {
+		if request.IsPersistentVM() && request.Checkpoint != nil {
+			return fmt.Errorf("persistent VM memory restore failed; cold boot requires an explicit VM start with cold=true")
+		}
 		restoringCheckpoint = false
 		if reseedCheckpointFilesystem && originalConfigErr != nil {
 			return fmt.Errorf("checkpoint mount validation fallback requires the original container config: %w", originalConfigErr)

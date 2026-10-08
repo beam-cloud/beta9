@@ -84,8 +84,49 @@ def test_template_preserves_unspecified_fields_and_channel():
         "name": "dev",
         "template": "base",
         "spec": {"ssh": False, "cpu": 2500, "env": ["VALUE=a=b c"]},
+        "request_id": vm.request_id,
     }
     assert vm._service is selected
+
+
+def test_retry_after_lost_creation_response_reuses_exact_request():
+    selected = service()
+    selected.http.json.side_effect = [
+        [],
+        TimeoutError("lost response"),
+        {"id": "resource", "name": "dev", "status": "starting"},
+    ]
+    vm = VM("dev", template="base", ssh=False, _service=selected)
+    with pytest.raises(TimeoutError):
+        vm.create(wait=False)
+    vm.create(wait=False)
+    calls = selected.http.json.call_args_list
+    assert calls[1].kwargs["json"] == calls[2].kwargs["json"]
+    assert calls[1].kwargs["json"]["request_id"] == vm.request_id
+    assert len(calls) == 3
+
+
+def test_update_can_clear_metadata_and_network_rules():
+    selected = service()
+    selected.http.json.return_value = {"id": "resource", "name": "dev", "spec": {}}
+    vm = VM("dev", _service=selected)
+    vm.update(ttl=0, auto_resume=False, metadata={})
+    assert selected.http.json.call_args.kwargs["json"] == {
+        "idle_timeout": 0,
+        "auto_resume": False,
+        "metadata": {},
+    }
+    vm.update_network_permissions()
+    assert selected.http.json.call_args.kwargs["json"] == {"block_network": False, "allow_list": []}
+
+
+def test_metadata_list_filter_and_status_use_gateway_query():
+    selected = service()
+    VM.list(metadata={"user": "a=b"}, status="stopped", _service=selected)
+    params = selected.http.json.call_args.kwargs["params"]
+    assert json.loads(params["metadata"]) == {"user": "a=b"}
+    assert params["status"] == "stopped"
+    selected.close.assert_not_called()
 
 
 def test_runtime_connection_is_invalidated_on_resume():

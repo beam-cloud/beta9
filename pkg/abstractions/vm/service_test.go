@@ -253,16 +253,20 @@ func (b *vmBackend) GetLatestDiskSnapshot(context.Context, uint, string) (*types
 
 type vmRuntime struct {
 	pb.UnimplementedPodServiceServer
-	containers    *vmContainers
-	requests      []string
-	snapshotError bool
-	snapshots     int
-	forwarded     string
-	diskName      string
-	boundPorts    []int32
+	containers     *vmContainers
+	requests       []string
+	checkpoint     string
+	memoryResponse *pb.PodSandboxSnapshotMemoryResponse
+	snapshotError  bool
+	snapshots      int
+	forwarded      string
+	diskName       string
+	boundPorts     []int32
+	network        *pb.PodSandboxUpdateNetworkPermissionsRequest
 }
 
-func (r *vmRuntime) RunVM(_ context.Context, _ *auth.AuthInfo, stub, cid string, _ []uint32) error {
+func (r *vmRuntime) RunVM(_ context.Context, _ *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string) error {
+	r.checkpoint = checkpoint
 	r.requests = append(r.requests, cid)
 	r.containers.states[cid] = &types.ContainerState{ContainerId: cid, StubId: stub, Status: types.ContainerStatusRunning}
 	return nil

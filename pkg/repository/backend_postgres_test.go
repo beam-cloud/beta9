@@ -482,7 +482,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 	postgresRepo := repo.(*PostgresBackendRepository)
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 
-	mock.ExpectQuery(`s\.updated_at < \$2`).
+	mock.ExpectQuery(`s\.updated_at < \$2 AND NOT EXISTS .*memory_checkpoint_id.*desired_state`).
 		WithArgs(sqlmock.AnyArg(), cutoff).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"checkpoint_id",
@@ -582,7 +582,7 @@ func TestCheckpointWriteAndListResultsRetainCompatibilityKey(t *testing.T) {
 	listed, err := repo.ListCheckpoints(ctx, "workspace")
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
-	mock.ExpectQuery(`UPDATE checkpoint c SET deleted_at`).
+	mock.ExpectQuery(`UPDATE checkpoint c SET deleted_at.*NOT EXISTS .*memory_checkpoint_id`).
 		WithArgs(pq.StringArray{checkpoint.CheckpointId}).WillReturnRows(checkpointQueryRows(key))
 	pruned, err := repo.PruneCheckpoints(ctx, []string{checkpoint.CheckpointId})
 	require.NoError(t, err)

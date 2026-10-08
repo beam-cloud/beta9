@@ -4,11 +4,15 @@ package vm
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -18,6 +22,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"io"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,7 +32,7 @@ import (
 
 type Runtime interface {
 	pb.PodServiceServer
-	RunVM(context.Context, *auth.AuthInfo, string, string, []uint32) error
+	RunVM(context.Context, *auth.AuthInfo, string, string, types.VMSpec, string) error
 	ForwardVM(echo.Context, string, string) error
 	TunnelVM(echo.Context, string, uint32) error
 }
@@ -59,6 +64,7 @@ func New(ctx context.Context, config types.VMConfig, backend repository.BackendR
 	api.GET("/:workspaceId/artifacts/:kind", auth.WithStrictWorkspaceAuth(s.artifacts))
 	api.DELETE("/:workspaceId/artifacts/:kind/:artifact", auth.WithStrictWorkspaceAuth(s.removeArtifact))
 	api.GET("/:workspaceId/:name", auth.WithStrictWorkspaceAuth(s.get))
+	api.PATCH("/:workspaceId/:name", auth.WithStrictWorkspaceAuth(s.update))
 	api.GET("/:workspaceId/:name/tunnel/:port", auth.WithStrictWorkspaceAuth(s.tunnel))
 	api.POST("/:workspaceId/:name/:action", auth.WithStrictWorkspaceAuth(s.action))
 	api.DELETE("/:workspaceId/:name", auth.WithStrictWorkspaceAuth(s.remove))
@@ -73,6 +79,21 @@ func New(ctx context.Context, config types.VMConfig, backend repository.BackendR
 
 var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+func normalizeDiskSize(size string) (string, error) {
+	if size == "" {
+		size = "50GiB"
+	}
+	quantity, err := resource.ParseQuantity(strings.TrimSuffix(size, "B"))
+	if err != nil {
+		return "", fmt.Errorf("invalid disk size %q", size)
+	}
+	bytes, exact := quantity.AsInt64()
+	if !exact || bytes < 1<<30 {
+		return "", fmt.Errorf("disk size must be an integer number of bytes, at least 1 GiB")
+	}
+	return strconv.FormatInt(bytes, 10), nil
+}
 
 func validate(spec *types.VMSpec) error {
 	if spec.CPU == 0 {
@@ -90,18 +111,52 @@ func validate(spec *types.VMSpec) error {
 	if spec.DiskSize == "" {
 		spec.DiskSize = "50GiB"
 	}
-	// The qcow driver takes integer bytes or Kubernetes units (Gi, not GiB).
-	quantity, err := resource.ParseQuantity(strings.TrimSuffix(spec.DiskSize, "B"))
+	var err error
+	spec.DiskSize, err = normalizeDiskSize(spec.DiskSize)
 	if err != nil {
-		return fmt.Errorf("invalid disk size %q", spec.DiskSize)
+		return err
 	}
-	bytes, exact := quantity.AsInt64()
-	if !exact || bytes < 1<<30 {
-		return fmt.Errorf("disk size must be an integer number of bytes, at least 1 GiB")
-	}
-	spec.DiskSize = strconv.FormatInt(bytes, 10)
-	if spec.CPU < 100 || spec.Memory < 256 || spec.IdleTimeout < 0 {
+	if spec.CPU < 100 || spec.Memory < 256 || spec.IdleTimeout < 0 || spec.IdleTimeout > 365*24*60*60 {
 		return fmt.Errorf("CPU must be at least 0.1, memory at least 256 MiB, and idle timeout nonnegative")
+	}
+	if spec.BlockNetwork && len(spec.AllowList) > 0 {
+		return fmt.Errorf("block_network and allow_list cannot both be set")
+	}
+	if spec.IdleAction != "" && spec.IdleAction != "stop" && spec.IdleAction != "pause" {
+		return fmt.Errorf("idle_action must be stop or pause")
+	}
+	if err := common.ValidateAllowList(spec.AllowList); err != nil {
+		return err
+	}
+	seenMounts := map[string]bool{"/": true}
+	seenDisks := map[string]bool{}
+	for _, disk := range spec.Disks {
+		if disk == nil || !validName.MatchString(disk.Name) || strings.HasPrefix(disk.Name, "vm-") || seenDisks[disk.Name] {
+			return fmt.Errorf("additional disks require unique names; the vm- prefix is reserved for VM roots")
+		}
+		if disk.Driver != "" && disk.Driver != "qcow" {
+			return fmt.Errorf("microVM disks require the qcow driver")
+		}
+		if disk.Filesystem != "" && disk.Filesystem != "ext4" {
+			return fmt.Errorf("microVM disks require ext4")
+		}
+		disk.Driver, disk.Filesystem = "qcow", "ext4"
+		disk.Size, err = normalizeDiskSize(disk.Size)
+		if err != nil {
+			return err
+		}
+		if err := validateMountPath(disk.MountPath, seenMounts); err != nil {
+			return err
+		}
+		seenDisks[disk.Name] = true
+	}
+	for _, volume := range spec.Volumes {
+		if err := abstractions.ValidateVolume(volume); err != nil {
+			return err
+		}
+		if err := validateMountPath(volume.MountPath, seenMounts); err != nil {
+			return err
+		}
 	}
 	if spec.ImageID == "" {
 		return fmt.Errorf("image_id is required; the image must contain systemd and the Beam VM services")
@@ -150,6 +205,24 @@ func validate(spec *types.VMSpec) error {
 			return fmt.Errorf("invalid private port %d", port)
 		}
 	}
+	for _, port := range spec.ProtectedPorts {
+		if port == 2222 || !slices.Contains(spec.Ports, port) {
+			return fmt.Errorf("protected port %d must be published", port)
+		}
+	}
+	return nil
+}
+
+func validateMountPath(mount string, seen map[string]bool) error {
+	if !path.IsAbs(mount) || path.Clean(mount) != mount || seen[mount] {
+		return fmt.Errorf("VM mount paths must be unique absolute paths outside the root")
+	}
+	for _, reserved := range []string{"/dev", "/proc", "/sys", "/run", "/.beam"} {
+		if mount == reserved || strings.HasPrefix(mount, reserved+"/") {
+			return fmt.Errorf("reserved VM mount path %q", mount)
+		}
+	}
+	seen[mount] = true
 	return nil
 }
 
@@ -172,6 +245,10 @@ func requestContext(c echo.Context) (context.Context, *auth.AuthInfo) {
 }
 
 func apiError(err error) error {
+	var httpErr *echo.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return echo.NewHTTPError(404, "VM not found")
 	}
@@ -212,6 +289,7 @@ func (s *Service) urls(v *types.VM) {
 func (s *Service) response(v *types.VM) types.VM {
 	copy := *v
 	copy.Spec.Env = nil
+	copy.CreationDigest = ""
 	s.urls(&copy)
 	return copy
 }
@@ -245,8 +323,25 @@ func (s *Service) list(c echo.Context) error {
 		return apiError(err)
 	}
 	result := []types.VM{}
+	var metadata map[string]string
+	if filter := c.QueryParam("metadata"); filter != "" {
+		if err := json.Unmarshal([]byte(filter), &metadata); err != nil {
+			return echo.NewHTTPError(400, "metadata filter must be a JSON object of strings")
+		}
+	}
 	for _, v := range vms {
 		if v.DesiredState == "deleted" && c.QueryParam("all") != "true" {
+			continue
+		}
+		if status := c.QueryParam("status"); status != "" && v.Status != status {
+			continue
+		}
+		match := true
+		for key, value := range metadata {
+			actual, exists := v.Metadata[key]
+			match = match && exists && actual == value
+		}
+		if !match {
 			continue
 		}
 		result = append(result, s.response(v))
@@ -267,10 +362,12 @@ func (s *Service) get(c echo.Context) error {
 }
 
 type createRequest struct {
-	Name     string          `json:"name"`
-	Spec     json.RawMessage `json:"spec"`
-	Template string          `json:"template,omitempty"`
-	Snapshot string          `json:"snapshot,omitempty"`
+	Name      string            `json:"name"`
+	Spec      json.RawMessage   `json:"spec"`
+	Template  string            `json:"template,omitempty"`
+	Snapshot  string            `json:"snapshot,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	RequestID string            `json:"request_id,omitempty"`
 }
 
 func (s *Service) create(c echo.Context) error {
@@ -279,7 +376,19 @@ func (s *Service) create(c echo.Context) error {
 	if err := decode(c, &req); err != nil {
 		return err
 	}
-	if req.Name == "" {
+	if req.RequestID != "" {
+		parsed, err := uuid.Parse(req.RequestID)
+		if err != nil {
+			return echo.NewHTTPError(400, "request_id must be a UUID")
+		}
+		req.RequestID = parsed.String()
+	}
+	if err := validateMetadata(req.Metadata); err != nil {
+		return apiError(err)
+	}
+	if req.Name == "" && req.RequestID != "" {
+		req.Name = "vm-" + req.RequestID[:8]
+	} else if req.Name == "" {
 		req.Name = "vm-" + uuid.NewString()[:8]
 	}
 	if !validName.MatchString(req.Name) {
@@ -335,7 +444,7 @@ func (s *Service) create(c echo.Context) error {
 	if err := validate(&spec); err != nil {
 		return apiError(err)
 	}
-	v, err := s.createVM(ctx, info, req.Name, spec)
+	v, err := s.createVMWithRequest(ctx, info, req.Name, spec, req.Metadata, req.RequestID)
 	if err != nil {
 		return apiError(err)
 	}
@@ -343,17 +452,45 @@ func (s *Service) create(c echo.Context) error {
 }
 
 func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec) (*types.VM, error) {
+	return s.createVMWithRequest(ctx, info, name, spec, nil, "")
+}
+
+func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string) (*types.VM, error) {
 	if spec.Pool == "" {
 		spec.Pool = s.defaultPool
 	}
 	now := time.Now().UTC()
 	id := uuid.NewString()
-	v := &types.VM{ID: id, WorkspaceID: info.Workspace.Id, WorkspaceExternalID: info.Workspace.ExternalId, TokenID: info.Token.ExternalId, Name: name, Handle: name + "-" + strings.ReplaceAll(uuid.NewString(), "-", ""), Spec: spec, DesiredState: "running", Status: "starting", CreatedAt: now, UpdatedAt: now, LastActiveAt: now}
+	if requestID != "" {
+		id = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("beam-vm:%d:%s", info.Workspace.Id, requestID))).String()
+	}
+	creation, _ := json.Marshal(struct {
+		Name     string
+		Spec     types.VMSpec
+		Metadata map[string]string
+	}{name, spec, metadata})
+	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
+	v := &types.VM{ID: id, WorkspaceID: info.Workspace.Id, WorkspaceExternalID: info.Workspace.ExternalId, TokenID: info.Token.ExternalId, Name: name, Metadata: metadata, CreationDigest: digest, TrafficAccessToken: strings.ReplaceAll(uuid.NewString(), "-", ""), Handle: name + "-" + strings.ReplaceAll(uuid.NewString(), "-", ""), Spec: spec, DesiredState: "running", Status: "starting", CreatedAt: now, UpdatedAt: now, LastActiveAt: now}
 	unlock, err := s.repo.LockVM(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	if requestID != "" {
+		existing, err := s.repo.GetVM(ctx, info.Workspace.Id, id)
+		if err == nil {
+			if existing.CreationDigest != digest {
+				return nil, echo.NewHTTPError(409, "request_id was already used with different VM settings")
+			}
+			if existing.DesiredState == "deleted" {
+				return nil, echo.NewHTTPError(410, "the VM for this request_id was removed")
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
 	// Hold the lifecycle lock before publishing the row to the reconciler.
 	if err := s.repo.CreateVM(ctx, v); err != nil {
 		return nil, err
@@ -371,6 +508,9 @@ type actionRequest struct {
 	Port         uint32 `json:"port,omitempty"`
 	SSHPublicKey string `json:"ssh_public_key,omitempty"`
 	Description  string `json:"description,omitempty"`
+	Protected    *bool  `json:"protected,omitempty"`
+	TTL          int64  `json:"ttl,omitempty"`
+	Cold         bool   `json:"cold,omitempty"`
 }
 
 func (s *Service) action(c echo.Context) error {
@@ -387,26 +527,30 @@ func (s *Service) action(c echo.Context) error {
 	if v.DesiredState == "deleted" {
 		return echo.NewHTTPError(404, "VM removed")
 	}
-	v.TokenID = info.Token.ExternalId
 	switch c.Param("action") {
 	case "start", "resume":
-		// Finish an interrupted stop before creating a replacement runtime.
-		if v.DesiredState == "stopped" && (v.ContainerID != "" || v.StopSnapshotID != "") {
-			if err := s.stop(ctx, v, false); err != nil {
-				return apiError(err)
+		if req.Cold {
+			// Finish terminal checkpoint finalization before abandoning RAM.
+			if v.DesiredState == "paused" && v.MemoryCheckpointID != "" {
+				if err := s.stop(ctx, v, false); err != nil {
+					return apiError(err)
+				}
+			}
+			v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
+			if v.DesiredState == "paused" {
+				v.DesiredState = "stopped"
 			}
 		}
-		v.DesiredState = "running"
-		v.LaunchAttempts = 0
-		v.Error = ""
-		if err := s.repo.TouchVM(ctx, v.ID); err != nil {
-			return apiError(err)
+		err = s.activate(ctx, info, v)
+	case "pause":
+		err = s.pause(ctx, v)
+	case "wake":
+		if !v.Spec.AutoResume && v.DesiredState != "running" {
+			return echo.NewHTTPError(409, "VM is stopped; call start() or enable auto_resume")
 		}
-		if err := s.repo.SaveVM(ctx, v); err != nil {
-			return apiError(err)
-		}
-		err = s.start(ctx, info, v)
+		err = s.activate(ctx, info, v)
 	case "stop":
+		v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 		v.DesiredState = "stopped"
 		if !req.NoSnapshot && v.StopSnapshotID == "" && v.ContainerID != "" {
 			v.StopSnapshotID = uuid.NewString()
@@ -466,12 +610,41 @@ func (s *Service) action(c echo.Context) error {
 				ports = append(ports, req.Port)
 			}
 			v.Spec.Ports = ports
+			if c.Param("action") == "unexpose" {
+				v.Spec.ProtectedPorts = slices.DeleteFunc(slices.Clone(v.Spec.ProtectedPorts), func(port uint32) bool { return port == req.Port })
+			} else if req.Protected != nil {
+				v.Spec.ProtectedPorts = slices.DeleteFunc(slices.Clone(v.Spec.ProtectedPorts), func(port uint32) bool { return port == req.Port })
+				if *req.Protected {
+					v.Spec.ProtectedPorts = append(v.Spec.ProtectedPorts, req.Port)
+					if v.TrafficAccessToken == "" {
+						v.TrafficAccessToken = strings.ReplaceAll(uuid.NewString(), "-", "")
+					}
+				}
+			}
 		}
 		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return apiError(err)
 		}
 	case "touch":
 		if err := s.repo.TouchVM(ctx, v.ID); err != nil {
+			return apiError(err)
+		}
+	case "access-session":
+		if !slices.Contains(v.Spec.ProtectedPorts, req.Port) {
+			return echo.NewHTTPError(400, "access sessions require a protected published port")
+		}
+		if req.TTL == 0 {
+			req.TTL = 600
+		}
+		if req.TTL < 1 || req.TTL > 3600 {
+			return echo.NewHTTPError(400, "session ttl must be 1–3600 seconds")
+		}
+		s.urls(v)
+		expires := time.Now().Add(time.Duration(req.TTL) * time.Second).Unix()
+		return c.JSON(200, map[string]any{"url": v.URLs[req.Port] + "?" + sessionParameter + "=" + accessSession(v, req.Port, expires), "expires_at": expires})
+	case "rotate-access-token":
+		v.TrafficAccessToken = strings.ReplaceAll(uuid.NewString(), "-", "")
+		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return apiError(err)
 		}
 	default:
@@ -492,6 +665,7 @@ func (s *Service) remove(c echo.Context) error {
 	}
 	defer unlock()
 	v.DesiredState = "deleted"
+	v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return apiError(err)
 	}
@@ -581,7 +755,18 @@ func (s *Service) proxy(c echo.Context) error {
 	if token == nil || !token.Active || token.DisabledByClusterAdmin {
 		return echo.NewHTTPError(403, "VM access is revoked")
 	}
-	release, err := s.keepActive(ctx, v.ID)
+	if handled, err := acceptBrowserSession(c, v, uint32(port)); handled || err != nil {
+		return err
+	}
+	validSession := browserSession(c, v, uint32(port))
+	if slices.Contains(v.Spec.ProtectedPorts, uint32(port)) {
+		provided := c.Request().Header.Get("X-Beam-VM-Token")
+		if !validSession && (v.TrafficAccessToken == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(v.TrafficAccessToken)) != 1) {
+			return echo.NewHTTPError(403, "VM traffic token required")
+		}
+	}
+	c.Request().Header.Del("X-Beam-VM-Token")
+	release, err := s.keepActive(ctx, v.ID, v.Spec.IdleTimeout)
 	if err != nil {
 		return echo.NewHTTPError(503, "VM activity unavailable")
 	}
@@ -589,7 +774,13 @@ func (s *Service) proxy(c echo.Context) error {
 	// Capability URLs contain only the VM's random identity, never a workspace
 	// token. Authenticated management and raw SSH retain workspace auth.
 	if v.Status != "running" {
-		return echo.NewHTTPError(503, "VM is not running; start it to use this URL")
+		if !v.Spec.AutoResume {
+			return echo.NewHTTPError(503, "VM is not running; start it to use this URL")
+		}
+		v, err = s.wakeForAccess(ctx, v, uint32(port))
+		if err != nil {
+			return err
+		}
 	}
 	// Hold activity while a desktop/terminal websocket is open, even when the
 	// user is watching without sending input.
@@ -618,7 +809,7 @@ func (s *Service) tunnel(c echo.Context) error {
 	if !slices.Contains(v.Spec.RuntimePorts(), uint32(port)) {
 		return echo.NewHTTPError(400, "expose the port before opening a tunnel")
 	}
-	release, err := s.keepActive(ctx, v.ID)
+	release, err := s.keepActive(ctx, v.ID, v.Spec.IdleTimeout)
 	if err != nil {
 		return apiError(err)
 	}
@@ -626,13 +817,17 @@ func (s *Service) tunnel(c echo.Context) error {
 	return s.runtime.TunnelVM(c, v.ContainerID, uint32(port))
 }
 
-func (s *Service) keepActive(ctx context.Context, id string) (func(), error) {
+func (s *Service) keepActive(ctx context.Context, id string, idleTimeout int64) (func(), error) {
 	if err := s.repo.TouchVM(ctx, id); err != nil {
 		return nil, err
 	}
 	done := make(chan struct{})
 	go func() {
-		tick := time.NewTicker(15 * time.Second)
+		interval := 15 * time.Second
+		if idleTimeout > 0 {
+			interval = min(interval, time.Duration(idleTimeout)*time.Second/3)
+		}
+		tick := time.NewTicker(interval)
 		defer tick.Stop()
 		for {
 			select {

@@ -26,6 +26,10 @@ from beta9.mcp import tools as mcp_tools
 
 @pytest.fixture
 def settings(monkeypatch, tmp_path):
+    # Helper tests can import an installed Beam wrapper into this interpreter.
+    # These fixtures explicitly exercise the Beta9 CLI configuration.
+    monkeypatch.delenv("BEAM_TOKEN", raising=False)
+    monkeypatch.delitem(sys.modules, "beam", raising=False)
     config_path = tmp_path / "config.ini"
     monkeypatch.setenv("CONFIG_PATH", str(config_path))
     monkeypatch.delenv("BETA9_TOKEN", raising=False)
