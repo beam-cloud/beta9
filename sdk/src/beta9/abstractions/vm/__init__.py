@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 
-from ..channel import Channel, GatewayHTTPError, ServiceClient
-from ..clients.image import ImageServiceStub
-from ..clients.pod import PodSandboxConnectRequest, PodServiceStub
-from ..config import ConfigContext, get_config_context, get_settings
-from ..exceptions import ImageBuildError, SandboxConnectionError
-from .image import Image
-from .sandbox import SandboxInstance
+from ...channel import Channel, GatewayHTTPError, ServiceClient
+from ...clients.image import ImageServiceStub
+from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
+from ...config import ConfigContext, get_config_context, get_settings
+from ...exceptions import ImageBuildError, SandboxConnectionError
+from ..image import Image
+from ..sandbox import SandboxInstance
 
 
 def identity() -> Path:
@@ -52,13 +52,20 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
         return prepared
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for path in sorted(Path(__file__).with_name("vm_image").iterdir()):
-            if path.is_file():
-                data = path.read_bytes()
-                entry = tarfile.TarInfo(path.name)
-                entry.size = len(data)
-                entry.mode = 0o644 if path.suffix == ".service" else 0o755
-                archive.addfile(entry, io.BytesIO(data))
+        for name in (
+            "beam-desktop.service",
+            "beam-terminal.service",
+            "boot",
+            "desktop",
+            "install",
+            "xstartup",
+        ):
+            path = Path(__file__).with_name(name)
+            data = path.read_bytes()
+            entry = tarfile.TarInfo(name)
+            entry.size = len(data)
+            entry.mode = 0o644 if path.suffix == ".service" else 0o755
+            archive.addfile(entry, io.BytesIO(data))
     data = base64.b64encode(gzip.compress(buffer.getvalue(), mtime=0)).decode("ascii")
     prepared.add_commands(
         [
