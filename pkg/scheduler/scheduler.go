@@ -612,7 +612,8 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 		// No worker can assign a STOPPING request. Record a terminal result
 		// before removing state, just as worker finalization does, so durable
 		// resources can distinguish cancellation from a missing Redis record.
-		if err := s.containerRepo.SetContainerExitCode(stopArgs.ContainerId, int(types.ContainerExitCodeUser)); err != nil {
+		code, _ := stopArgs.Reason.ExitCode()
+		if err := s.containerRepo.SetContainerExitCode(stopArgs.ContainerId, int(code)); err != nil {
 			return err
 		}
 		if err := s.containerRepo.DeleteContainerState(stopArgs.ContainerId); err != nil {

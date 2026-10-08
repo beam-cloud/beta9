@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 import io
+import threading
 
 import pytest
 from click.testing import CliRunner
@@ -224,3 +225,39 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch):
         vm_cli._run_tunnel("local", "/tmp/config.ini", "Beam", "resource", 2222)
     assert output.getvalue() == b"SSH-2.0-OpenSSH\r\n"
     assert diagnostics.getvalue() == "connection diagnostic\n"
+
+
+def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
+    class Socket:
+        def __init__(self):
+            self.eof = threading.Event()
+            self.closed = False
+            self.sent = []
+            self.reads = 0
+
+        def settimeout(self, value):
+            pass
+
+        def send_binary(self, data):
+            self.sent.append(data)
+
+        def send(self, message):
+            assert message == "EOF"
+            self.eof.set()
+
+        def recv(self):
+            assert self.eof.wait(5), "stdin EOF was never sent"
+            assert not self.closed, "tunnel closed before reading the response"
+            self.reads += 1
+            return b"complete response" if self.reads == 1 else b""
+
+        def close(self):
+            self.closed = True
+
+    remote = Socket()
+    monkeypatch.setattr(vm_cli, "_socket", lambda *args: remote)
+    output = io.BytesIO()
+    vm_cli._bridge(None, 2222, io.BytesIO(b"request"), output)
+    assert remote.sent == [b"request"]
+    assert output.getvalue() == b"complete response"
+    assert remote.closed

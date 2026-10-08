@@ -1108,6 +1108,24 @@ type StopContainerArgs struct {
 	Reason      StopContainerReason `json:"reason"`
 }
 
+// ExitCode returns the terminal code shared by assigned and pending stops.
+func (r StopContainerReason) ExitCode() (ContainerExitCode, bool) {
+	switch r {
+	case StopContainerReasonScheduler:
+		return ContainerExitCodeScheduler, true
+	case StopContainerReasonTtl:
+		return ContainerExitCodeTtl, true
+	case StopContainerReasonUser:
+		return ContainerExitCodeUser, true
+	case StopContainerReasonAdmin, StopContainerReasonInsufficientCredits:
+		return ContainerExitCodeAdmin, true
+	case StopContainerReasonEvicted:
+		return ContainerExitCodeEvicted, true
+	default:
+		return ContainerExitCodeSuccess, false
+	}
+}
+
 func (a StopContainerArgs) ToMap() (map[string]any, error) {
 	data, err := json.Marshal(a)
 	if err != nil {

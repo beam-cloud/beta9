@@ -1135,6 +1135,28 @@ func TestStopRecoversInterruptedUnassignedCancellation(t *testing.T) {
 	assert.Equal(t, int(types.ContainerExitCodeUser), code)
 }
 
+func TestUnassignedStopPreservesReason(t *testing.T) {
+	for reason, want := range map[types.StopContainerReason]types.ContainerExitCode{
+		types.StopContainerReasonScheduler:           types.ContainerExitCodeScheduler,
+		types.StopContainerReasonUser:                types.ContainerExitCodeUser,
+		types.StopContainerReasonTtl:                 types.ContainerExitCodeTtl,
+		types.StopContainerReasonAdmin:               types.ContainerExitCodeAdmin,
+		types.StopContainerReasonInsufficientCredits: types.ContainerExitCodeAdmin,
+		types.StopContainerReasonEvicted:             types.ContainerExitCodeEvicted,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			s, err := NewSchedulerForTest()
+			assert.NoError(t, err)
+			id := "cancelled-" + string(reason)
+			assert.NoError(t, s.containerRepo.SetContainerState(id, &types.ContainerState{ContainerId: id, Status: types.ContainerStatusPending}))
+			assert.NoError(t, s.Stop(&types.StopContainerArgs{ContainerId: id, Reason: reason}))
+			code, err := s.containerRepo.GetContainerExitCode(id)
+			assert.NoError(t, err)
+			assert.Equal(t, int(want), code)
+		})
+	}
+}
+
 func TestStopPreservesAssignedContainerForWorkerCancellation(t *testing.T) {
 	for _, status := range []types.ContainerStatus{
 		types.ContainerStatusPending,

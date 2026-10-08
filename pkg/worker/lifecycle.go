@@ -2095,17 +2095,8 @@ func (s *Worker) deleteRuntimeContainer(containerId string) error {
 }
 
 func normalizeContainerExitCode(exitCode int, stopReason types.StopContainerReason, oomKilled bool) int {
-	switch stopReason {
-	case types.StopContainerReasonScheduler:
-		return int(types.ContainerExitCodeScheduler)
-	case types.StopContainerReasonTtl:
-		return int(types.ContainerExitCodeTtl)
-	case types.StopContainerReasonUser:
-		return int(types.ContainerExitCodeUser)
-	case types.StopContainerReasonAdmin, types.StopContainerReasonInsufficientCredits:
-		return int(types.ContainerExitCodeAdmin)
-	case types.StopContainerReasonEvicted:
-		return int(types.ContainerExitCodeEvicted)
+	if code, ok := stopReason.ExitCode(); ok {
+		return int(code)
 	}
 
 	if oomKilled {
