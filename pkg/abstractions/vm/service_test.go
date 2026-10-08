@@ -265,6 +265,35 @@ func TestStopPreservesFinalRootWithoutVisibleSnapshot(t *testing.T) {
 	require.Empty(t, s.repo.(*vmStore).artifacts)
 }
 
+func TestCreateUsesConfiguredDefaultPoolAndPreservesExplicitPool(t *testing.T) {
+	for _, test := range []struct {
+		defaultPool, requestedPool, wantPool string
+	}{
+		{"vms", "", "vms"},
+		{"vms", "my-vms", "my-vms"},
+		{"", "", ""},
+	} {
+		t.Run(test.defaultPool+"/"+test.requestedPool, func(t *testing.T) {
+			s, base, info, _, gateway := fixture()
+			s.defaultPool = test.defaultPool
+			spec := base.Spec
+			spec.Pool = test.requestedPool
+			ctx := auth.ContextWithAuthInfo(context.Background(), info)
+			v, err := s.createVM(ctx, info, "new-vm", spec)
+			require.NoError(t, err)
+			require.Equal(t, test.wantPool, v.Spec.Pool)
+			saved, err := s.repo.GetVM(ctx, info.Workspace.Id, v.ID)
+			require.NoError(t, err)
+			require.Equal(t, test.wantPool, saved.Spec.Pool)
+			if test.wantPool == "" {
+				require.Nil(t, gateway.stub.Pool)
+			} else {
+				require.Equal(t, test.wantPool, gateway.stub.Pool.Name)
+			}
+		})
+	}
+}
+
 func TestStopSnapshotFailureKeepsRuntimeAlive(t *testing.T) {
 	s, v, info, runtime, gateway := fixture()
 	runtime.snapshotError = true

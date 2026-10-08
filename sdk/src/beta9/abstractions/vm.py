@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 
-from ..channel import Channel, ServiceClient
+from ..channel import Channel, GatewayHTTPError, ServiceClient
 from ..clients.image import ImageServiceStub
 from ..clients.pod import PodSandboxConnectRequest, PodServiceStub
 from ..config import ConfigContext, get_config_context, get_settings
@@ -150,6 +150,20 @@ class VM:
         return self
 
     def create(self, wait: bool = True) -> "VM":
+        # Verify the selected gateway before building an image or creating keys.
+        # Older gateways return a generic route 404, which otherwise appears
+        # after a successful (and potentially expensive) image build.
+        try:
+            self._api("GET")
+        except GatewayHTTPError as exc:
+            if exc.status != 404:
+                raise
+            raise GatewayHTTPError(
+                404,
+                f"Persistent VMs are unavailable at {self._service.http.base_url} "
+                "(HTTP 404). Deploy a gateway with persistent VM support, "
+                "or select the correct --context.",
+            ) from exc
         spec = dict(self._spec)
         if spec.get("ssh", True):
             spec["ssh_public_key"] = identity().with_suffix(".pub").read_text().strip()

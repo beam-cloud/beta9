@@ -104,9 +104,16 @@ Configure a wildcard domain pointing to the gateway, with wildcard TLS:
 ```yaml
 abstractions:
   vm:
+    defaultPool: vms
     domain: vm.example.com
     baseURL: https://gateway.example.com
 ```
+
+`defaultPool` selects the CPU microVM pool for `vm new` without `--pool`.
+An explicit `--pool` overrides it. Leave it unset to use the scheduler's
+eligible microVM pools. The selected pool must use `containerRuntime: microvm`.
+Creation checks the VM API before building an image and reports the selected
+HTTP gateway when it is unavailable.
 
 URLs use `<name>-<random handle>-<port>.vm.example.com`, with a separate random
 128-bit handle independent of the resource UUID. They remain fixed across cold

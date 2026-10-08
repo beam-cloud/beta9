@@ -37,13 +37,14 @@ type Gateway interface {
 }
 
 type Service struct {
-	repo       repository.VMRepository
-	backend    repository.BackendRepository
-	containers repository.ContainerRepository
-	runtime    Runtime
-	gateway    Gateway
-	domain     string
-	baseURL    string
+	repo        repository.VMRepository
+	backend     repository.BackendRepository
+	containers  repository.ContainerRepository
+	runtime     Runtime
+	gateway     Gateway
+	domain      string
+	baseURL     string
+	defaultPool string
 }
 
 func New(ctx context.Context, config types.VMConfig, backend repository.BackendRepository, containers repository.ContainerRepository, runtime Runtime, gateway Gateway, api *echo.Group, server *echo.Echo) error {
@@ -51,7 +52,7 @@ func New(ctx context.Context, config types.VMConfig, backend repository.BackendR
 	if !ok {
 		return fmt.Errorf("backend does not support persistent VMs")
 	}
-	s := &Service{repo: repo, backend: backend, containers: containers, runtime: runtime, gateway: gateway, domain: config.Domain, baseURL: strings.TrimSuffix(config.BaseURL, "/")}
+	s := &Service{repo: repo, backend: backend, containers: containers, runtime: runtime, gateway: gateway, domain: config.Domain, baseURL: strings.TrimSuffix(config.BaseURL, "/"), defaultPool: config.DefaultPool}
 	api.GET("/:workspaceId", auth.WithStrictWorkspaceAuth(s.list))
 	api.POST("/:workspaceId", auth.WithStrictWorkspaceAuth(s.create))
 	api.GET("/:workspaceId/artifacts/:kind", auth.WithStrictWorkspaceAuth(s.artifacts))
@@ -313,6 +314,9 @@ func (s *Service) create(c echo.Context) error {
 }
 
 func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec) (*types.VM, error) {
+	if spec.Pool == "" {
+		spec.Pool = s.defaultPool
+	}
 	now := time.Now().UTC()
 	id := uuid.NewString()
 	v := &types.VM{ID: id, WorkspaceID: info.Workspace.Id, WorkspaceExternalID: info.Workspace.ExternalId, TokenID: info.Token.ExternalId, Name: name, Handle: name + "-" + strings.ReplaceAll(uuid.NewString(), "-", ""), Spec: spec, DesiredState: "running", Status: "starting", CreatedAt: now, UpdatedAt: now, LastActiveAt: now}

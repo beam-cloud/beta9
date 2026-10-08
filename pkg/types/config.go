@@ -1296,6 +1296,8 @@ type AbstractionConfig struct {
 }
 
 type VMConfig struct {
+	// Optional pool used when a VM is created without an explicit selector.
+	DefaultPool string `key:"defaultPool" json:"default_pool"`
 	// Wildcard DNS/ingress pointing at the gateway; <handle>-<port>.<domain>.
 	Domain  string `key:"domain" json:"domain"`
 	BaseURL string `key:"baseURL" json:"base_url"`

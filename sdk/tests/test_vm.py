@@ -44,6 +44,28 @@ def test_vm_rejects_gpu_build_and_does_not_modify_explicit_image():
     assert prepared._explicit_image_id == "already-built"
 
 
+@pytest.mark.parametrize("status", [401, 404, 503])
+def test_create_checks_api_before_keys_or_image_build(monkeypatch, status):
+    selected = service()
+    selected.http.base_url = "https://app.stage.beam.cloud"
+    selected.http.json.side_effect = GatewayHTTPError(status, "Not Found")
+    build = MagicMock()
+    key = MagicMock()
+    monkeypatch.setattr("beta9.abstractions.vm.prepare_image", build)
+    monkeypatch.setattr("beta9.abstractions.vm.identity", key)
+    with pytest.raises(GatewayHTTPError) as error:
+        VM(_service=selected).create()
+    assert error.value.status == status
+    if status == 404:
+        assert "Persistent VMs are unavailable at https://app.stage.beam.cloud" in str(error.value)
+        assert "--context" in str(error.value)
+    else:
+        assert str(error.value) == "Not Found"
+    build.assert_not_called()
+    key.assert_not_called()
+    selected.http.json.assert_called_once_with("GET", "/api/v1/vm/{ws}", timeout=240)
+
+
 def test_template_preserves_unspecified_fields_and_channel():
     selected = service()
     selected.http.json.return_value = {"id": "resource", "name": "dev", "status": "starting"}
@@ -155,7 +177,8 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     assert options["env"] == {"VALUE": "a=b c"}
     assert options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
-    fake.create.assert_called_once_with()
+    fake.create.assert_called_once_with(wait=False)
+    fake.wait.assert_called_once_with()
 
 
 def test_exec_preserves_child_flags_that_match_cli_options(cli_service, monkeypatch):

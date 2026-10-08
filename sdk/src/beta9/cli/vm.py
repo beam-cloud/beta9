@@ -175,7 +175,10 @@ def new(
         _service=service,
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
-        vm.create()
+        vm.create(wait=False)
+        terminal.header("Starting VM", vm.name)
+        terminal.detail("Waiting for systemd and VM services...")
+        vm.wait()
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
