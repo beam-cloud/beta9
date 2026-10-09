@@ -232,6 +232,58 @@ func TestSuccessfulImageLoadActivatesExecutingLocality(t *testing.T) {
 	require.Contains(t, reporter.recent, reporterStubKey{workspaceID: "workspace", stubID: "stub"})
 }
 
+func TestPrefetchedImageGuardWaitsWithoutActivatingUnclaimedStub(t *testing.T) {
+	ctx := context.Background()
+	started, release := make(chan struct{}), make(chan struct{})
+	var startOnce sync.Once
+	var mu sync.Mutex
+	checks := 0
+	reporter := newTestReporter(&fakeEventRepo{})
+	reporter.metadata = cache.NewMockCacheMetadataStore()
+	client := &ImageClient{
+		cacheClient: &cache.Client{}, contentReporter: reporter,
+		registry: &registry.ImageRegistry{}, mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		archiveContentMetadata: func(context.Context, string) (*cache.FSMetadata, error) {
+			mu.Lock()
+			checks++
+			mu.Unlock()
+			startOnce.Do(func() { close(started) })
+			<-release
+			return nil, nil
+		},
+	}
+	client.mountedFuseServers.Set("image", nil)
+	request := &types.ContainerRequest{ImageId: "image", StubId: "stub", WorkspaceId: "workspace"}
+	prepared := client.prepareCachedImageAccess(ctx, request)
+	<-started
+	reporter.mu.Lock()
+	require.Empty(t, reporter.recent, "owner reads must not activate an unclaimed stub")
+	require.Empty(t, reporter.reported)
+	reporter.mu.Unlock()
+	returned := make(chan error, 1)
+	go func() { _, err := client.PullLazy(prepared, request); returned <- err }()
+	select {
+	case err := <-returned:
+		t.Fatalf("image activation did not wait for its owner checks: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-returned)
+	mu.Lock()
+	require.Equal(t, 2, checks, "the accepted load must reuse both prefetched archive checks")
+	mu.Unlock()
+	reporter.mu.Lock()
+	require.Contains(t, reporter.recent, reporterStubKey{workspaceID: "workspace", stubID: "stub"})
+	reporter.mu.Unlock()
+
+	// A context belongs to its exact image and stub, not another launch.
+	client.recordSuccessfulImageLoad(prepared, &types.ContainerRequest{ImageId: "image", StubId: "other"}, nil)
+	mu.Lock()
+	require.Equal(t, 4, checks)
+	mu.Unlock()
+	require.Equal(t, ctx, client.prepareCachedImageAccess(ctx, &types.ContainerRequest{ImageId: "unmounted"}))
+}
+
 func TestMountedImageFirstActivationChecksAllCachedContentOwners(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

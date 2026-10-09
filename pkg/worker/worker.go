@@ -986,6 +986,8 @@ func (s *Worker) runContainerRequestWithRunner(
 	}()
 	s.cancelContainerIfAlreadyStopping(cancelStartup, containerId)
 
+	ctx = s.imageClient.prepareCachedImageAccess(ctx, request)
+
 	// Only read the root head before accepting delivery. Its host lock stays
 	// held until the accepted claim and runtime validation permit attachment.
 	rootPreparation := s.startQcowRootPreparation(ctx, request)

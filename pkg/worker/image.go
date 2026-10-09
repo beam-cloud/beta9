@@ -342,6 +342,31 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	return time.Since(startTime), nil
 }
 
+// imageAccessGuardKey scopes a prefetched guard to one immutable launch. Only
+// cache owner reads run before the claim; reconciliation still starts after a
+// successfully loaded, accepted request.
+type imageAccessGuardKey struct{ imageID, stubID string }
+
+func (c *ImageClient) prepareCachedImageAccess(ctx context.Context, request *types.ContainerRequest) context.Context {
+	if c == nil || c.contentReporter == nil || request == nil || !c.mountedImageReady(request.ImageId) {
+		return ctx
+	}
+	key := imageAccessGuardKey{request.ImageId, cacheRequestStubID(request)}
+	meta := c.cachedImageMetadata(key.imageID)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.guardImageActivation(ctx, key, meta)
+	}()
+	return context.WithValue(ctx, key, (<-chan struct{})(done))
+}
+
+func (c *ImageClient) guardImageActivation(ctx context.Context, key imageAccessGuardKey, meta *clipCommon.ClipArchiveMetadata) {
+	c.contentReporter.guardFirstActivation(key.stubID, func() {
+		c.guardCachedImageContent(ctx, key.imageID, meta)
+	})
+}
+
 // recordSuccessfulImageLoad activates reconciliation only in a locality that
 // actually served the workload. A failed failover attempt must not retain or
 // proactively materialize that stub's content.
@@ -352,9 +377,12 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 	if meta == nil {
 		meta = c.cachedImageMetadata(request.ImageId)
 	}
-	c.contentReporter.guardFirstActivation(cacheRequestStubID(request), func() {
-		c.guardCachedImageContent(ctx, request.ImageId, meta)
-	})
+	key := imageAccessGuardKey{request.ImageId, cacheRequestStubID(request)}
+	if done, ok := ctx.Value(key).(<-chan struct{}); ok {
+		<-done
+	} else {
+		c.guardImageActivation(ctx, key, meta)
+	}
 	if _, isOCI := ociStorageInfo(meta); isOCI {
 		stubID := cacheRequestStubID(request)
 		if c.contentReporter.shouldGenerateRequiredContent(stubID) {
