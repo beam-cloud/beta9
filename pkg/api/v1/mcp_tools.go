@@ -72,7 +72,8 @@ func (g *MCPGroup) exactDeploymentURL(d *types.DeploymentWithRelated, port int) 
 
 func (g *MCPGroup) deploymentView(d *types.DeploymentWithRelated) map[string]any {
 	exactURL, _ := g.exactDeploymentURL(d, 0)
-	return map[string]any{
+	latestURL := g.deploymentURL(d)
+	view := map[string]any{
 		"name":          d.Name,
 		"deployment_id": d.ExternalId,
 		"app_id":        d.App.ExternalId,
@@ -82,8 +83,30 @@ func (g *MCPGroup) deploymentView(d *types.DeploymentWithRelated) map[string]any
 		"active":        d.Active,
 		"created_at":    d.CreatedAt.Time,
 		"url":           exactURL,
-		"latest_url":    g.deploymentURL(d),
+		"latest_url":    latestURL,
 	}
+	if urls := portURLs(d, latestURL); urls != nil {
+		view["port_urls"] = urls
+	}
+	return view
+}
+
+// portURLs fills in a multi-port container's URL template, whose port is a
+// placeholder, for each of its ports.
+func portURLs(d *types.DeploymentWithRelated, template string) map[string]string {
+	if !strings.Contains(template, common.PortPlaceholder) {
+		return nil
+	}
+	cfg, err := d.Stub.UnmarshalConfig()
+	if err != nil {
+		return nil
+	}
+	urls := make(map[string]string, len(cfg.Ports))
+	for _, port := range cfg.Ports {
+		key := strconv.Itoa(int(port))
+		urls[key] = strings.ReplaceAll(template, common.PortPlaceholder, key)
+	}
+	return urls
 }
 
 func (g *MCPGroup) deployments(ctx context.Context, ws *types.Workspace, filter types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
@@ -160,11 +183,11 @@ func (g *MCPGroup) catalog() []mcpTool {
 		},
 		{
 			Name:        "wait_deployment",
-			Description: "Verify HTTP application readiness on the exact revision using a safe health path. TCP and portless workloads require their protocol-specific check.",
+			Description: "Verify HTTP application readiness on the exact revision. A container is ready once / answers below 500 (a 404 still means its server is up); a path you name, and an endpoint's default /health, must answer 2xx. On timeout, health is the app's last answer. TCP and portless workloads require their protocol-specific check.",
 			Schema: schema(props{
 				"name":          str("App name"),
 				"deployment_id": str("Exact revision"),
-				"path":          str("Safe GET health endpoint; default /health"),
+				"path":          str("Safe GET path that answers 2xx once ready; default / for a container, /health otherwise"),
 				"port":          integer(0),
 				"wait_seconds":  integer(20),
 			}),
@@ -173,13 +196,13 @@ func (g *MCPGroup) catalog() []mcpTool {
 		{Name: "whoami", Description: "Workspace id, name and gateway URL for this token. Where prepaid credit applies, `credit.ok` says whether work can run and `credit.message` where to add credits when it cannot.", Schema: schema(props{}), Run: g.whoami},
 		{
 			Name:        "list_apps",
-			Description: "Apps in the workspace with their newest active deployment and URL.",
+			Description: "Apps in the workspace with their newest active deployment. Its url is that version's own; latest_url follows each new deployment, so share that one. A multi-port container has a latest URL per port in port_urls.",
 			Schema:      schema(props{"name": str("Filter by name"), "cursor": str("Next page cursor"), "limit": integer(50)}),
 			Run:         g.listApps,
 		},
 		{
 			Name:        "get_app",
-			Description: "One app: its config (resources, scaling, env, secret bindings, ports, disks) and URL.",
+			Description: "One app: its config (resources, scaling, env, secret bindings, ports, disks) and URLs: url is the version's own, latest_url (or port_urls per port) follows new deployments.",
 			Schema:      target,
 			Run:         g.getApp,
 		},
@@ -1401,26 +1424,81 @@ func (g *MCPGroup) waitDeployment(ctx context.Context, a *auth.AuthInfo, args to
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	call := toolArgs{
-		"deployment_id": d.ExternalId,
-		"method":        "GET",
-		"path":          cmp.Or(args.str("path"), "/health"),
-		"port":          args["port"],
-	}
+	path, serving := readinessCheck(d.Stub.Type.Kind(), args.str("path"))
+	call := toolArgs{"deployment_id": d.ExternalId, "method": "GET", "path": path, "port": args["port"]}
 
+	// The answer to report is the last the app gave: a request the deadline cut
+	// short says nothing about it.
+	var last map[string]any
 	for {
 		response, err := g.invoke(ctx, a, call)
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			return nil, err
 		}
-		value := response.(map[string]any)
-		if status, ok := value["status"].(int); ok && status >= 200 && status < 300 && value["is_error"] == false {
-			return map[string]any{"deployment_id": d.ExternalId, "ready": true, "health": value}, nil
+		if value, ok := response.(map[string]any); ok && value["code"] != "CANCELLED" {
+			last = value
+			if serving(value) {
+				return map[string]any{"deployment_id": d.ExternalId, "ready": true, "path": path, "health": clipAnswer(value)}, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return map[string]any{"deployment_id": d.ExternalId, "ready": false, "health": value, "is_error": true, "code": "NOT_READY"}, nil
+			result := map[string]any{"deployment_id": d.ExternalId, "ready": false, "path": path, "is_error": true, "code": "NOT_READY"}
+			if last != nil {
+				result["health"] = clipAnswer(last)
+			} else {
+				result["error"] = fmt.Sprintf("%s gave no answer within %s; the app may still be starting, so read its logs", path, wait)
+			}
+			return result, nil
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// healthAnswerMax bounds the body of a readiness answer that wait_deployment returns.
+const healthAnswerMax = 1000
+
+// readinessCheck is the path wait_deployment requests and whether an answer means
+// the app serves. A container's own server answers /, and any answer short of a
+// server error shows it is up, except a 429, which the gateway's queue sends. A
+// named path, and the /health a runner serves, must answer 2xx.
+func readinessCheck(kind string, path string) (string, func(map[string]any) bool) {
+	if path == "" && kind == types.StubTypePod {
+		return "/", func(answer map[string]any) bool {
+			status, _ := answer["status"].(int)
+			return status >= 200 && status < 500 && status != http.StatusTooManyRequests
+		}
+	}
+	return cmp.Or(path, "/health"), func(answer map[string]any) bool {
+		status, _ := answer["status"].(int)
+		return status >= 200 && status < 300 && (answer["is_error"] == false || answer["code"] == "RESPONSE_TOO_LARGE")
+	}
+}
+
+// clipAnswer is a readiness answer without its bulk: no headers, no binary body,
+// and a text body cut to healthAnswerMax.
+func clipAnswer(answer map[string]any) map[string]any {
+	out := make(map[string]any, len(answer))
+	for key, value := range answer {
+		switch key {
+		case "headers", "body_base64":
+		case "body":
+			text, ok := value.(string)
+			if !ok {
+				raw, _ := json.Marshal(value)
+				if len(raw) <= healthAnswerMax {
+					out[key] = value
+					continue
+				}
+				text = string(raw)
+			}
+			if len(text) > healthAnswerMax {
+				text = strings.ToValidUTF8(text[:healthAnswerMax], "") + "..."
+			}
+			out[key] = text
+		default:
+			out[key] = value
+		}
+	}
+	return out
 }
