@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -230,6 +231,100 @@ func TestSuccessfulImageLoadActivatesExecutingLocality(t *testing.T) {
 	reporter.mu.Lock()
 	defer reporter.mu.Unlock()
 	require.Contains(t, reporter.recent, reporterStubKey{workspaceID: "workspace", stubID: "stub"})
+}
+
+func TestPrefetchedImageGuardWaitsWithoutActivatingUnclaimedStub(t *testing.T) {
+	ctx := context.Background()
+	started, release := make(chan struct{}), make(chan struct{})
+	var startOnce sync.Once
+	var mu sync.Mutex
+	checks := 0
+	reporter := newTestReporter(&fakeEventRepo{})
+	reporter.metadata = cache.NewMockCacheMetadataStore()
+	client := &ImageClient{
+		cacheClient: &cache.Client{}, contentReporter: reporter,
+		registry: &registry.ImageRegistry{}, mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		archiveContentMetadata: func(context.Context, string) (*cache.FSMetadata, error) {
+			mu.Lock()
+			checks++
+			mu.Unlock()
+			startOnce.Do(func() { close(started) })
+			<-release
+			return nil, nil
+		},
+	}
+	client.mountedFuseServers.Set("image", nil)
+	request := &types.ContainerRequest{ImageId: "image", StubId: "stub", WorkspaceId: "workspace"}
+	prepared := client.prepareCachedImageAccess(ctx, request)
+	<-started
+	reporter.mu.Lock()
+	require.Empty(t, reporter.recent, "owner reads must not activate an unclaimed stub")
+	require.Empty(t, reporter.reported)
+	reporter.mu.Unlock()
+	returned := make(chan error, 1)
+	go func() { _, err := client.PullLazy(prepared, request); returned <- err }()
+	select {
+	case err := <-returned:
+		t.Fatalf("image activation did not wait for its owner checks: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-returned)
+	mu.Lock()
+	require.Equal(t, 2, checks, "the accepted load must reuse both prefetched archive checks")
+	mu.Unlock()
+	reporter.mu.Lock()
+	require.Contains(t, reporter.recent, reporterStubKey{workspaceID: "workspace", stubID: "stub"})
+	reporter.mu.Unlock()
+
+	// A context belongs to its exact image and stub, not another launch.
+	client.recordSuccessfulImageLoad(prepared, &types.ContainerRequest{ImageId: "image", StubId: "other"}, nil)
+	mu.Lock()
+	require.Equal(t, 4, checks)
+	mu.Unlock()
+	require.Equal(t, ctx, client.prepareCachedImageAccess(ctx, &types.ContainerRequest{ImageId: "unmounted"}))
+}
+
+func TestImageAccessPrefetchUsesUnMountedVerifiedArchives(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		t.Run(fmt.Sprint(compact), func(t *testing.T) {
+			ctx := context.Background()
+			reporter := newTestReporter(&fakeEventRepo{})
+			var checks atomic.Int64
+			client := &ImageClient{
+				imageCachePath: t.TempDir(), cacheClient: &cache.Client{}, contentReporter: reporter,
+				registry:               &registry.ImageRegistry{ImageFileExtension: registry.RemoteImageFileExtension},
+				archiveContentMetadata: func(context.Context, string) (*cache.FSMetadata, error) { checks.Add(1); return nil, nil },
+			}
+			request := &types.ContainerRequest{ImageId: "image", StubId: "stub", WorkspaceId: "workspace"}
+			path := client.localArchivePath("image")
+			archiver := clip.NewClipArchiver()
+			require.NoError(t, archiver.CreateRemoteArchive(testClipV2Metadata().StorageInfo, testClipV1Metadata(t), path))
+			if compact {
+				require.NoError(t, archiver.TranscodeMetadata(path, path+".batch", nil))
+				require.NoError(t, os.Remove(path))
+			} else {
+				require.NoError(t, os.WriteFile(path+".batch", []byte("truncated metadata"), 0600))
+			}
+			prepared := client.prepareCachedImageAccess(ctx, request)
+			done, ok := prepared.Value(imageAccessGuardKey{"image", "stub"}).(<-chan struct{})
+			require.True(t, ok, "verified metadata must be usable before its FUSE mount")
+			<-done
+			require.Positive(t, checks.Load())
+			reporter.mu.Lock()
+			require.Empty(t, reporter.recent, "preparation must not activate a rejected delivery")
+			require.Empty(t, reporter.reported)
+			reporter.mu.Unlock()
+			before := checks.Load()
+			reporter.shouldGenerateRequiredContent("stub") // Isolate reuse from asynchronous content generation.
+			client.recordSuccessfulImageLoad(prepared, request, nil)
+			require.Equal(t, before, checks.Load(), "an accepted load must reuse its completed owner checks")
+			require.False(t, client.mountedImageReady("image"), "preparation must not mount an unclaimed image")
+		})
+	}
+	client := &ImageClient{imageCachePath: t.TempDir(), registry: &registry.ImageRegistry{}, contentReporter: newTestReporter(&fakeEventRepo{})}
+	ctx := context.Background()
+	require.Equal(t, ctx, client.prepareCachedImageAccess(ctx, &types.ContainerRequest{ImageId: "missing"}))
 }
 
 func TestMountedImageFirstActivationChecksAllCachedContentOwners(t *testing.T) {

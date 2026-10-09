@@ -3,7 +3,9 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -13,6 +15,97 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 )
+
+type parallelStubIdentityRepo struct {
+	repository.BackendRepository
+	started    chan string
+	release    chan struct{}
+	failObject bool
+}
+
+func (r *parallelStubIdentityRepo) wait(ctx context.Context, record string) error {
+	r.started <- record
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *parallelStubIdentityRepo) GetOrCreateApp(ctx context.Context, ws uint, name string) (*types.App, error) {
+	if err := r.wait(ctx, "app"); err != nil {
+		return nil, err
+	}
+	return &types.App{WorkspaceId: ws, Name: name}, nil
+}
+
+func (r *parallelStubIdentityRepo) GetOrCreateDisk(ctx context.Context, _ uint, disk *types.Disk) (*types.Disk, error) {
+	return disk, r.wait(ctx, "disk")
+}
+
+func (r *parallelStubIdentityRepo) GetObjectByExternalId(ctx context.Context, id string, ws uint) (types.Object, error) {
+	if r.failObject {
+		r.started <- "object"
+		return types.Object{}, errors.New("object unavailable")
+	}
+	return types.Object{ExternalId: id, WorkspaceId: ws}, r.wait(ctx, "object")
+}
+
+func TestStubIdentityPreparesIndependentRecordsAndCancelsFailures(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "overlap", true: "cancel"}[fail], func(t *testing.T) {
+			repo := &parallelStubIdentityRepo{started: make(chan string, 3), release: make(chan struct{}), failObject: fail}
+			service := &GatewayService{backendRepo: repo}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				app, object, err := service.prepareStubIdentity(ctx, &types.Workspace{Id: 7}, &pb.GetOrCreateStubRequest{Name: "dev", ObjectId: "object"}, []*pb.DurableDisk{{Name: "root"}})
+				if err == nil && (app.Name != "dev" || app.WorkspaceId != 7 || object.WorkspaceId != 7 || object.ExternalId != "object") {
+					err = errors.New("wrong stub identity or ownership")
+				}
+				result <- err
+			}()
+			started := map[string]bool{}
+			for len(started) < 3 {
+				select {
+				case record := <-repo.started:
+					started[record] = true
+				case <-ctx.Done():
+					t.Fatal("stub identity did not prepare all independent records")
+				}
+			}
+			if !fail {
+				select {
+				case <-result:
+					t.Fatal("stub identity returned before prerequisites completed")
+				default:
+				}
+				close(repo.release)
+			}
+			select {
+			case err := <-result:
+				if fail {
+					require.ErrorContains(t, err, "prepare stub object")
+				} else {
+					require.NoError(t, err)
+				}
+			case <-ctx.Done():
+				t.Fatal("stub identity did not finish or cancel its prerequisites")
+			}
+		})
+	}
+}
+
+func TestVMStubRequiresCPUMicroVMAndAllowsPersistence(t *testing.T) {
+	in := &pb.GetOrCreateStubRequest{StubType: types.StubTypeVM}
+	require.Equal(t, "VMs require use_vm", validateUseVM(in, nil))
+	in.UseVm = true
+	require.Empty(t, validateUseVM(in, nil))
+	require.NotEmpty(t, validateUseVM(in, []types.GpuType{"A10G"}))
+	require.Equal(t, -1, normalizeKeepWarmSeconds(-1, types.StubType(types.StubTypeVM)))
+}
 
 type checkpointVolumeBackendRepo struct {
 	repository.BackendRepository

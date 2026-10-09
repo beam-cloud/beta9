@@ -342,6 +342,54 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	return time.Since(startTime), nil
 }
 
+// imageAccessGuardKey scopes a prefetched guard to one immutable launch. Only
+// cache owner reads run before the claim; reconciliation still starts after a
+// successfully loaded, accepted request.
+type imageAccessGuardKey struct{ imageID, stubID string }
+
+func (c *ImageClient) prepareCachedImageAccess(ctx context.Context, request *types.ContainerRequest) context.Context {
+	if c == nil || c.contentReporter == nil || request == nil {
+		return ctx
+	}
+	key := imageAccessGuardKey{request.ImageId, cacheRequestStubID(request)}
+	meta := c.cachedImageMetadata(key.imageID)
+	if !c.mountedImageReady(key.imageID) {
+		// A worker restart preserves verified archives but drops its mounts.
+		// Parse only files already on disk; pulling and mounting still require
+		// an accepted claim. Invalid or absent metadata uses the normal path.
+		if c.registry == nil || c.imageCachePath == "" {
+			return ctx
+		}
+		meta = nil
+		archivePath := c.localArchivePath(key.imageID)
+		if c.usesRemoteMetadataArchive() && c.cacheClient != nil {
+			meta, _ = c.processPulledArchive(archivePath+".batch", key.imageID)
+			if _, ok := ociStorageInfo(meta); !ok {
+				meta = nil
+			}
+		}
+		if meta == nil {
+			var err error
+			meta, err = c.processPulledArchive(archivePath, key.imageID)
+			if err != nil {
+				return ctx
+			}
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.guardImageActivation(ctx, key, meta)
+	}()
+	return context.WithValue(ctx, key, (<-chan struct{})(done))
+}
+
+func (c *ImageClient) guardImageActivation(ctx context.Context, key imageAccessGuardKey, meta *clipCommon.ClipArchiveMetadata) {
+	c.contentReporter.guardFirstActivation(key.stubID, func() {
+		c.guardCachedImageContent(ctx, key.imageID, meta)
+	})
+}
+
 // recordSuccessfulImageLoad activates reconciliation only in a locality that
 // actually served the workload. A failed failover attempt must not retain or
 // proactively materialize that stub's content.
@@ -352,9 +400,12 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 	if meta == nil {
 		meta = c.cachedImageMetadata(request.ImageId)
 	}
-	c.contentReporter.guardFirstActivation(cacheRequestStubID(request), func() {
-		c.guardCachedImageContent(ctx, request.ImageId, meta)
-	})
+	key := imageAccessGuardKey{request.ImageId, cacheRequestStubID(request)}
+	if done, ok := ctx.Value(key).(<-chan struct{}); ok {
+		<-done
+	} else {
+		c.guardImageActivation(ctx, key, meta)
+	}
 	if _, isOCI := ociStorageInfo(meta); isOCI {
 		stubID := cacheRequestStubID(request)
 		if c.contentReporter.shouldGenerateRequiredContent(stubID) {
@@ -2190,15 +2241,7 @@ func hasOCILayers(imageMetadata common.ImageMetadata) bool {
 
 // getBuildRegistry returns the registry to use for final and intermediate build images
 func (c *ImageClient) getBuildRegistry() string {
-	if c.config.ImageService.BuildRegistry != "" {
-		return c.config.ImageService.BuildRegistry
-	}
-
-	if c.config.ImageService.Runner.BaseImageRegistry != "" {
-		return c.config.ImageService.Runner.BaseImageRegistry
-	}
-
-	return "localhost"
+	return c.config.ImageService.EffectiveBuildRegistry()
 }
 
 // setupBuildahDirs creates paths for buildah operations. The graphroot is where

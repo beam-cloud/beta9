@@ -65,6 +65,16 @@ type containerResourceUpdater interface {
 	UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error
 }
 
+func (s *Worker) containerTerminationGrace(request *types.ContainerRequest) time.Duration {
+	grace := time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second
+	if request.IsPersistentVM() {
+		// Standard systemd units default to 90 seconds to stop. Allow
+		// those units and then the guest agent to finish disk writes.
+		return max(grace, 120*time.Second)
+	}
+	return grace
+}
+
 func containerResolvConfSource(useHostResolvConf bool, hostPath string) string {
 	if useHostResolvConf && resolvConfHasUsableNameserver(hostPath) {
 		return hostPath
@@ -224,7 +234,7 @@ func (s *Worker) stopObservedContainer(containerID string, request *types.Contai
 			log.Warn().Str("container_id", containerID).Err(stopSignalErr).Msg("failed to send graceful stop for persisted STOPPING container")
 		}
 
-		grace := time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second
+		grace := s.containerTerminationGrace(request)
 		if remaining := grace - time.Since(graceStarted); remaining > 0 {
 			timer := time.NewTimer(remaining)
 			defer timer.Stop()
@@ -259,7 +269,7 @@ func (s *Worker) stopObservedContainer(containerID string, request *types.Contai
 			return
 		}
 		if needsStop {
-			log.Info().Str("container_id", containerID).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
+			log.Info().Str("container_id", containerID).Int64("grace_period_seconds", int64(grace/time.Second)).Msg("container still running after stop event")
 			_, stopReason := instance.lifecycleState()
 			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
 				ID:          types.ContainerEventWorkerStoppingGraceKill,
@@ -268,7 +278,7 @@ func (s *Worker) stopObservedContainer(containerID string, request *types.Contai
 				Source:      source.String(),
 				Message:     types.EventMessageStoppingGraceKill.String(),
 				Attrs: map[string]string{
-					types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
+					types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", int64(grace/time.Second)),
 				},
 			})
 		}
@@ -387,7 +397,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	hasDurableDisk := request != nil && request.HasDurableDiskMount()
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
-		if request != nil && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if request != nil && request.Stub.Type.IsSandbox() {
 			instance.signalProcessManagerReadiness(false)
 		}
 		s.containerInstances.Set(containerId, instance)
@@ -463,7 +473,7 @@ func (s *Worker) finishContainerShutdown(containerId string, request *types.Cont
 			if s.ctx != nil {
 				workerDone = s.ctx.Done()
 			}
-			timer := time.NewTimer(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
+			timer := time.NewTimer(s.containerTerminationGrace(request))
 			select {
 			case <-timer.C:
 			case <-workerDone:
@@ -635,6 +645,10 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 		return err
 	}
 
+	if request.IsPersistentVM() && request.Checkpoint != nil && !s.canRestoreCheckpoint(request, s.runtime) {
+		return fmt.Errorf("persistent VM memory restore is unavailable on this worker; cold boot requires an explicit VM start with cold=true")
+	}
+
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		instance = &ContainerInstance{
@@ -644,17 +658,29 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 			Request:   request,
 			Runtime:   s.runtime,
 		}
-		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if request.Stub.Type.IsSandbox() {
 			instance.initializeProcessManagerReadiness()
 		}
 	}
 	s.containerInstances.Set(containerId, instance)
+
+	if rootPreparation, _ := ctx.Value(qcowRootPreparationKey{}).(*qcowRootPreparation); rootPreparation != nil {
+		rootPreparation.allowAttach()
+	}
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	startup, startupCtx := errgroup.WithContext(ctx)
 	addressRequest := request.Clone()
 	startup.Go(func() error { return s.setWorkerAddress(startupCtx, addressRequest) })
+	// A sandbox's namespace and IP assignment depend only on the request.
+	// Overlap their gateway round trip with image and durable-root preparation.
+	var networkSpec *specs.Spec
+	if request.Stub.Type.IsSandbox() {
+		networkSpec = &specs.Spec{Linux: &specs.Linux{}}
+		networkRequest := request.Clone()
+		startup.Go(func() error { return s.prepareContainerNetwork(startupCtx, networkRequest, networkSpec) })
+	}
 
 	logChan := make(chan common.LogRecord, 1000)
 	outputLogger := slog.New(common.NewChannelHandler(logChan))
@@ -781,6 +807,7 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	}()
 
 	opts := &ContainerOptions{
+		NetworkPrepared:             networkSpec != nil,
 		BundlePath:                  bundlePath,
 		HostBindPort:                bindPorts[0],
 		BindPorts:                   bindPorts,
@@ -798,6 +825,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSpecFromRequest, phaseStart, err == nil, nil)
 	if err != nil {
 		return err
+	}
+	if networkSpec != nil {
+		spec.Linux.Namespaces = append(spec.Linux.Namespaces, networkSpec.Linux.Namespaces...)
 	}
 	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
 
@@ -926,6 +956,9 @@ func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.Conta
 }
 
 func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerRequest) error {
+	if instance, ok := s.containerInstances.Get(request.ContainerId); ok && instance.workerAddressPublished.Load() {
+		return nil
+	}
 	hostname := joinHostPort(s.podAddr, s.containerServer.port)
 	startedAt := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(ctx, &pb.SetWorkerAddressRequest{
@@ -935,6 +968,17 @@ func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerR
 	}))
 	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(startedAt), request, nil)
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetWorkerAddress, startedAt, err == nil, nil)
+	return err
+}
+
+func (s *Worker) prepareContainerNetwork(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec) error {
+	startedAt := time.Now()
+	err := s.containerNetworkManager.Setup(request.ContainerId, spec, request)
+	metrics.RecordWorkerStartupPhase("network_setup", time.Since(startedAt), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, startedAt, err == nil, nil)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to setup container network")
+	}
 	return err
 }
 
@@ -1015,7 +1059,7 @@ func (s *Worker) buildOrPullBaseImageWithMetrics(ctx context.Context, request *t
 }
 
 func portsForRequest(request *types.ContainerRequest) []uint32 {
-	if request.Checkpoint != nil {
+	if request.Checkpoint != nil && !request.IsPersistentVM() {
 		return request.Checkpoint.ExposedPorts
 	}
 
@@ -1025,7 +1069,7 @@ func portsForRequest(request *types.ContainerRequest) []uint32 {
 	}
 
 	ports = append(ports, uint32(types.WorkerShellPort))
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		ports = append(ports, uint32(types.WorkerSandboxProcessManagerPort))
 	}
 
@@ -1038,11 +1082,11 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 	}
 
 	exposePorts := make(map[uint32]struct{}, len(request.Ports))
-	if request.Checkpoint != nil {
+	if request.Checkpoint != nil && !request.IsPersistentVM() {
 		for _, port := range request.Ports {
 			exposePorts[port] = struct{}{}
 		}
-	} else if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	} else if request.Stub.Type.IsSandbox() {
 		for _, port := range requestedPorts {
 			exposePorts[port] = struct{}{}
 		}
@@ -1403,7 +1447,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	// Add back tmpfs pod/sandbox mounts from initial spec if they exist
-	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
+	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.IsSandbox()) && options.InitialSpec != nil {
 		for _, m := range options.InitialSpec.Mounts {
 			if m.Source == "none" && m.Type == "tmpfs" {
 				m.Options = append([]string(nil), m.Options...)
@@ -1769,16 +1813,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	var gpuManager GPUManager
 	var assignedDevices []int
 	var deviceSetup errgroup.Group
-	deviceSetup.Go(func() error {
-		phaseStart := time.Now()
-		err := s.containerNetworkManager.Setup(containerId, spec, request)
-		metrics.RecordWorkerStartupPhase("network_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, phaseStart, err == nil, nil)
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
-		}
-		return err
-	})
+	if !opts.NetworkPrepared {
+		deviceSetup.Go(func() error { return s.prepareContainerNetwork(ctx, request, spec) })
+	}
 	if assignGPU {
 		gpuManager = s.gpuManagerForRequest(request)
 		deviceSetup.Go(func() error {
@@ -1835,42 +1872,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
 
-	// Modify sandbox entry point to point to process manager binary
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
-		instance, exists := s.containerInstances.Get(containerId)
-		if !exists {
-			log.Error().Str("container_id", containerId).Msg("instance not found")
-			return
-		}
-
-		instance.SandboxProcessManager = nil
-		s.containerInstances.Set(containerId, instance)
-
-		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "bind",
-			Source:      types.WorkerSandboxProcessManagerWorkerPath,
-			Destination: types.WorkerSandboxProcessManagerContainerPath,
-			Options: []string{
-				"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev",
-			},
-		})
-	}
-
-	// Add Docker capabilities if enabled for sandbox containers.
-	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox {
-		runtime.AddDockerInDockerCapabilities(spec)
-		if s.runtimeOwnsBlockRoot() {
-			if spec.Annotations == nil {
-				spec.Annotations = make(map[string]string)
-			}
-			spec.Annotations[runtime.MicroVMDockerAnnotation] = "true"
-		}
-		log.Info().Str("container_id", containerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
+	if err := s.prepareSandboxProcess(request, spec); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to prepare sandbox process")
+		return
 	}
 
 	if s.gpuVirtualizedForRequest(request) {
@@ -1949,7 +1953,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
-		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if request.Stub.Type.IsSandbox() {
 			instance, exists := s.containerInstances.Get(containerId)
 			if !exists {
 				return
@@ -2068,17 +2072,8 @@ func (s *Worker) deleteRuntimeContainer(containerId string) error {
 }
 
 func normalizeContainerExitCode(exitCode int, stopReason types.StopContainerReason, oomKilled bool) int {
-	switch stopReason {
-	case types.StopContainerReasonScheduler:
-		return int(types.ContainerExitCodeScheduler)
-	case types.StopContainerReasonTtl:
-		return int(types.ContainerExitCodeTtl)
-	case types.StopContainerReasonUser:
-		return int(types.ContainerExitCodeUser)
-	case types.StopContainerReasonAdmin, types.StopContainerReasonInsufficientCredits:
-		return int(types.ContainerExitCodeAdmin)
-	case types.StopContainerReasonEvicted:
-		return int(types.ContainerExitCodeEvicted)
+	if code, ok := stopReason.ExitCode(); ok {
+		return int(code)
 	}
 
 	if oomKilled {
@@ -2178,6 +2173,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		}
 	}
 	fallbackFromCheckpoint := func(reseedCheckpointFilesystem bool) error {
+		if request.IsPersistentVM() && request.Checkpoint != nil {
+			return fmt.Errorf("persistent VM memory restore failed; cold boot requires an explicit VM start with cold=true")
+		}
 		restoringCheckpoint = false
 		if reseedCheckpointFilesystem && originalConfigErr != nil {
 			return fmt.Errorf("checkpoint mount validation fallback requires the original container config: %w", originalConfigErr)
@@ -2666,7 +2664,7 @@ func (s *Worker) deferCPUThrottle(request *types.ContainerRequest, cpu *specs.Li
 		return false
 	}
 	kind := request.Stub.Type.Kind()
-	if kind != types.StubTypeSandbox && kind != types.StubTypeFunction {
+	if !request.Stub.Type.IsSandbox() && kind != types.StubTypeFunction {
 		return false
 	}
 	if kind == types.StubTypeFunction && !s.agentWorker() {

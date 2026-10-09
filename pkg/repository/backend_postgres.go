@@ -427,13 +427,13 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
 }
 
 func (r *PostgresBackendRepository) GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error) {
-	query := `SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id FROM token WHERE external_id = $1 AND workspace_id = $2;`
+	query := `SELECT id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id FROM token WHERE external_id = $1 AND workspace_id = $2;`
 
 	var token types.Token
 	err := r.client.GetContext(ctx, &token, query, extTokenId, workspaceId)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, errors.New("token not found")
+			return nil, fmt.Errorf("token not found: %w", err)
 		}
 		return nil, err
 	}
@@ -2964,6 +2964,8 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 	return checkpoint, err
 }
 
+const unreferencedVMCheckpoint = `AND NOT EXISTS (SELECT 1 FROM persistent_vm v WHERE v.data->>'memory_checkpoint_id' = c.checkpoint_id AND v.data->>'desired_state' <> 'deleted')`
+
 func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error) {
 	query := `
 		SELECT ` + checkpointColumns + `
@@ -2972,7 +2974,8 @@ func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, ac
 		INNER JOIN workspace w ON s.workspace_id = w.id
 		WHERE c.deleted_at IS NULL
 		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]))
-		  AND s.updated_at < $2;`
+		  AND s.updated_at < $2
+		  ` + unreferencedVMCheckpoint + `;`
 
 	rows, err := r.client.QueryxContext(ctx, query, pq.Array(activeRecentStubKeys), stubLastUsedBefore)
 	if err != nil {
@@ -2991,6 +2994,7 @@ func (r *PostgresBackendRepository) PruneCheckpoints(ctx context.Context, checkp
 		SET deleted_at = CURRENT_TIMESTAMP
 		WHERE c.deleted_at IS NULL
 		  AND c.checkpoint_id = ANY($1::text[])
+		  ` + unreferencedVMCheckpoint + `
 		RETURNING ` + checkpointColumns + `;`
 
 	rows, err := r.client.QueryxContext(ctx, query, pq.Array(checkpointIds))

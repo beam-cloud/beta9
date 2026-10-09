@@ -1234,6 +1234,10 @@ message AgentBootstrapConfig {
   uint32 image_clip_version = 12;
   bool image_local_cache_enabled = 13;
   AgentTelemetryConfig telemetry = 14;
+  // Non-secret publishing settings; registry credentials remain gateway-brokered.
+  string image_build_registry = 15;
+  string image_build_repository_name = 16;
+  bool image_build_registry_insecure = 17;
 }
 
 message AgentTelemetryConfig {

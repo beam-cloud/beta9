@@ -466,6 +466,7 @@ func TestPodRunnableStubOnlyAllowsPodAndSandboxKinds(t *testing.T) {
 		{name: "pod run", stubType: types.StubType(types.StubTypePodRun), want: true},
 		{name: "pod deployment", stubType: types.StubType(types.StubTypePodDeployment), want: true},
 		{name: "sandbox", stubType: types.StubType(types.StubTypeSandbox), want: true},
+		{name: "vm", stubType: types.StubType(types.StubTypeVM), want: true},
 		{name: "endpoint", stubType: types.StubType(types.StubTypeEndpoint), want: false},
 		{name: "asgi deployment", stubType: types.StubType(types.StubTypeASGIDeployment), want: false},
 		{name: "function", stubType: types.StubType(types.StubTypeFunction), want: false},

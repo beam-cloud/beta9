@@ -1456,15 +1456,30 @@ func TestNvidiaProcDriverStateAllowsHealthyDetectedGPUs(t *testing.T) {
 	}
 }
 
+func TestWorkerConfigPreservesPublishingDefaultsFromOlderGateways(t *testing.T) {
+	data, err := json.Marshal(newAgentWorkerConfig(bootstrapConfig{}, testWorkerSlot()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"buildRegistry", "buildRepositoryName", "buildRegistryInsecure"} {
+		if strings.Contains(string(data), `"`+key+`"`) {
+			t.Fatalf("unavailable bootstrap setting %q overrides embedded defaults", key)
+		}
+	}
+}
+
 func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	slot := testWorkerSlot()
 
 	if err := writeWorkerConfig(path, bootstrapConfig{
-		ImageRegistryStore:     reg.S3ImageRegistryStore,
-		ImageClipVersion:       1,
-		ImageLocalCacheEnabled: true,
-		WorkspaceID:            "workspace-one",
+		ImageRegistryStore:         reg.S3ImageRegistryStore,
+		ImageClipVersion:           1,
+		ImageLocalCacheEnabled:     true,
+		ImageBuildRegistry:         "build.example.com",
+		ImageBuildRepositoryName:   "stage/vm-images",
+		ImageBuildRegistryInsecure: false,
+		WorkspaceID:                "workspace-one",
 	}, slot); err != nil {
 		t.Fatal(err)
 	}
@@ -1498,6 +1513,15 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	imageConfig := config["imageService"].(map[string]any)
 	if got := imageConfig["registryStore"]; got != reg.S3ImageRegistryStore {
 		t.Fatalf("image registry store = %v, want %q", got, reg.S3ImageRegistryStore)
+	}
+	if got := imageConfig["buildRegistry"]; got != "build.example.com" {
+		t.Fatalf("image build registry = %v", got)
+	}
+	if got := imageConfig["buildRepositoryName"]; got != "stage/vm-images" {
+		t.Fatalf("image build repository = %v", got)
+	}
+	if got := imageConfig["buildRegistryInsecure"]; got != false {
+		t.Fatalf("image build registry insecure = %v", got)
 	}
 	if got := imageConfig["clipVersion"]; got != float64(1) {
 		t.Fatalf("image clip version = %v, want 1", got)

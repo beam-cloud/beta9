@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# OpenAPI documentation is generated separately with make openapi.
+
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -133,12 +135,10 @@ protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/queue/ --python_betterproto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/volume/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/volume/volume.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/volume/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/volume/volume.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/volume/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/volume/volume.proto
-protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/volume/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/volume/volume.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/disk/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/disk/disk.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/disk/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/disk/disk.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/disk/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/disk/disk.proto
-protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/disk/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/disk/disk.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/taskqueue/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/taskqueue/taskqueue.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/taskqueue/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/taskqueue/taskqueue.proto
@@ -151,13 +151,10 @@ protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/managedendpoint/ --python_b
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/pod/pod.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/pod/pod.proto 
-protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/pod/pod.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/image/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/image/image.proto
-protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/image/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/image/image.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/gateway/gateway.proto
-protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/gateway/gateway.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/pod/pod.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/output/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/output/output.proto

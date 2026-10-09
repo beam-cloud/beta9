@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -49,7 +50,7 @@ func removeOtherManagedWorkerContainers(name string, slot *pb.AgentWorkerSlot) e
 	if slot == nil {
 		return nil
 	}
-	out, err := exec.Command("docker", "ps", "-aq", "--filter", "label="+types.AgentDockerLabelManaged+"=true").CombinedOutput()
+	out, err := dockerControlOutput("ps", "-aq", "--filter", "label="+types.AgentDockerLabelManaged+"=true")
 	if err != nil {
 		return fmt.Errorf("list managed worker containers: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -79,11 +80,11 @@ func RemoveManagedWorkerContainersForMachine(machineID string) error {
 	if machineID == "" {
 		return fmt.Errorf("machine id is required")
 	}
-	out, err := exec.Command(
-		"docker", "ps", "-aq",
+	out, err := dockerControlOutput(
+		"ps", "-aq",
 		"--filter", "label="+types.AgentDockerLabelManaged+"=true",
 		"--filter", "label="+types.AgentDockerLabelMachineID+"="+machineID,
-	).CombinedOutput()
+	)
 	if err != nil {
 		return fmt.Errorf("list managed worker containers for machine %q: %w: %s", machineID, err, strings.TrimSpace(string(out)))
 	}
@@ -148,11 +149,17 @@ func workerImagePullKey(image string) string {
 }
 
 func removeDockerContainer(name string) error {
-	out, err := exec.Command("docker", "rm", "-f", name).CombinedOutput()
+	out, err := dockerControlOutput("rm", "-f", name)
 	if err != nil {
 		return fmt.Errorf("remove worker container %q: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func dockerControlOutput(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 }
 
 func dockerContainerOwnedByAgent(name string, slot *pb.AgentWorkerSlot) (bool, bool, error) {
@@ -169,7 +176,7 @@ func dockerContainerOwnedByAgent(name string, slot *pb.AgentWorkerSlot) (bool, b
 }
 
 func inspectDockerContainer(name string) (*dockerContainerInspect, bool, error) {
-	out, err := exec.Command("docker", "inspect", "--format", "{{json .}}", name).CombinedOutput()
+	out, err := dockerControlOutput("inspect", "--format", "{{json .}}", name)
 	if err != nil {
 		msg := strings.ToLower(string(out) + err.Error())
 		if strings.Contains(msg, "no such object") || strings.Contains(msg, "no such container") {

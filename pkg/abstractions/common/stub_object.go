@@ -52,6 +52,21 @@ func IsEmptyStubObject(object types.Object) bool {
 // object, creating and uploading it if needed. Stubs created without user
 // code (dashboard launches, gateway-orchestrated workloads) point at it.
 func EnsureEmptyStubObject(ctx context.Context, backendRepo repository.BackendRepository, workspace *types.Workspace) (types.Object, error) {
+	object, err := GetOrCreateEmptyStubObject(ctx, backendRepo, workspace)
+	if err != nil {
+		return types.Object{}, err
+	}
+	emptyObject, err := canonicalEmptyStubObject()
+	if err != nil {
+		return types.Object{}, err
+	}
+	return finalizeEmptyStubObject(ctx, workspace, &object, emptyObject.data)
+}
+
+// GetOrCreateEmptyStubObject registers the canonical empty context without
+// uploading it. Sandbox workers recognize its hash and create an empty workspace
+// locally, so launching a sandbox does not depend on object storage.
+func GetOrCreateEmptyStubObject(ctx context.Context, backendRepo repository.BackendRepository, workspace *types.Workspace) (types.Object, error) {
 	emptyObject, err := canonicalEmptyStubObject()
 	if err != nil {
 		return types.Object{}, err
@@ -72,11 +87,11 @@ func EnsureEmptyStubObject(ctx context.Context, backendRepo repository.BackendRe
 			if fetchErr != nil {
 				return types.Object{}, err
 			}
-			return finalizeEmptyStubObject(ctx, workspace, object, data)
+			return *object, nil
 		}
 	}
 
-	return finalizeEmptyStubObject(ctx, workspace, object, data)
+	return *object, nil
 }
 
 // finalizeEmptyStubObject uploads the object's content to workspace storage

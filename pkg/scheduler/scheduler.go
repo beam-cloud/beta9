@@ -608,7 +608,14 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	if err != nil {
 		return err
 	}
-	if stoppedBeforeAssignment {
+	if stoppedBeforeAssignment || (state != nil && state.Status == types.ContainerStatusStopping && state.WorkerId == "" && state.StartedAt == 0) {
+		// No worker can assign a STOPPING request. Record a terminal result
+		// before removing state, just as worker finalization does, so durable
+		// resources can distinguish cancellation from a missing Redis record.
+		code, _ := stopArgs.Reason.ExitCode()
+		if err := s.containerRepo.SetContainerExitCode(stopArgs.ContainerId, int(code)); err != nil {
+			return err
+		}
 		if err := s.containerRepo.DeleteContainerState(stopArgs.ContainerId); err != nil {
 			return err
 		}
@@ -935,8 +942,8 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 // loadBuildRegistryCredentials generates and attaches build registry credentials to a container request.
 // These credentials are used for both build-time push and runtime CLIP layer mounting.
 func (s *Scheduler) loadBuildRegistryCredentials(request *types.ContainerRequest) (schedulerCredentialAttachResult, error) {
-	buildRegistry := s.config.ImageService.BuildRegistry
-	if buildRegistry == "" || isLocalBuildRegistry(buildRegistry) {
+	buildRegistry := s.config.ImageService.EffectiveBuildRegistry()
+	if isLocalBuildRegistry(buildRegistry) {
 		requestLog(log.Debug(), request).
 			Str("build_registry", buildRegistry).
 			Msg("no remote build registry configured, skipping credential generation")
@@ -1268,13 +1275,16 @@ func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName strin
 // keeps use_vm requests off every other runtime, so they fail closed.
 // Checkpoint runtimes are matched separately by runtimeMatchesCheckpoint.
 func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) bool {
+	if request.Stub.Type.Kind() == types.StubTypeVM && !request.UseVM {
+		return false
+	}
 	if request.DockerEnabled && runtimeName == types.ContainerRuntimeRunc.String() {
 		return false
 	}
 	if runtimeName != types.ContainerRuntimeMicroVM.String() {
 		return !request.UseVM
 	}
-	return request.UseVM && request.Stub.Type.Kind() == types.StubTypeSandbox && !request.RequiresGPU()
+	return request.UseVM && request.Stub.Type.IsSandbox() && !request.RequiresGPU()
 }
 
 func checkpointAccelerator(request *types.ContainerRequest) string {

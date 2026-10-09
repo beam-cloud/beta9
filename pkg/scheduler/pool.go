@@ -156,7 +156,7 @@ func workerPodTerminationGracePeriod(workerStopGraceS int64) int64 {
 	}
 
 	// Covers task drain, forced nested-container stop, and FUSE unmounts.
-	grace := workerStopGraceS*2 + 60
+	grace := types.WorkerShutdownGraceSeconds(workerStopGraceS)
 	if grace < minWorkerPodGraceS {
 		return minWorkerPodGraceS
 	}

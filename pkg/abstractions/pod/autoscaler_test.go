@@ -11,6 +11,28 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+func TestPersistentVMBypassesSandboxAutoscaling(t *testing.T) {
+	i := &podInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Stub:       &types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+		StubConfig: &types.StubConfigV1{UseVM: true, KeepWarmSeconds: -1, Env: []string{"BEAM_VM_SYSTEMD=1"}},
+	}}
+	for _, count := range []int{0, 1, 2} {
+		if result := podScaleFunc(i, &podAutoscalerSample{CurrentContainers: count}); result.ResultValid {
+			t.Fatalf("VM autoscaling was enabled with %d runtimes", count)
+		}
+	}
+	if err := i.ensureReadyForRequest(); err != nil {
+		t.Fatal(err)
+	}
+	if i.startContainers(1) == nil || i.stopContainers(1) == nil {
+		t.Fatal("sandbox scaling must never manage VM runtimes")
+	}
+	i.StubConfig.Env = nil
+	if result := podScaleFunc(i, &podAutoscalerSample{CurrentContainers: 1}); !result.ResultValid || result.DesiredContainers != 1 {
+		t.Fatal("ordinary keep-warm microvm sandbox lost autoscaling")
+	}
+}
+
 func TestDesiredPodDeploymentContainersKeepsIdleMinimum(t *testing.T) {
 	config := podDeploymentConfig(2, 4, 1)
 

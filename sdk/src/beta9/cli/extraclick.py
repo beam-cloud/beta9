@@ -63,6 +63,12 @@ class HelpFormatter(click.HelpFormatter):
         super().write_heading(click.style(heading, fg="cyan", bold=True))
 
     def write_dl(self, rows, **kwargs):
+        # Click's default 30-character limit moves longer options onto a
+        # separate line. Keep one aligned description column when it fits.
+        kwargs.setdefault(
+            "col_max",
+            min(max((len(click.unstyle(name)) for name, _ in rows), default=30), self.width - 20),
+        )
         super().write_dl([(click.style(name, bold=True), text) for name, text in rows], **kwargs)
 
 
@@ -394,6 +400,18 @@ class ShlexParser(click.ParamType):
         return shlex.split(value)
 
 
+class MountSpec(click.ParamType):
+    """Shared NAME:/mount syntax for disks and volumes."""
+
+    name = "mount"
+
+    def convert(self, value, param, ctx):
+        parts = str(value).split(":")
+        if len(parts) != 2 or not parts[0] or not parts[1].startswith("/"):
+            self.fail(f"{value!r} is not NAME:/mount", param, ctx)
+        return parts[0], parts[1]
+
+
 class DurableDiskSpec(click.ParamType):
     """NAME:/mount[:SIZE], e.g. data:/app/data:20Gi."""
 
@@ -402,11 +420,12 @@ class DurableDiskSpec(click.ParamType):
 
     def convert(self, value, param, ctx):
         parts = str(value).split(":")
-        if len(parts) not in (2, 3) or not parts[0] or not parts[1].startswith("/"):
+        if len(parts) not in (2, 3):
             self.fail(f"{value!r} is not NAME:/mount[:SIZE]", param, ctx)
+        name, mount = MountSpec().convert(":".join(parts[:2]), param, ctx)
         return DurableDisk(
-            name=parts[0],
-            mount_path=parts[1],
+            name=name,
+            mount_path=mount,
             size=parts[2] if len(parts) == 3 else self.default_size,
         )
 

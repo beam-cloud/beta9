@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from beta9 import auth
+from beta9 import config as config_module
 from beta9.config import ConfigContext, SDKSettings, load_config, set_settings
 from beta9.mcp import server as mcp_server
 from beta9.mcp import tools as mcp_tools
@@ -26,6 +27,11 @@ from beta9.mcp import tools as mcp_tools
 
 @pytest.fixture
 def settings(monkeypatch, tmp_path):
+    # Helper tests can import an installed Beam wrapper into this interpreter.
+    # These fixtures explicitly exercise the Beta9 CLI configuration.
+    previous_settings = config_module._SETTINGS
+    monkeypatch.delenv("BEAM_TOKEN", raising=False)
+    monkeypatch.delitem(sys.modules, "beam", raising=False)
     config_path = tmp_path / "config.ini"
     monkeypatch.setenv("CONFIG_PATH", str(config_path))
     monkeypatch.delenv("BETA9_TOKEN", raising=False)
@@ -37,7 +43,7 @@ def settings(monkeypatch, tmp_path):
     )
     set_settings(s)
     yield s
-    set_settings(None)
+    config_module._SETTINGS = previous_settings
 
 
 def run_proxy(proxy: mcp_server.StdioProxy, *messages):

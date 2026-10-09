@@ -482,7 +482,7 @@ func sanitizeStubWithRelated(stub *types.StubWithRelated) error {
 
 func (a *AppGroup) appURL(stub *types.Stub, config *types.StubConfigV1, deployment *types.Deployment) string {
 	stubWithRelated := &types.StubWithRelated{Stub: *stub}
-	if stub.Type.Kind() == types.StubTypePod || stub.Type.Kind() == types.StubTypeSandbox {
+	if stub.Type.Kind() == types.StubTypePod || stub.Type.IsSandbox() {
 		externalURL := a.config.GatewayService.HTTP.GetExternalURL()
 		urlType := a.config.GatewayService.InvokeURLType
 		if config.TCP {

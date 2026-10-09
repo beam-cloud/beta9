@@ -102,7 +102,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	if cfg.Stub.Type.IsDeployment() {
 		failedContainerThreshold = types.FailedDeploymentContainerThreshold
 	}
-	if cfg.Stub.Type == types.StubType(types.StubTypeSandbox) {
+	if cfg.Stub.Type.IsSandbox() {
 		failedContainerThreshold = 0
 	}
 

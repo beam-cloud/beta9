@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,24 @@ type readyGoProcServer struct {
 	goprocpb.UnimplementedGoProcServer
 }
 
+func TestVMReservationOwnsSandboxReadiness(t *testing.T) {
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{ContainerId: "vm-reservation", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM)}}}
+	require.True(t, worker.reserveContainerInstance(request))
+	instance, ok := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, ok)
+	require.NotNil(t, instance.processManagerReadyChannel())
+	require.False(t, instance.processManagerReady())
+	worker.releaseUnclaimedContainer(request)
+	select {
+	case <-instance.processManagerReadyChannel():
+	default:
+		t.Fatal("VM readiness did not wake after a rejected claim")
+	}
+	_, ok = worker.containerInstances.Get(request.ContainerId)
+	require.False(t, ok)
+}
+
 func (readyGoProcServer) Ready(context.Context, *goprocpb.ReadyRequest) (*goprocpb.ReadyResponse, error) {
 	return &goprocpb.ReadyResponse{Ok: true}, nil
 }
@@ -165,6 +184,43 @@ func TestWaitForProcessManagerStopsWithContainer(t *testing.T) {
 	require.Nil(t, client)
 	require.Equal(t, context.Canceled.Error(), stats.LastError)
 	require.Greater(t, stats.Attempts, 1)
+}
+
+type delayedReadyGoProcServer struct {
+	goprocpb.UnimplementedGoProcServer
+	cancelled atomic.Int64
+}
+
+func (s *delayedReadyGoProcServer) Ready(ctx context.Context, _ *goprocpb.ReadyRequest) (*goprocpb.ReadyResponse, error) {
+	select {
+	case <-ctx.Done():
+		s.cancelled.Add(1)
+		return nil, ctx.Err()
+	case <-time.After(25 * time.Millisecond):
+		return &goprocpb.ReadyResponse{Ok: true}, nil
+	}
+}
+
+func TestWaitForProcessManagerAllowsSlowReadinessAfterFastProbes(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	service := &delayedReadyGoProcServer{}
+	goprocpb.RegisterGoProcServer(server, service)
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+	instance := &ContainerInstance{
+		ContainerAddressMap: map[int32]string{types.WorkerSandboxProcessManagerPort: listener.Addr().String()},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, ready, _ := (&Worker{}).waitForProcessManager(ctx, "slow-rpc", instance)
+	require.True(t, ready, "a guest slower than the fast probe deadline must still become usable")
+	require.Positive(t, service.cancelled.Load())
+	t.Cleanup(func() { _ = client.Cleanup() })
+	// The short readiness deadline must not become the client's lifetime.
+	time.Sleep(goprocReadyProbeTimeout)
+	require.NoError(t, client.Ready())
 }
 
 // A sandbox stopped while its process manager was still starting is finalized
@@ -340,7 +396,7 @@ func TestNewProcessManagerClientKeepsRetryableErrorWhenFallbackFailsHard(t *test
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	client, err := newProcessManagerClientFromEndpoints(ctx, endpoints)
+	client, err := newProcessManagerClientFromEndpoints(ctx, endpoints, goprocReadyProbeTimeout)
 	require.Nil(t, client)
 	require.Error(t, err)
 	require.True(t, isProcessManagerDialFailure(err), "expected the primary's retryable error, got: %v", err)

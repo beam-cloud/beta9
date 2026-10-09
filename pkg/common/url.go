@@ -80,7 +80,7 @@ func BuildPodURL(externalUrl, urlType string, stub *types.StubWithRelated, stubC
 			routeKind = "public"
 		}
 
-		url = fmt.Sprintf("%s://%s/%s/%s/%s/%s", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), routeKind, stub.ExternalId, portPlaceholder)
+		url = fmt.Sprintf("%s://%s/%s/%s/%s/%s", parsedUrl.Scheme, parsedUrl.Host, stub.Type.RouteKind(), routeKind, stub.ExternalId, portPlaceholder)
 	}
 
 	return url
@@ -114,5 +114,5 @@ func BuildSandboxURL(externalUrl, urlType string, stub *types.StubWithRelated, c
 		return fmt.Sprintf("%s://%s-%d.%s", parsedUrl.Scheme, containerId, port, parsedUrl.Host)
 	}
 
-	return fmt.Sprintf("%s://%s/%s/container/%s/%s/%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId, containerId, port)
+	return fmt.Sprintf("%s://%s/%s/container/%s/%s/%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.RouteKind(), stub.ExternalId, containerId, port)
 }

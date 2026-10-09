@@ -34,7 +34,14 @@ description = ""
 beta9 = "beta9.cli.main:start"
 
 [tool.setuptools.package-data]
-beta9 = ["skills/**/*.md"]
+beta9 = [
+    "skills/**/*.md",
+    "abstractions/vm/*.service",
+    "abstractions/vm/boot",
+    "abstractions/vm/desktop",
+    "abstractions/vm/install",
+    "abstractions/vm/xstartup",
+]
 
 [dependency-groups]
 dev = [

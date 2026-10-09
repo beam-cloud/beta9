@@ -15,6 +15,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBuildRegistryCredentialsUsesFallbackWithoutLeakingToOtherHosts(t *testing.T) {
+	service := &WorkerRepositoryService{appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{
+		Runner:              types.RunnerConfig{BaseImageRegistry: "registry.example.com"},
+		BuildRepositoryName: "stage/vms",
+		BuildRegistryCredentials: types.BuildRegistryCredentialsConfig{
+			Type: "basic", Credentials: map[string]string{"USERNAME": "user", "PASSWORD": "secret"},
+		},
+	}}}
+	for _, tt := range []struct{ registry, want string }{
+		{"registry.example.com", "user:secret"},
+		{"https://registry.example.com/stage/vms", "user:secret"},
+		{"registry.example.com.evil.test", ""},
+		{"other.example.com", ""},
+		{"", ""},
+	} {
+		t.Run(tt.registry, func(t *testing.T) {
+			require.Equal(t, tt.want, service.buildRegistryCredentials(context.Background(), tt.registry))
+		})
+	}
+}
+
 type checkpointLookupBackendRepo struct {
 	repository.BackendRepository
 	checkpoint *types.Checkpoint

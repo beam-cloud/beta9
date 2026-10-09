@@ -1017,6 +1017,8 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 		return err
 	}
 	dstDialer := websocket.Dialer{
+		ReadBufferSize:  64 << 10,
+		WriteBufferSize: 64 << 10,
 		NetDialContext: func(ctx context.Context, _, dialAddr string) (net.Conn, error) {
 			dialAddress := dialAddr
 			if _, isRoute := types.ParseBackendRouteAddress(addr); isRoute {
@@ -1048,6 +1050,8 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	defer serverConn.Close()
 
 	upgrader := websocket.Upgrader{
+		ReadBufferSize:  64 << 10,
+		WriteBufferSize: 64 << 10,
 		CheckOrigin: func(r *http.Request) bool {
 			return true // Allow all origins
 		},
@@ -1069,12 +1073,23 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 		defer src.Close()
 		defer dst.Close()
 
+		// Desktop frames can be megabytes. Stream them through a reusable
+		// buffer instead of allocating and waiting for a complete frame.
+		buffer := make([]byte, 64<<10)
 		for {
-			messageType, message, err := src.ReadMessage()
+			messageType, reader, err := src.NextReader()
 			if err != nil {
 				break
 			}
-			if err := dst.WriteMessage(messageType, message); err != nil {
+			writer, err := dst.NextWriter(messageType)
+			if err != nil {
+				break
+			}
+			_, err = io.CopyBuffer(writer, reader, buffer)
+			if err != nil {
+				break
+			}
+			if err := writer.Close(); err != nil {
 				break
 			}
 		}

@@ -3,6 +3,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
+from contextlib import nullcontext
 from typing import List, Optional
 
 import click
@@ -98,12 +99,12 @@ def create_container(service, image_id, name, cpu, memory, ttl, pool, format):
 @extraclick.pass_service_client
 def exec_container(service, container_id, command, cwd, timeout):
     process = None
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + timeout if timeout else None
     timed_out = False
     try:
         with ThreadPoolExecutor(max_workers=3) as executor:
             try:
-                with rpc_timeout(timeout):
+                with _rpc_timeout(timeout or None):
                     sandbox = _connect_sandbox(container_id, timeout)
                     process = sandbox.process.exec(
                         *command, cwd=cwd, stdin=None if sys.stdin.isatty() else sys.stdin.buffer
@@ -116,13 +117,15 @@ def exec_container(service, container_id, command, cwd, timeout):
                         )
                     ]
                     result = executor.submit(
-                        copy_context().run, process.wait, max(0, deadline - time.monotonic())
+                        copy_context().run,
+                        process.wait,
+                        max(0, deadline - time.monotonic()) if deadline is not None else None,
                     )
                     for completed in as_completed([*outputs, result]):
                         completed.result()
                     exit_code = result.result()
             except BaseException:
-                timed_out = time.monotonic() >= deadline
+                timed_out = deadline is not None and time.monotonic() >= deadline
                 try:
                     if process is not None and process.exit_code < 0:
                         # The execution deadline has unwound; cancellation gets its own budget.
@@ -151,15 +154,19 @@ def exec_container(service, container_id, command, cwd, timeout):
 
 
 def _connect_sandbox(container_id, timeout):
-    with rpc_timeout(timeout):
+    with _rpc_timeout(timeout or None):
         return Sandbox().connect(container_id)
 
 
 def _copy_output(stream, target, deadline):
-    with rpc_timeout(deadline - time.monotonic()):
+    with _rpc_timeout(deadline - time.monotonic() if deadline is not None else None):
         for chunk in stream:
             target.write(chunk)
             target.flush()
+
+
+def _rpc_timeout(timeout):
+    return rpc_timeout(timeout) if timeout is not None else nullcontext()
 
 
 @management.command("cp", help="Copy a file. Use CONTAINER_ID:/path for the remote side.")
