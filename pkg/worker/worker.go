@@ -188,7 +188,7 @@ func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManage
 
 type ContainerInstance struct {
 	tunnels                    tunnelSessions
-	requests                   common.RequestJournal
+	requests                   requestJournal
 	workerAddressPublished     atomic.Bool
 	Id                         string
 	StubId                     string

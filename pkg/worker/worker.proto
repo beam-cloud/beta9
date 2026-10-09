@@ -73,15 +73,9 @@ message ContainerStatusRequest { string container_id = 1; }
 
 message ContainerStatusResponse { bool running = 1; }
 
-message ContainerStreamLogsRequest {
-  string container_id = 1;
-  optional uint64 offset = 2;
-}
+message ContainerStreamLogsRequest { string container_id = 1; }
 
-message ContainerLogEntry {
-  string msg = 1;
-  uint64 offset = 2;
-}
+message ContainerLogEntry { string msg = 1; }
 
 message ContainerArchiveRequest {
   string container_id = 1;

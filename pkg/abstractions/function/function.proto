@@ -21,8 +21,6 @@ message FunctionInvokeRequest {
   string stub_id = 1;
   bytes args = 2;
   bool headless = 3;
-  string task_id = 4;
-  uint64 output_offset = 5;
 }
 
 message FunctionInvokeResponse {
@@ -31,7 +29,6 @@ message FunctionInvokeResponse {
   bool done = 3;
   int32 exit_code = 4;
   bytes result = 5;
-  uint64 output_offset = 6;
 }
 
 message FunctionGetArgsRequest { string task_id = 1; }

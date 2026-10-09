@@ -64,7 +64,6 @@ from ..clients.pod import (
 from ..config import ConfigContext
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
-from ..recovery import RecoveringPodStub
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
@@ -486,7 +485,7 @@ class SandboxInstance(BaseAbstraction):
     def __post_init__(self):
         super().__init__()
         self.gateway_stub = GatewayServiceStub(self.channel)
-        self.stub = RecoveringPodStub(self.channel)
+        self.stub = PodServiceStub(self.channel)
         self.fs = SandboxFileSystem(self)
         self.process = SandboxProcessManager(self)
         self.docker = SandboxDockerManager(self)
@@ -830,7 +829,7 @@ class SandboxInstance(BaseAbstraction):
         self.__dict__.update(state)
         unset_channel()
         self.gateway_stub = GatewayServiceStub(self.channel)
-        self.stub = RecoveringPodStub(self.channel)
+        self.stub = PodServiceStub(self.channel)
 
 
 class SandboxProcessResponse:

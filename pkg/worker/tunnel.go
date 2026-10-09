@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -32,7 +31,7 @@ type tunnelSessions struct {
 type tunnelSession struct {
 	port        uint32
 	conn        net.Conn
-	output      *common.ReplayBuffer
+	output      *tunnelBuffer
 	ctx         context.Context
 	cancel      context.CancelFunc
 	lease       *time.Timer
@@ -123,7 +122,7 @@ func (s *tunnelSessions) get(in *pb.ContainerTunnelRequest, dial func() (net.Con
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	session := &tunnelSession{port: in.Port, conn: conn, output: common.NewReplayBuffer(tunnelBufferSize), ctx: ctx, cancel: cancel}
+	session := &tunnelSession{port: in.Port, conn: conn, output: newTunnelBuffer(tunnelBufferSize), ctx: ctx, cancel: cancel}
 	s.sessions[in.SessionId] = session
 	session.lease = time.AfterFunc(tunnelReconnectTimeout, session.close)
 	go session.read()
@@ -202,4 +201,87 @@ func (s *tunnelSession) write(offset uint64, data []byte, eof bool) (uint64, err
 		s.inputEOF = true
 	}
 	return s.inputOffset, nil
+}
+
+// tunnelBuffer retains unacknowledged bytes and applies backpressure at capacity.
+// Read acknowledges only its requested offset; sending a response is not an ack.
+type tunnelBuffer struct {
+	mu       sync.Mutex
+	data     []byte
+	offset   uint64
+	capacity int
+	closed   bool
+	changed  chan struct{}
+}
+
+func newTunnelBuffer(capacity int) *tunnelBuffer {
+	return &tunnelBuffer{capacity: capacity, changed: make(chan struct{})}
+}
+
+func (b *tunnelBuffer) notify() {
+	close(b.changed)
+	b.changed = make(chan struct{})
+}
+
+func (b *tunnelBuffer) Append(ctx context.Context, data []byte) error {
+	for len(data) > 0 {
+		b.mu.Lock()
+		if b.closed {
+			b.mu.Unlock()
+			return io.ErrClosedPipe
+		}
+		n := min(len(data), b.capacity-len(b.data))
+		if n > 0 {
+			b.data = append(b.data, data[:n]...)
+			data = data[n:]
+			b.notify()
+		}
+		changed := b.changed
+		b.mu.Unlock()
+		if len(data) > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-changed:
+			}
+		}
+	}
+	return nil
+}
+
+func (b *tunnelBuffer) Read(ctx context.Context, offset uint64, size int) ([]byte, bool, error) {
+	for {
+		b.mu.Lock()
+		if offset < b.offset || offset > b.offset+uint64(len(b.data)) {
+			b.mu.Unlock()
+			return nil, false, status.Error(codes.OutOfRange, "invalid stream acknowledgement")
+		}
+		if offset > b.offset {
+			b.data = b.data[offset-b.offset:]
+			b.offset = offset
+			b.notify()
+		}
+		if len(b.data) > 0 || b.closed {
+			data := append([]byte(nil), b.data[:min(size, len(b.data))]...)
+			eof := b.closed && len(data) == 0
+			b.mu.Unlock()
+			return data, eof, nil
+		}
+		changed := b.changed
+		b.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+func (b *tunnelBuffer) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.closed {
+		b.closed = true
+		b.notify()
+	}
 }

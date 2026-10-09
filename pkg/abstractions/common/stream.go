@@ -27,7 +27,6 @@ type ContainerStreamOpts struct {
 	Config          types.AppConfig
 	KeyEventManager *common.KeyEventManager
 	SyncQueue       chan *pb.SyncContainerWorkspaceRequest
-	OutputOffset    *uint64
 }
 
 func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
@@ -39,7 +38,6 @@ func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
 		config:          opts.Config,
 		keyEventManager: opts.KeyEventManager,
 		syncQueue:       opts.SyncQueue,
-		outputOffset:    opts.OutputOffset,
 	}, nil
 }
 
@@ -51,7 +49,6 @@ type ContainerStream struct {
 	config          types.AppConfig
 	keyEventManager *common.KeyEventManager
 	syncQueue       chan *pb.SyncContainerWorkspaceRequest
-	outputOffset    *uint64
 }
 
 type containerStreamClient interface {
@@ -145,14 +142,6 @@ _stream:
 			logStreamReady = ready
 			go func() {
 				readyCallback := func() { close(ready) }
-				if l.outputOffset != nil {
-					if replayClient, ok := client.(interface {
-						StreamLogsAt(context.Context, string, *uint64, chan common.OutputMsg, func()) error
-					}); ok {
-						logErrors <- replayClient.StreamLogsAt(ctx, containerId, l.outputOffset, outputChan, readyCallback)
-						return
-					}
-				}
 				logErrors <- client.StreamLogsWithReady(ctx, containerId, outputChan, readyCallback)
 			}()
 		case err := <-logErrors:

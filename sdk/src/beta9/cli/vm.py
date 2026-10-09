@@ -622,16 +622,7 @@ def _socket(vm, port, session, offset, create):
         {"protocol": 2, "session": session, "offset": offset, "create": int(create)}
     )
     url = url.replace("https://", "wss://").replace("http://", "ws://")
-    try:
-        remote = websocket.create_connection(
-            url + query, header=vm._service.http.headers, timeout=30
-        )
-    except websocket.WebSocketBadStatusException as error:
-        if error.status_code != 501 or not create:
-            raise
-        remote = websocket.create_connection(url, header=vm._service.http.headers, timeout=30)
-    remote.resumable = remote.getheaders().get("x-beta9-tunnel-protocol") == "2"
-    return remote
+    return websocket.create_connection(url + query, header=vm._service.http.headers, timeout=30)
 
 
 def _bridge(vm, port, source, target):

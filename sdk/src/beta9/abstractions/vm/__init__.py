@@ -21,13 +21,19 @@ from urllib.parse import quote
 
 import betterproto
 
-from ...channel import Channel, GatewayHTTPError, ServiceClient, rpc_timeout
+from ...channel import (
+    RECOVERY_TIMEOUT,
+    Channel,
+    GatewayHTTPError,
+    ServiceClient,
+    rpc_timeout,
+    transient_error,
+)
 from ...clients.image import ImageServiceStub
 from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
 from ...clients.volume import VolumeServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
-from ...recovery import RECOVERY_TIMEOUT, transient_error
 from ...type import DurableDisk
 from ..image import Image
 from ..sandbox import SandboxInstance

@@ -34,7 +34,6 @@ from ..exceptions import (
     TaskStartError,
 )
 from ..logging import json_output_interceptor
-from ..recovery import retry_operation
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
@@ -216,11 +215,7 @@ def run(channel: Channel):
 def start_task(
     gateway_stub: GatewayServiceStub, task_id: str, container_id: str
 ) -> StartTaskResponse:
-    return retry_operation(
-        lambda: gateway_stub.start_task(
-            StartTaskRequest(task_id=task_id, container_id=container_id)
-        )
-    )
+    return gateway_stub.start_task(StartTaskRequest(task_id=task_id, container_id=container_id))
 
 
 async def invoke_function(
@@ -237,9 +232,7 @@ async def invoke_function(
         if handler is None:
             handler = FunctionHandler()
 
-        get_args_resp = retry_operation(
-            lambda: function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
-        )
+        get_args_resp = function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
         if not get_args_resp.ok:
             raise InvalidFunctionArgumentsError
 
@@ -267,10 +260,8 @@ async def invoke_function(
                 **kwargs,
             )
         pickled_result = cloudpickle.dumps(result)
-        set_result_resp = retry_operation(
-            lambda: function_stub.function_set_result(
-                FunctionSetResultRequest(task_id=task_id, result=pickled_result)
-            )
+        set_result_resp = function_stub.function_set_result(
+            FunctionSetResultRequest(task_id=task_id, result=pickled_result)
         )
         if not set_result_resp.ok:
             raise FunctionSetResultError

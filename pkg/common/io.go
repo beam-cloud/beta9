@@ -11,7 +11,6 @@ import (
 )
 
 type OutputMsg struct {
-	Offset    uint64
 	Msg       string
 	Done      bool
 	Success   bool

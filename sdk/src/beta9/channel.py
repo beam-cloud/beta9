@@ -4,12 +4,15 @@ import hashlib
 import os
 from importlib.metadata import PackageNotFoundError, version
 import sys
+import threading
 import time
 import traceback
 import weakref
 from abc import ABC, abstractmethod
+from collections import OrderedDict, deque
 from contextlib import contextmanager
 from contextvars import ContextVar
+from uuid import uuid4
 from typing import Any, Callable, Generator, List, NewType, Optional, Sequence, Tuple, cast
 
 import grpc
@@ -38,11 +41,57 @@ from .config import (
 )
 from .env import is_remote
 from .exceptions import RunnerException
-from .recovery import request_metadata
 
 GRPC_MAX_MESSAGE_SIZE = 16 * 1024 * 1024
 _channels = weakref.WeakSet()
 _deadline = ContextVar("beta9_rpc_deadline", default=None)
+request_metadata = ContextVar("beta9_request_metadata", default=())
+_acks = OrderedDict()
+_ack_lock = threading.Lock()
+RECOVERY_TIMEOUT = 120.0
+
+
+def transient_error(error):
+    if isinstance(error, grpc.RpcError):
+        return error.code() == grpc.StatusCode.UNAVAILABLE
+    if isinstance(error, GatewayHTTPError):
+        return error.status == 0 or error.status >= 500
+    return isinstance(error, (ConnectionError, ConnectionRefusedError, ConnectionResetError))
+
+
+def retry_operation(fn, *, owner=None, timeout=RECOVERY_TIMEOUT, delay=0.2):
+    if request_metadata.get():
+        return fn()
+    deadline = time.monotonic() + timeout
+    if (scope_deadline := _deadline.get()) is not None:
+        deadline = min(deadline, scope_deadline)
+    request_id = str(uuid4())
+    with _ack_lock:
+        pending = _acks.pop(owner, deque(maxlen=512))
+        acknowledgements = [pending.popleft() for _ in range(min(len(pending), 64))]
+        _acks[owner] = pending
+        while len(_acks) > 512:
+            _acks.popitem(last=False)
+    token = request_metadata.set(
+        (("x-beta9-request-id", request_id),)
+        + tuple(("x-beta9-request-ack", ack) for ack in acknowledgements)
+    )
+    try:
+        while True:
+            try:
+                result = fn()
+                with _ack_lock:
+                    if owner in _acks:
+                        _acks[owner].append(request_id)
+                return result
+            except Exception as error:
+                remaining = deadline - time.monotonic()
+                if not transient_error(error) or remaining <= 0:
+                    raise
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 1.5, 2.0)
+    finally:
+        request_metadata.reset(token)
 
 
 @contextmanager
@@ -177,8 +226,35 @@ class AuthTokenInterceptor(
     def intercept_call_stream(self, continuation, client_call_details, request_iterator):
         return self.intercept_call(continuation, client_call_details, request=request_iterator)
 
-    # Implement the four necessary interceptor methods using intercept_call
-    intercept_unary_unary = intercept_call
+    def intercept_unary_unary(self, continuation, client_call_details, request):
+        method = client_call_details.method.rsplit("/", 1)[-1]
+        recoverable = (
+            method.startswith("Sandbox")
+            and method
+            not in (
+                "SandboxSnapshotMemory",
+                "SandboxSnapshotDisks",
+                "SandboxCreateImageFromFilesystem",
+            )
+        ) or method in ("StartTask", "EndTask", "FunctionGetArgs", "FunctionSetResult")
+        if not recoverable:
+            return self.intercept_call(continuation, client_call_details, request)
+
+        def attempt():
+            call = self.intercept_call(continuation, client_call_details, request)
+            response = call.result()
+            if getattr(response, "error_msg", "") in (
+                "Failed to connect to sandbox",
+                "Failed to get sandbox stdout",
+                "Failed to get sandbox stderr",
+                "Failed to get sandbox status",
+            ):
+                raise ConnectionError(response.error_msg)
+            return call
+
+        return retry_operation(attempt, owner=getattr(request, "container_id", None))
+
+    # Streaming calls recover at their application cursor rather than replaying a request.
     intercept_unary_stream = intercept_call
     intercept_stream_unary = intercept_call_stream
     intercept_stream_stream = intercept_call_stream

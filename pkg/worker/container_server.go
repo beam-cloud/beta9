@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -273,7 +274,15 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 	buffer := make([]byte, 4096)
 	logEntry := &pb.ContainerLogEntry{}
-	offset := req.GetOffset()
+	offsets := metadata.ValueFromIncomingContext(stream.Context(), common.LogOffsetHeader)
+	var offset int64
+	if len(offsets) > 0 {
+		var err error
+		offset, err = strconv.ParseInt(offsets[0], 10, 64)
+		if err != nil || offset < 0 {
+			return status.Error(codes.InvalidArgument, "invalid log offset")
+		}
+	}
 
 	for {
 		select {
@@ -284,8 +293,8 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 		var n int
 		var err error
-		if req.Offset != nil {
-			n, err = instance.LogBuffer.ReadAt(buffer, int64(offset))
+		if len(offsets) > 0 {
+			n, err = instance.LogBuffer.ReadAt(buffer, offset)
 		} else {
 			n, err = instance.LogBuffer.Read(buffer)
 		}
@@ -299,8 +308,7 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 		if n > 0 {
 			logEntry.Msg = string(buffer[:n])
-			offset += uint64(n)
-			logEntry.Offset = offset
+			offset += int64(n)
 			if err := stream.Send(logEntry); err != nil {
 				return err
 			}

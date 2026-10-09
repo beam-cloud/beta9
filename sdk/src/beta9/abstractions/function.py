@@ -21,9 +21,14 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
-from ..recovery import resume_invocation
 from ..abstractions.volume import CloudBucket, Volume
-from ..channel import rpc_timeout, with_grpc_error_handling
+from ..channel import (
+    RECOVERY_TIMEOUT,
+    _deadline,
+    rpc_timeout,
+    transient_error,
+    with_grpc_error_handling,
+)
 from ..clients.function import (
     FunctionInvokeRequest,
     FunctionInvokeResponse,
@@ -37,6 +42,50 @@ from ..schema import Schema
 from ..sync import FileSyncer
 from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool, TaskPolicy
 from .mixins import DeployableMixin
+
+
+class _Invocation:
+    def __init__(self, stub, request):
+        self.stub = stub
+        self.request = request
+        self.task_id = ""
+        self.output_offset = 0
+
+    def __iter__(self):
+        recovery_started = None
+        delay = 0.2
+        while True:
+            try:
+                for response in self.stub.function_invoke(
+                    self.request,
+                    metadata=(
+                        ("x-beta9-task-id", self.task_id),
+                        ("x-beta9-log-offset", str(self.output_offset)),
+                    ),
+                ):
+                    self.task_id = response.task_id or self.task_id
+                    if response.output:
+                        self.output_offset += len(response.output.encode("utf-8"))
+                    recovery_started = None
+                    delay = 0.2
+                    yield response
+                    if response.done:
+                        return
+                raise ConnectionError("Function stream disconnected")
+            except Exception as error:
+                if not self.task_id or not transient_error(error):
+                    raise
+                if recovery_started is None:
+                    recovery_started = time.monotonic()
+                remaining = RECOVERY_TIMEOUT - (time.monotonic() - recovery_started)
+                if remaining <= 0:
+                    raise
+                if (deadline := _deadline.get()) is not None:
+                    remaining = min(remaining, deadline - time.monotonic())
+                    if remaining <= 0:
+                        raise
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 1.5, 2.0)
 
 
 class Function(RunnerAbstraction):
@@ -225,16 +274,17 @@ class _CallableWrapper(DeployableMixin):
             args=args,
             headless=self.parent.headless,
         )
-        responses = resume_invocation(self.parent.function_stub, request)
+        invocation = _Invocation(self.parent.function_stub, request)
+        responses = iter(invocation)
         with self._invocations_lock:
-            self._invocations[id(request)] = request
+            self._invocations[id(request)] = invocation
         try:
             return self._consume_invocation(responses, output, output_size)
         except KeyboardInterrupt:
-            if request.task_id and not self.parent.headless:
+            if invocation.task_id and not self.parent.headless:
                 with rpc_timeout(5):
                     self.parent.gateway_stub.stop_tasks(
-                        StopTasksRequest(task_ids=[request.task_id])
+                        StopTasksRequest(task_ids=[invocation.task_id])
                     )
             raise
         finally:

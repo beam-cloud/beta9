@@ -84,31 +84,3 @@ def test_tunnel_preserves_bytes_when_gateway_loses_input_and_output_acknowledgem
     assert len({session for session, _, _ in connects}) == 1
     assert connects[0][2] is True
     assert all(not create for _, _, create in connects[1:])
-
-
-def test_legacy_gateway_still_drains_output_after_stdin_eof():
-    payload = b"legacy stdin"
-    input_data = bytearray()
-    messages = queue.Queue()
-
-    class Remote:
-        resumable = False
-
-        def send_binary(self, data):
-            input_data.extend(data)
-
-        def send(self, data):
-            assert data == "EOF"
-            messages.put(b"reply:" + bytes(input_data))
-            messages.put("")
-
-        def recv(self):
-            return messages.get(timeout=5)
-
-        def close(self):
-            pass
-
-    target = io.BytesIO()
-    Tunnel(lambda *_: Remote(), io.BytesIO(payload), target).run()
-    assert bytes(input_data) == payload
-    assert target.getvalue() == b"reply:" + payload

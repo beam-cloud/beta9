@@ -251,9 +251,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
     @property
     def stub(self) -> PodServiceStub:
         if not self._pod_stub:
-            from ..recovery import RecoveringPodStub
-
-            self._pod_stub = RecoveringPodStub(self.channel)
+            self._pod_stub = PodServiceStub(self.channel)
         return self._pod_stub
 
     @stub.setter

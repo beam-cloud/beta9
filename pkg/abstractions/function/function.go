@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -111,8 +113,9 @@ func NewContainerFunctionService(ctx context.Context,
 }
 
 func (fs *ContainerFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
-	if in.TaskId != "" {
-		return fs.resumeInvocation(in, stream)
+	md, _ := metadata.FromIncomingContext(stream.Context())
+	if ids := md.Get("x-beta9-task-id"); len(ids) > 0 && ids[0] != "" {
+		return fs.resumeInvocation(in.StubId, ids[0], stream)
 	}
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 	ctx := stream.Context()
@@ -128,7 +131,7 @@ func (fs *ContainerFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest,
 		return err
 	}
 
-	return fs.streamAt(ctx, stream, authInfo, task, &in.OutputOffset)
+	return fs.stream(ctx, stream, authInfo, task)
 }
 
 func (fs *ContainerFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
@@ -171,16 +174,20 @@ func (fs *ContainerFunctionService) functionTaskFactory(ctx context.Context, msg
 	}, nil
 }
 
-func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, headless bool) error {
-	return fs.streamAt(ctx, stream, authInfo, task, nil)
-}
-
-func (fs *ContainerFunctionService) streamAt(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, offset *uint64) error {
+func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface) error {
+	// Cursor metadata is optional: deployed SDKs retain the legacy log reader.
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if offsets := md.Get(common.LogOffsetHeader); len(offsets) > 0 {
+			if _, err := strconv.ParseUint(offsets[0], 10, 63); err != nil {
+				return status.Error(codes.InvalidArgument, "invalid log offset")
+			}
+		}
+	}
 	taskId := task.Metadata().TaskId
 	containerId := task.Metadata().ContainerId
 
 	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done, OutputOffset: o.Offset}); err != nil {
+		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done}); err != nil {
 			return err
 		}
 
@@ -210,7 +217,6 @@ func (fs *ContainerFunctionService) streamAt(ctx context.Context, stream pb.Func
 		Config:          fs.config,
 		Tailscale:       fs.tailscale,
 		KeyEventManager: fs.keyEventManager,
-		OutputOffset:    offset,
 	})
 	if err != nil {
 		return err
@@ -552,4 +558,37 @@ func (k *keys) FunctionHeartbeat(workspaceName, taskId string) string {
 
 func (k *keys) FunctionScheduledJobLock(stubId string) string {
 	return fmt.Sprintf(functionScheduledJobsLock, stubId)
+}
+
+// Reattach to an accepted invocation without scheduling another container.
+func (fs *ContainerFunctionService) resumeInvocation(stubID, taskID string, stream pb.FunctionService_FunctionInvokeServer) error {
+	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
+	current, err := fs.backendRepo.GetTaskWithRelated(stream.Context(), taskID)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return status.Error(codes.NotFound, "invocation not found")
+	}
+	if current.Workspace.ExternalId != authInfo.Workspace.ExternalId || current.Stub.ExternalId != stubID {
+		return status.Error(codes.PermissionDenied, "invocation does not belong to this function")
+	}
+	if current.Status.IsCompleted() {
+		result, err := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskID)).Bytes()
+		if err != nil && current.Status == types.TaskStatusComplete {
+			return status.Error(codes.Unavailable, "function result is not yet available")
+		}
+		exitCode, err := fs.containerRepo.GetContainerExitCode(current.ContainerId)
+		if err != nil {
+			exitCode = 1
+			if current.Status == types.TaskStatusComplete {
+				exitCode = 0
+			}
+		}
+		return stream.Send(&pb.FunctionInvokeResponse{TaskId: taskID, Done: true, ExitCode: int32(exitCode), Result: result})
+	}
+	task := &FunctionTask{fs: fs, containerId: current.ContainerId, msg: &types.TaskMessage{
+		TaskId: taskID, StubId: stubID, WorkspaceName: authInfo.Workspace.Name,
+	}}
+	return fs.stream(stream.Context(), stream, authInfo, task)
 }

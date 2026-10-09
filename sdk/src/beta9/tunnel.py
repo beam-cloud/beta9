@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import websocket
 
-from .recovery import RECOVERY_TIMEOUT
+from .channel import RECOVERY_TIMEOUT
 
 
 class Tunnel:
@@ -76,9 +76,6 @@ class Tunnel:
                 remote = None
                 try:
                     remote = self.connect(self.session, self.offset, not self.created)
-                    if getattr(remote, "resumable", True) is False:
-                        _bridge_legacy(remote, self.source, self.target)
-                        return
                     if not upload_started:
                         threading.Thread(target=self._upload, daemon=True).start()
                         upload_started = True
@@ -152,30 +149,3 @@ class Tunnel:
 
 def bridge_tunnel(connect, source, target):
     Tunnel(connect, source, target).run()
-
-
-def _bridge_legacy(remote, source, target):
-    """Keep the previous byte-stream protocol for gateways without recovery."""
-
-    def upload():
-        try:
-            while True:
-                data = source.read1(65536) if hasattr(source, "read1") else source.read(65536)
-                if not data:
-                    remote.send("EOF")
-                    return
-                remote.send_binary(data)
-        except (OSError, websocket.WebSocketException):
-            remote.close()
-
-    threading.Thread(target=upload, daemon=True).start()
-    try:
-        while True:
-            message = remote.recv()
-            if not message:
-                return
-            if isinstance(message, bytes):
-                target.write(message)
-                target.flush()
-    except websocket.WebSocketConnectionClosedException:
-        return
