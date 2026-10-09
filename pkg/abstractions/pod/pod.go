@@ -47,12 +47,11 @@ type PodServiceOpts struct {
 }
 
 const (
-	podContainerPrefix     string = "pod"
-	sandboxContainerPrefix string = "sandbox"
-	podRoutePrefix         string = "/pod"
-	sandboxRoutePrefix     string = "/sandbox"
-	podProxyBufferSize            = 300
-	podStubLoadTimeout            = 5 * time.Second
+	podContainerPrefix string = types.StubTypePod
+	podRoutePrefix     string = "/pod"
+	sandboxRoutePrefix string = "/sandbox"
+	podProxyBufferSize        = 300
+	podStubLoadTimeout        = 5 * time.Second
 )
 
 type PodService interface {
@@ -116,7 +115,7 @@ func NewPodService(
 
 	// Listen for container events with a certain prefix
 	// For example if a container is created, destroyed, or updated
-	eventManager, err := abstractions.NewContainerEventManager(ctx, []string{podContainerPrefix, sandboxContainerPrefix}, keyEventManager, ps.InstanceFactory)
+	eventManager, err := abstractions.NewContainerEventManager(ctx, []string{types.StubTypePod, types.StubTypeSandbox, types.StubTypeVM}, keyEventManager, ps.InstanceFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -630,7 +629,7 @@ func podRunWorkspace(authInfo *auth.AuthInfo, stub *types.StubWithRelated) (*typ
 
 func podRunnableStub(stubType types.StubType) bool {
 	switch stubType.Kind() {
-	case types.StubTypePod, types.StubTypeSandbox:
+	case types.StubTypePod, types.StubTypeSandbox, types.StubTypeVM:
 		return true
 	default:
 		return false
@@ -801,12 +800,11 @@ func (s *GenericPodService) trackRunAsTask(stub *types.StubWithRelated) bool {
 }
 
 func (s *GenericPodService) generateContainerId(stubId string, stubType types.StubType) string {
-	switch string(stubType) {
-	case string(types.StubTypeSandbox):
-		return fmt.Sprintf("%s-%s-%s", sandboxContainerPrefix, stubId, uuid.New().String()[:8])
-	default:
-		return fmt.Sprintf("%s-%s-%s", podContainerPrefix, stubId, uuid.New().String()[:8])
+	prefix := types.StubTypePod
+	if stubType.IsSandbox() {
+		prefix = stubType.Kind()
 	}
+	return fmt.Sprintf("%s-%s-%s", prefix, stubId, uuid.New().String()[:8])
 }
 
 // TODO: consolidate this logic with the logic in api/v1/stub.go - for now just clone the object without cloning the object (does not matter for sandboxes/pods)

@@ -16,8 +16,8 @@ var (
 	subdomainRegex = regexp.MustCompile(
 		`^` +
 			`(?:` +
-			// Container form: sandbox-<stub UUID>-<suffix> optional -port
-			`(?P<ContainerID>(?:sandbox|pod|endpoint|taskqueue)-[a-f0-9-]{36}-[a-zA-Z0-9]{8})` +
+			// Container form: <stub kind>-<stub UUID>-<suffix> optional -port
+			`(?P<ContainerID>(?:` + strings.Join(types.StubScopedContainerPrefixes(), "|") + `)-[a-f0-9-]{36}-[a-zA-Z0-9]{8})` +
 			`|` +
 			// Deployment form: something-abcdefg optional -vN or -latest
 			`(?P<Subdomain>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` +
@@ -126,7 +126,7 @@ func ParseSubdomainFields(subdomain string) (*SubdomainFields, error) {
 // The extraPaths are appended to the end of the path.
 // It supports /public, /id, and /name/version paths.
 func BuildHandlerPath(stub *types.Stub, fields *SubdomainFields, extraPaths ...string) string {
-	pathSegments := []string{"/" + stub.Type.Kind()}
+	pathSegments := []string{"/" + stub.Type.RouteKind()}
 
 	if fields != nil && fields.ContainerId != "" {
 		pathSegments = append(pathSegments, "container", fields.StubId, fields.ContainerId)

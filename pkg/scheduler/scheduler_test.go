@@ -285,6 +285,15 @@ func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
 	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, sandbox(true), nil))
 	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{runcWorker, gvisorWorker}, sandbox(true), nil))
 
+	// Persistent VMs retain their own kind while using the same placement.
+	vm := sandbox(true)
+	vm.Stub.Type = types.StubType(types.StubTypeVM)
+	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, vm))
+	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, vm, nil))
+	vm.UseVM = false
+	assert.Empty(t, filterControllersByFlags(controllers, vm), "VMs must never fall back to a container runtime")
+	assert.Empty(t, filterWorkersByResources(workers, vm, nil))
+
 	// Things the VM runtime cannot serve stay off it even with use_vm.
 	gpu := sandbox(true)
 	gpu.Gpu = "RTX5090"
@@ -1109,14 +1118,52 @@ func TestStopDeletesUnassignedPendingContainerState(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	_, err = wb.containerRepo.GetContainerState(containerId)
-	notFound := &types.ErrContainerStateNotFound{}
-	assert.True(t, notFound.From(err), "expected deleted pending state, got %v", err)
+	assertUnassignedStopRemoved(t, wb, containerId)
 
 	popped, err := wb.requestBacklog.Pop()
 	assert.NoError(t, err)
 	wb.processRequestBatch([]*types.ContainerRequest{popped}, nil)
 	assert.Equal(t, int64(0), wb.requestBacklog.Len())
+}
+
+func TestStopRecoversInterruptedUnassignedCancellation(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	id := "unassigned-stopping-container"
+	assert.NoError(t, wb.containerRepo.SetContainerState(id, &types.ContainerState{ContainerId: id, Status: types.ContainerStatusStopping, WorkspaceId: "workspace-1"}))
+	assert.NoError(t, wb.Stop(&types.StopContainerArgs{ContainerId: id, Reason: types.StopContainerReasonUser}))
+	assertUnassignedStopRemoved(t, wb, id)
+}
+
+func assertUnassignedStopRemoved(t *testing.T, wb *Scheduler, id string) {
+	t.Helper()
+	_, err := wb.containerRepo.GetContainerState(id)
+	assert.True(t, (&types.ErrContainerStateNotFound{}).From(err), "expected deleted pending state, got %v", err)
+	code, err := wb.containerRepo.GetContainerExitCode(id)
+	assert.NoError(t, err)
+	assert.Equal(t, int(types.ContainerExitCodeUser), code)
+}
+
+func TestUnassignedStopPreservesReason(t *testing.T) {
+	for reason, want := range map[types.StopContainerReason]types.ContainerExitCode{
+		types.StopContainerReasonScheduler:           types.ContainerExitCodeScheduler,
+		types.StopContainerReasonUser:                types.ContainerExitCodeUser,
+		types.StopContainerReasonTtl:                 types.ContainerExitCodeTtl,
+		types.StopContainerReasonAdmin:               types.ContainerExitCodeAdmin,
+		types.StopContainerReasonInsufficientCredits: types.ContainerExitCodeAdmin,
+		types.StopContainerReasonEvicted:             types.ContainerExitCodeEvicted,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			s, err := NewSchedulerForTest()
+			assert.NoError(t, err)
+			id := "cancelled-" + string(reason)
+			assert.NoError(t, s.containerRepo.SetContainerState(id, &types.ContainerState{ContainerId: id, Status: types.ContainerStatusPending}))
+			assert.NoError(t, s.Stop(&types.StopContainerArgs{ContainerId: id, Reason: reason}))
+			code, err := s.containerRepo.GetContainerExitCode(id)
+			assert.NoError(t, err)
+			assert.Equal(t, int(want), code)
+		})
+	}
 }
 
 func TestStopPreservesAssignedContainerForWorkerCancellation(t *testing.T) {

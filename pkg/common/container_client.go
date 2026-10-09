@@ -199,10 +199,19 @@ func (c *ContainerClient) SandboxStatus(containerId string, pid int32) (*pb.Cont
 func (c *ContainerClient) SandboxStatusContext(ctx context.Context, containerId string, pid int32) (*pb.ContainerSandboxStatusResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxStatusTimeout)
 	defer cancel()
+	return c.sandboxStatusContext(ctx, containerId, pid, false)
+}
 
+// Wait for exec readiness on the worker, avoiding repeated network probes.
+// Older workers ignore the flag and return pending, which callers can retry.
+func (c *ContainerClient) SandboxReadyContext(ctx context.Context, containerId string) (*pb.ContainerSandboxStatusResponse, error) {
+	return c.sandboxStatusContext(ctx, containerId, 0, true)
+}
+
+func (c *ContainerClient) sandboxStatusContext(ctx context.Context, containerId string, pid int32, wait bool) (*pb.ContainerSandboxStatusResponse, error) {
 	resp, err := c.client.ContainerSandboxStatus(
 		ctx,
-		&pb.ContainerSandboxStatusRequest{ContainerId: containerId, Pid: pid},
+		&pb.ContainerSandboxStatusRequest{ContainerId: containerId, Pid: pid, WaitForReady: wait},
 		grpc.WaitForReady(true),
 	)
 	if err != nil {

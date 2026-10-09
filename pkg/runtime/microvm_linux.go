@@ -1862,6 +1862,8 @@ func (c *microVMControl) serve(conn net.Conn) {
 				case c.applicationOOM <- Event{Type: microvm.MsgApplicationOOM, ApplicationOOM: msg.OOM}:
 				case <-c.eventDone:
 					return
+				default:
+					log.Warn().Msg("microvm application OOM event buffer full")
 				}
 			}
 		case microvm.MsgExit:

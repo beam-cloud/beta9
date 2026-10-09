@@ -30,8 +30,7 @@ const (
 
 // NewWorkerRepositoryClient creates a new worker repository client
 func NewWorkerRepositoryClient(ctx context.Context, config types.AppConfig, token string) (pb.WorkerRepositoryServiceClient, error) {
-	host := fmt.Sprintf("%s:%d", config.GatewayService.GRPC.ExternalHost, config.GatewayService.GRPC.ExternalPort)
-	conn, err := newGRPCConn(host, token)
+	conn, err := newRepositoryConn(config, token)
 	if err != nil {
 		return nil, err
 	}
@@ -41,8 +40,7 @@ func NewWorkerRepositoryClient(ctx context.Context, config types.AppConfig, toke
 
 // NewContainerRepositoryClient creates a new container repository client
 func NewContainerRepositoryClient(ctx context.Context, config types.AppConfig, token string) (pb.ContainerRepositoryServiceClient, error) {
-	host := fmt.Sprintf("%s:%d", config.GatewayService.GRPC.ExternalHost, config.GatewayService.GRPC.ExternalPort)
-	conn, err := newGRPCConn(host, token)
+	conn, err := newRepositoryConn(config, token)
 	if err != nil {
 		return nil, err
 	}
@@ -52,8 +50,7 @@ func NewContainerRepositoryClient(ctx context.Context, config types.AppConfig, t
 
 // NewBackendRepositoryClient creates a new backend repository client
 func NewBackendRepositoryClient(ctx context.Context, config types.AppConfig, token string) (pb.BackendRepositoryServiceClient, error) {
-	host := fmt.Sprintf("%s:%d", config.GatewayService.GRPC.ExternalHost, config.GatewayService.GRPC.ExternalPort)
-	conn, err := newGRPCConn(host, token)
+	conn, err := newRepositoryConn(config, token)
 	if err != nil {
 		return nil, err
 	}
@@ -63,13 +60,17 @@ func NewBackendRepositoryClient(ctx context.Context, config types.AppConfig, tok
 
 // NewThunderServiceClient creates a new Thunder service client.
 func NewThunderServiceClient(ctx context.Context, config types.AppConfig, token string) (pb.ThunderServiceClient, error) {
-	host := fmt.Sprintf("%s:%d", config.GatewayService.GRPC.ExternalHost, config.GatewayService.GRPC.ExternalPort)
-	conn, err := newGRPCConn(host, token)
+	conn, err := newRepositoryConn(config, token)
 	if err != nil {
 		return nil, err
 	}
 
 	return pb.NewThunderServiceClient(conn), nil
+}
+
+func newRepositoryConn(config types.AppConfig, token string) (*grpc.ClientConn, error) {
+	host := fmt.Sprintf("%s:%d", config.GatewayService.GRPC.ExternalHost, config.GatewayService.GRPC.ExternalPort)
+	return newGRPCConn(host, token)
 }
 
 // newGRPCConn creates a new gRPC connection (with or without TLS/Auth) to the provided host

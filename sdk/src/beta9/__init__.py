@@ -2,6 +2,7 @@ from importlib import import_module
 
 
 _EXPORTS = {
+    "VM": (".abstractions.vm", "VM"),
     "Map": (".abstractions.map", "Map"),
     "Image": (".abstractions.image", "Image"),
     "Queue": (".abstractions.queue", "SimpleQueue"),

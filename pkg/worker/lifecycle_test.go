@@ -30,6 +30,22 @@ import (
 	"k8s.io/utils/cpuset"
 )
 
+func TestWarmVMUsesCurrentPortBindings(t *testing.T) {
+	request := &types.ContainerRequest{
+		Env: []string{"BEAM_VM_SYSTEMD=1"}, UseVM: true,
+		Ports:      []uint32{7681, 9000},
+		Stub:       types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+		Checkpoint: &types.Checkpoint{ExposedPorts: []uint32{7681, 8000}},
+	}
+	require.Equal(t, []uint32{7681, 9000, uint32(types.WorkerShellPort), uint32(types.WorkerSandboxProcessManagerPort)}, portsForRequest(request))
+	requested := request.Ports
+	request.Ports = portsForRequest(request)
+	bindings := startupPortBindingsForRequest(request, requested, []int{17681, 19000, 12222, 17111})
+	require.Equal(t, []PortBinding{{HostPort: 17681, ContainerPort: 7681}, {HostPort: 19000, ContainerPort: 9000}}, bindings)
+	request.Env = nil
+	require.Equal(t, request.Checkpoint.ExposedPorts, portsForRequest(request))
+}
+
 func TestPruneUnreachableSDKMountsKeepsOnlyPresentSitePackages(t *testing.T) {
 	rootfs := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(rootfs, "usr/local/lib/python3.12/site-packages"), 0o755))
@@ -2940,10 +2956,17 @@ func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {
 		runtimeName           string
 		archiveFilesystem     bool
 		forceResourceLimits   bool
+		persistentVM          bool
 		missingOverlay        bool
 		wantFallback          bool
 		wantCheckpointUpdates int
 	}{
+		{
+			name:                "persistent VM refuses durable mount cold fallback",
+			restoreErr:          fmt.Errorf("restore failed: %w", &checkpointDurableMountValidationError{mountPath: "/", err: assert.AnError}),
+			forceResourceLimits: true,
+			persistentVM:        true,
+		},
 		{
 			name: "forced sandbox durable mount validation error",
 			restoreErr: fmt.Errorf("restore failed: %w", &checkpointDurableMountValidationError{
@@ -3085,6 +3108,10 @@ func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {
 					CheckpointId: checkpointID,
 					Status:       string(types.CheckpointStatusAvailable),
 				},
+			}
+			if test.persistentVM {
+				request.UseVM = true
+				request.Env = []string{"BEAM_VM_SYSTEMD=1"}
 			}
 			if test.forceResourceLimits {
 				request.Stub.Config = `{"_beta9_force_resource_limits":true}`

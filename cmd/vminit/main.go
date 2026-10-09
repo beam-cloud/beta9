@@ -45,6 +45,20 @@ const (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--systemd-adopt-agent" {
+		if err := adoptSystemdAgent(); err != nil {
+			logf("adopt guest agent: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "--systemd-agent" {
+		code, err := runSystemdAgent()
+		if err != nil {
+			logf("guest agent: %v", err)
+		}
+		os.Exit(code)
+	}
 	if os.Getpid() != 1 {
 		fmt.Fprintln(os.Stderr, "beam-vminit must run as PID 1 inside a microvm")
 		os.Exit(2)
@@ -77,9 +91,11 @@ func powerOff(code int) {
 }
 
 func run() (int, error) {
+	logf("boot phase: init entered")
 	if err := mountEarly(); err != nil {
 		return -1, err
 	}
+	logf("boot phase: early mounts ready")
 	vm, err := readVMSpec()
 	if err != nil {
 		return -1, err
@@ -92,6 +108,7 @@ func run() (int, error) {
 	if err := assembleRoot(vm); err != nil {
 		return -1, fmt.Errorf("assemble root: %w", err)
 	}
+	logf("boot phase: root assembled")
 	if err := pivotRoot(); err != nil {
 		return -1, fmt.Errorf("pivot root: %w", err)
 	}
@@ -101,6 +118,7 @@ func run() (int, error) {
 		return -1, fmt.Errorf("configure workload memory: %w", err)
 	}
 	defer workload.close()
+	logf("boot phase: root pivoted")
 	hostname := spec.Hostname
 	if hostname != "" {
 		if err := unix.Sethostname([]byte(hostname)); err != nil {
@@ -110,7 +128,17 @@ func run() (int, error) {
 	if err := configureNetwork(vm.Network); err != nil {
 		return -1, fmt.Errorf("configure network: %w", err)
 	}
+	logf("boot phase: network configured")
 
+	if processEnv(spec.Process, "BEAM_VM_SYSTEMD") == "1" {
+		return -1, bootSystemd(spec, workload)
+	}
+
+	return runAgent(spec.Process, false, workload)
+}
+
+func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (int, error) {
+	logf("boot phase: workload agent entered")
 	if err := serveFS(microvm.FSPort); err != nil {
 		return -1, err
 	}
@@ -118,10 +146,11 @@ func run() (int, error) {
 	if err != nil {
 		return -1, err
 	}
+	logf("boot phase: control connected")
 	defer ctrl.close()
 	go workload.watchOOM(ctrl)
-
-	return runProcess(spec.Process, ctrl, workload)
+	ctrl.systemd = systemd
+	return runProcess(process, ctrl, workload)
 }
 
 // --- early boot ------------------------------------------------------------------
@@ -453,6 +482,10 @@ func reconfigureNetwork(cfg microvm.Network) error {
 	if err != nil {
 		return err
 	}
+	return reconfigureNetworkLink(cfg, link)
+}
+
+func reconfigureNetworkLink(cfg microvm.Network, link netlink.Link) error {
 	if mac, err := net.ParseMAC(cfg.MAC); err == nil && !bytes.Equal(mac, link.Attrs().HardwareAddr) {
 		if err := netlink.LinkSetHardwareAddr(link, mac); err != nil {
 			return fmt.Errorf("set mac %s: %w", cfg.MAC, err)
@@ -470,16 +503,20 @@ func reconfigureNetwork(cfg microvm.Network) error {
 			_ = netlink.NeighDel(&neigh)
 		}
 	}
-	return configureNetwork(cfg)
+	return configureNetworkLink(cfg, link)
 }
 
 func configureNetwork(cfg microvm.Network) error {
-	if lo, err := netlink.LinkByName("lo"); err == nil {
-		_ = netlink.LinkSetUp(lo)
-	}
 	link, err := findNIC(cfg.MAC)
 	if err != nil {
 		return err
+	}
+	return configureNetworkLink(cfg, link)
+}
+
+func configureNetworkLink(cfg microvm.Network, link netlink.Link) error {
+	if lo, err := netlink.LinkByName("lo"); err == nil {
+		_ = netlink.LinkSetUp(lo)
 	}
 	name := link.Attrs().Name
 	if cfg.MTU > 0 {
@@ -591,10 +628,15 @@ func writeSysctl(path, value string) {
 // --- control channel -------------------------------------------------------------------
 
 type control struct {
-	port uint32
-	mu   sync.Mutex
-	file *os.File
-	enc  *microvm.Encoder
+	port    uint32
+	systemd bool
+	mu      sync.Mutex
+	file    *os.File
+	enc     *microvm.Encoder
+	// Private loopback aliases retain interface-bound sockets across restore.
+	networkAliases  map[string]bool
+	networkMu       sync.Mutex
+	restoredNetwork *restoredSocketNetwork
 }
 
 // controlReconnectTimeout bounds how long init keeps trying to reach the
@@ -671,6 +713,9 @@ func (c *control) close() {
 func (c *control) heartbeat(interval time.Duration) {
 	for range time.Tick(interval) {
 		c.send(microvm.Message{Type: microvm.MsgPing})
+		if err := c.refreshRestoredSockets(); err != nil {
+			logf("refresh restored socket addresses: %v", err)
+		}
 	}
 }
 
@@ -700,12 +745,22 @@ func (c *control) serve(childPid func() int) {
 				c.ack(msg.ID, errors.New("network config is missing"))
 				continue
 			}
-			err := reconfigureNetwork(*msg.Network)
+			err := c.restoreNetwork(*msg.Network)
 			if err == nil {
 				logf("network reconfigured to %s %s", msg.Network.IPv4, msg.Network.IPv6)
 			}
 			c.ack(msg.ID, err)
 		case microvm.MsgSignal:
+			if c.systemd && (msg.Signal == int(unix.SIGTERM) || msg.Signal == int(unix.SIGINT)) {
+				// Shutdown ordinary units before the guest agent, which is
+				// ordered before sysinit and therefore stops after basic units.
+				if err := exec.Command("systemctl", "--no-block", "poweroff").Run(); err == nil {
+					c.ack(msg.ID, nil)
+					continue
+				} else {
+					logf("systemd poweroff failed; signaling workload: %v", err)
+				}
+			}
 			pid := childPid()
 			if pid <= 0 {
 				c.ack(msg.ID, errors.New("container process is not running"))
@@ -1227,16 +1282,30 @@ func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (i
 		return -1, fmt.Errorf("start %v: %w", proc.Args, err)
 	}
 	pid := cmd.Process.Pid
+	if ctrl.systemd {
+		// systemd sends TERM to the agent after ordinary units have stopped.
+		// Reap the workload and report its exit only at that shutdown barrier.
+		stopping := make(chan os.Signal, 1)
+		signal.Notify(stopping, unix.SIGTERM)
+		defer signal.Stop(stopping)
+		go func() { <-stopping; _ = unix.Kill(pid, unix.SIGTERM) }()
+	}
 	ctrl.send(microvm.Message{Type: microvm.MsgStarted, Pid: pid})
 	go ctrl.serve(func() int { return pid })
 	go ctrl.heartbeat(controlHeartbeat)
 	logf("started %v as pid %d", proc.Args, pid)
 
+	waitPID := -1
+	if ctrl.systemd {
+		// PID 1 reaps orphans in a systemd guest. Wait only for our workload
+		// so exec.Cmd helpers can collect their own children and exit status.
+		waitPID = pid
+	}
 	for {
 		<-sigchld
 		for {
 			var status unix.WaitStatus
-			reaped, err := unix.Wait4(-1, &status, unix.WNOHANG, nil)
+			reaped, err := unix.Wait4(waitPID, &status, unix.WNOHANG, nil)
 			if err != nil || reaped <= 0 {
 				break
 			}

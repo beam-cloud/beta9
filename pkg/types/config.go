@@ -400,6 +400,17 @@ type ImageServiceConfig struct {
 	BuildLayerCacheMaxPct float64 `key:"buildLayerCacheMaxPct" json:"build_layer_cache_max_pct"`
 }
 
+// EffectiveBuildRegistry resolves the publishing registry for gateway and agent workers.
+func (c ImageServiceConfig) EffectiveBuildRegistry() string {
+	if c.BuildRegistry != "" {
+		return c.BuildRegistry
+	}
+	if c.Runner.BaseImageRegistry != "" {
+		return c.Runner.BaseImageRegistry
+	}
+	return "localhost"
+}
+
 // BuildAptConfig is applied to apt during image builds whose base image has
 // apt installed. Public archives are slow or stall from some regions
 // (archive.ubuntu.com measured at ~90 KB/s from us-east-1, with apt's default
@@ -1292,6 +1303,15 @@ type NvidiaCRIUConfig struct {
 type AbstractionConfig struct {
 	Bot BotConfig `key:"bot" json:"bot"`
 	Pod PodConfig `key:"pod" json:"pod"`
+	VM  VMConfig  `key:"vm" json:"vm"`
+}
+
+type VMConfig struct {
+	// Optional pool used when a VM is created without an explicit selector.
+	DefaultPool string `key:"defaultPool" json:"default_pool"`
+	// Wildcard DNS/ingress pointing at the gateway; <handle>-<port>.<domain>.
+	Domain  string `key:"domain" json:"domain"`
+	BaseURL string `key:"baseURL" json:"base_url"`
 }
 
 type BotConfig struct {

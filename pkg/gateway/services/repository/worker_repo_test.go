@@ -49,6 +49,13 @@ func TestGetWorkerMeteringConfigRequiresAssignedManagedSlot(t *testing.T) {
 type claimWorkerRepo struct {
 	repository.WorkerRepository
 	claimErr error
+	moves    []*pb.MoveContainerIpRequest
+	moveErr  error
+}
+
+func (r *claimWorkerRepo) MoveContainerIp(prefix, from, to, ip string) error {
+	r.moves = append(r.moves, &pb.MoveContainerIpRequest{NetworkPrefix: prefix, FromContainerId: from, ToContainerId: to, IpAddress: ip})
+	return r.moveErr
 }
 
 func (r *claimWorkerRepo) AddContainerToWorker(workerID, containerID, deliveryToken string) error {
@@ -64,6 +71,13 @@ type claimContainerRepo struct {
 	updates       []types.ContainerStatus
 	updateExpiry  []int64
 	getStateCalls int
+	address       string
+	addressErr    error
+}
+
+func (r *claimContainerRepo) SetWorkerAddress(_ string, address string) error {
+	r.address = address
+	return r.addressErr
 }
 
 func (r *claimContainerRepo) UpdateContainerStatus(containerID string, status types.ContainerStatus, expirySeconds int64) error {
@@ -143,6 +157,55 @@ func TestClaimContainerReportsMissingStateAfterClaim(t *testing.T) {
 	require.True(t, resp.Claimed)
 	require.False(t, resp.Ok)
 	require.True(t, (&types.ErrContainerStateNotFound{}).From(errors.New(resp.ErrorMsg)))
+}
+
+func TestClaimContainerPublishesStartupOnlyAfterAcceptance(t *testing.T) {
+	for _, tc := range []struct {
+		name                                              string
+		claimErr, moveErr, addressErr                     error
+		stopping                                          bool
+		wantClaimed, wantMoved, wantAddress, wantPrepared bool
+	}{
+		{name: "accepted", wantClaimed: true, wantMoved: true, wantAddress: true, wantPrepared: true},
+		{name: "rejected", claimErr: errors.New("delivery owned elsewhere")},
+		{name: "stopping", stopping: true, wantClaimed: true},
+		{name: "move failed", moveErr: errors.New("source ownership changed"), wantClaimed: true, wantMoved: true},
+		{name: "address failed", addressErr: errors.New("route unavailable"), wantClaimed: true, wantMoved: true, wantAddress: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := &claimWorkerRepo{claimErr: tc.claimErr, moveErr: tc.moveErr}
+			containers := &claimContainerRepo{state: &types.ContainerState{ContainerId: "c1", WorkspaceId: "ws1", Status: types.ContainerStatusPending}, addressErr: tc.addressErr}
+			if tc.stopping {
+				containers.state.Status = types.ContainerStatusStopping
+			}
+			service := &WorkerRepositoryService{workerRepo: worker, containerRepo: containers}
+			resp, err := service.ClaimContainer(context.Background(), &pb.ClaimContainerRequest{
+				WorkerId: "w1", ContainerId: "c1", DeliveryToken: "token",
+				Network:       &pb.MoveContainerIpRequest{NetworkPrefix: "node1", FromContainerId: "network-slot:w1:s1", ToContainerId: "c1", IpAddress: "192.168.0.2"},
+				WorkerAddress: &pb.SetWorkerAddressRequest{ContainerId: "c1", Address: "worker:1234"},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.wantClaimed, resp.Claimed)
+			require.Equal(t, tc.wantMoved, len(worker.moves) == 1)
+			require.Equal(t, tc.wantAddress, containers.address != "")
+			require.Equal(t, tc.wantPrepared, resp.StartupPrepared)
+		})
+	}
+}
+
+func TestClaimContainerRefusesForeignStartupResources(t *testing.T) {
+	for _, req := range []*pb.ClaimContainerRequest{
+		{WorkerId: "w1", ContainerId: "c1", WorkerAddress: &pb.SetWorkerAddressRequest{ContainerId: "other"}},
+		{WorkerId: "w1", ContainerId: "c1", Network: &pb.MoveContainerIpRequest{FromContainerId: "network-slot:w2:s1", ToContainerId: "c1"}},
+		{WorkerId: "w1", ContainerId: "c1", Network: &pb.MoveContainerIpRequest{FromContainerId: "network-slot:w1:s1", ToContainerId: "other"}},
+		{WorkerId: "w1", ContainerId: "c1", WorkerAddress: &pb.SetWorkerAddressRequest{ContainerId: "c1", Route: &pb.BackendRoute{WorkerId: "w2", Kind: types.BackendRouteKindWorker}}},
+	} {
+		// Missing repositories make any acceptance or publication fail the test.
+		resp, err := (&WorkerRepositoryService{}).ClaimContainer(context.Background(), req)
+		require.NoError(t, err)
+		require.False(t, resp.Claimed)
+		require.False(t, resp.Ok)
+	}
 }
 
 type updateStatusContainerRepo struct {
@@ -237,4 +300,17 @@ func TestSetWorkerKeepAliveFailsClosedWhenHeadroomCannotBeDetermined(t *testing.
 			require.True(t, resp.PoolHeadroom, "an idle worker must stay up until the pool can actually be read")
 		})
 	}
+}
+
+func TestClaimContainerRefusesForeignRouteWorkspaceAfterAcceptance(t *testing.T) {
+	workers := &claimWorkerRepo{}
+	containers := &claimContainerRepo{state: &types.ContainerState{ContainerId: "c1", WorkspaceId: "ws1", Status: types.ContainerStatusPending}}
+	service := &WorkerRepositoryService{workerRepo: workers, containerRepo: containers}
+	resp, err := service.ClaimContainer(context.Background(), &pb.ClaimContainerRequest{WorkerId: "w1", ContainerId: "c1", DeliveryToken: "token", Network: &pb.MoveContainerIpRequest{FromContainerId: "network-slot:w1:s1", ToContainerId: "c1", IpAddress: "192.168.0.2"}, WorkerAddress: &pb.SetWorkerAddressRequest{ContainerId: "c1", Route: &pb.BackendRoute{WorkerId: "w1", WorkspaceId: "other", Kind: types.BackendRouteKindWorker}}})
+	require.NoError(t, err)
+	require.True(t, resp.Claimed)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "workspace")
+	require.Empty(t, workers.moves)
+	require.Empty(t, containers.address)
 }

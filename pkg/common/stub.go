@@ -2,16 +2,11 @@ package common
 
 import (
 	"errors"
+	"slices"
 	"strings"
-)
 
-var stubScopedContainerPrefixes = map[string]struct{}{
-	"sandbox":   {},
-	"pod":       {},
-	"endpoint":  {},
-	"taskqueue": {},
-	"managed":   {},
-}
+	"github.com/beam-cloud/beta9/pkg/types"
+)
 
 func ExtractStubIdFromContainerId(containerId string) (string, error) {
 	parts := strings.Split(containerId, "-")
@@ -27,7 +22,7 @@ func ExtractStubIdFromStubScopedContainerId(containerId string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if _, ok := stubScopedContainerPrefixes[prefix]; !ok {
+	if !slices.Contains(types.StubScopedContainerPrefixes(), prefix) {
 		return "", false
 	}
 

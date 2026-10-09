@@ -116,16 +116,21 @@ local from_container_id = ARGV[2]
 local to_container_id = ARGV[3]
 
 local current_ip = redis.call("GET", from_key)
+local owner = redis.call("GET", owner_key)
+local to_ip = redis.call("GET", to_key)
+-- A lost reply can be retried after the original move committed. Never
+-- touch a source that has since been assigned a different IP.
+if current_ip ~= ip and to_ip == ip and owner == to_container_id then
+	return 1
+end
 if current_ip ~= ip then
 	return redis.error_reply("source container does not own requested ip")
 end
 
-local owner = redis.call("GET", owner_key)
 if owner ~= from_container_id then
 	return redis.error_reply("ip owner mismatch")
 end
 
-local to_ip = redis.call("GET", to_key)
 if to_ip and to_ip ~= false and to_ip ~= "" and to_ip ~= ip then
 	return redis.error_reply("destination container already has a different ip")
 end

@@ -48,11 +48,61 @@ func newWorkloadMemory(limit int64) (*workloadMemory, error) {
 			return nil, fmt.Errorf("write %s: %w", setting.path, err)
 		}
 	}
+	return openWorkloadMemory()
+}
+
+func openWorkloadMemory() (*workloadMemory, error) {
+	data, err := os.ReadFile(microvm.WorkloadCgroup + "/memory.max")
+	if err != nil {
+		return nil, err
+	}
+	limit, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || limit <= 0 {
+		return nil, fmt.Errorf("invalid workload memory limit %q", data)
+	}
 	cgroup, err := os.Open(microvm.WorkloadExecCgroup)
 	if err != nil {
 		return nil, err
 	}
 	return &workloadMemory{limitBytes: limit, cgroup: cgroup, done: make(chan struct{})}, nil
+}
+
+// Systemd services and scopes share the exec budget. PID 1 and the adopted
+// agent remain outside it; transient configuration is recreated on cold boot.
+func (w *workloadMemory) configureSystemd(root string) error {
+	unitDir := filepath.Join(root, "run/systemd/system")
+	files := map[string]string{
+		microvm.WorkloadSlice:                   "[Unit]\nDefaultDependencies=no\n[Slice]\nMemoryMax=" + strconv.FormatInt(w.limitBytes, 10) + "\nMemorySwapMax=0\n",
+		microvm.ControlSlice:                    "[Unit]\nDefaultDependencies=no\n[Slice]\nMemoryMin=" + strconv.FormatInt(microvm.GuestMemoryHeadroom, 10) + "\n",
+		"service.d/00-workload.conf":            "[Service]\nSlice=" + microvm.WorkloadSlice + "\n",
+		"scope.d/00-workload.conf":              "[Scope]\nSlice=" + microvm.WorkloadSlice + "\n",
+		"beam-guest.service.d/00-workload.conf": "[Service]\nSlice=" + microvm.ControlSlice + "\n",
+		"init.scope.d/00-workload.conf":         "[Scope]\nSlice=-.slice\n",
+	}
+	for name, content := range files {
+		path := filepath.Join(unitDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func processInWorkloadCgroup(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return false
+	}
+	group := strings.TrimPrefix(microvm.WorkloadCgroup, "/sys/fs/cgroup")
+	for _, line := range strings.Split(string(data), "\n") {
+		if path, ok := strings.CutPrefix(line, "0::"); ok {
+			return path == group || strings.HasPrefix(path, group+"/")
+		}
+	}
+	return false
 }
 
 func (w *workloadMemory) close() {

@@ -1688,6 +1688,15 @@ func TestWorkerNetworkIPIndexMovesPreallocatedReservation(t *testing.T) {
 
 	err = repo.MoveContainerIp(networkPrefix, "network-slot:slot-a", "container-a", ip)
 	assert.Nil(t, err)
+	// A gateway retry after losing the successful reply preserves the owner.
+	assert.NoError(t, repo.MoveContainerIp(networkPrefix, "network-slot:slot-a", "container-a", ip))
+	// The source can meanwhile acquire a different IP. A replay must leave it.
+	assert.NoError(t, repo.SetContainerIp(networkPrefix, "network-slot:slot-a", "192.168.0.3"))
+	assert.NoError(t, repo.MoveContainerIp(networkPrefix, "network-slot:slot-a", "container-a", ip))
+	sourceIP, err := repo.GetContainerIp(networkPrefix, "network-slot:slot-a")
+	assert.NoError(t, err)
+	assert.Equal(t, "192.168.0.3", sourceIP)
+	assert.Error(t, repo.MoveContainerIp(networkPrefix, "network-slot:slot-a", "another-container", ip))
 
 	ips, err := repo.GetContainerIps(networkPrefix)
 	assert.Nil(t, err)

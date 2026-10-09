@@ -72,7 +72,13 @@ func (s *Worker) qcowVolumeKey(request *types.ContainerRequest, mount *types.Mou
 	return key
 }
 
-func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (retErr error) {
+func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) error {
+	return s.prepareQcowDurableDiskMountAfterHead(ctx, request, mount, nil)
+}
+
+// afterHead can defer all writes until a pending delivery is accepted. The
+// caller retains the host disk lock from the authoritative read through attach.
+func (s *Worker) prepareQcowDurableDiskMountAfterHead(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, afterHead func() error) (retErr error) {
 	if s.diskManager == nil {
 		return fmt.Errorf("qcow durable disks are not enabled on this worker")
 	}
@@ -86,9 +92,14 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	// Resolving a chain costs a round trip per generation. A worker that
 	// published or last restored this disk already holds the whole chain in
 	// memory, and a head that still matches means nothing was published since.
-	newest, err := s.latestQcowSnapshotRow(ctx, request, mount)
+	newest, err := s.restoreQcowSnapshotRow(ctx, request, mount)
 	if err != nil {
 		return err
+	}
+	if afterHead != nil {
+		if err := afterHead(); err != nil {
+			return err
+		}
 	}
 	journal, committed, err := s.openDatabaseDiskJournal(ctx, request, mount, newest, sizeBytes)
 	if err != nil {
@@ -244,14 +255,11 @@ func (s *Worker) openDatabaseDiskJournal(ctx context.Context, request *types.Con
 	if newest != nil && newest.ExternalId == snapshotID {
 		return journal, newest, nil
 	}
-	response, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{
-		WorkspaceId: cacheRequestWorkspaceID(request), SnapshotId: snapshotID,
-	}))
+	committed, err := s.diskSnapshotByID(ctx, request, snapshotID)
 	if err != nil {
 		_ = journal.Close()
 		return nil, nil, err
 	}
-	committed := durableDiskSnapshotFromProto(response.Snapshot)
 	if committed == nil || committed.ManifestKey == "" {
 		_ = journal.Close()
 		return nil, nil, fmt.Errorf("committed database snapshot %s is unavailable", snapshotID)
@@ -610,14 +618,11 @@ func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.Co
 		if len(rows) > disk.DefaultMaxChainDepth {
 			return nil, fmt.Errorf("disk %q snapshot chain exceeds %d generations", mount.DurableDisk.Name, disk.DefaultMaxChainDepth)
 		}
-		parentResp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{
-			WorkspaceId: cacheRequestWorkspaceID(request),
-			SnapshotId:  row.ParentSnapshotId,
-		}))
+		parent, err := s.diskSnapshotByID(ctx, request, row.ParentSnapshotId)
 		if err != nil {
 			return nil, fmt.Errorf("resolve qcow snapshot parent %s: %w", row.ParentSnapshotId, err)
 		}
-		row = durableDiskSnapshotFromProto(parentResp.Snapshot)
+		row = parent
 		if row == nil || row.ManifestKey == "" {
 			return nil, fmt.Errorf("qcow snapshot parent %s is missing", rows[len(rows)-1].ParentSnapshotId)
 		}
@@ -759,6 +764,26 @@ func (s *Worker) withdrawQcowSnapshot(ctx context.Context, request *types.Contai
 		log.Warn().Err(err).Str("container_id", request.ContainerId).Str("disk", row.DiskName).
 			Str("snapshot_id", row.ExternalId).Msg("failed to withdraw a snapshot its journal never recorded")
 	}
+}
+
+// A warm VM restores the immutable disk head paired with RAM. Consulting the
+// latest head here would race a publication after gateway validation.
+func (s *Worker) restoreQcowSnapshotRow(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
+	if !request.IsPersistentVM() || request.Checkpoint == nil {
+		return s.latestQcowSnapshotRow(ctx, request, mount)
+	}
+	id := mount.DurableDisk.SourceSnapshotId
+	if id == "" {
+		return nil, fmt.Errorf("VM memory checkpoint has no paired disk %s", mount.DurableDisk.Name)
+	}
+	row, err := s.diskSnapshotByID(ctx, request, id)
+	if err != nil {
+		return nil, fmt.Errorf("get paired VM disk snapshot: %w", err)
+	}
+	if row == nil || row.ExternalId != id || row.DiskName != mount.DurableDisk.Name || row.ManifestKey == "" || row.Format != types.DiskSnapshotFormatQcowV1 {
+		return nil, fmt.Errorf("paired VM disk snapshot %s is unavailable or incompatible", id)
+	}
+	return row, nil
 }
 
 func (s *Worker) latestQcowSnapshotRow(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {

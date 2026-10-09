@@ -63,9 +63,12 @@ type agentConfigWorkspaceStorage struct {
 }
 
 type agentConfigImage struct {
-	LocalCacheEnabled bool   `json:"localCacheEnabled"`
-	RegistryStore     string `json:"registryStore"`
-	ClipVersion       uint32 `json:"clipVersion"`
+	LocalCacheEnabled     bool   `json:"localCacheEnabled"`
+	RegistryStore         string `json:"registryStore"`
+	ClipVersion           uint32 `json:"clipVersion"`
+	BuildRegistry         string `json:"buildRegistry,omitempty"`
+	BuildRepositoryName   string `json:"buildRepositoryName,omitempty"`
+	BuildRegistryInsecure *bool  `json:"buildRegistryInsecure,omitempty"`
 	// Registries is always serialized with zero values to explicitly clear the
 	// placeholder registry credentials baked into the worker image's embedded
 	// default config (config.default.yaml). Private workers never hold static
@@ -194,6 +197,11 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 }
 
 func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) agentWorkerConfig {
+	// Older gateways omit publishing settings; preserve the worker defaults.
+	var buildRegistryInsecure *bool
+	if bootstrap.ImageBuildRegistry != "" {
+		buildRegistryInsecure = &bootstrap.ImageBuildRegistryInsecure
+	}
 	poolConfig := slot.GetPoolConfig()
 	workspaceStorageMode := firstNonEmpty(poolConfig.GetStorageMode(), os.Getenv(types.AgentStorageModeEnv), types.StorageModeGeese)
 	cache := agentDiskCacheConfig(slot)
@@ -264,9 +272,12 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			},
 		},
 		Image: agentConfigImage{
-			LocalCacheEnabled: bootstrap.ImageLocalCacheEnabled,
-			RegistryStore:     firstNonEmpty(bootstrap.ImageRegistryStore, registry.LocalImageRegistryStore),
-			ClipVersion:       firstNonZeroUint32(bootstrap.ImageClipVersion, uint32(types.ClipVersion2)),
+			LocalCacheEnabled:     bootstrap.ImageLocalCacheEnabled,
+			RegistryStore:         firstNonEmpty(bootstrap.ImageRegistryStore, registry.LocalImageRegistryStore),
+			ClipVersion:           firstNonZeroUint32(bootstrap.ImageClipVersion, uint32(types.ClipVersion2)),
+			BuildRegistry:         bootstrap.ImageBuildRegistry,
+			BuildRepositoryName:   bootstrap.ImageBuildRepositoryName,
+			BuildRegistryInsecure: buildRegistryInsecure,
 		},
 		Monitoring: agentConfigMonitoring{
 			MetricsCollector:         string(types.MetricsCollectorNone),

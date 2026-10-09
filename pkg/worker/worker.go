@@ -24,6 +24,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -146,6 +147,7 @@ type Worker struct {
 	completedRequests       chan *types.ContainerRequest
 	stopContainerChan       chan stopContainerEvent
 	workerRepoClient        pb.WorkerRepositoryServiceClient
+	repositoryConn          *grpc.ClientConn
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	backendRepoClient       pb.BackendRepositoryServiceClient
 	eventRepo               repo.EventRepository
@@ -185,6 +187,7 @@ func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManage
 }
 
 type ContainerInstance struct {
+	workerAddressPublished     atomic.Bool
 	Id                         string
 	StubId                     string
 	BundlePath                 string
@@ -389,6 +392,8 @@ func (i *ContainerInstance) containerAddress(port int32) string {
 }
 
 type ContainerOptions struct {
+	// NetworkPrepared means its namespace was assigned during image/disk setup.
+	NetworkPrepared             bool
 	BundlePath                  string
 	HostBindPort                int
 	BindPorts                   []int
@@ -501,27 +506,24 @@ func NewWorker() (_ *Worker, err error) {
 	}
 	config := configManager.GetConfig()
 
-	containerRepoClient, err := NewContainerRepositoryClient(context.TODO(), config, workerToken)
+	// The delivery stream keeps this authenticated HTTP/2 connection live.
+	// Repository RPCs share it instead of paying for independent idle transports.
+	repositoryConn, err := newRepositoryConn(config, workerToken)
 	if err != nil {
 		return nil, err
 	}
-
-	workerRepoClient, err := NewWorkerRepositoryClient(context.TODO(), config, workerToken)
-	if err != nil {
-		return nil, err
-	}
-
-	backendRepoClient, err := NewBackendRepositoryClient(context.TODO(), config, workerToken)
-	if err != nil {
-		return nil, err
-	}
-
+	initialized := false
+	defer func() {
+		if !initialized {
+			_ = repositoryConn.Close()
+		}
+	}()
+	containerRepoClient := pb.NewContainerRepositoryServiceClient(repositoryConn)
+	workerRepoClient := pb.NewWorkerRepositoryServiceClient(repositoryConn)
+	backendRepoClient := pb.NewBackendRepositoryServiceClient(repositoryConn)
 	var thunderClient pb.ThunderServiceClient
 	if gpuVirtualized {
-		thunderClient, err = NewThunderServiceClient(context.TODO(), config, workerToken)
-		if err != nil {
-			return nil, err
-		}
+		thunderClient = pb.NewThunderServiceClient(repositoryConn)
 	}
 
 	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
@@ -662,7 +664,12 @@ func NewWorker() (_ *Worker, err error) {
 	}
 
 	var criuManager CRIUManager = nil
-	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
+	if defaultRuntime.Name() == types.ContainerRuntimeMicroVM.String() && cacheManager != nil {
+		criuManager, err = InitializeMicroVMCheckpointManager(cacheManager.CheckpointRoot())
+		if err != nil {
+			log.Warn().Err(err).Msg("microVM checkpoint manager unavailable")
+		}
+	} else if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
 		if cacheManager == nil {
 			log.Warn().Str("worker_id", workerId).Msg("C/R unavailable, cache is required for checkpoints")
 		} else {
@@ -724,6 +731,7 @@ func NewWorker() (_ *Worker, err error) {
 			workerID:           workerId,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
+		repositoryConn:      repositoryConn,
 		containerRepoClient: containerRepoClient,
 		workerRepoClient:    workerRepoClient,
 		backendRepoClient:   backendRepoClient,
@@ -738,12 +746,7 @@ func NewWorker() (_ *Worker, err error) {
 		routeTransport:      routeTransport,
 	}
 
-	// Recover qcow volumes left behind by a previous worker process before any
-	// container can attach: live volumes are adopted, crashed ones cleaned up.
-	worker.diskManager = disk.NewManager(disk.Config{})
-	if err := worker.diskManager.Recover(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
-	}
+	worker.initializeDurableDisks(ctx)
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
 		PodAddr:                 podAddr,
@@ -782,6 +785,7 @@ func NewWorker() (_ *Worker, err error) {
 	worker.workerUsageMetrics = workerMetrics
 	worker.containerServer = containerServer
 
+	initialized = true
 	return worker, nil
 }
 
@@ -948,7 +952,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		Runtime:   s.runtime,
 		CPUSet:    s.allocateContainerCPUSet(request),
 	}
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		instance.initializeProcessManagerReadiness()
 	}
 	s.containerInstances.Set(request.ContainerId, instance)
@@ -985,11 +989,27 @@ func (s *Worker) runContainerRequestWithRunner(
 	}()
 	s.cancelContainerIfAlreadyStopping(cancelStartup, containerId)
 
+	ctx = s.imageClient.prepareCachedImageAccess(ctx, request)
+
+	// Only read the root head before accepting delivery. Its host lock stays
+	// held until the accepted claim and runtime validation permit attachment.
+	rootPreparation := s.startQcowRootPreparation(ctx, request)
+	ctx = rootPreparation.withContext(ctx)
+	defer rootPreparation.close()
+
+	// Release a prefetched disk fence before failure cleanup may acquire it.
+	failRequest := func(err error) {
+		cancelStartup()
+		rootPreparation.close()
+		s.failContainerRequest(containerId, request, err)
+	}
+
 	// The claim uses the worker context, like the delivery stream that carried
 	// the request: a stop that races the claim is observed afterwards through
 	// the startup context, so the container is failed (and its exit reported)
 	// rather than silently forgotten while the gateway believes it is ours.
 	claimed, err := s.claimContainer(s.ctx, request)
+	rootPreparation.finishClaim(request, err)
 	if err != nil {
 		if !claimed {
 			log.Warn().Str("container_id", containerId).Err(err).Msg("container claim rejected")
@@ -997,11 +1017,11 @@ func (s *Worker) runContainerRequestWithRunner(
 			return
 		}
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to claim container")
-		s.failContainerRequest(containerId, request, err)
+		failRequest(err)
 		return
 	}
 	if err := ctx.Err(); err != nil {
-		s.failContainerRequest(containerId, request, err)
+		failRequest(err)
 		return
 	}
 
@@ -1076,7 +1096,7 @@ func (s *Worker) runContainerRequestWithRunner(
 
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
-		s.failContainerRequest(containerId, request, err)
+		failRequest(err)
 		return
 	}
 
@@ -1092,7 +1112,7 @@ func (s *Worker) runContainerRequestWithRunner(
 // touched.
 func (s *Worker) releaseUnclaimedContainer(request *types.ContainerRequest) {
 	if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
-		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if request.Stub.Type.IsSandbox() {
 			instance.signalProcessManagerReadiness(false)
 		}
 		s.containerInstances.Delete(request.ContainerId)
@@ -1696,6 +1716,9 @@ func (s *Worker) startup() error {
 }
 
 func (s *Worker) shutdown() error {
+	if s.repositoryConn != nil {
+		defer s.repositoryConn.Close()
+	}
 	log.Info().Msg("shutting down")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
@@ -1814,9 +1837,11 @@ func (s *Worker) stopActiveContainersForShutdown() {
 
 	ids := s.activeContainerIDs()
 	log.Info().Int("containers", len(ids)).Msg("stopping active containers before worker shutdown")
+	grace := workerContainerStopGrace(s.config.Worker.TerminationGracePeriod)
 
 	for _, id := range ids {
 		if instance, exists := s.containerInstances.Get(id); exists {
+			grace = max(grace, s.containerTerminationGrace(instance.Request))
 			instance.setStopReason(types.StopContainerReasonAdmin)
 			s.containerInstances.Set(id, instance)
 		}
@@ -1825,7 +1850,6 @@ func (s *Worker) stopActiveContainersForShutdown() {
 		}
 	}
 
-	grace := workerContainerStopGrace(s.config.Worker.TerminationGracePeriod)
 	if s.waitForActiveContainers(grace) {
 		return
 	}

@@ -23,6 +23,8 @@ type workerRuntimeManager struct {
 	mu          sync.Mutex
 	supervisors map[string]*workerRuntimeSupervisor
 	noticeOnce  sync.Once
+	workers     sync.WaitGroup
+	stopped     bool
 	statusOut   io.Writer
 	statusErr   io.Writer
 	telemetry   *agentTelemetry
@@ -140,7 +142,16 @@ func (m *workerRuntimeManager) ensureSlot(ctx context.Context, slot *pb.AgentWor
 	}
 	m.supervisors[slot.WorkerId] = supervisor
 	statusf(m.statusOut, "Preparing worker %q", slot.WorkerId)
-	go m.superviseSlot(slotCtx, supervisor)
+	if m.stopped {
+		cancel()
+		delete(m.supervisors, slot.WorkerId)
+		return
+	}
+	m.workers.Add(1)
+	go func() {
+		defer m.workers.Done()
+		m.superviseSlot(slotCtx, supervisor)
+	}()
 }
 
 func (m *workerRuntimeManager) superviseSlot(ctx context.Context, supervisor *workerRuntimeSupervisor) {
@@ -314,14 +325,15 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		if err := stopWorkerContainer(name); err != nil {
+		grace := newAgentWorkerConfig(r.bootstrap, slot).Worker.TerminationGracePeriod
+		if err := stopWorkerContainer(name, int64(grace)); err != nil {
 			fmt.Fprintf(r.statusErr, "failed to gracefully stop worker %s: %v\n", name, err)
-			_ = exec.Command("docker", "rm", "-f", name).Run()
+			_ = removeDockerContainer(name)
 		}
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			_ = exec.Command("docker", "rm", "-f", name).Run()
+			_ = removeDockerContainer(name)
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
@@ -330,10 +342,11 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	}
 }
 
-func stopWorkerContainer(name string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+func stopWorkerContainer(name string, stopGrace int64) error {
+	grace := types.WorkerShutdownGraceSeconds(stopGrace)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(grace+5)*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "stop", "--time", "30", name).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "docker", "stop", "--time", fmt.Sprint(grace), name).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker stop: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -380,11 +393,13 @@ func (m *workerRuntimeManager) stopAll() {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.stopped = true
 	for workerID, supervisor := range m.supervisors {
 		supervisor.cancel()
 		delete(m.supervisors, workerID)
 	}
+	m.mu.Unlock()
+	m.workers.Wait()
 }
 
 func (m *workerRuntimeManager) stats() agentWorkerStats {

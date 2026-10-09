@@ -49,9 +49,11 @@ const (
 	GuestCID = 3
 
 	// The process manager lives outside the application's memory budget.
-	WorkloadCgroup      = "/sys/fs/cgroup/beam-workload"
+	WorkloadSlice       = "workload.slice"
+	ControlSlice        = "control.slice"
+	WorkloadCgroup      = "/sys/fs/cgroup/" + WorkloadSlice
 	WorkloadExecCgroup  = WorkloadCgroup + "/exec"
-	ControlCgroup       = "/sys/fs/cgroup/beam-control"
+	ControlCgroup       = "/sys/fs/cgroup/" + ControlSlice
 	WorkloadCgroupEnv   = "GOPROC_WORKLOAD_CGROUP"
 	GuestMemoryHeadroom = 512 << 20
 

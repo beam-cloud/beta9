@@ -647,6 +647,57 @@ func TestContainerSandboxStatusReportsFailedProcessManagerInitialization(t *test
 	require.Contains(t, resp.ErrorMsg, "failed to become ready")
 }
 
+func TestContainerSandboxStatusWaitsForReadinessEvent(t *testing.T) {
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	instance := &ContainerInstance{Id: "sandbox-ready"}
+	instance.initializeProcessManagerReadiness()
+	server.containerInstances.Set(instance.Id, instance)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan *pb.ContainerSandboxStatusResponse, 1)
+	go func() {
+		resp, _ := server.ContainerSandboxStatus(ctx, &pb.ContainerSandboxStatusRequest{ContainerId: instance.Id, WaitForReady: true})
+		result <- resp
+	}()
+	select {
+	case <-result:
+		t.Fatal("readiness returned before the process manager started")
+	case <-time.After(20 * time.Millisecond):
+	}
+	instance.signalProcessManagerReadiness(true)
+	select {
+	case resp := <-result:
+		require.True(t, resp.Ok)
+		require.Equal(t, string(types.SandboxStatusRunning), resp.Status)
+	case <-ctx.Done():
+		t.Fatal("readiness did not wake on the worker event")
+	}
+}
+
+func TestContainerSandboxStatusReadinessWaitCanCancelOrFail(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+		instance := &ContainerInstance{Id: "sandbox-ready"}
+		instance.initializeProcessManagerReadiness()
+		server.containerInstances.Set(instance.Id, instance)
+		ctx, cancel := context.WithCancel(context.Background())
+		if fail {
+			instance.signalProcessManagerReadiness(false)
+		} else {
+			cancel()
+		}
+		resp, err := server.ContainerSandboxStatus(ctx, &pb.ContainerSandboxStatusRequest{ContainerId: instance.Id, WaitForReady: true})
+		cancel()
+		require.NoError(t, err)
+		require.False(t, resp.Ok)
+		if fail {
+			require.Contains(t, resp.ErrorMsg, "failed to become ready")
+		} else {
+			require.Contains(t, resp.ErrorMsg, "cancelled")
+		}
+	}
+}
+
 func TestContainerSandboxStatusRequiresProcessManagerForPid(t *testing.T) {
 	containerId := "sandbox-test"
 	server := &ContainerRuntimeServer{

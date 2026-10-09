@@ -67,9 +67,11 @@ class InlineExecStub:
             if path.endswith("SandboxStatus"):
                 return SimpleNamespace(ok=True, exit_code=0, status="exited")
             if path.endswith("SandboxStdout"):
-                return SimpleNamespace(ok=True, stdout=self.stdout)
+                stdout, self.stdout = self.stdout, ""
+                return SimpleNamespace(ok=True, stdout=stdout)
             if path.endswith("SandboxStderr"):
-                return SimpleNamespace(ok=True, stderr=self.stderr)
+                stderr, self.stderr = self.stderr, ""
+                return SimpleNamespace(ok=True, stderr=stderr)
             raise AssertionError(f"unexpected RPC path: {path}")
 
         return call
@@ -96,6 +98,19 @@ class ExecReadyRetryStub:
         return call
 
 
+def test_process_discovery_preserves_quoted_argument_boundaries():
+    response = SimpleNamespace(
+        ok=True,
+        processes=[
+            SimpleNamespace(pid=44, cmd="printf '%s' 'two words'", cwd="/", env={}, exit_code=0)
+        ],
+    )
+    sandbox = SimpleNamespace(
+        container_id="sandbox", stub=SimpleNamespace(sandbox_list_processes=lambda _: response)
+    )
+    assert SandboxProcessManager(sandbox).list_processes()[44].args == ["printf", "%s", "two words"]
+
+
 def test_process_stream_read_propagates_fetch_errors():
     def fetch():
         raise SandboxProcessError("stdout unavailable")
@@ -106,20 +121,21 @@ def test_process_stream_read_propagates_fetch_errors():
         stream.read()
 
 
-def test_finished_process_stream_read_fetches_output_once():
+def test_finished_process_stream_read_drains_all_output_deltas():
     calls = 0
+    chunks = iter(["first\n", "second\n", "tail", ""])
 
     def fetch():
         nonlocal calls
         calls += 1
-        return "done"
+        return next(chunks)
 
     process = FakeProcess()
     process.exit_code = 0
     stream = SandboxProcessStream(process, fetch)
 
-    assert stream.read() == "done"
-    assert calls == 1
+    assert stream.read() == "first\nsecond\ntail"
+    assert calls == 4
 
 
 def test_process_stdout_checks_rpc_ok():
@@ -280,5 +296,7 @@ def test_run_code_falls_back_when_inline_exec_is_not_done():
         "SandboxExec",
         "SandboxStatus",
         "SandboxStdout",
+        "SandboxStdout",
+        "SandboxStderr",
         "SandboxStderr",
     ]
