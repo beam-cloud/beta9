@@ -1800,6 +1800,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Error().Str("container_id", containerId).Msgf("failed to attach service proxy: %v", err)
 		return
 	}
+	s.serviceProxy.AttachNodeSNI(request, spec)
 	if assignGPU {
 		// Only use CDI if runtime supports it
 		if !s.gpuVirtualizedForRequest(request) && s.runtime.Capabilities().CDI {
