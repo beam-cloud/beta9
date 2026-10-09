@@ -48,14 +48,18 @@ alert 112). libpq, Prisma, redis-py and Go clients send it. Node's ioredis
 set the app's own setting for it (Langfuse: `REDIS_TLS_SERVERNAME`).
 
 In a stack, a database is a service with `"type": "database"` and
-`"deploy": {"kind": "postgres"}`; `stack_from_compose` turns compose's
-postgres and redis services into these.
+`"deploy": {"kind": "postgres"}`, sized like an application
+(`"cpu": 0.5, "memory": "2Gi", "size": "10Gi"`); `stack_from_compose` turns
+compose's postgres and redis services into these.
 
 ## Read the credentials
 
 `database_credentials { "kind": "postgres", "name": "shop-db" }` returns the
 connection string for the user (for `psql`, a GUI, a migration run). Show it
-to the user only when they ask; prefer references in apps.
+to the user only when they ask; prefer references in apps. The string uses
+`sslmode=verify-full`, so a local libpq needs CA roots: append
+`&sslrootcert=system` (libpq 16+) or a bundle path such as
+`&sslrootcert=/etc/ssl/cert.pem`.
 
 ## Rotate, delete
 

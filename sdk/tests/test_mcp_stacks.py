@@ -29,6 +29,7 @@ class FakeStackTools:
         self.outside: List[str] = []  # workspace apps no stack owns
         self.revisions: List[Dict[str, Any]] = []
         self.stopped: List[str] = []
+        self.database_options: List[Dict[str, Any]] = []
 
     def remote(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if name == "list_stacks":
@@ -74,6 +75,7 @@ class FakeStackTools:
 
     def database_job(self, deploy: Dict[str, Any], key: str) -> Dict[str, Any]:
         self.submitted.append(key)
+        self.database_options.append(deploy)
         if self.failures:
             self.failures -= 1
             return failed(key, "Database job failed")
@@ -272,6 +274,27 @@ def test_only_unchanged_databases_are_reusable(tmp_path):
     assert text(step(tools, second)) == "Stack applied"
     assert tools.submitted == [f"stack:{first}:db"]
     assert tools.deployed == [f"stack:{first}:web", f"stack:{second}:web"]
+
+
+# A database's resources read like an application's; the gateway gets millicores
+# and MiB, which values already in those units stay.
+def test_database_resources_take_application_units(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    services = {
+        "db": {"type": "database", "deploy": {"kind": "postgres", "cpu": 0.5, "memory": "2Gi"}},
+        "cache": {"type": "database", "deploy": {"kind": "redis", "cpu": 1500, "memory": 768}},
+    }
+    spec = {"version": 1, "services": services}
+    plan_id = stacks.plan(tools, {"name": "app", "spec": spec})["structuredContent"]["plan_id"]
+
+    while text(step(tools, plan_id)) != "Stack applied":
+        assert len(tools.database_options) <= len(services)
+    resources = {d["name"]: (d["cpu"], d["memory"]) for d in tools.database_options}
+    assert resources == {"db": (500, 2048), "cache": (1500, 768)}
+
+    services["db"]["deploy"]["memory"] = "lots"
+    with pytest.raises(ValueError, match="db: memory is like 512Mi or 2Gi"):
+        stacks.plan(tools, {"name": "app", "spec": spec})
 
 
 def plan_app(tools: FakeStackTools, service: Dict[str, Any], **spec: Any) -> Dict[str, Any]:

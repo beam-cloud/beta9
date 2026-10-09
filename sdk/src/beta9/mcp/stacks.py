@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -53,6 +54,18 @@ DATABASE_OPTIONS = {
     "snapshot_id",
     "username",
     "database",
+}
+# MiB per unit, as applications' memory is read.
+MEMORY_UNITS = {
+    "": 1,
+    "m": 1,
+    "mb": 1,
+    "mi": 1,
+    "mib": 1,
+    "g": 1000,
+    "gb": 1000,
+    "gi": 1024,
+    "gib": 1024,
 }
 SERVICE_REFERENCE = re.compile(r"\$\{\{(?:db|app)\.([^.}]+)\.[^}]+\}\}")
 
@@ -214,7 +227,9 @@ def definitions(tools: LocalTools) -> List[Tool]:
                                                     "the service key). ports: [] is a worker. "
                                                     "tcp: true only for a server with no HTTP "
                                                     "port. Databases take kind (postgres or "
-                                                    "redis), size, cpu, memory, always_on."
+                                                    "redis), size (e.g. 10Gi), always_on, and "
+                                                    "cpu and memory in application units "
+                                                    '(cpu: 0.5, memory: "2Gi").'
                                                 ),
                                             },
                                             "depends_on": {
@@ -381,6 +396,7 @@ def _prepare_services(
                 raise ValueError(
                     "stack database kinds are postgres and redis; durability qualification is separate"
                 )
+            _database_resources(service, deploy)
         elif not deploy.get("image"):
             sources[service] = source_state(deploy.get("directory") or tools.cwd)
             deploy["directory"] = sources[service]["directory"]
@@ -397,6 +413,23 @@ def _prepare_services(
         visit(service)
 
     return order, sources, warnings
+
+
+def _database_resources(service: str, deploy: Dict[str, Any]) -> None:
+    """Databases take application units (cpu: 0.5, memory: "2Gi"). The gateway wants
+    millicores and MiB, which a cpu of 100 or more and an integer memory already are."""
+    if deploy.get("cpu") is not None:
+        cpu = str(deploy["cpu"]).strip().lower()
+        try:
+            value = float(cpu[:-1]) / 1000 if cpu.endswith("m") else float(cpu)
+        except ValueError:
+            raise ValueError(f"{service}: cpu is in cores, e.g. 0.5 or 2") from None
+        deploy["cpu"] = round(value if value >= 100 else value * 1000)
+    if isinstance(deploy.get("memory"), str):
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)([a-z]*)", deploy["memory"].strip().lower())
+        if not match or match.group(2) not in MEMORY_UNITS:
+            raise ValueError(f"{service}: memory is like 512Mi or 2Gi")
+        deploy["memory"] = math.ceil(float(match.group(1)) * MEMORY_UNITS[match.group(2)])
 
 
 def _prepare_application(
