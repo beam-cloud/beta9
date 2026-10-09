@@ -23,8 +23,7 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.volume import CloudBucket, Volume
 from ..channel import (
-    RECOVERY_TIMEOUT,
-    _deadline,
+    _RecoveryWindow,
     request_metadata,
     rpc_timeout,
     transient_error,
@@ -54,8 +53,7 @@ class _Invocation:
         self.resumable = False
 
     def __iter__(self):
-        recovery_started = None
-        delay = 0.2
+        recovery = _RecoveryWindow(start=False)
         while True:
             try:
                 responses = iter(self.stub.function_invoke(self.request))
@@ -78,26 +76,19 @@ class _Invocation:
                     self.task_id = response.task_id or self.task_id
                     if response.output:
                         self.output_offset += len(response.output.encode("utf-8"))
-                    recovery_started = None
-                    delay = 0.2
+                    recovery.reset()
                     yield response
                     if response.done:
                         return
                 raise ConnectionError("Function stream disconnected")
             except Exception as error:
-                if not self.resumable or not self.task_id or not transient_error(error):
+                if (
+                    not self.resumable
+                    or not self.task_id
+                    or not transient_error(error)
+                    or not recovery.wait()
+                ):
                     raise
-                if recovery_started is None:
-                    recovery_started = time.monotonic()
-                remaining = RECOVERY_TIMEOUT - (time.monotonic() - recovery_started)
-                if remaining <= 0:
-                    raise
-                if (deadline := _deadline.get()) is not None:
-                    remaining = min(remaining, deadline - time.monotonic())
-                    if remaining <= 0:
-                        raise
-                time.sleep(min(delay, remaining))
-                delay = min(delay * 1.5, 2.0)
 
 
 class Function(RunnerAbstraction):

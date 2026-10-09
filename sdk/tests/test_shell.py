@@ -616,37 +616,13 @@ def test_windows_shell_decodes_bytes_and_joins_reader(monkeypatch: pytest.Monkey
     assert "*** EOF ***" in stdout.getvalue()
 
 
-def test_resumable_shell_keeps_legacy_gateway_compatibility(monkeypatch):
-    from types import SimpleNamespace
-    from beta9.abstractions import shell
-
-    monkeypatch.setattr(
-        shell.requests, "head", lambda *_, **__: SimpleNamespace(status_code=404, headers={})
-    )
-    legacy = object()
-    real_create_socket = shell.create_socket
-    monkeypatch.setattr(shell, "create_socket", lambda *_, **__: legacy)
-    assert (
-        real_create_socket(
-            "gateway.test", 443, "/shell/id/stub", "container", "token", resumable=True
-        )
-        is legacy
-    )
-
-
 @pytest.mark.parametrize("port,host_header", [(443, None), (80, None), (8443, "shell.test")])
 def test_resumable_shell_origin_matches_the_host_header(monkeypatch, port, host_header):
-    from types import SimpleNamespace
     from beta9.abstractions import shell
 
-    monkeypatch.setattr(
-        shell.requests,
-        "head",
-        lambda *_, **__: SimpleNamespace(status_code=204, headers={"X-Beta9-Tunnel-Protocol": "2"}),
-    )
     calls = []
     monkeypatch.setattr(shell.websocket, "create_connection", lambda _, **kw: calls.append(kw))
-    monkeypatch.setattr(shell, "bridge_tunnel", lambda connect, *_: connect("session", 0, True))
+    monkeypatch.setattr(shell, "bridge_tunnel", lambda connect, *_: connect("session"))
     sock = shell.create_socket(
         "gateway.test",
         port,

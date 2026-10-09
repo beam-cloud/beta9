@@ -23,7 +23,7 @@ func (s *ContainerRuntimeServer) replaySandboxRequest(ctx context.Context, reque
 	switch method {
 	case "ContainerSandboxExec", "ContainerSandboxStdout", "ContainerSandboxStderr", "ContainerSandboxKill",
 		"ContainerSandboxUploadFile", "ContainerSandboxDeleteFile", "ContainerSandboxCreateDirectory", "ContainerSandboxDeleteDirectory",
-		"ContainerSandboxExposePort", "ContainerSandboxUpdateNetworkPermissions", "ContainerSandboxReplaceInFiles":
+		"ContainerSandboxExposePort", "ContainerSandboxUpdateNetworkPermissions", "ContainerSandboxReplaceInFiles", "ContainerTunnel":
 	default:
 		return handler(ctx, request)
 	}

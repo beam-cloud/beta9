@@ -1,26 +1,27 @@
 import io
 import json
 import queue
-import struct
+from uuid import UUID
 
 from beta9.tunnel import Tunnel
 
 
-def test_tunnel_preserves_bytes_when_gateway_loses_input_and_output_acknowledgements(monkeypatch):
-    monkeypatch.setattr("beta9.tunnel.time.sleep", lambda _: None)
+def test_tunnel_reuses_requests_when_gateway_loses_replies_and_acknowledgements(monkeypatch):
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
     payload = bytes(range(256)) * 1024
     received = bytearray()
-    connects = []
     output = b"echo:" + payload
-    lost_input_ack = False
-    lost_output_ack = False
+    responses = {}
+    connects = []
+    output_offset = 0
+    input_eof = False
+    lost_input_ack = lost_output_reply = lost_output_ack = False
+    output_delivered = False
 
     class Remote:
-        def __init__(self, offset):
+        def __init__(self):
             self.messages = queue.Queue()
-            self.messages.put(json.dumps({"type": "input", "offset": len(received)}))
-            self.offset = offset
-            self.eof = False
+            self.read = None
 
         def settimeout(self, _):
             pass
@@ -36,79 +37,62 @@ def test_tunnel_preserves_bytes_when_gateway_loses_input_and_output_acknowledgem
 
         def send_binary(self, frame):
             nonlocal lost_input_ack
-            offset = struct.unpack("!Q", frame[:8])[0]
-            data = frame[8:]
-            assert offset <= len(received) <= offset + len(data)
-            received.extend(data[len(received) - offset :])
+            request = str(UUID(bytes=frame[:16]))
+            if request not in responses:
+                received.extend(frame[32:])
+                responses[request] = json.dumps({"type": "input", "id": request})
             if not lost_input_ack:
                 lost_input_ack = True
-                self.messages.put(ConnectionResetError("gateway stopped after committing stdin"))
-                return
-            self.messages.put(json.dumps({"type": "input", "offset": len(received)}))
+                self.messages.put(ConnectionResetError("lost stdin reply"))
+            else:
+                self.messages.put(responses[request])
 
         def send(self, message):
-            nonlocal lost_output_ack
+            nonlocal input_eof, lost_output_ack
             control = json.loads(message)
+            request = control["id"]
             if control["type"] == "eof":
-                self.eof = True
-                self.messages.put(
-                    json.dumps({"type": "input", "offset": len(received), "eof": True})
-                )
-                self.next_output()
-            elif control["type"] == "ack":
-                self.offset = control["offset"]
-                if not lost_output_ack:
+                input_eof = True
+                responses[request] = json.dumps({"type": "input", "id": request})
+                self.messages.put(responses[request])
+                if self.read:
+                    self.reply(self.read)
+            elif control["type"] == "read":
+                if output_delivered and not lost_output_ack:
                     lost_output_ack = True
-                    raise ConnectionResetError("gateway stopped before receiving output ack")
-                self.next_output()
+                    raise ConnectionResetError("lost stdout ack before next read")
+                self.read = request
+                if input_eof:
+                    self.reply(request)
 
-        def next_output(self):
-            chunk = output[self.offset : self.offset + 65536]
-            if chunk:
-                self.messages.put(struct.pack("!Q", self.offset) + chunk)
+        def reply(self, request):
+            nonlocal output_offset, lost_output_reply, output_delivered
+            if request not in responses:
+                chunk = output[output_offset : output_offset + 65536]
+                output_offset += len(chunk)
+                responses[request] = (
+                    UUID(request).bytes + chunk
+                    if chunk
+                    else json.dumps({"type": "eof", "id": request})
+                )
+            if not lost_output_reply:
+                lost_output_reply = True
+                self.messages.put(ConnectionResetError("lost stdout reply after reading"))
             else:
-                self.messages.put(json.dumps({"type": "eof", "offset": self.offset}))
+                self.messages.put(responses[request])
+                output_delivered = True
 
-    def connect(session, offset, create):
-        connects.append((session, offset, create))
-        remote = Remote(offset)
-        if offset:
-            remote.next_output()
-        return remote
+    def connect(session):
+        connects.append(session)
+        return Remote()
 
-    target = io.BytesIO()
+    class PartialWriter(io.BytesIO):
+        def write(self, data):
+            return super().write(data[:13])
+
+    target = PartialWriter()
     Tunnel(connect, io.BytesIO(payload), target).run()
     assert bytes(received) == payload
     assert target.getvalue() == output
-    assert len(connects) == 3
-    assert len({session for session, _, _ in connects}) == 1
-    assert connects[0][2] is True
-    assert all(not create for _, _, create in connects[1:])
-
-
-def test_legacy_gateway_still_drains_output_after_stdin_eof():
-    payload = b"legacy stdin"
-    input_data = bytearray()
-    messages = queue.Queue()
-
-    class Remote:
-        resumable = False
-
-        def send_binary(self, data):
-            input_data.extend(data)
-
-        def send(self, data):
-            assert data == "EOF"
-            messages.put(b"reply:" + bytes(input_data))
-            messages.put("")
-
-        def recv(self):
-            return messages.get(timeout=5)
-
-        def close(self):
-            pass
-
-    target = io.BytesIO()
-    Tunnel(lambda *_: Remote(), io.BytesIO(payload), target).run()
-    assert bytes(input_data) == payload
-    assert target.getvalue() == b"reply:" + payload
+    assert len(connects) == 4
+    assert len(set(connects)) == 1

@@ -1,14 +1,13 @@
-"""A resumable byte stream for SSH, SCP, rsync, and port forwarding."""
+"""SSH byte streams use the worker's shared request replay journal."""
 
 import json
-import struct
+from contextlib import suppress
 import threading
-import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import websocket
 
-from .channel import RECOVERY_TIMEOUT
+from .channel import _RecoveryWindow
 
 
 class Tunnel:
@@ -17,17 +16,14 @@ class Tunnel:
         self.source = source
         self.target = target
         self.session = str(uuid4())
-        self.offset = 0
-        self.created = False
         self.condition = threading.Condition()
         self.remote = None
         self.stopped = False
-        self.input_offset = 0
-        self.input_eof = False
+        self.input_ack = None
         self.error = None
 
     def _upload(self):
-        offset = 0
+        ack = UUID(int=0)
         try:
             while True:
                 data = (
@@ -35,30 +31,30 @@ class Tunnel:
                     if hasattr(self.source, "read1")
                     else self.source.read(65536)
                 )
-                end = offset + len(data)
+                request = uuid4()
                 sent = None
-                while True:
-                    with self.condition:
+                with self.condition:
+                    while self.input_ack != str(request):
                         if self.stopped:
                             return
-                        if self.input_offset >= end and (data or self.input_eof):
-                            break
                         remote = self.remote
                         if remote is None or remote is sent:
                             self.condition.wait()
                             continue
-                    try:
-                        if data:
-                            remote.send_binary(struct.pack("!Q", offset) + data)
-                        else:
-                            remote.send(json.dumps({"type": "eof", "offset": offset}))
+                        try:
+                            if data:
+                                remote.send_binary(request.bytes + ack.bytes + data)
+                            else:
+                                remote.send(
+                                    json.dumps({"type": "eof", "id": str(request), "ack": str(ack)})
+                                )
+                        except (OSError, websocket.WebSocketException):
+                            remote.close()
                         sent = remote
-                    except (OSError, websocket.WebSocketException):
-                        remote.close()
-                        sent = remote
+                        self.condition.wait()
                 if not data:
                     return
-                offset = end
+                ack = request
         except Exception as error:
             with self.condition:
                 self.error = error
@@ -68,32 +64,27 @@ class Tunnel:
                 self.condition.notify_all()
 
     def run(self):
-        upload_started = False
-        recovery_started = None
-        delay = 0.2
+        request, ack = uuid4(), UUID(int=0)
+        recovery = _RecoveryWindow(start=False)
+        threading.Thread(target=self._upload, daemon=True).start()
         try:
             while not self.stopped:
                 remote = None
                 try:
-                    remote = self.connect(self.session, self.offset, not self.created)
-                    if getattr(remote, "resumable", True) is False:
-                        _bridge_legacy(remote, self.source, self.target)
-                        return
-                    if not upload_started:
-                        threading.Thread(target=self._upload, daemon=True).start()
-                        upload_started = True
+                    remote = self.connect(self.session)
                     remote.settimeout(30)
+                    with self.condition:
+                        self.remote = remote
+                        self.condition.notify_all()
+                    remote.send(json.dumps({"type": "read", "id": str(request), "ack": str(ack)}))
                     while not self.stopped:
                         message = remote.recv()
                         if not message:
                             raise ConnectionError("Tunnel disconnected")
                         if isinstance(message, bytes):
-                            if len(message) < 8:
-                                raise RuntimeError("Invalid tunnel frame")
-                            offset = struct.unpack("!Q", message[:8])[0]
-                            if offset != self.offset:
-                                raise RuntimeError("Invalid tunnel output offset")
-                            pending = memoryview(message)[8:]
+                            if len(message) < 16 or message[:16] != request.bytes:
+                                raise RuntimeError("Invalid tunnel response")
+                            pending = memoryview(message)[16:]
                             try:
                                 while pending:
                                     written = self.target.write(pending)
@@ -103,39 +94,36 @@ class Tunnel:
                                 self.target.flush()
                             except OSError as error:
                                 raise RuntimeError("Local tunnel output closed") from error
-                            self.offset += len(message) - 8
-                            remote.send(json.dumps({"type": "ack", "offset": self.offset}))
                         else:
                             control = json.loads(message)
+                            if control["type"] == "input":
+                                with self.condition:
+                                    self.input_ack = control["id"]
+                                    self.condition.notify_all()
+                                continue
+                            if control["id"] != str(request):
+                                raise RuntimeError("Invalid tunnel response")
                             if control["type"] == "eof":
-                                if control["offset"] != self.offset:
-                                    raise RuntimeError("Invalid tunnel EOF offset")
-                                remote.send(json.dumps({"type": "close"}))
+                                with suppress(OSError, websocket.WebSocketException):
+                                    remote.send(json.dumps({"type": "close", "id": str(uuid4())}))
                                 return
-                            if control["type"] != "input":
+                            if control["type"] != "output":
                                 raise RuntimeError("Invalid tunnel control")
-                            with self.condition:
-                                self.created = True
-                                self.input_offset = control["offset"]
-                                self.input_eof = control.get("eof", False)
-                                self.remote = remote
-                                self.condition.notify_all()
-                        recovery_started = None
-                        delay = 0.2
+                        # Advancing the request before sending its ack prevents replaying output.
+                        ack, request = request, uuid4()
+                        remote.send(
+                            json.dumps({"type": "read", "id": str(request), "ack": str(ack)})
+                        )
+                        recovery.reset()
                 except (OSError, websocket.WebSocketException) as error:
                     if isinstance(
                         error, websocket.WebSocketBadStatusException
                     ) and error.status_code in (400, 401, 403, 404, 410, 501):
                         raise
-                    if recovery_started is None:
-                        recovery_started = time.monotonic()
-                    remaining = RECOVERY_TIMEOUT - (time.monotonic() - recovery_started)
-                    if remaining <= 0:
+                    if not recovery.wait():
                         raise TimeoutError(
                             "Gateway did not reconnect within two minutes"
                         ) from error
-                    time.sleep(min(delay, remaining))
-                    delay = min(delay * 1.5, 2.0)
                 finally:
                     with self.condition:
                         self.remote = None
@@ -152,30 +140,3 @@ class Tunnel:
 
 def bridge_tunnel(connect, source, target):
     Tunnel(connect, source, target).run()
-
-
-def _bridge_legacy(remote, source, target):
-    """Keep the previous byte-stream protocol for gateways without recovery."""
-
-    def upload():
-        try:
-            while True:
-                data = source.read1(65536) if hasattr(source, "read1") else source.read(65536)
-                if not data:
-                    remote.send("EOF")
-                    return
-                remote.send_binary(data)
-        except (OSError, websocket.WebSocketException):
-            remote.close()
-
-    threading.Thread(target=upload, daemon=True).start()
-    try:
-        while True:
-            message = remote.recv()
-            if not message:
-                return
-            if isinstance(message, bytes):
-                target.write(message)
-                target.flush()
-    except websocket.WebSocketConnectionClosedException:
-        return

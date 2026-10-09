@@ -325,24 +325,19 @@ message ContainerSandboxUpdateNetworkPermissionsResponse {
   string error_msg = 2;
 }
 
-// The worker owns the TCP socket. Gateways only attach and acknowledge bytes.
+// The worker owns the TCP socket; reads and writes use request replay metadata.
 message ContainerTunnelRequest {
   string container_id = 1;
   string session_id = 2;
   uint32 port = 3;
   bool create = 4;
-  uint64 input_offset = 5;
-  bytes input = 6;
-  bool input_eof = 7;
-  uint64 output_offset = 8;
-  bool read = 9;
-  bool close = 10;
+  bytes input = 5;
+  bool input_eof = 6;
+  bool read = 7;
+  bool close = 8;
 }
 
 message ContainerTunnelResponse {
-  uint64 input_offset = 1;
-  uint64 output_offset = 2;
-  bytes output = 3;
-  bool output_eof = 4;
-  bool input_eof = 5;
+  bytes output = 1;
+  bool output_eof = 2;
 }

@@ -51,6 +51,29 @@ _ack_lock = threading.Lock()
 RECOVERY_TIMEOUT = 120.0
 
 
+class _RecoveryWindow:
+    def __init__(self, timeout=RECOVERY_TIMEOUT, *, start=True):
+        self.timeout = timeout
+        self.started = time.monotonic() if start else None
+        self.delay = 0.2
+
+    def reset(self):
+        self.started = None
+        self.delay = 0.2
+
+    def wait(self):
+        if self.started is None:
+            self.started = time.monotonic()
+        remaining = self.timeout - (time.monotonic() - self.started)
+        if (deadline := _deadline.get()) is not None:
+            remaining = min(remaining, deadline - time.monotonic())
+        if remaining <= 0:
+            return False
+        time.sleep(min(self.delay, remaining))
+        self.delay = min(self.delay * 1.5, 2.0)
+        return True
+
+
 def transient_error(error):
     if isinstance(error, grpc.RpcError):
         if error.code() == grpc.StatusCode.INTERNAL:
@@ -64,9 +87,8 @@ def transient_error(error):
 def retry_operation(fn, *, owner=None, timeout=RECOVERY_TIMEOUT, delay=0.2):
     if request_metadata.get():
         return fn()
-    deadline = time.monotonic() + timeout
-    if (scope_deadline := _deadline.get()) is not None:
-        deadline = min(deadline, scope_deadline)
+    recovery = _RecoveryWindow(timeout)
+    recovery.delay = delay
     request_id = str(uuid4())
     with _ack_lock:
         pending = _acks.pop(owner, deque(maxlen=512))
@@ -87,11 +109,8 @@ def retry_operation(fn, *, owner=None, timeout=RECOVERY_TIMEOUT, delay=0.2):
                         _acks[owner].append(request_id)
                 return result
             except Exception as error:
-                remaining = deadline - time.monotonic()
-                if not transient_error(error) or remaining <= 0:
+                if not transient_error(error) or not recovery.wait():
                     raise
-                time.sleep(min(delay, remaining))
-                delay = min(delay * 1.5, 2.0)
     finally:
         request_metadata.reset(token)
 
@@ -239,7 +258,11 @@ class AuthTokenInterceptor(
                 "SandboxCreateImageFromFilesystem",
             )
         ) or method in (
-            "StartTask", "EndTask", "FunctionGetArgs", "FunctionSetResult", "StopContainer"
+            "StartTask",
+            "EndTask",
+            "FunctionGetArgs",
+            "FunctionSetResult",
+            "StopContainer",
         )
         if not recoverable:
             return self.intercept_call(continuation, client_call_details, request)

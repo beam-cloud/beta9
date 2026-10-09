@@ -585,33 +585,43 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch):
 
 def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
     from queue import Queue
+    from uuid import UUID
     import json
-    import struct
 
     class Socket:
         def __init__(self):
             self.messages = Queue()
-            self.messages.put(json.dumps({"type": "input", "offset": 0}))
             self.closed = False
             self.sent = []
+            self.read = None
+            self.eof = False
+            self.responded = False
 
         def settimeout(self, value):
             pass
 
         def send_binary(self, data):
-            offset = struct.unpack("!Q", data[:8])[0]
-            self.sent.append(data[8:])
-            self.messages.put(json.dumps({"type": "input", "offset": offset + len(data) - 8}))
+            self.sent.append(data[32:])
+            self.messages.put(json.dumps({"type": "input", "id": str(UUID(bytes=data[:16]))}))
 
         def send(self, message):
             control = json.loads(message)
             if control["type"] == "eof":
-                self.messages.put(
-                    json.dumps({"type": "input", "offset": control["offset"], "eof": True})
-                )
-                self.messages.put(struct.pack("!Q", 0) + b"complete response")
-            elif control["type"] == "ack":
-                self.messages.put(json.dumps({"type": "eof", "offset": control["offset"]}))
+                self.eof = True
+                self.messages.put(json.dumps({"type": "input", "id": control["id"]}))
+                if self.read:
+                    self.reply(self.read)
+            elif control["type"] == "read":
+                self.read = control["id"]
+                if self.eof:
+                    self.reply(self.read)
+
+        def reply(self, request):
+            if self.responded:
+                self.messages.put(json.dumps({"type": "eof", "id": request}))
+            else:
+                self.messages.put(UUID(request).bytes + b"complete response")
+                self.responded = True
 
         def recv(self):
             assert not self.closed
