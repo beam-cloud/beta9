@@ -1,7 +1,7 @@
 import os
 from unittest import TestCase
 
-from beta9.abstractions.image import Image
+from beta9.abstractions.image import Image, dockerfile_for_build
 
 
 class TestImage(TestCase):
@@ -24,6 +24,20 @@ class TestImage(TestCase):
         image = Image(base_image_creds=["Key1", "Key2"])
         self.assertEqual(image.base_image_creds, ["Key1", "Key2"])
         self.assertEqual(Image().base_image_creds, [])
+
+    def test_dockerfile_target_and_build_args_shape_the_dockerfile_sent(self):
+        dockerfile = (
+            "ARG NODE=20\nFROM node:${NODE} AS deps\nARG MODE\nRUN npm ci\n"
+            "FROM deps AS app\nCMD node server.js\nFROM app AS test\nRUN npm test\n"
+        )
+        self.assertEqual(dockerfile_for_build(dockerfile), dockerfile)
+        self.assertEqual(
+            dockerfile_for_build(dockerfile, "app", {"NODE": "22", "MODE": 'say "hi"'}),
+            'ARG NODE="22"\nFROM node:${NODE} AS deps\nARG MODE="say \\"hi\\""\nRUN npm ci\n'
+            "FROM deps AS app\nCMD node server.js\n",
+        )
+        with self.assertRaisesRegex(ValueError, "'prod' is not a stage"):
+            dockerfile_for_build(dockerfile, "prod")
 
 
 class TestImageLocalFiles(TestCase):

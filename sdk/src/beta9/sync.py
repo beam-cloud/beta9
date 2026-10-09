@@ -87,6 +87,34 @@ drive/MyDrive
 """
 
 
+# Without a .dockerignore, docker build sends the whole context; leave out only what is
+# bulky and rebuilt inside the image anyway.
+DOCKER_CONTEXT_DEFAULTS = [".git", "**/node_modules/", "**/.venv/", "**/__pycache__/", ".DS_Store"]
+
+
+def dockerignore_patterns(dockerfile: str, context_dir: str) -> List[str]:
+    """What `docker build` leaves out of the context: <Dockerfile>.dockerignore beside the
+    Dockerfile, else .dockerignore at the context root. Docker anchors patterns at the root
+    (`build` is ./build only), so they are anchored here too."""
+    for path in (Path(f"{dockerfile}.dockerignore"), Path(context_dir) / ".dockerignore"):
+        if not path.is_file():
+            continue
+        patterns = []
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            negated = line.startswith("!")
+            pattern = line[1:].strip() if negated else line
+            while pattern.startswith(("./", "/")):
+                pattern = pattern[1:] if pattern.startswith("/") else pattern[2:]
+            if not pattern.startswith("**/"):
+                pattern = "/" + pattern
+            patterns.append(("!" if negated else "") + pattern)
+        return patterns + [f"/{ignore_file_name()}"]
+    return DOCKER_CONTEXT_DEFAULTS + [f"/{ignore_file_name()}"]
+
+
 class FileSyncResult(NamedTuple):
     success: bool = False
     object_id: str = ""
@@ -131,8 +159,9 @@ class FileSyncer:
 
         return patterns
 
-    def _should_ignore(self, path: str) -> bool:
-        relative_path = os.path.relpath(path, self.root_dir)
+    def _should_ignore(self, path: str, directory: bool = False) -> bool:
+        # A directory is matched as `dir/`, so `!src/` can re-include it after `*`.
+        relative_path = os.path.relpath(path, self.root_dir) + ("/" if directory else "")
         spec = getattr(self, "_ignore_spec", None) or PathSpec.from_lines(
             "gitwildmatch", self.ignore_patterns
         )
@@ -155,7 +184,9 @@ class FileSyncer:
         terminal.debug(f"Collecting files from {self.root_dir}")
 
         for root, dirs, files in os.walk(self.root_dir):
-            dirs[:] = [d for d in dirs if not self._should_ignore(os.path.join(root, d))]
+            dirs[:] = [
+                d for d in dirs if not self._should_ignore(os.path.join(root, d), directory=True)
+            ]
 
             for file in files:
                 file_path = os.path.join(root, file)
@@ -188,9 +219,8 @@ class FileSyncer:
     ) -> FileSyncResult:
         terminal.header("Syncing files")
 
-        self._init_ignore_file()
-
         if ignore_patterns is None or len(ignore_patterns) == 0:
+            self._init_ignore_file()
             self.ignore_patterns = self._read_ignore_file()
         else:
             self.ignore_patterns = ignore_patterns

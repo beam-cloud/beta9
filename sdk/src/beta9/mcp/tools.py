@@ -175,6 +175,15 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                     **STRING,
                     "description": "Build context relative to directory; default: the Dockerfile's directory.",
                 },
+                "target": {
+                    **STRING,
+                    "description": "Dockerfile stage to build, as docker build --target; default: the last.",
+                },
+                "build_args": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "Dockerfile ARG values, as docker build --build-arg.",
+                },
                 "image": {**STRING, "description": "Registry image to run instead of building."},
                 "entrypoint": STRINGS,
                 "ports": {
@@ -299,6 +308,7 @@ def run_definition(cli: str, cwd: str) -> Dict[str, Any]:
 DEPLOY_FLAGS = {
     "dockerfile": "--dockerfile",
     "context_dir": "--context-dir",
+    "target": "--target",
     "image": "--image",
     "cpu": "--cpu",
     "memory": "--memory",
@@ -765,6 +775,8 @@ class LocalTools:
             command += ["--port", str(int(port))]
         for key, value in (args.get("env") or {}).items():
             command += ["--env", f"{key}={value}"]
+        for key, value in (args.get("build_args") or {}).items():
+            command += ["--build-arg", f"{key}={value}"]
         if args.get("secrets"):
             command += ["--secrets", ",".join(map(str, args["secrets"]))]
         for disk in args.get("disks") or []:

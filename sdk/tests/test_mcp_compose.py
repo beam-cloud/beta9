@@ -278,11 +278,15 @@ def test_builds_keep_their_context_target_and_args(tmp_path):
         registry=FakeRegistry({"python:3.12": {"Cmd": ["python3"]}}),
     )
     deploy = services(result)["app-web"]["deploy"]
-    assert deploy["directory"] == str(tmp_path)
-    assert deploy["context_dir"] == "."
-    assert Path(deploy["dockerfile"]).read_text() == (
-        'ARG VERSION="2"\nFROM python:3.12 AS app\nEXPOSE 8000\n'
-    )
+    build = ("directory", "dockerfile", "context_dir", "target", "build_args")
+    assert {key: deploy[key] for key in build} == {
+        "directory": str(tmp_path),
+        "dockerfile": "docker/Dockerfile",
+        "context_dir": ".",
+        "target": "app",
+        "build_args": {"VERSION": "2"},
+    }
+    assert not any("target" in warning for warning in result.get("warnings", []))
 
     plain = translate(
         tmp_path,

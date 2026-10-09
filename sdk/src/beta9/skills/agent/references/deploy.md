@@ -70,8 +70,11 @@ and errors as `{"error", "code"}`; branch on `code` (`NOT_AUTHENTICATED`,
 - `context_dir`: the build context, relative to `directory`, when it is not
   the Dockerfile's directory (a monorepo's `docker/web/Dockerfile` that
   copies from the repository root: `"dockerfile": "docker/web/Dockerfile",
-  "context_dir": "."`). The Dockerfile's final stage is built with its ARG
-  defaults.
+  "context_dir": "."`). The context is what `docker build` would send: the
+  repository's `.dockerignore` applies (`.beamignore` does not).
+- `target`, `build_args`: as `docker build --target prod --build-arg K=V`.
+  Without `target` the last stage is built, which in many multi-stage
+  Dockerfiles is a dev or test stage; use the stage the README builds.
 - `keep_warm_seconds`: `-1` keeps one container running (web apps users hit
   directly); `0`/small values scale to zero when idle and cold start on the
   next request.

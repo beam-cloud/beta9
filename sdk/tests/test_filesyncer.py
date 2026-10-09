@@ -13,7 +13,14 @@ from beta9.clients.gateway import (
     HeadObjectResponse,
     ObjectUploadPart,
 )
-from beta9.sync import FileSyncer, FileSyncResult, _Manifest, _ManifestEntry, _SyncCache
+from beta9.sync import (
+    FileSyncer,
+    FileSyncResult,
+    _Manifest,
+    _ManifestEntry,
+    _SyncCache,
+    dockerignore_patterns,
+)
 
 
 class _FakeGateway:
@@ -407,6 +414,68 @@ class TestIncrementalSync(TestCase):
             self._sync(gw)
         self.assertEqual(self.part_attempts["https://put/part/1"], 3)
         self.assertEqual(gw.completed, [], "a failed upload is never completed")
+
+
+class TestDockerBuildContext(TestCase):
+    """A Dockerfile build sends what `docker build` would, whatever .beamignore says."""
+
+    FILES = [
+        "Dockerfile",
+        ".python-version",
+        "pyproject.toml",
+        "src/app.py",
+        "src/build/keep.txt",
+        "build/out.bin",
+        ".env",
+        "node_modules/x/index.js",
+        ".git/HEAD",
+    ]
+
+    def context(self, dockerignore=None):
+        with tempfile.TemporaryDirectory() as root:
+            for name in self.FILES:
+                Path(root, name).parent.mkdir(parents=True, exist_ok=True)
+                Path(root, name).write_text("x")
+            if dockerignore is not None:
+                Path(root, ".dockerignore").write_text(dockerignore)
+            syncer = FileSyncer(gateway_stub=MagicMock(), root_dir=root)
+            syncer.ignore_patterns = dockerignore_patterns(str(Path(root, "Dockerfile")), root)
+            syncer.include_patterns = []
+            return sorted(os.path.relpath(path, root) for path in syncer._collect_files())
+
+    def test_dockerignore_patterns_are_anchored_at_the_context_root(self):
+        self.assertEqual(
+            self.context("build\n.env\n**/node_modules\n"),
+            [
+                ".dockerignore",
+                ".git/HEAD",
+                ".python-version",
+                "Dockerfile",
+                "pyproject.toml",
+                "src/app.py",
+                "src/build/keep.txt",
+            ],
+        )
+
+    def test_an_allowlist_dockerignore_reincludes_directories(self):
+        self.assertEqual(
+            self.context("*\n!src/\n!pyproject.toml\n"),
+            ["pyproject.toml", "src/app.py", "src/build/keep.txt"],
+        )
+
+    def test_without_a_dockerignore_only_bulky_directories_are_left_out(self):
+        self.assertEqual(
+            self.context(),
+            [
+                ".env",
+                ".python-version",
+                "Dockerfile",
+                "build/out.bin",
+                "pyproject.toml",
+                "src/app.py",
+                "src/build/keep.txt",
+            ],
+        )
 
 
 class TestFileSyncer(TestCase):

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shlex
 import sys
 import threading
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, Union
 
 from beta9.clients.gateway import GatewayServiceStub
-from beta9.sync import FileSyncer
+from beta9.sync import FileSyncer, dockerignore_patterns
 
 from .. import env, terminal
 from ..abstractions.base import BaseAbstraction
@@ -25,6 +26,32 @@ from ..type import GpuType, GpuTypeAlias, PythonVersion, PythonVersionAlias
 
 LOCAL_PYTHON_VERSION = f"python{sys.version_info.major}.{sys.version_info.minor}"
 _DEFAULT_IMAGE_BUILD_CACHE_TTL_SECONDS = 300.0
+
+
+def dockerfile_for_build(
+    text: str, target: Optional[str] = None, build_args: Optional[Dict[str, str]] = None
+) -> str:
+    """The Dockerfile `docker build --target T --build-arg K=V` builds: everything up to
+    the end of stage T, with each `ARG K` defaulting to V."""
+    lines = text.splitlines()
+    if target:
+        stage = re.compile(rf"\s*FROM\s+.+\s+AS\s+{re.escape(target)}\s*$", re.I)
+        start = next((i for i, line in enumerate(lines) if stage.match(line)), None)
+        if start is None:
+            raise ValueError(f"build target {target!r} is not a stage of the Dockerfile")
+        end = next(
+            (i for i in range(start + 1, len(lines)) if re.match(r"\s*FROM\s", lines[i], re.I)),
+            len(lines),
+        )
+        lines = lines[:end]
+    for index, line in enumerate(lines):
+        match = re.match(r"(\s*ARG\s+)([A-Za-z_][A-Za-z0-9_]*)(=.*)?\s*$", line, re.I)
+        if match and match.group(2) in (build_args or {}):
+            value = json.dumps(str(build_args[match.group(2)]), ensure_ascii=False)
+            lines[index] = f"{match.group(1)}{match.group(2)}={value}"
+    if not target and not build_args:
+        return text
+    return "\n".join(lines) + "\n"
 
 
 class _ImageBuildResult(NamedTuple):
@@ -312,6 +339,8 @@ class Image(BaseAbstraction):
         self.dockerfile = ""
         self.dockerfile_path = ""
         self.dockerfile_context_dir = ""
+        self.dockerfile_target: Optional[str] = None
+        self.dockerfile_build_args: Dict[str, str] = {}
         self.build_ctx_object = ""
         self.gpu = GpuType.NoGPU
         self.ignore_python = False
@@ -375,7 +404,13 @@ class Image(BaseAbstraction):
             raise FileNotFoundError
 
     @classmethod
-    def from_dockerfile(cls, path: str, context_dir: Optional[str] = None) -> "Image":
+    def from_dockerfile(
+        cls,
+        path: str,
+        context_dir: Optional[str] = None,
+        target: Optional[str] = None,
+        build_args: Optional[Dict[str, str]] = None,
+    ) -> "Image":
         """
         Build the base image based on a Dockerfile.
 
@@ -385,6 +420,8 @@ class Image(BaseAbstraction):
         Parameters:
             path: The path to the Dockerfile.
             context_dir: The directory to sync. If not provided, the directory of the Dockerfile will be used.
+            target: The stage to build, as with `docker build --target`. Default: the last stage.
+            build_args: ARG values, as with `docker build --build-arg`.
 
         Returns:
             Image: The Image object.
@@ -399,7 +436,9 @@ class Image(BaseAbstraction):
 
         with open(path, "r") as f:
             dockerfile = f.read()
-        image.dockerfile = dockerfile
+        image.dockerfile_target = target
+        image.dockerfile_build_args = {k: str(v) for k, v in (build_args or {}).items()}
+        image.dockerfile = dockerfile_for_build(dockerfile, target, image.dockerfile_build_args)
         image.dockerfile_path = os.path.abspath(path)
         image.dockerfile_context_dir = os.path.abspath(context_dir)
         return image
@@ -408,10 +447,13 @@ class Image(BaseAbstraction):
         syncer = FileSyncer(
             gateway_stub=self.gateway_stub, root_dir=context_dir or os.path.dirname("./")
         )
-        # Dockerfile COPY sources must not be filtered by added local-file patterns.
-        result = syncer.sync(
-            include_patterns=[] if self.dockerfile_path else self.include_files_patterns
-        )
+        if self.dockerfile_path:
+            # COPY sources are what docker build would send, not the .beamignore selection.
+            result = syncer.sync(
+                ignore_patterns=dockerignore_patterns(self.dockerfile_path, str(syncer.root_dir))
+            )
+        else:
+            result = syncer.sync(include_patterns=self.include_files_patterns)
         if not result.success:
             raise ValueError("Failed to sync context directory.")
 
@@ -425,7 +467,11 @@ class Image(BaseAbstraction):
             terminal.detail("Syncing image build context...", dim=False)
 
         if self.dockerfile_path:
-            self.dockerfile = Path(self.dockerfile_path).read_text()
+            self.dockerfile = dockerfile_for_build(
+                Path(self.dockerfile_path).read_text(),
+                self.dockerfile_target,
+                self.dockerfile_build_args,
+            )
             self.sync_files(self.dockerfile_context_dir)
         elif self.include_files_patterns:
             self.sync_files()

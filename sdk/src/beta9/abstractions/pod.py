@@ -455,7 +455,8 @@ app = Pod(
                 key = "image"
                 value = (
                     f"Image.from_dockerfile({value.dockerfile_path!r}, "
-                    f"{value.dockerfile_context_dir!r})"
+                    f"{value.dockerfile_context_dir!r}, {value.dockerfile_target!r}, "
+                    f"{value.dockerfile_build_args!r})"
                 )
             elif isinstance(value, Image):
                 imports.append("Image")

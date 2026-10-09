@@ -1413,11 +1413,14 @@ class Translator:
             deploy["dockerfile"] = dockerfile
             if (context / dockerfile).resolve().parent != context:
                 deploy["context_dir"] = "."
-            if target or args:
-                derived = self._derived_dockerfile(service, context / dockerfile, target, args)
-                if derived:
-                    deploy["dockerfile"] = str(derived)
-                    deploy["context_dir"] = "."
+            if target:
+                deploy["target"] = target
+                stage = re.compile(rf"^\s*FROM\s+.+\s+AS\s+{re.escape(target)}\s*$", re.I | re.M)
+                path = context / dockerfile
+                if path.is_file() and not stage.search(path.read_text()):
+                    self.warn(service, f"build target {target} is not a stage of {dockerfile}")
+            if args:
+                deploy["build_args"] = {key: str(value) for key, value in args.items()}
         else:
             deploy["image"] = str(node["image"])
             if not config:
@@ -1468,50 +1471,6 @@ class Translator:
                 "no HTTP health check found; readiness only checks that its container runs (set health_path for a real check)",
             )
         return result
-
-    def _derived_dockerfile(
-        self, service: str, path: Path, target: Optional[str], args: Dict[str, str]
-    ) -> Optional[Path]:
-        """A copy of the Dockerfile ending at the target stage, with compose's build args as
-        ARG defaults, since the CLI builds the final stage without build args."""
-        if self.build_root is None or not path.is_file():
-            self.warn(
-                service,
-                "build target and args are not applied; the final stage is built with ARG defaults",
-            )
-            return None
-        lines = path.read_text().splitlines()
-        if target:
-            stage = re.compile(rf"\s*FROM\s+.+\s+AS\s+{re.escape(target)}\s*$", re.I)
-            start = next((i for i, line in enumerate(lines) if stage.match(line)), None)
-            if start is None:
-                self.warn(
-                    service,
-                    f"build target {target} is not a stage of {path.name}; the final stage is built",
-                )
-            else:
-                after = next(
-                    (
-                        i
-                        for i in range(start + 1, len(lines))
-                        if re.match(r"\s*FROM\s", lines[i], re.I)
-                    ),
-                    len(lines),
-                )
-                lines = lines[:after]
-        for index, line in enumerate(lines):
-            match = re.match(r"(\s*ARG\s+)([A-Za-z_][A-Za-z0-9_]*)(=.*)?\s*$", line, re.I)
-            if match and match.group(2) in args:
-                lines[index] = (
-                    f"{match.group(1)}{match.group(2)}={json.dumps(args[match.group(2)])}"
-                )
-        text = "\n".join(lines) + "\n"
-        destination = (
-            self.build_root / "dockerfiles" / hashlib.sha256(text.encode()).hexdigest()[:24]
-        )
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / "Dockerfile").write_text(text)
-        return destination / "Dockerfile"
 
     def _scan_command(self, service: str, argv: List[str]) -> None:
         others = sorted((a for a, n in self.aliases.items() if n != service), key=len, reverse=True)
@@ -1859,7 +1818,7 @@ def definition() -> Dict[str, Any]:
             "become references; placeholder credentials shared between services become "
             "generated stack secrets. Review every warning before stack_plan: they mark what "
             "compose expresses that Beam does not (private networking, TLS to managed "
-            "databases, user, ulimits, build args)."
+            "databases, user, ulimits)."
         ),
         "inputSchema": {
             "type": "object",
