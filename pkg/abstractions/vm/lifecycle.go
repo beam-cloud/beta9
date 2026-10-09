@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/proto"
-	"strings"
 	"sync"
 	"time"
 )
@@ -114,7 +113,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	// Persist before enqueue. A retry uses this exact runtime identity.
 	if v.ContainerID == "" {
 		v.Generation++
-		v.ContainerID = "sandbox-" + v.StubID + "-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+		v.ContainerID = "sandbox-" + v.StubID + "-" + randomHexID()[:8]
 	}
 	v.Status = "starting"
 	v.Error = ""

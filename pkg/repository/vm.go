@@ -143,7 +143,7 @@ func (r *PostgresBackendRepository) TouchVM(ctx context.Context, id string) erro
 }
 
 func (r *PostgresBackendRepository) ClaimVMIdleStop(ctx context.Context, id string, cutoff time.Time) (bool, error) {
-	result, err := r.client.ExecContext(ctx, `UPDATE persistent_vm SET data=jsonb_set(data,'{desired_state}','"stopped"') WHERE id=$1 AND data->>'desired_state'='running' AND last_active_at <= $2`, id, cutoff)
+	result, err := r.client.ExecContext(ctx, `UPDATE persistent_vm SET data=jsonb_set(data,'{desired_state}',to_jsonb(CASE WHEN data#>>'{spec,idle_action}'='pause' THEN 'paused' ELSE 'stopped' END)) WHERE id=$1 AND data->>'desired_state'='running' AND last_active_at <= $2`, id, cutoff)
 	if err != nil {
 		return false, err
 	}

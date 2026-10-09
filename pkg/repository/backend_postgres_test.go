@@ -582,7 +582,7 @@ func TestCheckpointWriteAndListResultsRetainCompatibilityKey(t *testing.T) {
 	listed, err := repo.ListCheckpoints(ctx, "workspace")
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
-	mock.ExpectQuery(`UPDATE checkpoint c SET deleted_at.*NOT EXISTS .*memory_checkpoint_id`).
+	mock.ExpectQuery(`UPDATE checkpoint c SET deleted_at.*NOT EXISTS .*memory_checkpoint_id.*desired_state' <> 'deleted'`).
 		WithArgs(pq.StringArray{checkpoint.CheckpointId}).WillReturnRows(checkpointQueryRows(key))
 	pruned, err := repo.PruneCheckpoints(ctx, []string{checkpoint.CheckpointId})
 	require.NoError(t, err)

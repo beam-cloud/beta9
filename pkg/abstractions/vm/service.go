@@ -255,7 +255,7 @@ func (s *Service) create(c echo.Context) error {
 	if req.Name == "" && req.RequestID != "" {
 		req.Name = "vm-" + strings.ReplaceAll(req.RequestID, "-", "")[:20]
 	} else if req.Name == "" {
-		req.Name = "vm-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:20]
+		req.Name = "vm-" + randomHexID()[:20]
 	}
 	if !validName.MatchString(req.Name) {
 		return echo.NewHTTPError(400, "name must begin with a letter and contain at most 24 lowercase letters, digits or hyphens")
@@ -336,7 +336,7 @@ func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, 
 		Metadata map[string]string
 	}{name, spec, metadata})
 	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
-	v := &types.VM{ID: id, WorkspaceID: info.Workspace.Id, WorkspaceExternalID: info.Workspace.ExternalId, TokenID: info.Token.ExternalId, Name: name, Metadata: metadata, CreationDigest: digest, TrafficAccessToken: strings.ReplaceAll(uuid.NewString(), "-", ""), Handle: name + "-" + strings.ReplaceAll(uuid.NewString(), "-", ""), Spec: spec, DesiredState: "running", Status: "starting", CreatedAt: now, UpdatedAt: now, LastActiveAt: now}
+	v := &types.VM{ID: id, WorkspaceID: info.Workspace.Id, WorkspaceExternalID: info.Workspace.ExternalId, TokenID: info.Token.ExternalId, Name: name, Metadata: metadata, CreationDigest: digest, TrafficAccessToken: randomHexID(), Handle: name + "-" + randomHexID(), Spec: spec, DesiredState: "running", Status: "starting", CreatedAt: now, UpdatedAt: now, LastActiveAt: now}
 	unlock, err := s.repo.LockVM(ctx, id)
 	if err != nil {
 		return nil, err
@@ -434,7 +434,7 @@ func (s *Service) action(c echo.Context) error {
 		return c.JSON(201, artifactResponse(*a))
 	case "fork":
 		if req.Name == "" {
-			req.Name = "vm-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:20]
+			req.Name = "vm-" + randomHexID()[:20]
 		}
 		if !validName.MatchString(req.Name) {
 			return echo.NewHTTPError(400, "valid fork name required")
@@ -481,7 +481,7 @@ func (s *Service) action(c echo.Context) error {
 				if c.Param("action") != "unexpose" && req.Protected != nil && *req.Protected {
 					v.Spec.ProtectedPorts = append(v.Spec.ProtectedPorts, req.Port)
 					if v.TrafficAccessToken == "" {
-						v.TrafficAccessToken = strings.ReplaceAll(uuid.NewString(), "-", "")
+						v.TrafficAccessToken = randomHexID()
 					}
 				}
 			}
@@ -507,7 +507,7 @@ func (s *Service) action(c echo.Context) error {
 		expires := time.Now().Add(time.Duration(req.TTL) * time.Second).Unix()
 		return c.JSON(200, map[string]any{"url": v.URLs[req.Port] + "?" + sessionParameter + "=" + accessSession(v, req.Port, expires), "expires_at": expires})
 	case "rotate-access-token":
-		v.TrafficAccessToken = strings.ReplaceAll(uuid.NewString(), "-", "")
+		v.TrafficAccessToken = randomHexID()
 		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return apiError(err)
 		}

@@ -17,8 +17,8 @@ import requests
 
 from beta9 import DurableDisk, Image, VM, Volume
 from beta9.channel import GatewayHTTPError, ServiceClient
-from beta9.clients.disk import DeleteDiskRequest
-from beta9.clients.volume import DeleteVolumeRequest
+from beta9.clients.disk import DeleteDiskRequest, ListDisksRequest
+from beta9.clients.volume import DeleteVolumeRequest, ListVolumesRequest
 from beta9.config import get_config_context
 
 
@@ -87,19 +87,57 @@ def main():
         return result.stdout + result.stderr if expected is None else result.stdout
 
     with ServiceClient(get_config_context(args.profile)) as service:
+
+        def storage_ids():
+            disks = service.disk.list_disks(ListDisksRequest())
+            volumes = service.volume.list_volumes(ListVolumesRequest())
+            assert disks.ok and volumes.ok
+            return {
+                "disk": next((d.id for d in disks.disks if d.name == disk_name), None),
+                "volume": next(
+                    (v.id for v in volumes.volumes if v.name == volume_name), None
+                ),
+            }
+
+        workspace_id = service.http.workspace_id
         if args.cleanup:
+            owned = json.loads(Path(args.report).read_text())
+            if any(
+                owned.get(key) != value
+                for key, value in {
+                    "profile": args.profile,
+                    "name": args.name,
+                    "workspace_id": workspace_id,
+                }.items()
+            ) or not owned.get("storage"):
+                raise RuntimeError(
+                    "Cleanup requires this run's matching ownership report"
+                )
+            current = storage_ids()
+            for kind, resource_id in current.items():
+                if resource_id and resource_id != owned["storage"].get(kind):
+                    raise RuntimeError(f"{kind} identity changed; refusing cleanup")
             try:
-                VM.get(args.name, _service=service).remove()
+                existing = VM.get(args.name, _service=service)
+                if existing.id != owned.get("vm_id"):
+                    raise RuntimeError("VM identity changed; refusing cleanup")
+                existing.remove()
             except GatewayHTTPError as exc:
                 if exc.status != 404:
                     raise
-            disk = service.disk.delete_disk(DeleteDiskRequest(name=disk_name))
-            volume = service.volume.delete_volume(DeleteVolumeRequest(name=volume_name))
-            print(
-                "Own VM removed; disk/volume cleanup:", disk.ok, volume.ok, flush=True
-            )
+            if current["disk"]:
+                assert service.disk.delete_disk(DeleteDiskRequest(name=disk_name)).ok
+            if current["volume"]:
+                assert service.volume.delete_volume(
+                    DeleteVolumeRequest(name=volume_name)
+                ).ok
+            print("Recorded VM and storage removed", flush=True)
             return
 
+        if any(storage_ids().values()):
+            raise RuntimeError(
+                "Audit storage already exists; choose a new audit name or clean the recorded run"
+            )
         vm = VM(
             args.name,
             image=Image.from_id(args.image_id),
@@ -117,6 +155,7 @@ def main():
             volumes=[Volume(volume_name, "/shared")],
             _service=service,
         ).create()
+        report.update(workspace_id=workspace_id, vm_id=vm.id, storage=storage_ids())
         initial_id = vm.info["container_id"]
         stable_url, desktop_url = vm.get_url(8000), vm.desktop_url
         assert vm.info["spec"]["pool"] == "vms"
@@ -212,36 +251,24 @@ def main():
         )
         passed("json_exec_timeout_cancels_child")
 
-        execute(
-            "curl",
-            "-ks",
-            "--connect-timeout",
-            "5",
-            "--max-time",
-            "8",
-            "https://1.1.1.1/",
-        )
+        def egress_allows(expected):
+            probe = vm.process.exec(
+                "curl",
+                "-ks",
+                "--connect-timeout",
+                "3",
+                "--max-time",
+                "4",
+                "https://1.1.1.1/",
+                cwd="/",
+            )
+            assert (probe.wait(10) == 0) is expected
+
+        egress_allows(True)
         vm.update_network_permissions(block_network=True)
-        denied = vm.process.exec(
-            "curl",
-            "-ks",
-            "--connect-timeout",
-            "3",
-            "--max-time",
-            "4",
-            "https://1.1.1.1/",
-        )
-        assert denied.wait(10) != 0
+        egress_allows(False)
         vm.update_network_permissions(allow_list=["1.1.1.1/32"])
-        execute(
-            "curl",
-            "-ks",
-            "--connect-timeout",
-            "5",
-            "--max-time",
-            "8",
-            "https://1.1.1.1/",
-        )
+        egress_allows(True)
         passed("live_egress_block_and_cidr_allow")
         vm.update_network_permissions()
 
