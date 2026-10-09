@@ -276,7 +276,9 @@ class StdioProxy:
             _, body = self._remote_call({"jsonrpc": "2.0", "id": "tools", "method": "tools/list"})
             if isinstance(body, dict):
                 tools.extend(body.get("result", {}).get("tools", []))
-        return tools + self.tools.definitions()
+        local = self.tools.definitions()
+        names = {tool["name"] for tool in local}
+        return [tool for tool in tools if tool.get("name") not in names] + local
 
     def _tools_call(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         response = self._call_tool(msg_id, params)

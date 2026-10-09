@@ -90,7 +90,10 @@ class FakeRemote:
             }
         elif method == "tools/list":
             result = {
-                "tools": [{"name": "whoami", "description": "", "inputSchema": {"type": "object"}}]
+                "tools": [
+                    {"name": "whoami", "description": "", "inputSchema": {"type": "object"}},
+                    {"name": "list_stacks", "description": "", "inputSchema": {"type": "object"}},
+                ]
             }
         elif method == "tools/call":
             result = {"content": [{"type": "text", "text": f"called {message['params']['name']}"}]}
@@ -155,6 +158,9 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
     assert "mcp install --context NAME" in init["result"]["instructions"]
     names = [t["name"] for t in tools["result"]["tools"]]
     assert names[0] == "whoami" and "deploy" in names and "login" in names
+    # A local tool replaces the gateway's tool of the same name.
+    listed = [t for t in tools["result"]["tools"] if t["name"] == "list_stacks"]
+    assert len(listed) == 1 and listed[0]["description"]
     assert call["result"]["content"][0]["text"] == "called whoami"
     assert [r["id"] for r in batch] == [4, 5]
     # The notification went to the gateway and produced no output line.

@@ -295,6 +295,26 @@ def test_a_ready_revision_retires_the_older_ones(tmp_path):
     assert [r["deployment_id"] for r in tools.revisions if r["active"]] == ["web-2"]
 
 
+# A stack's spec and checkpoint run to kilobytes per stack; listing stacks shows
+# what each one is and how its apply stands, and stack_status the rest.
+def test_list_stacks_summarizes_each_stack(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    plan_id = web_stack(tools, "web:1")
+    step(tools, plan_id)
+    step(tools, plan_id)
+
+    listed = stacks.list_summaries(tools)["structuredContent"]["items"]
+    assert listed == [
+        {
+            "name": "app",
+            "revision": tools.stack["revision"],
+            "apps": ["db", "web"],
+            "status": "complete",
+            "services": {"db": "complete", "web": "complete"},
+        }
+    ]
+
+
 # Fixing one service of a stack replans all of it; what did not change, and
 # still runs, stays as it is unless redeploy asks otherwise.
 def test_a_replan_keeps_unchanged_running_services(tmp_path):

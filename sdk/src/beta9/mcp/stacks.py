@@ -265,9 +265,9 @@ def definitions(tools: LocalTools) -> List[Tool]:
                                                 "type": "string",
                                                 "description": (
                                                     "Side-effect-free GET path answering 2xx "
-                                                    "when ready; required for an application "
-                                                    "with an HTTP port. Workers and tcp apps "
-                                                    "are checked by their running container."
+                                                    "when ready. Without one, and for workers "
+                                                    "and tcp apps, readiness only checks that "
+                                                    "the container runs."
                                                 ),
                                             },
                                             "health_port": {
@@ -313,6 +313,19 @@ def definitions(tools: LocalTools) -> List[Tool]:
                 },
             },
             lambda args: apply(tools, args),
+        ),
+        (
+            {
+                "name": "list_stacks",
+                "description": (
+                    "Stacks: named groups of apps shown together on the dashboard board, with "
+                    "each one's revision (update_stack's expected_revision) and, for a stack "
+                    "applied from a spec, the status of the apply and of each service. "
+                    "stack_status shows one stack in full."
+                ),
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            lambda args: list_summaries(tools),
         ),
         (
             {
@@ -368,6 +381,22 @@ def _find_stack(tools: LocalTools, name: str) -> Optional[Dict[str, Any]]:
         raise ValueError("multiple stacks have this name; resolve the duplicate before applying")
 
     return matches[0] if matches else None
+
+
+def list_summaries(tools: LocalTools) -> Dict[str, Any]:
+    """The workspace's stacks without their specs and checkpoints, which the gateway's
+    list_stacks returns whole."""
+    items = []
+    for stack in tools.remote("list_stacks", {}).get("items", []):
+        item = {key: stack[key] for key in ("name", "id", "revision", "apps") if key in stack}
+        operation = stack.get("spec", {}).get("operation", {})
+        if operation:
+            item["status"] = operation.get("status")
+            item["services"] = {
+                name: step.get("status") for name, step in operation.get("services", {}).items()
+            }
+        items.append(item)
+    return text_result(f"{len(items)} stacks", items=items)
 
 
 def status(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
