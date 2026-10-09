@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -139,6 +140,7 @@ func (s *ContainerRuntimeServer) Start() error {
 	log.Info().Int("port", s.port).Msg("container runtime server started")
 
 	s.grpcServer = grpc.NewServer(
+		grpc.UnaryInterceptor(s.replaySandboxRequest),
 		grpc.MaxRecvMsgSize(gRPCMaxRecvMsgSize),
 		grpc.MaxSendMsgSize(gRPCMaxSendMsgSize),
 	)
@@ -272,6 +274,15 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 	buffer := make([]byte, 4096)
 	logEntry := &pb.ContainerLogEntry{}
+	offsets := metadata.ValueFromIncomingContext(stream.Context(), common.LogOffsetHeader)
+	var offset int64
+	if len(offsets) > 0 {
+		var err error
+		offset, err = strconv.ParseInt(offsets[0], 10, 64)
+		if err != nil || offset < 0 {
+			return status.Error(codes.InvalidArgument, "invalid log offset")
+		}
+	}
 
 	for {
 		select {
@@ -280,7 +291,13 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 		default:
 		}
 
-		n, err := instance.LogBuffer.Read(buffer)
+		var n int
+		var err error
+		if len(offsets) > 0 {
+			n, err = instance.LogBuffer.ReadAt(buffer, offset)
+		} else {
+			n, err = instance.LogBuffer.Read(buffer)
+		}
 		if err == io.EOF {
 			break
 		}
@@ -291,6 +308,7 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 		if n > 0 {
 			logEntry.Msg = string(buffer[:n])
+			offset += int64(n)
 			if err := stream.Send(logEntry); err != nil {
 				return err
 			}
@@ -1656,6 +1674,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 	}
 
 	recordSandboxExposedPort(s.containerInstances, in.ContainerId, instance, uint32(in.Port))
+	instance.setContainerPortAddress(port, localTarget)
 
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[port])
 

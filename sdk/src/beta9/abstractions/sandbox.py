@@ -20,7 +20,7 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.pod import Pod
 from ..abstractions.volume import CloudBucket, Volume
-from ..channel import rpc_timeout
+from ..channel import RECOVERY_TIMEOUT, rpc_timeout
 from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopContainerResponse
 from ..clients.pod import (
     CreatePodRequest,
@@ -64,7 +64,6 @@ from ..clients.pod import (
 from ..config import ConfigContext
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
-from ..utils import retry_on_transient_error
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
@@ -105,7 +104,7 @@ def _call_with_sandbox_readiness_retry(do_call):
     deadline = time.monotonic() + SANDBOX_EXEC_READY_TIMEOUT_SECONDS
 
     while True:
-        response = retry_on_transient_error(do_call)
+        response = do_call()
         if response.ok:
             return response
         if not _is_sandbox_exec_readiness_error(response.error_msg):
@@ -1289,7 +1288,7 @@ class SandboxProcessStream:
         # The sandbox process manager returns output deltas and clears its
         # internal buffer after each read. Do not treat the returned value as
         # cumulative output.
-        return retry_on_transient_error(self.fetch_fn, max_retries=2, delay=0.2)
+        return self.fetch_fn()
 
     def read(self):
         """
@@ -1874,7 +1873,7 @@ class SandboxFileSystem:
         digest = hashlib.sha256()
         try:
             while True:
-                with rpc_timeout(30):
+                with rpc_timeout(RECOVERY_TIMEOUT):
                     response = self.sandbox_instance.stub.sandbox_upload_file(
                         PodSandboxUploadFileRequest(
                             container_id=self.sandbox_instance.container_id,
@@ -1896,9 +1895,9 @@ class SandboxFileSystem:
                 if not pending:
                     break
                 chunk, pending = pending, source.read(chunk_size)
-            with rpc_timeout(30):
+            with rpc_timeout(RECOVERY_TIMEOUT):
                 process = self.sandbox_instance.process.exec("sha256sum", "--", target)
-                if process.wait(30) != 0 or process.stdout.read().split()[:1] != [
+                if process.wait(RECOVERY_TIMEOUT) != 0 or process.stdout.read().split()[:1] != [
                     digest.hexdigest()
                 ]:
                     raise SandboxFileSystemError(
@@ -1908,7 +1907,7 @@ class SandboxFileSystem:
                         self.sandbox_instance.container_id,
                     )
                 process = self.sandbox_instance.process.exec("mv", "--", target, sandbox_path)
-                if process.wait(30) != 0:
+                if process.wait(RECOVERY_TIMEOUT) != 0:
                     raise SandboxFileSystemError(
                         process.stderr.read(),
                         "upload_file",
@@ -1967,7 +1966,7 @@ class SandboxFileSystem:
         offset = 0
         chunk_size = 4 * 1024 * 1024
         while True:
-            with rpc_timeout(30):
+            with rpc_timeout(RECOVERY_TIMEOUT):
                 response = self.sandbox_instance.stub.sandbox_download_file(
                     PodSandboxDownloadFileRequest(
                         container_id=self.sandbox_instance.container_id,

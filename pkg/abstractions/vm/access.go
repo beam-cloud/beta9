@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 )
 
 const sessionParameter = "beam_vm_session"
@@ -285,6 +287,10 @@ func (s *Service) keepActive(ctx context.Context, id string, idleTimeout int64) 
 	if err := s.repo.TouchVM(ctx, id); err != nil {
 		return nil, err
 	}
+	renew, release, err := s.activityLease(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -303,10 +309,11 @@ func (s *Service) keepActive(ctx context.Context, id string, idleTimeout int64) 
 				return
 			case <-tick.C:
 				_ = s.repo.TouchVM(ctx, id)
+				_ = renew()
 			}
 		}
 	}()
-	return func() { close(done) }, nil
+	return func() { close(done); release() }, nil
 }
 
 func (s *Service) createAccessSession(c echo.Context, v *types.VM, port uint32, ttl int64) error {
@@ -354,4 +361,47 @@ func (s *Service) urls(v *types.VM) {
 	if v.Spec.Desktop {
 		v.DesktopURL = v.URLs[8080]
 	}
+}
+
+const activityReconnectGrace = 150 * time.Second
+
+func activityKey(id string) string { return "vm:activity:" + id }
+
+func (s *Service) renewActivity(ctx context.Context, id, lease string) error {
+	if s.rdb == nil {
+		return nil
+	}
+	key := activityKey(id)
+	_, err := s.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(time.Now().UnixMilli(), 10))
+		pipe.ZAdd(ctx, key, redis.Z{Member: lease, Score: float64(time.Now().Add(activityReconnectGrace).UnixMilli())})
+		pipe.Expire(ctx, key, activityReconnectGrace)
+		return nil
+	})
+	return err
+}
+
+func (s *Service) hasActivity(ctx context.Context, id string) (bool, error) {
+	if s.rdb == nil {
+		return false, nil
+	}
+	count, err := s.rdb.ZCount(ctx, activityKey(id), strconv.FormatInt(time.Now().UnixMilli(), 10), "+inf").Result()
+	return count > 0, err
+}
+
+func (s *Service) activityLease(ctx context.Context, id string) (func() error, func(), error) {
+	lease := uuid.NewString()
+	renew := func() error { return s.renewActivity(ctx, id, lease) }
+	if err := renew(); err != nil {
+		return nil, nil, err
+	}
+	release := func() {
+		// Keep the lease across gateway shutdown; a replacement can reattach.
+		if s.rdb != nil && (s.ctx == nil || s.ctx.Err() == nil) {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			s.rdb.ZRem(cleanupCtx, activityKey(id), lease)
+		}
+	}
+	return renew, release, nil
 }

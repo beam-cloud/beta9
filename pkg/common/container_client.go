@@ -115,6 +115,7 @@ func newContainerClient(
 	maxMessageSize := 1 << 30 // 1Gi
 	if serviceToken != "" {
 		dialOptions = append(dialOptions, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(serviceToken)),
+			grpc.WithStreamInterceptor(GRPCClientAuthStreamInterceptor(serviceToken)),
 			grpc.WithDefaultCallOptions(
 				grpc.MaxCallRecvMsgSize(maxMessageSize),
 				grpc.MaxCallSendMsgSize(maxMessageSize),
@@ -502,6 +503,10 @@ func (c *ContainerClient) Archive(ctx context.Context, containerId, imageId stri
 			}
 		}
 	}
+}
+
+func (c *ContainerClient) Tunnel(ctx context.Context, request *pb.ContainerTunnelRequest) (*pb.ContainerTunnelResponse, error) {
+	return c.client.ContainerTunnel(ctx, request)
 }
 
 func (c *ContainerClient) SyncWorkspace(ctx context.Context, request *pb.SyncContainerWorkspaceRequest) (*pb.SyncContainerWorkspaceResponse, error) {

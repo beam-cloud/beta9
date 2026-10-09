@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import os
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -21,20 +22,74 @@ from ..abstractions.base.runner import (
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import CloudBucket, Volume
-from ..channel import rpc_timeout, with_grpc_error_handling
+from ..channel import (
+    RECOVERY_TIMEOUT,
+    _RecoveryWindow,
+    request_metadata,
+    rpc_timeout,
+    transient_error,
+    with_grpc_error_handling,
+)
 from ..clients.function import (
     FunctionInvokeRequest,
     FunctionInvokeResponse,
     FunctionScheduleRequest,
     FunctionServiceStub,
 )
-from ..clients.gateway import ListTasksRequest, StringList
+from ..clients.gateway import ListTasksRequest, StopTasksRequest, StringList
 from ..env import called_on_import, is_local
 from ..exceptions import RemoteExecutionError
 from ..schema import Schema
 from ..sync import FileSyncer
 from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool, TaskPolicy
 from .mixins import DeployableMixin
+
+
+class _Invocation:
+    def __init__(self, stub, request):
+        self.stub = stub
+        self.request = request
+        self.task_id = ""
+        self.output_offset = 0
+        self.resumable = False
+
+    def __iter__(self):
+        recovery = _RecoveryWindow(start=False)
+        while True:
+            try:
+                responses = iter(self.stub.function_invoke(self.request))
+                while True:
+                    token = request_metadata.set(
+                        (
+                            ("x-beta9-task-id", self.task_id),
+                            ("x-beta9-log-offset", str(self.output_offset)),
+                        )
+                    )
+                    try:
+                        response = next(responses, None)
+                    finally:
+                        request_metadata.reset(token)
+                    if response is None:
+                        break
+                    # The registration response advertises support for reattaching.
+                    if response.task_id and not response.output and not response.done:
+                        self.resumable = True
+                    self.task_id = response.task_id or self.task_id
+                    if response.output:
+                        self.output_offset += len(response.output.encode("utf-8"))
+                    recovery.reset()
+                    yield response
+                    if response.done:
+                        return
+                raise ConnectionError("Function stream disconnected")
+            except Exception as error:
+                if (
+                    not self.resumable
+                    or not self.task_id
+                    or not transient_error(error)
+                    or not recovery.wait()
+                ):
+                    raise
 
 
 class Function(RunnerAbstraction):
@@ -174,6 +229,8 @@ class _CallableWrapper(DeployableMixin):
     def __init__(self, func: Callable, parent: Function) -> None:
         self.func: Callable = func
         self.parent: Function = parent
+        self._invocations = set()
+        self._invocations_lock = threading.Lock()
 
     @with_grpc_error_handling
     def __call__(self, *args, **kwargs) -> Any:
@@ -213,17 +270,34 @@ class _CallableWrapper(DeployableMixin):
         )
 
         terminal.debug(f"Running function: {self.parent.handler}")
-        last_response: Optional[FunctionInvokeResponse] = None
         output = deque()
         output_size = 0
 
-        for r in self.parent.function_stub.function_invoke(
-            FunctionInvokeRequest(
-                stub_id=self.parent.stub_id,
-                args=args,
-                headless=self.parent.headless,
-            )
-        ):
+        request = FunctionInvokeRequest(
+            stub_id=self.parent.stub_id,
+            args=args,
+            headless=self.parent.headless,
+        )
+        invocation = _Invocation(self.parent.function_stub, request)
+        responses = iter(invocation)
+        with self._invocations_lock:
+            self._invocations.add(invocation)
+        try:
+            return self._consume_invocation(responses, output, output_size)
+        except KeyboardInterrupt:
+            if invocation.task_id and not self.parent.headless:
+                with rpc_timeout(RECOVERY_TIMEOUT):
+                    self.parent.gateway_stub.stop_tasks(
+                        StopTasksRequest(task_ids=[invocation.task_id])
+                    )
+            raise
+        finally:
+            with self._invocations_lock:
+                self._invocations.discard(invocation)
+
+    def _consume_invocation(self, responses, output, output_size):
+        last_response: Optional[FunctionInvokeResponse] = None
+        for r in responses:
             if r.output != "":
                 output.append(r.output[-65536:])
                 output_size += len(output[-1])
@@ -302,6 +376,14 @@ class _CallableWrapper(DeployableMixin):
                         yield result
                 except KeyboardInterrupt:
                     pool.shutdown(wait=False, cancel_futures=True)
+                    if not self.parent.headless:
+                        with self._invocations_lock:
+                            ids = [
+                                request.task_id for request in self._invocations if request.task_id
+                            ]
+                        if ids:
+                            with rpc_timeout(RECOVERY_TIMEOUT):
+                                self.parent.gateway_stub.stop_tasks(StopTasksRequest(task_ids=ids))
                     terminal.error(
                         f"Exiting shell. Mapped functions will {'be terminated.' if not self.parent.headless else 'continue running.'}",
                         exit=False,

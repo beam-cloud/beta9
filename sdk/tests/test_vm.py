@@ -584,28 +584,48 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch):
 
 
 def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
+    from queue import Queue
+    from uuid import UUID
+    import json
+
     class Socket:
         def __init__(self):
-            self.eof = threading.Event()
+            self.messages = Queue()
             self.closed = False
             self.sent = []
-            self.reads = 0
+            self.read = None
+            self.eof = False
+            self.responded = False
 
         def settimeout(self, value):
             pass
 
         def send_binary(self, data):
-            self.sent.append(data)
+            self.sent.append(data[32:])
+            self.messages.put(json.dumps({"type": "input", "id": str(UUID(bytes=data[:16]))}))
 
         def send(self, message):
-            assert message == "EOF"
-            self.eof.set()
+            control = json.loads(message)
+            if control["type"] == "eof":
+                self.eof = True
+                self.messages.put(json.dumps({"type": "input", "id": control["id"]}))
+                if self.read:
+                    self.reply(self.read)
+            elif control["type"] == "read":
+                self.read = control["id"]
+                if self.eof:
+                    self.reply(self.read)
+
+        def reply(self, request):
+            if self.responded:
+                self.messages.put(json.dumps({"type": "eof", "id": request}))
+            else:
+                self.messages.put(UUID(request).bytes + b"complete response")
+                self.responded = True
 
         def recv(self):
-            assert self.eof.wait(5), "stdin EOF was never sent"
-            assert not self.closed, "tunnel closed before reading the response"
-            self.reads += 1
-            return b"complete response" if self.reads == 1 else b""
+            assert not self.closed
+            return self.messages.get(timeout=5)
 
         def close(self):
             self.closed = True
@@ -830,3 +850,29 @@ def test_cli_json_exec_passes_stdin_only_for_foreground(cli_service, monkeypatch
         assert stdin is None
     else:
         assert stdin is not None
+
+
+def test_activity_lease_survives_gateway_restart_and_releases_same_lease():
+    selected = service()
+    restored = threading.Event()
+    info = {"id": "resource", "name": "dev", "spec": {"idle_timeout": 1}}
+    leases = []
+    failed_once = False
+
+    def response(method, path, **kwargs):
+        nonlocal failed_once
+        if path.endswith("/touch"):
+            leases.append(kwargs["params"])
+            if kwargs.get("timeout") == 3 and not kwargs["params"].get("release") == "1":
+                if not failed_once:
+                    failed_once = True
+                    raise GatewayHTTPError(503, "gateway restarting")
+                restored.set()
+        return info
+
+    selected.http.json.side_effect = response
+    vm = VM(_service=selected)._set(info)
+    with vm.keep_alive():
+        assert restored.wait(2)
+    assert len({params["lease"] for params in leases}) == 1
+    assert leases[-1]["release"] == "1"

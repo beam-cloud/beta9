@@ -294,6 +294,12 @@ func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// A gateway outage can expire the monitor heartbeat while the worker
+	// continues running the invocation. Do not dispatch another copy.
+	if res == 0 && task.Status == types.TaskStatusRunning {
+		container, err := t.fs.containerRepo.GetContainerState(task.ContainerId)
+		return container != nil && container.Status == types.ContainerStatusRunning, err
+	}
 
 	return res > 0, nil
 }

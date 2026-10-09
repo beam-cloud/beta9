@@ -495,6 +495,21 @@ func (s *Service) action(c echo.Context) error {
 			return apiError(err)
 		}
 	case "touch":
+		if lease := c.QueryParam("lease"); lease != "" {
+			if _, err := uuid.Parse(lease); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, "invalid activity lease")
+			}
+			if c.QueryParam("release") == "1" {
+				if s.rdb != nil {
+					err = s.rdb.ZRem(ctx, activityKey(v.ID), lease).Err()
+				}
+			} else {
+				err = s.renewActivity(ctx, v.ID, lease)
+			}
+			if err != nil {
+				return apiError(err)
+			}
+		}
 		if err := s.repo.TouchVM(ctx, v.ID); err != nil {
 			return apiError(err)
 		}

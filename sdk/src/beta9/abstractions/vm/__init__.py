@@ -21,7 +21,14 @@ from urllib.parse import quote
 
 import betterproto
 
-from ...channel import Channel, GatewayHTTPError, ServiceClient, rpc_timeout
+from ...channel import (
+    RECOVERY_TIMEOUT,
+    Channel,
+    GatewayHTTPError,
+    ServiceClient,
+    rpc_timeout,
+    transient_error,
+)
 from ...clients.image import ImageServiceStub
 from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
 from ...clients.volume import VolumeServiceStub
@@ -254,8 +261,9 @@ class VM:
             raise ValueError("Create or resolve the VM first")
         return "/" + quote(self.info.get("id") or self.name, safe="")
 
-    def _touch(self, *, timeout=240):
-        return self._api("POST", self._path() + "/touch", timeout=timeout, json={})
+    def _touch(self, *, timeout=240, lease=None, release=False):
+        params = {"lease": lease, "release": "1" if release else "0"} if lease else {}
+        return self._api("POST", self._path() + "/touch", timeout=timeout, json={}, params=params)
 
     def _set(self, info):
         if info.get("container_id") != self.info.get("container_id"):
@@ -608,20 +616,28 @@ class VM:
         idle stopping, or be owned by an application that maintains a lease.
         """
         self.refresh()
-        self._touch()
         ttl = self.info.get("spec", {}).get("idle_timeout", 0)
         if not ttl:
+            self._touch()
             yield self
             return
+        lease = str(uuid.uuid4())
+        self._touch(lease=lease)
         interval = max(0.25, min(15, ttl / 3))
         done = threading.Event()
         errors = []
 
         def heartbeat():
+            recovery_started = None
             while not done.wait(interval):
                 try:
-                    self._touch(timeout=3)
+                    self._touch(timeout=3, lease=lease)
+                    recovery_started = None
                 except Exception as exc:
+                    if transient_error(exc):
+                        recovery_started = recovery_started or time.monotonic()
+                        if time.monotonic() - recovery_started < RECOVERY_TIMEOUT:
+                            continue
                     errors.append(exc)
                     return
 
@@ -632,6 +648,11 @@ class VM:
         finally:
             done.set()
             thread.join(4)
+            try:
+                self._touch(timeout=3, lease=lease, release=True)
+            except Exception as exc:
+                if not transient_error(exc):
+                    errors.append(exc)
         if errors:
             raise RuntimeError("VM activity lease failed") from errors[0]
 

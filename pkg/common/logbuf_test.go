@@ -32,6 +32,25 @@ func TestLogBufferWriteAndRead(t *testing.T) {
 	}
 }
 
+func TestLogBufferCanReplayAfterLegacyReaderConsumesIt(t *testing.T) {
+	buffer := NewLogBuffer()
+	defer buffer.Dispose()
+	buffer.Write([]byte("replayable logs"))
+	buffer.Close()
+	<-buffer.closedChan
+	data := make([]byte, 64)
+	n, err := buffer.Read(data)
+	if err != nil || string(data[:n]) != "replayable logs" {
+		t.Fatalf("legacy read: %q, %v", data[:n], err)
+	}
+	for i := 0; i < 2; i++ {
+		n, err = buffer.ReadAt(data, 0)
+		if err != nil || string(data[:n]) != "replayable logs" {
+			t.Fatalf("replay: %q, %v", data[:n], err)
+		}
+	}
+}
+
 func TestLogBufferConcurrentWrite(t *testing.T) {
 	logBuffer := NewLogBuffer()
 	defer logBuffer.Close()
