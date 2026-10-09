@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -718,9 +720,25 @@ func NewWorker() (_ *Worker, err error) {
 
 	// Recover qcow volumes left behind by a previous worker process before any
 	// container can attach: live volumes are adopted, crashed ones cleaned up.
-	worker.diskManager = disk.NewManager(disk.Config{})
+	diskConfig := disk.Config{}
+	if worker.agentWorker() {
+		// The agent persists durable-disks across worker container replacement.
+		// Keep managers separate: recovery must never detach another slot's QSD.
+		slot := sha256.Sum256([]byte(worker.workerId))
+		diskConfig.Root = filepath.Join(types.DefaultDurableDisksPath, ".qcow", fmt.Sprintf("%x", slot[:6]))
+	}
+	worker.diskManager = disk.NewManager(diskConfig)
 	if err := worker.diskManager.Recover(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
+	}
+
+	if worker.runtimeOwnsBlockRoot() {
+		warmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := worker.diskManager.WarmSpares(warmCtx, types.DefaultVMRootSizeBytes)
+		cancel()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to warm fresh VM root disks")
+		}
 	}
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{

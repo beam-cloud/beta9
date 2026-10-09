@@ -256,6 +256,37 @@ func (m *Manager) replenishSpares(size int64) {
 	}()
 }
 
+// WarmSpares builds clean formatted heads before a worker starts receiving
+// containers. No guest, user data or machine identity is prepared. A bounded
+// caller can continue startup on failure and retain the normal attach fallback.
+func (m *Manager) WarmSpares(ctx context.Context, sizes ...int64) error {
+	if err := m.preflight(); err != nil {
+		return err
+	}
+	if err := m.ensureNBDDevices(ctx); err != nil {
+		return err
+	}
+	for _, size := range sizes {
+		if size > 0 {
+			m.rememberSpareSize(size)
+		}
+	}
+	for _, size := range m.rememberedSpareSizes() {
+		m.replenishSpares(size)
+	}
+	done := make(chan struct{})
+	go func() {
+		m.spareWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
+}
+
 // buildSpare creates, formats, and brings online a fresh volume under a spare
 // key. It is not mounted.
 func (m *Manager) buildSpare(ctx context.Context, size int64) (*Volume, error) {

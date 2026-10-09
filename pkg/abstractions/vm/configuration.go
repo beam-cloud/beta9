@@ -32,7 +32,7 @@ func randomHexID() string {
 
 func normalizeDiskSize(size string) (string, error) {
 	if size == "" {
-		size = "50GiB"
+		size = strconv.FormatInt(types.DefaultVMRootSizeBytes, 10)
 	}
 	quantity, err := resource.ParseQuantity(strings.TrimSuffix(size, "B"))
 	if err != nil {
@@ -57,9 +57,6 @@ func validate(spec *types.VMSpec) error {
 		if spec.Desktop {
 			spec.Memory = 2048
 		}
-	}
-	if spec.DiskSize == "" {
-		spec.DiskSize = "50GiB"
 	}
 	var err error
 	spec.DiskSize, err = normalizeDiskSize(spec.DiskSize)

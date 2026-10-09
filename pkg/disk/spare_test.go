@@ -646,3 +646,59 @@ func TestAttachRejectsReservedSpareKeys(t *testing.T) {
 		t.Fatal("a rejected key must not create a volume directory")
 	}
 }
+
+func TestWarmSparesPreparesFirstFreshRootBeforeDelivery(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	ctx := context.Background()
+	defer manager.Close(ctx)
+	if err := manager.WarmSpares(ctx, testSpareSize); err != nil {
+		t.Fatal(err)
+	}
+	if spareCount(manager, testSpareSize) != spareTarget {
+		t.Fatal("startup returned before fresh roots were formatted")
+	}
+	formatted := len(host.ran("mkfs.ext4"))
+	// Suppress replenishment to isolate the first real root attachment.
+	manager.mu.Lock()
+	manager.spareBuilds[testSpareSize] = true
+	manager.mu.Unlock()
+	volume, err := manager.Attach(ctx, AttachSpec{Key: "first-root", VirtualSizeBytes: testSpareSize, Export: ExportVhostUser}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !volume.state.Formatted || len(host.ran("mkfs.ext4")) != formatted {
+		t.Fatal("first root was formatted on the launch path")
+	}
+}
+
+func TestWarmSparesDoesNotBlockWorkerShutdown(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	formatting := make(chan struct{})
+	manager.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "mkfs.ext4" {
+			close(formatting)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return host.run(ctx, name, args...)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer manager.Close(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- manager.WarmSpares(ctx, testSpareSize) }()
+	select {
+	case <-formatting:
+	case <-time.After(time.Second):
+		t.Fatal("root formatting never started")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("startup cancellation was lost: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker startup ignored cancellation")
+	}
+}
