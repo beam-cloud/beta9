@@ -238,7 +238,9 @@ class AuthTokenInterceptor(
                 "SandboxSnapshotDisks",
                 "SandboxCreateImageFromFilesystem",
             )
-        ) or method in ("StartTask", "EndTask", "FunctionGetArgs", "FunctionSetResult")
+        ) or method in (
+            "StartTask", "EndTask", "FunctionGetArgs", "FunctionSetResult", "StopContainer"
+        )
         if not recoverable:
             return self.intercept_call(continuation, client_call_details, request)
 

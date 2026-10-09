@@ -1,17 +1,18 @@
+import hashlib
+import io
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
+from types import SimpleNamespace
+from unittest import TestCase
 from unittest.mock import Mock
 
 import grpc
 import pytest
 
-from beta9.channel import rpc_timeout
-from beta9.clients.function import FunctionInvokeRequest, FunctionInvokeResponse
-from beta9.channel import request_metadata, retry_operation
 from beta9.abstractions.function import _Invocation
-from unittest import TestCase
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
-
-from beta9.channel import Channel, GatewayHTTP
+from beta9.abstractions.sandbox import SandboxFileSystem
+from beta9.channel import Channel, GatewayHTTP, request_metadata, retry_operation, rpc_timeout
+from beta9.clients.function import FunctionInvokeRequest, FunctionInvokeResponse
 
 
 class TestChannelIdentity(TestCase):
@@ -93,6 +94,46 @@ def test_retry_respects_explicit_deadline():
     with rpc_timeout(0), pytest.raises(Unavailable):
         retry_operation(operation)
     operation.assert_called_once()
+
+
+@pytest.mark.parametrize("caller_timeout", [None, 10])
+def test_filesystem_upload_recovers_after_thirty_seconds(monkeypatch, caller_timeout):
+    from contextlib import nullcontext
+
+    now = [0.0]
+    monkeypatch.setattr("beta9.channel.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    attempts = []
+
+    def upload(request):
+        def attempt():
+            attempts.append(request)
+            if len(attempts) == 1:
+                now[0] = 35
+                raise Unavailable()
+            return SimpleNamespace(ok=True)
+
+        return retry_operation(attempt, owner="sandbox")
+
+    process = Mock()
+    process.exec.return_value.wait.return_value = 0
+    process.exec.return_value.stdout = io.StringIO(hashlib.sha256(b"payload").hexdigest())
+    instance = SimpleNamespace(
+        container_id="sandbox",
+        process=process,
+        stub=SimpleNamespace(sandbox_upload_file=upload, sandbox_delete_file=Mock()),
+    )
+    scope = rpc_timeout(caller_timeout) if caller_timeout else nullcontext()
+    with scope:
+        if caller_timeout:
+            with pytest.raises(Unavailable):
+                SandboxFileSystem(instance).write_bytes("/file", b"payload")
+            assert len(attempts) == 1
+            process.exec.assert_not_called()
+        else:
+            SandboxFileSystem(instance).write_bytes("/file", b"payload")
+            assert len(attempts) == 2
+            assert attempts[0] is attempts[1]
 
 
 @pytest.mark.parametrize("supports_resume", [True, False])
