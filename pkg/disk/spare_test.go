@@ -45,6 +45,14 @@ func (h *fakeHost) run(_ context.Context, name string, args ...string) ([]byte, 
 				if err := os.WriteFile(strings.TrimPrefix(arg, "addr.type=unix,addr.path="), nil, 0o600); err != nil {
 					return nil, err
 				}
+			case strings.HasPrefix(arg, "type=vhost-user-blk,"):
+				_, socket, ok := strings.Cut(arg, "addr.path=")
+				if ok {
+					socket, _, _ = strings.Cut(socket, ",")
+					if err := os.WriteFile(socket, nil, 0o600); err != nil {
+						return nil, err
+					}
+				}
 			}
 		}
 	case "nbd-client":
@@ -218,6 +226,62 @@ func TestAttachWithoutSpareBuildsFreshVolume(t *testing.T) {
 	defer manager.mu.Unlock()
 	if len(manager.spares[testSpareSize]) != 0 || !manager.closed {
 		t.Fatal("Close must destroy the spare pool")
+	}
+}
+
+func TestVMAdoptsFormattedSpareWithoutMountOrSecondFormat(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	ctx := context.Background()
+	spare, err := manager.buildSpare(ctx, testSpareSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.spares[testSpareSize] = []*Volume{spare}
+	// Keep background replenishment out of the formatting count.
+	manager.spareBuilds[testSpareSize] = true
+	head := spare.state.HeadPath
+	frozen := false
+	volume, err := manager.Attach(ctx, AttachSpec{Key: "vm-root", VirtualSizeBytes: testSpareSize,
+		Export: ExportVhostUser, Mountpoint: "/ignored-for-vm", Owner: "vm", Freeze: func(context.Context) (func(), error) {
+			frozen = true
+			return func() {}, nil
+		}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume != spare || volume.state.HeadPath != head || !volume.state.Formatted || volume.nbd != nil {
+		t.Fatal("VM must own the formatted spare head and release its NBD device")
+	}
+	if len(host.ran("mkfs.ext4")) != 1 || len(host.ran("mount")) != 0 || len(host.ran("nbd-client -d")) != 1 {
+		t.Fatalf("unexpected adoption commands: %v", host.commands)
+	}
+	if volume.ExportSocket() == "" || volume.state.exportMode() != ExportVhostUser || volume.owner != "vm" {
+		t.Fatalf("VM export not ready: %+v", volume.state)
+	}
+	if thaw, err := volume.quiesce(ctx); err != nil {
+		t.Fatal(err)
+	} else {
+		thaw()
+	}
+	if !frozen {
+		t.Fatal("adopted export lost its guest freeze hook")
+	}
+	saved, err := loadVolumeState(volume.dir)
+	if err != nil || saved.Key != "vm-root" || !saved.Attached || saved.ExportSocket == "" {
+		t.Fatalf("adoption was not persisted: %+v, %v", saved, err)
+	}
+	if err := manager.Detach(ctx, "vm-root"); err != nil {
+		t.Fatal(err)
+	}
+	reattached, err := manager.Attach(ctx, AttachSpec{Key: "vm-root", VirtualSizeBytes: testSpareSize, Export: ExportVhostUser}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reattached.state.HeadPath != head || len(host.ran("mkfs.ext4")) != 1 {
+		t.Fatal("reattach must retain the head and filesystem")
+	}
+	if err := manager.Close(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 

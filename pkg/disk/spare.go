@@ -119,10 +119,25 @@ func (v *Volume) adopt(ctx context.Context, spec AttachSpec) error {
 	v.state.QMPSocket = v.qsd.qmpSocket
 	v.state.NBDSocket = v.qsd.nbdSocket
 	v.state.Mountpoint = spec.Mountpoint
+	if spec.Export == ExportVhostUser {
+		v.state.Mountpoint = ""
+	}
 	v.state.Owner = spec.Owner
 	v.owner = spec.Owner
 	if err := saveVolumeState(v.dir, v.state); err != nil {
 		return err
+	}
+	if spec.Export == ExportVhostUser {
+		// Release the spare's unmounted NBD device and daemon before opening
+		// the same formatted head through vhost-user. detach persists the
+		// rekeyed state, so a crash here recovers as an ordinary volume.
+		if err := v.detach(ctx); err != nil {
+			return err
+		}
+		v.state.Export = string(ExportVhostUser)
+		v.state.Mountpoint = ""
+		v.freeze = spec.Freeze
+		return v.start(ctx)
 	}
 	return m.mountExt4(ctx, v.nbd.Path, spec.Mountpoint, false)
 }
