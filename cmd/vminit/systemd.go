@@ -134,14 +134,6 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	if err := os.MkdirAll(filepath.Join(root, process.Cwd), 0755); err != nil {
 		return err
 	}
-	// Machine identity is stable on start, and distinct on fork/template.
-	id, err := vmMachineID(processEnv(process, "BEAM_VM_ID"))
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(root, "etc/machine-id"), []byte(id+"\n"), 0644); err != nil {
-		return err
-	}
 	processFile := filepath.Join(root, systemdProcessFile)
 	if err := os.MkdirAll(filepath.Dir(processFile), 0700); err != nil {
 		return err
@@ -239,7 +231,8 @@ func vmMachineID(id string) (string, error) {
 
 func prepareVMIdentity(root string, process *specs.Process) error {
 	id := processEnv(process, "BEAM_VM_ID")
-	if _, err := vmMachineID(id); err != nil {
+	machineID, err := vmMachineID(id)
+	if err != nil {
 		return err
 	}
 	identityPath := filepath.Join(root, "etc/beam-vm-identity")
@@ -247,18 +240,32 @@ func prepareVMIdentity(root string, process *specs.Process) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if strings.TrimSpace(string(previous)) == id {
-		return nil
-	}
-	// A cold start keeps host keys; a fork/template must not reuse them.
-	keys, err := filepath.Glob(filepath.Join(root, "etc/ssh/ssh_host_*"))
-	if err != nil {
-		return err
-	}
-	for _, key := range keys {
-		if err := os.Remove(key); err != nil {
+	sameID := strings.TrimSpace(string(previous)) == id
+	if sameID {
+		// Retain the durable identity across upgrades of the ID derivation.
+		stored, err := os.ReadFile(filepath.Join(root, "etc/machine-id"))
+		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
+		if value := strings.TrimSpace(string(stored)); len(value) == 32 && strings.Trim(value, "0123456789abcdef") == "" {
+			return nil
+		}
+	}
+	// A cold start keeps host keys; a fork/template must not reuse them.
+	if !sameID {
+		keys, err := filepath.Glob(filepath.Join(root, "etc/ssh/ssh_host_*"))
+		if err != nil {
+			return err
+		}
+		for _, key := range keys {
+			if err := os.Remove(key); err != nil {
+				return err
+			}
+		}
+	}
+	// Write the new machine identity before marking the disk as this VM's root.
+	if err := os.WriteFile(filepath.Join(root, "etc/machine-id"), []byte(machineID+"\n"), 0644); err != nil {
+		return err
 	}
 	return os.WriteFile(identityPath, []byte(id+"\n"), 0644)
 }

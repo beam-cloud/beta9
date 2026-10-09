@@ -102,6 +102,36 @@ func TestSystemdBootConfiguration(t *testing.T) {
 	assertPrivateFile(t, managerPath)
 }
 
+func TestSystemdPreservesExistingShortVMIdentityOnUpgrade(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	id := "12ab34cd56ef7890"
+	machineID := "976139cdf92b4688bb36a0e763ef445c\n"
+	for path, value := range map[string]string{"etc/beam-vm-identity": id + "\n", "etc/machine-id": machineID} {
+		if err := os.WriteFile(filepath.Join(root, path), []byte(value), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proc := &specs.Process{Env: []string{"BEAM_VM_ID=" + id}}
+	if err := writeSystemdBootFiles(root, proc); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(filepath.Join(root, "etc/machine-id"))
+	if err != nil || string(stored) != machineID {
+		t.Fatalf("upgrade changed durable machine identity: %q, %v", stored, err)
+	}
+	proc.Env = []string{"BEAM_VM_ID=vm-12ab34cd56ef7891"}
+	if err := writeSystemdBootFiles(root, proc); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = os.ReadFile(filepath.Join(root, "etc/machine-id"))
+	if err != nil || string(stored) == machineID {
+		t.Fatalf("fork retained the parent's machine identity: %q, %v", stored, err)
+	}
+}
+
 func assertPrivateFile(t *testing.T, path string) {
 	t.Helper()
 	stat, err := os.Stat(path)
