@@ -122,6 +122,9 @@ func TestSystemdPreservesExistingShortVMIdentityOnUpgrade(t *testing.T) {
 	if err != nil || string(stored) != machineID {
 		t.Fatalf("upgrade changed durable machine identity: %q, %v", stored, err)
 	}
+	if err := os.RemoveAll(filepath.Join(root, "run")); err != nil {
+		t.Fatal(err)
+	}
 	proc.Env = []string{"BEAM_VM_ID=vm-12ab34cd56ef7891"}
 	if err := writeSystemdBootFiles(root, proc); err != nil {
 		t.Fatal(err)
