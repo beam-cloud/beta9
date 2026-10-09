@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,20 +16,19 @@ import (
 )
 
 type workloadMemory struct {
-	path       string
 	limitBytes int64
 	cgroup     *os.File
+	done       chan struct{}
 }
 
 func newWorkloadMemory(limit int64) (*workloadMemory, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("invalid workload memory limit %d", limit)
 	}
-	const root = "/sys/fs/cgroup"
-	if err := os.WriteFile(filepath.Join(root, "cgroup.subtree_control"), []byte("+memory"), 0o644); err != nil {
+	if err := os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+memory"), 0o644); err != nil {
 		return nil, err
 	}
-	for _, group := range []string{microvm.ControlCgroup, microvm.WorkloadCgroup} {
+	for _, group := range []string{microvm.ControlCgroup, microvm.WorkloadExecCgroup} {
 		if err := os.MkdirAll(group, 0o755); err != nil {
 			return nil, err
 		}
@@ -40,35 +40,32 @@ func newWorkloadMemory(limit int64) (*workloadMemory, error) {
 		{microvm.WorkloadCgroup + "/memory.swap.max", "0"},
 		{microvm.WorkloadCgroup + "/memory.oom.group", "0"},
 		{microvm.WorkloadCgroup + "/cgroup.subtree_control", "+memory"},
+		// The parent caps the aggregate, including Docker; the exec leaf
+		// exposes that limit to applications reading their own cgroup.
+		{microvm.WorkloadExecCgroup + "/memory.max", strconv.FormatInt(limit, 10)},
 	} {
 		if err := os.WriteFile(setting.path, []byte(setting.value), 0o644); err != nil {
 			return nil, fmt.Errorf("write %s: %w", setting.path, err)
 		}
 	}
-	if err := os.MkdirAll(microvm.WorkloadExecCgroup, 0o755); err != nil {
-		return nil, err
-	}
-	// Expose the same limit at the exec leaf for runtimes that read only their
-	// own cgroup. The parent still covers the aggregate, including Docker.
-	if err := os.WriteFile(microvm.WorkloadExecCgroup+"/memory.max", []byte(strconv.FormatInt(limit, 10)), 0o644); err != nil {
-		return nil, err
-	}
 	cgroup, err := os.Open(microvm.WorkloadExecCgroup)
 	if err != nil {
 		return nil, err
 	}
-	return &workloadMemory{path: microvm.WorkloadCgroup, limitBytes: limit, cgroup: cgroup}, nil
+	return &workloadMemory{limitBytes: limit, cgroup: cgroup, done: make(chan struct{})}, nil
+}
+
+func (w *workloadMemory) close() {
+	close(w.done)
+	_ = w.cgroup.Close()
 }
 
 func (w *workloadMemory) configureCommand(cmd *exec.Cmd) {
-	for n := len(cmd.Env) - 1; n >= 0; n-- {
-		if strings.HasPrefix(cmd.Env[n], microvm.WorkloadCgroupEnv+"=") {
-			cmd.Env = append(cmd.Env[:n], cmd.Env[n+1:]...)
-		}
-	}
+	cmd.Env = slices.DeleteFunc(cmd.Env, func(env string) bool {
+		return strings.HasPrefix(env, microvm.WorkloadCgroupEnv+"=")
+	})
 	if filepath.Base(cmd.Path) == "goproc" {
-		// The manager inherits PID 1's control cgroup; it places its own
-		// children in the workload using the released goproc policy.
+		// Keep the manager with PID 1; goproc places its exec children.
 		cmd.Env = append(cmd.Env, microvm.WorkloadCgroupEnv+"="+microvm.WorkloadExecCgroup)
 		return
 	}
@@ -77,7 +74,7 @@ func (w *workloadMemory) configureCommand(cmd *exec.Cmd) {
 }
 
 func (w *workloadMemory) readMemoryValue(name string) uint64 {
-	data, err := os.ReadFile(filepath.Join(w.path, name))
+	data, err := os.ReadFile(filepath.Join(microvm.WorkloadCgroup, name))
 	if err != nil {
 		return 0
 	}
@@ -86,7 +83,7 @@ func (w *workloadMemory) readMemoryValue(name string) uint64 {
 }
 
 func (w *workloadMemory) readOOMKills() (uint64, error) {
-	data, err := os.ReadFile(filepath.Join(w.path, "memory.events"))
+	data, err := os.ReadFile(filepath.Join(microvm.WorkloadCgroup, "memory.events"))
 	if err != nil {
 		return 0, err
 	}
@@ -100,23 +97,34 @@ func (w *workloadMemory) readOOMKills() (uint64, error) {
 }
 
 func (w *workloadMemory) watchOOM(ctrl *control) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
 	var previous uint64
 	for {
+		select {
+		case <-w.done:
+			return
+		case <-ticker.C:
+		}
 		kills, err := w.readOOMKills()
 		if err != nil {
 			logf("read workload OOM counter: %v", err)
-		} else if kills > previous {
-			event := &microvm.ApplicationOOM{
-				Kills:       kills - previous,
-				MemoryLimit: w.limitBytes,
-				MemoryUsage: w.readMemoryValue("memory.current"),
-				MemoryPeak:  w.readMemoryValue("memory.peak"),
-			}
-			logf("application OOM: killed=%d usage=%d peak=%d limit=%d; sandbox remains running", event.Kills, event.MemoryUsage, event.MemoryPeak, event.MemoryLimit)
-			if err := ctrl.send(microvm.Message{Type: microvm.MsgApplicationOOM, OOM: event}); err == nil {
-				previous = kills
-			}
+			continue
 		}
-		time.Sleep(500 * time.Millisecond)
+		if kills <= previous {
+			continue
+		}
+		event := &microvm.ApplicationOOM{
+			Kills:       kills - previous,
+			MemoryLimit: w.limitBytes,
+			MemoryUsage: w.readMemoryValue("memory.current"),
+			MemoryPeak:  w.readMemoryValue("memory.peak"),
+		}
+		logf("application OOM: killed=%d usage=%d peak=%d limit=%d; sandbox remains running",
+			event.Kills, event.MemoryUsage, event.MemoryPeak, event.MemoryLimit)
+		if err := ctrl.send(microvm.Message{Type: microvm.MsgApplicationOOM, OOM: event}); err == nil {
+			previous = kills
+		}
 	}
 }

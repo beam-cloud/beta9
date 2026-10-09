@@ -178,7 +178,11 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	// device and the guest has netfilter, so dockerd runs with its defaults
 	// (overlay2, bridge, iptables) and inner containers get real networking.
 	if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeMicroVM.String() {
-		cmd = []string{"dockerd", "--exec-opt=native.cgroupdriver=cgroupfs", "--cgroup-parent=" + strings.TrimPrefix(microvm.WorkloadCgroup, sandboxCgroupRoot)}
+		cmd = []string{
+			"dockerd",
+			"--exec-opt=native.cgroupdriver=cgroupfs",
+			"--cgroup-parent=" + strings.TrimPrefix(microvm.WorkloadCgroup, sandboxCgroupRoot),
+		}
 	}
 
 	// dockerd runs in the foreground; waiting here would block readiness checks.

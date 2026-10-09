@@ -166,15 +166,13 @@ func microVMMemoryBytes(spec *specs.Spec) int64 {
 }
 
 func microVMWorkloadMemoryBytes(spec *specs.Spec) int64 {
-	var size int64
 	if mib, ok := annotationInt(spec, MicroVMMemoryMiBAnnotation); ok && mib > 0 {
-		size = mib << 20
-	} else if spec.Linux != nil && spec.Linux.Resources != nil && spec.Linux.Resources.Memory != nil && spec.Linux.Resources.Memory.Limit != nil && *spec.Linux.Resources.Memory.Limit > 0 {
-		size = *spec.Linux.Resources.Memory.Limit
-	} else {
-		size = microVMDefaultMemoryMiB << 20
+		return mib << 20
 	}
-	return size
+	if spec.Linux != nil && spec.Linux.Resources != nil && spec.Linux.Resources.Memory != nil && spec.Linux.Resources.Memory.Limit != nil && *spec.Linux.Resources.Memory.Limit > 0 {
+		return *spec.Linux.Resources.Memory.Limit
+	}
+	return microVMDefaultMemoryMiB << 20
 }
 
 func annotationInt(spec *specs.Spec, key string) (int64, bool) {

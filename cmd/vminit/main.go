@@ -100,7 +100,7 @@ func run() (int, error) {
 	if err != nil {
 		return -1, fmt.Errorf("configure workload memory: %w", err)
 	}
-	defer workload.cgroup.Close()
+	defer workload.close()
 	hostname := spec.Hostname
 	if hostname != "" {
 		if err := unix.Sethostname([]byte(hostname)); err != nil {

@@ -589,27 +589,7 @@ func (m *MicroVM) Events(ctx context.Context, containerID string) (<-chan Event,
 	if !ok || inst.ctrl == nil {
 		return nil, ErrContainerNotFound{ContainerID: containerID}
 	}
-	ch := make(chan Event)
-	go func() {
-		defer close(ch)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-inst.ctrl.eventDone:
-				return
-			case event := <-inst.ctrl.applicationOOM:
-				select {
-				case ch <- event:
-				case <-ctx.Done():
-					return
-				case <-inst.ctrl.eventDone:
-					return
-				}
-			}
-		}
-	}()
-	return ch, nil
+	return inst.ctrl.events(ctx), nil
 }
 
 func (m *MicroVM) Close() error {
@@ -1827,6 +1807,30 @@ func (c *microVMControl) accept() {
 		}
 		c.serve(conn)
 	}
+}
+
+func (c *microVMControl) events(ctx context.Context) <-chan Event {
+	ch := make(chan Event)
+	go func() {
+		defer close(ch)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.eventDone:
+				return
+			case event := <-c.applicationOOM:
+				select {
+				case ch <- event:
+				case <-ctx.Done():
+					return
+				case <-c.eventDone:
+					return
+				}
+			}
+		}
+	}()
+	return ch
 }
 
 func (c *microVMControl) serve(conn net.Conn) {

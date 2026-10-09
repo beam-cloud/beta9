@@ -1153,7 +1153,12 @@ func TestMicroVMResourcesAndOOM(t *testing.T) {
 	total, err := strconv.Atoi(strings.TrimSpace(out))
 	require.NoError(t, err, out)
 	require.InDelta(t, 512+(microvm.GuestMemoryHeadroom>>20), total, 80, "guest RAM includes control headroom")
-	code, out = vm.sh(client, "cat /sys/fs/cgroup/beam-workload/memory.max; cat /sys/fs/cgroup/beam-workload/memory.oom.group; cat /proc/self/cgroup; cat /proc/$(pidof goproc)/cgroup")
+	code, out = vm.sh(client, `
+cat /sys/fs/cgroup/beam-workload/memory.max
+cat /sys/fs/cgroup/beam-workload/memory.oom.group
+cat /proc/self/cgroup
+cat /proc/$(pidof goproc)/cgroup
+`)
 	require.Equal(t, 0, code, out)
 	require.Contains(t, out, "536870912\n0\n", "workload has the requested hard limit and individual-process OOM killing")
 	require.Contains(t, out, "0::/beam-workload/exec", "exec belongs to the workload budget")
@@ -1203,7 +1208,11 @@ func TestMicroVMResourcesAndOOM(t *testing.T) {
 
 	// A direct OOM victim returns a normal completed-process status, preserves
 	// both log streams, and does not remain 'running' after SIGKILL.
-	pid, err := client.Exec([]string{"sh", "-c", "echo retained-stdout; echo retained-stderr >&2; exec tail /dev/zero"}, "/", []string{"PATH=/bin:/usr/bin"}, false)
+	pid, err := client.Exec([]string{"sh", "-c", `
+echo retained-stdout
+echo retained-stderr >&2
+exec tail /dev/zero
+`}, "/", []string{"PATH=/bin:/usr/bin"}, false)
 	require.NoError(t, err)
 	code, err = client.Wait(pid)
 	require.NoError(t, err)
