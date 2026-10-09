@@ -14,6 +14,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -25,7 +26,7 @@ import (
 
 const (
 	tcpHandlerKeyTtl time.Duration = 5 * time.Minute
-	postgresALPN                  = "postgresql"
+	postgresALPN                   = "postgresql"
 )
 
 type tcpConnection struct {
@@ -175,10 +176,7 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 		return
 	}
 
-	tlsConn := tls.Server(tlsReadyConn, &tls.Config{
-		Certificates: []tls.Certificate{pts.tlsCert},
-		NextProtos:   []string{postgresALPN},
-	})
+	tlsConn := tls.Server(tlsReadyConn, pts.tlsConfig())
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return
@@ -197,6 +195,30 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	sniMiddleware := pts.createSNIMiddleware(tcpHandler)
 	if err := sniMiddleware(tlsConn); err != nil {
 		log.Error().Err(err).Msg("connection handler error")
+	}
+}
+
+// tlsConfig fails the handshake of a client that sends no SNI with unrecognized_name:
+// it cannot be routed, and a completed handshake followed by a close leaves clients
+// such as ioredis reconnecting silently. ALPN is negotiated only for PostgreSQL direct
+// SSL; other offers are ignored, so HTTPS clients like curl reach HTTP ports.
+func (pts *PodTCPServer) tlsConfig() *tls.Config {
+	plain := &tls.Config{Certificates: []tls.Certificate{pts.tlsCert}}
+	postgres := &tls.Config{
+		Certificates: []tls.Certificate{pts.tlsCert},
+		NextProtos:   []string{postgresALPN},
+	}
+	return &tls.Config{
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			switch {
+			case hello.ServerName == "":
+				return &tls.Config{}, nil
+			case slices.Contains(hello.SupportedProtos, postgresALPN):
+				return postgres, nil
+			default:
+				return plain, nil
+			}
+		},
 	}
 }
 
