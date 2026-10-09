@@ -3,6 +3,12 @@ name: Build and release Worker
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: Semantic version of release
+        required: true
+        type: string
 
 permissions:
   id-token: write
@@ -10,12 +16,12 @@ permissions:
 
 jobs:
   microvm:
-    if: startsWith(github.ref, 'refs/tags/worker-')
+    if: startsWith(github.ref, 'refs/tags/worker-') || inputs.app_version != ''
     uses: ./.github/workflows/microvm-image.yml
     secrets: inherit
 
   build_and_release_worker:
-    if: startsWith(github.ref, 'refs/tags/worker-')
+    if: startsWith(github.ref, 'refs/tags/worker-') || inputs.app_version != ''
     needs: microvm
     environment: Release
     name: build (${{ matrix.platform }})
@@ -37,6 +43,11 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -53,8 +64,10 @@ jobs:
 
       - name: Set version
         id: set-version
+        env:
+          RELEASE_VERSION: ${{ inputs.app_version }}
         run: |
-          echo "TAG_NAME=${GITHUB_REF_NAME#worker-}" >> $GITHUB_OUTPUT
+          echo "TAG_NAME=${RELEASE_VERSION:-${GITHUB_REF_NAME#worker-}}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push container image to Amazon ECR
         uses: docker/build-push-action@v5
@@ -69,7 +82,7 @@ jobs:
             MICROVM_IMAGE=${{ needs.microvm.outputs.image }}
 
   publish_worker_manifest:
-    if: startsWith(github.ref, 'refs/tags/worker-')
+    if: startsWith(github.ref, 'refs/tags/worker-') || inputs.app_version != ''
     needs: build_and_release_worker
     environment: Release
     runs-on: ubuntu-latest
@@ -77,6 +90,8 @@ jobs:
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -93,8 +108,10 @@ jobs:
 
       - name: Set version
         id: set-version
+        env:
+          RELEASE_VERSION: ${{ inputs.app_version }}
         run: |
-          echo "TAG_NAME=${GITHUB_REF_NAME#worker-}" >> $GITHUB_OUTPUT
+          echo "TAG_NAME=${RELEASE_VERSION:-${GITHUB_REF_NAME#worker-}}" >> "$GITHUB_OUTPUT"
 
       - name: Publish multi-platform image manifests
         env:
