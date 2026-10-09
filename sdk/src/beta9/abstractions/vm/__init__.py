@@ -2,34 +2,35 @@
 
 import base64
 import copy
-import io
-import math
 import gzip
+import io
+import json
+import math
 import os
 import subprocess
 import tarfile
 import tempfile
-import time
 import threading
-from contextlib import contextmanager
+import time
 import uuid
-import json
-import betterproto
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 
+import betterproto
+
 from ...channel import Channel, GatewayHTTPError, ServiceClient, rpc_timeout
 from ...clients.image import ImageServiceStub
 from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
+from ...clients.volume import VolumeServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
 from ...type import DurableDisk
-from ...clients.volume import VolumeServiceStub
-from ..volume import Volume
 from ..image import Image
 from ..sandbox import SandboxInstance
+from ..volume import Volume
 
 
 def identity() -> Path:
@@ -38,6 +39,7 @@ def identity() -> Path:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.exists() and path.with_suffix(".pub").exists():
         return path
+
     # Generate off-path and publish with an atomic, non-overwriting link.
     # Concurrent processes always derive the public key from the winning key.
     try:
@@ -148,7 +150,8 @@ class VM:
     """A durable resource. Stop releases compute and retains the complete root.
 
     Stop/start cold boots enabled systemd units. Pause/resume preserves RAM
-    and running processes. URLs and machine identity stay fixed. Forks and templates get independent disks/identities.
+    and running processes. URLs and machine identity stay fixed. Forks and
+    templates get independent disks and identities.
     """
 
     def __init__(
@@ -194,6 +197,7 @@ class VM:
         self._volumes = volumes
         if template and snapshot:
             raise ValueError("Choose a template or snapshot")
+
         self.info: Dict[str, Any] = {}
         self._connected = None
         self._connected_at = 0
@@ -257,8 +261,10 @@ class VM:
         if info.get("container_id") != self.info.get("container_id"):
             self._connected = None
             self._services_container = None
+
         self.info = info
         self.name = info["name"]
+
         if info.get("exec_ready"):
             self._connected = _VMSandbox(
                 container_id=info["container_id"],
@@ -267,6 +273,7 @@ class VM:
                 vm_channel=self._service.channel,
             )
             self._connected_at = time.monotonic()
+
         return self
 
     def create(self, wait: bool = True) -> "VM":
@@ -279,6 +286,7 @@ class VM:
         # creation request, including the image and SSH key already prepared.
         if self._creation_body is not None:
             return self
+
         # Verify the selected gateway before building an image or creating keys.
         # Older gateways return a generic route 404, which otherwise appears
         # after a successful (and potentially expensive) image build.
@@ -293,26 +301,8 @@ class VM:
                 "(HTTP 404). Deploy a gateway with persistent VM support, "
                 "or select the correct --context.",
             ) from exc
-        spec = dict(self._spec)
-        if self._volumes is not None:
-            spec["volumes"] = []
-            for volume in self._volumes:
-                selected = copy.copy(volume)
-                selected.stub = VolumeServiceStub(self._service.channel)
-                if not selected.get_or_create():
-                    raise RuntimeError(f"Unable to prepare volume {selected.name}")
-                spec["volumes"].append(selected.export().to_dict(casing=betterproto.Casing.SNAKE))
-        if spec.get("ssh", True):
-            spec["ssh_public_key"] = public_key()
-        if not (self.template or self._snapshot_source):
-            spec.setdefault("ssh", True)
-            image = self.image or Image(base_image="ubuntu:22.04")
-            if self.image is None:
-                image.ignore_python = True
-            result = prepare_image(image, self._service, spec.get("desktop", False)).build()
-            if not result.success:
-                raise ImageBuildError(result.error or "VM image build failed")
-            spec["image_id"] = result.image_id
+
+        spec = self._prepare_spec()
         self._creation_body = copy.deepcopy(
             {
                 "name": self.name or "",
@@ -324,6 +314,33 @@ class VM:
             }
         )
         return self
+
+    def _prepare_spec(self):
+        """Resolve workspace volumes, SSH identity and the immutable VM image."""
+        spec = dict(self._spec)
+        if self._volumes is not None:
+            spec["volumes"] = []
+            for volume in self._volumes:
+                selected = copy.copy(volume)
+                selected.stub = VolumeServiceStub(self._service.channel)
+                if not selected.get_or_create():
+                    raise RuntimeError(f"Unable to prepare volume {selected.name}")
+                spec["volumes"].append(selected.export().to_dict(casing=betterproto.Casing.SNAKE))
+
+        if spec.get("ssh", True):
+            spec["ssh_public_key"] = public_key()
+
+        if not (self.template or self._snapshot_source):
+            spec.setdefault("ssh", True)
+            image = self.image or Image(base_image="ubuntu:22.04")
+            if self.image is None:
+                image.ignore_python = True
+            result = prepare_image(image, self._service, spec.get("desktop", False)).build()
+            if not result.success:
+                raise ImageBuildError(result.error or "VM image build failed")
+            spec["image_id"] = result.image_id
+
+        return spec
 
     def _submit_creation(self, wait):
         kwargs = {"params": {"wait": "exec"}} if wait else {}
