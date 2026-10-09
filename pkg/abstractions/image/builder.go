@@ -199,14 +199,14 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build, logsD
 						return err
 					}
 					if exitCode != 0 {
-						exitCodeMsg := getExitCodeMsg(exitCode)
+						exitCodeMsg := getBuildExitCodeMsg(exitCode, build.opts)
 						build.log(true, fmt.Sprintf("Build failed: %s\n", exitCodeMsg))
 						return errors.New(fmt.Sprintf("build failed: %s", exitCodeMsg))
 					}
 					// Success: buildah build + index creation completed
 					return nil
 				} else if exitCode != 0 {
-					exitCodeMsg := getExitCodeMsg(exitCode)
+					exitCodeMsg := getBuildExitCodeMsg(exitCode, build.opts)
 					time.Sleep(200 * time.Millisecond)
 					build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
 					return errors.New(fmt.Sprintf("container exited with error: %s", exitCodeMsg))
@@ -759,6 +759,16 @@ func getImageTagOrDigest(digest string, tag string) string {
 		return tag
 	}
 	return digest
+}
+
+func getBuildExitCodeMsg(exitCode int, opts *BuildOpts) string {
+	if exitCode == int(types.ContainerExitCodeInvalidCustomImage) && opts != nil && opts.ExistingImageUri != "" {
+		return fmt.Sprintf(
+			"InvalidCustomImage: %s was not found, or its registry requires credentials. Check the image name and tag; for a private image, pass registry credentials.",
+			getSourceImage(opts),
+		)
+	}
+	return getExitCodeMsg(exitCode)
 }
 
 func getExitCodeMsg(exitCode int) string {
