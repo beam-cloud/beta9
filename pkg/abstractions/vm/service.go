@@ -222,7 +222,11 @@ func (s *Service) list(c echo.Context) error {
 		if v.DesiredState == "deleted" && c.QueryParam("all") != "true" {
 			continue
 		}
-		if status := c.QueryParam("status"); status != "" && v.Status != status {
+		status, err := s.launchStatus(v)
+		if err != nil {
+			return apiError(err)
+		}
+		if filter := c.QueryParam("status"); filter != "" && status != filter {
 			continue
 		}
 		match := true
@@ -233,7 +237,9 @@ func (s *Service) list(c echo.Context) error {
 		if !match {
 			continue
 		}
-		result = append(result, s.response(v))
+		response := s.response(v)
+		response.Status = status
+		result = append(result, response)
 	}
 	return c.JSON(200, result)
 }
@@ -248,18 +254,9 @@ func (s *Service) get(c echo.Context) error {
 		return echo.NewHTTPError(404, "VM removed")
 	}
 	response := s.response(v)
-	// Launch completion is available in Redis immediately. The lifecycle
-	// reconciler persists it later; clients should not wait for that ticker.
-	// Only project starting -> running, leaving pause/stop and checkpoint
-	// ownership to the reconciler. SandboxConnect checks exec readiness.
-	if v.DesiredState == "running" && v.Status == "starting" {
-		state, err := s.runtimeState(v)
-		if err != nil {
-			return apiError(err)
-		}
-		if state != nil && state.Status == types.ContainerStatusRunning {
-			response.Status = "running"
-		}
+	response.Status, err = s.launchStatus(v)
+	if err != nil {
+		return apiError(err)
 	}
 	return c.JSON(200, response)
 }
@@ -683,7 +680,11 @@ func (s *Service) proxy(c echo.Context) error {
 	defer release()
 	// Capability URLs contain only the VM's random identity, never a workspace
 	// token. Authenticated management and raw SSH retain workspace auth.
-	if v.Status != "running" {
+	status, err := s.launchStatus(v)
+	if err != nil {
+		return echo.NewHTTPError(503, "VM runtime unavailable")
+	}
+	if v.DesiredState != "running" || status != "running" {
 		if !v.Spec.AutoResume {
 			return echo.NewHTTPError(503, "VM is not running; start it to use this URL")
 		}
@@ -713,7 +714,11 @@ func (s *Service) tunnel(c echo.Context) error {
 	if port == 2222 && !v.Spec.SSH {
 		return echo.NewHTTPError(400, "SSH is disabled")
 	}
-	if v.DesiredState != "running" || v.Status != "running" {
+	status, err := s.launchStatus(v)
+	if err != nil {
+		return echo.NewHTTPError(503, "VM runtime unavailable")
+	}
+	if v.DesiredState != "running" || status != "running" {
 		return echo.NewHTTPError(409, "VM is not running")
 	}
 	if !slices.Contains(v.Spec.RuntimePorts(), uint32(port)) {

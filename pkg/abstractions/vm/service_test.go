@@ -727,3 +727,15 @@ func TestCapabilityAccessFailsClosedAndReportsTokenOutages(t *testing.T) {
 		})
 	}
 }
+
+func TestListProjectsLaunchCompletionBeforeStatusFiltering(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	v.Status = "starting"
+	response := vmRequest(managementAPI(s, info), "GET", "/"+info.Workspace.ExternalId+"?status=running", "")
+	require.Equal(t, 200, response.Code, response.Body.String())
+	var result []types.VM
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+	require.Len(t, result, 1)
+	require.Equal(t, "running", result[0].Status)
+	require.Equal(t, "starting", v.Status)
+}

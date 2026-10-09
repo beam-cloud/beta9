@@ -144,6 +144,21 @@ func (s *Service) runtimeState(v *types.VM) (*types.ContainerState, error) {
 	return state, nil
 }
 
+// Launch completion is visible before the reconciler persists it. Project only
+// starting -> running; pause/stop intent and checkpoint ownership stay durable.
+func (s *Service) launchStatus(v *types.VM) (string, error) {
+	if v.DesiredState == "running" && v.Status == "starting" {
+		state, err := s.runtimeState(v)
+		if err != nil {
+			return "", err
+		}
+		if state != nil && state.Status == types.ContainerStatusRunning {
+			return "running", nil
+		}
+	}
+	return v.Status, nil
+}
+
 func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
 	if v.ContainerID == "" {
 		if v.RootSnapshotID == "" {

@@ -1,11 +1,13 @@
 package vm
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -83,4 +85,43 @@ func TestSessionCookiesDoNotCollideOnSharedGatewayHost(t *testing.T) {
 	other := &types.VM{Handle: "second"}
 	require.NotEqual(t, sessionCookie(v, 8080), sessionCookie(v, 8000))
 	require.NotEqual(t, sessionCookie(v, 8080), sessionCookie(other, 8080))
+}
+
+func TestAccessUsesLiveLaunchStateBeforeReconciliation(t *testing.T) {
+	for _, test := range []struct {
+		name, desired string
+		state         types.ContainerStatus
+		wantProxy     int
+		wantTunnel    int
+	}{
+		{"ready", "running", types.ContainerStatusRunning, 200, 200},
+		{"pending", "running", types.ContainerStatusPending, 503, 409},
+		{"stopped intent", "stopped", types.ContainerStatusRunning, 503, 409},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, v, info, runtime, _ := fixture()
+			v.Status, v.DesiredState = "starting", test.desired
+			runtime.containers.states[v.ContainerID].Status = test.state
+			response := vmRequest(proxyAPI(s), "GET", "/vm/"+v.Handle+"/8080/", "")
+			require.Equal(t, test.wantProxy, response.Code, response.Body.String())
+			e := managementAPI(s, info)
+			e.GET("/:workspaceId/:name/tunnel/:port", auth.WithStrictWorkspaceAuth(s.tunnel))
+			response = vmRequest(e, "GET", "/"+info.Workspace.ExternalId+"/"+v.ID+"/tunnel/7681", "")
+			require.Equal(t, test.wantTunnel, response.Code, response.Body.String())
+			require.Equal(t, "starting", v.Status, "access must not persist lifecycle/checkpoint state")
+		})
+	}
+}
+
+func TestAccessFailsClosedWhenRuntimeStateIsUnavailable(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	v.Status = "starting"
+	runtime.containers.readError = errors.New("redis unavailable")
+	response := vmRequest(proxyAPI(s), "GET", "/vm/"+v.Handle+"/8080/", "")
+	require.Equal(t, 503, response.Code)
+	require.Empty(t, runtime.forwarded)
+	e := managementAPI(s, info)
+	e.GET("/:workspaceId/:name/tunnel/:port", auth.WithStrictWorkspaceAuth(s.tunnel))
+	response = vmRequest(e, "GET", "/"+info.Workspace.ExternalId+"/"+v.ID+"/tunnel/7681", "")
+	require.Equal(t, 503, response.Code)
 }
