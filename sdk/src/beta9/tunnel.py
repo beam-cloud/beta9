@@ -68,7 +68,7 @@ class Tunnel:
                 self.condition.notify_all()
 
     def run(self):
-        threading.Thread(target=self._upload, daemon=True).start()
+        upload_started = False
         recovery_started = None
         delay = 0.2
         try:
@@ -76,6 +76,12 @@ class Tunnel:
                 remote = None
                 try:
                     remote = self.connect(self.session, self.offset, not self.created)
+                    if getattr(remote, "resumable", True) is False:
+                        _bridge_legacy(remote, self.source, self.target)
+                        return
+                    if not upload_started:
+                        threading.Thread(target=self._upload, daemon=True).start()
+                        upload_started = True
                     remote.settimeout(30)
                     while not self.stopped:
                         message = remote.recv()
@@ -119,7 +125,7 @@ class Tunnel:
                 except (OSError, websocket.WebSocketException) as error:
                     if isinstance(
                         error, websocket.WebSocketBadStatusException
-                    ) and error.status_code in (400, 401, 403, 404, 410):
+                    ) and error.status_code in (400, 401, 403, 404, 410, 501):
                         raise
                     if recovery_started is None:
                         recovery_started = time.monotonic()
@@ -146,3 +152,30 @@ class Tunnel:
 
 def bridge_tunnel(connect, source, target):
     Tunnel(connect, source, target).run()
+
+
+def _bridge_legacy(remote, source, target):
+    """Keep the previous byte-stream protocol for gateways without recovery."""
+
+    def upload():
+        try:
+            while True:
+                data = source.read1(65536) if hasattr(source, "read1") else source.read(65536)
+                if not data:
+                    remote.send("EOF")
+                    return
+                remote.send_binary(data)
+        except (OSError, websocket.WebSocketException):
+            remote.close()
+
+    threading.Thread(target=upload, daemon=True).start()
+    try:
+        while True:
+            message = remote.recv()
+            if not message:
+                return
+            if isinstance(message, bytes):
+                target.write(message)
+                target.flush()
+    except websocket.WebSocketConnectionClosedException:
+        return

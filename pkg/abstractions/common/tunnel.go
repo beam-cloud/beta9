@@ -47,9 +47,12 @@ func ServeTunnel(c echo.Context, worker TunnelClient, request *pb.ContainerTunne
 		if status.Code(err) == codes.NotFound {
 			return echo.NewHTTPError(410, "tunnel has expired")
 		}
+		if status.Code(err) == codes.Unimplemented {
+			return echo.NewHTTPError(501, "worker does not support resumable tunnels")
+		}
 		return err
 	}
-	client, err := (&websocket.Upgrader{ReadBufferSize: 64 << 10, WriteBufferSize: 64 << 10}).Upgrade(c.Response().Writer, c.Request(), nil)
+	client, err := (&websocket.Upgrader{ReadBufferSize: 64 << 10, WriteBufferSize: 64 << 10}).Upgrade(c.Response().Writer, c.Request(), map[string][]string{"X-Beta9-Tunnel-Protocol": {"2"}})
 	if err != nil {
 		return err
 	}

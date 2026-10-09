@@ -13,6 +13,7 @@ from typing import Callable, Dict, List, Optional
 from urllib.parse import quote, urlsplit, urlencode
 
 import websocket
+import requests
 
 from .. import terminal
 from ..env import is_local
@@ -189,6 +190,26 @@ def create_resumable_socket(host, port, path, container_id, token, timeout, host
     tls = port == 443 if use_tls is None else use_tls
     netloc = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
     url = f"{'wss' if tls else 'ws'}://{netloc}/{path.strip('/')}/{quote(container_id, safe='')}"
+    headers = {"Authorization": f"Bearer {token}", "Host": host_header or netloc}
+    response = requests.head(
+        url.replace("wss://", "https://").replace("ws://", "http://"),
+        headers=headers,
+        timeout=timeout,
+    )
+    if (
+        response.status_code == 404
+        or response.status_code < 400
+        and response.headers.get("X-Beta9-Tunnel-Protocol") != "2"
+    ):
+        return create_socket(
+            host, port, path, container_id, token, timeout, host_header=host_header, use_tls=use_tls
+        )
+    if response.status_code >= 400:
+        raise ShellProxyError(
+            "Shell proxy rejected the connection",
+            status_code=response.status_code,
+            retryable=response.status_code >= 500,
+        )
     client, local = socket.socketpair()
     ready = threading.Event()
     errors = []
@@ -222,6 +243,17 @@ def create_resumable_socket(host, port, path, container_id, token, timeout, host
     if not ready.wait(timeout) or errors:
         client.close()
         if errors:
+            if getattr(errors[0], "status_code", None) == 501:
+                return create_socket(
+                    host,
+                    port,
+                    path,
+                    container_id,
+                    token,
+                    timeout,
+                    host_header=host_header,
+                    use_tls=use_tls,
+                )
             raise ShellProxyError(str(errors[0])) from errors[0]
         raise TimeoutError("Timed out while establishing the shell connection")
     return client

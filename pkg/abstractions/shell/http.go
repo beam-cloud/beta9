@@ -26,6 +26,7 @@ type shellGroup struct {
 func registerShellRoutes(g *echo.Group, ss *SSHShellService) *shellGroup {
 	group := &shellGroup{routerGroup: g, ss: ss}
 	g.GET("/id/:stubId/:containerId", auth.WithAuth(group.ShellConnect))
+	g.HEAD("/id/:stubId/:containerId", auth.WithAuth(group.ShellConnect))
 	return group
 }
 
@@ -87,6 +88,10 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		}
 	}
 
+	if ctx.Request().Method == http.MethodHead {
+		ctx.Response().Header().Set("X-Beta9-Tunnel-Protocol", "2")
+		return ctx.NoContent(http.StatusNoContent)
+	}
 	if ctx.QueryParam("protocol") == "2" {
 		request, err := abstractions.ParseTunnelRequest(ctx, containerId, uint32(types.WorkerShellPort))
 		if err != nil {

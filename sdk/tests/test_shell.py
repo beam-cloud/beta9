@@ -614,3 +614,21 @@ def test_windows_shell_decodes_bytes_and_joins_reader(monkeypatch: pytest.Monkey
 
     assert "€" in stdout.getvalue()
     assert "*** EOF ***" in stdout.getvalue()
+
+
+def test_resumable_shell_keeps_legacy_gateway_compatibility(monkeypatch):
+    from types import SimpleNamespace
+    from beta9.abstractions import shell
+
+    monkeypatch.setattr(
+        shell.requests, "head", lambda *_, **__: SimpleNamespace(status_code=404, headers={})
+    )
+    legacy = object()
+    real_create_socket = shell.create_socket
+    monkeypatch.setattr(shell, "create_socket", lambda *_, **__: legacy)
+    assert (
+        real_create_socket(
+            "gateway.test", 443, "/shell/id/stub", "container", "token", resumable=True
+        )
+        is legacy
+    )
