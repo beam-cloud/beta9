@@ -30,8 +30,9 @@ type State struct {
 
 // Event represents a container event
 type Event struct {
-	Type           string // "oom", "application_oom", "exit", "error"
-	Err            error
+	Type string // "oom", "application_oom", "exit", "error"
+	Err  error
+
 	ApplicationOOM *microvm.ApplicationOOM
 }
 

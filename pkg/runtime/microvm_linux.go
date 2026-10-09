@@ -1775,9 +1775,10 @@ func (inst *microVMInstance) removeTap() {
 // the container process's pid and exit code out, and signals and freeze
 // requests in.
 type microVMControl struct {
-	listener       *net.UnixListener
-	exit           chan int
-	ready          chan struct{}
+	listener *net.UnixListener
+	exit     chan int
+	ready    chan struct{}
+
 	applicationOOM chan Event
 	eventDone      chan struct{}
 	closeOnce      sync.Once

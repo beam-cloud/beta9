@@ -24,17 +24,6 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/ ./cmd/
 COPY pkg/ ./pkg/
 COPY proto/ ./proto/
-COPY docker/patches/goproc/workload-oom.patch /tmp/goproc-workload-oom.patch
-
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    mkdir -p /out && \
-    cp -a "$(go list -m -f '{{.Dir}}' github.com/beam-cloud/goproc)" /tmp/beam-goproc && \
-    chmod -R u+w /tmp/beam-goproc && \
-    cd /tmp/beam-goproc && \
-    git apply /tmp/goproc-workload-oom.patch && \
-    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
-      go build -trimpath -ldflags="-s -w" -o /out/goproc ./cmd/main.go
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -57,10 +46,15 @@ FROM ${MICROVM_IMAGE} AS microvm
 
 FROM --platform=$TARGETPLATFORM ${WORKER_RUNTIME_IMAGE}
 
+ARG TARGETARCH
+ARG GOPROC_VERSION=0.1.16
 ARG SOURCE_REVISION
 ARG SOURCE_HASH
 LABEL org.opencontainers.image.revision="$SOURCE_REVISION" \
       dev.beam.source-hash="$SOURCE_HASH"
+
+RUN wget "https://github.com/beam-cloud/goproc/releases/download/v${GOPROC_VERSION}/goproc-${GOPROC_VERSION}-linux-${TARGETARCH}" \
+      -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc
 
 COPY --link --from=binaries /out/ /usr/local/bin/
 COPY --link --from=microvm /microvm/bin/ /usr/local/bin/
