@@ -113,6 +113,24 @@ type readyGoProcServer struct {
 	goprocpb.UnimplementedGoProcServer
 }
 
+func TestVMReservationOwnsSandboxReadiness(t *testing.T) {
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{ContainerId: "vm-reservation", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM)}}}
+	require.True(t, worker.reserveContainerInstance(request))
+	instance, ok := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, ok)
+	require.NotNil(t, instance.processManagerReadyChannel())
+	require.False(t, instance.processManagerReady())
+	worker.releaseUnclaimedContainer(request)
+	select {
+	case <-instance.processManagerReadyChannel():
+	default:
+		t.Fatal("VM readiness did not wake after a rejected claim")
+	}
+	_, ok = worker.containerInstances.Get(request.ContainerId)
+	require.False(t, ok)
+}
+
 func (readyGoProcServer) Ready(context.Context, *goprocpb.ReadyRequest) (*goprocpb.ReadyResponse, error) {
 	return &goprocpb.ReadyResponse{Ok: true}, nil
 }

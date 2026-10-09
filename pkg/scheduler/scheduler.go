@@ -1275,13 +1275,16 @@ func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName strin
 // keeps use_vm requests off every other runtime, so they fail closed.
 // Checkpoint runtimes are matched separately by runtimeMatchesCheckpoint.
 func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) bool {
+	if request.Stub.Type.Kind() == types.StubTypeVM && !request.UseVM {
+		return false
+	}
 	if request.DockerEnabled && runtimeName == types.ContainerRuntimeRunc.String() {
 		return false
 	}
 	if runtimeName != types.ContainerRuntimeMicroVM.String() {
 		return !request.UseVM
 	}
-	return request.UseVM && request.Stub.Type.Kind() == types.StubTypeSandbox && !request.RequiresGPU()
+	return request.UseVM && request.Stub.Type.IsSandbox() && !request.RequiresGPU()
 }
 
 func checkpointAccelerator(request *types.ContainerRequest) string {

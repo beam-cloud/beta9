@@ -285,6 +285,15 @@ func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
 	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, sandbox(true), nil))
 	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{runcWorker, gvisorWorker}, sandbox(true), nil))
 
+	// Persistent VMs retain their own kind while using the same placement.
+	vm := sandbox(true)
+	vm.Stub.Type = types.StubType(types.StubTypeVM)
+	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, vm))
+	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, vm, nil))
+	vm.UseVM = false
+	assert.Empty(t, filterControllersByFlags(controllers, vm), "VMs must never fall back to a container runtime")
+	assert.Empty(t, filterWorkersByResources(workers, vm, nil))
+
 	// Things the VM runtime cannot serve stay off it even with use_vm.
 	gpu := sandbox(true)
 	gpu.Gpu = "RTX5090"

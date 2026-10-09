@@ -32,7 +32,7 @@ func (s *Worker) claimContainer(ctx context.Context, request *types.ContainerReq
 		Credentials:   runtimeCredentialsRequest(request),
 	}
 	var network *networkClaim
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		if preparer, ok := s.containerNetworkManager.(networkClaimPreparer); ok {
 			network = preparer.prepareNetworkClaim(request.ContainerId)
 			if network != nil {

@@ -397,7 +397,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	hasDurableDisk := request != nil && request.HasDurableDiskMount()
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
-		if request != nil && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if request != nil && request.Stub.Type.IsSandbox() {
 			instance.signalProcessManagerReadiness(false)
 		}
 		s.containerInstances.Set(containerId, instance)
@@ -658,7 +658,7 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 			Request:   request,
 			Runtime:   s.runtime,
 		}
-		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if request.Stub.Type.IsSandbox() {
 			instance.initializeProcessManagerReadiness()
 		}
 	}
@@ -676,7 +676,7 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	// A sandbox's namespace and IP assignment depend only on the request.
 	// Overlap their gateway round trip with image and durable-root preparation.
 	var networkSpec *specs.Spec
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		networkSpec = &specs.Spec{Linux: &specs.Linux{}}
 		networkRequest := request.Clone()
 		startup.Go(func() error { return s.prepareContainerNetwork(startupCtx, networkRequest, networkSpec) })
@@ -1069,7 +1069,7 @@ func portsForRequest(request *types.ContainerRequest) []uint32 {
 	}
 
 	ports = append(ports, uint32(types.WorkerShellPort))
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		ports = append(ports, uint32(types.WorkerSandboxProcessManagerPort))
 	}
 
@@ -1086,7 +1086,7 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 		for _, port := range request.Ports {
 			exposePorts[port] = struct{}{}
 		}
-	} else if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	} else if request.Stub.Type.IsSandbox() {
 		for _, port := range requestedPorts {
 			exposePorts[port] = struct{}{}
 		}
@@ -1447,7 +1447,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	// Add back tmpfs pod/sandbox mounts from initial spec if they exist
-	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
+	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.IsSandbox()) && options.InitialSpec != nil {
 		for _, m := range options.InitialSpec.Mounts {
 			if m.Source == "none" && m.Type == "tmpfs" {
 				m.Options = append([]string(nil), m.Options...)
@@ -1872,7 +1872,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
 
 	// Modify sandbox entry point to point to process manager binary
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		instance, exists := s.containerInstances.Get(containerId)
 		if !exists {
 			log.Error().Str("container_id", containerId).Msg("instance not found")
@@ -1906,7 +1906,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Add Docker capabilities if enabled for sandbox containers.
-	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.DockerEnabled && request.Stub.Type.IsSandbox() {
 		runtime.AddDockerInDockerCapabilities(spec)
 		if s.runtimeOwnsBlockRoot() {
 			if spec.Annotations == nil {
@@ -1993,7 +1993,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
-		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if request.Stub.Type.IsSandbox() {
 			instance, exists := s.containerInstances.Get(containerId)
 			if !exists {
 				return
@@ -2704,7 +2704,7 @@ func (s *Worker) deferCPUThrottle(request *types.ContainerRequest, cpu *specs.Li
 		return false
 	}
 	kind := request.Stub.Type.Kind()
-	if kind != types.StubTypeSandbox && kind != types.StubTypeFunction {
+	if !request.Stub.Type.IsSandbox() && kind != types.StubTypeFunction {
 		return false
 	}
 	if kind == types.StubTypeFunction && !s.agentWorker() {

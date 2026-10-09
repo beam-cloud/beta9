@@ -949,7 +949,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		Runtime:   s.runtime,
 		CPUSet:    s.allocateContainerCPUSet(request),
 	}
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		instance.initializeProcessManagerReadiness()
 	}
 	s.containerInstances.Set(request.ContainerId, instance)
@@ -1115,7 +1115,7 @@ func (s *Worker) runContainerRequestWithRunner(
 // touched.
 func (s *Worker) releaseUnclaimedContainer(request *types.ContainerRequest) {
 	if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
-		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if request.Stub.Type.IsSandbox() {
 			instance.signalProcessManagerReadiness(false)
 		}
 		s.containerInstances.Delete(request.ContainerId)
