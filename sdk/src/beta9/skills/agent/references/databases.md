@@ -41,6 +41,12 @@ system bundle. An app configured with split settings (`REDIS_HOST`,
 with `maxmemory-policy noeviction`, as job queues such as BullMQ and Sidekiq
 require.
 
+The gateway routes by SNI, so the client must send the host as its TLS
+server name; one that does not fails with `tlsv1 unrecognized name` (SSL
+alert 112). libpq, Prisma, redis-py and Go clients send it. Node's ioredis
+(and BullMQ on top of it) does not: give it `tls: { servername: host }`, or
+set the app's own setting for it (Langfuse: `REDIS_TLS_SERVERNAME`).
+
 In a stack, a database is a service with `"type": "database"` and
 `"deploy": {"kind": "postgres"}`; `stack_from_compose` turns compose's
 postgres and redis services into these.

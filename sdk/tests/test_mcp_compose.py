@@ -122,6 +122,50 @@ def test_managed_databases_replace_postgres_and_redis_and_require_tls(tmp_path):
     assert "postgres: compose pins postgres 17; the managed postgres is 16" in result["warnings"]
 
 
+# The TLS gateway routes by SNI, which Node's ioredis omits unless given a server
+# name: a known image gets its setting, a declared one is filled in, and other Node
+# images are warned about. A URL moved onto the gateway turns its TLS switch on.
+def test_clients_reaching_the_tls_gateway_are_configured_for_it(tmp_path):
+    result = translate(
+        tmp_path,
+        """
+        services:
+          known:
+            image: langfuse/langfuse:3
+            environment:
+              REDIS_CONNECTION_STRING: redis://redis:6379
+              CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+          declared:
+            image: example/declared:1
+            environment: {REDIS_HOST: redis, QUEUE_REDIS_TLS_SERVERNAME: ""}
+          node:
+            image: example/node:1
+            environment: {REDIS_HOST: redis, EVENTS_URL: "nats://events:4222", EVENTS_TLS: "false"}
+          events:
+            image: nats:2
+            ports: ["4222:4222"]
+          clickhouse:
+            image: clickhouse/clickhouse-server:25.12
+            ports: ["8123:8123", "9000:9000"]
+          redis:
+            image: redis:7
+        """,
+        registry=FakeRegistry({"example/node:1": {"Env": ["NODE_VERSION=20"]}}),
+    )
+    spec = services(result)
+    server = "${{db.app-redis.HOST}}"
+
+    known = spec["app-known"]["deploy"]["env"]
+    assert known["REDIS_TLS_SERVERNAME"] == server
+    assert known["CLICKHOUSE_MIGRATION_SSL"] == "true"
+    assert spec["app-declared"]["deploy"]["env"]["QUEUE_REDIS_TLS_SERVERNAME"] == server
+    node = spec["app-node"]["deploy"]["env"]
+    assert node["EVENTS_TLS"] == "true"
+    assert not any("SERVERNAME" in key for key in node)
+    assert any(w.startswith("node: ") and "unrecognized name" in w for w in result["warnings"])
+    assert not any(w.startswith("declared: ") and "SNI" in w for w in result["warnings"])
+
+
 # Placeholder credentials that several services must agree on become one
 # generated secret; a hex key keeps its format.
 def test_shared_placeholder_credentials_become_generated_secrets(tmp_path):

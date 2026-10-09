@@ -97,6 +97,16 @@ KNOWN_IMAGES: Dict[str, Dict[str, Any]] = {
     "typesense": {"health": ("/health", 8108)},
     "elasticsearch": {"cpu": 2, "memory": "4Gi"},
     "opensearch": {"cpu": 2, "memory": "4Gi"},
+    "langfuse": {
+        "health": ("/api/public/health", 3000),
+        "redis_server_name": "REDIS_TLS_SERVERNAME",
+        "tls_flags": ["CLICKHOUSE_MIGRATION_SSL"],
+    },
+    "langfuse-worker": {
+        "health": ("/api/health", 3030),
+        "redis_server_name": "REDIS_TLS_SERVERNAME",
+        "tls_flags": ["CLICKHOUSE_MIGRATION_SSL"],
+    },
 }
 # Compose keys with no Beam equivalent that change how a service behaves.
 UNSUPPORTED_KEYS = {
@@ -910,10 +920,68 @@ class Translator:
                 new = self._database_field(key, value, literals) or value
             rewritten[key] = new
         self._address_apps_by_host(service, rewritten)
+        self._secure_gateway_urls(service, rewritten)
         self._complete_database_settings(service, rewritten)
         for database in sorted(connected):
             self._require_tls(service, rewritten, database)
+        self._redis_server_name(service, rewritten)
         return rewritten
+
+    def _secure_gateway_urls(self, service: str, env: Dict[str, str]) -> None:
+        """KEY_URL rewritten to a TCP gateway address needs the client's KEY_SSL (or TLS,
+        SECURE) switch on; an image known to read such a switch gets it added."""
+        known = KNOWN_IMAGES.get(self._image_basename(self.services[service]), {})
+        for key, value in list(env.items()):
+            stem = re.fullmatch(r"(.+_)(?:URL|URI|DSN|ADDR|ADDRESS)", key, re.I)
+            if not stem or not re.search(r"\$\{\{app\.[^}]+\.TCP\.\d+\}\}", value):
+                continue
+            prefix = stem.group(1).upper()
+            flags = [
+                flag
+                for flag in list(env) + known.get("tls_flags", [])
+                if flag.upper().startswith(prefix)
+                and re.fullmatch(r"(SSL|TLS|SECURE)(_?ENABLED?)?", flag.upper()[len(prefix) :])
+            ]
+            for flag in dict.fromkeys(flags):
+                if env.get(flag, "").lower() not in ("true", "1", "yes", "on"):
+                    env[flag] = "true"
+                    self.warn(service, f"{flag}=true: {key} goes through the TLS TCP gateway")
+
+    def _redis_server_name(self, service: str, env: Dict[str, str]) -> None:
+        """The TLS gateway routes by SNI. Node's ioredis (and BullMQ) sends it only when
+        given a servername, and otherwise fails with `tlsv1 unrecognized name`."""
+        services = {app: name for name, app in self.names.items()}
+        databases = sorted(
+            {
+                match.group(1)
+                for value in env.values()
+                for match in re.finditer(r"\$\{\{db\.([^.}]+)\.(?:HOST|REDIS_URL)\}\}", value)
+                if self.managed.get(services.get(match.group(1), "")) == "redis"
+            }
+        )
+        if not databases:
+            return
+        reference = "${{db.%s.HOST}}" % databases[0]
+        named = [
+            key
+            for key in env
+            if re.search(r"(REDIS|VALKEY).*(SERVERNAME|SERVER_NAME|SNI)$", key.upper())
+        ]
+        known = KNOWN_IMAGES.get(self._image_basename(self.services[service]), {})
+        if not named and known.get("redis_server_name"):
+            named = [known["redis_server_name"]]
+            self.warn(service, f"added {named[0]}: its Redis client sends no SNI otherwise")
+        for key in named:
+            env[key] = reference
+        config = self._image_config(service, self.services[service]) or {}
+        node = any(str(item).startswith("NODE_VERSION=") for item in config.get("Env") or [])
+        if not named and node:
+            self.warn(
+                service,
+                "reaches managed Redis through the TLS gateway, which routes by SNI; Node's "
+                "ioredis and BullMQ send none unless given tls.servername, and fail with "
+                f"'tlsv1 unrecognized name': set the app's Redis TLS server name to {reference}",
+            )
 
     def _address_apps_by_host(self, service: str, env: Dict[str, str]) -> None:
         """KEY_HOST=postgres naming an app becomes the host half of its TCP gateway address,
