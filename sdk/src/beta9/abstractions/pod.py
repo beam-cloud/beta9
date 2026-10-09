@@ -279,7 +279,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         ignore_patterns = []
         if is_custom_image:
-            ignore_patterns = ["**"]
+            ignore_patterns = ["*"]
 
         if not is_custom_image and self.entrypoint:
             self.entrypoint = self._wrap_user_code_entrypoint(self.entrypoint)
@@ -372,7 +372,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         ignore_patterns = []
         if is_custom_image:
-            ignore_patterns = ["**"]
+            ignore_patterns = ["*"]
 
         if not is_custom_image and self.entrypoint:
             self.entrypoint = self._wrap_user_code_entrypoint(self.entrypoint)

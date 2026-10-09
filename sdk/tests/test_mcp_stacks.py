@@ -409,6 +409,19 @@ def test_database_resources_take_application_units(tmp_path):
         stacks.plan(tools, {"name": "app", "spec": spec})
 
 
+# A service built from source falls back to the server's working directory,
+# which is the home folder under Cursor and never a project to build.
+def test_a_source_service_needs_a_directory_inside_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tools = FakeStackTools(tmp_path)
+    spec = {"version": 1, "services": {"web": {"deploy": {"ports": [8000]}}}}
+
+    with pytest.raises(
+        ValueError, match="web: set deploy.directory, the project to build: .* is your home folder"
+    ):
+        stacks.plan(tools, {"name": "app", "spec": spec})
+
+
 def plan_app(tools: FakeStackTools, service: Dict[str, Any], **spec: Any) -> Dict[str, Any]:
     spec = {"version": 1, "services": {"web": service}, **spec}
     return stacks.plan(tools, {"name": "app", "spec": spec})["structuredContent"]

@@ -197,7 +197,7 @@ class ManagedEndpoint(RunnerAbstraction):
 
         if not self.prepare_runtime(
             stub_type=MANAGED_ENDPOINT_DEPLOYMENT_STUB_TYPE,
-            ignore_patterns=["**"] if custom_image else [],
+            ignore_patterns=["*"] if custom_image else [],
         ):
             self.deploy_error = "stub preparation failed (see the build log)"
             return {}, False

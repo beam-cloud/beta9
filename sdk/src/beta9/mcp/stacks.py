@@ -25,6 +25,7 @@ from .tools import (
     Tool,
     _clamp,
     deploy_definition,
+    home_or_above,
     text_result,
 )
 
@@ -536,7 +537,13 @@ def _prepare_services(
                 )
             _database_resources(service, deploy)
         elif not deploy.get("image"):
-            sources[service] = source_state(deploy.get("directory") or tools.cwd)
+            directory = deploy.get("directory") or tools.cwd
+            place = home_or_above(directory)
+            if place:
+                raise ValueError(
+                    f"{service}: set deploy.directory, the project to build: {directory} is {place}"
+                )
+            sources[service] = source_state(directory)
             deploy["directory"] = sources[service]["directory"]
 
         if kind != "database" and registry is not None:

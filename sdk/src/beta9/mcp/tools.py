@@ -149,7 +149,25 @@ LOGIN_STATUS_DEFINITION: Dict[str, Any] = {
 }
 
 
+def home_or_above(directory: str) -> Optional[str]:
+    """Describes `directory` when it is the home folder or contains it, which
+    deploys never upload: Cursor starts MCP servers in the home folder, so an
+    agent that leaves out a directory gets it."""
+    home = Path.home().resolve()
+    path = Path(directory).expanduser().resolve()
+    if path == home:
+        return "your home folder"
+    if path in home.parents:
+        return "above your home folder"
+    return None
+
+
 def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
+    directory = (
+        "The project to deploy; required unless image is given."
+        if home_or_above(cwd)
+        else f"Default: {cwd}"
+    )
     return {
         "name": "deploy",
         "description": (
@@ -170,7 +188,7 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
             "required": ["name"],
             "properties": {
                 "name": {**STRING, "description": "App name: lowercase, dashes."},
-                "directory": {**STRING, "description": f"Default: {cwd}"},
+                "directory": {**STRING, "description": directory},
                 "handler": {
                     **STRING,
                     "description": "file.py:object for a decorated function or Pod.",
@@ -222,7 +240,13 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                     **STRING,
                     "description": "Reuse to recover the same deploy after interruption, or retry a failed one.",
                 },
-                "disks": {**STRINGS, "description": "Durable disks NAME:/mount[:SIZE]."},
+                "disks": {
+                    **STRINGS,
+                    "description": (
+                        "Disks NAME:/mount[:SIZE] for this app's state, saved whenever its "
+                        "container stops or exits, not continuously."
+                    ),
+                },
                 "keep_warm_seconds": {**INTEGER, "description": "-1 always on; 0 scale to zero."},
                 "min_replicas": INTEGER,
                 "max_replicas": INTEGER,
@@ -805,6 +829,18 @@ class LocalTools:
             args = {**args, "dockerfile": "Dockerfile"}
         if operation == "run" and args.get("rollout"):
             return error_result("rollout applies to deployments, not one-off jobs")
+        uploads = any(args.get(key) for key in ("handler", "dockerfile")) or not args.get("image")
+        place = home_or_above(directory) if uploads else None
+        if place:
+            source = (
+                directory
+                if args.get("directory")
+                else f"this server's working directory, {directory},"
+            )
+            return error_result(
+                f"Pass directory, the project to deploy: {source} is {place}, and {operation} "
+                "uploads the directory it deploys from."
+            )
 
         command = self._command(args, name, operation)
 

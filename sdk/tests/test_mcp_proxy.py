@@ -406,6 +406,37 @@ def test_deploy_takes_ports_from_the_image_and_retries_compare_the_request(
     assert other["isError"] and "different deployment request" in other["content"][0]["text"]
 
 
+# Cursor starts MCP servers in the home folder. A deploy that leaves out its
+# directory must not upload it; an image deploy uploads nothing and goes ahead.
+def test_deploy_never_uploads_the_home_folder(settings, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    deployed = '{"deployment_id":"d","stub_id":"s","invoke_url":"u"}'
+    cli = fake_cli(tmp_path, f"printf '{deployed}\\n'")
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+    tools = mcp_tools.LocalTools(cwd=str(home), on_login=lambda: None, signed_in=lambda: True)
+    monkeypatch.setattr(tools, "registry", lambda: None)
+
+    schema = mcp_tools.deploy_definition("beam", str(home))["inputSchema"]
+    assert schema["properties"]["directory"]["description"] == (
+        "The project to deploy; required unless image is given."
+    )
+    omitted = tools.deploy({"name": "web", "entrypoint": ["python", "app.py"]})
+    assert omitted["isError"] and omitted["content"][0]["text"] == (
+        f"Pass directory, the project to deploy: this server's working directory, {home}, "
+        "is your home folder, and deploy uploads the directory it deploys from."
+    )
+    above = tools.run({"name": "job", "directory": str(tmp_path), "dockerfile": "Dockerfile"})
+    assert above["isError"] and above["content"][0]["text"].startswith(
+        f"Pass directory, the project to deploy: {tmp_path} is above your home folder, and run "
+    )
+    assert not tools.jobs
+
+    image = tools.deploy({"name": "web", "image": "nginx:1", "wait_seconds": 10})
+    assert image["structuredContent"]["status"] == "accepted"
+
+
 def test_deploy_status_waits_for_the_job_and_returns_its_newest_lines(
     settings, local_tools, monkeypatch, tmp_path
 ):
