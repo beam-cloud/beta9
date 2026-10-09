@@ -510,7 +510,6 @@ func WorkerStartConcurrency(workerConfig WorkerConfig, worker *Worker) int {
 	return WorkerStartConcurrencyForPool(poolConfig, workerConfig.ContainerRuntime, worker.Runtime, worker.TotalCpu)
 }
 
-// IsBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
 // CapacityMemory includes runtime overhead in MiB without changing the
 // requested application budget. Native VMs reserve their control RAM and VMM.
 func (c *ContainerRequest) CapacityMemory() int64 {
@@ -525,6 +524,7 @@ func (c *ContainerRequest) CapacityMemory() int64 {
 	return memory
 }
 
+// IsBuildRequest reports whether the request builds a container image.
 func (c *ContainerRequest) IsBuildRequest() bool {
 	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil || c.BuildOptions.GitSource != nil
 }
