@@ -214,7 +214,8 @@ The development gateway hot-reloads in Okteto. Staging uses release images with
 `GATEWAY_TAG=<custom CI tag> make start-stage` and a separate Okteto state folder.
 Run `make worker` with a kubeconfig explicitly
 pointing at the development cluster: its cleanup step deletes local worker jobs.
-Migration 056 adds only VM identities and artifact metadata. There is no new
+Migration 056 adds VM identities and artifact metadata. Migration 057 adds the
+VM stub kind and supports compact IDs alongside existing UUIDs. There is no new
 scheduler or disk storage backend.
 
 The guest kernel currently builds for amd64 and requires KVM. The ARM k3d cluster
@@ -222,15 +223,13 @@ on this workstation has no `/dev/kvm`. Backend, SDK, CLI, database, guest config
 systemd container, and browser desktop checks can run locally; the full VM smoke
 test needs an amd64 KVM development worker connected to this gateway.
 
-Run `python hack/vm-smoke.py --context local --pool <development-vm-pool>` on that
-setup. It checks root persistence, arbitrary enabled units, shutdown writes,
-stable URLs and machine identity, independent forks, and templates after source
-removal. It creates and removes only its own resources.
+Use the CLI or SDK on that setup to check root persistence, enabled systemd
+units and shutdown writes, stable URLs and guest identity, snapshots/forks,
+TTL sleep, and native RAM pause/resume. Desktop checks should include both
+authenticated browser access and reconnection after compute replacement.
 
-`e2e/vm_tests/audit.py --profile staging --image-id <prepared-desktop-image>
---name audit-<run> --report <path>` checks memory pause, protected traffic,
-automatic wake, extra disks/volumes, network policy, async files, process control,
-metrics and desktop APIs. Run the same arguments with `--cleanup` after browser
-validation to remove that run's VM and unregister its disk/volume.
-See [the competitor audit](vm-competitor-audit.md) for scope and remaining platform
-distinctions.
+`benchmarks/vm_startup.py` measures fresh VM and sandbox launches through the
+public SDK and verifies the first command's output. Image and key preparation
+are reported separately; each VM gets a fresh durable root. Run the benchmark
+near the gateway to distinguish runtime startup from remote-client latency.
+It records ownership before launch and removes its own runtimes afterward.
