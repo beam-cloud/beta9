@@ -1,15 +1,16 @@
 package types
 
 import (
-	pb "github.com/beam-cloud/beta9/proto"
 	"slices"
 	"time"
+
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 // DefaultVMRootSizeBytes is the fresh persistent VM root size.
 const DefaultVMRootSizeBytes int64 = 50 << 30
 
-// IsPersistentVM identifies a sandbox whose lifecycle belongs to the VM service.
+// IsPersistentVM identifies a microVM whose lifecycle belongs to the VM service.
 func (s *StubConfigV1) IsPersistentVM() bool {
 	return s != nil && isPersistentVM(s.UseVM, s.Env)
 }

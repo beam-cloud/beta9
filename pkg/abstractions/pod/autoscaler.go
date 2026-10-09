@@ -64,7 +64,7 @@ func desiredPodContainers(i *podInstance, s *podAutoscalerSample) int {
 		s = &podAutoscalerSample{}
 	}
 
-	if i.Stub.Type == types.StubType(types.StubTypePodRun) || i.Stub.Type == types.StubType(types.StubTypeSandbox) {
+	if i.Stub.Type == types.StubType(types.StubTypePodRun) || i.Stub.Type.IsSandbox() {
 		if s.CurrentContainers == 0 {
 			return 0
 		}

@@ -437,7 +437,7 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 }
 
 func (g *DeploymentGroup) deploymentURL(stub *types.StubWithRelated, deployment *types.Deployment, stubConfig *types.StubConfigV1) string {
-	if stub.Type.Kind() == types.StubTypePod || stub.Type.Kind() == types.StubTypeSandbox {
+	if stub.Type.Kind() == types.StubTypePod || stub.Type.IsSandbox() {
 		externalURL := g.config.GatewayService.HTTP.GetExternalURL()
 		urlType := g.config.GatewayService.InvokeURLType
 		if stubConfig.TCP {

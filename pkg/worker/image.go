@@ -348,11 +348,34 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 type imageAccessGuardKey struct{ imageID, stubID string }
 
 func (c *ImageClient) prepareCachedImageAccess(ctx context.Context, request *types.ContainerRequest) context.Context {
-	if c == nil || c.contentReporter == nil || request == nil || !c.mountedImageReady(request.ImageId) {
+	if c == nil || c.contentReporter == nil || request == nil {
 		return ctx
 	}
 	key := imageAccessGuardKey{request.ImageId, cacheRequestStubID(request)}
 	meta := c.cachedImageMetadata(key.imageID)
+	if !c.mountedImageReady(key.imageID) {
+		// A worker restart preserves verified archives but drops its mounts.
+		// Parse only files already on disk; pulling and mounting still require
+		// an accepted claim. Invalid or absent metadata uses the normal path.
+		if c.registry == nil || c.imageCachePath == "" {
+			return ctx
+		}
+		meta = nil
+		archivePath := c.localArchivePath(key.imageID)
+		if c.usesRemoteMetadataArchive() && c.cacheClient != nil {
+			meta, _ = c.processPulledArchive(archivePath+".batch", key.imageID)
+			if _, ok := ociStorageInfo(meta); !ok {
+				meta = nil
+			}
+		}
+		if meta == nil {
+			var err error
+			meta, err = c.processPulledArchive(archivePath, key.imageID)
+			if err != nil {
+				return ctx
+			}
+		}
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

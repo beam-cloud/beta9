@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestVMRepositoryIntegration(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	repo := &PostgresBackendRepository{client: db}
 	ctx := context.Background()
-	id := uuid.NewString()
+	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
 	now := time.Now().UTC().Add(-time.Hour)
 	v := &types.VM{ID: id, WorkspaceID: uint(ws), WorkspaceExternalID: "test", TokenID: "test", Name: "vm-test-" + id[:8], Handle: "test-" + id, DesiredState: "running", Status: "running", CreatedAt: now, LastActiveAt: now}
 	require.NoError(t, repo.CreateVM(ctx, v))

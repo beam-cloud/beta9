@@ -41,7 +41,7 @@ const (
 	gRPCMaxSendMsgSize                  = 1024 * 1024 * 16
 	sandboxProcessManagerClientRetry    = 25 * time.Millisecond
 	sandboxProcessManagerClientTimeout  = 10 * time.Second
-	sandboxProcessManagerReadyTimeout   = 90 * time.Second
+	sandboxProcessManagerReadyTimeout   = 10 * time.Second
 	sandboxProcessManagerReadyPollDelay = 25 * time.Millisecond
 	sandboxExecInlineWaitTimeout        = 750 * time.Millisecond
 	sandboxExecInlineWaitPollDelay      = 20 * time.Millisecond

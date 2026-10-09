@@ -5,8 +5,9 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"github.com/beam-cloud/beta9/pkg/types"
 	"time"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type VMRepository interface {
@@ -72,7 +73,7 @@ func (row vmRow) vm() (*types.VM, error) {
 }
 
 func (r *PostgresBackendRepository) GetVM(ctx context.Context, ws uint, name string) (*types.VM, error) {
-	return r.getVM(ctx, `WHERE workspace_id=$1 AND (name=$2 OR id::text=$2) ORDER BY (data->>'desired_state'='deleted') LIMIT 1`, ws, name)
+	return r.getVM(ctx, `WHERE workspace_id=$1 AND (name=$2 OR id=$2) ORDER BY (data->>'desired_state'='deleted') LIMIT 1`, ws, name)
 }
 
 func (r *PostgresBackendRepository) GetVMByHandle(ctx context.Context, handle string) (*types.VM, error) {

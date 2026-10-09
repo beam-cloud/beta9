@@ -15,6 +15,8 @@ from urllib.parse import quote
 
 import click
 import websocket
+from rich import box
+from rich.table import Table
 
 from .. import terminal
 from ..abstractions.image import Image
@@ -36,9 +38,7 @@ class VMGroup(ClickManagementGroup):
         except (click.ClickException, click.exceptions.Exit):
             raise
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(
-                f"{exc.cmd[0]} exited with status {exc.returncode}"
-            ) from exc
+            raise click.ClickException(f"{exc.cmd[0]} exited with status {exc.returncode}") from exc
         except (RuntimeError, TimeoutError, OSError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
 
@@ -59,16 +59,12 @@ def _vm(service, name):
     return VM.get(name, _service=service)
 
 
-def _image(
-    dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=()
-):
+def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=()):
     image = (
         Image.from_dockerfile(dockerfile, build_context)
         if dockerfile
         else (
-            Image.from_id(image_id)
-            if image_id
-            else Image(base_image=image_uri or "ubuntu:22.04")
+            Image.from_id(image_id) if image_id else Image(base_image=image_uri or "ubuntu:22.04")
         )
     )
     image.ignore_python = True
@@ -83,27 +79,25 @@ def _show(info, as_json):
     if as_json:
         terminal.print_json(info)
     elif isinstance(info, list):
+        table = Table("Name", "Status", "ID", box=box.SIMPLE, header_style="bold cyan")
         for record in info:
-            click.echo(
-                f"{record['name']}\t{record.get('status', record.get('kind', ''))}\t{record['id']}"
+            table.add_row(
+                record["name"], record.get("status", record.get("kind", "")), record["id"]
             )
+        terminal.print(table)
     else:
         terminal.resource(
             info.get("name", "VM"),
             {
-                key: value
-                for key, value in info.items()
-                if key
-                in (
-                    "id",
-                    "status",
-                    "error",
-                    "container_id",
-                    "terminal_url",
-                    "desktop_url",
-                    "root_snapshot_id",
+                label: info[key]
+                for key, label in (
+                    ("id", "ID"),
+                    ("status", "Status"),
+                    ("error", "Error"),
+                    ("terminal_url", "Terminal"),
+                    ("desktop_url", "Desktop"),
                 )
-                and value
+                if info.get(key)
             },
         )
 
@@ -113,42 +107,82 @@ def _show(info, as_json):
 @click.option(
     "--cpu",
     type=click.FloatRange(min=0.1),
+    metavar="CORES",
     help="CPUs; defaults to 1, or 2 for desktop.",
 )
 @click.option(
     "--memory",
     type=click.IntRange(min=256),
+    metavar="MiB",
     help="RAM in MiB; defaults to 1024, or 2048 for desktop.",
 )
 @click.option("--disk-size", help="Durable root size; defaults to 50GiB.")
-@click.option(
-    "--image", "image_uri", help="Base registry image; defaults to ubuntu:22.04."
-)
+@click.option("--image", "image_uri", help="Base registry image; defaults to ubuntu:22.04.")
 @click.option("--image-id", help="Existing image with Beam VM services installed.")
-@click.option("--dockerfile", type=click.Path(exists=True, dir_okay=False))
-@click.option("--build-context", type=click.Path(exists=True, file_okay=False))
-@click.option("--build-secret", multiple=True)
-@click.option("--template")
-@click.option("--desktop", is_flag=True, default=None)
-@click.option("--docker-enabled", is_flag=True, default=None)
-@click.option("--env", multiple=True, metavar="KEY=VALUE")
-@click.option("--secret", multiple=True)
-@click.option("--port", multiple=True, type=click.IntRange(1, 65535))
-@click.option("--no-ssh", is_flag=True)
-@click.option("--sync", "sync_dir", type=click.Path(exists=True, file_okay=False))
+@click.option(
+    "--dockerfile", type=click.Path(exists=True, dir_okay=False), help="Build a custom VM image."
+)
+@click.option(
+    "--build-context",
+    type=click.Path(exists=True, file_okay=False),
+    help="Dockerfile build context.",
+)
+@click.option(
+    "--build-secret",
+    multiple=True,
+    metavar="NAME",
+    help="Secret available during image build; repeatable.",
+)
+@click.option("--template", metavar="NAME", help="Create from a saved template.")
+@click.option("--desktop", is_flag=True, default=None, help="Enable the browser desktop.")
+@click.option("--docker-enabled", is_flag=True, default=None, help="Enable Docker inside the VM.")
+@click.option("--env", multiple=True, metavar="KEY=VALUE", help="Environment variable; repeatable.")
+@click.option("--secret", multiple=True, metavar="NAME", help="Workspace secret; repeatable.")
+@click.option(
+    "--port",
+    multiple=True,
+    type=click.IntRange(1, 65535),
+    metavar="PORT",
+    help="Publish an application port; repeatable.",
+)
+@click.option("--no-ssh", is_flag=True, help="Disable SSH access.")
+@click.option(
+    "--sync",
+    "sync_dir",
+    type=click.Path(exists=True, file_okay=False),
+    help="Upload a local directory after creation.",
+)
 @click.option(
     "--ttl",
-    type=click.IntRange(min=0),
-    help="Auto-stop after this many idle seconds; 0 disables it.",
+    type=click.IntRange(0, 31536000),
+    metavar="SECONDS",
+    help="Snapshot and sleep after idle seconds; unset or 0 keeps running.",
 )
-@click.option("--idle-action", type=click.Choice(["stop", "pause"]))
-@click.option("--pool")
-@click.option("--metadata", multiple=True, metavar="KEY=VALUE")
-@click.option("--auto-resume/--no-auto-resume", default=None)
-@click.option("--block-network", is_flag=True, default=None)
-@click.option("--allow-network", multiple=True, metavar="CIDR")
-@click.option("--protected-port", multiple=True, type=click.IntRange(1, 65535))
-@click.option("--request-id", type=click.UUID)
+@click.option(
+    "--idle-action",
+    type=click.Choice(["stop", "pause"]),
+    help="Stop from disk (default), or pause with RAM.",
+)
+@click.option("--pool", metavar="NAME", help="CPU microVM worker pool.")
+@click.option(
+    "--metadata", multiple=True, metavar="KEY=VALUE", help="Resource metadata; repeatable."
+)
+@click.option("--auto-resume/--no-auto-resume", default=None, help="Wake on SDK or URL access.")
+@click.option("--block-network", is_flag=True, default=None, help="Block outbound network access.")
+@click.option(
+    "--allow-network",
+    multiple=True,
+    metavar="CIDR",
+    help="Allow outbound access only to these CIDRs.",
+)
+@click.option(
+    "--protected-port",
+    multiple=True,
+    type=click.IntRange(1, 65535),
+    metavar="PORT",
+    help="Publish a port requiring an access token.",
+)
+@click.option("--request-id", type=click.UUID, help="Reuse a UUID to retry creation safely.")
 @click.option(
     "--disk",
     multiple=True,
@@ -161,7 +195,7 @@ def _show(info, as_json):
     metavar="NAME:/mount",
     help="Shared workspace volume; persists independently of the VM.",
 )
-@click.option("--json", "as_json", is_flag=True)
+@click.option("--json", "as_json", is_flag=True, help="Print the complete result as JSON.")
 @extraclick.pass_service_client
 def new(
     service,
@@ -195,10 +229,9 @@ def new(
     volume=(),
     idle_action=None,
 ):
+    """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     if sum(bool(v) for v in (image_uri, image_id, dockerfile, template)) > 1:
-        raise click.UsageError(
-            "Choose one of --image, --image-id, --dockerfile or --template"
-        )
+        raise click.UsageError("Choose one of --image, --image-id, --dockerfile or --template")
     if build_context and not dockerfile:
         raise click.UsageError("--build-context requires --dockerfile")
     if no_ssh and sync_dir:
@@ -218,11 +251,7 @@ def new(
         docker_enabled=docker_enabled,
         env=env_map if env else None,
         secrets=list(secret) if secret else None,
-        ports=(
-            list(dict.fromkeys((*port, *protected_port)))
-            if port or protected_port
-            else None
-        ),
+        ports=(list(dict.fromkeys((*port, *protected_port))) if port or protected_port else None),
         ssh=False if no_ssh else None,
         ttl=ttl,
         idle_action=idle_action,
@@ -240,9 +269,6 @@ def new(
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
         vm.create(wait=False)
-        if not as_json:
-            terminal.header("Starting VM", vm.name)
-            terminal.detail("Waiting for VM exec readiness...")
         vm.wait()
         if sync_dir:
             _sync(vm, sync_dir, False)
@@ -263,12 +289,8 @@ def image_group():
 
 
 @image_group.command("build")
-@click.argument(
-    "build_context", default=".", type=click.Path(exists=True, file_okay=False)
-)
-@click.option(
-    "-f", "--file", "dockerfile", type=click.Path(exists=True, dir_okay=False)
-)
+@click.argument("build_context", default=".", type=click.Path(exists=True, file_okay=False))
+@click.option("-f", "--file", "dockerfile", type=click.Path(exists=True, dir_okay=False))
 @click.option("--secret", "--build-secret", "build_secret", multiple=True)
 @click.option("--desktop", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
@@ -293,6 +315,7 @@ def image_build(service, build_context, dockerfile, build_secret, desktop, as_js
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def list_vms(service, include_all, as_json, metadata=(), status=None):
+    """List VMs and their current state."""
     _show(
         VM.list(
             all=include_all,
@@ -309,21 +332,29 @@ def list_vms(service, include_all, as_json, metadata=(), status=None):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def get_vm(service, name, as_json):
+    """Show a VM's identity, state and URLs."""
     _show(_vm(service, name).info, as_json)
 
 
 @management.command("update")
 @click.argument("name")
-@click.option("--ttl", type=click.IntRange(0, 31536000))
-@click.option("--idle-action", type=click.Choice(["stop", "pause"]))
+@click.option(
+    "--ttl",
+    type=click.IntRange(0, 31536000),
+    metavar="SECONDS",
+    help="Snapshot and sleep after idle seconds; 0 disables it.",
+)
+@click.option(
+    "--idle-action",
+    type=click.Choice(["stop", "pause"]),
+    help="Stop from disk (default), or pause with RAM.",
+)
 @click.option("--auto-resume/--no-auto-resume", default=None)
 @click.option("--metadata", multiple=True, metavar="KEY=VALUE")
 @click.option("--clear-metadata", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def update_vm(
-    service, name, ttl, auto_resume, metadata, clear_metadata, as_json, idle_action=None
-):
+def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json, idle_action=None):
     if metadata and clear_metadata:
         raise click.UsageError("Choose --metadata or --clear-metadata")
     values = _key_values(metadata) if metadata or clear_metadata else None
@@ -340,9 +371,7 @@ def update_vm(
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def network_vm(service, name, block, allow, as_json):
-    vm = _vm(service, name).update_network_permissions(
-        block_network=block, allow_list=list(allow)
-    )
+    vm = _vm(service, name).update_network_permissions(block_network=block, allow_list=list(allow))
     _show(vm.info, as_json)
 
 
@@ -357,9 +386,7 @@ def access_token_vm(service, name, rotate):
 
 @management.command("start")
 @click.argument("name")
-@click.option(
-    "--cold", is_flag=True, help="Explicitly discard paused RAM and boot from disk."
-)
+@click.option("--cold", is_flag=True, help="Explicitly discard paused RAM and boot from disk.")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def start_vm(service, name, as_json, cold=False):
@@ -419,9 +446,7 @@ def fork_vm(service, source, name, as_json):
     default=0,
     help="Command deadline in seconds; 0 waits indefinitely.",
 )
-@click.option(
-    "--detach", is_flag=True, help="Return a reattachable process ID immediately."
-)
+@click.option("--detach", is_flag=True, help="Return a reattachable process ID immediately.")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False):
@@ -463,9 +488,7 @@ def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False)
     # The existing exec implementation streams both output channels, retains
     # argv boundaries, cancellation and the child's exit code.
     with vm.keep_alive():
-        exec_container.callback.__wrapped__(
-            service, vm.info["container_id"], command, cwd, timeout
-        )
+        exec_container.callback.__wrapped__(service, vm.info["container_id"], command, cwd, timeout)
 
 
 @management.command("ps")
@@ -496,9 +519,7 @@ def processes_vm(service, name, as_json):
 def kill_vm(service, name, pid, container_id):
     vm = _vm(service, name)
     if container_id and container_id != vm.info["container_id"]:
-        raise click.ClickException(
-            "The VM restarted; this process belongs to a previous runtime"
-        )
+        raise click.ClickException("The VM restarted; this process belongs to a previous runtime")
     sandbox = vm._sandbox(auto_resume=False)
     sandbox.process.get_process(pid).kill()
 
@@ -517,9 +538,7 @@ def _url(service, name, field, open_url):
     if url and port in vm.info.get("spec", {}).get("protected_ports", []):
         url = vm.access_url(port)
     if not url:
-        raise click.ClickException(
-            f"VM does not have {field.replace('_url', '')} enabled"
-        )
+        raise click.ClickException(f"VM does not have {field.replace('_url', '')} enabled")
     click.echo(url)
     if open_url:
         webbrowser.open(url)
@@ -577,9 +596,7 @@ def unexpose_vm(service, name, port):
 
 
 def _socket(vm, port):
-    url = vm._service.http.url(
-        f"/api/v1/vm/{{ws}}/{quote(vm.id, safe='')}/tunnel/{port}"
-    )
+    url = vm._service.http.url(f"/api/v1/vm/{{ws}}/{quote(vm.id, safe='')}/tunnel/{port}")
     return websocket.create_connection(
         url.replace("https://", "wss://").replace("http://", "ws://"),
         header=vm._service.http.headers,
@@ -595,11 +612,7 @@ def _bridge(vm, port, source, target):
     def upload():
         try:
             while not stopped.is_set():
-                data = (
-                    source.read1(65536)
-                    if hasattr(source, "read1")
-                    else source.read(65536)
-                )
+                data = source.read1(65536) if hasattr(source, "read1") else source.read(65536)
                 if not data:
                     remote.send("EOF")
                     return
@@ -639,9 +652,7 @@ def tunnel_vm(service, name, port):
 def _run_tunnel(profile, config_path, cli_name, vm_id, port):
     """OpenSSH helper: bypass interactive CLI setup and keep stdout binary."""
     token = os.getenv("BEAM_TOKEN" if cli_name.lower() == "beam" else "BETA9_TOKEN")
-    set_settings(
-        SDKSettings(name=cli_name, config_path=Path(config_path), api_token=token)
-    )
+    set_settings(SDKSettings(name=cli_name, config_path=Path(config_path), api_token=token))
     target = sys.stdout.buffer
     with redirect_stdout(sys.stderr):
         with ServiceClient(get_config_context(profile)) as service:
@@ -773,14 +784,10 @@ def forward_vm(service, name, port, local_port):
             port = parts[0]
         else:
             raise ValueError()
-        if not 1 <= port <= 65535 or (
-            local_port is not None and not 1 <= local_port <= 65535
-        ):
+        if not 1 <= port <= 65535 or (local_port is not None and not 1 <= local_port <= 65535):
             raise ValueError()
     except ValueError:
-        raise click.UsageError(
-            "Use PORT or LOCAL:REMOTE, with ports between 1 and 65535"
-        )
+        raise click.UsageError("Use PORT or LOCAL:REMOTE, with ports between 1 and 65535")
     vm = _vm(service, name)
     if port not in vm.info["spec"].get("ports", []) and port not in vm.info["spec"].get(
         "private_ports", []
@@ -856,16 +863,12 @@ def template_group():
 @click.argument("vm_name")
 @click.argument("name", required=False)
 @click.option("-d", "--description", default="")
-@click.option(
-    "--public", "public", is_flag=True, help="Reserved; complete VM roots are private."
-)
+@click.option("--public", "public", is_flag=True, help="Reserved; complete VM roots are private.")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_create(service, vm_name, name, description, public, as_json):
     if public:
-        raise click.UsageError(
-            "Public templates are unsupported; complete VM roots remain private"
-        )
+        raise click.UsageError("Public templates are unsupported; complete VM roots remain private")
     _show(_vm(service, vm_name).create_template(name, description), as_json)
 
 
@@ -906,9 +909,7 @@ def prompt_vm(service, name, prompt, agent, background, cwd):
     vm = _vm(service, name)
     session = "prompt-" + uuid.uuid4().hex[:12]
     log_dir = "/workspace/.beam-vm/logs"
-    command = (
-        ["claude", "-p", prompt] if agent == "claude" else ["codex", "exec", prompt]
-    )
+    command = ["claude", "-p", prompt] if agent == "claude" else ["codex", "exec", prompt]
     shell = f"mkdir -p {log_dir}; set -o pipefail; {shlex.join(command)} 2>&1 | tee {log_dir}/{session}.log"
     if background:
         process = vm.process.exec(
@@ -921,9 +922,7 @@ def prompt_vm(service, name, prompt, agent, background, cwd):
             shell,
         )
         if process.wait() != 0:
-            raise click.ClickException(
-                process.stderr.read() or "Failed to launch prompt service"
-            )
+            raise click.ClickException(process.stderr.read() or "Failed to launch prompt service")
         click.echo(session)
     else:
         exec_vm.callback.__wrapped__(service, name, ("bash", "-lc", shell), cwd)

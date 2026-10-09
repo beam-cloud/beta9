@@ -10,6 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -18,11 +24,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
 	"google.golang.org/protobuf/proto"
-	"io"
-	"slices"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type Runtime interface {
@@ -288,12 +289,7 @@ func (s *Service) create(c echo.Context) error {
 	if err := validateMetadata(req.Metadata); err != nil {
 		return apiError(err)
 	}
-	if req.Name == "" && req.RequestID != "" {
-		req.Name = "vm-" + strings.ReplaceAll(req.RequestID, "-", "")[:20]
-	} else if req.Name == "" {
-		req.Name = "vm-" + randomHexID()[:20]
-	}
-	if !validName.MatchString(req.Name) {
+	if req.Name != "" && !validName.MatchString(req.Name) {
 		return echo.NewHTTPError(400, "name must begin with a letter and contain at most 24 lowercase letters, digits or hyphens")
 	}
 	if req.Template != "" && req.Snapshot != "" {
@@ -362,9 +358,9 @@ func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, 
 		spec.Pool = s.defaultPool
 	}
 	now := time.Now().UTC()
-	id := uuid.NewString()
-	if requestID != "" {
-		id = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("beam-vm:%d:%s", info.Workspace.Id, requestID))).String()
+	id := vmID(info.Workspace.Id, requestID)
+	if name == "" {
+		name = defaultVMName(id)
 	}
 	creation, _ := json.Marshal(struct {
 		Name     string
@@ -372,7 +368,14 @@ func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, 
 		Metadata map[string]string
 	}{name, spec, metadata})
 	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
-	v := &types.VM{ID: id, WorkspaceID: info.Workspace.Id, WorkspaceExternalID: info.Workspace.ExternalId, TokenID: info.Token.ExternalId, Name: name, Metadata: metadata, CreationDigest: digest, TrafficAccessToken: randomHexID(), Handle: name + "-" + randomHexID(), Spec: spec, DesiredState: "running", Status: "starting", CreatedAt: now, UpdatedAt: now, LastActiveAt: now}
+	v := &types.VM{
+		ID: id, Name: name, Handle: name + "-" + randomHexID(),
+		WorkspaceID: info.Workspace.Id, WorkspaceExternalID: info.Workspace.ExternalId,
+		TokenID: info.Token.ExternalId, TrafficAccessToken: randomHexID(),
+		Spec: spec, Metadata: metadata, CreationDigest: digest,
+		DesiredState: "running", Status: "starting",
+		CreatedAt: now, UpdatedAt: now, LastActiveAt: now,
+	}
 	unlock, err := s.repo.LockVM(ctx, id)
 	if err != nil {
 		return nil, err
@@ -473,10 +476,7 @@ func (s *Service) action(c echo.Context) error {
 		}
 		return c.JSON(201, artifactResponse(*a))
 	case "fork":
-		if req.Name == "" {
-			req.Name = "vm-" + randomHexID()[:20]
-		}
-		if !validName.MatchString(req.Name) {
+		if req.Name != "" && !validName.MatchString(req.Name) {
 			return echo.NewHTTPError(400, "valid fork name required")
 		}
 		if err := s.snapshotRoot(ctx, v); err != nil {

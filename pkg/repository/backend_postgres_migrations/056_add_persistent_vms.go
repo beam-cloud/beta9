@@ -3,6 +3,7 @@ package backend_postgres_migrations
 import (
 	"context"
 	"database/sql"
+
 	"github.com/pressly/goose/v3"
 )
 

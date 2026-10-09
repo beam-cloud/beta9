@@ -2,11 +2,7 @@ package vm
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
-	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
-	"golang.org/x/crypto/ssh"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"path"
 	"regexp"
 	"slices"
@@ -14,21 +10,18 @@ import (
 	"strings"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/crypto/ssh"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-
-func randomHexID() string {
-	id := uuid.New()
-	return hex.EncodeToString(id[:])
-}
 
 func normalizeDiskSize(size string) (string, error) {
 	if size == "" {

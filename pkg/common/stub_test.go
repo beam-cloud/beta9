@@ -1,6 +1,27 @@
 package common
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
+)
+
+func TestVMContainerUsesSandboxTransportWithDistinctIdentity(t *testing.T) {
+	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
+	cid := "vm-" + stubID + "-1717f4fc"
+	fields, err := ParseSubdomainFields(cid + "-8080")
+	require.NoError(t, err)
+	require.Equal(t, stubID, fields.StubId)
+	require.Equal(t, cid, fields.ContainerId)
+	stub := &types.StubWithRelated{Stub: types.Stub{ExternalId: stubID, Type: types.StubType(types.StubTypeVM), Config: `{"authorized":true}`}}
+	expected := "/sandbox/container/" + stubID + "/" + cid + "/8080"
+	require.Equal(t, expected, BuildHandlerPath(&stub.Stub, fields))
+	require.Equal(t, "https://app.example.com"+expected, BuildSandboxURL("https://app.example.com", InvokeUrlTypePath, stub, cid, 8080))
+	legacy, err := ExtractStubIdFromContainerId("sandbox-" + stubID + "-1717f4fc")
+	require.NoError(t, err)
+	require.Equal(t, stubID, legacy)
+}
 
 func TestExtractStubIdFromStubScopedContainerId(t *testing.T) {
 	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
@@ -13,6 +34,12 @@ func TestExtractStubIdFromStubScopedContainerId(t *testing.T) {
 		{
 			name:        "sandbox",
 			containerID: "sandbox-" + stubID + "-1717f4fc",
+			wantStubID:  stubID,
+			wantOK:      true,
+		},
+		{
+			name:        "vm",
+			containerID: "vm-" + stubID + "-1717f4fc",
 			wantStubID:  stubID,
 			wantOK:      true,
 		},

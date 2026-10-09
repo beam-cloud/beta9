@@ -920,6 +920,7 @@ const (
 	StubTypePodDeployment          string = "pod/deployment"
 	StubTypePodRun                 string = "pod/run"
 	StubTypeSandbox                string = "sandbox"
+	StubTypeVM                     string = "vm"
 )
 
 // @go2proto
@@ -935,6 +936,25 @@ func (t StubType) IsDeployment() bool {
 
 func (t StubType) Kind() string {
 	return strings.Split(string(t), "/")[0]
+}
+
+// IsSandbox identifies workloads that share sandbox execution and storage.
+// Persistent VMs retain their own kind for lifecycle and billing.
+func (t StubType) IsSandbox() bool {
+	return t.Kind() == StubTypeSandbox || t.Kind() == StubTypeVM
+}
+
+// RouteKind keeps VM runtime operations on the shared sandbox transport.
+func (t StubType) RouteKind() string {
+	if t.Kind() == StubTypeVM {
+		return StubTypeSandbox
+	}
+	return t.Kind()
+}
+
+// StubScopedContainerPrefixes identifies container IDs carrying a stub UUID.
+func StubScopedContainerPrefixes() []string {
+	return []string{StubTypeSandbox, StubTypeVM, StubTypePod, StubTypeEndpoint, StubTypeTaskQueue, "managed"}
 }
 
 // @go2proto

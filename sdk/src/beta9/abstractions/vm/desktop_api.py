@@ -29,9 +29,7 @@ class VMDesktop:
                 pass
             raise
         if code != 0:
-            raise RuntimeError(
-                process.stderr.read() or f"Desktop command failed: {args[0]}"
-            )
+            raise RuntimeError(process.stderr.read() or f"Desktop command failed: {args[0]}")
         return process.stdout.read().strip()
 
     @property
@@ -100,11 +98,7 @@ class VMDesktop:
 
     def scroll(self, direction="down", amount=3):
         buttons = {"up": 4, "down": 5, "left": 6, "right": 7}
-        if (
-            direction not in buttons
-            or not isinstance(amount, int)
-            or not 1 <= amount <= 100
-        ):
+        if direction not in buttons or not isinstance(amount, int) or not 1 <= amount <= 100:
             raise ValueError("Use up/down/left/right and 1–100 scroll steps")
         self._run("xdotool", "click", "--repeat", str(amount), str(buttons[direction]))
 

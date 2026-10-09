@@ -5,17 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/proto"
-	"sync"
-	"time"
 )
 
-func rootDisk(v *types.VM) string { return "vm-" + v.ID }
+func rootDisk(v *types.VM) string { return types.StubTypeVM + "-" + v.ID }
 
 func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 	v.Error = err.Error()
@@ -43,24 +44,16 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	for _, name := range v.Spec.Secrets {
 		secrets = append(secrets, &pb.SecretVar{Name: name})
 	}
-	req := &pb.GetOrCreateStubRequest{ImageId: v.Spec.ImageID, Name: "vm/" + v.ID, StubType: types.StubTypeSandbox}
 	// Use the normal immutable stub and placement validation, including CPU
 	// limits, disk snapshot ownership and microvm-only pool selection.
-	req.Cpu = v.Spec.CPU
-	req.Memory = v.Spec.Memory
-	req.KeepWarmSeconds = -1
-	req.UseVm = true
-	req.Authorized = true
-	req.Env = env
-	req.Secrets = secrets
-	req.Ports = v.Spec.RuntimePorts()
-	req.CheckpointEnabled = false
-	req.DockerEnabled = v.Spec.DockerEnabled
-	req.BlockNetwork = v.Spec.BlockNetwork
-	req.AllowList = v.Spec.AllowList
-	req.Hostname = v.Name
-	req.Entrypoint = []string{"/opt/beam-vm/boot"}
-	req.Disks = []*pb.DurableDisk{{Name: rootDisk(v), Size: v.Spec.DiskSize, MountPath: "/", Filesystem: "ext4", Driver: "qcow", SourceSnapshotId: v.Spec.SourceSnapshotID}}
+	req := &pb.GetOrCreateStubRequest{
+		ImageId: v.Spec.ImageID, Name: types.StubTypeVM + "/" + v.ID, StubType: types.StubTypeVM,
+		Cpu: v.Spec.CPU, Memory: v.Spec.Memory, KeepWarmSeconds: -1, UseVm: true,
+		Authorized: true, Env: env, Secrets: secrets, Ports: v.Spec.RuntimePorts(),
+		DockerEnabled: v.Spec.DockerEnabled, BlockNetwork: v.Spec.BlockNetwork, AllowList: v.Spec.AllowList,
+		Hostname: v.Name, Entrypoint: []string{"/opt/beam-vm/boot"},
+		Disks: []*pb.DurableDisk{{Name: rootDisk(v), Size: v.Spec.DiskSize, MountPath: "/", Filesystem: "ext4", Driver: "qcow", SourceSnapshotId: v.Spec.SourceSnapshotID}},
+	}
 	for _, disk := range v.Spec.Disks {
 		req.Disks = append(req.Disks, proto.Clone(disk).(*pb.DurableDisk))
 	}
@@ -78,7 +71,8 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		return fmt.Errorf("%s", resp.ErrMsg)
 	}
 	v.StubID = resp.StubId
-	return s.repo.SaveVM(ctx, v)
+	// start persists the stub and runtime identities together before enqueue.
+	return nil
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
@@ -113,7 +107,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	// Persist before enqueue. A retry uses this exact runtime identity.
 	if v.ContainerID == "" {
 		v.Generation++
-		v.ContainerID = "sandbox-" + v.StubID + "-" + randomHexID()[:8]
+		v.ContainerID = types.StubTypeVM + "-" + v.StubID + "-" + randomHexID()[:8]
 	}
 	v.Status = "starting"
 	v.Error = ""

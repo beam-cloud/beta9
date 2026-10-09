@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -320,54 +322,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	// Register a first-class disk record for each durable disk declared on the
-	// stub so disks are listable as standalone resources (dashboard + CLI).
-	for _, durableDisk := range stubConfig.Disks {
-		if durableDisk == nil || durableDisk.Name == "" {
-			continue
-		}
-		if _, err := gws.backendRepo.GetOrCreateDisk(ctx, authInfo.Workspace.Id, &types.Disk{
-			Name:       types.SafeDurableDiskName(durableDisk.Name),
-			Size:       durableDisk.Size,
-			Filesystem: durableDisk.Filesystem,
-			Driver:     durableDisk.Driver,
-			MountPath:  durableDisk.MountPath,
-		}); err != nil {
-			log.Error().Err(err).Str("disk_name", durableDisk.Name).Msg("failed to register durable disk record")
-			return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: fmt.Sprintf("register disk %s: %s", durableDisk.Name, err)}, nil
-		}
-	}
-
-	appName := in.AppName
-	if appName == "" {
-		appName = in.Name
-	}
-
-	app, err := gws.backendRepo.GetOrCreateApp(ctx, authInfo.Workspace.Id, appName)
+	app, object, err := gws.prepareStubIdentity(ctx, authInfo.Workspace, in, stubConfig.Disks)
 	if err != nil {
-		return &pb.GetOrCreateStubResponse{
-			Ok:     false,
-			ErrMsg: "Failed to get or create app",
-		}, nil
-	}
-
-	var object types.Object
-	if strings.TrimSpace(in.ObjectId) == "" {
-		if types.StubType(in.StubType).Kind() == types.StubTypeSandbox {
-			object, err = abstractions.GetOrCreateEmptyStubObject(ctx, gws.backendRepo, authInfo.Workspace)
-		} else {
-			object, err = gws.ensureEmptyStubObject(ctx, authInfo.Workspace)
-		}
-	} else {
-		object, err = gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
-	}
-	if err != nil {
-		log.Error().Err(err).Str("workspace_id", authInfo.Workspace.ExternalId).
-			Msg("failed to prepare canonical stub object")
-		return &pb.GetOrCreateStubResponse{
-			Ok:     false,
-			ErrMsg: "Failed to prepare stub object",
-		}, nil
+		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
 	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id, in.ForceCreate, app.Id)
@@ -403,6 +360,62 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		UnsupportedGpus:    capacity.unsupportedGpus,
 		MatchedPrivatePool: capacity.matchedPrivatePool,
 	}, nil
+}
+
+// prepareStubIdentity overlaps independent records after resource validation.
+// The immutable stub is written only once every prerequisite succeeds.
+func (gws *GatewayService) prepareStubIdentity(ctx context.Context, workspace *types.Workspace, in *pb.GetOrCreateStubRequest, disks []*pb.DurableDisk) (*types.App, types.Object, error) {
+	group, prepareCtx := errgroup.WithContext(ctx)
+	var app *types.App
+	var object types.Object
+	group.Go(func() error {
+		for _, disk := range disks {
+			if disk == nil || disk.Name == "" {
+				continue
+			}
+			if _, err := gws.backendRepo.GetOrCreateDisk(prepareCtx, workspace.Id, &types.Disk{
+				Name: types.SafeDurableDiskName(disk.Name), Size: disk.Size,
+				Filesystem: disk.Filesystem, Driver: disk.Driver, MountPath: disk.MountPath,
+			}); err != nil {
+				log.Error().Err(err).Str("disk_name", disk.Name).Msg("failed to register durable disk record")
+				return fmt.Errorf("register disk %s: %s", disk.Name, err)
+			}
+		}
+		return nil
+	})
+	group.Go(func() error {
+		name := in.AppName
+		if name == "" {
+			name = in.Name
+		}
+		var err error
+		app, err = gws.backendRepo.GetOrCreateApp(prepareCtx, workspace.Id, name)
+		if err != nil {
+			return errors.New("Failed to get or create app")
+		}
+		return nil
+	})
+	group.Go(func() error {
+		var err error
+		if strings.TrimSpace(in.ObjectId) == "" {
+			if types.StubType(in.StubType).IsSandbox() {
+				object, err = abstractions.GetOrCreateEmptyStubObject(prepareCtx, gws.backendRepo, workspace)
+			} else {
+				object, err = gws.ensureEmptyStubObject(prepareCtx, workspace)
+			}
+		} else {
+			object, err = gws.backendRepo.GetObjectByExternalId(prepareCtx, in.ObjectId, workspace.Id)
+		}
+		if err != nil {
+			log.Error().Err(err).Str("workspace_id", workspace.ExternalId).Msg("failed to prepare canonical stub object")
+			return errors.New("Failed to prepare stub object")
+		}
+		return nil
+	})
+	if err := group.Wait(); err != nil {
+		return nil, types.Object{}, err
+	}
+	return app, object, nil
 }
 
 func (gws *GatewayService) cachePreparedStub(ctx context.Context, workspaceID, stubID string) {
@@ -519,13 +532,16 @@ func gpuTypesForStubRequest(in *pb.GetOrCreateStubRequest) []types.GpuType {
 // "no suitable worker" later. Returns an empty string when the request is fine.
 func validateUseVM(in *pb.GetOrCreateStubRequest, gpus []types.GpuType) string {
 	if !in.UseVm {
+		if types.StubType(in.StubType).Kind() == types.StubTypeVM {
+			return "VMs require use_vm"
+		}
 		return ""
 	}
-	if types.StubType(in.StubType).Kind() != types.StubTypeSandbox {
-		return "use_vm is only supported for sandboxes"
+	if !types.StubType(in.StubType).IsSandbox() {
+		return "use_vm is only supported for sandboxes and VMs"
 	}
 	if len(gpus) > 0 || in.GpuCount > 0 {
-		return "use_vm sandboxes cannot request a GPU"
+		return "use_vm sandboxes and VMs cannot request a GPU"
 	}
 	return ""
 }
@@ -545,7 +561,7 @@ func normalizeKeepWarmSeconds(raw float32, stubType types.StubType) int {
 
 func stubTypeSupportsInfiniteKeepWarm(stubType types.StubType) bool {
 	switch string(stubType) {
-	case types.StubTypePodDeployment, types.StubTypePodRun, types.StubTypeSandbox:
+	case types.StubTypePodDeployment, types.StubTypePodRun, types.StubTypeSandbox, types.StubTypeVM:
 		return true
 	default:
 		return false
@@ -1152,7 +1168,7 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 			Ok:  true,
 			Url: invokeUrl,
 		}, nil
-	} else if stub.Type.Kind() == types.StubTypePod || stub.Type.Kind() == types.StubTypeSandbox {
+	} else if stub.Type.Kind() == types.StubTypePod || stub.Type.IsSandbox() {
 		stubConfig := &types.StubConfigV1{}
 		if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 			return &pb.GetURLResponse{

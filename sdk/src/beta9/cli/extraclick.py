@@ -63,6 +63,12 @@ class HelpFormatter(click.HelpFormatter):
         super().write_heading(click.style(heading, fg="cyan", bold=True))
 
     def write_dl(self, rows, **kwargs):
+        # Click's default 30-character limit moves longer options onto a
+        # separate line. Keep one aligned description column when it fits.
+        kwargs.setdefault(
+            "col_max",
+            min(max((len(click.unstyle(name)) for name, _ in rows), default=30), self.width - 20),
+        )
         super().write_dl([(click.style(name, bold=True), text) for name, text in rows], **kwargs)
 
 

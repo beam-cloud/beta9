@@ -66,9 +66,7 @@ def identity() -> Path:
             temporary_public.write_bytes(public)
             _publish_identity(temporary_public, path.with_suffix(".pub"))
     except FileNotFoundError as exc:
-        raise RuntimeError(
-            "VM SSH requires OpenSSH; install ssh-keygen and try again"
-        ) from exc
+        raise RuntimeError("VM SSH requires OpenSSH; install ssh-keygen and try again") from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             f"Unable to prepare VM SSH identity at {path}: ssh-keygen failed"
@@ -91,6 +89,9 @@ class _VMImage(Image):
     @property
     def channel(self):
         return self._vm_channel
+
+    def build(self):
+        return super().build(quiet=True)
 
 
 def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
@@ -187,9 +188,7 @@ class VM:
         self.image = image
         self.template = template
         self._snapshot_source = snapshot
-        self.request_id = (
-            str(uuid.UUID(request_id)) if request_id else str(uuid.uuid4())
-        )
+        self.request_id = str(uuid.UUID(request_id)) if request_id else str(uuid.uuid4())
         self._metadata = metadata
         self._creation_body = None
         self._volumes = volumes
@@ -205,11 +204,7 @@ class VM:
             "disk_size": disk_size,
             "desktop": desktop,
             "docker_enabled": docker_enabled,
-            "env": (
-                [f"{key}={value}" for key, value in env.items()]
-                if env is not None
-                else None
-            ),
+            "env": ([f"{key}={value}" for key, value in env.items()] if env is not None else None),
             "secrets": secrets,
             "ports": ports,
             "ssh": ssh,
@@ -221,18 +216,13 @@ class VM:
             "allow_list": allow_list,
             "protected_ports": protected_ports,
             "disks": (
-                [
-                    disk.export().to_dict(casing=betterproto.Casing.SNAKE)
-                    for disk in disks
-                ]
+                [disk.export().to_dict(casing=betterproto.Casing.SNAKE) for disk in disks]
                 if disks is not None
                 else None
             ),
         }
 
-        self._spec = {
-            key: value for key, value in self._spec.items() if value is not None
-        }
+        self._spec = {key: value for key, value in self._spec.items() if value is not None}
 
     def _api(self, method, path="", *, timeout=240, **kwargs):
         deadline = time.monotonic() + timeout
@@ -311,9 +301,7 @@ class VM:
                 selected.stub = VolumeServiceStub(self._service.channel)
                 if not selected.get_or_create():
                     raise RuntimeError(f"Unable to prepare volume {selected.name}")
-                spec["volumes"].append(
-                    selected.export().to_dict(casing=betterproto.Casing.SNAKE)
-                )
+                spec["volumes"].append(selected.export().to_dict(casing=betterproto.Casing.SNAKE))
         if spec.get("ssh", True):
             spec["ssh_public_key"] = public_key()
         if not (self.template or self._snapshot_source):
@@ -321,9 +309,7 @@ class VM:
             image = self.image or Image(base_image="ubuntu:22.04")
             if self.image is None:
                 image.ignore_python = True
-            result = prepare_image(
-                image, self._service, spec.get("desktop", False)
-            ).build()
+            result = prepare_image(image, self._service, spec.get("desktop", False)).build()
             if not result.success:
                 raise ImageBuildError(result.error or "VM image build failed")
             spec["image_id"] = result.image_id
@@ -334,9 +320,7 @@ class VM:
                 "template": self.template or "",
                 "request_id": self.request_id,
                 **({"metadata": self._metadata} if self._metadata is not None else {}),
-                **(
-                    {"snapshot": self._snapshot_source} if self._snapshot_source else {}
-                ),
+                **({"snapshot": self._snapshot_source} if self._snapshot_source else {}),
             }
         )
         return self
@@ -351,9 +335,7 @@ class VM:
         return cls(name, context=context, _service=_service).refresh()
 
     @classmethod
-    def list(
-        cls, *, context=None, all=False, metadata=None, status=None, _service=None
-    ):
+    def list(cls, *, context=None, all=False, metadata=None, status=None, _service=None):
         client = cls(context=context, _service=_service)
         try:
             params = {"all": str(all).lower()}
@@ -435,10 +417,7 @@ class VM:
             remaining = deadline - time.monotonic()
             return (
                 remaining > 0
-                and sandbox.process.exec("python3", "-c", probe).wait(
-                    min(10, remaining)
-                )
-                == 0
+                and sandbox.process.exec("python3", "-c", probe).wait(min(10, remaining)) == 0
             )
         except (SandboxConnectionError, SandboxProcessError):
             return False
@@ -470,9 +449,7 @@ class VM:
             vm.close()
             raise
 
-    def update(
-        self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None
-    ) -> "VM":
+    def update(self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None) -> "VM":
         """Change idle stopping and metadata without replacing the VM or URLs.
 
         Metadata replaces the complete map; pass {} to clear it. It is visible
@@ -540,9 +517,7 @@ class VM:
         return self._action("snapshot", name=name or "")
 
     def snapshots(self):
-        return [
-            a for a in self._api("GET", "/artifacts/snapshot") if a["vm_id"] == self.id
-        ]
+        return [a for a in self._api("GET", "/artifacts/snapshot") if a["vm_id"] == self.id]
 
     def remove_snapshot(self, name: str):
         self._api("DELETE", "/artifacts/snapshot/" + quote(name, safe=""))
@@ -576,9 +551,7 @@ class VM:
         self._set(self._action("bind", port=port))
 
     def _sandbox(self, *, auto_resume=True, refresh=True, allow_starting=False):
-        if refresh and (
-            self._connected is None or time.monotonic() - self._connected_at >= 1
-        ):
+        if refresh and (self._connected is None or time.monotonic() - self._connected_at >= 1):
             self.refresh()
         container = self.info.get("container_id")
         if (

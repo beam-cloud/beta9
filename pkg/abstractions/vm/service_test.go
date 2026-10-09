@@ -6,6 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -13,10 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
-	"net/http/httptest"
-	"strings"
-	"testing"
-	"time"
 )
 
 type vmStore struct {
@@ -63,7 +64,22 @@ func (r *vmStore) ListVMs(_ context.Context, workspace uint) ([]*types.VM, error
 	return result, nil
 }
 func (r *vmStore) LockVM(context.Context, string) (func(), error) { return func() {}, nil }
-func (r *vmStore) TouchVM(context.Context, string) error          { return nil }
+func (r *vmStore) TouchVM(_ context.Context, id string) error {
+	r.rows[id].LastActiveAt = time.Now()
+	return nil
+}
+
+func (r *vmStore) ClaimVMIdleStop(_ context.Context, id string, cutoff time.Time) (bool, error) {
+	v := r.rows[id]
+	if v.DesiredState != "running" || v.LastActiveAt.After(cutoff) {
+		return false, nil
+	}
+	v.DesiredState = "stopped"
+	if v.Spec.IdleAction == "pause" {
+		v.DesiredState = "paused"
+	}
+	return true, nil
+}
 
 type createRaceStore struct {
 	*vmStore
@@ -451,7 +467,7 @@ func TestStableURLsAndNewRuntimeOnResume(t *testing.T) {
 	s.urls(v)
 	require.Equal(t, desktop, v.DesktopURL)
 	require.NotEqual(t, oldCID, v.ContainerID)
-	require.Contains(t, v.ContainerID, "sandbox-"+v.StubID+"-")
+	require.Contains(t, v.ContainerID, types.StubTypeVM+"-"+v.StubID+"-")
 }
 
 func TestPrepareForcesCPUVMAndIndependentRoot(t *testing.T) {
@@ -460,6 +476,7 @@ func TestPrepareForcesCPUVMAndIndependentRoot(t *testing.T) {
 	v.Spec.SourceSnapshotID = "source-root"
 	require.NoError(t, s.prepare(auth.ContextWithAuthInfo(context.Background(), info), v))
 	require.True(t, gateway.stub.UseVm)
+	require.Equal(t, types.StubTypeVM, gateway.stub.StubType)
 	require.Empty(t, gateway.stub.Gpu)
 	require.Zero(t, gateway.stub.GpuCount)
 	require.Equal(t, rootDisk(v), gateway.stub.Disks[0].Name)
@@ -467,6 +484,53 @@ func TestPrepareForcesCPUVMAndIndependentRoot(t *testing.T) {
 	require.Equal(t, "source-root", gateway.stub.Disks[0].SourceSnapshotId)
 	require.Contains(t, gateway.stub.Env, "BEAM_VM_SYSTEMD=1")
 	require.Contains(t, gateway.stub.Env, "BEAM_VM_ID="+v.ID)
+}
+
+type launchPersistenceStore struct {
+	*vmStore
+	failRuntimeSave bool
+}
+
+func (r *launchPersistenceStore) SaveVM(ctx context.Context, v *types.VM) error {
+	if r.failRuntimeSave && v.ContainerID != "" {
+		return errors.New("runtime identity persistence unavailable")
+	}
+	return r.vmStore.SaveVM(ctx, v)
+}
+
+type persistedLaunchRuntime struct {
+	*vmRuntime
+	store *vmStore
+	t     *testing.T
+	vmID  string
+}
+
+func (r *persistedLaunchRuntime) RunVM(ctx context.Context, info *auth.AuthInfo, stub, cid string, spec types.VMSpec, checkpoint string, disks map[string]string) error {
+	stored := r.store.rows[r.vmID]
+	require.Equal(r.t, stub, stored.StubID)
+	require.Equal(r.t, cid, stored.ContainerID)
+	require.Equal(r.t, "starting", stored.Status)
+	return r.vmRuntime.RunVM(ctx, info, stub, cid, spec, checkpoint, disks)
+}
+
+func TestStartPersistsBothLaunchIdentitiesBeforeScheduling(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	delete(runtime.containers.states, v.ContainerID)
+	v.ContainerID, v.StubID = "", ""
+	store := &launchPersistenceStore{vmStore: s.repo.(*vmStore), failRuntimeSave: true}
+	s.repo = store
+	s.runtime = &persistedLaunchRuntime{vmRuntime: runtime, store: store.vmStore, t: t, vmID: v.ID}
+	ctx := auth.ContextWithAuthInfo(context.Background(), info)
+	require.ErrorContains(t, s.start(ctx, info, v), "identity persistence unavailable")
+	require.Empty(t, runtime.requests, "failed persistence must never enqueue compute")
+	stored, err := store.GetVM(ctx, info.Workspace.Id, v.ID)
+	require.NoError(t, err)
+	require.Empty(t, stored.ContainerID)
+	require.Empty(t, stored.StubID)
+	require.Equal(t, 1, stored.LaunchAttempts)
+	store.failRuntimeSave = false
+	require.NoError(t, s.start(ctx, info, stored))
+	require.Len(t, runtime.requests, 1)
 }
 
 func TestBackendOutageNeverMeansRuntimeAbsent(t *testing.T) {

@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
-	"time"
 )
 
 // RunVM reuses sandbox scheduling while preserving the VM service's reserved
@@ -18,14 +19,14 @@ func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stub
 		return err
 	}
 	if stub == nil {
-		return fmt.Errorf("VM sandbox stub not found")
+		return fmt.Errorf("VM stub not found")
 	}
 	var spec types.StubConfigV1
 	if err := json.Unmarshal([]byte(stub.Config), &spec); err != nil {
 		return err
 	}
-	if !spec.UseVM || spec.RequiresGPU() || stub.Type != types.StubType(types.StubTypeSandbox) {
-		return fmt.Errorf("persistent VM requires a CPU microvm sandbox")
+	if !spec.IsPersistentVM() || spec.RequiresGPU() || !stub.Type.IsSandbox() {
+		return fmt.Errorf("persistent VM requires a CPU microvm stub")
 	}
 	spec.Ports = vmSpec.RuntimePorts()
 	spec.BlockNetwork = vmSpec.BlockNetwork

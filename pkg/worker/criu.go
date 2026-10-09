@@ -949,7 +949,7 @@ func (s *Worker) markCheckpointRestoreFailed(request *types.ContainerRequest, ch
 }
 
 func (s *Worker) signalRestoredSandboxProcessManager(ctx context.Context, request *types.ContainerRequest, rt runtime.Runtime) {
-	if request.Stub.Type.Kind() != types.StubTypeSandbox || rt == nil {
+	if !request.Stub.Type.IsSandbox() || rt == nil {
 		return
 	}
 
@@ -2126,7 +2126,7 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
 	}
 
 	// Sandboxes checkpoint only on demand.
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		return false
 	}
 

@@ -52,6 +52,17 @@ def test_vm_rejects_gpu_build_and_does_not_modify_explicit_image():
     assert prepared._explicit_image_id == "already-built"
 
 
+def test_vm_cached_image_lookup_is_quiet(monkeypatch, capsys):
+    from beta9.abstractions.image import ImageBuildResult
+
+    image = prepare_image(Image.from_id("cached-vm"), service(), False)
+    result = ImageBuildResult(success=True, image_id="cached-vm")
+    monkeypatch.setattr(image, "_cached_build_result", lambda key: None)
+    monkeypatch.setattr(image, "_exists", lambda: (True, result))
+    assert image.build().image_id == "cached-vm"
+    assert capsys.readouterr().out == ""
+
+
 @pytest.mark.parametrize("status", [401, 404, 503])
 def test_create_checks_api_before_keys_or_image_build(monkeypatch, status):
     selected = service()
@@ -65,9 +76,7 @@ def test_create_checks_api_before_keys_or_image_build(monkeypatch, status):
         VM(_service=selected).create()
     assert error.value.status == status
     if status == 404:
-        assert "Persistent VMs are unavailable at https://app.stage.beam.cloud" in str(
-            error.value
-        )
+        assert "Persistent VMs are unavailable at https://app.stage.beam.cloud" in str(error.value)
         assert "--context" in str(error.value)
     else:
         assert str(error.value) == "Not Found"
@@ -243,9 +252,7 @@ def test_wait_checks_every_service_and_tcp_readiness(sandbox_vm):
     assert "[7681, 2222, 8080]" in calls[3][2]
 
 
-def test_wait_for_exec_uses_live_connection_without_status_ticker(
-    sandbox_vm, monkeypatch
-):
+def test_wait_for_exec_uses_live_connection_without_status_ticker(sandbox_vm, monkeypatch):
     vm, sandbox = sandbox_vm
     vm.info["status"] = "starting"
     refresh = MagicMock()
@@ -262,9 +269,7 @@ def cli_service(monkeypatch):
     client = MagicMock()
     client.__enter__.return_value = selected
     monkeypatch.setattr(extraclick, "ServiceClient", lambda config: client)
-    monkeypatch.setattr(
-        extraclick, "get_config_context", lambda context: SimpleNamespace()
-    )
+    monkeypatch.setattr(extraclick, "get_config_context", lambda context: SimpleNamespace())
     return selected
 
 
@@ -326,12 +331,44 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     assert json.loads(result.output) == fake.info
     options = factory.call_args.kwargs
     assert options["env"] == {"VALUE": "a=b c"}
-    assert (
-        options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
-    )
+    assert options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
     fake.create.assert_called_once_with(wait=False)
     fake.wait.assert_called_once_with()
+
+
+def test_cli_creation_shows_only_result(cli_service, monkeypatch):
+    vm = MagicMock()
+    vm.info = {
+        "name": "calm-otter-a3b19f",
+        "id": "12ab34cd56ef7890",
+        "status": "running",
+        "container_id": "vm-long-internal-runtime",
+    }
+    monkeypatch.setattr(vm_cli, "VM", lambda *args, **kwargs: vm)
+    result = CliRunner().invoke(vm_cli.management, ["new", "--template", "base"])
+    assert result.exit_code == 0, result.output
+    assert "calm-otter-a3b19f" in result.output
+    assert "12ab34cd56ef7890" in result.output
+    assert "Checking image cache" not in result.output
+    assert "Waiting for VM" not in result.output
+    assert "vm-long-internal-runtime" not in result.output
+
+
+def test_vm_new_help_has_one_aligned_description_column():
+    result = CliRunner().invoke(vm_cli.management, ["new", "--help"], terminal_width=80)
+    assert result.exit_code == 0, result.output
+    starts = []
+    for option, description in [
+        ("--cpu", "CPUs;"),
+        ("--memory", "RAM in"),
+        ("--auto-resume", "Wake on"),
+        ("--ttl", "Snapshot and"),
+    ]:
+        line = next(line for line in result.output.splitlines() if line.strip().startswith(option))
+        starts.append(line.index(description))
+    assert len(set(starts)) == 1
+    assert "INTEGER RANGE" not in result.output
 
 
 @pytest.fixture
@@ -359,17 +396,13 @@ def test_identity_is_atomic_and_never_replaces_existing_keys(identity_settings):
 
 
 def test_identity_reports_missing_openssh(monkeypatch, identity_settings):
-    monkeypatch.setattr(
-        vm_module.subprocess, "run", MagicMock(side_effect=FileNotFoundError())
-    )
+    monkeypatch.setattr(vm_module.subprocess, "run", MagicMock(side_effect=FileNotFoundError()))
     with pytest.raises(RuntimeError, match="install ssh-keygen"):
         vm_module.identity()
 
 
 @pytest.mark.parametrize("hung_command", ["systemctl", "python3"])
-def test_wait_retries_hung_services_until_its_deadline(
-    monkeypatch, hung_command, sandbox_vm
-):
+def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command, sandbox_vm):
     vm, sandbox = sandbox_vm
     vm._services_container = None
     clock = [0.0]
@@ -460,9 +493,7 @@ def test_cli_reports_api_failures_without_tracebacks(cli_service, monkeypatch):
     monkeypatch.setattr(
         vm_cli.VM,
         "get",
-        MagicMock(
-            side_effect=GatewayHTTPError(409, "VM operation already in progress")
-        ),
+        MagicMock(side_effect=GatewayHTTPError(409, "VM operation already in progress")),
     )
     result = CliRunner().invoke(vm_cli.management, ["start", "dev"])
     assert result.exit_code == 1
@@ -487,9 +518,7 @@ def test_ssh_preserves_remote_arguments_and_exit_status(cli_service, monkeypatch
     monkeypatch.setattr(vm_cli, "_ssh_options", lambda vm: [])
     call = MagicMock(return_value=7)
     monkeypatch.setattr(vm_cli.subprocess, "call", call)
-    result = CliRunner().invoke(
-        vm_cli.management, ["ssh", "dev", "--", "echo", "a b;$USER"]
-    )
+    result = CliRunner().invoke(vm_cli.management, ["ssh", "dev", "--", "echo", "a b;$USER"])
     assert result.exit_code == 7
     assert call.call_args.args[0] == [
         "ssh",
@@ -605,9 +634,7 @@ def test_cli_stale_kill_rejects_before_acquiring_runtime(cli_service, monkeypatc
     vm = MagicMock()
     vm.info = {"container_id": "current"}
     monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
-    result = CliRunner().invoke(
-        vm_cli.management, ["kill", "--container-id", "old", "dev", "44"]
-    )
+    result = CliRunner().invoke(vm_cli.management, ["kill", "--container-id", "old", "dev", "44"])
     assert result.exit_code == 1
     assert "previous runtime" in result.output
     vm._sandbox.assert_not_called()
@@ -691,9 +718,7 @@ def test_activity_touch_retries_transient_lifecycle_lock():
     vm = VM(_service=selected)._set({"id": "resource", "name": "dev"})
     vm._touch(timeout=3)
     assert selected.http.json.call_count == 2
-    assert all(
-        call.kwargs["timeout"] <= 3 for call in selected.http.json.call_args_list
-    )
+    assert all(call.kwargs["timeout"] <= 3 for call in selected.http.json.call_args_list)
 
 
 def test_cli_rejects_detached_command_deadline(cli_service, monkeypatch):

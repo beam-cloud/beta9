@@ -138,8 +138,16 @@ explicitly boots the latest durable storage. Referenced checkpoints are retained
 by checkpoint garbage collection. RAM checkpoints resume the same VM; forks and
 templates remain filesystem snapshots.
 
-`--ttl` measures idle time from SDK operations and active HTTP/WebSocket/tunnel
-connections. `0` disables idle stopping. Restarting explicitly resets the idle
+VMs have their own `vm` stub kind and `vm-` runtime prefix, allowing their
+usage and pricing to be distinguished from sandboxes. New VM IDs are 16 hex
+characters; generated names look like `calm-otter-a3b19f`. Explicit names and
+existing VM identities continue to work.
+
+`--ttl` is optional and measures idle time from SDK operations and active
+HTTP/WebSocket/tunnel connections. Unset or `0` keeps the VM running. Expiry
+snapshots the durable root and shuts down the microVM, retaining its name,
+disk and URLs. `start` cold boots that root and enabled systemd services.
+`--idle-action pause` also preserves RAM. Restarting explicitly resets the idle
 clock. Guest background work alone does not count as external activity.
 
 `--auto-resume` allows authenticated SDK operations and published URL traffic to
