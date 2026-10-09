@@ -840,3 +840,29 @@ def test_cli_json_exec_passes_stdin_only_for_foreground(cli_service, monkeypatch
         assert stdin is None
     else:
         assert stdin is not None
+
+
+def test_activity_lease_survives_gateway_restart_and_releases_same_lease():
+    selected = service()
+    restored = threading.Event()
+    info = {"id": "resource", "name": "dev", "spec": {"idle_timeout": 1}}
+    leases = []
+    failed_once = False
+
+    def response(method, path, **kwargs):
+        nonlocal failed_once
+        if path.endswith("/touch"):
+            leases.append(kwargs["params"])
+            if kwargs.get("timeout") == 3 and not kwargs["params"].get("release") == "1":
+                if not failed_once:
+                    failed_once = True
+                    raise GatewayHTTPError(503, "gateway restarting")
+                restored.set()
+        return info
+
+    selected.http.json.side_effect = response
+    vm = VM(_service=selected)._set(info)
+    with vm.keep_alive():
+        assert restored.wait(2)
+    assert len({params["lease"] for params in leases}) == 1
+    assert leases[-1]["release"] == "1"

@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -612,6 +614,29 @@ func actionContext(info *auth.AuthInfo, name, action, body string) (*auth.HttpAu
 	c.SetParamNames("name", "action")
 	c.SetParamValues(name, action)
 	return &auth.HttpAuthContext{Context: c, AuthInfo: info}, rec
+}
+
+func TestActivityLeasesAreIndependentAndExplicitlyReleased(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	redis := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { rdb.Close() })
+	s.rdb = rdb
+	first, second := uuid.NewString(), uuid.NewString()
+	for _, lease := range []string{first, second} {
+		c, _ := actionContext(info, v.Name, "touch", `{}`)
+		c.Request().URL.RawQuery = "lease=" + lease
+		require.NoError(t, s.action(c))
+	}
+	for i, lease := range []string{first, second} {
+		c, _ := actionContext(info, v.Name, "touch", `{}`)
+		c.Request().URL.RawQuery = "lease=" + lease + "&release=1"
+		require.NoError(t, s.action(c))
+		active, err := s.hasActivity(context.Background(), v.ID)
+		require.NoError(t, err)
+		require.Equal(t, i == 0, active)
+	}
 }
 
 func TestFailedCaptureDoesNotChangeSourceLifecycle(t *testing.T) {

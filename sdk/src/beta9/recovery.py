@@ -17,8 +17,12 @@ RECOVERY_TIMEOUT = 120.0
 
 
 def transient_error(error):
+    from .channel import GatewayHTTPError
+
     if isinstance(error, grpc.RpcError):
         return error.code() == grpc.StatusCode.UNAVAILABLE
+    if isinstance(error, GatewayHTTPError):
+        return error.status == 0 or error.status >= 500
     return isinstance(error, (ConnectionError, ConnectionRefusedError, ConnectionResetError))
 
 
