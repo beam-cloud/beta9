@@ -48,8 +48,13 @@ func newQcowRootPreparation(ctx context.Context, request *types.ContainerRequest
 ) *qcowRootPreparation {
 	ctx, cancel := context.WithCancel(ctx)
 	p := &qcowRootPreparation{
-		ctx: ctx, cancel: cancel, request: request, mount: mount,
-		done: make(chan struct{}), claimed: make(chan struct{}), attach: make(chan struct{}),
+		ctx:     ctx,
+		cancel:  cancel,
+		request: request,
+		mount:   mount,
+		done:    make(chan struct{}),
+		claimed: make(chan struct{}),
+		attach:  make(chan struct{}),
 	}
 	go func() {
 		defer close(p.done)
@@ -60,7 +65,19 @@ func newQcowRootPreparation(ctx context.Context, request *types.ContainerRequest
 	return p
 }
 
+func (p *qcowRootPreparation) withContext(ctx context.Context) context.Context {
+	if p == nil {
+		return ctx
+	}
+
+	return context.WithValue(ctx, qcowRootPreparationKey{}, p)
+}
+
 func (p *qcowRootPreparation) finishClaim(request *types.ContainerRequest, err error) {
+	if p == nil {
+		return
+	}
+
 	p.claimErr = err
 	if err == nil {
 		p.credentials = request.Clone()
@@ -114,6 +131,10 @@ func (p *qcowRootPreparation) wait(ctx context.Context, request *types.Container
 }
 
 func (p *qcowRootPreparation) close() {
+	if p == nil {
+		return
+	}
+
 	p.cancel()
 	<-p.done
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -27,12 +28,13 @@ func TestBrowserSessionBoundToVMPortExpiryAndRotation(t *testing.T) {
 
 func TestBrowserSessionExchangesAndNeverReachesGuest(t *testing.T) {
 	s, v, _, _, _ := fixture()
+	s.domain = "vm.example.com"
 	v.TrafficAccessToken = "owner-secret"
 	v.Spec.ProtectedPorts = []uint32{8080}
 	e := proxyAPI(s)
 	session := accessSession(v, 8080, time.Now().Add(time.Minute).Unix())
 	path := "/vm/" + v.Handle + "/8080/desktop?existing=value&" + sessionParameter + "=" + session
-	req := httptest.NewRequest("GET", "https://vm.example.com"+path, nil)
+	req := httptest.NewRequest("GET", "https://"+v.Handle+"-8080."+s.domain+path, nil)
 	req.RequestURI = path
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -43,7 +45,7 @@ func TestBrowserSessionExchangesAndNeverReachesGuest(t *testing.T) {
 	require.True(t, cookies[0].Secure)
 	require.True(t, cookies[0].HttpOnly)
 	require.Equal(t, http.SameSiteLaxMode, cookies[0].SameSite)
-	req = httptest.NewRequest("GET", rec.Header().Get("Location"), nil)
+	req = httptest.NewRequest("GET", "https://"+v.Handle+"-8080."+s.domain+rec.Header().Get("Location"), nil)
 	req.AddCookie(cookies[0])
 	req.AddCookie(&http.Cookie{Name: "application", Value: "preserved"})
 	rec = httptest.NewRecorder()
@@ -63,7 +65,6 @@ func TestSessionCookieUsesPublishedOriginBehindH2C(t *testing.T) {
 	}{
 		{"vm.example.com", "https://gateway.example.com", true},
 		{"vm.localhost:1994", "http://localhost:1994", false},
-		{"", "http://127.0.0.1:1994", false},
 	} {
 		t.Run(test.base, func(t *testing.T) {
 			s, v, _, _, _ := fixture()
@@ -72,7 +73,12 @@ func TestSessionCookieUsesPublishedOriginBehindH2C(t *testing.T) {
 			v.Spec.ProtectedPorts = []uint32{8080}
 			path := "/vm/" + v.Handle + "/8080/?" + sessionParameter + "=" + accessSession(v, 8080, time.Now().Add(time.Minute).Unix())
 			rec := httptest.NewRecorder()
-			proxyAPI(s).ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+			s.urls(v)
+			origin, err := url.Parse(v.URLs[8080])
+			require.NoError(t, err)
+			req := httptest.NewRequest("GET", path, nil)
+			req.Host = origin.Host
+			proxyAPI(s).ServeHTTP(rec, req)
 			require.Equal(t, http.StatusSeeOther, rec.Code)
 			require.Len(t, rec.Result().Cookies(), 1)
 			require.Equal(t, test.secure, rec.Result().Cookies()[0].Secure)
@@ -124,4 +130,72 @@ func TestAccessFailsClosedWhenRuntimeStateIsUnavailable(t *testing.T) {
 	e.GET("/:workspaceId/:name/tunnel/:port", auth.WithStrictWorkspaceAuth(s.tunnel))
 	response = vmRequest(e, "GET", "/"+info.Workspace.ExternalId+"/"+v.ID+"/tunnel/7681", "")
 	require.Equal(t, 503, response.Code)
+}
+
+func TestBrowserSessionRejectsSharedHostAndOtherOrigins(t *testing.T) {
+	for _, test := range []struct {
+		name, host, origin string
+		status             int
+	}{
+		{"same origin", "dev-random-8080.vm.example.com", "https://dev-random-8080.vm.example.com", http.StatusOK},
+		{"shared gateway", "gateway.example.com", "", http.StatusForbidden},
+		{"other VM", "dev-random-8080.vm.example.com", "https://other-random-8080.vm.example.com", http.StatusForbidden},
+		{"other port", "dev-random-8080.vm.example.com", "https://dev-random-8000.vm.example.com", http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, v, _, runtime, _ := fixture()
+			s.domain = "vm.example.com"
+			v.Handle = "dev-random"
+			v.TrafficAccessToken = "owner-secret"
+			v.Spec.ProtectedPorts = []uint32{8080}
+			req := httptest.NewRequest("GET", "/vm/"+v.Handle+"/8080/", nil)
+			req.Host = test.host
+			req.Header.Set("Origin", test.origin)
+			req.AddCookie(&http.Cookie{Name: sessionCookie(v, 8080), Value: accessSession(v, 8080, time.Now().Add(time.Minute).Unix())})
+			rec := httptest.NewRecorder()
+			proxyAPI(s).ServeHTTP(rec, req)
+			require.Equal(t, test.status, rec.Code, rec.Body.String())
+			if test.status != http.StatusOK {
+				require.Empty(t, runtime.forwarded)
+			}
+		})
+	}
+}
+
+func TestSharedHostCannotExchangeBrowserSession(t *testing.T) {
+	s, v, _, _, _ := fixture()
+	s.domain = "vm.example.com"
+	v.TrafficAccessToken = "owner-secret"
+	path := "/vm/" + v.Handle + "/8080/?" + sessionParameter + "=" + accessSession(v, 8080, time.Now().Add(time.Minute).Unix())
+	req := httptest.NewRequest("GET", "https://gateway.example.com"+path, nil)
+	rec := httptest.NewRecorder()
+	proxyAPI(s).ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Empty(t, rec.Result().Cookies())
+}
+
+func TestPathModeRequiresExplicitTrafficToken(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	s.domain = ""
+	v.TrafficAccessToken = "owner-secret"
+	v.Spec.ProtectedPorts = []uint32{8080}
+	rec := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/access-session", `{"port":8080}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+
+	e := proxyAPI(s)
+	path := "/vm/" + v.Handle + "/8080/"
+	for _, token := range []string{"", "owner-secret"} {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookie(v, 8080), Value: accessSession(v, 8080, time.Now().Add(time.Minute).Unix())})
+		req.Header.Set("X-Beam-VM-Token", token)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		if token == "" {
+			require.Equal(t, http.StatusForbidden, rec.Code)
+		} else {
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Empty(t, req.Header.Get("X-Beam-VM-Token"))
+			require.Empty(t, req.Header.Get("Cookie"))
+		}
+	}
 }

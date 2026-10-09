@@ -18,16 +18,20 @@ func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stub
 	if err != nil {
 		return err
 	}
+
 	if stub == nil {
 		return fmt.Errorf("VM stub not found")
 	}
+
 	var spec types.StubConfigV1
 	if err := json.Unmarshal([]byte(stub.Config), &spec); err != nil {
 		return err
 	}
+
 	if !spec.IsPersistentVM() || spec.RequiresGPU() || !stub.Type.IsSandbox() {
 		return fmt.Errorf("persistent VM requires a CPU microvm stub")
 	}
+
 	spec.Ports = vmSpec.RuntimePorts()
 	spec.BlockNetwork = vmSpec.BlockNetwork
 	spec.AllowList = vmSpec.AllowList
@@ -37,9 +41,11 @@ func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stub
 		if err != nil {
 			return err
 		}
+
 		if checkpoint.WorkspaceId != info.Workspace.Id || checkpoint.StubId != stub.Id || checkpoint.Runtime != types.ContainerRuntimeMicroVM.String() || checkpoint.Status != string(types.CheckpointStatusAvailable) {
 			return fmt.Errorf("VM memory checkpoint is unavailable or incompatible")
 		}
+
 		// These launch-only snapshot IDs already travel in durable-disk mounts
 		// through worker RPCs. Warm VM mounts interpret them as exact heads.
 		for _, disk := range spec.Disks {
@@ -47,13 +53,16 @@ func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stub
 			if paired == "" {
 				return fmt.Errorf("VM memory checkpoint has no paired disk %s", disk.Name)
 			}
+
 			disk.SourceSnapshotId = paired
 		}
 	}
+
 	data, err := json.Marshal(spec)
 	if err != nil {
 		return err
 	}
+
 	stub.Config = string(data)
 	_, err = s.run(ctx, info, stub, runOptions{containerId: containerID, checkpoint: checkpoint})
 	return err
@@ -64,10 +73,12 @@ func (s *GenericPodService) VMPortReady(ctx context.Context, stubID, containerID
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+
 	instance, err := s.getOrCreatePodInstance(stubID)
 	if err != nil {
 		return false, err
 	}
+
 	return instance.buffer.primeContainerPort(containerID, int32(port), time.Second), nil
 }
 

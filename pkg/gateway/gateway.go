@@ -707,7 +707,15 @@ func (g *Gateway) registerServices() error {
 	if vmConfig.BaseURL == "" {
 		vmConfig.BaseURL = g.Config.GatewayService.HTTP.GetExternalURL()
 	}
-	if err := vm.New(g.ctx, vmConfig, g.BackendRepo, g.ContainerRepo, vmRuntime, gws, g.baseRouteGroup.Group("/vm", g.authMiddleware), g.echo); err != nil {
+	if err := vm.New(g.ctx, vm.ServiceOpts{
+		Config:        vmConfig,
+		BackendRepo:   g.BackendRepo,
+		ContainerRepo: g.ContainerRepo,
+		Runtime:       vmRuntime,
+		Gateway:       gws,
+		RouteGroup:    g.baseRouteGroup.Group("/vm", g.authMiddleware),
+		Server:        g.echo,
+	}); err != nil {
 		return err
 	}
 	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", g.authMiddleware), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)

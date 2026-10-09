@@ -62,6 +62,7 @@ func processEnv(proc *specs.Process, key string) string {
 	if proc == nil {
 		return ""
 	}
+
 	// Runtime overrides follow image defaults in the OCI environment.
 	for i := len(proc.Env) - 1; i >= 0; i-- {
 		entry := proc.Env[i]
@@ -69,6 +70,7 @@ func processEnv(proc *specs.Process, key string) string {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -78,6 +80,7 @@ func systemdBinary() (string, error) {
 			return name, nil
 		}
 	}
+
 	return "", fmt.Errorf("persistent VMs require systemd in the image; install systemd and dbus or use the Beam VM image")
 }
 
@@ -86,35 +89,43 @@ func bootSystemd(spec *specs.Spec) error {
 	if err != nil {
 		return err
 	}
+
 	if spec.Process == nil {
 		return fmt.Errorf("missing VM workload")
 	}
+
 	// Unlike the durable root, /tmp is boot state. In particular, X display
 	// sockets and lock files must not be restored from a disk snapshot.
 	if err := os.MkdirAll("/tmp", 01777); err != nil {
 		return err
 	}
+
 	if err := unix.Mount("tmpfs", "/tmp", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777"); err != nil {
 		return err
 	}
+
 	// Give the guest its own hosts file. Container mounts can be read-only,
 	// and KasmVNC/xauth require the guest hostname to resolve locally.
 	if err := guestHosts(spec.Hostname); err != nil {
 		return err
 	}
+
 	if err := writeSystemdBootFiles("/", spec.Process); err != nil {
 		return err
 	}
+
 	agent := exec.Command("/.beam/init", "--systemd-agent")
 	agent.Stdin, agent.Stdout, agent.Stderr = os.Stdin, os.Stdout, os.Stderr
 	agent.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := agent.Start(); err != nil {
 		return fmt.Errorf("start guest agent: %w", err)
 	}
+
 	if err := os.WriteFile(systemdAgentPIDFile, []byte(strconv.Itoa(agent.Process.Pid)+"\n"), 0600); err != nil {
 		agent.Process.Kill()
 		return err
 	}
+
 	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
 	logf("boot phase: executing systemd")
 	return unix.Exec(binary, []string{binary, "--unit=multi-user.target"}, env)
@@ -124,58 +135,71 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	if err := prepareVMIdentity(root, process); err != nil {
 		return err
 	}
+
 	// The worker starts goproc directly. Set the environment and working
 	// directory here, without a shell or SSH key generation on the exec path.
 	process.Env = append(process.Env, "HOME=/root", "LANG=C.UTF-8")
 	if processEnv(process, "BEAM_VM_DESKTOP") == "true" {
 		process.Env = append(process.Env, "DISPLAY=:1", "XAUTHORITY=/run/beam-desktop/.Xauthority")
 	}
+
 	process.Cwd = "/workspace"
 	if err := os.MkdirAll(filepath.Join(root, process.Cwd), 0755); err != nil {
 		return err
 	}
+
 	processFile := filepath.Join(root, systemdProcessFile)
 	if err := os.MkdirAll(filepath.Dir(processFile), 0700); err != nil {
 		return err
 	}
+
 	data, err := json.Marshal(process)
 	if err != nil {
 		return err
 	}
+
 	if err := os.WriteFile(processFile, data, 0600); err != nil {
 		return err
 	}
+
 	// Apply VM environment before any enabled user units start, including
 	// units ordered before multi-user.target. Keep secrets on transient /run.
 	managerDir := filepath.Join(root, "run/systemd/system.conf.d")
 	if err := os.MkdirAll(managerDir, 0755); err != nil {
 		return err
 	}
+
 	var manager strings.Builder
 	manager.WriteString("[Manager]\nDefaultEnvironment=")
 	for _, entry := range process.Env {
 		manager.WriteString(" " + systemdQuote(entry))
 	}
+
 	manager.WriteString("\n")
 	if err := os.WriteFile(filepath.Join(managerDir, "90-beam-vm.conf"), []byte(manager.String()), 0600); err != nil {
 		return err
 	}
+
 	unitDir := filepath.Join(root, "run/systemd/system")
 	if err := os.MkdirAll(filepath.Join(unitDir, "sysinit.target.wants"), 0755); err != nil {
 		return err
 	}
+
 	if err := os.WriteFile(filepath.Join(unitDir, "beam-guest.service"), []byte(guestAgentUnit), 0644); err != nil {
 		return err
 	}
+
 	if err := os.Symlink("../beam-guest.service", filepath.Join(unitDir, "sysinit.target.wants/beam-guest.service")); err != nil {
 		return err
 	}
+
 	// Enable managed services before PID 1 reads its unit graph. An early
 	// systemctl call can race creation of systemd's bus socket.
 	wants := filepath.Join(unitDir, "multi-user.target.wants")
 	if err := os.MkdirAll(wants, 0755); err != nil {
 		return err
 	}
+
 	services := map[string]string{"beam-terminal.service": "/etc/systemd/system/beam-terminal.service"}
 	if processEnv(process, "BEAM_VM_SSH") == "true" {
 		// SSH validates its configuration in ExecStartPre, so keys must be
@@ -183,29 +207,37 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		if err := os.MkdirAll(filepath.Join(root, "run/sshd"), 0755); err != nil {
 			return err
 		}
+
 		if err := os.WriteFile(filepath.Join(root, "run/beam-vm/authorized_keys"), []byte(processEnv(process, "BEAM_VM_SSH_PUBLIC_KEY")+"\n"), 0600); err != nil {
 			return err
 		}
+
 		if err := os.WriteFile(filepath.Join(unitDir, "beam-ssh-keys.service"), []byte(sshKeysUnit), 0644); err != nil {
 			return err
 		}
+
 		dropin := filepath.Join(unitDir, "ssh.service.d")
 		if err := os.MkdirAll(dropin, 0755); err != nil {
 			return err
 		}
+
 		if err := os.WriteFile(filepath.Join(dropin, "90-beam-keys.conf"), []byte("[Unit]\nRequires=beam-ssh-keys.service\nAfter=beam-ssh-keys.service\n"), 0644); err != nil {
 			return err
 		}
+
 		services["ssh.service"] = "/lib/systemd/system/ssh.service"
 	}
+
 	if processEnv(process, "BEAM_VM_DESKTOP") == "true" {
 		services["beam-desktop.service"] = "/etc/systemd/system/beam-desktop.service"
 	}
+
 	for name, target := range services {
 		if err := os.Symlink(target, filepath.Join(wants, name)); err != nil {
 			return err
 		}
 	}
+
 	// The NIC is configured before exec. Network managers must not replace
 	// the scheduler's addresses; user services still have a real systemd.
 	for _, unit := range []string{"systemd-networkd.service", "systemd-networkd.socket", "systemd-networkd-wait-online.service", "systemd-resolved.service", "NetworkManager.service"} {
@@ -213,6 +245,7 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -221,9 +254,11 @@ func vmMachineID(id string) (string, error) {
 	if (len(compact) != 16 && len(compact) != 32) || strings.Trim(compact, "0123456789abcdef") != "" {
 		return "", fmt.Errorf("invalid VM machine ID")
 	}
+
 	if len(compact) == 32 {
 		return compact, nil // Preserve the identity of existing UUID-based VMs.
 	}
+
 	// Systemd requires 128 bits, independent of the public resource ID's size.
 	sum := sha256.Sum256([]byte("vm-" + compact))
 	return fmt.Sprintf("%x", sum[:16]), nil
@@ -235,11 +270,13 @@ func prepareVMIdentity(root string, process *specs.Process) error {
 	if err != nil {
 		return err
 	}
+
 	identityPath := filepath.Join(root, "etc/beam-vm-identity")
 	previous, err := os.ReadFile(identityPath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+
 	sameID := strings.TrimSpace(string(previous)) == id
 	if sameID {
 		// Retain the durable identity across upgrades of the ID derivation.
@@ -247,26 +284,31 @@ func prepareVMIdentity(root string, process *specs.Process) error {
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
+
 		if value := strings.TrimSpace(string(stored)); len(value) == 32 && strings.Trim(value, "0123456789abcdef") == "" {
 			return nil
 		}
 	}
+
 	// A cold start keeps host keys; a fork/template must not reuse them.
 	if !sameID {
 		keys, err := filepath.Glob(filepath.Join(root, "etc/ssh/ssh_host_*"))
 		if err != nil {
 			return err
 		}
+
 		for _, key := range keys {
 			if err := os.Remove(key); err != nil {
 				return err
 			}
 		}
 	}
+
 	// Write the new machine identity before marking the disk as this VM's root.
 	if err := os.WriteFile(filepath.Join(root, "etc/machine-id"), []byte(machineID+"\n"), 0644); err != nil {
 		return err
 	}
+
 	return os.WriteFile(identityPath, []byte(id+"\n"), 0644)
 }
 
@@ -280,27 +322,34 @@ func guestHosts(hostname string) error {
 	if err := unix.Unmount("/etc/hosts", unix.MNT_DETACH); err != nil && err != unix.EINVAL {
 		return fmt.Errorf("unmount guest hosts: %w", err)
 	}
+
 	if data, err := os.ReadFile("/etc/hosts"); err == nil && len(data) > 0 {
 		seed = data
 	}
+
 	lines := []string{}
 	for _, line := range strings.Split(string(seed), "\n") {
 		if line != "" && !strings.HasSuffix(line, "# Beam VM hostname") {
 			lines = append(lines, line)
 		}
 	}
+
 	if len(lines) == 0 {
 		lines = append(lines, "127.0.0.1 localhost", "::1 localhost")
 	}
+
 	if hostname != "" {
 		lines = append(lines, "127.0.1.1 "+hostname+" # Beam VM hostname")
 	}
+
 	if err := os.WriteFile("/etc/hosts", []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
 		return err
 	}
+
 	if err := unix.Unmount("/etc/hostname", unix.MNT_DETACH); err != nil && err != unix.EINVAL && err != unix.ENOENT {
 		return fmt.Errorf("unmount guest hostname: %w", err)
 	}
+
 	return os.WriteFile("/etc/hostname", []byte(hostname+"\n"), 0644)
 }
 
@@ -309,10 +358,12 @@ func runSystemdAgent() (int, error) {
 	if err != nil {
 		return 1, err
 	}
+
 	var process specs.Process
 	if err := json.Unmarshal(data, &process); err != nil {
 		return 1, err
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go logExecReadiness(ctx)
@@ -328,22 +379,27 @@ func adoptSystemdAgent() error {
 	if err != nil {
 		return err
 	}
+
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || pid <= 1 {
 		return fmt.Errorf("invalid guest agent PID")
 	}
+
 	if err := unix.Kill(pid, 0); err != nil {
 		return fmt.Errorf("guest agent exited before adoption: %w", err)
 	}
+
 	data, err = os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		return err
 	}
+
 	for _, line := range strings.Split(string(data), "\n") {
 		if group, ok := strings.CutPrefix(line, "0::"); ok {
 			return moveAgentProcessTree(pid, filepath.Join("/sys/fs/cgroup", group, "cgroup.procs"), map[int]bool{})
 		}
 	}
+
 	return fmt.Errorf("guest agent requires a unified service cgroup")
 }
 
@@ -351,39 +407,48 @@ func moveAgentProcessTree(pid int, group string, visited map[int]bool) error {
 	if visited[pid] {
 		return nil
 	}
+
 	visited[pid] = true
 	// Move the parent first: any subsequent forks already inherit the group.
 	if err := os.WriteFile(group, []byte(strconv.Itoa(pid)), 0644); err != nil {
 		if os.IsNotExist(err) || errors.Is(err, unix.ESRCH) {
 			return nil // A short exec may exit during adoption.
 		}
+
 		return err
 	}
+
 	tasks, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
 	if os.IsNotExist(err) {
 		return nil
 	}
+
 	if err != nil {
 		return err
 	}
+
 	for _, task := range tasks {
 		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%s/children", pid, task.Name()))
 		if os.IsNotExist(err) {
 			continue
 		}
+
 		if err != nil {
 			return err
 		}
+
 		for _, child := range strings.Fields(string(data)) {
 			childPID, err := strconv.Atoi(child)
 			if err != nil {
 				return err
 			}
+
 			if err := moveAgentProcessTree(childPID, group, visited); err != nil {
 				return err
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -398,6 +463,7 @@ func logExecReadiness(ctx context.Context) {
 			logf("boot phase: exec TCP listening")
 			return
 		}
+
 		select {
 		case <-ctx.Done():
 			return

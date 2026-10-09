@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -41,6 +43,57 @@ const (
 	sandboxMissingProcessExitCode = 137
 	sandboxCgroupRoot             = "/sys/fs/cgroup"
 )
+
+// prepareSandboxProcess installs the shared process manager and guest-specific
+// capabilities before runtime preparation.
+func (s *Worker) prepareSandboxProcess(request *types.ContainerRequest, spec *specs.Spec) error {
+	// Modify sandbox entry point to point to process manager binary
+	if request.Stub.Type.IsSandbox() {
+		instance, exists := s.containerInstances.Get(request.ContainerId)
+		if !exists {
+			return fmt.Errorf("sandbox instance not found")
+		}
+
+		instance.SandboxProcessManager = nil
+		s.containerInstances.Set(request.ContainerId, instance)
+
+		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
+		if request.IsPersistentVM() {
+			// Vminit prepares identity and enables services through systemd.
+			// Exec readiness does not wait for SSH or desktop initialization.
+			// The VM boot agent administers a complete guest, even when
+			// the base container image declares a non-root USER.
+			spec.Process.User = specs.User{UID: 0, GID: 0}
+			spec.Process.Env = upsertEnvVars(spec.Process.Env, []string{"HOME=/root"})
+		}
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "bind",
+			Source:      types.WorkerSandboxProcessManagerWorkerPath,
+			Destination: types.WorkerSandboxProcessManagerContainerPath,
+			Options: []string{
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev",
+			},
+		})
+	}
+
+	// Add Docker capabilities if enabled for sandbox containers.
+	if request.DockerEnabled && request.Stub.Type.IsSandbox() {
+		runtime.AddDockerInDockerCapabilities(spec)
+		if s.runtimeOwnsBlockRoot() {
+			if spec.Annotations == nil {
+				spec.Annotations = make(map[string]string)
+			}
+			spec.Annotations[runtime.MicroVMDockerAnnotation] = "true"
+		}
+		log.Info().Str("container_id", request.ContainerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
+	}
+
+	return nil
+}
 
 func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
 	i.processManagerReadyMu.Lock()

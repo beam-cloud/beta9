@@ -29,6 +29,7 @@ func (r *PostgresBackendRepository) CreateVM(ctx context.Context, vm *types.VM) 
 	if err != nil {
 		return err
 	}
+
 	_, err = r.client.ExecContext(ctx, `INSERT INTO persistent_vm (id,workspace_id,workspace_external_id,token_id,name,handle,data,last_active_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, vm.ID, vm.WorkspaceID, vm.WorkspaceExternalID, vm.TokenID, vm.Name, vm.Handle, data, vm.LastActiveAt)
 	return err
 }
@@ -39,14 +40,17 @@ func (r *PostgresBackendRepository) SaveVM(ctx context.Context, vm *types.VM) er
 	if err != nil {
 		return err
 	}
+
 	result, err := r.client.ExecContext(ctx, `UPDATE persistent_vm SET data=$2,token_id=$3 WHERE id=$1`, vm.ID, data, vm.TokenID)
 	if err != nil {
 		return err
 	}
+
 	count, err := result.RowsAffected()
 	if err == nil && count != 1 {
 		return fmt.Errorf("VM not found")
 	}
+
 	return err
 }
 
@@ -65,6 +69,7 @@ func (row vmRow) vm() (*types.VM, error) {
 	if err := json.Unmarshal(row.Data, &vm); err != nil {
 		return nil, err
 	}
+
 	vm.WorkspaceID = row.WorkspaceID
 	vm.WorkspaceExternalID = row.WorkspaceExternalID
 	vm.TokenID = row.TokenID
@@ -86,6 +91,7 @@ func (r *PostgresBackendRepository) getVM(ctx context.Context, filter string, ar
 	if err != nil {
 		return nil, err
 	}
+
 	return row.vm()
 }
 
@@ -95,14 +101,17 @@ func (r *PostgresBackendRepository) ListVMs(ctx context.Context, ws uint) ([]*ty
 	if err != nil {
 		return nil, err
 	}
+
 	result := []*types.VM{}
 	for _, row := range rows {
 		vm, err := row.vm()
 		if err != nil {
 			return nil, err
 		}
+
 		result = append(result, vm)
 	}
+
 	return result, nil
 }
 
@@ -115,18 +124,22 @@ func (r *PostgresBackendRepository) LockVM(ctx context.Context, id string) (func
 	if err != nil {
 		return nil, err
 	}
+
 	var acquired bool
 	err = conn.GetContext(ctx, &acquired, `SELECT pg_try_advisory_lock(hashtextextended($1, 947))`, id)
 	if err != nil || !acquired {
 		if err != nil {
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
+
 		conn.Close()
 		if err == nil {
 			err = fmt.Errorf("VM operation already in progress")
 		}
+
 		return nil, err
 	}
+
 	return func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -134,6 +147,7 @@ func (r *PostgresBackendRepository) LockVM(ctx context.Context, id string) (func
 			// A failed unlock must not return a locked session to the pool.
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
+
 		conn.Close()
 	}, nil
 }
@@ -148,6 +162,7 @@ func (r *PostgresBackendRepository) ClaimVMIdleStop(ctx context.Context, id stri
 	if err != nil {
 		return false, err
 	}
+
 	count, err := result.RowsAffected()
 	return count == 1, err
 }
@@ -157,6 +172,7 @@ func (r *PostgresBackendRepository) CreateVMArtifact(ctx context.Context, ws uin
 	if err != nil {
 		return err
 	}
+
 	_, err = r.client.ExecContext(ctx, `INSERT INTO vm_artifact(id,workspace_id,name,kind,vm_id,data) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`, a.ID, ws, a.Name, a.Kind, a.VMID, data)
 	return err
 }
@@ -167,14 +183,17 @@ func (r *PostgresBackendRepository) ListVMArtifacts(ctx context.Context, ws uint
 	if err != nil {
 		return nil, err
 	}
+
 	result := []types.VMArtifact{}
 	for _, data := range rows {
 		var a types.VMArtifact
 		if err := json.Unmarshal(data, &a); err != nil {
 			return nil, err
 		}
+
 		result = append(result, a)
 	}
+
 	return result, nil
 }
 

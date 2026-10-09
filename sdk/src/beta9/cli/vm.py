@@ -460,7 +460,11 @@ def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False)
     vm = _vm(service, name)
     sandbox = vm._sandbox()
     if detach or as_json:
-        process = sandbox.process.exec(*command, cwd=cwd)
+        process = sandbox.process.exec(
+            *command,
+            cwd=cwd,
+            stdin=sys.stdin.buffer if not detach and not sys.stdin.isatty() else None,
+        )
         result = {
             "vm_id": vm.id,
             "container_id": vm.info["container_id"],

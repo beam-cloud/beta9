@@ -23,6 +23,7 @@ func vmID(workspaceID uint, requestID string) string {
 	if requestID == "" {
 		return vmIDPrefix + randomHexID()[:16]
 	}
+
 	id := sha256.Sum256([]byte(fmt.Sprintf("%s%d:%s", vmIDPrefix, workspaceID, requestID)))
 	return vmIDPrefix + hex.EncodeToString(id[:8])
 }

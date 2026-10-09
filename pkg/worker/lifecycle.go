@@ -1871,50 +1871,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
 
-	// Modify sandbox entry point to point to process manager binary
-	if request.Stub.Type.IsSandbox() {
-		instance, exists := s.containerInstances.Get(containerId)
-		if !exists {
-			log.Error().Str("container_id", containerId).Msg("instance not found")
-			return
-		}
-
-		instance.SandboxProcessManager = nil
-		s.containerInstances.Set(containerId, instance)
-
-		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
-		if request.IsPersistentVM() {
-			// Vminit prepares identity and enables services through systemd.
-			// Exec readiness does not wait for SSH or desktop initialization.
-			// The VM boot agent administers a complete guest, even when
-			// the base container image declares a non-root USER.
-			spec.Process.User = specs.User{UID: 0, GID: 0}
-			spec.Process.Env = upsertEnvVars(spec.Process.Env, []string{"HOME=/root"})
-		}
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "bind",
-			Source:      types.WorkerSandboxProcessManagerWorkerPath,
-			Destination: types.WorkerSandboxProcessManagerContainerPath,
-			Options: []string{
-				"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev",
-			},
-		})
-	}
-
-	// Add Docker capabilities if enabled for sandbox containers.
-	if request.DockerEnabled && request.Stub.Type.IsSandbox() {
-		runtime.AddDockerInDockerCapabilities(spec)
-		if s.runtimeOwnsBlockRoot() {
-			if spec.Annotations == nil {
-				spec.Annotations = make(map[string]string)
-			}
-			spec.Annotations[runtime.MicroVMDockerAnnotation] = "true"
-		}
-		log.Info().Str("container_id", containerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
+	if err := s.prepareSandboxProcess(request, spec); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to prepare sandbox process")
+		return
 	}
 
 	if s.gpuVirtualizedForRequest(request) {

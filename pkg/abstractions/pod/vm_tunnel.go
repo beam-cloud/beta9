@@ -3,12 +3,13 @@ package pod
 import (
 	"context"
 	"fmt"
-	"github.com/beam-cloud/beta9/pkg/network"
-	"github.com/gorilla/websocket"
-	"github.com/labstack/echo/v4"
 	"io"
 	"net"
 	"time"
+
+	"github.com/beam-cloud/beta9/pkg/network"
+	"github.com/gorilla/websocket"
+	"github.com/labstack/echo/v4"
 )
 
 // TunnelVM is reachable only after workspace authentication and a VM-scoped
@@ -19,10 +20,12 @@ func (s *GenericPodService) TunnelVM(c echo.Context, containerID string, port ui
 	if err != nil {
 		return err
 	}
+
 	address, ok := addresses[int32(port)]
 	if !ok {
 		return fmt.Errorf("port is not bound")
 	}
+
 	ctx, cancel := context.WithCancel(c.Request().Context())
 	defer cancel()
 	var backend net.Conn
@@ -31,16 +34,19 @@ func (s *GenericPodService) TunnelVM(c echo.Context, containerID string, port ui
 		if err == nil {
 			break
 		}
+
 		if ctx.Err() != nil || attempt == 1 {
 			return err
 		}
 	}
+
 	defer backend.Close()
 	upgrader := websocket.Upgrader{ReadBufferSize: 64 << 10, WriteBufferSize: 64 << 10}
 	client, err := upgrader.Upgrade(c.Response().Writer, c.Request(), nil)
 	if err != nil {
 		return err
 	}
+
 	defer client.Close()
 	return bridgeVMStream(ctx, client, backend)
 }
@@ -56,6 +62,7 @@ func bridgeVMStream(ctx context.Context, client *websocket.Conn, backend net.Con
 				backend.Close()
 				return
 			}
+
 			if kind == websocket.TextMessage {
 				control, err := io.ReadAll(io.LimitReader(r, 4))
 				if !halfClosed && err == nil && string(control) == "EOF" {
@@ -64,13 +71,16 @@ func bridgeVMStream(ctx context.Context, client *websocket.Conn, backend net.Con
 						continue
 					}
 				}
+
 				backend.Close()
 				return
 			}
+
 			if kind != websocket.BinaryMessage || halfClosed {
 				backend.Close()
 				return
 			}
+
 			if _, err := io.Copy(backend, r); err != nil {
 				backend.Close()
 				return
@@ -95,6 +105,7 @@ func bridgeVMStream(ctx context.Context, client *websocket.Conn, backend net.Con
 				return nil
 			}
 		}
+
 		if err != nil {
 			return nil
 		}

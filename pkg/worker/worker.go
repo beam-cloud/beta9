@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -719,31 +717,7 @@ func NewWorker() (_ *Worker, err error) {
 		routeTransport:      routeTransport,
 	}
 
-	// Recover qcow volumes left behind by a previous worker process before any
-	// container can attach: live volumes are adopted, crashed ones cleaned up.
-	diskConfig := disk.Config{}
-	if worker.runtimeOwnsBlockRoot() {
-		diskConfig.SpareExport = disk.ExportVhostUser
-	}
-	if worker.agentWorker() {
-		// The agent persists durable-disks across worker container replacement.
-		// Keep managers separate: recovery must never detach another slot's QSD.
-		slot := sha256.Sum256([]byte(worker.workerId))
-		diskConfig.Root = filepath.Join(types.DefaultDurableDisksPath, ".qcow", fmt.Sprintf("%x", slot[:6]))
-	}
-	worker.diskManager = disk.NewManager(diskConfig)
-	if err := worker.diskManager.Recover(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
-	}
-
-	if worker.runtimeOwnsBlockRoot() {
-		warmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := worker.diskManager.WarmSpares(warmCtx, types.DefaultVMRootSizeBytes)
-		cancel()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to warm fresh VM root disks")
-		}
-	}
+	worker.initializeDurableDisks(ctx)
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
 		PodAddr:                 podAddr,
@@ -991,17 +965,13 @@ func (s *Worker) runContainerRequestWithRunner(
 	// Only read the root head before accepting delivery. Its host lock stays
 	// held until the accepted claim and runtime validation permit attachment.
 	rootPreparation := s.startQcowRootPreparation(ctx, request)
-	if rootPreparation != nil {
-		ctx = context.WithValue(ctx, qcowRootPreparationKey{}, rootPreparation)
-		defer rootPreparation.close()
-	}
+	ctx = rootPreparation.withContext(ctx)
+	defer rootPreparation.close()
 
 	// Release a prefetched disk fence before failure cleanup may acquire it.
 	failRequest := func(err error) {
 		cancelStartup()
-		if rootPreparation != nil {
-			rootPreparation.close()
-		}
+		rootPreparation.close()
 		s.failContainerRequest(containerId, request, err)
 	}
 
@@ -1010,9 +980,7 @@ func (s *Worker) runContainerRequestWithRunner(
 	// the startup context, so the container is failed (and its exit reported)
 	// rather than silently forgotten while the gateway believes it is ours.
 	claimed, err := s.claimContainer(s.ctx, request)
-	if rootPreparation != nil {
-		rootPreparation.finishClaim(request, err)
-	}
+	rootPreparation.finishClaim(request, err)
 	if err != nil {
 		if !claimed {
 			log.Warn().Str("container_id", containerId).Err(err).Msg("container claim rejected")

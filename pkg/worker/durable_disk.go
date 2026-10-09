@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -30,6 +32,36 @@ const (
 	durableDiskStateClean = "clean"
 	durableDiskStateDirty = "dirty"
 )
+
+func (s *Worker) initializeDurableDisks(ctx context.Context) {
+	// Recover qcow volumes left behind by a previous worker process before any
+	// container can attach: live volumes are adopted, crashed ones cleaned up.
+	diskConfig := disk.Config{}
+	if s.runtimeOwnsBlockRoot() {
+		diskConfig.SpareExport = disk.ExportVhostUser
+	}
+
+	if s.agentWorker() {
+		// The agent persists durable-disks across worker container replacement.
+		// Keep managers separate: recovery must never detach another slot's QSD.
+		slot := sha256.Sum256([]byte(s.workerId))
+		diskConfig.Root = filepath.Join(types.DefaultDurableDisksPath, ".qcow", fmt.Sprintf("%x", slot[:6]))
+	}
+
+	s.diskManager = disk.NewManager(diskConfig)
+	if err := s.diskManager.Recover(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
+	}
+
+	if s.runtimeOwnsBlockRoot() {
+		warmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := s.diskManager.WarmSpares(warmCtx, types.DefaultVMRootSizeBytes)
+		cancel()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to warm fresh VM root disks")
+		}
+	}
+}
 
 type durableDiskSyncMode uint8
 

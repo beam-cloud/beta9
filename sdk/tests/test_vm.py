@@ -783,3 +783,24 @@ def test_activity_lease_surfaces_lost_authorization():
     with pytest.raises(RuntimeError, match="activity lease failed"):
         with vm.keep_alive():
             assert failed.wait(2)
+
+
+@pytest.mark.parametrize("detach", [False, True])
+def test_cli_json_exec_passes_stdin_only_for_foreground(cli_service, monkeypatch, detach):
+    vm = MagicMock()
+    vm.id = "vm-test"
+    vm.info = {"container_id": "current"}
+    process = vm._sandbox.return_value.process.exec.return_value
+    process.pid = 44
+    process.wait.return_value = 0
+    process.stdout.read.return_value = "output"
+    process.stderr.read.return_value = ""
+    monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
+    args = ["exec", "--json"] + (["--detach"] if detach else []) + ["dev", "cat"]
+    result = CliRunner().invoke(vm_cli.management, args, input="piped input")
+    assert result.exit_code == 0, result.output
+    stdin = vm._sandbox.return_value.process.exec.call_args.kwargs["stdin"]
+    if detach:
+        assert stdin is None
+    else:
+        assert stdin is not None

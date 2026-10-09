@@ -2032,16 +2032,6 @@
         },
         "telemetry": {
           "$ref": "#/definitions/gatewayAgentTelemetryConfig"
-        },
-        "imageBuildRegistry": {
-          "type": "string",
-          "description": "Non-secret publishing settings; registry credentials remain gateway-brokered."
-        },
-        "imageBuildRepositoryName": {
-          "type": "string"
-        },
-        "imageBuildRegistryInsecure": {
-          "type": "boolean"
         }
       }
     },
