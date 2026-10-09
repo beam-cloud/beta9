@@ -884,7 +884,7 @@ def screenshot_vm(service, name, path):
 
 @management.group("template")
 def template_group():
-    """Save reusable private VM roots, independently of the source VM."""
+    """Manage reusable private VM roots."""
 
 
 @template_group.command("create")
