@@ -39,6 +39,20 @@ TASK_ACTIVE_STATUSES = {"pending", "running", "retry"}
 IN_FLIGHT_STATUSES = {"running", "submitted"}
 SERVICE_FIELDS = {"type", "deploy", "depends_on", "health_path", "health_port"}
 JOB_FIELDS = {"job_id", "status", "deployment_id", "stub_id", "task_id", "log_cursor"}
+STEP_VIEW_FIELDS = (
+    "status",
+    "deployment_id",
+    "task_id",
+    "job_id",
+    "error",
+    "kept",
+    "attempt",
+    "retired",
+    "retire_error",
+)
+# Characters of a health check's answer, and log lines of a step in flight, worth showing.
+HEALTH_TEXT_MAX = 300
+PROGRESS_LINES = 8
 # wait_deployment errors that no amount of waiting fixes.
 READINESS_CONFIG_ERRORS = {"INVALID_ARGS", "UNSUPPORTED_PROTOCOL", "NO_HTTP_PORT"}
 SECRET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -187,12 +201,22 @@ def definitions(tools: LocalTools) -> List[Tool]:
                     "${{secret.NAME}}. Secret and credential references must be the whole "
                     "value. References add depends_on automatically. Applications run "
                     "continuously (min_replicas 1) unless min_replicas or keep_warm_seconds says "
-                    "otherwise. Source directories are fingerprinted."
+                    "otherwise. Omitted ports come from the image's EXPOSE. Source directories "
+                    "are fingerprinted. Replanning a stack keeps applications and jobs whose "
+                    "spec and source are unchanged and that still run or have completed."
                 ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "Stack name."},
+                        "redeploy": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Services to deploy or rerun even if unchanged, e.g. to pull an "
+                                "image tag that moved."
+                            ),
+                        },
                         "spec": {
                             "type": "object",
                             "properties": {
@@ -203,7 +227,8 @@ def definitions(tools: LocalTools) -> List[Tool]:
                                         "Workspace secrets shared by services, created with a "
                                         "random value when missing and never shown: "
                                         '{"NAME": {"length": 32, "alphabet": "0123456789abcdef"}} '
-                                        "(both optional). Reference as ${{secret.NAME}}."
+                                        "(both optional; the default is 32 letters and digits). "
+                                        "Reference as ${{secret.NAME}}."
                                     ),
                                     "additionalProperties": {"type": "object"},
                                 },
@@ -269,7 +294,8 @@ def definitions(tools: LocalTools) -> List[Tool]:
                     "again until it reports the stack applied. Preserves successful steps, "
                     "checks source changes, and checkpoints in stack.spec. Jobs are never "
                     "blindly rerun after an uncertain outcome. A newer plan replaces one "
-                    "stopped on a failed or unready service."
+                    "stopped on a failed or unready service. Returns each service's status, "
+                    "with recent logs for one still building or starting."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -291,10 +317,19 @@ def definitions(tools: LocalTools) -> List[Tool]:
         (
             {
                 "name": "stack_status",
-                "description": "Read the persisted desired state, checkpoint, and per-service results.",
+                "description": (
+                    "Each service's status, deployment or task, and error, with recent logs for "
+                    "one still building or starting."
+                ),
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"name": {"type": "string"}},
+                    "properties": {
+                        "name": {"type": "string"},
+                        "spec": {
+                            "type": "boolean",
+                            "description": "Include the applied spec and the full checkpoint.",
+                        },
+                    },
                     "required": ["name"],
                 },
             },
@@ -340,17 +375,91 @@ def status(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     if current is None:
         raise ValueError("stack not found")
 
-    return text_result("Stack state", **current)
+    view = _view(tools, current, live=True, full=bool(args.get("spec")))
+    return text_result("Stack state", **view)
+
+
+def _view(
+    tools: LocalTools, current: Dict[str, Any], live: bool = False, full: bool = False
+) -> Dict[str, Any]:
+    """The stack as an agent acts on it: each service's outcome and, when `live`, what
+    a service still in flight is doing now."""
+    operation = current.get("spec", {}).get("operation", {})
+    services = {}
+    for name, step in operation.get("services", {}).items():
+        view = {key: step[key] for key in STEP_VIEW_FIELDS if step.get(key)}
+        if isinstance(step.get("health"), dict) and step.get("status") != "complete":
+            view["health"] = _compact_health(step["health"])
+        if step.get("status") == "starting" and step.get("accepted_at"):
+            view["starting_for_seconds"] = round(time.time() - step["accepted_at"])
+        if live:
+            view.update(_progress(tools, step))
+        services[name] = view
+
+    view = {key: current[key] for key in ("name", "id", "revision", "apps") if key in current}
+    view.update(plan_id=operation.get("plan_id"), status=operation.get("status"), services=services)
+    if full:
+        view["spec"] = current.get("spec", {})
+    return view
+
+
+def _progress(tools: LocalTools, step: Dict[str, Any]) -> Dict[str, Any]:
+    """The newest output of a step in flight: its build log, or the logs of its starting
+    deployment or running task."""
+    try:
+        if step.get("status") == "running" and step.get("job_id"):
+            job = tools.deploy_status({"job_id": step["job_id"], "wait_seconds": 0})
+            lines = job.get("structuredContent", {}).get("logs", [])[-PROGRESS_LINES:]
+            return {"build_logs": lines} if lines else {}
+        target = {"starting": "deployment_id", "submitted": "task_id"}.get(step.get("status"))
+        if target and step.get(target):
+            listed = tools.remote("logs", {target: step[target], "tail": PROGRESS_LINES})
+            lines = [_log_line(item) for item in listed.get("items", [])]
+            return {"recent_logs": lines} if lines else {}
+    except (RemoteToolError, RuntimeError, ValueError):
+        pass
+    return {}
+
+
+def _log_line(item: Dict[str, Any]) -> str:
+    message = str(item.get("message", "")).rstrip()
+    if len(message) > HEALTH_TEXT_MAX:
+        message = message[:HEALTH_TEXT_MAX] + "..."
+    return f"{item['stream']}: {message}" if item.get("stream") else message
+
+
+def _compact_health(health: Dict[str, Any]) -> Dict[str, Any]:
+    """A readiness result small enough to checkpoint and show: the answer's status and
+    the start of its body, not the whole response."""
+    answer = health.get("health") if isinstance(health.get("health"), dict) else {}
+    compact = {
+        key: health[key]
+        for key in ("ready", "check", "containers", "code", "status")
+        if key in health
+    }
+    if "status" in answer:
+        compact["status"] = answer["status"]
+    for key, value in (
+        ("error", health.get("error")),
+        ("answer", answer.get("body") or answer.get("error") or health.get("answer")),
+    ):
+        if value:
+            text = value if isinstance(value, str) else json.dumps(value)
+            compact[key] = text if len(text) <= HEALTH_TEXT_MAX else text[:HEALTH_TEXT_MAX] + "..."
+    return compact
 
 
 def _prepare_services(
     tools: LocalTools, services: Dict[str, Any]
 ) -> Tuple[List[str], Dict[str, Any], List[str]]:
+    from .compose import resolve_image
+
     order: List[str] = []
     visiting: List[str] = []
     sources: Dict[str, Any] = {}
     warnings: List[str] = []
     deploy_options = set(deploy_definition("beam", tools.cwd)["inputSchema"]["properties"])
+    registry = tools.registry() if hasattr(tools, "registry") else None
 
     def visit(service: str) -> None:
         if service in order:
@@ -400,6 +509,19 @@ def _prepare_services(
         elif not deploy.get("image"):
             sources[service] = source_state(deploy.get("directory") or tools.cwd)
             deploy["directory"] = sources[service]["directory"]
+
+        if kind != "database" and registry is not None:
+            try:
+                resolved, notes = resolve_image(
+                    deploy,
+                    deploy.get("directory") or tools.cwd,
+                    registry,
+                    infer_ports=kind == "application",
+                )
+            except Exception:  # Best effort: deploy's own defaults still apply.
+                resolved, notes = deploy, []
+            deploy.update(resolved)
+            warnings.extend(f"{service}: {note}" for note in notes)
 
         if kind == "application":
             warning = _prepare_application(service, node, deploy)
@@ -531,6 +653,45 @@ def _existing_services(
     return existing, reusable
 
 
+def _unchanged_services(
+    tools: LocalTools,
+    services: Dict[str, Any],
+    sources: Dict[str, Any],
+    current: Optional[Dict[str, Any]],
+    redeploy: List[str],
+) -> List[str]:
+    """Applications and jobs a new plan can leave alone: the same spec and source as the
+    step that completed them and, for an application, that revision still active."""
+    if not current:
+        return []
+    previous = current.get("spec", {}).get("desired", {}).get("services", {})
+    steps = current.get("spec", {}).get("operation", {}).get("services", {})
+    kept = []
+    for service, node in services.items():
+        step = steps.get(service, {})
+        kind = node.get("type", "application")
+        if (
+            kind == "database"
+            or service in redeploy
+            or previous.get(service) != node
+            or step.get("status") != "complete"
+            or (service in sources and step.get("fingerprint") != sources[service]["fingerprint"])
+        ):
+            continue
+        if kind == "job":
+            if step.get("task_id"):
+                kept.append(service)
+            continue
+        if not step.get("deployment_id"):
+            continue
+        listed = tools.remote("list_deployments", {"name": service, "active": True, "limit": 100})
+        if any(
+            item.get("deployment_id") == step["deployment_id"] for item in listed.get("items", [])
+        ):
+            kept.append(service)
+    return kept
+
+
 def plan(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     name = str(args["name"]).strip()
     spec = args["spec"]
@@ -544,11 +705,17 @@ def plan(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if set(spec) - {"version", "secrets", "services"}:
         raise ValueError("spec fields are version, secrets and services")
+    redeploy = [str(service) for service in args.get("redeploy") or []]
+    if set(redeploy) - set(spec["services"]):
+        raise ValueError("redeploy names services of this spec")
     declared_secrets = _prepare_secrets(spec)
     services = json.loads(json.dumps(spec["services"]))
     order, sources, warnings = _prepare_services(tools, services)
     current = _find_stack(tools, name)
     existing, reusable = _existing_services(tools, services, current)
+    kept = _unchanged_services(tools, services, sources, current, redeploy)
+    for service in kept:
+        sources.pop(service, None)
     for source in sources.values():
         _snapshot_source(tools, source)
 
@@ -563,6 +730,7 @@ def plan(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
         "base_revision": current["revision"] if current else None,
         "existing": existing,
         "reusable": reusable,
+        "kept": kept,
     }
 
     plan_id = digest(planned)
@@ -573,14 +741,18 @@ def plan(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     ) as output:
         json.dump(planned, output)
 
-    return text_result(
-        "Review this plan, then call stack_apply with plan_id. Applying redeploys every "
-        "application and reruns every job, so migrations must be idempotent jobs; reusable "
-        "databases are kept and removed services are retained.",
-        plan_id=plan_id,
-        warnings=warnings,
-        **planned,
+    changing = [service for service in order if service not in kept and service not in reusable]
+    message = "Review this plan, then call stack_apply with plan_id. " + (
+        f"Applying deploys {', '.join(changing)}, in order" if changing else "Nothing changes"
     )
+    if kept:
+        message += f"; it keeps {', '.join(kept)}, unchanged (redeploy rebuilds any of them)"
+    if reusable:
+        message += f"; existing databases {', '.join(reusable)} are kept"
+    message += (
+        ". Changed jobs rerun, so migrations must be idempotent; removed services are retained."
+    )
+    return text_result(message, plan_id=plan_id, warnings=warnings, **planned)
 
 
 def _load_plan(tools: LocalTools, plan_id: str) -> Dict[str, Any]:
@@ -629,7 +801,12 @@ def _operation_state(
         for name in planned.get("reusable", [])
         if name in previous and planned["desired"]["services"][name].get("type") == "database"
     }
-    return {"plan_id": plan_id, "status": "applying", "services": reusable}
+    kept = {
+        name: {**previous[name], "kept": True}
+        for name in planned.get("kept", [])
+        if name in previous
+    }
+    return {"plan_id": plan_id, "status": "applying", "services": {**reusable, **kept}}
 
 
 @dataclass
@@ -656,6 +833,7 @@ class StackService:
             # The CLI writes build files; keep the reviewed snapshot immutable.
             _copy_source(source["snapshot_directory"], directory, source["fingerprint"])
             options["directory"] = str(directory)
+            self.state["fingerprint"] = source["fingerprint"]
 
         return self.tools.deploy(options, operation="run" if self.kind == "job" else "deploy")
 
@@ -725,7 +903,12 @@ class StackService:
         job = result.get("structuredContent", {})
         state.update({key: value for key, value in job.items() if key in JOB_FIELDS})
         if result.get("isError"):
-            state.update(status="uncertain", error=result["content"][0]["text"])
+            error = job.get("error") or result["content"][0]["text"].split("\n\n", 1)[0]
+            # A deploy or run that was never accepted left nothing a retry would repeat;
+            # a database create may have happened even though its job failed.
+            accepted = state.get("deployment_id") or state.get("task_id")
+            failed = self.kind != "database" and not accepted
+            state.update(status="failed" if failed else "uncertain", error=error)
             return
         if job["status"] == "running":
             return
@@ -733,14 +916,18 @@ class StackService:
             self.check_task()
             return
 
+        state.setdefault("accepted_at", time.time())
         try:
             health = self.readiness()
         except ReadinessConfigError as exc:
             state.update(status="failed", error=f"health check cannot pass: {exc}")
             return
         except RuntimeError as exc:
-            health = {"ready": False, "error": str(exc)}
-        state.update(status="complete" if health["ready"] else "starting", health=health)
+            payload = exc.payload if isinstance(exc, RemoteToolError) else {"error": str(exc)}
+            health = {**payload, "ready": False}
+        state.update(
+            status="complete" if health["ready"] else "starting", health=_compact_health(health)
+        )
         if self.kind == "database" and health["ready"]:
             state["readiness"] = "verified_connection"
         if self.kind == "application" and health["ready"]:
@@ -782,10 +969,10 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     previous = None
     steps = 0
     while True:
-        result, pending = _apply_step(tools, plan_id)
+        message, current, pending = _apply_step(tools, plan_id)
         steps += 1
         if pending is None or cancelled.is_set() or time.monotonic() >= deadline:
-            return result
+            return text_result(message, **_view(tools, current, live=pending is not None))
         if progress is not None:
             progress(steps, {"service": pending[0], "status": pending[1]})
         if pending == previous:
@@ -795,8 +982,9 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _apply_step(
     tools: LocalTools, plan_id: str
-) -> Tuple[Dict[str, Any], Optional[Tuple[str, str]]]:
-    """One bounded step, and the service and status still in flight, if any."""
+) -> Tuple[str, Dict[str, Any], Optional[Tuple[str, str]]]:
+    """One bounded step: its message, the stack, and the service and status still in
+    flight, if any."""
     planned = _load_plan(tools, plan_id)
     current = _find_stack(tools, planned["name"])
     operation = (current or {}).get("spec", {}).get("operation", {})
@@ -816,9 +1004,9 @@ def _apply_step(
 
     state = _operation_state(current, planned, plan_id)
     if state.get("status") == "complete":
-        return text_result("Stack already complete", **current), None
+        return "Stack already complete", current, None
     if state.get("lease_until", 0) > time.time():
-        return text_result("Another apply call is progressing this stack", **current), None
+        return "Another apply call is progressing this stack", current, None
 
     state["lease_until"] = time.time() + APPLY_LEASE_SECONDS
     state["owner"] = uuid.uuid4().hex
@@ -858,18 +1046,25 @@ def _apply_step(
         current = _save_operation(tools, planned["name"], current, state, added)
 
     for name in planned["order"]:
-        status = state["services"].get(name, {}).get("status", "pending")
-        if status in ("failed", "uncertain"):
-            error = state["services"][name].get("error")
+        step = state["services"].get(name, {})
+        status = step.get("status", "pending")
+        error = f" ({step['error']})" if step.get("error") else ""
+        if status == "failed":
             message = (
-                f"{name} is {status}{f' ({error})' if error else ''}; inspect it, then call "
-                "stack_resolve or apply a corrected plan"
+                f"{name} failed{error}; fix it and plan again, or inspect it and call stack_resolve"
             )
-            return text_result(message, **current), None
+            return message, current, None
+        if status == "uncertain":
+            message = (
+                f"{name} is uncertain{error}; inspect it, then call stack_resolve or apply a "
+                "corrected plan"
+            )
+            return message, current, None
         if status != "complete":
-            message = f"{name} is {status}; call stack_apply again"
-            return text_result(message, **current), (name, status)
-    return text_result("Stack applied", **current), None
+            since = step.get("accepted_at")
+            elapsed = f" ({round(time.time() - since)}s)" if status == "starting" and since else ""
+            return f"{name} is {status}{elapsed}; call stack_apply again", current, (name, status)
+    return "Stack applied", current, None
 
 
 def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -914,7 +1109,7 @@ def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     state["services"][service] = step
     added = [service] if resolution == "complete" else []
     current = _save_operation(tools, planned["name"], current, state, added)
-    return text_result("Resolution recorded; continue with stack_apply", **current)
+    return text_result("Resolution recorded; continue with stack_apply", **_view(tools, current))
 
 
 def _save_operation(

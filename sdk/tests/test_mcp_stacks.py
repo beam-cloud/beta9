@@ -30,6 +30,8 @@ class FakeStackTools:
         self.revisions: List[Dict[str, Any]] = []
         self.stopped: List[str] = []
         self.database_options: List[Dict[str, Any]] = []
+        self.container_logs: List[str] = []
+        self.health_answer: Dict[str, Any] = {}
 
     def remote(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if name == "list_stacks":
@@ -53,9 +55,17 @@ class FakeStackTools:
             self.health_checks.append(args)
             if self.health_error_code:
                 raise RemoteToolError({"code": self.health_error_code, "error": "cannot check"})
+            if self.health_answer:
+                raise RemoteToolError({"ready": False, "code": "NOT_READY", **self.health_answer})
             if not self.ready:
                 raise RuntimeError("no healthy replica")
             return {"status": 200}
+        if name == "logs":
+            return {
+                "items": [{"message": line, "stream": "stdout"} for line in self.container_logs]
+            }
+        if name == "get_task":
+            return {"task_id": args["task_id"], "status": "COMPLETE"}
         if name == "list_deployments":
             active = [r for r in self.revisions if r["name"] == args["name"] and r["active"]]
             return {"items": copy.deepcopy(active)}
@@ -87,9 +97,12 @@ class FakeStackTools:
         self.deploy_options.append(options)
         outcome = self.deploy_outcomes.pop(0) if self.deploy_outcomes else "accepted"
         if outcome == "failed":
-            return failed(key, f"Deploy of {options['name']} failed: build exited with code 1")
+            reason = "build exited with code 1"
+            return failed(key, f"Deploy of {options['name']} failed: {reason}", reason)
         job = {"job_id": key, "status": outcome}
-        if outcome == "accepted":
+        if operation == "run":
+            job["task_id"] = f"task-{len(self.deployed)}"
+        elif outcome == "accepted":
             job["deployment_id"] = f"web-{len(self.deployed)}"
             version = sum(r["name"] == options["name"] for r in self.revisions) + 1
             self.revisions.append(
@@ -106,12 +119,26 @@ class FakeStackTools:
         return {"structuredContent": {"job_id": args["job_id"], "status": "accepted"}}
 
 
-def failed(key: str, message: str) -> Dict[str, Any]:
+def failed(key: str, message: str, error: str = "") -> Dict[str, Any]:
     return {
         "isError": True,
-        "content": [{"type": "text", "text": message}],
-        "structuredContent": {"job_id": key, "status": "failed"},
+        "content": [{"type": "text", "text": f"{message}\n\n{{}}"}],
+        "structuredContent": {"job_id": key, "status": "failed", "error": error or message},
     }
+
+
+class ImageRegistry:
+    """Image configs by reference, and the hosts that only proxy Docker Hub."""
+
+    def __init__(self, ports: Dict[str, List[int]], proxies: List[str] = ()):
+        self.ports, self.proxies = ports, list(proxies)
+
+    def docker_hub_image(self, image: str) -> Any:
+        host, _, rest = image.partition("/")
+        return f"docker.io/{rest}" if host in self.proxies else None
+
+    def config(self, image: str) -> Dict[str, Any]:
+        return {"ExposedPorts": {f"{port}/tcp": {} for port in self.ports.get(image, [])}}
 
 
 def database_stack(tools: FakeStackTools) -> str:
@@ -119,7 +146,7 @@ def database_stack(tools: FakeStackTools) -> str:
     return stacks.plan(tools, {"name": "app", "spec": spec})["structuredContent"]["plan_id"]
 
 
-def web_stack(tools: FakeStackTools, image: str) -> str:
+def web_spec(image: str) -> Dict[str, Any]:
     services = {
         "db": {"type": "database", "deploy": {"kind": "postgres"}},
         "web": {
@@ -127,8 +154,12 @@ def web_stack(tools: FakeStackTools, image: str) -> str:
             "deploy": {"image": image, "env": {"DATABASE_URL": "${{db.db.DATABASE_URL}}"}},
         },
     }
-    spec = {"version": 1, "services": services}
-    return stacks.plan(tools, {"name": "app", "spec": spec})["structuredContent"]["plan_id"]
+    return {"version": 1, "services": services}
+
+
+def web_stack(tools: FakeStackTools, image: str, **args: Any) -> str:
+    planned = stacks.plan(tools, {"name": "app", "spec": web_spec(image), **args})
+    return planned["structuredContent"]["plan_id"]
 
 
 def text(result: Dict[str, Any]) -> str:
@@ -195,7 +226,10 @@ def test_a_corrected_plan_replaces_one_stopped_on_a_failed_service(tmp_path):
     tools.deploy_outcomes = ["failed"]
     broken = web_stack(tools, "web:broken")
     step(tools, broken)
-    assert text(step(tools, broken)).startswith("web is uncertain")
+    assert text(step(tools, broken)) == (
+        "web failed (build exited with code 1); fix it and plan again, or inspect it and call "
+        "stack_resolve"
+    )
 
     fixed = web_stack(tools, "web:fixed")
     assert text(step(tools, fixed)) == "Stack applied"
@@ -238,7 +272,7 @@ def test_apply_steps_until_the_stack_settles_or_time_runs_out(tmp_path, monkeypa
     tools.deploy_outcomes = ["failed"]
     started = time.monotonic()
     result = stacks.apply(tools, {"plan_id": web_stack(tools, "web:3"), "wait_seconds": 30})
-    assert text(result).startswith("web is uncertain") and time.monotonic() - started < 5
+    assert text(result).startswith("web failed") and time.monotonic() - started < 5
 
 
 # An always-on revision keeps running until stopped, so a stack retires an
@@ -261,19 +295,77 @@ def test_a_ready_revision_retires_the_older_ones(tmp_path):
     assert [r["deployment_id"] for r in tools.revisions if r["active"]] == ["web-2"]
 
 
-# Only a database carries over between plans; everything else is redeployed or
-# rerun, so the plan must not call an unchanged application reusable.
-def test_only_unchanged_databases_are_reusable(tmp_path):
+# Fixing one service of a stack replans all of it; what did not change, and
+# still runs, stays as it is unless redeploy asks otherwise.
+def test_a_replan_keeps_unchanged_running_services(tmp_path):
     tools = FakeStackTools(tmp_path)
     first = web_stack(tools, "web:same")
     step(tools, first)
     assert text(step(tools, first)) == "Stack applied"
 
-    second = web_stack(tools, "web:same")
-    assert stacks._load_plan(tools, second)["reusable"] == ["db"]
-    assert text(step(tools, second)) == "Stack applied"
+    planned = stacks.plan(tools, {"name": "app", "spec": web_spec("web:same")})
+    assert text(planned) == (
+        "Review this plan, then call stack_apply with plan_id. Nothing changes; it keeps web, "
+        "unchanged (redeploy rebuilds any of them); existing databases db are kept. Changed "
+        "jobs rerun, so migrations must be idempotent; removed services are retained."
+    )
+    second = planned["structuredContent"]["plan_id"]
+    assert planned["structuredContent"]["kept"] == ["web"]
+    applied = step(tools, second)
+    assert text(applied) == "Stack applied"
     assert tools.submitted == [f"stack:{first}:db"]
-    assert tools.deployed == [f"stack:{first}:web", f"stack:{second}:web"]
+    assert tools.deployed == [f"stack:{first}:web"]
+    assert applied["structuredContent"]["services"]["web"] == {
+        "status": "complete",
+        "deployment_id": "web-1",
+        "job_id": f"stack:{first}:web",
+        "kept": True,
+    }
+
+    forced = web_stack(tools, "web:same", redeploy=["web"])
+    assert stacks._load_plan(tools, forced)["kept"] == []
+    assert text(step(tools, forced)) == "Stack applied"
+    assert tools.deployed == [f"stack:{first}:web", f"stack:{forced}:web"]
+
+    tools.revisions[-1]["active"] = False  # stopped outside the stack
+    assert stacks._load_plan(tools, web_stack(tools, "web:same"))["kept"] == []
+
+    with pytest.raises(ValueError, match="redeploy names services of this spec"):
+        web_stack(tools, "web:same", redeploy=["api"])
+
+
+# A job that completed with the same spec is not rerun, and a source-built
+# service is kept only while its source is unchanged.
+def test_a_replan_reruns_jobs_and_rebuilds_sources_only_when_they_change(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "app.py").write_text("print('v1')")
+    services = {
+        "migrate": {"type": "job", "deploy": {"image": "app:1", "entrypoint": ["migrate"]}},
+        "web": {
+            "depends_on": ["migrate"],
+            "health_path": "/",
+            "deploy": {"directory": str(source)},
+        },
+    }
+
+    def apply(spec_services: Dict[str, Any]) -> Dict[str, Any]:
+        spec = {"version": 1, "services": copy.deepcopy(spec_services)}
+        planned = stacks.plan(tools, {"name": "app", "spec": spec})["structuredContent"]
+        while text(step(tools, planned["plan_id"])) != "Stack applied":
+            pass
+        return planned
+
+    first = apply(services)
+    assert len(tools.deployed) == 2
+    assert apply(services)["kept"] == ["migrate", "web"] and len(tools.deployed) == 2
+
+    (source / "app.py").write_text("print('v2')")
+    assert apply(services)["kept"] == ["migrate"]
+    services["migrate"]["deploy"]["image"] = "app:2"
+    assert apply(services)["kept"] == ["web"]
+    assert tools.deployed[0] == f"stack:{first['plan_id']}:migrate" and len(tools.deployed) == 4
 
 
 # A database's resources read like an application's; the gateway gets millicores
@@ -332,8 +424,61 @@ def test_a_health_check_the_gateway_refuses_fails_the_service(tmp_path):
     plan_id = plan_app(tools, {"health_path": "/", "deploy": {"image": "web"}})["plan_id"]
 
     assert text(step(tools, plan_id)).startswith(
-        "web is failed (health check cannot pass: cannot check); inspect it"
+        "web failed (health check cannot pass: cannot check); fix it"
     )
+
+
+# A service that is slow to come up says how long it has been starting and what
+# its containers print, and its checkpoint keeps only the start of an answer.
+def test_a_starting_service_shows_its_recent_logs_and_a_short_answer(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    tools.health_answer = {"health": {"status": 502, "body": "<html>" + "x" * 5000}}
+    tools.container_logs = ["Prisma schema loaded", "Error: P1001 can't reach database"]
+    plan_id = plan_app(tools, {"health_path": "/", "deploy": {"image": "web"}})["plan_id"]
+
+    result = step(tools, plan_id)
+    assert text(result).startswith("web is starting (0s); call stack_apply again")
+    web = result["structuredContent"]["services"]["web"]
+    assert web["recent_logs"] == [
+        "stdout: Prisma schema loaded",
+        "stdout: Error: P1001 can't reach database",
+    ]
+    assert web["starting_for_seconds"] == 0
+    answer = "<html>" + "x" * (stacks.HEALTH_TEXT_MAX - len("<html>")) + "..."
+    expected = {"ready": False, "code": "NOT_READY", "status": 502, "answer": answer}
+    assert web["health"] == expected
+    assert tools.stack["spec"]["operation"]["services"]["web"]["health"] == expected
+    assert "recent_logs" not in tools.stack["spec"]["operation"]["services"]["web"]
+
+    status = stacks.status(tools, {"name": "app"})["structuredContent"]
+    assert status["services"]["web"]["recent_logs"] == web["recent_logs"] and "spec" not in status
+    assert stacks.status(tools, {"name": "app", "spec": True})["structuredContent"]["spec"]
+
+
+# An image on a Docker Hub proxy is planned from Docker Hub, and an image that
+# EXPOSEs its port is routed there, both stated in the plan.
+def test_a_plan_completes_images_from_their_registry(tmp_path):
+    tools = FakeStackTools(tmp_path)
+    tools.registry = lambda: ImageRegistry(
+        {"docker.io/acme/web:2": [3000], "docker.io/acme/worker:2": [9000]}, ["docker.acme.dev"]
+    )
+    services = {
+        "web": {"health_path": "/", "deploy": {"image": "docker.acme.dev/acme/web:2"}},
+        "migrate": {"type": "job", "deploy": {"image": "docker.acme.dev/acme/worker:2"}},
+    }
+    planned = stacks.plan(tools, {"name": "app", "spec": {"version": 1, "services": services}})
+    desired = planned["structuredContent"]["desired"]["services"]
+
+    assert desired["web"]["deploy"]["image"] == "docker.io/acme/web:2"
+    assert desired["web"]["deploy"]["ports"] == [3000]
+    assert desired["migrate"]["deploy"] == {"image": "docker.io/acme/worker:2", "name": "migrate"}
+    assert planned["structuredContent"]["warnings"] == [
+        "web: Pulling docker.io/acme/web:2: docker.acme.dev only proxies Docker Hub, and its "
+        "anonymous pulls share one rate limit.",
+        "web: Ports [3000] come from docker.io/acme/web:2's EXPOSE.",
+        "migrate: Pulling docker.io/acme/worker:2: docker.acme.dev only proxies Docker Hub, and "
+        "its anonymous pulls share one rate limit.",
+    ]
 
 
 # Compose services run continuously; scaling to zero is opt-in.
