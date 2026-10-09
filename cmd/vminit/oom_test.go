@@ -46,6 +46,13 @@ func TestSystemdMemoryConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, "run/systemd/system")
+	defaults, err := os.ReadFile(filepath.Join(dir, "service.d/00-workload.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(defaults), "OOMPolicy=continue\n") {
+		t.Fatal("a service's CI parent must survive when a child is OOM-killed")
+	}
 	for _, name := range []string{"probe.service", "beam-guest.service"} {
 		unit := "[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/true\n"
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(unit), 0644); err != nil {

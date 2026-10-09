@@ -74,7 +74,7 @@ func (w *workloadMemory) configureSystemd(root string) error {
 	files := map[string]string{
 		microvm.WorkloadSlice:                   "[Unit]\nDefaultDependencies=no\n[Slice]\nMemoryMax=" + strconv.FormatInt(w.limitBytes, 10) + "\nMemorySwapMax=0\n",
 		microvm.ControlSlice:                    "[Unit]\nDefaultDependencies=no\n[Slice]\nMemoryMin=" + strconv.FormatInt(microvm.GuestMemoryHeadroom, 10) + "\n",
-		"service.d/00-workload.conf":            "[Service]\nSlice=" + microvm.WorkloadSlice + "\n",
+		"service.d/00-workload.conf":            "[Service]\nSlice=" + microvm.WorkloadSlice + "\nOOMPolicy=continue\n",
 		"scope.d/00-workload.conf":              "[Scope]\nSlice=" + microvm.WorkloadSlice + "\n",
 		"beam-guest.service.d/00-workload.conf": "[Service]\nSlice=" + microvm.ControlSlice + "\n",
 		"init.scope.d/00-workload.conf":         "[Scope]\nSlice=-.slice\n",
