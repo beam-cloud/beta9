@@ -15,6 +15,13 @@ import (
 func GRPCClientAuthInterceptor(token string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			for _, key := range []string{RequestIDHeader, RequestAckHeader} {
+				for _, value := range md.Get(key) {
+					newCtx = metadata.AppendToOutgoingContext(newCtx, key, value)
+				}
+			}
+		}
 		return invoker(newCtx, method, req, reply, cc, opts...)
 	}
 }

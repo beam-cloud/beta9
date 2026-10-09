@@ -38,6 +38,7 @@ from .config import (
 )
 from .env import is_remote
 from .exceptions import RunnerException
+from .recovery import request_metadata
 
 GRPC_MAX_MESSAGE_SIZE = 16 * 1024 * 1024
 _channels = weakref.WeakSet()
@@ -151,7 +152,7 @@ class AuthTokenInterceptor(
         client_call_details: ClientCallDetails,
     ) -> ClientCallDetails:
         """Add authentication metadata to the client call."""
-        headers = list(self._metadata)
+        headers = list(self._metadata) + list(request_metadata.get())
         if self._token:
             headers.append(("authorization", f"Bearer {self._token}"))
         if headers:

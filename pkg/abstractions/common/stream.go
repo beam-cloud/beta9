@@ -27,6 +27,7 @@ type ContainerStreamOpts struct {
 	Config          types.AppConfig
 	KeyEventManager *common.KeyEventManager
 	SyncQueue       chan *pb.SyncContainerWorkspaceRequest
+	OutputOffset    *uint64
 }
 
 func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
@@ -38,6 +39,7 @@ func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
 		config:          opts.Config,
 		keyEventManager: opts.KeyEventManager,
 		syncQueue:       opts.SyncQueue,
+		outputOffset:    opts.OutputOffset,
 	}, nil
 }
 
@@ -49,6 +51,7 @@ type ContainerStream struct {
 	config          types.AppConfig
 	keyEventManager *common.KeyEventManager
 	syncQueue       chan *pb.SyncContainerWorkspaceRequest
+	outputOffset    *uint64
 }
 
 type containerStreamClient interface {
@@ -62,6 +65,8 @@ type containerClientResult struct {
 }
 
 func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	outputChan := make(chan common.OutputMsg, 1000)
 	keyEventChan := make(chan common.KeyEvent, 1000)
 	if err := l.keyEventManager.ListenForKey(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan); err != nil {
@@ -124,6 +129,7 @@ func (l *ContainerStream) handleStreams(
 	var exitEvents <-chan common.KeyEvent
 	var logStreamReady <-chan struct{}
 	var syncQueue <-chan *pb.SyncContainerWorkspaceRequest
+	logErrors := make(chan error, 1)
 
 _stream:
 	for {
@@ -137,7 +143,23 @@ _stream:
 			syncQueue = l.syncQueue
 			ready := make(chan struct{})
 			logStreamReady = ready
-			go client.StreamLogsWithReady(ctx, containerId, outputChan, func() { close(ready) })
+			go func() {
+				readyCallback := func() { close(ready) }
+				if l.outputOffset != nil {
+					if replayClient, ok := client.(interface {
+						StreamLogsAt(context.Context, string, *uint64, chan common.OutputMsg, func()) error
+					}); ok {
+						logErrors <- replayClient.StreamLogsAt(ctx, containerId, l.outputOffset, outputChan, readyCallback)
+						return
+					}
+				}
+				logErrors <- client.StreamLogsWithReady(ctx, containerId, outputChan, readyCallback)
+			}()
+		case err := <-logErrors:
+			logErrors = nil
+			if err != nil {
+				return err
+			}
 		case <-logStreamReady:
 			logStreamReady = nil
 			exitEvents = keyEventChan
@@ -148,8 +170,7 @@ _stream:
 			}
 		case o := <-outputChan:
 			if err := l.sendCallback(o); err != nil {
-				lastMessage = o
-				break
+				return err
 			}
 
 			if o.Done {
@@ -187,12 +208,7 @@ _stream:
 			return nil
 
 		case <-ctx.Done():
-			// This ensures when the sdk exits, the message printed is
-			// that the container timed out.
-			if err := l.exitCallback(0); err != nil {
-				break _stream
-			}
-			return nil
+			return ctx.Err()
 		}
 	}
 

@@ -11,7 +11,7 @@ import uuid
 import webbrowser
 from pathlib import Path
 from contextlib import nullcontext, redirect_stdout, suppress
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import click
 import websocket
@@ -25,6 +25,7 @@ from ..abstractions.volume import Volume
 from ..channel import GatewayHTTPError, ServiceClient
 from ..config import SDKSettings, get_config_context, get_settings, set_settings
 from ..logging import StoredStdoutInterceptor
+from ..tunnel import bridge_tunnel
 from . import extraclick
 from .extraclick import ClickManagementGroup
 
@@ -615,8 +616,11 @@ def unexpose_vm(service, name, port):
     _vm(service, name).unexpose(port)
 
 
-def _socket(vm, port):
+def _socket(vm, port, session, offset, create):
     url = vm._service.http.url(f"/api/v1/vm/{{ws}}/{quote(vm.id, safe='')}/tunnel/{port}")
+    url += "?" + urlencode(
+        {"protocol": 2, "session": session, "offset": offset, "create": int(create)}
+    )
     return websocket.create_connection(
         url.replace("https://", "wss://").replace("http://", "ws://"),
         header=vm._service.http.headers,
@@ -625,38 +629,9 @@ def _socket(vm, port):
 
 
 def _bridge(vm, port, source, target):
-    remote = _socket(vm, port)
-    remote.settimeout(None)
-    stopped = threading.Event()
-
-    def upload():
-        try:
-            while not stopped.is_set():
-                data = source.read1(65536) if hasattr(source, "read1") else source.read(65536)
-                if not data:
-                    remote.send("EOF")
-                    return
-                remote.send_binary(data)
-        except (OSError, websocket.WebSocketException):
-            stopped.set()
-            remote.close()
-
-    thread = threading.Thread(target=upload, daemon=True)
-    thread.start()
-    try:
-        while not stopped.is_set():
-            data = remote.recv()
-            if not data:
-                break
-            if not isinstance(data, bytes):
-                raise RuntimeError("Tunnel returned a non-binary frame")
-            target.write(data)
-            target.flush()
-    except (OSError, websocket.WebSocketException):
-        pass
-    finally:
-        stopped.set()
-        remote.close()
+    bridge_tunnel(
+        lambda session, offset, create: _socket(vm, port, session, offset, create), source, target
+    )
 
 
 @management.command("tunnel", hidden=True)

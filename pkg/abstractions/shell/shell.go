@@ -745,7 +745,7 @@ func GenerateShellCredentials() (string, string, error) {
 	return "b9" + strings.ToLower(usernameSuffix), password, nil
 }
 
-func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
+func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, done <-chan struct{}, grace ...time.Duration) {
 	ticker := time.NewTicker(containerKeepAliveIntervalS)
 	defer ticker.Stop()
 
@@ -758,7 +758,11 @@ func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, do
 		case <-done:
 			return
 		case <-ticker.C:
-			if err := RefreshContainerTTL(ctx, ss.rdb, containerId); err != nil {
+			ttl := time.Duration(shellContainerTtlS) * time.Second
+			if len(grace) > 0 {
+				ttl = grace[0]
+			}
+			if err := extendContainerTTL(ctx, ss.rdb, containerId, ttl); err != nil {
 				log.Error().Err(err).Str("container_id", containerId).Msg("failed to refresh shell TTL")
 				if errors.Is(err, ErrShellLeaseExpired) {
 					return

@@ -34,6 +34,7 @@ from ..exceptions import (
     TaskStartError,
 )
 from ..logging import json_output_interceptor
+from ..recovery import retry_operation
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
@@ -81,12 +82,10 @@ def _monitor_task(
             function_stub = FunctionServiceStub(channel)
             gateway_stub = GatewayServiceStub(channel)
 
-            initial_backoff = 5
-            max_retries = 5
+            initial_backoff = 0.2
             backoff = initial_backoff
-            retry = 0
 
-            while retry <= max_retries:
+            while True:
                 try:
                     for response in function_stub.function_monitor(
                         FunctionMonitorRequest(
@@ -124,7 +123,6 @@ def _monitor_task(
                             return False
 
                         # Reset retry state if a valid response was received
-                        retry = 0
                         backoff = initial_backoff
 
                     # Reaching here means that the stream ended with no errors,
@@ -133,19 +131,12 @@ def _monitor_task(
                     return True
 
                 except (grpc.RpcError, ConnectionRefusedError):
-                    if retry == max_retries:
-                        print("Lost connection to task monitor, exiting")
-                        os.kill(runner_pid, signal.SIGABRT)
-                        return False
-
                     time.sleep(backoff)
-                    backoff *= 2
-                    retry += 1
+                    backoff = min(backoff * 1.5, 2.0)
 
-                except BaseException:
+                except Exception:
                     print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-                    os.kill(runner_pid, signal.SIGABRT)
-                    return False
+                    time.sleep(2)
 
     # Outer loop: restart only if the stream ended with no errors
     while True:
@@ -225,7 +216,11 @@ def run(channel: Channel):
 def start_task(
     gateway_stub: GatewayServiceStub, task_id: str, container_id: str
 ) -> StartTaskResponse:
-    return gateway_stub.start_task(StartTaskRequest(task_id=task_id, container_id=container_id))
+    return retry_operation(
+        lambda: gateway_stub.start_task(
+            StartTaskRequest(task_id=task_id, container_id=container_id)
+        )
+    )
 
 
 async def invoke_function(
@@ -242,7 +237,9 @@ async def invoke_function(
         if handler is None:
             handler = FunctionHandler()
 
-        get_args_resp = function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
+        get_args_resp = retry_operation(
+            lambda: function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
+        )
         if not get_args_resp.ok:
             raise InvalidFunctionArgumentsError
 
@@ -270,8 +267,10 @@ async def invoke_function(
                 **kwargs,
             )
         pickled_result = cloudpickle.dumps(result)
-        set_result_resp = function_stub.function_set_result(
-            FunctionSetResultRequest(task_id=task_id, result=pickled_result)
+        set_result_resp = retry_operation(
+            lambda: function_stub.function_set_result(
+                FunctionSetResultRequest(task_id=task_id, result=pickled_result)
+            )
         )
         if not set_result_resp.ok:
             raise FunctionSetResultError

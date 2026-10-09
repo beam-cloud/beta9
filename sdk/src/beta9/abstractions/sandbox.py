@@ -64,7 +64,7 @@ from ..clients.pod import (
 from ..config import ConfigContext
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
-from ..utils import retry_on_transient_error
+from ..recovery import RecoveringPodStub
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
@@ -105,7 +105,7 @@ def _call_with_sandbox_readiness_retry(do_call):
     deadline = time.monotonic() + SANDBOX_EXEC_READY_TIMEOUT_SECONDS
 
     while True:
-        response = retry_on_transient_error(do_call)
+        response = do_call()
         if response.ok:
             return response
         if not _is_sandbox_exec_readiness_error(response.error_msg):
@@ -486,7 +486,7 @@ class SandboxInstance(BaseAbstraction):
     def __post_init__(self):
         super().__init__()
         self.gateway_stub = GatewayServiceStub(self.channel)
-        self.stub = PodServiceStub(self.channel)
+        self.stub = RecoveringPodStub(self.channel)
         self.fs = SandboxFileSystem(self)
         self.process = SandboxProcessManager(self)
         self.docker = SandboxDockerManager(self)
@@ -830,7 +830,7 @@ class SandboxInstance(BaseAbstraction):
         self.__dict__.update(state)
         unset_channel()
         self.gateway_stub = GatewayServiceStub(self.channel)
-        self.stub = PodServiceStub(self.channel)
+        self.stub = RecoveringPodStub(self.channel)
 
 
 class SandboxProcessResponse:
@@ -1289,7 +1289,7 @@ class SandboxProcessStream:
         # The sandbox process manager returns output deltas and clears its
         # internal buffer after each read. Do not treat the returned value as
         # cumulative output.
-        return retry_on_transient_error(self.fetch_fn, max_retries=2, delay=0.2)
+        return self.fetch_fn()
 
     def read(self):
         """

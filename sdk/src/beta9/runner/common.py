@@ -23,6 +23,7 @@ from ..clients.gateway import (
 )
 from ..env import is_remote
 from ..exceptions import RunnerException
+from ..recovery import retry_operation
 
 USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
@@ -424,7 +425,7 @@ def _end_task(gateway_stub: GatewayServiceStub, request: EndTaskRequest) -> EndT
 
 
 def end_task(gateway_stub: GatewayServiceStub, request: EndTaskRequest) -> EndTaskResponse:
-    return _end_task(gateway_stub, request)
+    return retry_operation(lambda: _end_task(gateway_stub, request))
 
 
 def send_task_callback(

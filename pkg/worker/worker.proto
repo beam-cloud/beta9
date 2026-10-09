@@ -54,6 +54,7 @@ service ContainerService {
       returns (ContainerSandboxListExposedPortsResponse) {}
   rpc ContainerSandboxListProcesses(ContainerSandboxListProcessesRequest)
       returns (ContainerSandboxListProcessesResponse) {}
+  rpc ContainerTunnel(ContainerTunnelRequest) returns (ContainerTunnelResponse) {}
 }
 
 message ContainerKillRequest { string container_id = 1; }
@@ -72,9 +73,15 @@ message ContainerStatusRequest { string container_id = 1; }
 
 message ContainerStatusResponse { bool running = 1; }
 
-message ContainerStreamLogsRequest { string container_id = 1; }
+message ContainerStreamLogsRequest {
+  string container_id = 1;
+  optional uint64 offset = 2;
+}
 
-message ContainerLogEntry { string msg = 1; }
+message ContainerLogEntry {
+  string msg = 1;
+  uint64 offset = 2;
+}
 
 message ContainerArchiveRequest {
   string container_id = 1;
@@ -322,4 +329,26 @@ message ContainerSandboxUpdateNetworkPermissionsRequest {
 message ContainerSandboxUpdateNetworkPermissionsResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+// The worker owns the TCP socket. Gateways only attach and acknowledge bytes.
+message ContainerTunnelRequest {
+  string container_id = 1;
+  string session_id = 2;
+  uint32 port = 3;
+  bool create = 4;
+  uint64 input_offset = 5;
+  bytes input = 6;
+  bool input_eof = 7;
+  uint64 output_offset = 8;
+  bool read = 9;
+  bool close = 10;
+}
+
+message ContainerTunnelResponse {
+  uint64 input_offset = 1;
+  uint64 output_offset = 2;
+  bytes output = 3;
+  bool output_eof = 4;
+  bool input_eof = 5;
 }

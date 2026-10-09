@@ -7,6 +7,8 @@ import (
 	"net"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
@@ -16,6 +18,18 @@ import (
 // lookup. It shares the normal worker/network route and carries raw TCP bytes
 // in binary websocket frames for OpenSSH, rsync and local port forwarding.
 func (s *GenericPodService) TunnelVM(c echo.Context, containerID string, port uint32) error {
+	if c.QueryParam("protocol") == "2" {
+		request, err := abstractions.ParseTunnelRequest(c, containerID, port)
+		if err != nil {
+			return err
+		}
+		info := c.(*auth.HttpAuthContext).AuthInfo
+		client, _, err := s.getClient(c.Request().Context(), containerID, info.Token.Key, info.Workspace.ExternalId)
+		if err != nil {
+			return err
+		}
+		return abstractions.ServeTunnel(c, client, request)
+	}
 	addresses, err := s.containerRepo.GetContainerAddressMap(containerID)
 	if err != nil {
 		return err

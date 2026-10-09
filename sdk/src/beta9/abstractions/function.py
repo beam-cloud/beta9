@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import os
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
+from ..recovery import resume_invocation
 from ..abstractions.volume import CloudBucket, Volume
 from ..channel import rpc_timeout, with_grpc_error_handling
 from ..clients.function import (
@@ -28,7 +30,7 @@ from ..clients.function import (
     FunctionScheduleRequest,
     FunctionServiceStub,
 )
-from ..clients.gateway import ListTasksRequest, StringList
+from ..clients.gateway import ListTasksRequest, StopTasksRequest, StringList
 from ..env import called_on_import, is_local
 from ..exceptions import RemoteExecutionError
 from ..schema import Schema
@@ -174,6 +176,8 @@ class _CallableWrapper(DeployableMixin):
     def __init__(self, func: Callable, parent: Function) -> None:
         self.func: Callable = func
         self.parent: Function = parent
+        self._invocations = {}
+        self._invocations_lock = threading.Lock()
 
     @with_grpc_error_handling
     def __call__(self, *args, **kwargs) -> Any:
@@ -213,17 +217,33 @@ class _CallableWrapper(DeployableMixin):
         )
 
         terminal.debug(f"Running function: {self.parent.handler}")
-        last_response: Optional[FunctionInvokeResponse] = None
         output = deque()
         output_size = 0
 
-        for r in self.parent.function_stub.function_invoke(
-            FunctionInvokeRequest(
-                stub_id=self.parent.stub_id,
-                args=args,
-                headless=self.parent.headless,
-            )
-        ):
+        request = FunctionInvokeRequest(
+            stub_id=self.parent.stub_id,
+            args=args,
+            headless=self.parent.headless,
+        )
+        responses = resume_invocation(self.parent.function_stub, request)
+        with self._invocations_lock:
+            self._invocations[id(request)] = request
+        try:
+            return self._consume_invocation(responses, output, output_size)
+        except KeyboardInterrupt:
+            if request.task_id and not self.parent.headless:
+                with rpc_timeout(5):
+                    self.parent.gateway_stub.stop_tasks(
+                        StopTasksRequest(task_ids=[request.task_id])
+                    )
+            raise
+        finally:
+            with self._invocations_lock:
+                self._invocations.pop(id(request), None)
+
+    def _consume_invocation(self, responses, output, output_size):
+        last_response: Optional[FunctionInvokeResponse] = None
+        for r in responses:
             if r.output != "":
                 output.append(r.output[-65536:])
                 output_size += len(output[-1])
@@ -302,6 +322,16 @@ class _CallableWrapper(DeployableMixin):
                         yield result
                 except KeyboardInterrupt:
                     pool.shutdown(wait=False, cancel_futures=True)
+                    if not self.parent.headless:
+                        with self._invocations_lock:
+                            ids = [
+                                request.task_id
+                                for request in self._invocations.values()
+                                if request.task_id
+                            ]
+                        if ids:
+                            with rpc_timeout(5):
+                                self.parent.gateway_stub.stop_tasks(StopTasksRequest(task_ids=ids))
                     terminal.error(
                         f"Exiting shell. Mapped functions will {'be terminated.' if not self.parent.headless else 'continue running.'}",
                         exit=False,

@@ -503,6 +503,13 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 			}
 
 			if v.Spec.IdleTimeout > 0 && time.Since(v.LastActiveAt) >= time.Duration(v.Spec.IdleTimeout)*time.Second {
+				active, err := s.hasActivity(ctx, v.ID)
+				if err != nil {
+					return err
+				}
+				if active {
+					return nil
+				}
 				claimed, err := s.repo.ClaimVMIdleStop(ctx, v.ID, time.Now().Add(-time.Duration(v.Spec.IdleTimeout)*time.Second))
 				if err != nil {
 					return err

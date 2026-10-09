@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -112,6 +111,9 @@ func NewContainerFunctionService(ctx context.Context,
 }
 
 func (fs *ContainerFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
+	if in.TaskId != "" {
+		return fs.resumeInvocation(in, stream)
+	}
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 	ctx := stream.Context()
 
@@ -121,8 +123,12 @@ func (fs *ContainerFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest,
 	if err != nil {
 		return err
 	}
+	// Publish the task identity before waiting for its container to start.
+	if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: task.Metadata().TaskId}); err != nil {
+		return err
+	}
 
-	return fs.stream(ctx, stream, authInfo, task, in.Headless)
+	return fs.streamAt(ctx, stream, authInfo, task, &in.OutputOffset)
 }
 
 func (fs *ContainerFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
@@ -166,14 +172,15 @@ func (fs *ContainerFunctionService) functionTaskFactory(ctx context.Context, msg
 }
 
 func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, headless bool) error {
+	return fs.streamAt(ctx, stream, authInfo, task, nil)
+}
+
+func (fs *ContainerFunctionService) streamAt(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, offset *uint64) error {
 	taskId := task.Metadata().TaskId
 	containerId := task.Metadata().ContainerId
-	clientCtx := ctx
-	streamDone := make(chan struct{})
-	completionObserved := atomic.Bool{}
 
 	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done}); err != nil {
+		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done, OutputOffset: o.Offset}); err != nil {
 			return err
 		}
 
@@ -181,7 +188,6 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	}
 
 	exitCallback := func(exitCode int32) error {
-		completionObserved.Store(true)
 		resultLoadStart := time.Now()
 		result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskId)).Bytes()
 		if fs.eventRepo != nil {
@@ -204,48 +210,18 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 		Config:          fs.config,
 		Tailscale:       fs.tailscale,
 		KeyEventManager: fs.keyEventManager,
+		OutputOffset:    offset,
 	})
 	if err != nil {
 		return err
 	}
 
-	go func() {
-		if headless {
-			return
-		}
-
-		select {
-		case <-streamDone:
-			return
-		case <-clientCtx.Done():
-		}
-
-		if completionObserved.Load() {
-			return
-		}
-
-		if fs.eventRepo != nil {
-			fs.eventRepo.PushFunctionStreamCancelRequested(authInfo.Workspace.ExternalId, task)
-		}
-		if err := task.Cancel(context.Background(), types.TaskRequestCancelled); err != nil {
-			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error cancelling task")
-		} else if fs.eventRepo != nil {
-			fs.eventRepo.PushFunctionStreamCancelApplied(authInfo.Workspace.ExternalId, task)
-		}
-
-		if err := fs.taskDispatcher.Complete(context.Background(), authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId); err != nil {
-			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error completing task")
-		}
-
-		if err := fs.rdb.Publish(context.Background(), common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId), task.Message().TaskId).Err(); err != nil {
-			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error publishing task cancel event")
-		}
-	}()
-
 	ctx, cancel := common.MergeContexts(fs.ctx, ctx)
+	defer cancel()
 	err = containerStream.Stream(ctx, authInfo, containerId)
-	close(streamDone)
-	cancel()
+	if fs.ctx.Err() != nil {
+		return status.Error(codes.Unavailable, "gateway is restarting")
+	}
 	return err
 }
 

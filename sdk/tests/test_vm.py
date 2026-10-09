@@ -584,28 +584,38 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch):
 
 
 def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
+    from queue import Queue
+    import json
+    import struct
+
     class Socket:
         def __init__(self):
-            self.eof = threading.Event()
+            self.messages = Queue()
+            self.messages.put(json.dumps({"type": "input", "offset": 0}))
             self.closed = False
             self.sent = []
-            self.reads = 0
 
         def settimeout(self, value):
             pass
 
         def send_binary(self, data):
-            self.sent.append(data)
+            offset = struct.unpack("!Q", data[:8])[0]
+            self.sent.append(data[8:])
+            self.messages.put(json.dumps({"type": "input", "offset": offset + len(data) - 8}))
 
         def send(self, message):
-            assert message == "EOF"
-            self.eof.set()
+            control = json.loads(message)
+            if control["type"] == "eof":
+                self.messages.put(
+                    json.dumps({"type": "input", "offset": control["offset"], "eof": True})
+                )
+                self.messages.put(struct.pack("!Q", 0) + b"complete response")
+            elif control["type"] == "ack":
+                self.messages.put(json.dumps({"type": "eof", "offset": control["offset"]}))
 
         def recv(self):
-            assert self.eof.wait(5), "stdin EOF was never sent"
-            assert not self.closed, "tunnel closed before reading the response"
-            self.reads += 1
-            return b"complete response" if self.reads == 1 else b""
+            assert not self.closed
+            return self.messages.get(timeout=5)
 
         def close(self):
             self.closed = True

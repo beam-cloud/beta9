@@ -139,6 +139,7 @@ func (s *ContainerRuntimeServer) Start() error {
 	log.Info().Int("port", s.port).Msg("container runtime server started")
 
 	s.grpcServer = grpc.NewServer(
+		grpc.UnaryInterceptor(s.replaySandboxRequest),
 		grpc.MaxRecvMsgSize(gRPCMaxRecvMsgSize),
 		grpc.MaxSendMsgSize(gRPCMaxSendMsgSize),
 	)
@@ -272,6 +273,7 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 	buffer := make([]byte, 4096)
 	logEntry := &pb.ContainerLogEntry{}
+	offset := req.GetOffset()
 
 	for {
 		select {
@@ -280,7 +282,13 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 		default:
 		}
 
-		n, err := instance.LogBuffer.Read(buffer)
+		var n int
+		var err error
+		if req.Offset != nil {
+			n, err = instance.LogBuffer.ReadAt(buffer, int64(offset))
+		} else {
+			n, err = instance.LogBuffer.Read(buffer)
+		}
 		if err == io.EOF {
 			break
 		}
@@ -291,6 +299,8 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 		if n > 0 {
 			logEntry.Msg = string(buffer[:n])
+			offset += uint64(n)
+			logEntry.Offset = offset
 			if err := stream.Send(logEntry); err != nil {
 				return err
 			}
@@ -1656,6 +1666,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 	}
 
 	recordSandboxExposedPort(s.containerInstances, in.ContainerId, instance, uint32(in.Port))
+	instance.setContainerPortAddress(port, localTarget)
 
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[port])
 

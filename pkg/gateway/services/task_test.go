@@ -218,3 +218,26 @@ func restrictedTaskLifecycleContext(workspaceID string) context.Context {
 		Token:     &types.Token{TokenType: types.TokenTypeWorkspaceRestricted, Active: true},
 	})
 }
+
+func TestStartTaskReplayKeepsOriginalStartAndClaim(t *testing.T) {
+	gws, taskRepo := newTaskLifecycleGateway(t, "workspace-id")
+	ctx := restrictedTaskLifecycleContext("workspace-id")
+	request := &pb.StartTaskRequest{TaskId: "task-id", ContainerId: "container-id"}
+	first, err := gws.StartTask(ctx, request)
+	require.NoError(t, err)
+	require.True(t, first.Ok)
+	backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+	startedAt := backend.task.StartedAt
+	second, err := gws.StartTask(ctx, request)
+	require.NoError(t, err)
+	require.True(t, second.Ok)
+	require.Equal(t, startedAt, backend.task.StartedAt)
+	require.Len(t, backend.updates, 1)
+	claimed, err := taskRepo.IsClaimed(ctx, "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	request.ContainerId = "another-container"
+	second, err = gws.StartTask(ctx, request)
+	require.NoError(t, err)
+	require.False(t, second.Ok)
+}

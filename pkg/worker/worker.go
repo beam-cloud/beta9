@@ -187,6 +187,8 @@ func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManage
 }
 
 type ContainerInstance struct {
+	tunnels                    tunnelSessions
+	requests                   common.RequestJournal
 	workerAddressPublished     atomic.Bool
 	Id                         string
 	StubId                     string
@@ -389,6 +391,15 @@ func (i *ContainerInstance) containerAddress(port int32) string {
 	i.containerAddressMu.RLock()
 	defer i.containerAddressMu.RUnlock()
 	return i.ContainerAddressMap[port]
+}
+
+func (i *ContainerInstance) setContainerPortAddress(port int32, address string) {
+	i.containerAddressMu.Lock()
+	defer i.containerAddressMu.Unlock()
+	if i.ContainerAddressMap == nil {
+		i.ContainerAddressMap = make(map[int32]string)
+	}
+	i.ContainerAddressMap[port] = address
 }
 
 type ContainerOptions struct {
@@ -1112,6 +1123,10 @@ func (s *Worker) runContainerRequestWithRunner(
 // touched.
 func (s *Worker) releaseUnclaimedContainer(request *types.ContainerRequest) {
 	if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+		instance.tunnels.close()
+		if instance.LogBuffer != nil {
+			instance.LogBuffer.Dispose()
+		}
 		if request.Stub.Type.IsSandbox() {
 			instance.signalProcessManagerReadiness(false)
 		}

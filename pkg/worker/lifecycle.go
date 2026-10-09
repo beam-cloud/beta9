@@ -571,6 +571,12 @@ func (s *Worker) markContainerStopping(containerId string, expirySeconds int64) 
 }
 
 func (s *Worker) deleteContainer(containerId string) {
+	if instance, exists := s.containerInstances.Get(containerId); exists {
+		instance.tunnels.close()
+		if instance.LogBuffer != nil {
+			instance.LogBuffer.Dispose()
+		}
+	}
 	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
 		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
 			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")

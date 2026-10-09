@@ -141,6 +141,10 @@ func (c *ContainerClient) Close() error {
 	return c.conn.Close()
 }
 
+func (c *ContainerClient) Tunnel(ctx context.Context, in *pb.ContainerTunnelRequest) (*pb.ContainerTunnelResponse, error) {
+	return c.client.ContainerTunnel(ctx, in)
+}
+
 func (c *ContainerClient) Status(containerId string) (*pb.ContainerStatusResponse, error) {
 	resp, err := c.client.ContainerStatus(context.TODO(), &pb.ContainerStatusRequest{ContainerId: containerId})
 	if err != nil {
@@ -362,9 +366,13 @@ func (c *ContainerClient) StreamLogs(ctx context.Context, containerId string, ou
 // StreamLogsWithReady reports when the stream attachment attempt completes.
 // Callers can use ready to keep exit handling from racing log backfill.
 func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId string, outputChan chan OutputMsg, ready func()) error {
+	return c.StreamLogsAt(ctx, containerId, nil, outputChan, ready)
+}
+
+func (c *ContainerClient) StreamLogsAt(ctx context.Context, containerId string, offset *uint64, outputChan chan OutputMsg, ready func()) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stream, err := c.client.ContainerStreamLogs(ctx, &pb.ContainerStreamLogsRequest{ContainerId: containerId})
+	stream, err := c.client.ContainerStreamLogs(ctx, &pb.ContainerStreamLogsRequest{ContainerId: containerId, Offset: offset})
 	if err != nil {
 		return fmt.Errorf("error creating log stream: %w", err)
 	}
@@ -410,7 +418,7 @@ func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId s
 
 			if logEntry.Msg != "" {
 				select {
-				case outputChan <- OutputMsg{Msg: logEntry.Msg}:
+				case outputChan <- OutputMsg{Msg: logEntry.Msg, Offset: logEntry.Offset}:
 				case <-ctx.Done():
 					return ctx.Err()
 				}

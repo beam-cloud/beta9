@@ -83,3 +83,30 @@ def test_runner_ready_signal_failure_does_not_fail_user_code(monkeypatch):
 
     assert result.exception is None
     handler.assert_called_once()
+
+
+def test_monitor_reconnects_without_killing_running_function(monkeypatch):
+    import grpc
+
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+    channel = MagicMock()
+    channel.__enter__.return_value = channel
+    stub = MagicMock()
+    stub.function_monitor.side_effect = [Unavailable()] * 7 + [
+        [SimpleNamespace(cancelled=False, complete=True, timed_out=False)]
+    ]
+    monkeypatch.setattr(function_runner, "get_channel", lambda _: channel)
+    monkeypatch.setattr(function_runner, "FunctionServiceStub", lambda _: stub)
+    monkeypatch.setattr(function_runner.time, "sleep", lambda _: None)
+    kill = MagicMock()
+    monkeypatch.setattr(function_runner.os, "kill", kill)
+
+    function_runner._monitor_task(
+        function_context=SimpleNamespace(task_id="task", stub_id="stub", container_id="container"),
+        runner_pid=42,
+    )
+    assert stub.function_monitor.call_count == 8
+    kill.assert_not_called()
