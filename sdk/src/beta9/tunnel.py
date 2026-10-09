@@ -2,6 +2,7 @@
 
 import json
 from contextlib import suppress
+from queue import Full, Queue
 import threading
 from uuid import UUID, uuid4
 
@@ -21,6 +22,10 @@ class Tunnel:
         self.stopped = False
         self.input_ack = None
         self.error = None
+        self.output = Queue(maxsize=1)
+        self.read_id, self.read_ack = uuid4(), UUID(int=0)
+        self.downloading = False
+        self.sent_read = None
 
     def _upload(self):
         ack = UUID(int=0)
@@ -56,17 +61,58 @@ class Tunnel:
                     return
                 ack = request
         except Exception as error:
-            with self.condition:
-                self.error = error
-                self.stopped = True
-                if self.remote is not None:
-                    self.remote.close()
-                self.condition.notify_all()
+            self._fail(error)
+
+    def _fail(self, error):
+        with self.condition:
+            self.error = error
+            self.stopped = True
+            if self.remote is not None:
+                self.remote.close()
+            self.condition.notify_all()
+
+    def _send_read(self):
+        with self.condition:
+            remote = self.remote
+            if self.stopped or self.downloading or remote is None:
+                return
+            if self.sent_read == (remote, self.read_id):
+                return
+            self.sent_read = (remote, self.read_id)
+            try:
+                remote.send(
+                    json.dumps({"type": "read", "id": str(self.read_id), "ack": str(self.read_ack)})
+                )
+            except (OSError, websocket.WebSocketException):
+                remote.close()
+
+    def _finish_read(self):
+        with self.condition:
+            self.read_ack, self.read_id = self.read_id, uuid4()
+            self.downloading = False
+        self._send_read()
+
+    def _download(self):
+        try:
+            while True:
+                data = self.output.get()
+                if data is None or self.stopped:
+                    return
+                pending = memoryview(data)
+                while pending:
+                    written = self.target.write(pending)
+                    if not written:
+                        raise RuntimeError("Local tunnel output closed")
+                    pending = pending[written:]
+                self.target.flush()
+                self._finish_read()
+        except Exception as error:
+            self._fail(error)
 
     def run(self):
-        request, ack = uuid4(), UUID(int=0)
         recovery = _RecoveryWindow(start=False)
         threading.Thread(target=self._upload, daemon=True).start()
+        threading.Thread(target=self._download, daemon=True).start()
         try:
             while not self.stopped:
                 remote = None
@@ -76,24 +122,23 @@ class Tunnel:
                     with self.condition:
                         self.remote = remote
                         self.condition.notify_all()
-                    remote.send(json.dumps({"type": "read", "id": str(request), "ack": str(ack)}))
+                    self._send_read()
                     while not self.stopped:
                         message = remote.recv()
                         if not message:
                             raise ConnectionError("Tunnel disconnected")
+                        recovery.reset()
                         if isinstance(message, bytes):
-                            if len(message) < 16 or message[:16] != request.bytes:
-                                raise RuntimeError("Invalid tunnel response")
-                            pending = memoryview(message)[16:]
-                            try:
-                                while pending:
-                                    written = self.target.write(pending)
-                                    if not written:
-                                        raise RuntimeError("Local tunnel output closed")
-                                    pending = pending[written:]
-                                self.target.flush()
-                            except OSError as error:
-                                raise RuntimeError("Local tunnel output closed") from error
+                            with self.condition:
+                                if (
+                                    len(message) < 16
+                                    or message[:16] != self.read_id.bytes
+                                    or self.downloading
+                                ):
+                                    raise RuntimeError("Invalid tunnel response")
+                                self.downloading = True
+                            # Delivering output must not block receipt of stdin acknowledgements.
+                            self.output.put(message[16:])
                         else:
                             control = json.loads(message)
                             if control["type"] == "input":
@@ -101,7 +146,7 @@ class Tunnel:
                                     self.input_ack = control["id"]
                                     self.condition.notify_all()
                                 continue
-                            if control["id"] != str(request):
+                            if control["id"] != str(self.read_id):
                                 raise RuntimeError("Invalid tunnel response")
                             if control["type"] == "eof":
                                 with suppress(OSError, websocket.WebSocketException):
@@ -109,12 +154,7 @@ class Tunnel:
                                 return
                             if control["type"] != "output":
                                 raise RuntimeError("Invalid tunnel control")
-                        # Advancing the request before sending its ack prevents replaying output.
-                        ack, request = request, uuid4()
-                        remote.send(
-                            json.dumps({"type": "read", "id": str(request), "ack": str(ack)})
-                        )
-                        recovery.reset()
+                            self._finish_read()
                 except (OSError, websocket.WebSocketException) as error:
                     if isinstance(
                         error, websocket.WebSocketBadStatusException
@@ -127,6 +167,7 @@ class Tunnel:
                 finally:
                     with self.condition:
                         self.remote = None
+                        self.sent_read = None
                         self.condition.notify_all()
                     if remote is not None:
                         remote.close()
@@ -136,6 +177,8 @@ class Tunnel:
             with self.condition:
                 self.stopped = True
                 self.condition.notify_all()
+            with suppress(Full):
+                self.output.put_nowait(None)
 
 
 def bridge_tunnel(connect, source, target):

@@ -23,6 +23,7 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.volume import CloudBucket, Volume
 from ..channel import (
+    RECOVERY_TIMEOUT,
     _RecoveryWindow,
     request_metadata,
     rpc_timeout,
@@ -228,7 +229,7 @@ class _CallableWrapper(DeployableMixin):
     def __init__(self, func: Callable, parent: Function) -> None:
         self.func: Callable = func
         self.parent: Function = parent
-        self._invocations = {}
+        self._invocations = set()
         self._invocations_lock = threading.Lock()
 
     @with_grpc_error_handling
@@ -280,19 +281,19 @@ class _CallableWrapper(DeployableMixin):
         invocation = _Invocation(self.parent.function_stub, request)
         responses = iter(invocation)
         with self._invocations_lock:
-            self._invocations[id(request)] = invocation
+            self._invocations.add(invocation)
         try:
             return self._consume_invocation(responses, output, output_size)
         except KeyboardInterrupt:
             if invocation.task_id and not self.parent.headless:
-                with rpc_timeout(5):
+                with rpc_timeout(RECOVERY_TIMEOUT):
                     self.parent.gateway_stub.stop_tasks(
                         StopTasksRequest(task_ids=[invocation.task_id])
                     )
             raise
         finally:
             with self._invocations_lock:
-                self._invocations.pop(id(request), None)
+                self._invocations.discard(invocation)
 
     def _consume_invocation(self, responses, output, output_size):
         last_response: Optional[FunctionInvokeResponse] = None
@@ -378,12 +379,10 @@ class _CallableWrapper(DeployableMixin):
                     if not self.parent.headless:
                         with self._invocations_lock:
                             ids = [
-                                request.task_id
-                                for request in self._invocations.values()
-                                if request.task_id
+                                request.task_id for request in self._invocations if request.task_id
                             ]
                         if ids:
-                            with rpc_timeout(5):
+                            with rpc_timeout(RECOVERY_TIMEOUT):
                                 self.parent.gateway_stub.stop_tasks(StopTasksRequest(task_ids=ids))
                     terminal.error(
                         f"Exiting shell. Mapped functions will {'be terminated.' if not self.parent.headless else 'continue running.'}",

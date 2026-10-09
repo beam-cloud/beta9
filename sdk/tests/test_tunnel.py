@@ -27,7 +27,7 @@ def test_tunnel_reuses_requests_when_gateway_loses_replies_and_acknowledgements(
             pass
 
         def close(self):
-            pass
+            self.messages.put(ConnectionResetError())
 
         def recv(self):
             message = self.messages.get(timeout=5)
@@ -96,3 +96,62 @@ def test_tunnel_reuses_requests_when_gateway_loses_replies_and_acknowledgements(
     assert target.getvalue() == output
     assert len(connects) == 4
     assert len(set(connects)) == 1
+
+
+def test_tunnel_processes_input_ack_while_local_output_is_blocked():
+    import threading
+
+    writable = threading.Event()
+
+    class Remote:
+        def __init__(self):
+            self.messages = queue.Queue()
+            self.read = None
+            self.input = None
+            self.responded = False
+            self.writes = 0
+
+        def settimeout(self, _):
+            pass
+
+        def close(self):
+            self.messages.put(ConnectionResetError())
+
+        def recv(self):
+            return self.messages.get(timeout=5)
+
+        def reply(self):
+            if self.read and self.input and not self.responded:
+                # Output arrives before stdin's ack, just as two RPCs can complete.
+                self.messages.put(UUID(self.read).bytes + b"output")
+                self.messages.put(json.dumps({"type": "input", "id": self.input}))
+                self.responded = True
+
+        def send_binary(self, frame):
+            self.writes += 1
+            self.input = str(UUID(bytes=frame[:16]))
+            if self.writes == 1:
+                self.reply()
+            else:
+                writable.set()
+                self.messages.put(json.dumps({"type": "input", "id": self.input}))
+
+        def send(self, message):
+            control = json.loads(message)
+            if control["type"] == "read":
+                self.read = control["id"]
+                if self.responded:
+                    self.messages.put(json.dumps({"type": "eof", "id": self.read}))
+                else:
+                    self.reply()
+
+    class Target(io.BytesIO):
+        def write(self, data):
+            assert writable.wait(1), "output blocked delivery of stdin's ack"
+            return super().write(data)
+
+    remote = Remote()
+    target = Target()
+    Tunnel(lambda _: remote, io.BytesIO(b"x" * 131072), target).run()
+    assert remote.writes == 2
+    assert target.getvalue() == b"output"

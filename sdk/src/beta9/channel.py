@@ -263,6 +263,7 @@ class AuthTokenInterceptor(
             "FunctionGetArgs",
             "FunctionSetResult",
             "StopContainer",
+            "StopTasks",
         )
         if not recoverable:
             return self.intercept_call(continuation, client_call_details, request)
