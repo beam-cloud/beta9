@@ -95,7 +95,9 @@ def test_retry_respects_explicit_deadline():
     operation.assert_called_once()
 
 
-def test_function_reattaches_to_same_task_and_output_cursor(monkeypatch):
+@pytest.mark.parametrize("supports_resume", [True, False])
+@pytest.mark.parametrize("failure", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL])
+def test_function_reattaches_to_same_task_and_output_cursor(monkeypatch, supports_resume, failure):
     from concurrent.futures import ThreadPoolExecutor
     from beta9.clients.function import FunctionServiceStub
 
@@ -106,9 +108,10 @@ def test_function_reattaches_to_same_task_and_output_cursor(monkeypatch):
         headers = dict(context.invocation_metadata())
         attempts.append((headers["x-beta9-task-id"], int(headers["x-beta9-log-offset"])))
         if len(attempts) == 1:
-            yield FunctionInvokeResponse(task_id="task-123")
+            if supports_resume:
+                yield FunctionInvokeResponse(task_id="task-123")
             yield FunctionInvokeResponse(task_id="task-123", output="before\n")
-            context.abort(grpc.StatusCode.UNAVAILABLE, "gateway restarting")
+            context.abort(failure, "Received RST_STREAM with error code 2")
         yield FunctionInvokeResponse(task_id="task-123", output="after\n")
         yield FunctionInvokeResponse(task_id="task-123", done=True, result=b"result")
 
@@ -131,10 +134,16 @@ def test_function_reattaches_to_same_task_and_output_cursor(monkeypatch):
     server.start()
     channel = Channel(f"127.0.0.1:{port}", retry=(lambda _: None, False))
     try:
-        responses = []
-        for response in _Invocation(
+        invocation = _Invocation(
             FunctionServiceStub(channel), FunctionInvokeRequest(stub_id="stub")
-        ):
+        )
+        if not supports_resume:
+            with pytest.raises(grpc.RpcError):
+                list(invocation)
+            assert attempts == [("", 0)]
+            return
+        responses = []
+        for response in invocation:
             assert request_metadata.get() == ()
             responses.append(response)
         assert attempts == [("", 0), ("task-123", 7)]
@@ -153,6 +162,20 @@ def test_function_does_not_start_another_task_when_identity_is_unknown():
     stub.function_invoke.assert_called_once()
 
 
+def test_recovery_does_not_retry_application_internal_errors():
+    class Internal(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.INTERNAL
+
+        def details(self):
+            return "invalid application response"
+
+    operation = Mock(side_effect=Internal())
+    with pytest.raises(Internal):
+        retry_operation(operation)
+    operation.assert_called_once()
+
+
 def test_acknowledgements_stay_with_their_container():
     observed = []
 
@@ -167,7 +190,9 @@ def test_acknowledgements_stay_with_their_container():
     assert observed[2]["x-beta9-request-ack"] == observed[0]["x-beta9-request-id"]
 
 
-@pytest.mark.parametrize("failure", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED])
+@pytest.mark.parametrize(
+    "failure", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED]
+)
 def test_generated_sandbox_stub_retries_in_the_shared_channel(monkeypatch, failure):
     from concurrent.futures import ThreadPoolExecutor
     from beta9.clients.pod import PodServiceStub, PodSandboxExecRequest, PodSandboxExecResponse

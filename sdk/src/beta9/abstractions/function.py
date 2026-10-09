@@ -51,6 +51,7 @@ class _Invocation:
         self.request = request
         self.task_id = ""
         self.output_offset = 0
+        self.resumable = False
 
     def __iter__(self):
         recovery_started = None
@@ -71,6 +72,9 @@ class _Invocation:
                         request_metadata.reset(token)
                     if response is None:
                         break
+                    # The registration response advertises support for reattaching.
+                    if response.task_id and not response.output and not response.done:
+                        self.resumable = True
                     self.task_id = response.task_id or self.task_id
                     if response.output:
                         self.output_offset += len(response.output.encode("utf-8"))
@@ -81,7 +85,7 @@ class _Invocation:
                         return
                 raise ConnectionError("Function stream disconnected")
             except Exception as error:
-                if not self.task_id or not transient_error(error):
+                if not self.resumable or not self.task_id or not transient_error(error):
                     raise
                 if recovery_started is None:
                     recovery_started = time.monotonic()

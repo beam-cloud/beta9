@@ -53,6 +53,8 @@ RECOVERY_TIMEOUT = 120.0
 
 def transient_error(error):
     if isinstance(error, grpc.RpcError):
+        if error.code() == grpc.StatusCode.INTERNAL:
+            return error.details().startswith("Received RST_STREAM")
         return error.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED)
     if isinstance(error, GatewayHTTPError):
         return error.status == 0 or error.status >= 500
