@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,47 @@ import (
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
+
+func TestShortVMIDsProduceStableSystemdIdentity(t *testing.T) {
+	identities := map[string]bool{}
+	for _, id := range []string{"12ab34cd56ef7890", "12ab34cd56ef7891", "676139cd-f92b-4688-bb36-a0e763ef445c"} {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		proc := &specs.Process{Env: []string{"BEAM_VM_ID=" + id}}
+		if err := writeSystemdBootFiles(root, proc); err != nil {
+			t.Fatal(err)
+		}
+		first, err := os.ReadFile(filepath.Join(root, "etc/machine-id"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		machineID := strings.TrimSpace(string(first))
+		decoded, err := hex.DecodeString(machineID)
+		if err != nil || len(decoded) != 16 || identities[machineID] {
+			t.Fatalf("invalid or duplicated systemd identity %q: %v", machineID, err)
+		}
+		identities[machineID] = true
+		if len(id) == 36 && machineID != strings.ReplaceAll(id, "-", "") {
+			t.Fatal("existing VM identity changed")
+		}
+		// /run is a fresh tmpfs on a cold boot; only the durable root survives.
+		if err := os.RemoveAll(filepath.Join(root, "run")); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeSystemdBootFiles(root, proc); err != nil {
+			t.Fatal(err)
+		}
+		second, err := os.ReadFile(filepath.Join(root, "etc/machine-id"))
+		if err != nil || string(first) != string(second) {
+			t.Fatalf("cold boot changed systemd identity: %v", err)
+		}
+		if processEnv(proc, "BEAM_VM_ID") != id {
+			t.Fatal("public VM ID changed")
+		}
+	}
+}
 
 func TestSystemdBootConfiguration(t *testing.T) {
 	root := t.TempDir()

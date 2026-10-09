@@ -7,6 +7,7 @@ package main
 // protocol. Transient boot configuration lives on /run, never on the disk.
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,10 +135,12 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		return err
 	}
 	// Machine identity is stable on start, and distinct on fork/template.
-	if id := strings.ReplaceAll(processEnv(process, "BEAM_VM_ID"), "-", ""); id != "" {
-		if err := os.WriteFile(filepath.Join(root, "etc/machine-id"), []byte(id+"\n"), 0644); err != nil {
-			return err
-		}
+	id, err := vmMachineID(processEnv(process, "BEAM_VM_ID"))
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/machine-id"), []byte(id+"\n"), 0644); err != nil {
+		return err
 	}
 	processFile := filepath.Join(root, systemdProcessFile)
 	if err := os.MkdirAll(filepath.Dir(processFile), 0700); err != nil {
@@ -221,11 +224,23 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	return nil
 }
 
+func vmMachineID(id string) (string, error) {
+	compact := strings.ReplaceAll(id, "-", "")
+	if (len(compact) != 16 && len(compact) != 32) || strings.Trim(compact, "0123456789abcdef") != "" {
+		return "", fmt.Errorf("invalid VM machine ID")
+	}
+	if len(compact) == 32 {
+		return compact, nil // Preserve the identity of existing UUID-based VMs.
+	}
+	// Systemd requires 128 bits, independent of the public resource ID's size.
+	sum := sha256.Sum256([]byte("beam-vm:" + compact))
+	return fmt.Sprintf("%x", sum[:16]), nil
+}
+
 func prepareVMIdentity(root string, process *specs.Process) error {
 	id := processEnv(process, "BEAM_VM_ID")
-	compact := strings.ReplaceAll(id, "-", "")
-	if len(compact) != 32 || strings.Trim(compact, "0123456789abcdef") != "" {
-		return fmt.Errorf("invalid VM machine ID")
+	if _, err := vmMachineID(id); err != nil {
+		return err
 	}
 	identityPath := filepath.Join(root, "etc/beam-vm-identity")
 	previous, err := os.ReadFile(identityPath)
