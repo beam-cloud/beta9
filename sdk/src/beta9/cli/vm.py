@@ -239,9 +239,7 @@ def new(
 def _volumes(entries):
     result = []
     for entry in entries:
-        name, separator, mount = entry.partition(":")
-        if not separator or not name or not mount.startswith("/"):
-            raise click.UsageError("Expected volume NAME:/mount")
+        name, mount = extraclick.MountSpec().convert(entry, None, None)
         result.append(Volume(name=name, mount_path=mount))
     return result
 
@@ -406,6 +404,8 @@ def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False)
     command = _command(command)
     if not command:
         raise click.UsageError("A command is required")
+    if detach and timeout:
+        raise click.UsageError("--timeout requires foreground execution; omit --detach")
     vm = _vm(service, name)
     sandbox = vm._sandbox()
     if detach or as_json:
@@ -878,11 +878,13 @@ def logs_vm(service, name, unit, session, follow, pid=None):
     if pid is not None:
         if unit or session:
             raise click.UsageError("Choose one of --pid, --unit, or --session")
-        process = _vm(service, name).process.get_process(pid)
+        vm = _vm(service, name)
         if follow:
-            for line in process.logs:
-                click.echo(line, nl=False)
+            with vm.keep_alive():
+                for line in vm.process.get_process(pid).logs:
+                    click.echo(line, nl=False)
         else:
+            process = vm.process.get_process(pid)
             click.echo(process.stdout.read(), nl=False)
             click.echo(process.stderr.read(), nl=False, err=True)
         return

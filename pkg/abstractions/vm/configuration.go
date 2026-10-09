@@ -303,6 +303,18 @@ func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM
 	return s.start(ctx, info, v)
 }
 
+func (s *Service) accessOwner(ctx context.Context, v *types.VM) (*auth.AuthInfo, error) {
+	token, tokenErr := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
+	workspace, workspaceErr := s.backend.GetWorkspaceByExternalId(ctx, v.WorkspaceExternalID)
+	if tokenErr != nil || workspaceErr != nil {
+		return nil, echo.NewHTTPError(503, "VM authorization unavailable")
+	}
+	if token == nil || !token.Active || token.DisabledByClusterAdmin {
+		return nil, echo.NewHTTPError(403, "VM access is revoked")
+	}
+	return &auth.AuthInfo{Workspace: &workspace, Token: token}, nil
+}
+
 func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port uint32) (*types.VM, error) {
 	ctx, cancel := context.WithTimeout(parent, 180*time.Second)
 	defer cancel()
@@ -315,21 +327,11 @@ func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port u
 				unlock()
 				return nil, echo.NewHTTPError(409, "VM access changed while resuming")
 			}
-			token, tokenErr := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
-			if tokenErr != nil {
+			info, ownerErr := s.accessOwner(ctx, v)
+			if ownerErr != nil {
 				unlock()
-				return nil, echo.NewHTTPError(503, "VM authorization unavailable")
+				return nil, ownerErr
 			}
-			if token == nil || !token.Active || token.DisabledByClusterAdmin {
-				unlock()
-				return nil, echo.NewHTTPError(403, "VM access is revoked")
-			}
-			workspace, workspaceErr := s.backend.GetWorkspaceByExternalId(ctx, v.WorkspaceExternalID)
-			if workspaceErr != nil {
-				unlock()
-				return nil, echo.NewHTTPError(503, "VM authorization unavailable")
-			}
-			info := &auth.AuthInfo{Workspace: &workspace, Token: token}
 			ctx = auth.ContextWithAuthInfo(ctx, info)
 			if v.DesiredState != "running" {
 				err = s.activate(ctx, info, v)
@@ -341,9 +343,8 @@ func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port u
 					v.Status = "running"
 					// Do not forward a POST until the app's listening socket is
 					// ready. A cold boot restarts systemd services, not processes.
-					command := "python3 -c " + common.ShellQuote(fmt.Sprintf("import socket; socket.create_connection(('127.0.0.1', %d), 1).close()", port))
-					probe, probeErr := s.runtime.SandboxExec(ctx, &pb.PodSandboxExecRequest{ContainerId: v.ContainerID, Command: command, Cwd: "/", Wait: true})
-					if probeErr == nil && probe.Ok && probe.Done && probe.ExitCode == 0 {
+					ready, probeErr := s.runtime.VMPortReady(ctx, v.StubID, v.ContainerID, port)
+					if probeErr == nil && ready {
 						unlock()
 						return v, nil
 					}

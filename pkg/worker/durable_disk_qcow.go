@@ -86,7 +86,7 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	// Resolving a chain costs a round trip per generation. A worker that
 	// published or last restored this disk already holds the whole chain in
 	// memory, and a head that still matches means nothing was published since.
-	newest, err := s.latestQcowSnapshotRow(ctx, request, mount)
+	newest, err := s.restoreQcowSnapshotRow(ctx, request, mount)
 	if err != nil {
 		return err
 	}
@@ -759,6 +759,27 @@ func (s *Worker) withdrawQcowSnapshot(ctx context.Context, request *types.Contai
 		log.Warn().Err(err).Str("container_id", request.ContainerId).Str("disk", row.DiskName).
 			Str("snapshot_id", row.ExternalId).Msg("failed to withdraw a snapshot its journal never recorded")
 	}
+}
+
+// A warm VM restores the immutable disk head paired with RAM. Consulting the
+// latest head here would race a publication after gateway validation.
+func (s *Worker) restoreQcowSnapshotRow(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
+	if !request.IsPersistentVM() || request.Checkpoint == nil {
+		return s.latestQcowSnapshotRow(ctx, request, mount)
+	}
+	id := mount.DurableDisk.SourceSnapshotId
+	if id == "" {
+		return nil, fmt.Errorf("VM memory checkpoint has no paired disk %s", mount.DurableDisk.Name)
+	}
+	resp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{WorkspaceId: cacheRequestWorkspaceID(request), SnapshotId: id}))
+	if err != nil {
+		return nil, fmt.Errorf("get paired VM disk snapshot: %w", err)
+	}
+	row := durableDiskSnapshotFromProto(resp.Snapshot)
+	if row == nil || row.ExternalId != id || row.DiskName != mount.DurableDisk.Name || row.ManifestKey == "" || row.Format != types.DiskSnapshotFormatQcowV1 {
+		return nil, fmt.Errorf("paired VM disk snapshot %s is unavailable or incompatible", id)
+	}
+	return row, nil
 }
 
 func (s *Worker) latestQcowSnapshotRow(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {

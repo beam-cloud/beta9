@@ -452,6 +452,26 @@ def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
     assert remote.closed
 
 
+def test_activity_touch_retries_transient_lifecycle_lock():
+    selected = service()
+    selected.http.json.side_effect = [GatewayHTTPError(409, "VM operation already in progress"), {}]
+    vm = VM(_service=selected)._set({"id": "resource", "name": "dev"})
+    vm._touch(timeout=3)
+    assert selected.http.json.call_count == 2
+    assert all(call.kwargs["timeout"] <= 3 for call in selected.http.json.call_args_list)
+
+
+def test_cli_rejects_detached_command_deadline(cli_service, monkeypatch):
+    resolve = MagicMock()
+    monkeypatch.setattr(vm_cli, "_vm", resolve)
+    result = CliRunner().invoke(
+        vm_cli.management, ["exec", "--detach", "--timeout", "1", "dev", "sleep", "600"]
+    )
+    assert result.exit_code == 2
+    assert "foreground" in result.output
+    resolve.assert_not_called()
+
+
 def test_activity_lease_refreshes_during_work_and_stops_on_exit():
     selected = service()
     heartbeats = threading.Event()

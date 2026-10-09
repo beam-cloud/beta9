@@ -208,8 +208,8 @@ class VM:
 
         self._spec = {key: value for key, value in self._spec.items() if value is not None}
 
-    def _api(self, method, path="", **kwargs):
-        deadline = time.monotonic() + 240
+    def _api(self, method, path="", *, timeout=240, **kwargs):
+        deadline = time.monotonic() + timeout
         while True:
             try:
                 return self._service.http.json(
@@ -233,6 +233,9 @@ class VM:
         if not self.name:
             raise ValueError("Create or resolve the VM first")
         return "/" + quote(self.info.get("id") or self.name, safe="")
+
+    def _touch(self, *, timeout=240):
+        return self._api("POST", self._path() + "/touch", timeout=timeout, json={})
 
     def _set(self, info):
         if info.get("container_id") != self.info.get("container_id"):
@@ -511,7 +514,7 @@ class VM:
                 ok=True,
                 vm_channel=self._service.channel,
             )
-        self._action("touch")
+        self._touch()
         return self._connected
 
     @contextmanager
@@ -522,7 +525,7 @@ class VM:
         idle stopping, or be owned by an application that maintains a lease.
         """
         self.refresh()
-        self._action("touch")
+        self._touch()
         ttl = self.info.get("spec", {}).get("idle_timeout", 0)
         if not ttl:
             yield self
@@ -534,9 +537,7 @@ class VM:
         def heartbeat():
             while not done.wait(interval):
                 try:
-                    self._service.http.json(
-                        "POST", "/api/v1/vm/{ws}" + self._path() + "/touch", timeout=3, json={}
-                    )
+                    self._touch(timeout=3)
                 except Exception as exc:
                     errors.append(exc)
                     return

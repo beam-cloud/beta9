@@ -26,7 +26,8 @@ import (
 
 type Runtime interface {
 	pb.PodServiceServer
-	RunVM(context.Context, *auth.AuthInfo, string, string, types.VMSpec, string) error
+	RunVM(context.Context, *auth.AuthInfo, string, string, types.VMSpec, string, map[string]string) error
+	VMPortReady(context.Context, string, string, uint32) (bool, error)
 	ForwardVM(echo.Context, string, string) error
 	TunnelVM(echo.Context, string, uint32) error
 }
@@ -455,11 +456,9 @@ func (s *Service) action(c echo.Context) error {
 				ports = append(ports, req.Port)
 			}
 			v.Spec.Ports = ports
-			if c.Param("action") == "unexpose" {
+			if c.Param("action") == "unexpose" || req.Protected != nil {
 				v.Spec.ProtectedPorts = slices.DeleteFunc(slices.Clone(v.Spec.ProtectedPorts), func(port uint32) bool { return port == req.Port })
-			} else if req.Protected != nil {
-				v.Spec.ProtectedPorts = slices.DeleteFunc(slices.Clone(v.Spec.ProtectedPorts), func(port uint32) bool { return port == req.Port })
-				if *req.Protected {
+				if c.Param("action") != "unexpose" && req.Protected != nil && *req.Protected {
 					v.Spec.ProtectedPorts = append(v.Spec.ProtectedPorts, req.Port)
 					if v.TrafficAccessToken == "" {
 						v.TrafficAccessToken = strings.ReplaceAll(uuid.NewString(), "-", "")

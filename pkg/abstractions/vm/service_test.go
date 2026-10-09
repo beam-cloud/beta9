@@ -253,23 +253,28 @@ func (b *vmBackend) GetLatestDiskSnapshot(context.Context, uint, string) (*types
 
 type vmRuntime struct {
 	pb.UnimplementedPodServiceServer
-	containers     *vmContainers
-	requests       []string
-	checkpoint     string
-	memoryResponse *pb.PodSandboxSnapshotMemoryResponse
-	snapshotError  bool
-	snapshots      int
-	forwarded      string
-	diskName       string
-	boundPorts     []int32
-	network        *pb.PodSandboxUpdateNetworkPermissionsRequest
+	containers      *vmContainers
+	requests        []string
+	checkpoint      string
+	checkpointDisks map[string]string
+	memoryResponse  *pb.PodSandboxSnapshotMemoryResponse
+	snapshotError   bool
+	snapshots       int
+	forwarded       string
+	diskName        string
+	boundPorts      []int32
+	network         *pb.PodSandboxUpdateNetworkPermissionsRequest
 }
 
-func (r *vmRuntime) RunVM(_ context.Context, _ *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string) error {
+func (r *vmRuntime) RunVM(_ context.Context, _ *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string, disks map[string]string) error {
 	r.checkpoint = checkpoint
+	r.checkpointDisks = disks
 	r.requests = append(r.requests, cid)
 	r.containers.states[cid] = &types.ContainerState{ContainerId: cid, StubId: stub, Status: types.ContainerStatusRunning}
 	return nil
+}
+func (r *vmRuntime) VMPortReady(context.Context, string, string, uint32) (bool, error) {
+	return true, nil
 }
 func (r *vmRuntime) ForwardVM(c echo.Context, stub, cid string) error {
 	r.forwarded = fmt.Sprintf("%s:%s:%s", cid, c.Param("port"), c.Param("subPath"))

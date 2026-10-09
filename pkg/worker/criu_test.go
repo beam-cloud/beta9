@@ -2978,6 +2978,7 @@ func TestCheckpointDiscoveryFailureIsProcessSpecific(t *testing.T) {
 }
 
 func TestMicroVMNativeCheckpointManagerDoesNotRequireCRIU(t *testing.T) {
+	t.Setenv("PATH", "")
 	manager, err := InitializeMicroVMCheckpointManager(t.TempDir())
 	require.NoError(t, err)
 	worker := &Worker{criuManager: manager}

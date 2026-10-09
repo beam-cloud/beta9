@@ -10,7 +10,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
@@ -95,14 +94,6 @@ func TestMetadataFilterMatchesPresentKeysAndUpdateClears(t *testing.T) {
 func (r *vmRuntime) SandboxUpdateNetworkPermissions(_ context.Context, req *pb.PodSandboxUpdateNetworkPermissionsRequest) (*pb.PodSandboxUpdateNetworkPermissionsResponse, error) {
 	r.network = req
 	return &pb.PodSandboxUpdateNetworkPermissionsResponse{Ok: true}, nil
-}
-
-func (r *vmRuntime) SandboxExec(_ context.Context, req *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
-	args, err := shlex.Split(req.Command)
-	if err != nil || len(args) != 3 || args[0] != "python3" || args[1] != "-c" {
-		return &pb.PodSandboxExecResponse{ErrorMsg: "invalid readiness argv"}, nil
-	}
-	return &pb.PodSandboxExecResponse{Ok: true, Done: true}, nil
 }
 
 func TestNetworkChangesReachWorkerAndFutureLaunches(t *testing.T) {

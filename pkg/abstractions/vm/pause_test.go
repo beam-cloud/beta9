@@ -36,6 +36,7 @@ func TestPauseReleasesComputeAndRestoresPairedMemory(t *testing.T) {
 	require.Equal(t, "memory", v.MemoryCheckpointID)
 	require.NoError(t, s.activate(ctx, info, v))
 	require.Equal(t, "memory", runtime.checkpoint)
+	require.Equal(t, map[string]string{rootDisk(v): "root-after-shutdown"}, runtime.checkpointDisks)
 	require.NotEmpty(t, v.ContainerID)
 	require.NoError(t, s.start(ctx, info, v))
 	require.Empty(t, v.MemoryCheckpointID, "consume the checkpoint after successful restore")

@@ -4,6 +4,8 @@
 desktop, terminal, and application URLs. Every launch uses `use_vm`; GPU options
 are rejected. The guest runs systemd as PID 1. Stop releases compute; start is a
 cold boot of the same filesystem. Enabled user services start again normally.
+Pause releases compute while preserving memory and running processes; start
+resumes that checkpoint unless `--cold` explicitly discards it.
 
 ```sh
 beam --context local vm new dev --desktop --docker-enabled --cpu 2 --memory 2048
@@ -50,12 +52,45 @@ must already contain these services. Registry images and Dockerfiles passed
 directly to `vm new` receive the service layer automatically.
 
 Lifecycle commands are `new`, `list`, `get`, `start`/`resume`, `stop`, `rm`, and
-`fork`. Access commands are `exec`, `ssh`, `scp`, `sync --watch`, `desktop`, and
+`pause`, `fork`, and `update`. Access commands are `exec`, `ssh`, `scp`, `sync --watch`, `desktop`, and
 `terminal`. `ports`, `expose`, and `unexpose` manage published ports.
 `port-forward dev 15432:5432` binds localhost through an authenticated tunnel and
 does not publish a URL. `prompt` supports `--agent claude|codex`, `--cwd`, and
 `--detach`/`--background`. `logs --unit` reads the journal; `logs --session` reads
 durable prompt logs. Exec, prompt, and logs work without SSH.
+
+Creation also accepts `--auto-resume`, `--idle-action stop|pause`, repeated
+`--metadata KEY=VALUE`, `--request-id UUID`, `--block-network` or repeated
+`--allow-network`, repeated `--protected-port`, `--disk NAME:/MOUNT:SIZE`, and
+`--volume NAME:/MOUNT`. `list --metadata KEY=VALUE --status running` filters
+resources. `update` changes metadata and idle policy; `network` changes the
+outbound firewall live and on subsequent launches. UUID creation requests can
+be safely retried with the same body; changing that body returns a conflict.
+
+`exec --detach --json` returns a process ID and its runtime identity. `ps`,
+`logs --pid PID`, and `kill PID --container-id ID` reuse the sandbox process
+manager. Process handles belong to a runtime; reacquire them after a launch.
+Foreground exec maintains an idle activity lease and cancels the child at its
+deadline. Detached work should use `--ttl 0`, or a client-owned `vm.keep_alive()`
+context. `metrics` samples guest CPU, memory and root filesystem usage.
+
+SDK storage uses the existing `DurableDisk` and `Volume` objects. Extra disks
+must use qcow/ext4 and unique absolute mount paths. Shared volumes are external
+mutable storage, so they are not included transactionally in memory snapshots.
+VM removal owns only the VM's root, not attached disks or volumes.
+
+```python
+from beam import DurableDisk, VM, Volume
+
+vm = VM("dev", desktop=True, auto_resume=True, idle_action="pause", ttl=300,
+        metadata={"project": "editor"}, protected_ports=[8080, 7681],
+        disks=[DurableDisk("dev-data", "10GiB", "/data")],
+        volumes=[Volume("shared", "/shared")], context="staging").create()
+with vm.keep_alive():
+    vm.process.exec("python3", "train.py").wait()
+vm.pause()
+vm.start()  # live guest processes continue
+```
 
 `snapshot create`, `snapshot list`, `template create/list/show/rm`, and `fork`
 reuse immutable durable-disk snapshots. Fork accepts a VM or an explicit VM
@@ -92,12 +127,25 @@ Lifecycle advisory locks prevent concurrent operations across gateway replicas.
 Running VMs commit a recovery root approximately once a minute. Worker failure
 may lose writes after the latest completed commit; this is not synchronous remote
 storage. Snapshots are filesystem snapshots, not application transactions. This
-version resumes cold and does not save RAM. VM service shutdown gets at least
+version supports both cold stop/start and RAM pause/resume. VM service shutdown gets at least
 120 seconds; raise the worker termination grace period for units that need longer.
+
+Memory pause seals disk generations while the hypervisor is suspended, then
+terminates compute without systemd shutdown. Warm resume requires the original
+active workspace credential and unchanged paired disk generations. An incomplete
+pause, unavailable checkpoint, or changed disk produces an error; `start --cold`
+explicitly boots the latest durable storage. Referenced checkpoints are retained
+by checkpoint garbage collection. RAM checkpoints resume the same VM; forks and
+templates remain filesystem snapshots.
 
 `--ttl` measures idle time from SDK operations and active HTTP/WebSocket/tunnel
 connections. `0` disables idle stopping. Restarting explicitly resets the idle
 clock. Guest background work alone does not count as external activity.
+
+`--auto-resume` allows authenticated SDK operations and published URL traffic to
+start a stopped or paused VM. HTTP requests wait for the application's TCP port
+before forwarding once, preserving POST bodies and WebSocket upgrades. Resume
+may take seconds; application-level readiness remains the application's job.
 
 ## Persistent URLs
 
@@ -119,12 +167,21 @@ HTTP gateway when it is unavailable.
 
 URLs use `<name>-<random handle>-<port>.vm.example.com`, with a separate random
 128-bit handle independent of the resource UUID. They remain fixed across cold
-boots and gateway restarts. Treat published URLs as access credentials: anyone
-with the URL can reach that guest service. Workspace tokens never appear in URLs.
+boots and gateway restarts. Unprotected published URLs allow anyone holding the
+URL to reach that guest service. Workspace tokens never appear in URLs.
 SSH stays behind workspace authentication. Removing a VM or unpublishing a port
 revokes routing immediately; forks never share a handle.
 Revoking the owning token also denies new URL access and stops the VM during
 reconciliation. Another active workspace token can explicitly start it again.
+
+Protected ports require `X-Beam-VM-Token`, available through
+`vm.traffic_access_token` or `access-token`. `access-token --rotate` revokes old
+tokens and browser sessions. `vm.access_url(port, ttl=600)` exchanges a temporary,
+port-scoped link for a Secure/HttpOnly browser cookie and redirects to the stable
+URL. `desktop --url` and `terminal --url` do this automatically for protected
+ports. Access credentials are stripped before application forwarding, and denied
+requests never wake a stopped VM. Sessions grant traffic access only, with a
+maximum lifetime of one hour. Guest applications still control their own users.
 
 Local configuration uses `vm.localhost:1994` and plain HTTP. The generic path
 fallback is `/vm/<handle>/<port>/`; applications using absolute browser paths
@@ -136,9 +193,18 @@ uses JPEG to limit CPU spent on full-frame WebP encoding. The gateway streams
 WebSocket messages with reusable 64 KiB buffers instead of allocating whole
 frames. Frame rate still depends on the workload, network, and assigned CPU.
 
+`vm.desktop` adds screenshots, screen size/resize, mouse/click/drag/scroll,
+keyboard shortcuts, Unicode clipboard paste, application launch and CPU MP4
+recording over the existing authenticated sandbox transport. Finish recordings
+with `vm.desktop.stop_recording(handle)`, then download with `vm.fs`. `screenshot`
+saves a PNG through the CLI. Screenshots and recordings do not require a public
+desktop URL; `vm.aio` exposes the shared async process, filesystem and Docker APIs.
+
 ## Development verification
 
-The gateway hot-reloads in Okteto. Run `make worker` with a kubeconfig explicitly
+The development gateway hot-reloads in Okteto. Staging uses release images with
+`GATEWAY_TAG=<custom CI tag> make start-stage` and a separate Okteto state folder.
+Run `make worker` with a kubeconfig explicitly
 pointing at the development cluster: its cleanup step deletes local worker jobs.
 Migration 056 adds only VM identities and artifact metadata. There is no new
 scheduler or disk storage backend.
@@ -152,3 +218,11 @@ Run `python hack/vm-smoke.py --context local --pool <development-vm-pool>` on th
 setup. It checks root persistence, arbitrary enabled units, shutdown writes,
 stable URLs and machine identity, independent forks, and templates after source
 removal. It creates and removes only its own resources.
+
+`e2e/vm_tests/audit.py --profile staging --image-id <prepared-desktop-image>
+--name audit-<run> --report <path>` checks memory pause, protected traffic,
+automatic wake, extra disks/volumes, network policy, async files, process control,
+metrics and desktop APIs. Run the same arguments with `--cleanup` after browser
+validation to remove that run's VM and unregister its disk/volume.
+See [the competitor audit](vm-competitor-audit.md) for scope and remaining platform
+distinctions.

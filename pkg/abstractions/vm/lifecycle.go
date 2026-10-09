@@ -121,7 +121,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
 	}
-	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID)
+	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
 			v.ContainerID = ""
@@ -202,10 +202,6 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 		}
 	}
 	if v.ContainerID == "" {
-		v.Status = "stopped"
-		if v.DesiredState == "paused" {
-			v.Status = "paused"
-		}
 		return s.finishStop(ctx, v)
 	}
 	state, err := s.containers.GetContainerState(v.ContainerID)
@@ -261,10 +257,6 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 				v.RootSnapshotID = latest.ExternalId
 			}
 			v.ContainerID = ""
-			v.Status = "stopped"
-			if v.DesiredState == "paused" {
-				v.Status = "paused"
-			}
 			v.Error = ""
 			return s.finishStop(ctx, v)
 		}
@@ -282,6 +274,10 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 // Persist the final root before recording the optional artifact. A replacement
 // gateway retries the same artifact identity if it died between these writes.
 func (s *Service) finishStop(ctx context.Context, v *types.VM) error {
+	v.Status = "stopped"
+	if v.DesiredState == "paused" {
+		v.Status = "paused"
+	}
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
 	}

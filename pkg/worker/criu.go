@@ -594,13 +594,17 @@ type restoreCheckpointResult struct {
 	err      error
 }
 
-// MicroVM checkpoints are dispatched to Cloud Hypervisor through the shared
-// runtime manager; they require storage, not CRIU tools or GPU compatibility.
-func InitializeMicroVMCheckpointManager(checkpointRoot string) (CRIUManager, error) {
+func prepareCheckpointRoot(checkpointRoot string) error {
 	if checkpointRoot == "" {
-		return nil, fmt.Errorf("checkpoint root is required")
+		return fmt.Errorf("checkpoint root is required")
 	}
-	if err := os.MkdirAll(checkpointRoot, 0755); err != nil {
+	return os.MkdirAll(checkpointRoot, 0755)
+}
+
+// MicroVM checkpoints use the shared runtime dispatcher and require storage,
+// rather than CRIU tools or GPU compatibility.
+func InitializeMicroVMCheckpointManager(checkpointRoot string) (CRIUManager, error) {
+	if err := prepareCheckpointRoot(checkpointRoot); err != nil {
 		return nil, err
 	}
 	return &NvidiaCRIUManager{checkpointRoot: checkpointRoot, available: true}, nil
@@ -610,8 +614,8 @@ func InitializeMicroVMCheckpointManager(checkpointRoot string) (CRIUManager, err
 func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, checkpointRoot string) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
 	var err error = nil
-	if checkpointRoot == "" {
-		return nil, fmt.Errorf("checkpoint root is required")
+	if err := prepareCheckpointRoot(checkpointRoot); err != nil {
+		return nil, err
 	}
 
 	switch config.Mode {
@@ -622,10 +626,6 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, checkpo
 	}
 
 	if err != nil {
-		return nil, err
-	}
-
-	if err := os.MkdirAll(checkpointRoot, os.ModePerm); err != nil {
 		return nil, err
 	}
 
