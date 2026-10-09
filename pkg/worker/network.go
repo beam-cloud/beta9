@@ -706,7 +706,13 @@ func (m *ContainerNetworkManager) fillNetworkSlotPoolLocked(maxSlots int) error 
 	}
 
 	var wg sync.WaitGroup
-	limit := make(chan struct{}, min(needed, networkSlotFillConcurrency))
+	concurrency := networkSlotFillConcurrency
+	if m.networkSetupRecent() {
+		// Creating namespaces takes the kernel's global rtnl lock. A full
+		// parallel refill can stall network discovery in a starting runtime.
+		concurrency = 1
+	}
+	limit := make(chan struct{}, min(needed, concurrency))
 	for range needed {
 		if m.refillDeferred() {
 			break
@@ -716,6 +722,13 @@ func (m *ContainerNetworkManager) fillNetworkSlotPoolLocked(maxSlots int) error 
 		case <-m.ctx.Done():
 			wg.Wait()
 			return m.ctx.Err()
+		}
+
+		// Waiting for a refill can cross the low-water mark. Recheck after
+		// acquiring its slot so a busy worker does not queue another batch.
+		if m.refillDeferred() {
+			<-limit
+			break
 		}
 
 		wg.Add(1)
