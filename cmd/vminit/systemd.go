@@ -25,6 +25,15 @@ import (
 
 const systemdProcessFile = "/run/beam-vm/process.json"
 const systemdAgentPIDFile = "/run/beam-vm/agent.pid"
+const sshKeysUnit = `[Unit]
+Description=Beam VM SSH host keys
+Before=ssh.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'test -f /etc/ssh/ssh_host_ed25519_key || exec /usr/bin/ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/ssh_host_ed25519_key'
+`
 const guestAgentUnit = `[Unit]
 Description=Beam VM control and workload agent
 DefaultDependencies=no
@@ -111,11 +120,21 @@ func bootSystemd(spec *specs.Spec) error {
 }
 
 func writeSystemdBootFiles(root string, process *specs.Process) error {
+	if err := prepareVMIdentity(root, process); err != nil {
+		return err
+	}
+	// The worker starts goproc directly. Set the environment and working
+	// directory here, without a shell or SSH key generation on the exec path.
+	process.Env = append(process.Env, "HOME=/root", "LANG=C.UTF-8")
+	if processEnv(process, "BEAM_VM_DESKTOP") == "true" {
+		process.Env = append(process.Env, "DISPLAY=:1", "XAUTHORITY=/run/beam-desktop/.Xauthority")
+	}
+	process.Cwd = "/workspace"
+	if err := os.MkdirAll(filepath.Join(root, process.Cwd), 0755); err != nil {
+		return err
+	}
 	// Machine identity is stable on start, and distinct on fork/template.
 	if id := strings.ReplaceAll(processEnv(process, "BEAM_VM_ID"), "-", ""); id != "" {
-		if len(id) != 32 || strings.Trim(id, "0123456789abcdef") != "" {
-			return fmt.Errorf("invalid VM machine ID")
-		}
 		if err := os.WriteFile(filepath.Join(root, "etc/machine-id"), []byte(id+"\n"), 0644); err != nil {
 			return err
 		}
@@ -142,10 +161,6 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	for _, entry := range process.Env {
 		manager.WriteString(" " + systemdQuote(entry))
 	}
-	manager.WriteString(" \"HOME=/root\" \"LANG=C.UTF-8\"")
-	if processEnv(process, "BEAM_VM_DESKTOP") == "true" {
-		manager.WriteString(" \"DISPLAY=:1\" \"XAUTHORITY=/run/beam-desktop/.Xauthority\"")
-	}
 	manager.WriteString("\n")
 	if err := os.WriteFile(filepath.Join(managerDir, "90-beam-vm.conf"), []byte(manager.String()), 0600); err != nil {
 		return err
@@ -168,6 +183,24 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	}
 	services := map[string]string{"beam-terminal.service": "/etc/systemd/system/beam-terminal.service"}
 	if processEnv(process, "BEAM_VM_SSH") == "true" {
+		// SSH validates its configuration in ExecStartPre, so keys must be
+		// ready before the entire SSH service, including user pre-start hooks.
+		if err := os.MkdirAll(filepath.Join(root, "run/sshd"), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(root, "run/beam-vm/authorized_keys"), []byte(processEnv(process, "BEAM_VM_SSH_PUBLIC_KEY")+"\n"), 0600); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(unitDir, "beam-ssh-keys.service"), []byte(sshKeysUnit), 0644); err != nil {
+			return err
+		}
+		dropin := filepath.Join(unitDir, "ssh.service.d")
+		if err := os.MkdirAll(dropin, 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dropin, "90-beam-keys.conf"), []byte("[Unit]\nRequires=beam-ssh-keys.service\nAfter=beam-ssh-keys.service\n"), 0644); err != nil {
+			return err
+		}
 		services["ssh.service"] = "/lib/systemd/system/ssh.service"
 	}
 	if processEnv(process, "BEAM_VM_DESKTOP") == "true" {
@@ -186,6 +219,33 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		}
 	}
 	return nil
+}
+
+func prepareVMIdentity(root string, process *specs.Process) error {
+	id := processEnv(process, "BEAM_VM_ID")
+	compact := strings.ReplaceAll(id, "-", "")
+	if len(compact) != 32 || strings.Trim(compact, "0123456789abcdef") != "" {
+		return fmt.Errorf("invalid VM machine ID")
+	}
+	identityPath := filepath.Join(root, "etc/beam-vm-identity")
+	previous, err := os.ReadFile(identityPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if strings.TrimSpace(string(previous)) == id {
+		return nil
+	}
+	// A cold start keeps host keys; a fork/template must not reuse them.
+	keys, err := filepath.Glob(filepath.Join(root, "etc/ssh/ssh_host_*"))
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := os.Remove(key); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(identityPath, []byte(id+"\n"), 0644)
 }
 
 func systemdQuote(value string) string {

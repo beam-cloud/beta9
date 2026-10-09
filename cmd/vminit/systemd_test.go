@@ -109,3 +109,70 @@ func TestGuestAgentStopsAfterOrdinaryServices(t *testing.T) {
 		t.Fatal("host owns shutdown deadline, and agent failures must power off the guest")
 	}
 }
+
+func TestVMIdentityPreservesColdBootKeysAndRotatesForkKeys(t *testing.T) {
+	root := t.TempDir()
+	sshDir := filepath.Join(root, "etc/ssh")
+	if err := os.MkdirAll(sshDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	parent := &specs.Process{Env: []string{"BEAM_VM_ID=676139cd-f92b-4688-bb36-a0e763ef445c"}}
+	if err := prepareVMIdentity(root, parent); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ssh_host_ed25519_key", "ssh_host_ed25519_key.pub", "authorized_keys"} {
+		if err := os.WriteFile(filepath.Join(sshDir, name), []byte("existing"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := prepareVMIdentity(root, parent); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(sshDir, "ssh_host_ed25519_key")
+	if data, err := os.ReadFile(key); err != nil || string(data) != "existing" {
+		t.Fatalf("cold boot changed host key: %q, %v", data, err)
+	}
+	fork := &specs.Process{Env: []string{"BEAM_VM_ID=3e975de0-fef8-47d2-9530-a0f563eb6132"}}
+	if err := prepareVMIdentity(root, fork); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ssh_host_ed25519_key", "ssh_host_ed25519_key.pub"} {
+		if _, err := os.Stat(filepath.Join(sshDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("fork retained %s: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(sshDir, "authorized_keys")); err != nil {
+		t.Fatalf("changed an unrelated user file: %v", err)
+	}
+}
+
+func TestSSHPreparationIsOrderedBeforeSSHAndIndependentOfExec(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	process := &specs.Process{Args: []string{"/usr/bin/goproc"}, Env: []string{
+		"BEAM_VM_ID=676139cd-f92b-4688-bb36-a0e763ef445c", "BEAM_VM_SSH=true", "BEAM_VM_SSH_PUBLIC_KEY=ssh-ed25519 test",
+	}}
+	if err := writeSystemdBootFiles(root, process); err != nil {
+		t.Fatal(err)
+	}
+	keysPath := filepath.Join(root, "run/beam-vm/authorized_keys")
+	assertPrivateFile(t, keysPath)
+	if data, err := os.ReadFile(keysPath); err != nil || string(data) != "ssh-ed25519 test\n" {
+		t.Fatalf("authorized key: %q, %v", data, err)
+	}
+	dropin, err := os.ReadFile(filepath.Join(root, "run/systemd/system/ssh.service.d/90-beam-keys.conf"))
+	if err != nil || !strings.Contains(string(dropin), "Requires=beam-ssh-keys.service\nAfter=beam-ssh-keys.service") || strings.Contains(string(dropin), "ExecStartPre=") {
+		t.Fatalf("keys must precede SSH's existing pre-start hooks: %s, %v", dropin, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "etc/ssh/ssh_host_ed25519_key")); !os.IsNotExist(err) {
+		t.Fatalf("exec initialization generated keys synchronously: %v", err)
+	}
+	if process.Cwd != "/workspace" || processEnv(process, "HOME") != "/root" || len(process.Args) != 1 || process.Args[0] != "/usr/bin/goproc" {
+		t.Fatalf("unexpected workload: %+v", process)
+	}
+	if strings.Contains(guestAgentUnit, "beam-ssh-keys") {
+		t.Fatal("exec agent must not depend on SSH readiness")
+	}
+}

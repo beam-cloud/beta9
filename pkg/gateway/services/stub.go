@@ -353,7 +353,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	var object types.Object
 	if strings.TrimSpace(in.ObjectId) == "" {
-		object, err = gws.ensureEmptyStubObject(ctx, authInfo.Workspace)
+		if types.StubType(in.StubType).Kind() == types.StubTypeSandbox {
+			object, err = abstractions.GetOrCreateEmptyStubObject(ctx, gws.backendRepo, authInfo.Workspace)
+		} else {
+			object, err = gws.ensureEmptyStubObject(ctx, authInfo.Workspace)
+		}
 	} else {
 		object, err = gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
 	}

@@ -1861,9 +1861,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
 		if request.IsPersistentVM() {
-			// Persistent VMs initialize SSH/terminal/desktop services and
-			// then exec the same process manager as ordinary sandboxes.
-			spec.Process.Args = []string{"/opt/beam-vm/boot", types.WorkerSandboxProcessManagerContainerPath}
+			// Vminit prepares identity and enables services through systemd.
+			// Exec readiness does not wait for SSH or desktop initialization.
 			// The VM boot agent administers a complete guest, even when
 			// the base container image declares a non-root USER.
 			spec.Process.User = specs.User{UID: 0, GID: 0}
