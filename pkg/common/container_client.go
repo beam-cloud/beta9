@@ -115,6 +115,7 @@ func newContainerClient(
 	maxMessageSize := 1 << 30 // 1Gi
 	if serviceToken != "" {
 		dialOptions = append(dialOptions, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(serviceToken)),
+			grpc.WithStreamInterceptor(GRPCClientAuthStreamInterceptor(serviceToken)),
 			grpc.WithDefaultCallOptions(
 				grpc.MaxCallRecvMsgSize(maxMessageSize),
 				grpc.MaxCallSendMsgSize(maxMessageSize),
