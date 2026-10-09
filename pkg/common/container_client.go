@@ -504,6 +504,10 @@ func (c *ContainerClient) Archive(ctx context.Context, containerId, imageId stri
 	}
 }
 
+func (c *ContainerClient) Tunnel(ctx context.Context, request *pb.ContainerTunnelRequest) (*pb.ContainerTunnelResponse, error) {
+	return c.client.ContainerTunnel(ctx, request)
+}
+
 func (c *ContainerClient) SyncWorkspace(ctx context.Context, request *pb.SyncContainerWorkspaceRequest) (*pb.SyncContainerWorkspaceResponse, error) {
 	resp, err := c.client.ContainerSyncWorkspace(ctx, request)
 	if err != nil {
