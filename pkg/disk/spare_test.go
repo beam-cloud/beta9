@@ -702,3 +702,91 @@ func TestWarmSparesDoesNotBlockWorkerShutdown(t *testing.T) {
 		t.Fatal("worker startup ignored cancellation")
 	}
 }
+
+func TestPreparedVhostSpareAdoptsWithoutRestartingOrFormatting(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	manager.spareExport = ExportVhostUser
+	ctx := context.Background()
+	defer manager.Close(ctx)
+	if err := manager.WarmSpares(ctx, testSpareSize); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	spare := manager.spares[testSpareSize][0]
+	manager.spares[testSpareSize] = []*Volume{spare}
+	manager.spareBuilds[testSpareSize] = true // Isolate adoption from refill.
+	manager.mu.Unlock()
+	if spare.nbd != nil || spare.state.exportMode() != ExportVhostUser || !spare.state.Formatted {
+		t.Fatal("the spare must already serve a formatted vhost-user root")
+	}
+	before := len(host.ran("qemu-storage-daemon"))
+	formatted := len(host.ran("mkfs.ext4"))
+	connected := len(host.ran("nbd-client"))
+	freezeCalls := 0
+	volume, err := manager.Attach(ctx, AttachSpec{Key: "vm-root", Owner: "vm-c1", VirtualSizeBytes: testSpareSize, Export: ExportVhostUser, Freeze: func(context.Context) (func(), error) { freezeCalls++; return func() {}, nil }}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume != spare || len(host.ran("qemu-storage-daemon")) != before || len(host.ran("mkfs.ext4")) != formatted || len(host.ran("nbd-client")) != connected {
+		t.Fatal("adoption must retain the running export, without formatting or reconnecting")
+	}
+	want := filepath.Join(manager.runtimeDir("vm-root"), "vhost-user-blk.sock")
+	if volume.ExportSocket() != want || !fileExists(want) {
+		t.Fatalf("adopted export socket = %s, want %s", volume.ExportSocket(), want)
+	}
+	saved, err := loadVolumeState(volume.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ExportSocket != want || saved.Owner != "vm-c1" || !saved.Attached {
+		t.Fatalf("durable state must record the new owner and socket: %+v", saved)
+	}
+	if _, err := volume.freeze(ctx); err != nil || freezeCalls != 1 {
+		t.Fatal("adoption must install this guest's freeze hook")
+	}
+}
+
+func TestVhostSpareDoesNotDisplaceNBDConsumer(t *testing.T) {
+	manager, _ := newSpareTestManager(t)
+	manager.spareExport = ExportVhostUser
+	ctx := context.Background()
+	defer manager.Close(ctx)
+	if err := manager.WarmSpares(ctx, testSpareSize); err != nil {
+		t.Fatal(err)
+	}
+	before := spareCount(manager, testSpareSize)
+	volume, err := manager.Attach(ctx, AttachSpec{Key: "host-disk", VirtualSizeBytes: testSpareSize, Mountpoint: filepath.Join(manager.root, "mnt")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume.nbd == nil || volume.state.exportMode() != ExportNBD || spareCount(manager, testSpareSize) != before {
+		t.Fatal("host disks must retain their NBD mount and leave VM spares available")
+	}
+	if manager.reclaimSpare() || spareCount(manager, testSpareSize) != before {
+		t.Fatal("a spare with no NBD device must not be destroyed to reclaim one")
+	}
+}
+
+func TestPreparedVhostSpareConversionFailureCleansUp(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	manager.spareExport = ExportVhostUser
+	manager.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "qemu-storage-daemon" {
+			for _, arg := range args {
+				if strings.Contains(arg, "type=vhost-user-blk") {
+					return nil, errors.New("export failed")
+				}
+			}
+		}
+		return host.run(ctx, name, args...)
+	}
+	if _, err := manager.buildSpare(context.Background(), testSpareSize); err == nil {
+		t.Fatal("conversion must propagate the failure")
+	}
+	for _, dir := range []string{"volumes", "run"} {
+		entries, err := os.ReadDir(filepath.Join(manager.root, dir))
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("failed conversion left %s resources: %v %v", dir, entries, err)
+		}
+	}
+}

@@ -722,6 +722,9 @@ func NewWorker() (_ *Worker, err error) {
 	// Recover qcow volumes left behind by a previous worker process before any
 	// container can attach: live volumes are adopted, crashed ones cleaned up.
 	diskConfig := disk.Config{}
+	if worker.runtimeOwnsBlockRoot() {
+		diskConfig.SpareExport = disk.ExportVhostUser
+	}
 	if worker.agentWorker() {
 		// The agent persists durable-disks across worker container replacement.
 		// Keep managers separate: recovery must never detach another slot's QSD.

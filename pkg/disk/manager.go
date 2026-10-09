@@ -84,6 +84,9 @@ type Config struct {
 	Root          string
 	Binaries      Binaries
 	MaxChainDepth int
+	// SpareExport prepares empty formatted roots with the worker runtime's
+	// export. The default retains host-mounted NBD spares.
+	SpareExport ExportMode
 
 	// Test hooks.
 	SysBlockPath string
@@ -100,6 +103,7 @@ type Manager struct {
 	run           runner
 	execs         bool // run is the real exec runner, so binaries and devices are the host's
 	maxChainDepth int
+	spareExport   ExportMode
 
 	mu      sync.Mutex
 	volumes map[string]*Volume
@@ -152,6 +156,7 @@ func NewManager(config Config) *Manager {
 		run:           run,
 		execs:         config.Runner == nil,
 		maxChainDepth: config.MaxChainDepth,
+		spareExport:   config.SpareExport,
 		volumes:       make(map[string]*Volume),
 		spares:        make(map[int64][]*Volume),
 		spareBuilds:   make(map[int64]bool),
