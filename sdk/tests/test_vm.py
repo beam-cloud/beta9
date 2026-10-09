@@ -341,7 +341,7 @@ def test_cli_creation_shows_only_result(cli_service, monkeypatch):
     vm = MagicMock()
     vm.info = {
         "name": "calm-otter-a3b19f",
-        "id": "12ab34cd56ef7890",
+        "id": "vm-12ab34cd56ef7890",
         "status": "running",
         "container_id": "vm-long-internal-runtime",
     }
@@ -349,7 +349,7 @@ def test_cli_creation_shows_only_result(cli_service, monkeypatch):
     result = CliRunner().invoke(vm_cli.management, ["new", "--template", "base"])
     assert result.exit_code == 0, result.output
     assert "calm-otter-a3b19f" in result.output
-    assert "12ab34cd56ef7890" in result.output
+    assert "vm-12ab34cd56ef7890" in result.output
     assert "Checking image cache" not in result.output
     assert "Waiting for VM" not in result.output
     assert "vm-long-internal-runtime" not in result.output
@@ -528,6 +528,21 @@ def test_ssh_preserves_remote_arguments_and_exit_status(cli_service, monkeypatch
         "root@dev",
         "echo 'a b;$USER'",
     ]
+
+
+@pytest.mark.parametrize("vm_id", ["vm-12ab34cd56ef7890", "12ab34cd56ef7890"])
+def test_ssh_host_identity_uses_vm_prefix(vm_id, monkeypatch, tmp_path):
+    vm = MagicMock(id=vm_id, info={"spec": {"ssh": True}})
+    monkeypatch.setattr(vm_cli, "identity", lambda: tmp_path / "identity")
+    monkeypatch.setattr(vm_cli.extraclick, "selected_context", lambda: "staging")
+    monkeypatch.setattr(
+        vm_cli,
+        "get_settings",
+        lambda: SimpleNamespace(config_path=tmp_path / "config.ini", name="Beta9"),
+    )
+    options = vm_cli._ssh_options(vm)
+    assert "HostKeyAlias=vm-12ab34cd56ef7890" in options
+    vm.wait.assert_called_once_with(services=True)
 
 
 def test_private_bind_does_not_create_public_url():

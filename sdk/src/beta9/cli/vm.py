@@ -680,7 +680,7 @@ def _ssh_options(vm):
         "-o",
         f"UserKnownHostsFile={identity().parent / 'known_hosts'}",
         "-o",
-        f"HostKeyAlias=beam-vm-{vm.id}",
+        f"HostKeyAlias={vm.id if vm.id.startswith('vm-') else 'vm-' + vm.id}",
         "-o",
         f"ProxyCommand={proxy}",
     ]

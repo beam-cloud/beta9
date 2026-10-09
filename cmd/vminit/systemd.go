@@ -225,7 +225,7 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 }
 
 func vmMachineID(id string) (string, error) {
-	compact := strings.ReplaceAll(id, "-", "")
+	compact := strings.ReplaceAll(strings.TrimPrefix(id, "vm-"), "-", "")
 	if (len(compact) != 16 && len(compact) != 32) || strings.Trim(compact, "0123456789abcdef") != "" {
 		return "", fmt.Errorf("invalid VM machine ID")
 	}
@@ -233,7 +233,7 @@ func vmMachineID(id string) (string, error) {
 		return compact, nil // Preserve the identity of existing UUID-based VMs.
 	}
 	// Systemd requires 128 bits, independent of the public resource ID's size.
-	sum := sha256.Sum256([]byte("beam-vm:" + compact))
+	sum := sha256.Sum256([]byte("vm-" + compact))
 	return fmt.Sprintf("%x", sum[:16]), nil
 }
 

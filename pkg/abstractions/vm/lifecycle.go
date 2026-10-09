@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func rootDisk(v *types.VM) string { return types.StubTypeVM + "-" + v.ID }
+func rootDisk(v *types.VM) string { return vmIDPrefix + strings.TrimPrefix(v.ID, vmIDPrefix) }
 
 func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 	v.Error = err.Error()

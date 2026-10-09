@@ -15,7 +15,7 @@ import (
 
 func TestShortVMIDsProduceStableSystemdIdentity(t *testing.T) {
 	identities := map[string]bool{}
-	for _, id := range []string{"12ab34cd56ef7890", "12ab34cd56ef7891", "676139cd-f92b-4688-bb36-a0e763ef445c"} {
+	for _, id := range []string{"vm-12ab34cd56ef7890", "vm-12ab34cd56ef7891", "12ab34cd56ef7892", "676139cd-f92b-4688-bb36-a0e763ef445c"} {
 		root := t.TempDir()
 		if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
 			t.Fatal(err)

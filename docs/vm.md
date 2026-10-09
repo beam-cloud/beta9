@@ -139,8 +139,8 @@ by checkpoint garbage collection. RAM checkpoints resume the same VM; forks and
 templates remain filesystem snapshots.
 
 VMs have their own `vm` stub kind and `vm-` runtime prefix, allowing their
-usage and pricing to be distinguished from sandboxes. New VM IDs are 16 hex
-characters; generated names look like `calm-otter-a3b19f`. Explicit names and
+usage and pricing to be distinguished from sandboxes. New VM IDs have the form
+`vm-12ab34cd56ef7890`; generated names look like `calm-otter-a3b19f`. Explicit names and
 existing VM identities continue to work.
 
 `--ttl` is optional and measures idle time from SDK operations and active

@@ -20,7 +20,7 @@ func TestGeneratedIdentityIsCompactFriendlyAndRetryable(t *testing.T) {
 	require.Equal(t, 201, response.Code, response.Body.String())
 	var v types.VM
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &v))
-	require.Regexp(t, `^[0-9a-f]{16}$`, v.ID)
+	require.Regexp(t, `^vm-[0-9a-f]{16}$`, v.ID)
 	require.Regexp(t, `^[a-z]+-[a-z]+-[0-9a-f]{6}$`, v.Name)
 	require.True(t, validName.MatchString(v.Name))
 	require.Len(t, runtime.requests, 1)
@@ -45,5 +45,17 @@ func TestVMIdentityIsUniqueAcrossWorkspacesAndRandomCreations(t *testing.T) {
 	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, "my-dev", base.Spec)
 	require.NoError(t, err)
 	require.Equal(t, "my-dev", v.Name)
-	require.Len(t, v.ID, 16)
+	require.Regexp(t, `^vm-[0-9a-f]{16}$`, v.ID)
+}
+
+func TestRootDiskNamesPreserveExistingIdentities(t *testing.T) {
+	for _, tc := range []struct{ id, disk string }{
+		{"vm-12ab34cd56ef7890", "vm-12ab34cd56ef7890"},
+		{"12ab34cd56ef7890", "vm-12ab34cd56ef7890"},
+		{"676139cd-f92b-4688-bb36-a0e763ef445c", "vm-676139cd-f92b-4688-bb36-a0e763ef445c"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			require.Equal(t, tc.disk, rootDisk(&types.VM{ID: tc.id}))
+		})
+	}
 }
