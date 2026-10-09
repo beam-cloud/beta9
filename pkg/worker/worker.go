@@ -633,7 +633,12 @@ func NewWorker() (_ *Worker, err error) {
 	}
 
 	var criuManager CRIUManager = nil
-	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
+	if defaultRuntime.Name() == types.ContainerRuntimeMicroVM.String() && cacheManager != nil {
+		criuManager, err = InitializeMicroVMCheckpointManager(cacheManager.CheckpointRoot())
+		if err != nil {
+			log.Warn().Err(err).Msg("microVM checkpoint manager unavailable")
+		}
+	} else if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
 		if cacheManager == nil {
 			log.Warn().Str("worker_id", workerId).Msg("C/R unavailable, cache is required for checkpoints")
 		} else {

@@ -31,6 +31,9 @@ func TestPauseReleasesComputeAndRestoresPairedMemory(t *testing.T) {
 	require.Empty(t, v.ContainerID)
 	require.Equal(t, 0, gateway.stops, "terminal checkpoint owns shutdown")
 	require.Equal(t, 0, runtime.snapshots, "do not change the disk after pausing RAM")
+	v, err := s.repo.GetVM(ctx, v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	require.Equal(t, "memory", v.MemoryCheckpointID)
 	require.NoError(t, s.activate(ctx, info, v))
 	require.Equal(t, "memory", runtime.checkpoint)
 	require.NotEmpty(t, v.ContainerID)
@@ -78,4 +81,16 @@ func TestExtraDisksUseMicroVMDefaultsAndValidatedSizes(t *testing.T) {
 	require.Equal(t, "5368709120", spec.Disks[0].Size)
 	spec.Disks[0].Size = "500Mi"
 	require.Error(t, validate(&spec))
+}
+
+func TestIncompletePauseReconciliationDrainsComputeWithoutImplicitColdResume(t *testing.T) {
+	s, v, info, _, gateway := fixture()
+	v.DesiredState, v.Status = "paused", "error"
+	v.Error = "memory pause failed"
+	ctx := auth.ContextWithAuthInfo(context.Background(), info)
+	require.NoError(t, s.reconcileVM(ctx, v))
+	require.Empty(t, v.ContainerID)
+	require.Equal(t, 1, gateway.stops)
+	require.Equal(t, "paused", v.DesiredState)
+	require.ErrorContains(t, s.activate(ctx, info, v), "cold=true")
 }

@@ -594,6 +594,18 @@ type restoreCheckpointResult struct {
 	err      error
 }
 
+// MicroVM checkpoints are dispatched to Cloud Hypervisor through the shared
+// runtime manager; they require storage, not CRIU tools or GPU compatibility.
+func InitializeMicroVMCheckpointManager(checkpointRoot string) (CRIUManager, error) {
+	if checkpointRoot == "" {
+		return nil, fmt.Errorf("checkpoint root is required")
+	}
+	if err := os.MkdirAll(checkpointRoot, 0755); err != nil {
+		return nil, err
+	}
+	return &NvidiaCRIUManager{checkpointRoot: checkpointRoot, available: true}, nil
+}
+
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers.
 func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, checkpointRoot string) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
@@ -2127,8 +2139,13 @@ func hasAvailableCheckpoint(request *types.ContainerRequest) bool {
 }
 
 func (s *Worker) supportsCheckpointRestore(request *types.ContainerRequest, rt runtime.Runtime) bool {
-	return request != nil && rt != nil && rt.Capabilities().CheckpointRestore &&
-		s.IsCRIUAvailable(request.GpuCount)
+	if request == nil || rt == nil || !rt.Capabilities().CheckpointRestore {
+		return false
+	}
+	if rt.Name() == types.ContainerRuntimeMicroVM.String() {
+		return s.requireCRIUManager() == nil
+	}
+	return s.IsCRIUAvailable(request.GpuCount)
 }
 
 func (s *Worker) canRestoreCheckpoint(request *types.ContainerRequest, rt runtime.Runtime) bool {

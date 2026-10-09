@@ -24,10 +24,22 @@ func accessSession(v *types.VM, port uint32, expires int64) string {
 	return strconv.FormatInt(expires, 10) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func validAccessSession(v *types.VM, port uint32, session string, now time.Time) bool {
+func sessionExpiry(session string) int64 {
 	expiry, _, ok := strings.Cut(session, ".")
 	expires, err := strconv.ParseInt(expiry, 10, 64)
-	return ok && err == nil && expires > now.Unix() && v.TrafficAccessToken != "" && hmac.Equal([]byte(session), []byte(accessSession(v, port, expires)))
+	if !ok || err != nil {
+		return 0
+	}
+	return expires
+}
+
+func sessionCookie(v *types.VM, port uint32) string {
+	return fmt.Sprintf("%s_%s_%d", sessionParameter, v.Handle, port)
+}
+
+func validAccessSession(v *types.VM, port uint32, session string, now time.Time) bool {
+	expires := sessionExpiry(session)
+	return expires > now.Unix() && v.TrafficAccessToken != "" && hmac.Equal([]byte(session), []byte(accessSession(v, port, expires)))
 }
 
 // Exchange a short-lived URL for a host-only cookie before application traffic
@@ -37,9 +49,8 @@ func acceptBrowserSession(c echo.Context, v *types.VM, port uint32) (bool, error
 		if c.Request().Method != http.MethodGet || !validAccessSession(v, port, session, time.Now()) {
 			return false, echo.NewHTTPError(403, "invalid or expired VM access session")
 		}
-		expiry, _, _ := strings.Cut(session, ".")
-		expires, _ := strconv.ParseInt(expiry, 10, 64)
-		c.SetCookie(&http.Cookie{Name: sessionParameter, Value: session, Path: "/", Expires: time.Unix(expires, 0), Secure: c.Scheme() == "https", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		expires := sessionExpiry(session)
+		c.SetCookie(&http.Cookie{Name: sessionCookie(v, port), Value: session, Path: "/", Expires: time.Unix(expires, 0), Secure: c.Scheme() == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode})
 		query := c.Request().URL.Query()
 		query.Del(sessionParameter)
 		// RequestURI preserves the original browser path before host rewriting.
@@ -56,13 +67,13 @@ func acceptBrowserSession(c echo.Context, v *types.VM, port uint32) (bool, error
 }
 
 func browserSession(c echo.Context, v *types.VM, port uint32) bool {
-	cookie, err := c.Cookie(sessionParameter)
+	cookie, err := c.Cookie(sessionCookie(v, port))
 	valid := err == nil && validAccessSession(v, port, cookie.Value, time.Now())
 	// Preserve the application's own cookies without forwarding ours.
 	cookies := c.Request().Cookies()
 	c.Request().Header.Del("Cookie")
 	for _, other := range cookies {
-		if other.Name != sessionParameter {
+		if !strings.HasPrefix(other.Name, sessionParameter+"_") {
 			c.Request().AddCookie(other)
 		}
 	}

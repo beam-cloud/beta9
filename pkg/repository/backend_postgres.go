@@ -2964,6 +2964,8 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 	return checkpoint, err
 }
 
+const unreferencedVMCheckpoint = `AND NOT EXISTS (SELECT 1 FROM persistent_vm v WHERE v.data->>'memory_checkpoint_id' = c.checkpoint_id AND v.data->>'desired_state' <> 'deleted')`
+
 func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error) {
 	query := `
 		SELECT ` + checkpointColumns + `
@@ -2973,7 +2975,7 @@ func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, ac
 		WHERE c.deleted_at IS NULL
 		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]))
 		  AND s.updated_at < $2
-		  AND NOT EXISTS (SELECT 1 FROM persistent_vm v WHERE v.data->>'memory_checkpoint_id' = c.checkpoint_id AND v.data->>'desired_state' <> 'deleted');`
+		  ` + unreferencedVMCheckpoint + `;`
 
 	rows, err := r.client.QueryxContext(ctx, query, pq.Array(activeRecentStubKeys), stubLastUsedBefore)
 	if err != nil {
@@ -2992,7 +2994,7 @@ func (r *PostgresBackendRepository) PruneCheckpoints(ctx context.Context, checkp
 		SET deleted_at = CURRENT_TIMESTAMP
 		WHERE c.deleted_at IS NULL
 		  AND c.checkpoint_id = ANY($1::text[])
-		  AND NOT EXISTS (SELECT 1 FROM persistent_vm v WHERE v.data->>'memory_checkpoint_id' = c.checkpoint_id AND v.data->>'desired_state' <> 'deleted')
+		  ` + unreferencedVMCheckpoint + `
 		RETURNING ` + checkpointColumns + `;`
 
 	rows, err := r.client.QueryxContext(ctx, query, pq.Array(checkpointIds))

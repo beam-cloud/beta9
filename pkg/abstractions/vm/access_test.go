@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,8 +27,7 @@ func TestBrowserSessionExchangesAndNeverReachesGuest(t *testing.T) {
 	s, v, _, _, _ := fixture()
 	v.TrafficAccessToken = "owner-secret"
 	v.Spec.ProtectedPorts = []uint32{8080}
-	e := echo.New()
-	e.Any("/vm/:handle/:port/*", s.proxy)
+	e := proxyAPI(s)
 	session := accessSession(v, 8080, time.Now().Add(time.Minute).Unix())
 	path := "/vm/" + v.Handle + "/8080/desktop?existing=value&" + sessionParameter + "=" + session
 	req := httptest.NewRequest("GET", "https://vm.example.com"+path, nil)
@@ -42,15 +40,23 @@ func TestBrowserSessionExchangesAndNeverReachesGuest(t *testing.T) {
 	require.Len(t, cookies, 1)
 	require.True(t, cookies[0].Secure)
 	require.True(t, cookies[0].HttpOnly)
+	require.Equal(t, http.SameSiteLaxMode, cookies[0].SameSite)
 	req = httptest.NewRequest("GET", rec.Header().Get("Location"), nil)
 	req.AddCookie(cookies[0])
 	req.AddCookie(&http.Cookie{Name: "application", Value: "preserved"})
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	require.Equal(t, 200, rec.Code, rec.Body.String())
-	_, err := req.Cookie(sessionParameter)
+	_, err := req.Cookie(sessionCookie(v, 8080))
 	require.Error(t, err)
 	own, err := req.Cookie("application")
 	require.NoError(t, err)
 	require.Equal(t, "preserved", own.Value)
+}
+
+func TestSessionCookiesDoNotCollideOnSharedGatewayHost(t *testing.T) {
+	v := &types.VM{Handle: "first"}
+	other := &types.VM{Handle: "second"}
+	require.NotEqual(t, sessionCookie(v, 8080), sessionCookie(v, 8000))
+	require.NotEqual(t, sessionCookie(v, 8080), sessionCookie(other, 8080))
 }

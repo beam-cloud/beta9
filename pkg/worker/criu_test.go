@@ -2976,3 +2976,15 @@ func TestCheckpointDiscoveryFailureIsProcessSpecific(t *testing.T) {
 	require.True(t, strings.HasPrefix(second.checkpointCompatibilityKey, "unknown:"))
 	require.NotEqual(t, first.checkpointCompatibilityKey, second.checkpointCompatibilityKey)
 }
+
+func TestMicroVMNativeCheckpointManagerDoesNotRequireCRIU(t *testing.T) {
+	manager, err := InitializeMicroVMCheckpointManager(t.TempDir())
+	require.NoError(t, err)
+	worker := &Worker{criuManager: manager}
+	rt := NewMockRuntime(types.ContainerRuntimeMicroVM.String(), runtime.Capabilities{CheckpointRestore: true})
+	request := &types.ContainerRequest{Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: "microvm"}}
+	require.True(t, worker.supportsCheckpointRestore(request, rt))
+	require.True(t, worker.canRestoreCheckpoint(request, rt))
+	worker.criuManager = nil
+	require.False(t, worker.canRestoreCheckpoint(request, rt), "storage manager is still required")
+}

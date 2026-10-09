@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,12 @@ func managementAPI(s *Service, info *auth.AuthInfo) *echo.Echo {
 	e.POST("/:workspaceId", auth.WithStrictWorkspaceAuth(s.create))
 	e.PATCH("/:workspaceId/:name", auth.WithStrictWorkspaceAuth(s.update))
 	e.POST("/:workspaceId/:name/:action", auth.WithStrictWorkspaceAuth(s.action))
+	return e
+}
+
+func proxyAPI(s *Service) *echo.Echo {
+	e := echo.New()
+	e.Any("/vm/:handle/:port/*", s.proxy)
 	return e
 }
 
@@ -90,7 +97,11 @@ func (r *vmRuntime) SandboxUpdateNetworkPermissions(_ context.Context, req *pb.P
 	return &pb.PodSandboxUpdateNetworkPermissionsResponse{Ok: true}, nil
 }
 
-func (r *vmRuntime) SandboxExec(context.Context, *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
+func (r *vmRuntime) SandboxExec(_ context.Context, req *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
+	args, err := shlex.Split(req.Command)
+	if err != nil || len(args) != 3 || args[0] != "python3" || args[1] != "-c" {
+		return &pb.PodSandboxExecResponse{ErrorMsg: "invalid readiness argv"}, nil
+	}
 	return &pb.PodSandboxExecResponse{Ok: true, Done: true}, nil
 }
 
@@ -115,18 +126,22 @@ func TestProtectedPortDeniesBeforeWakeAndRotationRevokesOldToken(t *testing.T) {
 	s, v, info, runtime, _ := fixture()
 	v.Spec.ProtectedPorts = []uint32{8080}
 	v.TrafficAccessToken = "secret"
-	e := echo.New()
-	e.Any("/vm/:handle/:port/*", s.proxy)
+	delete(runtime.containers.states, v.ContainerID)
+	v.ContainerID, v.DesiredState, v.Status = "", "stopped", "stopped"
+	v.Spec.AutoResume = true
+	e := proxyAPI(s)
 	for _, token := range []string{"", "wrong", "secret"} {
 		req := httptest.NewRequest("GET", "/vm/"+v.Handle+"/8080/", nil)
 		req.Header.Set("X-Beam-VM-Token", token)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		if token == "secret" {
-			require.Equal(t, 200, rec.Code)
+			require.Equal(t, 200, rec.Code, rec.Body.String())
+			require.Len(t, runtime.requests, 1)
 			require.Empty(t, req.Header.Get("X-Beam-VM-Token"))
 		} else {
 			require.Equal(t, 403, rec.Code)
+			require.Empty(t, runtime.requests)
 		}
 	}
 	api := managementAPI(s, info)
@@ -137,7 +152,7 @@ func TestProtectedPortDeniesBeforeWakeAndRotationRevokesOldToken(t *testing.T) {
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	require.Equal(t, 403, rec.Code)
-	require.Empty(t, runtime.requests)
+	require.Len(t, runtime.requests, 1, "a revoked token must not launch more compute")
 }
 
 func TestAccessResumesStoppedVMAndKeepsItsURL(t *testing.T) {
@@ -146,8 +161,7 @@ func TestAccessResumesStoppedVMAndKeepsItsURL(t *testing.T) {
 	v.DesiredState, v.Status, v.ContainerID = "stopped", "stopped", ""
 	v.RootSnapshotID = "committed"
 	s.repo.(*vmStore).rows[v.ID] = v
-	e := echo.New()
-	e.Any("/vm/:handle/:port/*", s.proxy)
+	e := proxyAPI(s)
 	req := httptest.NewRequest("POST", "/vm/"+v.Handle+"/8080/path", strings.NewReader("body"))
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)

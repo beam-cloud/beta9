@@ -10,6 +10,8 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import threading
+from contextlib import contextmanager
 import uuid
 import json
 import betterproto
@@ -512,6 +514,43 @@ class VM:
         self._action("touch")
         return self._connected
 
+    @contextmanager
+    def keep_alive(self):
+        """Keep an idle-limited VM active during a long SDK operation.
+
+        This lease ends when the context exits. Detached work should disable
+        idle stopping, or be owned by an application that maintains a lease.
+        """
+        self.refresh()
+        self._action("touch")
+        ttl = self.info.get("spec", {}).get("idle_timeout", 0)
+        if not ttl:
+            yield self
+            return
+        interval = max(0.25, min(15, ttl / 3))
+        done = threading.Event()
+        errors = []
+
+        def heartbeat():
+            while not done.wait(interval):
+                try:
+                    self._service.http.json(
+                        "POST", "/api/v1/vm/{ws}" + self._path() + "/touch", timeout=3, json={}
+                    )
+                except Exception as exc:
+                    errors.append(exc)
+                    return
+
+        thread = threading.Thread(target=heartbeat, daemon=True)
+        thread.start()
+        try:
+            yield self
+        finally:
+            done.set()
+            thread.join(4)
+        if errors:
+            raise RuntimeError("VM activity lease failed") from errors[0]
+
     def metrics(self):
         """Sample guest CPU, memory, and root disk usage over one second.
 
@@ -550,6 +589,11 @@ print(json.dumps({'timestamp': time.time(), 'cpu_count': os.cpu_count(),
     @property
     def docker(self):
         return self._sandbox().docker
+
+    @property
+    def aio(self):
+        """Existing async process, filesystem and Docker transports."""
+        return self._sandbox().aio
 
     @property
     def desktop(self):

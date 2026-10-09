@@ -15,8 +15,8 @@ class VMDesktop:
             raise ValueError("Create this VM with desktop=True to use desktop controls")
         return sandbox
 
-    def _run(self, *args):
-        process = self._sandbox().process.exec(*args, cwd="/")
+    def _run(self, *args, stdin=None):
+        process = self._sandbox().process.exec(*args, cwd="/", stdin=stdin)
         if process.wait(30) != 0:
             raise RuntimeError(process.stderr.read() or f"Desktop command failed: {args[0]}")
         return process.stdout.read().strip()
@@ -56,8 +56,12 @@ class VMDesktop:
         # applies immediately to both the stream and subsequent screenshots.
         self._run("xrandr", "--output", "VNC-0", "--mode", f"{width}x{height}")
 
+    @staticmethod
+    def _move(x, y):
+        return ["mousemove", "--sync", str(int(x)), str(int(y))]
+
     def move_mouse(self, x: int, y: int):
-        self._run("xdotool", "mousemove", "--sync", str(int(x)), str(int(y)))
+        self._run("xdotool", *self._move(x, y))
 
     def click(self, x=None, y=None, *, button="left", count=1):
         buttons = {"left": 1, "middle": 2, "right": 3}
@@ -67,7 +71,7 @@ class VMDesktop:
             raise ValueError("Provide both mouse coordinates")
         args = ["xdotool"]
         if x is not None:
-            args += ["mousemove", "--sync", str(int(x)), str(int(y))]
+            args += self._move(x, y)
         self._run(*args, "click", "--repeat", str(count), "--delay", "100", str(buttons[button]))
 
     def scroll(self, direction="down", amount=3):
@@ -83,23 +87,14 @@ class VMDesktop:
 
     def write(self, text: str):
         """Type literal text without shell expansion."""
-        self._run("xdotool", "type", "--clearmodifiers", "--delay", "0", "--", text)
+        # X11 key synthesis cannot reliably represent arbitrary Unicode.
+        # Clipboard paste preserves the exact UTF-8 text, including newlines.
+        self._run("xclip", "-selection", "clipboard", "-in", stdin=text)
+        self._run("xdotool", "key", "--clearmodifiers", "ctrl+v")
 
     def drag(self, start, end):
         self._run(
-            "xdotool",
-            "mousemove",
-            "--sync",
-            str(int(start[0])),
-            str(int(start[1])),
-            "mousedown",
-            "1",
-            "mousemove",
-            "--sync",
-            str(int(end[0])),
-            str(int(end[1])),
-            "mouseup",
-            "1",
+            "xdotool", *self._move(*start), "mousedown", "1", *self._move(*end), "mouseup", "1"
         )
 
     def launch(self, *command: str):
@@ -112,8 +107,10 @@ class VMDesktop:
         """Record the guest screen to an MP4 until the returned handle stops.
 
         This uses CPU encoding; it is independent of browser frame-rate stats.
-        The file is inside the VM and can be downloaded with vm.fs.
+        Finish with stop_recording(handle), then download the file with vm.fs.
         """
+        if not isinstance(path, str) or not path.startswith("/"):
+            raise ValueError("Recording requires an absolute path inside the VM")
         if not isinstance(fps, int) or not 1 <= fps <= 60:
             raise ValueError("Recording FPS must be between 1 and 60")
         width, height = self.screen_size()
@@ -135,7 +132,19 @@ class VMDesktop:
             "ultrafast",
             "-pix_fmt",
             "yuv420p",
+            "-g",
+            str(fps),
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-movflags",
-            "frag_keyframe+empty_moov",
+            "frag_keyframe+empty_moov+default_base_moof",
             path,
         )
+
+    def stop_recording(self, recording):
+        """Finalize an MP4 with SIGINT, preserving its trailing frames."""
+        sandbox = self._sandbox()
+        if recording.sandbox_instance.container_id != sandbox.container_id:
+            raise ValueError("Recording belongs to a previous VM runtime")
+        self._run("kill", "-INT", str(recording.pid))
+        recording.wait(30)

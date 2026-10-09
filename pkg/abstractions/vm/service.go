@@ -10,20 +10,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
-	"golang.org/x/crypto/ssh"
 	"io"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"path"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -74,155 +68,6 @@ func New(ctx context.Context, config types.VMConfig, backend repository.BackendR
 		server.Pre(s.hostRoute)
 	}
 	go s.reconcile(ctx)
-	return nil
-}
-
-var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
-var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-
-func normalizeDiskSize(size string) (string, error) {
-	if size == "" {
-		size = "50GiB"
-	}
-	quantity, err := resource.ParseQuantity(strings.TrimSuffix(size, "B"))
-	if err != nil {
-		return "", fmt.Errorf("invalid disk size %q", size)
-	}
-	bytes, exact := quantity.AsInt64()
-	if !exact || bytes < 1<<30 {
-		return "", fmt.Errorf("disk size must be an integer number of bytes, at least 1 GiB")
-	}
-	return strconv.FormatInt(bytes, 10), nil
-}
-
-func validate(spec *types.VMSpec) error {
-	if spec.CPU == 0 {
-		spec.CPU = 1000
-		if spec.Desktop {
-			spec.CPU = 2000
-		}
-	}
-	if spec.Memory == 0 {
-		spec.Memory = 1024
-		if spec.Desktop {
-			spec.Memory = 2048
-		}
-	}
-	if spec.DiskSize == "" {
-		spec.DiskSize = "50GiB"
-	}
-	var err error
-	spec.DiskSize, err = normalizeDiskSize(spec.DiskSize)
-	if err != nil {
-		return err
-	}
-	if spec.CPU < 100 || spec.Memory < 256 || spec.IdleTimeout < 0 || spec.IdleTimeout > 365*24*60*60 {
-		return fmt.Errorf("CPU must be at least 0.1, memory at least 256 MiB, and idle timeout nonnegative")
-	}
-	if spec.BlockNetwork && len(spec.AllowList) > 0 {
-		return fmt.Errorf("block_network and allow_list cannot both be set")
-	}
-	if spec.IdleAction != "" && spec.IdleAction != "stop" && spec.IdleAction != "pause" {
-		return fmt.Errorf("idle_action must be stop or pause")
-	}
-	if err := common.ValidateAllowList(spec.AllowList); err != nil {
-		return err
-	}
-	seenMounts := map[string]bool{"/": true}
-	seenDisks := map[string]bool{}
-	for _, disk := range spec.Disks {
-		if disk == nil || !validName.MatchString(disk.Name) || strings.HasPrefix(disk.Name, "vm-") || seenDisks[disk.Name] {
-			return fmt.Errorf("additional disks require unique names; the vm- prefix is reserved for VM roots")
-		}
-		if disk.Driver != "" && disk.Driver != "qcow" {
-			return fmt.Errorf("microVM disks require the qcow driver")
-		}
-		if disk.Filesystem != "" && disk.Filesystem != "ext4" {
-			return fmt.Errorf("microVM disks require ext4")
-		}
-		disk.Driver, disk.Filesystem = "qcow", "ext4"
-		disk.Size, err = normalizeDiskSize(disk.Size)
-		if err != nil {
-			return err
-		}
-		if err := validateMountPath(disk.MountPath, seenMounts); err != nil {
-			return err
-		}
-		seenDisks[disk.Name] = true
-	}
-	for _, volume := range spec.Volumes {
-		if err := abstractions.ValidateVolume(volume); err != nil {
-			return err
-		}
-		if err := validateMountPath(volume.MountPath, seenMounts); err != nil {
-			return err
-		}
-	}
-	if spec.ImageID == "" {
-		return fmt.Errorf("image_id is required; the image must contain systemd and the Beam VM services")
-	}
-	if spec.Desktop && spec.Memory < 2048 {
-		return fmt.Errorf("desktop requires at least 2048 MiB")
-	}
-	for _, env := range spec.Env {
-		key, _, ok := strings.Cut(env, "=")
-		if !ok || !validEnvKey.MatchString(key) || strings.HasPrefix(key, "BEAM_VM_") || strings.HasPrefix(key, "BETA9_") || strings.ContainsRune(env, 0) {
-			return fmt.Errorf("invalid or reserved environment key %q", key)
-		}
-	}
-	for _, name := range spec.Secrets {
-		if strings.HasPrefix(name, "BEAM_VM_") || strings.HasPrefix(name, "BETA9_") {
-			return fmt.Errorf("reserved secret name %q", name)
-		}
-	}
-	if spec.SSH {
-		_, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(spec.SSHPublicKey))
-		if err != nil || len(options) != 0 || len(rest) != 0 || strings.ContainsAny(spec.SSHPublicKey, "\r\n") {
-			return fmt.Errorf("SSH requires one valid public key without authorized_keys options")
-		}
-	}
-	seen := map[uint32]bool{}
-	ports := []uint32{7681}
-	if spec.Desktop {
-		ports = append(ports, 8080)
-	}
-	if spec.SSH {
-		ports = append(ports, 2222)
-	}
-	ports = append(ports, spec.Ports...)
-	spec.Ports = nil
-	for _, port := range ports {
-		if port == 0 || port > 65535 || (port == 2222 && !spec.SSH) {
-			return fmt.Errorf("invalid port %d", port)
-		}
-		if !seen[port] {
-			spec.Ports = append(spec.Ports, port)
-			seen[port] = true
-		}
-	}
-	for _, port := range spec.PrivatePorts {
-		if port == 0 || port > 65535 || port == 2222 {
-			return fmt.Errorf("invalid private port %d", port)
-		}
-	}
-	for _, port := range spec.ProtectedPorts {
-		if port == 2222 || !slices.Contains(spec.Ports, port) {
-			return fmt.Errorf("protected port %d must be published", port)
-		}
-	}
-	return nil
-}
-
-func validateMountPath(mount string, seen map[string]bool) error {
-	if !path.IsAbs(mount) || path.Clean(mount) != mount || seen[mount] {
-		return fmt.Errorf("VM mount paths must be unique absolute paths outside the root")
-	}
-	for _, reserved := range []string{"/dev", "/proc", "/sys", "/run", "/.beam"} {
-		if mount == reserved || strings.HasPrefix(mount, reserved+"/") {
-			return fmt.Errorf("reserved VM mount path %q", mount)
-		}
-	}
-	seen[mount] = true
 	return nil
 }
 
@@ -387,9 +232,9 @@ func (s *Service) create(c echo.Context) error {
 		return apiError(err)
 	}
 	if req.Name == "" && req.RequestID != "" {
-		req.Name = "vm-" + req.RequestID[:8]
+		req.Name = "vm-" + strings.ReplaceAll(req.RequestID, "-", "")[:20]
 	} else if req.Name == "" {
-		req.Name = "vm-" + uuid.NewString()[:8]
+		req.Name = "vm-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:20]
 	}
 	if !validName.MatchString(req.Name) {
 		return echo.NewHTTPError(400, "name must begin with a letter and contain at most 24 lowercase letters, digits or hyphens")
@@ -568,7 +413,7 @@ func (s *Service) action(c echo.Context) error {
 		return c.JSON(201, artifactResponse(*a))
 	case "fork":
 		if req.Name == "" {
-			req.Name = "vm-" + uuid.NewString()[:8]
+			req.Name = "vm-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:20]
 		}
 		if !validName.MatchString(req.Name) {
 			return echo.NewHTTPError(400, "valid fork name required")

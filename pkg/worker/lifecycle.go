@@ -1029,7 +1029,7 @@ func (s *Worker) buildOrPullBaseImageWithMetrics(ctx context.Context, request *t
 }
 
 func portsForRequest(request *types.ContainerRequest) []uint32 {
-	if request.Checkpoint != nil {
+	if request.Checkpoint != nil && !request.IsPersistentVM() {
 		return request.Checkpoint.ExposedPorts
 	}
 

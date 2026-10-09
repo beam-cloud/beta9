@@ -450,3 +450,41 @@ def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
     assert remote.sent == [b"request"]
     assert output.getvalue() == b"complete response"
     assert remote.closed
+
+
+def test_activity_lease_refreshes_during_work_and_stops_on_exit():
+    selected = service()
+    heartbeats = threading.Event()
+    info = {"id": "resource", "name": "dev", "spec": {"idle_timeout": 1}}
+
+    def response(method, path, **kwargs):
+        if path.endswith("/touch") and kwargs.get("timeout") == 3:
+            heartbeats.set()
+        return info
+
+    selected.http.json.side_effect = response
+    vm = VM(_service=selected)._set(info)
+    with vm.keep_alive():
+        assert heartbeats.wait(2), "active work must refresh before its idle deadline"
+    calls = selected.http.json.call_count
+    assert not heartbeats.clear()
+    assert not heartbeats.wait(0.4), "lease must stop when its owner exits"
+    assert selected.http.json.call_count == calls
+
+
+def test_activity_lease_surfaces_lost_authorization():
+    selected = service()
+    failed = threading.Event()
+    info = {"id": "resource", "name": "dev", "spec": {"idle_timeout": 1}}
+
+    def response(method, path, **kwargs):
+        if kwargs.get("timeout") == 3:
+            failed.set()
+            raise GatewayHTTPError(403, "revoked")
+        return info
+
+    selected.http.json.side_effect = response
+    vm = VM(_service=selected)._set(info)
+    with pytest.raises(RuntimeError, match="activity lease failed"):
+        with vm.keep_alive():
+            assert failed.wait(2)

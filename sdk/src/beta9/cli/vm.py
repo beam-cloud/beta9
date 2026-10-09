@@ -10,7 +10,7 @@ import time
 import uuid
 import webbrowser
 from pathlib import Path
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, suppress
 from urllib.parse import quote
 
 import click
@@ -412,11 +412,17 @@ def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False)
         process = sandbox.process.exec(*command, cwd=cwd)
         result = {"vm_id": vm.id, "container_id": vm.info["container_id"], "pid": process.pid}
         if not detach:
-            result.update(
-                exit_code=process.wait(timeout or None),
-                stdout=process.stdout.read(),
-                stderr=process.stderr.read(),
-            )
+            with vm.keep_alive():
+                try:
+                    result.update(
+                        exit_code=process.wait(timeout or None),
+                        stdout=process.stdout.read(),
+                        stderr=process.stderr.read(),
+                    )
+                except (KeyboardInterrupt, Exception):
+                    with suppress(Exception):
+                        process.kill()
+                    raise
         if as_json:
             terminal.print_json(result)
         else:
@@ -426,7 +432,8 @@ def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False)
         return
     # The existing exec implementation streams both output channels, retains
     # argv boundaries, cancellation and the child's exit code.
-    exec_container.callback.__wrapped__(service, vm.info["container_id"], command, cwd, timeout)
+    with vm.keep_alive():
+        exec_container.callback.__wrapped__(service, vm.info["container_id"], command, cwd, timeout)
 
 
 @management.command("ps")
@@ -876,8 +883,8 @@ def logs_vm(service, name, unit, session, follow, pid=None):
             for line in process.logs:
                 click.echo(line, nl=False)
         else:
-            click.echo(process.stdout._fetch_next_chunk(), nl=False)
-            click.echo(process.stderr._fetch_next_chunk(), nl=False, err=True)
+            click.echo(process.stdout.read(), nl=False)
+            click.echo(process.stderr.read(), nl=False, err=True)
         return
     if session:
         if not all(c.isalnum() or c in "-_" for c in session):

@@ -212,7 +212,7 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 	if err != nil && !(&types.ErrContainerStateNotFound{}).From(err) {
 		return err
 	}
-	if err == nil && state.Status != types.ContainerStatusStopping && v.DesiredState != "paused" {
+	if err == nil && state.Status != types.ContainerStatusStopping && (v.DesiredState != "paused" || v.MemoryCheckpointID == "") {
 		// Commit the root before releasing compute. --no-snapshot skips only
 		// the named artifact, never filesystem durability.
 		if state.Status == types.ContainerStatusRunning {
@@ -369,9 +369,6 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	info := &auth.AuthInfo{Workspace: &workspace, Token: &types.Token{}}
 	ctx = auth.ContextWithAuthInfo(ctx, info)
 	if v.DesiredState != "running" {
-		if v.DesiredState == "paused" && v.MemoryCheckpointID == "" {
-			return nil
-		}
 		return s.stopOrDelete(ctx, v)
 	}
 	token, err := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
