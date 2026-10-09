@@ -878,7 +878,7 @@ func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandbo
 			client = acquiredClient
 			container = acquiredContainer
 		}
-		return client.SandboxStatusContext(probeCtx, in.ContainerId, 0)
+		return client.SandboxReadyContext(probeCtx, in.ContainerId)
 	})
 	cancel()
 

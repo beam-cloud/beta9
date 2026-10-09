@@ -996,6 +996,13 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 	}
 
 	if in.Pid == 0 {
+		if in.WaitForReady {
+			var err error
+			instance, err = s.waitForSandboxProcessManager(ctx, in.ContainerId, instance)
+			if err != nil {
+				return &pb.ContainerSandboxStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			}
+		}
 		if instance.processManagerReady() {
 			return &pb.ContainerSandboxStatusResponse{
 				Ok:       true,

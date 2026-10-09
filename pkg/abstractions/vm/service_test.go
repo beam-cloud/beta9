@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -264,6 +265,15 @@ type vmRuntime struct {
 	diskName        string
 	boundPorts      []int32
 	network         *pb.PodSandboxUpdateNetworkPermissionsRequest
+	connectError    error
+}
+
+func (r *vmRuntime) SandboxConnect(_ context.Context, req *pb.PodSandboxConnectRequest) (*pb.PodSandboxConnectResponse, error) {
+	if r.connectError != nil {
+		return nil, r.connectError
+	}
+	state := r.containers.states[req.ContainerId]
+	return &pb.PodSandboxConnectResponse{Ok: state != nil && state.Status == types.ContainerStatusRunning}, nil
 }
 
 func (r *vmRuntime) RunVM(_ context.Context, _ *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string, disks map[string]string) error {
@@ -346,6 +356,28 @@ func TestGetProjectsLaunchCompletionBeforeReconciliation(t *testing.T) {
 			require.Equal(t, "owned-checkpoint", v.MemoryCheckpointID)
 		})
 	}
+}
+
+func TestBlockingLaunchResponseVerifiesExecWithoutConsumingCheckpoint(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	v.Status = "starting"
+	v.MemoryCheckpointID = "owned-checkpoint"
+	c, rec := actionContext(info, v.Name, "start", "")
+	c.Request().URL.RawQuery = "wait=exec"
+	require.NoError(t, s.launchResponse(c, 201, v))
+	var response struct {
+		types.VM
+		ExecReady bool `json:"exec_ready"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	require.True(t, response.ExecReady)
+	require.Equal(t, "running", response.Status)
+	require.Equal(t, "starting", v.Status)
+	require.Equal(t, "owned-checkpoint", v.MemoryCheckpointID)
+	runtime.connectError = errors.New("not ready")
+	c, _ = actionContext(info, v.Name, "start", "")
+	c.Request().URL.RawQuery = "wait=exec"
+	require.Error(t, s.launchResponse(c, 201, v))
 }
 
 func TestStopPreservesFinalRootWithoutVisibleSnapshot(t *testing.T) {

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 
-from ...channel import Channel, GatewayHTTPError, ServiceClient
+from ...channel import Channel, GatewayHTTPError, ServiceClient, rpc_timeout
 from ...clients.image import ImageServiceStub
 from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
@@ -45,7 +45,16 @@ def identity() -> Path:
             temporary = Path(directory) / "identity"
             if not path.exists():
                 subprocess.run(
-                    ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(temporary)],
+                    [
+                        "ssh-keygen",
+                        "-q",
+                        "-t",
+                        "ed25519",
+                        "-N",
+                        "",
+                        "-f",
+                        str(temporary),
+                    ],
                     stdin=subprocess.DEVNULL,
                     check=True,
                 )
@@ -57,7 +66,9 @@ def identity() -> Path:
             temporary_public.write_bytes(public)
             _publish_identity(temporary_public, path.with_suffix(".pub"))
     except FileNotFoundError as exc:
-        raise RuntimeError("VM SSH requires OpenSSH; install ssh-keygen and try again") from exc
+        raise RuntimeError(
+            "VM SSH requires OpenSSH; install ssh-keygen and try again"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             f"Unable to prepare VM SSH identity at {path}: ssh-keygen failed"
@@ -176,7 +187,9 @@ class VM:
         self.image = image
         self.template = template
         self._snapshot_source = snapshot
-        self.request_id = str(uuid.UUID(request_id)) if request_id else str(uuid.uuid4())
+        self.request_id = (
+            str(uuid.UUID(request_id)) if request_id else str(uuid.uuid4())
+        )
         self._metadata = metadata
         self._creation_body = None
         self._volumes = volumes
@@ -184,13 +197,19 @@ class VM:
             raise ValueError("Choose a template or snapshot")
         self.info: Dict[str, Any] = {}
         self._connected = None
+        self._connected_at = 0
+        self._services_container = None
         self._spec = {
             "cpu": int(cpu * 1000) if cpu is not None else None,
             "memory": memory,
             "disk_size": disk_size,
             "desktop": desktop,
             "docker_enabled": docker_enabled,
-            "env": [f"{key}={value}" for key, value in env.items()] if env is not None else None,
+            "env": (
+                [f"{key}={value}" for key, value in env.items()]
+                if env is not None
+                else None
+            ),
             "secrets": secrets,
             "ports": ports,
             "ssh": ssh,
@@ -201,12 +220,19 @@ class VM:
             "block_network": block_network,
             "allow_list": allow_list,
             "protected_ports": protected_ports,
-            "disks": [disk.export().to_dict(casing=betterproto.Casing.SNAKE) for disk in disks]
-            if disks is not None
-            else None,
+            "disks": (
+                [
+                    disk.export().to_dict(casing=betterproto.Casing.SNAKE)
+                    for disk in disks
+                ]
+                if disks is not None
+                else None
+            ),
         }
 
-        self._spec = {key: value for key, value in self._spec.items() if value is not None}
+        self._spec = {
+            key: value for key, value in self._spec.items() if value is not None
+        }
 
     def _api(self, method, path="", *, timeout=240, **kwargs):
         deadline = time.monotonic() + timeout
@@ -240,15 +266,29 @@ class VM:
     def _set(self, info):
         if info.get("container_id") != self.info.get("container_id"):
             self._connected = None
+            self._services_container = None
         self.info = info
         self.name = info["name"]
+        if info.get("exec_ready"):
+            self._connected = _VMSandbox(
+                container_id=info["container_id"],
+                stub_id=info["stub_id"],
+                ok=True,
+                vm_channel=self._service.channel,
+            )
+            self._connected_at = time.monotonic()
         return self
 
     def create(self, wait: bool = True) -> "VM":
+        self.prepare()
+        return self._submit_creation(wait)
+
+    def prepare(self) -> "VM":
+        """Prepare the immutable image, keys and launch request without starting compute."""
         # Reusing this object after a lost response must send exactly the same
         # creation request, including the image and SSH key already prepared.
         if self._creation_body is not None:
-            return self._submit_creation(wait)
+            return self
         # Verify the selected gateway before building an image or creating keys.
         # Older gateways return a generic route 404, which otherwise appears
         # after a successful (and potentially expensive) image build.
@@ -271,7 +311,9 @@ class VM:
                 selected.stub = VolumeServiceStub(self._service.channel)
                 if not selected.get_or_create():
                     raise RuntimeError(f"Unable to prepare volume {selected.name}")
-                spec["volumes"].append(selected.export().to_dict(casing=betterproto.Casing.SNAKE))
+                spec["volumes"].append(
+                    selected.export().to_dict(casing=betterproto.Casing.SNAKE)
+                )
         if spec.get("ssh", True):
             spec["ssh_public_key"] = public_key()
         if not (self.template or self._snapshot_source):
@@ -279,7 +321,9 @@ class VM:
             image = self.image or Image(base_image="ubuntu:22.04")
             if self.image is None:
                 image.ignore_python = True
-            result = prepare_image(image, self._service, spec.get("desktop", False)).build()
+            result = prepare_image(
+                image, self._service, spec.get("desktop", False)
+            ).build()
             if not result.success:
                 raise ImageBuildError(result.error or "VM image build failed")
             spec["image_id"] = result.image_id
@@ -290,13 +334,16 @@ class VM:
                 "template": self.template or "",
                 "request_id": self.request_id,
                 **({"metadata": self._metadata} if self._metadata is not None else {}),
-                **({"snapshot": self._snapshot_source} if self._snapshot_source else {}),
+                **(
+                    {"snapshot": self._snapshot_source} if self._snapshot_source else {}
+                ),
             }
         )
-        return self._submit_creation(wait)
+        return self
 
     def _submit_creation(self, wait):
-        self._set(self._api("POST", json=self._creation_body))
+        kwargs = {"params": {"wait": "exec"}} if wait else {}
+        self._set(self._api("POST", json=self._creation_body, **kwargs))
         return self.wait() if wait else self
 
     @classmethod
@@ -304,7 +351,9 @@ class VM:
         return cls(name, context=context, _service=_service).refresh()
 
     @classmethod
-    def list(cls, *, context=None, all=False, metadata=None, status=None, _service=None):
+    def list(
+        cls, *, context=None, all=False, metadata=None, status=None, _service=None
+    ):
         client = cls(context=context, _service=_service)
         try:
             params = {"all": str(all).lower()}
@@ -330,23 +379,35 @@ class VM:
     def refresh(self) -> "VM":
         return self._set(self._api("GET", self._path()))
 
-    def wait(self, timeout: float = 180) -> "VM":
+    def wait(self, timeout: float = 180, *, services: bool = False) -> "VM":
+        """Wait for exec readiness; services=True also waits for SSH and UI ports."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            self.refresh()
+            if not self.info:
+                self.refresh()
             if self.info["status"] == "error":
                 raise RuntimeError(self.info.get("error") or "VM failed to start")
-            if self.info["status"] == "running":
-                # Runtime readiness includes the process manager. Check that
-                # the guest services have started, too, before returning.
+            if self.info["status"] in ("starting", "running"):
+                # SandboxConnect waits on the worker's readiness event, so
+                # neither lifecycle reconciliation nor fixed polling delays
+                # are part of the normal startup path.
                 try:
-                    sandbox = self._sandbox()
+                    with rpc_timeout(max(0.001, deadline - time.monotonic())):
+                        sandbox = self._sandbox(refresh=False, allow_starting=True)
                 except SandboxConnectionError:
-                    time.sleep(0.5)
-                    continue
-                if self._services_ready(sandbox, deadline):
-                    return self
-            time.sleep(0.5)
+                    pass
+                else:
+                    self.info["status"] = "running"
+                    if not services:
+                        return self
+                    if (
+                        self._services_container is not None
+                        and self._services_container == self.info.get("container_id")
+                    ) or self._services_ready(sandbox, deadline):
+                        self._services_container = self.info.get("container_id")
+                        return self
+            time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+            self.refresh()
         raise TimeoutError("VM did not become ready; inspect vm get/logs")
 
     def _services_ready(self, sandbox, deadline):
@@ -374,7 +435,10 @@ class VM:
             remaining = deadline - time.monotonic()
             return (
                 remaining > 0
-                and sandbox.process.exec("python3", "-c", probe).wait(min(10, remaining)) == 0
+                and sandbox.process.exec("python3", "-c", probe).wait(
+                    min(10, remaining)
+                )
+                == 0
             )
         except (SandboxConnectionError, SandboxProcessError):
             return False
@@ -384,7 +448,14 @@ class VM:
 
     def start(self, wait=True, *, cold=False) -> "VM":
         """Start or restore. cold=True explicitly discards saved RAM."""
-        self._set(self._action("start", **({"cold": True} if cold else {})))
+        self._set(
+            self._api(
+                "POST",
+                self._path() + "/start",
+                json={"cold": True} if cold else {},
+                **({"params": {"wait": "exec"}} if wait else {}),
+            )
+        )
         return self.wait() if wait else self
 
     resume = start
@@ -399,7 +470,9 @@ class VM:
             vm.close()
             raise
 
-    def update(self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None) -> "VM":
+    def update(
+        self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None
+    ) -> "VM":
         """Change idle stopping and metadata without replacing the VM or URLs.
 
         Metadata replaces the complete map; pass {} to clear it. It is visible
@@ -412,7 +485,11 @@ class VM:
             "metadata": metadata,
         }
         return self._set(
-            self._api("PATCH", self._path(), json={k: v for k, v in body.items() if v is not None})
+            self._api(
+                "PATCH",
+                self._path(),
+                json={k: v for k, v in body.items() if v is not None},
+            )
         )
 
     def update_network_permissions(self, block_network=False, allow_list=None) -> "VM":
@@ -463,7 +540,9 @@ class VM:
         return self._action("snapshot", name=name or "")
 
     def snapshots(self):
-        return [a for a in self._api("GET", "/artifacts/snapshot") if a["vm_id"] == self.id]
+        return [
+            a for a in self._api("GET", "/artifacts/snapshot") if a["vm_id"] == self.id
+        ]
 
     def remove_snapshot(self, name: str):
         self._api("DELETE", "/artifacts/snapshot/" + quote(name, safe=""))
@@ -496,18 +575,23 @@ class VM:
         """Bind a port for authenticated tunnels without publishing a URL."""
         self._set(self._action("bind", port=port))
 
-    def _sandbox(self, *, auto_resume=True):
-        self.refresh()
+    def _sandbox(self, *, auto_resume=True, refresh=True, allow_starting=False):
+        if refresh and (
+            self._connected is None or time.monotonic() - self._connected_at >= 1
+        ):
+            self.refresh()
         container = self.info.get("container_id")
         if (
             auto_resume
-            and self.info["status"] != "running"
+            and self.info["status"] not in ("starting", "running")
             and self.info.get("spec", {}).get("auto_resume")
         ):
             self._set(self._action("wake"))
             self.wait()
             container = self.info.get("container_id")
-        if not container or self.info["status"] != "running":
+        if not container or self.info["status"] not in (
+            ("starting", "running") if allow_starting else ("running",)
+        ):
             raise SandboxConnectionError("VM is not running; call start() first")
         if self._connected is None:
             response = PodServiceStub(self._service.channel).sandbox_connect(
@@ -521,7 +605,9 @@ class VM:
                 ok=True,
                 vm_channel=self._service.channel,
             )
-        self._touch()
+            self._connected_at = time.monotonic()
+        if self.info.get("spec", {}).get("idle_timeout"):
+            self._touch()
         return self._connected
 
     @contextmanager

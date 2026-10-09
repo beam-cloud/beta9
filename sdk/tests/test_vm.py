@@ -65,7 +65,9 @@ def test_create_checks_api_before_keys_or_image_build(monkeypatch, status):
         VM(_service=selected).create()
     assert error.value.status == status
     if status == 404:
-        assert "Persistent VMs are unavailable at https://app.stage.beam.cloud" in str(error.value)
+        assert "Persistent VMs are unavailable at https://app.stage.beam.cloud" in str(
+            error.value
+        )
         assert "--context" in str(error.value)
     else:
         assert str(error.value) == "Not Found"
@@ -76,8 +78,19 @@ def test_create_checks_api_before_keys_or_image_build(monkeypatch, status):
 
 def test_template_preserves_unspecified_fields_and_channel():
     selected = service()
-    selected.http.json.return_value = {"id": "resource", "name": "dev", "status": "starting"}
-    vm = VM("dev", template="base", ssh=False, cpu=2.5, env={"VALUE": "a=b c"}, _service=selected)
+    selected.http.json.return_value = {
+        "id": "resource",
+        "name": "dev",
+        "status": "starting",
+    }
+    vm = VM(
+        "dev",
+        template="base",
+        ssh=False,
+        cpu=2.5,
+        env={"VALUE": "a=b c"},
+        _service=selected,
+    )
     vm.create(wait=False)
     body = selected.http.json.call_args.kwargs["json"]
     assert body == {
@@ -87,6 +100,61 @@ def test_template_preserves_unspecified_fields_and_channel():
         "request_id": vm.request_id,
     }
     assert vm._service is selected
+
+
+def test_prepare_freezes_request_without_allocating_compute():
+    selected = service()
+    vm = VM("dev", template="base", ssh=False, _service=selected)
+    assert vm.prepare() is vm
+    assert [call.args[0] for call in selected.http.json.call_args_list] == ["GET"]
+    body = json.loads(json.dumps(vm._creation_body))
+    vm._spec["cpu"] = 9000
+    vm.prepare()
+    assert vm._creation_body == body
+    assert selected.http.json.call_count == 1
+
+
+def test_verified_launch_reuses_ready_connection_for_first_operation():
+    selected = service()
+    vm = VM(_service=selected)._set(
+        {
+            "name": "dev",
+            "status": "running",
+            "container_id": "runtime",
+            "stub_id": "stub",
+            "spec": {"idle_timeout": 0},
+            "exec_ready": True,
+        }
+    )
+    assert vm._sandbox() is vm._connected
+    selected.http.json.assert_not_called()
+
+
+def test_ready_connection_refreshes_after_lease_to_observe_external_stop(monkeypatch):
+    selected = service()
+    clock = [10.0]
+    monkeypatch.setattr(vm_module.time, "monotonic", lambda: clock[0])
+    vm = VM(_service=selected)._set(
+        {
+            "name": "dev",
+            "status": "running",
+            "container_id": "runtime",
+            "stub_id": "stub",
+            "spec": {"idle_timeout": 0},
+            "exec_ready": True,
+        }
+    )
+    selected.http.json.return_value = {
+        "name": "dev",
+        "status": "stopped",
+        "container_id": "",
+        "spec": {},
+    }
+    clock[0] += 1.1
+    with pytest.raises(SandboxConnectionError, match="not running"):
+        vm._sandbox()
+    assert vm._connected is None
+    selected.http.json.assert_called_once()
 
 
 def test_retry_after_lost_creation_response_reuses_exact_request():
@@ -117,7 +185,10 @@ def test_update_can_clear_metadata_and_network_rules():
         "metadata": {},
     }
     vm.update_network_permissions()
-    assert selected.http.json.call_args.kwargs["json"] == {"block_network": False, "allow_list": []}
+    assert selected.http.json.call_args.kwargs["json"] == {
+        "block_network": False,
+        "allow_list": [],
+    }
 
 
 def test_metadata_list_filter_and_status_use_gateway_query():
@@ -141,18 +212,27 @@ def test_runtime_connection_is_invalidated_on_resume():
 
 @pytest.fixture
 def sandbox_vm(monkeypatch):
-    vm = VM(_service=service())._set({"name": "dev", "status": "running", "spec": {}})
+    vm = VM(_service=service())._set(
+        {
+            "name": "dev",
+            "status": "running",
+            "container_id": "test-container",
+            "spec": {},
+        }
+    )
+    vm._services_container = "test-container"
     monkeypatch.setattr(vm, "refresh", lambda: vm)
     sandbox = SimpleNamespace(process=MagicMock())
-    monkeypatch.setattr(vm, "_sandbox", lambda: sandbox)
+    monkeypatch.setattr(vm, "_sandbox", lambda **kwargs: sandbox)
     return vm, sandbox
 
 
 def test_wait_checks_every_service_and_tcp_readiness(sandbox_vm):
     vm, sandbox = sandbox_vm
+    vm._services_container = None
     vm.info["spec"].update(ssh=True, desktop=True)
     sandbox.process.exec.return_value.wait.return_value = 0
-    assert vm.wait() is vm
+    assert vm.wait(services=True) is vm
     calls = [call.args for call in sandbox.process.exec.call_args_list]
     assert calls[:3] == [
         ("systemctl", "is-active", "--quiet", "beam-terminal.service"),
@@ -163,13 +243,28 @@ def test_wait_checks_every_service_and_tcp_readiness(sandbox_vm):
     assert "[7681, 2222, 8080]" in calls[3][2]
 
 
+def test_wait_for_exec_uses_live_connection_without_status_ticker(
+    sandbox_vm, monkeypatch
+):
+    vm, sandbox = sandbox_vm
+    vm.info["status"] = "starting"
+    refresh = MagicMock()
+    monkeypatch.setattr(vm, "refresh", refresh)
+    assert vm.wait() is vm
+    assert vm.info["status"] == "running"
+    refresh.assert_not_called()
+    sandbox.process.exec.assert_not_called()
+
+
 @pytest.fixture
 def cli_service(monkeypatch):
     selected = service()
     client = MagicMock()
     client.__enter__.return_value = selected
     monkeypatch.setattr(extraclick, "ServiceClient", lambda config: client)
-    monkeypatch.setattr(extraclick, "get_config_context", lambda context: SimpleNamespace())
+    monkeypatch.setattr(
+        extraclick, "get_config_context", lambda context: SimpleNamespace()
+    )
     return selected
 
 
@@ -224,13 +319,16 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     factory = MagicMock(return_value=fake)
     monkeypatch.setattr(vm_cli, "VM", factory)
     result = CliRunner().invoke(
-        vm_cli.management, ["new", "dev", "--template", "base", "--env", "VALUE=a=b c", "--json"]
+        vm_cli.management,
+        ["new", "dev", "--template", "base", "--env", "VALUE=a=b c", "--json"],
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == fake.info
     options = factory.call_args.kwargs
     assert options["env"] == {"VALUE": "a=b c"}
-    assert options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
+    assert (
+        options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
+    )
     assert options["_service"] is cli_service
     fake.create.assert_called_once_with(wait=False)
     fake.wait.assert_called_once_with()
@@ -239,7 +337,9 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
 @pytest.fixture
 def identity_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        vm_module, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config.ini")
+        vm_module,
+        "get_settings",
+        lambda: SimpleNamespace(config_path=tmp_path / "config.ini"),
     )
 
 
@@ -259,18 +359,25 @@ def test_identity_is_atomic_and_never_replaces_existing_keys(identity_settings):
 
 
 def test_identity_reports_missing_openssh(monkeypatch, identity_settings):
-    monkeypatch.setattr(vm_module.subprocess, "run", MagicMock(side_effect=FileNotFoundError()))
+    monkeypatch.setattr(
+        vm_module.subprocess, "run", MagicMock(side_effect=FileNotFoundError())
+    )
     with pytest.raises(RuntimeError, match="install ssh-keygen"):
         vm_module.identity()
 
 
 @pytest.mark.parametrize("hung_command", ["systemctl", "python3"])
-def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command, sandbox_vm):
+def test_wait_retries_hung_services_until_its_deadline(
+    monkeypatch, hung_command, sandbox_vm
+):
     vm, sandbox = sandbox_vm
+    vm._services_container = None
     clock = [0.0]
     monkeypatch.setattr(vm_module.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
-        vm_module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+        vm_module.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
     )
 
     def execute(command, *args):
@@ -283,7 +390,7 @@ def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command
 
     sandbox.process.exec.side_effect = execute
     with pytest.raises(TimeoutError, match="VM did not become ready"):
-        vm.wait(timeout=1)
+        vm.wait(timeout=1, services=True)
     assert sandbox.process.exec.call_count >= 2
 
 
@@ -294,7 +401,11 @@ def test_fork_connection_survives_parent_close(monkeypatch):
     clients = MagicMock(side_effect=[parent_service, child_service])
     monkeypatch.setattr(vm_module, "ServiceClient", clients)
     monkeypatch.setattr(vm_module, "public_key", lambda: "public-key")
-    parent_service.http.json.return_value = {"id": "child", "name": "child", "status": "starting"}
+    parent_service.http.json.return_value = {
+        "id": "child",
+        "name": "child",
+        "status": "starting",
+    }
     parent = VM("parent", context=config)
     child = parent.fork(wait=False)
     parent.close()
@@ -315,7 +426,8 @@ def test_exec_preserves_child_flags_that_match_cli_options(cli_service, monkeypa
         container_cli.exec_container, "callback", SimpleNamespace(__wrapped__=execute)
     )
     result = CliRunner().invoke(
-        vm_cli.management, ["exec", "--cwd", "/root", "dev", "sh", "-c", "echo --context literal"]
+        vm_cli.management,
+        ["exec", "--cwd", "/root", "dev", "sh", "-c", "echo --context literal"],
     )
     assert result.exit_code == 0, result.output
     execute.assert_called_once_with(
@@ -348,7 +460,9 @@ def test_cli_reports_api_failures_without_tracebacks(cli_service, monkeypatch):
     monkeypatch.setattr(
         vm_cli.VM,
         "get",
-        MagicMock(side_effect=GatewayHTTPError(409, "VM operation already in progress")),
+        MagicMock(
+            side_effect=GatewayHTTPError(409, "VM operation already in progress")
+        ),
     )
     result = CliRunner().invoke(vm_cli.management, ["start", "dev"])
     assert result.exit_code == 1
@@ -373,9 +487,18 @@ def test_ssh_preserves_remote_arguments_and_exit_status(cli_service, monkeypatch
     monkeypatch.setattr(vm_cli, "_ssh_options", lambda vm: [])
     call = MagicMock(return_value=7)
     monkeypatch.setattr(vm_cli.subprocess, "call", call)
-    result = CliRunner().invoke(vm_cli.management, ["ssh", "dev", "--", "echo", "a b;$USER"])
+    result = CliRunner().invoke(
+        vm_cli.management, ["ssh", "dev", "--", "echo", "a b;$USER"]
+    )
     assert result.exit_code == 7
-    assert call.call_args.args[0] == ["ssh", "-p", "2222", "--", "root@dev", "echo 'a b;$USER'"]
+    assert call.call_args.args[0] == [
+        "ssh",
+        "-p",
+        "2222",
+        "--",
+        "root@dev",
+        "echo 'a b;$USER'",
+    ]
 
 
 def test_private_bind_does_not_create_public_url():
@@ -482,7 +605,9 @@ def test_cli_stale_kill_rejects_before_acquiring_runtime(cli_service, monkeypatc
     vm = MagicMock()
     vm.info = {"container_id": "current"}
     monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
-    result = CliRunner().invoke(vm_cli.management, ["kill", "--container-id", "old", "dev", "44"])
+    result = CliRunner().invoke(
+        vm_cli.management, ["kill", "--container-id", "old", "dev", "44"]
+    )
     assert result.exit_code == 1
     assert "previous runtime" in result.output
     vm._sandbox.assert_not_called()
@@ -507,7 +632,11 @@ def test_recording_selects_mp4_for_extensionless_paths(sandbox_vm, monkeypatch):
     desktop = vm.desktop
     monkeypatch.setattr(desktop, "screen_size", lambda: (1280, 720))
     desktop.record("/workspace/extensionless")
-    assert sandbox.process.exec.call_args.args[-3:] == ("-f", "mp4", "/workspace/extensionless")
+    assert sandbox.process.exec.call_args.args[-3:] == (
+        "-f",
+        "mp4",
+        "/workspace/extensionless",
+    )
 
 
 def test_desktop_timeout_cancels_command_and_preserves_wait_error(sandbox_vm):
@@ -555,11 +684,16 @@ def test_creation_retry_freezes_caller_owned_metadata_and_lists():
 
 def test_activity_touch_retries_transient_lifecycle_lock():
     selected = service()
-    selected.http.json.side_effect = [GatewayHTTPError(409, "VM operation already in progress"), {}]
+    selected.http.json.side_effect = [
+        GatewayHTTPError(409, "VM operation already in progress"),
+        {},
+    ]
     vm = VM(_service=selected)._set({"id": "resource", "name": "dev"})
     vm._touch(timeout=3)
     assert selected.http.json.call_count == 2
-    assert all(call.kwargs["timeout"] <= 3 for call in selected.http.json.call_args_list)
+    assert all(
+        call.kwargs["timeout"] <= 3 for call in selected.http.json.call_args_list
+    )
 
 
 def test_cli_rejects_detached_command_deadline(cli_service, monkeypatch):

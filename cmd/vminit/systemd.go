@@ -6,17 +6,25 @@ package main
 // an ordinary systemd service to retain the worker's vsock and filesystem
 // protocol. Transient boot configuration lives on /run, never on the disk.
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
 
 const systemdProcessFile = "/run/beam-vm/process.json"
+const systemdAgentPIDFile = "/run/beam-vm/agent.pid"
 const guestAgentUnit = `[Unit]
 Description=Beam VM control and workload agent
 DefaultDependencies=no
@@ -26,8 +34,9 @@ Conflicts=shutdown.target
 OnFailure=poweroff.target
 
 [Service]
-Type=exec
-ExecStart=/.beam/init --systemd-agent
+Type=forking
+PIDFile=/run/beam-vm/agent.pid
+ExecStart=/.beam/init --systemd-adopt-agent
 Restart=no
 Delegate=yes
 KillMode=mixed
@@ -86,6 +95,16 @@ func bootSystemd(spec *specs.Spec) error {
 	if err := writeSystemdBootFiles("/", spec.Process); err != nil {
 		return err
 	}
+	agent := exec.Command("/.beam/init", "--systemd-agent")
+	agent.Stdin, agent.Stdout, agent.Stderr = os.Stdin, os.Stdout, os.Stderr
+	agent.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := agent.Start(); err != nil {
+		return fmt.Errorf("start guest agent: %w", err)
+	}
+	if err := os.WriteFile(systemdAgentPIDFile, []byte(strconv.Itoa(agent.Process.Pid)+"\n"), 0600); err != nil {
+		agent.Process.Kill()
+		return err
+	}
 	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
 	logf("boot phase: executing systemd")
 	return unix.Exec(binary, []string{binary, "--unit=multi-user.target"}, env)
@@ -123,6 +142,10 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	for _, entry := range process.Env {
 		manager.WriteString(" " + systemdQuote(entry))
 	}
+	manager.WriteString(" \"HOME=/root\" \"LANG=C.UTF-8\"")
+	if processEnv(process, "BEAM_VM_DESKTOP") == "true" {
+		manager.WriteString(" \"DISPLAY=:1\" \"XAUTHORITY=/run/beam-desktop/.Xauthority\"")
+	}
 	manager.WriteString("\n")
 	if err := os.WriteFile(filepath.Join(managerDir, "90-beam-vm.conf"), []byte(manager.String()), 0600); err != nil {
 		return err
@@ -136,6 +159,24 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	}
 	if err := os.Symlink("../beam-guest.service", filepath.Join(unitDir, "sysinit.target.wants/beam-guest.service")); err != nil {
 		return err
+	}
+	// Enable managed services before PID 1 reads its unit graph. An early
+	// systemctl call can race creation of systemd's bus socket.
+	wants := filepath.Join(unitDir, "multi-user.target.wants")
+	if err := os.MkdirAll(wants, 0755); err != nil {
+		return err
+	}
+	services := map[string]string{"beam-terminal.service": "/etc/systemd/system/beam-terminal.service"}
+	if processEnv(process, "BEAM_VM_SSH") == "true" {
+		services["ssh.service"] = "/lib/systemd/system/ssh.service"
+	}
+	if processEnv(process, "BEAM_VM_DESKTOP") == "true" {
+		services["beam-desktop.service"] = "/etc/systemd/system/beam-desktop.service"
+	}
+	for name, target := range services {
+		if err := os.Symlink(target, filepath.Join(wants, name)); err != nil {
+			return err
+		}
 	}
 	// The NIC is configured before exec. Network managers must not replace
 	// the scheduler's addresses; user services still have a real systemd.
@@ -190,5 +231,95 @@ func runSystemdAgent() (int, error) {
 	if err := json.Unmarshal(data, &process); err != nil {
 		return 1, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go logExecReadiness(ctx)
 	return runAgent(&process, true)
+}
+
+// The agent starts beside PID 1's exec of systemd. Once its ordinary service
+// starts, move the existing process tree into that service's delegated cgroup.
+// Its root-owned PIDFile lets systemd supervise the same agent without a
+// second process manager, while retaining the normal shutdown ordering.
+func adoptSystemdAgent() error {
+	data, err := os.ReadFile(systemdAgentPIDFile)
+	if err != nil {
+		return err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 1 {
+		return fmt.Errorf("invalid guest agent PID")
+	}
+	if err := unix.Kill(pid, 0); err != nil {
+		return fmt.Errorf("guest agent exited before adoption: %w", err)
+	}
+	data, err = os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if group, ok := strings.CutPrefix(line, "0::"); ok {
+			return moveAgentProcessTree(pid, filepath.Join("/sys/fs/cgroup", group, "cgroup.procs"), map[int]bool{})
+		}
+	}
+	return fmt.Errorf("guest agent requires a unified service cgroup")
+}
+
+func moveAgentProcessTree(pid int, group string, visited map[int]bool) error {
+	if visited[pid] {
+		return nil
+	}
+	visited[pid] = true
+	// Move the parent first: any subsequent forks already inherit the group.
+	if err := os.WriteFile(group, []byte(strconv.Itoa(pid)), 0644); err != nil {
+		if os.IsNotExist(err) || errors.Is(err, unix.ESRCH) {
+			return nil // A short exec may exit during adoption.
+		}
+		return err
+	}
+	tasks, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, task := range tasks {
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%s/children", pid, task.Name()))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, child := range strings.Fields(string(data)) {
+			childPID, err := strconv.Atoi(child)
+			if err != nil {
+				return err
+			}
+			if err := moveAgentProcessTree(childPID, group, visited); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Record when the workload opens exec without adding a boot dependency.
+func logExecReadiness(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		conn, err := (&net.Dialer{Timeout: 20 * time.Millisecond}).DialContext(ctx, "tcp", "127.0.0.1:7111")
+		if err == nil {
+			conn.Close()
+			logf("boot phase: exec TCP listening")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }

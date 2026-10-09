@@ -15,6 +15,7 @@ class VMDesktop:
         self.vm.refresh()
         if not self.vm.info["spec"].get("desktop"):
             raise ValueError("Create this VM with desktop=True to use desktop controls")
+        self.vm.wait(services=True)
         return self.vm._sandbox()
 
     def _run(self, *args, stdin=None):
@@ -28,7 +29,9 @@ class VMDesktop:
                 pass
             raise
         if code != 0:
-            raise RuntimeError(process.stderr.read() or f"Desktop command failed: {args[0]}")
+            raise RuntimeError(
+                process.stderr.read() or f"Desktop command failed: {args[0]}"
+            )
         return process.stdout.read().strip()
 
     @property
@@ -85,11 +88,23 @@ class VMDesktop:
         args = ["xdotool"]
         if x is not None:
             args += self._move(x, y)
-        self._run(*args, "click", "--repeat", str(count), "--delay", "100", str(buttons[button]))
+        self._run(
+            *args,
+            "click",
+            "--repeat",
+            str(count),
+            "--delay",
+            "100",
+            str(buttons[button]),
+        )
 
     def scroll(self, direction="down", amount=3):
         buttons = {"up": 4, "down": 5, "left": 6, "right": 7}
-        if direction not in buttons or not isinstance(amount, int) or not 1 <= amount <= 100:
+        if (
+            direction not in buttons
+            or not isinstance(amount, int)
+            or not 1 <= amount <= 100
+        ):
             raise ValueError("Use up/down/left/right and 1–100 scroll steps")
         self._run("xdotool", "click", "--repeat", str(amount), str(buttons[direction]))
 
@@ -107,7 +122,13 @@ class VMDesktop:
 
     def drag(self, start, end):
         self._run(
-            "xdotool", *self._move(*start), "mousedown", "1", *self._move(*end), "mouseup", "1"
+            "xdotool",
+            *self._move(*start),
+            "mousedown",
+            "1",
+            *self._move(*end),
+            "mouseup",
+            "1",
         )
 
     def launch(self, *command: str):

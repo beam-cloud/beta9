@@ -45,6 +45,13 @@ const (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--systemd-adopt-agent" {
+		if err := adoptSystemdAgent(); err != nil {
+			logf("adopt guest agent: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--systemd-agent" {
 		code, err := runSystemdAgent()
 		if err != nil {
@@ -1279,11 +1286,17 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 	go ctrl.heartbeat(controlHeartbeat)
 	logf("started %v as pid %d", proc.Args, pid)
 
+	waitPID := -1
+	if ctrl.systemd {
+		// PID 1 reaps orphans in a systemd guest. Wait only for our workload
+		// so exec.Cmd helpers can collect their own children and exit status.
+		waitPID = pid
+	}
 	for {
 		<-sigchld
 		for {
 			var status unix.WaitStatus
-			reaped, err := unix.Wait4(-1, &status, unix.WNOHANG, nil)
+			reaped, err := unix.Wait4(waitPID, &status, unix.WNOHANG, nil)
 			if err != nil || reaped <= 0 {
 				break
 			}

@@ -203,8 +203,8 @@ func processAlive(pid int, comm string) bool {
 	if err != nil {
 		return false
 	}
-	_, fields, ok := strings.Cut(string(stat), ") ")
-	return ok && len(fields) > 0 && fields[0] != 'Z' && fields[0] != 'X'
+	end := strings.LastIndex(string(stat), ") ")
+	return end >= 0 && len(stat) > end+2 && stat[end+2] != 'Z' && stat[end+2] != 'X'
 }
 
 func killProcess(pid int, comm string) {

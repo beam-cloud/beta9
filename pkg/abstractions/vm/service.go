@@ -142,6 +142,28 @@ func (s *Service) response(v *types.VM) types.VM {
 	return copy
 }
 
+// Blocking launch responses verify the same process-manager readiness as
+// SandboxConnect, saving a client round trip without persisting lifecycle state.
+func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error {
+	response := s.response(v)
+	if c.QueryParam("wait") != "exec" || v.DesiredState != "running" || v.ContainerID == "" || v.Status == "error" {
+		return c.JSON(status, response)
+	}
+	ctx, _ := requestContext(c)
+	ready, err := s.runtime.SandboxConnect(ctx, &pb.PodSandboxConnectRequest{ContainerId: v.ContainerID})
+	if err != nil {
+		return apiError(err)
+	}
+	if ready == nil || !ready.Ok {
+		return echo.NewHTTPError(503, "VM process manager is not ready")
+	}
+	response.Status = "running"
+	return c.JSON(status, struct {
+		types.VM
+		ExecReady bool `json:"exec_ready"`
+	}{response, true})
+}
+
 func artifactResponse(a types.VMArtifact) types.VMArtifact {
 	a.Spec = redactedSpec(a.Spec)
 	return a
@@ -328,7 +350,7 @@ func (s *Service) create(c echo.Context) error {
 	if err != nil {
 		return apiError(err)
 	}
-	return c.JSON(201, s.response(v))
+	return s.launchResponse(c, 201, v)
 }
 
 func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec) (*types.VM, error) {
@@ -403,7 +425,11 @@ func (s *Service) action(c echo.Context) error {
 	if err != nil {
 		return apiError(err)
 	}
-	defer unlock()
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	if v.DesiredState == "deleted" {
 		return echo.NewHTTPError(404, "VM removed")
 	}
@@ -535,7 +561,10 @@ func (s *Service) action(c echo.Context) error {
 		s.failed(ctx, v, err)
 		return apiError(err)
 	}
-	return c.JSON(200, s.response(v))
+	// The operation is persisted; readiness must not hold the lifecycle lock.
+	unlock()
+	unlock = nil
+	return s.launchResponse(c, 200, v)
 }
 
 func (s *Service) remove(c echo.Context) error {

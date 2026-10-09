@@ -75,6 +75,32 @@ func TestSystemdRejectsInvalidMachineIdentity(t *testing.T) {
 	}
 }
 
+func TestSystemdManagedServicesFollowVMFeatures(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		env := []string{"BEAM_VM_ID=676139cd-f92b-4688-bb36-a0e763ef445c"}
+		if enabled {
+			env = append(env, "BEAM_VM_SSH=true", "BEAM_VM_DESKTOP=true")
+		}
+		if err := writeSystemdBootFiles(root, &specs.Process{Env: env}); err != nil {
+			t.Fatal(err)
+		}
+		wants := filepath.Join(root, "run/systemd/system/multi-user.target.wants")
+		if _, err := os.Readlink(filepath.Join(wants, "beam-terminal.service")); err != nil {
+			t.Fatal(err)
+		}
+		for _, unit := range []string{"ssh.service", "beam-desktop.service"} {
+			_, err := os.Readlink(filepath.Join(wants, unit))
+			if enabled && err != nil || !enabled && !os.IsNotExist(err) {
+				t.Fatalf("%s enablement=%t: %v", unit, enabled, err)
+			}
+		}
+	}
+}
+
 func TestGuestAgentStopsAfterOrdinaryServices(t *testing.T) {
 	if !strings.Contains(guestAgentUnit, "Before=sysinit.target shutdown.target") || !strings.Contains(guestAgentUnit, "After=local-fs.target systemd-journald.service") || !strings.Contains(guestAgentUnit, "DefaultDependencies=no") {
 		t.Fatal("guest agent must outlive services and stop before local filesystems")
