@@ -25,6 +25,7 @@ from ..abstractions.volume import CloudBucket, Volume
 from ..channel import (
     RECOVERY_TIMEOUT,
     _deadline,
+    request_metadata,
     rpc_timeout,
     transient_error,
     with_grpc_error_handling,
@@ -56,13 +57,20 @@ class _Invocation:
         delay = 0.2
         while True:
             try:
-                for response in self.stub.function_invoke(
-                    self.request,
-                    metadata=(
-                        ("x-beta9-task-id", self.task_id),
-                        ("x-beta9-log-offset", str(self.output_offset)),
-                    ),
-                ):
+                responses = iter(self.stub.function_invoke(self.request))
+                while True:
+                    token = request_metadata.set(
+                        (
+                            ("x-beta9-task-id", self.task_id),
+                            ("x-beta9-log-offset", str(self.output_offset)),
+                        )
+                    )
+                    try:
+                        response = next(responses, None)
+                    finally:
+                        request_metadata.reset(token)
+                    if response is None:
+                        break
                     self.task_id = response.task_id or self.task_id
                     if response.output:
                         self.output_offset += len(response.output.encode("utf-8"))
