@@ -669,6 +669,14 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	startup, startupCtx := errgroup.WithContext(ctx)
 	addressRequest := request.Clone()
 	startup.Go(func() error { return s.setWorkerAddress(startupCtx, addressRequest) })
+	// A sandbox's namespace and IP assignment depend only on the request.
+	// Overlap their gateway round trip with image and durable-root preparation.
+	var networkSpec *specs.Spec
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		networkSpec = &specs.Spec{Linux: &specs.Linux{}}
+		networkRequest := request.Clone()
+		startup.Go(func() error { return s.prepareContainerNetwork(startupCtx, networkRequest, networkSpec) })
+	}
 
 	logChan := make(chan common.LogRecord, 1000)
 	outputLogger := slog.New(common.NewChannelHandler(logChan))
@@ -795,6 +803,7 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	}()
 
 	opts := &ContainerOptions{
+		NetworkPrepared:             networkSpec != nil,
 		BundlePath:                  bundlePath,
 		HostBindPort:                bindPorts[0],
 		BindPorts:                   bindPorts,
@@ -812,6 +821,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSpecFromRequest, phaseStart, err == nil, nil)
 	if err != nil {
 		return err
+	}
+	if networkSpec != nil {
+		spec.Linux.Namespaces = append(spec.Linux.Namespaces, networkSpec.Linux.Namespaces...)
 	}
 	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
 
@@ -949,6 +961,17 @@ func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerR
 	}))
 	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(startedAt), request, nil)
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetWorkerAddress, startedAt, err == nil, nil)
+	return err
+}
+
+func (s *Worker) prepareContainerNetwork(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec) error {
+	startedAt := time.Now()
+	err := s.containerNetworkManager.Setup(request.ContainerId, spec, request)
+	metrics.RecordWorkerStartupPhase("network_setup", time.Since(startedAt), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, startedAt, err == nil, nil)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to setup container network")
+	}
 	return err
 }
 
@@ -1783,16 +1806,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	var gpuManager GPUManager
 	var assignedDevices []int
 	var deviceSetup errgroup.Group
-	deviceSetup.Go(func() error {
-		phaseStart := time.Now()
-		err := s.containerNetworkManager.Setup(containerId, spec, request)
-		metrics.RecordWorkerStartupPhase("network_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, phaseStart, err == nil, nil)
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
-		}
-		return err
-	})
+	if !opts.NetworkPrepared {
+		deviceSetup.Go(func() error { return s.prepareContainerNetwork(ctx, request, spec) })
+	}
 	if assignGPU {
 		gpuManager = s.gpuManagerForRequest(request)
 		deviceSetup.Go(func() error {

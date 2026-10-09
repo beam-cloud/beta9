@@ -368,6 +368,8 @@ func (i *ContainerInstance) containerAddress(port int32) string {
 }
 
 type ContainerOptions struct {
+	// NetworkPrepared means its namespace was assigned during image/disk setup.
+	NetworkPrepared             bool
 	BundlePath                  string
 	HostBindPort                int
 	BindPorts                   []int
