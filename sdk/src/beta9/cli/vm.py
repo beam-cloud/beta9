@@ -10,7 +10,7 @@ import time
 import uuid
 import webbrowser
 from pathlib import Path
-from contextlib import redirect_stdout, suppress
+from contextlib import nullcontext, redirect_stdout, suppress
 from urllib.parse import quote
 
 import click
@@ -460,18 +460,18 @@ def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False)
     vm = _vm(service, name)
     sandbox = vm._sandbox()
     if detach or as_json:
-        process = sandbox.process.exec(
-            *command,
-            cwd=cwd,
-            stdin=sys.stdin.buffer if not detach and not sys.stdin.isatty() else None,
-        )
-        result = {
-            "vm_id": vm.id,
-            "container_id": vm.info["container_id"],
-            "pid": process.pid,
-        }
-        if not detach:
-            with vm.keep_alive():
+        with nullcontext() if detach else vm.keep_alive():
+            process = sandbox.process.exec(
+                *command,
+                cwd=cwd,
+                stdin=sys.stdin.buffer if not detach and not sys.stdin.isatty() else None,
+            )
+            result = {
+                "vm_id": vm.id,
+                "container_id": vm.info["container_id"],
+                "pid": process.pid,
+            }
+            if not detach:
                 try:
                     result.update(
                         exit_code=process.wait(timeout or None),

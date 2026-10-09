@@ -791,6 +791,13 @@ def test_cli_json_exec_passes_stdin_only_for_foreground(cli_service, monkeypatch
     vm.id = "vm-test"
     vm.info = {"container_id": "current"}
     process = vm._sandbox.return_value.process.exec.return_value
+
+    def execute(*args, **kwargs):
+        if not detach:
+            vm.keep_alive.return_value.__enter__.assert_called_once()
+        return process
+
+    vm._sandbox.return_value.process.exec.side_effect = execute
     process.pid = 44
     process.wait.return_value = 0
     process.stdout.read.return_value = "output"
