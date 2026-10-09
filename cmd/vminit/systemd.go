@@ -87,6 +87,7 @@ func bootSystemd(spec *specs.Spec) error {
 		return err
 	}
 	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
+	logf("boot phase: executing systemd")
 	return unix.Exec(binary, []string{binary, "--unit=multi-user.target"}, env)
 }
 

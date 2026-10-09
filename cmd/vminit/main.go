@@ -84,9 +84,11 @@ func powerOff(code int) {
 }
 
 func run() (int, error) {
+	logf("boot phase: init entered")
 	if err := mountEarly(); err != nil {
 		return -1, err
 	}
+	logf("boot phase: early mounts ready")
 	vm, err := readVMSpec()
 	if err != nil {
 		return -1, err
@@ -99,10 +101,12 @@ func run() (int, error) {
 	if err := assembleRoot(vm); err != nil {
 		return -1, fmt.Errorf("assemble root: %w", err)
 	}
+	logf("boot phase: root assembled")
 	if err := pivotRoot(); err != nil {
 		return -1, fmt.Errorf("pivot root: %w", err)
 	}
 	finishPseudo()
+	logf("boot phase: root pivoted")
 	hostname := spec.Hostname
 	if hostname != "" {
 		if err := unix.Sethostname([]byte(hostname)); err != nil {
@@ -112,6 +116,7 @@ func run() (int, error) {
 	if err := configureNetwork(vm.Network); err != nil {
 		return -1, fmt.Errorf("configure network: %w", err)
 	}
+	logf("boot phase: network configured")
 
 	if processEnv(spec.Process, "BEAM_VM_SYSTEMD") == "1" {
 		return -1, bootSystemd(spec)
@@ -121,6 +126,7 @@ func run() (int, error) {
 }
 
 func runAgent(process *specs.Process, systemd bool) (int, error) {
+	logf("boot phase: workload agent entered")
 	if err := serveFS(microvm.FSPort); err != nil {
 		return -1, err
 	}
@@ -128,6 +134,7 @@ func runAgent(process *specs.Process, systemd bool) (int, error) {
 	if err != nil {
 		return -1, err
 	}
+	logf("boot phase: control connected")
 	defer ctrl.close()
 	ctrl.systemd = systemd
 	return runProcess(process, ctrl)

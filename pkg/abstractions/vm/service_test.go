@@ -327,6 +327,27 @@ func fixture() (*Service, *types.VM, *auth.AuthInfo, *vmRuntime, *vmGateway) {
 	return s, v, info, runtime, gateway
 }
 
+func TestGetProjectsLaunchCompletionBeforeReconciliation(t *testing.T) {
+	for _, desired := range []string{"running", "paused", "stopped"} {
+		t.Run(desired, func(t *testing.T) {
+			s, v, info, _, _ := fixture()
+			v.Status, v.DesiredState = "starting", desired
+			v.MemoryCheckpointID = "owned-checkpoint"
+			c, rec := actionContext(info, v.Name, "", "")
+			require.NoError(t, s.get(c))
+			var response types.VM
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			if desired == "running" {
+				require.Equal(t, "running", response.Status)
+			} else {
+				require.Equal(t, "starting", response.Status)
+			}
+			require.Equal(t, "starting", v.Status)
+			require.Equal(t, "owned-checkpoint", v.MemoryCheckpointID)
+		})
+	}
+}
+
 func TestStopPreservesFinalRootWithoutVisibleSnapshot(t *testing.T) {
 	s, v, info, runtime, gateway := fixture()
 	v.DesiredState = "stopped"

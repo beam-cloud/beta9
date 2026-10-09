@@ -7,9 +7,13 @@ if [ "$(cat /etc/beam-vm-identity 2>/dev/null || true)" != "$BEAM_VM_ID" ]; then
   rm -f /etc/ssh/ssh_host_*
   printf '%s\n' "$BEAM_VM_ID" > /etc/beam-vm-identity
 fi
-ssh-keygen -A
-printf '%s\n' "${BEAM_VM_SSH_PUBLIC_KEY:-}" > /run/beam-vm/authorized_keys
-chmod 0600 /run/beam-vm/authorized_keys
+if [ "${BEAM_VM_SSH:-false}" = true ]; then
+  if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+    ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
+  fi
+  printf '%s\n' "${BEAM_VM_SSH_PUBLIC_KEY:-}" > /run/beam-vm/authorized_keys
+  chmod 0600 /run/beam-vm/authorized_keys
+fi
 systemctl set-environment HOME=/root LANG=C.UTF-8
 if [ "${BEAM_VM_DESKTOP:-false}" = true ]; then
   systemctl set-environment DISPLAY=:1 XAUTHORITY=/run/beam-desktop/.Xauthority

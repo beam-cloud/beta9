@@ -224,7 +224,21 @@ func (s *Service) get(c echo.Context) error {
 	if v.DesiredState == "deleted" {
 		return echo.NewHTTPError(404, "VM removed")
 	}
-	return c.JSON(200, s.response(v))
+	response := s.response(v)
+	// Launch completion is available in Redis immediately. The lifecycle
+	// reconciler persists it later; clients should not wait for that ticker.
+	// Only project starting -> running, leaving pause/stop and checkpoint
+	// ownership to the reconciler. SandboxConnect checks exec readiness.
+	if v.DesiredState == "running" && v.Status == "starting" {
+		state, err := s.runtimeState(v)
+		if err != nil {
+			return apiError(err)
+		}
+		if state != nil && state.Status == types.ContainerStatusRunning {
+			response.Status = "running"
+		}
+	}
+	return c.JSON(200, response)
 }
 
 type createRequest struct {

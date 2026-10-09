@@ -193,7 +193,18 @@ func processAlive(pid int, comm string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(string(data)) == comm
+	if strings.TrimSpace(string(data)) != comm {
+		return false
+	}
+	// Daemonized children may remain as zombies until PID 1 reaps them.
+	// They have already released their files and sockets; kill(0) and comm
+	// alone would make every temporary formatting daemon wait five seconds.
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	_, fields, ok := strings.Cut(string(stat), ") ")
+	return ok && len(fields) > 0 && fields[0] != 'Z' && fields[0] != 'X'
 }
 
 func killProcess(pid int, comm string) {

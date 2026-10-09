@@ -37,6 +37,7 @@ touch /etc/machine-id
 ln -s /etc/machine-id /var/lib/dbus/machine-id
 cat > /etc/ssh/sshd_config.d/beam-vm.conf <<'EOF'
 Port 2222
+HostKey /etc/ssh/ssh_host_ed25519_key
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 KbdInteractiveAuthentication no
