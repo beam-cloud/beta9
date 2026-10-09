@@ -72,7 +72,13 @@ func (s *Worker) qcowVolumeKey(request *types.ContainerRequest, mount *types.Mou
 	return key
 }
 
-func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (retErr error) {
+func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) error {
+	return s.prepareQcowDurableDiskMountAfterHead(ctx, request, mount, nil)
+}
+
+// afterHead can defer all writes until a pending delivery is accepted. The
+// caller retains the host disk lock from the authoritative read through attach.
+func (s *Worker) prepareQcowDurableDiskMountAfterHead(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, afterHead func() error) (retErr error) {
 	if s.diskManager == nil {
 		return fmt.Errorf("qcow durable disks are not enabled on this worker")
 	}
@@ -89,6 +95,11 @@ func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types
 	newest, err := s.restoreQcowSnapshotRow(ctx, request, mount)
 	if err != nil {
 		return err
+	}
+	if afterHead != nil {
+		if err := afterHead(); err != nil {
+			return err
+		}
 	}
 	journal, committed, err := s.openDatabaseDiskJournal(ctx, request, mount, newest, sizeBytes)
 	if err != nil {

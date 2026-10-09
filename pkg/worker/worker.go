@@ -963,11 +963,31 @@ func (s *Worker) runContainerRequestWithRunner(
 	}()
 	s.cancelContainerIfAlreadyStopping(cancelStartup, containerId)
 
+	// Only read the root head before accepting delivery. Its host lock stays
+	// held until the accepted claim and runtime validation permit attachment.
+	rootPreparation := s.startQcowRootPreparation(ctx, request)
+	if rootPreparation != nil {
+		ctx = context.WithValue(ctx, qcowRootPreparationKey{}, rootPreparation)
+		defer rootPreparation.close()
+	}
+
+	// Release a prefetched disk fence before failure cleanup may acquire it.
+	failRequest := func(err error) {
+		cancelStartup()
+		if rootPreparation != nil {
+			rootPreparation.close()
+		}
+		s.failContainerRequest(containerId, request, err)
+	}
+
 	// The claim uses the worker context, like the delivery stream that carried
 	// the request: a stop that races the claim is observed afterwards through
 	// the startup context, so the container is failed (and its exit reported)
 	// rather than silently forgotten while the gateway believes it is ours.
 	claimed, err := s.claimContainer(s.ctx, request)
+	if rootPreparation != nil {
+		rootPreparation.finishClaim(request, err)
+	}
 	if err != nil {
 		if !claimed {
 			log.Warn().Str("container_id", containerId).Err(err).Msg("container claim rejected")
@@ -975,11 +995,11 @@ func (s *Worker) runContainerRequestWithRunner(
 			return
 		}
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to claim container")
-		s.failContainerRequest(containerId, request, err)
+		failRequest(err)
 		return
 	}
 	if err := ctx.Err(); err != nil {
-		s.failContainerRequest(containerId, request, err)
+		failRequest(err)
 		return
 	}
 
@@ -1054,7 +1074,7 @@ func (s *Worker) runContainerRequestWithRunner(
 
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
-		s.failContainerRequest(containerId, request, err)
+		failRequest(err)
 		return
 	}
 

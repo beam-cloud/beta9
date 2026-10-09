@@ -664,6 +664,10 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	}
 	s.containerInstances.Set(containerId, instance)
 
+	if rootPreparation, _ := ctx.Value(qcowRootPreparationKey{}).(*qcowRootPreparation); rootPreparation != nil {
+		rootPreparation.allowAttach()
+	}
+
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	startup, startupCtx := errgroup.WithContext(ctx)

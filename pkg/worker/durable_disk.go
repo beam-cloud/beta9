@@ -99,9 +99,16 @@ type durableDiskMarker struct {
 // has already been failed. Disks that did attach are detached by clearContainer.
 func (s *Worker) prepareDurableDiskMounts(ctx context.Context, request *types.ContainerRequest) error {
 	disks, ctx := errgroup.WithContext(ctx)
+	rootPreparation, _ := ctx.Value(qcowRootPreparationKey{}).(*qcowRootPreparation)
+	if rootPreparation != nil {
+		disks.Go(func() error { return rootPreparation.wait(ctx, request) })
+	}
 	for i := range request.Mounts {
 		mount := &request.Mounts[i]
 		if mount.MountType != types.StorageModeDurableDisk {
+			continue
+		}
+		if rootPreparation != nil && rootPreparation.matches(mount) {
 			continue
 		}
 		disks.Go(func() error {
