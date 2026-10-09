@@ -428,8 +428,8 @@ func imageArchiveAmbientCredentialsAvailable() bool {
 
 func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, registry string) string {
 	imageCfg := s.appConfig.ImageService
-	buildRegistry := imageCfg.BuildRegistry
-	if buildRegistry == "" || registry == "" {
+	buildRegistry := imageCfg.EffectiveBuildRegistry()
+	if registry == "" {
 		return ""
 	}
 	// Only vend build-registry credentials when the requested registry host is

@@ -594,12 +594,28 @@ type restoreCheckpointResult struct {
 	err      error
 }
 
+func prepareCheckpointRoot(checkpointRoot string) error {
+	if checkpointRoot == "" {
+		return fmt.Errorf("checkpoint root is required")
+	}
+	return os.MkdirAll(checkpointRoot, 0755)
+}
+
+// MicroVM checkpoints use the shared runtime dispatcher and require storage,
+// rather than CRIU tools or GPU compatibility.
+func InitializeMicroVMCheckpointManager(checkpointRoot string) (CRIUManager, error) {
+	if err := prepareCheckpointRoot(checkpointRoot); err != nil {
+		return nil, err
+	}
+	return &NvidiaCRIUManager{checkpointRoot: checkpointRoot, available: true}, nil
+}
+
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers.
 func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, checkpointRoot string) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
 	var err error = nil
-	if checkpointRoot == "" {
-		return nil, fmt.Errorf("checkpoint root is required")
+	if err := prepareCheckpointRoot(checkpointRoot); err != nil {
+		return nil, err
 	}
 
 	switch config.Mode {
@@ -610,10 +626,6 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, checkpo
 	}
 
 	if err != nil {
-		return nil, err
-	}
-
-	if err := os.MkdirAll(checkpointRoot, os.ModePerm); err != nil {
 		return nil, err
 	}
 
@@ -937,7 +949,7 @@ func (s *Worker) markCheckpointRestoreFailed(request *types.ContainerRequest, ch
 }
 
 func (s *Worker) signalRestoredSandboxProcessManager(ctx context.Context, request *types.ContainerRequest, rt runtime.Runtime) {
-	if request.Stub.Type.Kind() != types.StubTypeSandbox || rt == nil {
+	if !request.Stub.Type.IsSandbox() || rt == nil {
 		return
 	}
 
@@ -2114,7 +2126,7 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
 	}
 
 	// Sandboxes checkpoint only on demand.
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.IsSandbox() {
 		return false
 	}
 
@@ -2127,8 +2139,13 @@ func hasAvailableCheckpoint(request *types.ContainerRequest) bool {
 }
 
 func (s *Worker) supportsCheckpointRestore(request *types.ContainerRequest, rt runtime.Runtime) bool {
-	return request != nil && rt != nil && rt.Capabilities().CheckpointRestore &&
-		s.IsCRIUAvailable(request.GpuCount)
+	if request == nil || rt == nil || !rt.Capabilities().CheckpointRestore {
+		return false
+	}
+	if rt.Name() == types.ContainerRuntimeMicroVM.String() {
+		return s.requireCRIUManager() == nil
+	}
+	return s.IsCRIUAvailable(request.GpuCount)
 }
 
 func (s *Worker) canRestoreCheckpoint(request *types.ContainerRequest, rt runtime.Runtime) bool {

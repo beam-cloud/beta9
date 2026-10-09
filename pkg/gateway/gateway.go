@@ -27,6 +27,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/managedendpoint"
 	pod "github.com/beam-cloud/beta9/pkg/abstractions/pod"
 	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
+	vm "github.com/beam-cloud/beta9/pkg/abstractions/vm"
 	"github.com/beam-cloud/beta9/pkg/clients"
 
 	disk "github.com/beam-cloud/beta9/pkg/abstractions/disk"
@@ -698,6 +699,25 @@ func (g *Gateway) registerServices() error {
 
 	// Needs the assembled gateway service, so not in initHttp.
 	apiv1.NewDatabaseGroup(g.baseRouteGroup.Group("/database", g.authMiddleware), gws)
+	vmRuntime, ok := ps.(vm.Runtime)
+	if !ok {
+		return fmt.Errorf("pod service does not support persistent VMs")
+	}
+	vmConfig := g.Config.Abstractions.VM
+	if vmConfig.BaseURL == "" {
+		vmConfig.BaseURL = g.Config.GatewayService.HTTP.GetExternalURL()
+	}
+	if err := vm.New(g.ctx, vm.ServiceOpts{
+		Config:        vmConfig,
+		BackendRepo:   g.BackendRepo,
+		ContainerRepo: g.ContainerRepo,
+		Runtime:       vmRuntime,
+		Gateway:       gws,
+		RouteGroup:    g.baseRouteGroup.Group("/vm", g.authMiddleware),
+		Server:        g.echo,
+	}); err != nil {
+		return err
+	}
 	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", g.authMiddleware), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
 
 	g.registerHealthService()

@@ -55,7 +55,7 @@ func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 		`Restart=always`,
 		`RestartSec=30`,
 		`SuccessExitStatus=130`,
-		`TimeoutStopSec=60`,
+		`TimeoutStopSec=900`,
 		`Environment="XDG_CONFIG_HOME=` + filepath.Join(tmp, "state", ".config") + `"`,
 	} {
 		if !strings.Contains(unitText, want) {

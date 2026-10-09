@@ -81,7 +81,7 @@ func (r *ManagedComputeContainerUsageRecorder) RecordContainerUsage(
 }
 
 func (r *ManagedComputeContainerUsageRecorder) routeFor(request *types.ContainerRequest) *managedComputeContainerUsageRoute {
-	if request.Stub.Type.Kind() != types.StubTypeSandbox {
+	if !request.Stub.Type.IsSandbox() {
 		return nil
 	}
 	for i := range r.routes {

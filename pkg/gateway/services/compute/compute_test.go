@@ -25,6 +25,34 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+func TestAgentBootstrapUsesConfiguredPublishingRegistry(t *testing.T) {
+	for _, tt := range []struct {
+		name, configured, fallback, want string
+		insecure                         bool
+	}{
+		{"explicit insecure", "registry.example.com", "runner.example.com", "registry.example.com", true},
+		{"explicit secure", "registry.example.com", "", "registry.example.com", false},
+		{"runner fallback", "", "runner.example.com", "runner.example.com", true},
+		{"localhost fallback", "", "", "localhost", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &Service{appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{
+				BuildRegistry: tt.configured, BuildRepositoryName: "stage/vms", BuildRegistryInsecure: tt.insecure,
+				Runner: types.RunnerConfig{BaseImageRegistry: tt.fallback},
+			}}}
+			bootstrap, err := service.agentBootstrapConfig(context.Background(), "workspace-one", &model.PoolState{
+				Name: "vms", Config: &pb.PoolConfig{Name: "vms"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bootstrap.ImageBuildRegistry != tt.want || bootstrap.ImageBuildRepositoryName != "stage/vms" || bootstrap.ImageBuildRegistryInsecure != tt.insecure {
+				t.Fatal("bootstrap did not preserve resolved publishing settings")
+			}
+		})
+	}
+}
+
 func TestPrivatePoolReadsAreWorkspaceScoped(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{

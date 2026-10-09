@@ -1074,6 +1074,13 @@ class AgentBootstrapConfig(betterproto.Message):
     image_clip_version: int = betterproto.uint32_field(12)
     image_local_cache_enabled: bool = betterproto.bool_field(13)
     telemetry: "AgentTelemetryConfig" = betterproto.message_field(14)
+    image_build_registry: str = betterproto.string_field(15)
+    """
+    Non-secret publishing settings; registry credentials remain gateway-brokered.
+    """
+
+    image_build_repository_name: str = betterproto.string_field(16)
+    image_build_registry_insecure: bool = betterproto.bool_field(17)
 
 
 @dataclass(eq=False, repr=False)

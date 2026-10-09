@@ -103,7 +103,7 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 		WorkspaceId: request.WorkspaceId,
 		Cpu:         request.Cpu, Memory: request.Memory,
 		Gpu: strings.TrimSpace(request.Gpu), GpuCount: request.GpuCount,
-		Sandbox: request.Stub.Type.Kind() == types.StubTypeSandbox,
+		Sandbox: request.Stub.Type.IsSandbox(),
 	}
 	if quote, ok := c.cached(key); ok {
 		return quote, nil

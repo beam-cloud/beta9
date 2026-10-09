@@ -563,6 +563,8 @@ class Image(BaseAbstraction):
 
     def build(
         self,
+        *,
+        quiet: bool = False,
     ) -> ImageBuildResult:
         if is_notebook_env():
             if LOCAL_PYTHON_VERSION != self.python_version:
@@ -575,15 +577,18 @@ class Image(BaseAbstraction):
         cache_key = self._cache_key()
         with _image_lookup_lock(cache_key):
             if cached_result := self._cached_build_result(cache_key):
-                terminal.header("Using cached image", cached_result.image_id)
+                if not quiet:
+                    terminal.header("Using cached image", cached_result.image_id)
                 self.image_id = cached_result.image_id
                 self.python_version = cached_result.python_version
                 return cached_result
 
-            terminal.detail("Checking image cache...", dim=False)
+            if not quiet:
+                terminal.detail("Checking image cache...", dim=False)
             exists, exists_response = self._exists()
             if exists:
-                terminal.header("Using cached image", exists_response.image_id)
+                if not quiet:
+                    terminal.header("Using cached image", exists_response.image_id)
                 result = ImageBuildResult(
                     success=True,
                     image_id=exists_response.image_id,

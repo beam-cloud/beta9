@@ -418,6 +418,8 @@ class ServiceClient:
         return self._secret
 
     def close(self) -> None:
+        if self._http:
+            self._http.close()
         if self._channel:
             self._channel.close()
 
@@ -433,14 +435,18 @@ class GatewayHTTP:
         self.base_url = base_url
         self.workspace_id = workspace_id
         self.headers = {"Authorization": f"Bearer {token}", **dict(caller_metadata())}
+        self._session = requests.Session()
 
     def url(self, path: str) -> str:
         return self.base_url + path.replace("{ws}", self.workspace_id)
 
     def request(self, method: str, path: str, timeout: float = 60, **kwargs):
-        return requests.request(
+        return self._session.request(
             method, self.url(path), headers=self.headers, timeout=timeout, **kwargs
         )
+
+    def close(self):
+        self._session.close()
 
     def json(self, method: str, path: str, **kwargs):
         """Request and decode JSON; GatewayHTTPError on 4xx/5xx or when the gateway is unreachable."""

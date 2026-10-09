@@ -37,6 +37,7 @@ from . import (
     task,
     token,
     volume,
+    vm,
     worker,
 )
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
@@ -134,6 +135,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(database)
     cli.register(serve)
     cli.register(volume)
+    cli.register(vm)
     cli.register(disk)
     cli.register(image)
     cli.register(logs)

@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -28,6 +30,8 @@ const (
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyProbeTimeout       = 50 * time.Millisecond
+	goprocFastReadyProbeTimeout   = 10 * time.Millisecond
+	goprocFastReadyWindow         = time.Second
 	goprocSlowReadyLogInterval    = 30 * time.Second
 	goprocInitialBackoff          = 5 * time.Millisecond
 	goprocMaxBackoff              = 15 * time.Millisecond
@@ -39,6 +43,57 @@ const (
 	sandboxMissingProcessExitCode = 137
 	sandboxCgroupRoot             = "/sys/fs/cgroup"
 )
+
+// prepareSandboxProcess installs the shared process manager and guest-specific
+// capabilities before runtime preparation.
+func (s *Worker) prepareSandboxProcess(request *types.ContainerRequest, spec *specs.Spec) error {
+	// Modify sandbox entry point to point to process manager binary
+	if request.Stub.Type.IsSandbox() {
+		instance, exists := s.containerInstances.Get(request.ContainerId)
+		if !exists {
+			return fmt.Errorf("sandbox instance not found")
+		}
+
+		instance.SandboxProcessManager = nil
+		s.containerInstances.Set(request.ContainerId, instance)
+
+		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
+		if request.IsPersistentVM() {
+			// Vminit prepares identity and enables services through systemd.
+			// Exec readiness does not wait for SSH or desktop initialization.
+			// The VM boot agent administers a complete guest, even when
+			// the base container image declares a non-root USER.
+			spec.Process.User = specs.User{UID: 0, GID: 0}
+			spec.Process.Env = upsertEnvVars(spec.Process.Env, []string{"HOME=/root"})
+		}
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "bind",
+			Source:      types.WorkerSandboxProcessManagerWorkerPath,
+			Destination: types.WorkerSandboxProcessManagerContainerPath,
+			Options: []string{
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev",
+			},
+		})
+	}
+
+	// Add Docker capabilities if enabled for sandbox containers.
+	if request.DockerEnabled && request.Stub.Type.IsSandbox() {
+		runtime.AddDockerInDockerCapabilities(spec)
+		if s.runtimeOwnsBlockRoot() {
+			if spec.Annotations == nil {
+				spec.Annotations = make(map[string]string)
+			}
+			spec.Annotations[runtime.MicroVMDockerAnnotation] = "true"
+		}
+		log.Info().Str("container_id", request.ContainerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
+	}
+
+	return nil
+}
 
 func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
 	i.processManagerReadyMu.Lock()
@@ -567,7 +622,12 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 
 	for {
 		stats.Attempts++
-		client, err := newProcessManagerClient(ctx, instance)
+		probeTimeout := goprocReadyProbeTimeout
+		fastProbe := time.Since(start) < goprocFastReadyWindow
+		if fastProbe {
+			probeTimeout = goprocFastReadyProbeTimeout
+		}
+		client, err := newProcessManagerClientWithProbeTimeout(ctx, instance, probeTimeout)
 		if err == nil {
 			log.Info().
 				Str("container_id", containerId).
@@ -595,7 +655,13 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 			stats.LastError = err.Error()
 			return nil, false, stats
 		}
-		backoff = nextProcessManagerBackoff(backoff)
+		// Before a microVM configures its NIC, ARP can hold a dial until
+		// the probe deadline. Keep early probes short so that a listening
+		// guest does not wait behind an obsolete dial and a long backoff.
+		// Slow guests retain the usual probe budget and retry cadence.
+		if !fastProbe {
+			backoff = nextProcessManagerBackoff(backoff)
+		}
 	}
 }
 
@@ -641,11 +707,15 @@ func nextProcessManagerBackoff(delay time.Duration) time.Duration {
 }
 
 func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
+	return newProcessManagerClientWithProbeTimeout(ctx, instance, goprocReadyProbeTimeout)
+}
+
+func newProcessManagerClientWithProbeTimeout(ctx context.Context, instance *ContainerInstance, probeTimeout time.Duration) (*goproc.GoProcClient, error) {
 	endpoints := sandboxProcessManagerEndpoints(instance)
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("sandbox process manager address unavailable")
 	}
-	return newProcessManagerClientFromEndpoints(ctx, endpoints)
+	return newProcessManagerClientFromEndpoints(ctx, endpoints, probeTimeout)
 }
 
 // newProcessManagerClientFromEndpoints tries each endpoint in order and returns
@@ -654,7 +724,7 @@ func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (
 // briefly refuses on its container IP while its published host-mapped address
 // fails hard (the worker itself cannot reach a PREROUTING-only DNAT), and the
 // later hard failure must not turn the transient refusal into a fatal exec.
-func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint) (*goproc.GoProcClient, error) {
+func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint, probeTimeout time.Duration) (*goproc.GoProcClient, error) {
 	var lastErr, retryableErr error
 	recordErr := func(err error) {
 		lastErr = err
@@ -670,7 +740,7 @@ func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []proce
 			continue
 		}
 
-		probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 		err = client.ReadyContext(probeCtx)
 		cancel()
 		if err != nil {

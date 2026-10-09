@@ -63,9 +63,10 @@ func TestWorkerPodTerminationGracePeriodAllowsNestedCleanup(t *testing.T) {
 		workerStopGrace int64
 		want            int64
 	}{
-		{name: "default", workerStopGrace: 0, want: 120},
-		{name: "short", workerStopGrace: 10, want: 120},
-		{name: "long", workerStopGrace: 90, want: 240},
+		{name: "default", workerStopGrace: 0, want: 210},
+		{name: "short", workerStopGrace: 10, want: 190},
+		{name: "long", workerStopGrace: 90, want: 270},
+		{name: "extended", workerStopGrace: 300, want: 660},
 	}
 
 	for _, tt := range tests {

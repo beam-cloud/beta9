@@ -49,6 +49,28 @@ func TestPublicDiskSnapshotStoreDownloadsPresignedObject(t *testing.T) {
 	require.Equal(t, "chunk", string(data))
 }
 
+func TestWarmVMDiskRestorePinsPairedGeneration(t *testing.T) {
+	paired := &pb.DiskSnapshot{ExternalId: "paired", DiskName: "data", ManifestKey: "paired/manifest", Format: types.DiskSnapshotFormatQcowV1}
+	backend := &fakeBackendRepoClient{sourceSnapshot: paired, latestSnapshot: &pb.DiskSnapshot{ExternalId: "newer", DiskName: "data", ManifestKey: "newer/manifest"}}
+	worker := &Worker{backendRepoClient: backend}
+	request := &types.ContainerRequest{UseVM: true, Env: []string{"BEAM_VM_SYSTEMD=1"}, Checkpoint: &types.Checkpoint{}}
+	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "data", SourceSnapshotId: "paired"}}
+	request.Mounts = []types.Mount{*mount}
+	request = types.NewContainerRequestFromProto(request.ToProto())
+	mount = &request.Mounts[0]
+	row, err := worker.restoreQcowSnapshotRow(context.Background(), request, mount)
+	require.NoError(t, err)
+	require.Equal(t, "paired", row.ExternalId, "never mount a newer head alongside captured RAM")
+	require.Equal(t, "paired", backend.requestedSnapshotId)
+	mount.DurableDisk.SourceSnapshotId = ""
+	_, err = worker.restoreQcowSnapshotRow(context.Background(), request, mount)
+	require.ErrorContains(t, err, "no paired disk")
+	mount.DurableDisk.SourceSnapshotId = "paired"
+	paired.DiskName = "another-disk"
+	_, err = worker.restoreQcowSnapshotRow(context.Background(), request, mount)
+	require.ErrorContains(t, err, "incompatible")
+}
+
 func TestDurableDiskSnapshotProtoKeepsPublic(t *testing.T) {
 	snapshot := durableDiskSnapshotFromProto(durableDiskSnapshotToProto(&types.DiskSnapshot{Public: true}))
 	require.True(t, snapshot.Public)

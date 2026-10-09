@@ -70,7 +70,7 @@ func (m *Manager) resolveVolumeDir(key string) (string, error) {
 // spare is destroyed and nil is returned so the caller builds the volume the
 // slow way.
 func (m *Manager) adoptSpare(ctx context.Context, spec AttachSpec) *Volume {
-	spare := m.takeSpare(spec.VirtualSizeBytes)
+	spare := m.takeSpare(spec.VirtualSizeBytes, spec.Export)
 	if spare == nil {
 		return nil
 	}
@@ -114,15 +114,40 @@ func (v *Volume) adopt(ctx context.Context, spec AttachSpec) error {
 	}
 	v.qsd.runtimeDir = runtimeDir
 	v.qsd.qmpSocket = filepath.Join(runtimeDir, filepath.Base(v.qsd.qmpSocket))
-	v.qsd.nbdSocket = filepath.Join(runtimeDir, filepath.Base(v.qsd.nbdSocket))
+	if v.qsd.nbdSocket != "" {
+		v.qsd.nbdSocket = filepath.Join(runtimeDir, filepath.Base(v.qsd.nbdSocket))
+	}
+	if v.qsd.exportSocket != "" {
+		v.qsd.exportSocket = filepath.Join(runtimeDir, filepath.Base(v.qsd.exportSocket))
+	}
 	v.state.Key = spec.Key
 	v.state.QMPSocket = v.qsd.qmpSocket
 	v.state.NBDSocket = v.qsd.nbdSocket
+	v.state.ExportSocket = v.qsd.exportSocket
 	v.state.Mountpoint = spec.Mountpoint
+	if spec.Export == ExportVhostUser {
+		v.state.Mountpoint = ""
+	}
 	v.state.Owner = spec.Owner
 	v.owner = spec.Owner
 	if err := saveVolumeState(v.dir, v.state); err != nil {
 		return err
+	}
+	if spec.Export == ExportVhostUser {
+		v.freeze = spec.Freeze
+		if v.state.exportMode() == ExportVhostUser {
+			return nil
+		}
+		// Release the spare's unmounted NBD device and daemon before opening
+		// the same formatted head through vhost-user. detach persists the
+		// rekeyed state, so a crash here recovers as an ordinary volume.
+		if err := v.detach(ctx); err != nil {
+			return err
+		}
+		v.state.Export = string(ExportVhostUser)
+		v.state.Mountpoint = ""
+		v.freeze = spec.Freeze
+		return v.start(ctx)
 	}
 	return m.mountExt4(ctx, v.nbd.Path, spec.Mountpoint, false)
 }
@@ -148,16 +173,21 @@ func (v *Volume) destroy() (deviceFreed bool) {
 	return deviceFreed
 }
 
-func (m *Manager) takeSpare(size int64) *Volume {
+func (m *Manager) takeSpare(size int64, export ExportMode) *Volume {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	pool := m.spares[size]
-	if len(pool) == 0 {
-		return nil
+	for i := len(pool) - 1; i >= 0; i-- {
+		spare := pool[i]
+		// An NBD spare can switch to either export. A vhost-user spare has
+		// released its NBD device and must stay available for VM roots.
+		if spare.state.exportMode() == ExportVhostUser && export != ExportVhostUser {
+			continue
+		}
+		m.spares[size] = append(pool[:i], pool[i+1:]...)
+		return spare
 	}
-	spare := pool[len(pool)-1]
-	m.spares[size] = pool[:len(pool)-1]
-	return spare
+	return nil
 }
 
 // rememberSpareSize records size in spareSizesFile, most recent first. Fresh
@@ -241,6 +271,37 @@ func (m *Manager) replenishSpares(size int64) {
 	}()
 }
 
+// WarmSpares builds clean formatted heads before a worker starts receiving
+// containers. No guest, user data or machine identity is prepared. A bounded
+// caller can continue startup on failure and retain the normal attach fallback.
+func (m *Manager) WarmSpares(ctx context.Context, sizes ...int64) error {
+	if err := m.preflight(); err != nil {
+		return err
+	}
+	if err := m.ensureNBDDevices(ctx); err != nil {
+		return err
+	}
+	for _, size := range sizes {
+		if size > 0 {
+			m.rememberSpareSize(size)
+		}
+	}
+	for _, size := range m.rememberedSpareSizes() {
+		m.replenishSpares(size)
+	}
+	done := make(chan struct{})
+	go func() {
+		m.spareWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
+}
+
 // buildSpare creates, formats, and brings online a fresh volume under a spare
 // key. It is not mounted.
 func (m *Manager) buildSpare(ctx context.Context, size int64) (*Volume, error) {
@@ -272,6 +333,19 @@ func (m *Manager) buildSpare(ctx context.Context, size int64) (*Volume, error) {
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
+	if m.spareExport == ExportVhostUser {
+		// Formatting requires NBD, but the consumer does not. Finish the
+		// conversion before pooling so attachment only rekeys the live export.
+		if err := spare.detach(ctx); err != nil {
+			spare.destroy()
+			return nil, err
+		}
+		spare.state.Export = string(ExportVhostUser)
+		if err := spare.start(ctx); err != nil {
+			spare.destroy()
+			return nil, err
+		}
+	}
 	return spare, nil
 }
 
@@ -285,9 +359,16 @@ func (m *Manager) reclaimSpare() bool {
 		if len(pool) == 0 {
 			continue
 		}
-		victim = pool[len(pool)-1]
-		m.spares[size] = pool[:len(pool)-1]
-		break
+		for i := len(pool) - 1; i >= 0; i-- {
+			if pool[i].nbd != nil {
+				victim = pool[i]
+				m.spares[size] = append(pool[:i], pool[i+1:]...)
+				break
+			}
+		}
+		if victim != nil {
+			break
+		}
 	}
 	m.mu.Unlock()
 	if victim == nil {

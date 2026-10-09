@@ -171,9 +171,9 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	}
 
 	fresh := state == nil && len(spec.Chain) == 0 && !spec.ReadOnly
-	// Spares are pre-connected NBD volumes; a vhost-user attach formats its
-	// own head instead.
-	if fresh && spec.Export == ExportNBD && spec.Journal == nil {
+	// Fresh exports can adopt a formatted spare. A VM switches its export
+	// from NBD to vhost-user without formatting on the launch path.
+	if fresh && spec.Journal == nil {
 		m.rememberSpareSize(spec.VirtualSizeBytes)
 		defer m.replenishSpares(spec.VirtualSizeBytes)
 		if volume := m.adoptSpare(ctx, spec); volume != nil {

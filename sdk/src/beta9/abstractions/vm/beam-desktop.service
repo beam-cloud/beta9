@@ -1,0 +1,23 @@
+[Unit]
+Description=Beam VM desktop
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+RuntimeDirectory=beam-desktop
+RuntimeDirectoryMode=0700
+Environment=HOME=/run/beam-desktop
+Environment=XDG_CONFIG_HOME=/root/.config
+Environment=DISPLAY=:1
+Environment=XAUTHORITY=/run/beam-desktop/.Xauthority
+WorkingDirectory=/workspace
+ExecStart=/opt/beam-vm/desktop
+Restart=on-failure
+RestartSec=1
+KillMode=control-group
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

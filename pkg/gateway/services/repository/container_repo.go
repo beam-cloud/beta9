@@ -162,21 +162,26 @@ func (s *ContainerRepositoryService) GetContainerAddressMap(ctx context.Context,
 }
 
 func (s *ContainerRepositoryService) SetWorkerAddress(ctx context.Context, req *pb.SetWorkerAddressRequest) (*pb.SetWorkerAddressResponse, error) {
-	address := req.Address
-	if req.Route != nil {
-		routeAddress, err := s.registerBackendRoute(ctx, req.ContainerId, req.Route, req.Address)
-		if err != nil {
-			return &pb.SetWorkerAddressResponse{Ok: false, ErrorMsg: err.Error()}, nil
-		}
-		address = routeAddress
-	}
-
-	err := s.containerRepo.SetWorkerAddress(req.ContainerId, address)
+	err := publishWorkerAddress(ctx, s.containerRepo, req)
 	if err != nil {
 		return &pb.SetWorkerAddressResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-
 	return &pb.SetWorkerAddressResponse{Ok: true}, nil
+}
+
+func publishWorkerAddress(ctx context.Context, repo repository.ContainerRepository, req *pb.SetWorkerAddressRequest) error {
+	address := req.Address
+	if req.Route != nil {
+		route, routeAddress, err := backendRoute(req.ContainerId, req.Route, req.Address)
+		if err != nil {
+			return err
+		}
+		if err := repo.SetBackendRoute(ctx, route); err != nil {
+			return err
+		}
+		address = routeAddress
+	}
+	return repo.SetWorkerAddress(req.ContainerId, address)
 }
 
 func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, containerID string, routeProto *pb.BackendRoute, defaultLocalTarget string) (string, error) {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -30,6 +32,36 @@ const (
 	durableDiskStateClean = "clean"
 	durableDiskStateDirty = "dirty"
 )
+
+func (s *Worker) initializeDurableDisks(ctx context.Context) {
+	// Recover qcow volumes left behind by a previous worker process before any
+	// container can attach: live volumes are adopted, crashed ones cleaned up.
+	diskConfig := disk.Config{}
+	if s.runtimeOwnsBlockRoot() {
+		diskConfig.SpareExport = disk.ExportVhostUser
+	}
+
+	if s.agentWorker() {
+		// The agent persists durable-disks across worker container replacement.
+		// Keep managers separate: recovery must never detach another slot's QSD.
+		slot := sha256.Sum256([]byte(s.workerId))
+		diskConfig.Root = filepath.Join(types.DefaultDurableDisksPath, ".qcow", fmt.Sprintf("%x", slot[:6]))
+	}
+
+	s.diskManager = disk.NewManager(diskConfig)
+	if err := s.diskManager.Recover(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
+	}
+
+	if s.runtimeOwnsBlockRoot() {
+		warmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := s.diskManager.WarmSpares(warmCtx, types.DefaultVMRootSizeBytes)
+		cancel()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to warm fresh VM root disks")
+		}
+	}
+}
 
 type durableDiskSyncMode uint8
 
@@ -99,9 +131,16 @@ type durableDiskMarker struct {
 // has already been failed. Disks that did attach are detached by clearContainer.
 func (s *Worker) prepareDurableDiskMounts(ctx context.Context, request *types.ContainerRequest) error {
 	disks, ctx := errgroup.WithContext(ctx)
+	rootPreparation, _ := ctx.Value(qcowRootPreparationKey{}).(*qcowRootPreparation)
+	if rootPreparation != nil {
+		disks.Go(func() error { return rootPreparation.wait(ctx, request) })
+	}
 	for i := range request.Mounts {
 		mount := &request.Mounts[i]
 		if mount.MountType != types.StorageModeDurableDisk {
+			continue
+		}
+		if rootPreparation != nil && rootPreparation.matches(mount) {
 			continue
 		}
 		disks.Go(func() error {
@@ -578,16 +617,24 @@ func (s *Worker) restoreDurableDiskSnapshot(ctx context.Context, request *types.
 	})
 }
 
+func (s *Worker) diskSnapshotByID(ctx context.Context, request *types.ContainerRequest, id string) (*types.DiskSnapshot, error) {
+	resp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{WorkspaceId: cacheRequestWorkspaceID(request), SnapshotId: id}))
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, nil
+	}
+	return durableDiskSnapshotFromProto(resp.Snapshot), nil
+}
+
 func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
 	sourceID := mount.DurableDisk.SourceSnapshotId
 	if sourceID == "" {
 		return nil, nil
 	}
 
-	resp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{
-		WorkspaceId: cacheRequestWorkspaceID(request),
-		SnapshotId:  sourceID,
-	}))
+	seed, err := s.diskSnapshotByID(ctx, request, sourceID)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -608,7 +655,6 @@ func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.Con
 		return nil, fmt.Errorf("resolve durable disk source snapshot %s: %w", sourceID, err)
 	}
 
-	seed := durableDiskSnapshotFromProto(resp.Snapshot)
 	if seed == nil || seed.ManifestKey == "" {
 		log.Warn().
 			Str("disk", mount.DurableDisk.Name).
