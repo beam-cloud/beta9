@@ -655,6 +655,25 @@ def test_cli_stale_kill_rejects_before_acquiring_runtime(cli_service, monkeypatc
     vm._sandbox.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        ["--unit", "ssh", "--session", "prompt-test"],
+        ["--pid", "44", "--session", "prompt-test"],
+        ["--pid", "44", "--unit", "ssh"],
+    ],
+)
+def test_cli_logs_rejects_conflicting_sources_before_acquiring_vm(
+    cli_service, monkeypatch, selectors
+):
+    acquire = MagicMock()
+    monkeypatch.setattr(vm_cli, "_vm", acquire)
+    result = CliRunner().invoke(vm_cli.management, ["logs", "dev", *selectors])
+    assert result.exit_code == 2
+    assert "Choose one of --pid, --unit, or --session" in result.output
+    acquire.assert_not_called()
+
+
 def test_cli_ps_uses_pid_indexed_processes(cli_service, monkeypatch):
     vm = MagicMock()
     vm.process.list_processes.return_value = {

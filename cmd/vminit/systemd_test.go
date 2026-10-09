@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,6 +101,40 @@ func TestSystemdBootConfiguration(t *testing.T) {
 		t.Fatalf("unsafe systemd environment: %s", manager)
 	}
 	assertPrivateFile(t, managerPath)
+}
+
+func TestSystemdTmpfilesPreservesEarlyExecFiles(t *testing.T) {
+	tmpfiles, err := exec.LookPath("systemd-tmpfiles")
+	if err != nil {
+		t.Skip("systemd-tmpfiles is unavailable")
+	}
+	root := t.TempDir()
+	for _, dir := range []string{"etc", "usr/lib/tmpfiles.d", "tmp/.beta9-stdin-test"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"etc/passwd":                  "root:x:0:0:root:/root:/bin/sh\n",
+		"etc/group":                   "root:x:0:\n",
+		"usr/lib/tmpfiles.d/tmp.conf": "D /tmp 1777 root root -\n",
+		"tmp/.beta9-stdin-test/input": "early input",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeSystemdBootFiles(root, &specs.Process{Env: []string{"BEAM_VM_ID=vm-12ab34cd56ef7890"}}); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(tmpfiles, "--root="+root, "--remove", "--boot").CombinedOutput(); err != nil {
+		t.Fatalf("tmpfiles boot cleanup: %v: %s", err, output)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "tmp/.beta9-stdin-test/input"))
+	if err != nil || string(data) != "early input" {
+		t.Fatalf("boot cleanup removed early exec input: %q, %v", data, err)
+	}
 }
 
 func TestSystemdPreservesExistingShortVMIdentityOnUpgrade(t *testing.T) {

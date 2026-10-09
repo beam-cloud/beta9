@@ -162,6 +162,17 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		return err
 	}
 
+	// /tmp is already a fresh tmpfs. Ubuntu's default D rule clears it
+	// during sysinit, racing stdin uploads from the early exec agent.
+	// Retain normal directory creation and age-based cleanup instead.
+	tmpfilesDir := filepath.Join(root, "run/tmpfiles.d")
+	if err := os.MkdirAll(tmpfilesDir, 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(tmpfilesDir, "tmp.conf"), []byte("d /tmp 1777 root root 10d\n"), 0644); err != nil {
+		return err
+	}
+
 	// Apply VM environment before any enabled user units start, including
 	// units ordered before multi-user.target. Keep secrets on transient /run.
 	managerDir := filepath.Join(root, "run/systemd/system.conf.d")
