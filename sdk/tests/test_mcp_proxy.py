@@ -387,13 +387,13 @@ def test_deploy_tool_surfaces_cli_failure(settings, local_tools, monkeypatch, tm
     result = local_tools.deploy({"name": "web", "wait_seconds": 10})
 
     assert result["isError"] is True
-    text = result["content"][0]["text"]
+    text, data = result["content"][0]["text"].rsplit("\n\n", 1)
     assert text.startswith(
         "Deploy of web failed: insufficient_credits (purchase credits at https://p)"
     )
     assert result["structuredContent"]["logs"] == ["Syncing files..."]  # JSON kept out of the log
     assert "Syncing files..." not in text  # shown once, with the other fields
-    assert json.loads(result["content"][1]["text"]) == result["structuredContent"]
+    assert json.loads(data) == result["structuredContent"]
 
 
 def test_deploy_failure_without_a_json_error_reports_the_last_line(
@@ -532,7 +532,9 @@ def test_job_results_show_the_same_fields_as_text(two_profiles, local_tools, tmp
         "app", str(tmp_path), [sys.executable, "-c", helper], "k-text", 30
     )
 
-    assert json.loads(result["content"][1]["text"]) == result["structuredContent"]
+    assert len(result["content"]) == 1  # some clients show only the first block
+    data = result["content"][0]["text"].rsplit("\n\n", 1)[1]
+    assert json.loads(data) == result["structuredContent"]
     assert result["structuredContent"]["logs"] == ["step one"]
 
 
@@ -604,12 +606,14 @@ def test_database_helper_does_not_run_a_beam_module_in_the_project(home, monkeyp
     assert run_database_helper(monkeypatch) == (["beta9-token"], 0)
 
 
-def test_local_results_show_their_fields_as_text():
+# Some clients show the model only the first text block.
+def test_local_results_show_their_fields_in_the_first_text_block():
     result = mcp_tools.text_result("Review this plan", plan_id="p1")
 
-    texts = [block["text"] for block in result["content"]]
-    assert texts[0] == "Review this plan"
-    assert json.loads(texts[1]) == {"plan_id": "p1"}
+    [block] = result["content"]
+    message, data = block["text"].split("\n\n")
+    assert message == "Review this plan"
+    assert json.loads(data) == {"plan_id": "p1"}
     assert result["structuredContent"] == {"plan_id": "p1"}
 
 

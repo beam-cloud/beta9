@@ -57,9 +57,10 @@ Tool = Tuple[Dict[str, Any], Handler]  # definition, handler
 def text_result(text: str, **structured: Any) -> Dict[str, Any]:
     result: Dict[str, Any] = {"content": [{"type": "text", "text": text}]}
     if structured:
-        # Clients that show the model only text content still need the fields,
-        # such as a stack plan's plan_id.
-        result["content"].append({"type": "text", "text": json.dumps(structured, default=str)})
+        # Some clients show the model only the first text block, and it still needs
+        # the fields, such as a stack plan's plan_id.
+        data = json.dumps(structured, default=str)
+        result["content"][0]["text"] = f"{text}\n\n{data}"
         result["structuredContent"] = structured
     return result
 

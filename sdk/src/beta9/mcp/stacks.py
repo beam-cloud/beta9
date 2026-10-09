@@ -9,19 +9,30 @@ import shutil
 import string
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .tools import LocalTools, RemoteToolError, Tool, deploy_definition, text_result
+from .tools import (
+    WAIT_DEFAULT,
+    WAIT_MAX,
+    LocalTools,
+    RemoteToolError,
+    Tool,
+    _clamp,
+    deploy_definition,
+    text_result,
+)
 
 SOURCE_MAX_FILES = 100_000
 SOURCE_MAX_BYTES = 1 << 30
 SOURCE_BLOCK_BYTES = 1 << 20
 SOURCE_IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache"}
 APPLY_LEASE_SECONDS = 180
+APPLY_POLL_SECONDS = 3
 TASK_ACTIVE_STATUSES = {"pending", "running", "retry"}
 # Steps whose deploy job or migration task may still change the services.
 IN_FLIGHT_STATUSES = {"running", "submitted"}
@@ -239,14 +250,24 @@ def definitions(tools: LocalTools) -> List[Tool]:
             {
                 "name": "stack_apply",
                 "description": (
-                    "Advance a reviewed plan by one bounded step; repeat until complete. "
-                    "Preserves successful steps, checks source changes, and checkpoints in "
-                    "stack.spec. Jobs are never blindly rerun after an uncertain outcome. A "
-                    "newer plan replaces one stopped on a failed or unready service."
+                    "Advance a reviewed plan service by service for up to wait_seconds; call "
+                    "again until it reports the stack applied. Preserves successful steps, "
+                    "checks source changes, and checkpoints in stack.spec. Jobs are never "
+                    "blindly rerun after an uncertain outcome. A newer plan replaces one "
+                    "stopped on a failed or unready service."
                 ),
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"plan_id": {"type": "string"}},
+                    "properties": {
+                        "plan_id": {"type": "string"},
+                        "wait_seconds": {
+                            "type": "integer",
+                            "description": (
+                                f"Keep stepping this long (default {WAIT_DEFAULT}, max "
+                                f"{WAIT_MAX}); 0 takes one step."
+                            ),
+                        },
+                    },
                     "required": ["plan_id"],
                 },
             },
@@ -689,10 +710,60 @@ class StackService:
         state.update(status="complete" if health["ready"] else "starting", health=health)
         if self.kind == "database" and health["ready"]:
             state["readiness"] = "verified_connection"
+        if self.kind == "application" and health["ready"]:
+            self.retire_previous()
+
+    def retire_previous(self) -> None:
+        """Stop the app's older active revisions once the planned one is ready: a stack runs
+        one revision per app, and an always-on revision left behind keeps running, and
+        consuming its queues, until stopped."""
+        try:
+            listed = self.tools.remote(
+                "list_deployments", {"name": self.name, "active": True, "limit": 100}
+            )
+            revisions = [item for item in listed.get("items", []) if item.get("name") == self.name]
+            current = next(
+                (r for r in revisions if r.get("deployment_id") == self.state["deployment_id"]),
+                None,
+            )
+            if current is None:
+                return
+            for revision in revisions:
+                if revision.get("active") and revision.get("version", 0) < current["version"]:
+                    self.tools.remote(
+                        "stop_deployment", {"deployment_id": revision["deployment_id"]}
+                    )
+                    self.state.setdefault("retired", []).append(revision["deployment_id"])
+        except (RemoteToolError, RuntimeError) as exc:
+            self.state["retire_error"] = f"older revisions may still run: {exc}"
 
 
 def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Step the plan until it settles (applied, blocked on a service, or applied by
+    another call) or wait_seconds pass."""
     plan_id = str(args["plan_id"])
+    deadline = time.monotonic() + _clamp(args.get("wait_seconds"), WAIT_DEFAULT)
+    request = getattr(tools, "request", None)
+    cancelled = getattr(request, "cancelled", None) or threading.Event()
+    progress = getattr(request, "progress", None)
+    previous = None
+    steps = 0
+    while True:
+        result, pending = _apply_step(tools, plan_id)
+        steps += 1
+        if pending is None or cancelled.is_set() or time.monotonic() >= deadline:
+            return result
+        if progress is not None:
+            progress(steps, {"service": pending[0], "status": pending[1]})
+        if pending == previous:
+            cancelled.wait(max(0.0, min(APPLY_POLL_SECONDS, deadline - time.monotonic())))
+        previous = pending
+
+
+def _apply_step(
+    tools: LocalTools, plan_id: str
+) -> Tuple[Dict[str, Any], Optional[Tuple[str, str]]]:
+    """One bounded step, and the service and status still in flight, if any."""
     planned = _load_plan(tools, plan_id)
     current = _find_stack(tools, planned["name"])
     operation = (current or {}).get("spec", {}).get("operation", {})
@@ -712,9 +783,9 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
     state = _operation_state(current, planned, plan_id)
     if state.get("status") == "complete":
-        return text_result("Stack already complete", **current)
+        return text_result("Stack already complete", **current), None
     if state.get("lease_until", 0) > time.time():
-        return text_result("Another apply call is progressing this stack", **current)
+        return text_result("Another apply call is progressing this stack", **current), None
 
     state["lease_until"] = time.time() + APPLY_LEASE_SECONDS
     state["owner"] = uuid.uuid4().hex
@@ -757,14 +828,15 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
         status = state["services"].get(name, {}).get("status", "pending")
         if status in ("failed", "uncertain"):
             error = state["services"][name].get("error")
-            return text_result(
+            message = (
                 f"{name} is {status}{f' ({error})' if error else ''}; inspect it, then call "
-                "stack_resolve or apply a corrected plan",
-                **current,
+                "stack_resolve or apply a corrected plan"
             )
+            return text_result(message, **current), None
         if status != "complete":
-            return text_result(f"{name} is {status}; call stack_apply again", **current)
-    return text_result("Stack applied", **current)
+            message = f"{name} is {status}; call stack_apply again"
+            return text_result(message, **current), (name, status)
+    return text_result("Stack applied", **current), None
 
 
 def resolve(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
