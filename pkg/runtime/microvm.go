@@ -59,7 +59,7 @@ const (
 	// microVMMemoryHeadroom is charged to the VM's cgroup on top of guest RAM
 	// for the VMM, virtiofsd, and their queues. The guest separately enforces
 	// the application budget, excluding its control headroom.
-	microVMMemoryHeadroom = 256 << 20
+	microVMMemoryHeadroom = microvm.HostMemoryHeadroom
 	microVMMemoryAlign    = 2 << 20
 	microVMConsoleTail    = 64
 	// microVMMaxGuestRead bounds a whole-file read (Length 0) the guest

@@ -13,6 +13,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMicroVMOOMEventsDoNotBlockControlAcknowledgements(t *testing.T) {
+	host, guest := net.Pipe()
+	defer host.Close()
+	defer guest.Close()
+	require.NoError(t, guest.SetDeadline(time.Now().Add(2*time.Second)))
+	ack := make(chan microvm.Message, 1)
+	ctrl := &microVMControl{
+		ready: make(chan struct{}), pending: map[uint64]chan microvm.Message{1: ack},
+		applicationOOM: make(chan Event, 16), eventDone: make(chan struct{}),
+	}
+	go ctrl.serve(host)
+	encoder := microvm.NewEncoder(guest)
+	// No event consumer: excess OOM notifications must never stall the
+	// protocol used for network updates, filesystem freezing and shutdown.
+	for i := 0; i < 20; i++ {
+		require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgApplicationOOM, OOM: &microvm.ApplicationOOM{Kills: 1}}))
+	}
+	require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgAck, ID: 1, OK: true}))
+	select {
+	case msg := <-ack:
+		require.True(t, msg.OK)
+	case <-time.After(2 * time.Second):
+		t.Fatal("OOM notifications blocked the control acknowledgement")
+	}
+}
+
 // The canvas is image content: a symlink where the host writes must be
 // replaced, never followed onto the host.
 func TestPrepareCanvasDoesNotFollowImageSymlinks(t *testing.T) {

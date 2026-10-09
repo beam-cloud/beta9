@@ -56,6 +56,7 @@ const (
 	ControlCgroup       = "/sys/fs/cgroup/" + ControlSlice
 	WorkloadCgroupEnv   = "GOPROC_WORKLOAD_CGROUP"
 	GuestMemoryHeadroom = 512 << 20
+	HostMemoryHeadroom  = 256 << 20
 
 	// Disk layout on the writable root disk, shared with container sandboxes
 	// so a durable disk restores into either kind.

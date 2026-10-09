@@ -1154,15 +1154,15 @@ func TestMicroVMResourcesAndOOM(t *testing.T) {
 	require.NoError(t, err, out)
 	require.InDelta(t, 512+(microvm.GuestMemoryHeadroom>>20), total, 80, "guest RAM includes control headroom")
 	code, out = vm.sh(client, `
-cat /sys/fs/cgroup/beam-workload/memory.max
-cat /sys/fs/cgroup/beam-workload/memory.oom.group
+cat /sys/fs/cgroup/workload.slice/memory.max
+cat /sys/fs/cgroup/workload.slice/memory.oom.group
 cat /proc/self/cgroup
 cat /proc/$(pidof goproc)/cgroup
 `)
 	require.Equal(t, 0, code, out)
 	require.Contains(t, out, "536870912\n0\n", "workload has the requested hard limit and individual-process OOM killing")
-	require.Contains(t, out, "0::/beam-workload/exec", "exec belongs to the workload budget")
-	require.Contains(t, out, "0::/beam-control", "manager is outside the workload budget")
+	require.Contains(t, out, "0::/workload.slice/exec", "exec belongs to the workload budget")
+	require.Contains(t, out, "0::/control.slice", "manager is outside the workload budget")
 
 	cgroup := microVMCgroupPath(vm.spec, vm.id)
 	max, err := os.ReadFile(filepath.Join(cgroup, "memory.max"))

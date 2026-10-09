@@ -7,6 +7,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCapacityMemoryReservesNativeVMOverhead(t *testing.T) {
+	for _, tc := range []struct {
+		memory, expected int64
+		useVM            bool
+	}{
+		{0, 0, true}, {-1, -1, true}, {1, 2, false}, {1024, 1280, false},
+		{128, 896, true}, {512, 1280, true}, {1025, 1794, true}, {4096, 5120, true},
+	} {
+		request := &ContainerRequest{Memory: tc.memory, UseVM: tc.useVM}
+		require.Equal(t, tc.expected, request.CapacityMemory())
+		require.Equal(t, tc.memory, request.Memory, "billing and the application budget remain unchanged")
+	}
+}
+
 func TestKeylessCheckpointMayEvict(t *testing.T) {
 	request := &ContainerRequest{Gpu: "RTX4090",
 		Checkpoint: &Checkpoint{Status: string(CheckpointStatusAvailable), Runtime: "gvisor"}}

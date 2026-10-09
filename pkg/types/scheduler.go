@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -510,6 +511,20 @@ func WorkerStartConcurrency(workerConfig WorkerConfig, worker *Worker) int {
 }
 
 // IsBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
+// CapacityMemory includes runtime overhead in MiB without changing the
+// requested application budget. Native VMs reserve their control RAM and VMM.
+func (c *ContainerRequest) CapacityMemory() int64 {
+	if c.Memory <= 0 {
+		return c.Memory
+	}
+	memory := (c.Memory*125 + 99) / 100
+	if c.UseVM {
+		guest := (c.Memory + (microvm.GuestMemoryHeadroom >> 20) + 1) / 2 * 2
+		memory = max(memory, guest+(microvm.HostMemoryHeadroom>>20))
+	}
+	return memory
+}
+
 func (c *ContainerRequest) IsBuildRequest() bool {
 	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil || c.BuildOptions.GitSource != nil
 }
