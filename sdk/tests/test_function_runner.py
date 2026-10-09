@@ -1,5 +1,8 @@
 import asyncio
 import importlib
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +16,20 @@ try:
     function_runner = importlib.import_module("beta9.runner.function")
 finally:
     common.config = original_config
+
+
+def test_remote_function_import_does_not_require_ssh_client_packages():
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.modules['websocket'] = None; "
+            "sys.modules['paramiko'] = None; from beta9 import function",
+        ],
+        env=dict(os.environ, CONTAINER_ID="function-test"),
+        check=True,
+        capture_output=True,
+    )
 
 
 def test_handler_load_failure_is_captured_for_task_failure_reporting():

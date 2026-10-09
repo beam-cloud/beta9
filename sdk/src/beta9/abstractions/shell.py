@@ -12,15 +12,16 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 from urllib.parse import quote, urlsplit, urlencode
 
-import websocket
 import requests
 
 from .. import terminal
 from ..env import is_local
-from ..tunnel import bridge_tunnel
 
 if is_local():
     import paramiko
+    import websocket
+
+    from ..tunnel import bridge_tunnel
 
 
 MAX_PROXY_RESPONSE_BYTES = 64 * 1024

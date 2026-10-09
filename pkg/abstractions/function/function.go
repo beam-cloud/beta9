@@ -222,8 +222,10 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 		return err
 	}
 
-	ctx, cancel := common.MergeContexts(fs.ctx, ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	stop := context.AfterFunc(fs.ctx, cancel)
+	defer stop()
 	err = containerStream.Stream(ctx, authInfo, containerId)
 	if fs.ctx.Err() != nil {
 		return status.Error(codes.Unavailable, "gateway is restarting")
