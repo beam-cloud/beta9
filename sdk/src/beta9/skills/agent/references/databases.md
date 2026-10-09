@@ -2,7 +2,10 @@
 
 Managed databases are apps of kind `database`: the upstream image on a
 durable disk, reached over TLS, with generated credentials stored as
-workspace secrets. Kinds: `postgres`, `redis`, `mysql`, `mongo`.
+workspace secrets. Kinds: `postgres`, `redis`, `mysql`, `mongo`. Postgres and
+Redis journal every acknowledged write to object storage, so they survive a
+machine failure; MySQL and Mongo save their disk when the container stops, so a
+machine failure loses what they wrote since it started.
 
 ## Create
 
@@ -44,8 +47,9 @@ require.
 The gateway routes by SNI, so the client must send the host as its TLS
 server name; one that does not fails with `tlsv1 unrecognized name` (SSL
 alert 112). libpq, Prisma, redis-py and Go clients send it. Node's ioredis
-(and BullMQ on top of it) does not: give it `tls: { servername: host }`, or
-set the app's own setting for it (Langfuse: `REDIS_TLS_SERVERNAME`).
+(and BullMQ on top of it) and node-redis do not; Beam preloads a fix through
+`NODE_OPTIONS` into Node processes whose environment names a database or
+service host. A client running elsewhere needs `tls: { servername: host }`.
 
 In a stack, a database is a service with `"type": "database"` and
 `"deploy": {"kind": "postgres"}`, sized like an application

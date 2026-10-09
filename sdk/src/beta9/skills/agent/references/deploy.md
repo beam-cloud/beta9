@@ -88,9 +88,13 @@ and errors as `{"error", "code"}`; branch on `code` (`NOT_AUTHENTICATED`,
   directly); `0`/small values scale to zero when idle and cold start on the
   next request.
 - `min_replicas` / `max_replicas`: fixed or autoscaled replica counts.
-- `disks`: `["data:/var/lib/app:10Gi"]`, a durable disk that survives
-  restarts, for state a single service owns. Shared storage across apps is a
-  volume (`Volume(name, mount_path)` in code).
+- `disks`: `["data:/var/lib/app:10Gi"]`, a disk for state a single service
+  owns. It is saved when the container stops or exits, crashes included, and
+  restored by the next one, so it survives restarts and redeploys; a machine
+  failure loses what was written since the container started. Data that must
+  not be lost belongs in managed Postgres or Redis, which keep every
+  acknowledged write. Shared storage across apps is a volume
+  (`Volume(name, mount_path)` in code).
 - `secrets`: workspace secret names injected as env vars. Create them with
   `create_secret` (MCP) or `{{cli}} secret create NAME`; never put values in
   `env`.
