@@ -41,6 +41,26 @@ func vmRequest(e *echo.Echo, method, path, body string) *httptest.ResponseRecord
 	return rec
 }
 
+func TestResponsesRedactVolumeCredentialsWithoutMutatingStoredSpec(t *testing.T) {
+	s, v, _, _, _ := fixture()
+	v.Spec.Volumes = []*pb.Volume{{Config: &pb.MountPointConfig{BucketName: "bucket", AccessKey: "volume-access", SecretKey: "volume-secret"}}}
+	for _, spec := range []types.VMSpec{s.response(v).Spec, artifactResponse(types.VMArtifact{Spec: v.Spec}).Spec} {
+		require.Empty(t, spec.Volumes[0].Config.AccessKey)
+		require.Empty(t, spec.Volumes[0].Config.SecretKey)
+		require.Equal(t, "bucket", spec.Volumes[0].Config.BucketName)
+	}
+	require.Equal(t, "volume-access", v.Spec.Volumes[0].Config.AccessKey)
+	require.Equal(t, "volume-secret", v.Spec.Volumes[0].Config.SecretKey)
+}
+
+func TestMountsCannotHideNestedDisksOrVolumes(t *testing.T) {
+	for _, mounts := range [][]string{{"/data", "/data/cache"}, {"/data/cache", "/data"}} {
+		seen := map[string]bool{"/": true}
+		require.NoError(t, validateMountPath(mounts[0], seen))
+		require.ErrorContains(t, validateMountPath(mounts[1], seen), "overlap")
+	}
+}
+
 func TestInternalProcessControlPortCannotBePublished(t *testing.T) {
 	spec := types.VMSpec{ImageID: "base", Ports: []uint32{uint32(types.WorkerSandboxProcessManagerPort)}}
 	require.Error(t, validate(&spec))

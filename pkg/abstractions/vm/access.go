@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -44,13 +45,23 @@ func validAccessSession(v *types.VM, port uint32, session string, now time.Time)
 
 // Exchange a short-lived URL for a host-only cookie before application traffic
 // (including desktop WebSockets). Neither credential reaches the guest.
-func acceptBrowserSession(c echo.Context, v *types.VM, port uint32) (bool, error) {
+func (s *Service) acceptBrowserSession(c echo.Context, v *types.VM, port uint32) (bool, error) {
 	if session := c.QueryParam(sessionParameter); session != "" {
 		if c.Request().Method != http.MethodGet || !validAccessSession(v, port, session, time.Now()) {
 			return false, echo.NewHTTPError(403, "invalid or expired VM access session")
 		}
 		expires := sessionExpiry(session)
-		c.SetCookie(&http.Cookie{Name: sessionCookie(v, port), Value: session, Path: "/", Expires: time.Unix(expires, 0), Secure: c.Scheme() == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		s.urls(v)
+		origin, err := url.Parse(v.URLs[port])
+		if err != nil {
+			return false, echo.NewHTTPError(503, "VM URL unavailable")
+		}
+		// The configured public origin remains authoritative behind h2c/TLS
+		// termination. Only explicitly local HTTP origins omit Secure.
+		host := origin.Hostname()
+		ip := net.ParseIP(host)
+		localHTTP := origin.Scheme == "http" && (host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback()))
+		c.SetCookie(&http.Cookie{Name: sessionCookie(v, port), Value: session, Path: "/", Expires: time.Unix(expires, 0), Secure: !localHTTP, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 		query := c.Request().URL.Query()
 		query.Del(sessionParameter)
 		// RequestURI preserves the original browser path before host rewriting.

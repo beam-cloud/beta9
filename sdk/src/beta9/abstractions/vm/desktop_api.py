@@ -138,6 +138,8 @@ class VMDesktop:
             "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-movflags",
             "frag_keyframe+empty_moov+default_base_moof",
+            "-f",
+            "mp4",
             path,
         )
 

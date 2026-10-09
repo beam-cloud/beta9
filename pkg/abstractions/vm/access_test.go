@@ -54,6 +54,30 @@ func TestBrowserSessionExchangesAndNeverReachesGuest(t *testing.T) {
 	require.Equal(t, "preserved", own.Value)
 }
 
+func TestSessionCookieUsesPublishedOriginBehindH2C(t *testing.T) {
+	for _, test := range []struct {
+		domain, base string
+		secure       bool
+	}{
+		{"vm.example.com", "https://gateway.example.com", true},
+		{"vm.localhost:1994", "http://localhost:1994", false},
+		{"", "http://127.0.0.1:1994", false},
+	} {
+		t.Run(test.base, func(t *testing.T) {
+			s, v, _, _, _ := fixture()
+			s.domain, s.baseURL = test.domain, test.base
+			v.TrafficAccessToken = "owner-secret"
+			v.Spec.ProtectedPorts = []uint32{8080}
+			path := "/vm/" + v.Handle + "/8080/?" + sessionParameter + "=" + accessSession(v, 8080, time.Now().Add(time.Minute).Unix())
+			rec := httptest.NewRecorder()
+			proxyAPI(s).ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+			require.Equal(t, http.StatusSeeOther, rec.Code)
+			require.Len(t, rec.Result().Cookies(), 1)
+			require.Equal(t, test.secure, rec.Result().Cookies()[0].Secure)
+		})
+	}
+}
+
 func TestSessionCookiesDoNotCollideOnSharedGatewayHost(t *testing.T) {
 	v := &types.VM{Handle: "first"}
 	other := &types.VM{Handle: "second"}

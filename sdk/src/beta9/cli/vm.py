@@ -47,13 +47,10 @@ def management():
 
 
 def _key_values(values):
-    result = {}
-    for entry in values:
-        key, separator, value = entry.partition("=")
-        if not separator or not key:
-            raise click.UsageError("Expected KEY=VALUE")
-        result[key] = value
-    return result
+    try:
+        return extraclick.env_vars_to_dict(values)
+    except ValueError as exc:
+        raise click.UsageError("Expected KEY=VALUE") from exc
 
 
 def _vm(service, name):

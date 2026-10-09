@@ -160,6 +160,11 @@ func validateMountPath(mount string, seen map[string]bool) error {
 	if !path.IsAbs(mount) || path.Clean(mount) != mount || seen[mount] {
 		return fmt.Errorf("VM mount paths must be unique absolute paths outside the root")
 	}
+	for other := range seen {
+		if other != "/" && (strings.HasPrefix(mount, other+"/") || strings.HasPrefix(other, mount+"/")) {
+			return fmt.Errorf("VM mount paths cannot overlap: %s and %s", mount, other)
+		}
+	}
 	for _, reserved := range []string{"/dev", "/proc", "/sys", "/run", "/.beam"} {
 		if mount == reserved || strings.HasPrefix(mount, reserved+"/") {
 			return fmt.Errorf("reserved VM mount path %q", mount)

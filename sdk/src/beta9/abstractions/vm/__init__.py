@@ -248,8 +248,7 @@ class VM:
         # Reusing this object after a lost response must send exactly the same
         # creation request, including the image and SSH key already prepared.
         if self._creation_body is not None:
-            self._set(self._api("POST", json=self._creation_body))
-            return self.wait() if wait else self
+            return self._submit_creation(wait)
         # Verify the selected gateway before building an image or creating keys.
         # Older gateways return a generic route 404, which otherwise appears
         # after a successful (and potentially expensive) image build.
@@ -284,14 +283,19 @@ class VM:
             if not result.success:
                 raise ImageBuildError(result.error or "VM image build failed")
             spec["image_id"] = result.image_id
-        self._creation_body = {
-            "name": self.name or "",
-            "spec": spec,
-            "template": self.template or "",
-            "request_id": self.request_id,
-            **({"metadata": self._metadata} if self._metadata is not None else {}),
-            **({"snapshot": self._snapshot_source} if self._snapshot_source else {}),
-        }
+        self._creation_body = copy.deepcopy(
+            {
+                "name": self.name or "",
+                "spec": spec,
+                "template": self.template or "",
+                "request_id": self.request_id,
+                **({"metadata": self._metadata} if self._metadata is not None else {}),
+                **({"snapshot": self._snapshot_source} if self._snapshot_source else {}),
+            }
+        )
+        return self._submit_creation(wait)
+
+    def _submit_creation(self, wait):
         self._set(self._api("POST", json=self._creation_body))
         return self.wait() if wait else self
 

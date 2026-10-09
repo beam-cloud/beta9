@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
+	"google.golang.org/protobuf/proto"
 	"io"
 	"slices"
 	"strconv"
@@ -134,7 +135,7 @@ func (s *Service) urls(v *types.VM) {
 // values in management responses or template listings.
 func (s *Service) response(v *types.VM) types.VM {
 	copy := *v
-	copy.Spec.Env = nil
+	copy.Spec = redactedSpec(v.Spec)
 	copy.CreationDigest = ""
 	copy.TrafficAccessToken = ""
 	s.urls(&copy)
@@ -142,8 +143,26 @@ func (s *Service) response(v *types.VM) types.VM {
 }
 
 func artifactResponse(a types.VMArtifact) types.VMArtifact {
-	a.Spec.Env = nil
+	a.Spec = redactedSpec(a.Spec)
 	return a
+}
+
+func redactedSpec(spec types.VMSpec) types.VMSpec {
+	spec.Env = nil
+	volumes := spec.Volumes
+	spec.Volumes = make([]*pb.Volume, len(volumes))
+	for i, volume := range volumes {
+		if volume == nil {
+			continue
+		}
+		copy := proto.Clone(volume).(*pb.Volume)
+		if copy.Config != nil {
+			config := types.NewMountPointConfigFromProto(copy.Config).WithoutCredentials()
+			copy.Config = config.ToProto()
+		}
+		spec.Volumes[i] = copy
+	}
+	return spec
 }
 
 func (s *Service) lockedVM(ctx context.Context, workspace uint, name string) (*types.VM, func(), error) {
@@ -603,7 +622,7 @@ func (s *Service) proxy(c echo.Context) error {
 	if token == nil || !token.Active || token.DisabledByClusterAdmin {
 		return echo.NewHTTPError(403, "VM access is revoked")
 	}
-	if handled, err := acceptBrowserSession(c, v, uint32(port)); handled || err != nil {
+	if handled, err := s.acceptBrowserSession(c, v, uint32(port)); handled || err != nil {
 		return err
 	}
 	validSession := browserSession(c, v, uint32(port))

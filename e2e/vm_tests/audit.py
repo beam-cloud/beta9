@@ -205,7 +205,7 @@ def main():
             expected=None,
             timeout=20,
         )
-        assert "timeout" in output.lower() or "timed out" in output.lower()
+        assert "did not exit within 1 seconds" in output.lower()
         active = json.loads(cli("ps", args.name, "--json"))
         assert not any(
             p["args"] == ["sleep", "600"] and p["exit_code"] < 0 for p in active
@@ -291,7 +291,30 @@ def main():
         vm.desktop.click(200, 200)
         vm.desktop.scroll()
         text = "Unicode: café 日本語 👋"
+        entry = vm.desktop.launch(
+            "xterm",
+            "-title",
+            "AuditInput",
+            "-xrm",
+            "XTerm*VT100.translations: #override Ctrl <Key>v: insert-selection(CLIPBOARD)",
+            "-e",
+            "python3",
+            "-c",
+            "import pathlib,sys; pathlib.Path('/workspace/audit-input.txt').write_text(sys.stdin.readline().rstrip('\\n'))",
+        )
+        execute(
+            "xdotool",
+            "search",
+            "--sync",
+            "--name",
+            "^AuditInput$",
+            "windowactivate",
+            "--sync",
+        )
         vm.desktop.write(text)
+        vm.desktop.press("Return")
+        assert entry.wait(30) == 0
+        assert vm.fs.read_text("/workspace/audit-input.txt") == text
         assert execute("xclip", "-selection", "clipboard", "-out") == text
         recording = vm.desktop.record("/workspace/audit.mp4", fps=15)
         time.sleep(3)

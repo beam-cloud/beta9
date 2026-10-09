@@ -452,11 +452,18 @@ def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
     assert remote.closed
 
 
-def test_disabled_desktop_does_not_wake_a_vm(monkeypatch):
-    vm = VM(_service=service())._set(
+@pytest.fixture
+def stopped_vm(monkeypatch):
+    selected = service()
+    vm = VM(_service=selected)._set(
         {"name": "dev", "status": "stopped", "spec": {"auto_resume": True}}
     )
     monkeypatch.setattr(vm, "refresh", lambda: vm)
+    return vm, selected
+
+
+def test_disabled_desktop_does_not_wake_a_vm(stopped_vm, monkeypatch):
+    vm, _ = stopped_vm
     acquire = MagicMock()
     monkeypatch.setattr(vm, "_sandbox", acquire)
     with pytest.raises(ValueError, match="desktop=True"):
@@ -464,12 +471,8 @@ def test_disabled_desktop_does_not_wake_a_vm(monkeypatch):
     acquire.assert_not_called()
 
 
-def test_process_kill_transport_can_refuse_automatic_wake(monkeypatch):
-    selected = service()
-    vm = VM(_service=selected)._set(
-        {"name": "dev", "status": "stopped", "spec": {"auto_resume": True}}
-    )
-    monkeypatch.setattr(vm, "refresh", lambda: vm)
+def test_process_kill_transport_can_refuse_automatic_wake(stopped_vm):
+    vm, selected = stopped_vm
     with pytest.raises(SandboxConnectionError, match="not running"):
         vm._sandbox(auto_resume=False)
     selected.http.json.assert_not_called()
@@ -496,6 +499,44 @@ def test_cli_ps_uses_pid_indexed_processes(cli_service, monkeypatch):
     assert json.loads(result.output) == [
         {"pid": 44, "args": ["echo", "two words"], "cwd": "/", "exit_code": 0}
     ]
+
+
+def test_recording_selects_mp4_for_extensionless_paths(sandbox_vm, monkeypatch):
+    vm, sandbox = sandbox_vm
+    vm.info["spec"]["desktop"] = True
+    desktop = vm.desktop
+    monkeypatch.setattr(desktop, "screen_size", lambda: (1280, 720))
+    desktop.record("/workspace/extensionless")
+    assert sandbox.process.exec.call_args.args[-3:] == ("-f", "mp4", "/workspace/extensionless")
+
+
+def test_creation_retry_freezes_caller_owned_metadata_and_lists():
+    selected = service()
+    selected.http.json.side_effect = [
+        [],
+        TimeoutError("lost response"),
+        {"id": "resource", "name": "dev", "status": "starting"},
+    ]
+    metadata, ports, networks = {"project": "original"}, [9000], ["1.1.1.1/32"]
+    vm = VM(
+        "dev",
+        template="base",
+        ssh=False,
+        metadata=metadata,
+        ports=ports,
+        allow_list=networks,
+        _service=selected,
+    )
+    with pytest.raises(TimeoutError):
+        vm.create(wait=False)
+    metadata["project"] = "changed"
+    ports.append(9001)
+    networks.clear()
+    vm.create(wait=False)
+    submitted = selected.http.json.call_args.kwargs["json"]
+    assert submitted["metadata"] == {"project": "original"}
+    assert submitted["spec"]["ports"] == [9000]
+    assert submitted["spec"]["allow_list"] == ["1.1.1.1/32"]
 
 
 def test_activity_touch_retries_transient_lifecycle_lock():
