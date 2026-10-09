@@ -167,7 +167,8 @@ def test_acknowledgements_stay_with_their_container():
     assert observed[2]["x-beta9-request-ack"] == observed[0]["x-beta9-request-id"]
 
 
-def test_generated_sandbox_stub_retries_in_the_shared_channel(monkeypatch):
+@pytest.mark.parametrize("failure", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED])
+def test_generated_sandbox_stub_retries_in_the_shared_channel(monkeypatch, failure):
     from concurrent.futures import ThreadPoolExecutor
     from beta9.clients.pod import PodServiceStub, PodSandboxExecRequest, PodSandboxExecResponse
 
@@ -177,7 +178,7 @@ def test_generated_sandbox_stub_retries_in_the_shared_channel(monkeypatch):
     def execute(request, context):
         calls.append(dict(context.invocation_metadata()))
         if len(calls) == 1:
-            context.abort(grpc.StatusCode.UNAVAILABLE, "gateway restarting after accepting exec")
+            context.abort(failure, "gateway restarting after accepting exec")
         return PodSandboxExecResponse(ok=True, pid=42)
 
     server = grpc.server(ThreadPoolExecutor(max_workers=2))
