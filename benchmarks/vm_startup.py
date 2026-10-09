@@ -138,6 +138,7 @@ def main():
                             ssh=not args.no_ssh,
                             desktop=args.desktop,
                             ttl=0,
+                            metadata={"beam-startup-benchmark": nonce},
                             _service=service,
                         )
                         begin = time.perf_counter()
@@ -174,6 +175,26 @@ def main():
                 finally:
                     save()
                     if runtime is not None:
+                        if args.mode == "vm" and not runtime.info.get("id"):
+                            # A blocking launch can lose its response after
+                            # persisting the resource. Resolve only this run's
+                            # unique name, and verify the ownership marker.
+                            try:
+                                recovered = VM.get(row["name"], _service=service)
+                            except Exception:
+                                recovered = None
+                            if (
+                                recovered is not None
+                                and recovered.info.get("metadata", {}).get(
+                                    "beam-startup-benchmark"
+                                )
+                                == nonce
+                            ):
+                                runtime = recovered
+                                row.update(
+                                    id=runtime.id,
+                                    container_id=runtime.info.get("container_id"),
+                                )
                         if args.mode == "vm" and runtime.info.get("id"):
                             runtime.remove()
                             row["removed"] = True
