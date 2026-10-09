@@ -27,6 +27,7 @@ REMOTE_TIMEOUT = 120
 TOOL_TIMEOUTS = {"create_database": 660}
 READ_RETRIES = 3
 RETRY_DELAY = 0.3
+VERSION_CHECK_SECONDS = 30
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -138,6 +139,8 @@ class StdioProxy:
         self._request_lock = threading.Lock()
         self._requests: Dict[Any, threading.Event] = {}
         self._stdout: BinaryIO = sys.stdout.buffer
+        self.version: str = _sdk_version()
+        self._installed: Tuple[float, str] = (time.monotonic(), self.version)
         self._follow_sign_in()
 
     def run(
@@ -276,6 +279,28 @@ class StdioProxy:
         return tools + self.tools.definitions()
 
     def _tools_call(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        response = self._call_tool(msg_id, params)
+        notice = self._upgrade_notice()
+        content = (response or {}).get("result", {}).get("content") or []
+        if notice and content and content[0].get("type") == "text":
+            content[0]["text"] = f"{notice}\n\n{content[0]['text']}"
+        return response
+
+    def _upgrade_notice(self) -> str:
+        """Clients keep this process across upgrades, so its tools can be older than the CLI's."""
+        checked_at, installed = self._installed
+        if time.monotonic() - checked_at > VERSION_CHECK_SECONDS:
+            installed = _sdk_version()
+            self._installed = (time.monotonic(), installed)
+        if installed in (self.version, "0"):
+            return ""
+        return (
+            f"This MCP server runs {get_settings().name.lower()} SDK {self.version}, but "
+            f"{installed} is installed. Restart the MCP server in your client to use the "
+            "installed tools."
+        )
+
+    def _call_tool(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         name = params.get("name", "")
         handler = self.tools.handler(name)
         if handler is not None:

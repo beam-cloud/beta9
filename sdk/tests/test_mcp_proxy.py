@@ -161,6 +161,26 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
     assert any(m.get("method") == "notifications/initialized" for m in remote.calls)
 
 
+# Clients keep the server process across CLI upgrades; the agent must learn that
+# the tools it calls are older than the installed CLI's.
+def test_results_say_when_a_newer_sdk_is_installed_than_the_server_runs(settings, monkeypatch):
+    remote = FakeRemote()
+    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: ConfigContext(token="t"))
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remote)
+    monkeypatch.setattr(mcp_server, "_sdk_version", lambda: "1.0.0")
+    monkeypatch.setattr(mcp_server, "VERSION_CHECK_SECONDS", -1)
+    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
+
+    (same,) = run_proxy(proxy, rpc("tools/call", 1, name="whoami", arguments={}))
+    monkeypatch.setattr(mcp_server, "_sdk_version", lambda: "1.1.0")
+    (upgraded,) = run_proxy(proxy, rpc("tools/call", 2, name="whoami", arguments={}))
+
+    assert same["result"]["content"][0]["text"] == "called whoami"
+    text = upgraded["result"]["content"][0]["text"]
+    assert text.startswith("This MCP server runs beta9 SDK 1.0.0, but 1.1.0 is installed.")
+    assert text.endswith("\n\ncalled whoami")
+
+
 def test_rejected_token_drops_remote_and_announces_tool_change(settings, monkeypatch):
     remote = FakeRemote(status=401)
     context = ConfigContext(token="t")
