@@ -462,6 +462,10 @@ func reconfigureNetwork(cfg microvm.Network) error {
 	if err != nil {
 		return err
 	}
+	return reconfigureNetworkLink(cfg, link)
+}
+
+func reconfigureNetworkLink(cfg microvm.Network, link netlink.Link) error {
 	if mac, err := net.ParseMAC(cfg.MAC); err == nil && !bytes.Equal(mac, link.Attrs().HardwareAddr) {
 		if err := netlink.LinkSetHardwareAddr(link, mac); err != nil {
 			return fmt.Errorf("set mac %s: %w", cfg.MAC, err)
@@ -479,16 +483,20 @@ func reconfigureNetwork(cfg microvm.Network) error {
 			_ = netlink.NeighDel(&neigh)
 		}
 	}
-	return configureNetwork(cfg)
+	return configureNetworkLink(cfg, link)
 }
 
 func configureNetwork(cfg microvm.Network) error {
-	if lo, err := netlink.LinkByName("lo"); err == nil {
-		_ = netlink.LinkSetUp(lo)
-	}
 	link, err := findNIC(cfg.MAC)
 	if err != nil {
 		return err
+	}
+	return configureNetworkLink(cfg, link)
+}
+
+func configureNetworkLink(cfg microvm.Network, link netlink.Link) error {
+	if lo, err := netlink.LinkByName("lo"); err == nil {
+		_ = netlink.LinkSetUp(lo)
 	}
 	name := link.Attrs().Name
 	if cfg.MTU > 0 {
@@ -605,6 +613,10 @@ type control struct {
 	mu      sync.Mutex
 	file    *os.File
 	enc     *microvm.Encoder
+	// Private loopback aliases retain interface-bound sockets across restore.
+	networkAliases  map[string]bool
+	networkMu       sync.Mutex
+	restoredNetwork *restoredSocketNetwork
 }
 
 // controlReconnectTimeout bounds how long init keeps trying to reach the
@@ -679,6 +691,9 @@ func (c *control) close() {
 func (c *control) heartbeat(interval time.Duration) {
 	for range time.Tick(interval) {
 		c.send(microvm.Message{Type: microvm.MsgPing})
+		if err := c.refreshRestoredSockets(); err != nil {
+			logf("refresh restored socket addresses: %v", err)
+		}
 	}
 }
 
@@ -708,7 +723,7 @@ func (c *control) serve(childPid func() int) {
 				c.ack(msg.ID, errors.New("network config is missing"))
 				continue
 			}
-			err := reconfigureNetwork(*msg.Network)
+			err := c.restoreNetwork(*msg.Network)
 			if err == nil {
 				logf("network reconfigured to %s %s", msg.Network.IPv4, msg.Network.IPv6)
 			}

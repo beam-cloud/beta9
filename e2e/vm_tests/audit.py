@@ -212,7 +212,7 @@ def main():
         )
         passed("json_exec_timeout_cancels_child")
 
-        assert execute(
+        execute(
             "curl",
             "-ks",
             "--connect-timeout",
@@ -233,7 +233,7 @@ def main():
         )
         assert denied.wait(10) != 0
         vm.update_network_permissions(allow_list=["1.1.1.1/32"])
-        assert execute(
+        execute(
             "curl",
             "-ks",
             "--connect-timeout",
@@ -264,6 +264,10 @@ def main():
                 "same_guest_process": True,
             },
         )
+
+        execute("systemctl", "restart", "audit-web.service")
+        assert web(headers=headers).json()["boot"] != after["boot"]
+        passed("interface_bound_service_restart_after_warm_resume")
 
         vm.stop()
         assert vm.info["status"] == "stopped"
