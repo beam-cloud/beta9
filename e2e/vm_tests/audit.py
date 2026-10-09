@@ -395,6 +395,32 @@ def main():
             assert vm.refresh().info["status"] == "running"
         vm.update(ttl=0)
         passed("activity_lease_survives_short_idle_timeout")
+
+        idle_pid = execute(
+            "systemctl", "show", "-p", "MainPID", "--value", "audit-web.service"
+        )
+        vm.fs.write_text("/run/audit-idle-marker", "memory-only idle pause")
+        vm.update(ttl=2, idle_action="pause", auto_resume=False)
+        idle_started = time.monotonic()
+        while time.monotonic() - idle_started < 90:
+            vm.refresh()
+            if vm.info["status"] == "paused":
+                break
+            assert vm.info["status"] not in ("error", "stopped"), vm.info["status"]
+            time.sleep(1)
+        assert vm.info["status"] == "paused", vm.info["status"]
+        assert vm.info["desired_state"] == "paused" and vm.info["memory_checkpoint_id"]
+        vm.update(ttl=0)
+        vm.start().wait()
+        assert (
+            execute(
+                "systemctl", "show", "-p", "MainPID", "--value", "audit-web.service"
+            )
+            == idle_pid
+        )
+        assert vm.fs.read_text("/run/audit-idle-marker") == "memory-only idle pause"
+        vm.update(idle_action="stop", auto_resume=True)
+        passed("idle_action_pause_and_warm_resume", {"same_process": True})
         print(
             "All integration checks passed; VM retained for browser validation and explicit cleanup.",
             flush=True,
