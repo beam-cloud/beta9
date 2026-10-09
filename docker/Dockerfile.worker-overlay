@@ -46,10 +46,15 @@ FROM ${MICROVM_IMAGE} AS microvm
 
 FROM --platform=$TARGETPLATFORM ${WORKER_RUNTIME_IMAGE}
 
+ARG TARGETARCH
+ARG GOPROC_VERSION=0.1.16
 ARG SOURCE_REVISION
 ARG SOURCE_HASH
 LABEL org.opencontainers.image.revision="$SOURCE_REVISION" \
       dev.beam.source-hash="$SOURCE_HASH"
+
+RUN wget "https://github.com/beam-cloud/goproc/releases/download/v${GOPROC_VERSION}/goproc-${GOPROC_VERSION}-linux-${TARGETARCH}" \
+      -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc
 
 COPY --link --from=binaries /out/ /usr/local/bin/
 COPY --link --from=microvm /microvm/bin/ /usr/local/bin/

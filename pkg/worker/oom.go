@@ -42,6 +42,9 @@ func (s *Worker) setupOOMWatcher(
 	if containerRuntime == nil {
 		return
 	}
+	if containerRuntime.Name() == types.ContainerRuntimeMicroVM.String() {
+		go s.watchApplicationOOM(ctx, request, outputLogger, containerRuntime)
+	}
 
 	if containerRuntime.Name() == types.ContainerRuntimeGvisor.String() {
 		if !s.memoryLimitsEnforced(request) {

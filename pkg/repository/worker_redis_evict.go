@@ -120,18 +120,18 @@ func containerStateFromFields(values []interface{}) (*types.ContainerState, bool
 
 // selectEvictionVictims picks reclaimable containers covering a shortfall:
 // lowest EvictOrder first, then not yet running, then newest.
-func (r *WorkerRedisRepository) selectEvictionVictims(ctx context.Context, workerID string, deficitCPU, deficitMemory, deficitGPU int64) ([]evictionVictim, error) {
+func (r *WorkerRedisRepository) selectEvictionVictims(ctx context.Context, worker *types.Worker, deficitCPU, deficitMemory, deficitGPU int64) ([]evictionVictim, error) {
 	if deficitCPU <= 0 && deficitMemory <= 0 && deficitGPU <= 0 {
 		return nil, nil
 	}
-	states, err := r.indexedContainerStates(ctx, workerID)
+	states, err := r.indexedContainerStates(ctx, worker.Id)
 	if err != nil {
 		return nil, err
 	}
-	return chooseVictims(states, workerID, deficitCPU, deficitMemory, deficitGPU)
+	return chooseVictims(states, worker, deficitCPU, deficitMemory, deficitGPU)
 }
 
-func chooseVictims(states []*types.ContainerState, workerID string, deficitCPU, deficitMemory, deficitGPU int64) ([]evictionVictim, error) {
+func chooseVictims(states []*types.ContainerState, worker *types.Worker, deficitCPU, deficitMemory, deficitGPU int64) ([]evictionVictim, error) {
 	type candidate struct {
 		evictionVictim
 		order     int32
@@ -140,7 +140,7 @@ func chooseVictims(states []*types.ContainerState, workerID string, deficitCPU, 
 	}
 	candidates := make([]candidate, 0)
 	for _, state := range states {
-		if !reclaimable(state, workerID) {
+		if !reclaimable(state, worker.Id) {
 			continue
 		}
 		candidates = append(candidates, candidate{
@@ -148,7 +148,7 @@ func chooseVictims(states []*types.ContainerState, workerID string, deficitCPU, 
 				containerID:  state.ContainerId,
 				stateKey:     common.RedisKeys.SchedulerContainerState(state.ContainerId),
 				cpu:          state.Cpu,
-				memory:       capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory}),
+				memory:       capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory, UseVM: worker.Runtime == types.ContainerRuntimeMicroVM.String()}),
 				gpu:          gpuCountForCapacity(state.Gpu, nil, state.GpuCount),
 				drainSeconds: state.DrainSeconds,
 			},

@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
@@ -232,7 +233,11 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	// device and the guest has netfilter, so dockerd runs with its defaults
 	// (overlay2, bridge, iptables) and inner containers get real networking.
 	if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeMicroVM.String() {
-		cmd = []string{"dockerd"}
+		cmd = []string{
+			"dockerd",
+			"--exec-opt=native.cgroupdriver=cgroupfs",
+			"--cgroup-parent=" + strings.TrimPrefix(microvm.WorkloadCgroup, sandboxCgroupRoot),
+		}
 	}
 
 	// dockerd runs in the foreground; waiting here would block readiness checks.

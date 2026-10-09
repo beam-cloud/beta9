@@ -781,7 +781,7 @@ func (r *WorkerRedisRepository) reconcileWorkerCapacity(ctx context.Context, wor
 		return nil
 	}
 
-	usage, err := r.getWorkerReservedCapacity(ctx, worker.Id)
+	usage, err := r.getWorkerReservedCapacity(ctx, worker)
 	if err != nil {
 		return err
 	}
@@ -826,7 +826,8 @@ func (r *WorkerRedisRepository) reconcileStoredWorkerCapacity(ctx context.Contex
 	return nil
 }
 
-func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, workerId string) (workerReservedCapacity, error) {
+func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, worker *types.Worker) (workerReservedCapacity, error) {
+	workerId := worker.Id
 	var usage workerReservedCapacity
 	requestContainerIDs := map[string]struct{}{}
 
@@ -881,7 +882,7 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		if _, queued := requestContainerIDs[state.ContainerId]; queued {
 			continue
 		}
-		usage.addContainerState(state, workerId)
+		usage.addContainerState(state, worker)
 	}
 
 	return usage, nil
@@ -900,13 +901,13 @@ func containerIDFromStateKey(key string) string {
 // worker finishes with it, so it counts as held (the replacement that
 // displaced it counts too; the sum is clamped at the worker's total, which is
 // why free reads zero while a drain is in flight) but never as reclaimable.
-func (c *workerReservedCapacity) addContainerState(state *types.ContainerState, workerID string) {
+func (c *workerReservedCapacity) addContainerState(state *types.ContainerState, worker *types.Worker) {
 	if state == nil {
 		return
 	}
-	memory := capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory})
+	memory := capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory, UseVM: worker.Runtime == types.ContainerRuntimeMicroVM.String()})
 	gpu := gpuCountForCapacity(state.Gpu, nil, state.GpuCount)
-	c.add(state.Cpu, memory, gpu, reclaimable(state, workerID))
+	c.add(state.Cpu, memory, gpu, reclaimable(state, worker.Id))
 }
 
 func (c *workerReservedCapacity) add(cpu, memory int64, gpu uint32, evictable bool) {
@@ -1491,14 +1492,7 @@ func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*typ
 }
 
 func capacityMemoryForRequest(request *types.ContainerRequest) int64 {
-	if request.Memory <= 0 {
-		return request.Memory
-	}
-
-	// Runtime cgroups use a 1.25x hard memory limit over the requested soft
-	// memory. Capacity accounting must reserve that hard limit; otherwise a
-	// worker can be packed past its pod limit before accounting says it is full.
-	return (request.Memory*125 + 99) / 100
+	return request.CapacityMemory()
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType) error {
@@ -1731,7 +1725,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		idleOnlyFits := idleOnlyCPU <= current.FreeCpu && idleOnlyMemory <= current.FreeMemory &&
 			idleOnlyGPU <= int64(current.FreeGpuCount)
 		if len(beneficiaries) > 0 && idleOnlyFits {
-			victims, err = r.selectEvictionVictims(ctx, worker.Id,
+			victims, err = r.selectEvictionVictims(ctx, current,
 				cpu-current.FreeCpu, memory-current.FreeMemory, gpu-int64(current.FreeGpuCount))
 			if err != nil {
 				if errors.Is(err, ErrInsufficientEvictableCapacity) && current.ResourceVersion != worker.ResourceVersion {

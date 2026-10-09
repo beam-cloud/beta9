@@ -1152,12 +1152,22 @@ func TestMicroVMResourcesAndOOM(t *testing.T) {
 	require.Equal(t, 0, code, out)
 	total, err := strconv.Atoi(strings.TrimSpace(out))
 	require.NoError(t, err, out)
-	require.InDelta(t, 512, total, 80, "guest sees roughly the requested memory")
+	require.InDelta(t, 512+(microvm.GuestMemoryHeadroom>>20), total, 80, "guest RAM includes control headroom")
+	code, out = vm.sh(client, `
+cat /sys/fs/cgroup/workload.slice/memory.max
+cat /sys/fs/cgroup/workload.slice/memory.oom.group
+cat /proc/self/cgroup
+cat /proc/$(pidof goproc)/cgroup
+`)
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, "536870912\n0\n", "workload has the requested hard limit and individual-process OOM killing")
+	require.Contains(t, out, "0::/workload.slice/exec", "exec belongs to the workload budget")
+	require.Contains(t, out, "0::/control.slice", "manager is outside the workload budget")
 
 	cgroup := microVMCgroupPath(vm.spec, vm.id)
 	max, err := os.ReadFile(filepath.Join(cgroup, "memory.max"))
 	require.NoError(t, err)
-	require.Equal(t, strconv.FormatInt((512<<20)+microVMMemoryHeadroom, 10), strings.TrimSpace(string(max)))
+	require.Equal(t, strconv.FormatInt((512<<20)+microvm.GuestMemoryHeadroom+microVMMemoryHeadroom, 10), strings.TrimSpace(string(max)))
 	cpuMax, err := os.ReadFile(filepath.Join(cgroup, "cpu.max"))
 	require.NoError(t, err)
 	require.Equal(t, "200000 100000", strings.TrimSpace(string(cpuMax)))
@@ -1165,11 +1175,57 @@ func TestMicroVMResourcesAndOOM(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, strings.TrimSpace(string(procs)), "hypervisor must be in the VM cgroup")
 
-	// Allocating past guest RAM is contained by the guest's own OOM killer;
-	// the VMM (and its cgroup) are unaffected.
+	events, err := rt.Events(context.Background(), vm.id)
+	require.NoError(t, err)
+	heartbeat, err := client.Exec([]string{"sh", "-c", "while :; do echo tick >> /tmp/heartbeat; sleep 0.1; done"}, "/", []string{"PATH=/bin:/usr/bin"}, false)
+	require.NoError(t, err)
+
+	// The allocator exceeds the workload cgroup, while a small CI parent and
+	// an unrelated heartbeat remain alive. The VM retains its original PID.
+	before, err := rt.State(context.Background(), vm.id)
+	require.NoError(t, err)
 	code, out = vm.sh(client, "head -c 1200m /dev/zero | tail; echo exit=$?")
+	require.Equal(t, 0, code, "CI parent must report its child's failure: %s", out)
 	require.Contains(t, out, "exit=137", "guest OOM killer must kill the allocator: %s", out)
 	require.True(t, rt.vms[vm.id].alive(), "VM must survive a guest OOM")
+	select {
+	case event := <-events:
+		require.NotNil(t, event.ApplicationOOM)
+		require.GreaterOrEqual(t, event.ApplicationOOM.Kills, uint64(1))
+		require.Equal(t, int64(512<<20), event.ApplicationOOM.MemoryLimit)
+	case <-time.After(10 * time.Second):
+		t.Fatal("application OOM event was not preserved")
+	}
+	after, err := rt.State(context.Background(), vm.id)
+	require.NoError(t, err)
+	require.Equal(t, before.Pid, after.Pid, "sandbox must not restart")
+	heartbeatStatus, err := client.Status(heartbeat)
+	require.NoError(t, err)
+	require.Equal(t, -1, heartbeatStatus, "unrelated process must keep running")
+	code, out = vm.sh(client, "wc -l < /tmp/heartbeat; echo sandbox-alive")
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, "sandbox-alive", "subsequent exec must work")
+
+	// A direct OOM victim returns a normal completed-process status, preserves
+	// both log streams, and does not remain 'running' after SIGKILL.
+	pid, err := client.Exec([]string{"sh", "-c", `
+echo retained-stdout
+echo retained-stderr >&2
+exec tail /dev/zero
+`}, "/", []string{"PATH=/bin:/usr/bin"}, false)
+	require.NoError(t, err)
+	code, err = client.Wait(pid)
+	require.NoError(t, err)
+	require.Equal(t, 137, code)
+	status, err := client.Status(pid)
+	require.NoError(t, err)
+	require.Equal(t, 137, status)
+	stdout, err := client.Stdout(pid)
+	require.NoError(t, err)
+	stderr, err := client.Stderr(pid)
+	require.NoError(t, err)
+	require.Contains(t, stdout, "retained-stdout")
+	require.Contains(t, stderr, "retained-stderr")
 
 	require.NoError(t, rt.Kill(context.Background(), vm.id, syscall.SIGKILL, nil))
 	vm.wait(30 * time.Second)

@@ -58,6 +58,9 @@ const (
 	containerStartupTimeout        time.Duration = 15 * time.Minute
 	stuckContainerAbortDelay       time.Duration = 2 * time.Minute
 	gvisorShmemTHPPath                           = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
+	gvisorMaxMapCountPath                        = "/proc/sys/vm/max_map_count"
+	// Match runsc's recommended host VMA limit.
+	gvisorMinMaxMapCount int64 = 4194304
 
 	// A draining worker is drained once it has no containers and this long
 	// has passed since both its disable and its last request, so a container
@@ -78,6 +81,24 @@ func ensureGVisorShmemTHP(path string) (bool, error) {
 		return false, nil
 	}
 	if err := os.WriteFile(path, []byte("advise"), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func ensureGVisorMaxMapCount(path string) (bool, error) {
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	current, err := strconv.ParseInt(strings.TrimSpace(string(value)), 10, 64)
+	if err != nil {
+		return false, fmt.Errorf("parse vm.max_map_count: %w", err)
+	}
+	if current >= gvisorMinMaxMapCount {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte(strconv.FormatInt(gvisorMinMaxMapCount, 10)+"\n"), 0644); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -561,6 +582,14 @@ func NewWorker() (_ *Worker, err error) {
 	case types.ContainerRuntimeRunc.String():
 		defaultRuntime = runcRuntime
 	case types.ContainerRuntimeGvisor.String():
+		// Page decommit fragments systrap's host mappings. At Linux's default
+		// VMA limit, even munmap can return ENOMEM and panic the sentry while
+		// the application remains below its memory limit.
+		if changed, err := ensureGVisorMaxMapCount(gvisorMaxMapCountPath); err != nil {
+			return nil, fmt.Errorf("configure gVisor host vm.max_map_count: %w", err)
+		} else if changed {
+			log.Info().Int64("max_map_count", gvisorMinMaxMapCount).Msg("increased host VMA limit for gVisor")
+		}
 		if changed, err := ensureGVisorShmemTHP(gvisorShmemTHPPath); err != nil {
 			log.Warn().Err(err).Msg("failed to enable shmem transparent huge pages for gVisor")
 		} else if changed {

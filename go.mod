@@ -19,7 +19,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.75.3
 	github.com/beam-cloud/clip v0.0.0-20261006212652-48dbe6ab9784
 	github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1
-	github.com/beam-cloud/goproc v0.1.15
+	github.com/beam-cloud/goproc v0.1.16
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
 	github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8
 	github.com/cenkalti/backoff v2.2.1+incompatible

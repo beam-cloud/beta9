@@ -96,21 +96,33 @@ func TestMicroVMResourcesFromSpec(t *testing.T) {
 		Memory: &specs.LinuxMemory{Limit: &limit},
 	}}}
 	assert.Equal(t, 3, microVMVCPUs(spec), "2.5 cores rounds up to 3 vCPUs")
-	assert.Equal(t, limit, microVMMemoryBytes(spec))
+	assert.Equal(t, limit, microVMWorkloadMemoryBytes(spec))
+	assert.Equal(t, limit+microvm.GuestMemoryHeadroom, microVMMemoryBytes(spec))
 	assert.Equal(t, "250000 100000", microVMCPUMax(spec))
 }
 
 func TestMicroVMResourcesFallbacks(t *testing.T) {
 	spec := &specs.Spec{Linux: &specs.Linux{Resources: &specs.LinuxResources{CPU: &specs.LinuxCPU{Cpus: "0-3,8"}}}}
 	assert.Equal(t, 5, microVMVCPUs(spec))
-	assert.Equal(t, int64(microVMDefaultMemoryMiB<<20), microVMMemoryBytes(spec))
+	assert.Equal(t, int64(microVMDefaultMemoryMiB<<20)+microvm.GuestMemoryHeadroom, microVMMemoryBytes(spec))
 	assert.Equal(t, "", microVMCPUMax(spec))
 
 	spec.Annotations = map[string]string{MicroVMVCPUAnnotation: "2", MicroVMMemoryMiBAnnotation: "1025"}
 	assert.Equal(t, 2, microVMVCPUs(spec))
-	assert.Equal(t, int64(1026<<20), microVMMemoryBytes(spec), "memory is rounded up to a 2 MiB multiple")
+	assert.Equal(t, int64(1025<<20), microVMWorkloadMemoryBytes(spec), "the workload budget remains exact")
+	assert.Equal(t, int64(1026<<20)+microvm.GuestMemoryHeadroom, microVMMemoryBytes(spec), "guest RAM includes headroom and rounds to 2 MiB")
 
 	assert.Equal(t, 1, microVMVCPUs(&specs.Spec{Linux: &specs.Linux{}}))
+}
+
+func TestMicroVMWorkloadBudgetExcludesHostBuffer(t *testing.T) {
+	limit := int64(22 << 30)
+	spec := &specs.Spec{
+		Annotations: map[string]string{MicroVMMemoryMiBAnnotation: "16384"},
+		Linux:       &specs.Linux{Resources: &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: &limit}}},
+	}
+	assert.Equal(t, int64(16<<30), microVMWorkloadMemoryBytes(spec))
+	assert.Equal(t, int64(16<<30), microVMGuestSpec(spec, microvm.Network{}, microVMDisk{}, nil, nil).WorkloadMemoryBytes)
 }
 
 func TestMicroVMCgroupPath(t *testing.T) {
