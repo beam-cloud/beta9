@@ -4,15 +4,17 @@
 
 | The code is… | Deploy it as | How |
 |---|---|---|
-| A web server in any language (Django, Rails, Express, Go, …) | container | `dockerfile` (a `./Dockerfile` is picked up automatically) + `ports` |
-| A prebuilt image (`ghcr.io/…`, `grafana/grafana`) | container | `image` + `ports` |
+| A web server in any language (Django, Rails, Express, Go, …) | container | `dockerfile` (a `./Dockerfile` is picked up automatically) |
+| A prebuilt image (`ghcr.io/…`, `grafana/grafana`) | container | `image` |
 | A queue consumer, scheduler, or bot with no HTTP port | worker | `ports: []`; it runs continuously |
 | A Python function with a `{{product}}` decorator (`@endpoint`, `@task_queue`, `@function`, `Pod(...)`) | handler | `handler: "app.py:name"` |
 | Several services, or a `docker-compose.yml` | stack | `stack_from_compose`, then `stack_plan` / `stack_apply` (below) |
 
-Containers listen on the ports you pass; the platform routes HTTPS to each and
-gives the app a URL. Without `ports`, a Dockerfile's `EXPOSE` is used, and an
-image defaults to 8000, so pass the port an image really binds.
+Containers listen on the ports you pass; the platform routes public HTTPS to
+each, and the first gets the app's URL. Without `ports`, the deploy uses the
+`EXPOSE` of the image, or of the Dockerfile stage it builds (base images
+included), and says so in its `notes`; with no `EXPOSE` the app gets 8000 and
+`PORT` is set to it. Pass `ports` when the server binds something else.
 
 Pass `tcp: true` only when every port is raw TCP (SSH, a database). A server
 with one HTTP port and other native ports (ClickHouse: HTTP 8123, native
@@ -43,11 +45,18 @@ deploy {
 Always pass `directory` as the project's absolute path; the default is the
 MCP server's working directory, which is not necessarily the project.
 
-The call returns a `job_id` after ~20 s; poll `deploy_status` with
-`wait_seconds: 50` and the returned `log_cursor` until `status` is
-`deployed` (then `url` is set) or `failed` (then `error` says why). When a
-new app answers 503, read its `logs` (`stream: system` shows container
-exits) before changing anything.
+The call returns a `job_id`. Call `deploy_status` with `wait_seconds: 55` and
+the returned `log_cursor`: it returns as soon as the job settles, with the
+newest build lines, as `accepted` (the platform took the deployment; `url` is
+set) or `failed` (`error` says why); while it is `running`, call it again.
+Retrying `deploy` with the same `idempotency_key` and request returns the
+same job; one that failed before deploying anything runs again.
+
+Accepted is not serving yet. `wait_deployment` checks the new version: a
+container is ready once `/` answers below 500 (a 404 or a login redirect
+still means its server is up); pass `path` when the app has a health
+endpoint, which must answer 2xx. When a new app answers 503, read its `logs`
+(`stream: system` shows container exits) before changing anything.
 
 ## From the CLI
 
@@ -104,7 +113,12 @@ docker-compose.prod.yml up`), pass the others in `files`.
 - `http://minio:9000`, `redis:6379`, `DB_HOST=db`, and
   `localhost:<published port>` in env become references; ports others need
   are exposed. A host setting gains the matching port (and, for a managed
-  database, password) setting.
+  database, password) setting. A port compose publishes only on `127.0.0.1`
+  stays unexposed unless another service or a health check needs it.
+- An application without ports gets its image's `EXPOSE` at plan time.
+  Images on hosts that only proxy Docker Hub (`docker.langfuse.com`,
+  `docker.n8n.io`) are pulled from Docker Hub itself: those proxies share
+  one anonymous rate limit.
 - Proxies that drive containers through the Docker socket (Traefik) and
   `base` services others only extend are left out.
 - Named volumes become durable disks (one app each). Bind-mounted files are
@@ -140,6 +154,16 @@ until it reports `Stack applied`. Applications in a stack run continuously
 (`min_replicas: 1`) unless their deploy sets `min_replicas` or
 `keep_warm_seconds`.
 
+Each `stack_apply` returns every service's status, with the newest build or
+container logs for one still starting. A service the platform never accepted
+(a failed build, a rejected config) is `failed`: fix the spec and plan again.
+One it accepted that never became ready is `uncertain`: read its `logs`, then
+`stack_resolve` it or apply a corrected plan. Planning again keeps
+applications and jobs whose spec and source are unchanged and that still run
+or have completed, so fixing one service redeploys only that one; name
+services in `redeploy` to rebuild them anyway (an image tag that moved).
+Changed jobs rerun, so migrations must be idempotent.
+
 ## Writing the Dockerfile when there is none
 
 Generate a conventional one for the framework and commit it; do not invent a
@@ -163,7 +187,11 @@ Framework notes:
 
 ## After the first deploy
 
-- Read back with `get_app` (MCP): config, env, URL.
-- Give the user the URL and what to expect (first request may cold start).
+- Read back with `get_app` (MCP): config, env, URLs. `url` is that version's
+  own address; `latest_url` follows each new deploy (a multi-port container
+  has one per port in `port_urls`).
+- Give the user the latest URL and what to expect (first request may cold
+  start). Every container URL is public, so an admin console or a database
+  port needs its own password or token.
 - If the app needs its own URL in env (callbacks, `ALLOWED_HOSTS`), set it as
   `${{app.<name>.URL}}` with `set_env`; the platform fills it in.

@@ -67,12 +67,14 @@ The shape is always the same; only the framework details change:
    name such as `<app>-db`. Credentials become secrets; you never see or copy
    them.
 2. **Deploy the app** from its directory: MCP `deploy` with `name`, the
-   `dockerfile` (or `image`, or a `handler`), `ports: [<port the server binds>]`,
-   and `env` that includes `DATABASE_URL: "${{db.<app>-db.DATABASE_URL}}"`.
-   From a terminal that is `{{cli}} deploy --dockerfile Dockerfile --name <app>
-   --port <port> --env DATABASE_URL='${{db.<app>-db.DATABASE_URL}}'`.
-3. **Wait**: poll `deploy_status` (or `{{cli}} deployment wait <id>`). Builds
-   take a minute or two the first time.
+   `dockerfile` (or `image`, or a `handler`), `ports` when the server binds a
+   port its image does not `EXPOSE`, and `env` that includes
+   `DATABASE_URL: "${{db.<app>-db.DATABASE_URL}}"`. From a terminal that is
+   `{{cli}} deploy --dockerfile Dockerfile --name <app> --port <port> --env
+   DATABASE_URL='${{db.<app>-db.DATABASE_URL}}'`.
+3. **Wait**: `deploy_status` until `accepted`, then `wait_deployment` until
+   the new version serves (or `{{cli}} deployment wait <id>`). Builds take a
+   minute or two the first time.
 4. **Wire anything else** with `connect_services` or `set_env`; each call
    deploys a new version.
 5. **Group** with `create_stack` (name it after the project) so the user sees
@@ -96,7 +98,8 @@ project, deploy a **stack** instead of wiring apps by hand:
 3. `stack_plan { "name": "<project>", "spec": ... }`, show the user the plan,
    then call `stack_apply { "plan_id": ... }` repeatedly until it says
    `Stack applied`; each call advances one step. A failed service names its
-   error; read its logs, fix the spec, plan again, and apply the new plan.
+   error; read its logs, fix the spec, plan again, and apply the new plan,
+   which keeps the services that did not change.
 
 See [references/deploy.md](references/deploy.md#docker-compose-projects).
 
