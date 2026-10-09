@@ -510,6 +510,20 @@ def test_recording_selects_mp4_for_extensionless_paths(sandbox_vm, monkeypatch):
     assert sandbox.process.exec.call_args.args[-3:] == ("-f", "mp4", "/workspace/extensionless")
 
 
+def test_desktop_timeout_cancels_command_and_preserves_wait_error(sandbox_vm):
+    vm, sandbox = sandbox_vm
+    vm.info["spec"]["desktop"] = True
+    process = sandbox.process.exec.return_value
+    error = SandboxProcessError("did not exit within 30 seconds")
+    process.wait.side_effect = error
+    process.kill.side_effect = SandboxProcessError("already exited")
+    with pytest.raises(SandboxProcessError) as raised:
+        vm.desktop.screen_size()
+    assert raised.value is error
+    process.kill.assert_called_once()
+    process.stderr.read.assert_not_called()
+
+
 def test_creation_retry_freezes_caller_owned_metadata_and_lists():
     selected = service()
     selected.http.json.side_effect = [

@@ -4,6 +4,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from ...exceptions import SandboxProcessError
+
 
 class VMDesktop:
     def __init__(self, vm):
@@ -17,7 +19,15 @@ class VMDesktop:
 
     def _run(self, *args, stdin=None):
         process = self._sandbox().process.exec(*args, cwd="/", stdin=stdin)
-        if process.wait(30) != 0:
+        try:
+            code = process.wait(30)
+        except SandboxProcessError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            raise
+        if code != 0:
             raise RuntimeError(process.stderr.read() or f"Desktop command failed: {args[0]}")
         return process.stdout.read().strip()
 
@@ -58,7 +68,10 @@ class VMDesktop:
 
     @staticmethod
     def _move(x, y):
-        return ["mousemove", "--sync", str(int(x)), str(int(y))]
+        # --sync waits for a motion event forever when the pointer is already
+        # at these coordinates. X requests are ordered, including a following
+        # click or drag, so ordinary mousemove also handles repeated positions.
+        return ["mousemove", str(int(x)), str(int(y))]
 
     def move_mouse(self, x: int, y: int):
         self._run("xdotool", *self._move(x, y))

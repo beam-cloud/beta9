@@ -39,6 +39,25 @@ address=route.getsockname()[0];route.close()
 http.server.ThreadingHTTPServer((address,8000),Handler).serve_forever()
 """
 
+# The desktop image already includes GTK for its browser. A tiny native entry
+# tests clipboard input without depending on browser onboarding or terminal
+# shortcut bindings. Its window title exposes the actual widget's UTF-8 value.
+DESKTOP_INPUT = """import ctypes
+g=ctypes.CDLL('libgtk-3.so.0');o=ctypes.CDLL('libgobject-2.0.so.0')
+g.gtk_init.argtypes=[ctypes.c_void_p,ctypes.c_void_p]
+g.gtk_window_new.restype=g.gtk_entry_new.restype=ctypes.c_void_p
+g.gtk_container_add.argtypes=[ctypes.c_void_p,ctypes.c_void_p]
+g.gtk_window_set_title.argtypes=[ctypes.c_void_p,ctypes.c_char_p]
+g.gtk_widget_show_all.argtypes=[ctypes.c_void_p]
+g.gtk_entry_get_text.argtypes=[ctypes.c_void_p];g.gtk_entry_get_text.restype=ctypes.c_char_p
+o.g_signal_connect_data.argtypes=[ctypes.c_void_p,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_int]
+g.gtk_init(None,None);w=g.gtk_window_new(0);entry=g.gtk_entry_new()
+callback=ctypes.CFUNCTYPE(None,ctypes.c_void_p,ctypes.c_void_p)(lambda e,_:g.gtk_window_set_title(w,b'AuditInput:'+g.gtk_entry_get_text(e)))
+o.g_signal_connect_data(entry,b'changed',callback,None,None,0)
+g.gtk_window_set_title(w,b'AuditInputReady');g.gtk_container_add(w,entry)
+g.gtk_widget_show_all(w);g.gtk_main()
+"""
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -293,7 +312,13 @@ def main():
         )
 
         execute("systemctl", "restart", "audit-web.service")
-        assert web(headers=headers).json()["boot"] != after["boot"]
+        for _ in range(20):
+            restarted = web(headers=headers)
+            if restarted.status_code == 200:
+                break
+            time.sleep(0.25)
+        assert restarted.status_code == 200
+        assert restarted.json()["boot"] != after["boot"]
         passed("interface_bound_service_restart_after_warm_resume")
 
         vm.stop()
@@ -322,31 +347,23 @@ def main():
         vm.desktop.click(200, 200)
         vm.desktop.scroll()
         text = "Unicode: café 日本語 👋"
-        entry = vm.desktop.launch(
-            "xterm",
-            "-title",
-            "AuditInput",
-            "-xrm",
-            "XTerm*VT100.translations: #override Ctrl <Key>v: insert-selection(CLIPBOARD)",
-            "-e",
-            "python3",
-            "-c",
-            "import pathlib,sys; pathlib.Path('/workspace/audit-input.txt').write_text(sys.stdin.readline().rstrip('\\n'))",
-        )
+        input_app = vm.desktop.launch("python3", "-c", DESKTOP_INPUT)
         execute(
+            "timeout",
+            "20",
             "xdotool",
             "search",
             "--sync",
             "--name",
-            "^AuditInput$",
+            "^AuditInputReady$",
             "windowactivate",
             "--sync",
         )
         vm.desktop.write(text)
-        vm.desktop.press("Return")
-        assert entry.wait(30) == 0
-        assert vm.fs.read_text("/workspace/audit-input.txt") == text
+        title = execute("xdotool", "getwindowfocus", "getwindowname")
+        assert "AuditInput:" + text in title, title
         assert execute("xclip", "-selection", "clipboard", "-out") == text
+        input_app.kill()
         recording = vm.desktop.record("/workspace/audit.mp4", fps=15)
         time.sleep(3)
         vm.desktop.stop_recording(recording)
