@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -166,6 +167,20 @@ func (s *WorkerRepositoryService) AddContainerToWorker(ctx context.Context, req 
 // it owns the container's failure reporting.
 func (s *WorkerRepositoryService) ClaimContainer(ctx context.Context, req *pb.ClaimContainerRequest) (*pb.ClaimContainerResponse, error) {
 	logger := log.With().Str("pool_name", req.PoolName).Str("hostname", req.PodHostname).Str("worker_id", req.WorkerId).Str("container_id", req.ContainerId).Logger()
+	if req.WorkerAddress != nil && req.WorkerAddress.ContainerId != req.ContainerId {
+		return &pb.ClaimContainerResponse{ErrorMsg: "worker address must belong to the claimed container"}, nil
+	}
+	if req.WorkerAddress != nil && req.WorkerAddress.Route != nil {
+		route := req.WorkerAddress.Route
+		if route.WorkerId != req.WorkerId || route.Kind != types.BackendRouteKindWorker || route.ContainerId != "" {
+			return &pb.ClaimContainerResponse{ErrorMsg: "worker route must belong to the claiming worker"}, nil
+		}
+	}
+	if network := req.Network; network != nil {
+		if network.ToContainerId != req.ContainerId || req.WorkerId == "" || !strings.HasPrefix(network.FromContainerId, "network-slot:"+req.WorkerId+":") {
+			return &pb.ClaimContainerResponse{ErrorMsg: "network reservation must belong to the claiming worker and container"}, nil
+		}
+	}
 
 	if err := s.workerRepo.AddContainerToWorker(req.WorkerId, req.ContainerId, req.DeliveryToken); err != nil {
 		logger.Warn().Err(err).Msg("container claim rejected")
@@ -199,6 +214,10 @@ func (s *WorkerRepositoryService) ClaimContainer(ctx context.Context, req *pb.Cl
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	resp.State = containerStateToProto(state)
+	if req.WorkerAddress != nil && req.WorkerAddress.Route != nil && req.WorkerAddress.Route.WorkspaceId != state.WorkspaceId {
+		resp.ErrorMsg = "worker route must belong to the container workspace"
+		return resp, nil
+	}
 
 	if req.Credentials != nil {
 		resp.Credentials = s.vendRuntimeCredentials(ctx, req.Credentials, state)
@@ -206,6 +225,23 @@ func (s *WorkerRepositoryService) ClaimContainer(ctx context.Context, req *pb.Cl
 			resp.ErrorMsg = resp.Credentials.ErrorMsg
 			return resp, nil
 		}
+	}
+	// The source reservation still owns the IP until this accepted claim
+	// moves it. A retry uses the same source, destination and IP fence.
+	if state.Status != types.ContainerStatusStopping {
+		if network := req.Network; network != nil {
+			if err := s.workerRepo.MoveContainerIp(network.NetworkPrefix, network.FromContainerId, network.ToContainerId, network.IpAddress); err != nil {
+				resp.ErrorMsg = err.Error()
+				return resp, nil
+			}
+		}
+		if req.WorkerAddress != nil {
+			if err := publishWorkerAddress(ctx, s.containerRepo, req.WorkerAddress); err != nil {
+				resp.ErrorMsg = err.Error()
+				return resp, nil
+			}
+		}
+		resp.StartupPrepared = true
 	}
 
 	logger.Info().Msg("container claimed by worker")

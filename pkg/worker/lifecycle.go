@@ -956,6 +956,9 @@ func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.Conta
 }
 
 func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerRequest) error {
+	if instance, ok := s.containerInstances.Get(request.ContainerId); ok && instance.workerAddressPublished.Load() {
+		return nil
+	}
 	hostname := joinHostPort(s.podAddr, s.containerServer.port)
 	startedAt := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(ctx, &pb.SetWorkerAddressRequest{

@@ -168,6 +168,7 @@ func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManage
 }
 
 type ContainerInstance struct {
+	workerAddressPublished     atomic.Bool
 	Id                         string
 	StubId                     string
 	BundlePath                 string

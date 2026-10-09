@@ -2,6 +2,7 @@ syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beta9/proto";
 import "types.proto";
+import "container_repo.proto";
 
 service WorkerRepositoryService {
   rpc GetNextContainerRequest(GetNextContainerRequestRequest)
@@ -166,6 +167,10 @@ message ClaimContainerRequest {
   string delivery_token = 5;
   // Optional. When set, credentials are vended after the claim succeeds.
   GetContainerRuntimeCredentialsRequest credentials = 6;
+  // Optional startup resources. They are published only after delivery is
+  // accepted; older gateways ignore them and the worker publishes them itself.
+  SetWorkerAddressRequest worker_address = 7;
+  MoveContainerIpRequest network = 8;
 }
 
 message ClaimContainerResponse {
@@ -177,6 +182,7 @@ message ClaimContainerResponse {
   bool claimed = 3;
   types.ContainerState state = 4;
   GetContainerRuntimeCredentialsResponse credentials = 5;
+  bool startup_prepared = 6;
 }
 
 message RemoveContainerFromWorkerRequest {

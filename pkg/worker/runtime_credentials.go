@@ -31,6 +31,20 @@ func (s *Worker) claimContainer(ctx context.Context, request *types.ContainerReq
 		DeliveryToken: request.DeliveryToken,
 		Credentials:   runtimeCredentialsRequest(request),
 	}
+	var network *networkClaim
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if preparer, ok := s.containerNetworkManager.(networkClaimPreparer); ok {
+			network = preparer.prepareNetworkClaim(request.ContainerId)
+			if network != nil {
+				claim.Network = network.request()
+				defer network.close()
+			}
+		}
+	}
+	if s.containerServer != nil && s.podAddr != "" {
+		address := joinHostPort(s.podAddr, s.containerServer.port)
+		claim.WorkerAddress = &pb.SetWorkerAddressRequest{ContainerId: request.ContainerId, Address: address, Route: s.backendRouteFor(request, types.BackendRouteKindWorker, 0, address)}
+	}
 
 	var resp *pb.ClaimContainerResponse
 	for {
@@ -66,6 +80,17 @@ func (s *Worker) claimContainer(ctx context.Context, request *types.ContainerReq
 	if resp.State != nil && types.ContainerStatus(resp.State.Status) == types.ContainerStatusStopping {
 		// A stop raced the claim. The observed-stop path cancels startup.
 		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
+		return true, nil
+	}
+	if network != nil {
+		if err := network.commit(resp.StartupPrepared); err != nil {
+			return true, err
+		}
+	}
+	if claim.WorkerAddress != nil && resp.StartupPrepared {
+		if instance, ok := s.containerInstances.Get(request.ContainerId); ok {
+			instance.workerAddressPublished.Store(true)
+		}
 	}
 	return true, nil
 }

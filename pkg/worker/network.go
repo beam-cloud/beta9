@@ -1187,6 +1187,12 @@ func (m *ContainerNetworkManager) releaseUnusedNetworkSlotWithContext(ctx contex
 }
 
 func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId string, spec *specs.Spec, request *types.ContainerRequest) (bool, error) {
+	m.slotMu.Lock()
+	claimedSlot := m.containerSlots[containerId]
+	m.slotMu.Unlock()
+	if claimedSlot != nil {
+		return true, m.installPreallocatedNetworkSlot(containerId, claimedSlot, spec, request)
+	}
 	var slot *containerNetworkSlot
 	discardedSlots := 0
 	for attempts := 0; attempts < containerNetworkSlotAcquireAttempts; attempts++ {
@@ -1238,7 +1244,10 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 	if err != nil {
 		return true, errors.Join(err, m.discardNetworkSlot(containerId, slot, true))
 	}
+	return true, m.installPreallocatedNetworkSlot(containerId, slot, spec, request)
+}
 
+func (m *ContainerNetworkManager) installPreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot, spec *specs.Spec, request *types.ContainerRequest) error {
 	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
 		Type: specs.NetworkNamespace,
 		Path: slot.netnsPath,
@@ -1255,11 +1264,11 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 
 	log.Debug().Str("container_id", containerId).Str("ip_address", slot.ip).Str("network_slot", slot.id).Msg("container preallocated network slot assigned")
 	if err := m.setupNetworkRestrictions(containerId, request); err != nil {
-		return true, errors.Join(err, m.rollbackPreallocatedNetworkSlotAssignment(containerId, slot))
+		return errors.Join(err, m.rollbackPreallocatedNetworkSlotAssignment(containerId, slot))
 	}
 
 	go m.fillNetworkSlotPool()
-	return true, nil
+	return nil
 }
 
 // prepareNetworkSlotForAssignment confirms the slot's namespace and host veth
