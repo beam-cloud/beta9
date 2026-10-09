@@ -26,6 +26,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -127,6 +128,7 @@ type Worker struct {
 	completedRequests       chan *types.ContainerRequest
 	stopContainerChan       chan stopContainerEvent
 	workerRepoClient        pb.WorkerRepositoryServiceClient
+	repositoryConn          *grpc.ClientConn
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	backendRepoClient       pb.BackendRepositoryServiceClient
 	eventRepo               repo.EventRepository
@@ -484,27 +486,24 @@ func NewWorker() (_ *Worker, err error) {
 	}
 	config := configManager.GetConfig()
 
-	containerRepoClient, err := NewContainerRepositoryClient(context.TODO(), config, workerToken)
+	// The delivery stream keeps this authenticated HTTP/2 connection live.
+	// Repository RPCs share it instead of paying for independent idle transports.
+	repositoryConn, err := newRepositoryConn(config, workerToken)
 	if err != nil {
 		return nil, err
 	}
-
-	workerRepoClient, err := NewWorkerRepositoryClient(context.TODO(), config, workerToken)
-	if err != nil {
-		return nil, err
-	}
-
-	backendRepoClient, err := NewBackendRepositoryClient(context.TODO(), config, workerToken)
-	if err != nil {
-		return nil, err
-	}
-
+	initialized := false
+	defer func() {
+		if !initialized {
+			_ = repositoryConn.Close()
+		}
+	}()
+	containerRepoClient := pb.NewContainerRepositoryServiceClient(repositoryConn)
+	workerRepoClient := pb.NewWorkerRepositoryServiceClient(repositoryConn)
+	backendRepoClient := pb.NewBackendRepositoryServiceClient(repositoryConn)
 	var thunderClient pb.ThunderServiceClient
 	if gpuVirtualized {
-		thunderClient, err = NewThunderServiceClient(context.TODO(), config, workerToken)
-		if err != nil {
-			return nil, err
-		}
+		thunderClient = pb.NewThunderServiceClient(repositoryConn)
 	}
 
 	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
@@ -704,6 +703,7 @@ func NewWorker() (_ *Worker, err error) {
 			workerID:           workerId,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
+		repositoryConn:      repositoryConn,
 		containerRepoClient: containerRepoClient,
 		workerRepoClient:    workerRepoClient,
 		backendRepoClient:   backendRepoClient,
@@ -778,6 +778,7 @@ func NewWorker() (_ *Worker, err error) {
 	worker.workerUsageMetrics = workerMetrics
 	worker.containerServer = containerServer
 
+	initialized = true
 	return worker, nil
 }
 
@@ -1712,6 +1713,9 @@ func (s *Worker) startup() error {
 }
 
 func (s *Worker) shutdown() error {
+	if s.repositoryConn != nil {
+		defer s.repositoryConn.Close()
+	}
 	log.Info().Msg("shutting down")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
