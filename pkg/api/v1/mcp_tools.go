@@ -37,6 +37,10 @@ func protoMap(m proto.Message) map[string]any {
 // configView is the part of a stub config an agent acts on.
 var configView = []string{"runtime", "autoscaler", "keep_warm_seconds", "workers", "concurrent_requests", "max_pending_tasks", "task_policy", "env", "ports", "tcp", "authorized", "entry_point", "volumes", "disks", "pool"}
 
+// podUnusedConfig is the part of configView a pod never reads: it serves its
+// ports rather than running tasks.
+var podUnusedConfig = []string{"workers", "concurrent_requests", "max_pending_tasks", "task_policy"}
+
 func (g *MCPGroup) deploymentURL(d *types.DeploymentWithRelated) string {
 	url, _ := g.gws.DeploymentURL(d)
 	return url
@@ -217,7 +221,7 @@ func (g *MCPGroup) catalog() []mcpTool {
 		{Name: "get_deployment", Description: "One deployment version: active, URL, stub.", Schema: target, Run: g.getDeployment},
 		{
 			Name:        "redeploy",
-			Description: "Deploy an existing configuration again, or roll back using an older deployment_id. Choose rollout=replace to retire previous revisions; auto preserves them.",
+			Description: "Deploy an existing configuration again, which restarts an app on fresh containers that read current secrets, or roll back using an older deployment_id. Choose rollout=replace to retire previous revisions; auto preserves them.",
 			Schema: schema(props{
 				"name":          str("App name"),
 				"deployment_id": str("Specific configuration to deploy"),
@@ -291,7 +295,7 @@ func (g *MCPGroup) catalog() []mcpTool {
 		},
 		{Name: "delete_stack", Description: "Delete a stack; its apps are untouched.", Schema: name, Destructive: true, Run: g.deleteStack},
 		// observe
-		{Name: "logs", Description: "Recent logs, newest last. By app name (every version), or one deployment, stub, task or container. Each line carries its stream: stdout, stderr or system (container lifecycle: image pulls, mounts, exits); `stream` keeps one of them out of the `tail` newest lines.", Schema: schema(props{"name": str("App name"), "deployment_id": str(""), "stub_id": str(""), "task_id": str(""), "container_id": str(""), "tail": integer(100), "since_minutes": integer(0), "search": str("Substring filter"), "stream": logStream}), Run: g.logs},
+		{Name: "logs", Description: "Recent logs, newest last. By app name (every version), or one deployment, stub, task or container. Each line carries its stream: stdout, stderr or system (the worker's notes: failed or slow image loads, mount and checkpoint problems; a healthy start writes none); `stream` keeps one of them out of the `tail` newest lines.", Schema: schema(props{"name": str("App name"), "deployment_id": str(""), "stub_id": str(""), "task_id": str(""), "container_id": str(""), "tail": integer(100), "since_minutes": integer(0), "search": str("Substring filter"), "stream": logStream}), Run: g.logs},
 		{Name: "list_tasks", Description: "Recent tasks (invocations), newest first.", Schema: schema(props{"stub_id": str(""), "status": str("Comma-separated: pending, running, complete, error, cancelled, timeout"), "limit": integer(20)}), Run: g.listTasks},
 		{
 			Name:        "get_task",
@@ -371,11 +375,20 @@ func (g *MCPGroup) getApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	if err != nil {
 		return nil, err
 	}
+	out := g.deploymentView(d)
+	out["config"] = appConfigView(d.Stub.Type, cfg)
+	return out, nil
+}
+
+func appConfigView(stubType types.StubType, cfg *types.StubConfigV1) map[string]any {
 	raw, _ := json.Marshal(cfg)
 	var full map[string]any
 	_ = json.Unmarshal(raw, &full)
 	view := make(map[string]any, len(configView)+1)
 	for _, key := range configView {
+		if stubType.Kind() == types.StubTypePod && slices.Contains(podUnusedConfig, key) {
+			continue
+		}
 		if v, ok := full[key]; ok {
 			view[key] = v
 		}
@@ -385,9 +398,7 @@ func (g *MCPGroup) getApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 		bindings = append(bindings, map[string]string{"name": s.Name, "env_name": cmp.Or(s.EnvName, s.Name)})
 	}
 	view["secrets"] = bindings
-	out := g.deploymentView(d)
-	out["config"] = view
-	return out, nil
+	return view
 }
 
 func (g *MCPGroup) deleteApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
@@ -719,6 +730,11 @@ func databaseView(info types.DatabaseServiceInfo) map[string]any {
 	raw, _ := json.Marshal(info)
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
+	for key, value := range out {
+		if value == "" {
+			delete(out, key)
+		}
+	}
 	return out
 }
 

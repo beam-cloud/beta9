@@ -18,6 +18,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/lib/pq"
@@ -708,9 +709,21 @@ func (gws *GatewayService) ListDatabaseServices(ctx context.Context, authInfo *a
 	for name, versions := range byName {
 		d := newestDeployment(versions)
 		product := databaseProducts[databaseKind(&d.Stub)]
-		out = append(out, databaseInfo(product, databaseSecrets(product, name), d))
+		info := databaseInfo(product, databaseSecrets(product, name), d)
+		info.Host = gws.deploymentTCPHost(d, product.Port)
+		out = append(out, info)
 	}
 	return out, nil
+}
+
+// deploymentTCPHost is the TCP gateway address of one port of a loaded deployment.
+func (gws *GatewayService) deploymentTCPHost(d *types.DeploymentWithRelated, port uint32) string {
+	config, err := d.Stub.UnmarshalConfig()
+	if err != nil || !config.TCP {
+		return ""
+	}
+	raw := common.BuildPodDeploymentURL(gws.appConfig.Abstractions.Pod.TCP.GetExternalURL(), common.InvokeUrlTypeHost, &d.Deployment, config)
+	return tcpHostFromURL(strings.ReplaceAll(raw, common.PortPlaceholder, strconv.FormatUint(uint64(port), 10)))
 }
 
 // databaseInfo is the public view of one database deployment.

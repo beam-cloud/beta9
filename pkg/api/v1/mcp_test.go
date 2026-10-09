@@ -71,6 +71,24 @@ func TestMCPCallGates(t *testing.T) {
 	require.Equal(t, -32602, resp.Error.Code)
 }
 
+// A pod serves its ports, so the task settings its stub config carries anyway
+// stay out of its view.
+func TestMCPAppConfigView(t *testing.T) {
+	cfg := &types.StubConfigV1{Workers: 1, ConcurrentRequests: 1, KeepWarmSeconds: 600, Ports: []uint32{3001}}
+
+	pod := appConfigView(types.StubType(types.StubTypePodDeployment), cfg)
+	for _, key := range podUnusedConfig {
+		require.NotContains(t, pod, key)
+	}
+	require.Contains(t, pod, "keep_warm_seconds")
+	require.Contains(t, pod, "autoscaler")
+	require.Contains(t, pod, "ports")
+
+	endpoint := appConfigView(types.StubType(types.StubTypeEndpointDeployment), cfg)
+	require.Contains(t, endpoint, "workers")
+	require.Contains(t, endpoint, "task_policy")
+}
+
 // A container is up once its own server answers /, whatever it answers short of
 // a server error or the gateway's 429; a named path, or a runner's /health,
 // must answer 2xx.
@@ -92,6 +110,23 @@ func TestMCPReadinessCheck(t *testing.T) {
 	path, serving = readinessCheck("endpoint", "")
 	require.Equal(t, "/health", path)
 	require.False(t, serving(answer(404)))
+}
+
+// A request the deadline cut off before the app answered has no status: the
+// default 200 would read as a crash-looping app serving.
+func TestMCPCancelledResult(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	unanswered := (&boundedResponse{header: http.Header{}}).result(ctx)
+	require.NotContains(t, unanswered, "status")
+	require.Equal(t, "CANCELLED", unanswered["code"])
+	require.Contains(t, unanswered["error"], "no answer before the deadline")
+
+	started := &boundedResponse{header: http.Header{}}
+	started.WriteHeader(http.StatusAccepted)
+	require.Equal(t, http.StatusAccepted, started.result(ctx)["status"])
+	require.Equal(t, "CANCELLED", started.result(ctx)["code"])
 }
 
 // A readiness answer can be a whole page; what an agent reads of it is bounded.
@@ -180,4 +215,8 @@ func TestMCPApiInProcess(t *testing.T) {
 	out, err = g.apiRoutes(ctx, a, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"GET /api/v1/thing/{ws}", "POST /api/v1/thing/{ws}"}, out.(map[string]any)["routes"])
+
+	out, err = g.apiRoutes(ctx, a, toolArgs{"path": "/api/v1/other"})
+	require.NoError(t, err)
+	require.Empty(t, out.(map[string]any)["routes"])
 }
