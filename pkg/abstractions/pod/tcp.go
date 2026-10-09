@@ -2,6 +2,7 @@ package pod
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -170,7 +171,7 @@ func (pts *PodTCPServer) acceptConnections() {
 }
 
 func (pts *PodTCPServer) handleConnection(conn net.Conn) {
-	tlsReadyConn, err := preparePostgresAwareTLSConn(conn)
+	tlsReadyConn, postgres, err := preparePostgresAwareTLSConn(conn)
 	if err != nil {
 		conn.Close()
 		return
@@ -180,6 +181,17 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return
+	}
+	var client net.Conn = tlsConn
+	if postgres || tlsConn.ConnectionState().NegotiatedProtocol == postgresALPN {
+		_ = tlsConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		startup, err := readPostgresStartup(tlsConn)
+		_ = tlsConn.SetReadDeadline(time.Time{})
+		if err != nil {
+			conn.Close()
+			return
+		}
+		client = &postgresClientConn{Conn: tlsConn, startup: startup}
 	}
 
 	// Route based on SNI, if not available we just close the connection
@@ -193,7 +205,7 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	}
 
 	sniMiddleware := pts.createSNIMiddleware(tcpHandler)
-	if err := sniMiddleware(tlsConn); err != nil {
+	if err := sniMiddleware(client); err != nil {
 		log.Error().Err(err).Msg("connection handler error")
 	}
 }
@@ -236,36 +248,106 @@ func (c *bufferedReadConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-func preparePostgresAwareTLSConn(conn net.Conn) (net.Conn, error) {
+// preparePostgresAwareTLSConn answers a PostgreSQL SSLRequest, reporting that
+// one came, and returns the connection positioned at its TLS handshake.
+func preparePostgresAwareTLSConn(conn net.Conn) (net.Conn, bool, error) {
 	reader := bufio.NewReader(conn)
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	defer conn.SetReadDeadline(time.Time{})
 
 	first, err := reader.Peek(1)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if first[0] == 0x16 {
-		return &bufferedReadConn{Conn: conn, reader: reader}, nil
+		return &bufferedReadConn{Conn: conn, reader: reader}, false, nil
 	}
 
 	header, err := reader.Peek(8)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if binary.BigEndian.Uint32(header[0:4]) != 8 ||
 		binary.BigEndian.Uint32(header[4:8]) != postgresSSLRequestCode {
-		return nil, fmt.Errorf("connection did not start with TLS or PostgreSQL SSLRequest")
+		return nil, false, fmt.Errorf("connection did not start with TLS or PostgreSQL SSLRequest")
 	}
 
 	if _, err := io.ReadFull(reader, make([]byte, 8)); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if _, err := conn.Write([]byte("S")); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return &bufferedReadConn{Conn: conn, reader: reader}, nil
+	return &bufferedReadConn{Conn: conn, reader: reader}, true, nil
+}
+
+// postgresStartupMaxLength is the server's limit on a startup message.
+const postgresStartupMaxLength = 10000
+
+// readPostgresStartup reads a PostgreSQL client's first message and drops its
+// ssl* startup parameters. libpq's sslmode and sslrootcert are client settings
+// that drivers such as postgres.js forward from the connection URL, and the
+// server's ssl settings are not a client's to set: the server ends the
+// connection over any of them. Dotted names are extension settings and stay.
+// Other messages, such as a cancel request, pass unchanged.
+func readPostgresStartup(r io.Reader) ([]byte, error) {
+	header := make([]byte, 8)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return nil, err
+	}
+	length := binary.BigEndian.Uint32(header[0:4])
+	if length <= 8 || length > postgresStartupMaxLength {
+		return header, nil
+	}
+	body := make([]byte, length-8)
+	if _, err := io.ReadFull(r, body); err != nil {
+		return nil, err
+	}
+	message := append(header, body...)
+	if binary.BigEndian.Uint32(header[4:8])>>16 != 3 {
+		return message, nil
+	}
+
+	var kept []byte
+	params := body
+	for len(params) > 0 && params[0] != 0 {
+		name, rest, ok := bytes.Cut(params, []byte{0})
+		if !ok {
+			return message, nil
+		}
+		value, rest, ok := bytes.Cut(rest, []byte{0})
+		if !ok {
+			return message, nil
+		}
+		if !bytes.HasPrefix(name, []byte("ssl")) || bytes.Contains(name, []byte(".")) {
+			kept = append(append(append(append(kept, name...), 0), value...), 0)
+		}
+		params = rest
+	}
+	if len(params) != 1 {
+		return message, nil
+	}
+	filtered := make([]byte, 8, 8+len(kept)+1)
+	binary.BigEndian.PutUint32(filtered[0:4], uint32(cap(filtered)))
+	copy(filtered[4:8], header[4:8])
+	return append(append(filtered, kept...), 0), nil
+}
+
+// postgresClientConn is a client connection whose startup message was read,
+// and possibly rewritten, before routing.
+type postgresClientConn struct {
+	*tls.Conn
+	startup []byte
+}
+
+func (c *postgresClientConn) Read(p []byte) (int, error) {
+	if len(c.startup) > 0 {
+		n := copy(p, c.startup)
+		c.startup = c.startup[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
 }
 
 // createSNIMiddleware wraps a handler with SNI-based routing middleware
@@ -273,7 +355,7 @@ func (pts *PodTCPServer) createSNIMiddleware(handler tcpConnectionHandler) func(
 	return func(conn net.Conn) error {
 		var sni string
 
-		if tlsConn, ok := conn.(*tls.Conn); ok {
+		if tlsConn, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
 			sni = tlsConn.ConnectionState().ServerName
 		}
 

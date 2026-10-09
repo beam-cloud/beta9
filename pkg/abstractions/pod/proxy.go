@@ -2,7 +2,6 @@ package pod
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -681,7 +680,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 			log.Warn().Err(err).Msg("error copying from pod to client")
 		}
 
-		if tlsConn, ok := tc.Conn.(*tls.Conn); ok {
+		if tlsConn, ok := tc.Conn.(interface{ CloseWrite() error }); ok {
 			tlsConn.CloseWrite()
 		}
 	}()
