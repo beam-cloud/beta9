@@ -24,7 +24,7 @@ import uuid
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
 from .. import auth
@@ -37,6 +37,9 @@ from ..config import (
     get_settings,
     set_settings,
 )
+
+if TYPE_CHECKING:
+    from .compose import Registry
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
@@ -153,7 +156,8 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
             f"Deploy a project directory from this machine with the {cli} CLI; returns a job to poll "
             "with deploy_status. Give a Dockerfile (./Dockerfile is found automatically), an image, or "
             f"an entrypoint plus the port the server binds; or a {cli}-decorated object as handler "
-            "'file.py:name'. A worker (ports: []) runs continuously. Apps have no private network: "
+            "'file.py:name'. Container URLs are public. A worker (ports: []) runs continuously. "
+            "Apps have no private network: "
             "env values reach other apps by reference, ${{app.NAME.URL}} or ${{app.NAME.URL.<port>}} "
             "(public HTTPS) and ${{app.NAME.TCP.<port>}} (host:port through the TLS TCP gateway; "
             "HOST.<port> and PORT.<port> give its halves); "
@@ -190,7 +194,11 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                 "ports": {
                     "type": "array",
                     "items": INTEGER,
-                    "description": "Ports the server listens on; [] for a worker with no URL. Omit to use the Dockerfile's EXPOSE.",
+                    "description": (
+                        "Ports the server listens on; the first gets the URL. [] for a worker "
+                        "with no URL. Omit to use the EXPOSE of the image or built stage, base "
+                        "images included; with none, 8000."
+                    ),
                 },
                 "env": {"type": "object", "additionalProperties": STRING},
                 "secrets": {**STRINGS, "description": "Workspace secret names to inject."},
@@ -238,14 +246,20 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
 
 DEPLOY_STATUS_DEFINITION: Dict[str, Any] = {
     "name": "deploy_status",
-    "description": "Progress of a deploy job: status, log lines since log_cursor, and the URL once deployed.",
+    "description": (
+        "Progress of a deploy job: status (running, accepted, failed), the newest log lines "
+        "since log_cursor (the whole log is in log_file), and the URL once accepted."
+    ),
     "inputSchema": {
         "type": "object",
         "required": ["job_id"],
         "properties": {
             "job_id": STRING,
             "log_cursor": {**INTEGER, "description": "From the previous response."},
-            "wait_seconds": {**INTEGER, "description": f"Block for a change, up to {WAIT_MAX}."},
+            "wait_seconds": {
+                **INTEGER,
+                "description": f"Wait up to this long, max {WAIT_MAX}, for the job to finish.",
+            },
         },
     },
     "annotations": {"readOnlyHint": True},
@@ -351,6 +365,22 @@ class DeployJob:
     @property
     def log_path(self) -> Optional[Path]:
         return self.state_path.with_suffix(".log") if self.state_path else None
+
+    @property
+    def request_path(self) -> Optional[Path]:
+        """The request as the agent made it and notes on completing it. Kept beside the
+        record, which servers from before it could not load with extra fields."""
+        return self.state_path.with_suffix(".request") if self.state_path else None
+
+    def request(self) -> Dict[str, Any]:
+        if self.request_path is None or not self.request_path.exists():
+            return {"command": self.command, "notes": []}
+        return json.loads(self.request_path.read_text())
+
+    def save_request(self, command: List[str], notes: List[str]) -> None:
+        if self.request_path is not None:
+            with open(self.request_path, "w", opener=_private_file) as output:
+                json.dump({"command": command, "notes": notes}, output)
 
     def save(self) -> None:
         if self.state_path is None:
@@ -490,7 +520,7 @@ class DeployJob:
                 "stub_id": deployed.get("stub_id"),
                 "url": deployed.get("invoke_url") or deployed.get("url"),
                 "version": deployed.get("version"),
-                "deployment": deployed,
+                "deployment": _without_logs(deployed),
                 "readiness": "unverified",
                 "container_id": deployed.get("container_id"),
                 "task_id": deployed.get("task_id"),
@@ -545,25 +575,34 @@ class DeployJob:
     def logs(self, cursor: int = 0) -> List[str]:
         """Progress lines from `cursor` on, without the CLI's JSON."""
         _, json_lines = _json_objects(self.lines)
-        lines = enumerate(self.lines[cursor : cursor + LOG_TAIL], start=cursor)
+        lines = enumerate(self.lines[cursor:], start=cursor)
         return [line for i, line in lines if line.strip() and i not in json_lines]
 
     def result(self, cursor: int = 0) -> Dict[str, Any]:
+        """The job's state with the newest log lines since `cursor`; older ones are in
+        log_file."""
         self.refresh()
-        cursor = max(0, min(cursor, len(self.lines)))
-        next_cursor = min(len(self.lines), cursor + LOG_TAIL)
+        lines = self.logs(max(0, min(cursor, len(self.lines))))
+        deployed = dict(self.deployed)
+        if isinstance(deployed.get("deployment"), dict):
+            deployed["deployment"] = _without_logs(deployed["deployment"])
         view: Dict[str, Any] = {
             "job_id": self.id,
             "context": self.context_name,
-            "has_more_logs": next_cursor < len(self.lines),
-            "logs": self.logs(cursor),
+            "logs": lines[-LOG_TAIL:],
             "name": self.name,
             "status": self.status,
             "elapsed_seconds": round(time.time() - self.started_at, 1),
-            "log_cursor": next_cursor,
+            "log_cursor": len(self.lines),
             "log_file": str(self.log_path) if self.log_path else None,
-            **self.deployed,
+            **deployed,
         }
+        if len(lines) > LOG_TAIL:
+            view["skipped_log_lines"] = len(lines) - LOG_TAIL
+        notes = self.request()["notes"]
+        if notes:
+            view["notes"] = notes
+        failed = self.status in ("failed", "cancelled", "interrupted")
         if self.status == "accepted" and not self.deployed.get("deployment_id"):
             if self.deployed.get("task_id"):
                 text = (
@@ -575,10 +614,9 @@ class DeployJob:
                     f"Container {self.deployed.get('container_id')} submitted for {self.name} "
                     "without a task. Use logs with container_id for its output."
                 )
-            return text_result(text, **view)
-        if self.status == "accepted":
+        elif self.status == "accepted":
             where = f" at {self.deployed['url']}" if self.deployed.get("url") else ""
-            check = "wait_deployment with an application health path"
+            check = "wait_deployment, with the app's health path if it has one"
             kind = self.deployed["deployment"].get("kind")
             if kind in ("postgres", "redis"):
                 check = "database_readiness"
@@ -588,23 +626,30 @@ class DeployJob:
                 f"Deployment accepted for {self.name}{where} (deployment {self.deployed['deployment_id']}). "
                 f"Readiness is not yet verified; use {check}."
             )
-            return text_result(text, **view)
-
-        if self.status in ("failed", "cancelled", "interrupted"):
+        elif failed:
             view["error"] = self.error
             text = f"Deploy of {self.name} failed: {self.error}"
             if self.deployed:
                 text += " It was accepted first; reconcile what it created before deploying again."
         else:
-            text = f"Deploying {self.name} (job {self.id}, {view['elapsed_seconds']}s). Poll deploy_status with log_cursor={view['log_cursor']}."
-        result = text_result(text, **view)
-        if self.status in ("failed", "cancelled", "interrupted"):
+            text = (
+                f"Deploying {self.name} (job {self.id}, {view['elapsed_seconds']}s). Call "
+                f"deploy_status with log_cursor={view['log_cursor']} and wait_seconds={WAIT_MAX}; "
+                "it returns as soon as the job finishes."
+            )
+        result = text_result(" ".join([text, *notes]), **view)
+        if failed:
             result["isError"] = True
         return result
 
 
 def _private_file(path: str, flags: int) -> int:
     return os.open(path, flags, 0o600)
+
+
+def _without_logs(deployment: Dict[str, Any]) -> Dict[str, Any]:
+    """The CLI's deployment JSON repeats the whole build log, which log_file holds."""
+    return {key: value for key, value in deployment.items() if key != "logs"}
 
 
 class RemoteToolError(RuntimeError):
@@ -698,6 +743,12 @@ class LocalTools:
         os.chmod(path, 0o700)
         return path
 
+    def registry(self) -> "Registry":
+        """Reads image configs, to complete deploy options from the image."""
+        from .compose import Registry
+
+        return Registry()
+
     def available(self) -> List[Tool]:
         """(definition, handler) for every tool offered right now."""
         settings = get_settings()
@@ -752,13 +803,36 @@ class LocalTools:
             and Path(directory, "Dockerfile").is_file()
         ):
             args = {**args, "dockerfile": "Dockerfile"}
+        if operation == "run" and args.get("rollout"):
+            return error_result("rollout applies to deployments, not one-off jobs")
 
+        command = self._command(args, name, operation)
+
+        def resolve() -> Tuple[List[str], List[str]]:
+            if operation != "deploy":
+                return command, []
+            from .compose import resolve_image
+
+            try:
+                options, notes = resolve_image(args, directory, self.registry())
+            except Exception:  # Best effort: the CLI's own defaults still apply.
+                return command, []
+            return self._command(options, name, operation), notes
+
+        return self.start_command(
+            name,
+            directory,
+            command,
+            args.get("idempotency_key"),
+            args.get("wait_seconds"),
+            resolve=resolve,
+        )
+
+    def _command(self, args: Dict[str, Any], name: str, operation: str) -> List[str]:
         command = _cli_command() + [operation, "--context", self.context_name, "--json"]
         command += ["--name", name]
         if operation == "run":
             command += ["--detach"]
-            if args.get("rollout"):
-                return error_result("rollout applies to deployments, not one-off jobs")
         if args.get("handler"):
             command.append(str(args["handler"]))
         for key, flag in DEPLOY_FLAGS.items():
@@ -784,10 +858,7 @@ class LocalTools:
             command += ["--disk", str(disk)]
         if args.get("tcp"):
             command.append("--tcp")
-
-        return self.start_command(
-            name, directory, command, args.get("idempotency_key"), args.get("wait_seconds")
-        )
+        return command
 
     def start_command(
         self,
@@ -797,14 +868,18 @@ class LocalTools:
         key: Optional[str] = None,
         wait_seconds: Optional[int] = 0,
         env: Optional[Dict[str, str]] = None,
+        resolve: Optional[Callable[[], Tuple[List[str], List[str]]]] = None,
     ) -> Dict[str, Any]:
+        """Start `command` as a job, or return the job `key` already started. `resolve`
+        gives the command to run, and notes on it, for a new job only: it reads
+        registries, so a retry could see different answers."""
         key = str(key or uuid.uuid4().hex)
         job_id = hashlib.sha256(key.encode()).hexdigest()[:24]
         state_path = self.job_dir / f"{job_id}.json"
         with open(state_path.with_suffix(".lock"), "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             job = DeployJob.load(state_path) if state_path.exists() else None
-            if job and (job.command != command or job.directory != directory):
+            if job and (job.request()["command"] != command or job.directory != directory):
                 return error_result(
                     "idempotency_key already belongs to a different deployment request"
                 )
@@ -812,17 +887,20 @@ class LocalTools:
             # may have deployed, and a failed or cancelled one can still hold an
             # accepted deployment.
             if job is None or (job.status in ("failed", "cancelled") and not job.deployed):
-                for leftover in (".log", ".cancel"):
+                for leftover in (".log", ".cancel", ".request"):
                     state_path.with_suffix(leftover).unlink(missing_ok=True)
+                final, notes = resolve() if resolve else (command, [])
                 job = DeployJob(
                     id=job_id,
                     name=name,
                     directory=directory,
-                    command=command,
+                    command=final,
                     state_path=state_path,
                     context_name=self.context_name,
                     env=env or {},
                 )
+                if final != command or notes:
+                    job.save_request(command, notes)
                 job.start()
 
         self.jobs[job.id] = job
@@ -848,8 +926,8 @@ class LocalTools:
         job.refresh()
         cursor = int(args.get("log_cursor") or 0)
         deadline = time.monotonic() + _clamp(args.get("wait_seconds"), 0)
-        while job.status == "running" and len(job.lines) <= cursor and time.monotonic() < deadline:
-            time.sleep(0.2)
+        while job.status == "running" and time.monotonic() < deadline:
+            time.sleep(0.5)
             job.refresh()
 
         return job.result(cursor)

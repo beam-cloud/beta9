@@ -356,6 +356,72 @@ def test_deploy_tool_runs_cli_in_directory_and_reports_url(
     ]
 
 
+# An image that EXPOSEs its port is routed there and the result says so. Reading
+# the image happens once: a retry compares the request as the agent made it.
+def test_deploy_takes_ports_from_the_image_and_retries_compare_the_request(
+    settings, local_tools, monkeypatch, tmp_path
+):
+    deployed = '{"deployment_id":"d","stub_id":"s","invoke_url":"u","logs":["Pulling"]}'
+    cli = fake_cli(tmp_path, f"printf '{deployed}\\n'")
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+    exposed = {"nginx:1": {"ExposedPorts": {"80/tcp": {}}}}
+
+    class Images:
+        def docker_hub_image(self, image):
+            return None
+
+        def config(self, image):
+            return exposed.get(image)
+
+    monkeypatch.setattr(local_tools, "registry", Images)
+    request = {"name": "web", "image": "nginx:1", "idempotency_key": "k-ports", "wait_seconds": 10}
+
+    result = local_tools.deploy(request)
+    body = result["structuredContent"]
+    command = local_tools.jobs[body["job_id"]].command
+    assert command[command.index("--port") + 1] == "80" and command.count("--port") == 1
+    assert body["notes"] == ["Ports [80] come from nginx:1's EXPOSE."]
+    assert (
+        result["content"][0]["text"]
+        .split("\n\n")[0]
+        .endswith(
+            "Readiness is not yet verified; use wait_deployment, with the app's health path if it "
+            "has one. Ports [80] come from nginx:1's EXPOSE."
+        )
+    )
+    assert "logs" not in body["deployment"]  # the build log is in log_file
+
+    exposed["nginx:1"] = {"ExposedPorts": {"8080/tcp": {}}}
+    again = local_tools.deploy(request)
+    assert not again.get("isError") and again["structuredContent"]["job_id"] == body["job_id"]
+    assert again["structuredContent"]["notes"] == body["notes"]
+
+    other = local_tools.deploy({**request, "image": "nginx:2"})
+    assert other["isError"] and "different deployment request" in other["content"][0]["text"]
+
+
+def test_deploy_status_waits_for_the_job_and_returns_its_newest_lines(
+    settings, local_tools, monkeypatch, tmp_path
+):
+    cli = fake_cli(
+        tmp_path,
+        """
+        for i in $(seq 1 100); do echo "line $i"; done
+        sleep 1
+        printf '{"deployment_id":"d","stub_id":"s","invoke_url":"u"}\\n'
+        """,
+    )
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+    started = local_tools.deploy({"name": "web", "ports": [8000], "wait_seconds": 0})
+
+    body = local_tools.deploy_status(
+        {"job_id": started["structuredContent"]["job_id"], "wait_seconds": 30}
+    )["structuredContent"]
+    assert body["status"] == "accepted"
+    assert body["logs"] == [f"line {i}" for i in range(61, 101)]
+    assert body["skipped_log_lines"] == 60
+
+
 def test_deploy_tool_maps_empty_ports_to_a_worker(settings, local_tools, monkeypatch, tmp_path):
     cli = fake_cli(tmp_path, 'printf \'{"deployment_id":"d","stub_id":"s","invoke_url":""}\\n\'')
     monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])

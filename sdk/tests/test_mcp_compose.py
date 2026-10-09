@@ -1,6 +1,6 @@
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 import pytest
 
@@ -8,13 +8,21 @@ from beta9.mcp import compose
 
 
 class FakeRegistry:
-    """Image configs by image reference; unknown images are unreadable."""
+    """Image configs by image reference; unknown images are unreadable. Hosts in
+    `proxies` only proxy Docker Hub."""
 
-    def __init__(self, configs: Optional[Dict[str, Dict[str, Any]]] = None):
+    def __init__(
+        self, configs: Optional[Dict[str, Dict[str, Any]]] = None, proxies: Iterable[str] = ()
+    ):
         self.configs = configs or {}
+        self.proxies = set(proxies)
 
     def config(self, image: str) -> Optional[Dict[str, Any]]:
         return self.configs.get(image)
+
+    def docker_hub_image(self, image: str) -> Optional[str]:
+        host, _, rest = image.partition("/")
+        return f"docker.io/{rest}" if host in self.proxies else None
 
 
 def translate(root: Path, text: str, **kwargs: Any) -> Dict[str, Any]:
@@ -204,7 +212,8 @@ def test_multi_port_servers_keep_ports_disks_and_health_checks(tmp_path):
         "-c",
         'mkdir -p /data/bucket && minio server --address ":9000" /data',
     ]
-    assert (minio["health_path"], minio["health_port"]) == ("/minio/health/live", 9000)
+    assert minio["health_path"] == "/minio/health/live"
+    assert minio["deploy"]["ports"] == [9000]
     assert spec["app-worker"]["depends_on"] == [
         "app-clickhouse",
         "app-minio",
@@ -547,11 +556,77 @@ def test_addresses_built_into_an_app_are_flagged(tmp_path):
 
 
 def test_ports_compose_kept_private_are_flagged_when_they_become_public(tmp_path):
-    warnings = translate(tmp_path, LANGFUSE_STYLE)["warnings"]
+    result = translate(tmp_path, LANGFUSE_STYLE)
+    warnings = result["warnings"]
     assert any(
         warning.startswith("clickhouse: ports 8123, 9000 were private") for warning in warnings
     )
     assert not any(warning.startswith("web: port") for warning in warnings)
+    # The MinIO console nothing uses stays out; the worker's only port stays in.
+    assert any(warning.startswith("minio: left out port 9001") for warning in warnings)
+    assert services(result)["app-worker"]["deploy"]["ports"] == [3030]
+    assert any(warning.startswith("worker: port 3030 was private") for warning in warnings)
+
+
+def test_images_on_docker_hub_proxies_are_pulled_from_docker_hub(tmp_path):
+    result = translate(
+        tmp_path,
+        """
+        services:
+          web:
+            image: docker.acme.dev/acme/web:4
+            ports: ["3000:3000"]
+          api:
+            image: ghcr.io/acme/api:1
+            ports: ["8000:8000"]
+        """,
+        registry=FakeRegistry(proxies={"docker.acme.dev"}),
+    )
+    spec = services(result)
+    assert spec["app-web"]["deploy"]["image"] == "docker.io/acme/web:4"
+    assert spec["app-api"]["deploy"]["image"] == "ghcr.io/acme/api:1"
+    assert any(
+        warning.startswith("web: pulling docker.io/acme/web:4: docker.acme.dev only proxies")
+        for warning in result["warnings"]
+    )
+
+
+class Pings:
+    """A session answering registry pings: (final URL, WWW-Authenticate) by URL."""
+
+    def __init__(self, answers: Dict[str, Any]):
+        self.answers = answers
+        self.calls: list = []
+
+    def get(self, url: str, **_: Any) -> Any:
+        self.calls.append(url)
+        final, challenge = self.answers[url]
+        return type("Response", (), {"url": final, "headers": {"WWW-Authenticate": challenge}})
+
+
+def test_a_registry_that_redirects_or_authenticates_with_docker_hub_is_a_proxy():
+    hub = 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"'
+    registry = compose.Registry()
+    registry.session = Pings(
+        {
+            "https://docker.acme.dev/v2/": ("https://registry-1.docker.io/v2/", hub),
+            "https://docker.n8n.dev/v2/": ("https://docker.n8n.dev/v2/", hub),
+            "https://ghcr.io/v2/": (
+                "https://ghcr.io/v2/",
+                'Bearer realm="https://ghcr.io/token",service="ghcr.io"',
+            ),
+        }
+    )
+    assert registry.docker_hub_image("docker.acme.dev/acme/web:4") == "docker.io/acme/web:4"
+    assert (
+        registry.docker_hub_image("docker.n8n.dev/n8nio/n8n@sha256:abc")
+        == "docker.io/n8nio/n8n@sha256:abc"
+    )
+    assert registry.docker_hub_image("ghcr.io/acme/api:1") is None
+    assert registry.docker_hub_image("redis:7") is None
+    assert registry.docker_hub_image("docker.io/library/redis:7") is None
+    registry.docker_hub_image("docker.acme.dev/acme/worker:4")
+    assert registry.session.calls.count("https://docker.acme.dev/v2/") == 1
 
 
 def test_a_project_without_services_is_rejected(tmp_path):

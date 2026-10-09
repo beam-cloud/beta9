@@ -16,11 +16,13 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from urllib.parse import urlsplit
 
 import requests
 import yaml
 
 COMPOSE_FILES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
+DOCKER_HUB_HOSTS = ("docker.io", "index.docker.io", "registry-1.docker.io")
 VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DISK_SIZE = "10Gi"
 DEFAULT_MEMORY = "1Gi"
@@ -366,18 +368,23 @@ def _interpolate_tree(node: Any, variables: Dict[str, str], missing: Set[str]) -
     return node
 
 
+def _registry_host(image: str) -> Optional[str]:
+    """The registry an image reference names, or None for Docker Hub's short form."""
+    first, _, rest = image.partition("/")
+    if rest and ("." in first or ":" in first or first == "localhost"):
+        return first
+    return None
+
+
 def parse_image(image: str) -> Tuple[str, str, str]:
     """(registry API host, repository, tag or digest) of an image reference."""
     name, _, digest = image.partition("@")
     tag = ""
     if ":" in name.rsplit("/", 1)[-1]:
         name, tag = name.rsplit(":", 1)
-    parts = name.split("/")
-    if len(parts) > 1 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
-        registry, repository = parts[0], "/".join(parts[1:])
-    else:
-        registry, repository = "docker.io", name
-    if registry in ("docker.io", "index.docker.io", "registry-1.docker.io"):
+    host = _registry_host(name)
+    registry, repository = (host, name[len(host) + 1 :]) if host else ("docker.io", name)
+    if registry in DOCKER_HUB_HOSTS:
         registry = "registry-1.docker.io"
         if "/" not in repository:
             repository = "library/" + repository
@@ -392,11 +399,32 @@ class Registry:
         self.timeout = timeout
         self.tokens: Dict[str, str] = {}
         self.configs: Dict[str, Optional[Dict[str, Any]]] = {}
+        self.proxies: Dict[str, bool] = {}
+
+    def docker_hub_image(self, image: str) -> Optional[str]:
+        """The docker.io reference of an image whose registry only proxies Docker Hub
+        (docker.langfuse.com, docker.n8n.io). Such a proxy pulls anonymously from one
+        address, so the Docker Hub rate limit its users share is usually spent."""
+        host = _registry_host(image)
+        if host is None or host in DOCKER_HUB_HOSTS or host.startswith("localhost"):
+            return None
+        if host not in self.proxies:
+            try:
+                response = self.session.get(f"https://{host}/v2/", timeout=self.timeout)
+                self.proxies[host] = (
+                    urlsplit(response.url).hostname in DOCKER_HUB_HOSTS
+                    or 'service="registry.docker.io"'
+                    in response.headers.get("WWW-Authenticate", "")
+                )
+            except requests.RequestException:
+                self.proxies[host] = False
+        return "docker.io/" + image[len(host) + 1 :] if self.proxies[host] else None
 
     def config(self, image: str) -> Optional[Dict[str, Any]]:
         if image not in self.configs:
             try:
-                self.configs[image] = self._config(*parse_image(image))
+                source = self.docker_hub_image(image) or image
+                self.configs[image] = self._config(*parse_image(source))
             except (requests.RequestException, ValueError, KeyError, TypeError):
                 self.configs[image] = None
         return self.configs[image]
@@ -447,6 +475,15 @@ class Registry:
         response.raise_for_status()
         body = response.json()
         return body.get("token") or body.get("access_token")
+
+
+def exposed_ports(config: Optional[Dict[str, Any]]) -> List[int]:
+    """The TCP ports an image config EXPOSEs, lowest first."""
+    return sorted(
+        int(port.split("/")[0])
+        for port in (config or {}).get("ExposedPorts") or {}
+        if port.endswith("/tcp") and port.split("/")[0].isdigit()
+    )
 
 
 def _exec_form(value: str) -> List[str]:
@@ -522,6 +559,54 @@ def dockerfile_config(
         if chosen is not None:
             return chosen, resolved
     return (stages[-1][1] if stages else {}), resolved
+
+
+def resolve_image(
+    options: Dict[str, Any], directory: str, registry: Registry, infer_ports: bool = True
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Deploy options completed from the image itself, and notes for the agent: an
+    image behind a Docker Hub proxy is pulled from Docker Hub, and omitted ports are
+    the EXPOSE of the image or built stage, base images included."""
+    options, notes = dict(options), []
+    image = options.get("image")
+    if image:
+        hub = registry.docker_hub_image(str(image))
+        if hub:
+            notes.append(
+                f"Pulling {hub}: {_registry_host(str(image))} only proxies Docker Hub, and its anonymous pulls share one rate limit."
+            )
+            options["image"] = image = hub
+    if not infer_ports or "ports" in options or options.get("handler"):
+        return options, notes
+
+    if image:
+        source, config = str(image), registry.config(str(image))
+    else:
+        dockerfile = options.get("dockerfile") or "Dockerfile"
+        path = Path(directory, dockerfile)
+        if not path.is_file():
+            return options, notes
+        source = dockerfile
+        built, resolved = dockerfile_config(
+            path, options.get("target"), options.get("build_args") or {}, registry
+        )
+        config = built if resolved or exposed_ports(built) else None
+    ports = exposed_ports(config)
+    if ports:
+        options["ports"] = ports
+        notes.append(
+            f"Ports {ports} come from {source}'s EXPOSE"
+            + (f"; the URL and health checks use {ports[0]}." if len(ports) > 1 else ".")
+        )
+    elif config is not None:
+        notes.append(
+            f"{source} EXPOSEs no port, so the app listens on 8000 (PORT is set to it); pass ports if it binds another, or ports: [] for a worker."
+        )
+    else:
+        notes.append(
+            f"{source}'s EXPOSE is unreadable (a private or unreachable image), so the app gets port 8000 unless you pass ports."
+        )
+    return options, notes
 
 
 def _slug(value: str) -> str:
@@ -1033,10 +1118,7 @@ class Translator:
     def _default_port(self, name: str) -> Optional[int]:
         port = self._only_port(name)
         if port is None and not self.ports.get(name):
-            config = self._image_config(name, self.services[name]) or {}
-            exposed = [
-                int(p.split("/")[0]) for p in config.get("ExposedPorts") or {} if p.endswith("/tcp")
-            ]
+            exposed = exposed_ports(self._image_config(name, self.services[name]))
             port = exposed[0] if len(exposed) == 1 else None
         return port
 
@@ -1491,6 +1573,13 @@ class Translator:
                 deploy["build_args"] = {key: str(value) for key, value in args.items()}
         else:
             deploy["image"] = str(node["image"])
+            hub = self.registry.docker_hub_image(deploy["image"])
+            if hub:
+                self.warn(
+                    service,
+                    f"pulling {hub}: {_registry_host(deploy['image'])} only proxies Docker Hub, and its anonymous pulls share one rate limit",
+                )
+                deploy["image"] = hub
             if not config:
                 self.warn(
                     service,
@@ -1513,14 +1602,27 @@ class Translator:
         ports = list(self.ports[service])
         ports += [port for port in sorted(self.needed[service]) if port not in ports]
         if not ports and service in self.named_by_host:
-            ports = [
-                int(port.split("/")[0])
-                for port in config.get("ExposedPorts") or {}
-                if port.endswith("/tcp")
-            ]
+            ports = exposed_ports(config)
         health = self._health(service, node, config, known, ports)
         if health and health[1] not in ports:
             ports.append(health[1])
+        # Every port here is public, so a port compose kept to itself (an admin
+        # console on 127.0.0.1) stays out unless something uses it. A service's
+        # only ports stay, since a proxy on the host may have been their way in.
+        unused = [
+            port
+            for port in self.ports[service]
+            if port not in self.public[service]
+            and port not in self.needed[service]
+            and not (health and port == health[1])
+        ]
+        if unused and len(unused) < len(ports):
+            ports = [port for port in ports if port not in unused]
+            noun, pronoun = ("ports", "them") if len(unused) > 1 else ("port", "it")
+            self.warn(
+                service,
+                f"left out {noun} {', '.join(map(str, unused))}: compose kept {pronoun} private (127.0.0.1 or expose) and nothing here uses {pronoun}; add {pronoun} to ports to reach {pronoun}, publicly",
+            )
         deploy["ports"] = ports
         private = [str(port) for port in ports if port not in self.public[service]]
         own_url = "${{app.%s." % self.names[service]
