@@ -88,8 +88,12 @@ MANAGED_IMAGES = {
     "bitnami/valkey": "redis",
 }
 MANAGED_PORTS = {"postgres": 5432, "redis": 6379}
-# Health endpoints and sizes compose files rarely state, by image name.
+# Health endpoints and sizes compose files rarely state, by repository or, when
+# that is not listed, by image name.
 KNOWN_IMAGES: Dict[str, Dict[str, Any]] = {
+    "n8n": {"health": ("/healthz", 5678)},
+    "docmost": {"health": ("/api/health", 3000)},
+    "plausible/community-edition": {"health": ("/api/health", 8000)},
     "minio": {"health": ("/minio/health/live", 9000)},
     "clickhouse-server": {"health": ("/ping", 8123), "cpu": 2, "memory": "4Gi"},
     "grafana": {"health": ("/api/health", 3000)},
@@ -1015,7 +1019,7 @@ class Translator:
     def _secure_gateway_urls(self, service: str, env: Dict[str, str]) -> None:
         """KEY_URL rewritten to a TCP gateway address needs the client's KEY_SSL (or TLS,
         SECURE) switch on; an image known to read such a switch gets it added."""
-        known = KNOWN_IMAGES.get(self._image_basename(self.services[service]), {})
+        known = self._known(self.services[service])
         for key, value in list(env.items()):
             stem = re.fullmatch(r"(.+_)(?:URL|URI|DSN|ADDR|ADDRESS)", key, re.I)
             if not stem or not re.search(r"\$\{\{app\.[^}]+\.TCP\.\d+\}\}", value):
@@ -1033,8 +1037,9 @@ class Translator:
                     self.warn(service, f"{flag}=true: {key} goes through the TLS TCP gateway")
 
     def _redis_server_name(self, service: str, env: Dict[str, str]) -> None:
-        """The TLS gateway routes by SNI. Node's ioredis (and BullMQ) sends it only when
-        given a servername, and otherwise fails with `tlsv1 unrecognized name`."""
+        """The TLS gateway routes by SNI, which Node's ioredis and node-redis omit
+        unless given a server name. Workers preload one into Node processes; an
+        app's own setting names the host explicitly."""
         services = {app: name for name, app in self.names.items()}
         databases = sorted(
             {
@@ -1052,21 +1057,12 @@ class Translator:
             for key in env
             if re.search(r"(REDIS|VALKEY).*(SERVERNAME|SERVER_NAME|SNI)$", key.upper())
         ]
-        known = KNOWN_IMAGES.get(self._image_basename(self.services[service]), {})
+        known = self._known(self.services[service])
         if not named and known.get("redis_server_name"):
             named = [known["redis_server_name"]]
-            self.warn(service, f"added {named[0]}: its Redis client sends no SNI otherwise")
+            self.warn(service, f"added {named[0]}: the TLS gateway routes Redis by SNI")
         for key in named:
             env[key] = reference
-        config = self._image_config(service, self.services[service]) or {}
-        node = any(str(item).startswith("NODE_VERSION=") for item in config.get("Env") or [])
-        if not named and node:
-            self.warn(
-                service,
-                "reaches managed Redis through the TLS gateway, which routes by SNI; Node's "
-                "ioredis and BullMQ send none unless given tls.servername, and fail with "
-                f"'tlsv1 unrecognized name': set the app's Redis TLS server name to {reference}",
-            )
 
     def _address_apps_by_host(self, service: str, env: Dict[str, str]) -> None:
         """KEY_HOST=postgres naming an app becomes the host half of its TCP gateway address,
@@ -1555,7 +1551,7 @@ class Translator:
         deploy: Dict[str, Any] = {}
         result: Dict[str, Any] = {"type": kind, "deploy": deploy, "depends_on": depends_on}
         config = self._image_config(service, node) or {}
-        known = KNOWN_IMAGES.get(self._image_basename(node), {})
+        known = self._known(node)
 
         if node.get("build") is not None:
             context, dockerfile, target, args = self._build(node)
@@ -1606,6 +1602,16 @@ class Translator:
         health = self._health(service, node, config, known, ports)
         if health and health[1] not in ports:
             ports.append(health[1])
+        # Every port here is public: when nothing names one, an image's other EXPOSEd
+        # ports (a database's native and replication ports) stay out.
+        if health and len(ports) > 1 and not self.ports[service] and not self.needed[service]:
+            unnamed = [str(port) for port in ports if port != health[1]]
+            ports = [health[1]]
+            noun, pronoun = ("ports", "them") if len(unnamed) > 1 else ("port", "it")
+            self.warn(
+                service,
+                f"left out EXPOSEd {noun} {', '.join(unnamed)}: nothing here names {pronoun}, so only {health[1]}, which its health check uses, is open; add {pronoun} to ports to reach {pronoun}, publicly",
+            )
         # Every port here is public, so a port compose kept to itself (an admin
         # console on 127.0.0.1) stays out unless something uses it. A service's
         # only ports stay, since a proxy on the host may have been their way in.
@@ -1657,10 +1663,11 @@ class Translator:
                 f"its command names another service ({match.group(0)}), which does not resolve here; the stack starts it after its dependencies are ready, so drop wait-for loops and read addresses from env",
             )
 
-    def _image_basename(self, node: Dict[str, Any]) -> str:
+    def _known(self, node: Dict[str, Any]) -> Dict[str, Any]:
         if not node.get("image"):
-            return ""
-        return parse_image(str(node["image"]))[1].rsplit("/", 1)[-1]
+            return {}
+        repository = parse_image(str(node["image"]))[1]
+        return KNOWN_IMAGES.get(repository) or KNOWN_IMAGES.get(repository.rsplit("/", 1)[-1], {})
 
     def _entrypoint(
         self, service: str, node: Dict[str, Any], config: Dict[str, Any]

@@ -131,8 +131,9 @@ def test_managed_databases_replace_postgres_and_redis_and_require_tls(tmp_path):
 
 
 # The TLS gateway routes by SNI, which Node's ioredis omits unless given a server
-# name: a known image gets its setting, a declared one is filled in, and other Node
-# images are warned about. A URL moved onto the gateway turns its TLS switch on.
+# name: a known image gets its setting and a declared one is filled in, while other
+# Node images rely on the worker's preload. A URL moved onto the gateway turns its
+# TLS switch on.
 def test_clients_reaching_the_tls_gateway_are_configured_for_it(tmp_path):
     result = translate(
         tmp_path,
@@ -170,7 +171,7 @@ def test_clients_reaching_the_tls_gateway_are_configured_for_it(tmp_path):
     node = spec["app-node"]["deploy"]["env"]
     assert node["EVENTS_TLS"] == "true"
     assert not any("SERVERNAME" in key for key in node)
-    assert any(w.startswith("node: ") and "unrecognized name" in w for w in result["warnings"])
+    assert not any(w.startswith("node: ") and "server name" in w for w in result["warnings"])
     assert not any(w.startswith("declared: ") and "SNI" in w for w in result["warnings"])
 
 
@@ -220,6 +221,60 @@ def test_multi_port_servers_keep_ports_disks_and_health_checks(tmp_path):
         "app-postgres",
         "app-redis",
     ]
+
+
+# An app that reaches a dependency at an address built into it names no port, so
+# only the port the dependency is checked on opens, not every one it EXPOSEs.
+def test_unnamed_dependency_opens_only_its_health_port(tmp_path):
+    exposed = {"ExposedPorts": {"8123/tcp": {}, "9000/tcp": {}, "9009/tcp": {}}}
+    result = translate(
+        tmp_path,
+        """
+        services:
+          app:
+            image: example/app:1
+            ports: ["8000:8000"]
+            depends_on: [events]
+          events:
+            image: clickhouse/clickhouse-server:24.12-alpine
+        """,
+        registry=FakeRegistry({"clickhouse/clickhouse-server:24.12-alpine": exposed}),
+    )
+    events = services(result)["app-events"]
+
+    assert events["deploy"]["ports"] == [8123]
+    assert events["health_path"] == "/ping"
+    warnings = result["warnings"]
+    assert any(w.startswith("events: left out EXPOSEd ports 9000, 9009:") for w in warnings)
+    assert any(
+        w.startswith("app: depends on events") and "${{app.app-events.URL.8123}}" in w
+        for w in warnings
+    )
+
+
+# An image whose name alone is generic is known by its repository.
+def test_known_images_are_matched_by_repository_first(tmp_path):
+    spec = services(
+        translate(
+            tmp_path,
+            """
+            services:
+              plausible:
+                image: ghcr.io/plausible/community-edition:v3.2.0
+                ports: ["8000:8000"]
+              n8n:
+                image: docker.n8n.io/n8nio/n8n:1.0
+                ports: ["5678:5678"]
+              other:
+                image: example/community-edition:1
+                ports: ["8000:8000"]
+            """,
+        )
+    )
+
+    assert spec["app-plausible"]["health_path"] == "/api/health"
+    assert spec["app-n8n"]["health_path"] == "/healthz"
+    assert "health_path" not in spec["app-other"]
 
 
 def test_interpolation_follows_compose(tmp_path):
