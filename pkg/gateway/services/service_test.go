@@ -254,7 +254,7 @@ func TestConfigurePodDeploymentAutoscalerPreservesReplicaBounds(t *testing.T) {
 		TasksPerContainer: 1,
 	}
 
-	if err := configurePodDeploymentAutoscaler(autoscaler, 0, 0); err != nil {
+	if err := configurePodDeploymentAutoscaler(autoscaler, 0, true, 0); err != nil {
 		t.Fatalf("configurePodDeploymentAutoscaler() error = %v", err)
 	}
 
@@ -274,7 +274,7 @@ func TestConfigurePodDeploymentAutoscalerBackfillsLegacyAlwaysOn(t *testing.T) {
 		TasksPerContainer: 1,
 	}
 
-	if err := configurePodDeploymentAutoscaler(autoscaler, -1, 0); err != nil {
+	if err := configurePodDeploymentAutoscaler(autoscaler, -1, true, 0); err != nil {
 		t.Fatalf("configurePodDeploymentAutoscaler() error = %v", err)
 	}
 
@@ -286,6 +286,23 @@ func TestConfigurePodDeploymentAutoscalerBackfillsLegacyAlwaysOn(t *testing.T) {
 	}
 }
 
+func TestConfigurePodDeploymentAutoscalerKeepsPortlessWorkersRunning(t *testing.T) {
+	autoscaler := &types.Autoscaler{
+		Type:              types.QueueDepthAutoscaler,
+		MaxContainers:     1,
+		MinContainers:     0,
+		TasksPerContainer: 1,
+	}
+
+	if err := configurePodDeploymentAutoscaler(autoscaler, 600, false, 0); err != nil {
+		t.Fatalf("configurePodDeploymentAutoscaler() error = %v", err)
+	}
+
+	if got, want := autoscaler.MinContainers, uint(1); got != want {
+		t.Fatalf("min containers = %d, want %d", got, want)
+	}
+}
+
 func TestConfigurePodDeploymentAutoscalerRejectsMinAboveMax(t *testing.T) {
 	autoscaler := &types.Autoscaler{
 		Type:              types.QueueDepthAutoscaler,
@@ -294,7 +311,7 @@ func TestConfigurePodDeploymentAutoscalerRejectsMinAboveMax(t *testing.T) {
 		TasksPerContainer: 1,
 	}
 
-	if err := configurePodDeploymentAutoscaler(autoscaler, 0, 0); err == nil {
+	if err := configurePodDeploymentAutoscaler(autoscaler, 0, true, 0); err == nil {
 		t.Fatal("configurePodDeploymentAutoscaler() error = nil, want error")
 	}
 }
@@ -307,7 +324,7 @@ func TestConfigurePodDeploymentAutoscalerRejectsMaxAboveLimit(t *testing.T) {
 		TasksPerContainer: 1,
 	}
 
-	if err := configurePodDeploymentAutoscaler(autoscaler, 0, 10); err == nil {
+	if err := configurePodDeploymentAutoscaler(autoscaler, 0, true, 10); err == nil {
 		t.Fatal("configurePodDeploymentAutoscaler() error = nil, want error")
 	}
 }

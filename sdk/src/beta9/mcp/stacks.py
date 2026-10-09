@@ -4,7 +4,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
+import string
 import subprocess
 import tempfile
 import time
@@ -13,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .tools import LocalTools, Tool, deploy_definition, text_result
+from .tools import LocalTools, RemoteToolError, Tool, deploy_definition, text_result
 
 SOURCE_MAX_FILES = 100_000
 SOURCE_MAX_BYTES = 1 << 30
@@ -23,8 +25,12 @@ APPLY_LEASE_SECONDS = 180
 TASK_ACTIVE_STATUSES = {"pending", "running", "retry"}
 # Steps whose deploy job or migration task may still change the services.
 IN_FLIGHT_STATUSES = {"running", "submitted"}
-SERVICE_FIELDS = {"type", "deploy", "depends_on", "health_path"}
+SERVICE_FIELDS = {"type", "deploy", "depends_on", "health_path", "health_port"}
 JOB_FIELDS = {"job_id", "status", "deployment_id", "stub_id", "task_id", "log_cursor"}
+# wait_deployment errors that no amount of waiting fixes.
+READINESS_CONFIG_ERRORS = {"INVALID_ARGS", "UNSUPPORTED_PROTOCOL", "NO_HTTP_PORT"}
+SECRET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+SECRET_ALPHABET = string.ascii_letters + string.digits
 DATABASE_OPTIONS = {
     "name",
     "kind",
@@ -38,6 +44,10 @@ DATABASE_OPTIONS = {
     "database",
 }
 SERVICE_REFERENCE = re.compile(r"\$\{\{(?:db|app)\.([^.}]+)\.[^}]+\}\}")
+
+
+class ReadinessConfigError(RuntimeError):
+    """The health check is misconfigured, so waiting longer cannot pass it."""
 
 
 def digest(value: Any) -> str:
@@ -131,19 +141,95 @@ def _snapshot_source(tools: LocalTools, source: Dict[str, Any]) -> None:
 
 
 def definitions(tools: LocalTools) -> List[Tool]:
+    from . import compose
+
     return [
+        (compose.definition(), compose.handler(lambda: tools.job_dir / "compose")),
         (
             {
                 "name": "stack_plan",
                 "description": (
-                    "Validate a version-1 desired stack and return a reviewable dependency plan. "
-                    "services maps application names to type (application/database/job), deploy "
-                    "options, depends_on, and health_path. Source directories are fingerprinted. "
-                    "Does not provision resources."
+                    "Validate a desired multi-service stack and return a reviewable plan; "
+                    "stack_apply provisions it. Provisions nothing itself. For a "
+                    "docker-compose project, start from stack_from_compose. Service names are "
+                    "workspace-wide app names. Services reach each other only through "
+                    "references in env, never by service name or localhost: "
+                    "${{db.NAME.DATABASE_URL}} (also REDIS_URL, HOST, PORT, USERNAME, PASSWORD, "
+                    "DATABASE), ${{app.NAME.URL}} or ${{app.NAME.URL.<port>}} (public https URL "
+                    "of a port), ${{app.NAME.TCP.<port>}} (host:443 of a port on the TCP "
+                    "gateway; the client must use TLS with that host as SNI; "
+                    "${{app.NAME.HOST.<port>}} and ${{app.NAME.PORT.<port>}} are its halves "
+                    "for separate host and port settings), and "
+                    "${{secret.NAME}}. Secret and credential references must be the whole "
+                    "value. References add depends_on automatically. Applications run "
+                    "continuously (min_replicas 1) unless min_replicas or keep_warm_seconds says "
+                    "otherwise. Source directories are fingerprinted."
                 ),
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"name": {"type": "string"}, "spec": {"type": "object"}},
+                    "properties": {
+                        "name": {"type": "string", "description": "Stack name."},
+                        "spec": {
+                            "type": "object",
+                            "properties": {
+                                "version": {"const": 1},
+                                "secrets": {
+                                    "type": "object",
+                                    "description": (
+                                        "Workspace secrets shared by services, created with a "
+                                        "random value when missing and never shown: "
+                                        '{"NAME": {"length": 32, "alphabet": "0123456789abcdef"}} '
+                                        "(both optional). Reference as ${{secret.NAME}}."
+                                    ),
+                                    "additionalProperties": {"type": "object"},
+                                },
+                                "services": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "object",
+                                        "properties": {
+                                            "type": {
+                                                "enum": ["application", "database", "job"],
+                                                "description": (
+                                                    "application (default) is a deployment, job "
+                                                    "a one-off run such as a migration, database "
+                                                    "a managed postgres or redis."
+                                                ),
+                                            },
+                                            "deploy": {
+                                                "type": "object",
+                                                "description": (
+                                                    "The deploy tool's options (name defaults to "
+                                                    "the service key). ports: [] is a worker. "
+                                                    "tcp: true only for a server with no HTTP "
+                                                    "port. Databases take kind (postgres or "
+                                                    "redis), size, cpu, memory, always_on."
+                                                ),
+                                            },
+                                            "depends_on": {
+                                                "type": "array",
+                                                "items": {"type": "string"},
+                                            },
+                                            "health_path": {
+                                                "type": "string",
+                                                "description": (
+                                                    "Side-effect-free GET path answering 2xx "
+                                                    "when ready; required for an application "
+                                                    "with an HTTP port. Workers and tcp apps "
+                                                    "are checked by their running container."
+                                                ),
+                                            },
+                                            "health_port": {
+                                                "type": "integer",
+                                                "description": "Port serving health_path; defaults to the first port.",
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                            "required": ["version", "services"],
+                        },
+                    },
                     "required": ["name", "spec"],
                 },
             },
@@ -223,21 +309,26 @@ def status(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _prepare_services(
     tools: LocalTools, services: Dict[str, Any]
-) -> Tuple[List[str], Dict[str, Any]]:
+) -> Tuple[List[str], Dict[str, Any], List[str]]:
     order: List[str] = []
-    visiting = set()
+    visiting: List[str] = []
     sources: Dict[str, Any] = {}
+    warnings: List[str] = []
     deploy_options = set(deploy_definition("beam", tools.cwd)["inputSchema"]["properties"])
 
     def visit(service: str) -> None:
         if service in order:
             return
         if service in visiting:
-            raise ValueError(f"dependency cycle at {service}")
+            cycle = " -> ".join(visiting[visiting.index(service) :] + [service])
+            raise ValueError(
+                f"dependency cycle: {cycle}. A reference needs its target deployed first, so "
+                "drop one of them and add it with set_env after the stack is applied"
+            )
         if service not in services:
             raise ValueError(f"unknown dependency: {service}")
 
-        visiting.add(service)
+        visiting.append(service)
         node = services[service]
         if not isinstance(node, dict) or set(node) - SERVICE_FIELDS:
             raise ValueError(f"service fields are type, deploy, depends_on, health_path: {service}")
@@ -253,7 +344,9 @@ def _prepare_services(
 
         dependencies = set(node.get("depends_on", []))
         for value in deploy.get("env", {}).values():
-            dependencies.update(set(SERVICE_REFERENCE.findall(str(value))) & services.keys())
+            # The gateway resolves an app's references to itself while creating it.
+            referenced = set(SERVICE_REFERENCE.findall(str(value))) - {service}
+            dependencies.update(referenced & services.keys())
         node["depends_on"] = sorted(dependencies)
         for dependency in node["depends_on"]:
             visit(dependency)
@@ -271,8 +364,10 @@ def _prepare_services(
             sources[service] = source_state(deploy.get("directory") or tools.cwd)
             deploy["directory"] = sources[service]["directory"]
 
-        if kind == "application" and deploy.get("ports") != [] and not node.get("health_path"):
-            raise ValueError(f"application requires a safe health_path: {service}")
+        if kind == "application":
+            warning = _prepare_application(service, node, deploy)
+            if warning:
+                warnings.append(warning)
 
         visiting.remove(service)
         order.append(service)
@@ -280,7 +375,78 @@ def _prepare_services(
     for service in services:
         visit(service)
 
-    return order, sources
+    return order, sources, warnings
+
+
+def _prepare_application(
+    service: str, node: Dict[str, Any], deploy: Dict[str, Any]
+) -> Optional[str]:
+    """Validate an application's health check and defaults; returns a warning, if any."""
+    # Compose services run continuously, and a dependency that scales to zero
+    # stalls its callers on a cold start; scaling to zero is opt-in.
+    if "min_replicas" not in deploy and "keep_warm_seconds" not in deploy:
+        deploy["min_replicas"] = 1
+
+    ports = deploy.get("ports")
+    health_port = node.get("health_port")
+    if deploy.get("tcp") or ports == []:
+        if node.get("health_path") or health_port is not None:
+            raise ValueError(
+                f"{service}: health checks use HTTP, which a tcp or portless app does not serve; "
+                "omit health_path to check its running container, or keep tcp false when one "
+                "port speaks HTTP and reach the other ports with ${{app.NAME.TCP.<port>}}"
+            )
+        return None
+    if not node.get("health_path"):
+        return (
+            f"{service}: no health_path, so readiness only checks that its container runs; "
+            "set a side-effect-free GET path that answers 2xx once it serves"
+        )
+    if health_port is None and ports and len(ports) > 1:
+        node["health_port"] = ports[0]
+    elif health_port is not None and (
+        not isinstance(health_port, int) or (ports and health_port not in ports)
+    ):
+        raise ValueError(f"{service}: health_port must be one of its ports {ports}")
+    return None
+
+
+def _prepare_secrets(spec: Dict[str, Any]) -> Dict[str, Any]:
+    declared = spec.get("secrets") or {}
+    if not isinstance(declared, dict):
+        raise ValueError("secrets maps NAME to {length, alphabet}")
+    prepared = {}
+    for name, options in declared.items():
+        options = {} if options is None else options
+        if not SECRET_NAME.fullmatch(name) or not isinstance(options, dict):
+            raise ValueError(
+                f"secret {name!r}: names are env-safe and options are {{length, alphabet}}"
+            )
+        if set(options) - {"length", "alphabet"}:
+            raise ValueError(f"secret {name}: options are length and alphabet")
+        length = options.get("length", 32)
+        alphabet = options.get("alphabet", SECRET_ALPHABET)
+        if not isinstance(length, int) or not 8 <= length <= 512:
+            raise ValueError(f"secret {name}: length must be an integer from 8 to 512")
+        if not isinstance(alphabet, str) or len(set(alphabet)) < 2:
+            raise ValueError(f"secret {name}: alphabet needs at least two distinct characters")
+        prepared[name] = {"length": length, "alphabet": alphabet}
+    return prepared
+
+
+def _ensure_secrets(tools: LocalTools, declared: Dict[str, Any]) -> List[str]:
+    """Create each missing stack secret with a random value; existing ones are kept."""
+    if not declared:
+        return []
+    existing = {item["name"] for item in tools.remote("list_secrets", {}).get("items", [])}
+    created = []
+    for name, options in declared.items():
+        if name in existing:
+            continue
+        value = "".join(secrets.choice(options["alphabet"]) for _ in range(options["length"]))
+        tools.remote("create_secret", {"name": name, "value": value})
+        created.append(name)
+    return created
 
 
 def _existing_services(
@@ -322,16 +488,22 @@ def plan(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     ):
         raise ValueError("name and spec {version:1, services:{...}} are required")
 
+    if set(spec) - {"version", "secrets", "services"}:
+        raise ValueError("spec fields are version, secrets and services")
+    declared_secrets = _prepare_secrets(spec)
     services = json.loads(json.dumps(spec["services"]))
-    order, sources = _prepare_services(tools, services)
+    order, sources, warnings = _prepare_services(tools, services)
     current = _find_stack(tools, name)
     existing, reusable = _existing_services(tools, services, current)
     for source in sources.values():
         _snapshot_source(tools, source)
 
+    desired: Dict[str, Any] = {"version": 1, "services": services}
+    if declared_secrets:
+        desired["secrets"] = declared_secrets
     planned = {
         "name": name,
-        "desired": {"version": 1, "services": services},
+        "desired": desired,
         "order": order,
         "sources": sources,
         "base_revision": current["revision"] if current else None,
@@ -352,6 +524,7 @@ def plan(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
         "application and reruns every job, so migrations must be idempotent jobs; reusable "
         "databases are kept and removed services are retained.",
         plan_id=plan_id,
+        warnings=warnings,
         **planned,
     )
 
@@ -437,13 +610,15 @@ class StackService:
         if self.kind == "database":
             return self.tools.remote("database_readiness", {"name": self.name, **revision})
         if self.node.get("health_path"):
-            return {
-                **self.tools.remote(
-                    "wait_deployment",
-                    {**revision, "path": self.node["health_path"], "wait_seconds": 5},
-                ),
-                "ready": True,
-            }
+            check = {**revision, "path": self.node["health_path"], "wait_seconds": 5}
+            if self.node.get("health_port"):
+                check["port"] = self.node["health_port"]
+            try:
+                return {**self.tools.remote("wait_deployment", check), "ready": True}
+            except RemoteToolError as exc:
+                if exc.payload.get("code") in READINESS_CONFIG_ERRORS:
+                    raise ReadinessConfigError(exc.payload.get("error") or str(exc)) from exc
+                raise
 
         deployment = self.tools.remote("get_deployment", revision)
         containers = self.tools.remote("api", {"path": "/api/v1/container/{ws}", "method": "GET"})
@@ -506,6 +681,9 @@ class StackService:
 
         try:
             health = self.readiness()
+        except ReadinessConfigError as exc:
+            state.update(status="failed", error=f"health check cannot pass: {exc}")
+            return
         except RuntimeError as exc:
             health = {"ready": False, "error": str(exc)}
         state.update(status="complete" if health["ready"] else "starting", health=health)
@@ -551,6 +729,7 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
 
     added = []
     try:
+        _ensure_secrets(tools, planned["desired"].get("secrets", {}))
         for service in planned["order"]:
             step = state["services"].setdefault(service, {"status": "pending"})
             if step["status"] == "complete":
@@ -577,8 +756,10 @@ def apply(tools: LocalTools, args: Dict[str, Any]) -> Dict[str, Any]:
     for name in planned["order"]:
         status = state["services"].get(name, {}).get("status", "pending")
         if status in ("failed", "uncertain"):
+            error = state["services"][name].get("error")
             return text_result(
-                f"{name} is {status}; inspect it, then call stack_resolve or apply a corrected plan",
+                f"{name} is {status}{f' ({error})' if error else ''}; inspect it, then call "
+                "stack_resolve or apply a corrected plan",
                 **current,
             )
         if status != "complete":

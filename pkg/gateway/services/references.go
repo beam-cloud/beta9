@@ -29,6 +29,7 @@ import (
 //	KEY=...${{app.NAME.URL}}...     inline the public URL of deployment NAME
 //	KEY=...${{app.NAME.URL.8123}}... inline the URL of one of NAME's ports
 //	KEY=...${{app.NAME.TCP.9000}}... inline host:port of one of NAME's ports on the TCP (TLS) gateway
+//	KEY=...${{app.NAME.HOST.9000}}... inline the host of that address (PORT likewise), for split settings
 //	KEY=...${{randomInt(1,100)}}... inline a random integer
 //
 // Secret-bearing references must be the whole value; the rest are inlined.
@@ -349,11 +350,15 @@ func generatedSecretName(appName, key string) string {
 	return app + "_" + sanitizeSecretName(key)
 }
 
-// appReference is app.<name>.URL (port 0), app.<name>.URL.<port> or app.<name>.TCP.<port>.
+// appReference is app.<name>.URL (port 0), or app.<name>.<kind>.<port> for one port.
 type appReference struct {
 	name string
-	kind string // "URL" or "TCP"
+	kind string // "URL", "TCP", or "HOST"/"PORT", the halves of the TCP address
 	port uint32
+}
+
+func isAppPortKind(kind string) bool {
+	return kind == "URL" || kind == "TCP" || kind == "HOST" || kind == "PORT"
 }
 
 // parseAppReference reads the field from the end, so app names may contain dots.
@@ -365,13 +370,13 @@ func parseAppReference(expr string) (appReference, error) {
 			return appReference{name: name, kind: "URL"}, nil
 		}
 	}
-	if n >= 3 && (parts[n-2] == "URL" || parts[n-2] == "TCP") {
+	if n >= 3 && isAppPortKind(parts[n-2]) {
 		port, err := strconv.ParseUint(parts[n-1], 10, 16)
 		if name := strings.Join(parts[:n-2], "."); err == nil && port > 0 && name != "" {
 			return appReference{name: name, kind: parts[n-2], port: uint32(port)}, nil
 		}
 	}
-	return appReference{}, fmt.Errorf("invalid app reference %q; expected app.<name>.URL, app.<name>.URL.<port> or app.<name>.TCP.<port>", expr)
+	return appReference{}, fmt.Errorf("invalid app reference %q; expected app.<name>.URL, or app.<name>.URL|TCP|HOST|PORT.<port>", expr)
 }
 
 // addressedDeploymentByName is the active deployment name; its latest alias survives redeploys.
@@ -419,7 +424,18 @@ func (gws *GatewayService) appAddress(target *addressedDeployment, ref appRefere
 		return "", fmt.Errorf("app %q: TCP references need the TCP gateway, which is not enabled", ref.name)
 	}
 	tcpURL := common.BuildPodDeploymentURL(tcp.GetExternalURL(), common.InvokeUrlTypeHost, &target.deployment, &onePort)
-	return tcpHostFromURL(tcpURL), nil
+	address := tcpHostFromURL(tcpURL)
+	if ref.kind == "TCP" {
+		return address, nil
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fmt.Errorf("app %q: split TCP address %q: %w", ref.name, address, err)
+	}
+	if ref.kind == "HOST" {
+		return host, nil
+	}
+	return port, nil
 }
 
 // DeploymentURL is the latest-alias URL of a deployment: TCP pods on the TCP

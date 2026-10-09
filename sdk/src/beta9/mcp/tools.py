@@ -152,8 +152,13 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
             f"Deploy a project directory from this machine with the {cli} CLI; returns a job to poll "
             "with deploy_status. Give a Dockerfile (./Dockerfile is found automatically), an image, or "
             f"an entrypoint plus the port the server binds; or a {cli}-decorated object as handler "
-            "'file.py:name'. Env values may reference apps and databases (${{app.NAME.URL}}, "
-            "${{db.NAME.DATABASE_URL}}) and secrets (${{secret.NAME}})."
+            "'file.py:name'. A worker (ports: []) runs continuously. Apps have no private network: "
+            "env values reach other apps by reference, ${{app.NAME.URL}} or ${{app.NAME.URL.<port>}} "
+            "(public HTTPS) and ${{app.NAME.TCP.<port>}} (host:port through the TLS TCP gateway; "
+            "HOST.<port> and PORT.<port> give its halves); "
+            "databases by ${{db.NAME.DATABASE_URL}}, REDIS_URL, HOST, PORT, USERNAME, PASSWORD; "
+            "secrets by ${{secret.NAME}}. Secret and credential references must be the whole value. "
+            "Several services, or a docker-compose project: use stack_from_compose and stack_plan."
         ),
         "inputSchema": {
             "type": "object",
@@ -166,6 +171,10 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                     "description": "file.py:object for a decorated function or Pod.",
                 },
                 "dockerfile": {**STRING, "description": "Path relative to directory."},
+                "context_dir": {
+                    **STRING,
+                    "description": "Build context relative to directory; default: the Dockerfile's directory.",
+                },
                 "image": {**STRING, "description": "Registry image to run instead of building."},
                 "entrypoint": STRINGS,
                 "ports": {
@@ -201,7 +210,11 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                 "max_replicas": INTEGER,
                 "tcp": {
                     "type": "boolean",
-                    "description": "Raw TCP (SSH, Postgres) instead of HTTP.",
+                    "description": (
+                        "Every port speaks raw TCP (SSH, Postgres) instead of HTTP. With one HTTP "
+                        "port, keep false; its other ports are still reachable at "
+                        "${{app.NAME.TCP.<port>}}."
+                    ),
                 },
                 "wait_seconds": {
                     **INTEGER,
@@ -285,6 +298,7 @@ def run_definition(cli: str, cwd: str) -> Dict[str, Any]:
 # One --flag per scalar argument of `deploy`.
 DEPLOY_FLAGS = {
     "dockerfile": "--dockerfile",
+    "context_dir": "--context-dir",
     "image": "--image",
     "cpu": "--cpu",
     "memory": "--memory",

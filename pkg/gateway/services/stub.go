@@ -74,6 +74,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		if err := configurePodDeploymentAutoscaler(
 			autoscaler,
 			keepWarmSeconds,
+			len(in.Ports) > 0,
 			resourcePolicy.maxReplicasLimit(gws.appConfig.GatewayService.StubLimits.MaxReplicas),
 		); err != nil {
 			return &pb.GetOrCreateStubResponse{
@@ -565,12 +566,14 @@ func autoscalerFromProto(in *pb.Autoscaler) *types.Autoscaler {
 	}
 }
 
-func configurePodDeploymentAutoscaler(autoscaler *types.Autoscaler, keepWarmSeconds int, maxReplicas uint64) error {
+func configurePodDeploymentAutoscaler(autoscaler *types.Autoscaler, keepWarmSeconds int, exposesPorts bool, maxReplicas uint64) error {
 	if autoscaler.MaxContainers == 0 {
 		autoscaler.MaxContainers = 1
 	}
 
-	if keepWarmSeconds < 0 && autoscaler.MinContainers == 0 {
+	// Connections scale a pod up from zero; a portless pod (a worker) never
+	// receives one, so it would never start.
+	if (keepWarmSeconds < 0 || !exposesPorts) && autoscaler.MinContainers == 0 {
 		autoscaler.MinContainers = 1
 	}
 

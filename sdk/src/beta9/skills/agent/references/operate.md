@@ -45,6 +45,15 @@ A stack is a named board of apps. `create_stack { name, apps: [...] }`,
 put its apps in one stack named after the project so the user sees the
 whole thing and the references between the pieces.
 
+A stack can also be deployed from a spec: `stack_plan` validates it,
+`stack_apply` advances the plan one step per call (repeat until `Stack
+applied`), `stack_status` shows each service's state and error, and
+`stack_resolve` settles a failed or uncertain service after you inspect it.
+To change a stack, edit the spec and plan again; reapplying redeploys its
+applications and keeps its databases. `spec.secrets` declares secrets the
+apply generates once (`{"length": 32}`, optional `alphabet`) for services to
+share as `${{secret.NAME}}`.
+
 ## Money and capacity
 
 - `INSUFFICIENT_CREDITS`: the workspace has no prepaid credit. `whoami`

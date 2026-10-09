@@ -36,7 +36,14 @@ variable name instead.
 Connection strings use TLS to the platform's TCP gateway with
 `sslmode=require` (Postgres), `ssl-mode=REQUIRED` (MySQL), `tls=true`
 (Mongo), `rediss://` (Redis). Clients that pin CA certificates need the
-system bundle.
+system bundle. An app configured with split settings (`REDIS_HOST`,
+`REDIS_PORT`, `REDIS_PASSWORD`) must turn its own TLS option on. Redis runs
+with `maxmemory-policy noeviction`, as job queues such as BullMQ and Sidekiq
+require.
+
+In a stack, a database is a service with `"type": "database"` and
+`"deploy": {"kind": "postgres"}`; `stack_from_compose` turns compose's
+postgres and redis services into these.
 
 ## Read the credentials
 
@@ -48,8 +55,8 @@ to the user only when they ask; prefer references in apps.
 
 `rotate_database_credentials` sets a new password and restarts the database
 and every app bound to it; confirm with the user first.
-`delete_database` (requires `confirm: true`) removes the service and its
-secrets; the disk is kept.
+`delete_database` (requires `confirm: true`) removes the service, its
+credential secrets and its durable disk: the data is gone.
 
 ## Migrations and seed data
 
