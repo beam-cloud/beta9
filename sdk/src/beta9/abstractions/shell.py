@@ -223,6 +223,7 @@ def create_resumable_socket(host, port, path, container_id, token, timeout, host
             url + "?" + query,
             header={"Authorization": f"Bearer {token}"},
             host=host_header or netloc,
+            origin=f"{'https' if tls else 'http'}://{host_header or netloc}",
             timeout=timeout,
         )
         ready.set()

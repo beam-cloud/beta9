@@ -632,3 +632,31 @@ def test_resumable_shell_keeps_legacy_gateway_compatibility(monkeypatch):
         )
         is legacy
     )
+
+
+@pytest.mark.parametrize("port,host_header", [(443, None), (80, None), (8443, "shell.test")])
+def test_resumable_shell_origin_matches_the_host_header(monkeypatch, port, host_header):
+    from types import SimpleNamespace
+    from beta9.abstractions import shell
+
+    monkeypatch.setattr(
+        shell.requests,
+        "head",
+        lambda *_, **__: SimpleNamespace(status_code=204, headers={"X-Beta9-Tunnel-Protocol": "2"}),
+    )
+    calls = []
+    monkeypatch.setattr(shell.websocket, "create_connection", lambda _, **kw: calls.append(kw))
+    monkeypatch.setattr(shell, "bridge_tunnel", lambda connect, *_: connect("session", 0, True))
+    sock = shell.create_socket(
+        "gateway.test",
+        port,
+        "/shell/id/stub",
+        "container",
+        "token",
+        host_header=host_header,
+        resumable=True,
+    )
+    sock.close()
+    host = host_header or f"gateway.test:{port}"
+    assert calls[0]["host"] == host
+    assert calls[0]["origin"] == f"{'https' if port == 443 else 'http'}://{host}"
