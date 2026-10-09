@@ -74,6 +74,18 @@ func TestWarmResumeRejectsChangedDiskAndCredential(t *testing.T) {
 	require.Empty(t, runtime.requests)
 }
 
+func TestReconcileConsumesCheckpointEvenAfterAmbiguousRunningStatus(t *testing.T) {
+	s, v, _, _, _ := fixture()
+	v.Status = "running"
+	v.MemoryCheckpointID = "already-restored"
+	v.MemoryDiskSnapshots = map[string]string{rootDisk(v): "old-generation"}
+	require.NoError(t, s.reconcileVM(context.Background(), v))
+	stored, err := s.repo.GetVM(context.Background(), v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	require.Empty(t, stored.MemoryCheckpointID)
+	require.Empty(t, stored.MemoryDiskSnapshots)
+}
+
 func TestExtraDisksUseMicroVMDefaultsAndValidatedSizes(t *testing.T) {
 	spec := types.VMSpec{ImageID: "base", Disks: []*pb.DurableDisk{{Name: "data", MountPath: "/data", Size: "5GiB"}}}
 	require.NoError(t, validate(&spec))

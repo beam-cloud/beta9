@@ -41,6 +41,13 @@ func vmRequest(e *echo.Echo, method, path, body string) *httptest.ResponseRecord
 	return rec
 }
 
+func TestInternalProcessControlPortCannotBePublished(t *testing.T) {
+	spec := types.VMSpec{ImageID: "base", Ports: []uint32{uint32(types.WorkerSandboxProcessManagerPort)}}
+	require.Error(t, validate(&spec))
+	spec.Ports, spec.PrivatePorts = nil, []uint32{uint32(types.WorkerSandboxProcessManagerPort)}
+	require.Error(t, validate(&spec))
+}
+
 func TestCreationRequestIsWorkspaceScopedAndDoesNotLaunchTwice(t *testing.T) {
 	s, _, info, runtime, _ := fixture()
 	e := managementAPI(s, info)
@@ -57,6 +64,12 @@ func TestCreationRequestIsWorkspaceScopedAndDoesNotLaunchTwice(t *testing.T) {
 	require.Equal(t, a.Handle, b.Handle)
 	require.Len(t, runtime.requests, 1)
 	require.Empty(t, a.CreationDigest)
+	require.Empty(t, a.TrafficAccessToken)
+	access := vmRequest(e, "POST", "/"+info.Workspace.ExternalId+"/"+a.ID+"/access-token", `{}`)
+	require.Equal(t, 200, access.Code)
+	stored, err := s.repo.GetVM(context.Background(), info.Workspace.Id, a.ID)
+	require.NoError(t, err)
+	require.Contains(t, access.Body.String(), stored.TrafficAccessToken)
 	conflict := vmRequest(e, "POST", "/"+info.Workspace.ExternalId, strings.Replace(body, "retry-safe", "changed", 1))
 	require.Equal(t, 409, conflict.Code)
 	require.Len(t, runtime.requests, 1)

@@ -1143,7 +1143,7 @@ class SandboxProcessManager:
                 self.sandbox_instance,
                 pid=process.pid,
                 cwd=process.cwd,
-                args=process.cmd.split(" "),
+                args=shlex.split(process.cmd),
                 env=process.env,
                 exit_code=process.exit_code,
             )

@@ -136,6 +136,7 @@ func (s *Service) response(v *types.VM) types.VM {
 	copy := *v
 	copy.Spec.Env = nil
 	copy.CreationDigest = ""
+	copy.TrafficAccessToken = ""
 	s.urls(&copy)
 	return copy
 }
@@ -324,6 +325,9 @@ func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, 
 	defer unlock()
 	if requestID != "" {
 		existing, err := s.repo.GetVM(ctx, info.Workspace.Id, id)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
 		if err == nil {
 			if existing.CreationDigest != digest {
 				return nil, echo.NewHTTPError(409, "request_id was already used with different VM settings")
@@ -332,9 +336,6 @@ func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, 
 				return nil, echo.NewHTTPError(410, "the VM for this request_id was removed")
 			}
 			return existing, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
 		}
 	}
 	// Hold the lifecycle lock before publishing the row to the reconciler.
@@ -434,7 +435,7 @@ func (s *Service) action(c echo.Context) error {
 		}
 		return c.JSON(201, s.response(child))
 	case "expose", "unexpose", "bind":
-		if req.Port == 0 || req.Port > 65535 || req.Port == 2222 || req.Port == 7681 || (req.Port == 8080 && v.Spec.Desktop) {
+		if req.Port == 0 || req.Port > 65535 || req.Port == 2222 || req.Port == 7681 || req.Port == uint32(types.WorkerSandboxProcessManagerPort) || (req.Port == 8080 && v.Spec.Desktop) {
 			return echo.NewHTTPError(400, "invalid or reserved port")
 		}
 		if v.ContainerID != "" && c.Param("action") != "unexpose" {
@@ -491,6 +492,9 @@ func (s *Service) action(c echo.Context) error {
 		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return apiError(err)
 		}
+		fallthrough
+	case "access-token":
+		return c.JSON(200, map[string]string{"token": v.TrafficAccessToken})
 	default:
 		return echo.NewHTTPError(404, "unknown VM action")
 	}

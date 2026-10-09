@@ -423,12 +423,11 @@ class VM:
 
     def rotate_access_token(self) -> str:
         """Immediately revoke the previous token for protected application ports."""
-        self._set(self._action("rotate-access-token"))
-        return self.info["traffic_access_token"]
+        return self._action("rotate-access-token")["token"]
 
     @property
     def traffic_access_token(self):
-        return self.refresh().info.get("traffic_access_token")
+        return self._action("access-token")["token"]
 
     def access_url(self, port: int, *, ttl=600) -> str:
         """Create an expiring browser entry URL for a protected application port.
@@ -493,10 +492,14 @@ class VM:
         """Bind a port for authenticated tunnels without publishing a URL."""
         self._set(self._action("bind", port=port))
 
-    def _sandbox(self):
+    def _sandbox(self, *, auto_resume=True):
         self.refresh()
         container = self.info.get("container_id")
-        if self.info["status"] != "running" and self.info.get("spec", {}).get("auto_resume"):
+        if (
+            auto_resume
+            and self.info["status"] != "running"
+            and self.info.get("spec", {}).get("auto_resume")
+        ):
             self._set(self._action("wake"))
             self.wait()
             container = self.info.get("container_id")

@@ -390,7 +390,7 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 		if state.Status == types.ContainerStatusRunning {
 			v.EverRunning = true
 			v.LaunchAttempts = 0
-			if v.Status != "running" {
+			if v.Status != "running" || v.MemoryCheckpointID != "" {
 				v.Status = "running"
 				v.Error = ""
 				v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil

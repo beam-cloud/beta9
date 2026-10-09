@@ -135,7 +135,7 @@ func validate(spec *types.VMSpec) error {
 	ports = append(ports, spec.Ports...)
 	spec.Ports = nil
 	for _, port := range ports {
-		if port == 0 || port > 65535 || (port == 2222 && !spec.SSH) {
+		if port == 0 || port > 65535 || port == uint32(types.WorkerSandboxProcessManagerPort) || (port == 2222 && !spec.SSH) {
 			return fmt.Errorf("invalid port %d", port)
 		}
 		if !seen[port] {
@@ -144,7 +144,7 @@ func validate(spec *types.VMSpec) error {
 		}
 	}
 	for _, port := range spec.PrivatePorts {
-		if port == 0 || port > 65535 || port == 2222 {
+		if port == 0 || port > 65535 || port == 2222 || port == uint32(types.WorkerSandboxProcessManagerPort) {
 			return fmt.Errorf("invalid private port %d", port)
 		}
 	}
@@ -315,47 +315,54 @@ func (s *Service) accessOwner(ctx context.Context, v *types.VM) (*auth.AuthInfo,
 	return &auth.AuthInfo{Workspace: &workspace, Token: token}, nil
 }
 
+// One attempt owns the lifecycle lock; the outer loop owns its retry deadline.
+func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, port uint32) (*types.VM, bool, error) {
+	v, unlock, err := s.lockedVM(ctx, record.WorkspaceID, record.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer unlock()
+	if v.DesiredState == "deleted" || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
+		return nil, false, echo.NewHTTPError(409, "VM access changed while resuming")
+	}
+	info, err := s.accessOwner(ctx, v)
+	if err != nil {
+		return nil, false, err
+	}
+	ctx = auth.ContextWithAuthInfo(ctx, info)
+	if v.DesiredState != "running" {
+		if err := s.activate(ctx, info, v); err != nil {
+			return nil, false, echo.NewHTTPError(503, "unable to resume VM: "+err.Error())
+		}
+	}
+	state, err := s.runtimeState(v)
+	if err != nil {
+		return nil, false, echo.NewHTTPError(503, "unable to resume VM: "+err.Error())
+	}
+	if state == nil || state.Status != types.ContainerStatusRunning {
+		return v, false, nil
+	}
+	v.Status = "running"
+	// Probe the forwarding route before sending the original request once.
+	ready, err := s.runtime.VMPortReady(ctx, v.StubID, v.ContainerID, port)
+	if err != nil {
+		return nil, false, echo.NewHTTPError(503, "VM readiness unavailable: "+err.Error())
+	}
+	return v, ready, nil
+}
+
 func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port uint32) (*types.VM, error) {
 	ctx, cancel := context.WithTimeout(parent, 180*time.Second)
 	defer cancel()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		v, unlock, err := s.lockedVM(ctx, record.WorkspaceID, record.ID)
-		if err == nil {
-			if v.DesiredState == "deleted" || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
-				unlock()
-				return nil, echo.NewHTTPError(409, "VM access changed while resuming")
-			}
-			info, ownerErr := s.accessOwner(ctx, v)
-			if ownerErr != nil {
-				unlock()
-				return nil, ownerErr
-			}
-			ctx = auth.ContextWithAuthInfo(ctx, info)
-			if v.DesiredState != "running" {
-				err = s.activate(ctx, info, v)
-			}
-			if err == nil {
-				state, stateErr := s.runtimeState(v)
-				err = stateErr
-				if state != nil && state.Status == types.ContainerStatusRunning {
-					v.Status = "running"
-					// Do not forward a POST until the app's listening socket is
-					// ready. A cold boot restarts systemd services, not processes.
-					ready, probeErr := s.runtime.VMPortReady(ctx, v.StubID, v.ContainerID, port)
-					if probeErr == nil && ready {
-						unlock()
-						return v, nil
-					}
-				}
-			}
-			unlock()
-			if err != nil {
-				return nil, echo.NewHTTPError(503, "unable to resume VM: "+err.Error())
-			}
-		} else if !strings.Contains(err.Error(), "operation already in progress") {
+		v, ready, err := s.resumeAccessAttempt(ctx, record, port)
+		if err != nil && !strings.Contains(err.Error(), "operation already in progress") {
 			return nil, apiError(err)
+		}
+		if ready {
+			return v, nil
 		}
 		select {
 		case <-ctx.Done():

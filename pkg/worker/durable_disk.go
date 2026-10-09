@@ -578,16 +578,24 @@ func (s *Worker) restoreDurableDiskSnapshot(ctx context.Context, request *types.
 	})
 }
 
+func (s *Worker) diskSnapshotByID(ctx context.Context, request *types.ContainerRequest, id string) (*types.DiskSnapshot, error) {
+	resp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{WorkspaceId: cacheRequestWorkspaceID(request), SnapshotId: id}))
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, nil
+	}
+	return durableDiskSnapshotFromProto(resp.Snapshot), nil
+}
+
 func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
 	sourceID := mount.DurableDisk.SourceSnapshotId
 	if sourceID == "" {
 		return nil, nil
 	}
 
-	resp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{
-		WorkspaceId: cacheRequestWorkspaceID(request),
-		SnapshotId:  sourceID,
-	}))
+	seed, err := s.diskSnapshotByID(ctx, request, sourceID)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -608,7 +616,6 @@ func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.Con
 		return nil, fmt.Errorf("resolve durable disk source snapshot %s: %w", sourceID, err)
 	}
 
-	seed := durableDiskSnapshotFromProto(resp.Snapshot)
 	if seed == nil || seed.ManifestKey == "" {
 		log.Warn().
 			Str("disk", mount.DurableDisk.Name).

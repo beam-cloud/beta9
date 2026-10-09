@@ -462,9 +462,9 @@ def processes_vm(service, name, as_json):
 @extraclick.pass_service_client
 def kill_vm(service, name, pid, container_id):
     vm = _vm(service, name)
-    sandbox = vm._sandbox()
     if container_id and container_id != vm.info["container_id"]:
         raise click.ClickException("The VM restarted; this process belongs to a previous runtime")
+    sandbox = vm._sandbox(auto_resume=False)
     sandbox.process.get_process(pid).kill()
 
 

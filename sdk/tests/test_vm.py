@@ -13,7 +13,7 @@ from click.testing import CliRunner
 from beta9.abstractions.image import Image
 from beta9.abstractions.vm import VM, prepare_image
 from beta9.abstractions import vm as vm_module
-from beta9.exceptions import SandboxProcessError
+from beta9.exceptions import SandboxProcessError, SandboxConnectionError
 from beta9.channel import GatewayHTTPError
 from beta9.cli import extraclick
 from beta9.cli import vm as vm_cli
@@ -452,6 +452,52 @@ def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
     assert remote.closed
 
 
+def test_disabled_desktop_does_not_wake_a_vm(monkeypatch):
+    vm = VM(_service=service())._set(
+        {"name": "dev", "status": "stopped", "spec": {"auto_resume": True}}
+    )
+    monkeypatch.setattr(vm, "refresh", lambda: vm)
+    acquire = MagicMock()
+    monkeypatch.setattr(vm, "_sandbox", acquire)
+    with pytest.raises(ValueError, match="desktop=True"):
+        vm.desktop.screen_size()
+    acquire.assert_not_called()
+
+
+def test_process_kill_transport_can_refuse_automatic_wake(monkeypatch):
+    selected = service()
+    vm = VM(_service=selected)._set(
+        {"name": "dev", "status": "stopped", "spec": {"auto_resume": True}}
+    )
+    monkeypatch.setattr(vm, "refresh", lambda: vm)
+    with pytest.raises(SandboxConnectionError, match="not running"):
+        vm._sandbox(auto_resume=False)
+    selected.http.json.assert_not_called()
+
+
+def test_cli_stale_kill_rejects_before_acquiring_runtime(cli_service, monkeypatch):
+    vm = MagicMock()
+    vm.info = {"container_id": "current"}
+    monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
+    result = CliRunner().invoke(vm_cli.management, ["kill", "--container-id", "old", "dev", "44"])
+    assert result.exit_code == 1
+    assert "previous runtime" in result.output
+    vm._sandbox.assert_not_called()
+
+
+def test_cli_ps_uses_pid_indexed_processes(cli_service, monkeypatch):
+    vm = MagicMock()
+    vm.process.list_processes.return_value = {
+        44: SimpleNamespace(pid=44, args=["echo", "two words"], cwd="/", exit_code=0)
+    }
+    monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
+    result = CliRunner().invoke(vm_cli.management, ["ps", "--json", "dev"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == [
+        {"pid": 44, "args": ["echo", "two words"], "cwd": "/", "exit_code": 0}
+    ]
+
+
 def test_activity_touch_retries_transient_lifecycle_lock():
     selected = service()
     selected.http.json.side_effect = [GatewayHTTPError(409, "VM operation already in progress"), {}]
@@ -487,7 +533,7 @@ def test_activity_lease_refreshes_during_work_and_stops_on_exit():
     with vm.keep_alive():
         assert heartbeats.wait(2), "active work must refresh before its idle deadline"
     calls = selected.http.json.call_count
-    assert not heartbeats.clear()
+    heartbeats.clear()
     assert not heartbeats.wait(0.4), "lease must stop when its owner exits"
     assert selected.http.json.call_count == calls
 

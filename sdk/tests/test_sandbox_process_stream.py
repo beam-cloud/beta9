@@ -98,6 +98,19 @@ class ExecReadyRetryStub:
         return call
 
 
+def test_process_discovery_preserves_quoted_argument_boundaries():
+    response = SimpleNamespace(
+        ok=True,
+        processes=[
+            SimpleNamespace(pid=44, cmd="printf '%s' 'two words'", cwd="/", env={}, exit_code=0)
+        ],
+    )
+    sandbox = SimpleNamespace(
+        container_id="sandbox", stub=SimpleNamespace(sandbox_list_processes=lambda _: response)
+    )
+    assert SandboxProcessManager(sandbox).list_processes()[44].args == ["printf", "%s", "two words"]
+
+
 def test_process_stream_read_propagates_fetch_errors():
     def fetch():
         raise SandboxProcessError("stdout unavailable")

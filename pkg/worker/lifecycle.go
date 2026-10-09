@@ -1052,7 +1052,7 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 	}
 
 	exposePorts := make(map[uint32]struct{}, len(request.Ports))
-	if request.Checkpoint != nil {
+	if request.Checkpoint != nil && !request.IsPersistentVM() {
 		for _, port := range request.Ports {
 			exposePorts[port] = struct{}{}
 		}

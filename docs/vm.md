@@ -51,7 +51,7 @@ with VM services, then pass its result to `vm new --image-id`. Existing image ID
 must already contain these services. Registry images and Dockerfiles passed
 directly to `vm new` receive the service layer automatically.
 
-Lifecycle commands are `new`, `list`, `get`, `start`/`resume`, `stop`, `rm`, and
+Lifecycle commands are `new`, `list`, `get`, `start`/`resume`, `stop`, `rm`,
 `pause`, `fork`, and `update`. Access commands are `exec`, `ssh`, `scp`, `sync --watch`, `desktop`, and
 `terminal`. `ports`, `expose`, and `unexpose` manage published ports.
 `port-forward dev 15432:5432` binds localhost through an authenticated tunnel and

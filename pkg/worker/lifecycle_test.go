@@ -38,6 +38,10 @@ func TestWarmVMUsesCurrentPortBindings(t *testing.T) {
 		Checkpoint: &types.Checkpoint{ExposedPorts: []uint32{7681, 8000}},
 	}
 	require.Equal(t, []uint32{7681, 9000, uint32(types.WorkerShellPort), uint32(types.WorkerSandboxProcessManagerPort)}, portsForRequest(request))
+	requested := request.Ports
+	request.Ports = portsForRequest(request)
+	bindings := startupPortBindingsForRequest(request, requested, []int{17681, 19000, 12222, 17111})
+	require.Equal(t, []PortBinding{{HostPort: 17681, ContainerPort: 7681}, {HostPort: 19000, ContainerPort: 9000}}, bindings)
 	request.Env = nil
 	require.Equal(t, request.Checkpoint.ExposedPorts, portsForRequest(request))
 }

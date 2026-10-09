@@ -244,14 +244,11 @@ func (s *Worker) openDatabaseDiskJournal(ctx context.Context, request *types.Con
 	if newest != nil && newest.ExternalId == snapshotID {
 		return journal, newest, nil
 	}
-	response, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{
-		WorkspaceId: cacheRequestWorkspaceID(request), SnapshotId: snapshotID,
-	}))
+	committed, err := s.diskSnapshotByID(ctx, request, snapshotID)
 	if err != nil {
 		_ = journal.Close()
 		return nil, nil, err
 	}
-	committed := durableDiskSnapshotFromProto(response.Snapshot)
 	if committed == nil || committed.ManifestKey == "" {
 		_ = journal.Close()
 		return nil, nil, fmt.Errorf("committed database snapshot %s is unavailable", snapshotID)
@@ -610,14 +607,11 @@ func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.Co
 		if len(rows) > disk.DefaultMaxChainDepth {
 			return nil, fmt.Errorf("disk %q snapshot chain exceeds %d generations", mount.DurableDisk.Name, disk.DefaultMaxChainDepth)
 		}
-		parentResp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{
-			WorkspaceId: cacheRequestWorkspaceID(request),
-			SnapshotId:  row.ParentSnapshotId,
-		}))
+		parent, err := s.diskSnapshotByID(ctx, request, row.ParentSnapshotId)
 		if err != nil {
 			return nil, fmt.Errorf("resolve qcow snapshot parent %s: %w", row.ParentSnapshotId, err)
 		}
-		row = durableDiskSnapshotFromProto(parentResp.Snapshot)
+		row = parent
 		if row == nil || row.ManifestKey == "" {
 			return nil, fmt.Errorf("qcow snapshot parent %s is missing", rows[len(rows)-1].ParentSnapshotId)
 		}
@@ -771,11 +765,10 @@ func (s *Worker) restoreQcowSnapshotRow(ctx context.Context, request *types.Cont
 	if id == "" {
 		return nil, fmt.Errorf("VM memory checkpoint has no paired disk %s", mount.DurableDisk.Name)
 	}
-	resp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{WorkspaceId: cacheRequestWorkspaceID(request), SnapshotId: id}))
+	row, err := s.diskSnapshotByID(ctx, request, id)
 	if err != nil {
 		return nil, fmt.Errorf("get paired VM disk snapshot: %w", err)
 	}
-	row := durableDiskSnapshotFromProto(resp.Snapshot)
 	if row == nil || row.ExternalId != id || row.DiskName != mount.DurableDisk.Name || row.ManifestKey == "" || row.Format != types.DiskSnapshotFormatQcowV1 {
 		return nil, fmt.Errorf("paired VM disk snapshot %s is unavailable or incompatible", id)
 	}

@@ -10,10 +10,10 @@ class VMDesktop:
         self.vm = vm
 
     def _sandbox(self):
-        sandbox = self.vm._sandbox()
+        self.vm.refresh()
         if not self.vm.info["spec"].get("desktop"):
             raise ValueError("Create this VM with desktop=True to use desktop controls")
-        return sandbox
+        return self.vm._sandbox()
 
     def _run(self, *args, stdin=None):
         process = self._sandbox().process.exec(*args, cwd="/", stdin=stdin)

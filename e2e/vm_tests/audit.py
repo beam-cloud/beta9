@@ -78,11 +78,13 @@ def main():
             capture_output=True,
             timeout=timeout,
         )
-        if result.returncode != expected:
+        if (expected is None and result.returncode == 0) or (
+            expected is not None and result.returncode != expected
+        ):
             raise RuntimeError(
                 (command, result.returncode, result.stdout, result.stderr)
             )
-        return result.stdout
+        return result.stdout + result.stderr if expected is None else result.stdout
 
     with ServiceClient(get_config_context(args.profile)) as service:
         if args.cleanup:
@@ -178,9 +180,9 @@ def main():
         pid = json.loads(
             cli(
                 "exec",
-                args.name,
                 "--detach",
                 "--json",
+                args.name,
                 "--",
                 "sh",
                 "-c",
@@ -191,28 +193,19 @@ def main():
         assert "firstsecond" in cli("logs", args.name, "--pid", str(pid))
         assert isinstance(json.loads(cli("ps", args.name, "--json")), list)
         passed("detached_exec_reattachment_and_logs")
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "from beta9.cli.main import start; start()",
-                "--context",
-                args.profile,
-                "vm",
-                "exec",
-                args.name,
-                "--timeout",
-                "1",
-                "--json",
-                "--",
-                "sleep",
-                "600",
-            ],
-            capture_output=True,
-            text=True,
+        output = cli(
+            "exec",
+            "--timeout",
+            "1",
+            "--json",
+            args.name,
+            "--",
+            "sleep",
+            "600",
+            expected=None,
             timeout=20,
         )
-        assert result.returncode != 0
+        assert "timeout" in output.lower() or "timed out" in output.lower()
         active = json.loads(cli("ps", args.name, "--json"))
         assert not any(
             p["args"] == ["sleep", "600"] and p["exit_code"] < 0 for p in active
@@ -282,7 +275,7 @@ def main():
         vm.wait()
         assert vm.fs.read_text("/data/persistent.txt") == "durable-extra-disk"
         assert vm.fs.read_text("/shared/persistent.txt") == "shared-volume"
-        assert execute("sh", "-c", "test ! -e /run/ram-marker; echo cold") == "cold"
+        assert execute("sh", "-c", "test ! -e /run/ram-marker && echo cold") == "cold"
         passed(
             "http_auto_resume_single_post_and_storage",
             {"seconds": round(time.monotonic() - boot_started, 2)},
