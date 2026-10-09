@@ -24,6 +24,17 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/ ./cmd/
 COPY pkg/ ./pkg/
 COPY proto/ ./proto/
+COPY docker/patches/goproc/workload-oom.patch /tmp/goproc-workload-oom.patch
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    mkdir -p /out && \
+    cp -a "$(go list -m -f '{{.Dir}}' github.com/beam-cloud/goproc)" /tmp/beam-goproc && \
+    chmod -R u+w /tmp/beam-goproc && \
+    cd /tmp/beam-goproc && \
+    git apply /tmp/goproc-workload-oom.patch && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+      go build -trimpath -ldflags="-s -w" -o /out/goproc ./cmd/main.go
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

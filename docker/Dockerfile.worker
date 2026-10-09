@@ -197,6 +197,17 @@ RUN go build -o /usr/local/bin/agent ./cmd/agent
 # Guest init for microvm sandboxes: static, PID 1 inside the VM.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/beam-vminit ./cmd/vminit
 
+# Build the pinned process manager with native guest cgroup placement and
+# signal exit reporting. Keep its protocol/library version from go.mod.
+RUN <<EOT
+set -eux
+cp -a "$(go list -m -f '{{.Dir}}' github.com/beam-cloud/goproc)" /tmp/beam-goproc
+chmod -R u+w /tmp/beam-goproc
+cd /tmp/beam-goproc
+git apply /workspace/docker/patches/goproc/workload-oom.patch
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/goproc ./cmd/main.go
+EOT
+
 # uv
 # ========================
 FROM golang AS uv
@@ -385,13 +396,7 @@ EOT
 
 RUN apt-get install -y wget git
 
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.15/goproc-0.1.15-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
-    elif [ "$TARGETARCH" = "amd64" ]; then \
-      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.15/goproc-0.1.15-linux-amd64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
-    else \
-      echo "Unsupported architecture: $TARGETARCH" && exit 1 ; \
-    fi
+COPY --from=worker /usr/local/bin/goproc /usr/local/bin/goproc
 
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \

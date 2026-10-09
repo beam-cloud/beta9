@@ -4,6 +4,7 @@ import (
 	"context"
 	"syscall"
 
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -29,8 +30,9 @@ type State struct {
 
 // Event represents a container event
 type Event struct {
-	Type string // "oom", "exit", "error"
-	Err  error
+	Type           string // "oom", "application_oom", "exit", "error"
+	Err            error
+	ApplicationOOM *microvm.ApplicationOOM
 }
 
 // RunOpts contains options for running a container

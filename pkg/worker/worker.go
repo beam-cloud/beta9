@@ -218,6 +218,7 @@ type ContainerInstance struct {
 	statusHeartbeatMu          sync.Mutex
 	stateMu                    sync.RWMutex
 	oomWatcherMu               sync.Mutex
+	applicationOOMCancel       context.CancelFunc
 	oomWatcher                 runtime.OOMWatcher
 	oomWatcherFactory          func(func()) runtime.OOMWatcher
 	oomWatcherOnOOM            func() error
@@ -350,6 +351,10 @@ func (i *ContainerInstance) suspendOOMWatcher() func() {
 
 func (i *ContainerInstance) stopOOMWatcher() {
 	i.oomWatcherMu.Lock()
+	if i.applicationOOMCancel != nil {
+		i.applicationOOMCancel()
+		i.applicationOOMCancel = nil
+	}
 	i.oomWatcherClosed = true
 	i.oomWatcherSuspended = true
 	i.oomWatcherGeneration++

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -41,6 +42,9 @@ func (s *Worker) setupOOMWatcher(
 	}
 	if containerRuntime == nil {
 		return
+	}
+	if containerRuntime.Name() == types.ContainerRuntimeMicroVM.String() {
+		s.setupApplicationOOMWatcher(ctx, containerInstance, request, outputLogger, containerRuntime)
 	}
 
 	if containerRuntime.Name() == types.ContainerRuntimeGvisor.String() {
@@ -80,6 +84,62 @@ func (s *Worker) setupOOMWatcher(
 	}, func() error {
 		return s.handleOOMKill(ctx, containerId, request, outputLogger, isOOMKilled)
 	})
+}
+
+// Guest application OOMs report an event without marking the runtime OOM-killed
+// or entering its stop/delete path. Victim selection stays in the guest kernel;
+// the process manager is outside the workload budget.
+func (s *Worker) setupApplicationOOMWatcher(ctx context.Context, instance *ContainerInstance, request *types.ContainerRequest, outputLogger *slog.Logger, rt runtime.Runtime) {
+	watchCtx, cancel := context.WithCancel(ctx)
+	events, err := rt.Events(watchCtx, request.ContainerId)
+	if err != nil {
+		cancel()
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("application OOM watcher failed to start")
+		return
+	}
+	instance.oomWatcherMu.Lock()
+	if instance.oomWatcherClosed {
+		instance.oomWatcherMu.Unlock()
+		cancel()
+		return
+	}
+	if instance.applicationOOMCancel != nil {
+		instance.applicationOOMCancel()
+	}
+	instance.applicationOOMCancel = cancel
+	instance.oomWatcherMu.Unlock()
+	go func() {
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				if event.ApplicationOOM == nil {
+					continue
+				}
+				oom := event.ApplicationOOM
+				outputLogger.Info(types.EventMessageApplicationOOMKilled.String(), "oom_kills", oom.Kills, "memory_limit", oom.MemoryLimit, "memory_usage", oom.MemoryUsage, "memory_peak", oom.MemoryPeak)
+				s.recordContainerEvent(watchCtx, request, types.EventContainerEventSchema{
+					ID:        types.ContainerEventApplicationOOMKilled,
+					Domain:    types.EventDomainRuntime,
+					Timestamp: time.Now().UTC(),
+					Reason:    "OOM",
+					Source:    types.EventSourceWorkerRuntime.String(),
+					Message:   types.EventMessageApplicationOOMKilled.String(),
+					Attrs: map[string]string{
+						types.EventAttrExitCode: "137",
+						"oom_kills":             strconv.FormatUint(oom.Kills, 10),
+						"memory_limit":          strconv.FormatInt(oom.MemoryLimit, 10),
+						"memory_usage":          strconv.FormatUint(oom.MemoryUsage, 10),
+						"memory_peak":           strconv.FormatUint(oom.MemoryPeak, 10),
+					},
+				})
+			}
+		}
+	}()
 }
 
 // handleOOMKill handles the OOM kill event

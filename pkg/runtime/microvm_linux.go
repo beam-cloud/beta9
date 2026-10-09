@@ -585,8 +585,30 @@ func (m *MicroVM) State(ctx context.Context, containerID string) (State, error) 
 }
 
 func (m *MicroVM) Events(ctx context.Context, containerID string) (<-chan Event, error) {
+	inst, ok := m.instance(containerID)
+	if !ok || inst.ctrl == nil {
+		return nil, ErrContainerNotFound{ContainerID: containerID}
+	}
 	ch := make(chan Event)
-	close(ch)
+	go func() {
+		defer close(ch)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-inst.ctrl.eventDone:
+				return
+			case event := <-inst.ctrl.applicationOOM:
+				select {
+				case ch <- event:
+				case <-ctx.Done():
+					return
+				case <-inst.ctrl.eventDone:
+					return
+				}
+			}
+		}
+	}()
 	return ch, nil
 }
 
@@ -1753,9 +1775,12 @@ func (inst *microVMInstance) removeTap() {
 // the container process's pid and exit code out, and signals and freeze
 // requests in.
 type microVMControl struct {
-	listener *net.UnixListener
-	exit     chan int
-	ready    chan struct{}
+	listener       *net.UnixListener
+	exit           chan int
+	ready          chan struct{}
+	applicationOOM chan Event
+	eventDone      chan struct{}
+	closeOnce      sync.Once
 	// network, when set, is pushed to the guest as soon as it reports in: a
 	// restored guest still carries the checkpointed container's identity.
 	// networkApplied receives the outcome of the first push.
@@ -1783,6 +1808,8 @@ func listenMicroVMControl(vsockPath string) (*microVMControl, error) {
 		ready:          make(chan struct{}),
 		networkApplied: make(chan error, 1),
 		pending:        map[uint64]chan microvm.Message{},
+		applicationOOM: make(chan Event, 16),
+		eventDone:      make(chan struct{}),
 	}
 	go ctrl.accept()
 	return ctrl, nil
@@ -1824,6 +1851,14 @@ func (c *microVMControl) serve(conn net.Conn) {
 				go c.pushNetwork()
 			}
 		case microvm.MsgPing:
+		case microvm.MsgApplicationOOM:
+			if msg.OOM != nil {
+				select {
+				case c.applicationOOM <- Event{Type: microvm.MsgApplicationOOM, ApplicationOOM: msg.OOM}:
+				case <-c.eventDone:
+					return
+				}
+			}
 		case microvm.MsgExit:
 			select {
 			case c.exit <- msg.Code:
@@ -1918,6 +1953,11 @@ func (c *microVMControl) close() {
 	if c == nil {
 		return
 	}
+	c.closeOnce.Do(func() {
+		if c.eventDone != nil {
+			close(c.eventDone)
+		}
+	})
 	_ = c.listener.Close()
 	c.mu.Lock()
 	if c.conn != nil {

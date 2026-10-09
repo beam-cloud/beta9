@@ -48,6 +48,13 @@ const (
 	// GuestCID is the CID assigned to every VM (one VM per vsock device).
 	GuestCID = 3
 
+	// The process manager lives outside the application's memory budget.
+	WorkloadCgroup      = "/sys/fs/cgroup/beam-workload"
+	WorkloadExecCgroup  = WorkloadCgroup + "/exec"
+	ControlCgroup       = "/sys/fs/cgroup/beam-control"
+	WorkloadCgroupEnv   = "GOPROC_WORKLOAD_CGROUP"
+	GuestMemoryHeadroom = 512 << 20
+
 	// Disk layout on the writable root disk, shared with container sandboxes
 	// so a durable disk restores into either kind.
 	DiskOverlayUpper = "overlay/upper"
@@ -61,7 +68,8 @@ const (
 
 // Spec is what the host tells the guest init about this VM, at SpecFile.
 type Spec struct {
-	Network Network `json:"network"`
+	Network             Network `json:"network"`
+	WorkloadMemoryBytes int64   `json:"workload_memory_bytes"`
 	// RootDisk is the block device holding the overlay upper (and Docker
 	// state). Always present.
 	RootDisk string `json:"root_disk"`
@@ -114,10 +122,11 @@ type Mount struct {
 // both sides exchange newline-delimited JSON.
 const (
 	// Guest -> host.
-	MsgStarted = "started" // Payload: Pid of the container process.
-	MsgExit    = "exit"    // Payload: Code, the container process exit code.
-	MsgAck     = "ack"     // Payload: ID of the command, OK, Error.
-	MsgPing    = "ping"    // Keepalive; lets init notice a connection that died with a restore.
+	MsgStarted        = "started"         // Payload: Pid of the container process.
+	MsgExit           = "exit"            // Payload: Code, the container process exit code.
+	MsgAck            = "ack"             // Payload: ID of the command, OK, Error.
+	MsgPing           = "ping"            // Keepalive; lets init notice a connection that died with a restore.
+	MsgApplicationOOM = "application_oom" // Payload: OOM; the VM remains running.
 
 	// Host -> guest.
 	MsgSignal  = "signal"  // Payload: Signal to deliver to the container process.
@@ -209,15 +218,25 @@ type FSResponse struct {
 
 // Message is one control frame.
 type Message struct {
-	Type    string   `json:"type"`
-	ID      uint64   `json:"id,omitempty"`
-	Pid     int      `json:"pid,omitempty"`
-	Code    int      `json:"code,omitempty"`
-	Signal  int      `json:"signal,omitempty"`
-	OK      bool     `json:"ok,omitempty"`
-	Error   string   `json:"error,omitempty"`
-	Text    string   `json:"text,omitempty"`
-	Network *Network `json:"network,omitempty"`
+	Type    string          `json:"type"`
+	ID      uint64          `json:"id,omitempty"`
+	Pid     int             `json:"pid,omitempty"`
+	Code    int             `json:"code,omitempty"`
+	Signal  int             `json:"signal,omitempty"`
+	OK      bool            `json:"ok,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Text    string          `json:"text,omitempty"`
+	Network *Network        `json:"network,omitempty"`
+	OOM     *ApplicationOOM `json:"oom,omitempty"`
+}
+
+// ApplicationOOM reports guest memory-cgroup kills, separate from a host
+// runtime OOM. Usage is the observation after the kernel selected a victim.
+type ApplicationOOM struct {
+	Kills       uint64 `json:"kills"`
+	MemoryLimit int64  `json:"memory_limit"`
+	MemoryUsage uint64 `json:"memory_usage"`
+	MemoryPeak  uint64 `json:"memory_peak"`
 }
 
 // MaxLineBytes bounds a control message or filesystem header line; the

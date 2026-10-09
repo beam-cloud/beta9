@@ -42,7 +42,7 @@ const (
 	MicroVMDockerAnnotation     = "com.beam.microvm.docker"      // "true" binds the disk's docker dir over /var/lib/docker
 	MicroVMRootDiskAnnotation   = "com.beam.microvm.disk.root"   // vhost-user-blk socket serving the writable root disk
 	MicroVMDiskAnnotationPrefix = "com.beam.microvm.disk."       // .<n> = "<socket>:<mount path>[:ro]"
-	MicroVMMemoryMiBAnnotation  = "com.beam.microvm.memory-mib"  // guest RAM when the spec carries no memory limit
+	MicroVMMemoryMiBAnnotation  = "com.beam.microvm.memory-mib"  // application budget; excludes guest control headroom
 	MicroVMVCPUAnnotation       = "com.beam.microvm.vcpus"       // vCPU count when the spec carries no CPU quota
 	MicroVMScratchGiBAnnotation = "com.beam.microvm.scratch-gib" // sparse scratch disk size for ephemeral sandboxes
 
@@ -57,8 +57,8 @@ const (
 	microVMDefaultMemoryMiB      = 512
 	microVMDefaultScratchGiB     = 32
 	// microVMMemoryHeadroom is charged to the VM's cgroup on top of guest RAM
-	// for the VMM, virtiofsd, and their queues. Guest RAM itself is fixed by
-	// --memory, so this does not let the workload exceed its request.
+	// for the VMM, virtiofsd, and their queues. The guest separately enforces
+	// the application budget, excluding its control headroom.
 	microVMMemoryHeadroom = 256 << 20
 	microVMMemoryAlign    = 2 << 20
 	microVMConsoleTail    = 64
@@ -161,6 +161,11 @@ func microVMVCPUs(spec *specs.Spec) int {
 }
 
 func microVMMemoryBytes(spec *specs.Spec) int64 {
+	size := microVMWorkloadMemoryBytes(spec) + microvm.GuestMemoryHeadroom
+	return (size + microVMMemoryAlign - 1) / microVMMemoryAlign * microVMMemoryAlign
+}
+
+func microVMWorkloadMemoryBytes(spec *specs.Spec) int64 {
 	var size int64
 	if mib, ok := annotationInt(spec, MicroVMMemoryMiBAnnotation); ok && mib > 0 {
 		size = mib << 20
@@ -169,7 +174,7 @@ func microVMMemoryBytes(spec *specs.Spec) int64 {
 	} else {
 		size = microVMDefaultMemoryMiB << 20
 	}
-	return (size + microVMMemoryAlign - 1) / microVMMemoryAlign * microVMMemoryAlign
+	return size
 }
 
 func annotationInt(spec *specs.Spec, key string) (int64, bool) {
@@ -342,10 +347,11 @@ func underAny(path string, prefixes ...string) bool {
 // decided that the guest has to act on.
 func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, mounts []microvm.Mount) *microvm.Spec {
 	vmSpec := &microvm.Spec{
-		Network:  network,
-		RootDisk: root.device,
-		Docker:   annotationBool(spec, MicroVMDockerAnnotation),
-		Mounts:   mounts,
+		WorkloadMemoryBytes: microVMWorkloadMemoryBytes(spec),
+		Network:             network,
+		RootDisk:            root.device,
+		Docker:              annotationBool(spec, MicroVMDockerAnnotation),
+		Mounts:              mounts,
 	}
 	for _, disk := range extra {
 		vmSpec.Disks = append(vmSpec.Disks, microvm.Disk{Device: disk.device, MountPath: disk.mountPath, ReadOnly: disk.readOnly})

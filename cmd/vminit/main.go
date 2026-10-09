@@ -96,6 +96,9 @@ func run() (int, error) {
 		return -1, fmt.Errorf("pivot root: %w", err)
 	}
 	finishPseudo()
+	if err := setupWorkloadMemory(vm.WorkloadMemoryBytes); err != nil {
+		return -1, fmt.Errorf("configure workload memory: %w", err)
+	}
 	hostname := spec.Hostname
 	if hostname != "" {
 		if err := unix.Sethostname([]byte(hostname)); err != nil {
@@ -114,6 +117,7 @@ func run() (int, error) {
 		return -1, err
 	}
 	defer ctrl.close()
+	go watchWorkloadOOM(ctrl)
 
 	return runProcess(spec.Process, ctrl)
 }
@@ -636,12 +640,14 @@ func (c *control) current() *os.File {
 	return c.file
 }
 
-func (c *control) send(msg microvm.Message) {
+func (c *control) send(msg microvm.Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.enc.Encode(msg); err != nil {
 		logf("control send %s: %v", msg.Type, err)
+		return err
 	}
+	return nil
 }
 
 func (c *control) ack(id uint64, err error) {
@@ -1178,7 +1184,18 @@ func searchFile(r io.Reader, regex *regexp.Regexp) ([]microvm.FSMatch, error) {
 // --- container process --------------------------------------------------------------------
 
 func runProcess(proc *specs.Process, ctrl *control) (int, error) {
-	env := proc.Env
+	env := append([]string(nil), proc.Env...)
+	// Only the manager inherits control membership; all of its exec children
+	// are atomically placed in the workload by goproc before they can allocate.
+	manager := filepath.Base(proc.Args[0]) == "goproc"
+	for n := len(env) - 1; n >= 0; n-- {
+		if strings.HasPrefix(env[n], microvm.WorkloadCgroupEnv+"=") {
+			env = append(env[:n], env[n+1:]...)
+		}
+	}
+	if manager {
+		env = append(env, microvm.WorkloadCgroupEnv+"="+microvm.WorkloadExecCgroup)
+	}
 	path, found := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", false
 	for _, kv := range env {
 		if value, ok := strings.CutPrefix(kv, "PATH="); ok {
@@ -1207,6 +1224,15 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 			Gid:    proc.User.GID,
 			Groups: proc.User.AdditionalGids,
 		},
+	}
+	if !manager {
+		group, err := os.Open(microvm.WorkloadExecCgroup)
+		if err != nil {
+			return -1, fmt.Errorf("open workload cgroup: %w", err)
+		}
+		defer group.Close()
+		cmd.SysProcAttr.UseCgroupFD = true
+		cmd.SysProcAttr.CgroupFD = int(group.Fd())
 	}
 
 	// Reap everything as PID 1; the container process's own status is what
