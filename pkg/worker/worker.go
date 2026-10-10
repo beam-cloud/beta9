@@ -1148,7 +1148,11 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 	}
 
 	// Set a non-zero exit code for the container (both in memory, and in repo)
-	exitCode := int(types.ContainerExitCodeStartupFailed)
+	exitCode := int(types.ContainerExitCodeUnknownError)
+	if request != nil && request.Stub.Type.Kind() == types.StubTypeVM {
+		// A VM can retry startup once final disk sync has succeeded.
+		exitCode = int(types.ContainerExitCodeStartupFailed)
+	}
 
 	serr, ok := runErr.(*types.ExitCodeError)
 	if ok {
