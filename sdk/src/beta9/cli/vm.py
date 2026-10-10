@@ -60,6 +60,10 @@ def _vm(service, name):
     return VM.get(name, _service=service)
 
 
+def _progress(message, done, as_json=False):
+    return nullcontext() if as_json else terminal.StepTracker().step(message, done)
+
+
 def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=()):
     image = (
         Image.from_dockerfile(dockerfile, build_context)
@@ -269,8 +273,9 @@ def new(
         _service=service,
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
-        vm.create(wait=False)
-        vm.wait()
+        with _progress("Creating VM", "VM ready", as_json):
+            vm.create(wait=False)
+            vm.wait()
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
@@ -301,9 +306,10 @@ def image_build(service, build_context, dockerfile, build_secret, desktop, as_js
     dockerfile = dockerfile or str(Path(build_context) / "Dockerfile")
     image = _image(dockerfile, build_context, secrets=build_secret)
     with StoredStdoutInterceptor(capture_logs=as_json):
-        result = prepare_image(image, service, desktop).build()
-    if not result.success:
-        raise click.ClickException(result.error or "VM image build failed")
+        with _progress("Preparing image", "Image ready", as_json):
+            result = prepare_image(image, service, desktop).build()
+            if not result.success:
+                raise click.ClickException(result.error or "VM image build failed")
     if as_json:
         terminal.print_json({"image_id": result.image_id, "desktop": desktop})
     else:
@@ -396,7 +402,9 @@ def access_token_vm(service, name, rotate):
 @extraclick.pass_service_client
 def start_vm(service, name, as_json, cold=False):
     """Start a stopped VM or resume its saved memory."""
-    _show(_vm(service, name).start(cold=cold).info, as_json)
+    with _progress("Starting VM", "VM ready", as_json):
+        vm = _vm(service, name).start(cold=cold)
+    _show(vm.info, as_json)
 
 
 management.add_command(start_vm, "resume")
@@ -408,7 +416,9 @@ management.add_command(start_vm, "resume")
 @extraclick.pass_service_client
 def pause_vm(service, name, as_json):
     """Save memory and disk, then release compute."""
-    _show(_vm(service, name).pause().info, as_json)
+    with _progress("Pausing VM", "VM paused", as_json):
+        vm = _vm(service, name).pause()
+    _show(vm.info, as_json)
 
 
 @management.command("stop")
@@ -418,7 +428,10 @@ def pause_vm(service, name, as_json):
 @extraclick.pass_service_client
 def stop_vm(service, name, no_snapshot, as_json):
     """Save the root and shut down the VM."""
-    _show(_vm(service, name).stop(no_snapshot).info, as_json)
+    message = "Stopping VM" if no_snapshot else "Snapshotting and stopping VM"
+    with _progress(message, "VM stopped", as_json):
+        vm = _vm(service, name).stop(no_snapshot)
+    _show(vm.info, as_json)
 
 
 @management.command("rm")
@@ -426,7 +439,8 @@ def stop_vm(service, name, no_snapshot, as_json):
 @extraclick.pass_service_client
 def remove_vm(service, name):
     """Delete a VM and its root disk."""
-    _vm(service, name).remove()
+    with _progress("Removing VM", "VM removed"):
+        _vm(service, name).remove()
 
 
 @management.command("fork")
@@ -436,11 +450,13 @@ def remove_vm(service, name):
 @extraclick.pass_service_client
 def fork_vm(service, source, name, as_json):
     """Create an independent VM from a VM or snapshot."""
-    for item in VM(_service=service)._api("GET", "/artifacts/snapshot"):
-        if item["id"] == source:
-            _show(VM(name, snapshot=source, _service=service).create().info, as_json)
-            return
-    _show(_vm(service, source).fork(name).info, as_json)
+    with _progress("Forking VM", "VM ready", as_json):
+        snapshots = VM(_service=service)._api("GET", "/artifacts/snapshot")
+        if any(item["id"] == source for item in snapshots):
+            vm = VM(name, snapshot=source, _service=service).create()
+        else:
+            vm = _vm(service, source).fork(name)
+    _show(vm.info, as_json)
 
 
 @management.command(
@@ -818,7 +834,9 @@ def snapshot_group():
 @extraclick.pass_service_client
 def snapshot_create(service, vm_name, name, as_json):
     """Capture a filesystem restore point."""
-    _show(_vm(service, vm_name).snapshot(name), as_json)
+    with _progress("Snapshotting VM", "Snapshot created", as_json):
+        snapshot = _vm(service, vm_name).snapshot(name)
+    _show(snapshot, as_json)
 
 
 @snapshot_group.command("list")
@@ -869,7 +887,9 @@ def template_create(service, vm_name, name, description, public, as_json):
     """Save the VM root as a reusable private template."""
     if public:
         raise click.UsageError("Public templates are unsupported; complete VM roots remain private")
-    _show(_vm(service, vm_name).create_template(name, description), as_json)
+    with _progress("Creating template", "Template created", as_json):
+        template = _vm(service, vm_name).create_template(name, description)
+    _show(template, as_json)
 
 
 @template_group.command("list")

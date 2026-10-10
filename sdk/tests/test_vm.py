@@ -337,7 +337,7 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     fake.wait.assert_called_once_with()
 
 
-def test_cli_creation_shows_only_result(cli_service, monkeypatch):
+def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, monkeypatch):
     vm = MagicMock()
     vm.info = {
         "name": "calm-otter-a3b19f",
@@ -348,11 +348,44 @@ def test_cli_creation_shows_only_result(cli_service, monkeypatch):
     monkeypatch.setattr(vm_cli, "VM", lambda *args, **kwargs: vm)
     result = CliRunner().invoke(vm_cli.management, ["new", "--template", "base"])
     assert result.exit_code == 0, result.output
+    assert "Creating VM" in result.output
+    assert result.output.index("✓ VM ready") < result.output.index("calm-otter-a3b19f")
     assert "calm-otter-a3b19f" in result.output
     assert "vm-12ab34cd56ef7890" in result.output
     assert "Checking image cache" not in result.output
     assert "Waiting for VM" not in result.output
     assert "vm-long-internal-runtime" not in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["new", "dev", "--template", "base"],
+        ["start", "dev"],
+        ["resume", "dev"],
+        ["pause", "dev"],
+        ["stop", "dev"],
+        ["stop", "dev", "--no-snapshot"],
+        ["fork", "dev", "copy"],
+        ["fork", "snapshot", "copy"],
+        ["snapshot", "create", "dev"],
+        ["template", "create", "dev", "base"],
+    ],
+)
+def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, args):
+    vm = MagicMock(info={"id": "vm-12ab34cd56ef7890", "name": "dev", "status": "running"})
+    for method in ("create", "start", "pause", "stop", "fork"):
+        getattr(vm, method).return_value = vm
+    vm._api.return_value = [{"id": "snapshot"}]
+    vm.snapshot.return_value = vm.create_template.return_value = vm.info
+    factory = MagicMock(return_value=vm)
+    factory.get.return_value = vm
+    monkeypatch.setattr(vm_cli, "VM", factory)
+
+    result = CliRunner().invoke(vm_cli.management, [*args, "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == vm.info
+    assert result.stderr == ""
 
 
 def test_vm_new_help_has_one_aligned_description_column():
@@ -499,6 +532,9 @@ def test_cli_reports_api_failures_without_tracebacks(cli_service, monkeypatch):
     assert result.exit_code == 1
     assert "Error: VM operation already in progress" in result.output
     assert "Traceback" not in result.output
+    assert "✗ Starting VM" in result.output
+    assert "✓ VM ready" not in result.output
+    assert vm_cli.terminal._current_status is None
 
 
 def test_cli_rejects_no_ssh_sync_before_create(cli_service, monkeypatch, tmp_path):
