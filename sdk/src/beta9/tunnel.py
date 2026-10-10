@@ -118,6 +118,9 @@ class Tunnel:
                 remote = None
                 try:
                     remote = self.connect(self.session)
+                    # The gateway upgrades only after reattaching the worker session.
+                    # Each subsequent disconnect gets its own recovery window.
+                    recovery.reset()
                     remote.settimeout(30)
                     with self.condition:
                         self.remote = remote
