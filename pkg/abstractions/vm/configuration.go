@@ -62,6 +62,7 @@ func validate(spec *types.VMSpec) error {
 	if err != nil {
 		return err
 	}
+
 	rootSize, _ := strconv.ParseInt(spec.DiskSize, 10, 64)
 	if rootSize > types.MaxVMRootSizeBytes {
 		return fmt.Errorf("VM root disk size cannot exceed 100 GiB")

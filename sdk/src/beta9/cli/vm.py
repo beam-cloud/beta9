@@ -1,7 +1,7 @@
 """Persistent CPU VMs. File/exec operations share the sandbox transport."""
 
-import shlex
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -9,8 +9,8 @@ import threading
 import time
 import uuid
 import webbrowser
-from pathlib import Path
 from contextlib import nullcontext, redirect_stdout, suppress
+from pathlib import Path
 from urllib.parse import quote, urlencode
 
 import click

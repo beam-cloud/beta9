@@ -36,7 +36,11 @@ func TestClearOverlayOriginsPreservesRootContents(t *testing.T) {
 		_, err := unix.Lgetxattr(path, "trusted.overlay.origin", nil)
 		require.ErrorIs(t, err, unix.ENODATA)
 	}
-	for _, test := range []struct{ path, attr, value string }{
+	for _, test := range []struct {
+		path  string
+		attr  string
+		value string
+	}{
 		{upper, "trusted.overlay.opaque", "y"},
 		{file, "user.persistence", "customer metadata"},
 		{outsideFile, "trusted.overlay.origin", "old handle"},

@@ -45,17 +45,18 @@ func vmRequest(e *echo.Echo, method, path, body string) *httptest.ResponseRecord
 
 func TestRootDiskCapacity(t *testing.T) {
 	for _, test := range []struct {
-		size string
-		code int
+		size    string
+		code    int
+		message string
 	}{
-		{"1GiB", http.StatusCreated},
-		{"100Gi", http.StatusCreated},
-		{"100GiB", http.StatusCreated},
-		{"107374182400", http.StatusCreated},
-		{"107374182401", http.StatusBadRequest},
-		{"100.001Gi", http.StatusBadRequest},
-		{"101GiB", http.StatusBadRequest},
-		{"1TiB", http.StatusBadRequest},
+		{"1GiB", http.StatusCreated, ""},
+		{"100Gi", http.StatusCreated, ""},
+		{"100GiB", http.StatusCreated, ""},
+		{"107374182400", http.StatusCreated, ""},
+		{"107374182401", http.StatusBadRequest, "100 GiB"},
+		{"100.001Gi", http.StatusBadRequest, "integer number of bytes"},
+		{"101GiB", http.StatusBadRequest, "100 GiB"},
+		{"1TiB", http.StatusBadRequest, "100 GiB"},
 	} {
 		t.Run(test.size, func(t *testing.T) {
 			s, _, info, runtime, _ := fixture()
@@ -64,9 +65,7 @@ func TestRootDiskCapacity(t *testing.T) {
 			require.Equal(t, test.code, rec.Code, rec.Body.String())
 			if test.code == http.StatusBadRequest {
 				require.Empty(t, runtime.requests)
-				if test.size != "100.001Gi" {
-					require.Contains(t, rec.Body.String(), "100 GiB")
-				}
+				require.Contains(t, rec.Body.String(), test.message)
 			}
 		})
 	}
