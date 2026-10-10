@@ -1488,8 +1488,16 @@ func TestDeleteContainerStateCleansIndexesByExitHistory(t *testing.T) {
 				}
 			}
 
+			if err := repo.SetWorkerAddress(state.ContainerId, "worker.internal"); err != nil {
+				t.Fatal(err)
+			}
+
 			if err := repo.DeleteContainerState(state.ContainerId); err != nil {
 				t.Fatal(err)
+			}
+
+			if ttl := rdb.TTL(context.Background(), common.RedisKeys.SchedulerWorkerAddress(state.ContainerId)).Val(); ttl <= 0 || ttl > common.CompletedContainerLogRetention {
+				t.Fatalf("completed worker address has unbounded or missing retention: %s", ttl)
 			}
 
 			stubIndexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)

@@ -12,10 +12,12 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
-	flushLogsTimeout          = 500 * time.Millisecond
+	flushLogsTimeout          = 10 * time.Second
 	workerAddressPollInterval = time.Second
 )
 
@@ -127,6 +129,7 @@ func (l *ContainerStream) handleStreams(
 	var logStreamReady <-chan struct{}
 	var syncQueue <-chan *pb.SyncContainerWorkspaceRequest
 	logErrors := make(chan error, 1)
+	logsFinished := false
 
 _stream:
 	for {
@@ -149,6 +152,7 @@ _stream:
 			if err != nil {
 				return err
 			}
+			logsFinished = true
 		case <-logStreamReady:
 			logStreamReady = nil
 			exitEvents = keyEventChan
@@ -172,22 +176,27 @@ _stream:
 				exitCode = -1
 			}
 
-			// After the container exits, flush remaining logs for up to flushLogsTimeout milliseconds
+			// Drain through EOF before delivering the result. A completed
+			// invocation may have accumulated logs during a gateway outage.
 			flushLogsTimer := time.NewTimer(flushLogsTimeout)
 			defer flushLogsTimer.Stop()
 
-		_flush:
-			for {
+			for !logsFinished || len(outputChan) > 0 {
 				select {
-				case o, ok := <-outputChan:
-					if !ok {
-						break _flush
-					}
+				case o := <-outputChan:
 					if err := l.sendCallback(o); err != nil {
-						break _flush
+						return err
 					}
+				case err := <-logErrors:
+					logErrors = nil
+					if err != nil {
+						return err
+					}
+					logsFinished = true
 				case <-flushLogsTimer.C:
-					break _flush
+					return status.Error(codes.Unavailable, "container logs are still flushing")
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
 

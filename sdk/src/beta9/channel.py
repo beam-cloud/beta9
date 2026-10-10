@@ -77,6 +77,8 @@ class _RecoveryWindow:
 
 def transient_error(error):
     if isinstance(error, grpc.RpcError):
+        if error.code() == grpc.StatusCode.UNKNOWN:
+            return error.details() == "Stream removed"
         if error.code() == grpc.StatusCode.INTERNAL:
             return error.details().startswith("Received RST_STREAM")
         return error.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED)
