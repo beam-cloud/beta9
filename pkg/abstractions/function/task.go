@@ -298,6 +298,9 @@ func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
 	// continues running the invocation. Do not dispatch another copy.
 	if res == 0 && task.Status == types.TaskStatusRunning {
 		container, err := t.fs.containerRepo.GetContainerState(task.ContainerId)
+		if (&types.ErrContainerStateNotFound{}).From(err) {
+			return false, nil
+		}
 		return container != nil && container.Status == types.ContainerStatusRunning, err
 	}
 
