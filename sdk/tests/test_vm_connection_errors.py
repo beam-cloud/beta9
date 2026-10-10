@@ -26,10 +26,10 @@ def test_stopped_vm_shows_start_command(monkeypatch, command):
     monkeypatch.setattr(extraclick, "ServiceClient", lambda _: client)
     monkeypatch.setattr(extraclick, "get_config_context", lambda _: SimpleNamespace())
     monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
-    with pytest.raises(SandboxConnectionError, match="beta9 vm start vm-0123456789abcdef"):
+    with pytest.raises(SandboxConnectionError, match="beta9 vm start dev"):
         vm._sandbox()
     result = CliRunner().invoke(vm_cli.management, command)
     assert result.exit_code == 1
     assert result.output == (
-        "Error: VM is not running. Start it with: beta9 vm start vm-0123456789abcdef\n"
+        "Error: VM is not running. Start it with: beta9 vm start dev\n"
     )

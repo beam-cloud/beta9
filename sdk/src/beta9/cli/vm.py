@@ -675,7 +675,7 @@ def _run_tunnel(profile, config_path, cli_name, vm_id, port):
 def _ssh_options(vm):
     if not vm.info["spec"]["ssh"]:
         raise click.ClickException("SSH was disabled for this VM")
-    if vm.info["status"] not in ("starting", "running"):
+    if vm.info.get("status") in ("stopped", "paused"):
         vm._sandbox()
     vm.wait(services=True)
     settings = get_settings()

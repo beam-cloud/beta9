@@ -594,7 +594,7 @@ class VM:
             ("starting", "running") if allow_starting else ("running",)
         ):
             raise SandboxConnectionError(
-                f"VM is not running. Start it with: beta9 vm start {self.id}"
+                f"VM is not running. Start it with: beta9 vm start {self.name}"
             )
         if self._connected is None:
             response = PodServiceStub(self._service.channel).sandbox_connect(
