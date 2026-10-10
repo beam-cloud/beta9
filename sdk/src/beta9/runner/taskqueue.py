@@ -375,7 +375,9 @@ class TaskQueueWorker:
                                         container_id=config.container_id,
                                         container_hostname=config.container_hostname,
                                         keep_warm_seconds=config.keep_warm_seconds,
-                                        result=serialize_result(result) if result else None,
+                                        result=serialize_result(result)
+                                        if result is not None
+                                        else None,
                                     )
                                 )
                             )
@@ -393,7 +395,7 @@ class TaskQueueWorker:
                             send_callback(
                                 gateway_stub=gateway_stub,
                                 context=context,
-                                payload=result or {},
+                                payload=result if result is not None else {},
                                 task_status=task_status,
                                 override_callback_url=kwargs.get("callback_url"),
                             )
