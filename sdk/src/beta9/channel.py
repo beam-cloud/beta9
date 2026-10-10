@@ -13,17 +13,7 @@ from collections import OrderedDict, deque
 from contextlib import contextmanager
 from contextvars import ContextVar
 from uuid import uuid4
-from typing import (
-    Any,
-    Callable,
-    Generator,
-    List,
-    NewType,
-    Optional,
-    Sequence,
-    Tuple,
-    cast,
-)
+from typing import Any, Callable, Generator, List, NewType, Optional, Sequence, Tuple, cast
 
 import grpc
 import requests
@@ -91,15 +81,10 @@ def transient_error(error):
             return error.details() == "Stream removed"
         if error.code() == grpc.StatusCode.INTERNAL:
             return error.details().startswith("Received RST_STREAM")
-        return error.code() in (
-            grpc.StatusCode.UNAVAILABLE,
-            grpc.StatusCode.DEADLINE_EXCEEDED,
-        )
+        return error.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED)
     if isinstance(error, GatewayHTTPError):
         return error.status == 0 or error.status >= 500
-    return isinstance(
-        error, (ConnectionError, ConnectionRefusedError, ConnectionResetError)
-    )
+    return isinstance(error, (ConnectionError, ConnectionRefusedError, ConnectionResetError))
 
 
 def retry_operation(fn, *, owner=None, timeout=RECOVERY_TIMEOUT, delay=0.2):
@@ -184,9 +169,7 @@ class Channel(InterceptorChannel):
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials, options=options)
         elif addr.endswith("443"):
-            channel = grpc.secure_channel(
-                addr, grpc.ssl_channel_credentials(), options=options
-            )
+            channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials(), options=options)
         else:
             channel = grpc.insecure_channel(addr, options=options)
 
@@ -230,9 +213,7 @@ class AuthTokenInterceptor(
     """A generic interceptor to add an authentication token to gRPC requests."""
 
     def __init__(
-        self,
-        token: Optional[str] = None,
-        metadata: Optional[Sequence[Tuple[str, str]]] = None,
+        self, token: Optional[str] = None, metadata: Optional[Sequence[Tuple[str, str]]] = None
     ):
         """Initialize the interceptor with an optional authentication token and
         extra metadata attached to every call."""
@@ -266,12 +247,8 @@ class AuthTokenInterceptor(
 
         return continuation(new_details, request)
 
-    def intercept_call_stream(
-        self, continuation, client_call_details, request_iterator
-    ):
-        return self.intercept_call(
-            continuation, client_call_details, request=request_iterator
-        )
+    def intercept_call_stream(self, continuation, client_call_details, request_iterator):
+        return self.intercept_call(continuation, client_call_details, request=request_iterator)
 
     def intercept_unary_unary(self, continuation, client_call_details, request):
         method = client_call_details.method.rsplit("/", 1)[-1]
@@ -512,21 +489,15 @@ class ServiceClient:
     def http(self) -> "GatewayHTTP":
         """REST access to the same gateway, resolved once per client."""
         if not self._http:
-            config = self.gateway.export_workspace_config(
-                ExportWorkspaceConfigRequest()
-            )
+            config = self.gateway.export_workspace_config(ExportWorkspaceConfigRequest())
             scheme = "https" if config.gateway_http_tls else "http"
-            base_url = (
-                self._config.api_url if self._config and self._config.api_url else None
-            )
+            base_url = self._config.api_url if self._config and self._config.api_url else None
             self._http = GatewayHTTP(
                 base_url=(
-                    base_url
-                    or f"{scheme}://{config.gateway_http_host}:{config.gateway_http_port}"
+                    base_url or f"{scheme}://{config.gateway_http_host}:{config.gateway_http_port}"
                 ).rstrip("/"),
                 workspace_id=config.workspace_id,
-                token=(self._config.token if self._config else "")
-                or self.channel.config.token,
+                token=(self._config.token if self._config else "") or self.channel.config.token,
             )
         return self._http
 
@@ -596,9 +567,7 @@ class GatewayHTTP:
                 message = response.json().get("message") or response.text
             except ValueError:
                 message = response.text
-            raise GatewayHTTPError(
-                response.status_code, message or f"HTTP {response.status_code}"
-            )
+            raise GatewayHTTPError(response.status_code, message or f"HTTP {response.status_code}")
         return response.json() if response.content else None
 
 
