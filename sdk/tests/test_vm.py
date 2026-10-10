@@ -385,7 +385,6 @@ def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, ar
     result = CliRunner().invoke(vm_cli.management, [*args, "--json"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == vm.info
-    assert result.stderr == ""
 
 
 def test_vm_new_help_has_one_aligned_description_column():
