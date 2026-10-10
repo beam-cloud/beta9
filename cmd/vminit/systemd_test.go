@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -101,6 +102,40 @@ func TestSystemdBootConfiguration(t *testing.T) {
 		t.Fatalf("unsafe systemd environment: %s", manager)
 	}
 	assertPrivateFile(t, managerPath)
+}
+
+func TestSystemdTmpPreservesFilesAndCleansOnlyManagedDisplay(t *testing.T) {
+	files := []string{"customer-data", ".X1-lock", ".X11-unix/X1", ".X2-lock", ".X11-unix/X2"}
+	for _, desktop := range []bool{false, true} {
+		t.Run(strconv.FormatBool(desktop), func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "tmp/.X11-unix"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range files {
+				if err := os.WriteFile(filepath.Join(root, "tmp", name), []byte("preserved"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := prepareSystemdTmp(root, desktop); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(filepath.Join(root, "tmp"))
+			if err != nil || info.Mode().Perm() != 0777 || info.Mode()&os.ModeSticky == 0 {
+				t.Fatalf("/tmp must be writable with the sticky bit: %v, %v", info, err)
+			}
+			for _, name := range files {
+				data, err := os.ReadFile(filepath.Join(root, "tmp", name))
+				if desktop && (name == ".X1-lock" || name == ".X11-unix/X1") {
+					if !os.IsNotExist(err) {
+						t.Fatalf("managed display state survived cold boot: %s, %v", name, err)
+					}
+				} else if err != nil || string(data) != "preserved" {
+					t.Fatalf("cold boot removed user data: %s, %q, %v", name, data, err)
+				}
+			}
+		})
+	}
 }
 
 func TestSystemdTmpfilesPreservesEarlyExecFiles(t *testing.T) {
