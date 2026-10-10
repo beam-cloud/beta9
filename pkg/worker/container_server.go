@@ -57,6 +57,7 @@ type ContainerRuntimeServer struct {
 	baseConfigSpec specs.Spec
 	pb.UnimplementedContainerServiceServer
 	containerInstances      *common.SafeMap[*ContainerInstance]
+	completedLogs           sync.Map // container ID -> *common.LogBuffer
 	killedSandboxProcesses  sync.Map
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	containerNetworkManager ContainerNetwork
@@ -265,7 +266,13 @@ func (s *ContainerRuntimeServer) ContainerStatus(ctx context.Context, in *pb.Con
 // ContainerStreamLogs streams container logs
 func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogsRequest, stream pb.ContainerService_ContainerStreamLogsServer) error {
 	instance, exists := s.containerInstances.Get(req.ContainerId)
-	if !exists {
+	var logs *common.LogBuffer
+	if exists {
+		logs = instance.LogBuffer
+	} else if completed, ok := s.completedLogs.Load(req.ContainerId); ok {
+		logs = completed.(*common.LogBuffer)
+	}
+	if logs == nil {
 		return errors.New("container not found")
 	}
 	if err := stream.SendHeader(nil); err != nil {
@@ -294,9 +301,9 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 		var n int
 		var err error
 		if len(offsets) > 0 {
-			n, err = instance.LogBuffer.ReadAt(buffer, offset)
+			n, err = logs.ReadAt(buffer, offset)
 		} else {
-			n, err = instance.LogBuffer.Read(buffer)
+			n, err = logs.Read(buffer)
 		}
 		if err == io.EOF {
 			break
@@ -319,6 +326,16 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 	}
 
 	return nil
+}
+
+func (s *ContainerRuntimeServer) retainCompletedLogs(containerID string, logs *common.LogBuffer) {
+	if _, loaded := s.completedLogs.LoadOrStore(containerID, logs); loaded {
+		return
+	}
+	time.AfterFunc(common.CompletedContainerLogRetention, func() {
+		s.completedLogs.Delete(containerID)
+		logs.Dispose()
+	})
 }
 
 // ContainerCheckpoint creates a checkpoint of a running container

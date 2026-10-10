@@ -528,7 +528,8 @@ func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) err
 	addrMapKey := common.RedisKeys.SchedulerContainerAddressMap(containerId)
 	workerAddrKey := common.RedisKeys.SchedulerWorkerAddress(containerId)
 	pipe := cr.rdb.TxPipeline()
-	pipe.Del(ctx, stateKey, addrKey, addrMapKey, workerAddrKey)
+	pipe.Del(ctx, stateKey, addrKey, addrMapKey)
+	pipe.Expire(ctx, workerAddrKey, common.CompletedContainerLogRetention)
 	pipe.ZRem(ctx, common.RedisKeys.SchedulerContainerStateIndex(), stateKey)
 	if workspaceId != "" {
 		pipe.SRem(ctx, common.RedisKeys.SchedulerContainerWorkspaceIndex(workspaceId), stateKey)

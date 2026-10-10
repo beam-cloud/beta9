@@ -147,7 +147,18 @@ func (fs *ContainerFunctionService) resumeInvocation(stubID, taskID string, stre
 	if current.Workspace.ExternalId != authInfo.Workspace.ExternalId || current.Stub.ExternalId != stubID {
 		return status.Error(codes.PermissionDenied, "invocation does not belong to this function")
 	}
+	// New workers retain completed logs briefly. Reattach through the same
+	// cursor-aware stream before delivering the result; older workers fall back
+	// to the stored result once their worker address has been removed.
+	retainedLogs := true
 	if current.Status.IsCompleted() {
+		count, err := fs.rdb.Exists(stream.Context(), common.RedisKeys.SchedulerWorkerAddress(current.ContainerId)).Result()
+		if err != nil {
+			return err
+		}
+		retainedLogs = count > 0
+	}
+	if current.Status.IsCompleted() && !retainedLogs {
 		result, err := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskID)).Bytes()
 		if err != nil && current.Status == types.TaskStatusComplete {
 			return status.Error(codes.Unavailable, "function result is not yet available")

@@ -14,9 +14,11 @@ import (
 )
 
 type testContainerStreamClient struct {
-	started chan struct{}
-	attach  chan struct{}
-	log     common.OutputMsg
+	started  chan struct{}
+	attach   chan struct{}
+	log      common.OutputMsg
+	delay    time.Duration
+	trailing []common.OutputMsg
 }
 
 type pendingContainerStreamRepo struct {
@@ -75,6 +77,10 @@ func (c *testContainerStreamClient) StreamLogsWithReady(_ context.Context, _ str
 	<-c.attach
 	output <- c.log
 	ready()
+	time.Sleep(c.delay)
+	for _, message := range c.trailing {
+		output <- message
+	}
 	return nil
 }
 
@@ -133,4 +139,27 @@ func TestContainerStreamWaitsForLogAttachmentBeforeExit(t *testing.T) {
 	require.Equal(t, "buffered output", (<-output).Msg)
 	require.Equal(t, int32(7), <-exited)
 	require.NoError(t, <-done)
+}
+
+func TestContainerStreamDrainsBacklogThroughEOF(t *testing.T) {
+	attach := make(chan struct{})
+	close(attach)
+	clients := make(chan containerClientResult, 1)
+	clients <- containerClientResult{client: &testContainerStreamClient{
+		started: make(chan struct{}), attach: attach, log: common.OutputMsg{Msg: "first"},
+		delay: 750 * time.Millisecond, trailing: []common.OutputMsg{{Msg: "last"}},
+	}}
+	events := make(chan common.KeyEvent, 1)
+	events <- common.KeyEvent{}
+	var output []string
+	exited := false
+	stream := &ContainerStream{
+		containerRepo: testStreamContainerRepo{},
+		sendCallback:  func(message common.OutputMsg) error { output = append(output, message.Msg); return nil },
+		exitCallback:  func(int32) error { exited = true; require.Equal(t, []string{"first", "last"}, output); return nil },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, stream.handleStreams(ctx, "container-1", make(chan common.OutputMsg, 1000), events, clients))
+	require.True(t, exited)
 }

@@ -46,6 +46,8 @@ func TestContainerRuntimeListenerSkipsForwardedPort(t *testing.T) {
 type logAttachmentStream struct {
 	pb.ContainerService_ContainerStreamLogsServer
 	attached bool
+	ctx      context.Context
+	output   strings.Builder
 }
 
 type execCapturingRuntime struct {
@@ -64,7 +66,15 @@ func (s *logAttachmentStream) SendHeader(metadata.MD) error {
 }
 
 func (s *logAttachmentStream) Context() context.Context {
+	if s.ctx != nil {
+		return s.ctx
+	}
 	return context.Background()
+}
+
+func (s *logAttachmentStream) Send(entry *pb.ContainerLogEntry) error {
+	_, err := s.output.WriteString(entry.Msg)
+	return err
 }
 
 func TestContainerStreamLogsAcknowledgesAttachment(t *testing.T) {
@@ -1244,4 +1254,23 @@ func TestRequestJournalReplaysConsumedOutputUntilAcknowledged(t *testing.T) {
 	_, err = journal.Do(context.Background(), "next", "stdout", request, []string{"first"}, run)
 	require.NoError(t, err)
 	require.NotContains(t, journal.entries, "first")
+}
+
+func TestCompletedFunctionReplaysLogsWithoutRetainingContainer(t *testing.T) {
+	logs := common.NewLogBuffer()
+	t.Cleanup(logs.Dispose)
+	require.True(t, logs.Write([]byte("first\nremaining\n")))
+	logs.Close()
+	instances := common.NewSafeMap[*ContainerInstance]()
+	server := &ContainerRuntimeServer{containerInstances: instances}
+	worker := &Worker{containerInstances: instances, containerServer: server}
+	instances.Set("function-test", &ContainerInstance{LogBuffer: logs, Request: &types.ContainerRequest{
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}},
+	}})
+	worker.deleteContainer("function-test")
+	_, active := instances.Get("function-test")
+	require.False(t, active)
+	stream := &logAttachmentStream{ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs(common.LogOffsetHeader, "6"))}
+	require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: "function-test"}, stream))
+	require.Equal(t, "remaining\n", stream.output.String())
 }
