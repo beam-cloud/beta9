@@ -3,7 +3,59 @@ import json
 import queue
 from uuid import UUID
 
+import pytest
+
 from beta9.tunnel import Tunnel
+
+
+def test_successful_reattachment_resets_recovery_before_the_first_reply(monkeypatch):
+    clock = [0.0]
+    sessions = []
+    delays = []
+    monkeypatch.setattr("beta9.channel.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("beta9.channel.time.sleep", delays.append)
+
+    class Remote:
+        def settimeout(self, _):
+            pass
+
+        def close(self):
+            pass
+
+        def send(self, message):
+            control = json.loads(message)
+            if control["type"] == "read":
+                self.read_id = control["id"]
+
+        def recv(self):
+            if len(sessions) < 5:
+                raise ConnectionResetError("gateway cycled before its first reply")
+            return json.dumps({"type": "eof", "id": self.read_id})
+
+    def connect(session):
+        # Each outage fits the recovery budget; their total does not.
+        clock[0] += 50
+        sessions.append(session)
+        return Remote()
+
+    Tunnel(connect, io.BytesIO(), io.BytesIO()).run()
+    assert len(sessions) == 5
+    assert len(set(sessions)) == 1
+    assert delays == pytest.approx([0.2, 0.3, 0.45, 0.675])
+
+
+def test_failed_reattachments_still_exhaust_recovery(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("beta9.channel.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+
+    def connect(_):
+        clock[0] += 50
+        raise ConnectionRefusedError("gateway unavailable")
+
+    with pytest.raises(TimeoutError, match="Gateway did not reconnect"):
+        Tunnel(connect, io.BytesIO(), io.BytesIO()).run()
+    assert clock[0] == 200
 
 
 def test_tunnel_reuses_requests_when_gateway_loses_replies_and_acknowledgements(monkeypatch):
