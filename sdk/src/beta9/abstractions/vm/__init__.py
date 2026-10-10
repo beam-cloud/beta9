@@ -34,6 +34,7 @@ from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
 from ...clients.volume import VolumeServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
+from ...terminal import cli_name
 from ...type import DurableDisk
 from ..image import Image
 from ..sandbox import SandboxInstance
@@ -594,7 +595,7 @@ class VM:
             ("starting", "running") if allow_starting else ("running",)
         ):
             raise SandboxConnectionError(
-                f"VM is not running. Start it with: beta9 vm start {self.name}"
+                f"VM is not running. Start it with: {cli_name()} vm start {self.name}"
             )
         if self._connected is None:
             response = PodServiceStub(self._service.channel).sandbox_connect(
