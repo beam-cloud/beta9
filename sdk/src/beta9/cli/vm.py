@@ -24,6 +24,7 @@ from ..abstractions.vm import VM, identity, prepare_image
 from ..abstractions.volume import Volume
 from ..channel import GatewayHTTPError, ServiceClient
 from ..config import SDKSettings, get_config_context, get_settings, set_settings
+from ..exceptions import SandboxConnectionError
 from ..logging import StoredStdoutInterceptor
 from ..tunnel import bridge_tunnel
 from . import extraclick
@@ -35,6 +36,8 @@ class VMGroup(ClickManagementGroup):
         try:
             return super().invoke(ctx)
         except GatewayHTTPError as exc:
+            raise click.ClickException(exc.message) from exc
+        except SandboxConnectionError as exc:
             raise click.ClickException(exc.message) from exc
         except (click.ClickException, click.exceptions.Exit):
             raise
@@ -672,6 +675,8 @@ def _run_tunnel(profile, config_path, cli_name, vm_id, port):
 def _ssh_options(vm):
     if not vm.info["spec"]["ssh"]:
         raise click.ClickException("SSH was disabled for this VM")
+    if vm.info.get("status") in ("stopped", "paused"):
+        vm._sandbox()
     vm.wait(services=True)
     settings = get_settings()
     helper = (
