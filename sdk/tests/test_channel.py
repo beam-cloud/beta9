@@ -346,3 +346,19 @@ def test_runner_finalization_recovers_from_removed_stream(monkeypatch):
     finally:
         channel.close()
         server.stop(0).wait()
+
+
+@pytest.mark.parametrize("method", ["ImageExists", "ExportWorkspaceConfig"])
+def test_preparation_reads_reconnect_after_gateway_restart(monkeypatch, method):
+    from beta9.channel import AuthTokenInterceptor
+
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    details = Mock(method=f"/gateway.GatewayService/{method}", timeout=None, metadata=None)
+    details._replace.return_value = details
+    unavailable = Mock()
+    unavailable.result.side_effect = Unavailable()
+    completed = Mock()
+    continuation = Mock(side_effect=[unavailable, completed])
+    result = AuthTokenInterceptor().intercept_unary_unary(continuation, details, Mock())
+    assert result is completed
+    assert continuation.call_count == 2

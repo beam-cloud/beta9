@@ -261,6 +261,8 @@ class AuthTokenInterceptor(
                 "SandboxCreateImageFromFilesystem",
             )
         ) or method in (
+            "ImageExists",
+            "ExportWorkspaceConfig",
             "StartTask",
             "EndTask",
             "FunctionGetArgs",
