@@ -63,6 +63,11 @@ func validate(spec *types.VMSpec) error {
 		return err
 	}
 
+	rootSize, _ := strconv.ParseInt(spec.DiskSize, 10, 64)
+	if rootSize > types.MaxVMRootSizeBytes {
+		return fmt.Errorf("VM root disk size cannot exceed 100 GiB")
+	}
+
 	if spec.CPU < 100 || spec.Memory < 256 || spec.IdleTimeout < 0 || spec.IdleTimeout > 365*24*60*60 {
 		return fmt.Errorf("CPU must be at least 0.1, memory at least 256 MiB, and idle timeout nonnegative")
 	}

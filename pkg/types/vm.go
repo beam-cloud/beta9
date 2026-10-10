@@ -7,8 +7,11 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-// DefaultVMRootSizeBytes is the fresh persistent VM root size.
-const DefaultVMRootSizeBytes int64 = 50 << 30
+// Writable VM root capacity in bytes, layered over the separate base image.
+const (
+	DefaultVMRootSizeBytes int64 = 50 << 30
+	MaxVMRootSizeBytes     int64 = 100 << 30
+)
 
 // IsPersistentVM identifies a microVM whose lifecycle belongs to the VM service.
 func (s *StubConfigV1) IsPersistentVM() bool {
