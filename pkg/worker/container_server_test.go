@@ -1261,6 +1261,10 @@ func TestCompletedFunctionReplaysLogsWithoutRetainingContainer(t *testing.T) {
 	t.Cleanup(logs.Dispose)
 	require.True(t, logs.Write([]byte("first\nremaining\n")))
 	logs.Close()
+	require.Eventually(t, func() bool {
+		n, _ := logs.ReadAt(make([]byte, 6), 0)
+		return n == 6
+	}, time.Second, time.Millisecond)
 	instances := common.NewSafeMap[*ContainerInstance]()
 	server := &ContainerRuntimeServer{containerInstances: instances}
 	worker := &Worker{containerInstances: instances, containerServer: server}
