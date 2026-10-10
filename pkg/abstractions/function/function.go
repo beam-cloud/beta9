@@ -3,6 +3,7 @@ package function
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -147,7 +148,23 @@ func (fs *ContainerFunctionService) resumeInvocation(stubID, taskID string, stre
 	if current.Workspace.ExternalId != authInfo.Workspace.ExternalId || current.Stub.ExternalId != stubID {
 		return status.Error(codes.PermissionDenied, "invocation does not belong to this function")
 	}
+	task := &FunctionTask{fs: fs, containerId: current.ContainerId, msg: &types.TaskMessage{
+		TaskId: taskID, StubId: stubID, WorkspaceName: authInfo.Workspace.Name,
+	}}
 	if current.Status.IsCompleted() {
+		count, err := fs.rdb.Exists(stream.Context(), common.RedisKeys.SchedulerWorkerAddress(current.ContainerId)).Result()
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			err := fs.stream(stream.Context(), stream, authInfo, task)
+			// Older workers have no completed log buffer. Only that explicit
+			// response falls back to the result; transport failures retry.
+			var rpcErr interface{ GRPCStatus() *status.Status }
+			if !errors.As(err, &rpcErr) || rpcErr.GRPCStatus().Code() != codes.Unknown || rpcErr.GRPCStatus().Message() != "container not found" {
+				return err
+			}
+		}
 		result, err := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskID)).Bytes()
 		if err != nil && current.Status == types.TaskStatusComplete {
 			return status.Error(codes.Unavailable, "function result is not yet available")
@@ -161,9 +178,6 @@ func (fs *ContainerFunctionService) resumeInvocation(stubID, taskID string, stre
 		}
 		return stream.Send(&pb.FunctionInvokeResponse{TaskId: taskID, Done: true, ExitCode: int32(exitCode), Result: result})
 	}
-	task := &FunctionTask{fs: fs, containerId: current.ContainerId, msg: &types.TaskMessage{
-		TaskId: taskID, StubId: stubID, WorkspaceName: authInfo.Workspace.Name,
-	}}
 	return fs.stream(stream.Context(), stream, authInfo, task)
 }
 

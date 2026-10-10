@@ -4,7 +4,12 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 )
+
+// CompletedContainerLogRetention allows clients to finish replaying logs after
+// a gateway restart, without retaining the container or its resources.
+const CompletedContainerLogRetention = 3 * time.Minute
 
 // LogBuffer spools logs locally so readers can reattach at their own offset.
 // The unlinked file belongs to the container and is released by Dispose.

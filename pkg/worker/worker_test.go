@@ -1438,6 +1438,7 @@ func TestFailContainerRequestReportsExitCode(t *testing.T) {
 
 	repoClient := &fakeContainerRepoClient{}
 	request := &types.ContainerRequest{ContainerId: "container-failed-start-cleanup"}
+	request.Stub.Type = types.StubType(types.StubTypeVM)
 	tempDir := filepath.Join(baseConfigPath, request.ContainerId)
 	require.NoError(t, os.MkdirAll(tempDir, 0o755))
 	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
@@ -1453,7 +1454,7 @@ func TestFailContainerRequestReportsExitCode(t *testing.T) {
 
 	require.Equal(t, 1, repoClient.setExitCodeCalls)
 	require.Equal(t, request.ContainerId, repoClient.lastSetExitCode.ContainerId)
-	require.Equal(t, int32(1), repoClient.lastSetExitCode.ExitCode)
+	require.Equal(t, int32(types.ContainerExitCodeStartupFailed), repoClient.lastSetExitCode.ExitCode)
 	require.NoDirExists(t, tempDir)
 }
 
