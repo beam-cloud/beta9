@@ -11,8 +11,9 @@ from beta9.tunnel import Tunnel
 def test_successful_reattachment_resets_recovery_before_the_first_reply(monkeypatch):
     clock = [0.0]
     sessions = []
+    delays = []
     monkeypatch.setattr("beta9.channel.time.monotonic", lambda: clock[0])
-    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    monkeypatch.setattr("beta9.channel.time.sleep", delays.append)
 
     class Remote:
         def settimeout(self, _):
@@ -40,6 +41,7 @@ def test_successful_reattachment_resets_recovery_before_the_first_reply(monkeypa
     Tunnel(connect, io.BytesIO(), io.BytesIO()).run()
     assert len(sessions) == 5
     assert len(set(sessions)) == 1
+    assert delays == pytest.approx([0.2, 0.3, 0.45, 0.675])
 
 
 def test_failed_reattachments_still_exhaust_recovery(monkeypatch):

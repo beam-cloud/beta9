@@ -57,9 +57,10 @@ class _RecoveryWindow:
         self.started = time.monotonic() if start else None
         self.delay = 0.2
 
-    def reset(self):
+    def reset(self, *, keep_backoff=False):
         self.started = None
-        self.delay = 0.2
+        if not keep_backoff:
+            self.delay = 0.2
 
     def wait(self):
         if self.started is None:
