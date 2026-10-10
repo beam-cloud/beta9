@@ -159,6 +159,8 @@ class VM:
     Stop/start cold boots enabled systemd units. Pause/resume preserves RAM
     and running processes. URLs and machine identity stay fixed. Forks and
     templates get independent disks and identities.
+
+    disk_size sets the durable root capacity (1–100 GiB; default 50 GiB).
     """
 
     def __init__(

@@ -117,7 +117,7 @@ def _show(info, as_json):
     metavar="MiB",
     help="RAM in MiB; defaults to 1024, or 2048 for desktop.",
 )
-@click.option("--disk-size", help="Durable root size; defaults to 50GiB.")
+@click.option("--disk-size", help="Durable root size, 1–100 GiB; defaults to 50 GiB.")
 @click.option("--image", "image_uri", help="Base registry image; defaults to ubuntu:22.04.")
 @click.option("--image-id", help="Existing image with Beam VM services installed.")
 @click.option(

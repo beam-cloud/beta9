@@ -1078,7 +1078,7 @@ func TestMicroVMDurableDiskOverVhostUser(t *testing.T) {
 	manager := disk.NewManager(disk.Config{Root: filepath.Join(testWorkRoot, "qcow")})
 	ctx := context.Background()
 	key := fmt.Sprintf("mvmdisk-%d", time.Now().UnixNano()%1_000_000)
-	t.Cleanup(func() { _ = manager.Detach(context.Background(), key) })
+	t.Cleanup(func() { _ = manager.Close(ctx) })
 
 	var freezeTarget atomic.Value
 	freezeTarget.Store("")
@@ -1087,13 +1087,24 @@ func TestMicroVMDurableDiskOverVhostUser(t *testing.T) {
 	}
 	volume, err := manager.Attach(ctx, disk.AttachSpec{Key: key, VirtualSizeBytes: 2 << 30, Export: disk.ExportVhostUser, Freeze: freeze}, nil)
 	require.NoError(t, err)
-	require.NotEmpty(t, volume.ExportSocket())
+	exportSocket := volume.ExportSocket()
+	require.NotEmpty(t, exportSocket)
 	require.Empty(t, volume.Mountpoint(), "nothing is mounted on the host")
 
 	// First VM writes persistent data and keeps writing while we seal.
 	vm := newTestVM(t, rt, vmOptions{
-		image:       "alpine",
-		args:        []string{"sh", "-c", "echo persisted > /data.txt; sync; while true; do echo x >> /loop.txt; done"},
+		image: "alpine",
+		args: []string{"sh", "-c", `
+set -eu
+echo persisted > /data.txt
+echo installed > /etc/apk/persistent-package
+chmod 0700 /etc/apk
+chmod 0600 /etc/alpine-release
+find /etc/apk -type f -exec sha256sum {} \; | sort > /packages.sha
+sha256sum /etc/alpine-release >> /packages.sha
+sync
+while true; do echo x >> /loop.txt; done
+`},
 		annotations: map[string]string{MicroVMRootDiskAnnotation: volume.ExportSocket()},
 	})
 	freezeTarget.Store(vm.id)
@@ -1121,14 +1132,24 @@ func TestMicroVMDurableDiskOverVhostUser(t *testing.T) {
 	vm.wait(30 * time.Second)
 	require.NoError(t, rt.Delete(ctx, vm.id, &DeleteOpts{Force: true}))
 	require.NoError(t, manager.Detach(ctx, key))
-	require.Empty(t, processesMatching("qemu-storage-daemon"), "detach must stop the daemon")
+	require.Empty(t, processesMatching(exportSocket), "detach must stop this volume's daemon")
 
 	// Re-attach the same key: local layers are reused and the data is there.
 	volume, err = manager.Attach(ctx, disk.AttachSpec{Key: key, VirtualSizeBytes: 2 << 30, Export: disk.ExportVhostUser}, nil)
 	require.NoError(t, err)
 	vm2 := newTestVM(t, rt, vmOptions{
-		image:       "alpine",
-		args:        []string{"sh", "-c", "cat /data.txt; wc -l < /loop.txt"},
+		image: "alpine",
+		args: []string{"sh", "-c", `
+set -eu
+cat /data.txt
+wc -l < /loop.txt
+sha256sum -c /packages.sha
+find /etc/apk -type f -exec sha256sum {} \; | sort > /actual.sha
+sha256sum /etc/alpine-release >> /actual.sha
+cmp /packages.sha /actual.sha
+test "$(stat -c %a /etc/apk)" = 700
+test "$(stat -c %a /etc/alpine-release)" = 600
+`},
 		annotations: map[string]string{MicroVMRootDiskAnnotation: volume.ExportSocket()},
 	})
 	vm2.start()

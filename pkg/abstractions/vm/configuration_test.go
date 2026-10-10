@@ -3,6 +3,8 @@ package vm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -39,6 +41,35 @@ func vmRequest(e *echo.Echo, method, path, body string) *httptest.ResponseRecord
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	return rec
+}
+
+func TestRootDiskCapacity(t *testing.T) {
+	for _, test := range []struct {
+		size string
+		code int
+	}{
+		{"1GiB", http.StatusCreated},
+		{"100Gi", http.StatusCreated},
+		{"100GiB", http.StatusCreated},
+		{"107374182400", http.StatusCreated},
+		{"107374182401", http.StatusBadRequest},
+		{"100.001Gi", http.StatusBadRequest},
+		{"101GiB", http.StatusBadRequest},
+		{"1TiB", http.StatusBadRequest},
+	} {
+		t.Run(test.size, func(t *testing.T) {
+			s, _, info, runtime, _ := fixture()
+			body := fmt.Sprintf(`{"name":"capacity","spec":{"image_id":"base","disk_size":%q}}`, test.size)
+			rec := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId, body)
+			require.Equal(t, test.code, rec.Code, rec.Body.String())
+			if test.code == http.StatusBadRequest {
+				require.Empty(t, runtime.requests)
+				if test.size != "100.001Gi" {
+					require.Contains(t, rec.Body.String(), "100 GiB")
+				}
+			}
+		})
+	}
 }
 
 func TestResponsesRedactVolumeCredentialsWithoutMutatingStoredSpec(t *testing.T) {
