@@ -94,13 +94,7 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
 		return fmt.Errorf("missing VM workload")
 	}
 
-	// Unlike the durable root, /tmp is boot state. In particular, X display
-	// sockets and lock files must not be restored from a disk snapshot.
-	if err := os.MkdirAll("/tmp", 01777); err != nil {
-		return err
-	}
-
-	if err := unix.Mount("tmpfs", "/tmp", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777"); err != nil {
+	if err := prepareSystemdTmp("/", processEnv(spec.Process, "BEAM_VM_DESKTOP") == "true"); err != nil {
 		return err
 	}
 
@@ -135,6 +129,26 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
 	return unix.Exec(binary, []string{binary, "--unit=multi-user.target"}, env)
 }
 
+// Keep /tmp on the durable root. Only the managed desktop's display sockets
+// and lock are boot state; restoring them can prevent Xvnc from starting.
+func prepareSystemdTmp(root string, desktop bool) error {
+	tmp := filepath.Join(root, "tmp")
+	if err := os.MkdirAll(tmp, 0777); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, os.ModeSticky|0777); err != nil {
+		return err
+	}
+	if desktop {
+		for _, name := range []string{".X1-lock", ".X11-unix/X1"} {
+			if err := os.Remove(filepath.Join(tmp, name)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func writeSystemdBootFiles(root string, process *specs.Process) error {
 	if err := prepareVMIdentity(root, process); err != nil {
 		return err
@@ -166,9 +180,9 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		return err
 	}
 
-	// /tmp is already a fresh tmpfs. Ubuntu's default D rule clears it
-	// during sysinit, racing stdin uploads from the early exec agent.
-	// Retain normal directory creation and age-based cleanup instead.
+	// Ubuntu's default D rule clears /tmp during sysinit, deleting durable
+	// files and racing stdin uploads from the early exec agent. Retain normal
+	// directory creation and age-based cleanup instead.
 	tmpfilesDir := filepath.Join(root, "run/tmpfiles.d")
 	if err := os.MkdirAll(tmpfilesDir, 0755); err != nil {
 		return err
