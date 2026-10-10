@@ -221,6 +221,21 @@ func readOCISpec() (*specs.Spec, error) {
 
 // --- root assembly -----------------------------------------------------------------
 
+// Origin handles refer to the previous virtio-fs instance. Discard those
+// references before mounting; keep file data, whiteouts and opaque directories.
+func clearOverlayOrigins(upper string) error {
+	return filepath.WalkDir(upper, func(path string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		err = unix.Lremovexattr(path, "trusted.overlay.origin")
+		if errors.Is(err, unix.ENODATA) || errors.Is(err, unix.EOPNOTSUPP) {
+			return nil
+		}
+		return err
+	})
+}
+
 func assembleRoot(vm *microvm.Spec) error {
 	if err := waitForDevice(vm.RootDisk); err != nil {
 		return err
@@ -236,6 +251,9 @@ func assembleRoot(vm *microvm.Spec) error {
 			return err
 		}
 	}
+	if err := clearOverlayOrigins(upper); err != nil {
+		return fmt.Errorf("clear stale overlay origins: %w", err)
+	}
 	// overlayfs wants a work dir it created; one left by a previous mount
 	// (possibly by a container runtime on another host) is rejected.
 	if err := os.RemoveAll(work); err != nil {
@@ -250,7 +268,9 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := unix.Mount("/", microvm.ImageMount, "", unix.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind image root: %w", err)
 	}
-	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", microvm.ImageMount, upper, work)
+	// virtio-fs inode handles change on cold boots and forks. Keep copied-up
+	// data on the durable disk instead of indexing or referencing lower inodes.
+	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=off", microvm.ImageMount, upper, work)
 	if err := unix.Mount("overlay", microvm.NewRoot, "overlay", 0, overlayOpts); err != nil {
 		return fmt.Errorf("mount overlay (%s): %w", overlayOpts, err)
 	}
