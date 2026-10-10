@@ -593,7 +593,9 @@ class VM:
         if not container or self.info["status"] not in (
             ("starting", "running") if allow_starting else ("running",)
         ):
-            raise SandboxConnectionError("VM is not running; call start() first")
+            raise SandboxConnectionError(
+                f"VM is not running. Start it with: beta9 vm start {self.id}"
+            )
         if self._connected is None:
             response = PodServiceStub(self._service.channel).sandbox_connect(
                 PodSandboxConnectRequest(container_id=container)

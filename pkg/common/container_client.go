@@ -20,7 +20,7 @@ import (
 const (
 	containerClientSandboxExecTimeout   = 15 * time.Second
 	containerClientSandboxStatusTimeout = 5 * time.Second
-	containerClientSandboxOutputTimeout = 5 * time.Second
+	containerClientSandboxOutputTimeout = 30 * time.Second
 	containerClientExistingConnTimeout  = 1 * time.Second
 	containerClientReconnectBaseDelay   = 20 * time.Millisecond
 	containerClientReconnectMaxDelay    = 100 * time.Millisecond
