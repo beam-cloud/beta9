@@ -491,6 +491,8 @@ func TestPrepareForcesCPUVMAndIndependentRoot(t *testing.T) {
 	require.NoError(t, s.prepare(auth.ContextWithAuthInfo(context.Background(), info), v))
 	require.True(t, gateway.stub.UseVm)
 	require.Equal(t, types.StubTypeVM, gateway.stub.StubType)
+	require.Equal(t, types.VMAppName, gateway.stub.AppName)
+	require.Equal(t, types.StubTypeVM+"/"+v.ID, gateway.stub.Name)
 	require.Empty(t, gateway.stub.Gpu)
 	require.Zero(t, gateway.stub.GpuCount)
 	require.Equal(t, rootDisk(v), gateway.stub.Disks[0].Name)
