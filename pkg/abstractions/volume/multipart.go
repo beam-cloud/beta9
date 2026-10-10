@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"path/filepath"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -42,14 +41,6 @@ func (s *GlobalVolumeService) getS3Client() *s3.Client {
 	})
 }
 
-func joinCleanPath(parts ...string) string {
-	for i, part := range parts {
-		parts[i] = filepath.Clean(part)
-	}
-
-	return filepath.Join(parts...)
-}
-
 func (s *GlobalVolumeService) GetFileServiceInfo(ctx context.Context, in *pb.GetFileServiceInfoRequest) (*pb.GetFileServiceInfoResponse, error) {
 	return &pb.GetFileServiceInfoResponse{
 		Ok:      true,
@@ -71,7 +62,7 @@ func (s *GlobalVolumeService) CreatePresignedURL(ctx context.Context, in *pb.Cre
 	var s3Client *s3.Client
 	var presignClient *s3.PresignClient
 
-	key := joinCleanPath(types.DefaultVolumesPrefix, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
+	key := types.DefaultVolumesPrefix + "/" + authInfo.Workspace.Name + "/" + volume.ExternalId + "/" + in.VolumePath
 	bucket := s.config.BucketName
 
 	if authInfo.Workspace.StorageAvailable() {
@@ -85,7 +76,7 @@ func (s *GlobalVolumeService) CreatePresignedURL(ctx context.Context, in *pb.Cre
 
 		s3Client = storageClient.S3Client()
 		presignClient = storageClient.PresignClient()
-		key = joinCleanPath(types.DefaultVolumesPrefix, volume.ExternalId, in.VolumePath)
+		key = types.DefaultVolumesPrefix + "/" + volume.ExternalId + "/" + in.VolumePath
 		bucket = storageClient.BucketName()
 	} else {
 		s3Client = s.getS3Client()
@@ -177,7 +168,7 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 
 	var s3Client *s3.Client
 	bucket := s.config.BucketName
-	key := joinCleanPath(types.DefaultVolumesPrefix, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
+	key := types.DefaultVolumesPrefix + "/" + authInfo.Workspace.Name + "/" + volume.ExternalId + "/" + in.VolumePath
 
 	if authInfo.Workspace.StorageAvailable() {
 		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
@@ -190,7 +181,7 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 
 		s3Client = storageClient.S3Client()
 		bucket = storageClient.BucketName()
-		key = joinCleanPath(types.DefaultVolumesPrefix, volume.ExternalId, in.VolumePath)
+		key = types.DefaultVolumesPrefix + "/" + volume.ExternalId + "/" + in.VolumePath
 	} else {
 		s3Client = s.getS3Client()
 	}
@@ -268,7 +259,7 @@ func (s *GlobalVolumeService) CompleteMultipartUpload(ctx context.Context, in *p
 	var s3Client *s3.Client
 
 	bucket := s.config.BucketName
-	key := joinCleanPath(types.DefaultVolumesPrefix, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
+	key := types.DefaultVolumesPrefix + "/" + authInfo.Workspace.Name + "/" + volume.ExternalId + "/" + in.VolumePath
 
 	if authInfo.Workspace.StorageAvailable() {
 		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
@@ -281,7 +272,7 @@ func (s *GlobalVolumeService) CompleteMultipartUpload(ctx context.Context, in *p
 
 		s3Client = storageClient.S3Client()
 		bucket = storageClient.BucketName()
-		key = joinCleanPath(types.DefaultVolumesPrefix, volume.ExternalId, in.VolumePath)
+		key = types.DefaultVolumesPrefix + "/" + volume.ExternalId + "/" + in.VolumePath
 	} else {
 		s3Client = s.getS3Client()
 	}
@@ -330,7 +321,7 @@ func (s *GlobalVolumeService) AbortMultipartUpload(ctx context.Context, in *pb.A
 	var s3Client *s3.Client
 
 	bucket := s.config.BucketName
-	key := joinCleanPath(types.DefaultVolumesPrefix, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
+	key := types.DefaultVolumesPrefix + "/" + authInfo.Workspace.Name + "/" + volume.ExternalId + "/" + in.VolumePath
 
 	if authInfo.Workspace.StorageAvailable() {
 		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
@@ -343,7 +334,7 @@ func (s *GlobalVolumeService) AbortMultipartUpload(ctx context.Context, in *pb.A
 
 		s3Client = storageClient.S3Client()
 		bucket = storageClient.BucketName()
-		key = joinCleanPath(types.DefaultVolumesPrefix, volume.ExternalId, in.VolumePath)
+		key = types.DefaultVolumesPrefix + "/" + volume.ExternalId + "/" + in.VolumePath
 	} else {
 		s3Client = s.getS3Client()
 	}
