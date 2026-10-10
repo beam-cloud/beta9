@@ -13,8 +13,11 @@ DB_FIELDS = ("DATABASE_URL", "REDIS_URL", "URL", "USERNAME", "PASSWORD", "DATABA
 _SECRET_FN = re.compile(r"^secret\(\s*(\d+)?\s*(?:,\s*(\"[^\"]*\"|'[^']*'))?\s*\)$")
 _RANDOM_FN = re.compile(r"^randomInt\(\s*(-?\d+)?\s*(?:,\s*(-?\d+))?\s*\)$")
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
-# app.<name>.URL, or one port's URL / TCP gateway address; names may contain dots.
-_APP_REF = re.compile(r"^app\.[^.].*\.(?:URL|(?:URL|TCP)\.([1-9]\d{0,4}))$")
+# app.<name>.URL, or one port's URL / TCP gateway address (or its HOST / PORT half);
+# names may contain dots.
+_APP_REF = re.compile(r"^app\.[^.].*\.(?:URL|(?:URL|TCP|HOST|PORT)\.([1-9]\d{0,4}))$")
+# Database fields the gateway inlines; the rest are secrets.
+DB_ADDRESS_FIELDS = ("HOST", "PORT")
 
 
 def find_references(value: str) -> List[str]:
@@ -37,8 +40,8 @@ def validate_expression(expr: str) -> List[str]:
         m = _APP_REF.match(expr)
         if not m:
             return [
-                f"app reference {expr!r} must be app.<name>.URL, app.<name>.URL.<port> "
-                "or app.<name>.TCP.<port>"
+                f"app reference {expr!r} must be app.<name>.URL, or "
+                "app.<name>.URL|TCP|HOST|PORT.<port>"
             ]
         if m.group(1) and int(m.group(1)) > 65535:
             return [f"app reference {expr!r} has port {m.group(1)}; ports go up to 65535"]
@@ -77,7 +80,10 @@ def validate_env(env: Union[Dict[str, str], Sequence[str]]) -> List[str]:
             problems.extend(f"{key}: {p}" for p in validate_expression(expr))
         whole = len(refs) == 1 and REFERENCE_RE.fullmatch(value.strip()) is not None
         for expr in refs:
-            if (expr.startswith("secret") or expr.startswith("db.")) and not whole:
+            secret = expr.startswith("secret") or (
+                expr.startswith("db.") and expr.rsplit(".", 1)[-1].upper() not in DB_ADDRESS_FIELDS
+            )
+            if secret and not whole:
                 problems.append(
                     f"{key}: {expr!r} must be the entire value; secrets cannot be embedded in a string"
                 )

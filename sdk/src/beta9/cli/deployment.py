@@ -284,7 +284,12 @@ def _materialize_dockerfile_image(kwargs: Dict) -> Optional[Image]:
     if dockerfile is None:
         return None
 
-    image = image_from_dockerfile_option(dockerfile)
+    image = image_from_dockerfile_option(
+        dockerfile,
+        kwargs.get("context_dir"),
+        kwargs.get("build_target"),
+        kwargs.get("build_args") or (),
+    )
     kwargs["dockerfile"] = image
     return image
 

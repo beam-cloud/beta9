@@ -2,7 +2,10 @@
 
 Managed databases are apps of kind `database`: the upstream image on a
 durable disk, reached over TLS, with generated credentials stored as
-workspace secrets. Kinds: `postgres`, `redis`, `mysql`, `mongo`.
+workspace secrets. Kinds: `postgres`, `redis`, `mysql`, `mongo`. Postgres and
+Redis journal every acknowledged write to object storage, so they survive a
+machine failure; MySQL and Mongo save their disk when the container stops, so a
+machine failure loses what they wrote since it started.
 
 ## Create
 
@@ -36,20 +39,38 @@ variable name instead.
 Connection strings use TLS to the platform's TCP gateway with
 `sslmode=require` (Postgres), `ssl-mode=REQUIRED` (MySQL), `tls=true`
 (Mongo), `rediss://` (Redis). Clients that pin CA certificates need the
-system bundle.
+system bundle. An app configured with split settings (`REDIS_HOST`,
+`REDIS_PORT`, `REDIS_PASSWORD`) must turn its own TLS option on. Redis runs
+with `maxmemory-policy noeviction`, as job queues such as BullMQ and Sidekiq
+require.
+
+The gateway routes by SNI, so the client must send the host as its TLS
+server name; one that does not fails with `tlsv1 unrecognized name` (SSL
+alert 112). libpq, Prisma, redis-py and Go clients send it. Node's ioredis
+(and BullMQ on top of it) and node-redis do not; Beam preloads a fix through
+`NODE_OPTIONS` into Node processes whose environment names a database or
+service host. A client running elsewhere needs `tls: { servername: host }`.
+
+In a stack, a database is a service with `"type": "database"` and
+`"deploy": {"kind": "postgres"}`, sized like an application
+(`"cpu": 0.5, "memory": "2Gi", "size": "10Gi"`); `stack_from_compose` turns
+compose's postgres and redis services into these.
 
 ## Read the credentials
 
 `database_credentials { "kind": "postgres", "name": "shop-db" }` returns the
 connection string for the user (for `psql`, a GUI, a migration run). Show it
-to the user only when they ask; prefer references in apps.
+to the user only when they ask; prefer references in apps. The string uses
+`sslmode=verify-full`, so a local libpq needs CA roots: append
+`&sslrootcert=system` (libpq 16+) or a bundle path such as
+`&sslrootcert=/etc/ssl/cert.pem`.
 
 ## Rotate, delete
 
 `rotate_database_credentials` sets a new password and restarts the database
 and every app bound to it; confirm with the user first.
-`delete_database` (requires `confirm: true`) removes the service and its
-secrets; the disk is kept.
+`delete_database` (requires `confirm: true`) removes the service, its
+credential secrets and its durable disk: the data is gone.
 
 ## Migrations and seed data
 

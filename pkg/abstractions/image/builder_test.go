@@ -4,8 +4,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestBuildExitCodeMsgNamesTheMissingImage(t *testing.T) {
+	missing := int(types.ContainerExitCodeInvalidCustomImage)
+	opts := &BuildOpts{
+		ExistingImageUri:  "minio/minio:latest",
+		BaseImageRegistry: "docker.io",
+		BaseImageName:     "minio/minio",
+		BaseImageTag:      "latest",
+	}
+	assert.Contains(t, getBuildExitCodeMsg(missing, opts), "docker.io/minio/minio:latest was not found")
+	assert.Equal(t, getExitCodeMsg(missing), getBuildExitCodeMsg(missing, &BuildOpts{Dockerfile: "FROM scratch"}))
+}
 
 func TestExtractImageNameAndTag(t *testing.T) {
 	tests := []struct {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
@@ -67,6 +69,86 @@ func TestMCPCallGates(t *testing.T) {
 
 	resp := g.dispatch(ctx, nil, rpcRequest{JSONRPC: "2.0", Method: "tools/call", Params: json.RawMessage(`{"name":"nope"}`)})
 	require.Equal(t, -32602, resp.Error.Code)
+}
+
+// A pod serves its ports, so the task settings its stub config carries anyway
+// stay out of its view.
+func TestMCPAppConfigView(t *testing.T) {
+	cfg := &types.StubConfigV1{Workers: 1, ConcurrentRequests: 1, KeepWarmSeconds: 600, Ports: []uint32{3001}}
+
+	pod := appConfigView(types.StubType(types.StubTypePodDeployment), cfg)
+	for _, key := range podUnusedConfig {
+		require.NotContains(t, pod, key)
+	}
+	require.Contains(t, pod, "keep_warm_seconds")
+	require.Contains(t, pod, "autoscaler")
+	require.Contains(t, pod, "ports")
+
+	endpoint := appConfigView(types.StubType(types.StubTypeEndpointDeployment), cfg)
+	require.Contains(t, endpoint, "workers")
+	require.Contains(t, endpoint, "task_policy")
+}
+
+// A container is up once its own server answers /, whatever it answers short of
+// a server error or the gateway's 429; a named path, or a runner's /health,
+// must answer 2xx.
+func TestMCPReadinessCheck(t *testing.T) {
+	answer := func(status int) map[string]any { return map[string]any{"status": status, "is_error": status >= 400} }
+
+	path, serving := readinessCheck(types.StubTypePod, "")
+	require.Equal(t, "/", path)
+	for status, ready := range map[int]bool{200: true, 302: true, 401: true, 404: true, 429: false, 502: false, 503: false} {
+		require.Equal(t, ready, serving(answer(status)), status)
+	}
+
+	path, serving = readinessCheck(types.StubTypePod, "/healthz")
+	require.Equal(t, "/healthz", path)
+	require.True(t, serving(answer(204)))
+	require.False(t, serving(answer(404)))
+	require.True(t, serving(map[string]any{"status": 200, "is_error": true, "code": "RESPONSE_TOO_LARGE"}))
+
+	path, serving = readinessCheck("endpoint", "")
+	require.Equal(t, "/health", path)
+	require.False(t, serving(answer(404)))
+}
+
+// A request the deadline cut off before the app answered has no status: the
+// default 200 would read as a crash-looping app serving.
+func TestMCPCancelledResult(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	unanswered := (&boundedResponse{header: http.Header{}}).result(ctx)
+	require.NotContains(t, unanswered, "status")
+	require.Equal(t, "CANCELLED", unanswered["code"])
+	require.Contains(t, unanswered["error"], "no answer before the deadline")
+
+	started := &boundedResponse{header: http.Header{}}
+	started.WriteHeader(http.StatusAccepted)
+	require.Equal(t, http.StatusAccepted, started.result(ctx)["status"])
+	require.Equal(t, "CANCELLED", started.result(ctx)["code"])
+}
+
+// A readiness answer can be a whole page; what an agent reads of it is bounded.
+func TestMCPClipAnswer(t *testing.T) {
+	page := strings.Repeat("x", healthAnswerMax+10)
+	clipped := clipAnswer(map[string]any{"status": 200, "headers": http.Header{"Set-Cookie": {"s"}}, "body": page})
+	require.Equal(t, map[string]any{"status": 200, "body": page[:healthAnswerMax] + "..."}, clipped)
+
+	small := map[string]any{"status": "ok"}
+	require.Equal(t, small, clipAnswer(map[string]any{"body": small})["body"])
+	require.NotContains(t, clipAnswer(map[string]any{"body_base64": "AAAA"}), "body_base64")
+}
+
+// A multi-port container's latest URL has a port placeholder; each port gets
+// its own URL an agent can open or share.
+func TestMCPPortURLs(t *testing.T) {
+	d := &types.DeploymentWithRelated{Stub: types.Stub{Config: `{"ports": [3000, 9001]}`}}
+	require.Equal(t, map[string]string{
+		"3000": "https://dep-latest-3000.app.test",
+		"9001": "https://dep-latest-9001.app.test",
+	}, portURLs(d, "https://dep-latest-"+common.PortPlaceholder+".app.test"))
+	require.Nil(t, portURLs(d, "https://dep-latest-3000.app.test"))
 }
 
 type creditGateway struct {
@@ -133,4 +215,8 @@ func TestMCPApiInProcess(t *testing.T) {
 	out, err = g.apiRoutes(ctx, a, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"GET /api/v1/thing/{ws}", "POST /api/v1/thing/{ws}"}, out.(map[string]any)["routes"])
+
+	out, err = g.apiRoutes(ctx, a, toolArgs{"path": "/api/v1/other"})
+	require.NoError(t, err)
+	require.Empty(t, out.(map[string]any)["routes"])
 }

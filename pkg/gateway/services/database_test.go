@@ -77,6 +77,21 @@ func TestDatabaseConnectionString(t *testing.T) {
 	}
 }
 
+// Listing databases shows each one's TCP gateway address without reading its
+// credentials.
+func TestDatabaseHost(t *testing.T) {
+	gws := &GatewayService{}
+	gws.appConfig.Abstractions.Pod.TCP = types.PodTCPConfig{Enabled: true, ExternalHost: "tcp.example.com", ExternalPort: 443}
+	d := &types.DeploymentWithRelated{
+		Deployment: types.Deployment{Subdomain: "app-db-abc1234"},
+		Stub:       types.Stub{Config: `{"tcp":true,"ports":[5432,6432]}`},
+	}
+	require.Equal(t, "app-db-abc1234-latest-5432.tcp.example.com:443", gws.deploymentTCPHost(d, 5432))
+
+	d.Stub.Config = `{"ports":[5432]}`
+	require.Empty(t, gws.deploymentTCPHost(d, 5432))
+}
+
 func TestDatabaseSecretNames(t *testing.T) {
 	pg := databaseSecrets(databaseProducts["postgres"], "app-db")
 	if pg.URL != "BETA9_POSTGRES_APP_DB_URL" || len(pg.all()) != 5 || len(pg.bound()) != 3 {

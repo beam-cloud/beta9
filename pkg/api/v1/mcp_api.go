@@ -109,6 +109,9 @@ func (g *MCPGroup) serve(ctx context.Context, method, url string, body []byte, h
 }
 
 func (rec *boundedResponse) result(ctx context.Context) map[string]any {
+	if rec.status == 0 && ctx.Err() != nil {
+		return map[string]any{"is_error": true, "code": "CANCELLED", "error": "no answer before the deadline: " + ctx.Err().Error()}
+	}
 	if rec.status == 0 {
 		rec.status = http.StatusOK
 	}
@@ -210,11 +213,16 @@ func (g *MCPGroup) apiRoutes(_ context.Context, _ *auth.AuthInfo, args toolArgs)
 	routes := g.router.Routes()
 	out := make([]string, 0, len(routes))
 	seen := map[string]bool{}
+	filter := args.str("path")
 	for _, r := range routes {
 		if !strings.HasPrefix(r.Path, HttpServerBaseRoute+"/") || strings.HasPrefix(r.Path, HttpServerBaseRoute+"/mcp") || strings.HasSuffix(r.Path, "*") || r.Name == "echo_route_not_found" || strings.Contains(r.Name, "Cluster") {
 			continue
 		}
-		line := r.Method + " " + strings.ReplaceAll(r.Path, ":workspaceId", "{ws}")
+		path := strings.ReplaceAll(r.Path, ":workspaceId", "{ws}")
+		if filter != "" && !strings.Contains(path, filter) {
+			continue
+		}
+		line := r.Method + " " + path
 		if !seen[line] {
 			seen[line] = true
 			out = append(out, line)

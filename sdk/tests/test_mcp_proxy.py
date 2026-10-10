@@ -96,7 +96,10 @@ class FakeRemote:
             }
         elif method == "tools/list":
             result = {
-                "tools": [{"name": "whoami", "description": "", "inputSchema": {"type": "object"}}]
+                "tools": [
+                    {"name": "whoami", "description": "", "inputSchema": {"type": "object"}},
+                    {"name": "list_stacks", "description": "", "inputSchema": {"type": "object"}},
+                ]
             }
         elif method == "tools/call":
             result = {"content": [{"type": "text", "text": f"called {message['params']['name']}"}]}
@@ -161,10 +164,33 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
     assert "mcp install --context NAME" in init["result"]["instructions"]
     names = [t["name"] for t in tools["result"]["tools"]]
     assert names[0] == "whoami" and "deploy" in names and "login" in names
+    # A local tool replaces the gateway's tool of the same name.
+    listed = [t for t in tools["result"]["tools"] if t["name"] == "list_stacks"]
+    assert len(listed) == 1 and listed[0]["description"]
     assert call["result"]["content"][0]["text"] == "called whoami"
     assert [r["id"] for r in batch] == [4, 5]
     # The notification went to the gateway and produced no output line.
     assert any(m.get("method") == "notifications/initialized" for m in remote.calls)
+
+
+# Clients keep the server process across CLI upgrades; the agent must learn that
+# the tools it calls are older than the installed CLI's.
+def test_results_say_when_a_newer_sdk_is_installed_than_the_server_runs(settings, monkeypatch):
+    remote = FakeRemote()
+    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: ConfigContext(token="t"))
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remote)
+    monkeypatch.setattr(mcp_server, "_sdk_version", lambda: "1.0.0")
+    monkeypatch.setattr(mcp_server, "VERSION_CHECK_SECONDS", -1)
+    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
+
+    (same,) = run_proxy(proxy, rpc("tools/call", 1, name="whoami", arguments={}))
+    monkeypatch.setattr(mcp_server, "_sdk_version", lambda: "1.1.0")
+    (upgraded,) = run_proxy(proxy, rpc("tools/call", 2, name="whoami", arguments={}))
+
+    assert same["result"]["content"][0]["text"] == "called whoami"
+    text = upgraded["result"]["content"][0]["text"]
+    assert text.startswith("This MCP server runs beta9 SDK 1.0.0, but 1.1.0 is installed.")
+    assert text.endswith("\n\ncalled whoami")
 
 
 def test_rejected_token_drops_remote_and_announces_tool_change(settings, monkeypatch):
@@ -298,6 +324,8 @@ def test_deploy_tool_runs_cli_in_directory_and_reports_url(
             "name": "web",
             "directory": str(project),
             "dockerfile": "Dockerfile",
+            "target": "runtime",
+            "build_args": {"NODE_ENV": "production"},
             "ports": [8000, 9000],
             "env": {"DATABASE_URL": "${{db.web-db.DATABASE_URL}}"},
             "secrets": ["A", "B"],
@@ -322,18 +350,119 @@ def test_deploy_tool_runs_cli_in_directory_and_reports_url(
         "web",
         "--dockerfile",
         "Dockerfile",
+        "--target",
+        "runtime",
         "--port",
         "8000",
         "--port",
         "9000",
         "--env",
         "DATABASE_URL=${{db.web-db.DATABASE_URL}}",
+        "--build-arg",
+        "NODE_ENV=production",
         "--secrets",
         "A,B",
         "--disk",
         "data:/data:5Gi",
         "--tcp",
     ]
+
+
+# An image that EXPOSEs its port is routed there and the result says so. Reading
+# the image happens once: a retry compares the request as the agent made it.
+def test_deploy_takes_ports_from_the_image_and_retries_compare_the_request(
+    settings, local_tools, monkeypatch, tmp_path
+):
+    deployed = '{"deployment_id":"d","stub_id":"s","invoke_url":"u","logs":["Pulling"]}'
+    cli = fake_cli(tmp_path, f"printf '{deployed}\\n'")
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+    exposed = {"nginx:1": {"ExposedPorts": {"80/tcp": {}}}}
+
+    class Images:
+        def docker_hub_image(self, image):
+            return None
+
+        def config(self, image):
+            return exposed.get(image)
+
+    monkeypatch.setattr(local_tools, "registry", Images)
+    request = {"name": "web", "image": "nginx:1", "idempotency_key": "k-ports", "wait_seconds": 10}
+
+    result = local_tools.deploy(request)
+    body = result["structuredContent"]
+    command = local_tools.jobs[body["job_id"]].command
+    assert command[command.index("--port") + 1] == "80" and command.count("--port") == 1
+    assert body["notes"] == ["Ports [80] come from nginx:1's EXPOSE."]
+    assert (
+        result["content"][0]["text"]
+        .split("\n\n")[0]
+        .endswith(
+            "Readiness is not yet verified; use wait_deployment, with the app's health path if it "
+            "has one. Ports [80] come from nginx:1's EXPOSE."
+        )
+    )
+    assert "logs" not in body["deployment"]  # the build log is in log_file
+
+    exposed["nginx:1"] = {"ExposedPorts": {"8080/tcp": {}}}
+    again = local_tools.deploy(request)
+    assert not again.get("isError") and again["structuredContent"]["job_id"] == body["job_id"]
+    assert again["structuredContent"]["notes"] == body["notes"]
+
+    other = local_tools.deploy({**request, "image": "nginx:2"})
+    assert other["isError"] and "different deployment request" in other["content"][0]["text"]
+
+
+# Cursor starts MCP servers in the home folder. A deploy that leaves out its
+# directory must not upload it; an image deploy uploads nothing and goes ahead.
+def test_deploy_never_uploads_the_home_folder(settings, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    deployed = '{"deployment_id":"d","stub_id":"s","invoke_url":"u"}'
+    cli = fake_cli(tmp_path, f"printf '{deployed}\\n'")
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+    tools = mcp_tools.LocalTools(cwd=str(home), on_login=lambda: None, signed_in=lambda: True)
+    monkeypatch.setattr(tools, "registry", lambda: None)
+
+    schema = mcp_tools.deploy_definition("beam", str(home))["inputSchema"]
+    assert schema["properties"]["directory"]["description"] == (
+        "The project to deploy; required unless image is given."
+    )
+    omitted = tools.deploy({"name": "web", "entrypoint": ["python", "app.py"]})
+    assert omitted["isError"] and omitted["content"][0]["text"] == (
+        f"Pass directory, the project to deploy: this server's working directory, {home}, "
+        "is your home folder, and deploy uploads the directory it deploys from."
+    )
+    above = tools.run({"name": "job", "directory": str(tmp_path), "dockerfile": "Dockerfile"})
+    assert above["isError"] and above["content"][0]["text"].startswith(
+        f"Pass directory, the project to deploy: {tmp_path} is above your home folder, and run "
+    )
+    assert not tools.jobs
+
+    image = tools.deploy({"name": "web", "image": "nginx:1", "wait_seconds": 10})
+    assert image["structuredContent"]["status"] == "accepted"
+
+
+def test_deploy_status_waits_for_the_job_and_returns_its_newest_lines(
+    settings, local_tools, monkeypatch, tmp_path
+):
+    cli = fake_cli(
+        tmp_path,
+        """
+        for i in $(seq 1 100); do echo "line $i"; done
+        sleep 1
+        printf '{"deployment_id":"d","stub_id":"s","invoke_url":"u"}\\n'
+        """,
+    )
+    monkeypatch.setattr(mcp_tools, "_cli_command", lambda: [str(cli)])
+    started = local_tools.deploy({"name": "web", "ports": [8000], "wait_seconds": 0})
+
+    body = local_tools.deploy_status(
+        {"job_id": started["structuredContent"]["job_id"], "wait_seconds": 30}
+    )["structuredContent"]
+    assert body["status"] == "accepted"
+    assert body["logs"] == [f"line {i}" for i in range(61, 101)]
+    assert body["skipped_log_lines"] == 60
 
 
 def test_deploy_tool_maps_empty_ports_to_a_worker(settings, local_tools, monkeypatch, tmp_path):
@@ -387,13 +516,13 @@ def test_deploy_tool_surfaces_cli_failure(settings, local_tools, monkeypatch, tm
     result = local_tools.deploy({"name": "web", "wait_seconds": 10})
 
     assert result["isError"] is True
-    text = result["content"][0]["text"]
+    text, data = result["content"][0]["text"].rsplit("\n\n", 1)
     assert text.startswith(
         "Deploy of web failed: insufficient_credits (purchase credits at https://p)"
     )
     assert result["structuredContent"]["logs"] == ["Syncing files..."]  # JSON kept out of the log
     assert "Syncing files..." not in text  # shown once, with the other fields
-    assert json.loads(result["content"][1]["text"]) == result["structuredContent"]
+    assert json.loads(data) == result["structuredContent"]
 
 
 def test_deploy_failure_without_a_json_error_reports_the_last_line(
@@ -532,7 +661,9 @@ def test_job_results_show_the_same_fields_as_text(two_profiles, local_tools, tmp
         "app", str(tmp_path), [sys.executable, "-c", helper], "k-text", 30
     )
 
-    assert json.loads(result["content"][1]["text"]) == result["structuredContent"]
+    assert len(result["content"]) == 1  # some clients show only the first block
+    data = result["content"][0]["text"].rsplit("\n\n", 1)[1]
+    assert json.loads(data) == result["structuredContent"]
     assert result["structuredContent"]["logs"] == ["step one"]
 
 
@@ -604,12 +735,14 @@ def test_database_helper_does_not_run_a_beam_module_in_the_project(home, monkeyp
     assert run_database_helper(monkeypatch) == (["beta9-token"], 0)
 
 
-def test_local_results_show_their_fields_as_text():
+# Some clients show the model only the first text block.
+def test_local_results_show_their_fields_in_the_first_text_block():
     result = mcp_tools.text_result("Review this plan", plan_id="p1")
 
-    texts = [block["text"] for block in result["content"]]
-    assert texts[0] == "Review this plan"
-    assert json.loads(texts[1]) == {"plan_id": "p1"}
+    [block] = result["content"]
+    message, data = block["text"].split("\n\n")
+    assert message == "Review this plan"
+    assert json.loads(data) == {"plan_id": "p1"}
     assert result["structuredContent"] == {"plan_id": "p1"}
 
 

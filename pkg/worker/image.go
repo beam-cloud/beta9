@@ -2224,15 +2224,6 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 		}
 	}
 
-	// The clip indexer cannot index zstd layers; fail before copying the image.
-	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		for _, layer := range imageMetadata.LayersData {
-			if strings.HasSuffix(layer.MIMEType, "+zstd") {
-				return imageMetadata, fmt.Errorf("image %s has zstd-compressed layers, which cannot be indexed yet; push a gzip-compressed copy (skopeo copy --compression-format gzip) or pick a gzip-compressed tag", *request.BuildOptions.SourceImage)
-			}
-		}
-	}
-
 	return imageMetadata, nil
 }
 

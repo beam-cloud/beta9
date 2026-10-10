@@ -30,6 +30,13 @@ mounts, and exits, which is where "it never started" lives.
 | Pause / resume | `stop_deployment`, `start_deployment` |
 | Call it | `invoke { name, path, method, body }` |
 
+A new version of an always-on app does not stop the previous one (rollout
+`auto`): both run, and both consume queues, until the old one is stopped.
+Once `wait_deployment` verifies the new version, `stop_deployment` the older
+active ones from `list_deployments { name, active: true }`, or deploy with
+`rollout: "replace"` when a brief outage is fine. `stack_apply` does this
+for a stack's apps itself.
+
 ## Secrets
 
 `list_secrets`, `create_secret { name, value }`, `update_secret`,
@@ -44,6 +51,17 @@ A stack is a named board of apps. `create_stack { name, apps: [...] }`,
 `delete_stack` (apps are untouched). After deploying a multi-service app,
 put its apps in one stack named after the project so the user sees the
 whole thing and the references between the pieces.
+
+A stack can also be deployed from a spec: `stack_plan` validates it,
+`stack_apply` advances the plan for up to `wait_seconds` per call (repeat
+until `Stack applied`), `stack_status` shows each service's state and error
+(`spec: true` adds the applied spec), and `stack_resolve` settles a failed or
+uncertain service after you inspect it. To change a stack, edit the spec and
+plan again: unchanged applications and jobs that still run or have completed
+are kept (list them in `redeploy` to rebuild), changed ones redeploy, and
+databases are kept. `spec.secrets` declares secrets the apply generates once
+(both settings optional: `length`, default 32, and `alphabet`, default
+letters and digits) for services to share as `${{secret.NAME}}`.
 
 ## Money and capacity
 

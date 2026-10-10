@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -24,6 +26,13 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	clip "github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
+	gname "github.com/google/go-containerregistry/pkg/name"
+	ggcrregistry "github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/static"
+	ggcrtypes "github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1169,6 +1178,53 @@ func TestMaterializeOCILayerPrivateWorkerRequiresGatewayRegistryCredentials(t *t
 	require.Equal(t, "stub-a", workerRepo.requests[0].StubId)
 	require.Equal(t, "image-a", workerRepo.requests[0].ImageId)
 	require.Equal(t, "registry.example.com", workerRepo.requests[0].Registry)
+}
+
+func TestMaterializeOCILayerStoresDecompressedLayer(t *testing.T) {
+	ctx := context.Background()
+	origin := httptest.NewServer(ggcrregistry.New())
+	defer origin.Close()
+	server, err := cache.NewServerWithOptions(ctx, testCacheManagerConfig(t.TempDir()).Cache, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	manager := &WorkerCacheManager{ctx: ctx, originCredsCache: make(map[string]*originCredentials)}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+
+	for name, compress := range map[string]func([]byte) v1.Layer{
+		"gzip": func(content []byte) v1.Layer {
+			var buf bytes.Buffer
+			gzw := gzip.NewWriter(&buf)
+			_, err := gzw.Write(content)
+			require.NoError(t, err)
+			require.NoError(t, gzw.Close())
+			return static.NewLayer(buf.Bytes(), ggcrtypes.OCILayer)
+		},
+		"zstd": func(content []byte) v1.Layer {
+			return static.NewLayer(encoder.EncodeAll(content, nil), ggcrtypes.OCILayerZStd)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			content := []byte(strings.Repeat(name+" layer content ", 100))
+			sum := sha256.Sum256(content)
+			layer := compress(content)
+			repository, err := gname.NewRepository(strings.TrimPrefix(origin.URL, "http://") + "/team/" + name)
+			require.NoError(t, err)
+			require.NoError(t, remote.WriteLayer(repository, layer))
+			digest, err := layer.Digest()
+			require.NoError(t, err)
+			item := types.CacheRequiredContentItem{
+				Hash:   hex.EncodeToString(sum[:]),
+				Source: repository.Digest(digest.String()).String(),
+				Kind:   types.CacheContentKindClipV2,
+			}
+
+			status := manager.materializeOCILayer(ctx, server, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"}, item)
+
+			require.Equal(t, types.CacheAuditStatusMaterialized, status)
+			require.True(t, server.HasCompleteContent(item.Hash, int64(len(content))))
+		})
+	}
 }
 
 func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T) {

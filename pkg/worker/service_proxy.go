@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,8 @@ const (
 	containerHostsFileName   = "hosts"
 	serviceTrustBundle       = "/etc/beam/ca-certificates.crt"
 	workerTrustBundle        = "/etc/ssl/certs/ca-certificates.crt"
+	nodeSNIPreload           = "/etc/beam/node-sni.cjs"
+	nodeSNIPreloadFileName   = "node-sni.cjs"
 )
 
 // ServiceProxy lets containers reach TCP services (<name>.<tcp externalHost>:
@@ -165,6 +168,77 @@ func (p *ServiceProxy) attachTrust(spec *specs.Spec) error {
 		Options: []string{"ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"},
 	})
 	return nil
+}
+
+// AttachNodeSNI preloads into Node processes a tls.connect that names the host as
+// SNI when a client connecting to a service sets no servername. The gateway
+// routes by SNI, and Node sends one only when asked, which Redis clients such
+// as ioredis and node-redis do not. Without the preload file the container
+// starts as it would have.
+func (p *ServiceProxy) AttachNodeSNI(request *types.ContainerRequest, spec *specs.Spec) {
+	if p.suffix == "" || len(p.siblingHostnames(spec.Process.Env)) == 0 {
+		return
+	}
+	dir := filepath.Join(baseConfigPath, request.ContainerId)
+	path := filepath.Join(dir, nodeSNIPreloadFileName)
+	err := os.MkdirAll(dir, 0755)
+	if err == nil {
+		err = os.WriteFile(path, []byte(nodeSNIPreloadSource(p.suffix)), 0644)
+	}
+	if err != nil {
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("node sni preload unavailable")
+		return
+	}
+	spec.Mounts = append(spec.Mounts, specs.Mount{
+		Type:        "none",
+		Source:      path,
+		Destination: nodeSNIPreload,
+		Options:     []string{"ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"},
+	})
+	spec.Process.Env = withNodePreload(spec.Process.Env, nodeSNIPreload)
+}
+
+// withNodePreload adds `--require module` to every NODE_OPTIONS in env, or sets
+// it: which of several entries a process reads depends on its libc.
+func withNodePreload(env []string, module string) []string {
+	flag := "--require " + module
+	found := false
+	for i, entry := range env {
+		value, ok := strings.CutPrefix(entry, "NODE_OPTIONS=")
+		if !ok {
+			continue
+		}
+		found = true
+		if !strings.Contains(value, module) {
+			env[i] = "NODE_OPTIONS=" + strings.TrimSpace(flag+" "+value)
+		}
+	}
+	if !found {
+		env = append(env, "NODE_OPTIONS="+flag)
+	}
+	return env
+}
+
+func nodeSNIPreloadSource(suffix string) string {
+	quoted, _ := json.Marshal(suffix)
+	return `'use strict';
+// Written by the Beam worker: Beam's TCP gateway routes TLS by SNI.
+const tls = require('tls');
+const net = require('net');
+const Module = require('module');
+const suffix = ` + string(quoted) + `;
+const connect = tls.connect;
+tls.connect = function (options) {
+  const args = Array.prototype.slice.call(arguments);
+  if (options !== null && typeof options === 'object' && !options.servername &&
+      typeof options.host === 'string' && !net.isIP(options.host) &&
+      options.host.toLowerCase().endsWith(suffix)) {
+    args[0] = Object.assign({}, options, { servername: options.host });
+  }
+  return connect.apply(this, args);
+};
+if (Module.syncBuiltinESMExports) Module.syncBuiltinESMExports();
+`
 }
 
 // siblingHostnames finds every <label>(.<label>)*.<externalHost> in the env values.
