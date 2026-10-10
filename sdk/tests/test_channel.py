@@ -11,7 +11,13 @@ import pytest
 
 from beta9.abstractions.function import _Invocation
 from beta9.abstractions.sandbox import SandboxFileSystem
-from beta9.channel import Channel, GatewayHTTP, request_metadata, retry_operation, rpc_timeout
+from beta9.channel import (
+    Channel,
+    GatewayHTTP,
+    request_metadata,
+    retry_operation,
+    rpc_timeout,
+)
 from beta9.clients.function import FunctionInvokeRequest, FunctionInvokeResponse
 
 
@@ -43,7 +49,9 @@ class TestGatewayHTTP(TestCase):
             protocol_version = "HTTP/1.1"
 
             def do_GET(self):
-                requests.append((self.client_address, self.path, self.headers["Authorization"]))
+                requests.append(
+                    (self.client_address, self.path, self.headers["Authorization"])
+                )
                 self.send_response(200)
                 self.send_header("Content-Length", "2")
                 self.end_headers()
@@ -55,12 +63,16 @@ class TestGatewayHTTP(TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        client = GatewayHTTP(f"http://127.0.0.1:{server.server_port}", "workspace", "test-token")
+        client = GatewayHTTP(
+            f"http://127.0.0.1:{server.server_port}", "workspace", "test-token"
+        )
         try:
             self.assertEqual(client.json("GET", "/{ws}/first"), {})
             self.assertEqual(client.json("GET", "/{ws}/second"), {})
             self.assertEqual(requests[0][0], requests[1][0])
-            self.assertEqual([r[1] for r in requests], ["/workspace/first", "/workspace/second"])
+            self.assertEqual(
+                [r[1] for r in requests], ["/workspace/first", "/workspace/second"]
+            )
             self.assertEqual([r[2] for r in requests], ["Bearer test-token"] * 2)
         finally:
             client.close()
@@ -117,7 +129,9 @@ def test_filesystem_upload_recovers_after_thirty_seconds(monkeypatch, caller_tim
 
     process = Mock()
     process.exec.return_value.wait.return_value = 0
-    process.exec.return_value.stdout = io.StringIO(hashlib.sha256(b"payload").hexdigest())
+    process.exec.return_value.stdout = io.StringIO(
+        hashlib.sha256(b"payload").hexdigest()
+    )
     instance = SimpleNamespace(
         container_id="sandbox",
         process=process,
@@ -137,8 +151,13 @@ def test_filesystem_upload_recovers_after_thirty_seconds(monkeypatch, caller_tim
 
 
 @pytest.mark.parametrize("supports_resume", [True, False])
-@pytest.mark.parametrize("failure", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL])
-def test_function_reattaches_to_same_task_and_output_cursor(monkeypatch, supports_resume, failure):
+@pytest.mark.parametrize(
+    "failure",
+    [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL, grpc.StatusCode.UNKNOWN],
+)
+def test_function_reattaches_to_same_task_and_output_cursor(
+    monkeypatch, supports_resume, failure
+):
     from concurrent.futures import ThreadPoolExecutor
     from beta9.clients.function import FunctionServiceStub
 
@@ -147,12 +166,19 @@ def test_function_reattaches_to_same_task_and_output_cursor(monkeypatch, support
 
     def invoke(request, context):
         headers = dict(context.invocation_metadata())
-        attempts.append((headers["x-beta9-task-id"], int(headers["x-beta9-log-offset"])))
+        attempts.append(
+            (headers["x-beta9-task-id"], int(headers["x-beta9-log-offset"]))
+        )
         if len(attempts) == 1:
             if supports_resume:
                 yield FunctionInvokeResponse(task_id="task-123")
             yield FunctionInvokeResponse(task_id="task-123", output="before\n")
-            context.abort(failure, "Received RST_STREAM with error code 2")
+            details = (
+                "Stream removed"
+                if failure == grpc.StatusCode.UNKNOWN
+                else "Received RST_STREAM with error code 2"
+            )
+            context.abort(failure, details)
         yield FunctionInvokeResponse(task_id="task-123", output="after\n")
         yield FunctionInvokeResponse(task_id="task-123", done=True, result=b"result")
 
@@ -203,10 +229,11 @@ def test_function_does_not_start_another_task_when_identity_is_unknown():
     stub.function_invoke.assert_called_once()
 
 
-def test_recovery_does_not_retry_application_internal_errors():
+@pytest.mark.parametrize("status", [grpc.StatusCode.INTERNAL, grpc.StatusCode.UNKNOWN])
+def test_recovery_does_not_retry_application_internal_errors(status):
     class Internal(grpc.RpcError):
         def code(self):
-            return grpc.StatusCode.INTERNAL
+            return status
 
         def details(self):
             return "invalid application response"
@@ -232,11 +259,20 @@ def test_acknowledgements_stay_with_their_container():
 
 
 @pytest.mark.parametrize(
-    "failure", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED]
+    "failure",
+    [
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+        grpc.StatusCode.UNKNOWN,
+    ],
 )
 def test_generated_sandbox_stub_retries_in_the_shared_channel(monkeypatch, failure):
     from concurrent.futures import ThreadPoolExecutor
-    from beta9.clients.pod import PodServiceStub, PodSandboxExecRequest, PodSandboxExecResponse
+    from beta9.clients.pod import (
+        PodServiceStub,
+        PodSandboxExecRequest,
+        PodSandboxExecResponse,
+    )
 
     monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
     calls = []
@@ -244,7 +280,7 @@ def test_generated_sandbox_stub_retries_in_the_shared_channel(monkeypatch, failu
     def execute(request, context):
         calls.append(dict(context.invocation_metadata()))
         if len(calls) == 1:
-            context.abort(failure, "gateway restarting after accepting exec")
+            context.abort(failure, "Stream removed")
         return PodSandboxExecResponse(ok=True, pid=42)
 
     server = grpc.server(ThreadPoolExecutor(max_workers=2))
@@ -292,3 +328,50 @@ def test_recovery_does_not_retry_cancellation(monkeypatch):
     from beta9.channel import time
 
     time.sleep.assert_not_called()
+
+
+def test_runner_finalization_recovers_from_removed_stream(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from beta9.clients.gateway import (
+        EndTaskRequest,
+        EndTaskResponse,
+        GatewayServiceStub,
+    )
+    from beta9.runner.common import end_task
+
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    calls = []
+
+    def complete(request, context):
+        calls.append((request, dict(context.invocation_metadata())))
+        if len(calls) == 1:
+            context.abort(grpc.StatusCode.UNKNOWN, "Stream removed")
+        return EndTaskResponse(ok=True)
+
+    server = grpc.server(ThreadPoolExecutor(max_workers=2))
+    server.add_generic_rpc_handlers(
+        (
+            grpc.method_handlers_generic_handler(
+                "gateway.GatewayService",
+                {
+                    "EndTask": grpc.unary_unary_rpc_method_handler(
+                        complete,
+                        request_deserializer=EndTaskRequest().parse,
+                        response_serializer=bytes,
+                    )
+                },
+            ),
+        )
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    channel = Channel(f"127.0.0.1:{port}", retry=(lambda _: None, False))
+    try:
+        request = EndTaskRequest(task_id="task", container_id="function")
+        assert end_task(GatewayServiceStub(channel), request).ok
+        assert len(calls) == 2
+        assert calls[0][0] == calls[1][0] == request
+        assert calls[0][1]["x-beta9-request-id"] == calls[1][1]["x-beta9-request-id"]
+    finally:
+        channel.close()
+        server.stop(0).wait()
