@@ -13,6 +13,10 @@ const (
 	MaxVMRootSizeBytes     int64 = 100 << 30
 )
 
+// VMAppName owns every VM stub in a workspace. App listings skip it because
+// VMs are managed through the VM service, not as apps.
+const VMAppName = "__beam_vms__"
+
 // IsPersistentVM identifies a microVM whose lifecycle belongs to the VM service.
 func (s *StubConfigV1) IsPersistentVM() bool {
 	return s != nil && isPersistentVM(s.UseVM, s.Env)

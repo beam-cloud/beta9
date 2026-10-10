@@ -1882,11 +1882,12 @@ func (c *PostgresBackendRepository) ListAppIDsByStubExternalIDs(ctx context.Cont
 		JOIN app a ON s.app_id = a.id
 		WHERE w.external_id = $1
 		  AND s.external_id = ANY($2)
-		  AND a.deleted_at IS NULL;
+		  AND a.deleted_at IS NULL
+		  AND a.name <> $3;
 	`
 
 	var rows []stubAppIDRow
-	if err := c.client.SelectContext(ctx, &rows, query, workspaceID, pq.Array(stubExternalIDs)); err != nil {
+	if err := c.client.SelectContext(ctx, &rows, query, workspaceID, pq.Array(stubExternalIDs), types.VMAppName); err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -2587,8 +2588,8 @@ func (r *PostgresBackendRepository) GetOrCreateApp(ctx context.Context, workspac
 func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId uint) ([]types.App, error) {
 	var apps []types.App
 
-	query := `SELECT * FROM app WHERE workspace_id = $1 and deleted_at is null`
-	err := r.client.SelectContext(ctx, &apps, query, workspaceId)
+	query := `SELECT * FROM app WHERE workspace_id = $1 and deleted_at is null and name <> $2`
+	err := r.client.SelectContext(ctx, &apps, query, workspaceId, types.VMAppName)
 	if err != nil {
 		return nil, err
 	}
@@ -2629,7 +2630,7 @@ func (r *PostgresBackendRepository) RetrieveAppByStubExternalId(ctx context.Cont
 }
 
 func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId}).Where(squirrel.Eq{"deleted_at": nil})
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId}).Where(squirrel.Eq{"deleted_at": nil}).Where(squirrel.NotEq{"a.name": types.VMAppName})
 
 	if filters.Name != "" {
 		qb = qb.Where(squirrel.Like{"LOWER(a.name)": fmt.Sprintf("%%%s%%", strings.ToLower(filters.Name))})
@@ -2666,7 +2667,7 @@ func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, works
 // CountApps returns the number of live (non-deleted) apps in a workspace.
 func (r *PostgresBackendRepository) CountApps(ctx context.Context, workspaceId uint) (int, error) {
 	var count int
-	err := r.client.GetContext(ctx, &count, `SELECT COUNT(*) FROM app WHERE workspace_id = $1 AND deleted_at IS NULL;`, workspaceId)
+	err := r.client.GetContext(ctx, &count, `SELECT COUNT(*) FROM app WHERE workspace_id = $1 AND deleted_at IS NULL AND name <> $2;`, workspaceId, types.VMAppName)
 	return count, err
 }
 

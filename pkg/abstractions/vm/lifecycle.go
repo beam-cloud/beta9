@@ -62,6 +62,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	req := &pb.GetOrCreateStubRequest{
 		ImageId:         v.Spec.ImageID,
 		Name:            types.StubTypeVM + "/" + v.ID,
+		AppName:         types.VMAppName,
 		StubType:        types.StubTypeVM,
 		Cpu:             v.Spec.CPU,
 		Memory:          v.Spec.Memory,

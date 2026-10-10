@@ -66,11 +66,14 @@ func (r *appBackendRepo) GetWorkspaceByExternalIdWithSigningKey(_ context.Contex
 }
 
 // ListAppsPaginated honours the include / exclude scoping the handler derives
-// from live state, the way the real query does.
+// from live state and skips the VM app, the way the real query does.
 func (r *appBackendRepo) ListAppsPaginated(_ context.Context, _ uint, filters types.AppFilter) (repoCommon.CursorPaginationInfo[types.App], error) {
 	r.lastFilters = filters
 	page := repoCommon.CursorPaginationInfo[types.App]{Next: r.apps.Next}
 	for _, app := range r.apps.Data {
+		if app.Name == types.VMAppName {
+			continue
+		}
 		if filters.IncludeExternalIds != nil {
 			found := false
 			for _, id := range filters.IncludeExternalIds {
@@ -97,7 +100,13 @@ func (r *appBackendRepo) ListAppsPaginated(_ context.Context, _ uint, filters ty
 }
 
 func (r *appBackendRepo) CountApps(_ context.Context, _ uint) (int, error) {
-	return len(r.apps.Data), nil
+	count := 0
+	for _, app := range r.apps.Data {
+		if app.Name != types.VMAppName {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (r *appBackendRepo) AggregateTaskActivityByApp(_ context.Context, _ uint, appIDs []string, _ time.Time) (map[string][]types.AppActivityBucket, error) {
@@ -153,8 +162,15 @@ func (r *appBackendRepo) CountActiveDeploymentsByApp(_ context.Context, _ uint, 
 
 // ListAppIDsByStubExternalIDs resolves stubs through both the deployment and
 // stub fixtures, plus any explicit extra mappings (e.g. older stubs that are
-// no longer the app's latest).
+// no longer the app's latest). Like the real query, it never resolves to the
+// VM app.
 func (r *appBackendRepo) ListAppIDsByStubExternalIDs(_ context.Context, _ string, stubExternalIDs []string) (map[string]string, error) {
+	hidden := map[string]bool{}
+	for _, app := range r.apps.Data {
+		if app.Name == types.VMAppName {
+			hidden[app.ExternalId] = true
+		}
+	}
 	known := map[string]string{}
 	for appID, deployments := range r.deploymentsByApp {
 		for _, deployment := range deployments {
@@ -171,7 +187,7 @@ func (r *appBackendRepo) ListAppIDsByStubExternalIDs(_ context.Context, _ string
 	}
 	result := map[string]string{}
 	for _, stubID := range stubExternalIDs {
-		if appID, ok := known[stubID]; ok {
+		if appID, ok := known[stubID]; ok && !hidden[appID] {
 			result[stubID] = appID
 		}
 	}
@@ -787,6 +803,69 @@ func TestListAppWithLatestActivityStateFilterAndCounts(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected an error for an invalid state filter")
+	}
+}
+
+// A running VM lives in the shared VM app, which must not surface as an app,
+// in the total, or in the running count.
+func TestListAppWithLatestActivityHidesVMApp(t *testing.T) {
+	workspace := &types.Workspace{Id: 1, ExternalId: "workspace-1", Name: "Workspace 1"}
+	web := types.App{Id: 1, ExternalId: "app-web", Name: "web", WorkspaceId: workspace.Id}
+	vms := types.App{Id: 2, ExternalId: "app-vms", Name: types.VMAppName, WorkspaceId: workspace.Id}
+
+	appGroup := &AppGroup{
+		backendRepo: &appBackendRepo{
+			workspace: workspace,
+			apps:      repoCommon.CursorPaginationInfo[types.App]{Data: []types.App{web, vms}},
+			deploymentsByApp: map[string][]types.DeploymentWithRelated{
+				web.ExternalId: {{
+					Deployment: types.Deployment{ExternalId: "dep-web", Name: web.Name, Active: true, WorkspaceId: workspace.Id, AppId: web.Id},
+					Stub:       types.Stub{ExternalId: "stub-web", Name: web.Name, Type: types.StubType(types.StubTypeEndpointDeployment), Config: "{}", WorkspaceId: workspace.Id, AppId: web.Id},
+					Workspace:  *workspace,
+					App:        web,
+				}},
+			},
+			stubsByApp: map[string][]types.StubWithRelated{
+				vms.ExternalId: {{
+					Stub:      types.Stub{ExternalId: "stub-vm", Name: types.StubTypeVM + "/vm-abc", Type: types.StubType(types.StubTypeVM), Config: "{}", WorkspaceId: workspace.Id, AppId: vms.Id},
+					Workspace: *workspace,
+					App:       &vms,
+				}},
+			},
+		},
+		containerRepo: &appContainerRepo{states: []types.ContainerState{
+			{StubId: "stub-web", Status: types.ContainerStatusRunning},
+			{StubId: "stub-vm", Status: types.ContainerStatusRunning},
+		}},
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/workspace-1/latest", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues(workspace.ExternalId)
+	if err := appGroup.ListAppWithLatestActivity(&auth.HttpAuthContext{
+		Context:  ctx,
+		AuthInfo: &auth.AuthInfo{Workspace: workspace, Token: &types.Token{TokenType: types.TokenTypeWorkspacePrimary}},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var out struct {
+		StateCounts types.AppStateCounts `json:"state_counts"`
+		Data        []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(out.Data) != 1 || out.Data[0].ID != web.ExternalId {
+		t.Fatalf("expected only %s, got %+v", web.ExternalId, out.Data)
+	}
+	if out.StateCounts != (types.AppStateCounts{All: 1, Running: 1}) {
+		t.Fatalf("unexpected counts: %+v", out.StateCounts)
 	}
 }
 

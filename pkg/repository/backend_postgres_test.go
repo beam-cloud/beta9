@@ -458,6 +458,56 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestAppListingsSkipVMApp(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("list", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectQuery(`SELECT \* FROM app WHERE workspace_id = \$1 and deleted_at is null and name <> \$2`).
+			WithArgs(uint(11), types.VMAppName).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+		_, err := repo.(*PostgresBackendRepository).ListApps(ctx, 11)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("paginated", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectQuery(`FROM app a WHERE workspace_id = \$1 AND deleted_at IS NULL AND a\.name <> \$2`).
+			WithArgs(uint(11), types.VMAppName).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+		_, err := repo.ListAppsPaginated(ctx, 11, types.AppFilter{})
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("count", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM app WHERE workspace_id = \$1 AND deleted_at IS NULL AND name <> \$2`).
+			WithArgs(uint(11), types.VMAppName).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+
+		count, err := repo.CountApps(ctx, 11)
+		require.NoError(t, err)
+		require.Equal(t, 3, count)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("stub app ids", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectQuery(`AND a\.deleted_at IS NULL\s+AND a\.name <> \$3`).
+			WithArgs("workspace-1", pq.Array([]string{"stub-1"}), types.VMAppName).
+			WillReturnRows(sqlmock.NewRows([]string{"stub_external_id", "app_external_id"}).AddRow("stub-1", "app-1"))
+
+		appIDs, err := repo.ListAppIDsByStubExternalIDs(ctx, "workspace-1", []string{"stub-1"})
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"stub-1": "app-1"}, appIDs)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 func TestAggregateTasksByTimeWindowScopesAppStubSubquery(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
