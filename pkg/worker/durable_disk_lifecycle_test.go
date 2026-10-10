@@ -55,6 +55,7 @@ func TestDurableDiskSyncFailureExitCode(t *testing.T) {
 		{name: "eviction", got: int(types.ContainerExitCodeEvicted), want: int(types.ContainerExitCodeEvicted)},
 		{name: "oom", got: int(types.ContainerExitCodeOomKill), want: int(types.ContainerExitCodeOomKill)},
 		{name: "existing failure", got: 42, want: 42},
+		{name: "startup failure with failed final sync", got: int(types.ContainerExitCodeStartupFailed), want: int(types.ContainerExitCodeUnknownError)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, durableDiskSyncFailureExitCode(test.got))

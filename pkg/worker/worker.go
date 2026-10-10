@@ -1148,7 +1148,7 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 	}
 
 	// Set a non-zero exit code for the container (both in memory, and in repo)
-	exitCode := 1
+	exitCode := int(types.ContainerExitCodeStartupFailed)
 
 	serr, ok := runErr.(*types.ExitCodeError)
 	if ok {

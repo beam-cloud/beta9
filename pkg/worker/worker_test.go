@@ -1453,7 +1453,7 @@ func TestFailContainerRequestReportsExitCode(t *testing.T) {
 
 	require.Equal(t, 1, repoClient.setExitCodeCalls)
 	require.Equal(t, request.ContainerId, repoClient.lastSetExitCode.ContainerId)
-	require.Equal(t, int32(1), repoClient.lastSetExitCode.ExitCode)
+	require.Equal(t, int32(types.ContainerExitCodeStartupFailed), repoClient.lastSetExitCode.ExitCode)
 	require.NoDirExists(t, tempDir)
 }
 

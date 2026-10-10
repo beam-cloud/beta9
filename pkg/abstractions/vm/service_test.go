@@ -219,6 +219,18 @@ func TestStopAcceptsExplicitSchedulingFailureButNotMissingState(t *testing.T) {
 	}
 }
 
+func TestStartupFailureAllowsVMRetry(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	containers := s.containers.(*vmContainers)
+	delete(containers.states, v.ContainerID)
+	containers.exitCode = int(types.ContainerExitCodeStartupFailed)
+	original := v.ContainerID
+
+	require.NoError(t, s.start(auth.ContextWithAuthInfo(context.Background(), info), info, v))
+	require.NotEqual(t, original, v.ContainerID)
+	require.Len(t, runtime.requests, 1)
+}
+
 func TestFinalizationErrorPreservesRuntimeForRecovery(t *testing.T) {
 	for _, reconcile := range []bool{false, true} {
 		s, v, info, runtime, _ := fixture()
