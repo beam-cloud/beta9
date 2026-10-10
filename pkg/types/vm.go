@@ -7,7 +7,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-// Persistent VM root capacity, in bytes.
+// Writable VM root capacity in bytes, layered over the separate base image.
 const (
 	DefaultVMRootSizeBytes int64 = 50 << 30
 	MaxVMRootSizeBytes     int64 = 100 << 30

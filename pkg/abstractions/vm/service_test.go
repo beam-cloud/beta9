@@ -155,7 +155,7 @@ func TestInterruptedStopFinishesExactlyOneArtifact(t *testing.T) {
 }
 
 func TestDesktopDefaultsAndDiskSizeValidation(t *testing.T) {
-	for _, disk := range []string{"50GiB", "50Gi", "53687091200"} {
+	for _, disk := range []string{"", "50GiB", "50Gi", "53687091200"} {
 		spec := types.VMSpec{ImageID: "image", Desktop: true, DiskSize: disk}
 		require.NoError(t, validate(&spec))
 		require.Equal(t, int64(2000), spec.CPU)
