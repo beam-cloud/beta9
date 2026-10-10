@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -187,6 +189,11 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 	requestID := uuid.NewString()
 	if task != nil && task.msg != nil && task.msg.TaskId != "" {
 		requestID = task.msg.TaskId
+	}
+
+	if task == nil {
+		rb.addTasklessRequest(requestID)
+		defer rb.removeTasklessRequest(requestID)
 	}
 
 	done := make(chan struct{})
@@ -553,6 +560,50 @@ func (rb *RequestBuffer) discoverContainers() {
 		case <-timer.C:
 		}
 	}
+}
+
+// The autoscaler only counts tasks, so taskless requests are recorded until
+// they finish, scored by queue deadline so a crashed gateway's entry expires.
+func (rb *RequestBuffer) addTasklessRequest(requestID string) {
+	if rb.rdb == nil || rb.workspace == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	key := Keys.endpointTasklessRequests(rb.workspace.Name, rb.stubId)
+	ttl := rb.requestQueueTimeout(nil)
+	now := time.Now()
+	pipe := rb.rdb.TxPipeline()
+	pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(now.UnixMilli(), 10))
+	pipe.ZAdd(ctx, key, redis.Z{Score: float64(now.Add(ttl).UnixMilli()), Member: requestID})
+	pipe.PExpire(ctx, key, ttl)
+	_, _ = pipe.Exec(ctx)
+}
+
+func (rb *RequestBuffer) removeTasklessRequest(requestID string) {
+	if rb.rdb == nil || rb.workspace == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_ = rb.rdb.ZRem(ctx, Keys.endpointTasklessRequests(rb.workspace.Name, rb.stubId), requestID).Err()
+}
+
+func (rb *RequestBuffer) hasTasklessRequests() (bool, error) {
+	if rb.rdb == nil || rb.workspace == nil {
+		return false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	key := Keys.endpointTasklessRequests(rb.workspace.Name, rb.stubId)
+	count, err := rb.rdb.ZCount(ctx, key, strconv.FormatInt(time.Now().UnixMilli(), 10), "+inf").Result()
+	return count > 0, err
 }
 
 func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
