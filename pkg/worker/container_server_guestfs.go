@@ -31,7 +31,7 @@ func guestFilesystemMutation(ctx context.Context, instance *ContainerInstance, a
 		return false, nil
 	}
 	process := *instance.Spec.Process
-	process.Args = args
+	process.Args = append([]string{types.WorkerSandboxFilesystemContainerPath}, args...)
 	process.User = specs.User{}
 	var output bytes.Buffer
 	err := instance.Runtime.Exec(ctx, instance.Id, process, &runtime.ExecOpts{OutputWriter: &output})

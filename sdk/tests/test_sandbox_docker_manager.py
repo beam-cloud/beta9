@@ -73,14 +73,22 @@ def compose_manager():
     return manager
 
 
-def test_compose_config_resolves_services_in_guest_and_isolates_projects(compose_manager):
+@pytest.mark.parametrize(
+    "hosts",
+    [
+        {"external.example": "192.0.2.5", "ipv6.example": "::1"},
+        ["external.example:192.0.2.5", "ipv6.example:::1"],
+        ["external.example=192.0.2.5", "ipv6.example=::1"],
+    ],
+)
+def test_compose_config_resolves_services_in_guest_and_isolates_projects(compose_manager, hosts):
     uploaded = {}
     commands = []
     services = {
         "included-web": {
             "build": {"context": "/workspace/src"},
             "networks": {"custom": None},
-            "extra_hosts": {"external.example": "192.0.2.5"},
+            "extra_hosts": hosts,
         },
         "db": {"image": "busybox"},
     }
@@ -106,6 +114,7 @@ def test_compose_config_resolves_services_in_guest_and_isolates_projects(compose
         "pid": "host",
         "extra_hosts": {
             "external.example": "192.0.2.5",
+            "ipv6.example": "::1",
             "included-web": "127.0.0.1",
             "db": "127.0.0.1",
         },

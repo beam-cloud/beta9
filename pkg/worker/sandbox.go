@@ -93,6 +93,14 @@ func (s *Worker) prepareSandboxProcess(request *types.ContainerRequest, spec *sp
 				"nodev",
 			},
 		})
+
+		if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
+			// Guest VFS mutations must also work in images without mkdir or rm.
+			helper := spec.Mounts[len(spec.Mounts)-1]
+			helper.Source = types.WorkerSandboxFilesystemWorkerPath
+			helper.Destination = types.WorkerSandboxFilesystemContainerPath
+			spec.Mounts = append(spec.Mounts, helper)
+		}
 	}
 
 	// Add Docker capabilities if enabled for sandbox containers.

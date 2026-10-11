@@ -67,7 +67,7 @@ func TestGvisorFilesystemMutationsRunThroughGuest(t *testing.T) {
 	handled, err := guestFilesystemMutation(context.Background(), instance, "rm", "-rf", "--", "/tmp/a b;echo injected")
 	require.NoError(t, err)
 	require.True(t, handled)
-	require.Equal(t, []string{"rm", "-rf", "--", "/tmp/a b;echo injected"}, rt.processes[0].Args)
+	require.Equal(t, []string{types.WorkerSandboxFilesystemContainerPath, "rm", "-rf", "--", "/tmp/a b;echo injected"}, rt.processes[0].Args)
 	require.Equal(t, "/workspace", rt.processes[0].Cwd)
 	require.Zero(t, rt.processes[0].User.UID)
 	instance.Runtime = NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{})

@@ -24,6 +24,8 @@ const (
 	WorkerSandboxProcessManagerPort          int32         = 7111
 	WorkerSandboxProcessManagerWorkerPath    string        = "/usr/local/bin/goproc"
 	WorkerSandboxProcessManagerContainerPath string        = "/usr/bin/goproc"
+	WorkerSandboxFilesystemWorkerPath        string        = "/bin/busybox"
+	WorkerSandboxFilesystemContainerPath     string        = "/usr/lib/beta9/busybox"
 )
 
 const (

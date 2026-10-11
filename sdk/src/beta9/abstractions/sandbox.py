@@ -3059,9 +3059,10 @@ class SandboxDockerManager:
             service["network_mode"] = DOCKER_SANDBOX_NETWORK_MODE
             service["pid"] = DOCKER_SANDBOX_PID_MODE
             if len(services) > 1:
-                service.setdefault("extra_hosts", {}).update(
-                    {name: "127.0.0.1" for name in services}
-                )
+                hosts = service.get("extra_hosts", {})
+                if isinstance(hosts, list):
+                    hosts = dict(host.split("=" if "=" in host else ":", 1) for host in hosts)
+                service["extra_hosts"] = {**hosts, **{name: "127.0.0.1" for name in services}}
             if "build" in service:
                 build = service["build"]
                 build["network"] = DOCKER_SANDBOX_NETWORK_MODE
