@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Chrome
-Exec=google-chrome-stable --no-sandbox --disable-dev-shm-usage --no-first-run --no-default-browser-check %U
+Exec=google-chrome-stable --no-sandbox --disable-dev-shm-usage --no-first-run --no-default-browser-check --test-type %U
 Icon=google-chrome
 Path=/workspace
 Terminal=false

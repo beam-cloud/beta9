@@ -2,6 +2,6 @@
 Type=Application
 Name=Terminal
 Exec=xterm -fa Monospace -fs 12
-Icon=utilities-terminal
+Icon=xterm-color
 Path=/workspace
 Terminal=false

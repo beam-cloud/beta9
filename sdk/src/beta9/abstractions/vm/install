@@ -62,6 +62,9 @@ if [ "$desktop" = true ]; then
   install -m 0644 "$assets/desktop.html" /usr/share/kasmvnc/www/index.html
   install -d -m 0755 /root/Desktop
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/
+  # Open desktop launchers directly instead of prompting to execute a script.
+  sed -i '/^\[config\]/a quick_exec=1' /etc/xdg/libfm/libfm.conf
+  xdg-user-dirs-update
   # Start the desktop after Openbox has acquired the window-manager selection.
   if ! grep -q '^pcmanfm --desktop' /etc/xdg/openbox/autostart; then
     printf '\npcmanfm --desktop &\n' >> /etc/xdg/openbox/autostart
