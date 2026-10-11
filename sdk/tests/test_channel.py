@@ -35,6 +35,22 @@ class TestChannelIdentity(TestCase):
                 ch.close()
 
 
+@pytest.mark.parametrize(
+    "address, secure", [("localhost:443", True), ("[::1]:443", True), ("127.0.0.1:46443", False)]
+)
+def test_channel_infers_tls_only_for_port_443(monkeypatch, address, secure):
+    tls = Mock(return_value=Mock(spec=grpc.Channel))
+    plaintext = Mock(return_value=Mock(spec=grpc.Channel))
+    monkeypatch.setattr(grpc, "secure_channel", tls)
+    monkeypatch.setattr(grpc, "insecure_channel", plaintext)
+    channel = Channel(address)
+    try:
+        assert tls.called is secure
+        assert plaintext.called is not secure
+    finally:
+        channel.close()
+
+
 class TestGatewayHTTP(TestCase):
     def test_sequential_requests_reuse_connection_and_preserve_identity(self):
         requests = []
@@ -156,7 +172,9 @@ def test_function_reattaches_to_same_task_and_output_cursor(monkeypatch, support
             yield FunctionInvokeResponse(task_id="task-123", output="before\n")
             context.abort(
                 failure,
-                "Stream removed" if failure == grpc.StatusCode.UNKNOWN else "Received RST_STREAM with error code 2",
+                "Stream removed"
+                if failure == grpc.StatusCode.UNKNOWN
+                else "Received RST_STREAM with error code 2",
             )
         yield FunctionInvokeResponse(task_id="task-123", output="after\n")
         yield FunctionInvokeResponse(task_id="task-123", done=True, result=b"result")

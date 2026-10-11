@@ -168,7 +168,7 @@ class Channel(InterceptorChannel):
 
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials, options=options)
-        elif addr.endswith("443"):
+        elif addr.endswith(":443"):
             channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials(), options=options)
         else:
             channel = grpc.insecure_channel(addr, options=options)

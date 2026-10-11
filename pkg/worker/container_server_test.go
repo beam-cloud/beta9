@@ -1293,25 +1293,31 @@ func TestRequestJournalReplaysConsumedOutputUntilAcknowledged(t *testing.T) {
 	require.NotContains(t, journal.entries, "first")
 }
 
-func TestCompletedFunctionReplaysLogsWithoutRetainingContainer(t *testing.T) {
-	logs := common.NewLogBuffer()
-	t.Cleanup(logs.Dispose)
-	require.True(t, logs.Write([]byte("first\nremaining\n")))
-	logs.Close()
-	require.Eventually(t, func() bool {
-		n, _ := logs.ReadAt(make([]byte, 6), 0)
-		return n == 6
-	}, time.Second, time.Millisecond)
-	instances := common.NewSafeMap[*ContainerInstance]()
-	server := &ContainerRuntimeServer{containerInstances: instances}
-	worker := &Worker{containerInstances: instances, containerServer: server}
-	instances.Set("function-test", &ContainerInstance{LogBuffer: logs, Request: &types.ContainerRequest{
-		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}},
-	}})
-	worker.deleteContainer("function-test")
-	_, active := instances.Get("function-test")
-	require.False(t, active)
-	stream := &logAttachmentStream{ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs(common.LogOffsetHeader, "6"))}
-	require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: "function-test"}, stream))
-	require.Equal(t, "remaining\n", stream.output.String())
+func TestCompletedContainerReplaysLogsWithoutRetainingContainer(t *testing.T) {
+	dockerfile := "FROM ubuntu:22.04"
+	for name, request := range map[string]*types.ContainerRequest{
+		"function": {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}}},
+		"build":    {BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := common.NewLogBuffer()
+			t.Cleanup(logs.Dispose)
+			require.True(t, logs.Write([]byte("first\nremaining\n")))
+			logs.Close()
+			require.Eventually(t, func() bool {
+				n, _ := logs.ReadAt(make([]byte, 6), 0)
+				return n == 6
+			}, time.Second, time.Millisecond)
+			instances := common.NewSafeMap[*ContainerInstance]()
+			server := &ContainerRuntimeServer{containerInstances: instances}
+			worker := &Worker{containerInstances: instances, containerServer: server}
+			instances.Set(name, &ContainerInstance{LogBuffer: logs, Request: request})
+			worker.deleteContainer(name)
+			_, active := instances.Get(name)
+			require.False(t, active)
+			stream := &logAttachmentStream{ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs(common.LogOffsetHeader, "6"))}
+			require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: name}, stream))
+			require.Equal(t, "remaining\n", stream.output.String())
+		})
+	}
 }

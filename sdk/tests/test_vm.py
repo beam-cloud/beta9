@@ -911,3 +911,17 @@ def test_activity_lease_survives_gateway_restart_and_releases_same_lease():
         assert restored.wait(2)
     assert len({params["lease"] for params in leases}) == 1
     assert leases[-1]["release"] == "1"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js unavailable")
+def test_desktop_browser_routing_and_reconnect():
+    from pathlib import Path
+
+    subprocess.run(
+        [
+            "node",
+            str(Path(__file__).with_name("test_vm_desktop.js")),
+            str(Path(vm_module.__file__).with_name("desktop.html")),
+        ],
+        check=True,
+    )

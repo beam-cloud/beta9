@@ -574,7 +574,7 @@ func (s *Worker) deleteContainer(containerId string) {
 	if instance, exists := s.containerInstances.Get(containerId); exists {
 		instance.tunnels.close()
 		if instance.LogBuffer != nil {
-			if s.containerServer != nil && instance.Request != nil && instance.Request.Stub.Type.Kind() == types.StubTypeFunction {
+			if s.containerServer != nil && instance.Request != nil && (instance.Request.Stub.Type.Kind() == types.StubTypeFunction || instance.Request.IsBuildRequest()) {
 				s.containerServer.retainCompletedLogs(containerId, instance.LogBuffer)
 			} else {
 				instance.LogBuffer.Dispose()

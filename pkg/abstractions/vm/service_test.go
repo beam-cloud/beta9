@@ -287,6 +287,7 @@ type vmRuntime struct {
 	containers      *vmContainers
 	requests        []string
 	checkpoint      string
+	launchToken     string
 	checkpointDisks map[string]string
 	memoryResponse  *pb.PodSandboxSnapshotMemoryResponse
 	snapshotError   bool
@@ -306,7 +307,8 @@ func (r *vmRuntime) SandboxConnect(_ context.Context, req *pb.PodSandboxConnectR
 	return &pb.PodSandboxConnectResponse{Ok: state != nil && state.Status == types.ContainerStatusRunning}, nil
 }
 
-func (r *vmRuntime) RunVM(_ context.Context, _ *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string, disks map[string]string) error {
+func (r *vmRuntime) RunVM(_ context.Context, info *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string, disks map[string]string) error {
+	r.launchToken = info.Token.ExternalId
 	r.checkpoint = checkpoint
 	r.checkpointDisks = disks
 	r.requests = append(r.requests, cid)

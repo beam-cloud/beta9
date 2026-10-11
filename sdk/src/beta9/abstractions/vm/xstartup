@@ -4,5 +4,14 @@ export HOME=/root
 export XDG_CONFIG_HOME=/root/.config
 export XAUTHORITY=/run/beam-desktop/.Xauthority
 export DISPLAY=:1
-xsetroot -solid '#2c001e'
+# Keep application sizing consistent with the viewer's 2x framebuffer.
+export GDK_SCALE=2
+export GDK_DPI_SCALE=0.5
+xrdb -merge <<'EOF'
+Xft.dpi: 192
+Xft.antialias: 1
+Xft.hintstyle: hintslight
+Xft.rgba: none
+EOF
+xsetroot -solid '#17171c'
 exec dbus-run-session -- openbox-session
