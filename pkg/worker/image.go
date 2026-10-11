@@ -572,7 +572,11 @@ func (c *ImageClient) verifyImageSource(ctx context.Context, options clip.MountO
 	}
 	layer, err := remote.Layer(ref, opts...)
 	if err == nil {
-		_, err = layer.Size()
+		var stream io.ReadCloser
+		stream, err = layer.Compressed()
+		if err == nil {
+			stream.Close()
+		}
 	}
 	var terr *transport.Error
 	if errors.As(err, &terr) && (terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden || terr.StatusCode == http.StatusNotFound) {
