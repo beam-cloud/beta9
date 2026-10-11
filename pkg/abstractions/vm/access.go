@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -146,7 +147,8 @@ func (s *Service) hostRoute(next echo.HandlerFunc) echo.HandlerFunc {
 		if strings.HasSuffix(host, "."+domain) {
 			label := strings.TrimSuffix(host, "."+domain)
 			handle, port, ok := splitHost(label)
-			if ok {
+			_, appRouteError := common.ParseSubdomainFields(label)
+			if ok && appRouteError != nil {
 				// Route through Echo normally so host-based access retains
 				// the gateway's recovery, tracing and other middleware.
 				u := c.Request().URL

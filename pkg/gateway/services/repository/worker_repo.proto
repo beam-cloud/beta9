@@ -416,6 +416,9 @@ message GetCacheOriginCredentialsRequest {
   string stub_id = 2;
   string registry = 3;
   string image_id = 4;
+  // Publish a filesystem export under this stub's generated image ID.
+  string image_archive_upload_id = 5;
+  bool image_archive_upload_data = 6;
 }
 
 message GetCacheOriginCredentialsResponse {
@@ -432,6 +435,7 @@ message GetCacheOriginCredentialsResponse {
   // private-pool workers that have no S3 credentials to lazily restore or
   // reconcile v1 archive data.
   string image_archive_data_url = 8;
+  string image_archive_upload_url = 9;
 }
 
 message RuntimeMountCredentialRequest {

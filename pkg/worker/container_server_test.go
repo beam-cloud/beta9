@@ -55,6 +55,25 @@ type execCapturingRuntime struct {
 	processes []specs.Process
 }
 
+type guestMutationRuntime struct{ execCapturingRuntime }
+
+func (*guestMutationRuntime) Name() string { return types.ContainerRuntimeGvisor.String() }
+
+func TestGvisorFilesystemMutationsRunThroughGuest(t *testing.T) {
+	rt := &guestMutationRuntime{}
+	instance := &ContainerInstance{Id: "sandbox-test", Runtime: rt, Spec: &specs.Spec{Process: &specs.Process{Cwd: "/workspace", User: specs.User{UID: 1000}}}}
+	handled, err := guestFilesystemMutation(context.Background(), instance, "rm", "-rf", "--", "/tmp/a b;echo injected")
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Equal(t, []string{"rm", "-rf", "--", "/tmp/a b;echo injected"}, rt.processes[0].Args)
+	require.Equal(t, "/workspace", rt.processes[0].Cwd)
+	require.Zero(t, rt.processes[0].User.UID)
+	instance.Runtime = NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{})
+	handled, err = guestFilesystemMutation(context.Background(), instance, "mkdir", "-p", "/tmp/test")
+	require.NoError(t, err)
+	require.False(t, handled)
+}
+
 func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, _ *betaruntime.ExecOpts) error {
 	r.processes = append(r.processes, process)
 	return nil

@@ -67,7 +67,7 @@ from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
-SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS = 5
+SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS = 30
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.1
 SANDBOX_EXEC_READY_TIMEOUT_SECONDS = 90
 SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS = 0.05
@@ -2638,7 +2638,7 @@ class SandboxDockerManager:
             raise DockerCommandError(" ".join(cmd), exit_code, stderr)
 
         stdout = p.stdout.read().strip()
-        return SimpleNamespace(stdout=stdout)
+        return SimpleNamespace(stdout=stdout, stderr=p.stderr.read().strip())
 
     def _result(self, *cmd, extract_output: callable = None) -> DockerResult:
         """Execute docker command and return a DockerResult (for operations with logs)."""
@@ -2803,7 +2803,7 @@ class SandboxDockerManager:
             cmd.extend(["--tail", str(tail)])
         cmd.append(container)
         result = self._run(*cmd)
-        return result.stdout
+        return "\n".join(output for output in (result.stdout, result.stderr) if output)
 
     def exec(self, container: str, command: Union[str, List[str]], **kwargs) -> "SandboxProcess":
         """Execute command in running container."""
@@ -3119,7 +3119,10 @@ class SandboxDockerManager:
                 ]
 
             if service_name in services_with_build or not service_names:
-                service["build"] = {"network": DOCKER_SANDBOX_NETWORK_MODE}
+                service["build"] = {
+                    "network": DOCKER_SANDBOX_NETWORK_MODE,
+                    "entitlements": ["network.host"],
+                }
 
             override["services"][service_name] = service
 
@@ -3276,7 +3279,8 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        cmd = ["docker-compose", "-f", file, "build"]
+        override_path = self._create_compose_override(file, cwd)
+        cmd = ["docker-compose", "-f", file, "-f", override_path, "build"]
 
         if no_cache:
             cmd.append("--no-cache")

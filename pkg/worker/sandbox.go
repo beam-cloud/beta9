@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,9 +69,21 @@ func (s *Worker) prepareSandboxProcess(request *types.ContainerRequest, spec *sp
 			spec.Process.User = specs.User{UID: 0, GID: 0}
 			spec.Process.Env = upsertEnvVars(spec.Process.Env, []string{"HOME=/root"})
 		}
+		processManagerPath := types.WorkerSandboxProcessManagerWorkerPath
+		if request.Checkpoint != nil && !request.Checkpoint.IsFilesystemOnly() {
+			savedPath := filepath.Join(s.checkpointPath(request.Checkpoint.CheckpointId), checkpointProcessManagerFile)
+			if info, err := os.Lstat(savedPath); err == nil {
+				if !info.Mode().IsRegular() || info.Size() == 0 {
+					return errors.New("invalid checkpoint process manager")
+				}
+				processManagerPath = savedPath
+			} else if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("read checkpoint process manager: %w", err)
+			}
+		}
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Type:        "bind",
-			Source:      types.WorkerSandboxProcessManagerWorkerPath,
+			Source:      processManagerPath,
 			Destination: types.WorkerSandboxProcessManagerContainerPath,
 			Options: []string{
 				"ro",

@@ -46,6 +46,7 @@ const (
 	readyLogRate                    = 10
 	checkpointFsDir                 = "filesystem" // Legacy materialized upper directory.
 	checkpointFsArchive             = "filesystem.tar"
+	checkpointProcessManagerFile    = "goproc"
 	checkpointArchiveExtension      = ".tar"
 	checkpointOriginPrefix          = "checkpoints"
 	checkpointTriggerHTTP           = "http"
@@ -1354,6 +1355,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	if !filesystemOnly {
+		if err = captureCheckpointProcessManager(instance, checkpointPath); err != nil {
+			return err
+		}
 		if checkpointFilesystemOnDisk(opts.Request, instance.Runtime) {
 			err = os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile), []byte(checkpointFilesystemOnDiskV1), 0644)
 		} else {
@@ -1440,6 +1444,20 @@ func (s *Worker) markCheckpointFailed(ctx context.Context, opts *CreateCheckpoin
 			Str("checkpoint_id", opts.CheckpointId).
 			Msgf("failed to create checkpoint state: %v", stateErr)
 	}
+}
+
+// Saved executable mappings must be restored against the same bytes, even
+// when the worker's bundled process manager has since been upgraded.
+func captureCheckpointProcessManager(instance *ContainerInstance, checkpointPath string) error {
+	if instance.Spec == nil {
+		return nil
+	}
+	for _, mount := range instance.Spec.Mounts {
+		if mount.Destination == types.WorkerSandboxProcessManagerContainerPath {
+			return copyFile(mount.Source, filepath.Join(checkpointPath, checkpointProcessManagerFile))
+		}
+	}
+	return nil
 }
 
 func (s *Worker) checkpointPath(checkpointId string) string {
@@ -2015,7 +2033,7 @@ func checkpointHasRuntimePayload(checkpointPath string) bool {
 
 	for _, entry := range entries {
 		switch entry.Name() {
-		case checkpointFsDir, checkpointFsArchive, checkpointFilesystemOnlyFile, checkpointFilesystemOnDiskFile, checkpointForcedRuncProfileFile:
+		case checkpointFsDir, checkpointFsArchive, checkpointFilesystemOnlyFile, checkpointFilesystemOnDiskFile, checkpointForcedRuncProfileFile, checkpointProcessManagerFile:
 			continue
 		}
 

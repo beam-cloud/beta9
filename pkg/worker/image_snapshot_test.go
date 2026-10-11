@@ -3,14 +3,18 @@ package worker
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
@@ -18,6 +22,30 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
+
+func TestFilesystemExportPublishesArchiveWithoutWorkerAWSCredentials(t *testing.T) {
+	var uploaded []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPut, r.Method)
+		var err error
+		uploaded, err = io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, int64(len(uploaded)), r.ContentLength)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	file := filepath.Join(t.TempDir(), "image.rclip")
+	require.NoError(t, os.WriteFile(file, []byte("archive bytes"), 0600))
+	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{Ok: true, ImageArchiveUploadUrl: server.URL}}
+	c := &ImageClient{workerRepoClient: repo, config: types.AppConfig{ImageService: types.ImageServiceConfig{RegistryStore: "s3"}}}
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "base", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}}
+	require.NoError(t, c.publishImageArchive(context.Background(), request, file, "stub-id-1780000000"))
+	require.Equal(t, "archive bytes", string(uploaded))
+	require.Equal(t, "base", repo.requests[0].ImageId)
+	require.Equal(t, "stub-id-1780000000", repo.requests[0].ImageArchiveUploadId)
+	repo.resp.ImageArchiveUploadUrl = ""
+	require.Error(t, c.publishImageArchive(context.Background(), request, file, "stub-id-1780000000"))
+}
 
 func readLayerEntries(t *testing.T, path string) map[string]*tar.Header {
 	f, err := os.Open(path)

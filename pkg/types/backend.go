@@ -597,6 +597,26 @@ type StubConfigV1 struct {
 	PreparationCacheKey string `json:"preparation_cache_key,omitempty"`
 }
 
+func (c *StubConfigV1) UnmarshalJSON(data []byte) error {
+	type config StubConfigV1
+	value := struct {
+		*config
+		KeepWarmSeconds json.RawMessage `json:"keep_warm_seconds"`
+	}{config: (*config)(c)}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	// Older clients encoded the indefinite (-1) TTL as an unsigned integer.
+	if string(value.KeepWarmSeconds) == "18446744073709551615" {
+		c.KeepWarmSeconds = -1
+		return nil
+	}
+	if len(value.KeepWarmSeconds) > 0 {
+		return json.Unmarshal(value.KeepWarmSeconds, &c.KeepWarmSeconds)
+	}
+	return nil
+}
+
 const (
 	ForceResourceLimitsMetadata  = "x-beta9-force-resource-limits"
 	forceResourceLimitsConfigKey = "_beta9_force_resource_limits"

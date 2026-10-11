@@ -17,6 +17,13 @@ def test_docker_list_helpers_return_stdout_strings():
     assert manager.ps() == "CONTAINER ID   IMAGE\nabc            busybox"
 
 
+def test_docker_logs_include_stderr():
+    manager = SandboxDockerManager.__new__(SandboxDockerManager)
+    manager._run = lambda *args: SimpleNamespace(stdout="out", stderr="error")
+
+    assert manager.logs("app") == "out\nerror"
+
+
 def test_docker_list_helpers_split_quiet_stdout():
     manager = docker_manager_with_output("abc\ndef")
 
@@ -77,6 +84,32 @@ def test_compose_override_uses_host_network_and_pid_namespaces():
     assert uploaded["remote_path"] == "/tmp/.docker-compose-override.yml"
     assert service["network_mode"] == "host"
     assert service["pid"] == "host"
+
+
+def test_compose_build_and_up_share_build_network_entitlements():
+    uploaded = {}
+    manager = SandboxDockerManager.__new__(SandboxDockerManager)
+    manager._read_compose_services = lambda *args: (["web", "db"], {"web"})
+    manager._upload_text = lambda content, *args, **kwargs: uploaded.update(content=content)
+    manager._authenticated = True
+    commands = []
+    manager._run = lambda *cmd, **kwargs: commands.append(cmd)
+    manager.sandbox_instance = SimpleNamespace(
+        process=SimpleNamespace(exec=lambda *cmd, **kwargs: commands.append(cmd))
+    )
+
+    manager.compose_build(file="compose.yml", no_cache=True)
+    manager.compose_up(file="compose.yml", build=True)
+
+    override = yaml.safe_load(uploaded["content"])
+    assert override["services"]["web"]["build"] == {
+        "network": "host", "entitlements": ["network.host"]
+    }
+    assert "build" not in override["services"]["db"]
+    for cmd in commands:
+        assert cmd[:5] == (
+            "docker-compose", "-f", "compose.yml", "-f", "/tmp/.docker-compose-override.yml"
+        )
 
 
 class ConsumptiveStream:
