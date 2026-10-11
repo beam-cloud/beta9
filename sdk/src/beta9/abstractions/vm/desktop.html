@@ -11,4 +11,19 @@
 <iframe title="Desktop"
   src="vnc.html?autoconnect=1&amp;resize=remote&amp;reconnect=true&amp;video_quality=3&amp;enable_webp=true&amp;clipboard_up=true&amp;clipboard_down=true&amp;clipboard_seamless=true"
   allow="clipboard-read; clipboard-write; fullscreen" allowfullscreen></iframe>
+<script>
+  const desktop = document.querySelector('iframe');
+  let reconnectTimer;
+  window.addEventListener('message', ({origin, source, data}) => {
+    if (origin !== location.origin || source !== desktop.contentWindow ||
+        data?.action !== 'connection_state') return;
+    if (data.value === 'connected') {
+      clearInterval(reconnectTimer);
+      reconnectTimer = null;
+    } else if (data.value === 'disconnected' && !reconnectTimer) {
+      // Kasm retries clean closes only; gateway cycles can close abruptly.
+      reconnectTimer = setInterval(() => desktop.contentWindow.location.reload(), 5000);
+    }
+  });
+</script>
 </html>
