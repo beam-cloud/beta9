@@ -44,17 +44,11 @@ func normalizeDiskSize(size string) (string, error) {
 
 func validate(spec *types.VMSpec) error {
 	if spec.CPU == 0 {
-		spec.CPU = 1000
-		if spec.Desktop {
-			spec.CPU = 2000
-		}
+		spec.CPU = 4000
 	}
 
 	if spec.Memory == 0 {
-		spec.Memory = 1024
-		if spec.Desktop {
-			spec.Memory = 2048
-		}
+		spec.Memory = 8192
 	}
 
 	var err error

@@ -49,6 +49,7 @@ type ContainerCostRequest struct {
 	Gpu         string `json:"gpu"`
 	GpuCount    uint32 `json:"gpu_count"`
 	Sandbox     bool   `json:"sandbox"`
+	VM          bool   `json:"vm,omitempty"`
 }
 
 type containerCostCacheEntry struct {
@@ -86,7 +87,7 @@ func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCost
 	}
 }
 
-// GetContainerCostQuote caches by workspace and resources for five minutes (or valid_until).
+// GetContainerCostQuote caches by workspace, stub kind and resources for five minutes (or valid_until).
 // A failed refresh returns the last good quote and retries on a later lookup.
 func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request *types.ContainerRequest) (ContainerCostQuote, error) {
 	if c == nil {
@@ -103,7 +104,8 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 		WorkspaceId: request.WorkspaceId,
 		Cpu:         request.Cpu, Memory: request.Memory,
 		Gpu: strings.TrimSpace(request.Gpu), GpuCount: request.GpuCount,
-		Sandbox: request.Stub.Type.IsSandbox(),
+		Sandbox: request.Stub.Type.Kind() == types.StubTypeSandbox,
+		VM:      request.Stub.Type.Kind() == types.StubTypeVM,
 	}
 	if quote, ok := c.cached(key); ok {
 		return quote, nil
@@ -268,7 +270,7 @@ func (c *ContainerCostClient) lastGood(key ContainerCostRequest) ContainerCostQu
 func (r ContainerCostRequest) cacheKey() string {
 	return r.WorkspaceId + "\x00" + strconv.FormatInt(r.Cpu, 10) + "\x00" + strconv.FormatInt(r.Memory, 10) +
 		"\x00" + r.Gpu + "\x00" + strconv.FormatUint(uint64(r.GpuCount), 10) +
-		"\x00" + strconv.FormatBool(r.Sandbox)
+		"\x00" + strconv.FormatBool(r.Sandbox) + "\x00" + strconv.FormatBool(r.VM)
 }
 
 func optionalTime(value, name string) (time.Time, error) {

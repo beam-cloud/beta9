@@ -154,14 +154,22 @@ func TestInterruptedStopFinishesExactlyOneArtifact(t *testing.T) {
 	require.Len(t, store.artifacts, 1)
 }
 
-func TestDesktopDefaultsAndDiskSizeValidation(t *testing.T) {
+func TestVMDefaultsAndDiskSizeValidation(t *testing.T) {
 	for _, disk := range []string{"", "50GiB", "50Gi", "53687091200"} {
 		spec := types.VMSpec{ImageID: "image", Desktop: true, DiskSize: disk}
 		require.NoError(t, validate(&spec))
-		require.Equal(t, int64(2000), spec.CPU)
-		require.Equal(t, int64(2048), spec.Memory)
+		require.Equal(t, int64(4000), spec.CPU)
+		require.Equal(t, int64(8192), spec.Memory)
 		require.Equal(t, "53687091200", spec.DiskSize)
 	}
+	spec := types.VMSpec{ImageID: "image"}
+	require.NoError(t, validate(&spec))
+	require.Equal(t, int64(4000), spec.CPU)
+	require.Equal(t, int64(8192), spec.Memory)
+	explicit := types.VMSpec{ImageID: "image", CPU: 1000, Memory: 1024}
+	require.NoError(t, validate(&explicit))
+	require.Equal(t, int64(1000), explicit.CPU)
+	require.Equal(t, int64(1024), explicit.Memory)
 	for _, disk := range []string{"-1Gi", "0", "bad", "99999999999999999999999999999Ti"} {
 		require.Error(t, validate(&types.VMSpec{ImageID: "image", DiskSize: disk}))
 	}
