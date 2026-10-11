@@ -15,9 +15,12 @@
   const desktop = document.querySelector('iframe');
   let connecting = false;
   let reconnectTimer;
-  const retry = () => {
+  const retry = (delay = 5000) => {
     clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(() => desktop.contentWindow.location.reload(), 5000);
+    reconnectTimer = setTimeout(() => {
+      connecting = false;
+      desktop.contentWindow.location.reload();
+    }, delay);
   };
   // Error pages cannot emit Kasm events; retry them after loading.
   desktop.addEventListener('load', () => { if (!connecting) retry(); });
@@ -25,8 +28,11 @@
     if (origin !== location.origin || source !== desktop.contentWindow ||
         data?.action !== 'connection_state') return;
     connecting = ['connected', 'connecting', 'reconnecting'].includes(data.value);
-    if (connecting) {
+    if (data.value === 'connected') {
       clearTimeout(reconnectTimer);
+    } else if (connecting) {
+      // Allow slow handshakes to finish, but recover if one stalls.
+      retry(30000);
     } else if (data.value === 'disconnected') {
       // Kasm retries clean closes only; gateway cycles can close abruptly.
       retry();
