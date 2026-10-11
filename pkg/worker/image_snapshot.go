@@ -57,6 +57,9 @@ func (c *ImageClient) ArchiveLayer(ctx context.Context, request *types.Container
 	}
 	defer os.RemoveAll(tmpdir)
 
+	if _, err := c.filesystemExportRegistry(ctx, request); err != nil {
+		return err
+	}
 	base, _, err := c.remoteBaseImage(ctx, request, baseRef)
 	if err != nil {
 		return fmt.Errorf("fetch base image %s: %w", baseRef, err)
@@ -114,10 +117,7 @@ func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, reque
 			progress(pct)
 		}
 	}
-	config, err := c.filesystemExportRegistry(ctx, request)
-	if err != nil {
-		return nil, err
-	}
+	config := c.buildRegistryConfig()
 	buildRegistry := config.EffectiveBuildRegistry()
 	imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, config.BuildRepositoryName, imageId)
 	var nameOptions []name.Option
@@ -281,13 +281,13 @@ func (c *ImageClient) indexImage(ctx context.Context, request *types.ContainerRe
 }
 
 func (c *ImageClient) filesystemExportRegistry(ctx context.Context, request *types.ContainerRequest) (types.ImageServiceConfig, error) {
-	config := c.config.ImageService
+	config := c.buildRegistryConfig()
 	if c.workerRepoClient == nil || request == nil || !request.Stub.Type.IsSandbox() {
 		return config, nil
 	}
 	response, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{
-		WorkspaceId: request.WorkspaceId,
-		StubId:      request.StubId,
+		WorkspaceId: cacheRequestWorkspaceID(request),
+		StubId:      cacheRequestStubID(request),
 		ImageId:     request.ImageId,
 		Registry:    config.EffectiveBuildRegistry(),
 	}))
@@ -298,12 +298,13 @@ func (c *ImageClient) filesystemExportRegistry(ctx context.Context, request *typ
 		config.BuildRegistry = response.BuildRegistry
 		config.BuildRepositoryName = response.BuildRepositoryName
 		config.BuildRegistryInsecure = response.BuildRegistryInsecure
+		c.publishingConfig.Store(&config)
 	}
 	return config, nil
 }
 
 func (c *ImageClient) buildRegistryNameOptions() []name.Option {
-	if c.config.ImageService.BuildRegistryInsecure {
+	if c.buildRegistryConfig().BuildRegistryInsecure {
 		return []name.Option{name.Insecure}
 	}
 	return nil
@@ -335,7 +336,7 @@ func (c *ImageClient) parseImageReference(ref string) (name.Reference, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !c.config.ImageService.BuildRegistryInsecure {
+	if !c.buildRegistryConfig().BuildRegistryInsecure {
 		return parsed, nil
 	}
 	buildRegistry, err := name.NewRegistry(c.getBuildRegistry())

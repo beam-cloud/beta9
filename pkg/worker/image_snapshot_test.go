@@ -72,13 +72,34 @@ func TestFilesystemExportRefreshesSavedPublishingRegistry(t *testing.T) {
 	require.Equal(t, "workspace-id", repo.requests[0].WorkspaceId)
 	require.Equal(t, "stub-id", repo.requests[0].StubId)
 	require.Equal(t, "registry.localhost:5000", c.config.ImageService.BuildRegistry)
+	require.Equal(t, config, c.buildRegistryConfig())
+
+	// Private requests may carry their scope only in the related records.
+	request.WorkspaceId, request.StubId = "", ""
+	request.Workspace.ExternalId = "workspace-id"
+	request.Stub.ExternalId = "stub-id"
+	repo.resp.BuildRegistryInsecure = true
+	config, err = c.filesystemExportRegistry(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, "workspace-id", repo.requests[1].WorkspaceId)
+	require.Equal(t, "stub-id", repo.requests[1].StubId)
+	ref, err := c.parseImageReference("build.example.com/stage/images:exported")
+	require.NoError(t, err)
+	require.Equal(t, "http", ref.Context().Registry.Scheme())
+	ref, err = c.parseImageReference("docker.io/library/python:3.11-slim")
+	require.NoError(t, err)
+	require.Equal(t, "https", ref.Context().Registry.Scheme())
 
 	// Older gateways retain the configured destination; authorization failures
 	// remain errors rather than publishing with a guessed registry.
 	repo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true}
-	config, err = c.filesystemExportRegistry(context.Background(), request)
+	fallback, err := c.filesystemExportRegistry(context.Background(), request)
 	require.NoError(t, err)
-	require.Equal(t, c.config.ImageService, config)
+	require.Equal(t, config, fallback)
+	legacy := &ImageClient{workerRepoClient: repo, config: c.config}
+	fallback, err = legacy.filesystemExportRegistry(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, c.config.ImageService, fallback)
 	repo.resp = &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "forbidden"}
 	_, err = c.filesystemExportRegistry(context.Background(), request)
 	require.ErrorContains(t, err, "forbidden")
