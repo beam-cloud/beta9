@@ -10,6 +10,41 @@ import pytest
 from beta9.tunnel import Tunnel
 
 
+@pytest.mark.parametrize("close_frame", ["", "{"])
+@pytest.mark.parametrize("invalid_control", [False, True])
+def test_close_frame_does_not_replace_the_tunnel_result(close_frame, invalid_control):
+    class Remote:
+        closed = False
+        closing = False
+
+        def settimeout(self, _):
+            pass
+
+        def close(self):
+            self.closed = True
+
+        def send(self, message):
+            control = json.loads(message)
+            if control["type"] == "read":
+                self.read_id = control["id"]
+            if control["type"] == "close":
+                self.closing = True
+
+        def recv(self):
+            if self.closing:
+                return close_frame
+            return json.dumps({"type": "invalid" if invalid_control else "eof", "id": self.read_id})
+
+    remote = Remote()
+    tunnel = Tunnel(lambda _: remote, io.BytesIO(), io.BytesIO())
+    if invalid_control:
+        with pytest.raises(RuntimeError, match="Invalid tunnel control"):
+            tunnel.run()
+    else:
+        tunnel.run()
+    assert remote.closed
+
+
 def test_remote_eof_exits_cleanly_while_stdin_remains_open():
     script = """
 import json,sys,time

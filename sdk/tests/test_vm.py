@@ -607,6 +607,7 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch, termi
         for name in ("SIGHUP", "SIGTERM")
         if hasattr(vm_cli.signal, name)
     }
+    ignored_signals = []
     client = MagicMock()
     monkeypatch.setattr(vm_cli, "ServiceClient", lambda config: client)
     monkeypatch.setattr(vm_cli, "get_config_context", lambda profile: SimpleNamespace())
@@ -617,7 +618,12 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch, termi
         print("connection diagnostic")
         target.write(b"SSH-2.0-OpenSSH\r\n")
         if terminate:
-            vm_cli.signal.raise_signal(getattr(vm_cli.signal, terminate))
+            try:
+                vm_cli.signal.raise_signal(getattr(vm_cli.signal, terminate))
+            finally:
+                for sig in previous_handlers:
+                    vm_cli.signal.raise_signal(sig)
+                    ignored_signals.append(sig)
 
     monkeypatch.setattr(vm_cli, "_bridge", bridge)
     with monkeypatch.context() as patch:
@@ -632,6 +638,7 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch, termi
             vm_cli._run_tunnel("local", "/tmp/config.ini", "Beam", "resource", 2222)
     assert output.getvalue() == b"SSH-2.0-OpenSSH\r\n"
     assert diagnostics.getvalue() == "connection diagnostic\n"
+    assert ignored_signals == (list(previous_handlers) if terminate else [])
     assert all(
         vm_cli.signal.getsignal(sig) == handler for sig, handler in previous_handlers.items()
     )

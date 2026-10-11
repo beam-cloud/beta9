@@ -108,7 +108,7 @@ class Tunnel:
 
     def _close(self, remote):
         request = str(uuid4())
-        with suppress(OSError, websocket.WebSocketException):
+        with suppress(OSError, ValueError, websocket.WebSocketException):
             remote.settimeout(1)
             remote.send(json.dumps({"type": "close", "id": request}))
             deadline = time.monotonic() + 1

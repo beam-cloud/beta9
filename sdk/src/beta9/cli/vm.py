@@ -742,9 +742,15 @@ def _run_tunnel(profile, config_path, cli_name, vm_id, port):
     # OpenSSH terminates its proxy after a remote command exits. Unwind the
     # tunnel first so the worker can release its reconnect lease immediately.
     previous = {}
+
+    def terminate(*_):
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(0)
+
     for name in ("SIGHUP", "SIGTERM"):
         if sig := getattr(signal, name, None):
-            previous[sig] = signal.signal(sig, lambda *_: sys.exit(0))
+            previous[sig] = signal.signal(sig, terminate)
     try:
         with redirect_stdout(sys.stderr):
             with ServiceClient(get_config_context(profile)) as service:
