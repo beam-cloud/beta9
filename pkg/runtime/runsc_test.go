@@ -418,6 +418,14 @@ func TestAlignRestoreSpec(t *testing.T) {
 			bundle:     []specs.Mount{testProcMount, testCgroupMount, {Destination: "/volumes/b", Type: "bind", Source: "/b"}},
 			want:       []specs.Mount{testProcMount, {Destination: "/volumes/b", Type: "bind", Source: "/b"}},
 		},
+		{
+			name: "saved process manager preserves gofer cache option across filesystems",
+			checkpoint: []specs.Mount{{Destination: types.WorkerSandboxProcessManagerContainerPath, Type: "bind", Source: types.WorkerSandboxProcessManagerWorkerPath,
+				Options: []string{"ro", "overlayfs_stale_read"}}},
+			bundle: []specs.Mount{{Destination: types.WorkerSandboxProcessManagerContainerPath, Type: "bind", Source: "/cache/checkpoint/goproc", Options: []string{"ro"}}},
+			want: []specs.Mount{{Destination: types.WorkerSandboxProcessManagerContainerPath, Type: "bind", Source: "/cache/checkpoint/goproc",
+				Options: []string{"ro", "overlayfs_stale_read"}}},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
