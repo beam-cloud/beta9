@@ -21,7 +21,7 @@
       connecting = false;
       // A failed navigation may never emit load or Kasm events.
       retry(30000);
-      desktop.contentWindow.location.reload();
+      desktop.src = desktop.getAttribute('src');
     }, delay);
   };
   // Error pages cannot emit Kasm events; retry them after loading.
