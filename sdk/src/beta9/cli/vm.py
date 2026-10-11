@@ -891,7 +891,12 @@ def forward_vm(service, name, port, local_port):
 
     def connection(client):
         with client, client.makefile("rb") as source, client.makefile("wb") as target:
-            _bridge(vm, port, source, target)
+            try:
+                _bridge(vm, port, source, target)
+            finally:
+                # Wake the input reader before closing its buffered file.
+                with suppress(OSError):
+                    client.shutdown(socket.SHUT_RDWR)
 
     try:
         while True:
