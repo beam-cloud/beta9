@@ -721,7 +721,7 @@ func (b *runscBundle) alignRestore(imagePath string) error {
 			// Preserve the gofer cache option that was saved with its executable mappings.
 			if mount.Destination == savedManager.Destination && mount.Source != types.WorkerSandboxProcessManagerWorkerPath &&
 				slices.Contains(savedManager.Options, "overlayfs_stale_read") && !slices.Contains(mount.Options, "overlayfs_stale_read") {
-				spec.Mounts[i].Options = append(mount.Options, "overlayfs_stale_read")
+				spec.Mounts[i].Options = append(slices.Clone(mount.Options), "overlayfs_stale_read")
 				processManagerChanged = true
 			}
 		}

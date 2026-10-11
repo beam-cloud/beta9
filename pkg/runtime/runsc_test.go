@@ -434,7 +434,17 @@ func TestAlignRestoreSpec(t *testing.T) {
 			bundlePath := writeRunscBundleWithMounts(t, dir, test.bundle...)
 			imagePath := writeRunscCheckpointImage(t, dir, test.checkpoint...)
 
-			require.NoError(t, mustLoadRunscBundle(t, bundlePath).alignRestore(imagePath))
+			bundle := mustLoadRunscBundle(t, bundlePath)
+			var sharedOptions [][]string
+			for i, mount := range bundle.spec.Mounts {
+				options := append(mount.Options, "shared-option")
+				bundle.spec.Mounts[i].Options = options[:len(options)-1]
+				sharedOptions = append(sharedOptions, options)
+			}
+			require.NoError(t, bundle.alignRestore(imagePath))
+			for _, options := range sharedOptions {
+				require.Equal(t, "shared-option", options[len(options)-1])
+			}
 			require.Equal(t, test.want, mustLoadRunscBundle(t, bundlePath).spec.Mounts)
 		})
 	}

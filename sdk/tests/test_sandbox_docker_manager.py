@@ -77,7 +77,11 @@ def test_compose_config_resolves_services_in_guest_and_isolates_projects(compose
     uploaded = {}
     commands = []
     services = {
-        "included-web": {"build": {"context": "/workspace/src"}, "networks": {"custom": None}},
+        "included-web": {
+            "build": {"context": "/workspace/src"},
+            "networks": {"custom": None},
+            "extra_hosts": {"external.example": "192.0.2.5"},
+        },
         "db": {"image": "busybox"},
     }
 
@@ -100,7 +104,11 @@ def test_compose_config_resolves_services_in_guest_and_isolates_projects(compose
     assert override["included-web"] == {
         "network_mode": "host",
         "pid": "host",
-        "extra_hosts": {"included-web": "127.0.0.1", "db": "127.0.0.1"},
+        "extra_hosts": {
+            "external.example": "192.0.2.5",
+            "included-web": "127.0.0.1",
+            "db": "127.0.0.1",
+        },
         "build": {"context": "/workspace/src", "network": "host", "entitlements": ["network.host"]},
     }
     assert "build" not in override["db"]
