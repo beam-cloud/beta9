@@ -3247,7 +3247,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 	var err error = nil
 	switch c.config.ImageService.RegistryStore {
 	case registry.S3ImageRegistryStore:
-		if c.workerRepoClient != nil && request.Stub.Type.IsSandbox() {
+		if c.workerRepoClient != nil && request != nil && request.Stub.Type.IsSandbox() {
 			err = c.archiveWithBrokeredStorage(ctx, request, bundlePath.Path, archivePath, imageId)
 			break
 		}

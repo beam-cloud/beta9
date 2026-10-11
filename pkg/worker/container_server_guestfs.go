@@ -33,7 +33,11 @@ func guestFilesystemMutation(ctx context.Context, instance *ContainerInstance, a
 	process := *instance.Spec.Process
 	process.Args = args
 	process.User = specs.User{}
-	err := instance.Runtime.Exec(ctx, instance.Id, process, &runtime.ExecOpts{})
+	var output bytes.Buffer
+	err := instance.Runtime.Exec(ctx, instance.Id, process, &runtime.ExecOpts{OutputWriter: &output})
+	if err != nil && output.Len() > 0 {
+		return true, fmt.Errorf("%w: %s", err, bytes.TrimSpace(output.Bytes()))
+	}
 	return true, err
 }
 

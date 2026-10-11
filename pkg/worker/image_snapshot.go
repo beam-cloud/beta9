@@ -183,7 +183,7 @@ func (c *ImageClient) publishImageArchive(ctx context.Context, request *types.Co
 }
 
 func (c *ImageClient) publishImageArchiveFile(ctx context.Context, request *types.ContainerRequest, archivePath, imageID string, data bool) error {
-	if c.config.ImageService.RegistryStore != reg.S3ImageRegistryStore || c.workerRepoClient == nil || !request.Stub.Type.IsSandbox() {
+	if c.config.ImageService.RegistryStore != reg.S3ImageRegistryStore || c.workerRepoClient == nil || request == nil || !request.Stub.Type.IsSandbox() {
 		return c.registry.Push(ctx, archivePath, imageID)
 	}
 	credentials, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{

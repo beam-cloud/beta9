@@ -53,6 +53,8 @@ type logAttachmentStream struct {
 type execCapturingRuntime struct {
 	mockRuntime
 	processes []specs.Process
+	output    string
+	err       error
 }
 
 type guestMutationRuntime struct{ execCapturingRuntime }
@@ -72,11 +74,21 @@ func TestGvisorFilesystemMutationsRunThroughGuest(t *testing.T) {
 	handled, err = guestFilesystemMutation(context.Background(), instance, "mkdir", "-p", "/tmp/test")
 	require.NoError(t, err)
 	require.False(t, handled)
+
+	instance.Runtime = rt
+	rt.err = errors.New("exit status 1")
+	rt.output = "mkdir: Not a directory\n"
+	_, err = guestFilesystemMutation(context.Background(), instance, "mkdir", "-p", "/tmp/test")
+	require.ErrorIs(t, err, rt.err)
+	require.ErrorContains(t, err, "mkdir: Not a directory")
 }
 
-func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, _ *betaruntime.ExecOpts) error {
+func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, opts *betaruntime.ExecOpts) error {
 	r.processes = append(r.processes, process)
-	return nil
+	if opts != nil && opts.OutputWriter != nil {
+		fmt.Fprint(opts.OutputWriter, r.output)
+	}
+	return r.err
 }
 
 func (s *logAttachmentStream) SendHeader(metadata.MD) error {

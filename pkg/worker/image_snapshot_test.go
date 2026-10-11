@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
@@ -45,6 +46,14 @@ func TestFilesystemExportPublishesArchiveWithoutWorkerAWSCredentials(t *testing.
 	require.Equal(t, "stub-id-1780000000", repo.requests[0].ImageArchiveUploadId)
 	repo.resp.ImageArchiveUploadUrl = ""
 	require.Error(t, c.publishImageArchive(context.Background(), request, file, "stub-id-1780000000"))
+
+	imageRegistry, err := reg.NewImageRegistry(types.AppConfig{}, types.S3ImageRegistryConfig{})
+	require.NoError(t, err)
+	c.registry = imageRegistry
+	calls := len(repo.requests)
+	err = c.publishImageArchive(context.Background(), nil, filepath.Join(t.TempDir(), "missing"), "image-id")
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Len(t, repo.requests, calls)
 }
 
 func readLayerEntries(t *testing.T, path string) map[string]*tar.Header {

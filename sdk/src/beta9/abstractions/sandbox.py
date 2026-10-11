@@ -3314,7 +3314,7 @@ class SandboxDockerManager:
         if pull:
             cmd.append("--pull")
 
-        return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+        return self.sandbox_instance.process.exec(*cmd, cwd=cwd or "/workspace")
 
     # === Volumes ===
 

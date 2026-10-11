@@ -91,6 +91,7 @@ def test_compose_override_uses_host_network_and_pid_namespaces():
 def test_compose_build_and_up_share_build_network_entitlements():
     uploaded = {}
     commands = []
+    working_dirs = []
     plan = '{"target":{"web":{"tags":["project-web"]}}}'
     manager = SandboxDockerManager.__new__(SandboxDockerManager)
     manager._read_compose_services = lambda *args: (["web", "db"], {"web"})
@@ -105,6 +106,7 @@ def test_compose_build_and_up_share_build_network_entitlements():
 
     def exec_process(*cmd, **kwargs):
         commands.append(cmd)
+        working_dirs.append(kwargs["cwd"])
         return SimpleNamespace(wait=lambda: 0)
 
     manager._upload_text = upload
@@ -123,6 +125,7 @@ def test_compose_build_and_up_share_build_network_entitlements():
     assert len(builds) == 2
     assert all("--allow=network.host" in cmd and "--load" in cmd for cmd in builds)
     assert "--no-cache" in builds[0]
+    assert working_dirs == ["/workspace", "/workspace"]
     assert commands[-1] == (
         "docker-compose", "-f", "compose.yml", "-f", "/tmp/.docker-compose-override.yml",
         "up", "--no-build", "-d",
