@@ -70,6 +70,12 @@ func TestGvisorFilesystemMutationsRunThroughGuest(t *testing.T) {
 	require.Equal(t, []string{types.WorkerSandboxFilesystemContainerPath, "rm", "-rf", "--", "/tmp/a b;echo injected"}, rt.processes[0].Args)
 	require.Equal(t, "/workspace", rt.processes[0].Cwd)
 	require.Zero(t, rt.processes[0].User.UID)
+	for _, path := range []string{"/", "/tmp/.."} {
+		handled, err = guestFilesystemMutation(context.Background(), instance, "rm", "-rf", "--", path)
+		require.True(t, handled)
+		require.ErrorContains(t, err, "refusing to remove container root")
+	}
+	require.Len(t, rt.processes, 1)
 	instance.Runtime = NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{})
 	handled, err = guestFilesystemMutation(context.Background(), instance, "mkdir", "-p", "/tmp/test")
 	require.NoError(t, err)

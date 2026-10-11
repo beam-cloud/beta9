@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 
 	"github.com/beam-cloud/beta9/pkg/runtime"
@@ -29,6 +30,10 @@ func guestFS(instance *ContainerInstance) (runtime.GuestFilesystem, bool) {
 func guestFilesystemMutation(ctx context.Context, instance *ContainerInstance, args ...string) (bool, error) {
 	if instance.Runtime == nil || instance.Runtime.Name() != types.ContainerRuntimeGvisor.String() {
 		return false, nil
+	}
+	args[len(args)-1] = filepath.Clean(args[len(args)-1])
+	if args[0] == "rm" && args[len(args)-1] == "/" {
+		return true, fmt.Errorf("refusing to remove container root")
 	}
 	process := *instance.Spec.Process
 	process.Args = append([]string{types.WorkerSandboxFilesystemContainerPath}, args...)
