@@ -96,6 +96,7 @@ def test_compose_build_and_up_share_build_network_entitlements():
     manager = SandboxDockerManager.__new__(SandboxDockerManager)
     manager._read_compose_services = lambda *args: (["web", "db"], {"web"})
     manager._authenticated = True
+    manager._ensure_ready = lambda: None
 
     def upload(content, path, **kwargs):
         uploaded[path] = content

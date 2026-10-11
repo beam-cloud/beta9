@@ -85,7 +85,7 @@ func TestGvisorFilesystemMutationsRunThroughGuest(t *testing.T) {
 
 func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, opts *betaruntime.ExecOpts) error {
 	r.processes = append(r.processes, process)
-	if opts != nil && opts.OutputWriter != nil {
+	if r.output != "" && opts != nil && opts.OutputWriter != nil {
 		fmt.Fprint(opts.OutputWriter, r.output)
 	}
 	return r.err

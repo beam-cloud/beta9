@@ -2622,7 +2622,7 @@ class SandboxDockerManager:
     def _exec(self, *cmd, cwd: Optional[str] = None) -> "SandboxProcess":
         """Execute docker command."""
         self._ensure_ready()
-        return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+        return self.sandbox_instance.process.exec(*cmd, cwd=cwd or "/workspace")
 
     def _run(self, *cmd, cwd: Optional[str] = None):
         """Execute docker command and return output (for simple operations)."""
@@ -3035,7 +3035,7 @@ class SandboxDockerManager:
     # === Docker Compose ===
 
     def _compose_file_path(self, file: str, cwd: Optional[str] = None) -> str:
-        return file if file.startswith("/") else f"{cwd or '.'}/{file}"
+        return file if file.startswith("/") else f"{cwd or '/workspace'}/{file}"
 
     def _read_compose_services(
         self, file: str, cwd: Optional[str] = None
@@ -3314,7 +3314,7 @@ class SandboxDockerManager:
         if pull:
             cmd.append("--pull")
 
-        return self.sandbox_instance.process.exec(*cmd, cwd=cwd or "/workspace")
+        return self._exec(*cmd, cwd=cwd)
 
     # === Volumes ===
 
