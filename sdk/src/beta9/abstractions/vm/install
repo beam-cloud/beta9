@@ -25,6 +25,8 @@ apt-get install -y --no-install-recommends nodejs
 if ! command -v dockerd >/dev/null || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1 || ! docker buildx version >/dev/null 2>&1; then
   apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
+ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+docker-compose version >/dev/null
 npm install -g --no-fund --no-audit @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.226
 npm cache clean --force
 install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
