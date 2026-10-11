@@ -3171,13 +3171,19 @@ class SandboxDockerManager:
             self._auto_login()
 
         override_path = self._create_compose_override(file, cwd)
-        service_names, _ = self._read_compose_services(file, cwd)
+        service_names, services_with_build = self._read_compose_services(file, cwd)
 
-        cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
+        if services_with_build:
+            process = self.compose_build(file=file, cwd=cwd)
+            exit_code = process.wait()
+            if exit_code != 0:
+                from beta9.exceptions import DockerCommandError
+
+                raise DockerCommandError("docker compose build", exit_code, process.stderr.read())
+
+        cmd = ["docker-compose", "-f", file, "-f", override_path, "up", "--no-build"]
         if detach:
             cmd.append("-d")
-        if build:
-            cmd.append("--build")
 
         self._run(*cmd, cwd=cwd)
         return DockerComposeStack(self, file, cwd, override_path, service_names)
@@ -3280,19 +3286,18 @@ class SandboxDockerManager:
             self._auto_login()
 
         override_path = self._create_compose_override(file, cwd)
-        cmd = ["docker-compose", "-f", file, "-f", override_path, "build"]
+        # Compose's Bake backend does not forward network.host permission.
+        cmd = [
+            "docker", "buildx", "bake", "-f", file, "-f", override_path,
+            "--allow=network.host", "--load",
+        ]
 
         if no_cache:
             cmd.append("--no-cache")
         if pull:
             cmd.append("--pull")
 
-        env = {}
-
-        if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
-
-        return self.sandbox_instance.process.exec(*cmd, env=env)
+        return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
 
     # === Volumes ===
 

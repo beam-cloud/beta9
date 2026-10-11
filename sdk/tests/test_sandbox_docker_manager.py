@@ -94,9 +94,11 @@ def test_compose_build_and_up_share_build_network_entitlements():
     manager._authenticated = True
     commands = []
     manager._run = lambda *cmd, **kwargs: commands.append(cmd)
-    manager.sandbox_instance = SimpleNamespace(
-        process=SimpleNamespace(exec=lambda *cmd, **kwargs: commands.append(cmd))
-    )
+    def exec_process(*cmd, **kwargs):
+        commands.append(cmd)
+        return SimpleNamespace(wait=lambda: 0)
+
+    manager.sandbox_instance = SimpleNamespace(process=SimpleNamespace(exec=exec_process))
 
     manager.compose_build(file="compose.yml", no_cache=True)
     manager.compose_up(file="compose.yml", build=True)
@@ -106,10 +108,15 @@ def test_compose_build_and_up_share_build_network_entitlements():
         "network": "host", "entitlements": ["network.host"]
     }
     assert "build" not in override["services"]["db"]
-    for cmd in commands:
-        assert cmd[:5] == (
-            "docker-compose", "-f", "compose.yml", "-f", "/tmp/.docker-compose-override.yml"
+    for cmd in commands[:2]:
+        assert cmd[:7] == (
+            "docker", "buildx", "bake", "-f", "compose.yml", "-f", "/tmp/.docker-compose-override.yml"
         )
+        assert "--allow=network.host" in cmd and "--load" in cmd
+    assert commands[-1] == (
+        "docker-compose", "-f", "compose.yml", "-f", "/tmp/.docker-compose-override.yml",
+        "up", "--no-build", "-d",
+    )
 
 
 class ConsumptiveStream:
