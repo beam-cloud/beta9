@@ -88,31 +88,39 @@ def test_compose_override_uses_host_network_and_pid_namespaces():
 
 def test_compose_build_and_up_share_build_network_entitlements():
     uploaded = {}
+    commands = []
+    plan = '{"target":{"web":{"tags":["project-web"]}}}'
     manager = SandboxDockerManager.__new__(SandboxDockerManager)
     manager._read_compose_services = lambda *args: (["web", "db"], {"web"})
-    manager._upload_text = lambda content, *args, **kwargs: uploaded.update(content=content)
     manager._authenticated = True
-    commands = []
-    manager._run = lambda *cmd, **kwargs: commands.append(cmd)
+
+    def upload(content, path, **kwargs):
+        uploaded[path] = content
+
+    def run(*cmd, **kwargs):
+        commands.append(cmd)
+        return SimpleNamespace(stdout=plan)
+
     def exec_process(*cmd, **kwargs):
         commands.append(cmd)
         return SimpleNamespace(wait=lambda: 0)
 
+    manager._upload_text = upload
+    manager._run = run
     manager.sandbox_instance = SimpleNamespace(process=SimpleNamespace(exec=exec_process))
-
     manager.compose_build(file="compose.yml", no_cache=True)
     manager.compose_up(file="compose.yml", build=True)
 
-    override = yaml.safe_load(uploaded["content"])
+    override = yaml.safe_load(uploaded["/tmp/.docker-compose-override.yml"])
     assert override["services"]["web"]["build"] == {
         "network": "host", "entitlements": ["network.host"]
     }
     assert "build" not in override["services"]["db"]
-    for cmd in commands[:2]:
-        assert cmd[:7] == (
-            "docker", "buildx", "bake", "-f", "compose.yml", "-f", "/tmp/.docker-compose-override.yml"
-        )
-        assert "--allow=network.host" in cmd and "--load" in cmd
+    assert uploaded["/tmp/.docker-compose-override.yml.bake.json"] == plan
+    builds = [cmd for cmd in commands if cmd[:3] == ("docker", "buildx", "bake")]
+    assert len(builds) == 2
+    assert all("--allow=network.host" in cmd and "--load" in cmd for cmd in builds)
+    assert "--no-cache" in builds[0]
     assert commands[-1] == (
         "docker-compose", "-f", "compose.yml", "-f", "/tmp/.docker-compose-override.yml",
         "up", "--no-build", "-d",

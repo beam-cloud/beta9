@@ -3287,8 +3287,14 @@ class SandboxDockerManager:
 
         override_path = self._create_compose_override(file, cwd)
         # Compose's Bake backend does not forward network.host permission.
+        # Its build plan preserves project image names and resolves .env files.
+        plan = self._run(
+            "docker-compose", "-f", file, "-f", override_path, "build", "--print", cwd=cwd
+        ).stdout
+        bake_path = override_path + ".bake.json"
+        self._upload_text(plan, bake_path, suffix=".json")
         cmd = [
-            "docker", "buildx", "bake", "-f", file, "-f", override_path,
+            "docker", "buildx", "bake", "-f", bake_path,
             "--allow=network.host", "--load",
         ]
 
