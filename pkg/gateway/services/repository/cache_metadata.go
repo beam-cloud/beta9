@@ -176,8 +176,11 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		// storage and presigning image archives here adds database and object
 		// store round trips to every cold mount without producing used data.
 		return &pb.GetCacheOriginCredentialsResponse{
-			Ok:                  true,
-			RegistryCredentials: registryCredentials,
+			Ok:                    true,
+			RegistryCredentials:   registryCredentials,
+			BuildRegistry:         s.appConfig.ImageService.EffectiveBuildRegistry(),
+			BuildRepositoryName:   s.appConfig.ImageService.BuildRepositoryName,
+			BuildRegistryInsecure: s.appConfig.ImageService.BuildRegistryInsecure,
 		}, nil
 	}
 

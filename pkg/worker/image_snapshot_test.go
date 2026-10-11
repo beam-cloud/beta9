@@ -56,6 +56,34 @@ func TestFilesystemExportPublishesArchiveWithoutWorkerAWSCredentials(t *testing.
 	require.Len(t, repo.requests, calls)
 }
 
+func TestFilesystemExportRefreshesSavedPublishingRegistry(t *testing.T) {
+	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{
+		Ok: true, BuildRegistry: "build.example.com", BuildRepositoryName: "stage/images", BuildRegistryInsecure: false,
+	}}
+	c := &ImageClient{workerRepoClient: repo, config: types.AppConfig{ImageService: types.ImageServiceConfig{
+		BuildRegistry: "registry.localhost:5000", BuildRepositoryName: "old/images", BuildRegistryInsecure: true,
+	}}}
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "base", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}}
+	config, err := c.filesystemExportRegistry(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, "build.example.com", config.BuildRegistry)
+	require.Equal(t, "stage/images", config.BuildRepositoryName)
+	require.False(t, config.BuildRegistryInsecure)
+	require.Equal(t, "workspace-id", repo.requests[0].WorkspaceId)
+	require.Equal(t, "stub-id", repo.requests[0].StubId)
+	require.Equal(t, "registry.localhost:5000", c.config.ImageService.BuildRegistry)
+
+	// Older gateways retain the configured destination; authorization failures
+	// remain errors rather than publishing with a guessed registry.
+	repo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true}
+	config, err = c.filesystemExportRegistry(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, c.config.ImageService, config)
+	repo.resp = &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "forbidden"}
+	_, err = c.filesystemExportRegistry(context.Background(), request)
+	require.ErrorContains(t, err, "forbidden")
+}
+
 func readLayerEntries(t *testing.T, path string) map[string]*tar.Header {
 	f, err := os.Open(path)
 	require.NoError(t, err)

@@ -803,6 +803,46 @@ def test_desktop_timeout_cancels_command_and_preserves_wait_error(sandbox_vm):
     process.stderr.read.assert_not_called()
 
 
+def test_desktop_resize_registers_custom_resolution(sandbox_vm, monkeypatch):
+    vm, _ = sandbox_vm
+    desktop = vm.desktop
+    run = MagicMock(side_effect=["1920x1080 60.00", "", "", ""])
+    monkeypatch.setattr(desktop, "_run", run)
+    desktop.resize(2560, 1440)
+    assert run.call_args_list[1].args == (
+        "xrandr",
+        "--newmode",
+        "2560x1440",
+        "221.184",
+        "2560",
+        "0",
+        "0",
+        "2560",
+        "1440",
+        "0",
+        "0",
+        "1440",
+    )
+    assert run.call_args_list[2].args == ("xrandr", "--addmode", "VNC-0", "2560x1440")
+    assert run.call_args_list[3].args == (
+        "xrandr",
+        "--output",
+        "VNC-0",
+        "--mode",
+        "2560x1440",
+    )
+
+
+def test_desktop_resize_reuses_existing_resolution(sandbox_vm, monkeypatch):
+    vm, _ = sandbox_vm
+    desktop = vm.desktop
+    run = MagicMock(side_effect=["2560x1440 60.00", ""])
+    monkeypatch.setattr(desktop, "_run", run)
+    desktop.resize(2560, 1440)
+    assert run.call_count == 2
+    assert run.call_args.args == ("xrandr", "--output", "VNC-0", "--mode", "2560x1440")
+
+
 def test_creation_retry_freezes_caller_owned_metadata_and_lists():
     selected = service()
     selected.http.json.side_effect = [

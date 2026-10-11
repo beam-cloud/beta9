@@ -114,9 +114,17 @@ func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, reque
 			progress(pct)
 		}
 	}
-	buildRegistry := c.getBuildRegistry()
-	imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, imageId)
-	targetRef, err := name.ParseReference(imageTag, c.buildRegistryNameOptions()...)
+	config, err := c.filesystemExportRegistry(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	buildRegistry := config.EffectiveBuildRegistry()
+	imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, config.BuildRepositoryName, imageId)
+	var nameOptions []name.Option
+	if config.BuildRegistryInsecure {
+		nameOptions = append(nameOptions, name.Insecure)
+	}
+	targetRef, err := name.ParseReference(imageTag, nameOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -270,6 +278,28 @@ func appendLayers(base v1.Image, layers []*packedLayer, createdBy string) (v1.Im
 func (c *ImageClient) indexImage(ctx context.Context, request *types.ContainerRequest, imageTag, layoutDir, archivePath string) error {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return c.createOCIImageWithProgress(ctx, quiet, request, imageTag, layoutDir, archivePath, 2)
+}
+
+func (c *ImageClient) filesystemExportRegistry(ctx context.Context, request *types.ContainerRequest) (types.ImageServiceConfig, error) {
+	config := c.config.ImageService
+	if c.workerRepoClient == nil || request == nil || !request.Stub.Type.IsSandbox() {
+		return config, nil
+	}
+	response, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{
+		WorkspaceId: request.WorkspaceId,
+		StubId:      request.StubId,
+		ImageId:     request.ImageId,
+		Registry:    config.EffectiveBuildRegistry(),
+	}))
+	if err != nil {
+		return config, fmt.Errorf("load filesystem export registry: %w", err)
+	}
+	if response.BuildRegistry != "" {
+		config.BuildRegistry = response.BuildRegistry
+		config.BuildRepositoryName = response.BuildRepositoryName
+		config.BuildRegistryInsecure = response.BuildRegistryInsecure
+	}
+	return config, nil
 }
 
 func (c *ImageClient) buildRegistryNameOptions() []name.Option {

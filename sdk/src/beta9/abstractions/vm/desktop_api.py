@@ -63,9 +63,26 @@ class VMDesktop:
             or not (320 <= width <= 4096 and 200 <= height <= 2160)
         ):
             raise ValueError("Desktop resolution must be 320–4096 by 200–2160")
-        # KasmVNC advertises resize modes through RandR. The selected size
-        # applies immediately to both the stream and subsequent screenshots.
-        self._run("xrandr", "--output", "VNC-0", "--mode", f"{width}x{height}")
+        mode = f"{width}x{height}"
+        if mode not in self._run("xrandr", "--query").split():
+            # Xvnc accepts arbitrary virtual modes; use its own 60 Hz timing
+            # formula so sizes absent from the default list work exactly.
+            self._run(
+                "xrandr",
+                "--newmode",
+                mode,
+                str(width * height * 60 / 1_000_000),
+                str(width),
+                "0",
+                "0",
+                str(width),
+                str(height),
+                "0",
+                "0",
+                str(height),
+            )
+            self._run("xrandr", "--addmode", "VNC-0", mode)
+        self._run("xrandr", "--output", "VNC-0", "--mode", mode)
 
     @staticmethod
     def _move(x, y):

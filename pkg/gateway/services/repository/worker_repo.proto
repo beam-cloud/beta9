@@ -436,6 +436,10 @@ message GetCacheOriginCredentialsResponse {
   // reconcile v1 archive data.
   string image_archive_data_url = 8;
   string image_archive_upload_url = 9;
+  // Publishing settings also refresh agents with an older saved bootstrap.
+  string build_registry = 10;
+  string build_repository_name = 11;
+  bool build_registry_insecure = 12;
 }
 
 message RuntimeMountCredentialRequest {
