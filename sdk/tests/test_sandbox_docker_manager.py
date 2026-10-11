@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from beta9.abstractions.sandbox import DockerResult, SandboxDockerManager
+from beta9.exceptions import DockerCommandError
 
 
 def docker_manager_with_output(output: str) -> SandboxDockerManager:
@@ -125,6 +127,30 @@ def test_compose_build_and_up_share_build_network_entitlements():
         "docker-compose", "-f", "compose.yml", "-f", "/tmp/.docker-compose-override.yml",
         "up", "--no-build", "-d",
     )
+
+
+@pytest.mark.parametrize("cached", [True, False])
+def test_compose_up_builds_only_missing_images_by_default(cached):
+    builds = []
+    manager = SandboxDockerManager.__new__(SandboxDockerManager)
+    manager._authenticated = True
+    manager._read_compose_services = lambda *args: (["web"], {"web"})
+    manager._create_compose_override = lambda *args: "/tmp/override.yml"
+
+    def run(*cmd, **kwargs):
+        if cmd[:3] == ("docker", "image", "inspect") and not cached:
+            raise DockerCommandError("docker image inspect", 1, "No such image")
+        return SimpleNamespace(stdout="project-web")
+
+    def build(**kwargs):
+        builds.append(kwargs)
+        return SimpleNamespace(wait=lambda: 0)
+
+    manager._run = run
+    manager.compose_build = build
+    manager.compose_up(file="compose.yml", cwd="/project")
+
+    assert len(builds) == (0 if cached else 1)
 
 
 class ConsumptiveStream:

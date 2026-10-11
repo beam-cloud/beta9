@@ -3167,18 +3167,29 @@ class SandboxDockerManager:
             stack.stop()
             ```
         """
+        from beta9.exceptions import DockerCommandError
+
         if not self._authenticated:
             self._auto_login()
 
         override_path = self._create_compose_override(file, cwd)
         service_names, services_with_build = self._read_compose_services(file, cwd)
 
-        if services_with_build:
+        needs_build = build
+        if services_with_build and not needs_build:
+            images = self._run(
+                "docker-compose", "-f", file, "-f", override_path, "config", "--images",
+                *sorted(services_with_build), cwd=cwd,
+            ).stdout.splitlines()
+            try:
+                self._run("docker", "image", "inspect", *images, cwd=cwd)
+            except DockerCommandError:
+                needs_build = True
+
+        if services_with_build and needs_build:
             process = self.compose_build(file=file, cwd=cwd)
             exit_code = process.wait()
             if exit_code != 0:
-                from beta9.exceptions import DockerCommandError
-
                 raise DockerCommandError("docker compose build", exit_code, process.stderr.read())
 
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up", "--no-build"]
