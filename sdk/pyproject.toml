@@ -37,6 +37,8 @@ beta9 = "beta9.cli.main:start"
 beta9 = [
     "skills/**/*.md",
     "abstractions/vm/*.service",
+    "abstractions/vm/*.desktop",
+    "abstractions/vm/*.html",
     "abstractions/vm/boot",
     "abstractions/vm/desktop",
     "abstractions/vm/install",

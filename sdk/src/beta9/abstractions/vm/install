@@ -48,10 +48,23 @@ if [ "$desktop" = true ]; then
   [ "${VERSION_CODENAME:-}" = jammy ] || { echo 'Desktop currently requires Ubuntu 22.04 (jammy)' >&2; exit 1; }
   version=1.5.0
   curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_jammy_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
-  apt_repository mozilla https://packages.mozilla.org/apt/repo-signing-key.gpg https://packages.mozilla.org/apt mozilla main
-  printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
+  if [ "$arch" = amd64 ]; then
+    apt_repository google-chrome https://dl.google.com/linux/linux_signing_key.pub https://dl.google.com/linux/chrome/deb/ stable main
+    browser=google-chrome-stable
+  else
+    # Google Chrome has no Linux arm64 package; retain Firefox on that architecture.
+    apt_repository mozilla https://packages.mozilla.org/apt/repo-signing-key.gpg https://packages.mozilla.org/apt mozilla main
+    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
+    browser=firefox
+  fi
   apt-get update
-  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb firefox openbox dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" openbox pcmanfm adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  install -m 0644 "$assets/desktop.html" /usr/share/kasmvnc/www/index.html
+  install -d -m 0755 /root/Desktop
+  install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/
+  if [ "$browser" = firefox ]; then
+    sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' /root/Desktop/browser.desktop
+  fi
   rm -f /tmp/kasmvnc.deb
 fi
 rm -rf /var/lib/apt/lists/* "$assets"

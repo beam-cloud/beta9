@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Exec=xterm -fa Monospace -fs 12
+Icon=utilities-terminal
+Path=/workspace
+Terminal=false
