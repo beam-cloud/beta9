@@ -6,6 +6,7 @@ import io
 import shutil
 import subprocess
 import threading
+import socket
 
 import pytest
 from click.testing import CliRunner
@@ -616,6 +617,39 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch):
         vm_cli._run_tunnel("local", "/tmp/config.ini", "Beam", "resource", 2222)
     assert output.getvalue() == b"SSH-2.0-OpenSSH\r\n"
     assert diagnostics.getvalue() == "connection diagnostic\n"
+
+
+def test_port_forward_closes_socket_with_pending_input(cli_service, monkeypatch):
+    peer, client = socket.socketpair()
+    listener = MagicMock()
+    listener.accept.side_effect = [(client, None), KeyboardInterrupt()]
+    monkeypatch.setattr(vm_cli.socket, "socket", lambda *args: listener)
+    monkeypatch.setattr(
+        vm_cli, "_vm", lambda *args: SimpleNamespace(name="dev", info={"spec": {"ports": [80]}})
+    )
+    reading, finished = threading.Event(), threading.Event()
+
+    def bridge(vm, port, source, target):
+        def read():
+            reading.set()
+            source.read1(1)
+            finished.set()
+
+        threading.Thread(target=read, daemon=True).start()
+        assert reading.wait(1)
+        target.write(b"response")
+        target.flush()
+
+    monkeypatch.setattr(vm_cli, "_bridge", bridge)
+    try:
+        CliRunner().invoke(vm_cli.management, ["port-forward", "dev", "80"])
+        peer.settimeout(2)
+        assert peer.recv(8) == b"response"
+        assert peer.recv(1) == b""
+        assert finished.wait(1)
+    finally:
+        peer.close()
+        client.close()
 
 
 def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
