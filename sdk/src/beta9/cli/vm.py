@@ -121,13 +121,13 @@ def _show(info, as_json):
     "--cpu",
     type=click.FloatRange(min=0.1),
     metavar="CORES",
-    help="CPUs; defaults to 1, or 2 for desktop.",
+    help="CPUs; defaults to 4.",
 )
 @click.option(
     "--memory",
     type=click.IntRange(min=256),
     metavar="MiB",
-    help="RAM in MiB; defaults to 1024, or 2048 for desktop.",
+    help="RAM in MiB; defaults to 8192.",
 )
 @click.option(
     "--disk-size",
