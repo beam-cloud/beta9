@@ -10,25 +10,30 @@ import time
 import uuid
 import webbrowser
 from contextlib import nullcontext, redirect_stdout, suppress
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
 import click
+import grpc
 import websocket
 from rich import box
-from rich.table import Table
+from rich.table import Column, Table
+from rich.text import Text
 
 from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.vm import VM, identity, prepare_image
 from ..abstractions.volume import Volume
-from ..channel import GatewayHTTPError, ServiceClient
+from ..channel import GatewayHTTPError, ServiceClient, rpc_timeout
+from ..clients.gateway import ListContainersRequest
 from ..config import SDKSettings, get_config_context, get_settings, set_settings
 from ..exceptions import SandboxConnectionError
 from ..logging import StoredStdoutInterceptor
 from ..tunnel import bridge_tunnel
 from . import extraclick
 from .extraclick import ClickManagementGroup
+from .machine_format import format_cpu, format_memory
 
 
 class VMGroup(ClickManagementGroup):
@@ -329,16 +334,82 @@ def image_build(service, build_context, dockerfile, build_secret, desktop, as_js
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def list_vms(service, include_all, as_json, metadata=(), status=None):
-    """List VMs and their current state."""
-    _show(
-        VM.list(
-            all=include_all,
-            metadata=_key_values(metadata) if metadata else None,
-            status=status,
-            _service=service,
-        ),
-        as_json,
+    """List VM resources, disk sizes and current uptime."""
+    records = VM.list(
+        all=include_all,
+        metadata=_key_values(metadata) if metadata else None,
+        status=status,
+        _service=service,
     )
+    if as_json:
+        terminal.print_json(records)
+        return
+
+    if not records:
+        terminal.resource("No VMs found", {"Create": f"{terminal.cli_name()} vm new"})
+        return
+
+    starts = {}
+    if any(record.get("status") == "running" for record in records):
+        # One bounded lookup for the current boot, rather than the VM's creation date.
+        with suppress(grpc.RpcError), rpc_timeout(5):
+            response = service.gateway.list_containers(ListContainersRequest())
+            if response.ok:
+                starts = {c.container_id: c.started_at for c in response.containers}
+    terminal.print(_vm_table(records, starts))
+
+
+def _vm_table(records, starts):
+    table = Table(
+        Column("Name", overflow="ellipsis"),
+        Column("Status", min_width=8, no_wrap=True),
+        Column("Size", min_width=16, no_wrap=True),
+        Column("Disk", justify="right", no_wrap=True),
+        Column("Uptime", no_wrap=True),
+        Column("ID", min_width=19, max_width=19, style="dim", no_wrap=True),
+        box=box.SIMPLE,
+        header_style="bold cyan",
+        collapse_padding=True,
+    )
+    now = datetime.now(timezone.utc)
+    colors = {
+        "running": "green",
+        "starting": "cyan",
+        "stopping": "yellow",
+        "paused": "yellow",
+        "stopped": "dim",
+        "error": "red",
+        "deleted": "dim",
+    }
+    for record in records:
+        spec = record.get("spec", {})
+        size = " · ".join(
+            formatter(spec[key])
+            for key, formatter in (("cpu", format_cpu), ("memory", format_memory))
+            if spec.get(key)
+        )
+        status = record.get("status", "")
+        disk = str(spec.get("disk_size") or "")
+        if disk.isdigit():
+            disk = terminal.humanize_memory(int(disk)).replace(".00", "").replace(" ", "")
+        started = starts.get(record.get("container_id")) if status == "running" else None
+        uptime = (
+            terminal.humanize_duration(max(now - started, timedelta()), compact=True)
+            if started and started.timestamp() > 0
+            else "-"
+        )
+        table.add_row(
+            record["name"],
+            Text(status, style=colors.get(status, "")),
+            size or "-",
+            disk or "-",
+            uptime,
+            record["id"],
+        )
+    count, suffix = terminal.pluralize(records)
+    table.add_section()
+    table.add_row(f"[bold]{count} VM{suffix}")
+    return table
 
 
 @management.command("get")
