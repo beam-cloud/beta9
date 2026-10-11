@@ -62,6 +62,10 @@ if [ "$desktop" = true ]; then
   install -m 0644 "$assets/desktop.html" /usr/share/kasmvnc/www/index.html
   install -d -m 0755 /root/Desktop
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/
+  # Start the desktop after Openbox has acquired the window-manager selection.
+  if ! grep -q '^pcmanfm --desktop' /etc/xdg/openbox/autostart; then
+    printf '\npcmanfm --desktop &\n' >> /etc/xdg/openbox/autostart
+  fi
   if [ "$browser" = firefox ]; then
     sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' /root/Desktop/browser.desktop
   fi

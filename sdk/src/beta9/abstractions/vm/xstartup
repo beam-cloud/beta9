@@ -5,4 +5,4 @@ export XDG_CONFIG_HOME=/root/.config
 export XAUTHORITY=/run/beam-desktop/.Xauthority
 export DISPLAY=:1
 xsetroot -solid '#2c001e'
-exec dbus-run-session -- sh -c 'pcmanfm --desktop & exec openbox-session'
+exec dbus-run-session -- openbox-session
