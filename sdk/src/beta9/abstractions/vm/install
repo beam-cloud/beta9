@@ -58,7 +58,7 @@ if [ "$desktop" = true ]; then
     browser=firefox
   fi
   apt-get update
-  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" openbox pcmanfm adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" openbox pcmanfm libfm-modules xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
   install -m 0644 "$assets/desktop.html" /usr/share/kasmvnc/www/index.html
   install -d -m 0755 /root/Desktop
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/

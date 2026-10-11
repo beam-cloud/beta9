@@ -2491,7 +2491,7 @@ class _DockerComposeConfig:
 
     @property
     def command(self) -> List[str]:
-        return ["docker-compose", "-f", self.file, "-f", self.override_path]
+        return ["docker-compose", "-f", self.override_path]
 
 
 class DockerComposeStack:
@@ -2515,7 +2515,7 @@ class DockerComposeStack:
         self, service: Optional[str] = None, follow: bool = False, tail: Optional[int] = None
     ) -> str:
         """Get logs from compose stack or specific service."""
-        cmd = ["docker-compose", "-f", self.file, "-f", self.override_path, "logs"]
+        cmd = ["docker-compose", "-f", self.override_path, "logs"]
         if follow:
             cmd.append("-f")
         if tail is not None:
@@ -3048,28 +3048,30 @@ class SandboxDockerManager:
     def _compose_config(self, file: str, cwd: Optional[str] = None) -> "_DockerComposeConfig":
         import json
 
-        import yaml
-
-        # Let Compose resolve .env, includes and extends in the guest.
-        services = json.loads(
+        # Compose resolves .env, includes, extends and absolute guest paths.
+        project = json.loads(
             self._run("docker-compose", "-f", file, "config", "--format", "json", cwd=cwd).stdout
-        )["services"]
+        )
+        services = project["services"]
+        project.pop("networks", None)
+        for service in services.values():
+            service.pop("networks", None)
+            service["network_mode"] = DOCKER_SANDBOX_NETWORK_MODE
+            service["pid"] = DOCKER_SANDBOX_PID_MODE
+            if len(services) > 1:
+                service.setdefault("extra_hosts", {}).update(
+                    {name: "127.0.0.1" for name in services}
+                )
+            if "build" in service:
+                build = service["build"]
+                build["network"] = DOCKER_SANDBOX_NETWORK_MODE
+                if "network.host" not in build.setdefault("entitlements", []):
+                    build["entitlements"].append("network.host")
         path = os.path.normpath(os.path.join(cwd or "/workspace", file))
         key = hashlib.sha256(path.encode()).hexdigest()[:16]
-        override_path = f"/tmp/.docker-compose-{key}.yml"
-        override = {}
-        for name, config in services.items():
-            service = {"network_mode": DOCKER_SANDBOX_NETWORK_MODE, "pid": DOCKER_SANDBOX_PID_MODE}
-            if len(services) > 1:
-                service["extra_hosts"] = [f"{other}:127.0.0.1" for other in services]
-            if "build" in config:
-                service["build"] = {
-                    "network": DOCKER_SANDBOX_NETWORK_MODE,
-                    "entitlements": ["network.host"],
-                }
-            override[name] = service
-        self.sandbox_instance.fs.write_text(override_path, yaml.safe_dump({"services": override}))
-        return _DockerComposeConfig(file, cwd, services, override_path)
+        config_path = f"/tmp/.docker-compose-{key}.json"
+        self.sandbox_instance.fs.write_text(config_path, json.dumps(project), mode=0o600)
+        return _DockerComposeConfig(file, cwd, services, config_path)
 
     def _compose_build(
         self, config: "_DockerComposeConfig", no_cache: bool = False, pull: bool = False
@@ -3078,7 +3080,7 @@ class SandboxDockerManager:
         # Keep its resolved plan so project names, .env and build contexts match.
         plan = self._run(*config.command, "build", "--print", cwd=config.cwd).stdout
         bake_path = config.override_path + ".bake.json"
-        self.sandbox_instance.fs.write_text(bake_path, plan)
+        self.sandbox_instance.fs.write_text(bake_path, plan, mode=0o600)
         cmd = ["docker", "buildx", "bake", "-f", bake_path, "--allow=network.host", "--load"]
         if no_cache:
             cmd.append("--no-cache")

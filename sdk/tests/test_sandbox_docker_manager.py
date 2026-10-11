@@ -2,7 +2,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from beta9.abstractions.sandbox import DockerResult, SandboxDockerManager
 from beta9.exceptions import DockerCommandError
@@ -68,7 +67,9 @@ def compose_manager():
     manager = SandboxDockerManager.__new__(SandboxDockerManager)
     manager._authenticated = True
     manager._ensure_ready = lambda: None
-    manager.sandbox_instance = SimpleNamespace(fs=SimpleNamespace(write_text=lambda *args: None))
+    manager.sandbox_instance = SimpleNamespace(
+        fs=SimpleNamespace(write_text=lambda *args, **kwargs: None)
+    )
     return manager
 
 
@@ -76,7 +77,7 @@ def test_compose_config_resolves_services_in_guest_and_isolates_projects(compose
     uploaded = {}
     commands = []
     services = {
-        "included-web": {"build": {"context": "/workspace/src"}},
+        "included-web": {"build": {"context": "/workspace/src"}, "networks": {"custom": None}},
         "db": {"image": "busybox"},
     }
 
@@ -85,20 +86,22 @@ def test_compose_config_resolves_services_in_guest_and_isolates_projects(compose
         return SimpleNamespace(stdout=json.dumps({"services": services}))
 
     compose_manager._run = run
-    compose_manager.sandbox_instance.fs.write_text = lambda path, text: uploaded.update(
+    compose_manager.sandbox_instance.fs.write_text = lambda path, text, **kwargs: uploaded.update(
         {path: text}
     )
     first = compose_manager._compose_config("compose.yml", cwd="/workspace/one")
     second = compose_manager._compose_config("compose.yml", cwd="/workspace/two")
     assert first.override_path != second.override_path
     assert commands[0] == ("docker-compose", "-f", "compose.yml", "config", "--format", "json")
-    assert first.services == services
-    override = yaml.safe_load(uploaded[first.override_path])["services"]
+    assert list(first.services) == list(services)
+    project = json.loads(uploaded[first.override_path])
+    override = project["services"]
+    assert "networks" not in project and "networks" not in override["included-web"]
     assert override["included-web"] == {
         "network_mode": "host",
         "pid": "host",
-        "extra_hosts": ["included-web:127.0.0.1", "db:127.0.0.1"],
-        "build": {"network": "host", "entitlements": ["network.host"]},
+        "extra_hosts": {"included-web": "127.0.0.1", "db": "127.0.0.1"},
+        "build": {"context": "/workspace/src", "network": "host", "entitlements": ["network.host"]},
     }
     assert "build" not in override["db"]
 
@@ -132,7 +135,7 @@ def test_compose_build_and_up_share_resolved_plan_and_workspace(compose_manager)
         working_dirs.append(kwargs["cwd"])
         return SimpleNamespace(wait=lambda: 0)
 
-    compose_manager.sandbox_instance.fs.write_text = lambda path, text: uploaded.update(
+    compose_manager.sandbox_instance.fs.write_text = lambda path, text, **kwargs: uploaded.update(
         {path: text}
     )
     compose_manager._run = run
