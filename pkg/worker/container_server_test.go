@@ -53,11 +53,48 @@ type logAttachmentStream struct {
 type execCapturingRuntime struct {
 	mockRuntime
 	processes []specs.Process
+	output    string
+	err       error
 }
 
-func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, _ *betaruntime.ExecOpts) error {
+type guestMutationRuntime struct{ execCapturingRuntime }
+
+func (*guestMutationRuntime) Name() string { return types.ContainerRuntimeGvisor.String() }
+
+func TestGvisorFilesystemMutationsRunThroughGuest(t *testing.T) {
+	rt := &guestMutationRuntime{}
+	instance := &ContainerInstance{Id: "sandbox-test", Runtime: rt, Spec: &specs.Spec{Process: &specs.Process{Cwd: "/workspace", User: specs.User{UID: 1000}}}}
+	handled, err := guestFilesystemMutation(context.Background(), instance, "rm", "-rf", "--", "/tmp/a b;echo injected")
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Equal(t, []string{types.WorkerSandboxFilesystemContainerPath, "rm", "-rf", "--", "/tmp/a b;echo injected"}, rt.processes[0].Args)
+	require.Equal(t, "/workspace", rt.processes[0].Cwd)
+	require.Zero(t, rt.processes[0].User.UID)
+	for _, path := range []string{"/", "/tmp/.."} {
+		handled, err = guestFilesystemMutation(context.Background(), instance, "rm", "-rf", "--", path)
+		require.True(t, handled)
+		require.ErrorContains(t, err, "refusing to remove container root")
+	}
+	require.Len(t, rt.processes, 1)
+	instance.Runtime = NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{})
+	handled, err = guestFilesystemMutation(context.Background(), instance, "mkdir", "-p", "/tmp/test")
+	require.NoError(t, err)
+	require.False(t, handled)
+
+	instance.Runtime = rt
+	rt.err = errors.New("exit status 1")
+	rt.output = "mkdir: Not a directory\n"
+	_, err = guestFilesystemMutation(context.Background(), instance, "mkdir", "-p", "/tmp/test")
+	require.ErrorIs(t, err, rt.err)
+	require.ErrorContains(t, err, "mkdir: Not a directory")
+}
+
+func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, opts *betaruntime.ExecOpts) error {
 	r.processes = append(r.processes, process)
-	return nil
+	if r.output != "" && opts != nil && opts.OutputWriter != nil {
+		fmt.Fprint(opts.OutputWriter, r.output)
+	}
+	return r.err
 }
 
 func (s *logAttachmentStream) SendHeader(metadata.MD) error {

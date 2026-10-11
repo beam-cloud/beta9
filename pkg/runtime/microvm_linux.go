@@ -987,12 +987,31 @@ func treeXattrs(hdr *tar.Header) map[string][]byte {
 // Hypervisor's unix socket: the VMM expects "CONNECT <port>\n" and answers
 // "OK <port>\n" once the guest accepted.
 func dialGuestVsock(ctx context.Context, socketPath string, port uint32) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for {
+		conn, err := dialGuestVsockOnce(ctx, socketPath, port)
+		if err == nil {
+			return conn, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, errors.Join(ctx.Err(), err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func dialGuestVsockOnce(ctx context.Context, socketPath string, port uint32) (net.Conn, error) {
 	dialer := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return nil, err
 	}
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
 	if _, err := fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
 		conn.Close()
 		return nil, err

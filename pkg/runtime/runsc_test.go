@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 )
@@ -418,6 +419,14 @@ func TestAlignRestoreSpec(t *testing.T) {
 			bundle:     []specs.Mount{testProcMount, testCgroupMount, {Destination: "/volumes/b", Type: "bind", Source: "/b"}},
 			want:       []specs.Mount{testProcMount, {Destination: "/volumes/b", Type: "bind", Source: "/b"}},
 		},
+		{
+			name: "saved process manager preserves gofer cache option across filesystems",
+			checkpoint: []specs.Mount{{Destination: types.WorkerSandboxProcessManagerContainerPath, Type: "bind", Source: types.WorkerSandboxProcessManagerWorkerPath,
+				Options: []string{"ro", "overlayfs_stale_read"}}},
+			bundle: []specs.Mount{{Destination: types.WorkerSandboxProcessManagerContainerPath, Type: "bind", Source: "/cache/checkpoint/goproc", Options: []string{"ro"}}},
+			want: []specs.Mount{{Destination: types.WorkerSandboxProcessManagerContainerPath, Type: "bind", Source: "/cache/checkpoint/goproc",
+				Options: []string{"ro", "overlayfs_stale_read"}}},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -425,7 +434,17 @@ func TestAlignRestoreSpec(t *testing.T) {
 			bundlePath := writeRunscBundleWithMounts(t, dir, test.bundle...)
 			imagePath := writeRunscCheckpointImage(t, dir, test.checkpoint...)
 
-			require.NoError(t, mustLoadRunscBundle(t, bundlePath).alignRestore(imagePath))
+			bundle := mustLoadRunscBundle(t, bundlePath)
+			var sharedOptions [][]string
+			for i, mount := range bundle.spec.Mounts {
+				options := append(mount.Options, "shared-option")
+				bundle.spec.Mounts[i].Options = options[:len(options)-1]
+				sharedOptions = append(sharedOptions, options)
+			}
+			require.NoError(t, bundle.alignRestore(imagePath))
+			for _, options := range sharedOptions {
+				require.Equal(t, "shared-option", options[len(options)-1])
+			}
 			require.Equal(t, test.want, mustLoadRunscBundle(t, bundlePath).spec.Mounts)
 		})
 	}

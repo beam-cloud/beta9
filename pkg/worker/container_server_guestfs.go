@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // guestFS returns the runtime's in-guest filesystem when the container's
@@ -20,6 +23,27 @@ func guestFS(instance *ContainerInstance) (runtime.GuestFilesystem, bool) {
 	}
 	gfs, ok := instance.Runtime.(runtime.GuestFilesystem)
 	return gfs, ok
+}
+
+// gVisor caches the root filesystem. Mutations must go through its VFS,
+// rather than changing the host overlay underneath already-cached dentries.
+func guestFilesystemMutation(ctx context.Context, instance *ContainerInstance, args ...string) (bool, error) {
+	if instance.Runtime == nil || instance.Runtime.Name() != types.ContainerRuntimeGvisor.String() {
+		return false, nil
+	}
+	args[len(args)-1] = filepath.Clean(args[len(args)-1])
+	if args[0] == "rm" && args[len(args)-1] == "/" {
+		return true, fmt.Errorf("refusing to remove container root")
+	}
+	process := *instance.Spec.Process
+	process.Args = append([]string{types.WorkerSandboxFilesystemContainerPath}, args...)
+	process.User = specs.User{}
+	var output bytes.Buffer
+	err := instance.Runtime.Exec(ctx, instance.Id, process, &runtime.ExecOpts{OutputWriter: &output})
+	if err != nil && output.Len() > 0 {
+		return true, fmt.Errorf("%w: %s", err, bytes.TrimSpace(output.Bytes()))
+	}
+	return true, err
 }
 
 func (s *ContainerRuntimeServer) guestUploadFile(ctx context.Context, gfs runtime.GuestFilesystem, in *pb.ContainerSandboxUploadFileRequest, containerPath string) (*pb.ContainerSandboxUploadFileResponse, error) {

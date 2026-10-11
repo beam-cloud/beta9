@@ -10,8 +10,39 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVMHostRoutingPreservesAppPaths(t *testing.T) {
+	s := &Service{domain: "app.example.com"}
+	for _, host := range []string{
+		"sandbox-11111111-2222-3333-4444-555555555555-12345678-8080",
+		"11111111-2222-3333-4444-555555555555-8080",
+		"my-app-abcdefg-latest-8080",
+	} {
+		t.Run(host, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "https://"+host+"."+s.domain+"/files/a%20b?x=1", nil)
+			err := s.hostRoute(func(c echo.Context) error {
+				require.Equal(t, "/files/a b", c.Request().URL.Path)
+				require.Equal(t, "/files/a%20b", c.Request().URL.EscapedPath())
+				require.Equal(t, "x=1", c.Request().URL.RawQuery)
+				return nil
+			})(e.NewContext(req, httptest.NewRecorder()))
+			require.NoError(t, err)
+		})
+	}
+	_, v, _, _, _ := fixture()
+	v.Handle = "sandbox-long-friendly-name-0123456789abcdef0123456789abcdef"
+	req := httptest.NewRequest(http.MethodGet, "https://"+v.Handle+"-8080."+s.domain+"/files/a%20b", nil)
+	err := s.hostRoute(func(c echo.Context) error {
+		require.Equal(t, "/vm/"+v.Handle+"/8080/files/a b", c.Request().URL.Path)
+		return nil
+	})(echo.New().NewContext(req, httptest.NewRecorder()))
+	require.NoError(t, err)
+	require.Equal(t, "/files/a b", req.URL.Path)
+}
 
 func TestBrowserSessionBoundToVMPortExpiryAndRotation(t *testing.T) {
 	v := &types.VM{Handle: "dev-random", TrafficAccessToken: "owner-secret"}

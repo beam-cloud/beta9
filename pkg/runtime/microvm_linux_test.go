@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,6 +14,38 @@ import (
 	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGuestFilesystemConnectRetriesBeforeSendingRequest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vsock.sock")
+	listener, err := net.Listen("unix", path)
+	require.NoError(t, err)
+	defer listener.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for attempt := 0; attempt < 2; attempt++ {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			line, err := bufio.NewReader(conn).ReadString('\n')
+			if err == nil && attempt == 1 && line == "CONNECT 1025\n" {
+				_, _ = conn.Write([]byte("OK 1025\n"))
+			}
+			conn.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	conn, err := dialGuestVsock(ctx, path, microvm.FSPort)
+	require.NoError(t, err)
+	conn.Close()
+	<-done
+	ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = dialGuestVsock(ctx, path+"-missing", microvm.FSPort)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
 
 func TestMicroVMOOMEventsDoNotBlockControlAcknowledgements(t *testing.T) {
 	host, guest := net.Pipe()

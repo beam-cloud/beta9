@@ -3080,7 +3080,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, request)
 	if err != nil {
 		return err
 	}
@@ -3165,7 +3165,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	defer os.RemoveAll(copyDir)
 
 	outputLogger.Info("Archiving base image...\n")
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, request)
 	if err != nil {
 		return err
 	}
@@ -3231,7 +3231,7 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 }
 
 // Generate and upload archived version of the image for distribution
-func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId string, progressChan chan int) error {
+func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId string, progressChan chan int, request *types.ContainerRequest) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -3247,6 +3247,10 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 	var err error = nil
 	switch c.config.ImageService.RegistryStore {
 	case registry.S3ImageRegistryStore:
+		if c.workerRepoClient != nil && request != nil && request.Stub.Type.IsSandbox() {
+			err = c.archiveWithBrokeredStorage(ctx, request, bundlePath.Path, archivePath, imageId)
+			break
+		}
 		err = clip.CreateAndUploadArchive(ctx, clip.CreateOptions{
 			InputPath:  bundlePath.Path,
 			OutputPath: archivePath,
@@ -3286,7 +3290,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 
 	// Push the archive to a registry
 	startTime = time.Now()
-	err = c.registry.Push(ctx, archivePath, imageId)
+	err = c.publishImageArchive(ctx, request, archivePath, imageId)
 	if err != nil {
 		log.Error().Str("image_id", imageId).Err(err).Msg("failed to push image")
 		return err

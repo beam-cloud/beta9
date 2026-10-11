@@ -384,7 +384,7 @@ case "$TARGETARCH" in
 esac
 EOT
 
-RUN apt-get install -y wget git
+RUN apt-get install -y wget git busybox-static
 
 RUN wget "https://github.com/beam-cloud/goproc/releases/download/v${GOPROC_VERSION}/goproc-${GOPROC_VERSION}-linux-${TARGETARCH}" \
       -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc

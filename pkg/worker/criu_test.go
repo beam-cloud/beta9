@@ -32,6 +32,28 @@ import (
 	"google.golang.org/grpc"
 )
 
+func TestCheckpointPinsProcessManagerAcrossWorkerUpgrades(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "worker-goproc")
+	require.NoError(t, os.WriteFile(binary, []byte("original executable"), 0755))
+	req := &types.ContainerRequest{ContainerId: "sandbox-test", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}}
+	instance := &ContainerInstance{Request: req, Spec: &specs.Spec{Process: &specs.Process{}, Mounts: []specs.Mount{{Source: binary, Destination: types.WorkerSandboxProcessManagerContainerPath}}}}
+	checkpoint := filepath.Join(root, "saved")
+	require.NoError(t, captureCheckpointProcessManager(instance, checkpoint))
+	require.NoError(t, os.WriteFile(binary, []byte("upgraded executable"), 0755))
+	req.Checkpoint = &types.Checkpoint{CheckpointId: "saved"}
+	w := &Worker{cacheManager: &WorkerCacheManager{checkpointRoot: root}, containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	w.containerInstances.Set(req.ContainerId, instance)
+	spec := &specs.Spec{Process: &specs.Process{}}
+	require.NoError(t, w.prepareSandboxProcess(req, spec))
+	require.Equal(t, filepath.Join(checkpoint, checkpointProcessManagerFile), spec.Mounts[0].Source)
+	instance.Spec = spec
+	require.NoError(t, captureCheckpointProcessManager(instance, filepath.Join(root, "saved-again")))
+	saved, err := os.ReadFile(filepath.Join(root, "saved-again", checkpointProcessManagerFile))
+	require.NoError(t, err)
+	require.Equal(t, "original executable", string(saved))
+}
+
 // MockRuntime is a mock implementation of runtime.Runtime for testing
 type MockRuntime struct {
 	name             string

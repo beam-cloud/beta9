@@ -4,7 +4,27 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestLegacyIndefiniteTTLConfigIsReadableAndSanitized(t *testing.T) {
+	stub := Stub{Config: `{"keep_warm_seconds":18446744073709551615,"runtime":{"image_id":"image"},"secrets":[{"name":"TOKEN","value":"private"}]}`}
+	config, err := stub.UnmarshalConfig()
+	require.NoError(t, err)
+	require.Equal(t, -1, config.KeepWarmSeconds)
+	require.Equal(t, "image", config.Runtime.ImageId)
+	require.NoError(t, stub.SanitizeConfig())
+	require.NotContains(t, stub.Config, "private")
+	config, err = stub.UnmarshalConfig()
+	require.NoError(t, err)
+	require.Equal(t, -1, config.KeepWarmSeconds)
+	for _, ttl := range []string{"-1", "0", "600"} {
+		require.NoError(t, json.Unmarshal([]byte(`{"keep_warm_seconds":`+ttl+`}`), &config))
+	}
+	require.Error(t, json.Unmarshal([]byte(`{"keep_warm_seconds":18446744073709551614}`), &config))
+	require.Error(t, json.Unmarshal([]byte(`{"keep_warm_seconds":1.5}`), &config))
+}
 
 // TestIsServe checks the IsServe method for various stub types
 func TestIsServe(t *testing.T) {

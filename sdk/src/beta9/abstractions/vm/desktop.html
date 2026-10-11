@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desktop</title>
+<style>
+  html, body, iframe { width: 100%; height: 100%; margin: 0; border: 0; overflow: hidden; }
+  iframe { display: block; }
+</style>
+<!-- KasmVNC's embedded client hides its control panel automatically. -->
+<iframe title="Desktop"
+  src="vnc.html?autoconnect=1&amp;resize=remote&amp;reconnect=true&amp;video_quality=3&amp;enable_webp=true&amp;clipboard_up=true&amp;clipboard_down=true&amp;clipboard_seamless=true"
+  allow="clipboard-read; clipboard-write; fullscreen" allowfullscreen></iframe>
+<script>
+  const desktop = document.querySelector('iframe');
+  let connecting = false;
+  let reconnectTimer;
+  const retry = (delay = 5000) => {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      connecting = false;
+      // A failed navigation may never emit load or Kasm events.
+      retry(30000);
+      desktop.src = desktop.getAttribute('src');
+    }, delay);
+  };
+  // Error pages cannot emit Kasm events; retry them after loading.
+  desktop.addEventListener('load', () => { if (!connecting) retry(); });
+  window.addEventListener('message', ({origin, source, data}) => {
+    if (origin !== location.origin || source !== desktop.contentWindow ||
+        data?.action !== 'connection_state') return;
+    connecting = ['connected', 'connecting', 'reconnecting'].includes(data.value);
+    if (data.value === 'connected') {
+      clearTimeout(reconnectTimer);
+    } else if (connecting) {
+      // Allow slow handshakes to finish, but recover if one stalls.
+      retry(30000);
+    } else if (data.value === 'disconnected') {
+      // Kasm retries clean closes only; gateway cycles can close abruptly.
+      retry();
+    }
+  });
+</script>
+</html>

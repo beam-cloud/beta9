@@ -737,6 +737,12 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 		return err
 	})
 	startup.Go(func() error { return s.prepareContainerMounts(startupCtx, request, outputLogger) })
+	if request.Stub.Type.IsSandbox() && s.canRestoreCheckpoint(request, s.runtime) && !request.Checkpoint.IsFilesystemOnly() {
+		startup.Go(func() error {
+			_, err := s.ensureCheckpointMaterializedWithLogger(startupCtx, request, request.Checkpoint, outputLogger)
+			return err
+		})
+	}
 	if request.HasDurableDiskMount() {
 		startup.Go(func() error {
 			phaseStart := time.Now()

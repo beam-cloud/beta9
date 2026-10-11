@@ -514,7 +514,7 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 				}
 			}
 			if err == nil {
-				err = s.imageClient.Archive(ctx, NewPathInfo(rootDir), req.ImageId, progressChan)
+				err = s.imageClient.Archive(ctx, NewPathInfo(rootDir), req.ImageId, progressChan, instance.Request)
 			}
 		}
 	}
@@ -1383,6 +1383,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Context, in *pb.ContainerSandboxCreateDirectoryRequest) (*pb.ContainerSandboxCreateDirectoryResponse, error) {
+	if in.Mode == 0 {
+		in.Mode = 0755
+	}
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.ContainerSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: "Container not found"}, nil
@@ -1398,6 +1401,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Con
 	}
 	if gfs, ok := guestFS(instance); ok {
 		return s.guestCreateDirectory(ctx, gfs, in, containerPath)
+	}
+	if handled, err := guestFilesystemMutation(ctx, instance, "mkdir", "-p", "-m", fmt.Sprintf("%o", in.Mode), "--", containerPath); handled {
+		if err != nil {
+			return &pb.ContainerSandboxCreateDirectoryResponse{ErrorMsg: err.Error()}, nil
+		}
+		return &pb.ContainerSandboxCreateDirectoryResponse{Ok: true}, nil
 	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
@@ -1428,6 +1437,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteDirectory(ctx context.Con
 	}
 	if gfs, ok := guestFS(instance); ok {
 		return s.guestDeleteDirectory(ctx, gfs, in, containerPath)
+	}
+	if handled, err := guestFilesystemMutation(ctx, instance, "rm", "-rf", "--", containerPath); handled {
+		if err != nil {
+			return &pb.ContainerSandboxDeleteDirectoryResponse{ErrorMsg: err.Error()}, nil
+		}
+		return &pb.ContainerSandboxDeleteDirectoryResponse{Ok: true}, nil
 	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
@@ -1506,6 +1521,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteFile(ctx context.Context,
 	}
 	if gfs, ok := guestFS(instance); ok {
 		return s.guestDeleteFile(ctx, gfs, in, containerPath)
+	}
+	if handled, err := guestFilesystemMutation(ctx, instance, "rm", "-rf", "--", containerPath); handled {
+		if err != nil {
+			return &pb.ContainerSandboxDeleteFileResponse{ErrorMsg: err.Error()}, nil
+		}
+		return &pb.ContainerSandboxDeleteFileResponse{Ok: true}, nil
 	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
