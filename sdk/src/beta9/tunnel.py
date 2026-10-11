@@ -1,8 +1,10 @@
 """SSH byte streams use the worker's shared request replay journal."""
 
 import json
+import os
 from contextlib import suppress
 from queue import Full, Queue
+import select
 import threading
 from uuid import UUID, uuid4
 
@@ -30,12 +32,23 @@ class Tunnel:
     def _upload(self):
         ack = UUID(int=0)
         try:
-            while True:
-                data = (
-                    self.source.read1(65536)
-                    if hasattr(self.source, "read1")
-                    else self.source.read(65536)
-                )
+            try:
+                source_fd = self.source.fileno()
+            except (AttributeError, OSError, ValueError):
+                source_fd = None
+            while not self.stopped:
+                if source_fd is not None:
+                    # Keep stdin cancellable and avoid holding its buffered IO
+                    # lock after OpenSSH closes the remote side of the tunnel.
+                    if os.name != "nt" and not select.select([source_fd], [], [], 0.1)[0]:
+                        continue
+                    data = os.read(source_fd, 65536)
+                else:
+                    data = (
+                        self.source.read1(65536)
+                        if hasattr(self.source, "read1")
+                        else self.source.read(65536)
+                    )
                 request = uuid4()
                 sent = None
                 with self.condition:
@@ -111,7 +124,8 @@ class Tunnel:
 
     def run(self):
         recovery = _RecoveryWindow(start=False)
-        threading.Thread(target=self._upload, daemon=True).start()
+        upload = threading.Thread(target=self._upload, daemon=True)
+        upload.start()
         threading.Thread(target=self._download, daemon=True).start()
         try:
             while not self.stopped:
@@ -183,6 +197,7 @@ class Tunnel:
                 self.condition.notify_all()
             with suppress(Full):
                 self.output.put_nowait(None)
+            upload.join(timeout=1)
 
 
 def bridge_tunnel(connect, source, target):

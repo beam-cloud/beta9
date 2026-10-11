@@ -1,11 +1,48 @@
 import io
 import json
 import queue
+import subprocess
+import sys
 from uuid import UUID
 
 import pytest
 
 from beta9.tunnel import Tunnel
+
+
+def test_remote_eof_exits_cleanly_while_stdin_remains_open():
+    script = """
+import json,sys,time
+from beta9.tunnel import Tunnel
+class Remote:
+    def settimeout(self, _): pass
+    def close(self): pass
+    def send(self, message):
+        control = json.loads(message)
+        if control['type'] == 'read': self.read_id = control['id']
+    def recv(self):
+        time.sleep(.1)
+        return json.dumps({'type': 'eof', 'id': self.read_id})
+Tunnel(lambda _: Remote(), sys.stdin.buffer, sys.stdout.buffer).run()
+print('clean exit')
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        # communicate() would close stdin and hide the OpenSSH shutdown race.
+        assert process.wait(timeout=5) == 0, process.stderr.read().decode()
+        assert process.stdout.read() == b"clean exit\n"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
 
 
 def test_successful_reattachment_resets_recovery_before_the_first_reply(monkeypatch):
