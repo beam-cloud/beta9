@@ -24,6 +24,9 @@ encoding:
   video_encoding_mode:
     jpeg_quality: 7
     webp_quality: -1
+    max_resolution:
+      width: 3840
+      height: 2160
     enter_video_encoding_mode:
       time_threshold: 1
       area_threshold: 45%
@@ -34,4 +37,4 @@ secret=$(openssl rand -base64 18)
 printf '%s\n%s\n' "$secret" "$secret" | vncpasswd -u desktop -w -o
 # Xvnc runs in the foreground so systemd observes failure and restarts the
 # entire desktop cgroup. No pgrep guesses or persistent PID files.
-exec vncserver :1 -fg -geometry 1920x1080 -depth 24 -interface 0.0.0.0 -websocketPort 8080 -disableBasicAuth -SecurityTypes None -select-de manual -prompt 0
+exec vncserver :1 -fg -geometry 1920x1080 -dpi 192 -depth 24 -interface 0.0.0.0 -websocketPort 8080 -disableBasicAuth -SecurityTypes None -select-de manual -prompt 0

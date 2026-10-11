@@ -62,12 +62,29 @@ if [ "$desktop" = true ]; then
     browser=firefox
   fi
   apt-get update
-  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" openbox pcmanfm libfm-modules xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" openbox pcmanfm libfm-modules librsvg2-common xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
   install -m 0644 "$assets/desktop.html" /usr/share/kasmvnc/www/index.html
+  install -m 0644 "$assets/terminal.svg" /opt/beam-vm/
   install -d -m 0755 /root/Desktop
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/
   # Open desktop launchers directly instead of prompting to execute a script.
   sed -i '/^\[config\]/a quick_exec=1' /etc/xdg/libfm/libfm.conf
+  sed -i 's/^big_icon_size=.*/big_icon_size=96/' /etc/xdg/libfm/libfm.conf
+  # Use the installed flat window theme and readable title bars at 192 DPI.
+  sed -i 's/<name>Clearlooks<\//<name>Breeze-ob<\//; /<font /,/<\/font>/s/<size>.*<\/size>/<size>11<\/size>/' /etc/xdg/openbox/rc.xml
+  desktop_config=/root/.config/pcmanfm/default/desktop-items-0.conf
+  if [ ! -f "$desktop_config" ]; then
+    install -d "$(dirname "$desktop_config")"
+    cat > "$desktop_config" <<'EOF'
+[*]
+wallpaper_mode=color
+desktop_bg=#17171c
+desktop_fg=#ededee
+desktop_shadow=#17171c
+desktop_font=Ubuntu 9
+show_trash=0
+EOF
+  fi
   xdg-user-dirs-update
   # Start the desktop after Openbox has acquired the window-manager selection.
   if ! grep -q '^pcmanfm --desktop' /etc/xdg/openbox/autostart; then
