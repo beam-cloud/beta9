@@ -13,16 +13,23 @@
   allow="clipboard-read; clipboard-write; fullscreen" allowfullscreen></iframe>
 <script>
   const desktop = document.querySelector('iframe');
+  let connecting = false;
   let reconnectTimer;
+  const retry = () => {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => desktop.contentWindow.location.reload(), 5000);
+  };
+  // Error pages cannot emit Kasm events; retry them after loading.
+  desktop.addEventListener('load', () => { if (!connecting) retry(); });
   window.addEventListener('message', ({origin, source, data}) => {
     if (origin !== location.origin || source !== desktop.contentWindow ||
         data?.action !== 'connection_state') return;
-    if (data.value === 'connected') {
-      clearInterval(reconnectTimer);
-      reconnectTimer = null;
-    } else if (data.value === 'disconnected' && !reconnectTimer) {
+    connecting = ['connected', 'connecting', 'reconnecting'].includes(data.value);
+    if (connecting) {
+      clearTimeout(reconnectTimer);
+    } else if (data.value === 'disconnected') {
       // Kasm retries clean closes only; gateway cycles can close abruptly.
-      reconnectTimer = setInterval(() => desktop.contentWindow.location.reload(), 5000);
+      retry();
     }
   });
 </script>
