@@ -16,12 +16,16 @@ import json,sys,time
 from beta9.tunnel import Tunnel
 class Remote:
     def settimeout(self, _): pass
-    def close(self): pass
+    def close(self): assert self.close_acked
     def send(self, message):
         control = json.loads(message)
         if control['type'] == 'read': self.read_id = control['id']
+        if control['type'] == 'close': self.close_id = control['id']
     def recv(self):
         time.sleep(.1)
+        if hasattr(self, 'close_id'):
+            self.close_acked = True
+            return json.dumps({'type': 'input', 'id': self.close_id})
         return json.dumps({'type': 'eof', 'id': self.read_id})
 Tunnel(lambda _: Remote(), sys.stdin.buffer, sys.stdout.buffer).run()
 print('clean exit')
@@ -61,12 +65,16 @@ def test_successful_reattachment_resets_recovery_before_the_first_reply(monkeypa
 
         def send(self, message):
             control = json.loads(message)
+            if control["type"] == "close":
+                self.close_id = control["id"]
             if control["type"] == "read":
                 self.read_id = control["id"]
 
         def recv(self):
             if len(sessions) < 5:
                 raise ConnectionResetError("gateway cycled before its first reply")
+            if hasattr(self, "close_id"):
+                return json.dumps({"type": "input", "id": self.close_id})
             return json.dumps({"type": "eof", "id": self.read_id})
 
     def connect(session):
@@ -140,7 +148,9 @@ def test_tunnel_reuses_requests_when_gateway_loses_replies_and_acknowledgements(
             nonlocal input_eof, lost_output_ack
             control = json.loads(message)
             request = control["id"]
-            if control["type"] == "eof":
+            if control["type"] == "close":
+                self.messages.put(json.dumps({"type": "input", "id": request}))
+            elif control["type"] == "eof":
                 input_eof = True
                 responses[request] = json.dumps({"type": "input", "id": request})
                 self.messages.put(responses[request])
@@ -227,6 +237,8 @@ def test_tunnel_processes_input_ack_while_local_output_is_blocked():
 
         def send(self, message):
             control = json.loads(message)
+            if control["type"] == "close":
+                self.messages.put(json.dumps({"type": "input", "id": control["id"]}))
             if control["type"] == "read":
                 self.read = control["id"]
                 if self.responded:
