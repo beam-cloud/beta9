@@ -19,6 +19,8 @@
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       connecting = false;
+      // A failed navigation may never emit load or Kasm events.
+      retry(30000);
       desktop.contentWindow.location.reload();
     }, delay);
   };
