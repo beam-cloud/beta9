@@ -10,7 +10,7 @@ import pytest
 from beta9.tunnel import Tunnel
 
 
-@pytest.mark.parametrize("close_frame", ["", "{"])
+@pytest.mark.parametrize("close_frame", ["", "{", "[]", "null"])
 @pytest.mark.parametrize("invalid_control", [False, True])
 def test_close_frame_does_not_replace_the_tunnel_result(close_frame, invalid_control):
     class Remote:

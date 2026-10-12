@@ -114,8 +114,10 @@ class Tunnel:
             deadline = time.monotonic() + 1
             while time.monotonic() < deadline:
                 message = remote.recv()
-                if isinstance(message, str) and json.loads(message).get("id") == request:
-                    return
+                if isinstance(message, str):
+                    control = json.loads(message)
+                    if isinstance(control, dict) and control.get("id") == request:
+                        return
 
     def _download(self):
         try:
