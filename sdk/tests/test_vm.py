@@ -16,6 +16,7 @@ from beta9.abstractions.vm import VM, prepare_image
 from beta9.abstractions import vm as vm_module
 from beta9.exceptions import SandboxProcessError, SandboxConnectionError
 from beta9.channel import GatewayHTTPError
+from beta9.config import SDKSettings
 from beta9.cli import extraclick
 from beta9.cli import vm as vm_cli
 from beta9.cli import container as container_cli
@@ -293,6 +294,7 @@ def test_vm_cli_registration_and_cpu_only_args():
         "desktop",
         "terminal",
         "ports",
+        "access-url",
         "expose",
         "unexpose",
         "port-forward",
@@ -317,6 +319,44 @@ def test_vm_cli_registration_and_cpu_only_args():
         "context",
     } <= options
     assert not {"gpu", "gpu_count"} & options
+
+
+@pytest.mark.parametrize("cli_name", ["Beta9", "Beam"])
+@pytest.mark.parametrize("options,ttl", [([], 600), (["--ttl", "3600"], 3600)])
+def test_cli_access_url_uses_selected_profile(cli_service, monkeypatch, cli_name, options, ttl):
+    context = MagicMock(return_value=SimpleNamespace())
+    monkeypatch.setattr(extraclick, "get_config_context", context)
+    url = "https://dev-3000.example.test/?beam_vm_session=signed"
+    cli_service.http.json.side_effect = [
+        {"name": "dev", "id": "vm-resource", "status": "stopped"},
+        {"url": url},
+    ]
+    cli = load_cli(check_config=False, settings=SDKSettings(name=cli_name))
+
+    result = CliRunner().invoke(
+        cli.common_group,
+        ["vm", "access-url", "dev", "3000", "--context", "staging", *options],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == url + "\n"
+    context.assert_called_once_with("staging")
+    requests = cli_service.http.json.call_args_list
+    assert [request.args for request in requests] == [
+        ("GET", "/api/v1/vm/{ws}/dev"),
+        ("POST", "/api/v1/vm/{ws}/vm-resource/access-session"),
+    ]
+    assert requests[1].kwargs["json"] == {"port": 3000, "ttl": ttl}
+
+
+@pytest.mark.parametrize(
+    "args", [["0"], ["65536"], ["3000", "--ttl", "0"], ["3000", "--ttl", "3601"]]
+)
+def test_cli_access_url_rejects_invalid_port_or_ttl(cli_service, args):
+    result = CliRunner().invoke(vm_cli.management, ["access-url", "dev", *args])
+    assert result.exit_code == 2
+    assert "Invalid value" in result.output
+    cli_service.http.json.assert_not_called()
 
 
 def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch):

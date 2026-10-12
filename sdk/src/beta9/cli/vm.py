@@ -473,6 +473,23 @@ def access_token_vm(service, name, rotate):
     click.echo(vm.rotate_access_token() if rotate else vm.traffic_access_token)
 
 
+@management.command("access-url")
+@click.argument("name")
+@click.argument("port", type=click.IntRange(1, 65535))
+@click.option(
+    "--ttl",
+    type=click.IntRange(1, 3600),
+    default=600,
+    show_default=True,
+    metavar="SECONDS",
+    help="Access link lifetime, from 1 to 3600 seconds.",
+)
+@extraclick.pass_service_client
+def access_url_vm(service, name, port, ttl):
+    """Print a temporary browser link for a protected port."""
+    click.echo(_vm(service, name).access_url(port, ttl=ttl))
+
+
 @management.command("start")
 @click.argument("name")
 @click.option("--cold", is_flag=True, help="Explicitly discard paused RAM and boot from disk.")
