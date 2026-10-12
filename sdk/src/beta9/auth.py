@@ -164,6 +164,8 @@ class DeviceLogin:
                     data.get("gateway_port") or self.target.gateway_port or DEFAULT_GATEWAY_PORT
                 ),
                 api_url=data.get("api_url") or self.target.api_url,
+                app_url_template=data.get("app_url_template") or self.target.app_url_template,
+                vm_url_template=data.get("vm_url_template") or self.target.vm_url_template,
             )
         error = data.get("error", "")
         if error == "authorization_pending":

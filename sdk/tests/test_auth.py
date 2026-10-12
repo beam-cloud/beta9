@@ -211,3 +211,24 @@ def test_environment_token_targets_the_environments_gateway(settings, monkeypatc
         "https://auth.stage.example/oauth",
     )
     assert get_config_context("default").gateway_host == "gw.example"
+
+
+def test_device_login_preserves_provider_dashboard_templates(settings, monkeypatch):
+    posts(
+        monkeypatch,
+        [
+            FakeResponse(
+                200,
+                {
+                    "access_token": "test-token",
+                    "app_url_template": "https://dash.stage.example/app/{app_id}/logs",
+                    "vm_url_template": "https://dash.stage.example/vms/{vm_id}?tab=logs",
+                },
+            )
+        ],
+    )
+    context = flow().wait()
+    auth.save_login(context, "test")
+    restored = get_config_context("test")
+    assert restored.app_url_template == context.app_url_template
+    assert restored.vm_url_template == context.vm_url_template

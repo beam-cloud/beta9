@@ -62,8 +62,15 @@ def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypa
     from beta9.cli import setup
 
     monkeypatch.setenv("BETA9_JSON", "1")
+    monkeypatch.setattr(setup, "ensure_credit", lambda *_: None)
+    monkeypatch.setattr(
+        setup, "dashboard_link", lambda *_: "https://dashboard.example/vms/vm-ready?tab=logs"
+    )
     monkeypatch.setattr("beta9.mcp.server.context_or_none", lambda _: object())
-    monkeypatch.setattr("beta9.config.get_config_context", lambda _: object())
+    monkeypatch.setattr(
+        "beta9.config.get_config_context",
+        lambda _: __import__("beta9.config", fromlist=["ConfigContext"]).ConfigContext(),
+    )
     monkeypatch.setattr(
         setup, "get_settings", lambda: SimpleNamespace(name="Beam", config_path=tmp_path / "config")
     )
@@ -83,6 +90,7 @@ def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypa
         "context": "staging",
         "agents": configured,
         "vm": {"name": "first", "id": "vm-ready"},
+        "dashboard_url": "https://dashboard.example/vms/vm-ready?tab=logs",
     }
     prepare.assert_called_once()
 
@@ -92,8 +100,12 @@ def test_setup_vm_does_not_report_success_after_failed_probe(tmp_path, monkeypat
 
     from beta9.cli import setup
 
+    monkeypatch.setattr(setup, "ensure_credit", lambda *_: None)
     monkeypatch.setattr("beta9.mcp.server.context_or_none", lambda _: object())
-    monkeypatch.setattr("beta9.config.get_config_context", lambda _: object())
+    monkeypatch.setattr(
+        "beta9.config.get_config_context",
+        lambda _: __import__("beta9.config", fromlist=["ConfigContext"]).ConfigContext(),
+    )
     monkeypatch.setattr(
         setup, "get_settings", lambda: SimpleNamespace(name="Beam", config_path=tmp_path / "config")
     )
@@ -105,3 +117,90 @@ def test_setup_vm_does_not_report_success_after_failed_probe(tmp_path, monkeypat
     assert result.exit_code == 1
     assert "Guest timed out" in result.output
     assert "ready" not in result.output
+
+
+def test_credit_checkpoint_never_opens_checkout_for_unattended_setup(monkeypatch):
+    import click
+    from beta9.cli import setup
+    import webbrowser
+
+    opening = MagicMock()
+    monkeypatch.setattr(webbrowser, "open", opening)
+    monkeypatch.setattr(
+        "beta9.mcp.tools.call_remote",
+        lambda *_: {
+            "credit": {"ok": False, "message": "Add credits at https://account.example/credits"}
+        },
+    )
+    with pytest.raises(click.ClickException, match="https://account.example/credits"):
+        setup.ensure_credit(object(), unattended=True)
+    opening.assert_not_called()
+
+
+def test_interactive_credit_checkpoint_waits_for_confirmed_funding(monkeypatch):
+    import webbrowser
+    from beta9.cli import setup
+
+    opening = MagicMock()
+    confirm = MagicMock(return_value=True)
+    monkeypatch.setattr(webbrowser, "open", opening)
+    monkeypatch.setattr(setup.click, "confirm", confirm)
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+    statuses = iter(
+        [
+            {
+                "workspace_name": "test",
+                "credit": {
+                    "ok": False,
+                    "message": "Add credits at https://account.example/credits",
+                },
+            },
+            {"credit": {"ok": False}},
+            {"credit": {"ok": True}},
+        ]
+    )
+    monkeypatch.setattr("beta9.mcp.tools.call_remote", lambda *_: next(statuses))
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    setup.ensure_credit(object(), unattended=False)
+    opening.assert_called_once_with("https://account.example/credits", new=2)
+    confirm.assert_called_once()
+
+
+def test_product_dashboard_templates_are_optional_and_context_bound(monkeypatch):
+    from beta9.cli import setup
+    from beta9.config import ConfigContext
+
+    monkeypatch.setattr(
+        setup,
+        "get_settings",
+        lambda: SimpleNamespace(
+            api_url="https://app.prod.example",
+            app_url_template="https://dash.prod.example/app/{app_id}",
+            vm_url_template="",
+        ),
+    )
+    context = ConfigContext(api_url="https://app.stage.example")
+    assert setup.dashboard_link(context, "app", "id") == ""
+    context.app_url_template = "https://dash.stage.example/workloads/{app_id}/logs"
+    assert (
+        setup.dashboard_link(context, "app", "a/b")
+        == "https://dash.stage.example/workloads/a%2Fb/logs"
+    )
+    context.vm_url_template = "https://dash.stage.example/machines/{vm_id}"
+    assert (
+        setup.dashboard_link(context, "vm", "vm-id") == "https://dash.stage.example/machines/vm-id"
+    )
+
+
+def test_example_setup_refuses_unrelated_existing_app(tmp_path):
+    selected = SimpleNamespace(http=SimpleNamespace(workspace_id="workspace"))
+
+    def call(tool, args):
+        return (
+            {"items": [{"app_id": "someone-elses-app"}]}
+            if tool == "list_apps"
+            else {"config": {"env": []}}
+        )
+
+    with pytest.raises(ValueError, match="already exists"):
+        onboarding.prepare_example(selected, tmp_path, "existing", "inference", call)
