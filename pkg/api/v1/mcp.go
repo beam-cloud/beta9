@@ -20,7 +20,7 @@ import (
 // The MCP server lives in the gateway: agents connect over HTTP with a workspace
 // token and get the same operations the dashboard and CLI use. Stateless
 // JSON-RPC (Streamable HTTP without a server stream); every call is one POST.
-const mcpProtocolVersion = "2025-03-26"
+const mcpProtocolVersion = "2025-11-25"
 
 // MCPGateway is what the tools need from the assembled gateway service.
 type MCPGateway interface {
@@ -56,13 +56,12 @@ type MCPGroup struct {
 func NewMCPGroup(g *echo.Group, router *echo.Echo, gws MCPGateway, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, eventRepo repository.EventRepository, config types.AppConfig) *MCPGroup {
 	group := &MCPGroup{router: router, gws: gws, backendRepo: backendRepo, workspaceRepo: workspaceRepo, eventRepo: eventRepo, config: config}
 	group.tools = group.catalog()
-	group.byName = make(map[string]*mcpTool, len(group.tools))
-	for i := range group.tools {
-		group.byName[group.tools[i].Name] = &group.tools[i]
-	}
-	g.POST("", auth.WithAuth(group.Post))
-	g.GET("", auth.WithAuth(group.Get))
-	g.DELETE("", auth.WithAuth(func(ctx echo.Context) error { return ctx.NoContent(http.StatusOK) }))
+	group.prepareTools()
+	g.POST("", group.authorize(group.Post))
+	g.GET("", group.authorize(group.Get))
+	g.DELETE("", group.authorize(func(ctx echo.Context) error { return ctx.NoContent(http.StatusOK) }))
+	router.GET("/.well-known/oauth-protected-resource", group.oauthMetadata)
+	router.GET("/.well-known/oauth-protected-resource/api/v1/mcp", group.oauthMetadata)
 	return group
 }
 
@@ -78,6 +77,7 @@ type rpcRequest struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
 type rpcResponse struct {
@@ -92,67 +92,34 @@ func (g *MCPGroup) Get(ctx echo.Context) error {
 	return ctx.NoContent(http.StatusMethodNotAllowed)
 }
 
-func (g *MCPGroup) Post(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	var raw json.RawMessage
-	if err := json.NewDecoder(ctx.Request().Body).Decode(&raw); err != nil {
-		return parseError(ctx)
-	}
-	batch := len(raw) > 0 && raw[0] == '['
-	var requests []rpcRequest
-	if batch {
-		if err := json.Unmarshal(raw, &requests); err != nil {
-			return parseError(ctx)
-		}
-	} else {
-		requests = make([]rpcRequest, 1)
-		if err := json.Unmarshal(raw, &requests[0]); err != nil {
-			return parseError(ctx)
-		}
-	}
-
-	reqCtx := withIdentityHeaders(ctx.Request().Context(), ctx.Request().Header)
-	responses := make([]rpcResponse, 0, len(requests))
-	for _, req := range requests {
-		if len(req.ID) == 0 || string(req.ID) == "null" {
-			continue // notification
-		}
-		responses = append(responses, g.dispatch(reqCtx, cc.AuthInfo, req))
-	}
-	switch {
-	case len(responses) == 0:
-		return ctx.NoContent(http.StatusAccepted)
-	case batch:
-		return ctx.JSON(http.StatusOK, responses)
-	default:
-		return ctx.JSON(http.StatusOK, responses[0])
-	}
-}
-
-func parseError(ctx echo.Context) error {
-	return ctx.JSON(http.StatusBadRequest, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{-32700, "parse error"}})
-}
-
 func (g *MCPGroup) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rpcRequest) rpcResponse {
 	resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	switch req.Method {
+	case "server/discover":
+		resp.Result = map[string]any{"capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "beam", "version": "1"}, "instructions": g.instructions(), "supportedVersions": []string{mcpStatelessVersion}}
 	case "initialize":
+		var init struct {
+			Version string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(req.Params, &init)
+		version := mcpProtocolVersion
+		if init.Version == "2025-03-26" || init.Version == "2025-06-18" {
+			version = init.Version
+		}
 		resp.Result = map[string]any{
-			"protocolVersion": mcpProtocolVersion,
+			"protocolVersion": version,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "beta9", "version": "1"},
-			"instructions": "Serverless GPU/CPU apps, one-off containers and managed databases in one workspace. " +
-				"Start with whoami and list_apps. Ship code with the CLI in the project directory (`deploy`); " +
-				"everything else is here: read config with get_app, change it with update_config, wire services with connect_services or set_env " +
-				"(${{db.NAME.DATABASE_URL}}, ${{secret.NAME}}, ${{app.NAME.URL}}), provision databases, manage secrets, " +
-				"group apps into stacks, call apps with invoke, read logs and request stats. Anything without a tool: api_routes then api. " +
-				"Tools that say so need confirm=true.",
+			"instructions":    g.instructions(),
 		}
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
 		out := make([]map[string]any, 0, len(g.tools))
 		for _, t := range g.tools {
+			if !g.allowed(authInfo, &t) || !g.selected(ctx, &t) {
+				continue
+			}
 			out = append(out, t.describe())
 		}
 		resp.Result = map[string]any{"tools": out}
@@ -162,17 +129,17 @@ func (g *MCPGroup) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rp
 			Arguments map[string]any `json:"arguments"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
-			resp.Error = &rpcError{-32602, "invalid params"}
+			resp.Error = &rpcError{Code: -32602, Message: "invalid params"}
 			return resp
 		}
 		tool, ok := g.byName[params.Name]
 		if !ok {
-			resp.Error = &rpcError{-32602, fmt.Sprintf("unknown tool %q", params.Name)}
+			resp.Error = &rpcError{Code: -32602, Message: fmt.Sprintf("unknown tool %q", params.Name)}
 			return resp
 		}
 		resp.Result = g.call(ctx, authInfo, tool, params.Arguments)
 	default:
-		resp.Error = &rpcError{-32601, "method not found"}
+		resp.Error = &rpcError{Code: -32601, Message: "method not found"}
 	}
 	return resp
 }
@@ -245,6 +212,12 @@ type mcpTool struct {
 	Destructive bool
 	Confirm     string // non-empty: the call needs confirm=true and this is the warning
 	Run         toolFn
+	ReadOnly    bool
+	Idempotent  bool
+	OpenWorld   bool
+	Category    string
+	Scope       string
+	validate    func(any) error
 }
 
 func (t mcpTool) describe() map[string]any {
@@ -253,7 +226,8 @@ func (t mcpTool) describe() map[string]any {
 		"name":        t.Name,
 		"description": t.Description,
 		"inputSchema": t.Schema,
-		"annotations": map[string]any{"destructiveHint": destructive, "readOnlyHint": !destructive},
+		"_meta":       map[string]any{"beam/category": t.Category, "beam/scope": t.Scope},
+		"annotations": map[string]any{"destructiveHint": destructive, "readOnlyHint": t.ReadOnly, "idempotentHint": t.Idempotent, "openWorldHint": t.OpenWorld},
 	}
 }
 
@@ -261,12 +235,22 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 	if args == nil {
 		args = map[string]any{}
 	}
-	if required, _ := tool.Schema["required"].([]string); len(required) > 0 {
-		for _, key := range required {
-			if _, ok := args[key]; !ok {
-				return toolResult(map[string]any{"error": fmt.Sprintf("%s is required", key), "code": "INVALID_ARGS"}, true)
-			}
+	validate := tool.validate
+	if validate == nil {
+		var err error
+		validate, err = compileToolSchema(tool.Schema)
+		if err != nil {
+			return toolResult(map[string]any{"code": "INTERNAL_ERROR", "error": "Invalid tool contract"}, true)
 		}
+	}
+	if err := validate(args); err != nil {
+		return toolResult(map[string]any{"code": "INVALID_ARGS", "error": err.Error()}, true)
+	}
+	if !g.allowed(authInfo, tool) {
+		return toolResult(map[string]any{"code": "FORBIDDEN", "error": "This credential cannot call " + tool.Name, "required_scope": tool.Scope}, true)
+	}
+	if !g.selected(ctx, tool) {
+		return toolResult(map[string]any{"code": "TOOL_UNAVAILABLE", "error": "Tool is excluded by this connection's filter"}, true)
 	}
 
 	// Validate shared bounded fields before any backend call or integer conversion.
@@ -284,7 +268,7 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 	}
 	for key, bound := range bounds {
 		raw, exists := args[key]
-		if !exists {
+		if !exists || tool.Category == "vm" {
 			continue
 		}
 
@@ -323,6 +307,9 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 		return toolResult(result, true)
 	}
 
+	if payload, ok := out.(mcpPayload); ok {
+		return map[string]any(payload)
+	}
 	failed := false
 	if response, ok := out.(map[string]any); ok {
 		failed, _ = response["is_error"].(bool)
@@ -351,7 +338,7 @@ func toolResult(value any, isError bool) map[string]any {
 type props map[string]any
 
 func schema(p props, required ...string) map[string]any {
-	s := map[string]any{"type": "object", "properties": p}
+	s := map[string]any{"type": "object", "properties": p, "additionalProperties": false}
 	if len(required) > 0 {
 		s["required"] = required
 	}

@@ -177,7 +177,7 @@ func (g *MCPGroup) catalog() []mcpTool {
 		"port":          integer(0),
 	}
 
-	return []mcpTool{
+	return withToolPolicies(append([]mcpTool{
 		// workspace
 		{
 			Name:        "capabilities",
@@ -329,7 +329,7 @@ func (g *MCPGroup) catalog() []mcpTool {
 			Destructive: true,
 			Run:         g.api,
 		},
-	}
+	}, g.vmCatalog()...))
 }
 
 // --- workspace ----------------------------------------------------------------------------

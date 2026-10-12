@@ -719,7 +719,7 @@ func (g *Gateway) registerServices() error {
 	}); err != nil {
 		return err
 	}
-	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp", g.authMiddleware), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
+	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp"), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
 
 	g.registerHealthService()
 

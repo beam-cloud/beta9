@@ -45,13 +45,16 @@ func TestMCPCatalogSchemas(t *testing.T) {
 func TestMCPCallGates(t *testing.T) {
 	g := newTestMCPGroup()
 	ctx := context.Background()
+	identity := &auth.AuthInfo{Workspace: &types.Workspace{}, Token: &types.Token{TokenType: types.TokenTypeWorkspace}}
 
-	res := g.call(ctx, nil, g.byName["get_app"], nil)
+	res := g.call(ctx, identity, g.byName["get_app"], nil)
 	require.Equal(t, "INVALID_ARGS", res["structuredContent"].(map[string]any)["code"])
 
-	res = g.call(ctx, nil, g.byName["logs"], map[string]any{"name": "x", "stream": "console"})
+	res = g.call(ctx, identity, g.byName["logs"], map[string]any{"name": "x", "stream": "console"})
 	require.Equal(t, "INVALID_ARGS", res["structuredContent"].(map[string]any)["code"])
-	require.Contains(t, res["structuredContent"].(map[string]any)["error"], "stdout, stderr, system")
+	for _, stream := range []string{"stdout", "stderr", "system"} {
+		require.Contains(t, res["structuredContent"].(map[string]any)["error"], stream)
+	}
 
 	for stubType, counted := range map[string]bool{
 		types.StubTypeEndpointDeployment:  true,
@@ -64,7 +67,7 @@ func TestMCPCallGates(t *testing.T) {
 		require.Equal(t, counted, servesRequests(types.StubType(stubType)), stubType)
 	}
 
-	res = g.call(ctx, nil, g.byName["delete_app"], map[string]any{"name": "x"})
+	res = g.call(ctx, identity, g.byName["delete_app"], map[string]any{"name": "x"})
 	require.Equal(t, "NEEDS_CONFIRMATION", res["structuredContent"].(map[string]any)["code"])
 
 	resp := g.dispatch(ctx, nil, rpcRequest{JSONRPC: "2.0", Method: "tools/call", Params: json.RawMessage(`{"name":"nope"}`)})
