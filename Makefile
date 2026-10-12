@@ -143,8 +143,8 @@ stop:
 # Staging gateway on eks-stage-01 (see hack/okteto.stage.yaml). Forwards to
 # localhost:11993/11994 so it never collides with the local session.
 start-stage:
-	@test -n "$(GATEWAY_TAG)" || { echo "GATEWAY_TAG is required, e.g. GATEWAY_TAG=perf-startup-9b71dbb7 make start-stage"; exit 1; }
-	cd hack && GATEWAY_TAG=$(GATEWAY_TAG) $(OKTETO_STAGE) up $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml
+	@test -f hack/stage/config.stage.yaml || { echo "Copy the staging config to hack/stage/config.stage.yaml first"; exit 1; }
+	cd hack && export STAGE_GATEWAY_IMAGE="$${STAGE_GATEWAY_IMAGE:-$$(kubectl --context '$(STAGE_OKTETO_CONTEXT)' -n '$(STAGE_OKTETO_NAMESPACE)' get deploy beta9-gateway -o jsonpath='{.spec.template.spec.containers[0].image}')}" && $(OKTETO_STAGE) up $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml
 
 stop-stage:
 	cd hack && $(OKTETO_STAGE) down $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml

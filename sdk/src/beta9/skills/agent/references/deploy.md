@@ -38,7 +38,7 @@ deploy {
     "ALLOWED_HOSTS": "*"
   },
   "cpu": 1, "memory": "2Gi",
-  "keep_warm_seconds": -1
+  "min_replicas": 0, "keep_warm_seconds": 0
 }
 ```
 
@@ -84,9 +84,9 @@ and errors as `{"error", "code"}`; branch on `code` (`NOT_AUTHENTICATED`,
 - `target`, `build_args`: as `docker build --target prod --build-arg K=V`.
   Without `target` the last stage is built, which in many multi-stage
   Dockerfiles is a dev or test stage; use the stage the README builds.
-- `keep_warm_seconds`: `-1` keeps one container running (web apps users hit
-  directly); `0`/small values scale to zero when idle and cold start on the
-  next request.
+- `keep_warm_seconds`: defaults to `0`, scales to zero when idle and cold
+  starts on the next request. `-1` keeps compute running indefinitely; use
+  it only for an explicitly requested continuous workload.
 - `min_replicas` / `max_replicas`: fixed or autoscaled replica counts.
 - `disks`: `["data:/var/lib/app:10Gi"]`, a disk for state a single service
   owns. It is saved when the container stops or exits, crashes included, and
@@ -154,9 +154,10 @@ common ones:
 - Managed versions differ from compose pins; check the app supports them.
 
 Then `stack_plan`, review the plan with the user, and call `stack_apply`
-until it reports `Stack applied`. Applications in a stack run continuously
-(`min_replicas: 1`) unless their deploy sets `min_replicas` or
-`keep_warm_seconds`.
+until it reports `Stack applied`. Stack applications default to
+`min_replicas: 0`, `keep_warm_seconds: 0`; databases default to
+`always_on: false`. Preserve those defaults unless the user explicitly
+requests continuous compute. Cold starts alone do not justify an idle floor.
 
 Each `stack_apply` returns every service's status, with the newest build or
 container logs for one still starting. A service the platform never accepted

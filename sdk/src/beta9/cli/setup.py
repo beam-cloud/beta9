@@ -3,6 +3,8 @@
 agent on this machine, then say what is left (at most: signing in).
 """
 
+import sys
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from typing import Dict, Optional, Sequence
 
@@ -60,38 +62,16 @@ def setup():
 )
 @extraclick.config_context_option
 def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Optional[str]):
-    from ..mcp.server import context_or_none
-
     product = get_settings().name
     cli = product.lower()
-    targets = [CLIENTS[c] for c in clients] if clients else detected_clients()
     name = context or extraclick.selected_context()
-    signed_in = context_or_none(name) is not None
     can_login = login_configured(name)
-
-    # Skills go to the universal directory plus every client that has its own.
-    skills = {}
-    if not skip_skills:
-        skills["Universal (.agents)"] = install_skill(Path(UNIVERSAL_SKILLS_DIR).expanduser())
-        for c in targets:
-            if c.skills_dir:
-                skills[c.label] = install_skill(Path(c.skills_dir).expanduser())
-    mcp: Dict[str, Path] = {}
-    failed: Dict[str, str] = {}
-    if not skip_mcp:
-        mcp, failed = install_clients(targets, server_command(context))
+    result = configure_agents(clients, skip_skills, skip_mcp, context)
+    skills, mcp, failed = result["skills"], result["mcp"], result["failed"]
+    signed_in = result["signed_in"]
 
     if terminal.json_output():
-        terminal.print_json(
-            {
-                "cli": cli_path() or cli,
-                "clients": [c.id for c in targets],
-                "signed_in": signed_in,
-                "skills": [str(p) for p in skills.values()],
-                "mcp": {k: str(v) for k, v in mcp.items()},
-                "failed": failed,
-            }
-        )
+        terminal.print_json({**result, "skills": list(skills.values())})
         if failed:
             raise click.exceptions.Exit(1)
         return
@@ -103,7 +83,7 @@ def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Op
     if not skip_mcp:
         if mcp:
             terminal.success(f"{product} MCP — {', '.join(CLIENTS[c].label for c in mcp)}")
-        elif not targets:
+        elif not result["clients"]:
             terminal.success(
                 f"{product} MCP — no agent clients found; later: {cli} mcp install --client <name>"
             )
@@ -125,3 +105,96 @@ def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Op
         )
     if failed:
         raise click.exceptions.Exit(1)
+
+
+def configure_agents(clients, skip_skills, skip_mcp, context):
+    """Configure agent clients without printing a separate completion or JSON document."""
+    from ..mcp.server import context_or_none
+
+    targets = [CLIENTS[c] for c in clients] if clients else detected_clients()
+    skills = {}
+    if not skip_skills:
+        skills["Universal (.agents)"] = str(install_skill(Path(UNIVERSAL_SKILLS_DIR).expanduser()))
+        for client in targets:
+            if client.skills_dir:
+                skills[client.label] = str(install_skill(Path(client.skills_dir).expanduser()))
+    mcp: Dict[str, Path] = {}
+    failed: Dict[str, str] = {}
+    if not skip_mcp:
+        mcp, failed = install_clients(targets, server_command(context))
+    return {
+        "cli": cli_path() or get_settings().name.lower(),
+        "clients": [client.id for client in targets],
+        "signed_in": context_or_none(context or extraclick.selected_context()) is not None,
+        "skills": skills,
+        "mcp": {key: str(value) for key, value in mcp.items()},
+        "failed": failed,
+    }
+
+
+@setup.command(
+    name="vm",
+    help="Sign in, connect your agents and start a real persistent CPU VM. Safe to resume.",
+)
+@click.option("--name", default="beam-agent", help="Name of the first VM.")
+@click.option("--desktop", is_flag=True, help="Include a browser desktop.")
+@click.option("--client", "clients", type=click.Choice(CLIENT_IDS), multiple=True)
+@click.option("--skip-agents", is_flag=True, help="Sign in and prepare the VM only.")
+@click.option("-y", "--yes", is_flag=True, help="Approve creation without prompting.")
+@extraclick.config_context_option
+def setup_vm(name, desktop, clients, skip_agents, yes, context):
+    from ..auth import DeviceLogin, LoginError, save_login
+    from ..channel import GatewayHTTPError, ServiceClient
+    from ..config import context_defaults, get_config_context
+    from ..deployment.onboarding import prepare_vm
+    from ..mcp.server import context_or_none
+
+    selected = context or extraclick.selected_context()
+    cli = get_settings().name.lower()
+    try:
+        if context_or_none(selected) is None:
+            flow = DeviceLogin.start(context_defaults(selected))
+            with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+                terminal.header("Connect your Beam account")
+                terminal.print(f"  {flow.verification_uri_complete}")
+                flow.open_browser()
+                with terminal.progress("Waiting for sign-in..."):
+                    save_login(flow.wait(), selected)
+        agents = None
+        if not skip_agents:
+            with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+                agents = configure_agents(clients, False, False, selected)
+            if agents["failed"]:
+                report_failures(agents["failed"])
+                raise click.ClickException("Agent configuration failed; fix it and resume setup")
+            if not terminal.json_output():
+                terminal.success("Agent skills and MCP configured")
+        if not yes:
+            click.confirm(
+                "Start your VM (1 CPU, 2 GiB RAM, 10 GiB disk; sleeps after 15 minutes idle)?",
+                abort=True,
+            )
+        with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+            with ServiceClient(get_config_context(selected)) as service:
+                with terminal.progress("Preparing your VM and checking the guest..."):
+                    result = prepare_vm(
+                        service,
+                        get_settings().config_path.parent / "onboarding",
+                        name,
+                        desktop=desktop,
+                    )
+        if terminal.json_output():
+            terminal.print_json(
+                {"ready": True, "context": selected, "agents": agents, "vm": result}
+            )
+        else:
+            terminal.success(f"VM {result['name']} is ready — guest command verified")
+            terminal.print(f"  {cli} --context {selected} vm ssh {result['name']}")
+            terminal.print(f"  {cli} --context {selected} vm terminal {result['name']}")
+            if result.get("desktop_url"):
+                terminal.print(f"  {cli} --context {selected} vm desktop {result['name']}")
+            terminal.detail(
+                "Restart your agent to use Beam's VM tools. Re-run this setup to resume the same VM."
+            )
+    except (LoginError, GatewayHTTPError, RuntimeError, TimeoutError, ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc

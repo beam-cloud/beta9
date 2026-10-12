@@ -25,6 +25,7 @@ dependencies = [
     "paramiko<4.0.0,>=3.5.0",
     "websockets>=13,<16",
     "pyyaml<7.0.0,>=6.0.0",
+    "jsonschema>=4.17.3,<5",
 ]
 name = "beta9"
 version = "0.1.279"

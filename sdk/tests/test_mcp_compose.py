@@ -4,7 +4,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import pytest
 
-from beta9.mcp import compose
+from beta9.deployment import compose
 
 
 class FakeRegistry:
@@ -122,7 +122,7 @@ def test_managed_databases_replace_postgres_and_redis_and_require_tls(tmp_path):
 
     assert spec["app-postgres"] == {
         "type": "database",
-        "deploy": {"kind": "postgres", "always_on": True},
+        "deploy": {"kind": "postgres", "always_on": False},
         "depends_on": [],
     }
     assert spec["app-redis"]["deploy"]["kind"] == "redis"

@@ -514,17 +514,23 @@ def test_a_plan_completes_images_from_their_registry(tmp_path):
     ]
 
 
-# Compose services run continuously; scaling to zero is opt-in.
-def test_applications_run_continuously_unless_they_choose_scaling(tmp_path):
+def test_applications_scale_to_zero_and_preserve_explicit_choices(tmp_path):
     tools = FakeStackTools(tmp_path)
     plan_id = plan_app(tools, {"health_path": "/", "deploy": {"image": "web"}})["plan_id"]
     step(tools, plan_id)
-    assert tools.deploy_options[-1]["min_replicas"] == 1
+    assert tools.deploy_options[-1]["min_replicas"] == 0
+    assert tools.deploy_options[-1]["keep_warm_seconds"] == 0
 
     service = {"health_path": "/", "deploy": {"image": "web", "keep_warm_seconds": 60}}
     plan_id = plan_app(tools, service)["plan_id"]
     step(tools, plan_id)
-    assert "min_replicas" not in tools.deploy_options[-1]
+    assert tools.deploy_options[-1]["min_replicas"] == 0
+    assert tools.deploy_options[-1]["keep_warm_seconds"] == 60
+
+    service = {"health_path": "/", "deploy": {"image": "web", "min_replicas": 1}}
+    plan_id = plan_app(tools, service)["plan_id"]
+    step(tools, plan_id)
+    assert tools.deploy_options[-1]["min_replicas"] == 1
 
 
 # The gateway resolves an app's references to itself while creating it, so only

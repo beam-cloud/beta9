@@ -55,7 +55,8 @@ workspace tools appear. With those tools you can do the whole job through MCP.
    the link to add credits) and wait for them before deploying anything.
 2. `list_apps` / `{{cli}} status --json`: what already exists. App names are
    workspace-wide, so reuse or pick a distinct name.
-3. Read [references/deploy.md](references/deploy.md) before the first deploy of
+3. Read [references/vms.md](references/vms.md) before provisioning a VM,
+   [references/deploy.md](references/deploy.md) before the first deploy of
    a new codebase, and [references/databases.md](references/databases.md) when
    the app needs one.
 
@@ -82,6 +83,22 @@ The shape is always the same; only the framework details change:
 
 Ask before spending: pick the smallest resources that work (1 CPU, 1–2 Gi for
 web apps; a GPU only when the code needs one) and say what you chose.
+
+## Compute defaults
+
+Apps and stack services default to serverless: `min_replicas: 0`,
+`keep_warm_seconds: 0`; managed databases default to `always_on: false`.
+Keep these defaults. A Compose file, a web app, a stack, or a cold start is
+not a request for continuous compute. Set a positive minimum, `always_on`,
+or `keep_warm_seconds: -1` only when the user explicitly asks for continuous
+capacity and understands the idle cost. A portless queue poller may need
+continuous compute; explain that requirement before changing its minimum.
+
+For a real persistent machine, use VM tools, with the smallest useful CPU
+and memory and a finite idle timeout. `{{cli}} setup vm` handles browser
+sign-in and prepares a verified guest. A VM is a different resource from a
+request-driven application; use `idle_timeout`/auto-resume to control its
+idle behavior. See [VM operations](references/vms.md).
 
 ## Several services: a stack
 
@@ -126,6 +143,7 @@ signal to ask first.
 
 ## References
 
+- [vms.md](references/vms.md): persistent VMs, processes, files, desktops, ports, snapshots, templates and local tools
 - [setup.md](references/setup.md): sign-in, contexts, tokens for CI, MCP registration
 - [deploy.md](references/deploy.md): containers, Dockerfiles, handlers, ports, workers, disks, GPUs, compose projects, framework notes
 - [databases.md](references/databases.md): managed databases and references

@@ -22,7 +22,7 @@ mounts, and exits, which is where "it never started" lives.
 | Intent | Tool |
 |---|---|
 | Env vars (values may be references) | `set_env { name, env: {...}, unset: [...] }` |
-| Resources and scaling | `update_config { name, fields: { "runtime.cpu": 2000, "runtime.memory": 4096, "runtime.gpu": "A10G", "autoscaler.max_containers": 4, "keep_warm_seconds": -1, "ports": [8000] } }` |
+| Resources and scaling | `update_config { name, fields: { "runtime.cpu": 2000, "runtime.memory": 4096, "runtime.gpu": "A10G", "autoscaler.max_containers": 4, "autoscaler.min_containers": 0, "keep_warm_seconds": 0, "ports": [8000] } }` |
 | Wire two services | `connect_services { source, target }` |
 | Replicas of a pod | `scale_deployment { name, containers }` |
 | Restart with the same config | `redeploy { name }` |

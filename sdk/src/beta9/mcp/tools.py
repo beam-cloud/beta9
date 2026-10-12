@@ -39,7 +39,7 @@ from ..config import (
 )
 
 if TYPE_CHECKING:
-    from .compose import Registry
+    from ..deployment.images import Registry
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
@@ -68,8 +68,12 @@ def text_result(text: str, **structured: Any) -> Dict[str, Any]:
     return result
 
 
-def error_result(text: str) -> Dict[str, Any]:
-    return {"content": [{"type": "text", "text": text}], "isError": True}
+def error_result(text: str, code: str = "ERROR") -> Dict[str, Any]:
+    return {
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": {"code": code, "error": text},
+        "isError": True,
+    }
 
 
 def _cli_command() -> List[str]:
@@ -174,7 +178,9 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
             f"Deploy a project directory from this machine with the {cli} CLI; returns a job to poll "
             "with deploy_status. Give a Dockerfile (./Dockerfile is found automatically), an image, or "
             f"an entrypoint plus the port the server binds; or a {cli}-decorated object as handler "
-            "'file.py:name'. Container URLs are public. A worker (ports: []) runs continuously. "
+            "'file.py:name'. Container URLs are public. Apps default to serverless, with "
+            "min_replicas=0 and keep_warm_seconds=0. A portless continuous worker needs an "
+            "explicitly approved positive min_replicas. "
             "Apps have no private network: "
             "env values reach other apps by reference, ${{app.NAME.URL}} or ${{app.NAME.URL.<port>}} "
             "(public HTTPS) and ${{app.NAME.TCP.<port>}} (host:port through the TLS TCP gateway; "
@@ -375,6 +381,8 @@ class DeployJob:
     started_at: float = field(default_factory=time.time)
     lines: List[str] = field(default_factory=list)  # everything the CLI printed
     json_lines: Set[int] = field(default_factory=set)  # indices of its JSON output
+    operation: str = "deploy"
+    output: Dict[str, Any] = field(default_factory=dict)
     status: str = "running"  # running | accepted | failed | cancelled | interrupted
     deployed: Dict[str, Any] = field(default_factory=dict)  # deployment_id, stub_id, url, version
     error: str = ""
@@ -423,6 +431,8 @@ class DeployJob:
                 "error",
                 "pid",
                 "context_name",
+                "operation",
+                "output",
             )
         }
 
@@ -550,7 +560,10 @@ class DeployJob:
                 "task_id": deployed.get("task_id"),
             }
 
-        if code == 0 and deployed and not errors:
+        if code == 0 and self.operation == "command" and not errors:
+            self.status = "complete"
+            self.output = payloads[-1] if payloads else {}
+        elif code == 0 and deployed and not errors:
             self.status = "accepted"
         else:
             self.error = self._failure(errors, code)
@@ -627,7 +640,11 @@ class DeployJob:
         if notes:
             view["notes"] = notes
         failed = self.status in ("failed", "cancelled", "interrupted")
-        if self.status == "accepted" and not self.deployed.get("deployment_id"):
+        if self.operation == "command":
+            view["result"] = self.output
+        if self.status == "complete":
+            text = f"Operation {self.name} completed."
+        elif self.status == "accepted" and not self.deployed.get("deployment_id"):
             if self.deployed.get("task_id"):
                 text = (
                     f"Task {self.deployed['task_id']} submitted for {self.name}. "
@@ -714,12 +731,17 @@ def _json_objects(lines: List[str]) -> Tuple[List[Dict[str, Any]], Set[int]]:
     objects: List[Dict[str, Any]] = []
     taken: Set[int] = set()
     start: Optional[int] = None
+    offset = 0
     for index, line in enumerate(lines):
-        if start is None and not line.startswith("{"):
-            continue
-        start = index if start is None else start
+        if start is None:
+            # Some build streams end without a newline; the CLI's JSON error
+            # then starts immediately after the last progress message.
+            offset = line.find("{")
+            if offset < 0 or (offset and line[offset:].strip() != "{"):
+                continue
+            start = index
         try:
-            data = json.loads("\n".join(lines[start : index + 1]))
+            data = json.loads("\n".join(lines[start : index + 1])[offset:])
         except ValueError:
             continue
         if isinstance(data, dict):
@@ -769,7 +791,7 @@ class LocalTools:
 
     def registry(self) -> "Registry":
         """Reads image configs, to complete deploy options from the image."""
-        from .compose import Registry
+        from ..deployment.images import Registry
 
         return Registry()
 
@@ -794,8 +816,10 @@ class LocalTools:
                 (DATABASE_JOB_DEFINITION, self.create_database_job),
             ]
             from .stacks import definitions
+            from .vm import definitions as vm_definitions
 
             tools += definitions(self)
+            tools += vm_definitions(self)
 
         return tools
 
@@ -847,7 +871,7 @@ class LocalTools:
         def resolve() -> Tuple[List[str], List[str]]:
             if operation != "deploy":
                 return command, []
-            from .compose import resolve_image
+            from ..deployment.images import resolve_image
 
             try:
                 options, notes = resolve_image(args, directory, self.registry())
@@ -905,6 +929,7 @@ class LocalTools:
         wait_seconds: Optional[int] = 0,
         env: Optional[Dict[str, str]] = None,
         resolve: Optional[Callable[[], Tuple[List[str], List[str]]]] = None,
+        operation: str = "deploy",
     ) -> Dict[str, Any]:
         """Start `command` as a job, or return the job `key` already started. `resolve`
         gives the command to run, and notes on it, for a new job only: it reads
@@ -917,12 +942,18 @@ class LocalTools:
             job = DeployJob.load(state_path) if state_path.exists() else None
             if job and (job.request()["command"] != command or job.directory != directory):
                 return error_result(
-                    "idempotency_key already belongs to a different deployment request"
+                    "idempotency_key already belongs to a different "
+                    + ("deployment" if operation == "deploy" else "operation")
+                    + " request"
                 )
             # Rerun only a job that definitely deployed nothing: an interrupted job
             # may have deployed, and a failed or cancelled one can still hold an
             # accepted deployment.
-            if job is None or (job.status in ("failed", "cancelled") and not job.deployed):
+            if job is None or (
+                job.operation == "deploy"
+                and job.status in ("failed", "cancelled")
+                and not job.deployed
+            ):
                 for leftover in (".log", ".cancel", ".request"):
                     state_path.with_suffix(leftover).unlink(missing_ok=True)
                 final, notes = resolve() if resolve else (command, [])
@@ -934,6 +965,7 @@ class LocalTools:
                     state_path=state_path,
                     context_name=self.context_name,
                     env=env or {},
+                    operation=operation,
                 )
                 if final != command or notes:
                     job.save_request(command, notes)

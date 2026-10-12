@@ -16,12 +16,14 @@ from dataclasses import replace
 from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Tuple
 
 import requests
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from ..channel import ServiceClient
 from ..config import DEFAULT_CONTEXT_NAME, ConfigContext, context_defaults, get_settings
 from .tools import LocalTools, error_result
 
-PROTOCOL_VERSION = "2025-03-26"
+PROTOCOL_VERSION = "2025-11-25"
 REMOTE_TIMEOUT = 120
 # Database creation can include the gateway's ten-minute image build.
 TOOL_TIMEOUTS = {"create_database": 660}
@@ -118,6 +120,7 @@ class RemoteMCP:
                 tool["name"]
                 for tool in body.get("result", {}).get("tools", [])
                 if tool.get("annotations", {}).get("readOnlyHint") is True
+                and tool.get("annotations", {}).get("idempotentHint") is True
             }
         return response.status_code, body
 
@@ -285,7 +288,7 @@ class StdioProxy:
         notice = self._upgrade_notice()
         content = (response or {}).get("result", {}).get("content") or []
         if notice and content and content[0].get("type") == "text":
-            content[0]["text"] = f"{notice}\n\n{content[0]['text']}"
+            content.append({"type": "text", "text": notice})
         return response
 
     def _upgrade_notice(self) -> str:
@@ -306,6 +309,14 @@ class StdioProxy:
         name = params.get("name", "")
         handler = self.tools.handler(name)
         if handler is not None:
+            definition = next(item for item in self.tools.definitions() if item["name"] == name)
+            try:
+                Draft202012Validator(definition["inputSchema"]).validate(
+                    params.get("arguments") or {}
+                )
+            except ValidationError as exc:
+                path = ".".join(str(part) for part in exc.path) or "arguments"
+                return _result(msg_id, error_result(f"{path}: {exc.message}", code="INVALID_ARGS"))
             with self._request_lock:
                 self.tools.request.cancelled = self._requests.get(msg_id, threading.Event())
             token = params.get("_meta", {}).get("progressToken")

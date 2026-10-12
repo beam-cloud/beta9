@@ -200,9 +200,10 @@ def definitions(tools: LocalTools) -> List[Tool]:
                     "${{app.NAME.HOST.<port>}} and ${{app.NAME.PORT.<port>}} are its halves "
                     "for separate host and port settings), and "
                     "${{secret.NAME}}. Secret and credential references must be the whole "
-                    "value. References add depends_on automatically. Applications run "
-                    "continuously (min_replicas 1) unless min_replicas or keep_warm_seconds says "
-                    "otherwise. Omitted ports come from the image's EXPOSE. Source directories "
+                    "value. References add depends_on automatically. Applications default to "
+                    "serverless (min_replicas 0, keep_warm_seconds 0). Use a positive minimum "
+                    "only when the user explicitly wants continuous compute. Omitted ports "
+                    "come from the image's EXPOSE. Source directories "
                     "are fingerprinted. Replanning a stack keeps applications and jobs whose "
                     "spec and source are unchanged and that still run or have completed."
                 ),
@@ -482,7 +483,7 @@ def _compact_health(health: Dict[str, Any]) -> Dict[str, Any]:
 def _prepare_services(
     tools: LocalTools, services: Dict[str, Any]
 ) -> Tuple[List[str], Dict[str, Any], List[str]]:
-    from .compose import resolve_image
+    from ..deployment.images import resolve_image
 
     order: List[str] = []
     visiting: List[str] = []
@@ -594,10 +595,10 @@ def _prepare_application(
     service: str, node: Dict[str, Any], deploy: Dict[str, Any]
 ) -> Optional[str]:
     """Validate an application's health check and defaults; returns a warning, if any."""
-    # Compose services run continuously, and a dependency that scales to zero
-    # stalls its callers on a cold start; scaling to zero is opt-in.
-    if "min_replicas" not in deploy and "keep_warm_seconds" not in deploy:
-        deploy["min_replicas"] = 1
+    # A stack is a grouping, not consent to continuous compute. Preserve
+    # explicit scaling choices; otherwise every app can sleep when idle.
+    deploy.setdefault("min_replicas", 0)
+    deploy.setdefault("keep_warm_seconds", 0)
 
     ports = deploy.get("ports")
     health_port = node.get("health_port")

@@ -188,9 +188,10 @@ def test_results_say_when_a_newer_sdk_is_installed_than_the_server_runs(settings
     (upgraded,) = run_proxy(proxy, rpc("tools/call", 2, name="whoami", arguments={}))
 
     assert same["result"]["content"][0]["text"] == "called whoami"
-    text = upgraded["result"]["content"][0]["text"]
+    assert upgraded["result"]["content"][0]["text"] == "called whoami"
+    text = upgraded["result"]["content"][1]["text"]
     assert text.startswith("This MCP server runs beta9 SDK 1.0.0, but 1.1.0 is installed.")
-    assert text.endswith("\n\ncalled whoami")
+    assert text.endswith("Restart the MCP server in your client to use the installed tools.")
 
 
 def test_rejected_token_drops_remote_and_announces_tool_change(settings, monkeypatch):
@@ -545,6 +546,32 @@ def test_deploy_failure_without_a_json_error_reports_the_last_line(
     assert result["structuredContent"]["error"] == error
 
 
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_local_command_result_survives_restart_without_rerunning(
+    settings, local_tools, tmp_path, exit_code
+):
+    count = tmp_path / "executions"
+    cli = fake_cli(
+        tmp_path,
+        f"printf x >> '{count}'\nprintf '{{\"image_id\":\"built-image\"}}\\n'\nexit {exit_code}\n",
+    )
+    command = [str(cli)]
+    result = local_tools.start_command(
+        "image", str(tmp_path), command, key="vm-image", wait_seconds=10, operation="command"
+    )
+    expected = "complete" if exit_code == 0 else "failed"
+    assert result["structuredContent"]["status"] == expected
+    if exit_code == 0:
+        assert result["structuredContent"]["result"] == {"image_id": "built-image"}
+    recovered = mcp_tools.LocalTools(str(tmp_path), lambda: None, lambda: True)
+    again = recovered.start_command(
+        "image", str(tmp_path), command, key="vm-image", wait_seconds=10, operation="command"
+    )
+    assert again["structuredContent"]["status"] == expected
+    assert again["structuredContent"]["job_id"] == result["structuredContent"]["job_id"]
+    assert count.read_text() == "x"
+
+
 @pytest.fixture
 def two_profiles(monkeypatch, tmp_path):
     # The serving CLI's settings name one config file (as `beam` does with
@@ -888,7 +915,10 @@ def test_remote_retries_only_tools_advertised_as_read_only(monkeypatch):
                 {
                     "result": {
                         "tools": [
-                            {"name": "inspect", "annotations": {"readOnlyHint": True}},
+                            {
+                                "name": "inspect",
+                                "annotations": {"readOnlyHint": True, "idempotentHint": True},
+                            },
                             {"name": "get_or_create", "annotations": {"readOnlyHint": False}},
                         ]
                     }
