@@ -144,6 +144,11 @@ stop:
 # localhost:11993/11994 so it never collides with the local session.
 start-stage:
 	@test -f hack/stage/config.stage.yaml || { echo "Copy the staging config to hack/stage/config.stage.yaml first"; exit 1; }
+	@umask 077; if [ -d hack/stage/gomodcache/cache/download/github.com/beam-cloud ]; then \
+		tar -cf hack/stage/gomodcache.tar -C hack/stage/gomodcache cache/download/github.com/beam-cloud; \
+	else \
+		tar -cf hack/stage/gomodcache.tar -T /dev/null; \
+	fi
 	cd hack && export STAGE_GATEWAY_IMAGE="$${STAGE_GATEWAY_IMAGE:-$$(kubectl --context '$(STAGE_OKTETO_CONTEXT)' -n '$(STAGE_OKTETO_NAMESPACE)' get deploy beta9-gateway -o jsonpath='{.spec.template.spec.containers[0].image}')}" && $(OKTETO_STAGE) up $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml
 
 stop-stage:

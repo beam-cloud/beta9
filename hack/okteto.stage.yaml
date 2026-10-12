@@ -12,10 +12,14 @@ dev:
     sync:
     - ../:/workspace
     environment:
-      BUILD_COMMAND: mkdir -p /tmp/beta9-dev && go build -o /tmp/beta9-dev/gateway /workspace/cmd/gateway/main.go
+      BUILD_COMMAND: >-
+        mkdir -p /tmp/beta9-dev/gomodcache &&
+        while [ ! -f /workspace/hack/stage/gomodcache.tar ]; do sleep 1; done &&
+        tar -xf /workspace/hack/stage/gomodcache.tar -C /tmp/beta9-dev/gomodcache &&
+        go build -o /tmp/beta9-dev/gateway /workspace/cmd/gateway/main.go
       BUILD_BINARY_PATH: /tmp/beta9-dev/gateway
       CONFIG_PATH: /workspace/hack/stage/config.stage.yaml
-      GOMODCACHE: /workspace/hack/stage/gomodcache
+      GOMODCACHE: /tmp/beta9-dev/gomodcache
       GONOSUMDB: github.com/beam-cloud/*
       GOTOOLCHAIN: auto
     forward:

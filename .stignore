@@ -38,3 +38,7 @@ benchmarks
 .htmlcov
 node_modules
 .next
+
+# Go writes its runtime module cache outside the synced tree. make start-stage
+# packages only private download artifacts into hack/stage/gomodcache.tar.
+hack/stage/gomodcache
