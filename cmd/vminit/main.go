@@ -113,6 +113,11 @@ func run() (int, error) {
 		return -1, fmt.Errorf("pivot root: %w", err)
 	}
 	finishPseudo()
+	workload, err := newWorkloadMemory(vm.WorkloadMemoryBytes)
+	if err != nil {
+		return -1, fmt.Errorf("configure workload memory: %w", err)
+	}
+	defer workload.close()
 	logf("boot phase: root pivoted")
 	hostname := spec.Hostname
 	if hostname != "" {
@@ -126,13 +131,13 @@ func run() (int, error) {
 	logf("boot phase: network configured")
 
 	if processEnv(spec.Process, "BEAM_VM_SYSTEMD") == "1" {
-		return -1, bootSystemd(spec)
+		return -1, bootSystemd(spec, workload)
 	}
 
-	return runAgent(spec.Process, false)
+	return runAgent(spec.Process, false, workload)
 }
 
-func runAgent(process *specs.Process, systemd bool) (int, error) {
+func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (int, error) {
 	logf("boot phase: workload agent entered")
 	if err := serveFS(microvm.FSPort); err != nil {
 		return -1, err
@@ -143,8 +148,9 @@ func runAgent(process *specs.Process, systemd bool) (int, error) {
 	}
 	logf("boot phase: control connected")
 	defer ctrl.close()
+	go workload.watchOOM(ctrl)
 	ctrl.systemd = systemd
-	return runProcess(process, ctrl)
+	return runProcess(process, ctrl, workload)
 }
 
 // --- early boot ------------------------------------------------------------------
@@ -215,6 +221,21 @@ func readOCISpec() (*specs.Spec, error) {
 
 // --- root assembly -----------------------------------------------------------------
 
+// Origin handles refer to the previous virtio-fs instance. Discard those
+// references before mounting; keep file data, whiteouts and opaque directories.
+func clearOverlayOrigins(upper string) error {
+	return filepath.WalkDir(upper, func(path string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		err = unix.Lremovexattr(path, "trusted.overlay.origin")
+		if errors.Is(err, unix.ENODATA) || errors.Is(err, unix.EOPNOTSUPP) {
+			return nil
+		}
+		return err
+	})
+}
+
 func assembleRoot(vm *microvm.Spec) error {
 	if err := waitForDevice(vm.RootDisk); err != nil {
 		return err
@@ -230,6 +251,9 @@ func assembleRoot(vm *microvm.Spec) error {
 			return err
 		}
 	}
+	if err := clearOverlayOrigins(upper); err != nil {
+		return fmt.Errorf("clear stale overlay origins: %w", err)
+	}
 	// overlayfs wants a work dir it created; one left by a previous mount
 	// (possibly by a container runtime on another host) is rejected.
 	if err := os.RemoveAll(work); err != nil {
@@ -244,7 +268,9 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := unix.Mount("/", microvm.ImageMount, "", unix.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind image root: %w", err)
 	}
-	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", microvm.ImageMount, upper, work)
+	// virtio-fs inode handles change on cold boots and forks. Keep copied-up
+	// data on the durable disk instead of indexing or referencing lower inodes.
+	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=off", microvm.ImageMount, upper, work)
 	if err := unix.Mount("overlay", microvm.NewRoot, "overlay", 0, overlayOpts); err != nil {
 		return fmt.Errorf("mount overlay (%s): %w", overlayOpts, err)
 	}
@@ -678,12 +704,14 @@ func (c *control) current() *os.File {
 	return c.file
 }
 
-func (c *control) send(msg microvm.Message) {
+func (c *control) send(msg microvm.Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.enc.Encode(msg); err != nil {
 		logf("control send %s: %v", msg.Type, err)
+		return err
 	}
+	return nil
 }
 
 func (c *control) ack(id uint64, err error) {
@@ -1232,8 +1260,8 @@ func searchFile(r io.Reader, regex *regexp.Regexp) ([]microvm.FSMatch, error) {
 
 // --- container process --------------------------------------------------------------------
 
-func runProcess(proc *specs.Process, ctrl *control) (int, error) {
-	env := proc.Env
+func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (int, error) {
+	env := append([]string(nil), proc.Env...)
 	path, found := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", false
 	for _, kv := range env {
 		if value, ok := strings.CutPrefix(kv, "PATH="); ok {
@@ -1263,6 +1291,7 @@ func runProcess(proc *specs.Process, ctrl *control) (int, error) {
 			Groups: proc.User.AdditionalGids,
 		},
 	}
+	workload.configureCommand(cmd)
 
 	// Reap everything as PID 1; the container process's own status is what
 	// we report.

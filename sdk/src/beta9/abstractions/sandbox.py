@@ -6,7 +6,7 @@ import shlex
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import BinaryIO, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import BinaryIO, Callable, Dict, List, Optional, Tuple, Union
 
 import grpc
 
@@ -20,7 +20,7 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.pod import Pod
 from ..abstractions.volume import CloudBucket, Volume
-from ..channel import rpc_timeout
+from ..channel import RECOVERY_TIMEOUT, rpc_timeout
 from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopContainerResponse
 from ..clients.pod import (
     CreatePodRequest,
@@ -64,11 +64,10 @@ from ..clients.pod import (
 from ..config import ConfigContext
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
-from ..utils import retry_on_transient_error
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
-SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS = 5
+SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS = 30
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.1
 SANDBOX_EXEC_READY_TIMEOUT_SECONDS = 90
 SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS = 0.05
@@ -92,7 +91,6 @@ SANDBOX_TERMINAL_STATUSES = {
 }
 DOCKER_SANDBOX_NETWORK_MODE = "host"
 DOCKER_SANDBOX_PID_MODE = "host"
-DOCKER_COMPOSE_OVERRIDE_PATH = "/tmp/.docker-compose-override.yml"
 SANDBOX_IDLE_ENTRYPOINT = ["tail", "-f", "/dev/null"]
 
 
@@ -105,7 +103,7 @@ def _call_with_sandbox_readiness_retry(do_call):
     deadline = time.monotonic() + SANDBOX_EXEC_READY_TIMEOUT_SECONDS
 
     while True:
-        response = retry_on_transient_error(do_call)
+        response = do_call()
         if response.ok:
             return response
         if not _is_sandbox_exec_readiness_error(response.error_msg):
@@ -1289,7 +1287,7 @@ class SandboxProcessStream:
         # The sandbox process manager returns output deltas and clears its
         # internal buffer after each read. Do not treat the returned value as
         # cumulative output.
-        return retry_on_transient_error(self.fetch_fn, max_retries=2, delay=0.2)
+        return self.fetch_fn()
 
     def read(self):
         """
@@ -1874,7 +1872,7 @@ class SandboxFileSystem:
         digest = hashlib.sha256()
         try:
             while True:
-                with rpc_timeout(30):
+                with rpc_timeout(RECOVERY_TIMEOUT):
                     response = self.sandbox_instance.stub.sandbox_upload_file(
                         PodSandboxUploadFileRequest(
                             container_id=self.sandbox_instance.container_id,
@@ -1896,9 +1894,9 @@ class SandboxFileSystem:
                 if not pending:
                     break
                 chunk, pending = pending, source.read(chunk_size)
-            with rpc_timeout(30):
+            with rpc_timeout(RECOVERY_TIMEOUT):
                 process = self.sandbox_instance.process.exec("sha256sum", "--", target)
-                if process.wait(30) != 0 or process.stdout.read().split()[:1] != [
+                if process.wait(RECOVERY_TIMEOUT) != 0 or process.stdout.read().split()[:1] != [
                     digest.hexdigest()
                 ]:
                     raise SandboxFileSystemError(
@@ -1908,7 +1906,7 @@ class SandboxFileSystem:
                         self.sandbox_instance.container_id,
                     )
                 process = self.sandbox_instance.process.exec("mv", "--", target, sandbox_path)
-                if process.wait(30) != 0:
+                if process.wait(RECOVERY_TIMEOUT) != 0:
                     raise SandboxFileSystemError(
                         process.stderr.read(),
                         "upload_file",
@@ -1967,7 +1965,7 @@ class SandboxFileSystem:
         offset = 0
         chunk_size = 4 * 1024 * 1024
         while True:
-            with rpc_timeout(30):
+            with rpc_timeout(RECOVERY_TIMEOUT):
                 response = self.sandbox_instance.stub.sandbox_download_file(
                     PodSandboxDownloadFileRequest(
                         container_id=self.sandbox_instance.container_id,
@@ -2484,6 +2482,18 @@ class DockerResult:
         return self._stderr
 
 
+@dataclass(frozen=True)
+class _DockerComposeConfig:
+    file: str
+    cwd: Optional[str]
+    services: Dict[str, dict]
+    override_path: str
+
+    @property
+    def command(self) -> List[str]:
+        return ["docker-compose", "-f", self.override_path]
+
+
 class DockerComposeStack:
     """Represents a running Docker Compose stack."""
 
@@ -2505,7 +2515,7 @@ class DockerComposeStack:
         self, service: Optional[str] = None, follow: bool = False, tail: Optional[int] = None
     ) -> str:
         """Get logs from compose stack or specific service."""
-        cmd = ["docker-compose", "-f", self.file, "-f", self.override_path, "logs"]
+        cmd = ["docker-compose", "-f", self.override_path, "logs"]
         if follow:
             cmd.append("-f")
         if tail is not None:
@@ -2623,7 +2633,7 @@ class SandboxDockerManager:
     def _exec(self, *cmd, cwd: Optional[str] = None) -> "SandboxProcess":
         """Execute docker command."""
         self._ensure_ready()
-        return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+        return self.sandbox_instance.process.exec(*cmd, cwd=cwd or "/workspace")
 
     def _run(self, *cmd, cwd: Optional[str] = None):
         """Execute docker command and return output (for simple operations)."""
@@ -2639,7 +2649,7 @@ class SandboxDockerManager:
             raise DockerCommandError(" ".join(cmd), exit_code, stderr)
 
         stdout = p.stdout.read().strip()
-        return SimpleNamespace(stdout=stdout)
+        return SimpleNamespace(stdout=stdout, stderr=p.stderr.read().strip())
 
     def _result(self, *cmd, extract_output: callable = None) -> DockerResult:
         """Execute docker command and return a DockerResult (for operations with logs)."""
@@ -2804,7 +2814,7 @@ class SandboxDockerManager:
             cmd.extend(["--tail", str(tail)])
         cmd.append(container)
         result = self._run(*cmd)
-        return result.stdout
+        return "\n".join(output for output in (result.stdout, result.stderr) if output)
 
     def exec(self, container: str, command: Union[str, List[str]], **kwargs) -> "SandboxProcess":
         """Execute command in running container."""
@@ -3035,99 +3045,49 @@ class SandboxDockerManager:
 
     # === Docker Compose ===
 
-    def _compose_file_path(self, file: str, cwd: Optional[str] = None) -> str:
-        return file if file.startswith("/") else f"{cwd or '.'}/{file}"
+    def _compose_config(self, file: str, cwd: Optional[str] = None) -> "_DockerComposeConfig":
+        import json
 
-    def _read_compose_services(
-        self, file: str, cwd: Optional[str] = None
-    ) -> Tuple[List[str], Set[str]]:
-        import os
-        import tempfile
+        # Compose resolves .env, includes, extends and absolute guest paths.
+        project = json.loads(
+            self._run("docker-compose", "-f", file, "config", "--format", "json", cwd=cwd).stdout
+        )
+        services = project["services"]
+        project.pop("networks", None)
+        for service in services.values():
+            service.pop("networks", None)
+            service["network_mode"] = DOCKER_SANDBOX_NETWORK_MODE
+            service["pid"] = DOCKER_SANDBOX_PID_MODE
+            if len(services) > 1:
+                hosts = service.get("extra_hosts", {})
+                if isinstance(hosts, list):
+                    hosts = dict(host.split("=" if "=" in host else ":", 1) for host in hosts)
+                service["extra_hosts"] = {**hosts, **{name: "127.0.0.1" for name in services}}
+            if "build" in service:
+                build = service["build"]
+                build["network"] = DOCKER_SANDBOX_NETWORK_MODE
+                if "network.host" not in build.setdefault("entitlements", []):
+                    build["entitlements"].append("network.host")
+        path = os.path.normpath(os.path.join(cwd or "/workspace", file))
+        key = hashlib.sha256(path.encode()).hexdigest()[:16]
+        config_path = f"/tmp/.docker-compose-{key}.json"
+        self.sandbox_instance.fs.write_text(config_path, json.dumps(project), mode=0o600)
+        return _DockerComposeConfig(file, cwd, services, config_path)
 
-        import yaml
-
-        compose_path = self._compose_file_path(file, cwd)
-        service_names: List[str] = []
-        services_with_build: Set[str] = set()
-
-        try:
-            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
-                local_compose_path = tmp_file.name
-
-            try:
-                self.sandbox_instance.fs.download_file(compose_path, local_compose_path)
-                with open(local_compose_path, "r") as f:
-                    compose_data = yaml.safe_load(f.read())
-            finally:
-                if os.path.exists(local_compose_path):
-                    os.unlink(local_compose_path)
-        except Exception:
-            return service_names, services_with_build
-
-        services = compose_data.get("services") if isinstance(compose_data, dict) else None
-        if not isinstance(services, dict):
-            return service_names, services_with_build
-
-        service_names = list(services.keys())
-        services_with_build = {
-            name
-            for name, config in services.items()
-            if isinstance(config, dict) and "build" in config
-        }
-        return service_names, services_with_build
-
-    def _upload_text(self, content: str, remote_path: str, suffix: str = "") -> None:
-        import os
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as tmp_file:
-            tmp_file.write(content)
-            tmp_file.flush()
-            local_path = tmp_file.name
-
-        try:
-            self.sandbox_instance.fs.upload_file(local_path, remote_path)
-        finally:
-            if os.path.exists(local_path):
-                os.unlink(local_path)
-
-    def _create_compose_override(self, file: str, cwd: Optional[str] = None) -> str:
-        """
-        Create gVisor-compatible compose override file.
-
-        Args:
-            file: Path to docker-compose file
-            cwd: Working directory
-
-        Returns:
-            str: Path to override file in sandbox
-        """
-        import yaml
-
-        service_names, services_with_build = self._read_compose_services(file, cwd)
-        override_path = DOCKER_COMPOSE_OVERRIDE_PATH
-        override = {"services": {}}
-
-        for service_name in service_names or ["default"]:
-            service = {
-                "network_mode": DOCKER_SANDBOX_NETWORK_MODE,
-                "pid": DOCKER_SANDBOX_PID_MODE,
-            }
-
-            if len(service_names) > 1:
-                service["extra_hosts"] = [
-                    f"{other_service}:127.0.0.1" for other_service in service_names
-                ]
-
-            if service_name in services_with_build or not service_names:
-                service["build"] = {"network": DOCKER_SANDBOX_NETWORK_MODE}
-
-            override["services"][service_name] = service
-
-        override_content = yaml.safe_dump(override, sort_keys=False)
-        self._upload_text(override_content, override_path, suffix=".yml")
-
-        return override_path
+    def _compose_build(
+        self, config: "_DockerComposeConfig", no_cache: bool = False, pull: bool = False
+    ) -> "SandboxProcess":
+        # Compose's Bake backend does not forward network.host permission.
+        # Keep its resolved plan so project names, .env and build contexts match.
+        plan = self._run(*config.command, "build", "--print", cwd=config.cwd).stdout
+        bake_path = config.override_path + ".bake.json"
+        self.sandbox_instance.fs.write_text(bake_path, plan, mode=0o600)
+        cmd = ["docker", "buildx", "bake", "-f", bake_path, "--allow=network.host", "--load"]
+        if no_cache:
+            cmd.append("--no-cache")
+        if pull:
+            cmd.append("--pull")
+        return self._exec(*cmd, cwd=config.cwd)
 
     def compose_up(
         self,
@@ -3147,7 +3107,7 @@ class SandboxDockerManager:
             file: Path to docker-compose file (default: "docker-compose.yml")
             detach: Run in background (default: True)
             build: Build images before starting (default: False)
-            cwd: Working directory to run compose from (default: None, uses sandbox's current directory)
+            cwd: Working directory to run compose from (default: /workspace)
 
         Returns:
             DockerComposeStack: Object representing the running stack
@@ -3165,20 +3125,39 @@ class SandboxDockerManager:
             stack.stop()
             ```
         """
+        from beta9.exceptions import DockerCommandError
+
         if not self._authenticated:
             self._auto_login()
 
-        override_path = self._create_compose_override(file, cwd)
-        service_names, _ = self._read_compose_services(file, cwd)
+        config = self._compose_config(file, cwd)
+        build_services = [name for name, service in config.services.items() if "build" in service]
+        needs_build = build
+        if build_services and not needs_build:
+            images = self._run(
+                *config.command,
+                "config",
+                "--images",
+                *build_services,
+                cwd=cwd,
+            ).stdout.splitlines()
+            try:
+                self._run("docker", "image", "inspect", *images, cwd=cwd)
+            except DockerCommandError:
+                needs_build = True
 
-        cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
+        if build_services and needs_build:
+            process = self._compose_build(config)
+            exit_code = process.wait()
+            if exit_code != 0:
+                raise DockerCommandError("docker compose build", exit_code, process.stderr.read())
+
+        cmd = [*config.command, "up", "--no-build"]
         if detach:
             cmd.append("-d")
-        if build:
-            cmd.append("--build")
 
         self._run(*cmd, cwd=cwd)
-        return DockerComposeStack(self, file, cwd, override_path, service_names)
+        return DockerComposeStack(self, file, cwd, config.override_path, list(config.services))
 
     def compose_down(
         self,
@@ -3200,8 +3179,8 @@ class SandboxDockerManager:
         from beta9.exceptions import DockerCommandError
 
         try:
-            override_path = self._create_compose_override(file, cwd)
-            cmd = ["docker-compose", "-f", file, "-f", override_path, "down"]
+            config = self._compose_config(file, cwd)
+            cmd = [*config.command, "down"]
             if volumes:
                 cmd.append("-v")
             self._run(*cmd, cwd=cwd)
@@ -3226,19 +3205,17 @@ class SandboxDockerManager:
         Returns:
             SandboxProcess: Process object for streaming logs
         """
-        cmd = ["docker-compose", "-f", file, "logs"]
+        config = self._compose_config(file, cwd)
+        cmd = [*config.command, "logs"]
         if follow:
             cmd.append("-f")
 
-        if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
-        return self._exec(*cmd)
+        return self._exec(*cmd, cwd=cwd)
 
     def compose_ps(self, file: str = "docker-compose.yml", cwd: Optional[str] = None) -> str:
         """List compose services."""
-        override_path = self._create_compose_override(file, cwd)
-        cmd = ["docker-compose", "-f", file, "-f", override_path, "ps"]
-        result = self._run(*cmd, cwd=cwd)
+        config = self._compose_config(file, cwd)
+        result = self._run(*config.command, "ps", cwd=cwd)
         return result.stdout
 
     def compose_build(
@@ -3277,19 +3254,7 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        cmd = ["docker-compose", "-f", file, "build"]
-
-        if no_cache:
-            cmd.append("--no-cache")
-        if pull:
-            cmd.append("--pull")
-
-        env = {}
-
-        if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
-
-        return self.sandbox_instance.process.exec(*cmd, env=env)
+        return self._compose_build(self._compose_config(file, cwd), no_cache=no_cache, pull=pull)
 
     # === Volumes ===
 

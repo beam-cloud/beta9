@@ -44,23 +44,22 @@ func normalizeDiskSize(size string) (string, error) {
 
 func validate(spec *types.VMSpec) error {
 	if spec.CPU == 0 {
-		spec.CPU = 1000
-		if spec.Desktop {
-			spec.CPU = 2000
-		}
+		spec.CPU = 4000
 	}
 
 	if spec.Memory == 0 {
-		spec.Memory = 1024
-		if spec.Desktop {
-			spec.Memory = 2048
-		}
+		spec.Memory = 8192
 	}
 
 	var err error
 	spec.DiskSize, err = normalizeDiskSize(spec.DiskSize)
 	if err != nil {
 		return err
+	}
+
+	rootSize, _ := strconv.ParseInt(spec.DiskSize, 10, 64)
+	if rootSize > types.MaxVMRootSizeBytes {
+		return fmt.Errorf("VM root disk size cannot exceed 100 GiB")
 	}
 
 	if spec.CPU < 100 || spec.Memory < 256 || spec.IdleTimeout < 0 || spec.IdleTimeout > 365*24*60*60 {
@@ -339,8 +338,20 @@ func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM
 		return echo.NewHTTPError(http.StatusConflict, "memory pause did not complete; use start with cold=true to recover from disk")
 	}
 
-	if v.MemoryCheckpointID != "" && v.TokenID != info.Token.ExternalId {
-		return echo.NewHTTPError(http.StatusConflict, "memory resume requires the original owner credential; use cold=true with a new credential")
+	if v.MemoryCheckpointID != "" {
+		// The caller is already authorized for this workspace. Keep the runtime
+		// identity embedded in saved memory when resuming from another client.
+		owner, err := s.accessOwner(ctx, v)
+		if err != nil {
+			if failure, ok := err.(*echo.HTTPError); ok && failure.Code == http.StatusForbidden {
+				return echo.NewHTTPError(http.StatusConflict, "saved memory authorization was revoked; use cold=true to start from disk")
+			}
+
+			return err
+		}
+
+		info = owner
+		ctx = auth.ContextWithAuthInfo(ctx, owner)
 	}
 
 	if (v.DesiredState == "stopped" || v.DesiredState == "paused") && (v.ContainerID != "" || v.StopSnapshotID != "") {

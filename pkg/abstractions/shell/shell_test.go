@@ -2,7 +2,11 @@ package shell
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -15,6 +19,25 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
+
+func TestSSHStartupDoesNotWaitForDaemonOutput(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	daemon := filepath.Join(dir, "dropbear")
+	if err := os.WriteFile(daemon, []byte("#!/bin/sh\nsleep 2 &\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.NewReplacer(
+		"/usr/local/bin/dropbear", daemon,
+		"/etc/dropbear", dir,
+		"/etc/nsswitch.conf", filepath.Join(dir, "nsswitch.conf"),
+	).Replace(fmt.Sprintf(podStartupScript, 2222))
+	cmd := exec.Command("sh", "-c", script)
+	cmd.WaitDelay = 500 * time.Millisecond
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("SSH daemon retained the exec output pipe: %v: %s", err, output)
+	}
+}
 
 func TestStandaloneContainerOwnership(t *testing.T) {
 	t.Parallel()

@@ -12,10 +12,12 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
-	flushLogsTimeout          = 500 * time.Millisecond
+	flushLogsTimeout          = 10 * time.Second
 	workerAddressPollInterval = time.Second
 )
 
@@ -62,6 +64,8 @@ type containerClientResult struct {
 }
 
 func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	outputChan := make(chan common.OutputMsg, 1000)
 	keyEventChan := make(chan common.KeyEvent, 1000)
 	if err := l.keyEventManager.ListenForKey(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan); err != nil {
@@ -124,6 +128,8 @@ func (l *ContainerStream) handleStreams(
 	var exitEvents <-chan common.KeyEvent
 	var logStreamReady <-chan struct{}
 	var syncQueue <-chan *pb.SyncContainerWorkspaceRequest
+	logErrors := make(chan error, 1)
+	logsFinished := false
 
 _stream:
 	for {
@@ -137,7 +143,16 @@ _stream:
 			syncQueue = l.syncQueue
 			ready := make(chan struct{})
 			logStreamReady = ready
-			go client.StreamLogsWithReady(ctx, containerId, outputChan, func() { close(ready) })
+			go func() {
+				readyCallback := func() { close(ready) }
+				logErrors <- client.StreamLogsWithReady(ctx, containerId, outputChan, readyCallback)
+			}()
+		case err := <-logErrors:
+			logErrors = nil
+			if err != nil {
+				return err
+			}
+			logsFinished = true
 		case <-logStreamReady:
 			logStreamReady = nil
 			exitEvents = keyEventChan
@@ -148,8 +163,7 @@ _stream:
 			}
 		case o := <-outputChan:
 			if err := l.sendCallback(o); err != nil {
-				lastMessage = o
-				break
+				return err
 			}
 
 			if o.Done {
@@ -162,22 +176,27 @@ _stream:
 				exitCode = -1
 			}
 
-			// After the container exits, flush remaining logs for up to flushLogsTimeout milliseconds
+			// Drain through EOF before delivering the result. A completed
+			// invocation may have accumulated logs during a gateway outage.
 			flushLogsTimer := time.NewTimer(flushLogsTimeout)
 			defer flushLogsTimer.Stop()
 
-		_flush:
-			for {
+			for !logsFinished || len(outputChan) > 0 {
 				select {
-				case o, ok := <-outputChan:
-					if !ok {
-						break _flush
-					}
+				case o := <-outputChan:
 					if err := l.sendCallback(o); err != nil {
-						break _flush
+						return err
 					}
+				case err := <-logErrors:
+					logErrors = nil
+					if err != nil {
+						return err
+					}
+					logsFinished = true
 				case <-flushLogsTimer.C:
-					break _flush
+					return status.Error(codes.Unavailable, "container logs are still flushing")
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
 
@@ -187,12 +206,7 @@ _stream:
 			return nil
 
 		case <-ctx.Done():
-			// This ensures when the sdk exits, the message printed is
-			// that the container timed out.
-			if err := l.exitCallback(0); err != nil {
-				break _stream
-			}
-			return nil
+			return ctx.Err()
 		}
 	}
 

@@ -176,9 +176,8 @@ func TestContainerCostClientSeparatesWorkspaceAndSandboxQuotes(t *testing.T) {
 }
 
 // Prevents this: concurrent refreshes were deduplicated by resources alone, so
-// two workspaces asking at the same moment shared one flight and one of them
-// was handed the other's price.
-func TestContainerCostClientDoesNotCoalesceAcrossWorkspaces(t *testing.T) {
+// concurrent requests must not share prices across workspaces or stub kinds.
+func TestContainerCostClientDoesNotCoalesceAcrossWorkspacesOrStubKinds(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -192,6 +191,15 @@ func TestContainerCostClientDoesNotCoalesceAcrossWorkspaces(t *testing.T) {
 		if request.WorkspaceId == "workspace-b" {
 			cost = "0.2"
 		}
+		if request.Sandbox {
+			cost = "0.3"
+		}
+		if request.VM {
+			if request.Sandbox {
+				t.Error("VM quote must not use sandbox prices")
+			}
+			cost = "0.4"
+		}
 		_, _ = fmt.Fprintf(w, `{"cost_per_ms":%q}`, cost)
 	}))
 	t.Cleanup(server.Close)
@@ -200,8 +208,10 @@ func TestContainerCostClientDoesNotCoalesceAcrossWorkspaces(t *testing.T) {
 	requests := map[string]*types.ContainerRequest{
 		"workspace-a": {WorkspaceId: "workspace-a", Cpu: 1_000, Memory: 1_024},
 		"workspace-b": {WorkspaceId: "workspace-b", Cpu: 1_000, Memory: 1_024},
+		"sandbox":     {WorkspaceId: "workspace-a", Cpu: 1_000, Memory: 1_024, UseVM: true, Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}},
+		"vm":          {WorkspaceId: "workspace-a", Cpu: 1_000, Memory: 1_024, Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM)}}},
 	}
-	want := map[string]float64{"workspace-a": 0.1, "workspace-b": 0.2}
+	want := map[string]float64{"workspace-a": 0.1, "workspace-b": 0.2, "sandbox": 0.3, "vm": 0.4}
 
 	start := make(chan struct{})
 	errs := make(chan error, len(requests))
@@ -226,8 +236,8 @@ func TestContainerCostClientDoesNotCoalesceAcrossWorkspaces(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("quote calls = %d, want one refresh per workspace", got)
+	if got := calls.Load(); got != int32(len(requests)) {
+		t.Fatalf("quote calls = %d, want one refresh per workspace and stub kind", got)
 	}
 }
 

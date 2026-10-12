@@ -499,6 +499,7 @@ const (
 	EventMessageEvicted                        EventMessage = "container evicted to make room for a higher priority workload"
 	EventMessageRuntimeExited                  EventMessage = "runtime process exited"
 	EventMessageRuntimeOOMKilled               EventMessage = "runtime process was oom killed"
+	EventMessageApplicationOOMKilled           EventMessage = "application process was oom killed; sandbox remains running"
 )
 
 func (m EventMessage) String() string {
@@ -765,6 +766,7 @@ const (
 	ContainerEventWorkerEvicted             ContainerEventID = "worker.evicted"
 	ContainerEventRuntimeExited             ContainerEventID = "runtime.exited"
 	ContainerEventRuntimeOOMKilled          ContainerEventID = "runtime.oom_killed"
+	ContainerEventApplicationOOMKilled      ContainerEventID = "runtime.application_oom_killed"
 	ContainerEventGatewayAttachDisconnected ContainerEventID = "gateway.attach_disconnected"
 	ContainerEventGatewayServeLockDeleted   ContainerEventID = "gateway.serve_lock_deleted"
 	ContainerEventGatewayServeLockPreserved ContainerEventID = "gateway.serve_lock_preserved"
@@ -802,6 +804,7 @@ var ContainerEventDefinitions = map[ContainerEventID]ContainerEventDefinition{
 	ContainerEventWorkerEvicted:             {ID: ContainerEventWorkerEvicted, Domain: EventDomainWorker, Label: "Evicted"},
 	ContainerEventRuntimeExited:             {ID: ContainerEventRuntimeExited, Domain: EventDomainRuntime, Label: "Runtime exited"},
 	ContainerEventRuntimeOOMKilled:          {ID: ContainerEventRuntimeOOMKilled, Domain: EventDomainRuntime, Label: "Runtime OOM killed"},
+	ContainerEventApplicationOOMKilled:      {ID: ContainerEventApplicationOOMKilled, Domain: EventDomainRuntime, Label: "Application OOM killed"},
 	ContainerEventGatewayAttachDisconnected: {ID: ContainerEventGatewayAttachDisconnected, Domain: EventDomainGateway, Label: "Attach disconnected"},
 	ContainerEventGatewayServeLockDeleted:   {ID: ContainerEventGatewayServeLockDeleted, Domain: EventDomainGateway, Label: "Serve lock deleted"},
 	ContainerEventGatewayServeLockPreserved: {ID: ContainerEventGatewayServeLockPreserved, Domain: EventDomainGateway, Label: "Serve lock preserved"},

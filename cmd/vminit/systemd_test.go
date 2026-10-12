@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -100,6 +102,74 @@ func TestSystemdBootConfiguration(t *testing.T) {
 		t.Fatalf("unsafe systemd environment: %s", manager)
 	}
 	assertPrivateFile(t, managerPath)
+}
+
+func TestSystemdTmpPreservesFilesAndCleansOnlyManagedDisplay(t *testing.T) {
+	files := []string{"customer-data", ".X1-lock", ".X11-unix/X1", ".X2-lock", ".X11-unix/X2"}
+	for _, desktop := range []bool{false, true} {
+		t.Run(strconv.FormatBool(desktop), func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "tmp/.X11-unix"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range files {
+				if err := os.WriteFile(filepath.Join(root, "tmp", name), []byte("preserved"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := prepareSystemdTmp(root, desktop); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(filepath.Join(root, "tmp"))
+			if err != nil || info.Mode().Perm() != 0777 || info.Mode()&os.ModeSticky == 0 {
+				t.Fatalf("/tmp must be writable with the sticky bit: %v, %v", info, err)
+			}
+			for _, name := range files {
+				data, err := os.ReadFile(filepath.Join(root, "tmp", name))
+				if desktop && (name == ".X1-lock" || name == ".X11-unix/X1") {
+					if !os.IsNotExist(err) {
+						t.Fatalf("managed display state survived cold boot: %s, %v", name, err)
+					}
+				} else if err != nil || string(data) != "preserved" {
+					t.Fatalf("cold boot removed user data: %s, %q, %v", name, data, err)
+				}
+			}
+		})
+	}
+}
+
+func TestSystemdTmpfilesPreservesEarlyExecFiles(t *testing.T) {
+	tmpfiles, err := exec.LookPath("systemd-tmpfiles")
+	if err != nil {
+		t.Skip("systemd-tmpfiles is unavailable")
+	}
+	root := t.TempDir()
+	for _, dir := range []string{"etc", "usr/lib/tmpfiles.d", "tmp/.beta9-stdin-test"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"etc/passwd":                  "root:x:0:0:root:/root:/bin/sh\n",
+		"etc/group":                   "root:x:0:\n",
+		"usr/lib/tmpfiles.d/tmp.conf": "D /tmp 1777 root root -\n",
+		"tmp/.beta9-stdin-test/input": "early input",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeSystemdBootFiles(root, &specs.Process{Env: []string{"BEAM_VM_ID=vm-12ab34cd56ef7890"}}); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(tmpfiles, "--root="+root, "--remove", "--boot").CombinedOutput(); err != nil {
+		t.Fatalf("tmpfiles boot cleanup: %v: %s", err, output)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "tmp/.beta9-stdin-test/input"))
+	if err != nil || string(data) != "early input" {
+		t.Fatalf("boot cleanup removed early exec input: %q, %v", data, err)
+	}
 }
 
 func TestSystemdPreservesExistingShortVMIdentityOnUpgrade(t *testing.T) {

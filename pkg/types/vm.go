@@ -7,8 +7,27 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-// DefaultVMRootSizeBytes is the fresh persistent VM root size.
-const DefaultVMRootSizeBytes int64 = 50 << 30
+// VM lifecycle states are persisted and exposed by the management API.
+const (
+	VMStateRunning  = "running"
+	VMStateStarting = "starting"
+	VMStateStopped  = "stopped"
+	VMStateStopping = "stopping"
+	VMStatePaused   = "paused"
+	VMStatePausing  = "pausing"
+	VMStateError    = "error"
+	VMStateDeleted  = "deleted"
+)
+
+// Writable VM root capacity in bytes, layered over the separate base image.
+const (
+	DefaultVMRootSizeBytes int64 = 50 << 30
+	MaxVMRootSizeBytes     int64 = 100 << 30
+)
+
+// VMAppName owns every VM stub in a workspace. App listings skip it because
+// VMs are managed through the VM service, not as apps.
+const VMAppName = "__beam_vms__"
 
 // IsPersistentVM identifies a microVM whose lifecycle belongs to the VM service.
 func (s *StubConfigV1) IsPersistentVM() bool {

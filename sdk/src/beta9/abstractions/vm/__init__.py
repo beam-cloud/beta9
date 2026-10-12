@@ -21,12 +21,20 @@ from urllib.parse import quote
 
 import betterproto
 
-from ...channel import Channel, GatewayHTTPError, ServiceClient, rpc_timeout
+from ...channel import (
+    RECOVERY_TIMEOUT,
+    Channel,
+    GatewayHTTPError,
+    ServiceClient,
+    rpc_timeout,
+    transient_error,
+)
 from ...clients.image import ImageServiceStub
 from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
 from ...clients.volume import VolumeServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
+from ...terminal import cli_name
 from ...type import DurableDisk
 from ..image import Image
 from ..sandbox import SandboxInstance
@@ -117,6 +125,9 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
             "beam-terminal.service",
             "boot",
             "desktop",
+            "browser.desktop",
+            "terminal.desktop",
+            "terminal.svg",
             "install",
             "xstartup",
         ):
@@ -124,7 +135,7 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
             data = path.read_bytes()
             entry = tarfile.TarInfo(name)
             entry.size = len(data)
-            entry.mode = 0o644 if path.suffix == ".service" else 0o755
+            entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg") else 0o755
             archive.addfile(entry, io.BytesIO(data))
     data = base64.b64encode(gzip.compress(buffer.getvalue(), mtime=0)).decode("ascii")
     prepared.add_commands(
@@ -152,6 +163,9 @@ class VM:
     Stop/start cold boots enabled systemd units. Pause/resume preserves RAM
     and running processes. URLs and machine identity stay fixed. Forks and
     templates get independent disks and identities.
+
+    disk_size sets the writable root capacity over the base image
+    (1–100 GiB; default 50 GiB).
     """
 
     def __init__(
@@ -254,8 +268,9 @@ class VM:
             raise ValueError("Create or resolve the VM first")
         return "/" + quote(self.info.get("id") or self.name, safe="")
 
-    def _touch(self, *, timeout=240):
-        return self._api("POST", self._path() + "/touch", timeout=timeout, json={})
+    def _touch(self, *, timeout=240, lease=None, release=False):
+        params = {"lease": lease, "release": "1" if release else "0"} if lease else {}
+        return self._api("POST", self._path() + "/touch", timeout=timeout, json={}, params=params)
 
     def _set(self, info):
         if info.get("container_id") != self.info.get("container_id"):
@@ -582,7 +597,9 @@ class VM:
         if not container or self.info["status"] not in (
             ("starting", "running") if allow_starting else ("running",)
         ):
-            raise SandboxConnectionError("VM is not running; call start() first")
+            raise SandboxConnectionError(
+                f"VM is not running. Start it with: {cli_name()} vm start {self.name}"
+            )
         if self._connected is None:
             response = PodServiceStub(self._service.channel).sandbox_connect(
                 PodSandboxConnectRequest(container_id=container)
@@ -608,20 +625,28 @@ class VM:
         idle stopping, or be owned by an application that maintains a lease.
         """
         self.refresh()
-        self._touch()
         ttl = self.info.get("spec", {}).get("idle_timeout", 0)
         if not ttl:
+            self._touch()
             yield self
             return
+        lease = str(uuid.uuid4())
+        self._touch(lease=lease)
         interval = max(0.25, min(15, ttl / 3))
         done = threading.Event()
         errors = []
 
         def heartbeat():
+            recovery_started = None
             while not done.wait(interval):
                 try:
-                    self._touch(timeout=3)
+                    self._touch(timeout=3, lease=lease)
+                    recovery_started = None
                 except Exception as exc:
+                    if transient_error(exc):
+                        recovery_started = recovery_started or time.monotonic()
+                        if time.monotonic() - recovery_started < RECOVERY_TIMEOUT:
+                            continue
                     errors.append(exc)
                     return
 
@@ -632,6 +657,11 @@ class VM:
         finally:
             done.set()
             thread.join(4)
+            try:
+                self._touch(timeout=3, lease=lease, release=True)
+            except Exception as exc:
+                if not transient_error(exc):
+                    errors.append(exc)
         if errors:
             raise RuntimeError("VM activity lease failed") from errors[0]
 

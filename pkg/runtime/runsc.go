@@ -692,8 +692,8 @@ func (b *runscBundle) save() error {
 	return os.WriteFile(filepath.Join(b.path, "config.json"), config, 0644)
 }
 
-// alignRestore preserves the saved NVIDIA device layout and virtual cgroup
-// mount. Every other mount is left alone so real mismatches surface.
+// alignRestore preserves runtime-owned mount settings and the saved NVIDIA
+// device layout. Other mounts remain subject to runsc's restore validation.
 func (b *runscBundle) alignRestore(imagePath string) error {
 	if imagePath == "" {
 		return nil
@@ -714,7 +714,19 @@ func (b *runscBundle) alignRestore(imagePath string) error {
 		spec.Linux.Devices = nil
 	}
 	mountChanged := checkpointHasMount != restoreHasMount || !mountsEqual(checkpointMount, restoreMount)
-	if !devicesCleared && !mountChanged {
+	processManagerChanged := false
+	if savedManager, ok := findMount(saved.Mounts, types.WorkerSandboxProcessManagerContainerPath); ok {
+		for i, mount := range spec.Mounts {
+			// The saved binary moves from the worker overlay to checkpoint storage.
+			// Preserve the gofer cache option that was saved with its executable mappings.
+			if mount.Destination == savedManager.Destination && mount.Source != types.WorkerSandboxProcessManagerWorkerPath &&
+				slices.Contains(savedManager.Options, "overlayfs_stale_read") && !slices.Contains(mount.Options, "overlayfs_stale_read") {
+				spec.Mounts[i].Options = append(slices.Clone(mount.Options), "overlayfs_stale_read")
+				processManagerChanged = true
+			}
+		}
+	}
+	if !devicesCleared && !mountChanged && !processManagerChanged {
 		return nil
 	}
 	if devicesCleared && spec.Process != nil {

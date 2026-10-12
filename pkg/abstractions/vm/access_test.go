@@ -10,8 +10,39 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVMHostRoutingPreservesAppPaths(t *testing.T) {
+	s := &Service{domain: "app.example.com"}
+	for _, host := range []string{
+		"sandbox-11111111-2222-3333-4444-555555555555-12345678-8080",
+		"11111111-2222-3333-4444-555555555555-8080",
+		"my-app-abcdefg-latest-8080",
+	} {
+		t.Run(host, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "https://"+host+"."+s.domain+"/files/a%20b?x=1", nil)
+			err := s.hostRoute(func(c echo.Context) error {
+				require.Equal(t, "/files/a b", c.Request().URL.Path)
+				require.Equal(t, "/files/a%20b", c.Request().URL.EscapedPath())
+				require.Equal(t, "x=1", c.Request().URL.RawQuery)
+				return nil
+			})(e.NewContext(req, httptest.NewRecorder()))
+			require.NoError(t, err)
+		})
+	}
+	_, v, _, _, _ := fixture()
+	v.Handle = "sandbox-long-friendly-name-0123456789abcdef0123456789abcdef"
+	req := httptest.NewRequest(http.MethodGet, "https://"+v.Handle+"-8080."+s.domain+"/files/a%20b", nil)
+	err := s.hostRoute(func(c echo.Context) error {
+		require.Equal(t, "/vm/"+v.Handle+"/8080/files/a b", c.Request().URL.Path)
+		return nil
+	})(echo.New().NewContext(req, httptest.NewRecorder()))
+	require.NoError(t, err)
+	require.Equal(t, "/files/a b", req.URL.Path)
+}
 
 func TestBrowserSessionBoundToVMPortExpiryAndRotation(t *testing.T) {
 	v := &types.VM{Handle: "dev-random", TrafficAccessToken: "owner-secret"}
@@ -91,6 +122,89 @@ func TestSessionCookiesDoNotCollideOnSharedGatewayHost(t *testing.T) {
 	other := &types.VM{Handle: "second"}
 	require.NotEqual(t, sessionCookie(v, 8080), sessionCookie(v, 8000))
 	require.NotEqual(t, sessionCookie(v, 8080), sessionCookie(other, 8080))
+}
+
+func TestDesktopServesViewerBeforeBackendReady(t *testing.T) {
+	for _, state := range []types.ContainerStatus{types.ContainerStatusPending, types.ContainerStatusRunning} {
+		t.Run(string(state), func(t *testing.T) {
+			s, v, _, runtime, _ := fixture()
+			v.Status = types.VMStateStarting
+			runtime.containers.states[v.ContainerID].Status = state
+			runtime.forwardStatus = http.StatusBadGateway
+			e := proxyAPI(s)
+			path := "/vm/" + v.Handle + "/8080/"
+			request := func(path string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.Header.Set("Accept", "text/html")
+				rec := httptest.NewRecorder()
+				e.ServeHTTP(rec, req)
+				return rec
+			}
+
+			response := request(path)
+			require.Equal(t, http.StatusOK, response.Code)
+			require.Contains(t, response.Body.String(), "Connecting to desktop…")
+			require.Contains(t, response.Body.String(), "aria-label=\"Beam\"")
+			require.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+			require.Empty(t, runtime.forwarded)
+			response = request(path + "vnc.html")
+			if state == types.ContainerStatusPending {
+				require.Equal(t, http.StatusServiceUnavailable, response.Code)
+			} else {
+				require.Equal(t, http.StatusBadGateway, response.Code)
+			}
+
+			runtime.containers.states[v.ContainerID].Status = types.ContainerStatusRunning
+			runtime.forwardStatus = http.StatusOK
+			response = request(path + "vnc.html")
+			require.Equal(t, http.StatusOK, response.Code)
+			require.NotEmpty(t, runtime.forwarded, "readiness requires a response from the desktop HTTP server")
+			response = request(path)
+			require.Equal(t, http.StatusOK, response.Code)
+			require.Contains(t, response.Body.String(), "Connecting to desktop…")
+		})
+	}
+}
+
+func TestDesktopStartupStillRequiresItsTrafficCredential(t *testing.T) {
+	s, v, _, runtime, _ := fixture()
+	v.Spec.ProtectedPorts = []uint32{8080}
+	v.TrafficAccessToken = "owner-secret"
+	runtime.forwardStatus = http.StatusBadGateway
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		req := httptest.NewRequest(method, "/vm/"+v.Handle+"/8080/", nil)
+		req.Header.Set("Accept", "text/html")
+		rec := httptest.NewRecorder()
+		proxyAPI(s).ServeHTTP(rec, req)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.NotContains(t, rec.Body.String(), "Starting desktop")
+		require.Empty(t, runtime.forwarded)
+	}
+}
+
+func TestDesktopStartupPageDoesNotReplaceOtherRequests(t *testing.T) {
+	for _, test := range []struct {
+		method, path, accept string
+		desktop              bool
+	}{
+		{http.MethodGet, "/8080/vnc.html", "text/html", true},
+		{http.MethodGet, "/8080/", "application/json", true},
+		{http.MethodPost, "/8080/", "text/html", true},
+		{http.MethodGet, "/7681/", "text/html", true},
+		{http.MethodGet, "/8080/", "text/html", false},
+	} {
+		t.Run(test.method+test.path+test.accept, func(t *testing.T) {
+			s, v, _, runtime, _ := fixture()
+			v.Spec.Desktop = test.desktop
+			runtime.forwardStatus = http.StatusBadGateway
+			req := httptest.NewRequest(test.method, "/vm/"+v.Handle+test.path, nil)
+			req.Header.Set("Accept", test.accept)
+			rec := httptest.NewRecorder()
+			proxyAPI(s).ServeHTTP(rec, req)
+			require.Equal(t, http.StatusBadGateway, rec.Code)
+			require.NotEmpty(t, runtime.forwarded)
+		})
+	}
 }
 
 func TestAccessUsesLiveLaunchStateBeforeReconciliation(t *testing.T) {

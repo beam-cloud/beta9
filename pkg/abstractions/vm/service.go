@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -28,6 +29,8 @@ type Gateway interface {
 }
 
 type Service struct {
+	ctx         context.Context
+	rdb         *common.RedisClient
 	repo        repository.VMRepository
 	backend     repository.BackendRepository
 	containers  repository.ContainerRepository
@@ -39,6 +42,7 @@ type Service struct {
 }
 
 type ServiceOpts struct {
+	RedisClient   *common.RedisClient
 	Config        types.VMConfig
 	BackendRepo   repository.BackendRepository
 	ContainerRepo repository.ContainerRepository
@@ -55,6 +59,8 @@ func New(ctx context.Context, opts ServiceOpts) error {
 	}
 
 	s := &Service{
+		ctx:         ctx,
+		rdb:         opts.RedisClient,
 		repo:        repo,
 		backend:     opts.BackendRepo,
 		containers:  opts.ContainerRepo,

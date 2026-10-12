@@ -191,7 +191,8 @@ func durableDiskFinalSyncMode(exitCode int) durableDiskSyncMode {
 // unless the container already failed. An eviction keeps its code: replica
 // controllers read it as the authoritative sign of an eviction.
 func durableDiskSyncFailureExitCode(exitCode int) int {
-	if exitedCleanly(exitCode) && types.ContainerExitCode(exitCode) != types.ContainerExitCodeEvicted {
+	if types.ContainerExitCode(exitCode) == types.ContainerExitCodeStartupFailed ||
+		(exitedCleanly(exitCode) && types.ContainerExitCode(exitCode) != types.ContainerExitCodeEvicted) {
 		return int(types.ContainerExitCodeUnknownError)
 	}
 	return exitCode

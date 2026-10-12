@@ -45,6 +45,7 @@ const (
 	ContainerService_ContainerSandboxFindInFiles_FullMethodName              = "/container.ContainerService/ContainerSandboxFindInFiles"
 	ContainerService_ContainerSandboxListExposedPorts_FullMethodName         = "/container.ContainerService/ContainerSandboxListExposedPorts"
 	ContainerService_ContainerSandboxListProcesses_FullMethodName            = "/container.ContainerService/ContainerSandboxListProcesses"
+	ContainerService_ContainerTunnel_FullMethodName                          = "/container.ContainerService/ContainerTunnel"
 )
 
 // ContainerServiceClient is the client API for ContainerService service.
@@ -77,6 +78,7 @@ type ContainerServiceClient interface {
 	ContainerSandboxFindInFiles(ctx context.Context, in *ContainerSandboxFindInFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxFindInFilesResponse, error)
 	ContainerSandboxListExposedPorts(ctx context.Context, in *ContainerSandboxListExposedPortsRequest, opts ...grpc.CallOption) (*ContainerSandboxListExposedPortsResponse, error)
 	ContainerSandboxListProcesses(ctx context.Context, in *ContainerSandboxListProcessesRequest, opts ...grpc.CallOption) (*ContainerSandboxListProcessesResponse, error)
+	ContainerTunnel(ctx context.Context, in *ContainerTunnelRequest, opts ...grpc.CallOption) (*ContainerTunnelResponse, error)
 }
 
 type containerServiceClient struct {
@@ -367,6 +369,15 @@ func (c *containerServiceClient) ContainerSandboxListProcesses(ctx context.Conte
 	return out, nil
 }
 
+func (c *containerServiceClient) ContainerTunnel(ctx context.Context, in *ContainerTunnelRequest, opts ...grpc.CallOption) (*ContainerTunnelResponse, error) {
+	out := new(ContainerTunnelResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerTunnel_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ContainerServiceServer is the server API for ContainerService service.
 // All implementations must embed UnimplementedContainerServiceServer
 // for forward compatibility
@@ -397,6 +408,7 @@ type ContainerServiceServer interface {
 	ContainerSandboxFindInFiles(context.Context, *ContainerSandboxFindInFilesRequest) (*ContainerSandboxFindInFilesResponse, error)
 	ContainerSandboxListExposedPorts(context.Context, *ContainerSandboxListExposedPortsRequest) (*ContainerSandboxListExposedPortsResponse, error)
 	ContainerSandboxListProcesses(context.Context, *ContainerSandboxListProcessesRequest) (*ContainerSandboxListProcessesResponse, error)
+	ContainerTunnel(context.Context, *ContainerTunnelRequest) (*ContainerTunnelResponse, error)
 	mustEmbedUnimplementedContainerServiceServer()
 }
 
@@ -481,6 +493,9 @@ func (UnimplementedContainerServiceServer) ContainerSandboxListExposedPorts(cont
 }
 func (UnimplementedContainerServiceServer) ContainerSandboxListProcesses(context.Context, *ContainerSandboxListProcessesRequest) (*ContainerSandboxListProcessesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxListProcesses not implemented")
+}
+func (UnimplementedContainerServiceServer) ContainerTunnel(context.Context, *ContainerTunnelRequest) (*ContainerTunnelResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerTunnel not implemented")
 }
 func (UnimplementedContainerServiceServer) mustEmbedUnimplementedContainerServiceServer() {}
 
@@ -969,6 +984,24 @@ func _ContainerService_ContainerSandboxListProcesses_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerService_ContainerTunnel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerTunnelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerServiceServer).ContainerTunnel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerService_ContainerTunnel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerServiceServer).ContainerTunnel(ctx, req.(*ContainerTunnelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ContainerService_ServiceDesc is the grpc.ServiceDesc for ContainerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1071,6 +1104,10 @@ var ContainerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ContainerSandboxListProcesses",
 			Handler:    _ContainerService_ContainerSandboxListProcesses_Handler,
+		},
+		{
+			MethodName: "ContainerTunnel",
+			Handler:    _ContainerService_ContainerTunnel_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

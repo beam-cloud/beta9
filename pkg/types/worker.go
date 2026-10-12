@@ -24,6 +24,8 @@ const (
 	WorkerSandboxProcessManagerPort          int32         = 7111
 	WorkerSandboxProcessManagerWorkerPath    string        = "/usr/local/bin/goproc"
 	WorkerSandboxProcessManagerContainerPath string        = "/usr/bin/goproc"
+	WorkerSandboxFilesystemWorkerPath        string        = "/bin/busybox"
+	WorkerSandboxFilesystemContainerPath     string        = "/usr/lib/beta9/busybox"
 )
 
 const (
@@ -180,7 +182,8 @@ const (
 	ContainerExitCodeAdmin              ContainerExitCode = 561
 	// ContainerExitCodeEvicted is reported for evictable containers the
 	// scheduler stopped to make room for a non-evictable request.
-	ContainerExitCodeEvicted ContainerExitCode = 562
+	ContainerExitCodeEvicted       ContainerExitCode = 562
+	ContainerExitCodeStartupFailed ContainerExitCode = 563
 )
 
 const (
@@ -204,6 +207,7 @@ var ExitCodeMessages = map[ContainerExitCode]string{
 var WorkerContainerExitCodes = map[ContainerExitCode]string{
 	ContainerExitCodeSuccess:            "Success",
 	ContainerExitCodeUnknownError:       "UnknownError: An unknown error occurred.",
+	ContainerExitCodeStartupFailed:      "StartupFailed: Container failed to start. Check the container logs.",
 	ContainerExitCodeIncorrectImageArch: "InvalidArch: Image must be built for the " + runtime.GOARCH + " architecture.",
 	ContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Custom image not found. Check your image reference and registry credentials.",
 	ContainerExitCodeIncorrectImageOs:   "InvalidOS: Image must be built for Linux.",

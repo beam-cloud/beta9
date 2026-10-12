@@ -6,13 +6,18 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/beam-cloud/clip/pkg/clip"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -52,6 +57,9 @@ func (c *ImageClient) ArchiveLayer(ctx context.Context, request *types.Container
 	}
 	defer os.RemoveAll(tmpdir)
 
+	if _, err := c.filesystemExportRegistry(ctx, request); err != nil {
+		return err
+	}
 	base, _, err := c.remoteBaseImage(ctx, request, baseRef)
 	if err != nil {
 		return fmt.Errorf("fetch base image %s: %w", baseRef, err)
@@ -109,9 +117,14 @@ func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, reque
 			progress(pct)
 		}
 	}
-	buildRegistry := c.getBuildRegistry()
-	imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, imageId)
-	targetRef, err := name.ParseReference(imageTag, c.buildRegistryNameOptions()...)
+	config := c.buildRegistryConfig()
+	buildRegistry := config.EffectiveBuildRegistry()
+	imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, config.BuildRepositoryName, imageId)
+	var nameOptions []name.Option
+	if config.BuildRegistryInsecure {
+		nameOptions = append(nameOptions, name.Insecure)
+	}
+	targetRef, err := name.ParseReference(imageTag, nameOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -166,11 +179,82 @@ func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, reque
 		result.indexed = time.Since(started)
 	}
 	report(90)
-	if err := c.registry.Push(ctx, archivePath, imageId); err != nil {
+	if err := c.publishImageArchive(ctx, request, archivePath, imageId); err != nil {
 		return nil, fmt.Errorf("publish index archive: %w", err)
 	}
 	result.elapsed = time.Since(started)
 	return result, nil
+}
+
+func (c *ImageClient) publishImageArchive(ctx context.Context, request *types.ContainerRequest, archivePath, imageID string) error {
+	return c.publishImageArchiveFile(ctx, request, archivePath, imageID, false)
+}
+
+func (c *ImageClient) publishImageArchiveFile(ctx context.Context, request *types.ContainerRequest, archivePath, imageID string, data bool) error {
+	if c.config.ImageService.RegistryStore != reg.S3ImageRegistryStore || c.workerRepoClient == nil || request == nil || !request.Stub.Type.IsSandbox() {
+		return c.registry.Push(ctx, archivePath, imageID)
+	}
+	credentials, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{
+		WorkspaceId:            cacheRequestWorkspaceID(request),
+		StubId:                 cacheRequestStubID(request),
+		ImageId:                request.ImageId,
+		ImageArchiveUploadId:   imageID,
+		ImageArchiveUploadData: data,
+	}))
+	if err != nil {
+		return err
+	}
+	if credentials.ImageArchiveUploadUrl == "" {
+		return errors.New("image archive upload URL unavailable")
+	}
+	return uploadImageArchiveURL(ctx, credentials.ImageArchiveUploadUrl, archivePath)
+}
+
+func (c *ImageClient) archiveWithBrokeredStorage(ctx context.Context, request *types.ContainerRequest, bundlePath, archivePath, imageID string) error {
+	dataPath := archivePath + ".data"
+	defer os.Remove(dataPath)
+	if err := clip.CreateArchive(clip.CreateOptions{InputPath: bundlePath, OutputPath: dataPath}); err != nil {
+		return err
+	}
+	archiver := clip.NewClipArchiver()
+	metadata, err := archiver.ExtractMetadata(dataPath)
+	if err != nil {
+		return err
+	}
+	if err := c.publishImageArchiveFile(ctx, request, dataPath, imageID, true); err != nil {
+		return err
+	}
+	registry := c.config.ImageService.Registries.S3
+	return archiver.CreateRemoteArchive(&clipCommon.S3StorageInfo{
+		Bucket: registry.BucketName, Region: registry.Region, Endpoint: registry.Endpoint,
+		Key: imageID + "." + reg.LocalImageFileExtension, ForcePathStyle: registry.ForcePathStyle,
+	}, metadata, archivePath)
+}
+
+func uploadImageArchiveURL(ctx context.Context, url, archivePath string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, file)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = info.Size()
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("publish image archive: HTTP %d", response.StatusCode)
+	}
+	return nil
 }
 
 // appendLayers stacks packed layers on base, each with a history entry.
@@ -196,8 +280,31 @@ func (c *ImageClient) indexImage(ctx context.Context, request *types.ContainerRe
 	return c.createOCIImageWithProgress(ctx, quiet, request, imageTag, layoutDir, archivePath, 2)
 }
 
+func (c *ImageClient) filesystemExportRegistry(ctx context.Context, request *types.ContainerRequest) (types.ImageServiceConfig, error) {
+	config := c.buildRegistryConfig()
+	if c.workerRepoClient == nil || request == nil || !request.Stub.Type.IsSandbox() {
+		return config, nil
+	}
+	response, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{
+		WorkspaceId: cacheRequestWorkspaceID(request),
+		StubId:      cacheRequestStubID(request),
+		ImageId:     request.ImageId,
+		Registry:    config.EffectiveBuildRegistry(),
+	}))
+	if err != nil {
+		return config, fmt.Errorf("load filesystem export registry: %w", err)
+	}
+	if response.BuildRegistry != "" {
+		config.BuildRegistry = response.BuildRegistry
+		config.BuildRepositoryName = response.BuildRepositoryName
+		config.BuildRegistryInsecure = response.BuildRegistryInsecure
+		c.publishingConfig.Store(&config)
+	}
+	return config, nil
+}
+
 func (c *ImageClient) buildRegistryNameOptions() []name.Option {
-	if c.config.ImageService.BuildRegistryInsecure {
+	if c.buildRegistryConfig().BuildRegistryInsecure {
 		return []name.Option{name.Insecure}
 	}
 	return nil
@@ -229,7 +336,7 @@ func (c *ImageClient) parseImageReference(ref string) (name.Reference, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !c.config.ImageService.BuildRegistryInsecure {
+	if !c.buildRegistryConfig().BuildRegistryInsecure {
 		return parsed, nil
 	}
 	buildRegistry, err := name.NewRegistry(c.getBuildRegistry())

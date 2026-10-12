@@ -2,7 +2,10 @@ package vm
 
 import (
 	"context"
+	"net/http"
 	"testing"
+
+	"github.com/labstack/echo/v4"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -58,7 +61,7 @@ func TestPauseFailureRequiresExplicitColdRecovery(t *testing.T) {
 	require.Len(t, runtime.requests, 1)
 }
 
-func TestWarmResumeRejectsChangedDiskAndCredential(t *testing.T) {
+func TestWarmResumeRejectsChangedDisk(t *testing.T) {
 	s, v, info, runtime, _ := fixture()
 	delete(runtime.containers.states, v.ContainerID)
 	v.ContainerID, v.DesiredState, v.TokenID = "", "paused", info.Token.ExternalId
@@ -67,10 +70,6 @@ func TestWarmResumeRejectsChangedDiskAndCredential(t *testing.T) {
 	ctx := auth.ContextWithAuthInfo(context.Background(), info)
 	require.ErrorContains(t, s.activate(ctx, info, v), "changed after memory pause")
 	require.Equal(t, "paused", v.DesiredState)
-	require.Empty(t, runtime.requests)
-	v.MemoryDiskSnapshots[rootDisk(v)] = "root-after-shutdown"
-	v.TokenID = "another-credential"
-	require.ErrorContains(t, s.activate(ctx, info, v), "original owner credential")
 	require.Empty(t, runtime.requests)
 }
 
@@ -106,4 +105,43 @@ func TestIncompletePauseReconciliationDrainsComputeWithoutImplicitColdResume(t *
 	require.Equal(t, 1, gateway.stops)
 	require.Equal(t, "paused", v.DesiredState)
 	require.ErrorContains(t, s.activate(ctx, info, v), "cold=true")
+}
+
+func TestWarmResumeFromAnotherWorkspaceCredentialPreservesRuntimeOwner(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	v.WorkspaceExternalID = info.Workspace.ExternalId
+	v.TokenID = "runtime-owner"
+	s.backend.(*vmBackend).token = &types.Token{ExternalId: v.TokenID, Active: true}
+	runtime.memoryResponse = &pb.PodSandboxSnapshotMemoryResponse{Ok: true, Runtime: "microvm", CheckpointId: "memory", DiskSnapshots: []*pb.PodSandboxDiskSnapshot{{DiskName: rootDisk(v), SnapshotId: "root-after-shutdown"}}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), info)
+	require.NoError(t, s.pause(ctx, v))
+	e := managementAPI(s, info)
+	response := vmRequest(e, "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/start", `{}`)
+	require.Equal(t, 200, response.Code, response.Body.String())
+	require.Equal(t, "memory", runtime.checkpoint)
+	require.Equal(t, "runtime-owner", runtime.launchToken)
+	require.Equal(t, "runtime-owner", v.TokenID)
+
+	other := &auth.AuthInfo{Workspace: &types.Workspace{Id: 8, ExternalId: "another-workspace"}, Token: info.Token}
+	response = vmRequest(managementAPI(s, other), "POST", "/another-workspace/"+v.ID+"/start", `{}`)
+	require.Equal(t, 404, response.Code)
+}
+
+func TestWarmResumeCannotReactivateRevokedRuntimeOwner(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	v.TokenID = "revoked-owner"
+	v.MemoryCheckpointID = "memory"
+	s.backend.(*vmBackend).token = &types.Token{ExternalId: v.TokenID, Active: false}
+	err := s.activate(context.Background(), info, v)
+	require.ErrorContains(t, err, "cold=true")
+	require.Equal(t, http.StatusConflict, err.(*echo.HTTPError).Code)
+	require.Empty(t, runtime.requests)
+
+	delete(runtime.containers.states, v.ContainerID)
+	v.DesiredState, v.Status, v.ContainerID = "paused", "paused", ""
+	e := managementAPI(s, info)
+	response := vmRequest(e, "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/start", `{"cold":true}`)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Empty(t, runtime.checkpoint)
+	require.Equal(t, info.Token.ExternalId, runtime.launchToken)
 }

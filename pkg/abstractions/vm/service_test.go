@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -152,14 +155,22 @@ func TestInterruptedStopFinishesExactlyOneArtifact(t *testing.T) {
 	require.Len(t, store.artifacts, 1)
 }
 
-func TestDesktopDefaultsAndDiskSizeValidation(t *testing.T) {
-	for _, disk := range []string{"50GiB", "50Gi", "53687091200"} {
+func TestVMDefaultsAndDiskSizeValidation(t *testing.T) {
+	for _, disk := range []string{"", "50GiB", "50Gi", "53687091200"} {
 		spec := types.VMSpec{ImageID: "image", Desktop: true, DiskSize: disk}
 		require.NoError(t, validate(&spec))
-		require.Equal(t, int64(2000), spec.CPU)
-		require.Equal(t, int64(2048), spec.Memory)
+		require.Equal(t, int64(4000), spec.CPU)
+		require.Equal(t, int64(8192), spec.Memory)
 		require.Equal(t, "53687091200", spec.DiskSize)
 	}
+	spec := types.VMSpec{ImageID: "image"}
+	require.NoError(t, validate(&spec))
+	require.Equal(t, int64(4000), spec.CPU)
+	require.Equal(t, int64(8192), spec.Memory)
+	explicit := types.VMSpec{ImageID: "image", CPU: 1000, Memory: 1024}
+	require.NoError(t, validate(&explicit))
+	require.Equal(t, int64(1000), explicit.CPU)
+	require.Equal(t, int64(1024), explicit.Memory)
 	for _, disk := range []string{"-1Gi", "0", "bad", "99999999999999999999999999999Ti"} {
 		require.Error(t, validate(&types.VMSpec{ImageID: "image", DiskSize: disk}))
 	}
@@ -215,6 +226,18 @@ func TestStopAcceptsExplicitSchedulingFailureButNotMissingState(t *testing.T) {
 			require.NotEmpty(t, v.ContainerID)
 		}
 	}
+}
+
+func TestStartupFailureAllowsVMRetry(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	containers := s.containers.(*vmContainers)
+	delete(containers.states, v.ContainerID)
+	containers.exitCode = int(types.ContainerExitCodeStartupFailed)
+	original := v.ContainerID
+
+	require.NoError(t, s.start(auth.ContextWithAuthInfo(context.Background(), info), info, v))
+	require.NotEqual(t, original, v.ContainerID)
+	require.Len(t, runtime.requests, 1)
 }
 
 func TestFinalizationErrorPreservesRuntimeForRecovery(t *testing.T) {
@@ -273,6 +296,7 @@ type vmRuntime struct {
 	containers      *vmContainers
 	requests        []string
 	checkpoint      string
+	launchToken     string
 	checkpointDisks map[string]string
 	memoryResponse  *pb.PodSandboxSnapshotMemoryResponse
 	snapshotError   bool
@@ -282,6 +306,7 @@ type vmRuntime struct {
 	boundPorts      []int32
 	network         *pb.PodSandboxUpdateNetworkPermissionsRequest
 	connectError    error
+	forwardStatus   int
 }
 
 func (r *vmRuntime) SandboxConnect(_ context.Context, req *pb.PodSandboxConnectRequest) (*pb.PodSandboxConnectResponse, error) {
@@ -292,7 +317,8 @@ func (r *vmRuntime) SandboxConnect(_ context.Context, req *pb.PodSandboxConnectR
 	return &pb.PodSandboxConnectResponse{Ok: state != nil && state.Status == types.ContainerStatusRunning}, nil
 }
 
-func (r *vmRuntime) RunVM(_ context.Context, _ *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string, disks map[string]string) error {
+func (r *vmRuntime) RunVM(_ context.Context, info *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string, disks map[string]string) error {
+	r.launchToken = info.Token.ExternalId
 	r.checkpoint = checkpoint
 	r.checkpointDisks = disks
 	r.requests = append(r.requests, cid)
@@ -304,7 +330,11 @@ func (r *vmRuntime) VMPortReady(context.Context, string, string, uint32) (bool, 
 }
 func (r *vmRuntime) ForwardVM(c echo.Context, stub, cid string) error {
 	r.forwarded = fmt.Sprintf("%s:%s:%s", cid, c.Param("port"), c.Param("subPath"))
-	return c.String(200, "desktop")
+	status := r.forwardStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return c.String(status, "desktop")
 }
 func (r *vmRuntime) TunnelVM(echo.Context, string, uint32) error { return nil }
 func (r *vmRuntime) SandboxExposePort(_ context.Context, in *pb.PodSandboxExposePortRequest) (*pb.PodSandboxExposePortResponse, error) {
@@ -477,6 +507,8 @@ func TestPrepareForcesCPUVMAndIndependentRoot(t *testing.T) {
 	require.NoError(t, s.prepare(auth.ContextWithAuthInfo(context.Background(), info), v))
 	require.True(t, gateway.stub.UseVm)
 	require.Equal(t, types.StubTypeVM, gateway.stub.StubType)
+	require.Equal(t, types.VMAppName, gateway.stub.AppName)
+	require.Equal(t, types.StubTypeVM+"/"+v.ID, gateway.stub.Name)
 	require.Empty(t, gateway.stub.Gpu)
 	require.Zero(t, gateway.stub.GpuCount)
 	require.Equal(t, rootDisk(v), gateway.stub.Disks[0].Name)
@@ -612,6 +644,29 @@ func actionContext(info *auth.AuthInfo, name, action, body string) (*auth.HttpAu
 	c.SetParamNames("name", "action")
 	c.SetParamValues(name, action)
 	return &auth.HttpAuthContext{Context: c, AuthInfo: info}, rec
+}
+
+func TestActivityLeasesAreIndependentAndExplicitlyReleased(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	redis := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { rdb.Close() })
+	s.rdb = rdb
+	first, second := uuid.NewString(), uuid.NewString()
+	for _, lease := range []string{first, second} {
+		c, _ := actionContext(info, v.Name, "touch", `{}`)
+		c.Request().URL.RawQuery = "lease=" + lease
+		require.NoError(t, s.action(c))
+	}
+	for i, lease := range []string{first, second} {
+		c, _ := actionContext(info, v.Name, "touch", `{}`)
+		c.Request().URL.RawQuery = "lease=" + lease + "&release=1"
+		require.NoError(t, s.action(c))
+		active, err := s.hasActivity(context.Background(), v.ID)
+		require.NoError(t, err)
+		require.Equal(t, i == 0, active)
+	}
 }
 
 func TestFailedCaptureDoesNotChangeSourceLifecycle(t *testing.T) {

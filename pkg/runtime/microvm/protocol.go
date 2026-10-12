@@ -48,6 +48,16 @@ const (
 	// GuestCID is the CID assigned to every VM (one VM per vsock device).
 	GuestCID = 3
 
+	// The process manager lives outside the application's memory budget.
+	WorkloadSlice       = "workload.slice"
+	ControlSlice        = "control.slice"
+	WorkloadCgroup      = "/sys/fs/cgroup/" + WorkloadSlice
+	WorkloadExecCgroup  = WorkloadCgroup + "/exec"
+	ControlCgroup       = "/sys/fs/cgroup/" + ControlSlice
+	WorkloadCgroupEnv   = "GOPROC_WORKLOAD_CGROUP"
+	GuestMemoryHeadroom = 512 << 20
+	HostMemoryHeadroom  = 256 << 20
+
 	// Disk layout on the writable root disk, shared with container sandboxes
 	// so a durable disk restores into either kind.
 	DiskOverlayUpper = "overlay/upper"
@@ -62,6 +72,9 @@ const (
 // Spec is what the host tells the guest init about this VM, at SpecFile.
 type Spec struct {
 	Network Network `json:"network"`
+
+	// Application budget, excluding guest control headroom.
+	WorkloadMemoryBytes int64 `json:"workload_memory_bytes"`
 	// RootDisk is the block device holding the overlay upper (and Docker
 	// state). Always present.
 	RootDisk string `json:"root_disk"`
@@ -118,6 +131,8 @@ const (
 	MsgExit    = "exit"    // Payload: Code, the container process exit code.
 	MsgAck     = "ack"     // Payload: ID of the command, OK, Error.
 	MsgPing    = "ping"    // Keepalive; lets init notice a connection that died with a restore.
+
+	MsgApplicationOOM = "application_oom" // Payload: OOM; the VM remains running.
 
 	// Host -> guest.
 	MsgSignal  = "signal"  // Payload: Signal to deliver to the container process.
@@ -218,6 +233,17 @@ type Message struct {
 	Error   string   `json:"error,omitempty"`
 	Text    string   `json:"text,omitempty"`
 	Network *Network `json:"network,omitempty"`
+
+	OOM *ApplicationOOM `json:"oom,omitempty"`
+}
+
+// ApplicationOOM reports guest memory-cgroup kills, separate from a host
+// runtime OOM. Usage is the observation after the kernel selected a victim.
+type ApplicationOOM struct {
+	Kills       uint64 `json:"kills"`
+	MemoryLimit int64  `json:"memory_limit"`
+	MemoryUsage uint64 `json:"memory_usage"`
+	MemoryPeak  uint64 `json:"memory_peak"`
 }
 
 // MaxLineBytes bounds a control message or filesystem header line; the

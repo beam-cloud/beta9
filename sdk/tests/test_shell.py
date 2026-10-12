@@ -614,3 +614,25 @@ def test_windows_shell_decodes_bytes_and_joins_reader(monkeypatch: pytest.Monkey
 
     assert "€" in stdout.getvalue()
     assert "*** EOF ***" in stdout.getvalue()
+
+
+@pytest.mark.parametrize("port,host_header", [(443, None), (80, None), (8443, "shell.test")])
+def test_resumable_shell_origin_matches_the_host_header(monkeypatch, port, host_header):
+    from beta9.abstractions import shell
+
+    calls = []
+    monkeypatch.setattr(shell.websocket, "create_connection", lambda _, **kw: calls.append(kw))
+    monkeypatch.setattr(shell, "bridge_tunnel", lambda connect, *_: connect("session"))
+    sock = shell.create_socket(
+        "gateway.test",
+        port,
+        "/shell/id/stub",
+        "container",
+        "token",
+        host_header=host_header,
+        resumable=True,
+    )
+    sock.close()
+    host = host_header or f"gateway.test:{port}"
+    assert calls[0]["host"] == host
+    assert calls[0]["origin"] == f"{'https' if port == 443 else 'http'}://{host}"

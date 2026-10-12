@@ -933,6 +933,11 @@ func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T)
 	status, requests := http.StatusOK, []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests = append(requests, r.Method+" "+r.URL.Path)
+		// ECR allows downloads while rejecting HEAD requests for the same blob.
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		w.WriteHeader(status)
 	}))
 	defer server.Close()
@@ -952,7 +957,7 @@ func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T)
 	for _, status = range []int{http.StatusOK, http.StatusInternalServerError} {
 		require.NoError(t, c.verifyImageSource(context.Background(), options), status)
 	}
-	require.Contains(t, requests, "HEAD /v2/org/app/blobs/"+layer)
+	require.Contains(t, requests, "GET /v2/org/app/blobs/"+layer)
 	for _, status = range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
 		require.ErrorContains(t, c.verifyImageSource(context.Background(), options), "image source "+server.Listener.Addr().String()+"/org/app@"+layer, status)
 	}
@@ -963,7 +968,7 @@ func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T)
 	require.NoError(t, c.verifyImageSource(context.Background(), options))
 	require.Empty(t, requests)
 
-	// A peer's complete layer also needs no origin credentials or HEAD request.
+	// A peer's complete layer also needs no origin credentials or registry request.
 	require.NoError(t, os.Remove(filepath.Join(cachePath, "hash-1")))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

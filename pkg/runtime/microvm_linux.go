@@ -585,9 +585,11 @@ func (m *MicroVM) State(ctx context.Context, containerID string) (State, error) 
 }
 
 func (m *MicroVM) Events(ctx context.Context, containerID string) (<-chan Event, error) {
-	ch := make(chan Event)
-	close(ch)
-	return ch, nil
+	inst, ok := m.instance(containerID)
+	if !ok || inst.ctrl == nil {
+		return nil, ErrContainerNotFound{ContainerID: containerID}
+	}
+	return inst.ctrl.events(ctx), nil
 }
 
 func (m *MicroVM) Close() error {
@@ -985,12 +987,31 @@ func treeXattrs(hdr *tar.Header) map[string][]byte {
 // Hypervisor's unix socket: the VMM expects "CONNECT <port>\n" and answers
 // "OK <port>\n" once the guest accepted.
 func dialGuestVsock(ctx context.Context, socketPath string, port uint32) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for {
+		conn, err := dialGuestVsockOnce(ctx, socketPath, port)
+		if err == nil {
+			return conn, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, errors.Join(ctx.Err(), err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func dialGuestVsockOnce(ctx context.Context, socketPath string, port uint32) (net.Conn, error) {
 	dialer := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return nil, err
 	}
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
 	if _, err := fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
 		conn.Close()
 		return nil, err
@@ -1756,6 +1777,10 @@ type microVMControl struct {
 	listener *net.UnixListener
 	exit     chan int
 	ready    chan struct{}
+
+	applicationOOM chan Event
+	eventDone      chan struct{}
+	closeOnce      sync.Once
 	// network, when set, is pushed to the guest as soon as it reports in: a
 	// restored guest still carries the checkpointed container's identity.
 	// networkApplied receives the outcome of the first push.
@@ -1783,6 +1808,8 @@ func listenMicroVMControl(vsockPath string) (*microVMControl, error) {
 		ready:          make(chan struct{}),
 		networkApplied: make(chan error, 1),
 		pending:        map[uint64]chan microvm.Message{},
+		applicationOOM: make(chan Event, 16),
+		eventDone:      make(chan struct{}),
 	}
 	go ctrl.accept()
 	return ctrl, nil
@@ -1799,6 +1826,30 @@ func (c *microVMControl) accept() {
 		}
 		c.serve(conn)
 	}
+}
+
+func (c *microVMControl) events(ctx context.Context) <-chan Event {
+	ch := make(chan Event)
+	go func() {
+		defer close(ch)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.eventDone:
+				return
+			case event := <-c.applicationOOM:
+				select {
+				case ch <- event:
+				case <-ctx.Done():
+					return
+				case <-c.eventDone:
+					return
+				}
+			}
+		}
+	}()
+	return ch
 }
 
 func (c *microVMControl) serve(conn net.Conn) {
@@ -1824,6 +1875,16 @@ func (c *microVMControl) serve(conn net.Conn) {
 				go c.pushNetwork()
 			}
 		case microvm.MsgPing:
+		case microvm.MsgApplicationOOM:
+			if msg.OOM != nil {
+				select {
+				case c.applicationOOM <- Event{Type: microvm.MsgApplicationOOM, ApplicationOOM: msg.OOM}:
+				case <-c.eventDone:
+					return
+				default:
+					log.Warn().Msg("microvm application OOM event buffer full")
+				}
+			}
 		case microvm.MsgExit:
 			select {
 			case c.exit <- msg.Code:
@@ -1918,6 +1979,11 @@ func (c *microVMControl) close() {
 	if c == nil {
 		return
 	}
+	c.closeOnce.Do(func() {
+		if c.eventDone != nil {
+			close(c.eventDone)
+		}
+	})
 	_ = c.listener.Close()
 	c.mu.Lock()
 	if c.conn != nil {

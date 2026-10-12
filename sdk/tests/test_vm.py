@@ -6,6 +6,7 @@ import io
 import shutil
 import subprocess
 import threading
+import socket
 
 import pytest
 from click.testing import CliRunner
@@ -15,6 +16,7 @@ from beta9.abstractions.vm import VM, prepare_image
 from beta9.abstractions import vm as vm_module
 from beta9.exceptions import SandboxProcessError, SandboxConnectionError
 from beta9.channel import GatewayHTTPError
+from beta9.config import SDKSettings
 from beta9.cli import extraclick
 from beta9.cli import vm as vm_cli
 from beta9.cli import container as container_cli
@@ -292,6 +294,7 @@ def test_vm_cli_registration_and_cpu_only_args():
         "desktop",
         "terminal",
         "ports",
+        "access-url",
         "expose",
         "unexpose",
         "port-forward",
@@ -318,6 +321,44 @@ def test_vm_cli_registration_and_cpu_only_args():
     assert not {"gpu", "gpu_count"} & options
 
 
+@pytest.mark.parametrize("cli_name", ["Beta9", "Beam"])
+@pytest.mark.parametrize("options,ttl", [([], 600), (["--ttl", "3600"], 3600)])
+def test_cli_access_url_uses_selected_profile(cli_service, monkeypatch, cli_name, options, ttl):
+    context = MagicMock(return_value=SimpleNamespace())
+    monkeypatch.setattr(extraclick, "get_config_context", context)
+    url = "https://dev-3000.example.test/?beam_vm_session=signed"
+    cli_service.http.json.side_effect = [
+        {"name": "dev", "id": "vm-resource", "status": "stopped"},
+        {"url": url},
+    ]
+    cli = load_cli(check_config=False, settings=SDKSettings(name=cli_name))
+
+    result = CliRunner().invoke(
+        cli.common_group,
+        ["vm", "access-url", "dev", "3000", "--context", "staging", *options],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == url + "\n"
+    context.assert_called_once_with("staging")
+    requests = cli_service.http.json.call_args_list
+    assert [request.args for request in requests] == [
+        ("GET", "/api/v1/vm/{ws}/dev"),
+        ("POST", "/api/v1/vm/{ws}/vm-resource/access-session"),
+    ]
+    assert requests[1].kwargs["json"] == {"port": 3000, "ttl": ttl}
+
+
+@pytest.mark.parametrize(
+    "args", [["0"], ["65536"], ["3000", "--ttl", "0"], ["3000", "--ttl", "3601"]]
+)
+def test_cli_access_url_rejects_invalid_port_or_ttl(cli_service, args):
+    result = CliRunner().invoke(vm_cli.management, ["access-url", "dev", *args])
+    assert result.exit_code == 2
+    assert "Invalid value" in result.output
+    cli_service.http.json.assert_not_called()
+
+
 def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch):
     fake = MagicMock()
     fake.info = {"name": "dev", "id": "resource", "status": "running"}
@@ -337,7 +378,7 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     fake.wait.assert_called_once_with()
 
 
-def test_cli_creation_shows_only_result(cli_service, monkeypatch):
+def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, monkeypatch):
     vm = MagicMock()
     vm.info = {
         "name": "calm-otter-a3b19f",
@@ -348,11 +389,43 @@ def test_cli_creation_shows_only_result(cli_service, monkeypatch):
     monkeypatch.setattr(vm_cli, "VM", lambda *args, **kwargs: vm)
     result = CliRunner().invoke(vm_cli.management, ["new", "--template", "base"])
     assert result.exit_code == 0, result.output
+    assert "Creating VM" in result.output
+    assert result.output.index("✓ VM ready") < result.output.index("calm-otter-a3b19f")
     assert "calm-otter-a3b19f" in result.output
     assert "vm-12ab34cd56ef7890" in result.output
     assert "Checking image cache" not in result.output
     assert "Waiting for VM" not in result.output
     assert "vm-long-internal-runtime" not in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["new", "dev", "--template", "base"],
+        ["start", "dev"],
+        ["resume", "dev"],
+        ["pause", "dev"],
+        ["stop", "dev"],
+        ["stop", "dev", "--no-snapshot"],
+        ["fork", "dev", "copy"],
+        ["fork", "snapshot", "copy"],
+        ["snapshot", "create", "dev"],
+        ["template", "create", "dev", "base"],
+    ],
+)
+def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, args):
+    vm = MagicMock(info={"id": "vm-12ab34cd56ef7890", "name": "dev", "status": "running"})
+    for method in ("create", "start", "pause", "stop", "fork"):
+        getattr(vm, method).return_value = vm
+    vm._api.return_value = [{"id": "snapshot"}]
+    vm.snapshot.return_value = vm.create_template.return_value = vm.info
+    factory = MagicMock(return_value=vm)
+    factory.get.return_value = vm
+    monkeypatch.setattr(vm_cli, "VM", factory)
+
+    result = CliRunner().invoke(vm_cli.management, [*args, "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == vm.info
 
 
 def test_vm_new_help_has_one_aligned_description_column():
@@ -499,6 +572,9 @@ def test_cli_reports_api_failures_without_tracebacks(cli_service, monkeypatch):
     assert result.exit_code == 1
     assert "Error: VM operation already in progress" in result.output
     assert "Traceback" not in result.output
+    assert "✗ Starting VM" in result.output
+    assert "✓ VM ready" not in result.output
+    assert vm_cli.terminal._current_status is None
 
 
 def test_cli_rejects_no_ssh_sync_before_create(cli_service, monkeypatch, tmp_path):
@@ -561,8 +637,17 @@ def test_private_bind_does_not_create_public_url():
     assert "5432" not in vm.info["urls"]
 
 
-def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch):
+@pytest.mark.parametrize("terminate", [None, "SIGHUP", "SIGTERM"])
+def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch, terminate):
+    if terminate and not hasattr(vm_cli.signal, terminate):
+        pytest.skip(f"{terminate} is unavailable")
     output, diagnostics = io.BytesIO(), io.StringIO()
+    previous_handlers = {
+        getattr(vm_cli.signal, name): vm_cli.signal.getsignal(getattr(vm_cli.signal, name))
+        for name in ("SIGHUP", "SIGTERM")
+        if hasattr(vm_cli.signal, name)
+    }
+    ignored_signals = []
     client = MagicMock()
     monkeypatch.setattr(vm_cli, "ServiceClient", lambda config: client)
     monkeypatch.setattr(vm_cli, "get_config_context", lambda profile: SimpleNamespace())
@@ -572,40 +657,111 @@ def test_ssh_helper_keeps_diagnostics_out_of_binary_transport(monkeypatch):
     def bridge(vm, port, source, target):
         print("connection diagnostic")
         target.write(b"SSH-2.0-OpenSSH\r\n")
+        if terminate:
+            try:
+                vm_cli.signal.raise_signal(getattr(vm_cli.signal, terminate))
+            finally:
+                for sig in previous_handlers:
+                    vm_cli.signal.raise_signal(sig)
+                    ignored_signals.append(sig)
 
     monkeypatch.setattr(vm_cli, "_bridge", bridge)
     with monkeypatch.context() as patch:
         patch.setattr(vm_cli.sys, "stdout", SimpleNamespace(buffer=output))
         patch.setattr(vm_cli.sys, "stderr", diagnostics)
         patch.setattr(vm_cli.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
-        vm_cli._run_tunnel("local", "/tmp/config.ini", "Beam", "resource", 2222)
+        if terminate:
+            with pytest.raises(SystemExit) as exit:
+                vm_cli._run_tunnel("local", "/tmp/config.ini", "Beam", "resource", 2222)
+            assert exit.value.code == 0
+        else:
+            vm_cli._run_tunnel("local", "/tmp/config.ini", "Beam", "resource", 2222)
     assert output.getvalue() == b"SSH-2.0-OpenSSH\r\n"
     assert diagnostics.getvalue() == "connection diagnostic\n"
+    assert ignored_signals == (list(previous_handlers) if terminate else [])
+    assert all(
+        vm_cli.signal.getsignal(sig) == handler for sig, handler in previous_handlers.items()
+    )
+
+
+def test_port_forward_closes_socket_with_pending_input(cli_service, monkeypatch):
+    peer, client = socket.socketpair()
+    listener = MagicMock()
+    listener.accept.side_effect = [(client, None), KeyboardInterrupt()]
+    monkeypatch.setattr(vm_cli.socket, "socket", lambda *args: listener)
+    monkeypatch.setattr(
+        vm_cli, "_vm", lambda *args: SimpleNamespace(name="dev", info={"spec": {"ports": [80]}})
+    )
+    reading, finished = threading.Event(), threading.Event()
+
+    def bridge(vm, port, source, target):
+        def read():
+            reading.set()
+            source.read1(1)
+            finished.set()
+
+        threading.Thread(target=read, daemon=True).start()
+        assert reading.wait(1)
+        target.write(b"response")
+        target.flush()
+
+    monkeypatch.setattr(vm_cli, "_bridge", bridge)
+    try:
+        CliRunner().invoke(vm_cli.management, ["port-forward", "dev", "80"])
+        peer.settimeout(2)
+        assert peer.recv(8) == b"response"
+        assert peer.recv(1) == b""
+        assert finished.wait(1)
+    finally:
+        peer.close()
+        client.close()
 
 
 def test_tunnel_drains_response_after_stdin_eof(monkeypatch):
+    from queue import Queue
+    from uuid import UUID
+    import json
+
     class Socket:
         def __init__(self):
-            self.eof = threading.Event()
+            self.messages = Queue()
             self.closed = False
             self.sent = []
-            self.reads = 0
+            self.read = None
+            self.eof = False
+            self.responded = False
 
         def settimeout(self, value):
             pass
 
         def send_binary(self, data):
-            self.sent.append(data)
+            self.sent.append(data[32:])
+            self.messages.put(json.dumps({"type": "input", "id": str(UUID(bytes=data[:16]))}))
 
         def send(self, message):
-            assert message == "EOF"
-            self.eof.set()
+            control = json.loads(message)
+            if control["type"] == "close":
+                self.messages.put(json.dumps({"type": "input", "id": control["id"]}))
+            if control["type"] == "eof":
+                self.eof = True
+                self.messages.put(json.dumps({"type": "input", "id": control["id"]}))
+                if self.read:
+                    self.reply(self.read)
+            elif control["type"] == "read":
+                self.read = control["id"]
+                if self.eof:
+                    self.reply(self.read)
+
+        def reply(self, request):
+            if self.responded:
+                self.messages.put(json.dumps({"type": "eof", "id": request}))
+            else:
+                self.messages.put(UUID(request).bytes + b"complete response")
+                self.responded = True
 
         def recv(self):
-            assert self.eof.wait(5), "stdin EOF was never sent"
-            assert not self.closed, "tunnel closed before reading the response"
-            self.reads += 1
-            return b"complete response" if self.reads == 1 else b""
+            assert not self.closed
+            return self.messages.get(timeout=5)
 
         def close(self):
             self.closed = True
@@ -655,6 +811,25 @@ def test_cli_stale_kill_rejects_before_acquiring_runtime(cli_service, monkeypatc
     vm._sandbox.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        ["--unit", "ssh", "--session", "prompt-test"],
+        ["--pid", "44", "--session", "prompt-test"],
+        ["--pid", "44", "--unit", "ssh"],
+    ],
+)
+def test_cli_logs_rejects_conflicting_sources_before_acquiring_vm(
+    cli_service, monkeypatch, selectors
+):
+    acquire = MagicMock()
+    monkeypatch.setattr(vm_cli, "_vm", acquire)
+    result = CliRunner().invoke(vm_cli.management, ["logs", "dev", *selectors])
+    assert result.exit_code == 2
+    assert "Choose one of --pid, --unit, or --session" in result.output
+    acquire.assert_not_called()
+
+
 def test_cli_ps_uses_pid_indexed_processes(cli_service, monkeypatch):
     vm = MagicMock()
     vm.process.list_processes.return_value = {
@@ -693,6 +868,46 @@ def test_desktop_timeout_cancels_command_and_preserves_wait_error(sandbox_vm):
     assert raised.value is error
     process.kill.assert_called_once()
     process.stderr.read.assert_not_called()
+
+
+def test_desktop_resize_registers_custom_resolution(sandbox_vm, monkeypatch):
+    vm, _ = sandbox_vm
+    desktop = vm.desktop
+    run = MagicMock(side_effect=["1920x1080 60.00", "", "", ""])
+    monkeypatch.setattr(desktop, "_run", run)
+    desktop.resize(2560, 1440)
+    assert run.call_args_list[1].args == (
+        "xrandr",
+        "--newmode",
+        "2560x1440",
+        "221.184",
+        "2560",
+        "0",
+        "0",
+        "2560",
+        "1440",
+        "0",
+        "0",
+        "1440",
+    )
+    assert run.call_args_list[2].args == ("xrandr", "--addmode", "VNC-0", "2560x1440")
+    assert run.call_args_list[3].args == (
+        "xrandr",
+        "--output",
+        "VNC-0",
+        "--mode",
+        "2560x1440",
+    )
+
+
+def test_desktop_resize_reuses_existing_resolution(sandbox_vm, monkeypatch):
+    vm, _ = sandbox_vm
+    desktop = vm.desktop
+    run = MagicMock(side_effect=["2560x1440 60.00", ""])
+    monkeypatch.setattr(desktop, "_run", run)
+    desktop.resize(2560, 1440)
+    assert run.call_count == 2
+    assert run.call_args.args == ("xrandr", "--output", "VNC-0", "--mode", "2560x1440")
 
 
 def test_creation_retry_freezes_caller_owned_metadata_and_lists():
@@ -811,3 +1026,43 @@ def test_cli_json_exec_passes_stdin_only_for_foreground(cli_service, monkeypatch
         assert stdin is None
     else:
         assert stdin is not None
+
+
+def test_activity_lease_survives_gateway_restart_and_releases_same_lease():
+    selected = service()
+    restored = threading.Event()
+    info = {"id": "resource", "name": "dev", "spec": {"idle_timeout": 1}}
+    leases = []
+    failed_once = False
+
+    def response(method, path, **kwargs):
+        nonlocal failed_once
+        if path.endswith("/touch"):
+            leases.append(kwargs["params"])
+            if kwargs.get("timeout") == 3 and not kwargs["params"].get("release") == "1":
+                if not failed_once:
+                    failed_once = True
+                    raise GatewayHTTPError(503, "gateway restarting")
+                restored.set()
+        return info
+
+    selected.http.json.side_effect = response
+    vm = VM(_service=selected)._set(info)
+    with vm.keep_alive():
+        assert restored.wait(2)
+    assert len({params["lease"] for params in leases}) == 1
+    assert leases[-1]["release"] == "1"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js unavailable")
+def test_desktop_browser_routing_and_reconnect():
+    from pathlib import Path
+
+    subprocess.run(
+        [
+            "node",
+            str(Path(__file__).with_name("test_vm_desktop.js")),
+            str(Path(__file__).parents[2] / "pkg/abstractions/vm/desktop.html"),
+        ],
+        check=True,
+    )

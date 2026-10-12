@@ -10,13 +10,17 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlsplit, urlencode
+
 
 from .. import terminal
 from ..env import is_local
 
 if is_local():
     import paramiko
+    import websocket
+
+    from ..tunnel import bridge_tunnel
 
 
 MAX_PROXY_RESPONSE_BYTES = 64 * 1024
@@ -123,10 +127,15 @@ def create_socket(
     *,
     host_header: Optional[str] = None,
     use_tls: Optional[bool] = None,
+    resumable: bool = False,
 ) -> socket.socket:
     """
     Create a socket connection to the server and authenticate with the given token.
     """
+    if resumable:
+        return create_resumable_socket(
+            proxy_host, proxy_port, path, container_id, auth_token, timeout, host_header, use_tls
+        )
     deadline = time.monotonic() + timeout
     sock: Optional[socket.socket] = None
     try:
@@ -173,6 +182,49 @@ def create_socket(
         raise
 
     return sock
+
+
+def create_resumable_socket(host, port, path, container_id, token, timeout, host_header, use_tls):
+    if any("\r" in value or "\n" in value for value in (path, host_header or host, token)):
+        raise ValueError("Invalid shell proxy request metadata")
+    tls = port == 443 if use_tls is None else use_tls
+    netloc = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    url = f"{'wss' if tls else 'ws'}://{netloc}/{path.strip('/')}/{quote(container_id, safe='')}"
+    client, local = socket.socketpair()
+    ready = threading.Event()
+    errors = []
+
+    def connect(session):
+        query = urlencode({"protocol": 2, "session": session})
+        remote = websocket.create_connection(
+            url + "?" + query,
+            header={"Authorization": f"Bearer {token}"},
+            host=host_header or netloc,
+            origin=f"{'https' if tls else 'http'}://{host_header or netloc}",
+            timeout=timeout,
+        )
+        ready.set()
+        return remote
+
+    def run():
+        try:
+            with local.makefile("rb", buffering=0) as source, local.makefile(
+                "wb", buffering=0
+            ) as target:
+                bridge_tunnel(connect, source, target)
+        except Exception as error:
+            errors.append(error)
+        finally:
+            local.close()
+            ready.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    if not ready.wait(timeout) or errors:
+        client.close()
+        if errors:
+            raise ShellProxyError(str(errors[0])) from errors[0]
+        raise TimeoutError("Timed out while establishing the shell connection")
+    return client
 
 
 def wait_for_ok(
@@ -303,6 +355,7 @@ class SSHShell:
                 timeout=_remaining_time(deadline),
                 host_header=self.host_header,
                 use_tls=self.use_tls,
+                resumable=True,
             )
             self.socket.settimeout(_remaining_time(deadline))
             self.transport = paramiko.Transport(self.socket)

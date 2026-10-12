@@ -84,7 +84,7 @@ func systemdBinary() (string, error) {
 	return "", fmt.Errorf("persistent VMs require systemd in the image; install systemd and dbus or use the Beam VM image")
 }
 
-func bootSystemd(spec *specs.Spec) error {
+func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
 	binary, err := systemdBinary()
 	if err != nil {
 		return err
@@ -94,19 +94,17 @@ func bootSystemd(spec *specs.Spec) error {
 		return fmt.Errorf("missing VM workload")
 	}
 
-	// Unlike the durable root, /tmp is boot state. In particular, X display
-	// sockets and lock files must not be restored from a disk snapshot.
-	if err := os.MkdirAll("/tmp", 01777); err != nil {
-		return err
-	}
-
-	if err := unix.Mount("tmpfs", "/tmp", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777"); err != nil {
+	if err := prepareSystemdTmp("/", processEnv(spec.Process, "BEAM_VM_DESKTOP") == "true"); err != nil {
 		return err
 	}
 
 	// Give the guest its own hosts file. Container mounts can be read-only,
 	// and KasmVNC/xauth require the guest hostname to resolve locally.
 	if err := guestHosts(spec.Hostname); err != nil {
+		return err
+	}
+
+	if err := workload.configureSystemd("/"); err != nil {
 		return err
 	}
 
@@ -129,6 +127,26 @@ func bootSystemd(spec *specs.Spec) error {
 	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
 	logf("boot phase: executing systemd")
 	return unix.Exec(binary, []string{binary, "--unit=multi-user.target"}, env)
+}
+
+// Keep /tmp on the durable root. Only the managed desktop's display sockets
+// and lock are boot state; restoring them can prevent Xvnc from starting.
+func prepareSystemdTmp(root string, desktop bool) error {
+	tmp := filepath.Join(root, "tmp")
+	if err := os.MkdirAll(tmp, 0777); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, os.ModeSticky|0777); err != nil {
+		return err
+	}
+	if desktop {
+		for _, name := range []string{".X1-lock", ".X11-unix/X1"} {
+			if err := os.Remove(filepath.Join(tmp, name)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func writeSystemdBootFiles(root string, process *specs.Process) error {
@@ -159,6 +177,17 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	}
 
 	if err := os.WriteFile(processFile, data, 0600); err != nil {
+		return err
+	}
+
+	// Ubuntu's default D rule clears /tmp during sysinit, deleting durable
+	// files and racing stdin uploads from the early exec agent. Retain normal
+	// directory creation and age-based cleanup instead.
+	tmpfilesDir := filepath.Join(root, "run/tmpfiles.d")
+	if err := os.MkdirAll(tmpfilesDir, 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(tmpfilesDir, "tmp.conf"), []byte("d /tmp 1777 root root 10d\n"), 0644); err != nil {
 		return err
 	}
 
@@ -367,7 +396,12 @@ func runSystemdAgent() (int, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go logExecReadiness(ctx)
-	return runAgent(&process, true)
+	workload, err := openWorkloadMemory()
+	if err != nil {
+		return 1, err
+	}
+	defer workload.close()
+	return runAgent(&process, true, workload)
 }
 
 // The agent starts beside PID 1's exec of systemd. Once its ordinary service
@@ -404,7 +438,7 @@ func adoptSystemdAgent() error {
 }
 
 func moveAgentProcessTree(pid int, group string, visited map[int]bool) error {
-	if visited[pid] {
+	if visited[pid] || processInWorkloadCgroup(pid) {
 		return nil
 	}
 

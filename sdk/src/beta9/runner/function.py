@@ -81,12 +81,10 @@ def _monitor_task(
             function_stub = FunctionServiceStub(channel)
             gateway_stub = GatewayServiceStub(channel)
 
-            initial_backoff = 5
-            max_retries = 5
+            initial_backoff = 0.2
             backoff = initial_backoff
-            retry = 0
 
-            while retry <= max_retries:
+            while True:
                 try:
                     for response in function_stub.function_monitor(
                         FunctionMonitorRequest(
@@ -124,7 +122,6 @@ def _monitor_task(
                             return False
 
                         # Reset retry state if a valid response was received
-                        retry = 0
                         backoff = initial_backoff
 
                     # Reaching here means that the stream ended with no errors,
@@ -133,19 +130,12 @@ def _monitor_task(
                     return True
 
                 except (grpc.RpcError, ConnectionRefusedError):
-                    if retry == max_retries:
-                        print("Lost connection to task monitor, exiting")
-                        os.kill(runner_pid, signal.SIGABRT)
-                        return False
-
                     time.sleep(backoff)
-                    backoff *= 2
-                    retry += 1
+                    backoff = min(backoff * 1.5, 2.0)
 
-                except BaseException:
+                except Exception:
                     print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-                    os.kill(runner_pid, signal.SIGABRT)
-                    return False
+                    time.sleep(2)
 
     # Outer loop: restart only if the stream ended with no errors
     while True:

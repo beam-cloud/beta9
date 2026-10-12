@@ -1455,8 +1455,10 @@ func TestDeleteContainerStateCleansIndexesByExitHistory(t *testing.T) {
 		exitCode          types.ContainerExitCode
 		setExitCode       bool
 		retainStubHistory bool
+		retainLogs        bool
 	}{
 		{name: "pending cancellation without an exit lease"},
+		{name: "completed function", retainLogs: true},
 		{name: "non-failure stop", exitCode: types.ContainerExitCodeUser, setExitCode: true},
 		{name: "failed exit", exitCode: types.ContainerExitCodeUnknownError, setExitCode: true, retainStubHistory: true},
 	} {
@@ -1467,8 +1469,12 @@ func TestDeleteContainerStateCleansIndexesByExitHistory(t *testing.T) {
 			}
 
 			repo := NewContainerRedisRepositoryForTest(rdb)
+			prefix := types.StubTypeEndpoint
+			if test.retainLogs {
+				prefix = types.StubTypeFunction
+			}
 			state := &types.ContainerState{
-				ContainerId: "endpoint-" + strings.ReplaceAll(test.name, " ", "-"),
+				ContainerId: prefix + "-" + strings.ReplaceAll(test.name, " ", "-"),
 				StubId:      "endpoint-stub",
 				WorkspaceId: "test-workspace",
 				WorkerId:    "worker-one",
@@ -1488,8 +1494,21 @@ func TestDeleteContainerStateCleansIndexesByExitHistory(t *testing.T) {
 				}
 			}
 
+			if err := repo.SetWorkerAddress(state.ContainerId, "worker.internal"); err != nil {
+				t.Fatal(err)
+			}
+
 			if err := repo.DeleteContainerState(state.ContainerId); err != nil {
 				t.Fatal(err)
+			}
+
+			ttl := rdb.TTL(context.Background(), common.RedisKeys.SchedulerWorkerAddress(state.ContainerId)).Val()
+			if test.retainLogs {
+				if ttl <= 0 || ttl > common.CompletedContainerLogRetention {
+					t.Fatalf("invalid function log retention: %s", ttl)
+				}
+			} else if ttl != -2*time.Nanosecond {
+				t.Fatalf("non-function worker address was retained: %s", ttl)
 			}
 
 			stubIndexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)

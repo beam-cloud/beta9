@@ -46,16 +46,55 @@ func TestContainerRuntimeListenerSkipsForwardedPort(t *testing.T) {
 type logAttachmentStream struct {
 	pb.ContainerService_ContainerStreamLogsServer
 	attached bool
+	ctx      context.Context
+	output   strings.Builder
 }
 
 type execCapturingRuntime struct {
 	mockRuntime
 	processes []specs.Process
+	output    string
+	err       error
 }
 
-func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, _ *betaruntime.ExecOpts) error {
+type guestMutationRuntime struct{ execCapturingRuntime }
+
+func (*guestMutationRuntime) Name() string { return types.ContainerRuntimeGvisor.String() }
+
+func TestGvisorFilesystemMutationsRunThroughGuest(t *testing.T) {
+	rt := &guestMutationRuntime{}
+	instance := &ContainerInstance{Id: "sandbox-test", Runtime: rt, Spec: &specs.Spec{Process: &specs.Process{Cwd: "/workspace", User: specs.User{UID: 1000}}}}
+	handled, err := guestFilesystemMutation(context.Background(), instance, "rm", "-rf", "--", "/tmp/a b;echo injected")
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Equal(t, []string{types.WorkerSandboxFilesystemContainerPath, "rm", "-rf", "--", "/tmp/a b;echo injected"}, rt.processes[0].Args)
+	require.Equal(t, "/workspace", rt.processes[0].Cwd)
+	require.Zero(t, rt.processes[0].User.UID)
+	for _, path := range []string{"/", "/tmp/.."} {
+		handled, err = guestFilesystemMutation(context.Background(), instance, "rm", "-rf", "--", path)
+		require.True(t, handled)
+		require.ErrorContains(t, err, "refusing to remove container root")
+	}
+	require.Len(t, rt.processes, 1)
+	instance.Runtime = NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{})
+	handled, err = guestFilesystemMutation(context.Background(), instance, "mkdir", "-p", "/tmp/test")
+	require.NoError(t, err)
+	require.False(t, handled)
+
+	instance.Runtime = rt
+	rt.err = errors.New("exit status 1")
+	rt.output = "mkdir: Not a directory\n"
+	_, err = guestFilesystemMutation(context.Background(), instance, "mkdir", "-p", "/tmp/test")
+	require.ErrorIs(t, err, rt.err)
+	require.ErrorContains(t, err, "mkdir: Not a directory")
+}
+
+func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, opts *betaruntime.ExecOpts) error {
 	r.processes = append(r.processes, process)
-	return nil
+	if r.output != "" && opts != nil && opts.OutputWriter != nil {
+		fmt.Fprint(opts.OutputWriter, r.output)
+	}
+	return r.err
 }
 
 func (s *logAttachmentStream) SendHeader(metadata.MD) error {
@@ -64,7 +103,15 @@ func (s *logAttachmentStream) SendHeader(metadata.MD) error {
 }
 
 func (s *logAttachmentStream) Context() context.Context {
+	if s.ctx != nil {
+		return s.ctx
+	}
 	return context.Background()
+}
+
+func (s *logAttachmentStream) Send(entry *pb.ContainerLogEntry) error {
+	_, err := s.output.WriteString(entry.Msg)
+	return err
 }
 
 func TestContainerStreamLogsAcknowledgesAttachment(t *testing.T) {
@@ -1197,4 +1244,80 @@ func TestContainerSyncWorkspaceStaysInsideWorkspace(t *testing.T) {
 	contents, err = os.ReadFile(hostFile)
 	require.NoError(t, err)
 	require.Equal(t, "host-secret", string(contents))
+}
+
+func TestRequestJournalSurvivesLostReply(t *testing.T) {
+	var journal requestJournal
+	var calls atomic.Int32
+	started, finish := make(chan struct{}), make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	request := &pb.ContainerSandboxExecRequest{ContainerId: "container", Cmd: "side-effect"}
+	run := func(ctx context.Context) (interface{}, error) {
+		calls.Add(1)
+		close(started)
+		<-finish
+		require.NoError(t, ctx.Err())
+		return &pb.ContainerSandboxExecResponse{Ok: true, Pid: 42, Stdout: "one result"}, nil
+	}
+	disconnected := make(chan error)
+	go func() { _, err := journal.Do(ctx, "id", "exec", request, nil, run); disconnected <- err }()
+	<-started
+	cancel()
+	require.ErrorIs(t, <-disconnected, context.Canceled)
+	close(finish)
+	response, err := journal.Do(context.Background(), "id", "exec", request, nil, run)
+	require.NoError(t, err)
+	require.Equal(t, int32(42), response.(*pb.ContainerSandboxExecResponse).Pid)
+	require.Equal(t, int32(1), calls.Load())
+	request.Cmd = "different-command"
+	_, err = journal.Do(context.Background(), "id", "exec", request, nil, run)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestRequestJournalReplaysConsumedOutputUntilAcknowledged(t *testing.T) {
+	var journal requestJournal
+	calls := 0
+	run := func(context.Context) (interface{}, error) {
+		calls++
+		return &pb.ContainerSandboxStdoutResponse{Ok: true, Stdout: "consumed output"}, nil
+	}
+	request := &pb.ContainerSandboxStdoutRequest{Pid: 42}
+	first, err := journal.Do(context.Background(), "first", "stdout", request, nil, run)
+	require.NoError(t, err)
+	replayed, err := journal.Do(context.Background(), "first", "stdout", request, nil, run)
+	require.NoError(t, err)
+	require.Equal(t, first, replayed)
+	require.Equal(t, 1, calls)
+	_, err = journal.Do(context.Background(), "next", "stdout", request, []string{"first"}, run)
+	require.NoError(t, err)
+	require.NotContains(t, journal.entries, "first")
+}
+
+func TestCompletedContainerReplaysLogsWithoutRetainingContainer(t *testing.T) {
+	dockerfile := "FROM ubuntu:22.04"
+	for name, request := range map[string]*types.ContainerRequest{
+		"function": {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}}},
+		"build":    {BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := common.NewLogBuffer()
+			t.Cleanup(logs.Dispose)
+			require.True(t, logs.Write([]byte("first\nremaining\n")))
+			logs.Close()
+			require.Eventually(t, func() bool {
+				n, _ := logs.ReadAt(make([]byte, 6), 0)
+				return n == 6
+			}, time.Second, time.Millisecond)
+			instances := common.NewSafeMap[*ContainerInstance]()
+			server := &ContainerRuntimeServer{containerInstances: instances}
+			worker := &Worker{containerInstances: instances, containerServer: server}
+			instances.Set(name, &ContainerInstance{LogBuffer: logs, Request: request})
+			worker.deleteContainer(name)
+			_, active := instances.Get(name)
+			require.False(t, active)
+			stream := &logAttachmentStream{ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs(common.LogOffsetHeader, "6"))}
+			require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: name}, stream))
+			require.Equal(t, "remaining\n", stream.output.String())
+		})
+	}
 }

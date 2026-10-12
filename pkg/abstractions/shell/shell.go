@@ -50,7 +50,7 @@ const (
 	sshStartupPollIntervalS       time.Duration = 100 * time.Millisecond
 	// Remove systemd from nsswitch.conf to prevent systemd from being used as credential provider by dropbear
 	startupScript    string = `SHELL="$(command -v bash || command -v sh)"; mkdir -p /etc/dropbear; sed -i 's/systemd//g' /etc/nsswitch.conf 2>/dev/null || true; /usr/local/bin/dropbear -e -c "export PATH=$PATH:/usr/local/bin && cd /mnt/code && $SHELL" -p %d -R -E -F 2>> /etc/dropbear/logs.txt`
-	podStartupScript string = `SHELL="$(command -v bash || command -v sh)"; mkdir -p /etc/dropbear; sed -i 's/systemd//g' /etc/nsswitch.conf 2>/dev/null || true; /usr/local/bin/dropbear -e -c "export PATH=$PATH:/usr/local/bin && cd /mnt/code && $SHELL" -p %d -R -E 2>> /etc/dropbear/logs.txt`
+	podStartupScript string = `SHELL="$(command -v bash || command -v sh)"; mkdir -p /etc/dropbear; sed -i 's/systemd//g' /etc/nsswitch.conf 2>/dev/null || true; /usr/local/bin/dropbear -e -c "export PATH=$PATH:/usr/local/bin && cd /mnt/code && $SHELL" -p %d -R -E </dev/null >/dev/null 2>> /etc/dropbear/logs.txt`
 	createUserScript string = `SHELL="$(command -v bash || command -v sh)"; mkdir -p /etc/dropbear; \
 (command -v useradd >/dev/null && useradd -o -m -s $SHELL -u 0 -g 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL --uid 0 --gid 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
@@ -745,7 +745,7 @@ func GenerateShellCredentials() (string, string, error) {
 	return "b9" + strings.ToLower(usernameSuffix), password, nil
 }
 
-func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
+func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, done <-chan struct{}, ttl time.Duration) {
 	ticker := time.NewTicker(containerKeepAliveIntervalS)
 	defer ticker.Stop()
 
@@ -758,7 +758,7 @@ func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, do
 		case <-done:
 			return
 		case <-ticker.C:
-			if err := RefreshContainerTTL(ctx, ss.rdb, containerId); err != nil {
+			if err := extendContainerTTL(ctx, ss.rdb, containerId, ttl); err != nil {
 				log.Error().Err(err).Str("container_id", containerId).Msg("failed to refresh shell TTL")
 				if errors.Is(err, ErrShellLeaseExpired) {
 					return

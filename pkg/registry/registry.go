@@ -153,6 +153,17 @@ func (s *S3Store) PresignGet(ctx context.Context, key string, expires time.Durat
 	return req.URL, nil
 }
 
+func (s *S3Store) PresignPut(ctx context.Context, key string, expires time.Duration) (string, error) {
+	req, err := s3.NewPresignClient(s.client).PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.config.BucketName),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(expires))
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
+}
+
 func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 	start := time.Now()
 	f, err := os.Open(localPath)

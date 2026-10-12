@@ -1,7 +1,8 @@
 """Persistent CPU VMs. File/exec operations share the sandbox transport."""
 
-import shlex
 import os
+import shlex
+import signal
 import socket
 import subprocess
 import sys
@@ -9,24 +10,31 @@ import threading
 import time
 import uuid
 import webbrowser
-from pathlib import Path
 from contextlib import nullcontext, redirect_stdout, suppress
-from urllib.parse import quote
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import quote, urlencode
 
 import click
+import grpc
 import websocket
 from rich import box
-from rich.table import Table
+from rich.table import Column, Table
+from rich.text import Text
 
 from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.vm import VM, identity, prepare_image
 from ..abstractions.volume import Volume
-from ..channel import GatewayHTTPError, ServiceClient
+from ..channel import GatewayHTTPError, ServiceClient, rpc_timeout
+from ..clients.gateway import ListContainersRequest
 from ..config import SDKSettings, get_config_context, get_settings, set_settings
+from ..exceptions import SandboxConnectionError
 from ..logging import StoredStdoutInterceptor
+from ..tunnel import bridge_tunnel
 from . import extraclick
 from .extraclick import ClickManagementGroup
+from .machine_format import format_cpu, format_memory
 
 
 class VMGroup(ClickManagementGroup):
@@ -34,6 +42,8 @@ class VMGroup(ClickManagementGroup):
         try:
             return super().invoke(ctx)
         except GatewayHTTPError as exc:
+            raise click.ClickException(exc.message) from exc
+        except SandboxConnectionError as exc:
             raise click.ClickException(exc.message) from exc
         except (click.ClickException, click.exceptions.Exit):
             raise
@@ -57,6 +67,10 @@ def _key_values(values):
 
 def _vm(service, name):
     return VM.get(name, _service=service)
+
+
+def _progress(message, done, as_json=False):
+    return nullcontext() if as_json else terminal.StepTracker().step(message, done)
 
 
 def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=()):
@@ -108,15 +122,18 @@ def _show(info, as_json):
     "--cpu",
     type=click.FloatRange(min=0.1),
     metavar="CORES",
-    help="CPUs; defaults to 1, or 2 for desktop.",
+    help="CPUs; defaults to 4.",
 )
 @click.option(
     "--memory",
     type=click.IntRange(min=256),
     metavar="MiB",
-    help="RAM in MiB; defaults to 1024, or 2048 for desktop.",
+    help="RAM in MiB; defaults to 8192.",
 )
-@click.option("--disk-size", help="Durable root size; defaults to 50GiB.")
+@click.option(
+    "--disk-size",
+    help="Writable disk over the base image; 1–100 GiB, default 50 GiB.",
+)
 @click.option("--image", "image_uri", help="Base registry image; defaults to ubuntu:22.04.")
 @click.option("--image-id", help="Existing image with Beam VM services installed.")
 @click.option(
@@ -268,8 +285,9 @@ def new(
         _service=service,
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
-        vm.create(wait=False)
-        vm.wait()
+        with _progress("Creating VM", "VM ready", as_json):
+            vm.create(wait=False)
+            vm.wait()
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
@@ -296,12 +314,14 @@ def image_group():
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def image_build(service, build_context, dockerfile, build_secret, desktop, as_json):
+    """Build a VM image from a local Dockerfile."""
     dockerfile = dockerfile or str(Path(build_context) / "Dockerfile")
     image = _image(dockerfile, build_context, secrets=build_secret)
     with StoredStdoutInterceptor(capture_logs=as_json):
-        result = prepare_image(image, service, desktop).build()
-    if not result.success:
-        raise click.ClickException(result.error or "VM image build failed")
+        with _progress("Preparing image", "Image ready", as_json):
+            result = prepare_image(image, service, desktop).build()
+            if not result.success:
+                raise click.ClickException(result.error or "VM image build failed")
     if as_json:
         terminal.print_json({"image_id": result.image_id, "desktop": desktop})
     else:
@@ -315,16 +335,82 @@ def image_build(service, build_context, dockerfile, build_secret, desktop, as_js
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def list_vms(service, include_all, as_json, metadata=(), status=None):
-    """List VMs and their current state."""
-    _show(
-        VM.list(
-            all=include_all,
-            metadata=_key_values(metadata) if metadata else None,
-            status=status,
-            _service=service,
-        ),
-        as_json,
+    """List VM resources, disk sizes and current uptime."""
+    records = VM.list(
+        all=include_all,
+        metadata=_key_values(metadata) if metadata else None,
+        status=status,
+        _service=service,
     )
+    if as_json:
+        terminal.print_json(records)
+        return
+
+    if not records:
+        terminal.resource("No VMs found", {"Create": f"{terminal.cli_name()} vm new"})
+        return
+
+    starts = {}
+    if any(record.get("status") == "running" for record in records):
+        # One bounded lookup for the current boot, rather than the VM's creation date.
+        with suppress(grpc.RpcError), rpc_timeout(5):
+            response = service.gateway.list_containers(ListContainersRequest())
+            if response.ok:
+                starts = {c.container_id: c.started_at for c in response.containers}
+    terminal.print(_vm_table(records, starts))
+
+
+def _vm_table(records, starts):
+    table = Table(
+        Column("Name", overflow="ellipsis"),
+        Column("Status", min_width=8, no_wrap=True),
+        Column("Size", min_width=16, no_wrap=True),
+        Column("Disk", justify="right", no_wrap=True),
+        Column("Uptime", no_wrap=True),
+        Column("ID", min_width=19, max_width=19, style="dim", no_wrap=True),
+        box=box.SIMPLE,
+        header_style="bold cyan",
+        collapse_padding=True,
+    )
+    now = datetime.now(timezone.utc)
+    colors = {
+        "running": "green",
+        "starting": "cyan",
+        "stopping": "yellow",
+        "paused": "yellow",
+        "stopped": "dim",
+        "error": "red",
+        "deleted": "dim",
+    }
+    for record in records:
+        spec = record.get("spec", {})
+        size = " · ".join(
+            formatter(spec[key])
+            for key, formatter in (("cpu", format_cpu), ("memory", format_memory))
+            if spec.get(key)
+        )
+        status = record.get("status", "")
+        disk = str(spec.get("disk_size") or "")
+        if disk.isdigit():
+            disk = terminal.humanize_memory(int(disk)).replace(".00", "").replace(" ", "")
+        started = starts.get(record.get("container_id")) if status == "running" else None
+        uptime = (
+            terminal.humanize_duration(max(now - started, timedelta()), compact=True)
+            if started and started.timestamp() > 0
+            else "-"
+        )
+        table.add_row(
+            record["name"],
+            Text(status, style=colors.get(status, "")),
+            size or "-",
+            disk or "-",
+            uptime,
+            record["id"],
+        )
+    count, suffix = terminal.pluralize(records)
+    table.add_section()
+    table.add_row(f"[bold]{count} VM{suffix}")
+    return table
 
 
 @management.command("get")
@@ -355,6 +441,7 @@ def get_vm(service, name, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json, idle_action=None):
+    """Update idle sleep, automatic resume and metadata."""
     if metadata and clear_metadata:
         raise click.UsageError("Choose --metadata or --clear-metadata")
     values = _key_values(metadata) if metadata or clear_metadata else None
@@ -371,6 +458,7 @@ def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def network_vm(service, name, block, allow, as_json):
+    """Set outbound network permissions."""
     vm = _vm(service, name).update_network_permissions(block_network=block, allow_list=list(allow))
     _show(vm.info, as_json)
 
@@ -380,8 +468,26 @@ def network_vm(service, name, block, allow, as_json):
 @click.option("--rotate", is_flag=True)
 @extraclick.pass_service_client
 def access_token_vm(service, name, rotate):
+    """Print or rotate the token for protected URLs."""
     vm = _vm(service, name)
     click.echo(vm.rotate_access_token() if rotate else vm.traffic_access_token)
+
+
+@management.command("access-url")
+@click.argument("name")
+@click.argument("port", type=click.IntRange(1, 65535))
+@click.option(
+    "--ttl",
+    type=click.IntRange(1, 3600),
+    default=600,
+    show_default=True,
+    metavar="SECONDS",
+    help="Access link lifetime, from 1 to 3600 seconds.",
+)
+@extraclick.pass_service_client
+def access_url_vm(service, name, port, ttl):
+    """Print a temporary browser link for a protected port."""
+    click.echo(_vm(service, name).access_url(port, ttl=ttl))
 
 
 @management.command("start")
@@ -390,7 +496,10 @@ def access_token_vm(service, name, rotate):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def start_vm(service, name, as_json, cold=False):
-    _show(_vm(service, name).start(cold=cold).info, as_json)
+    """Start a stopped VM or resume its saved memory."""
+    with _progress("Starting VM", "VM ready", as_json):
+        vm = _vm(service, name).start(cold=cold)
+    _show(vm.info, as_json)
 
 
 management.add_command(start_vm, "resume")
@@ -401,7 +510,10 @@ management.add_command(start_vm, "resume")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def pause_vm(service, name, as_json):
-    _show(_vm(service, name).pause().info, as_json)
+    """Save memory and disk, then release compute."""
+    with _progress("Pausing VM", "VM paused", as_json):
+        vm = _vm(service, name).pause()
+    _show(vm.info, as_json)
 
 
 @management.command("stop")
@@ -410,14 +522,20 @@ def pause_vm(service, name, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def stop_vm(service, name, no_snapshot, as_json):
-    _show(_vm(service, name).stop(no_snapshot).info, as_json)
+    """Save the root and shut down the VM."""
+    message = "Stopping VM" if no_snapshot else "Snapshotting and stopping VM"
+    with _progress(message, "VM stopped", as_json):
+        vm = _vm(service, name).stop(no_snapshot)
+    _show(vm.info, as_json)
 
 
 @management.command("rm")
 @click.argument("name")
 @extraclick.pass_service_client
 def remove_vm(service, name):
-    _vm(service, name).remove()
+    """Delete a VM and its root disk."""
+    with _progress("Removing VM", "VM removed"):
+        _vm(service, name).remove()
 
 
 @management.command("fork")
@@ -426,11 +544,14 @@ def remove_vm(service, name):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def fork_vm(service, source, name, as_json):
-    for item in VM(_service=service)._api("GET", "/artifacts/snapshot"):
-        if item["id"] == source:
-            _show(VM(name, snapshot=source, _service=service).create().info, as_json)
-            return
-    _show(_vm(service, source).fork(name).info, as_json)
+    """Create an independent VM from a VM or snapshot."""
+    with _progress("Forking VM", "VM ready", as_json):
+        snapshots = VM(_service=service)._api("GET", "/artifacts/snapshot")
+        if any(item["id"] == source for item in snapshots):
+            vm = VM(name, snapshot=source, _service=service).create()
+        else:
+            vm = _vm(service, source).fork(name)
+    _show(vm.info, as_json)
 
 
 @management.command(
@@ -450,6 +571,7 @@ def fork_vm(service, source, name, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False):
+    """Run a command; put CLI options before NAME."""
     from .container import exec_container
 
     command = _command(command)
@@ -500,6 +622,7 @@ def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def processes_vm(service, name, as_json):
+    """List managed processes and their exit status."""
     processes = _vm(service, name).process.list_processes()
     rows = [
         {"pid": p.pid, "args": p.args, "cwd": p.cwd, "exit_code": p.exit_code}
@@ -521,6 +644,7 @@ def processes_vm(service, name, as_json):
 )
 @extraclick.pass_service_client
 def kill_vm(service, name, pid, container_id):
+    """Stop a managed process."""
     vm = _vm(service, name)
     if container_id and container_id != vm.info["container_id"]:
         raise click.ClickException("The VM restarted; this process belongs to a previous runtime")
@@ -532,6 +656,7 @@ def kill_vm(service, name, pid, container_id):
 @click.argument("name")
 @extraclick.pass_service_client
 def metrics_vm(service, name):
+    """Show CPU, memory and disk usage as JSON."""
     terminal.print_json(_vm(service, name).metrics())
 
 
@@ -549,7 +674,7 @@ def _url(service, name, field, open_url):
 
 
 def _url_command(feature):
-    @management.command(feature)
+    @management.command(feature, help=f"Print or open the browser {feature} URL.")
     @click.argument("name")
     @click.option("--open/--no-open", "open_url", default=True)
     @click.option(
@@ -574,6 +699,7 @@ terminal_vm = _url_command("terminal")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def ports_vm(service, name, as_json):
+    """List published ports and their stable URLs."""
     urls = _vm(service, name).info["urls"]
     if as_json:
         terminal.print_json(urls)
@@ -588,6 +714,7 @@ def ports_vm(service, name, as_json):
 @click.argument("port", type=click.IntRange(1, 65535))
 @extraclick.pass_service_client
 def expose_vm(service, name, port, protected=None):
+    """Publish a port with a stable URL."""
     click.echo(_vm(service, name).expose(port, protected=protected))
 
 
@@ -596,51 +723,22 @@ def expose_vm(service, name, port, protected=None):
 @click.argument("port", type=click.IntRange(1, 65535))
 @extraclick.pass_service_client
 def unexpose_vm(service, name, port):
+    """Remove a published port."""
     _vm(service, name).unexpose(port)
 
 
-def _socket(vm, port):
+def _socket(vm, port, session):
     url = vm._service.http.url(f"/api/v1/vm/{{ws}}/{quote(vm.id, safe='')}/tunnel/{port}")
+    url = url.replace("https://", "wss://").replace("http://", "ws://")
     return websocket.create_connection(
-        url.replace("https://", "wss://").replace("http://", "ws://"),
+        url + "?" + urlencode({"protocol": 2, "session": session}),
         header=vm._service.http.headers,
         timeout=30,
     )
 
 
 def _bridge(vm, port, source, target):
-    remote = _socket(vm, port)
-    remote.settimeout(None)
-    stopped = threading.Event()
-
-    def upload():
-        try:
-            while not stopped.is_set():
-                data = source.read1(65536) if hasattr(source, "read1") else source.read(65536)
-                if not data:
-                    remote.send("EOF")
-                    return
-                remote.send_binary(data)
-        except (OSError, websocket.WebSocketException):
-            stopped.set()
-            remote.close()
-
-    thread = threading.Thread(target=upload, daemon=True)
-    thread.start()
-    try:
-        while not stopped.is_set():
-            data = remote.recv()
-            if not data:
-                break
-            if not isinstance(data, bytes):
-                raise RuntimeError("Tunnel returned a non-binary frame")
-            target.write(data)
-            target.flush()
-    except (OSError, websocket.WebSocketException):
-        pass
-    finally:
-        stopped.set()
-        remote.close()
+    bridge_tunnel(lambda session: _socket(vm, port, session), source, target)
 
 
 @management.command("tunnel", hidden=True)
@@ -658,14 +756,32 @@ def _run_tunnel(profile, config_path, cli_name, vm_id, port):
     token = os.getenv("BEAM_TOKEN" if cli_name.lower() == "beam" else "BETA9_TOKEN")
     set_settings(SDKSettings(name=cli_name, config_path=Path(config_path), api_token=token))
     target = sys.stdout.buffer
-    with redirect_stdout(sys.stderr):
-        with ServiceClient(get_config_context(profile)) as service:
-            _bridge(_vm(service, vm_id), port, sys.stdin.buffer, target)
+    # OpenSSH terminates its proxy after a remote command exits. Unwind the
+    # tunnel first so the worker can release its reconnect lease immediately.
+    previous = {}
+
+    def terminate(*_):
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(0)
+
+    for name in ("SIGHUP", "SIGTERM"):
+        if sig := getattr(signal, name, None):
+            previous[sig] = signal.signal(sig, terminate)
+    try:
+        with redirect_stdout(sys.stderr):
+            with ServiceClient(get_config_context(profile)) as service:
+                _bridge(_vm(service, vm_id), port, sys.stdin.buffer, target)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def _ssh_options(vm):
     if not vm.info["spec"]["ssh"]:
         raise click.ClickException("SSH was disabled for this VM")
+    if vm.info.get("status") in ("stopped", "paused"):
+        vm._sandbox()
     vm.wait(services=True)
     settings = get_settings()
     helper = (
@@ -698,6 +814,7 @@ def _ssh_options(vm):
 @click.argument("command", nargs=-1, type=click.UNPROCESSED)
 @extraclick.pass_service_client
 def ssh_vm(service, name, command):
+    """Open an SSH shell or run a remote command."""
     command = _command(command)
     vm = _vm(service, name)
     argv = ["ssh", *_ssh_options(vm), "-p", "2222", "--", "root@" + vm.name]
@@ -712,6 +829,7 @@ def ssh_vm(service, name, command):
 @click.option("-r", "recursive", is_flag=True)
 @extraclick.pass_service_client
 def scp_vm(service, source, destination, recursive):
+    """Copy files to or from NAME:/remote/path."""
     remote = [value for value in (source, destination) if ":" in value]
     if len(remote) != 1:
         raise click.UsageError("Specify one VM path: NAME:/remote/path")
@@ -771,6 +889,7 @@ def _sync(vm, directory, watch):
 @click.option("--watch", is_flag=True)
 @extraclick.pass_service_client
 def sync_vm(service, name, directory, watch):
+    """Upload a directory, optionally watching for edits."""
     _sync(_vm(service, name), directory, watch)
 
 
@@ -780,6 +899,7 @@ def sync_vm(service, name, directory, watch):
 @click.option("--local-port", type=click.IntRange(1, 65535))
 @extraclick.pass_service_client
 def forward_vm(service, name, port, local_port):
+    """Forward a private VM port to localhost."""
     try:
         parts = [int(value) for value in port.split(":")]
         if len(parts) == 2 and local_port is None:
@@ -805,7 +925,12 @@ def forward_vm(service, name, port, local_port):
 
     def connection(client):
         with client, client.makefile("rb") as source, client.makefile("wb") as target:
-            _bridge(vm, port, source, target)
+            try:
+                _bridge(vm, port, source, target)
+            finally:
+                # Wake the input reader before closing its buffered file.
+                with suppress(OSError):
+                    client.shutdown(socket.SHUT_RDWR)
 
     try:
         while True:
@@ -826,7 +951,10 @@ def snapshot_group():
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def snapshot_create(service, vm_name, name, as_json):
-    _show(_vm(service, vm_name).snapshot(name), as_json)
+    """Capture a filesystem restore point."""
+    with _progress("Snapshotting VM", "Snapshot created", as_json):
+        snapshot = _vm(service, vm_name).snapshot(name)
+    _show(snapshot, as_json)
 
 
 @snapshot_group.command("list")
@@ -835,6 +963,7 @@ def snapshot_create(service, vm_name, name, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def snapshot_list(service, vm_name, include_all, as_json):
+    """List filesystem restore points."""
     items = VM(_service=service)._api("GET", "/artifacts/snapshot")
     if vm_name:
         vm = _vm(service, vm_name)
@@ -846,6 +975,7 @@ def snapshot_list(service, vm_name, include_all, as_json):
 @click.argument("name")
 @extraclick.pass_service_client
 def snapshot_rm(service, name):
+    """Delete a filesystem restore point."""
     VM(_service=service).remove_snapshot(name)
 
 
@@ -854,13 +984,14 @@ def snapshot_rm(service, name):
 @click.argument("path", type=click.Path(dir_okay=False))
 @extraclick.pass_service_client
 def screenshot_vm(service, name, path):
+    """Save a desktop screenshot as a local PNG."""
     _vm(service, name).desktop.screenshot(path)
     click.echo(path)
 
 
 @management.group("template")
 def template_group():
-    """Save reusable private VM roots, independently of the source VM."""
+    """Manage reusable private VM roots."""
 
 
 @template_group.command("create")
@@ -871,15 +1002,19 @@ def template_group():
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_create(service, vm_name, name, description, public, as_json):
+    """Save the VM root as a reusable private template."""
     if public:
         raise click.UsageError("Public templates are unsupported; complete VM roots remain private")
-    _show(_vm(service, vm_name).create_template(name, description), as_json)
+    with _progress("Creating template", "Template created", as_json):
+        template = _vm(service, vm_name).create_template(name, description)
+    _show(template, as_json)
 
 
 @template_group.command("list")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_list(service, as_json):
+    """List private VM templates."""
     _show(VM(_service=service)._api("GET", "/artifacts/template"), as_json)
 
 
@@ -888,6 +1023,7 @@ def template_list(service, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_show(service, name, as_json):
+    """Show a private VM template."""
     for item in VM(_service=service)._api("GET", "/artifacts/template"):
         if item["name"] == name or item["id"] == name:
             _show(item, as_json)
@@ -899,6 +1035,7 @@ def template_show(service, name, as_json):
 @click.argument("name")
 @extraclick.pass_service_client
 def template_rm(service, name):
+    """Delete a private VM template."""
     VM(_service=service)._api("DELETE", "/artifacts/template/" + quote(name, safe=""))
 
 
@@ -910,6 +1047,7 @@ def template_rm(service, name):
 @click.option("--cwd", default="/workspace")
 @extraclick.pass_service_client
 def prompt_vm(service, name, prompt, agent, background, cwd):
+    """Run an installed agent with durable session logs."""
     vm = _vm(service, name)
     session = "prompt-" + uuid.uuid4().hex[:12]
     log_dir = "/workspace/.beam-vm/logs"
@@ -940,9 +1078,10 @@ def prompt_vm(service, name, prompt, agent, background, cwd):
 @click.option("-f", "follow", is_flag=True)
 @extraclick.pass_service_client
 def logs_vm(service, name, unit, session, follow, pid=None):
+    """Read systemd, prompt session or managed process logs."""
+    if sum(value is not None for value in (pid, unit, session)) > 1:
+        raise click.UsageError("Choose one of --pid, --unit, or --session")
     if pid is not None:
-        if unit or session:
-            raise click.UsageError("Choose one of --pid, --unit, or --session")
         vm = _vm(service, name)
         if follow:
             with vm.keep_alive():

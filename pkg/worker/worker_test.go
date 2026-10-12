@@ -565,6 +565,41 @@ func TestEnsureGVisorShmemTHP(t *testing.T) {
 	}
 }
 
+func TestEnsureGVisorMaxMapCount(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		changed     bool
+	}{
+		{"raise default", "65530\n", true},
+		{"preserve minimum", "4194304\n", false},
+		{"preserve higher", "8388608\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "max_map_count")
+			require.NoError(t, os.WriteFile(path, []byte(tc.value), 0400))
+			if tc.changed {
+				require.NoError(t, os.Chmod(path, 0600))
+			}
+			changed, err := ensureGVisorMaxMapCount(path)
+			require.NoError(t, err)
+			require.Equal(t, tc.changed, changed)
+			value, err := os.ReadFile(path)
+			require.NoError(t, err)
+			if tc.changed {
+				require.Equal(t, "4194304\n", string(value))
+			} else {
+				require.Equal(t, tc.value, string(value))
+			}
+		})
+	}
+	path := filepath.Join(t.TempDir(), "max_map_count")
+	_, err := ensureGVisorMaxMapCount(path)
+	require.Error(t, err)
+	require.NoError(t, os.WriteFile(path, []byte("invalid\n"), 0600))
+	_, err = ensureGVisorMaxMapCount(path)
+	require.ErrorContains(t, err, "parse vm.max_map_count")
+}
+
 func TestContainerStartLimitForRuntimeUsesRuntimeName(t *testing.T) {
 	t.Setenv(types.WorkerStartConcurrencyEnv, "")
 
@@ -1403,6 +1438,7 @@ func TestFailContainerRequestReportsExitCode(t *testing.T) {
 
 	repoClient := &fakeContainerRepoClient{}
 	request := &types.ContainerRequest{ContainerId: "container-failed-start-cleanup"}
+	request.Stub.Type = types.StubType(types.StubTypeVM)
 	tempDir := filepath.Join(baseConfigPath, request.ContainerId)
 	require.NoError(t, os.MkdirAll(tempDir, 0o755))
 	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
@@ -1418,7 +1454,7 @@ func TestFailContainerRequestReportsExitCode(t *testing.T) {
 
 	require.Equal(t, 1, repoClient.setExitCodeCalls)
 	require.Equal(t, request.ContainerId, repoClient.lastSetExitCode.ContainerId)
-	require.Equal(t, int32(1), repoClient.lastSetExitCode.ExitCode)
+	require.Equal(t, int32(types.ContainerExitCodeStartupFailed), repoClient.lastSetExitCode.ExitCode)
 	require.NoDirExists(t, tempDir)
 }
 

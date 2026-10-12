@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Exec=xterm -fa "Ubuntu Mono" -fs 12 -bg "#17171c" -fg "#ededee"
+Icon=/opt/beam-vm/terminal.svg
+Path=/workspace
+Terminal=false

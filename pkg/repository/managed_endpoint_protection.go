@@ -123,7 +123,7 @@ func (r *ManagedEndpointRedisRepository) setReplicaProtection(ctx context.Contex
 		return nil, errors.New("worker resource version exhausted")
 	}
 	workers := &WorkerRedisRepository{rdb: r.rdb, lock: r.lock}
-	usage, err := workers.getWorkerReservedCapacity(ctx, workerID)
+	usage, err := workers.getWorkerReservedCapacity(ctx, worker)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (r *ManagedEndpointRedisRepository) setReplicaProtection(ctx context.Contex
 		if err != nil {
 			return nil, ErrReplicaProtectionChanged
 		}
-		memory = capacityMemoryForRequest(&types.ContainerRequest{Memory: memory})
+		memory = capacityMemoryForRequest(&types.ContainerRequest{Memory: memory, UseVM: worker.Runtime == types.ContainerRuntimeMicroVM.String()})
 		gpuCount := gpuCountForCapacity(state["gpu"], nil, uint32(gpu))
 		if protected {
 			if usage.evictableCPU < cpu || usage.evictableMemory < memory || usage.evictableGPU < gpuCount {

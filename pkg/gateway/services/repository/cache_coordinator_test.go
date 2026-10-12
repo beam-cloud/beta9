@@ -2,6 +2,7 @@ package repository_services
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
@@ -17,6 +18,46 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 )
+
+func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
+	t.Setenv("AWS_ROLE_ARN", "")
+	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
+	s := &WorkerRepositoryService{
+		backendRepo: &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
+		appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{Registries: types.ImageRegistriesConfig{S3: types.S3ImageRegistryConfig{
+			BucketName: "images", Region: "us-east-1", AccessKey: "test-key", SecretKey: "test-secret",
+		}}}},
+	}
+	ctx := cacheRepositoryWorkspaceAuthContext("workspace-a")
+	request := &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-a", StubId: "stub-id", ImageId: "image-id", ImageArchiveUploadId: "stub-id-1780000000"}
+	for _, data := range []bool{false, true} {
+		request.ImageArchiveUploadData = data
+		response, err := s.GetCacheOriginCredentials(ctx, request)
+		require.NoError(t, err)
+		require.True(t, response.Ok, response.ErrorMsg)
+		u, err := url.Parse(response.ImageArchiveUploadUrl)
+		require.NoError(t, err)
+		extension := reg.RemoteImageFileExtension
+		if data {
+			extension = reg.LocalImageFileExtension
+		}
+		require.Equal(t, "/stub-id-1780000000."+extension, u.Path)
+		require.Equal(t, "900", u.Query().Get("X-Amz-Expires"))
+		require.Nil(t, response.ImageArchiveStorage)
+	}
+	for _, id := range []string{"other-stub-1780000000", "stub-id-../private", "stub-id--1"} {
+		request.ImageArchiveUploadId = id
+		response, err := s.GetCacheOriginCredentials(ctx, request)
+		require.NoError(t, err)
+		require.False(t, response.Ok)
+		require.Empty(t, response.ImageArchiveUploadUrl)
+	}
+	request.ImageArchiveUploadId = "stub-id-1780000000"
+	request.WorkspaceId = "workspace-b"
+	response, err := s.GetCacheOriginCredentials(ctx, request)
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+}
 
 type pruneCheckpointBackendRepo struct {
 	repository.BackendRepository
@@ -560,6 +601,9 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	}
 	service := &WorkerRepositoryService{
 		backendRepo: backendRepo,
+		appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{
+			BuildRegistry: "build.example.com", BuildRepositoryName: "stage/images", BuildRegistryInsecure: true,
+		}},
 	}
 
 	resp, err := service.GetCacheOriginCredentials(
@@ -575,6 +619,9 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
+	require.Equal(t, "build.example.com", resp.BuildRegistry)
+	require.Equal(t, "stage/images", resp.BuildRepositoryName)
+	require.True(t, resp.BuildRegistryInsecure)
 	require.Equal(t, 1, backendRepo.workspaceWithSigningCalls)
 	require.Zero(t, backendRepo.workspaceByExternalCalls)
 	require.Zero(t, backendRepo.workspaceCalls)

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
@@ -66,9 +69,21 @@ func (s *Worker) prepareSandboxProcess(request *types.ContainerRequest, spec *sp
 			spec.Process.User = specs.User{UID: 0, GID: 0}
 			spec.Process.Env = upsertEnvVars(spec.Process.Env, []string{"HOME=/root"})
 		}
+		processManagerPath := types.WorkerSandboxProcessManagerWorkerPath
+		if request.Checkpoint != nil && !request.Checkpoint.IsFilesystemOnly() {
+			savedPath := filepath.Join(s.checkpointPath(request.Checkpoint.CheckpointId), checkpointProcessManagerFile)
+			if info, err := os.Lstat(savedPath); err == nil {
+				if !info.Mode().IsRegular() || info.Size() == 0 {
+					return errors.New("invalid checkpoint process manager")
+				}
+				processManagerPath = savedPath
+			} else if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("read checkpoint process manager: %w", err)
+			}
+		}
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Type:        "bind",
-			Source:      types.WorkerSandboxProcessManagerWorkerPath,
+			Source:      processManagerPath,
 			Destination: types.WorkerSandboxProcessManagerContainerPath,
 			Options: []string{
 				"ro",
@@ -78,6 +93,14 @@ func (s *Worker) prepareSandboxProcess(request *types.ContainerRequest, spec *sp
 				"nodev",
 			},
 		})
+
+		if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
+			// Guest VFS mutations must also work in images without mkdir or rm.
+			helper := spec.Mounts[len(spec.Mounts)-1]
+			helper.Source = types.WorkerSandboxFilesystemWorkerPath
+			helper.Destination = types.WorkerSandboxFilesystemContainerPath
+			spec.Mounts = append(spec.Mounts, helper)
+		}
 	}
 
 	// Add Docker capabilities if enabled for sandbox containers.
@@ -232,7 +255,11 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	// device and the guest has netfilter, so dockerd runs with its defaults
 	// (overlay2, bridge, iptables) and inner containers get real networking.
 	if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeMicroVM.String() {
-		cmd = []string{"dockerd"}
+		cmd = []string{
+			"dockerd",
+			"--exec-opt=native.cgroupdriver=cgroupfs",
+			"--cgroup-parent=" + strings.TrimPrefix(microvm.WorkloadCgroup, sandboxCgroupRoot),
+		}
 	}
 
 	// dockerd runs in the foreground; waiting here would block readiness checks.

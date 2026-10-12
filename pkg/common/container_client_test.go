@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -147,4 +148,33 @@ func TestStreamLogsReadyWaitsForWorkerAttachment(t *testing.T) {
 		t.Fatal("did not report worker attachment")
 	}
 	require.NoError(t, <-done)
+}
+
+type logMetadataServer struct {
+	pb.UnimplementedContainerServiceServer
+}
+
+func (logMetadataServer) ContainerStreamLogs(_ *pb.ContainerStreamLogsRequest, stream pb.ContainerService_ContainerStreamLogsServer) error {
+	md, _ := metadata.FromIncomingContext(stream.Context())
+	return stream.Send(&pb.ContainerLogEntry{Msg: strings.Join(md.Get("authorization"), "") + ":" + strings.Join(md.Get(LogOffsetHeader), "")})
+}
+
+func TestContainerClientForwardsLogCursor(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	pb.RegisterContainerServiceServer(server, logMetadataServer{})
+	go func() { _ = server.Serve(lis) }()
+	t.Cleanup(server.Stop)
+
+	client, err := NewContainerClient(lis.Addr().String(), "token", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(LogOffsetHeader, "128"))
+	output := make(chan OutputMsg, 1)
+
+	require.NoError(t, client.StreamLogs(ctx, "container-id", output))
+	require.Equal(t, "Bearer token:128", (<-output).Msg)
 }

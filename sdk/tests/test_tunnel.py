@@ -1,0 +1,293 @@
+import io
+import json
+import queue
+import subprocess
+import sys
+from uuid import UUID
+
+import pytest
+
+from beta9.tunnel import Tunnel
+
+
+@pytest.mark.parametrize("close_frame", ["", "{", "[]", "null"])
+@pytest.mark.parametrize("invalid_control", [False, True])
+def test_close_frame_does_not_replace_the_tunnel_result(close_frame, invalid_control):
+    class Remote:
+        closed = False
+        closing = False
+
+        def settimeout(self, _):
+            pass
+
+        def close(self):
+            self.closed = True
+
+        def send(self, message):
+            control = json.loads(message)
+            if control["type"] == "read":
+                self.read_id = control["id"]
+            if control["type"] == "close":
+                self.closing = True
+
+        def recv(self):
+            if self.closing:
+                return close_frame
+            return json.dumps({"type": "invalid" if invalid_control else "eof", "id": self.read_id})
+
+    remote = Remote()
+    tunnel = Tunnel(lambda _: remote, io.BytesIO(), io.BytesIO())
+    if invalid_control:
+        with pytest.raises(RuntimeError, match="Invalid tunnel control"):
+            tunnel.run()
+    else:
+        tunnel.run()
+    assert remote.closed
+
+
+def test_remote_eof_exits_cleanly_while_stdin_remains_open():
+    script = """
+import json,sys,time
+from beta9.tunnel import Tunnel
+class Remote:
+    def settimeout(self, _): pass
+    def close(self): assert self.close_acked
+    def send(self, message):
+        control = json.loads(message)
+        if control['type'] == 'read': self.read_id = control['id']
+        if control['type'] == 'close': self.close_id = control['id']
+    def recv(self):
+        time.sleep(.1)
+        if hasattr(self, 'close_id'):
+            self.close_acked = True
+            return json.dumps({'type': 'input', 'id': self.close_id})
+        return json.dumps({'type': 'eof', 'id': self.read_id})
+Tunnel(lambda _: Remote(), sys.stdin.buffer, sys.stdout.buffer).run()
+print('clean exit')
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        # communicate() would close stdin and hide the OpenSSH shutdown race.
+        assert process.wait(timeout=5) == 0, process.stderr.read().decode()
+        assert process.stdout.read() == b"clean exit\n"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
+
+
+def test_successful_reattachment_resets_recovery_before_the_first_reply(monkeypatch):
+    clock = [0.0]
+    sessions = []
+    delays = []
+    monkeypatch.setattr("beta9.channel.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("beta9.channel.time.sleep", delays.append)
+
+    class Remote:
+        def settimeout(self, _):
+            pass
+
+        def close(self):
+            pass
+
+        def send(self, message):
+            control = json.loads(message)
+            if control["type"] == "close":
+                self.close_id = control["id"]
+            if control["type"] == "read":
+                self.read_id = control["id"]
+
+        def recv(self):
+            if len(sessions) < 5:
+                raise ConnectionResetError("gateway cycled before its first reply")
+            if hasattr(self, "close_id"):
+                return json.dumps({"type": "input", "id": self.close_id})
+            return json.dumps({"type": "eof", "id": self.read_id})
+
+    def connect(session):
+        # Each outage fits the recovery budget; their total does not.
+        clock[0] += 50
+        sessions.append(session)
+        return Remote()
+
+    Tunnel(connect, io.BytesIO(), io.BytesIO()).run()
+    assert len(sessions) == 5
+    assert len(set(sessions)) == 1
+    assert delays == pytest.approx([0.2, 0.3, 0.45, 0.675])
+
+
+def test_failed_reattachments_still_exhaust_recovery(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("beta9.channel.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+
+    def connect(_):
+        clock[0] += 50
+        raise ConnectionRefusedError("gateway unavailable")
+
+    with pytest.raises(TimeoutError, match="Gateway did not reconnect"):
+        Tunnel(connect, io.BytesIO(), io.BytesIO()).run()
+    assert clock[0] == 200
+
+
+def test_tunnel_reuses_requests_when_gateway_loses_replies_and_acknowledgements(monkeypatch):
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    payload = bytes(range(256)) * 1024
+    received = bytearray()
+    output = b"echo:" + payload
+    responses = {}
+    connects = []
+    output_offset = 0
+    input_eof = False
+    lost_input_ack = lost_output_reply = lost_output_ack = False
+    output_delivered = False
+
+    class Remote:
+        def __init__(self):
+            self.messages = queue.Queue()
+            self.read = None
+
+        def settimeout(self, _):
+            pass
+
+        def close(self):
+            self.messages.put(ConnectionResetError())
+
+        def recv(self):
+            message = self.messages.get(timeout=5)
+            if isinstance(message, Exception):
+                raise message
+            return message
+
+        def send_binary(self, frame):
+            nonlocal lost_input_ack
+            request = str(UUID(bytes=frame[:16]))
+            if request not in responses:
+                received.extend(frame[32:])
+                responses[request] = json.dumps({"type": "input", "id": request})
+            if not lost_input_ack:
+                lost_input_ack = True
+                self.messages.put(ConnectionResetError("lost stdin reply"))
+            else:
+                self.messages.put(responses[request])
+
+        def send(self, message):
+            nonlocal input_eof, lost_output_ack
+            control = json.loads(message)
+            request = control["id"]
+            if control["type"] == "close":
+                self.messages.put(json.dumps({"type": "input", "id": request}))
+            elif control["type"] == "eof":
+                input_eof = True
+                responses[request] = json.dumps({"type": "input", "id": request})
+                self.messages.put(responses[request])
+                if self.read:
+                    self.reply(self.read)
+            elif control["type"] == "read":
+                if output_delivered and not lost_output_ack:
+                    lost_output_ack = True
+                    raise ConnectionResetError("lost stdout ack before next read")
+                self.read = request
+                if input_eof:
+                    self.reply(request)
+
+        def reply(self, request):
+            nonlocal output_offset, lost_output_reply, output_delivered
+            if request not in responses:
+                chunk = output[output_offset : output_offset + 65536]
+                output_offset += len(chunk)
+                responses[request] = (
+                    UUID(request).bytes + chunk
+                    if chunk
+                    else json.dumps({"type": "eof", "id": request})
+                )
+            if not lost_output_reply:
+                lost_output_reply = True
+                self.messages.put(ConnectionResetError("lost stdout reply after reading"))
+            else:
+                self.messages.put(responses[request])
+                output_delivered = True
+
+    def connect(session):
+        connects.append(session)
+        return Remote()
+
+    class PartialWriter(io.BytesIO):
+        def write(self, data):
+            return super().write(data[:13])
+
+    target = PartialWriter()
+    Tunnel(connect, io.BytesIO(payload), target).run()
+    assert bytes(received) == payload
+    assert target.getvalue() == output
+    assert len(connects) == 4
+    assert len(set(connects)) == 1
+
+
+def test_tunnel_processes_input_ack_while_local_output_is_blocked():
+    import threading
+
+    writable = threading.Event()
+
+    class Remote:
+        def __init__(self):
+            self.messages = queue.Queue()
+            self.read = None
+            self.input = None
+            self.responded = False
+            self.writes = 0
+
+        def settimeout(self, _):
+            pass
+
+        def close(self):
+            self.messages.put(ConnectionResetError())
+
+        def recv(self):
+            return self.messages.get(timeout=5)
+
+        def reply(self):
+            if self.read and self.input and not self.responded:
+                # Output arrives before stdin's ack, just as two RPCs can complete.
+                self.messages.put(UUID(self.read).bytes + b"output")
+                self.messages.put(json.dumps({"type": "input", "id": self.input}))
+                self.responded = True
+
+        def send_binary(self, frame):
+            self.writes += 1
+            self.input = str(UUID(bytes=frame[:16]))
+            if self.writes == 1:
+                self.reply()
+            else:
+                writable.set()
+                self.messages.put(json.dumps({"type": "input", "id": self.input}))
+
+        def send(self, message):
+            control = json.loads(message)
+            if control["type"] == "close":
+                self.messages.put(json.dumps({"type": "input", "id": control["id"]}))
+            if control["type"] == "read":
+                self.read = control["id"]
+                if self.responded:
+                    self.messages.put(json.dumps({"type": "eof", "id": self.read}))
+                else:
+                    self.reply()
+
+    class Target(io.BytesIO):
+        def write(self, data):
+            assert writable.wait(1), "output blocked delivery of stdin's ack"
+            return super().write(data)
+
+    remote = Remote()
+    target = Target()
+    Tunnel(lambda _: remote, io.BytesIO(b"x" * 131072), target).run()
+    assert remote.writes == 2
+    assert target.getvalue() == b"output"

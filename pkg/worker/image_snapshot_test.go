@@ -3,14 +3,19 @@ package worker
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
@@ -18,6 +23,87 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
+
+func TestFilesystemExportPublishesArchiveWithoutWorkerAWSCredentials(t *testing.T) {
+	var uploaded []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPut, r.Method)
+		var err error
+		uploaded, err = io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, int64(len(uploaded)), r.ContentLength)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	file := filepath.Join(t.TempDir(), "image.rclip")
+	require.NoError(t, os.WriteFile(file, []byte("archive bytes"), 0600))
+	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{Ok: true, ImageArchiveUploadUrl: server.URL}}
+	c := &ImageClient{workerRepoClient: repo, config: types.AppConfig{ImageService: types.ImageServiceConfig{RegistryStore: "s3"}}}
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "base", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}}
+	require.NoError(t, c.publishImageArchive(context.Background(), request, file, "stub-id-1780000000"))
+	require.Equal(t, "archive bytes", string(uploaded))
+	require.Equal(t, "base", repo.requests[0].ImageId)
+	require.Equal(t, "stub-id-1780000000", repo.requests[0].ImageArchiveUploadId)
+	repo.resp.ImageArchiveUploadUrl = ""
+	require.Error(t, c.publishImageArchive(context.Background(), request, file, "stub-id-1780000000"))
+
+	imageRegistry, err := reg.NewImageRegistry(types.AppConfig{}, types.S3ImageRegistryConfig{})
+	require.NoError(t, err)
+	c.registry = imageRegistry
+	calls := len(repo.requests)
+	err = c.publishImageArchive(context.Background(), nil, filepath.Join(t.TempDir(), "missing"), "image-id")
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Len(t, repo.requests, calls)
+}
+
+func TestFilesystemExportRefreshesSavedPublishingRegistry(t *testing.T) {
+	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{
+		Ok: true, BuildRegistry: "build.example.com", BuildRepositoryName: "stage/images", BuildRegistryInsecure: false,
+	}}
+	c := &ImageClient{workerRepoClient: repo, config: types.AppConfig{ImageService: types.ImageServiceConfig{
+		BuildRegistry: "registry.localhost:5000", BuildRepositoryName: "old/images", BuildRegistryInsecure: true,
+	}}}
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "base", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}}
+	config, err := c.filesystemExportRegistry(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, "build.example.com", config.BuildRegistry)
+	require.Equal(t, "stage/images", config.BuildRepositoryName)
+	require.False(t, config.BuildRegistryInsecure)
+	require.Equal(t, "workspace-id", repo.requests[0].WorkspaceId)
+	require.Equal(t, "stub-id", repo.requests[0].StubId)
+	require.Equal(t, "registry.localhost:5000", c.config.ImageService.BuildRegistry)
+	require.Equal(t, config, c.buildRegistryConfig())
+
+	// Private requests may carry their scope only in the related records.
+	request.WorkspaceId, request.StubId = "", ""
+	request.Workspace.ExternalId = "workspace-id"
+	request.Stub.ExternalId = "stub-id"
+	repo.resp.BuildRegistryInsecure = true
+	config, err = c.filesystemExportRegistry(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, "workspace-id", repo.requests[1].WorkspaceId)
+	require.Equal(t, "stub-id", repo.requests[1].StubId)
+	ref, err := c.parseImageReference("build.example.com/stage/images:exported")
+	require.NoError(t, err)
+	require.Equal(t, "http", ref.Context().Registry.Scheme())
+	ref, err = c.parseImageReference("docker.io/library/python:3.11-slim")
+	require.NoError(t, err)
+	require.Equal(t, "https", ref.Context().Registry.Scheme())
+
+	// Older gateways retain the configured destination; authorization failures
+	// remain errors rather than publishing with a guessed registry.
+	repo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true}
+	fallback, err := c.filesystemExportRegistry(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, config, fallback)
+	legacy := &ImageClient{workerRepoClient: repo, config: c.config}
+	fallback, err = legacy.filesystemExportRegistry(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, c.config.ImageService, fallback)
+	repo.resp = &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "forbidden"}
+	_, err = c.filesystemExportRegistry(context.Background(), request)
+	require.ErrorContains(t, err, "forbidden")
+}
 
 func readLayerEntries(t *testing.T, path string) map[string]*tar.Header {
 	f, err := os.Open(path)

@@ -160,6 +160,7 @@ type ImageClient struct {
 	mountLocksMu       sync.Mutex
 	skopeoClient       common.SkopeoClient
 	config             types.AppConfig
+	publishingConfig   atomic.Pointer[types.ImageServiceConfig]
 	workerId           string
 	workerPoolName     string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
@@ -572,7 +573,11 @@ func (c *ImageClient) verifyImageSource(ctx context.Context, options clip.MountO
 	}
 	layer, err := remote.Layer(ref, opts...)
 	if err == nil {
-		_, err = layer.Size()
+		var stream io.ReadCloser
+		stream, err = layer.Compressed()
+		if err == nil {
+			stream.Close()
+		}
 	}
 	var terr *transport.Error
 	if errors.As(err, &terr) && (terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden || terr.StatusCode == http.StatusNotFound) {
@@ -1470,7 +1475,7 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 // false positives.
 func (c *ImageClient) requestCredentialProvider(ctx context.Context, sourceRef, registry, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	buildRegistry := c.getBuildRegistry()
-	buildRepoName := c.config.ImageService.BuildRepositoryName
+	buildRepoName := c.buildRegistryConfig().BuildRepositoryName
 	if buildRegistry != "" && buildRepoName != "" &&
 		strings.Contains(sourceRef, buildRegistry) &&
 		strings.Contains(sourceRef, buildRepoName) &&
@@ -2241,7 +2246,14 @@ func hasOCILayers(imageMetadata common.ImageMetadata) bool {
 
 // getBuildRegistry returns the registry to use for final and intermediate build images
 func (c *ImageClient) getBuildRegistry() string {
-	return c.config.ImageService.EffectiveBuildRegistry()
+	return c.buildRegistryConfig().EffectiveBuildRegistry()
+}
+
+func (c *ImageClient) buildRegistryConfig() types.ImageServiceConfig {
+	if config := c.publishingConfig.Load(); config != nil {
+		return *config
+	}
+	return c.config.ImageService
 }
 
 // setupBuildahDirs creates paths for buildah operations. The graphroot is where
@@ -2867,7 +2879,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	// Pre-pull base image with insecure option if necessary
 	insecure := false
 	if sourceImage != "" {
-		insecure = c.config.ImageService.BuildRegistryInsecure
+		insecure = c.buildRegistryConfig().BuildRegistryInsecure
 
 		cachedBaseRef, cachedBase, _, missingBaseLayers, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
 		if cacheErr != nil {
@@ -3002,7 +3014,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			log.Info().Err(planErr).Str("image_id", request.ImageId).Msg("dockerfile outside the layered builder's subset, building with bud")
 		}
 
-		imageTag := fmt.Sprintf("%s/%s:%s", c.getBuildRegistry(), c.config.ImageService.BuildRepositoryName, request.ImageId)
+		imageTag := fmt.Sprintf("%s/%s:%s", c.getBuildRegistry(), c.buildRegistryConfig().BuildRepositoryName, request.ImageId)
 
 		// Build w/ buildah
 		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
@@ -3071,7 +3083,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, request)
 	if err != nil {
 		return err
 	}
@@ -3156,7 +3168,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	defer os.RemoveAll(copyDir)
 
 	outputLogger.Info("Archiving base image...\n")
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, request)
 	if err != nil {
 		return err
 	}
@@ -3222,7 +3234,7 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 }
 
 // Generate and upload archived version of the image for distribution
-func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId string, progressChan chan int) error {
+func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId string, progressChan chan int, request *types.ContainerRequest) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -3238,6 +3250,10 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 	var err error = nil
 	switch c.config.ImageService.RegistryStore {
 	case registry.S3ImageRegistryStore:
+		if c.workerRepoClient != nil && request != nil && request.Stub.Type.IsSandbox() {
+			err = c.archiveWithBrokeredStorage(ctx, request, bundlePath.Path, archivePath, imageId)
+			break
+		}
 		err = clip.CreateAndUploadArchive(ctx, clip.CreateOptions{
 			InputPath:  bundlePath.Path,
 			OutputPath: archivePath,
@@ -3277,7 +3293,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 
 	// Push the archive to a registry
 	startTime = time.Now()
-	err = c.registry.Push(ctx, archivePath, imageId)
+	err = c.publishImageArchive(ctx, request, archivePath, imageId)
 	if err != nil {
 		log.Error().Str("image_id", imageId).Err(err).Msg("failed to push image")
 		return err
@@ -3442,7 +3458,7 @@ func (c *ImageClient) publishFromStorage(ctx context.Context, outputLogger *slog
 		"--retry", "5",
 		"--retry-delay", "1s",
 	)
-	if c.config.ImageService.BuildRegistryInsecure {
+	if c.buildRegistryConfig().BuildRegistryInsecure {
 		pushArgs = append(pushArgs, "--tls-verify=false")
 	}
 	if buildRegistryCredentials != "" {

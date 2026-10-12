@@ -25,6 +25,10 @@ apt-get install -y --no-install-recommends nodejs
 if ! command -v dockerd >/dev/null || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1 || ! docker buildx version >/dev/null 2>&1; then
   apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
+rm -f /usr/local/bin/docker-compose
+printf '#!/bin/sh\nexec docker compose "$@"\n' > /usr/local/bin/docker-compose
+chmod 0755 /usr/local/bin/docker-compose
+docker-compose version >/dev/null
 npm install -g --no-fund --no-audit @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.226
 npm cache clean --force
 install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
@@ -48,10 +52,46 @@ if [ "$desktop" = true ]; then
   [ "${VERSION_CODENAME:-}" = jammy ] || { echo 'Desktop currently requires Ubuntu 22.04 (jammy)' >&2; exit 1; }
   version=1.5.0
   curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_jammy_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
-  apt_repository mozilla https://packages.mozilla.org/apt/repo-signing-key.gpg https://packages.mozilla.org/apt mozilla main
-  printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
+  if [ "$arch" = amd64 ]; then
+    apt_repository google-chrome https://dl.google.com/linux/linux_signing_key.pub https://dl.google.com/linux/chrome/deb/ stable main
+    browser=google-chrome-stable
+  else
+    # Google Chrome has no Linux arm64 package; retain Firefox on that architecture.
+    apt_repository mozilla https://packages.mozilla.org/apt/repo-signing-key.gpg https://packages.mozilla.org/apt mozilla main
+    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
+    browser=firefox
+  fi
   apt-get update
-  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb firefox openbox dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" openbox pcmanfm libfm-modules librsvg2-common xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  install -m 0644 "$assets/terminal.svg" /opt/beam-vm/
+  install -d -m 0755 /root/Desktop
+  install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/
+  # Open desktop launchers directly instead of prompting to execute a script.
+  sed -i '/^\[config\]/a quick_exec=1' /etc/xdg/libfm/libfm.conf
+  sed -i 's/^big_icon_size=.*/big_icon_size=96/' /etc/xdg/libfm/libfm.conf
+  # Use the installed flat window theme and readable title bars at 192 DPI.
+  sed -i 's/<name>Clearlooks<\//<name>Breeze-ob<\//; /<font /,/<\/font>/s/<size>.*<\/size>/<size>11<\/size>/' /etc/xdg/openbox/rc.xml
+  desktop_config=/root/.config/pcmanfm/default/desktop-items-0.conf
+  if [ ! -f "$desktop_config" ]; then
+    install -d "$(dirname "$desktop_config")"
+    cat > "$desktop_config" <<'EOF'
+[*]
+wallpaper_mode=color
+desktop_bg=#17171c
+desktop_fg=#ededee
+desktop_shadow=#17171c
+desktop_font=Ubuntu 9
+show_trash=0
+EOF
+  fi
+  xdg-user-dirs-update
+  # Start the desktop after Openbox has acquired the window-manager selection.
+  if ! grep -q '^pcmanfm --desktop' /etc/xdg/openbox/autostart; then
+    printf '\npcmanfm --desktop &\n' >> /etc/xdg/openbox/autostart
+  fi
+  if [ "$browser" = firefox ]; then
+    sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' /root/Desktop/browser.desktop
+  fi
   rm -f /tmp/kasmvnc.deb
 fi
 rm -rf /var/lib/apt/lists/* "$assets"

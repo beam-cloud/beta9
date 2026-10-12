@@ -1367,11 +1367,7 @@ func gpuRequestsForScheduling(request *types.ContainerRequest) []string {
 }
 
 func capacityMemoryForScheduling(request *types.ContainerRequest) int64 {
-	if request.Memory <= 0 {
-		return request.Memory
-	}
-
-	return (request.Memory*125 + 99) / 100
+	return request.CapacityMemory()
 }
 
 func (s *Scheduler) filterWorkersByFlags(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {

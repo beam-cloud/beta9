@@ -27,7 +27,7 @@ dependencies = [
     "pyyaml<7.0.0,>=6.0.0",
 ]
 name = "beta9"
-version = "0.1.277"
+version = "0.1.279"
 description = ""
 
 [project.scripts]
@@ -37,6 +37,8 @@ beta9 = "beta9.cli.main:start"
 beta9 = [
     "skills/**/*.md",
     "abstractions/vm/*.service",
+    "abstractions/vm/*.desktop",
+    "abstractions/vm/*.svg",
     "abstractions/vm/boot",
     "abstractions/vm/desktop",
     "abstractions/vm/install",

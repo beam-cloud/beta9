@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desktop</title>
+<style>
+  html, body, iframe { width: 100%; height: 100%; margin: 0; border: 0; overflow: hidden; }
+  body { background: #111113; color: #ededee; font: 14px system-ui, sans-serif; }
+  /* Match the guest's 192 DPI at half size: sharp pixels, normal application sizes. */
+  iframe { display: block; visibility: hidden; width: 200%; height: 200%; transform: scale(0.5); transform-origin: top left; }
+  #loading { position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: 24px; }
+  #loading[hidden], #retry[hidden] { display: none; }
+  #loading svg { width: 48px; height: 48px; }
+  #status { margin: 0; color: #b5b5bd; }
+  button { font: inherit; padding: 8px 16px; color: inherit; background: #242428; border: 1px solid #3a3a40; border-radius: 6px; cursor: pointer; }
+</style>
+<div id="loading" role="status" aria-live="polite">
+  <svg viewBox="0 0 54905 54905" fill="currentColor" fill-rule="evenodd" aria-label="Beam"><path d="M27453 0c15161,0 27452,12291 27452,27453 0,6751 -2437,12932 -6480,17712l-9697 -9697c-668,826 -1384,1621 -2137,2373 -1918,1918 -4101,3591 -6399,4864 -362,201 -727,392 -1094,572l0 11578c-544,32 -1093,50 -1645,50 -15161,0 -27452,-12290 -27453,-27452 0,-5732 1758,-11047 4758,-15447l16747 12641c-3099,3235 -5532,6468 -7003,9169 -1385,2544 -1940,4423 -1336,5035 612,604 2492,50 5034,-1335 2549,-1388 5574,-3633 8626,-6488l-2538 -3818c-446,-673 -908,-1312 -275,-1945 634,-633 1273,-172 1945,273l3822 2540c2850,-3048 5094,-6074 6484,-8628 1387,-2543 1941,-4423 1332,-5030 -605,-606 -2486,-52 -5030,1333 -2706,1475 -5941,3904 -9171,6998l-12802 -16962c4653,-3627 10504,-5789 16860,-5789zm-11458 41287c1059,-299 2223,-794 3459,-1468 3190,-1739 7021,-4670 10732,-8381l-3 -3 3 -2c3716,-3717 6647,-7545 8381,-10729 673,-1236 1169,-2399 1468,-3456 2302,3775 1551,8549 -873,12920 -1145,2067 -2670,4051 -4431,5813 -1762,1762 -3748,3287 -5814,4432 -4371,2423 -9147,3175 -12922,874z" /></svg>
+  <p id="status">Connecting to desktop…</p>
+  <button id="retry" type="button" hidden>Reconnect</button>
+</div>
+<!-- The embedded client hides Kasm's control panel. Keep its loading UI behind our splash. -->
+<iframe title="Desktop" allow="clipboard-read; clipboard-write; fullscreen" allowfullscreen></iframe>
+<script>
+  const desktop = document.querySelector('iframe');
+  const loading = document.querySelector('#loading');
+  const status = document.querySelector('#status');
+  const button = document.querySelector('#retry');
+  const client = new URL('vnc.html', location.href);
+  client.search = new URLSearchParams({
+    autoconnect: '1', resize: 'remote', reconnect: 'true', video_quality: '3',
+    // The frame already renders at 2x; Kasm's native-density mode would scale it again.
+    enable_hidpi: 'false', anti_aliasing: '1', framerate: '60', framerate_image_mode: '60',
+    enable_perf_stats: 'false',
+    enable_webp: 'true', clipboard_up: 'true', clipboard_down: 'true', clipboard_seamless: 'true',
+    // Kasm defaults to /websockify, which loses a gateway path prefix.
+    path: new URL('websockify', client).pathname.slice(1),
+  });
+  let connected = false;
+  let attempts = 0;
+  let timer;
+
+  const showLoading = (message) => {
+    connected = false;
+    desktop.style.visibility = 'hidden';
+    loading.hidden = false;
+    status.textContent = message;
+  };
+  const retry = (delay) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (attempts >= 3) {
+        showLoading('Unable to connect to the desktop.');
+        button.hidden = false;
+        return;
+      }
+      attempts++;
+      connect();
+    }, delay);
+  };
+  const connect = () => {
+    clearTimeout(timer);
+    showLoading(attempts ? 'Reconnecting to desktop…' : 'Connecting to desktop…');
+    button.hidden = true;
+    const deadline = Date.now() + 180000;
+    const wait = async () => {
+      try {
+        const response = await fetch(client.href, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+        if (connected) return;
+        if (response.ok) {
+          // Recover stalled handshakes and clients that cannot emit events.
+          retry(30000);
+          desktop.src = client.href;
+          return;
+        }
+        if ([401, 403, 404].includes(response.status)) {
+          showLoading('Reopen the desktop to check your access.');
+          button.hidden = false;
+          return;
+        }
+      } catch (_) { /* Retry transient failures while the desktop starts. */ }
+      if (Date.now() >= deadline) {
+        showLoading('The desktop is taking longer to start. Try again.');
+        button.hidden = false;
+        return;
+      }
+      showLoading('Starting desktop…');
+      timer = setTimeout(wait, 1000);
+    };
+    wait();
+  };
+  button.addEventListener('click', () => { attempts = 0; connect(); });
+  window.addEventListener('message', ({origin, source, data}) => {
+    if (origin !== location.origin || source !== desktop.contentWindow ||
+        data?.action !== 'connection_state') return;
+    if (data.value === 'connected') {
+      connected = true;
+      attempts = 0;
+      clearTimeout(timer);
+      loading.hidden = true;
+      desktop.style.visibility = 'visible';
+    } else if (data.value === 'disconnected') {
+      showLoading('Reconnecting to desktop…');
+      // Kasm retries clean closes; abrupt gateway disconnects need a new connection.
+      retry(5000);
+    } else if (!connected && ['connecting', 'reconnecting'].includes(data.value)) {
+      retry(30000);
+    }
+  });
+  connect();
+</script>
+</html>

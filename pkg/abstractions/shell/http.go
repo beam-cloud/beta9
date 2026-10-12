@@ -7,10 +7,12 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -85,6 +87,35 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		}
 	}
 
+	if ctx.QueryParam("protocol") == "2" {
+		request, err := abstractions.ParseTunnelRequest(ctx, containerId, uint32(types.WorkerShellPort))
+		if err != nil {
+			return err
+		}
+		workerAddress, err := g.ss.containerRepo.GetWorkerAddress(ctx.Request().Context(), containerId)
+		if err != nil {
+			return err
+		}
+		conn, err := network.ConnectToBackend(ctx.Request().Context(), workerAddress, containerControlDialTimeout, g.ss.tailscale, g.ss.config.Tailscale, g.ss.containerRepo)
+		if err != nil {
+			return err
+		}
+		client, err := common.NewContainerClient(workerAddress, "", conn)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		done := make(chan struct{})
+		defer close(done)
+		if standalone {
+			if err := extendContainerTTL(ctx.Request().Context(), g.ss.rdb, containerId, 150*time.Second); err != nil {
+				return err
+			}
+			go g.ss.keepAlive(ctx.Request().Context(), containerId, done, 150*time.Second)
+		}
+		return abstractions.ServeTunnel(ctx, client, request)
+	}
+
 	// Hijack the connection
 	hijacker, ok := ctx.Response().Writer.(http.Hijacker)
 	if !ok {
@@ -118,7 +149,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	// Start proxying data
 	done := make(chan struct{})
 	if standalone {
-		go g.ss.keepAlive(ctx.Request().Context(), containerId, done)
+		go g.ss.keepAlive(ctx.Request().Context(), containerId, done, time.Duration(shellContainerTtlS)*time.Second)
 	}
 	proxyShellConnections(
 		ctx.Request().Context(),

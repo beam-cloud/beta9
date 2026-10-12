@@ -571,6 +571,16 @@ func (s *Worker) markContainerStopping(containerId string, expirySeconds int64) 
 }
 
 func (s *Worker) deleteContainer(containerId string) {
+	if instance, exists := s.containerInstances.Get(containerId); exists {
+		instance.tunnels.close()
+		if instance.LogBuffer != nil {
+			if s.containerServer != nil && instance.Request != nil && (instance.Request.Stub.Type.Kind() == types.StubTypeFunction || instance.Request.IsBuildRequest()) {
+				s.containerServer.retainCompletedLogs(containerId, instance.LogBuffer)
+			} else {
+				instance.LogBuffer.Dispose()
+			}
+		}
+	}
 	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
 		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
 			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
@@ -727,6 +737,12 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 		return err
 	})
 	startup.Go(func() error { return s.prepareContainerMounts(startupCtx, request, outputLogger) })
+	if request.Stub.Type.IsSandbox() && s.canRestoreCheckpoint(request, s.runtime) && !request.Checkpoint.IsFilesystemOnly() {
+		startup.Go(func() error {
+			_, err := s.ensureCheckpointMaterializedWithLogger(startupCtx, request, request.Checkpoint, outputLogger)
+			return err
+		})
+	}
 	if request.HasDurableDiskMount() {
 		startup.Go(func() error {
 			phaseStart := time.Now()

@@ -57,6 +57,10 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 		log.Warn().Str("task_id", in.TaskId).Str("container_id", in.ContainerId).Str("status", string(task.Status)).Msg("start task rejected because task is completed")
 		return &pb.StartTaskResponse{Ok: false}, nil
 	}
+	// The runner may retry after the gateway loses the successful reply.
+	if task.Status == types.TaskStatusRunning && task.StartedAt.Valid {
+		return &pb.StartTaskResponse{Ok: task.ContainerId == in.ContainerId}, nil
+	}
 
 	startedAt := time.Now()
 	task.StartedAt = types.NullTime{Time: startedAt, Valid: true}

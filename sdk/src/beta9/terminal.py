@@ -232,8 +232,14 @@ def humanize_date(d: datetime.datetime) -> str:
         return f"{s // 3600} hours ago"
 
 
-def humanize_duration(delta: datetime.timedelta) -> str:
+def humanize_duration(delta: datetime.timedelta, *, compact: bool = False) -> str:
     total_seconds = int(delta.total_seconds())
+    if compact:
+        for scale, suffix in ((86400, "d"), (3600, "h"), (60, "m"), (1, "s")):
+            if total_seconds >= scale:
+                return f"{total_seconds // scale}{suffix}"
+        return "0s"
+
     if total_seconds < 60:
         return f"{total_seconds} seconds"
     elif total_seconds < 3600:

@@ -605,6 +605,19 @@ func TestCapacityMemoryForRequest(t *testing.T) {
 	assert.Equal(t, int64(2), capacityMemoryForRequest(&types.ContainerRequest{Memory: 1}))
 }
 
+func TestNativeVMCapacityReconciliationIncludesControlMemory(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.Nil(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{Id: "vm-capacity", Runtime: types.ContainerRuntimeMicroVM.String(), TotalMemory: 4096}
+	state := &types.ContainerState{ContainerId: "vm-running", WorkerId: worker.Id, Status: types.ContainerStatusRunning, Memory: 512}
+	key := common.RedisKeys.SchedulerContainerState(state.ContainerId)
+	assert.Nil(t, rdb.HSet(context.Background(), key, common.ToSlice(state)).Err())
+	assert.Nil(t, rdb.SAdd(context.Background(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), key).Err())
+	assert.Nil(t, repo.(*WorkerRedisRepository).reconcileWorkerCapacity(context.Background(), worker))
+	assert.Equal(t, int64(2816), worker.FreeMemory, "running VMs reserve their exact guest and VMM memory after queue consumption")
+}
+
 func TestUpdateWorkerCapacityAddDoesNotExceedTotalCapacity(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

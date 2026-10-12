@@ -88,9 +88,9 @@ FROM debian:bookworm AS gvisor
 
 ARG TARGETARCH
 ARG GVISOR_VERSION=20260714.0
-# beam-cloud/gvisor@f5056750a788c74f5aabcb328dd4973a56b56f42 (checkpoint version ebbaed3f9dd5)
-ARG GVISOR_AMD64_RELEASE=release-20260714.0-beam.10
-ARG GVISOR_AMD64_SHA512=e20837f15b858c3e8eb4b26946a072e6d4d712bef7fa19b2e6c07f1c0ff4ae8af163e5ad214037ff3b3ffcd832af7b3a19f853d58b14321a25eef0770e00cfad
+# beam-cloud/gvisor@5cbba1ff7 (checkpoint version ebbaed3f9dd5)
+ARG GVISOR_AMD64_RELEASE=release-20260714.0-beam.14
+ARG GVISOR_AMD64_SHA512=48f0b12bf1b03c62095ddb345534ac84665dc9b89a1ec856ed43238a8e30ac06ed73678e7ddf49fb794f6a55ca729d192c7b2c1f39b94dac34f4aa92e5ded2cf
 
 WORKDIR /tmp
 
@@ -209,6 +209,7 @@ FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
 ARG TARGETARCH
+ARG GOPROC_VERSION=0.1.17
 ENV DEBIAN_FRONTEND="noninteractive"
 WORKDIR /workspace
 
@@ -383,15 +384,10 @@ case "$TARGETARCH" in
 esac
 EOT
 
-RUN apt-get install -y wget git
+RUN apt-get install -y wget git busybox-static
 
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.15/goproc-0.1.15-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
-    elif [ "$TARGETARCH" = "amd64" ]; then \
-      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.15/goproc-0.1.15-linux-amd64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
-    else \
-      echo "Unsupported architecture: $TARGETARCH" && exit 1 ; \
-    fi
+RUN wget "https://github.com/beam-cloud/goproc/releases/download/v${GOPROC_VERSION}/goproc-${GOPROC_VERSION}-linux-${TARGETARCH}" \
+      -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc
 
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \

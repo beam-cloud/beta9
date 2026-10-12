@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -56,6 +57,7 @@ type ContainerRuntimeServer struct {
 	baseConfigSpec specs.Spec
 	pb.UnimplementedContainerServiceServer
 	containerInstances      *common.SafeMap[*ContainerInstance]
+	completedLogs           sync.Map // container ID -> *common.LogBuffer
 	killedSandboxProcesses  sync.Map
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	containerNetworkManager ContainerNetwork
@@ -139,6 +141,7 @@ func (s *ContainerRuntimeServer) Start() error {
 	log.Info().Int("port", s.port).Msg("container runtime server started")
 
 	s.grpcServer = grpc.NewServer(
+		grpc.UnaryInterceptor(s.replaySandboxRequest),
 		grpc.MaxRecvMsgSize(gRPCMaxRecvMsgSize),
 		grpc.MaxSendMsgSize(gRPCMaxSendMsgSize),
 	)
@@ -263,7 +266,13 @@ func (s *ContainerRuntimeServer) ContainerStatus(ctx context.Context, in *pb.Con
 // ContainerStreamLogs streams container logs
 func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogsRequest, stream pb.ContainerService_ContainerStreamLogsServer) error {
 	instance, exists := s.containerInstances.Get(req.ContainerId)
-	if !exists {
+	var logs *common.LogBuffer
+	if exists {
+		logs = instance.LogBuffer
+	} else if completed, ok := s.completedLogs.Load(req.ContainerId); ok {
+		logs = completed.(*common.LogBuffer)
+	}
+	if logs == nil {
 		return errors.New("container not found")
 	}
 	if err := stream.SendHeader(nil); err != nil {
@@ -272,6 +281,15 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 	buffer := make([]byte, 4096)
 	logEntry := &pb.ContainerLogEntry{}
+	offsets := metadata.ValueFromIncomingContext(stream.Context(), common.LogOffsetHeader)
+	var offset int64
+	if len(offsets) > 0 {
+		var err error
+		offset, err = strconv.ParseInt(offsets[0], 10, 64)
+		if err != nil || offset < 0 {
+			return status.Error(codes.InvalidArgument, "invalid log offset")
+		}
+	}
 
 	for {
 		select {
@@ -280,7 +298,13 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 		default:
 		}
 
-		n, err := instance.LogBuffer.Read(buffer)
+		var n int
+		var err error
+		if len(offsets) > 0 {
+			n, err = logs.ReadAt(buffer, offset)
+		} else {
+			n, err = logs.Read(buffer)
+		}
 		if err == io.EOF {
 			break
 		}
@@ -291,6 +315,7 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 
 		if n > 0 {
 			logEntry.Msg = string(buffer[:n])
+			offset += int64(n)
 			if err := stream.Send(logEntry); err != nil {
 				return err
 			}
@@ -301,6 +326,16 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 	}
 
 	return nil
+}
+
+func (s *ContainerRuntimeServer) retainCompletedLogs(containerID string, logs *common.LogBuffer) {
+	if _, loaded := s.completedLogs.LoadOrStore(containerID, logs); loaded {
+		return
+	}
+	time.AfterFunc(common.CompletedContainerLogRetention, func() {
+		s.completedLogs.Delete(containerID)
+		logs.Dispose()
+	})
 }
 
 // ContainerCheckpoint creates a checkpoint of a running container
@@ -479,7 +514,7 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 				}
 			}
 			if err == nil {
-				err = s.imageClient.Archive(ctx, NewPathInfo(rootDir), req.ImageId, progressChan)
+				err = s.imageClient.Archive(ctx, NewPathInfo(rootDir), req.ImageId, progressChan, instance.Request)
 			}
 		}
 	}
@@ -1348,6 +1383,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Context, in *pb.ContainerSandboxCreateDirectoryRequest) (*pb.ContainerSandboxCreateDirectoryResponse, error) {
+	if in.Mode == 0 {
+		in.Mode = 0755
+	}
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.ContainerSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: "Container not found"}, nil
@@ -1363,6 +1401,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Con
 	}
 	if gfs, ok := guestFS(instance); ok {
 		return s.guestCreateDirectory(ctx, gfs, in, containerPath)
+	}
+	if handled, err := guestFilesystemMutation(ctx, instance, "mkdir", "-p", "-m", fmt.Sprintf("%o", in.Mode), "--", containerPath); handled {
+		if err != nil {
+			return &pb.ContainerSandboxCreateDirectoryResponse{ErrorMsg: err.Error()}, nil
+		}
+		return &pb.ContainerSandboxCreateDirectoryResponse{Ok: true}, nil
 	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
@@ -1393,6 +1437,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteDirectory(ctx context.Con
 	}
 	if gfs, ok := guestFS(instance); ok {
 		return s.guestDeleteDirectory(ctx, gfs, in, containerPath)
+	}
+	if handled, err := guestFilesystemMutation(ctx, instance, "rm", "-rf", "--", containerPath); handled {
+		if err != nil {
+			return &pb.ContainerSandboxDeleteDirectoryResponse{ErrorMsg: err.Error()}, nil
+		}
+		return &pb.ContainerSandboxDeleteDirectoryResponse{Ok: true}, nil
 	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
@@ -1471,6 +1521,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteFile(ctx context.Context,
 	}
 	if gfs, ok := guestFS(instance); ok {
 		return s.guestDeleteFile(ctx, gfs, in, containerPath)
+	}
+	if handled, err := guestFilesystemMutation(ctx, instance, "rm", "-rf", "--", containerPath); handled {
+		if err != nil {
+			return &pb.ContainerSandboxDeleteFileResponse{ErrorMsg: err.Error()}, nil
+		}
+		return &pb.ContainerSandboxDeleteFileResponse{Ok: true}, nil
 	}
 
 	root, name, err := containerRoot(instance, containerPath, true)
@@ -1656,6 +1712,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 	}
 
 	recordSandboxExposedPort(s.containerInstances, in.ContainerId, instance, uint32(in.Port))
+	instance.setContainerPortAddress(port, localTarget)
 
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[port])
 
