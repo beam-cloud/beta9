@@ -59,11 +59,35 @@
     }, delay);
   };
   const connect = () => {
+    clearTimeout(timer);
     showLoading(attempts ? 'Reconnecting to desktop…' : 'Connecting to desktop…');
     button.hidden = true;
-    // Recover stalled handshakes and error pages that cannot emit client events.
-    retry(30000);
-    desktop.src = client.href;
+    const deadline = Date.now() + 180000;
+    const wait = async () => {
+      try {
+        const response = await fetch(client.href, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+        if (connected) return;
+        if (response.ok) {
+          // Recover stalled handshakes and clients that cannot emit events.
+          retry(30000);
+          desktop.src = client.href;
+          return;
+        }
+        if ([401, 403, 404].includes(response.status)) {
+          showLoading('Reopen the desktop to check your access.');
+          button.hidden = false;
+          return;
+        }
+      } catch (_) { /* Retry transient failures while the desktop starts. */ }
+      if (Date.now() >= deadline) {
+        showLoading('The desktop is taking longer to start. Try again.');
+        button.hidden = false;
+        return;
+      }
+      showLoading('Starting desktop…');
+      timer = setTimeout(wait, 1000);
+    };
+    wait();
   };
   button.addEventListener('click', () => { attempts = 0; connect(); });
   window.addEventListener('message', ({origin, source, data}) => {

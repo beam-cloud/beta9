@@ -63,7 +63,6 @@ if [ "$desktop" = true ]; then
   fi
   apt-get update
   apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" openbox pcmanfm libfm-modules librsvg2-common xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
-  install -m 0644 "$assets/desktop.html" /usr/share/kasmvnc/www/index.html
   install -m 0644 "$assets/terminal.svg" /opt/beam-vm/
   install -d -m 0755 /root/Desktop
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/

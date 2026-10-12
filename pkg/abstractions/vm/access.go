@@ -180,7 +180,7 @@ func splitHost(label string) (string, string, bool) {
 func (s *Service) proxy(c echo.Context) error {
 	ctx := c.Request().Context()
 	v, err := s.repo.GetVMByHandle(ctx, c.Param("handle"))
-	if err != nil || v.DesiredState == "deleted" {
+	if err != nil || v.DesiredState == types.VMStateDeleted {
 		return echo.NewHTTPError(http.StatusNotFound, "VM not found")
 	}
 
@@ -228,7 +228,11 @@ func (s *Service) proxy(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "VM runtime unavailable")
 	}
 
-	if v.DesiredState != "running" || status != "running" {
+	if desktopEntry(c, v, port) {
+		return s.serveDesktop(c, v, status)
+	}
+
+	if v.DesiredState != types.VMStateRunning || status != types.VMStateRunning {
 		if !v.Spec.AutoResume {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "VM is not running; start it to use this URL")
 		}
@@ -268,7 +272,7 @@ func (s *Service) tunnel(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "VM runtime unavailable")
 	}
 
-	if v.DesiredState != "running" || status != "running" {
+	if v.DesiredState != types.VMStateRunning || status != types.VMStateRunning {
 		return echo.NewHTTPError(http.StatusConflict, "VM is not running")
 	}
 
