@@ -6,6 +6,7 @@ from contextlib import suppress
 from queue import Full, Queue
 import select
 import threading
+import time
 from uuid import UUID, uuid4
 
 import websocket
@@ -105,6 +106,19 @@ class Tunnel:
             self.downloading = False
         self._send_read()
 
+    def _close(self, remote):
+        request = str(uuid4())
+        with suppress(OSError, ValueError, websocket.WebSocketException):
+            remote.settimeout(1)
+            remote.send(json.dumps({"type": "close", "id": request}))
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                message = remote.recv()
+                if isinstance(message, str):
+                    control = json.loads(message)
+                    if isinstance(control, dict) and control.get("id") == request:
+                        return
+
     def _download(self):
         try:
             while True:
@@ -167,8 +181,7 @@ class Tunnel:
                             if control["id"] != str(self.read_id):
                                 raise RuntimeError("Invalid tunnel response")
                             if control["type"] == "eof":
-                                with suppress(OSError, websocket.WebSocketException):
-                                    remote.send(json.dumps({"type": "close", "id": str(uuid4())}))
+                                self.stopped = True
                                 return
                             if control["type"] != "output":
                                 raise RuntimeError("Invalid tunnel control")
@@ -182,7 +195,12 @@ class Tunnel:
                         raise TimeoutError(
                             "Gateway did not reconnect within two minutes"
                         ) from error
+                except BaseException:
+                    self.stopped = True
+                    raise
                 finally:
+                    if self.stopped and remote is not None:
+                        self._close(remote)
                     with self.condition:
                         self.remote = None
                         self.sent_read = None

@@ -2,6 +2,7 @@
 
 import os
 import shlex
+import signal
 import socket
 import subprocess
 import sys
@@ -738,9 +739,25 @@ def _run_tunnel(profile, config_path, cli_name, vm_id, port):
     token = os.getenv("BEAM_TOKEN" if cli_name.lower() == "beam" else "BETA9_TOKEN")
     set_settings(SDKSettings(name=cli_name, config_path=Path(config_path), api_token=token))
     target = sys.stdout.buffer
-    with redirect_stdout(sys.stderr):
-        with ServiceClient(get_config_context(profile)) as service:
-            _bridge(_vm(service, vm_id), port, sys.stdin.buffer, target)
+    # OpenSSH terminates its proxy after a remote command exits. Unwind the
+    # tunnel first so the worker can release its reconnect lease immediately.
+    previous = {}
+
+    def terminate(*_):
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(0)
+
+    for name in ("SIGHUP", "SIGTERM"):
+        if sig := getattr(signal, name, None):
+            previous[sig] = signal.signal(sig, terminate)
+    try:
+        with redirect_stdout(sys.stderr):
+            with ServiceClient(get_config_context(profile)) as service:
+                _bridge(_vm(service, vm_id), port, sys.stdin.buffer, target)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def _ssh_options(vm):
