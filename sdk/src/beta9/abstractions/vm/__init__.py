@@ -125,7 +125,6 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
             "beam-terminal.service",
             "boot",
             "desktop",
-            "desktop.html",
             "browser.desktop",
             "terminal.desktop",
             "terminal.svg",
@@ -136,9 +135,7 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
             data = path.read_bytes()
             entry = tarfile.TarInfo(name)
             entry.size = len(data)
-            entry.mode = (
-                0o644 if path.suffix in (".service", ".html", ".desktop", ".svg") else 0o755
-            )
+            entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg") else 0o755
             archive.addfile(entry, io.BytesIO(data))
     data = base64.b64encode(gzip.compress(buffer.getvalue(), mtime=0)).decode("ascii")
     prepared.add_commands(
