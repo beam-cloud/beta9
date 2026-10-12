@@ -87,6 +87,12 @@ func (s *Service) ensurePublicIPv6(ctx context.Context, v *types.VM) error {
 	return fmt.Errorf("unable to reserve a public IPv6 for VM %s", v.ID)
 }
 
+func (s *Service) backfillPublicIPv6(ctx context.Context, v *types.VM) {
+	if err := s.ensurePublicIPv6(ctx, v); err != nil {
+		log.Warn().Err(err).Str("vm_id", v.ID).Msg("unable to allocate public VM IPv6; retrying on reconciliation")
+	}
+}
+
 func (s *Service) startPublicNetwork(cfg types.VMNetworkConfig, dialer *network.BackendDialer) error {
 	p, err := parsePublicVMNetwork(cfg)
 	if err != nil || p == nil {

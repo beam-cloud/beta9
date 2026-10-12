@@ -457,10 +457,6 @@ func (s *Service) reconcile(ctx context.Context) {
 }
 
 func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
-	if err := s.ensurePublicIPv6(ctx, v); err != nil {
-		return err
-	}
-
 	workspace, err := s.backend.GetWorkspaceByExternalId(ctx, v.WorkspaceExternalID)
 	if err != nil {
 		return err
@@ -471,7 +467,11 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	info := &auth.AuthInfo{Workspace: &workspace, Token: &types.Token{}}
 	ctx = auth.ContextWithAuthInfo(ctx, info)
 	if v.DesiredState != "running" {
-		return s.stopOrDelete(ctx, v)
+		if err := s.stopOrDelete(ctx, v); err != nil {
+			return err
+		}
+		s.backfillPublicIPv6(ctx, v)
+		return nil
 	}
 
 	token, err := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
@@ -539,9 +539,14 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 			}
 
 			if time.Since(v.UpdatedAt) >= time.Minute {
-				return s.snapshotRoot(ctx, v)
+				if err := s.snapshotRoot(ctx, v); err != nil {
+					return err
+				}
 			}
 
+			// Backfill legacy VMs after lifecycle work: allocation failures
+			// must never delay shutdown or idle expiry.
+			s.backfillPublicIPv6(ctx, v)
 			return nil
 		}
 

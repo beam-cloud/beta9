@@ -89,6 +89,31 @@ func TestPublicVMAddressSurvivesLifecycleAndIsNotInherited(t *testing.T) {
 	require.Empty(t, deleted.PublicIPv6)
 }
 
+type unavailableVMAddresses struct{ repository.PublicVMRepository }
+
+func (unavailableVMAddresses) AssignVMPublicIPv6(context.Context, string, string) (string, error) {
+	return "", errors.New("address allocation unavailable")
+}
+
+func TestPublicVMAllocationCannotDelayStopOrIdleExpiry(t *testing.T) {
+	for _, idle := range []bool{false, true} {
+		s, v, _, _, gateway := fixture()
+		s.publicNetwork, _ = parsePublicVMNetwork(publicNetworkConfig())
+		s.publicNetwork.repo = unavailableVMAddresses{}
+		if idle {
+			v.Spec.IdleTimeout = 1
+			v.LastActiveAt = time.Now().Add(-time.Hour)
+		} else {
+			v.DesiredState = types.VMStateStopped
+		}
+		require.NoError(t, s.reconcileVM(context.Background(), v))
+		require.Equal(t, 1, gateway.stops)
+		require.Empty(t, v.ContainerID)
+		require.Equal(t, types.VMStateStopped, v.Status)
+		require.NotEmpty(t, v.RootSnapshotID)
+	}
+}
+
 type networkVMStore struct {
 	*vmStore
 	mu        sync.Mutex
