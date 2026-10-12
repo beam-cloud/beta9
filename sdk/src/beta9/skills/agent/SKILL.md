@@ -91,8 +91,9 @@ Apps and stack services default to serverless: `min_replicas: 0`,
 Keep these defaults. A Compose file, a web app, a stack, or a cold start is
 not a request for continuous compute. Set a positive minimum, `always_on`,
 or `keep_warm_seconds: -1` only when the user explicitly asks for continuous
-capacity and understands the idle cost. A portless queue poller may need
-continuous compute; explain that requirement before changing its minimum.
+capacity and understands the idle cost. A portless queue poller has no incoming
+connection to wake it from zero; explain that requirement and obtain the user's
+choice before setting a positive minimum. Use a job for one-off work.
 
 For a real persistent machine, use VM tools, with the smallest useful CPU
 and memory and a finite idle timeout. `{{cli}} setup vm` handles browser

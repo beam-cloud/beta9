@@ -365,6 +365,108 @@ def test_bound_files_are_baked_and_the_services_they_name_expose_ports(tmp_path)
     )
 
 
+@pytest.mark.parametrize("directory", [False, True])
+@pytest.mark.parametrize("scan_references", [False, True])
+def test_bind_symlinks_cannot_read_outside_project(
+    tmp_path, monkeypatch, directory, scan_references
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    bound = project / "config"
+    bound.mkdir()
+    external = tmp_path / "private"
+    external.mkdir()
+    secret = external / "credentials"
+    secret.write_text("private-content")
+    (bound / "escape").symlink_to(external if directory else secret, target_is_directory=directory)
+
+    original_read = Path.read_text
+
+    def guarded_read(path, *args, **kwargs):
+        assert path.resolve() != secret, "translation must not read an external symlink"
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read)
+    original_bytes = Path.read_bytes
+
+    def guarded_bytes(path):
+        assert path.resolve() != secret, "image hashing must not read an external symlink"
+        return original_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_bytes)
+    compose_file = textwrap.dedent("""
+        services:
+          proxy:
+            image: nginx:1.27
+            volumes: ["./config:/etc/nginx:ro"]
+    """)
+    if scan_references:
+        compose_file += "  api:\n    image: example/api:1\n"
+    with pytest.raises(compose.ComposeError, match="points outside the project"):
+        translate(project, compose_file)
+    assert not (project / "builds").exists()
+
+
+def test_bound_directory_preserves_relative_links_and_hashes_target_content(tmp_path):
+    bound = tmp_path / "config"
+    bound.mkdir()
+    target = bound / "actual"
+    target.mkdir()
+    config = target / "nginx.conf"
+    config.write_text("first")
+    (bound / "file-link").symlink_to("actual/nginx.conf")
+    (bound / "dir-link").symlink_to("actual", target_is_directory=True)
+    source = """
+        services:
+          proxy:
+            image: nginx:1.27
+            volumes: ["./config:/etc/nginx:ro"]
+    """
+    first = Path(services(translate(tmp_path, source))["app-proxy"]["deploy"]["directory"])
+    assert (first / "bind0" / "file-link").is_symlink()
+    assert (first / "bind0" / "dir-link").is_symlink()
+    assert (first / "bind0" / "file-link").read_text() == "first"
+    config.write_text("second")
+    second = Path(services(translate(tmp_path, source))["app-proxy"]["deploy"]["directory"])
+    assert second != first
+    assert (second / "bind0" / "dir-link" / "nginx.conf").read_text() == "second"
+
+
+def test_broken_bound_symlink_is_rejected(tmp_path):
+    bound = tmp_path / "config"
+    bound.mkdir()
+    (bound / "missing").symlink_to("not-present")
+    with pytest.raises(compose.ComposeError, match="broken or cyclic"):
+        translate(
+            tmp_path,
+            """
+            services:
+              proxy:
+                image: nginx:1.27
+                volumes: ["./config:/etc/nginx:ro"]
+            """,
+        )
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_bound_symlinks_must_be_portable_in_the_copied_directory(tmp_path, absolute):
+    bound = tmp_path / "config"
+    bound.mkdir()
+    target = (bound if absolute else tmp_path) / "target"
+    target.write_text("config")
+    (bound / "link").symlink_to(target if absolute else "../target")
+    with pytest.raises(compose.ComposeError, match="relative target inside the bound directory"):
+        translate(
+            tmp_path,
+            """
+            services:
+              proxy:
+                image: nginx:1.27
+                volumes: ["./config:/etc/nginx:ro"]
+            """,
+        )
+
+
 # The CLI builds from the Dockerfile's directory, the final stage, and ARG
 # defaults; compose may say otherwise for each.
 def test_builds_keep_their_context_target_and_args(tmp_path):

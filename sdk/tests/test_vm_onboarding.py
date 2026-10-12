@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from beta9.channel import GatewayHTTPError
+from beta9.config import ConfigContext
 from beta9.deployment import onboarding
 
 
@@ -69,7 +70,7 @@ def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypa
     monkeypatch.setattr("beta9.mcp.server.context_or_none", lambda _: object())
     monkeypatch.setattr(
         "beta9.config.get_config_context",
-        lambda _: __import__("beta9.config", fromlist=["ConfigContext"]).ConfigContext(),
+        lambda _: ConfigContext(),
     )
     monkeypatch.setattr(
         setup, "get_settings", lambda: SimpleNamespace(name="Beam", config_path=tmp_path / "config")
@@ -104,7 +105,7 @@ def test_setup_vm_does_not_report_success_after_failed_probe(tmp_path, monkeypat
     monkeypatch.setattr("beta9.mcp.server.context_or_none", lambda _: object())
     monkeypatch.setattr(
         "beta9.config.get_config_context",
-        lambda _: __import__("beta9.config", fromlist=["ConfigContext"]).ConfigContext(),
+        lambda _: ConfigContext(),
     )
     monkeypatch.setattr(
         setup, "get_settings", lambda: SimpleNamespace(name="Beam", config_path=tmp_path / "config")

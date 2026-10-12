@@ -9,6 +9,7 @@ faithfully becomes a warning.
 """
 
 import hashlib
+import os
 import re
 import shlex
 import shutil
@@ -1434,8 +1435,10 @@ class Translator:
         digest = hashlib.sha256(str(node["image"]).encode())
         for path, target in binds:
             digest.update(f"{path}\0{target}\0".encode())
-            for file in sorted(path.rglob("*")) if path.is_dir() else [path]:
-                if file.is_file():
+            for file in self._bound_files(path):
+                if file.is_symlink():
+                    digest.update(str(file.relative_to(path)).encode() + os.readlink(file).encode())
+                elif file.is_file():
                     digest.update(str(file.relative_to(path.parent)).encode() + file.read_bytes())
         destination = self.build_root / digest.hexdigest()[:24]
         if not destination.exists():
@@ -1447,7 +1450,7 @@ class Translator:
                 for index, (path, target) in enumerate(binds):
                     name = f"bind{index}"
                     if path.is_dir():
-                        shutil.copytree(path, staging / name, symlinks=False)
+                        shutil.copytree(path, staging / name, symlinks=True)
                     else:
                         shutil.copy2(path, staging / name)
                     lines.append(f"COPY {name} {target}")
@@ -1460,6 +1463,33 @@ class Translator:
             service,
             f"bind-mounted files are copied into an image built from {node['image']} at {destination}",
         )
+
+    def _bound_files(self, path: Path) -> List[Path]:
+        """Validate the entire bind before reading; preserve only portable internal links."""
+        files = [path]
+        if path.is_dir():
+            files = sorted(
+                Path(directory) / name
+                for directory, directories, names in os.walk(path, followlinks=False)
+                for name in directories + names
+            )
+        for file in files:
+            if not file.is_symlink():
+                continue
+            label = file.relative_to(self.root)
+            try:
+                resolved = file.resolve(strict=True)
+            except (OSError, RuntimeError) as exc:
+                raise ComposeError(f"bind mount symlink {label} is broken or cyclic") from exc
+            if self.root != resolved and self.root not in resolved.parents:
+                raise ComposeError(f"bind mount symlink {label} points outside the project")
+            if os.path.isabs(os.readlink(file)) or (
+                path != resolved and path not in resolved.parents
+            ):
+                raise ComposeError(
+                    f"bind mount symlink {label} must use a relative target inside the bound directory"
+                )
+        return files
 
     def _scan_bound_files(self) -> None:
         """Bound config files (an nginx proxy_pass, say) may name other services by host;
@@ -1481,8 +1511,8 @@ class Translator:
                 path = (self.root / Path(source).expanduser()).resolve()
                 if kind != "bind" or not path.exists() or self.root not in [path, *path.parents]:
                     continue
-                for file in sorted(path.rglob("*")) if path.is_dir() else [path]:
-                    if not file.is_file() or file.stat().st_size >= 1 << 20:
+                for file in self._bound_files(path):
+                    if file.is_symlink() or not file.is_file() or file.stat().st_size >= 1 << 20:
                         continue
                     found = []
                     for match in pattern.finditer(file.read_text(errors="ignore")):

@@ -158,6 +158,11 @@ until it reports `Stack applied`. Stack applications default to
 `min_replicas: 0`, `keep_warm_seconds: 0`; databases default to
 `always_on: false`. Preserve those defaults unless the user explicitly
 requests continuous compute. Cold starts alone do not justify an idle floor.
+Portless pollers cannot wake on a connection: offer an explicit positive minimum
+for continuous work, or a job for finite work. The gateway preserves a zero minimum.
+Bind-mounted directories preserve relative internal symlinks; links escaping the
+project or bound directory, absolute links and broken links must be fixed before
+translation. Config scanning and image packaging never follow them outside the project.
 
 Each `stack_apply` returns every service's status, with the newest build or
 container logs for one still starting. A service the platform never accepted
