@@ -205,3 +205,42 @@ def test_example_setup_refuses_unrelated_existing_app(tmp_path):
 
     with pytest.raises(ValueError, match="already exists"):
         onboarding.prepare_example(selected, tmp_path, "existing", "inference", call)
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_example_handler_uses_upload_root_with_symlinked_state(tmp_path, monkeypatch, relative):
+    import os
+    from pathlib import Path
+
+    from beta9.abstractions.endpoint import _CallableWrapper
+
+    root = tmp_path / "real"
+    root.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    state_directory = Path("alias") if relative else alias
+    selected = SimpleNamespace(
+        http=SimpleNamespace(workspace_id="workspace"),
+        channel=MagicMock(),
+        _config=ConfigContext(token="test-token"),
+    )
+
+    def deploy(wrapper, **kwargs):
+        wrapper.parent._map_callable_to_attr(attr="handler", func=wrapper.func)
+        assert wrapper.parent.handler == "app:hello"
+        assert Path("app.py").is_file()
+        return {}, True
+
+    monkeypatch.setattr(_CallableWrapper, "deploy", deploy)
+    response = MagicMock()
+    response.json.return_value = {"message": "Hello from the cloud"}
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: response)
+
+    def call(tool, arguments):
+        return {"items": []} if tool == "list_apps" else {"url": "https://test.example"}
+
+    before = os.getcwd()
+    result = onboarding.prepare_example(selected, state_directory, "hello", "inference", call)
+    assert result["result"] == {"message": "Hello from the cloud"}
+    assert os.getcwd() == before

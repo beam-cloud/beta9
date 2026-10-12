@@ -90,7 +90,9 @@ def prepare_example(service, state_directory, name, kind, call):
         raise ValueError("Choose inference or functions")
     workspace = service.http.workspace_id
     key = hashlib.sha256(f"{workspace}:{kind}:{name}".encode()).hexdigest()[:24]
-    directory = state_directory / "examples" / key
+    # Import and deploy from the same canonical path, including symlinked homes
+    # and macOS's /tmp alias, so handler paths stay relative to the upload root.
+    directory = (state_directory / "examples" / key).resolve()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     state_path = directory / "request.json"
     with open(directory / "request.lock", "a", opener=_private_file) as lock:
