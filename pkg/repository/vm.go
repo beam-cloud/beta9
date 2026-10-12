@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
@@ -24,13 +25,19 @@ type VMRepository interface {
 	DeleteVMArtifact(context.Context, uint, string, string) error
 }
 
+// PublicVMRepository is required only when public VM networking is enabled.
+type PublicVMRepository interface {
+	GetVMByPublicIPv6(context.Context, string) (*types.VM, error)
+	AssignVMPublicIPv6(context.Context, string, string) (string, error)
+}
+
 func (r *PostgresBackendRepository) CreateVM(ctx context.Context, vm *types.VM) error {
 	data, err := json.Marshal(vm)
 	if err != nil {
 		return err
 	}
 
-	_, err = r.client.ExecContext(ctx, `INSERT INTO persistent_vm (id,workspace_id,workspace_external_id,token_id,name,handle,data,last_active_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, vm.ID, vm.WorkspaceID, vm.WorkspaceExternalID, vm.TokenID, vm.Name, vm.Handle, data, vm.LastActiveAt)
+	_, err = r.client.ExecContext(ctx, `INSERT INTO persistent_vm (id,workspace_id,workspace_external_id,token_id,name,handle,data,last_active_at,public_ipv6) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::inet)`, vm.ID, vm.WorkspaceID, vm.WorkspaceExternalID, vm.TokenID, vm.Name, vm.Handle, data, vm.LastActiveAt, vm.PublicIPv6)
 	return err
 }
 
@@ -55,14 +62,15 @@ func (r *PostgresBackendRepository) SaveVM(ctx context.Context, vm *types.VM) er
 }
 
 type vmRow struct {
-	WorkspaceID         uint      `db:"workspace_id"`
-	WorkspaceExternalID string    `db:"workspace_external_id"`
-	TokenID             string    `db:"token_id"`
-	Data                []byte    `db:"data"`
-	LastActiveAt        time.Time `db:"last_active_at"`
+	WorkspaceID         uint           `db:"workspace_id"`
+	WorkspaceExternalID string         `db:"workspace_external_id"`
+	TokenID             string         `db:"token_id"`
+	Data                []byte         `db:"data"`
+	LastActiveAt        time.Time      `db:"last_active_at"`
+	PublicIPv6          sql.NullString `db:"public_ipv6"`
 }
 
-const selectVM = `SELECT workspace_id,workspace_external_id,token_id,data,last_active_at FROM persistent_vm `
+const selectVM = `SELECT workspace_id,workspace_external_id,token_id,data,last_active_at,host(public_ipv6) AS public_ipv6 FROM persistent_vm `
 
 func (row vmRow) vm() (*types.VM, error) {
 	var vm types.VM
@@ -74,6 +82,7 @@ func (row vmRow) vm() (*types.VM, error) {
 	vm.WorkspaceExternalID = row.WorkspaceExternalID
 	vm.TokenID = row.TokenID
 	vm.LastActiveAt = row.LastActiveAt
+	vm.PublicIPv6 = row.PublicIPv6.String
 	return &vm, nil
 }
 
@@ -83,6 +92,18 @@ func (r *PostgresBackendRepository) GetVM(ctx context.Context, ws uint, name str
 
 func (r *PostgresBackendRepository) GetVMByHandle(ctx context.Context, handle string) (*types.VM, error) {
 	return r.getVM(ctx, `WHERE handle=$1`, handle)
+}
+
+func (r *PostgresBackendRepository) GetVMByPublicIPv6(ctx context.Context, address string) (*types.VM, error) {
+	return r.getVM(ctx, `WHERE public_ipv6=$1::inet AND data->>'desired_state'<>'deleted'`, address)
+}
+
+// Separate ownership from launch JSON: a stale lifecycle save cannot release
+// an address, and retrying an ambiguous allocation returns the same reservation.
+func (r *PostgresBackendRepository) AssignVMPublicIPv6(ctx context.Context, id, address string) (string, error) {
+	var assigned string
+	err := r.client.GetContext(ctx, &assigned, `UPDATE persistent_vm SET public_ipv6=COALESCE(public_ipv6,$2::inet) WHERE id=$1 AND data->>'desired_state'<>'deleted' RETURNING host(public_ipv6)`, id, address)
+	return assigned, err
 }
 
 func (r *PostgresBackendRepository) getVM(ctx context.Context, filter string, args ...any) (*types.VM, error) {

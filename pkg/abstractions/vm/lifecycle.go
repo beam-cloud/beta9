@@ -114,6 +114,10 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
+	if err := s.ensurePublicIPv6(ctx, v); err != nil {
+		return err
+	}
+
 	state, err := s.runtimeState(v)
 	if err != nil {
 		return err
@@ -453,6 +457,10 @@ func (s *Service) reconcile(ctx context.Context) {
 }
 
 func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
+	if err := s.ensurePublicIPv6(ctx, v); err != nil {
+		return err
+	}
+
 	workspace, err := s.backend.GetWorkspaceByExternalId(ctx, v.WorkspaceExternalID)
 	if err != nil {
 		return err

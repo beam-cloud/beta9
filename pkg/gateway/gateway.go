@@ -716,6 +716,7 @@ func (g *Gateway) registerServices() error {
 		Gateway:       gws,
 		RouteGroup:    g.baseRouteGroup.Group("/vm", g.authMiddleware),
 		Server:        g.echo,
+		BackendDialer: network.NewBackendDialer(g.Tailscale, g.Config.Tailscale, g.ContainerRepo, 10*time.Second),
 	}); err != nil {
 		return err
 	}

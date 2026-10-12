@@ -97,6 +97,7 @@ type VM struct {
 	CreationDigest      string            `json:"creation_digest,omitempty"`
 	TrafficAccessToken  string            `json:"traffic_access_token,omitempty"`
 	Handle              string            `json:"handle"`
+	PublicIPv6          string            `json:"public_ipv6,omitempty"`
 	Spec                VMSpec            `json:"spec"`
 	StubID              string            `json:"stub_id,omitempty"`
 	ContainerID         string            `json:"container_id,omitempty"`

@@ -1310,8 +1310,21 @@ type VMConfig struct {
 	// Optional pool used when a VM is created without an explicit selector.
 	DefaultPool string `key:"defaultPool" json:"default_pool"`
 	// Wildcard DNS/ingress pointing at the gateway; <handle>-<port>.<domain>.
-	Domain  string `key:"domain" json:"domain"`
-	BaseURL string `key:"baseURL" json:"base_url"`
+	Domain  string          `key:"domain" json:"domain"`
+	BaseURL string          `key:"baseURL" json:"base_url"`
+	Network VMNetworkConfig `key:"network" json:"network"`
+}
+
+type VMNetworkConfig struct {
+	// Empty disables public networking. The ingress must route this prefix to
+	// the gateway while preserving the original destination with PROXY protocol.
+	PublicIPv6Prefix string `key:"publicIPv6Prefix" json:"public_ipv6_prefix"`
+	// All published TCP ports must reach this listener with PROXY v2 TCP6
+	// metadata carrying their original destination address and port.
+	IngressPort int `key:"ingressPort" json:"ingress_port"`
+	// These are the actual TCP ingress peers. Disable client IP preservation
+	// on this listener so advertised client addresses cannot authorize a proxy.
+	TrustedProxyCIDRs []string `key:"trustedProxyCIDRs" json:"trusted_proxy_cidrs"`
 }
 
 type BotConfig struct {

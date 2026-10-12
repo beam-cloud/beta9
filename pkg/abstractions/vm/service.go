@@ -9,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -29,16 +30,17 @@ type Gateway interface {
 }
 
 type Service struct {
-	ctx         context.Context
-	rdb         *common.RedisClient
-	repo        repository.VMRepository
-	backend     repository.BackendRepository
-	containers  repository.ContainerRepository
-	runtime     Runtime
-	gateway     Gateway
-	domain      string
-	baseURL     string
-	defaultPool string
+	ctx           context.Context
+	rdb           *common.RedisClient
+	repo          repository.VMRepository
+	backend       repository.BackendRepository
+	containers    repository.ContainerRepository
+	runtime       Runtime
+	gateway       Gateway
+	domain        string
+	baseURL       string
+	defaultPool   string
+	publicNetwork *publicVMNetwork
 }
 
 type ServiceOpts struct {
@@ -50,6 +52,7 @@ type ServiceOpts struct {
 	Gateway       Gateway
 	RouteGroup    *echo.Group
 	Server        *echo.Echo
+	BackendDialer *network.BackendDialer
 }
 
 func New(ctx context.Context, opts ServiceOpts) error {
@@ -69,6 +72,10 @@ func New(ctx context.Context, opts ServiceOpts) error {
 		domain:      opts.Config.Domain,
 		baseURL:     strings.TrimSuffix(opts.Config.BaseURL, "/"),
 		defaultPool: opts.Config.DefaultPool,
+	}
+
+	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {
+		return err
 	}
 
 	registerVMRoutes(opts.RouteGroup, s)
