@@ -1022,7 +1022,7 @@ def test_desktop_browser_routing_and_reconnect():
         [
             "node",
             str(Path(__file__).with_name("test_vm_desktop.js")),
-            str(Path(vm_module.__file__).with_name("desktop.html")),
+            str(Path(__file__).parents[2] / "pkg/abstractions/vm/desktop.html"),
         ],
         check=True,
     )

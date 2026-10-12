@@ -7,6 +7,18 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+// VM lifecycle states are persisted and exposed by the management API.
+const (
+	VMStateRunning  = "running"
+	VMStateStarting = "starting"
+	VMStateStopped  = "stopped"
+	VMStateStopping = "stopping"
+	VMStatePaused   = "paused"
+	VMStatePausing  = "pausing"
+	VMStateError    = "error"
+	VMStateDeleted  = "deleted"
+)
+
 // Writable VM root capacity in bytes, layered over the separate base image.
 const (
 	DefaultVMRootSizeBytes int64 = 50 << 30

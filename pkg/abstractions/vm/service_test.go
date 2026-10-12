@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -305,6 +306,7 @@ type vmRuntime struct {
 	boundPorts      []int32
 	network         *pb.PodSandboxUpdateNetworkPermissionsRequest
 	connectError    error
+	forwardStatus   int
 }
 
 func (r *vmRuntime) SandboxConnect(_ context.Context, req *pb.PodSandboxConnectRequest) (*pb.PodSandboxConnectResponse, error) {
@@ -328,7 +330,11 @@ func (r *vmRuntime) VMPortReady(context.Context, string, string, uint32) (bool, 
 }
 func (r *vmRuntime) ForwardVM(c echo.Context, stub, cid string) error {
 	r.forwarded = fmt.Sprintf("%s:%s:%s", cid, c.Param("port"), c.Param("subPath"))
-	return c.String(200, "desktop")
+	status := r.forwardStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return c.String(status, "desktop")
 }
 func (r *vmRuntime) TunnelVM(echo.Context, string, uint32) error { return nil }
 func (r *vmRuntime) SandboxExposePort(_ context.Context, in *pb.PodSandboxExposePortRequest) (*pb.PodSandboxExposePortResponse, error) {
