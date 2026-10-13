@@ -17,24 +17,30 @@ import (
 	"sync"
 	"time"
 
+	vmetrics "github.com/VictoriaMetrics/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
 	proxyproto "github.com/pires/go-proxyproto"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 type publicVMNetwork struct {
-	prefix         netip.Prefix
-	prefixes       []netip.Prefix
-	trusted        []netip.Prefix
-	maxConnections int
-	activityMu     sync.Mutex
-	activities     map[string]*publicVMActivity
-	repo           repository.PublicVMRepository
-	dialer         *network.BackendDialer
+	prefix              netip.Prefix
+	prefixes            []netip.Prefix
+	trusted             []netip.Prefix
+	maxConnections      int
+	maxConnectionsPerVM int
+	connectionMu        sync.Mutex
+	connections         map[string]int
+	rejectionLog        zerolog.Logger
+	activityMu          sync.Mutex
+	activities          map[string]*publicVMActivity
+	repo                repository.PublicVMRepository
+	dialer              *network.BackendDialer
 }
 
 type publicVMActivity struct {
@@ -46,7 +52,7 @@ type publicVMActivity struct {
 }
 
 func parsePublicVMNetwork(cfg types.VMNetworkConfig) (*publicVMNetwork, error) {
-	if cfg.PublicIPv6Prefix == "" && len(cfg.PublicIPv6Prefixes) == 0 && cfg.IngressPort == 0 && len(cfg.TrustedProxyCIDRs) == 0 && cfg.MaxConnections == 0 {
+	if cfg.PublicIPv6Prefix == "" && len(cfg.PublicIPv6Prefixes) == 0 && cfg.IngressPort == 0 && len(cfg.TrustedProxyCIDRs) == 0 && cfg.MaxConnections == 0 && cfg.MaxConnectionsPerVM == 0 {
 		return nil, nil
 	}
 	values := slices.Clone(cfg.PublicIPv6Prefixes)
@@ -69,14 +75,25 @@ func parsePublicVMNetwork(cfg types.VMNetworkConfig) (*publicVMNetwork, error) {
 	if cfg.IngressPort < 1 || cfg.IngressPort > 65535 || len(cfg.TrustedProxyCIDRs) == 0 {
 		return nil, fmt.Errorf("VM public networking requires ingressPort and trustedProxyCIDRs")
 	}
-	if cfg.MaxConnections < 0 {
-		return nil, fmt.Errorf("VM maxConnections must be nonnegative")
+	if cfg.MaxConnections < 0 || cfg.MaxConnectionsPerVM < 0 {
+		return nil, fmt.Errorf("VM connection limits must be nonnegative")
 	}
 	limit := cfg.MaxConnections
 	if limit == 0 {
 		limit = 16384
 	}
-	p := &publicVMNetwork{prefix: prefixes[0], prefixes: prefixes, maxConnections: limit, activities: make(map[string]*publicVMActivity)}
+	vmLimit := cfg.MaxConnectionsPerVM
+	if vmLimit == 0 {
+		vmLimit = min(256, max(1, limit/4))
+	}
+	if vmLimit > limit {
+		return nil, fmt.Errorf("VM maxConnectionsPerVM must not exceed maxConnections")
+	}
+	p := &publicVMNetwork{
+		prefix: prefixes[0], prefixes: prefixes, maxConnections: limit, maxConnectionsPerVM: vmLimit,
+		connections: make(map[string]int), activities: make(map[string]*publicVMActivity),
+		rejectionLog: log.Sample(&zerolog.BurstSampler{Burst: 1, Period: 5 * time.Second}),
+	}
 	for _, value := range cfg.TrustedProxyCIDRs {
 		cidr, err := netip.ParsePrefix(value)
 		if err != nil || cidr.Addr().Is4In6() {
@@ -186,12 +203,39 @@ func (s *Service) startPublicNetwork(cfg types.VMNetworkConfig, dialer *network.
 					s.handlePublicVMConn(ctx, conn, httpListener)
 				}()
 			default:
+				p.rejectConnection("gateway_limit", "")
 				conn.Close()
 			}
 		}
 	}()
-	log.Info().Int("port", cfg.IngressPort).Int("max_connections", p.maxConnections).Int("prefix_pools", len(p.prefixes)).Msg("public VM ingress listening")
+	log.Info().Int("port", cfg.IngressPort).Int("max_connections", p.maxConnections).Int("max_connections_per_vm", p.maxConnectionsPerVM).Int("prefix_pools", len(p.prefixes)).Msg("public VM ingress listening")
 	return nil
+}
+
+func (p *publicVMNetwork) acquireVMConnection(id string) bool {
+	p.connectionMu.Lock()
+	defer p.connectionMu.Unlock()
+	if p.connections[id] >= p.maxConnectionsPerVM {
+		return false
+	}
+	p.connections[id]++
+	return true
+}
+
+func (p *publicVMNetwork) releaseVMConnection(id string) {
+	p.connectionMu.Lock()
+	defer p.connectionMu.Unlock()
+	if p.connections[id] == 1 {
+		delete(p.connections, id)
+	} else {
+		p.connections[id]--
+	}
+}
+
+func (p *publicVMNetwork) rejectConnection(reason, id string) {
+	// Label only the reason: VM IDs would create unbounded metric cardinality.
+	vmetrics.GetOrCreateCounter(fmt.Sprintf(`vm_public_connections_rejected_total{reason=%q}`, reason)).Inc()
+	p.rejectionLog.Warn().Str("reason", reason).Str("vm_id", id).Msg("public VM connection limit reached")
 }
 
 func (p *publicVMNetwork) trustedProxy(address net.Addr) bool {
@@ -251,6 +295,13 @@ func (s *Service) handlePublicVMConn(ctx context.Context, raw net.Conn, httpList
 	if err != nil || !publicVMPort(v, port) {
 		return
 	}
+	if !p.acquireVMConnection(v.ID) {
+		p.rejectConnection("vm_limit", v.ID)
+		return
+	}
+	// Keep the slot until the TCP socket closes, including HTTP keep-alives
+	// and upgraded terminal/desktop sessions, rather than one HTTP request.
+	defer p.releaseVMConnection(v.ID)
 	if publicVMHTTPPort(v, port) {
 		tracked := &publicVMHTTPConn{Conn: conn, done: make(chan struct{})}
 		select {
@@ -399,6 +450,8 @@ func (s *Service) servePublicVMHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	c.SetParamNames("handle", "port", "*")
 	c.SetParamValues(v.Handle, strconv.Itoa(int(port)), strings.TrimPrefix(r.URL.Path, "/"))
+	// The shared proxy also checks protected-port auth, then removes the VM
+	// traffic token before forwarding HTTP or websocket requests to the guest.
 	if err := s.proxy(c); err != nil {
 		e.HTTPErrorHandler(err, c)
 	}

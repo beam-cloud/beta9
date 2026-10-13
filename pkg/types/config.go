@@ -1330,6 +1330,9 @@ type VMNetworkConfig struct {
 	TrustedProxyCIDRs []string `key:"trustedProxyCIDRs" json:"trusted_proxy_cidrs"`
 	// Maximum concurrent public TCP connections per gateway. Zero uses 16384.
 	MaxConnections int `key:"maxConnections" json:"max_connections"`
+	// Per-VM limit per gateway across public TCP ports, including HTTP keep-alives.
+	// Zero uses 256, capped at one quarter of the gateway limit (minimum one).
+	MaxConnectionsPerVM int `key:"maxConnectionsPerVM" json:"max_connections_per_vm"`
 }
 
 type BotConfig struct {

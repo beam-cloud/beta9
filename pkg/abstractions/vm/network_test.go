@@ -7,11 +7,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,10 +22,13 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	vmetrics "github.com/VictoriaMetrics/metrics"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/gorilla/websocket"
+	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
 	proxyproto "github.com/pires/go-proxyproto"
 	"github.com/stretchr/testify/require"
@@ -48,6 +54,9 @@ func TestPublicVMNetworkConfig(t *testing.T) {
 		{PublicIPv6Prefix: "2001:db8::/64", IngressPort: 65536, TrustedProxyCIDRs: []string{"127.0.0.0/8"}},
 		{PublicIPv6Prefix: "2001:db8::/64", IngressPort: 1996, TrustedProxyCIDRs: []string{"invalid"}},
 		{PublicIPv6Prefix: "2001:db8::/64", IngressPort: 1996, TrustedProxyCIDRs: []string{"127.0.0.1/32"}, MaxConnections: -1},
+		{PublicIPv6Prefix: "2001:db8::/64", IngressPort: 1996, TrustedProxyCIDRs: []string{"127.0.0.1/32"}, MaxConnectionsPerVM: -1},
+		{PublicIPv6Prefix: "2001:db8::/64", IngressPort: 1996, TrustedProxyCIDRs: []string{"127.0.0.1/32"}, MaxConnections: 4, MaxConnectionsPerVM: 5},
+		{MaxConnectionsPerVM: 4},
 	} {
 		_, err := parsePublicVMNetwork(cfg)
 		require.Error(t, err)
@@ -55,11 +64,20 @@ func TestPublicVMNetworkConfig(t *testing.T) {
 	p, err = parsePublicVMNetwork(publicNetworkConfig())
 	require.NoError(t, err)
 	require.Equal(t, 16384, p.maxConnections)
+	require.Equal(t, 256, p.maxConnectionsPerVM)
 	cfg := publicNetworkConfig()
 	cfg.MaxConnections = 32768
+	cfg.MaxConnectionsPerVM = 1024
 	custom, err := parsePublicVMNetwork(cfg)
 	require.NoError(t, err)
 	require.Equal(t, 32768, custom.maxConnections)
+	require.Equal(t, 1024, custom.maxConnectionsPerVM)
+	for _, limit := range []int{1, 4, 256} {
+		cfg.MaxConnections, cfg.MaxConnectionsPerVM = limit, 0
+		custom, err := parsePublicVMNetwork(cfg)
+		require.NoError(t, err)
+		require.Equal(t, max(1, limit/4), custom.maxConnectionsPerVM)
+	}
 	require.True(t, p.trustedProxy(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4567}))
 	require.False(t, p.trustedProxy(&net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 4567}))
 }
@@ -94,6 +112,35 @@ func TestPublicVMAddressSurvivesLifecycleAndIsNotInherited(t *testing.T) {
 	deleted := &types.VM{ID: "deleted", DesiredState: types.VMStateDeleted}
 	require.NoError(t, s.ensurePublicIPv6(ctx, deleted))
 	require.Empty(t, deleted.PublicIPv6)
+}
+
+func TestPublicVMAddressesUseAllRoutedPoolsAndRemainStable(t *testing.T) {
+	s, _, _, _, _ := fixture()
+	store := &networkVMStore{vmStore: s.repo.(*vmStore)}
+	cfg := publicNetworkConfig()
+	cfg.PublicIPv6Prefixes = []string{"2001:db8:5678::/80", cfg.PublicIPv6Prefix}
+	var err error
+	s.publicNetwork, err = parsePublicVMNetwork(cfg)
+	require.NoError(t, err)
+	require.Len(t, s.publicNetwork.prefixes, 2)
+	s.publicNetwork.repo = store
+	seen := make(map[netip.Prefix]bool)
+	for i := range 128 {
+		v := &types.VM{ID: fmt.Sprintf("vm-pool-%d", i), DesiredState: types.VMStateStopped}
+		require.NoError(t, store.SaveVM(context.Background(), v))
+		require.NoError(t, s.ensurePublicIPv6(context.Background(), v))
+		address := v.PublicIPv6
+		for _, prefix := range s.publicNetwork.prefixes {
+			if prefix.Contains(netip.MustParseAddr(address)) {
+				seen[prefix] = true
+			}
+		}
+		require.NoError(t, s.ensurePublicIPv6(context.Background(), v))
+		require.Equal(t, address, v.PublicIPv6)
+		header := proxyproto.HeaderProxyFromAddrs(2, &net.TCPAddr{IP: net.ParseIP("2001:db8::1"), Port: 1234}, &net.TCPAddr{IP: net.ParseIP(address), Port: 2222})
+		require.NoError(t, s.publicNetwork.validateHeader(header))
+	}
+	require.Len(t, seen, 2)
 }
 
 type unavailableVMAddresses struct{ repository.PublicVMRepository }
@@ -321,7 +368,7 @@ func (r *networkVMContainers) GetBackendRoute(_ context.Context, id string) (*ty
 	return r.routes[id], nil
 }
 
-func startPublicVMIngress(t *testing.T, addresses map[int32]string) (*Service, *types.VM, *networkVMStore, *networkVMContainers, string, context.CancelFunc) {
+func startPublicVMIngress(t *testing.T, addresses map[int32]string, configure ...func(*types.VMNetworkConfig)) (*Service, *types.VM, *networkVMStore, *networkVMContainers, string, context.CancelFunc) {
 	t.Helper()
 	s, v, _, _, _ := fixture()
 	v.PublicIPv6 = "2001:db8:1234::abcd"
@@ -346,6 +393,9 @@ func startPublicVMIngress(t *testing.T, addresses map[int32]string) (*Service, *
 	require.NoError(t, listener.Close())
 	cfg := publicNetworkConfig()
 	cfg.IngressPort = port
+	for _, option := range configure {
+		option(&cfg)
+	}
 	dialer := network.NewBackendDialer(nil, types.TailscaleConfig{}, containers, time.Second)
 	require.NoError(t, s.startPublicNetwork(cfg, dialer))
 	return s, v, store, containers, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), cancel
@@ -559,6 +609,151 @@ func TestPublicVMHTTPIngressChecksEveryKeepAliveRequest(t *testing.T) {
 	v.Spec.Ports = []uint32{2222}
 	require.NoError(t, store.SaveVM(context.Background(), v))
 	require.Equal(t, http.StatusNotFound, request(v.TrafficAccessToken))
+}
+
+func TestPublicVMConnectionLimitsIsolateVMsAndReleaseClosedSockets(t *testing.T) {
+	backend := publicVMBackend(t, func(c net.Conn) {
+		io.WriteString(c, "ready\n")
+		io.Copy(io.Discard, c)
+	})
+	s, v, store, _, ingress, cancel := startPublicVMIngress(t, map[int32]string{2222: backend}, func(cfg *types.VMNetworkConfig) {
+		cfg.MaxConnections, cfg.MaxConnectionsPerVM = 4, 2
+	})
+	other := *v
+	other.ID, other.Name, other.Handle, other.PublicIPv6 = "other-vm", "other", "other-handle", "2001:db8:1234::abce"
+	require.NoError(t, store.SaveVM(context.Background(), &other))
+	third := other
+	third.ID, third.Name, third.Handle, third.PublicIPv6 = "third-vm", "third", "third-handle", "2001:db8:1234::abcf"
+	require.NoError(t, store.SaveVM(context.Background(), &third))
+	openSSH := func(address string) *net.TCPConn {
+		conn := publicVMClient(t, ingress, address, 2222)
+		banner, err := bufio.NewReader(conn).ReadString('\n')
+		require.NoError(t, err)
+		require.Equal(t, "ready\n", banner)
+		return conn
+	}
+	count := func(id string) int {
+		s.publicNetwork.connectionMu.Lock()
+		defer s.publicNetwork.connectionMu.Unlock()
+		return s.publicNetwork.connections[id]
+	}
+	first := openSSH(v.PublicIPv6)
+	// An idle HTTP connection must count alongside SSH and other TCP ports.
+	httpConn := publicVMClient(t, ingress, v.PublicIPv6, 9000)
+	_, err := fmt.Fprintf(httpConn, "GET /path HTTP/1.1\r\nHost: vm\r\nX-Beam-VM-Token: %s\r\n\r\n", v.TrafficAccessToken)
+	require.NoError(t, err)
+	response, err := http.ReadResponse(bufio.NewReader(httpConn), nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	_, err = io.Copy(io.Discard, response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, 2, count(v.ID))
+	vmRejections := vmetrics.GetOrCreateCounter(`vm_public_connections_rejected_total{reason="vm_limit"}`)
+	before := vmRejections.Get()
+	rejected := publicVMClient(t, ingress, v.PublicIPv6, 2222)
+	_, err = rejected.Read(make([]byte, 1))
+	require.Error(t, err)
+	require.Equal(t, before+1, vmRejections.Get())
+	// The busy VM cannot prevent another VM from using the remaining capacity.
+	openSSH(other.PublicIPv6)
+	openSSH(other.PublicIPv6)
+	gatewayRejections := vmetrics.GetOrCreateCounter(`vm_public_connections_rejected_total{reason="gateway_limit"}`)
+	before = gatewayRejections.Get()
+	// Do not write a PROXY header: a full gateway rejects immediately on accept.
+	full, err := net.Dial("tcp", ingress)
+	require.NoError(t, err)
+	defer full.Close()
+	require.NoError(t, full.SetDeadline(time.Now().Add(time.Second)))
+	_, err = full.Read(make([]byte, 1))
+	require.Error(t, err)
+	require.Equal(t, before+1, gatewayRejections.Get())
+	require.NoError(t, httpConn.Close())
+	require.Eventually(t, func() bool { return count(v.ID) == 1 }, time.Second, time.Millisecond)
+	replacement := openSSH(v.PublicIPv6)
+	require.NoError(t, first.Close())
+	require.Eventually(t, func() bool { return count(v.ID) == 1 }, time.Second, time.Millisecond)
+	openSSH(third.PublicIPv6)
+	require.NoError(t, replacement.Close())
+	require.Eventually(t, func() bool { return count(v.ID) == 0 }, time.Second, time.Millisecond)
+	cancel()
+	require.Eventually(t, func() bool {
+		s.publicNetwork.connectionMu.Lock()
+		defer s.publicNetwork.connectionMu.Unlock()
+		return len(s.publicNetwork.connections) == 0
+	}, time.Second, time.Millisecond)
+}
+
+type networkVMHTTPRuntime struct {
+	Runtime
+	handler http.Handler
+}
+
+func (r *networkVMHTTPRuntime) ForwardVM(c echo.Context, _, _ string) error {
+	r.handler.ServeHTTP(c.Response(), c.Request())
+	return nil
+}
+
+func TestPublicVMManagedWebTokensDoNotReachGuest(t *testing.T) {
+	for _, port := range []int{7681, 8080} {
+		for _, protected := range []bool{false, true} {
+			t.Run(fmt.Sprintf("port=%d/protected=%t", port, protected), func(t *testing.T) {
+				headers := make(chan http.Header, 2)
+				guest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					headers <- r.Header.Clone()
+					if websocket.IsWebSocketUpgrade(r) {
+						upgrader := websocket.Upgrader{}
+						conn, err := upgrader.Upgrade(w, r, nil)
+						if err == nil {
+							defer conn.Close()
+							conn.WriteMessage(websocket.TextMessage, []byte("guest"))
+						}
+						return
+					}
+					io.WriteString(w, "guest")
+				}))
+				defer guest.Close()
+				s, v, store, _, ingress, _ := startPublicVMIngress(t, nil)
+				if protected {
+					v.Spec.ProtectedPorts = []uint32{uint32(port)}
+					require.NoError(t, store.SaveVM(context.Background(), v))
+				}
+				target, err := url.Parse(guest.URL)
+				require.NoError(t, err)
+				s.runtime = &networkVMHTTPRuntime{Runtime: s.runtime, handler: httputil.NewSingleHostReverseProxy(target)}
+				conn := publicVMClient(t, ingress, v.PublicIPv6, port)
+				reader := bufio.NewReader(conn)
+				for _, token := range []string{"wrong", v.TrafficAccessToken} {
+					_, err := fmt.Fprintf(conn, "GET /path HTTP/1.1\r\nHost: vm\r\nX-Beam-VM-Token: %s\r\n\r\n", token)
+					require.NoError(t, err)
+					response, err := http.ReadResponse(reader, nil)
+					require.NoError(t, err)
+					body, err := io.ReadAll(response.Body)
+					require.NoError(t, err)
+					require.NoError(t, response.Body.Close())
+					if token == "wrong" {
+						require.Equal(t, http.StatusForbidden, response.StatusCode)
+						require.Empty(t, headers, "failed authentication must not reach the guest")
+					} else {
+						require.Equal(t, http.StatusOK, response.StatusCode)
+						require.Equal(t, "guest", string(body))
+						require.Empty(t, (<-headers).Values("X-Beam-VM-Token"))
+					}
+				}
+				dialer := websocket.Dialer{NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+					return publicVMClient(t, ingress, v.PublicIPv6, port), nil
+				}}
+				ws, _, err := dialer.Dial(fmt.Sprintf("ws://[%s]:%d/ws", v.PublicIPv6, port), http.Header{"X-Beam-VM-Token": {v.TrafficAccessToken}})
+				require.NoError(t, err)
+				defer ws.Close()
+				require.NoError(t, ws.SetReadDeadline(time.Now().Add(3*time.Second)))
+				_, data, err := ws.ReadMessage()
+				require.NoError(t, err)
+				require.Equal(t, "guest", string(data))
+				require.Empty(t, (<-headers).Values("X-Beam-VM-Token"), "websocket handshakes must also strip credentials")
+			})
+		}
+	}
 }
 
 func TestPublicVMIngressRequiresTrustedProxyV2Metadata(t *testing.T) {
