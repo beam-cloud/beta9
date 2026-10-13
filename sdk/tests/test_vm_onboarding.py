@@ -251,23 +251,34 @@ def test_credit_checkpoint_never_opens_checkout_for_unattended_setup(monkeypatch
     opening.assert_not_called()
 
 
-def test_interactive_credit_checkpoint_waits_for_confirmed_funding(monkeypatch):
+def unfunded_setup(monkeypatch, checkout_status=201):
+    """An interactive credit checkpoint whose account is funded on the second poll."""
     import webbrowser
+
+    import requests
 
     from beta9.cli import setup
 
     opening = MagicMock()
     prompt = MagicMock(return_value="")
+    checkout = MagicMock(
+        return_value=MagicMock(
+            status_code=checkout_status,
+            json=lambda: {"url": "https://checkout.stripe.com/c/pay/cs_test"},
+        )
+    )
     monkeypatch.setattr(webbrowser, "open", opening)
     monkeypatch.setattr(setup.click, "prompt", prompt)
+    monkeypatch.setattr(requests, "post", checkout)
     monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
     statuses = iter(
         [
             {
-                "workspace_name": "test",
+                "workspace_name": "014913",
                 "credit": {
                     "ok": False,
-                    "message": "Add credits at https://account.example/credits",
+                    "message": "This workspace has no credits yet. Add credits at "
+                    "https://account.example/settings/credits to run workloads.",
                 },
             },
             {"credit": {"ok": False}},
@@ -276,14 +287,52 @@ def test_interactive_credit_checkpoint_waits_for_confirmed_funding(monkeypatch):
     )
     monkeypatch.setattr("beta9.mcp.tools.call_remote", lambda *_: next(statuses))
     monkeypatch.setattr("time.sleep", lambda _: None)
-    setup.ensure_credit(object(), unattended=False)
-    opening.assert_called_once_with("https://account.example/credits", new=2)
+    context = ConfigContext(token="workspace-token", auth_url="https://api.example/v2/oauth")
+    return setup, context, opening, prompt, checkout
+
+
+def test_enter_opens_a_twenty_dollar_checkout_for_the_signed_in_account(monkeypatch, capsys):
+    setup, context, opening, prompt, checkout = unfunded_setup(monkeypatch)
+
+    setup.ensure_credit(context, unattended=False)
+
     prompt.assert_called_once_with(
-        "Press enter to add credits via Stripe (Ctrl+C to exit)",
+        "Press enter to add $20 in credits (Ctrl+C to exit)",
         default="",
         show_default=False,
         prompt_suffix=" ",
     )
+    checkout.assert_called_once()
+    assert checkout.call_args.args == ("https://api.example/v2/oauth/cli/checkout",)
+    assert checkout.call_args.kwargs["json"] == {"total_cents_amount": 2000}
+    assert checkout.call_args.kwargs["headers"] == {"Authorization": "Bearer workspace-token"}
+    opening.assert_called_once_with("https://checkout.stripe.com/c/pay/cs_test", new=2)
+    output = capsys.readouterr().out
+    assert "This workspace has no credits yet." in output
+    assert "Added credits" in output
+    assert "014913" not in output
+    assert ";" not in output
+
+
+def test_checkout_falls_back_to_the_credits_page(monkeypatch):
+    setup, context, opening, _, _ = unfunded_setup(monkeypatch, checkout_status=404)
+
+    setup.ensure_credit(context, unattended=False)
+
+    opening.assert_called_once_with("https://account.example/settings/credits", new=2)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "this workspace has no credits yet; add credits at https://x/settings/credits to run workloads",
+        "This workspace has no credits yet. Add credits at https://x/settings/credits to run workloads.",
+    ],
+)
+def test_credit_reason_is_one_sentence_without_the_link(message):
+    from beta9.cli import setup
+
+    assert setup.credit_reason(message) == "This workspace has no credits yet."
 
 
 def test_product_dashboard_templates_are_optional_and_context_bound(monkeypatch):

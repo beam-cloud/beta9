@@ -47,7 +47,7 @@ def prepare_vm(
             vm = _create_vm(service, path, state, name, desktop)
         else:
             if (vm.info.get("metadata") or {}).get("beam.onboarding") != marker["beam.onboarding"]:
-                raise ValueError(f"VM {name!r} already exists; choose a different --name")
+                raise ValueError(f"VM {name!r} already exists. Choose a different --name.")
             if vm.info.get("desired_state") != "running":
                 vm.start(wait=False)
 
@@ -55,7 +55,7 @@ def prepare_vm(
         probe = vm.process.exec("sh", "-c", "test -d /workspace && uname -s", cwd="/")
         if probe.wait(30) != 0 or probe.stdout.read().strip() != "Linux":
             raise RuntimeError(
-                "VM guest readiness check failed; inspect vm get/logs and retry setup"
+                "VM guest readiness check failed. Inspect vm get/logs and retry setup."
             )
         return vm.refresh().info
 
@@ -147,7 +147,7 @@ def prepare_example(
         path = directory / "app.py"
         if kind == "sandboxes":
             if matches and state.get("app_id") != matches[0].get("app_id"):
-                raise ValueError(f"App {name!r} already exists; choose a different --name")
+                raise ValueError(f"App {name!r} already exists. Choose a different --name.")
             path.write_text(
                 "from beta9 import Sandbox\n\n"
                 f"code = '''{SANDBOX_CODE}'''\n\n"
@@ -172,7 +172,7 @@ def prepare_example(
         if matches:
             existing = call("get_app", {"name": name})
             if marker not in existing.get("config", {}).get("env", []):
-                raise ValueError(f"App {name!r} already exists; choose a different --name")
+                raise ValueError(f"App {name!r} already exists. Choose a different --name.")
 
         decorator = "endpoint" if kind == "inference" else "function"
         scaling = "    keep_warm_seconds=0,\n" if kind == "inference" else ""
@@ -217,7 +217,7 @@ def prepare_example(
                 )
                 if not accepted:
                     raise RuntimeError(
-                        "Sample deployment was not accepted; inspect logs and resume setup"
+                        "Sample deployment was not accepted. Inspect logs and resume setup."
                     )
                 existing = call("get_app", {"name": name})
 
@@ -297,7 +297,7 @@ def _run_sandbox_example(
 
         apps = call("list_apps", {"name": name}).get("items", [])
         if len(apps) != 1 or not apps[0].get("app_id"):
-            raise RuntimeError("Sandbox app could not be found; inspect logs before retrying")
+            raise RuntimeError("Sandbox app could not be found. Inspect logs before retrying.")
         state["app_id"] = apps[0]["app_id"]
         _save_state(directory / "request.json", state)
 
@@ -322,7 +322,7 @@ def _run_sandbox_example(
                 raise TimeoutError("Sandbox sample did not finish within 30 seconds")
             time.sleep(0.1)
         if exit_code != 0 or not "".join(output).strip().endswith("Hello from the cloud"):
-            raise RuntimeError("Sandbox hello-world result was not verified; inspect logs")
+            raise RuntimeError("Sandbox hello-world result was not verified. Inspect logs.")
         return {
             "name": name,
             "example": "sandboxes",
@@ -333,7 +333,7 @@ def _run_sandbox_example(
     finally:
         try:
             if instance is not None and instance.ok and not instance.terminate():
-                raise RuntimeError("Sandbox did not stop; inspect container status")
+                raise RuntimeError("Sandbox did not stop. Inspect container status.")
         finally:
             os.chdir(previous_directory)
             if previous_channel is None:

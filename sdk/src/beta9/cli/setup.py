@@ -25,6 +25,8 @@ from .mcp import (
 )
 
 UNIVERSAL_SKILLS_DIR = "~/.agents/skills"
+# The minimum credit purchase, which also covers a first VM.
+CHECKOUT_CENTS = 2000
 
 
 @click.group(cls=ClickCommonGroup)
@@ -57,7 +59,7 @@ def setup():
     "--yes",
     is_flag=True,
     expose_value=False,
-    help="Accepted for symmetry with installers; nothing prompts.",
+    help="Accepted for symmetry with installers. Nothing prompts.",
 )
 @extraclick.config_context_option
 def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Optional[str]):
@@ -139,7 +141,7 @@ def configure_agents(
     name="vm",
     help="Sign in, connect your agents and start a persistent CPU VM. Run again to resume.",
 )
-@click.option("--name", help="Name of the first VM; defaults to <product>-agent.")
+@click.option("--name", help="Name of the first VM. Defaults to <product>-agent.")
 @click.option("--desktop", is_flag=True, help="Include a browser desktop.")
 @click.option("--client", "clients", type=click.Choice(CLIENT_IDS), multiple=True)
 @click.option("--skip-agents", is_flag=True, help="Sign in and prepare the VM only.")
@@ -158,7 +160,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             selected_context, agents = connect_onboarding(selected, clients, skip_agents, yes)
         if not confirm_workload(
-            "Start your VM (4 vCPU, 8 GiB RAM, 50 GiB disk; runs until stopped)?", yes
+            "Start your VM (4 vCPU, 8 GiB RAM, 50 GiB disk, runs until stopped)?", yes
         ):
             return
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
@@ -222,40 +224,74 @@ def confirm_workload(prompt: str, yes: bool) -> bool:
 
 
 def ensure_credit(context: ConfigContext, unattended: bool) -> None:
-    """Use the gateway's credit decision; purchases stay in the product dashboard."""
-    import re
+    """Use the gateway's credit decision; Enter opens checkout for the signed-in account."""
     import time
     import webbrowser
 
     from ..mcp.tools import call_remote
 
-    summary = call_remote(context, "whoami", {})
-    credit = summary.get("credit")
+    credit = call_remote(context, "whoami", {}).get("credit")
     if not credit or credit.get("ok"):
         return
     message = credit.get("message") or "Add credits before starting compute."
-    match = re.search(r"https?://[^\s<>]+", message)
-    link = match.group(0).rstrip(".,)") if match else ""
-    if unattended or not sys.stdin.isatty() or not link:
+    if unattended or not sys.stdin.isatty():
         raise click.ClickException(message)
-    terminal.header(f"Add credits to {summary.get('workspace_name') or 'your workspace'}")
-    terminal.print(message)
+    terminal.header("Add credits")
+    terminal.print(credit_reason(message), markup=False)
     click.prompt(
-        "Press enter to add credits via Stripe (Ctrl+C to exit)",
+        f"Press enter to add ${CHECKOUT_CENTS // 100} in credits (Ctrl+C to exit)",
         default="",
         show_default=False,
         prompt_suffix=" ",
     )
+    link = credit_checkout(context) or credits_page(message)
+    if not link:
+        raise click.ClickException(message)
     webbrowser.open(link, new=2)
-    terminal.print("Choose an amount and complete checkout. Setup continues when credits arrive.")
+    terminal.detail(f"If it didn't open: {link}")
     deadline = time.monotonic() + 900
-    with terminal.progress("Waiting for credits"):
+    with terminal.progress("Waiting for checkout"):
         while time.monotonic() < deadline:
             if call_remote(context, "whoami", {}).get("credit", {}).get("ok"):
-                terminal.success("Credits confirmed")
+                terminal.success("Added credits")
                 return
             time.sleep(3)
     raise click.ClickException("Credits are still pending. Run this command again after checkout.")
+
+
+def credit_reason(message: str) -> str:
+    """The first sentence of the gateway's credit message, without the dashboard link."""
+    import re
+
+    reason = re.split(r"[;.]\s", message, maxsplit=1)[0].rstrip(".")
+    return reason[:1].upper() + reason[1:] + "."
+
+
+def credits_page(message: str) -> str:
+    import re
+
+    match = re.search(r"https?://[^\s<>]+", message)
+    return match.group(0).rstrip(".,)") if match else ""
+
+
+def credit_checkout(context: ConfigContext) -> str:
+    """A Stripe Checkout URL for this context's account, or "" if its auth server has none."""
+    import requests
+
+    if not context.auth_url or not context.token:
+        return ""
+    try:
+        response = requests.post(
+            context.auth_url.rstrip("/") + "/cli/checkout",
+            json={"total_cents_amount": CHECKOUT_CENTS},
+            headers={"Authorization": f"Bearer {context.token}"},
+            timeout=10,
+            allow_redirects=False,
+        )
+        url = response.json().get("url") if response.status_code == 201 else ""
+    except (requests.RequestException, ValueError, AttributeError):
+        return ""
+    return url if isinstance(url, str) and url.startswith("https://") else ""
 
 
 def connect_onboarding(
@@ -280,7 +316,7 @@ def connect_onboarding(
     agents = None if skip_agents else configure_agents(clients, False, False, selected)
     if agents and agents["failed"]:
         report_failures(agents["failed"])
-        raise click.ClickException("Agent configuration failed; fix it and resume setup")
+        raise click.ClickException("Agent configuration failed. Fix it and resume setup.")
     if agents:
         terminal.success("Agent skills and MCP configured")
     return context, agents
@@ -380,9 +416,9 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             configured, agents = connect_onboarding(selected, clients, skip_agents, yes)
         if not confirm_workload(
-            "Run hello world in a sandbox (1 CPU, 256 MiB; stops when finished)?"
+            "Run hello world in a sandbox (1 CPU, 256 MiB, stops when finished)?"
             if kind == "sandboxes"
-            else "Run hello world (1 CPU, 256 MiB; scales to zero when idle)?",
+            else "Run hello world (1 CPU, 256 MiB, scales to zero when idle)?",
             yes,
         ):
             return
