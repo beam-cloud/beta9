@@ -35,9 +35,6 @@ def prepare_vm(
                 raise
             vm = VM(
                 name,
-                cpu=1,
-                memory=2048,
-                disk_size="10Gi",
                 desktop=desktop,
                 docker_enabled=True,
                 ttl=900,
