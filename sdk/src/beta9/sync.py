@@ -98,11 +98,13 @@ class FileSyncer:
         gateway_stub: GatewayServiceStub,
         root_dir=".",
         prune_ignored_directories: bool = True,
+        use_project_ignore: bool = True,
     ):
         self.root_dir = Path(root_dir).absolute()
         self.gateway_stub: GatewayServiceStub = gateway_stub
         self.is_workspace_dir = root_dir == "."
         self.prune_ignored_directories = prune_ignored_directories
+        self.use_project_ignore = use_project_ignore
 
     @property
     def ignore_file_path(self) -> Path:
@@ -183,7 +185,7 @@ class FileSyncer:
         ignore_patterns: Optional[List[str]] = None,
         include_patterns: Optional[List[str]] = None,
     ) -> FileSyncResult:
-        """Use the project ignore file by default; an empty list disables exclusions."""
+        """Sync selected files, using the project's ignore file by default."""
         with _sync_lock:
             return self._sync(
                 ignore_patterns=ignore_patterns,
@@ -197,11 +199,11 @@ class FileSyncer:
     ) -> FileSyncResult:
         terminal.header("Syncing files")
 
-        if ignore_patterns is None:
+        if not ignore_patterns and self.use_project_ignore:
             self._init_ignore_file()
             self.ignore_patterns = self._read_ignore_file()
         else:
-            self.ignore_patterns = ignore_patterns
+            self.ignore_patterns = ignore_patterns or []
 
         if include_patterns is None or len(include_patterns) == 0:
             self.include_patterns = []

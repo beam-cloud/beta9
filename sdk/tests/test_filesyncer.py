@@ -20,6 +20,7 @@ from beta9.sync import (
     _Manifest,
     _ManifestEntry,
     _SyncCache,
+    ignore_file_name,
 )
 
 
@@ -165,6 +166,20 @@ class TestIncrementalSync(TestCase):
 
         self.assertIn("main.py", self.puts[0][1])
         self.assertIn(".beamignore", self.puts[0][1])
+
+    def test_empty_ignore_patterns_preserve_project_exclusions_in_uploaded_archive(self):
+        for name in (".git/HEAD", ".venv/lib/file", "node_modules/package/index.js"):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("excluded")
+        (self.root / ignore_file_name()).write_text(
+            f"{ignore_file_name()}\n.git\n.venv\nnode_modules\napp\n"
+        )
+
+        with patch("beta9.sync.is_local", return_value=True):
+            FileSyncer(_FakeGateway(), root_dir=str(self.root)).sync(ignore_patterns=[])
+
+        self.assertEqual(self.puts[0][1], ["main.py"])
 
     def test_manifest_hash_depends_on_content_path_and_mode(self):
         a = _Manifest({"x": _ManifestEntry(1, 1, "h1", 0o644)})
@@ -530,11 +545,11 @@ class TestDockerBuildContext(TestCase):
 
 
 class TestFileSyncer(TestCase):
-    def test_explicit_empty_patterns_do_not_load_or_create_beamignore(self):
+    def test_disabling_project_ignore_does_not_load_or_create_it(self):
         gateway = MagicMock()
         gateway.head_object.return_value = HeadObjectResponse(ok=True, exists=True)
         with tempfile.TemporaryDirectory() as root:
-            syncer = FileSyncer(gateway_stub=gateway, root_dir=root)
+            syncer = FileSyncer(gateway_stub=gateway, root_dir=root, use_project_ignore=False)
             with patch.object(syncer, "_init_ignore_file") as initialize:
                 with patch.object(syncer, "_read_ignore_file") as read:
                     syncer.sync(ignore_patterns=[])

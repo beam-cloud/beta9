@@ -481,6 +481,7 @@ class Image(BaseAbstraction):
         syncer = FileSyncer(
             gateway_stub=self.gateway_stub,
             root_dir=root_dir,
+            use_project_ignore=not bool(self.dockerfile_path),
             # Docker rules can re-include files beneath an excluded directory.
             prune_ignored_directories=not any(p.startswith("!") for p in patterns or []),
         )
