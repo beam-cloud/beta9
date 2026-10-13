@@ -279,7 +279,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         ignore_patterns = []
         if is_custom_image:
-            ignore_patterns = ["**"]
+            ignore_patterns = ["*"]
 
         if not is_custom_image and self.entrypoint:
             self.entrypoint = self._wrap_user_code_entrypoint(self.entrypoint)
@@ -372,7 +372,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         ignore_patterns = []
         if is_custom_image:
-            ignore_patterns = ["**"]
+            ignore_patterns = ["*"]
 
         if not is_custom_image and self.entrypoint:
             self.entrypoint = self._wrap_user_code_entrypoint(self.entrypoint)
@@ -453,7 +453,11 @@ app = Pod(
             if key == "dockerfile" and isinstance(value, Image):
                 imports.append("Image")
                 key = "image"
-                value = f"Image.from_dockerfile('{value.dockerfile_path}')"
+                value = (
+                    f"Image.from_dockerfile({value.dockerfile_path!r}, "
+                    f"{value.dockerfile_context_dir!r}, {value.dockerfile_target!r}, "
+                    f"{value.dockerfile_build_args!r})"
+                )
             elif isinstance(value, Image):
                 imports.append("Image")
                 value = f'Image(base_image="{value.base_image}")'

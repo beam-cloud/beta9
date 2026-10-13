@@ -1371,7 +1371,7 @@ func TestSetConfigField(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			configCopy := *tt.config
 
-			err := setConfigField(&configCopy, tt.fieldPath, tt.value)
+			err := SetConfigField(&configCopy, tt.fieldPath, tt.value)
 
 			if tt.expectedErr {
 				if err == nil {

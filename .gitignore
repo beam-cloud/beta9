@@ -50,3 +50,6 @@ hack/stage/config.stage.yaml
 # Local evaluation reports and captures
 /docs/reports/
 *.local.md
+
+# Private staging configuration and seeded Go module cache
+hack/stage/

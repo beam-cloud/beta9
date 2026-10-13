@@ -4,7 +4,7 @@ import os
 import shlex
 import textwrap
 from gettext import gettext
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import click
 
@@ -370,11 +370,22 @@ class DockerfileParser(click.ParamType):
         return value
 
 
-def image_from_dockerfile_option(value) -> Image:
+def image_from_dockerfile_option(
+    value,
+    context_dir: Optional[str] = None,
+    target: Optional[str] = None,
+    build_args: Sequence[str] = (),
+) -> Image:
     if isinstance(value, Image):
         return value
 
-    image = Image.from_dockerfile(str(value))
+    args = {}
+    for entry in build_args or ():
+        key, separator, arg = entry.partition("=")
+        if not separator or not key:
+            raise ValueError(f"--build-arg {entry!r} must be KEY=VALUE")
+        args[key] = arg
+    image = Image.from_dockerfile(str(value), context_dir, target, args)
     image.dockerfile_path = str(value)
     image.ignore_python = True
     return image
@@ -489,6 +500,24 @@ def override_config_options(func: click.Command):
         type=DockerfileParser(),
         help="The path to the Dockerfile to use for the container (e.g. --dockerfile Dockerfile).",
         required=False,
+    )(f)
+    f = click.option(
+        "--context-dir",
+        type=click.Path(exists=True, file_okay=False),
+        help="The build context for --dockerfile (default: the Dockerfile's directory).",
+        required=False,
+    )(f)
+    f = click.option(
+        "--target",
+        "build_target",
+        help="The --dockerfile stage to build, as with docker build --target (default: the last).",
+        required=False,
+    )(f)
+    f = click.option(
+        "--build-arg",
+        "build_args",
+        multiple=True,
+        help="A KEY=VALUE build argument for --dockerfile, as with docker build. Repeatable.",
     )(f)
     f = click.option(
         "--image",
@@ -644,7 +673,12 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
             config_class_instance.configure_replicas(**replica_args)
 
         if kwargs.get("dockerfile") is not None:
-            image = image_from_dockerfile_option(kwargs["dockerfile"])
+            image = image_from_dockerfile_option(
+                kwargs["dockerfile"],
+                kwargs.get("context_dir"),
+                kwargs.get("build_target"),
+                kwargs.get("build_args") or (),
+            )
             kwargs["dockerfile"] = image
             config_class_instance.image = image
 

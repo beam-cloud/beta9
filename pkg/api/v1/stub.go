@@ -620,7 +620,7 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 			return HTTPBadRequest("Field path cannot be empty")
 		}
 
-		if err := setConfigField(&stubConfig, fieldPath, value); err != nil {
+		if err := SetConfigField(&stubConfig, fieldPath, value); err != nil {
 			return HTTPBadRequest(fmt.Sprintf("Failed to update field '%s': %v", fieldPath, err))
 		}
 		updatedFields = append(updatedFields, fieldPath)
@@ -696,8 +696,8 @@ func (g *StubGroup) ScaleStub(ctx echo.Context) error {
 	})
 }
 
-// setConfigField sets a dotted path such as runtime.cpu or autoscaler.max_containers.
-func setConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
+// SetConfigField sets a dotted path such as runtime.cpu or autoscaler.max_containers.
+func SetConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
 	fields := strings.Split(fieldPath, ".")
 	if len(fields) == 0 {
 		return fmt.Errorf("empty field path")

@@ -590,6 +590,7 @@ func configurePodDeploymentAutoscaler(autoscaler *types.Autoscaler, keepWarmSeco
 		autoscaler.MaxContainers = 1
 	}
 
+	// Only an explicit always-on request should introduce a billed replica floor.
 	if keepWarmSeconds < 0 && autoscaler.MinContainers == 0 {
 		autoscaler.MinContainers = 1
 	}

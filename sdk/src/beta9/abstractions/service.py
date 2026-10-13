@@ -3,18 +3,18 @@ import os
 from typing import Dict, List, Optional, Tuple, Union
 
 from ..type import (
+    DurableDisk,
     GpuType,
     GpuTypeAlias,
     Pool,
     QueueDepthAutoscaler,
     ServingConfig,
-    DurableDisk,
 )
 from .base.container import Container
 from .image import Image
 from .pod import Pod, PodInstance
 
-DEFAULT_SERVICE_KEEP_WARM_SECONDS = 600
+DEFAULT_SERVICE_KEEP_WARM_SECONDS = 0
 
 DEFAULT_SERVICE_PORT = 8000
 

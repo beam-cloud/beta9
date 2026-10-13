@@ -1,17 +1,14 @@
 package pod
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/binary"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"time"
@@ -23,10 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	tcpHandlerKeyTtl time.Duration = 5 * time.Minute
-	postgresALPN                  = "postgresql"
-)
+const tcpHandlerKeyTtl time.Duration = 5 * time.Minute
 
 type tcpConnection struct {
 	Conn        net.Conn
@@ -36,6 +30,7 @@ type tcpConnection struct {
 }
 
 type tcpConnectionHandler func(conn *tcpConnection) error
+
 type PodTCPServer struct {
 	ps            *GenericPodService
 	ctx           context.Context
@@ -45,7 +40,7 @@ type PodTCPServer struct {
 	redisClient   *common.RedisClient
 	tailscale     *network.Tailscale
 	listener      net.Listener
-	tlsCert       tls.Certificate
+	tls           *tcpTLSHandler
 }
 
 func NewPodTCPServer(
@@ -79,7 +74,7 @@ func (pts *PodTCPServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to load TLS certificate: %w", err)
 	}
-	pts.tlsCert = cert
+	pts.tls = newTCPTLSHandler(cert)
 
 	log.Info().Int("port", pts.config.Abstractions.Pod.TCP.Port).
 		Msg("pod tcp server running")
@@ -169,17 +164,8 @@ func (pts *PodTCPServer) acceptConnections() {
 }
 
 func (pts *PodTCPServer) handleConnection(conn net.Conn) {
-	tlsReadyConn, err := preparePostgresAwareTLSConn(conn)
+	client, err := pts.tls.accept(conn)
 	if err != nil {
-		conn.Close()
-		return
-	}
-
-	tlsConn := tls.Server(tlsReadyConn, &tls.Config{
-		Certificates: []tls.Certificate{pts.tlsCert},
-		NextProtos:   []string{postgresALPN},
-	})
-	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return
 	}
@@ -195,55 +181,9 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	}
 
 	sniMiddleware := pts.createSNIMiddleware(tcpHandler)
-	if err := sniMiddleware(tlsConn); err != nil {
+	if err := sniMiddleware(client); err != nil {
 		log.Error().Err(err).Msg("connection handler error")
 	}
-}
-
-const postgresSSLRequestCode uint32 = 80877103
-
-type bufferedReadConn struct {
-	net.Conn
-	reader *bufio.Reader
-}
-
-func (c *bufferedReadConn) Read(p []byte) (int, error) {
-	if c.reader != nil && c.reader.Buffered() > 0 {
-		return c.reader.Read(p)
-	}
-	return c.Conn.Read(p)
-}
-
-func preparePostgresAwareTLSConn(conn net.Conn) (net.Conn, error) {
-	reader := bufio.NewReader(conn)
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	defer conn.SetReadDeadline(time.Time{})
-
-	first, err := reader.Peek(1)
-	if err != nil {
-		return nil, err
-	}
-	if first[0] == 0x16 {
-		return &bufferedReadConn{Conn: conn, reader: reader}, nil
-	}
-
-	header, err := reader.Peek(8)
-	if err != nil {
-		return nil, err
-	}
-	if binary.BigEndian.Uint32(header[0:4]) != 8 ||
-		binary.BigEndian.Uint32(header[4:8]) != postgresSSLRequestCode {
-		return nil, fmt.Errorf("connection did not start with TLS or PostgreSQL SSLRequest")
-	}
-
-	if _, err := io.ReadFull(reader, make([]byte, 8)); err != nil {
-		return nil, err
-	}
-	if _, err := conn.Write([]byte("S")); err != nil {
-		return nil, err
-	}
-
-	return &bufferedReadConn{Conn: conn, reader: reader}, nil
 }
 
 // createSNIMiddleware wraps a handler with SNI-based routing middleware
@@ -251,7 +191,7 @@ func (pts *PodTCPServer) createSNIMiddleware(handler tcpConnectionHandler) func(
 	return func(conn net.Conn) error {
 		var sni string
 
-		if tlsConn, ok := conn.(*tls.Conn); ok {
+		if tlsConn, ok := conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
 			sni = tlsConn.ConnectionState().ServerName
 		}
 

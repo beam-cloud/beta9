@@ -1,10 +1,4 @@
-"""
-Stdio MCP server for agent clients. Workspace tools are forwarded to the
-gateway's stateless `/api/v1/mcp` (one POST per message; notifications get a
-bodyless 202); `deploy` and `login` run here. With no credentials the server
-still starts and offers `login`, then announces the workspace tools once a
-token arrives.
-"""
+"""Stdio MCP bridge with local sign-in and deployment tools."""
 
 import configparser
 import json
@@ -16,17 +10,20 @@ from dataclasses import replace
 from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Tuple
 
 import requests
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from ..channel import ServiceClient
 from ..config import DEFAULT_CONTEXT_NAME, ConfigContext, context_defaults, get_settings
 from .tools import LocalTools, error_result
 
-PROTOCOL_VERSION = "2025-03-26"
+PROTOCOL_VERSION = "2025-11-25"
 REMOTE_TIMEOUT = 120
 # Database creation can include the gateway's ten-minute image build.
 TOOL_TIMEOUTS = {"create_database": 660}
 READ_RETRIES = 3
 RETRY_DELAY = 0.3
+VERSION_CHECK_SECONDS = 30
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -40,7 +37,7 @@ def log(message: str) -> None:
 
 
 def context_or_none(name: str) -> Optional[ConfigContext]:
-    """The saved context, or its defaults with the environment token; never prompts."""
+    """Resolve saved or environment credentials without prompting."""
     context = context_defaults(name)
     if context.token:
         return context
@@ -106,8 +103,7 @@ class RemoteMCP:
         except ValueError:
             return response.status_code, None
 
-        # Trust the gateway's catalog, not tool-name prefixes. Unknown calls
-        # are never retried: their side effects may already have happened.
+        # Retry only operations advertised as read-only and idempotent.
         if (
             isinstance(message, dict)
             and message.get("method") == "tools/list"
@@ -117,6 +113,7 @@ class RemoteMCP:
                 tool["name"]
                 for tool in body.get("result", {}).get("tools", [])
                 if tool.get("annotations", {}).get("readOnlyHint") is True
+                and tool.get("annotations", {}).get("idempotentHint") is True
             }
         return response.status_code, body
 
@@ -138,6 +135,8 @@ class StdioProxy:
         self._request_lock = threading.Lock()
         self._requests: Dict[Any, threading.Event] = {}
         self._stdout: BinaryIO = sys.stdout.buffer
+        self.version: str = _sdk_version()
+        self._installed: Tuple[float, str] = (time.monotonic(), self.version)
         self._follow_sign_in()
 
     def run(
@@ -273,12 +272,44 @@ class StdioProxy:
             _, body = self._remote_call({"jsonrpc": "2.0", "id": "tools", "method": "tools/list"})
             if isinstance(body, dict):
                 tools.extend(body.get("result", {}).get("tools", []))
-        return tools + self.tools.definitions()
+        local = self.tools.definitions()
+        names = {tool["name"] for tool in local}
+        return [tool for tool in tools if tool.get("name") not in names] + local
 
     def _tools_call(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        response = self._call_tool(msg_id, params)
+        notice = self._upgrade_notice()
+        content = (response or {}).get("result", {}).get("content") or []
+        if notice and content and content[0].get("type") == "text":
+            content.append({"type": "text", "text": notice})
+        return response
+
+    def _upgrade_notice(self) -> str:
+        """Clients keep this process across upgrades, so its tools can be older than the CLI's."""
+        checked_at, installed = self._installed
+        if time.monotonic() - checked_at > VERSION_CHECK_SECONDS:
+            installed = _sdk_version()
+            self._installed = (time.monotonic(), installed)
+        if installed in (self.version, "0"):
+            return ""
+        return (
+            f"This MCP server runs {get_settings().name.lower()} SDK {self.version}, but "
+            f"{installed} is installed. Restart the MCP server in your client to use the "
+            "installed tools."
+        )
+
+    def _call_tool(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         name = params.get("name", "")
         handler = self.tools.handler(name)
         if handler is not None:
+            definition = next(item for item in self.tools.definitions() if item["name"] == name)
+            try:
+                Draft202012Validator(definition["inputSchema"]).validate(
+                    params.get("arguments") or {}
+                )
+            except ValidationError as exc:
+                path = ".".join(str(part) for part in exc.path) or "arguments"
+                return _result(msg_id, error_result(f"{path}: {exc.message}", code="INVALID_ARGS"))
             with self._request_lock:
                 self.tools.request.cancelled = self._requests.get(msg_id, threading.Event())
             token = params.get("_meta", {}).get("progressToken")

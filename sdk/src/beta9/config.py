@@ -59,6 +59,7 @@ class SDKSettings:
     # "https://platform.beam.cloud/app/{app_id}/overview". Empty when there is
     # no dashboard to link to (plain beta9 installs without one).
     app_url_template: str = os.getenv("BETA9_APP_URL_TEMPLATE", "")
+    vm_url_template: str = os.getenv("BETA9_VM_URL_TEMPLATE", "")
     # OAuth 2.0 authorization server for `login` (RFC 8628 device grant):
     # POST {auth_url}/device/code and POST {auth_url}/token. Empty means the
     # install has no browser sign-in and tokens are entered by hand.
@@ -114,6 +115,10 @@ class ConfigContext:
     # OAuth device-grant server that issues this context's tokens; empty when
     # tokens are created in a dashboard and pasted in.
     auth_url: Optional[str] = None
+    # Optional product UI supplied by the account provider. Core and
+    # self-hosted SDK installs have no billing or dashboard dependency.
+    app_url_template: Optional[str] = None
+    vm_url_template: Optional[str] = None
 
     @property
     def http_url(self) -> str:

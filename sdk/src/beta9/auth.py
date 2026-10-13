@@ -1,9 +1,4 @@
-"""
-Browser sign-in for the CLI: the OAuth 2.0 device grant (RFC 8628) against the
-authorization server of the target context (`ConfigContext.auth_url`; the
-settings' for the default one). The issued token is a workspace token, so the
-saved context is the one `config create` would write.
-"""
+"""CLI browser sign-in using the OAuth 2.0 device grant (RFC 8628)."""
 
 import configparser
 import os
@@ -28,8 +23,7 @@ from .config import (
 
 GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 REQUEST_TIMEOUT = 15
-# Consecutive polls that may fail to reach the service (network errors, 5xx)
-# before the sign-in is given up; one blip must not end a ten-minute wait.
+# Consecutive network or server failures tolerated during device polling.
 MAX_TRANSIENT_FAILURES = 5
 
 
@@ -164,6 +158,8 @@ class DeviceLogin:
                     data.get("gateway_port") or self.target.gateway_port or DEFAULT_GATEWAY_PORT
                 ),
                 api_url=data.get("api_url") or self.target.api_url,
+                app_url_template=data.get("app_url_template") or self.target.app_url_template,
+                vm_url_template=data.get("vm_url_template") or self.target.vm_url_template,
             )
         error = data.get("error", "")
         if error == "authorization_pending":
