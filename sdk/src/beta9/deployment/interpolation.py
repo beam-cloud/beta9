@@ -7,8 +7,7 @@ VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def interpolate(text: str, variables: Dict[str, str], missing: Set[str]) -> str:
-    """Compose interpolation: $VAR, ${VAR}, ${VAR:-default}, ${VAR-default},
-    ${VAR:?error}, ${VAR:+alternative}, nested defaults, and $$ for a literal $."""
+    """Expand Compose variables, defaults, alternatives, and escaped dollar signs."""
     out: List[str] = []
     i = 0
     while i < len(text):
@@ -73,11 +72,11 @@ def _expand(expression: str, variables: Dict[str, str], missing: Set[str]) -> st
     return _lookup(name, variables, missing)
 
 
-def _interpolate_tree(node: Any, variables: Dict[str, str], missing: Set[str]) -> Any:
+def interpolate_tree(node: Any, variables: Dict[str, str], missing: Set[str]) -> Any:
     if isinstance(node, str):
         return interpolate(node, variables, missing)
     if isinstance(node, list):
-        return [_interpolate_tree(item, variables, missing) for item in node]
+        return [interpolate_tree(item, variables, missing) for item in node]
     if isinstance(node, dict):
-        return {key: _interpolate_tree(value, variables, missing) for key, value in node.items()}
+        return {key: interpolate_tree(value, variables, missing) for key, value in node.items()}
     return node

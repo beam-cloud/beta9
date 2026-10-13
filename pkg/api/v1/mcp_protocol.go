@@ -54,8 +54,7 @@ func (g *MCPGroup) Post(c echo.Context) error {
 		return rpcFailure(c, nil, -32700, "expected one JSON document", nil)
 	}
 	var req rpcRequest
-	// Modern MCP does not allow JSON-RPC arrays. The local bridge now sends
-	// individual requests; reject arrays consistently rather than partially run them.
+	// MCP requires individual JSON-RPC messages.
 	if json.Unmarshal(raw, &req) != nil || !validRPC(req) {
 		return rpcFailure(c, nil, -32600, "invalid request", nil)
 	}
@@ -91,7 +90,11 @@ func (g *MCPGroup) Post(c echo.Context) error {
 	if len(req.ID) == 0 {
 		return c.NoContent(http.StatusAccepted)
 	}
-	selection := mcpSelection{Features: splitMCPFilter(c.QueryParam("features")), Tools: splitMCPFilter(c.QueryParam("tools")), ReadOnly: c.QueryParam("readonly") == "true" || c.QueryParam("readonly") == "1"}
+	selection := mcpSelection{
+		Features: splitMCPFilter(c.QueryParam("features")),
+		Tools:    splitMCPFilter(c.QueryParam("tools")),
+		ReadOnly: c.QueryParam("readonly") == "true" || c.QueryParam("readonly") == "1",
+	}
 	ctx := withIdentityHeaders(c.Request().Context(), c.Request().Header)
 	ctx = context.WithValue(ctx, mcpSelectionKey{}, selection)
 	response := g.dispatch(ctx, cc.AuthInfo, req)

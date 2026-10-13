@@ -1,5 +1,6 @@
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, Union
 
 from beta9.clients.gateway import GatewayServiceStub
-from beta9.sync import FileSyncer, dockerignore_patterns
+from beta9.sync import FileSyncer
 
 from .. import env, terminal
 from ..abstractions.base import BaseAbstraction
@@ -28,11 +29,40 @@ LOCAL_PYTHON_VERSION = f"python{sys.version_info.major}.{sys.version_info.minor}
 _DEFAULT_IMAGE_BUILD_CACHE_TTL_SECONDS = 300.0
 
 
+def dockerignore_patterns(dockerfile: str, context_dir: str) -> List[str]:
+    """Read Dockerfile-specific or context ignore rules, anchored at the context root."""
+    for path in (Path(f"{dockerfile}.dockerignore"), Path(context_dir) / ".dockerignore"):
+        if not path.is_file():
+            continue
+
+        patterns = []
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+
+            line = line.strip()
+            negated = line.startswith("!")
+            pattern = line[1:].strip() if negated else line
+            if not pattern:
+                raise ValueError("Empty .dockerignore pattern")
+            pattern = posixpath.normpath(pattern).strip("/")
+            if pattern == ".":
+                continue
+            if not pattern:
+                raise ValueError("Empty .dockerignore pattern")
+
+            if not pattern.startswith("**/"):
+                pattern = "/" + pattern
+            patterns.append(("!" if negated else "") + pattern)
+
+        return patterns
+    return []
+
+
 def dockerfile_for_build(
     text: str, target: Optional[str] = None, build_args: Optional[Dict[str, str]] = None
 ) -> str:
-    """The Dockerfile `docker build --target T --build-arg K=V` builds: everything up to
-    the end of stage T, with each `ARG K` defaulting to V."""
+    """Select a build stage and apply build-argument defaults."""
     lines = text.splitlines()
     if target:
         stage = re.compile(rf"\s*FROM\s+.+\s+AS\s+{re.escape(target)}\s*$", re.I)
@@ -444,16 +474,20 @@ class Image(BaseAbstraction):
         return image
 
     def sync_files(self, context_dir: Optional[str] = None) -> None:
-        syncer = FileSyncer(
-            gateway_stub=self.gateway_stub, root_dir=context_dir or os.path.dirname("./")
+        root_dir = context_dir or "."
+        patterns = (
+            dockerignore_patterns(self.dockerfile_path, root_dir) if self.dockerfile_path else None
         )
-        if self.dockerfile_path:
-            # COPY sources are what docker build would send, not the .beamignore selection.
-            result = syncer.sync(
-                ignore_patterns=dockerignore_patterns(self.dockerfile_path, str(syncer.root_dir))
-            )
-        else:
-            result = syncer.sync(include_patterns=self.include_files_patterns)
+        syncer = FileSyncer(
+            gateway_stub=self.gateway_stub,
+            root_dir=root_dir,
+            # Docker rules can re-include files beneath an excluded directory.
+            prune_ignored_directories=not any(p.startswith("!") for p in patterns or []),
+        )
+        result = syncer.sync(
+            ignore_patterns=patterns,
+            include_patterns=None if self.dockerfile_path else self.include_files_patterns,
+        )
         if not result.success:
             raise ValueError("Failed to sync context directory.")
 

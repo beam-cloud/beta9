@@ -1,7 +1,7 @@
 """Image registry access and Dockerfile build metadata."""
 
-import re
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
@@ -11,7 +11,7 @@ import requests
 from .interpolation import interpolate
 
 DOCKER_HUB_HOSTS = ("docker.io", "index.docker.io", "registry-1.docker.io")
-SERVICE_REGISTRY_ACCEPT = ", ".join(
+MANIFEST_ACCEPT = ", ".join(
     [
         "application/vnd.oci.image.index.v1+json",
         "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -21,8 +21,8 @@ SERVICE_REGISTRY_ACCEPT = ", ".join(
 )
 
 
-def _registry_host(image: str) -> Optional[str]:
-    """The registry an image reference names, or None for Docker Hub's short form."""
+def registry_host(image: str) -> Optional[str]:
+    """Return the explicit registry host, or None for Docker Hub shorthand."""
     first, _, rest = image.partition("/")
     if rest and ("." in first or ":" in first or first == "localhost"):
         return first
@@ -30,12 +30,12 @@ def _registry_host(image: str) -> Optional[str]:
 
 
 def parse_image(image: str) -> Tuple[str, str, str]:
-    """(registry API host, repository, tag or digest) of an image reference."""
+    """Return the registry API host, repository, and tag or digest."""
     name, _, digest = image.partition("@")
     tag = ""
     if ":" in name.rsplit("/", 1)[-1]:
         name, tag = name.rsplit(":", 1)
-    host = _registry_host(name)
+    host = registry_host(name)
     registry, repository = (host, name[len(host) + 1 :]) if host else ("docker.io", name)
     if registry in DOCKER_HUB_HOSTS:
         registry = "registry-1.docker.io"
@@ -45,7 +45,7 @@ def parse_image(image: str) -> Tuple[str, str, str]:
 
 
 class Registry:
-    """Reads public image configs anonymously; a private or unreachable image yields None."""
+    """Fetch and cache public OCI image configurations."""
 
     def __init__(self, timeout: float = 8):
         self.session = requests.Session()
@@ -55,10 +55,8 @@ class Registry:
         self.proxies: Dict[str, bool] = {}
 
     def docker_hub_image(self, image: str) -> Optional[str]:
-        """The docker.io reference of an image whose registry only proxies Docker Hub
-        (docker.langfuse.com, docker.n8n.io). Such a proxy pulls anonymously from one
-        address, so the Docker Hub rate limit its users share is usually spent."""
-        host = _registry_host(image)
+        """Resolve Docker Hub references served through registry proxies."""
+        host = registry_host(image)
         if host is None or host in DOCKER_HUB_HOSTS or host.startswith("localhost"):
             return None
         if host not in self.proxies:
@@ -97,15 +95,17 @@ class Registry:
             if chosen is None:
                 return None
             manifest = self._get(registry, repository, f"manifests/{chosen['digest']}", True).json()
+
         blob = self._get(registry, repository, f"blobs/{manifest['config']['digest']}").json()
         return blob.get("config") or {}
 
     def _get(self, registry: str, repository: str, path: str, manifest: bool = False):
         url = f"https://{registry}/v2/{repository}/{path}"
-        headers = {"Accept": SERVICE_REGISTRY_ACCEPT} if manifest else {}
+        headers = {"Accept": MANIFEST_ACCEPT} if manifest else {}
         scope = f"{registry}/{repository}"
         if scope in self.tokens:
             headers["Authorization"] = f"Bearer {self.tokens[scope]}"
+
         response = self.session.get(url, headers=headers, timeout=self.timeout)
         if response.status_code == 401 and scope not in self.tokens:
             token = self._token(response.headers.get("WWW-Authenticate", ""), repository)
@@ -113,6 +113,7 @@ class Registry:
                 self.tokens[scope] = token
                 headers["Authorization"] = f"Bearer {token}"
                 response = self.session.get(url, headers=headers, timeout=self.timeout)
+
         response.raise_for_status()
         return response
 
@@ -131,7 +132,7 @@ class Registry:
 
 
 def exposed_ports(config: Optional[Dict[str, Any]]) -> List[int]:
-    """The TCP ports an image config EXPOSEs, lowest first."""
+    """Return sorted TCP ports from image metadata."""
     return sorted(
         int(port.split("/")[0])
         for port in (config or {}).get("ExposedPorts") or {}
@@ -172,7 +173,7 @@ def _dockerfile_instructions(text: str) -> List[Tuple[str, str]]:
 def dockerfile_config(
     path: Path, target: Optional[str], build_args: Dict[str, str], registry: Registry
 ) -> Tuple[Dict[str, Any], bool]:
-    """The image config a Dockerfile build produces, and whether its base images resolved."""
+    """Infer Dockerfile image metadata and report whether base images resolved."""
     args = dict(build_args)
     stages: List[Tuple[Optional[str], Dict[str, Any]]] = []
     config: Optional[Dict[str, Any]] = None
@@ -207,6 +208,7 @@ def dockerfile_config(
                 config["Healthcheck"] = {"Test": ["CMD-SHELL", value.split("CMD", 1)[1].strip()]}
             elif keyword == "WORKDIR":
                 config["WorkingDir"] = value
+
     if target:
         chosen = next((c for n, c in stages if n == target.lower()), None)
         if chosen is not None:
@@ -217,18 +219,18 @@ def dockerfile_config(
 def resolve_image(
     options: Dict[str, Any], directory: str, registry: Registry, infer_ports: bool = True
 ) -> Tuple[Dict[str, Any], List[str]]:
-    """Deploy options completed from the image itself, and notes for the agent: an
-    image behind a Docker Hub proxy is pulled from Docker Hub, and omitted ports are
-    the EXPOSE of the image or built stage, base images included."""
-    options, notes = dict(options), []
+    """Resolve registry proxies and infer omitted ports from image metadata."""
+    options = dict(options)
+    notes: List[str] = []
     image = options.get("image")
     if image:
         hub = registry.docker_hub_image(str(image))
         if hub:
             notes.append(
-                f"Pulling {hub}: {_registry_host(str(image))} only proxies Docker Hub, and its anonymous pulls share one rate limit."
+                f"Pulling {hub}: {registry_host(str(image))} only proxies Docker Hub, and its anonymous pulls share one rate limit."
             )
             options["image"] = image = hub
+
     if not infer_ports or "ports" in options or options.get("handler"):
         return options, notes
 
@@ -244,6 +246,7 @@ def resolve_image(
             path, options.get("target"), options.get("build_args") or {}, registry
         )
         config = built if resolved or exposed_ports(built) else None
+
     ports = exposed_ports(config)
     if ports:
         options["ports"] = ports

@@ -87,34 +87,6 @@ drive/MyDrive
 """
 
 
-# Without a .dockerignore, docker build sends the whole context; leave out only what is
-# bulky and rebuilt inside the image anyway.
-DOCKER_CONTEXT_DEFAULTS = [".git", "**/node_modules/", "**/.venv/", "**/__pycache__/", ".DS_Store"]
-
-
-def dockerignore_patterns(dockerfile: str, context_dir: str) -> List[str]:
-    """What `docker build` leaves out of the context: <Dockerfile>.dockerignore beside the
-    Dockerfile, else .dockerignore at the context root. Docker anchors patterns at the root
-    (`build` is ./build only), so they are anchored here too."""
-    for path in (Path(f"{dockerfile}.dockerignore"), Path(context_dir) / ".dockerignore"):
-        if not path.is_file():
-            continue
-        patterns = []
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            negated = line.startswith("!")
-            pattern = line[1:].strip() if negated else line
-            while pattern.startswith(("./", "/")):
-                pattern = pattern[1:] if pattern.startswith("/") else pattern[2:]
-            if not pattern.startswith("**/"):
-                pattern = "/" + pattern
-            patterns.append(("!" if negated else "") + pattern)
-        return patterns + [f"/{ignore_file_name()}"]
-    return DOCKER_CONTEXT_DEFAULTS + [f"/{ignore_file_name()}"]
-
-
 class FileSyncResult(NamedTuple):
     success: bool = False
     object_id: str = ""
@@ -125,10 +97,12 @@ class FileSyncer:
         self,
         gateway_stub: GatewayServiceStub,
         root_dir=".",
+        prune_ignored_directories: bool = True,
     ):
         self.root_dir = Path(root_dir).absolute()
         self.gateway_stub: GatewayServiceStub = gateway_stub
         self.is_workspace_dir = root_dir == "."
+        self.prune_ignored_directories = prune_ignored_directories
 
     @property
     def ignore_file_path(self) -> Path:
@@ -184,9 +158,12 @@ class FileSyncer:
         terminal.debug(f"Collecting files from {self.root_dir}")
 
         for root, dirs, files in os.walk(self.root_dir):
-            dirs[:] = [
-                d for d in dirs if not self._should_ignore(os.path.join(root, d), directory=True)
-            ]
+            if self.prune_ignored_directories:
+                dirs[:] = [
+                    d
+                    for d in dirs
+                    if not self._should_ignore(os.path.join(root, d), directory=True)
+                ]
 
             for file in files:
                 file_path = os.path.join(root, file)
@@ -203,9 +180,10 @@ class FileSyncer:
 
     def sync(
         self,
-        ignore_patterns: List[str] = [],
-        include_patterns: List[str] = [],
+        ignore_patterns: Optional[List[str]] = None,
+        include_patterns: Optional[List[str]] = None,
     ) -> FileSyncResult:
+        """Use the project ignore file by default; an empty list disables exclusions."""
         with _sync_lock:
             return self._sync(
                 ignore_patterns=ignore_patterns,
@@ -214,12 +192,12 @@ class FileSyncer:
 
     def _sync(
         self,
-        ignore_patterns: List[str] = [],
-        include_patterns: List[str] = [],
+        ignore_patterns: Optional[List[str]] = None,
+        include_patterns: Optional[List[str]] = None,
     ) -> FileSyncResult:
         terminal.header("Syncing files")
 
-        if ignore_patterns is None or len(ignore_patterns) == 0:
+        if ignore_patterns is None:
             self._init_ignore_file()
             self.ignore_patterns = self._read_ignore_file()
         else:

@@ -1,10 +1,4 @@
-"""
-Stdio MCP server for agent clients. Workspace tools are forwarded to the
-gateway's stateless `/api/v1/mcp` (one POST per message; notifications get a
-bodyless 202); `deploy` and `login` run here. With no credentials the server
-still starts and offers `login`, then announces the workspace tools once a
-token arrives.
-"""
+"""Stdio MCP bridge with local sign-in and deployment tools."""
 
 import configparser
 import json
@@ -43,7 +37,7 @@ def log(message: str) -> None:
 
 
 def context_or_none(name: str) -> Optional[ConfigContext]:
-    """The saved context, or its defaults with the environment token; never prompts."""
+    """Resolve saved or environment credentials without prompting."""
     context = context_defaults(name)
     if context.token:
         return context
@@ -109,8 +103,7 @@ class RemoteMCP:
         except ValueError:
             return response.status_code, None
 
-        # Trust the gateway's catalog, not tool-name prefixes. Unknown calls
-        # are never retried: their side effects may already have happened.
+        # Retry only operations advertised as read-only and idempotent.
         if (
             isinstance(message, dict)
             and message.get("method") == "tools/list"

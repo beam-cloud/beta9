@@ -17,9 +17,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// The MCP server lives in the gateway: agents connect over HTTP with a workspace
-// token and get the same operations the dashboard and CLI use. Stateless
-// JSON-RPC (Streamable HTTP without a server stream); every call is one POST.
+// Default protocol for clients that omit a version.
 const mcpProtocolVersion = "2025-11-25"
 
 // MCPGateway is what the tools need from the assembled gateway service.
@@ -43,7 +41,7 @@ type MCPGateway interface {
 }
 
 type MCPGroup struct {
-	router        *echo.Echo // the gateway itself, for in-process `api` and `invoke` calls
+	router        *echo.Echo
 	gws           MCPGateway
 	backendRepo   repository.BackendRepository
 	workspaceRepo repository.WorkspaceRepository
@@ -54,7 +52,14 @@ type MCPGroup struct {
 }
 
 func NewMCPGroup(g *echo.Group, router *echo.Echo, gws MCPGateway, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, eventRepo repository.EventRepository, config types.AppConfig) *MCPGroup {
-	group := &MCPGroup{router: router, gws: gws, backendRepo: backendRepo, workspaceRepo: workspaceRepo, eventRepo: eventRepo, config: config}
+	group := &MCPGroup{
+		router:        router,
+		gws:           gws,
+		backendRepo:   backendRepo,
+		workspaceRepo: workspaceRepo,
+		eventRepo:     eventRepo,
+		config:        config,
+	}
 	group.tools = group.catalog()
 	group.prepareTools()
 	g.POST("", group.authorize(group.Post))
@@ -64,8 +69,6 @@ func NewMCPGroup(g *echo.Group, router *echo.Echo, gws MCPGateway, backendRepo r
 	router.GET("/.well-known/oauth-protected-resource/api/v1/mcp", group.oauthMetadata)
 	return group
 }
-
-// --- protocol ------------------------------------------------------------------
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -96,7 +99,12 @@ func (g *MCPGroup) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rp
 	resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	switch req.Method {
 	case "server/discover":
-		resp.Result = map[string]any{"capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "beam", "version": "1"}, "instructions": g.instructions(), "supportedVersions": []string{mcpStatelessVersion}}
+		resp.Result = map[string]any{
+			"capabilities":      map[string]any{"tools": map[string]any{}},
+			"serverInfo":        map[string]any{"name": "beam", "version": "1"},
+			"instructions":      g.instructions(),
+			"supportedVersions": []string{mcpStatelessVersion},
+		}
 	case "initialize":
 		var init struct {
 			Version string `json:"protocolVersion"`
@@ -143,8 +151,6 @@ func (g *MCPGroup) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rp
 	}
 	return resp
 }
-
-// --- tools --------------------------------------------------------------------------
 
 type toolArgs map[string]any
 
@@ -227,7 +233,12 @@ func (t mcpTool) describe() map[string]any {
 		"description": t.Description,
 		"inputSchema": t.Schema,
 		"_meta":       map[string]any{"beam/category": t.Category, "beam/scope": t.Scope},
-		"annotations": map[string]any{"destructiveHint": destructive, "readOnlyHint": t.ReadOnly, "idempotentHint": t.Idempotent, "openWorldHint": t.OpenWorld},
+		"annotations": map[string]any{
+			"destructiveHint": destructive,
+			"readOnlyHint":    t.ReadOnly,
+			"idempotentHint":  t.Idempotent,
+			"openWorldHint":   t.OpenWorld,
+		},
 	}
 }
 
@@ -247,7 +258,11 @@ func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpT
 		return toolResult(map[string]any{"code": "INVALID_ARGS", "error": err.Error()}, true)
 	}
 	if !g.allowed(authInfo, tool) {
-		return toolResult(map[string]any{"code": "FORBIDDEN", "error": "This credential cannot call " + tool.Name, "required_scope": tool.Scope}, true)
+		return toolResult(map[string]any{
+			"code":           "FORBIDDEN",
+			"error":          "This credential cannot call " + tool.Name,
+			"required_scope": tool.Scope,
+		}, true)
 	}
 	if !g.selected(ctx, tool) {
 		return toolResult(map[string]any{"code": "TOOL_UNAVAILABLE", "error": "Tool is excluded by this connection's filter"}, true)
@@ -332,8 +347,6 @@ func toolResult(value any, isError bool) map[string]any {
 		"isError":           isError,
 	}
 }
-
-// --- schema helpers ---------------------------------------------------------------------
 
 type props map[string]any
 

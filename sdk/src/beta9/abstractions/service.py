@@ -3,12 +3,12 @@ import os
 from typing import Dict, List, Optional, Tuple, Union
 
 from ..type import (
+    DurableDisk,
     GpuType,
     GpuTypeAlias,
     Pool,
     QueueDepthAutoscaler,
     ServingConfig,
-    DurableDisk,
 )
 from .base.container import Container
 from .image import Image

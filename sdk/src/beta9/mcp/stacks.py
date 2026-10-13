@@ -36,7 +36,7 @@ SOURCE_IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache"}
 APPLY_LEASE_SECONDS = 180
 APPLY_POLL_SECONDS = 3
 TASK_ACTIVE_STATUSES = {"pending", "running", "retry"}
-# Steps whose deploy job or migration task may still change the services.
+# States with active deployment or migration work.
 IN_FLIGHT_STATUSES = {"running", "submitted"}
 SERVICE_FIELDS = {"type", "deploy", "depends_on", "health_path", "health_port"}
 JOB_FIELDS = {"job_id", "status", "deployment_id", "stub_id", "task_id", "log_cursor"}
@@ -51,10 +51,10 @@ STEP_VIEW_FIELDS = (
     "retired",
     "retire_error",
 )
-# Characters of a health check's answer, and log lines of a step in flight, worth showing.
+# Response and log limits for progress summaries.
 HEALTH_TEXT_MAX = 300
 PROGRESS_LINES = 8
-# wait_deployment errors that no amount of waiting fixes.
+# Permanent readiness errors.
 READINESS_CONFIG_ERRORS = {"INVALID_ARGS", "UNSUPPORTED_PROTOCOL", "NO_HTTP_PORT"}
 SECRET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SECRET_ALPHABET = string.ascii_letters + string.digits
@@ -70,7 +70,7 @@ DATABASE_OPTIONS = {
     "username",
     "database",
 }
-# MiB per unit, as applications' memory is read.
+# Application memory units in MiB.
 MEMORY_UNITS = {
     "": 1,
     "m": 1,
@@ -86,7 +86,7 @@ SERVICE_REFERENCE = re.compile(r"\$\{\{(?:db|app)\.([^.}]+)\.[^}]+\}\}")
 
 
 class ReadinessConfigError(RuntimeError):
-    """The health check is misconfigured, so waiting longer cannot pass it."""
+    """A permanent readiness configuration error."""
 
 
 def digest(value: Any) -> str:
@@ -595,8 +595,7 @@ def _prepare_application(
     service: str, node: Dict[str, Any], deploy: Dict[str, Any]
 ) -> Optional[str]:
     """Validate an application's health check and defaults; returns a warning, if any."""
-    # A stack is a grouping, not consent to continuous compute. Preserve
-    # explicit scaling choices; otherwise every app can sleep when idle.
+    # Preserve explicit scaling settings; default to scale-to-zero.
     deploy.setdefault("min_replicas", 0)
     deploy.setdefault("keep_warm_seconds", 0)
 
@@ -815,8 +814,7 @@ def _operation_state(
     if state.get("plan_id") == plan_id:
         return state
     if state.get("status") == "applying":
-        # A plan stopped on a failed or unready service gives way to a newer
-        # one, so a fix never waits on resolving the broken attempt.
+        # New plans supersede failed or unready attempts.
         if state.get("lease_until", 0) > time.time():
             raise ValueError("another plan is applying")
         for name, step in state.get("services", {}).items():
@@ -830,8 +828,7 @@ def _operation_state(
     if not planned["base_revision"] and current.get("spec", {}).get("desired"):
         raise ValueError("stack was created by another plan; create a new plan")
 
-    # An unchanged database keeps its progress, failures included: it is never
-    # recreated, and an unresolved outcome still needs stack_resolve.
+    # Preserve unchanged database state, including unresolved failures.
     previous = state.get("services", {})
     reusable = {
         name: previous[name]
@@ -941,8 +938,7 @@ class StackService:
         state.update({key: value for key, value in job.items() if key in JOB_FIELDS})
         if result.get("isError"):
             error = job.get("error") or result["content"][0]["text"].split("\n\n", 1)[0]
-            # A deploy or run that was never accepted left nothing a retry would repeat;
-            # a database create may have happened even though its job failed.
+            # Deployment retries are safe only before acceptance; database creation is not.
             accepted = state.get("deployment_id") or state.get("task_id")
             failed = self.kind != "database" and not accepted
             state.update(status="failed" if failed else "uncertain", error=error)
@@ -1067,8 +1063,7 @@ def _apply_step(
             node = planned["desired"]["services"][service]
             resource = StackService(tools, service, node, step)
             resource.advance(planned, plan_id)
-            # A service joins once it exists, ready or not, so a corrected
-            # plan can redeploy it.
+            # Register existing services before readiness checks to allow corrected plans.
             if step.get("deployment_id") or step.get("task_id") or step["status"] == "complete":
                 added.append(service)
             break

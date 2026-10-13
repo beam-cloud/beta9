@@ -1,18 +1,15 @@
-"""
-`setup agent`: install the skill and register the MCP server for every coding
-agent on this machine, then say what is left (at most: signing in).
-"""
+"""Account sign-in, coding agent configuration, and workload onboarding."""
 
 import sys
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import click
 
 from .. import terminal
 from ..auth import login_configured
-from ..config import cli_path, get_settings
+from ..config import ConfigContext, cli_path, get_settings
 from ..skills import install_skill, skill_name
 from . import extraclick
 from .extraclick import ClickCommonGroup
@@ -107,7 +104,9 @@ def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Op
         raise click.exceptions.Exit(1)
 
 
-def configure_agents(clients, skip_skills, skip_mcp, context):
+def configure_agents(
+    clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Optional[str]
+) -> Dict[str, Any]:
     """Configure agent clients without printing a separate completion or JSON document."""
     from ..mcp.server import context_or_none
 
@@ -118,10 +117,12 @@ def configure_agents(clients, skip_skills, skip_mcp, context):
         for client in targets:
             if client.skills_dir:
                 skills[client.label] = str(install_skill(Path(client.skills_dir).expanduser()))
+
     mcp: Dict[str, Path] = {}
     failed: Dict[str, str] = {}
     if not skip_mcp:
         mcp, failed = install_clients(targets, server_command(context))
+
     return {
         "cli": cli_path() or get_settings().name.lower(),
         "clients": [client.id for client in targets],
@@ -194,7 +195,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
         raise click.ClickException(str(exc)) from exc
 
 
-def ensure_credit(context, unattended):
+def ensure_credit(context: ConfigContext, unattended: bool) -> None:
     """Use the gateway's credit decision; purchases stay in the product dashboard."""
     import re
     import time
@@ -233,7 +234,9 @@ def ensure_credit(context, unattended):
     )
 
 
-def connect_onboarding(selected, clients, skip_agents, unattended):
+def connect_onboarding(
+    selected: str, clients: Sequence[str], skip_agents: bool, unattended: bool
+) -> Tuple[ConfigContext, Optional[Dict[str, Any]]]:
     from ..auth import DeviceLogin, save_login
     from ..config import context_defaults, get_config_context
     from ..mcp.server import context_or_none
@@ -259,9 +262,10 @@ def connect_onboarding(selected, clients, skip_agents, unattended):
     return context, agents
 
 
-def provider_links(context):
+def provider_links(context: ConfigContext) -> ConfigContext:
     """Optional UI hints; a missing extension never blocks self-hosted installs."""
     from dataclasses import replace
+
     import requests
 
     try:
@@ -283,7 +287,7 @@ def provider_links(context):
         return context
 
 
-def dashboard_link(context, kind, external_id):
+def dashboard_link(context: ConfigContext, kind: str, external_id: str) -> str:
     from urllib.parse import quote, urlsplit
 
     field = f"{kind}_url_template"

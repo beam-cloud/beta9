@@ -12,9 +12,11 @@ import (
 )
 
 type mcpSelection struct {
-	Features, Tools []string
-	ReadOnly        bool
+	Features []string
+	Tools    []string
+	ReadOnly bool
 }
+
 type mcpSelectionKey struct{}
 
 func compileToolSchema(schema map[string]any) (func(any) error, error) {
@@ -49,17 +51,19 @@ func (g *MCPGroup) prepareTools() {
 	}
 }
 
-// Curated policy complements the existing API contract. Read-only, destructive,
-// idempotent and open-world effects are independent, including for creations.
+// withToolPolicies supplies default categories, scopes, and annotations.
 func withToolPolicies(tools []mcpTool) []mcpTool {
-	reads := strings.Fields("capabilities wait_deployment whoami list_apps get_app list_deployments get_deployment list_secrets list_databases database_credentials database_readiness list_volumes list_stacks logs list_tasks get_task metrics request_stats list_webhooks api_routes")
+	reads := strings.Fields("capabilities wait_deployment whoami list_apps get_app list_deployments get_deployment " +
+		"list_secrets list_databases database_credentials database_readiness list_volumes list_stacks " +
+		"logs list_tasks get_task metrics request_stats list_webhooks api_routes")
 	creations := strings.Fields("create_secret create_volume create_stack create_database create_webhook start_deployment")
 	credentials := strings.Fields("database_credentials rotate_database_credentials")
 	for i := range tools {
 		t := &tools[i]
+		// VM tools declare their policies in the catalog.
 		if t.Category != "" {
 			continue
-		} // VM policies are explicit in its catalog.
+		}
 		t.Category = "apps"
 		for _, group := range []struct{ category, words string }{
 			{"core", "whoami capabilities api api_routes"},
@@ -99,7 +103,7 @@ func withToolPolicies(tools []mcpTool) []mcpTool {
 func (g *MCPGroup) allowed(info *auth.AuthInfo, t *mcpTool) bool {
 	if t.Scope == "" {
 		return true
-	} // internal test/custom tools have no policy.
+	}
 	if !auth.HasPermission(info) {
 		return false
 	}
@@ -109,8 +113,7 @@ func (g *MCPGroup) allowed(info *auth.AuthInfo, t *mcpTool) bool {
 	if info.OAuth == nil {
 		return true
 	}
-	// Broad API traversal can mint unscoped credentials. Native connections use
-	// the curated operations, never this escape hatch.
+	// OAuth grants cannot use API routes that mint unscoped credentials.
 	return t.Scope != "beam:admin" && slices.Contains(info.OAuth.Scopes, t.Scope)
 }
 
@@ -133,7 +136,9 @@ func (g *MCPGroup) instructions() string {
 		"VM commands return process IDs; use vm_process_status and vm_process_output to follow long work. " +
 		"Use environment references to wire apps and databases. Confirmation-required tools name their effect. " +
 		"Apps and stack services default to serverless: min_replicas=0, keep_warm_seconds=0; databases use always_on=false. " +
-		"Keep these defaults unless the user explicitly requests continuous compute; a cold start is not a reason to add an idle floor. " +
-		"Use a finite idle timeout and auto-resume for persistent VMs. Pin container_id for process operations across VM restarts. " +
+		"Keep these defaults unless the user explicitly requests continuous compute; a cold start is " +
+		"not a reason to add an idle floor. " +
+		"Use a finite idle timeout and auto-resume for persistent VMs. Pin container_id for process " +
+		"operations across VM restarts. " +
 		"Filter discovery with ?features=vm,apps,observe or ?tools=whoami,list_vms; ?readonly=true exposes read-only operations."
 }

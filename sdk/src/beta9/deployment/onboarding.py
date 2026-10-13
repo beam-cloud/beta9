@@ -1,4 +1,4 @@
-"""Recoverable first-VM setup, shared by the CLI and onboarding integrations."""
+"""Create and verify onboarding workloads."""
 
 import fcntl
 import hashlib
@@ -6,25 +6,28 @@ import json
 import os
 import uuid
 from pathlib import Path
+from typing import Any, Callable, Dict
 
 from ..abstractions.vm import VM
 from ..channel import GatewayHTTPError, ServiceClient
 
+AppLookup = Callable[[str, Dict[str, Any]], Dict[str, Any]]
 
-def prepare_vm(service: ServiceClient, state_directory: Path, name: str, *, desktop=False):
-    """Resume this setup's VM, preserving the original creation request across retries.
 
-    A pre-existing resource is reused only if its metadata identifies this setup.
-    Success means a managed command has exited successfully inside the guest.
-    """
+def prepare_vm(
+    service: ServiceClient, state_directory: Path, name: str, *, desktop: bool = False
+) -> Dict[str, Any]:
+    """Create or resume a setup-owned VM and verify its Linux guest."""
     workspace = service.http.workspace_id
     directory = state_directory / hashlib.sha256(workspace.encode()).hexdigest()[:24]
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = directory / (hashlib.sha256(name.encode()).hexdigest()[:24] + ".json")
+
     with open(path.with_suffix(".lock"), "a", opener=_private_file) as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = json.loads(path.read_text()) if path.exists() else {"request_id": str(uuid.uuid4())}
         marker = {"beam.onboarding": state["request_id"]}
+
         try:
             vm = VM.get(name, _service=service)
         except GatewayHTTPError as exc:
@@ -48,18 +51,14 @@ def prepare_vm(service: ServiceClient, state_directory: Path, name: str, *, desk
             else:
                 vm.prepare()
                 state["creation_body"] = vm._creation_body
-                temporary = path.with_suffix(".tmp")
-                with open(temporary, "w", opener=_private_file) as output:
-                    json.dump(state, output)
-                    output.flush()
-                    os.fsync(output.fileno())
-                temporary.replace(path)
+                _save_state(path, state)
             vm.create(wait=False)
         else:
             if (vm.info.get("metadata") or {}).get("beam.onboarding") != marker["beam.onboarding"]:
                 raise ValueError(f"VM {name!r} already exists; choose a different --name")
             if vm.info.get("desired_state") != "running":
                 vm.start(wait=False)
+
         vm.wait(timeout=240, services=True)
         probe = vm.process.exec("sh", "-c", "test -d /workspace && uname -s", cwd="/")
         if probe.wait(30) != 0 or probe.stdout.read().strip() != "Linux":
@@ -69,16 +68,23 @@ def prepare_vm(service: ServiceClient, state_directory: Path, name: str, *, desk
         return vm.refresh().info
 
 
-def _private_file(path, flags):
+def _private_file(path: str, flags: int) -> int:
     return os.open(path, flags, 0o600)
 
 
-def prepare_example(service, state_directory, name, kind, call):
-    """Deploy and verify a small sample, reusing only this setup's marked app.
+def _save_state(path: Path, state: Dict[str, Any]) -> None:
+    temporary = path.with_suffix(".tmp")
+    with open(temporary, "w", opener=_private_file) as output:
+        json.dump(state, output)
+        output.flush()
+        os.fsync(output.fileno())
+    temporary.replace(path)
 
-    ``call`` supplies workspace app discovery, so the example planner has no
-    dependency on the MCP transport or product account/billing services.
-    """
+
+def prepare_example(
+    service: ServiceClient, state_directory: Path, name: str, kind: str, call: AppLookup
+) -> Dict[str, Any]:
+    """Run a verified sample in a setup-owned app."""
     import importlib.util
     import sys
 
@@ -88,29 +94,29 @@ def prepare_example(service, state_directory, name, kind, call):
 
     if kind not in ("inference", "functions", "sandboxes"):
         raise ValueError("Choose inference, functions or sandboxes")
+
     workspace = service.http.workspace_id
     key = hashlib.sha256(f"{workspace}:{kind}:{name}".encode()).hexdigest()[:24]
-    # Import and deploy from the same canonical path, including symlinked homes
-    # and macOS's /tmp alias, so handler paths stay relative to the upload root.
+    # Canonicalize symlinks so handler paths stay relative to the upload root.
     directory = (state_directory / "examples" / key).resolve()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     state_path = directory / "request.json"
+
     with open(directory / "request.lock", "a", opener=_private_file) as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if state_path.exists():
             state = json.loads(state_path.read_text())
         else:
             state = {"request_id": str(uuid.uuid4())}
-            with open(state_path, "w", opener=_private_file) as output:
-                json.dump(state, output)
-                output.flush()
-                os.fsync(output.fileno())
+            _save_state(state_path, state)
+
         marker = f"ONBOARDING_RUN={state['request_id']}"
         matches = call("list_apps", {"name": name}).get("items", [])
         if kind == "sandboxes":
             if matches and state.get("app_id") != matches[0].get("app_id"):
                 raise ValueError(f"App {name!r} already exists; choose a different --name")
             return _run_sandbox_example(service, directory, name, state, call)
+
         existing = None
         if matches:
             existing = call("get_app", {"name": name})
@@ -128,6 +134,7 @@ def prepare_example(service, state_directory, name, kind, call):
         )
         path = directory / "app.py"
         path.write_text(source)
+
         previous_directory = Path.cwd()
         previous_module = sys.modules.get("app")
         previous_channel = base._channel
@@ -147,6 +154,7 @@ def prepare_example(service, state_directory, name, kind, call):
                         "Sample deployment was not accepted; inspect logs and resume setup"
                     )
                 existing = call("get_app", {"name": name})
+
             if kind == "inference":
                 url = existing.get("url") or existing.get("latest_url")
                 if not url:
@@ -161,6 +169,7 @@ def prepare_example(service, state_directory, name, kind, call):
                 result = response.json()
             else:
                 result = module.hello.remote()
+
             if not isinstance(result, dict) or result.get("message") != "Hello from the cloud":
                 raise RuntimeError("The sample ran but its hello-world result was not verified")
             return {"name": name, "example": kind, "result": result, **existing}
@@ -176,8 +185,10 @@ def prepare_example(service, state_directory, name, kind, call):
                 base.set_channel(previous_channel)
 
 
-def _run_sandbox_example(service, directory, name, state, call):
-    """Run the ephemeral sample and release its container even if verification fails."""
+def _run_sandbox_example(
+    service: ServiceClient, directory: Path, name: str, state: Dict[str, Any], call: AppLookup
+) -> Dict[str, Any]:
+    """Run the sandbox sample and always stop its container."""
     from ..abstractions import base
     from ..abstractions.sandbox import Sandbox
 
@@ -198,16 +209,13 @@ def _run_sandbox_example(service, directory, name, state, call):
         instance = sandbox.create()
         if not instance.ok:
             raise RuntimeError(instance.error_msg or "Sandbox creation failed")
+
         apps = call("list_apps", {"name": name}).get("items", [])
         if len(apps) != 1 or not apps[0].get("app_id"):
             raise RuntimeError("Sandbox app could not be found; inspect logs before retrying")
         state["app_id"] = apps[0]["app_id"]
-        temporary = directory / "request.tmp"
-        with open(temporary, "w", opener=_private_file) as output:
-            json.dump(state, output)
-            output.flush()
-            os.fsync(output.fileno())
-        temporary.replace(directory / "request.json")
+        _save_state(directory / "request.json", state)
+
         process = instance.process.exec("python", "-c", "print('Hello from the cloud')")
         if process.wait(30) != 0 or process.stdout.read().strip() != "Hello from the cloud":
             raise RuntimeError("Sandbox hello-world result was not verified; inspect logs")

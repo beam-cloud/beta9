@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
+from beta9.abstractions.image import Image, dockerignore_patterns
 from beta9.clients.gateway import (
     CommitObjectDeltaResponse,
     CompleteObjectUploadResponse,
@@ -19,7 +20,6 @@ from beta9.sync import (
     _Manifest,
     _ManifestEntry,
     _SyncCache,
-    dockerignore_patterns,
 )
 
 
@@ -140,6 +140,31 @@ class TestIncrementalSync(TestCase):
     def _sync(self, gw):
         syncer = FileSyncer(gateway_stub=gw, root_dir=str(self.root))
         return syncer.sync()
+
+    def test_dockerfile_upload_reincludes_files_under_excluded_directories(self):
+        dockerfile = self.root / "Dockerfile"
+        dockerfile.write_text("FROM scratch\nCOPY . /\n")
+        (self.root / ".dockerignore").write_text("*\n!app/f0.bin\n")
+        (self.root / ".beamignore").write_text("*\n")
+        image = Image.from_dockerfile(str(dockerfile))
+        image.gateway_stub = _FakeGateway()
+
+        image.sync_files(str(self.root))
+
+        self.assertEqual(self.puts[0][1], ["app/f0.bin"])
+        self.assertTrue(image.build_ctx_object)
+
+    def test_dockerfile_upload_without_dockerignore_preserves_all_local_files(self):
+        dockerfile = self.root / "Dockerfile"
+        dockerfile.write_text("FROM scratch\nCOPY . /\n")
+        (self.root / ".beamignore").write_text("*\n")
+        image = Image.from_dockerfile(str(dockerfile))
+        image.gateway_stub = _FakeGateway()
+
+        image.sync_files(str(self.root))
+
+        self.assertIn("main.py", self.puts[0][1])
+        self.assertIn(".beamignore", self.puts[0][1])
 
     def test_manifest_hash_depends_on_content_path_and_mode(self):
         a = _Manifest({"x": _ManifestEntry(1, 1, "h1", 0o644)})
@@ -431,15 +456,22 @@ class TestDockerBuildContext(TestCase):
         ".git/HEAD",
     ]
 
-    def context(self, dockerignore=None):
+    def context(self, dockerignore=None, specific_ignore=None):
         with tempfile.TemporaryDirectory() as root:
             for name in self.FILES:
                 Path(root, name).parent.mkdir(parents=True, exist_ok=True)
                 Path(root, name).write_text("x")
             if dockerignore is not None:
                 Path(root, ".dockerignore").write_text(dockerignore)
-            syncer = FileSyncer(gateway_stub=MagicMock(), root_dir=root)
-            syncer.ignore_patterns = dockerignore_patterns(str(Path(root, "Dockerfile")), root)
+            if specific_ignore is not None:
+                Path(root, "Dockerfile.dockerignore").write_text(specific_ignore)
+            patterns = dockerignore_patterns(str(Path(root, "Dockerfile")), root)
+            syncer = FileSyncer(
+                gateway_stub=MagicMock(),
+                root_dir=root,
+                prune_ignored_directories=not any(p.startswith("!") for p in patterns),
+            )
+            syncer.ignore_patterns = patterns
             syncer.include_patterns = []
             return sorted(os.path.relpath(path, root) for path in syncer._collect_files())
 
@@ -463,14 +495,33 @@ class TestDockerBuildContext(TestCase):
             ["pyproject.toml", "src/app.py", "src/build/keep.txt"],
         )
 
-    def test_without_a_dockerignore_only_bulky_directories_are_left_out(self):
+    def test_without_a_dockerignore_sends_the_whole_context(self):
+        self.assertEqual(self.context(), sorted(self.FILES))
+
+    def test_negated_file_beneath_an_excluded_directory_is_included(self):
+        self.assertEqual(self.context("*\n!src/app.py\n"), ["src/app.py"])
+
+    def test_trailing_slashes_do_not_require_a_directory(self):
+        self.assertNotIn("pyproject.toml", self.context("pyproject.toml/\n"))
+
+    def test_dot_pattern_is_ignored(self):
+        self.assertEqual(self.context(".\n"), sorted(self.FILES + [".dockerignore"]))
+
+    def test_empty_negation_is_invalid(self):
+        with self.assertRaisesRegex(ValueError, "Empty .dockerignore pattern"):
+            self.context("!\n")
+
+    def test_dockerfile_specific_ignore_takes_precedence(self):
         self.assertEqual(
-            self.context(),
+            self.context("src\n", "build\n"),
             [
+                ".dockerignore",
                 ".env",
+                ".git/HEAD",
                 ".python-version",
                 "Dockerfile",
-                "build/out.bin",
+                "Dockerfile.dockerignore",
+                "node_modules/x/index.js",
                 "pyproject.toml",
                 "src/app.py",
                 "src/build/keep.txt",
@@ -479,6 +530,30 @@ class TestDockerBuildContext(TestCase):
 
 
 class TestFileSyncer(TestCase):
+    def test_explicit_empty_patterns_do_not_load_or_create_beamignore(self):
+        gateway = MagicMock()
+        gateway.head_object.return_value = HeadObjectResponse(ok=True, exists=True)
+        with tempfile.TemporaryDirectory() as root:
+            syncer = FileSyncer(gateway_stub=gateway, root_dir=root)
+            with patch.object(syncer, "_init_ignore_file") as initialize:
+                with patch.object(syncer, "_read_ignore_file") as read:
+                    syncer.sync(ignore_patterns=[])
+            initialize.assert_not_called()
+            read.assert_not_called()
+            self.assertEqual(syncer.ignore_patterns, [])
+
+    def test_default_sync_still_uses_beamignore(self):
+        gateway = MagicMock()
+        gateway.head_object.return_value = HeadObjectResponse(ok=True, exists=True)
+        with tempfile.TemporaryDirectory() as root:
+            syncer = FileSyncer(gateway_stub=gateway, root_dir=root)
+            with patch.object(syncer, "_init_ignore_file") as initialize:
+                with patch.object(syncer, "_read_ignore_file", return_value=["secret"]) as read:
+                    syncer.sync()
+            initialize.assert_called_once_with()
+            read.assert_called_once_with()
+            self.assertEqual(syncer.ignore_patterns, ["secret"])
+
     def test_init_ignore_file(self):
         syncer = FileSyncer(gateway_stub=MagicMock())
 

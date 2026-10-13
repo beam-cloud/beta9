@@ -19,17 +19,11 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
-// The curated tools cover the build/ship/operate loop by name. Everything else
-// the gateway serves is reachable through `api`, which runs a request through
-// the gateway's own router in-process: same routes, same auth, nothing to keep
-// in sync. `invoke` does the same against a deployment's URL.
-
 type identityHeadersKey struct{}
 
 var identityHeaders = []string{"Authorization", auth.CallerHeader, auth.AgentSessionHeader}
 
-// withIdentityHeaders carries the MCP caller's identity so in-process requests
-// authenticate and attribute exactly like the call that triggered them.
+// withIdentityHeaders preserves caller identity for in-process requests.
 func withIdentityHeaders(ctx context.Context, h http.Header) context.Context {
 	kept := http.Header{}
 	for _, key := range identityHeaders {
@@ -42,9 +36,7 @@ func withIdentityHeaders(ctx context.Context, h http.Header) context.Context {
 
 const maxInProcessBody = 4 << 20
 
-// boundedResponse prevents an unbounded upstream response from consuming gateway
-// memory. A response exceeding the limit is explicitly unsuccessful, never parsed
-// as a different type of successful body.
+// boundedResponse rejects responses that exceed the gateway memory limit.
 type boundedResponse struct {
 	header http.Header
 	body   bytes.Buffer
@@ -79,8 +71,7 @@ func (w *boundedResponse) Write(p []byte) (int, error) {
 	return w.body.Write(p)
 }
 
-// serve runs through the existing router, preserving its authorization and
-// response semantics. Cancellation bounds both slow and oversized responses.
+// serve dispatches through the gateway router with the caller's authorization.
 func (g *MCPGroup) serve(ctx context.Context, method, url string, body []byte, headers map[string]string) (any, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -110,7 +101,11 @@ func (g *MCPGroup) serve(ctx context.Context, method, url string, body []byte, h
 
 func (rec *boundedResponse) result(ctx context.Context) map[string]any {
 	if rec.status == 0 && ctx.Err() != nil {
-		return map[string]any{"is_error": true, "code": "CANCELLED", "error": "no answer before the deadline: " + ctx.Err().Error()}
+		return map[string]any{
+			"is_error": true,
+			"code":     "CANCELLED",
+			"error":    "no answer before the deadline: " + ctx.Err().Error(),
+		}
 	}
 	if rec.status == 0 {
 		rec.status = http.StatusOK
@@ -271,8 +266,7 @@ func (g *MCPGroup) invoke(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	return g.serve(ctx, method, url, body, args.stringMap("headers"))
 }
 
-// gatewayOperations derives customer-facing RPC schemas from the same descriptors
-// used by the gateway. No second catalog of sandbox/file/storage fields to drift.
+// gatewayOperations derives RPC schemas from the gateway protobuf descriptors.
 func gatewayOperations(filter string) []map[string]any {
 	out := []map[string]any{}
 	protoregistry.GlobalFiles.RangeFiles(func(file protoreflect.FileDescriptor) bool {
@@ -389,7 +383,11 @@ func protoFieldSchema(field protoreflect.FieldDescriptor, depth int) map[string]
 		}
 		return map[string]any{"type": "string", "enum": names}
 	case protoreflect.Int64Kind, protoreflect.Uint64Kind, protoreflect.Sint64Kind, protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind:
-		return map[string]any{"type": "string", "pattern": "^-?[0-9]+$", "description": "64-bit integer encoded as a decimal string"}
+		return map[string]any{
+			"type":        "string",
+			"pattern":     "^-?[0-9]+$",
+			"description": "64-bit integer encoded as a decimal string",
+		}
 	case protoreflect.FloatKind, protoreflect.DoubleKind:
 		return map[string]any{"type": "number"}
 	default:

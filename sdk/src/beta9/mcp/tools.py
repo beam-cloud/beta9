@@ -1,8 +1,4 @@
-"""
-Tools that run on the agent's machine: `deploy` ships a project directory with
-the CLI as a background job (builds can outlast a client's tool timeout), and
-`login` runs the browser sign-in so an agent can onboard a user inside MCP.
-"""
+"""Local sign-in and deployment tools with recoverable background jobs."""
 
 import base64
 import fcntl
@@ -43,14 +39,11 @@ if TYPE_CHECKING:
 
 WAIT_DEFAULT = 20
 WAIT_MAX = 55
-# Seconds. A job runner records its pid as it starts; one that has not by then never will.
+# Maximum delay before a supervisor records its PID.
 RUNNER_START_LIMIT = 600
 LOG_TAIL = 40
 GENERIC_FAILURE = "Deployment failed"
-# The context a job's helper process calls the gateway with. The helper is a
-# fresh interpreter without the serving CLI's settings (a `beam` install reads
-# ~/.beam/config.ini, bare beta9 ~/.beta9/config.ini), so resolving the context
-# name again there can land in a different workspace.
+# Pass resolved credentials to helpers; product-specific config paths may differ.
 JOB_CONTEXT_ENV = "BETA9_MCP_JOB_CONTEXT"
 
 Handler = Callable[[Dict[str, Any]], Dict[str, Any]]
@@ -60,8 +53,7 @@ Tool = Tuple[Dict[str, Any], Handler]  # definition, handler
 def text_result(text: str, **structured: Any) -> Dict[str, Any]:
     result: Dict[str, Any] = {"content": [{"type": "text", "text": text}]}
     if structured:
-        # Some clients show the model only the first text block, and it still needs
-        # the fields, such as a stack plan's plan_id.
+        # Include structured fields for clients that render only text content.
         data = json.dumps(structured, default=str)
         result["content"][0]["text"] = f"{text}\n\n{data}"
         result["structuredContent"] = structured
@@ -88,8 +80,6 @@ def _clamp(value: Any, default: int) -> int:
         seconds = default
     return max(0, min(seconds, WAIT_MAX))
 
-
-# --- definitions --------------------------------------------------------------------------
 
 STRING = {"type": "string"}
 INTEGER = {"type": "integer"}
@@ -154,9 +144,7 @@ LOGIN_STATUS_DEFINITION: Dict[str, Any] = {
 
 
 def home_or_above(directory: str) -> Optional[str]:
-    """Describes `directory` when it is the home folder or contains it, which
-    deploys never upload: Cursor starts MCP servers in the home folder, so an
-    agent that leaves out a directory gets it."""
+    """Identify paths that would upload the user's home directory."""
     home = Path.home().resolve()
     path = Path(directory).expanduser().resolve()
     if path == home:
@@ -367,9 +355,6 @@ DEPLOY_FLAGS = {
 }
 
 
-# --- deploy jobs --------------------------------------------------------------------------
-
-
 @dataclass
 class DeployJob:
     """One `deploy --json` run in the background; `result` is what the agent sees."""
@@ -400,8 +385,7 @@ class DeployJob:
 
     @property
     def request_path(self) -> Optional[Path]:
-        """The request as the agent made it and notes on completing it. Kept beside the
-        record, which servers from before it could not load with extra fields."""
+        """Keep request metadata separate for compatibility with older job records."""
         return self.state_path.with_suffix(".request") if self.state_path else None
 
     def request(self) -> Dict[str, Any]:
@@ -452,12 +436,12 @@ class DeployJob:
         if self.state_path is None or not self.state_path.exists():
             return
 
-        # Polled before reading the record: a supervisor saves its result before it exits.
-        # A job loaded from its record (a retried key, a restarted server) has no handle.
+        # Poll before loading the supervisor's final record.
         if self.supervisor is not None:
             exited = self.supervisor.poll() is not None
         else:
             exited = time.time() - self.started_at > RUNNER_START_LIMIT
+
         payload = json.loads(self.state_path.read_text())
         for key, value in payload.items():
             setattr(self, key, value)
@@ -478,6 +462,7 @@ class DeployJob:
                 self.status = "interrupted"
                 self.error = "Deployment supervisor exited without a terminal result; reconcile deployments before retrying."
                 self.save()
+
         if self.status != "running":
             self.done.set()
 
@@ -494,8 +479,7 @@ class DeployJob:
             return
 
         self.save()
-        # The supervisor owns the CLI pipe and terminal record independently of
-        # the MCP client's lifetime. Job files are private to this context.
+        # Detach the supervisor so jobs survive MCP disconnection.
         with open(self.log_path, "a", opener=_private_file) as log:
             self.supervisor = subprocess.Popen(
                 [sys.executable, "-m", "beta9.mcp", str(self.state_path)],
@@ -689,13 +673,12 @@ def _private_file(path: str, flags: int) -> int:
 
 
 def _without_logs(deployment: Dict[str, Any]) -> Dict[str, Any]:
-    """The CLI's deployment JSON repeats the whole build log, which log_file holds."""
+    """Omit build logs already stored in the job log file."""
     return {key: value for key, value in deployment.items() if key != "logs"}
 
 
 class RemoteToolError(RuntimeError):
-    """A gateway tool's error. `payload` carries its `error` and `code`; `result`
-    is the error result the gateway sent, if it sent one."""
+    """A gateway tool error with its original payload and MCP result."""
 
     def __init__(self, payload: Dict[str, Any], result: Optional[Dict[str, Any]] = None):
         super().__init__(json.dumps(payload))
@@ -734,8 +717,7 @@ def _json_objects(lines: List[str]) -> Tuple[List[Dict[str, Any]], Set[int]]:
     offset = 0
     for index, line in enumerate(lines):
         if start is None:
-            # Some build streams end without a newline; the CLI's JSON error
-            # then starts immediately after the last progress message.
+            # JSON errors may follow a progress message without a newline.
             offset = line.find("{")
             if offset < 0 or (offset and line[offset:].strip() != "{"):
                 continue
@@ -751,9 +733,6 @@ def _json_objects(lines: List[str]) -> Tuple[List[Dict[str, Any]], Set[int]]:
     if start is not None:
         taken.update(range(start, len(lines)))
     return objects, taken
-
-
-# --- the tools ----------------------------------------------------------------------------
 
 
 class LocalTools:
@@ -779,7 +758,7 @@ class LocalTools:
 
     @property
     def job_dir(self) -> Path:
-        """Records of the context's current sign-in; a later sign-in to another account gets its own."""
+        """Isolate job records by signed-in workspace."""
         context = context_defaults(self.context_name)
         identity = hashlib.sha256(
             f"{self.context_name}:{context.gateway_host}:{context.token}".encode()
@@ -790,13 +769,13 @@ class LocalTools:
         return path
 
     def registry(self) -> "Registry":
-        """Reads image configs, to complete deploy options from the image."""
+        """Registry metadata used to complete deployment options."""
         from ..deployment.images import Registry
 
         return Registry()
 
     def available(self) -> List[Tool]:
-        """(definition, handler) for every tool offered right now."""
+        """Definitions and handlers currently available to the client."""
         settings = get_settings()
         tools: List[Tool] = []
         if self.login_available:
@@ -931,9 +910,7 @@ class LocalTools:
         resolve: Optional[Callable[[], Tuple[List[str], List[str]]]] = None,
         operation: str = "deploy",
     ) -> Dict[str, Any]:
-        """Start `command` as a job, or return the job `key` already started. `resolve`
-        gives the command to run, and notes on it, for a new job only: it reads
-        registries, so a retry could see different answers."""
+        """Start or recover a keyed job; resolve registry metadata only for new jobs."""
         key = str(key or uuid.uuid4().hex)
         job_id = hashlib.sha256(key.encode()).hexdigest()[:24]
         state_path = self.job_dir / f"{job_id}.json"
@@ -946,9 +923,7 @@ class LocalTools:
                     + ("deployment" if operation == "deploy" else "operation")
                     + " request"
                 )
-            # Rerun only a job that definitely deployed nothing: an interrupted job
-            # may have deployed, and a failed or cancelled one can still hold an
-            # accepted deployment.
+            # Retry only jobs with no accepted deployment.
             if job is None or (
                 job.operation == "deploy"
                 and job.status in ("failed", "cancelled")
@@ -1034,7 +1009,7 @@ class LocalTools:
         items = []
         for path in paths[:100]:
             job = DeployJob.load(path)
-            # deploy_status carries the build log; a listing of 100 jobs must stay small.
+            # Job listings omit logs; deploy_status returns them.
             deployed = {k: v for k, v in job.deployed.items() if k != "deployment"}
             items.append({"job_id": job.id, "name": job.name, "status": job.status, **deployed})
 
@@ -1251,10 +1226,7 @@ def _helper_context(name: str) -> ConfigContext:
     if JOB_CONTEXT_ENV in os.environ:
         return ConfigContext(**json.loads(os.environ[JOB_CONTEXT_ENV]))
 
-    # Servers from before JOB_CONTEXT_ENV pass only the context's name. They
-    # served the CLI installed alongside, and SDKSettings picks Beam's config
-    # file once the beam package is loaded. `python -m` put the job's directory,
-    # the user's project, first on the path; a beam module there is not the CLI.
+    # Older supervisors need the installed product's settings, not a project-local module.
     sys.path[:] = [p for p in sys.path if p not in ("", os.getcwd())]
     if importlib.util.find_spec("beam") is not None:
         importlib.import_module("beam")
@@ -1264,8 +1236,7 @@ def _helper_context(name: str) -> ConfigContext:
 
 def main() -> None:
     if sys.argv[1] == "create-database":
-        # The job supervisor parses the JSON objects printed here; one with an
-        # `error` key fails the job with that message.
+        # Supervisors treat JSON objects with an error key as failures.
         try:
             context = _helper_context(sys.argv[2])
             print(json.dumps(call_remote(context, "create_database", json.loads(sys.argv[3]))))

@@ -1,12 +1,4 @@
-"""Translate a docker-compose project into a draft stack spec for stack_plan.
-
-Compose services share a private network and find each other by service name;
-on Beam every app is reached through its public address. The translation
-rewrites those addresses into references, maps postgres and redis images onto
-managed databases, named volumes onto durable disks, and placeholder
-credentials onto generated stack secrets. Whatever it cannot translate
-faithfully becomes a warning.
-"""
+"""Translate Docker Compose projects into stack specifications."""
 
 import hashlib
 import os
@@ -19,13 +11,17 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import yaml
 
-from .images import Registry, parse_image, exposed_ports, dockerfile_config, _registry_host
-from .image_rules import KNOWN_IMAGES
-from .interpolation import _interpolate_tree, interpolate as interpolate
+from .images import (
+    Registry,
+    dockerfile_config,
+    exposed_ports,
+    parse_image,
+    registry_host,
+)
+from .interpolation import interpolate as interpolate
+from .interpolation import interpolate_tree
 
 COMPOSE_FILES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
-DOCKER_HUB_HOSTS = ("docker.io", "index.docker.io", "registry-1.docker.io")
-VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DISK_SIZE = "10Gi"
 DEFAULT_MEMORY = "1Gi"
 HEX = "0123456789abcdef"
@@ -62,7 +58,7 @@ SERVER_CREDENTIALS = {
     "CLICKHOUSE_PASSWORD",
     "ELASTIC_PASSWORD",
 }
-# A variable with no default: compose requires it, or the app ships without it.
+# Required interpolation variables without defaults.
 REQUIRED_VARIABLE = re.compile(r"\$(?:\{([A-Za-z_]\w*)(?::?\?[^}]*)?\}|([A-Za-z_]\w*))")
 OWN_URL_KEY = re.compile(
     r"(?:^|_)(?:BASE|PUBLIC|SITE|APP|ROOT|EXTERNAL|SERVER|NEXTAUTH|WEBAPP|WEBHOOK|HOST)_?URL$"
@@ -71,8 +67,7 @@ DATABASE_URL_KEYS = {
     "postgres": re.compile(r"(?:DATABASE|POSTGRES|POSTGRESQL|PG|DB)_UR[LI]"),
     "redis": re.compile(r"(?:REDIS|CACHE|QUEUE)_URL"),
 }
-# Official images whose clients only need an address and credentials. Builds
-# with extensions (pgvector, postgis, timescale) keep running as containers.
+# Extension images (pgvector, PostGIS, Timescale) remain containers.
 MANAGED_IMAGES = {
     "library/postgres": "postgres",
     "bitnami/postgresql": "postgres",
@@ -82,8 +77,31 @@ MANAGED_IMAGES = {
     "bitnami/valkey": "redis",
 }
 MANAGED_PORTS = {"postgres": 5432, "redis": 6379}
-# Health endpoints and sizes compose files rarely state, by repository or, when
-# that is not listed, by image name.
+IMAGE_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "n8n": {"health": ("/healthz", 5678)},
+    "docmost": {"health": ("/api/health", 3000)},
+    "plausible/community-edition": {"health": ("/api/health", 8000)},
+    "minio": {"health": ("/minio/health/live", 9000)},
+    "clickhouse-server": {"health": ("/ping", 8123), "cpu": 2, "memory": "4Gi"},
+    "grafana": {"health": ("/api/health", 3000)},
+    "prometheus": {"health": ("/-/ready", 9090)},
+    "qdrant": {"health": ("/healthz", 6333)},
+    "meilisearch": {"health": ("/health", 7700)},
+    "typesense": {"health": ("/health", 8108)},
+    "elasticsearch": {"cpu": 2, "memory": "4Gi"},
+    "opensearch": {"cpu": 2, "memory": "4Gi"},
+    "langfuse": {
+        "health": ("/api/public/health", 3000),
+        "redis_server_name": "REDIS_TLS_SERVERNAME",
+        "tls_flags": ["CLICKHOUSE_MIGRATION_SSL"],
+    },
+    "langfuse-worker": {
+        "health": ("/api/health", 3030),
+        "redis_server_name": "REDIS_TLS_SERVERNAME",
+        "tls_flags": ["CLICKHOUSE_MIGRATION_SSL"],
+    },
+}
+
 # Compose keys with no Beam equivalent that change how a service behaves.
 UNSUPPORTED_KEYS = {
     "privileged": "privileged mode is not available",
@@ -109,7 +127,7 @@ class ComposeError(ValueError):
 
 
 class _ComposeLoader(yaml.SafeLoader):
-    """YAML 1.2 scalars, as compose reads them: `22:22` stays a string, `yes` is not a bool."""
+    """Load Compose scalars without YAML 1.1 implicit booleans or sexagesimal numbers."""
 
 
 _ComposeLoader.yaml_implicit_resolvers = {
@@ -134,7 +152,7 @@ _ComposeLoader.add_implicit_resolver(
 
 
 class _Override:
-    """A value tagged !override replaces what earlier files set instead of merging with it."""
+    """A Compose !override value, excluded from merge processing."""
 
     def __init__(self, value: Any):
         self.value = value
@@ -443,14 +461,16 @@ class Translator:
             for name, node in services.items()
             if (node or {}).get("profiles") and not selected & set(node["profiles"])
         ]
-        # A proxy or updater driving other containers through the Docker socket cannot run.
+
+        # Docker socket access is unsupported.
         self.dockerized = [
             name
             for name, node in services.items()
             if name not in self.skipped
             and any("docker.sock" in str(entry) for entry in (node or {}).get("volumes") or [])
         ]
-        # A `base: &base` service others merge (`<<: *base`) only to share settings.
+
+        # Exclude services used only as YAML templates.
         self.templates = [
             name
             for name, node in services.items()
@@ -461,12 +481,14 @@ class Translator:
                 name in ((other or {}).get("depends_on") or []) for other in services.values()
             )
         ]
+
         left_out = set(self.skipped) | set(self.dockerized) | set(self.templates)
         self.services = {
             name: node or {} for name, node in services.items() if name not in left_out
         }
         if not self.services:
             raise ComposeError("no service can run without the Docker socket or inactive profiles")
+
         self.names = {name: self._app_name(name) for name in self.services}
         self.aliases: Dict[str, str] = {}
         for name, node in self.services.items():
@@ -477,6 +499,7 @@ class Translator:
             ] + self._network_aliases(node):
                 if alias:
                     self.aliases.setdefault(str(alias), name)
+
         self.ports: Dict[str, List[int]] = {}
         self.public: Dict[str, Set[int]] = {}
         self.published: Dict[int, Tuple[str, int]] = {}
@@ -486,9 +509,10 @@ class Translator:
         self.needed: Dict[str, Set[int]] = {name: set() for name in self.services}
         self.named_by_host: Set[str] = set()
         self.disk_owners: Dict[str, str] = {}
-        # Env keys whose value is an unset variable with no default, by service.
+
+        # Unresolved required variables, grouped by service.
         self.unset: Dict[str, Dict[str, str]] = {name: {} for name in self.services}
-        # Env keys declared without a value (pass-through or empty), by service.
+        # Empty or pass-through environment keys, grouped by service.
         self.declared: Dict[str, Set[str]] = {name: set() for name in self.services}
         self.filled: Set[str] = set()
         self.file_references: Set[Tuple[str, str]] = set()
@@ -548,7 +572,7 @@ class Translator:
         self._share_secrets(environments)
         self._scan_bound_files()
         unreferenced = self._unreferenced_dependencies(environments)
-        # The app reaches them at an address built into it, so they must listen somewhere.
+        # Referenced ports must remain exposed.
         self.named_by_host.update(dependency for _, dependency in unreferenced)
 
         spec_services = {}
@@ -669,9 +693,8 @@ class Translator:
         return rewritten
 
     def _secure_gateway_urls(self, service: str, env: Dict[str, str]) -> None:
-        """KEY_URL rewritten to a TCP gateway address needs the client's KEY_SSL (or TLS,
-        SECURE) switch on; an image known to read such a switch gets it added."""
-        known = self._known(self.services[service])
+        """Enable matching TLS flags for URLs routed through the TCP gateway."""
+        known = self._image_defaults(self.services[service])
         for key, value in list(env.items()):
             stem = re.fullmatch(r"(.+_)(?:URL|URI|DSN|ADDR|ADDRESS)", key, re.I)
             if not stem or not re.search(r"\$\{\{app\.[^}]+\.TCP\.\d+\}\}", value):
@@ -689,9 +712,7 @@ class Translator:
                     self.warn(service, f"{flag}=true: {key} goes through the TLS TCP gateway")
 
     def _redis_server_name(self, service: str, env: Dict[str, str]) -> None:
-        """The TLS gateway routes by SNI, which Node's ioredis and node-redis omit
-        unless given a server name. Workers preload one into Node processes; an
-        app's own setting names the host explicitly."""
+        """Set Redis server names for clients that require explicit TLS SNI."""
         services = {app: name for name, app in self.names.items()}
         databases = sorted(
             {
@@ -709,7 +730,7 @@ class Translator:
             for key in env
             if re.search(r"(REDIS|VALKEY).*(SERVERNAME|SERVER_NAME|SNI)$", key.upper())
         ]
-        known = self._known(self.services[service])
+        known = self._image_defaults(self.services[service])
         if not named and known.get("redis_server_name"):
             named = [known["redis_server_name"]]
             self.warn(service, f"added {named[0]}: the TLS gateway routes Redis by SNI")
@@ -1203,7 +1224,7 @@ class Translator:
         deploy: Dict[str, Any] = {}
         result: Dict[str, Any] = {"type": kind, "deploy": deploy, "depends_on": depends_on}
         config = self._image_config(service, node) or {}
-        known = self._known(node)
+        known = self._image_defaults(node)
 
         if node.get("build") is not None:
             context, dockerfile, target, args = self._build(node)
@@ -1225,7 +1246,7 @@ class Translator:
             if hub:
                 self.warn(
                     service,
-                    f"pulling {hub}: {_registry_host(deploy['image'])} only proxies Docker Hub, and its anonymous pulls share one rate limit",
+                    f"pulling {hub}: {registry_host(deploy['image'])} only proxies Docker Hub, and its anonymous pulls share one rate limit",
                 )
                 deploy["image"] = hub
             if not config:
@@ -1254,8 +1275,7 @@ class Translator:
         health = self._health(service, node, config, known, ports)
         if health and health[1] not in ports:
             ports.append(health[1])
-        # Every port here is public: when nothing names one, an image's other EXPOSEd
-        # ports (a database's native and replication ports) stay out.
+        # Exclude unreferenced image ports to avoid exposing internal protocols.
         if health and len(ports) > 1 and not self.ports[service] and not self.needed[service]:
             unnamed = [str(port) for port in ports if port != health[1]]
             ports = [health[1]]
@@ -1264,9 +1284,7 @@ class Translator:
                 service,
                 f"left out EXPOSEd {noun} {', '.join(unnamed)}: nothing here names {pronoun}, so only {health[1]}, which its health check uses, is open; add {pronoun} to ports to reach {pronoun}, publicly",
             )
-        # Every port here is public, so a port compose kept to itself (an admin
-        # console on 127.0.0.1) stays out unless something uses it. A service's
-        # only ports stay, since a proxy on the host may have been their way in.
+        # Keep private Compose ports only when referenced or required for access.
         unused = [
             port
             for port in self.ports[service]
@@ -1315,11 +1333,13 @@ class Translator:
                 f"its command names another service ({match.group(0)}), which does not resolve here; the stack starts it after its dependencies are ready, so drop wait-for loops and read addresses from env",
             )
 
-    def _known(self, node: Dict[str, Any]) -> Dict[str, Any]:
+    def _image_defaults(self, node: Dict[str, Any]) -> Dict[str, Any]:
         if not node.get("image"):
             return {}
         repository = parse_image(str(node["image"]))[1]
-        return KNOWN_IMAGES.get(repository) or KNOWN_IMAGES.get(repository.rsplit("/", 1)[-1], {})
+        return IMAGE_DEFAULTS.get(repository) or IMAGE_DEFAULTS.get(
+            repository.rsplit("/", 1)[-1], {}
+        )
 
     def _entrypoint(
         self, service: str, node: Dict[str, Any], config: Dict[str, Any]
@@ -1624,7 +1644,7 @@ def translate(
             merged.append(extra.name)
     translator = Translator(
         root,
-        _interpolate_tree(document, variables, missing),
+        interpolate_tree(document, variables, missing),
         variables,
         prefix,
         profiles or [],

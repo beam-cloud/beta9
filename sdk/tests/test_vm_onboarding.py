@@ -121,9 +121,11 @@ def test_setup_vm_does_not_report_success_after_failed_probe(tmp_path, monkeypat
 
 
 def test_credit_checkpoint_never_opens_checkout_for_unattended_setup(monkeypatch):
-    import click
-    from beta9.cli import setup
     import webbrowser
+
+    import click
+
+    from beta9.cli import setup
 
     opening = MagicMock()
     monkeypatch.setattr(webbrowser, "open", opening)
@@ -140,6 +142,7 @@ def test_credit_checkpoint_never_opens_checkout_for_unattended_setup(monkeypatch
 
 def test_interactive_credit_checkpoint_waits_for_confirmed_funding(monkeypatch):
     import webbrowser
+
     from beta9.cli import setup
 
     opening = MagicMock()
@@ -249,6 +252,7 @@ def test_example_handler_uses_upload_root_with_symlinked_state(tmp_path, monkeyp
 @pytest.mark.parametrize("exit_code", [0, 1])
 def test_sandbox_sample_stops_container_after_verification(tmp_path, monkeypatch, exit_code):
     import os
+
     from beta9.abstractions import base
 
     instance = MagicMock(ok=True, container_id="sandbox-owned")
@@ -264,8 +268,10 @@ def test_sandbox_sample_stops_container_after_verification(tmp_path, monkeypatch
         _config=ConfigContext(token="test-token"),
     )
     responses = iter([{"items": []}, {"items": [{"app_id": "owned-app"}]}])
+
     def call(*_):
         return next(responses)
+
     before = os.getcwd()
     channel = base._channel
     if exit_code:

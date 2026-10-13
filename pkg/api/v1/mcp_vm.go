@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -69,9 +70,7 @@ func (g *MCPGroup) vmGet(ctx context.Context, a *auth.AuthInfo, args toolArgs) (
 	return info, nil
 }
 
-// Resolve the container through the workspace's VM identity on every call.
-// Never accept an arbitrary container_id from an agent. Reattachable process
-// calls can pin it to reject IDs from a previous boot.
+// vmPod resolves the workspace VM and rejects container IDs from previous boots.
 func (g *MCPGroup) vmPod(ctx context.Context, a *auth.AuthInfo, args toolArgs, method, operation string, body map[string]any, query url.Values) (any, error) {
 	info, err := g.vmGet(ctx, a, args)
 	if err != nil {
@@ -84,8 +83,7 @@ func (g *MCPGroup) vmPod(ctx context.Context, a *auth.AuthInfo, args toolArgs, m
 	if pinned := args.str("container_id"); pinned != "" && pinned != container {
 		return nil, fail("VM_RESTARTED", "VM has restarted; this process belongs to a previous container")
 	}
-	// Renew idle activity before the operation. Background processes are followed
-	// explicitly rather than starting a permanent lease the agent may abandon.
+	// Renew activity for this operation without holding a permanent lease.
 	if _, err := g.vmRequest(ctx, a, http.MethodPost, vmPath(args)+"/touch", map[string]any{}, nil); err != nil {
 		return nil, err
 	}
@@ -103,10 +101,20 @@ func (g *MCPGroup) vmPod(ctx context.Context, a *auth.AuthInfo, args toolArgs, m
 	return value, err
 }
 
-// The gRPC HTTP bridge emits protobuf camelCase fields. VM management and the
-// CLI use snake_case; keep the MCP contract consistent at this boundary.
+// vmRPCValue normalizes protobuf response fields to the VM tool schema.
 func vmRPCValue(value any) any {
-	fields := map[string]string{"errorMsg": "error_msg", "exitCode": "exit_code", "fileInfo": "file_info", "modTime": "mod_time", "isDir": "is_dir", "containerId": "container_id", "vmId": "vm_id", "startTime": "start_time", "lineNumber": "line_number", "filePath": "file_path"}
+	fields := map[string]string{
+		"errorMsg":    "error_msg",
+		"exitCode":    "exit_code",
+		"fileInfo":    "file_info",
+		"modTime":     "mod_time",
+		"isDir":       "is_dir",
+		"containerId": "container_id",
+		"vmId":        "vm_id",
+		"startTime":   "start_time",
+		"lineNumber":  "line_number",
+		"filePath":    "file_path",
+	}
 	switch v := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
@@ -139,7 +147,13 @@ func (g *MCPGroup) vmExec(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, fail("INVALID_ARGS", "command must contain a program and optional arguments")
 	}
-	body := map[string]any{"command": shellCommand(argv), "cwd": args.str("cwd"), "env": args.stringMap("env"), "wait": false, "secrets": args.strings("secrets")}
+	body := map[string]any{
+		"command": shellCommand(argv),
+		"cwd":     args.str("cwd"),
+		"env":     args.stringMap("env"),
+		"wait":    false,
+		"secrets": args.strings("secrets"),
+	}
 	value, err := g.vmPod(ctx, a, args, http.MethodPost, "/exec", body, nil)
 	if err != nil || !args.boolean("wait") {
 		return value, err
@@ -255,4 +269,93 @@ func (g *MCPGroup) vmPrompt(ctx context.Context, a *auth.AuthInfo, args toolArgs
 	}
 	result, err := g.vmExecCommand(ctx, a, args, argv, true)
 	return map[string]any{"vm_id": info["id"], "session": session, "log_path": logPath, "launch": result}, err
+}
+
+func (g *MCPGroup) vmList(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	query := url.Values{}
+	if args.boolean("all") {
+		query.Set("all", "true")
+	}
+	if args.str("status") != "" {
+		query.Set("status", args.str("status"))
+	}
+	if metadata, ok := args["metadata"]; ok {
+		raw, _ := json.Marshal(metadata)
+		query.Set("metadata", string(raw))
+	}
+	return g.vmRequest(ctx, a, http.MethodGet, "", nil, query)
+}
+
+func (g *MCPGroup) vmCreate(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	return g.vmRequest(ctx, a, http.MethodPost, "", args, nil)
+}
+
+func (g *MCPGroup) vmUpdate(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	body := map[string]any{}
+	for k, v := range args {
+		if k != "name" {
+			body[k] = v
+		}
+	}
+	return g.vmRequest(ctx, a, http.MethodPatch, vmPath(args), body, nil)
+}
+
+func (g *MCPGroup) vmMetrics(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	info, err := g.vmGet(ctx, a, args)
+	if err != nil {
+		return nil, err
+	}
+	return g.metrics(ctx, a, toolArgs{"stub_id": info["stub_id"], "window_minutes": args.num("window_minutes", 60)})
+}
+
+func (g *MCPGroup) vmProcessStatus(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	return g.vmPod(ctx, a, args, http.MethodGet, "/status", nil, url.Values{"pid": {strconv.Itoa(int(args.num("pid", 0)))}})
+}
+
+func (g *MCPGroup) vmListProcesses(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	return g.vmPod(ctx, a, args, http.MethodGet, "/processes", nil, nil)
+}
+
+func (g *MCPGroup) vmKillProcess(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	return g.vmPod(ctx, a, args, http.MethodPost, "/kill", map[string]any{"pid": args["pid"]}, nil)
+}
+
+func (g *MCPGroup) vmReadFile(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	return g.vmPod(ctx, a, args, http.MethodGet, "/files/download/"+url.PathEscape(args.str("path")), nil, url.Values{
+		"offset": {strconv.Itoa(int(args.num("offset", 0)))},
+		"length": {strconv.Itoa(int(args.num("length", 65536)))},
+	})
+}
+
+func (g *MCPGroup) vmWriteFile(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	text, hasText := args["text"].(string)
+	encoded, hasData := args["data_base64"].(string)
+	if hasText == hasData {
+		return nil, fail("INVALID_ARGS", "provide exactly one of text or data_base64")
+	}
+	if hasText {
+		encoded = base64.StdEncoding.EncodeToString([]byte(text))
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(data) > 524288 {
+		return nil, fail("INVALID_ARGS", "file chunk must be valid base64 and at most 512 KiB")
+	}
+	return g.vmPod(ctx, a, args, http.MethodPost, "/files/upload", map[string]any{
+		"container_path": args.str("path"),
+		"data":           encoded,
+		"mode":           args.num("mode", 420),
+		"offset":         args.num("offset", 0),
+	}, nil)
+}
+
+func (g *MCPGroup) vmFindInFiles(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	return g.vmPod(ctx, a, args, http.MethodPost, "/files/find", map[string]any{"container_path": args.str("path"), "pattern": args.rawString("pattern")}, nil)
+}
+
+func (g *MCPGroup) vmReplaceInFiles(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	return g.vmPod(ctx, a, args, http.MethodPost, "/files/replace", map[string]any{
+		"container_path": args.str("path"),
+		"pattern":        args.rawString("pattern"),
+		"new_string":     args.rawString("replacement"),
+	}, nil)
 }

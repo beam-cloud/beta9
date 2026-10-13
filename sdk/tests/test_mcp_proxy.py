@@ -13,8 +13,8 @@ import sys
 import textwrap
 import time
 import types
-from typing import Any, Dict, Optional
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 import pytest
 
