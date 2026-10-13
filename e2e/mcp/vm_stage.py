@@ -1,4 +1,4 @@
-"""Disposable staging VM acceptance through MCP. See docs/mcp/README.md.
+"""Disposable staging VM acceptance through MCP.
 
 Runs real lifecycle, file/process, desktop and artifact operations. Cleans up
 only this run's uniquely named VMs and artifacts, even after a failed check.
