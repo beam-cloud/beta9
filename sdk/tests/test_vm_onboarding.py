@@ -244,3 +244,53 @@ def test_example_handler_uses_upload_root_with_symlinked_state(tmp_path, monkeyp
     result = onboarding.prepare_example(selected, state_directory, "hello", "inference", call)
     assert result["result"] == {"message": "Hello from the cloud"}
     assert os.getcwd() == before
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_sandbox_sample_stops_container_after_verification(tmp_path, monkeypatch, exit_code):
+    import os
+    from beta9.abstractions import base
+
+    instance = MagicMock(ok=True, container_id="sandbox-owned")
+    instance.process.exec.return_value.wait.return_value = exit_code
+    instance.process.exec.return_value.stdout.read.return_value = "Hello from the cloud\n"
+    instance.terminate.return_value = True
+    factory = MagicMock()
+    factory.return_value.create.return_value = instance
+    monkeypatch.setattr("beta9.abstractions.sandbox.Sandbox", factory)
+    selected = SimpleNamespace(
+        http=SimpleNamespace(workspace_id="workspace"),
+        channel=MagicMock(),
+        _config=ConfigContext(token="test-token"),
+    )
+    responses = iter([{"items": []}, {"items": [{"app_id": "owned-app"}]}])
+    def call(*_):
+        return next(responses)
+    before = os.getcwd()
+    channel = base._channel
+    if exit_code:
+        with pytest.raises(RuntimeError, match="not verified"):
+            onboarding.prepare_example(selected, tmp_path, "hello", "sandboxes", call)
+    else:
+        result = onboarding.prepare_example(selected, tmp_path, "hello", "sandboxes", call)
+        assert result["container_id"] == "sandbox-owned"
+        assert result["app_id"] == "owned-app"
+    instance.terminate.assert_called_once()
+    assert factory.call_args.kwargs["keep_warm_seconds"] == 60
+    assert os.getcwd() == before
+    assert base._channel is channel
+
+
+def test_sandbox_sample_refuses_existing_app_without_ownership(tmp_path, monkeypatch):
+    factory = MagicMock()
+    monkeypatch.setattr("beta9.abstractions.sandbox.Sandbox", factory)
+    service = SimpleNamespace(http=SimpleNamespace(workspace_id="workspace"))
+    with pytest.raises(ValueError, match="already exists"):
+        onboarding.prepare_example(
+            service,
+            tmp_path,
+            "existing",
+            "sandboxes",
+            lambda *_: {"items": [{"app_id": "someone-elses-app"}]},
+        )
+    factory.assert_not_called()

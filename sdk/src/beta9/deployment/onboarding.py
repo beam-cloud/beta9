@@ -86,8 +86,8 @@ def prepare_example(service, state_directory, name, kind, call):
 
     from ..abstractions import base
 
-    if kind not in ("inference", "functions"):
-        raise ValueError("Choose inference or functions")
+    if kind not in ("inference", "functions", "sandboxes"):
+        raise ValueError("Choose inference, functions or sandboxes")
     workspace = service.http.workspace_id
     key = hashlib.sha256(f"{workspace}:{kind}:{name}".encode()).hexdigest()[:24]
     # Import and deploy from the same canonical path, including symlinked homes
@@ -107,6 +107,10 @@ def prepare_example(service, state_directory, name, kind, call):
                 os.fsync(output.fileno())
         marker = f"ONBOARDING_RUN={state['request_id']}"
         matches = call("list_apps", {"name": name}).get("items", [])
+        if kind == "sandboxes":
+            if matches and state.get("app_id") != matches[0].get("app_id"):
+                raise ValueError(f"App {name!r} already exists; choose a different --name")
+            return _run_sandbox_example(service, directory, name, state, call)
         existing = None
         if matches:
             existing = call("get_app", {"name": name})
@@ -166,6 +170,60 @@ def prepare_example(service, state_directory, name, kind, call):
                 sys.modules.pop("app", None)
             else:
                 sys.modules["app"] = previous_module
+            if previous_channel is None:
+                base.unset_channel()
+            else:
+                base.set_channel(previous_channel)
+
+
+def _run_sandbox_example(service, directory, name, state, call):
+    """Run the ephemeral sample and release its container even if verification fails."""
+    from ..abstractions import base
+    from ..abstractions.sandbox import Sandbox
+
+    previous_directory = Path.cwd()
+    previous_channel = base._channel
+    instance = None
+    try:
+        os.chdir(directory)
+        base.set_channel(service.channel)
+        sandbox = Sandbox(
+            name=name,
+            cpu=1,
+            memory=256,
+            keep_warm_seconds=60,
+            env={"ONBOARDING_RUN": state["request_id"]},
+        )
+        sandbox.config_context = service._config
+        instance = sandbox.create()
+        if not instance.ok:
+            raise RuntimeError(instance.error_msg or "Sandbox creation failed")
+        apps = call("list_apps", {"name": name}).get("items", [])
+        if len(apps) != 1 or not apps[0].get("app_id"):
+            raise RuntimeError("Sandbox app could not be found; inspect logs before retrying")
+        state["app_id"] = apps[0]["app_id"]
+        temporary = directory / "request.tmp"
+        with open(temporary, "w", opener=_private_file) as output:
+            json.dump(state, output)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(directory / "request.json")
+        process = instance.process.exec("python", "-c", "print('Hello from the cloud')")
+        if process.wait(30) != 0 or process.stdout.read().strip() != "Hello from the cloud":
+            raise RuntimeError("Sandbox hello-world result was not verified; inspect logs")
+        return {
+            "name": name,
+            "example": "sandboxes",
+            "app_id": state["app_id"],
+            "container_id": instance.container_id,
+            "result": {"message": "Hello from the cloud", "example": "sandboxes"},
+        }
+    finally:
+        try:
+            if instance is not None and instance.ok and not instance.terminate():
+                raise RuntimeError("Sandbox did not stop; inspect container status")
+        finally:
+            os.chdir(previous_directory)
             if previous_channel is None:
                 base.unset_channel()
             else:

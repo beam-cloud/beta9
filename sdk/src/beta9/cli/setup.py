@@ -334,6 +334,14 @@ def setup_functions(name, clients, skip_agents, yes, context):
     setup_example("functions", name, clients, skip_agents, yes, context)
 
 
+@setup.command(
+    name="sandboxes", help="Sign in, fund the workspace and run a verified container sandbox."
+)
+@workload_options
+def setup_sandboxes(name, clients, skip_agents, yes, context):
+    setup_example("sandboxes", name, clients, skip_agents, yes, context)
+
+
 def setup_example(kind, name, clients, skip_agents, yes, context):
     from ..auth import LoginError
     from ..channel import GatewayHTTPError, ServiceClient
@@ -347,11 +355,18 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
             configured, agents = connect_onboarding(selected, clients, skip_agents, yes)
             if not yes:
                 click.confirm(
-                    "Start the hello-world workload (1 CPU, 256 MiB; scales to zero when idle)?",
+                    "Run hello world in a sandbox (1 CPU, 256 MiB; stops when finished)?"
+                    if kind == "sandboxes"
+                    else "Start the hello-world workload (1 CPU, 256 MiB; scales to zero when idle)?",
                     abort=True,
                 )
             with ServiceClient(configured) as service:
-                with terminal.progress("Deploying your sample and checking its result..."):
+                message = (
+                    "Running your sandbox and checking its output..."
+                    if kind == "sandboxes"
+                    else "Deploying your sample and checking its result..."
+                )
+                with terminal.progress(message):
                     result = prepare_example(
                         service,
                         get_settings().config_path.parent / "onboarding",
@@ -371,7 +386,11 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
                 }
             )
         else:
-            terminal.success(f"{name} is ready — hello-world result verified")
+            terminal.success(
+                f"{name} complete — hello-world result verified and sandbox stopped"
+                if kind == "sandboxes"
+                else f"{name} is ready — hello-world result verified"
+            )
             if dashboard:
                 terminal.print(f"  Dashboard and logs: {dashboard}")
             if result.get("url"):
