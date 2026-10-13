@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
@@ -26,24 +27,56 @@ import (
 )
 
 type publicVMNetwork struct {
-	prefix  netip.Prefix
-	trusted []netip.Prefix
-	repo    repository.PublicVMRepository
-	dialer  *network.BackendDialer
+	prefix         netip.Prefix
+	prefixes       []netip.Prefix
+	trusted        []netip.Prefix
+	maxConnections int
+	activityMu     sync.Mutex
+	activities     map[string]*publicVMActivity
+	repo           repository.PublicVMRepository
+	dialer         *network.BackendDialer
+}
+
+type publicVMActivity struct {
+	refs    int
+	ready   chan struct{}
+	cancel  context.CancelFunc
+	release func()
+	err     error
 }
 
 func parsePublicVMNetwork(cfg types.VMNetworkConfig) (*publicVMNetwork, error) {
-	if cfg.PublicIPv6Prefix == "" && cfg.IngressPort == 0 && len(cfg.TrustedProxyCIDRs) == 0 {
+	if cfg.PublicIPv6Prefix == "" && len(cfg.PublicIPv6Prefixes) == 0 && cfg.IngressPort == 0 && len(cfg.TrustedProxyCIDRs) == 0 && cfg.MaxConnections == 0 {
 		return nil, nil
 	}
-	prefix, err := netip.ParsePrefix(cfg.PublicIPv6Prefix)
-	if err != nil || !prefix.Addr().Is6() || prefix.Addr().Is4In6() || prefix.Addr().IsPrivate() || !prefix.Addr().IsGlobalUnicast() || prefix.Bits() > 112 || prefix != prefix.Masked() {
-		return nil, fmt.Errorf("VM publicIPv6Prefix must be a public IPv6 network with at least 16 address bits")
+	values := slices.Clone(cfg.PublicIPv6Prefixes)
+	if cfg.PublicIPv6Prefix != "" {
+		values = append(values, cfg.PublicIPv6Prefix)
+	}
+	var prefixes []netip.Prefix
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil || !prefix.Addr().Is6() || prefix.Addr().Is4In6() || prefix.Addr().IsPrivate() || !prefix.Addr().IsGlobalUnicast() || prefix.Bits() > 112 || prefix != prefix.Masked() {
+			return nil, fmt.Errorf("VM publicIPv6Prefix must be a public IPv6 network with at least 16 address bits")
+		}
+		if !slices.Contains(prefixes, prefix) {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	if len(prefixes) == 0 {
+		return nil, fmt.Errorf("VM public networking requires a routed IPv6 prefix")
 	}
 	if cfg.IngressPort < 1 || cfg.IngressPort > 65535 || len(cfg.TrustedProxyCIDRs) == 0 {
 		return nil, fmt.Errorf("VM public networking requires ingressPort and trustedProxyCIDRs")
 	}
-	p := &publicVMNetwork{prefix: prefix}
+	if cfg.MaxConnections < 0 {
+		return nil, fmt.Errorf("VM maxConnections must be nonnegative")
+	}
+	limit := cfg.MaxConnections
+	if limit == 0 {
+		limit = 16384
+	}
+	p := &publicVMNetwork{prefix: prefixes[0], prefixes: prefixes, maxConnections: limit, activities: make(map[string]*publicVMActivity)}
 	for _, value := range cfg.TrustedProxyCIDRs {
 		cidr, err := netip.ParsePrefix(value)
 		if err != nil || cidr.Addr().Is4In6() {
@@ -65,13 +98,18 @@ func (s *Service) ensurePublicIPv6(ctx context.Context, v *types.VM) error {
 		if _, err := rand.Read(address[:]); err != nil {
 			return err
 		}
-		base := s.publicNetwork.prefix.Addr().As16()
-		for bit := range s.publicNetwork.prefix.Bits() {
+		pool, err := rand.Int(rand.Reader, big.NewInt(int64(len(s.publicNetwork.prefixes))))
+		if err != nil {
+			return err
+		}
+		prefix := s.publicNetwork.prefixes[pool.Int64()]
+		base := prefix.Addr().As16()
+		for bit := range prefix.Bits() {
 			mask := byte(1 << (7 - bit%8))
 			address[bit/8] = address[bit/8]&^mask | base[bit/8]&mask
 		}
 		candidate := netip.AddrFrom16(address)
-		if candidate == s.publicNetwork.prefix.Addr() {
+		if candidate == prefix.Addr() {
 			continue
 		}
 		assigned, err := s.publicNetwork.repo.AssignVMPublicIPv6(ctx, v.ID, candidate.String())
@@ -132,7 +170,7 @@ func (s *Service) startPublicNetwork(cfg types.VMNetworkConfig, dialer *network.
 	}()
 	go func() {
 		defer cancel()
-		slots := make(chan struct{}, 256)
+		slots := make(chan struct{}, p.maxConnections)
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -152,7 +190,7 @@ func (s *Service) startPublicNetwork(cfg types.VMNetworkConfig, dialer *network.
 			}
 		}
 	}()
-	log.Info().Int("port", cfg.IngressPort).Str("prefix", p.prefix.String()).Msg("public VM ingress listening")
+	log.Info().Int("port", cfg.IngressPort).Int("max_connections", p.maxConnections).Int("prefix_pools", len(p.prefixes)).Msg("public VM ingress listening")
 	return nil
 }
 
@@ -174,7 +212,7 @@ func (p *publicVMNetwork) validateHeader(header *proxyproto.Header) error {
 		return fmt.Errorf("public VM ingress requires a PROXY v2 TCP6 destination")
 	}
 	destination, ok := header.DestinationAddr.(*net.TCPAddr)
-	if !ok || destination.Port < 1 || !p.prefix.Contains(destination.AddrPort().Addr()) {
+	if !ok || destination.Port < 1 || !slices.ContainsFunc(p.prefixes, func(prefix netip.Prefix) bool { return prefix.Contains(destination.AddrPort().Addr()) }) {
 		return fmt.Errorf("public VM destination is outside the configured prefix")
 	}
 	return nil
@@ -239,7 +277,7 @@ func (s *Service) forwardPublicVMTCP(ctx context.Context, conn net.Conn, v *type
 	if _, err := s.accessOwner(ctx, v); err != nil {
 		return err
 	}
-	release, err := s.keepActive(ctx, v.ID, v.Spec.IdleTimeout)
+	release, err := s.keepPublicVMActive(ctx, v)
 	if err != nil {
 		return err
 	}
@@ -279,6 +317,55 @@ func (s *Service) forwardPublicVMTCP(ctx context.Context, conn net.Conn, v *type
 	<-done
 	<-done
 	return nil
+}
+
+// Share one activity lease per VM on this gateway. Thousands of sockets to
+// one VM must not each update the same PostgreSQL row every 15 seconds.
+func (s *Service) keepPublicVMActive(ctx context.Context, v *types.VM) (func(), error) {
+	p := s.publicNetwork
+	p.activityMu.Lock()
+	activity := p.activities[v.ID]
+	if activity == nil {
+		leaseCtx, cancel := context.WithCancel(s.ctx)
+		activity = &publicVMActivity{ready: make(chan struct{}), cancel: cancel}
+		p.activities[v.ID] = activity
+		go func() {
+			activity.release, activity.err = s.keepActive(leaseCtx, v.ID, v.Spec.IdleTimeout)
+			close(activity.ready)
+		}()
+	}
+	activity.refs++
+	p.activityMu.Unlock()
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			p.activityMu.Lock()
+			activity.refs--
+			last := activity.refs == 0
+			if last {
+				delete(p.activities, v.ID)
+			}
+			p.activityMu.Unlock()
+			if last {
+				activity.cancel()
+				<-activity.ready
+				if activity.release != nil {
+					activity.release()
+				}
+			}
+		})
+	}
+	select {
+	case <-activity.ready:
+		if activity.err != nil {
+			release()
+			return nil, activity.err
+		}
+		return release, nil
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
 }
 
 func closePublicVMWrite(conn net.Conn) {

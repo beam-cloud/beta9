@@ -47,12 +47,19 @@ func TestPublicVMNetworkConfig(t *testing.T) {
 		{PublicIPv6Prefix: "2001:db8::/64", TrustedProxyCIDRs: []string{"127.0.0.0/8"}},
 		{PublicIPv6Prefix: "2001:db8::/64", IngressPort: 65536, TrustedProxyCIDRs: []string{"127.0.0.0/8"}},
 		{PublicIPv6Prefix: "2001:db8::/64", IngressPort: 1996, TrustedProxyCIDRs: []string{"invalid"}},
+		{PublicIPv6Prefix: "2001:db8::/64", IngressPort: 1996, TrustedProxyCIDRs: []string{"127.0.0.1/32"}, MaxConnections: -1},
 	} {
 		_, err := parsePublicVMNetwork(cfg)
 		require.Error(t, err)
 	}
 	p, err = parsePublicVMNetwork(publicNetworkConfig())
 	require.NoError(t, err)
+	require.Equal(t, 16384, p.maxConnections)
+	cfg := publicNetworkConfig()
+	cfg.MaxConnections = 32768
+	custom, err := parsePublicVMNetwork(cfg)
+	require.NoError(t, err)
+	require.Equal(t, 32768, custom.maxConnections)
 	require.True(t, p.trustedProxy(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4567}))
 	require.False(t, p.trustedProxy(&net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 4567}))
 }
@@ -116,9 +123,10 @@ func TestPublicVMAllocationCannotDelayStopOrIdleExpiry(t *testing.T) {
 
 type networkVMStore struct {
 	*vmStore
-	mu        sync.Mutex
-	saveError error
-	saveCalls int
+	mu         sync.Mutex
+	saveError  error
+	saveCalls  int
+	touchCalls int
 }
 
 func (r *networkVMStore) SaveVM(ctx context.Context, v *types.VM) error {
@@ -191,7 +199,49 @@ func (r *networkVMStore) AssignVMPublicIPv6(ctx context.Context, id, address str
 func (r *networkVMStore) TouchVM(ctx context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.touchCalls++
 	return r.vmStore.TouchVM(ctx, id)
+}
+
+func TestPublicVMConnectionsShareActivityUntilLastClose(t *testing.T) {
+	s, v, _, _, _, _ := startPublicVMIngress(t, nil)
+	store := s.repo.(*networkVMStore)
+	const connections = 2048
+	releases := make(chan func(), connections)
+	errors := make(chan error, connections)
+	var pending sync.WaitGroup
+	for range connections {
+		pending.Add(1)
+		go func() {
+			defer pending.Done()
+			release, err := s.keepPublicVMActive(context.Background(), v)
+			if err != nil {
+				errors <- err
+				return
+			}
+			releases <- release
+		}()
+	}
+	pending.Wait()
+	require.Empty(t, errors)
+	store.mu.Lock()
+	require.Equal(t, 1, store.touchCalls)
+	store.mu.Unlock()
+	require.Len(t, s.publicNetwork.activities, 1)
+	for range connections - 1 {
+		release := <-releases
+		release()
+		release() // A double close cannot remove another socket's reference.
+	}
+	require.Len(t, s.publicNetwork.activities, 1)
+	(<-releases)()
+	require.Empty(t, s.publicNetwork.activities)
+	release, err := s.keepPublicVMActive(context.Background(), v)
+	require.NoError(t, err)
+	release()
+	store.mu.Lock()
+	require.Equal(t, 2, store.touchCalls)
+	store.mu.Unlock()
 }
 
 func TestPublicVMAddressRetriesOnlyAddressConflicts(t *testing.T) {

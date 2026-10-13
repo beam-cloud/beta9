@@ -1319,12 +1319,17 @@ type VMNetworkConfig struct {
 	// Empty disables public networking. The ingress must route this prefix to
 	// the gateway while preserving the original destination with PROXY protocol.
 	PublicIPv6Prefix string `key:"publicIPv6Prefix" json:"public_ipv6_prefix"`
+	// Additional routed pools let shared ingress capacity grow without moving
+	// existing VM addresses. Keep retired pools routed until their VMs are gone.
+	PublicIPv6Prefixes []string `key:"publicIPv6Prefixes" json:"public_ipv6_prefixes"`
 	// All published TCP ports must reach this listener with PROXY v2 TCP6
 	// metadata carrying their original destination address and port.
 	IngressPort int `key:"ingressPort" json:"ingress_port"`
 	// These are the actual TCP ingress peers. Disable client IP preservation
 	// on this listener so advertised client addresses cannot authorize a proxy.
 	TrustedProxyCIDRs []string `key:"trustedProxyCIDRs" json:"trusted_proxy_cidrs"`
+	// Maximum concurrent public TCP connections per gateway. Zero uses 16384.
+	MaxConnections int `key:"maxConnections" json:"max_connections"`
 }
 
 type BotConfig struct {
