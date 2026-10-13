@@ -165,7 +165,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
             return
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             with ServiceClient(get_config_context(selected)) as service:
-                with terminal.StepTracker().step("Starting VM and checking the guest", "VM ready"):
+                with terminal.StepTracker().step("Starting VM", "VM ready"):
                     result = prepare_vm(
                         service,
                         get_settings().config_path.parent / "onboarding",
