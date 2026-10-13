@@ -323,9 +323,10 @@ format_option = click.option(
 )
 
 
-def command_hint() -> str:
-    ctx = click.get_current_context()
-    return f"{terminal.cli_name()} --context {shlex.quote(selected_context(ctx))}"
+def command_hint(context: Optional[str] = None) -> str:
+    name = context or selected_context()
+    cli = terminal.cli_name()
+    return cli if name == DEFAULT_CONTEXT_NAME else f"{cli} --context {shlex.quote(name)}"
 
 
 def filter_values_callback(
