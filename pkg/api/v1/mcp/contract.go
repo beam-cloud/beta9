@@ -138,7 +138,8 @@ func (g *Group) instructions() string {
 		"Apps and stack services default to serverless: min_replicas=0, keep_warm_seconds=0; databases use always_on=false. " +
 		"Keep these defaults unless the user explicitly requests continuous compute; a cold start is " +
 		"not a reason to add an idle floor. " +
-		"Use a finite idle timeout and auto-resume for persistent VMs. Pin container_id for process " +
+		"VM defaults are 4 vCPU, 8 GiB memory, 50 GiB disk and no idle timeout; keep them unless requested otherwise. " +
+		"Pin container_id for process " +
 		"operations across VM restarts. " +
 		"Filter discovery with ?features=vm,apps,observe or ?tools=whoami,list_vms; ?readonly=true exposes read-only operations."
 }

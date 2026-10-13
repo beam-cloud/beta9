@@ -62,8 +62,9 @@ operations that need local files or sockets.
 
 ## First workload
 
-`{{cli}} setup vm` signs in, checks credits and verifies a persistent VM with a
-finite idle timeout. `{{cli}} setup sandboxes` runs a verified hello-world
+`{{cli}} setup vm` signs in, checks credits and verifies a persistent VM using
+the defaults: 4 vCPU, 8 GiB memory, 50 GiB disk and no idle timeout.
+`{{cli}} setup sandboxes` runs a verified hello-world
 command in a container sandbox and stops it when finished. `setup inference`
 and `setup functions` verify scale-to-zero sample apps. Add `--skip-agents`
 to preserve local agent configuration and `--yes` only with approval to create

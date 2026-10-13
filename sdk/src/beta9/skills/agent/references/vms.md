@@ -2,9 +2,10 @@
 
 Use a VM for a real Linux guest with a writable root, SSH, Docker, a desktop,
 or a durable coding-agent session. For HTTP apps and stacks, keep the
-serverless defaults instead. Start with 1 CPU, 2 GiB memory, a 10 GiB root,
-`idle_timeout: 900`, and `auto_resume: true`; ask before starting paid compute
-unless the user has already authorized it. GPUs are not a CPU VM feature.
+serverless defaults instead. Keep VM defaults: 4 vCPU, 8 GiB memory, a 50 GiB
+root and no idle timeout. VMs keep running until stopped. Ask before starting
+paid compute unless the user has already authorized it. GPUs are not a CPU VM
+feature.
 
 ## First VM
 

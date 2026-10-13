@@ -95,11 +95,10 @@ capacity and understands the idle cost. A portless queue poller has no incoming
 connection to wake it from zero; explain that requirement and obtain the user's
 choice before setting a positive minimum. Use a job for one-off work.
 
-For a real persistent machine, use VM tools, with the smallest useful CPU
-and memory and a finite idle timeout. `{{cli}} setup vm` handles browser
-sign-in and prepares a verified guest. A VM is a different resource from a
-request-driven application; use `idle_timeout`/auto-resume to control its
-idle behavior. See [VM operations](references/vms.md).
+For a persistent machine, use VM tools. Keep the VM defaults: 4 vCPU, 8 GiB
+memory, 50 GiB disk and no idle timeout. Change them when the user requests it.
+`{{cli}} setup vm` handles browser sign-in and prepares a verified guest.
+VMs keep running until stopped. See [VM operations](references/vms.md).
 
 ## Several services: a stack
 

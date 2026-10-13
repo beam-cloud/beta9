@@ -157,7 +157,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
             selected_context, agents = connect_onboarding(selected, clients, skip_agents, yes)
         if not yes:
             click.confirm(
-                "Start your VM (4 vCPU, 8 GiB RAM, 50 GiB disk; sleeps after 15 minutes idle)?",
+                "Start your VM (4 vCPU, 8 GiB RAM, 50 GiB disk; runs until stopped)?",
                 abort=True,
             )
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():

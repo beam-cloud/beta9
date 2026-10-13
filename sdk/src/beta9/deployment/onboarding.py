@@ -37,7 +37,6 @@ def prepare_vm(
                 name,
                 desktop=desktop,
                 docker_enabled=True,
-                ttl=900,
                 auto_resume=True,
                 metadata=marker,
                 request_id=state["request_id"],
