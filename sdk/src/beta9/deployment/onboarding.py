@@ -4,14 +4,25 @@ import fcntl
 import hashlib
 import json
 import os
+import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from ..abstractions.vm import VM
 from ..channel import GatewayHTTPError, ServiceClient
 
 AppLookup = Callable[[str, Dict[str, Any]], Dict[str, Any]]
+
+SANDBOX_CODE = """import hashlib
+
+records = ["beam", "cloud", "agents"]
+print(f"Hashing {len(records)} records", flush=True)
+for record in records:
+    digest = hashlib.sha256(record.encode()).hexdigest()[:8]
+    print(f"{record}: {digest}", flush=True)
+print("Hello from the cloud", flush=True)
+"""
 
 
 def prepare_vm(
@@ -78,7 +89,14 @@ def _save_state(path: Path, state: Dict[str, Any]) -> None:
 
 
 def prepare_example(
-    service: ServiceClient, state_directory: Path, name: str, kind: str, call: AppLookup
+    service: ServiceClient,
+    state_directory: Path,
+    name: str,
+    kind: str,
+    call: AppLookup,
+    *,
+    on_source: Optional[Callable[[Path], None]] = None,
+    on_output: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """Run a verified sample in a setup-owned app."""
     import importlib.util
@@ -94,7 +112,8 @@ def prepare_example(
     workspace = service.http.workspace_id
     key = hashlib.sha256(f"{workspace}:{kind}:{name}".encode()).hexdigest()[:24]
     # Canonicalize symlinks so handler paths stay relative to the upload root.
-    directory = (state_directory / "examples" / key).resolve()
+    state_directory = state_directory.resolve()
+    directory = state_directory / "examples" / key
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     state_path = directory / "request.json"
 
@@ -108,10 +127,29 @@ def prepare_example(
 
         marker = f"ONBOARDING_RUN={state['request_id']}"
         matches = call("list_apps", {"name": name}).get("items", [])
+        path = directory / "app.py"
         if kind == "sandboxes":
             if matches and state.get("app_id") != matches[0].get("app_id"):
                 raise ValueError(f"App {name!r} already exists; choose a different --name")
-            return _run_sandbox_example(service, directory, name, state, call)
+            path.write_text(
+                "from beta9 import Sandbox\n\n"
+                f"code = '''{SANDBOX_CODE}'''\n\n"
+                f"sandbox = Sandbox(name={name!r}, cpu=1, memory=256).create()\n"
+                "if not sandbox.ok:\n"
+                "    raise RuntimeError(sandbox.error_msg)\n\n"
+                "try:\n"
+                "    process = sandbox.process.exec('python', '-u', '-c', code)\n"
+                "    for line in process.stdout:\n"
+                "        print(line, end='', flush=True)\n"
+                "    if process.wait(30) != 0:\n"
+                "        raise RuntimeError(process.stderr.read())\n"
+                "finally:\n"
+                "    sandbox.terminate()\n"
+            )
+            if on_source:
+                on_source(path)
+            result = _run_sandbox_example(service, directory, name, state, call, on_output)
+            return {**result, "source_path": str(path)}
 
         existing = None
         if matches:
@@ -120,16 +158,31 @@ def prepare_example(
                 raise ValueError(f"App {name!r} already exists; choose a different --name")
 
         decorator = "endpoint" if kind == "inference" else "function"
-        scaling = "keep_warm_seconds=0, " if kind == "inference" else ""
+        scaling = "    keep_warm_seconds=0,\n" if kind == "inference" else ""
+        output = (
+            "    records = ['beam', 'cloud', 'agents']\n"
+            "    print(f'Processing {len(records)} records', flush=True)\n"
+            "    print(', '.join(record.upper() for record in records), flush=True)\n"
+            if kind == "functions"
+            else ""
+        )
         source = (
-            f"from beta9 import {decorator}\n\n"
-            f"@{decorator}(name={name!r}, app={name!r}, cpu=1, memory=256, "
-            f"{scaling}env={{'ONBOARDING_RUN': {state['request_id']!r}}})\n"
+            f"from beta9 import {decorator}\n\n\n"
+            f"@{decorator}(\n"
+            f"    name={name!r},\n"
+            f"    app={name!r},\n"
+            "    cpu=1,\n"
+            "    memory=256,\n"
+            f"{scaling}"
+            f"    env={{'ONBOARDING_RUN': {state['request_id']!r}}},\n"
+            ")\n"
             "def hello(**inputs):\n"
+            f"{output}"
             f"    return {{'message': 'Hello from the cloud', 'example': {kind!r}}}\n"
         )
-        path = directory / "app.py"
         path.write_text(source)
+        if on_source:
+            on_source(path)
 
         previous_directory = Path.cwd()
         previous_module = sys.modules.get("app")
@@ -168,7 +221,21 @@ def prepare_example(
 
             if not isinstance(result, dict) or result.get("message") != "Hello from the cloud":
                 raise RuntimeError("The sample ran but its hello-world result was not verified")
-            return {"name": name, "example": kind, "result": result, **existing}
+            example = {
+                "name": name,
+                "example": kind,
+                "result": result,
+                "source_path": str(path),
+                **existing,
+            }
+            if kind == "inference":
+                curl_config = (state_directory / "requests" / (key + ".curl")).resolve()
+                curl_config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                with open(curl_config, "w", opener=_private_file) as config:
+                    header = "Authorization: Bearer " + service._config.token
+                    config.write("header = " + json.dumps(header) + "\n")
+                example["curl_config"] = str(curl_config)
+            return example
         finally:
             os.chdir(previous_directory)
             if previous_module is None:
@@ -182,7 +249,12 @@ def prepare_example(
 
 
 def _run_sandbox_example(
-    service: ServiceClient, directory: Path, name: str, state: Dict[str, Any], call: AppLookup
+    service: ServiceClient,
+    directory: Path,
+    name: str,
+    state: Dict[str, Any],
+    call: AppLookup,
+    on_output: Optional[Callable[[str], None]],
 ) -> Dict[str, Any]:
     """Run the sandbox sample and always stop its container."""
     from ..abstractions import base
@@ -212,8 +284,27 @@ def _run_sandbox_example(
         state["app_id"] = apps[0]["app_id"]
         _save_state(directory / "request.json", state)
 
-        process = instance.process.exec("python", "-c", "print('Hello from the cloud')")
-        if process.wait(30) != 0 or process.stdout.read().strip() != "Hello from the cloud":
+        process = instance.process.exec("python", "-u", "-c", SANDBOX_CODE)
+        output = []
+        deadline = time.monotonic() + 30
+        while True:
+            chunk = process.stdout.read()
+            if chunk:
+                output.append(chunk)
+                if on_output:
+                    on_output(chunk)
+            exit_code, _ = process.status()
+            if exit_code >= 0:
+                chunk = process.stdout.read()
+                if chunk:
+                    output.append(chunk)
+                    if on_output:
+                        on_output(chunk)
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Sandbox sample did not finish within 30 seconds")
+            time.sleep(0.1)
+        if exit_code != 0 or not "".join(output).strip().endswith("Hello from the cloud"):
             raise RuntimeError("Sandbox hello-world result was not verified; inspect logs")
         return {
             "name": name,

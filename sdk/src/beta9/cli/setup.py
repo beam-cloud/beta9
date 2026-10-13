@@ -1,11 +1,13 @@
 """Account sign-in, coding agent configuration, and workload onboarding."""
 
+import shlex
 import sys
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import click
+from rich.syntax import Syntax
 
 from .. import terminal
 from ..auth import login_configured
@@ -162,7 +164,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
             )
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             with ServiceClient(get_config_context(selected)) as service:
-                with terminal.progress("Starting VM and running a test command"):
+                with terminal.StepTracker().step("Starting VM and checking the guest", "VM ready"):
                     result = prepare_vm(
                         service,
                         get_settings().config_path.parent / "onboarding",
@@ -181,16 +183,26 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                 }
             )
         else:
-            terminal.success(f"VM {result['name']} is ready")
-            if dashboard:
-                terminal.print(f"  Dashboard: {dashboard}")
-            terminal.print(f"  {cli} --context {selected} vm ssh {result['name']}")
-            terminal.print(f"  {cli} --context {selected} vm terminal {result['name']}")
-            if result.get("desktop_url"):
-                terminal.print(f"  {cli} --context {selected} vm desktop {result['name']}")
+            terminal.resource(
+                result["name"],
+                {
+                    "ID": result["id"],
+                    "Status": result.get("status"),
+                    "Terminal": result.get("terminal_url"),
+                    "Desktop": result.get("desktop_url"),
+                    "Dashboard": dashboard,
+                },
+            )
             terminal.detail(
                 "Restart your agent to use the VM tools. Re-run this setup to resume the same VM."
             )
+            command = extraclick.command_hint(selected)
+            name = shlex.quote(result["name"])
+            terminal.print("")
+            for action in ("ssh", "terminal", "logs", "stop"):
+                terminal.print(f"  {command} vm {action} {name}", markup=False)
+            if result.get("desktop_url"):
+                terminal.print(f"  {command} vm desktop {name}", markup=False)
     except (LoginError, GatewayHTTPError, RuntimeError, TimeoutError, ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -214,8 +226,12 @@ def ensure_credit(context: ConfigContext, unattended: bool) -> None:
         raise click.ClickException(message)
     terminal.header(f"Add credits to {summary.get('workspace_name') or 'your workspace'}")
     terminal.print(message)
-    if not click.confirm("Open checkout in your browser?"):
-        raise click.Abort()
+    click.prompt(
+        "Press enter to add credits via Stripe (Ctrl+C to exit)",
+        default="",
+        show_default=False,
+        prompt_suffix=" ",
+    )
     webbrowser.open(link, new=2)
     terminal.print("Choose an amount and complete checkout. Setup continues when credits arrive.")
     deadline = time.monotonic() + 900
@@ -369,6 +385,8 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
                         name,
                         kind,
                         lambda tool, arguments: call_remote(configured, tool, arguments),
+                        on_source=show_example_source if not terminal.json_output() else None,
+                        on_output=lambda text: terminal.print(text, markup=False, end=""),
                     )
         dashboard = dashboard_link(configured, "app", result["app_id"])
         if terminal.json_output():
@@ -388,8 +406,32 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
                 else f"{name}: hello world passed"
             )
             if dashboard:
-                terminal.print(f"  Dashboard: {dashboard}")
+                terminal.print(f"  Dashboard: {dashboard}", markup=False, soft_wrap=True)
             if result.get("url"):
-                terminal.print(f"  Endpoint: {result['url']}")
+                terminal.print(f"  Endpoint: {result['url']}", markup=False, soft_wrap=True)
+            terminal.print(f"  Code: {result['source_path']}", markup=False, soft_wrap=True)
+            if result.get("curl_config"):
+                terminal.print("")
+                terminal.print(
+                    f"curl --config {shlex.quote(result['curl_config'])} "
+                    f"-H 'Content-Type: application/json' -d '{{}}' "
+                    f"{shlex.quote(result['url'])}",
+                    markup=False,
+                    soft_wrap=True,
+                )
     except (LoginError, GatewayHTTPError, RuntimeError, TimeoutError, ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def show_example_source(path: Path) -> None:
+    terminal.detail(str(path))
+    terminal.print(
+        Syntax(
+            path.read_text(),
+            "python",
+            theme="ansi_dark",
+            background_color="default",
+            padding=(1, 2),
+            word_wrap=True,
+        )
+    )

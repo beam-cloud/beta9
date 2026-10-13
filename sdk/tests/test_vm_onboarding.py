@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -146,9 +147,9 @@ def test_interactive_credit_checkpoint_waits_for_confirmed_funding(monkeypatch):
     from beta9.cli import setup
 
     opening = MagicMock()
-    confirm = MagicMock(return_value=True)
+    prompt = MagicMock(return_value="")
     monkeypatch.setattr(webbrowser, "open", opening)
-    monkeypatch.setattr(setup.click, "confirm", confirm)
+    monkeypatch.setattr(setup.click, "prompt", prompt)
     monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
     statuses = iter(
         [
@@ -167,7 +168,12 @@ def test_interactive_credit_checkpoint_waits_for_confirmed_funding(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda _: None)
     setup.ensure_credit(object(), unattended=False)
     opening.assert_called_once_with("https://account.example/credits", new=2)
-    confirm.assert_called_once()
+    prompt.assert_called_once_with(
+        "Press enter to add credits via Stripe (Ctrl+C to exit)",
+        default="",
+        show_default=False,
+        prompt_suffix=" ",
+    )
 
 
 def test_product_dashboard_templates_are_optional_and_context_bound(monkeypatch):
@@ -246,6 +252,11 @@ def test_example_handler_uses_upload_root_with_symlinked_state(tmp_path, monkeyp
     before = os.getcwd()
     result = onboarding.prepare_example(selected, state_directory, "hello", "inference", call)
     assert result["result"] == {"message": "Hello from the cloud"}
+    assert Path(result["source_path"]).is_file()
+    auth = Path(result["curl_config"])
+    assert auth.parent == root / "requests"
+    assert auth.stat().st_mode & 0o777 == 0o600
+    assert "Bearer test-token" in auth.read_text()
     assert os.getcwd() == before
 
 
@@ -256,8 +267,9 @@ def test_sandbox_sample_stops_container_after_verification(tmp_path, monkeypatch
     from beta9.abstractions import base
 
     instance = MagicMock(ok=True, container_id="sandbox-owned")
-    instance.process.exec.return_value.wait.return_value = exit_code
-    instance.process.exec.return_value.stdout.read.return_value = "Hello from the cloud\n"
+    process = instance.process.exec.return_value
+    process.status.side_effect = [(-1, "running"), (exit_code, "exited")]
+    process.stdout.read.side_effect = ["Hashing 3 records\n", "Hello from the cloud\n", ""]
     instance.terminate.return_value = True
     factory = MagicMock()
     factory.return_value.create.return_value = instance
@@ -274,13 +286,21 @@ def test_sandbox_sample_stops_container_after_verification(tmp_path, monkeypatch
 
     before = os.getcwd()
     channel = base._channel
+    output = []
     if exit_code:
         with pytest.raises(RuntimeError, match="not verified"):
-            onboarding.prepare_example(selected, tmp_path, "hello", "sandboxes", call)
+            onboarding.prepare_example(
+                selected, tmp_path, "hello", "sandboxes", call, on_output=output.append
+            )
     else:
-        result = onboarding.prepare_example(selected, tmp_path, "hello", "sandboxes", call)
+        result = onboarding.prepare_example(
+            selected, tmp_path, "hello", "sandboxes", call, on_output=output.append
+        )
         assert result["container_id"] == "sandbox-owned"
         assert result["app_id"] == "owned-app"
+        assert "Sandbox" in Path(result["source_path"]).read_text()
+    assert output == ["Hashing 3 records\n", "Hello from the cloud\n"]
+    process.wait.assert_not_called()
     instance.terminate.assert_called_once()
     assert factory.call_args.kwargs["keep_warm_seconds"] == 60
     assert os.getcwd() == before
