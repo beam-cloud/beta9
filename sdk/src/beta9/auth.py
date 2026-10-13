@@ -66,7 +66,7 @@ def save_login(context: ConfigContext, name: str = DEFAULT_CONTEXT_NAME) -> None
 def _post(auth_url: Optional[str], path: str, payload: Dict[str, str]) -> requests.Response:
     if not auth_url:
         raise LoginError(
-            "This install has no browser sign-in; create a token in the dashboard and run `config create`.",
+            "This install has no browser sign-in. Create a token in the dashboard and run `config create`.",
             "LOGIN_NOT_CONFIGURED",
         )
     try:
@@ -168,7 +168,7 @@ class DeviceLogin:
             self.interval += 2
             return None
         if error == "expired_token":
-            raise LoginError("The sign-in code expired; run login again.", "LOGIN_EXPIRED")
+            raise LoginError("The sign-in code expired. Run login again.", "LOGIN_EXPIRED")
         if error == "access_denied":
             raise LoginError("Sign-in was denied in the browser.", "LOGIN_DENIED")
         raise LoginError(_message(response, "Sign-in failed"))
@@ -188,5 +188,5 @@ class DeviceLogin:
             if context is not None:
                 return context
             if time.monotonic() + self.interval > deadline:
-                raise LoginError("Timed out waiting for sign-in; run login again.", "LOGIN_EXPIRED")
+                raise LoginError("Timed out waiting for sign-in. Run login again.", "LOGIN_EXPIRED")
             time.sleep(self.interval)
