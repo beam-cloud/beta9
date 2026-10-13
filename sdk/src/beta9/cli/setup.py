@@ -157,11 +157,10 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
     try:
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             selected_context, agents = connect_onboarding(selected, clients, skip_agents, yes)
-        if not yes:
-            click.confirm(
-                "Start your VM (4 vCPU, 8 GiB RAM, 50 GiB disk; runs until stopped)?",
-                abort=True,
-            )
+        if not confirm_workload(
+            "Start your VM (4 vCPU, 8 GiB RAM, 50 GiB disk; runs until stopped)?", yes
+        ):
+            return
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             with ServiceClient(get_config_context(selected)) as service:
                 with terminal.StepTracker().step("Starting VM and checking the guest", "VM ready"):
@@ -203,8 +202,23 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                 terminal.print(f"  {command} vm {action} {name}", markup=False)
             if result.get("desktop_url"):
                 terminal.print(f"  {command} vm desktop {name}", markup=False)
+    except click.Abort:
+        raise
     except (LoginError, GatewayHTTPError, RuntimeError, TimeoutError, ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def confirm_workload(prompt: str, yes: bool) -> bool:
+    if yes:
+        return True
+    with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+        if click.confirm(prompt):
+            return True
+    if terminal.json_output():
+        terminal.print_json({"ready": False, "cancelled": True})
+    else:
+        terminal.detail("Setup canceled.")
+    return False
 
 
 def ensure_credit(context: ConfigContext, unattended: bool) -> None:
@@ -365,13 +379,14 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
     try:
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             configured, agents = connect_onboarding(selected, clients, skip_agents, yes)
-            if not yes:
-                click.confirm(
-                    "Run hello world in a sandbox (1 CPU, 256 MiB; stops when finished)?"
-                    if kind == "sandboxes"
-                    else "Run hello world (1 CPU, 256 MiB; scales to zero when idle)?",
-                    abort=True,
-                )
+        if not confirm_workload(
+            "Run hello world in a sandbox (1 CPU, 256 MiB; stops when finished)?"
+            if kind == "sandboxes"
+            else "Run hello world (1 CPU, 256 MiB; scales to zero when idle)?",
+            yes,
+        ):
+            return
+        with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             with ServiceClient(configured) as service:
                 message = (
                     "Running hello world in a sandbox"
@@ -419,6 +434,8 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
                     markup=False,
                     soft_wrap=True,
                 )
+    except click.Abort:
+        raise
     except (LoginError, GatewayHTTPError, RuntimeError, TimeoutError, ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
 

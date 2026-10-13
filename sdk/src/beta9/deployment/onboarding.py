@@ -44,22 +44,7 @@ def prepare_vm(
         except GatewayHTTPError as exc:
             if exc.status != 404:
                 raise
-            vm = VM(
-                name,
-                desktop=desktop,
-                docker_enabled=True,
-                auto_resume=True,
-                metadata=marker,
-                request_id=state["request_id"],
-                _service=service,
-            )
-            if state.get("creation_body"):
-                vm._creation_body = state["creation_body"]
-            else:
-                vm.prepare()
-                state["creation_body"] = vm._creation_body
-                _save_state(path, state)
-            vm.create(wait=False)
+            vm = _create_vm(service, path, state, name, desktop)
         else:
             if (vm.info.get("metadata") or {}).get("beam.onboarding") != marker["beam.onboarding"]:
                 raise ValueError(f"VM {name!r} already exists; choose a different --name")
@@ -73,6 +58,38 @@ def prepare_vm(
                 "VM guest readiness check failed; inspect vm get/logs and retry setup"
             )
         return vm.refresh().info
+
+
+def _create_vm(service, path, state, name, desktop):
+    for attempt in range(2):
+        vm = VM(
+            name,
+            desktop=desktop,
+            docker_enabled=True,
+            auto_resume=True,
+            metadata={"beam.onboarding": state["request_id"]},
+            request_id=state["request_id"],
+            _service=service,
+        )
+        if state.get("creation_body"):
+            vm._creation_body = state["creation_body"]
+        else:
+            vm.prepare()
+            state["creation_body"] = vm._creation_body
+            _save_state(path, state)
+        try:
+            vm.create(wait=False)
+            return vm
+        except GatewayHTTPError as exc:
+            if exc.status != 410:
+                raise
+            if attempt:
+                raise GatewayHTTPError(
+                    410,
+                    "The VM was deleted during setup. Run this command again to create a new VM.",
+                ) from exc
+            state = {"request_id": str(uuid.uuid4())}
+            _save_state(path, state)
 
 
 def _private_file(path: str, flags: int) -> int:
