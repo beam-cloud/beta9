@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -7,11 +7,12 @@ import (
 	"net/url"
 	"strconv"
 
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func (g *MCPGroup) listSecrets(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+func (g *Group) listSecrets(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
 	secrets, err := g.backendRepo.ListSecrets(ctx, a.Workspace)
 	if err != nil {
 		return nil, err
@@ -23,21 +24,21 @@ func (g *MCPGroup) listSecrets(ctx context.Context, a *auth.AuthInfo, _ toolArgs
 	return out, nil
 }
 
-func (g *MCPGroup) createSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) createSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	if _, err := g.backendRepo.CreateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.rawString("value"), true); err != nil {
 		return nil, err
 	}
 	return map[string]any{"name": args.str("name"), "created": true}, nil
 }
 
-func (g *MCPGroup) updateSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) updateSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	if _, err := g.backendRepo.UpdateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.rawString("value")); err != nil {
 		return nil, err
 	}
 	return map[string]any{"name": args.str("name"), "updated": true}, nil
 }
 
-func (g *MCPGroup) deleteSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) deleteSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	if err := g.backendRepo.DeleteSecret(ctx, a.Workspace, args.str("name")); err != nil {
 		return nil, err
 	}
@@ -58,7 +59,7 @@ func databaseView(info types.DatabaseServiceInfo) map[string]any {
 	return out
 }
 
-func (g *MCPGroup) database(ctx context.Context, a *auth.AuthInfo, kind, name string) (*types.DatabaseServiceInfo, error) {
+func (g *Group) database(ctx context.Context, a *auth.AuthInfo, kind, name string) (*types.DatabaseServiceInfo, error) {
 	services, err := g.gws.ListDatabaseServices(ctx, a)
 	if err != nil {
 		return nil, err
@@ -71,7 +72,7 @@ func (g *MCPGroup) database(ctx context.Context, a *auth.AuthInfo, kind, name st
 	return nil, fail("NOT_FOUND", "no %s database named %q", kind, name)
 }
 
-func (g *MCPGroup) listDatabases(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+func (g *Group) listDatabases(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
 	services, err := g.gws.ListDatabaseServices(ctx, a)
 	if err != nil {
 		return nil, err
@@ -83,8 +84,8 @@ func (g *MCPGroup) listDatabases(ctx context.Context, a *auth.AuthInfo, _ toolAr
 	return out, nil
 }
 
-func (g *MCPGroup) createDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	ctx, cancel := context.WithTimeout(ctx, databaseCreateTimeout)
+func (g *Group) createDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	ctx, cancel := context.WithTimeout(ctx, apiv1.DatabaseCreateTimeout)
 	defer cancel()
 	info, err := g.gws.CreateDatabaseService(ctx, a, types.CreateDatabaseParams{
 		Kind:       args.str("kind"),
@@ -104,11 +105,11 @@ func (g *MCPGroup) createDatabase(ctx context.Context, a *auth.AuthInfo, args to
 	return databaseView(*info), nil
 }
 
-func (g *MCPGroup) databaseReadiness(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) databaseReadiness(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.gws.CheckDatabaseReadiness(ctx, a, args.str("name"), args.str("deployment_id"))
 }
 
-func (g *MCPGroup) databaseCredentials(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) databaseCredentials(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	info, err := g.database(ctx, a, args.str("kind"), args.str("name"))
 	if err != nil {
 		return nil, err
@@ -151,7 +152,7 @@ func (g *MCPGroup) databaseCredentials(ctx context.Context, a *auth.AuthInfo, ar
 	return out, nil
 }
 
-func (g *MCPGroup) rotateDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) rotateDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	if _, err := g.database(ctx, a, args.str("kind"), args.str("name")); err != nil {
 		return nil, err
 	}
@@ -164,7 +165,7 @@ func (g *MCPGroup) rotateDatabase(ctx context.Context, a *auth.AuthInfo, args to
 	return out, nil
 }
 
-func (g *MCPGroup) deleteDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) deleteDatabase(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	if _, err := g.database(ctx, a, args.str("kind"), args.str("name")); err != nil {
 		return nil, err
 	}
@@ -174,7 +175,7 @@ func (g *MCPGroup) deleteDatabase(ctx context.Context, a *auth.AuthInfo, args to
 	return map[string]any{"deleted": args.str("name"), "kind": args.str("kind"), "disk_deleted": true}, nil
 }
 
-func (g *MCPGroup) listVolumes(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+func (g *Group) listVolumes(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
 	volumes, err := g.backendRepo.ListVolumesWithRelated(ctx, a.Workspace.Id)
 	if err != nil {
 		return nil, err
@@ -186,7 +187,7 @@ func (g *MCPGroup) listVolumes(ctx context.Context, a *auth.AuthInfo, _ toolArgs
 	return out, nil
 }
 
-func (g *MCPGroup) createVolume(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) createVolume(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	v, err := g.backendRepo.GetOrCreateVolume(ctx, a.Workspace.Id, args.str("name"))
 	if err != nil {
 		return nil, err

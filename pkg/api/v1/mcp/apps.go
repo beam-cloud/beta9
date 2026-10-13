@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"cmp"
@@ -12,13 +12,14 @@ import (
 	"slices"
 	"strings"
 
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"k8s.io/utils/ptr"
 )
 
-func (g *MCPGroup) listApps(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) listApps(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	page, err := g.backendRepo.ListAppsPaginated(ctx, a.Workspace.Id, types.AppFilter{Name: args.str("name"), Cursor: args.str("cursor"), Limit: uint32(args.num("limit", 50))})
 	if err != nil {
 		return nil, err
@@ -38,7 +39,7 @@ func (g *MCPGroup) listApps(ctx context.Context, a *auth.AuthInfo, args toolArgs
 	return map[string]any{"items": out, "next_cursor": page.Next}, nil
 }
 
-func (g *MCPGroup) getApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) getApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -73,13 +74,13 @@ func appConfigView(stubType types.StubType, cfg *types.StubConfigV1) map[string]
 	return view
 }
 
-func (g *MCPGroup) deleteApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) deleteApp(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	app, err := g.appByName(ctx, a.Workspace, args.str("name"))
 	if err != nil {
 		return nil, err
 	}
 	// The REST handler stops deployments and containers before removing the record.
-	res, err := g.serve(ctx, http.MethodDelete, g.config.GatewayService.HTTP.GetExternalURL()+HttpServerBaseRoute+"/app/"+a.Workspace.ExternalId+"/"+app.ExternalId, nil, nil)
+	res, err := g.serve(ctx, http.MethodDelete, g.config.GatewayService.HTTP.GetExternalURL()+apiv1.HttpServerBaseRoute+"/app/"+a.Workspace.ExternalId+"/"+app.ExternalId, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func (g *MCPGroup) deleteApp(ctx context.Context, a *auth.AuthInfo, args toolArg
 	return map[string]any{"deleted": app.Name, "app_id": app.ExternalId}, nil
 }
 
-func (g *MCPGroup) listDeployments(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) listDeployments(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	filter := types.DeploymentFilter{
 		Name:       args.str("name"),
 		BaseFilter: types.BaseFilter{Limit: uint32(args.num("limit", 50)), Offset: int(args.num("offset", 0))},
@@ -110,7 +111,7 @@ func (g *MCPGroup) listDeployments(ctx context.Context, a *auth.AuthInfo, args t
 	return out, nil
 }
 
-func (g *MCPGroup) deployment(ctx context.Context, a *auth.AuthInfo, id string) (*types.DeploymentWithRelated, error) {
+func (g *Group) deployment(ctx context.Context, a *auth.AuthInfo, id string) (*types.DeploymentWithRelated, error) {
 	d, err := g.backendRepo.GetDeploymentByExternalId(ctx, a.Workspace.Id, id)
 	if err != nil || d == nil {
 		return nil, fail("NOT_FOUND", "no deployment %s", id)
@@ -120,7 +121,7 @@ func (g *MCPGroup) deployment(ctx context.Context, a *auth.AuthInfo, id string) 
 
 // target is the deployment a tool acts on: a specific deployment_id, or the
 // newest active version of the app called name.
-func (g *MCPGroup) target(ctx context.Context, a *auth.AuthInfo, args toolArgs) (*types.DeploymentWithRelated, error) {
+func (g *Group) target(ctx context.Context, a *auth.AuthInfo, args toolArgs) (*types.DeploymentWithRelated, error) {
 	if id := args.str("deployment_id"); id != "" {
 		return g.deployment(ctx, a, id)
 	}
@@ -146,7 +147,7 @@ func (g *MCPGroup) target(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	return nil, fail("INVALID_ARGS", "name or deployment_id is required")
 }
 
-func (g *MCPGroup) getDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) getDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -154,7 +155,7 @@ func (g *MCPGroup) getDeployment(ctx context.Context, a *auth.AuthInfo, args too
 	return g.getApp(ctx, a, toolArgs{"deployment_id": d.ExternalId})
 }
 
-func (g *MCPGroup) redeploy(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) redeploy(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -168,7 +169,7 @@ func (g *MCPGroup) redeploy(ctx context.Context, a *auth.AuthInfo, args toolArgs
 	return deployed(res, err, d.Name)
 }
 
-func (g *MCPGroup) stopDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) stopDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -177,7 +178,7 @@ func (g *MCPGroup) stopDeployment(ctx context.Context, a *auth.AuthInfo, args to
 	return okOrErr(res.GetOk(), res.GetErrMsg(), err, map[string]any{"deployment_id": d.ExternalId, "name": d.Name, "active": false})
 }
 
-func (g *MCPGroup) startDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) startDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -186,7 +187,7 @@ func (g *MCPGroup) startDeployment(ctx context.Context, a *auth.AuthInfo, args t
 	return okOrErr(res.GetOk(), res.GetErrMsg(), err, map[string]any{"deployment_id": d.ExternalId, "name": d.Name, "active": true})
 }
 
-func (g *MCPGroup) deleteDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) deleteDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -195,7 +196,7 @@ func (g *MCPGroup) deleteDeployment(ctx context.Context, a *auth.AuthInfo, args 
 	return okOrErr(res.GetOk(), res.GetErrMsg(), err, map[string]any{"deleted": d.ExternalId, "name": d.Name})
 }
 
-func (g *MCPGroup) scaleDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) scaleDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -221,14 +222,14 @@ func deployed(res *pb.DeployStubResponse, err error, name string) (any, error) {
 	return okOrErr(res.GetOk(), res.GetErrMsg(), err, map[string]any{"deployment_id": res.GetDeploymentId(), "version": res.GetVersion(), "name": name})
 }
 
-func (g *MCPGroup) updateConfig(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) updateConfig(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	fields, _ := args["fields"].(map[string]any)
 	if len(fields) == 0 {
 		return nil, fail("INVALID_ARGS", "fields is required")
 	}
 	res, err := g.gws.RedeployWithConfig(ctx, a, args.str("name"), func(config *types.StubConfigV1) error {
 		for path, value := range fields {
-			if err := setConfigField(config, path, value); err != nil {
+			if err := apiv1.SetConfigField(config, path, value); err != nil {
 				return fail("INVALID_ARGS", "%s", err)
 			}
 		}
@@ -237,7 +238,7 @@ func (g *MCPGroup) updateConfig(ctx context.Context, a *auth.AuthInfo, args tool
 	return deployed(res, err, args.str("name"))
 }
 
-func (g *MCPGroup) setEnv(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) setEnv(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	set, unset := args.stringMap("env"), args.strings("unset")
 	if len(set) == 0 && len(unset) == 0 {
 		return nil, fail("INVALID_ARGS", "env or unset is required")
@@ -283,7 +284,7 @@ func connectionReferences(source, kind, envName string) map[string]string {
 	return out
 }
 
-func (g *MCPGroup) connectServices(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) connectServices(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	source, target := args.str("source"), args.str("target")
 	src, err := g.gws.ActiveDeploymentByName(ctx, a.Workspace, source)
 	if err != nil {
@@ -331,7 +332,7 @@ func (g *MCPGroup) connectServices(ctx context.Context, a *auth.AuthInfo, args t
 	return out, nil
 }
 
-func (g *MCPGroup) serviceCredential(ctx context.Context, a *auth.AuthInfo, appID, consumerName string, rotate bool) (string, error) {
+func (g *Group) serviceCredential(ctx context.Context, a *auth.AuthInfo, appID, consumerName string, rotate bool) (string, error) {
 	consumer, err := g.appByName(ctx, a.Workspace, consumerName)
 	if err != nil {
 		return "", err

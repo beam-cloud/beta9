@@ -1,6 +1,6 @@
-package apiv1
+package mcp
 
-func (g *MCPGroup) catalog() []mcpTool {
+func (g *Group) catalog() []mcpTool {
 	target := schema(props{"name": str("App name: its newest active version"), "deployment_id": str("A specific version instead")})
 	targetConfirm := schema(props{
 		"name":          str("App name: its newest active version"),

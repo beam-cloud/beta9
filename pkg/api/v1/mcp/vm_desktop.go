@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 
 type mcpPayload map[string]any
 
-func (g *MCPGroup) vmDesktop(ctx context.Context, a *auth.AuthInfo, args toolArgs, command []string, wait bool) (any, error) {
+func (g *Group) vmDesktop(ctx context.Context, a *auth.AuthInfo, args toolArgs, command []string, wait bool) (any, error) {
 	info, err := g.vmGet(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -27,7 +27,7 @@ func (g *MCPGroup) vmDesktop(ctx context.Context, a *auth.AuthInfo, args toolArg
 	return g.vmExecCommand(ctx, a, args, command, wait)
 }
 
-func (g *MCPGroup) vmDesktopCatalog() []mcpTool {
+func (g *Group) vmDesktopCatalog() []mcpTool {
 	with := func(extra props, required ...string) map[string]any {
 		p := props{"name": str("VM name or ID")}
 		for k, v := range extra {
@@ -126,7 +126,7 @@ func (g *MCPGroup) vmDesktopCatalog() []mcpTool {
 	return tools
 }
 
-func (g *MCPGroup) vmScreenshot(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmScreenshot(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	path := "/run/beam-desktop/mcp-" + uuid.NewString() + ".png"
 	if _, err := g.vmDesktop(ctx, a, args, []string{"scrot", "--overwrite", path}, true); err != nil {
 		return nil, err
@@ -163,15 +163,15 @@ func (g *MCPGroup) vmScreenshot(ctx context.Context, a *auth.AuthInfo, args tool
 	}, nil
 }
 
-func (g *MCPGroup) vmDesktopSize(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopSize(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmDesktop(ctx, a, args, []string{"xdotool", "getdisplaygeometry"}, true)
 }
 
-func (g *MCPGroup) vmDesktopMoveMouse(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopMoveMouse(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmDesktop(ctx, a, args, []string{"xdotool", "mousemove", strconv.Itoa(int(args.num("x", 0))), strconv.Itoa(int(args.num("y", 0)))}, true)
 }
 
-func (g *MCPGroup) vmDesktopClick(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopClick(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	command := []string{"xdotool"}
 	_, hasX := args["x"]
 	_, hasY := args["y"]
@@ -186,12 +186,12 @@ func (g *MCPGroup) vmDesktopClick(ctx context.Context, a *auth.AuthInfo, args to
 	return g.vmDesktop(ctx, a, args, command, true)
 }
 
-func (g *MCPGroup) vmDesktopScroll(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopScroll(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	button := map[string]string{"": "5", "up": "4", "down": "5", "left": "6", "right": "7"}[args.str("direction")]
 	return g.vmDesktop(ctx, a, args, []string{"xdotool", "click", "--repeat", strconv.Itoa(int(args.num("amount", 3))), button}, true)
 }
 
-func (g *MCPGroup) vmDesktopPress(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopPress(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	keys := args.strings("keys")
 	for _, key := range keys {
 		if key == "" || strings.HasPrefix(key, "-") {
@@ -201,13 +201,13 @@ func (g *MCPGroup) vmDesktopPress(ctx context.Context, a *auth.AuthInfo, args to
 	return g.vmDesktop(ctx, a, args, append([]string{"xdotool", "key", "--clearmodifiers"}, keys...), true)
 }
 
-func (g *MCPGroup) vmDesktopWrite(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopWrite(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(args.rawString("text")))
 	script := "printf %s " + shellWord(encoded) + " | base64 -d | xclip -selection clipboard -in && xdotool key --clearmodifiers ctrl+v"
 	return g.vmDesktop(ctx, a, args, []string{"bash", "-lc", script}, true)
 }
 
-func (g *MCPGroup) vmDesktopDrag(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopDrag(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	command := []string{
 		"xdotool",
 		"mousemove",
@@ -224,18 +224,18 @@ func (g *MCPGroup) vmDesktopDrag(ctx context.Context, a *auth.AuthInfo, args too
 	return g.vmDesktop(ctx, a, args, command, true)
 }
 
-func (g *MCPGroup) vmDesktopLaunch(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopLaunch(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmDesktop(ctx, a, args, args.strings("command"), false)
 }
 
-func (g *MCPGroup) vmDesktopResize(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopResize(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	w, h := int(args.num("width", 1280)), int(args.num("height", 720))
 	mode := fmt.Sprintf("%dx%d", w, h)
 	script := fmt.Sprintf("if ! xrandr --query | awk '$1 == %s {found=1} END {exit !found}'; then xrandr --newmode %s %g %d 0 0 %d %d 0 0 %d && xrandr --addmode VNC-0 %s; fi; xrandr --output VNC-0 --mode %s", strconv.Quote(mode), shellWord(mode), float64(w*h*60)/1000000, w, w, h, h, shellWord(mode), shellWord(mode))
 	return g.vmDesktop(ctx, a, args, []string{"bash", "-lc", script}, true)
 }
 
-func (g *MCPGroup) vmDesktopRecord(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopRecord(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	if !strings.HasPrefix(args.str("path"), "/") {
 		return nil, fail("INVALID_ARGS", "recording path must be absolute")
 	}
@@ -266,7 +266,7 @@ func (g *MCPGroup) vmDesktopRecord(ctx context.Context, a *auth.AuthInfo, args t
 	return g.vmDesktop(ctx, a, args, command, false)
 }
 
-func (g *MCPGroup) vmDesktopStopRecording(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmDesktopStopRecording(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	info, err := g.vmGet(ctx, a, args)
 	if err != nil {
 		return nil, err

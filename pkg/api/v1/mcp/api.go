@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
@@ -72,7 +73,7 @@ func (w *boundedResponse) Write(p []byte) (int, error) {
 }
 
 // serve dispatches through the gateway router with the caller's authorization.
-func (g *MCPGroup) serve(ctx context.Context, method, url string, body []byte, headers map[string]string) (any, error) {
+func (g *Group) serve(ctx context.Context, method, url string, body []byte, headers map[string]string) (any, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -167,7 +168,7 @@ func requestBody(args toolArgs) ([]byte, error) {
 	return jsonBody(args), nil
 }
 
-func (g *MCPGroup) api(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) api(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	method := strings.ToUpper(args.str("method"))
 	if method == "" {
 		method = http.MethodGet
@@ -204,13 +205,13 @@ func jsonBody(args toolArgs) []byte {
 	return body
 }
 
-func (g *MCPGroup) apiRoutes(_ context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) apiRoutes(_ context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
 	routes := g.router.Routes()
 	out := make([]string, 0, len(routes))
 	seen := map[string]bool{}
 	filter := args.str("path")
 	for _, r := range routes {
-		if !strings.HasPrefix(r.Path, HttpServerBaseRoute+"/") || strings.HasPrefix(r.Path, HttpServerBaseRoute+"/mcp") || strings.HasSuffix(r.Path, "*") || r.Name == "echo_route_not_found" || strings.Contains(r.Name, "Cluster") {
+		if !strings.HasPrefix(r.Path, apiv1.HttpServerBaseRoute+"/") || strings.HasPrefix(r.Path, apiv1.HttpServerBaseRoute+"/mcp") || strings.HasSuffix(r.Path, "*") || r.Name == "echo_route_not_found" || strings.Contains(r.Name, "Cluster") {
 			continue
 		}
 		path := strings.ReplaceAll(r.Path, ":workspaceId", "{ws}")
@@ -227,11 +228,11 @@ func (g *MCPGroup) apiRoutes(_ context.Context, _ *auth.AuthInfo, args toolArgs)
 	return map[string]any{
 		"routes":             out,
 		"gateway_operations": gatewayOperations(args.str("path")),
-		"notes":              "{ws} is your workspace id. " + HttpServerBaseRoute + "/gateway/* proxies the gRPC services (pods, images, volumes, disks); gateway_operations contains live protobuf-derived input/output schemas; filter by path for detail. Substitute path parameters and put remaining GET arguments in the query string. JSON bodies use the shown field names; bytes use base64. Server streams return the gateway streaming representation.",
+		"notes":              "{ws} is your workspace id. " + apiv1.HttpServerBaseRoute + "/gateway/* proxies the gRPC services (pods, images, volumes, disks); gateway_operations contains live protobuf-derived input/output schemas; filter by path for detail. Substitute path parameters and put remaining GET arguments in the query string. JSON bodies use the shown field names; bytes use base64. Server streams return the gateway streaming representation.",
 	}, nil
 }
 
-func (g *MCPGroup) invoke(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) invoke(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err

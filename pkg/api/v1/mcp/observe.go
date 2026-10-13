@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"cmp"
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -19,7 +20,7 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-func (g *MCPGroup) logs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) logs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	stream := args.str("stream")
 	if stream != "" && !slices.Contains(logStreams, stream) {
 		return nil, fail("INVALID_ARGS", "stream must be one of %s", strings.Join(logStreams, ", "))
@@ -94,7 +95,7 @@ func (g *MCPGroup) logs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (a
 	return map[string]any{"items": out, "complete": complete, "scanned": len(res.Logs), "scan_limit": query.Limit}, nil
 }
 
-func (g *MCPGroup) listTasks(ctx context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) listTasks(ctx context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
 	filters := map[string]*pb.StringList{}
 	if v := args.str("stub_id"); v != "" {
 		filters["stub-id"] = &pb.StringList{Values: []string{v}}
@@ -113,7 +114,7 @@ func (g *MCPGroup) listTasks(ctx context.Context, _ *auth.AuthInfo, args toolArg
 	return out, nil
 }
 
-func (g *MCPGroup) getTask(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) getTask(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	deadline := time.Now().Add(time.Duration(args.num("wait_seconds", 0)) * time.Second)
 	for {
 		task, err := g.backendRepo.GetTaskWithRelated(ctx, args.str("task_id"))
@@ -141,13 +142,13 @@ func (g *MCPGroup) getTask(ctx context.Context, a *auth.AuthInfo, args toolArgs)
 	}
 }
 
-func (g *MCPGroup) stopTask(ctx context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) stopTask(ctx context.Context, _ *auth.AuthInfo, args toolArgs) (any, error) {
 	res, err := g.gws.StopTasks(ctx, &pb.StopTasksRequest{TaskIds: []string{args.str("task_id")}})
 	return okOrErr(res.GetOk(), res.GetErrMsg(), err, map[string]any{"task_id": args.str("task_id"), "stopped": true})
 }
 
 // stubID is the stub a metrics tool reads: given directly, or the target deployment's.
-func (g *MCPGroup) stubID(ctx context.Context, a *auth.AuthInfo, args toolArgs) (string, error) {
+func (g *Group) stubID(ctx context.Context, a *auth.AuthInfo, args toolArgs) (string, error) {
 	if id := args.str("stub_id"); id != "" {
 		return id, nil
 	}
@@ -158,7 +159,7 @@ func (g *MCPGroup) stubID(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	return d.Stub.ExternalId, nil
 }
 
-func (g *MCPGroup) metrics(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) metrics(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	stubID, err := g.stubID(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -218,7 +219,7 @@ func (g *MCPGroup) metrics(ctx context.Context, a *auth.AuthInfo, args toolArgs)
 	return out, nil
 }
 
-func (g *MCPGroup) requestStats(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) requestStats(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	stubID, err := g.stubID(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -300,20 +301,20 @@ func (g *MCPGroup) requestStats(ctx context.Context, a *auth.AuthInfo, args tool
 	}, nil
 }
 
-func (g *MCPGroup) listWebhooks(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+func (g *Group) listWebhooks(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
 	webhooks, err := g.workspaceRepo.ListWebhooks(ctx, a.Workspace.ExternalId)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]types.WorkspaceWebhook, 0, len(webhooks))
 	for _, w := range webhooks {
-		out = append(out, redact(w))
+		out = append(out, apiv1.RedactWebhook(w))
 	}
 	return out, nil
 }
 
-func (g *MCPGroup) createWebhook(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	if err := validateWebhookURL(args.str("url")); err != nil {
+func (g *Group) createWebhook(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+	if err := apiv1.ValidateWebhookURL(args.str("url")); err != nil {
 		return nil, fail("INVALID_ARGS", "url must be an absolute http(s) URL")
 	}
 	id, err := common.GenerateObjectId()
@@ -343,7 +344,7 @@ func (g *MCPGroup) createWebhook(ctx context.Context, a *auth.AuthInfo, args too
 	return webhook, nil
 }
 
-func (g *MCPGroup) waitDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) waitDeployment(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	d, err := g.target(ctx, a, args)
 	if err != nil {
 		return nil, err

@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -22,7 +22,7 @@ func mcpIdentity() *auth.AuthInfo {
 }
 
 func TestMCPCompleteContracts(t *testing.T) {
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	g.prepareTools()
 	for _, tool := range g.tools {
 		require.NotEmpty(t, tool.Scope, tool.Name)
@@ -58,7 +58,7 @@ func (r *mcpSecretRecorder) CreateSecret(context.Context, *types.Workspace, uint
 }
 
 func TestMCPRestrictedCredentialCannotWriteSecrets(t *testing.T) {
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	recorder := &mcpSecretRecorder{}
 	g.backendRepo = recorder
 	identity := mcpIdentity()
@@ -75,7 +75,7 @@ func TestMCPRestrictedCredentialCannotWriteSecrets(t *testing.T) {
 }
 
 func TestMCPOAuthScopeAndFilterCannotBeBypassed(t *testing.T) {
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	a := mcpIdentity()
 	a.OAuth = &auth.OAuthGrant{Scopes: []string{"beam:read"}}
 	for _, name := range []string{"create_vm", "vm_exec", "vm_access_token", "api", "create_secret"} {
@@ -94,7 +94,7 @@ func TestMCPOAuthScopeAndFilterCannotBeBypassed(t *testing.T) {
 }
 
 func TestMCPProtocolRejectsInvalidEnvelopes(t *testing.T) {
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	for _, body := range []string{`{"jsonrpc":"1.0","id":1,"method":"ping"}`, `[]`, `{"jsonrpc":"2.0","id":true,"method":"ping"}`, `{"jsonrpc":"2.0","id":1,"method":"ping"} {"trailing":true}`} {
 		r := httptest.NewRecorder()
 		c := &auth.HttpAuthContext{Context: g.router.NewContext(httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(body)), r), AuthInfo: mcpIdentity()}
@@ -139,7 +139,7 @@ func TestMCPOAuthDiscoveryAndIntrospection(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"active": active, "iss": "https://api.test/v2/oauth", "resource": "https://app.test/api/v1/mcp", "client_id": "test", "sub": "1", "workspace_id": "ws", "workspace_token": "private-test-key", "scope": "beam:read"})
 	}))
 	defer server.Close()
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	g.backendRepo = &mcpBackendAuth{}
 	g.workspaceRepo = &mcpWorkspaceAuth{identity: mcpIdentity()}
 	g.config.GatewayService.MCPOAuth = types.MCPOAuthConfig{Issuer: "https://api.test/v2/oauth", Resource: "https://app.test/api/v1/mcp", IntrospectionURL: server.URL, IntrospectionSecret: "introspection-test-secret"}
@@ -169,7 +169,7 @@ func TestMCPOAuthDiscoveryAndIntrospection(t *testing.T) {
 }
 
 func TestMCPVMExecPinsWorkspaceAndArgv(t *testing.T) {
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	g.router.GET("/api/v1/vm/ws/:name", func(c echo.Context) error {
 		return c.JSON(200, map[string]any{"id": "vm-id", "container_id": "owned-container", "desired_state": "running"})
 	})
@@ -191,7 +191,7 @@ func TestMCPVMExecPinsWorkspaceAndArgv(t *testing.T) {
 }
 
 func TestMCPVMWaitPreservesNonzeroExitAndOutput(t *testing.T) {
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	g.router.GET("/api/v1/vm/ws/:name", func(c echo.Context) error {
 		return c.JSON(200, map[string]any{"id": "vm", "container_id": "container", "desired_state": "running"})
 	})

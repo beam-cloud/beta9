@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -20,10 +21,9 @@ import (
 // Default protocol for clients that omit a version.
 const mcpProtocolVersion = "2025-11-25"
 
-// MCPGateway is what the tools need from the assembled gateway service.
-type MCPGateway interface {
-	DatabaseManager
-	ListDeployments(ctx context.Context, in *pb.ListDeploymentsRequest) (*pb.ListDeploymentsResponse, error)
+// Gateway provides the service operations used by MCP tools.
+type Gateway interface {
+	apiv1.DatabaseManager
 	StopDeployment(ctx context.Context, in *pb.StopDeploymentRequest) (*pb.StopDeploymentResponse, error)
 	StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error)
 	DeleteDeployment(ctx context.Context, in *pb.DeleteDeploymentRequest) (*pb.DeleteDeploymentResponse, error)
@@ -40,9 +40,9 @@ type MCPGateway interface {
 	WorkspaceCredit(ctx context.Context, workspace *types.Workspace) *types.CreditStatus
 }
 
-type MCPGroup struct {
+type Group struct {
 	router        *echo.Echo
-	gws           MCPGateway
+	gws           Gateway
 	backendRepo   repository.BackendRepository
 	workspaceRepo repository.WorkspaceRepository
 	eventRepo     repository.EventRepository
@@ -51,8 +51,8 @@ type MCPGroup struct {
 	byName        map[string]*mcpTool
 }
 
-func NewMCPGroup(g *echo.Group, router *echo.Echo, gws MCPGateway, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, eventRepo repository.EventRepository, config types.AppConfig) *MCPGroup {
-	group := &MCPGroup{
+func NewGroup(g *echo.Group, router *echo.Echo, gws Gateway, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, eventRepo repository.EventRepository, config types.AppConfig) *Group {
+	group := &Group{
 		router:        router,
 		gws:           gws,
 		backendRepo:   backendRepo,
@@ -91,11 +91,11 @@ type rpcResponse struct {
 }
 
 // Get: no server-initiated stream; clients fall back to plain request/response.
-func (g *MCPGroup) Get(ctx echo.Context) error {
+func (g *Group) Get(ctx echo.Context) error {
 	return ctx.NoContent(http.StatusMethodNotAllowed)
 }
 
-func (g *MCPGroup) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rpcRequest) rpcResponse {
+func (g *Group) dispatch(ctx context.Context, authInfo *auth.AuthInfo, req rpcRequest) rpcResponse {
 	resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	switch req.Method {
 	case "server/discover":
@@ -242,7 +242,7 @@ func (t mcpTool) describe() map[string]any {
 	}
 }
 
-func (g *MCPGroup) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpTool, args map[string]any) map[string]any {
+func (g *Group) call(ctx context.Context, authInfo *auth.AuthInfo, tool *mcpTool, args map[string]any) map[string]any {
 	if args == nil {
 		args = map[string]any{}
 	}

@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -14,8 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestMCPGroup() *MCPGroup {
-	g := &MCPGroup{router: echo.New()}
+func newTestGroup() *Group {
+	g := &Group{router: echo.New()}
 	g.config.GatewayService.HTTP.ExternalHost = "gateway.test"
 	g.tools = g.catalog()
 	g.byName = make(map[string]*mcpTool, len(g.tools))
@@ -26,7 +27,7 @@ func newTestMCPGroup() *MCPGroup {
 }
 
 func TestMCPCatalogSchemas(t *testing.T) {
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	seen := map[string]bool{}
 	for _, tool := range g.tools {
 		require.False(t, seen[tool.Name], tool.Name)
@@ -43,7 +44,7 @@ func TestMCPCatalogSchemas(t *testing.T) {
 }
 
 func TestMCPCallGates(t *testing.T) {
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	ctx := context.Background()
 	identity := &auth.AuthInfo{Workspace: &types.Workspace{}, Token: &types.Token{TokenType: types.TokenTypeWorkspace}}
 
@@ -155,7 +156,7 @@ func TestMCPPortURLs(t *testing.T) {
 }
 
 type creditGateway struct {
-	MCPGateway
+	Gateway
 	status *types.CreditStatus
 }
 
@@ -168,7 +169,7 @@ func TestMCPSurfacesCredit(t *testing.T) {
 	a := &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-1", Name: "36dc7a"}}
 	denied := &types.CreditStatus{Code: "insufficient_credits", Message: "add credits at https://example/credits"}
 
-	g := newTestMCPGroup()
+	g := newTestGroup()
 	g.gws = creditGateway{status: denied}
 	out, err := g.whoami(ctx, a, nil)
 	require.NoError(t, err)
@@ -191,11 +192,11 @@ func TestMCPSurfacesCredit(t *testing.T) {
 // api runs through the gateway router with the caller's identity; anything the
 // router serves is reachable without a dedicated tool.
 func TestMCPApiInProcess(t *testing.T) {
-	g := newTestMCPGroup()
-	g.router.GET(HttpServerBaseRoute+"/thing/:workspaceId", func(c echo.Context) error {
+	g := newTestGroup()
+	g.router.GET(apiv1.HttpServerBaseRoute+"/thing/:workspaceId", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"ws": c.Param("workspaceId"), "auth": c.Request().Header.Get("Authorization")})
 	})
-	g.router.POST(HttpServerBaseRoute+"/thing/:workspaceId", func(c echo.Context) error { return c.NoContent(http.StatusCreated) })
+	g.router.POST(apiv1.HttpServerBaseRoute+"/thing/:workspaceId", func(c echo.Context) error { return c.NoContent(http.StatusCreated) })
 
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer tok")

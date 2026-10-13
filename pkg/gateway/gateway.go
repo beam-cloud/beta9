@@ -40,6 +40,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	volume "github.com/beam-cloud/beta9/pkg/abstractions/volume"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
+	"github.com/beam-cloud/beta9/pkg/api/v1/mcp"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	gatewaymiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
@@ -719,7 +720,7 @@ func (g *Gateway) registerServices() error {
 	}); err != nil {
 		return err
 	}
-	apiv1.NewMCPGroup(g.baseRouteGroup.Group("/mcp"), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
+	mcp.NewGroup(g.baseRouteGroup.Group("/mcp"), g.echo, gws, g.BackendRepo, g.WorkspaceRepo, g.EventRepo, g.Config)
 
 	g.registerHealthService()
 

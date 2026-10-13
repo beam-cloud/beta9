@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -35,7 +35,7 @@ func compileToolSchema(schema map[string]any) (func(any) error, error) {
 	return resolved.Validate, nil
 }
 
-func (g *MCPGroup) prepareTools() {
+func (g *Group) prepareTools() {
 	g.byName = make(map[string]*mcpTool, len(g.tools))
 	for i := range g.tools {
 		tool := &g.tools[i]
@@ -100,7 +100,7 @@ func withToolPolicies(tools []mcpTool) []mcpTool {
 	return tools
 }
 
-func (g *MCPGroup) allowed(info *auth.AuthInfo, t *mcpTool) bool {
+func (g *Group) allowed(info *auth.AuthInfo, t *mcpTool) bool {
 	if t.Scope == "" {
 		return true
 	}
@@ -117,7 +117,7 @@ func (g *MCPGroup) allowed(info *auth.AuthInfo, t *mcpTool) bool {
 	return t.Scope != "beam:admin" && slices.Contains(info.OAuth.Scopes, t.Scope)
 }
 
-func (g *MCPGroup) selected(ctx context.Context, tool *mcpTool) bool {
+func (g *Group) selected(ctx context.Context, tool *mcpTool) bool {
 	selection, _ := ctx.Value(mcpSelectionKey{}).(mcpSelection)
 	if selection.ReadOnly && !tool.ReadOnly {
 		return false
@@ -128,7 +128,7 @@ func (g *MCPGroup) selected(ctx context.Context, tool *mcpTool) bool {
 	return slices.Contains(selection.Features, tool.Category) || slices.Contains(selection.Tools, tool.Name)
 }
 
-func (g *MCPGroup) instructions() string {
+func (g *Group) instructions() string {
 	return "Beam CPU/GPU apps, managed databases, stacks and persistent CPU VMs in one workspace. " +
 		"Start with whoami and capabilities. Use list_apps or list_vms to inspect existing resources. " +
 		"Deploy local files through the Beam CLI or local MCP bridge; remote MCP cannot read a laptop directory. " +

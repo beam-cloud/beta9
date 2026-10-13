@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -20,19 +20,19 @@ var mcpOAuthClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-func (g *MCPGroup) oauthResource() string {
+func (g *Group) oauthResource() string {
 	if value := g.config.GatewayService.MCPOAuth.Resource; value != "" {
 		return value
 	}
 	return strings.TrimRight(g.config.GatewayService.HTTP.GetExternalURL(), "/") + "/api/v1/mcp"
 }
 
-func (g *MCPGroup) oauthEnabled() bool {
+func (g *Group) oauthEnabled() bool {
 	o := g.config.GatewayService.MCPOAuth
 	return o.Issuer != "" && o.IntrospectionURL != "" && o.IntrospectionSecret != ""
 }
 
-func (g *MCPGroup) oauthMetadata(c echo.Context) error {
+func (g *Group) oauthMetadata(c echo.Context) error {
 	if !g.oauthEnabled() {
 		return echo.NewHTTPError(http.StatusNotFound, "OAuth is not configured")
 	}
@@ -45,7 +45,7 @@ func (g *MCPGroup) oauthMetadata(c echo.Context) error {
 	})
 }
 
-func (g *MCPGroup) oauthChallenge(c echo.Context, rejected bool) error {
+func (g *Group) oauthChallenge(c echo.Context, rejected bool) error {
 	challenge := "Bearer"
 	if rejected {
 		challenge += ` error="invalid_token"`
@@ -74,7 +74,7 @@ type mcpOAuthToken struct {
 	Scope          string `json:"scope"`
 }
 
-func (g *MCPGroup) introspectOAuth(ctx context.Context, token string) (*mcpOAuthToken, error) {
+func (g *Group) introspectOAuth(ctx context.Context, token string) (*mcpOAuthToken, error) {
 	config := g.config.GatewayService.MCPOAuth
 	body := url.Values{"token": {token}, "resource": {g.oauthResource()}}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.IntrospectionURL, strings.NewReader(body.Encode()))
@@ -100,7 +100,7 @@ func (g *MCPGroup) introspectOAuth(ctx context.Context, token string) (*mcpOAuth
 	return &result, nil
 }
 
-func (g *MCPGroup) authorize(next echo.HandlerFunc) echo.HandlerFunc {
+func (g *Group) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 	standard := auth.AuthMiddleware(g.backendRepo, g.workspaceRepo)
 	return func(c echo.Context) error {
 		header := c.Request().Header.Get("Authorization")

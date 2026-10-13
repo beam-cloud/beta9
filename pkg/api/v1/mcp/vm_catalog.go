@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -71,14 +71,14 @@ func vmSchema(extra props, required ...string) map[string]any {
 	return schema(properties, append([]string{"name"}, required...)...)
 }
 
-func (g *MCPGroup) vmCatalog() []mcpTool {
+func (g *Group) vmCatalog() []mcpTool {
 	tools := g.vmLifecycleCatalog()
 	tools = append(tools, g.vmProcessCatalog()...)
 	tools = append(tools, g.vmFileCatalog()...)
 	return append(tools, g.vmDesktopCatalog()...)
 }
 
-func (g *MCPGroup) vmLifecycleCatalog() []mcpTool {
+func (g *Group) vmLifecycleCatalog() []mcpTool {
 	get := func(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) { return g.vmGet(ctx, a, args) }
 	tools := []mcpTool{
 		vmTool(
@@ -241,7 +241,7 @@ func (g *MCPGroup) vmLifecycleCatalog() []mcpTool {
 	return tools
 }
 
-func (g *MCPGroup) vmProcessCatalog() []mcpTool {
+func (g *Group) vmProcessCatalog() []mcpTool {
 	var tools []mcpTool
 	process := props{
 		"pid":          boundedInt(1, 2147483647, 1),
@@ -340,7 +340,7 @@ func (g *MCPGroup) vmProcessCatalog() []mcpTool {
 	return tools
 }
 
-func (g *MCPGroup) vmFileCatalog() []mcpTool {
+func (g *Group) vmFileCatalog() []mcpTool {
 	var tools []mcpTool
 	for _, op := range []struct {
 		name, path, method, description string

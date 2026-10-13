@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -19,7 +19,7 @@ type stackSpec struct {
 }
 
 // appNames maps app ids to names and back, once per call.
-func (g *MCPGroup) appNames(ctx context.Context, ws *types.Workspace) (byID, byName map[string]string, err error) {
+func (g *Group) appNames(ctx context.Context, ws *types.Workspace) (byID, byName map[string]string, err error) {
 	byID, byName = map[string]string{}, map[string]string{}
 	cursor := ""
 	for {
@@ -57,7 +57,7 @@ func stackView(s *types.Stack, byID map[string]string) map[string]any {
 	}
 }
 
-func (g *MCPGroup) stack(ctx context.Context, ws *types.Workspace, name string) (*types.Stack, error) {
+func (g *Group) stack(ctx context.Context, ws *types.Workspace, name string) (*types.Stack, error) {
 	stacks, err := g.backendRepo.ListStacks(ctx, ws.Id)
 	if err != nil {
 		return nil, err
@@ -70,7 +70,7 @@ func (g *MCPGroup) stack(ctx context.Context, ws *types.Workspace, name string) 
 	return nil, fail("NOT_FOUND", "no stack named %q", name)
 }
 
-func (g *MCPGroup) listStacks(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+func (g *Group) listStacks(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
 	stacks, err := g.backendRepo.ListStacks(ctx, a.Workspace.Id)
 	if err != nil {
 		return nil, err
@@ -98,7 +98,7 @@ func resolveApps(byName map[string]string, names []string) ([]string, error) {
 	return ids, nil
 }
 
-func (g *MCPGroup) createStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) createStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	byID, byName, err := g.appNames(ctx, a.Workspace)
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (g *MCPGroup) createStack(ctx context.Context, a *auth.AuthInfo, args toolA
 	return stackView(s, byID), nil
 }
 
-func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) updateStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	s, err := g.stack(ctx, a.Workspace, args.str("name"))
 	if err != nil {
 		return nil, err
@@ -169,7 +169,7 @@ func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolA
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > stackSpecMaxBytes {
+	if len(raw) > types.StackSpecMaxBytes {
 		return nil, fail("INVALID_ARGS", "stack spec exceeds 256 KiB")
 	}
 	writer, ok := g.backendRepo.(interface {
@@ -188,7 +188,7 @@ func (g *MCPGroup) updateStack(ctx context.Context, a *auth.AuthInfo, args toolA
 	return stackView(updated, byID), nil
 }
 
-func (g *MCPGroup) deleteStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) deleteStack(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	s, err := g.stack(ctx, a.Workspace, args.str("name"))
 	if err != nil {
 		return nil, err

@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -45,13 +45,13 @@ var configView = []string{
 // Pods serve ports without the task-runner settings.
 var podUnusedConfig = []string{"workers", "concurrent_requests", "max_pending_tasks", "task_policy"}
 
-func (g *MCPGroup) deploymentURL(d *types.DeploymentWithRelated) string {
+func (g *Group) deploymentURL(d *types.DeploymentWithRelated) string {
 	url, _ := g.gws.DeploymentURL(d)
 	return url
 }
 
 // exactDeploymentURL never uses the mutable latest alias.
-func (g *MCPGroup) exactDeploymentURL(d *types.DeploymentWithRelated, port int) (string, error) {
+func (g *Group) exactDeploymentURL(d *types.DeploymentWithRelated, port int) (string, error) {
 	cfg, err := d.Stub.UnmarshalConfig()
 	if err != nil {
 		return "", err
@@ -78,7 +78,7 @@ func (g *MCPGroup) exactDeploymentURL(d *types.DeploymentWithRelated, port int) 
 	return common.BuildPodURL(host, urlType, stub, cfg), nil
 }
 
-func (g *MCPGroup) deploymentView(d *types.DeploymentWithRelated) map[string]any {
+func (g *Group) deploymentView(d *types.DeploymentWithRelated) map[string]any {
 	exactURL, _ := g.exactDeploymentURL(d, 0)
 	latestURL := g.deploymentURL(d)
 	view := map[string]any{
@@ -116,7 +116,7 @@ func portURLs(d *types.DeploymentWithRelated, template string) map[string]string
 	return urls
 }
 
-func (g *MCPGroup) deployments(ctx context.Context, ws *types.Workspace, filter types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+func (g *Group) deployments(ctx context.Context, ws *types.Workspace, filter types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
 	filter.WorkspaceID = ws.Id
 	if filter.Limit == 0 {
 		filter.Limit = 1000
@@ -125,7 +125,7 @@ func (g *MCPGroup) deployments(ctx context.Context, ws *types.Workspace, filter 
 }
 
 // latestByApp is the newest active deployment for every app that has one.
-func (g *MCPGroup) latestByApp(ctx context.Context, ws *types.Workspace) (map[string]*types.DeploymentWithRelated, error) {
+func (g *Group) latestByApp(ctx context.Context, ws *types.Workspace) (map[string]*types.DeploymentWithRelated, error) {
 	all, err := g.deployments(ctx, ws, types.DeploymentFilter{Active: ptr.To(true)})
 	if err != nil {
 		return nil, err
@@ -140,7 +140,7 @@ func (g *MCPGroup) latestByApp(ctx context.Context, ws *types.Workspace) (map[st
 	return latest, nil
 }
 
-func (g *MCPGroup) appByName(ctx context.Context, ws *types.Workspace, name string) (*types.App, error) {
+func (g *Group) appByName(ctx context.Context, ws *types.Workspace, name string) (*types.App, error) {
 	cursor := ""
 	for {
 		page, err := g.backendRepo.ListAppsPaginated(ctx, ws.Id, types.AppFilter{Name: name, Limit: 100, Cursor: cursor})
@@ -160,7 +160,7 @@ func (g *MCPGroup) appByName(ctx context.Context, ws *types.Workspace, name stri
 	return nil, fail("NOT_FOUND", "no app named %q", name)
 }
 
-func (g *MCPGroup) whoami(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+func (g *Group) whoami(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
 	out := map[string]any{
 		"workspace_id":   a.Workspace.ExternalId,
 		"workspace_name": a.Workspace.Name,
@@ -172,7 +172,7 @@ func (g *MCPGroup) whoami(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (an
 	return out, nil
 }
 
-func (g *MCPGroup) capabilities(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
+func (g *Group) capabilities(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (any, error) {
 	out := map[string]any{
 		"serverless_default":                      true,
 		"always_on":                               "autoscaler.min_containers=1",

@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -40,7 +40,7 @@ func validRPC(req rpcRequest) bool {
 	}
 }
 
-func (g *MCPGroup) Post(c echo.Context) error {
+func (g *Group) Post(c echo.Context) error {
 	cc, ok := c.(*auth.HttpAuthContext)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized)

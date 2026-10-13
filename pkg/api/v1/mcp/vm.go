@@ -1,4 +1,4 @@
-package apiv1
+package mcp
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func (g *MCPGroup) vmRequest(ctx context.Context, a *auth.AuthInfo, method, suffix string, body any, query url.Values) (any, error) {
+func (g *Group) vmRequest(ctx context.Context, a *auth.AuthInfo, method, suffix string, body any, query url.Values) (any, error) {
 	path := "/api/v1/vm/" + url.PathEscape(a.Workspace.ExternalId) + suffix
 	if len(query) > 0 {
 		path += "?" + query.Encode()
@@ -58,7 +58,7 @@ func mcpAPIValue(response any, err error) (any, error) {
 
 func vmPath(args toolArgs) string { return "/" + url.PathEscape(args.str("name")) }
 
-func (g *MCPGroup) vmGet(ctx context.Context, a *auth.AuthInfo, args toolArgs) (map[string]any, error) {
+func (g *Group) vmGet(ctx context.Context, a *auth.AuthInfo, args toolArgs) (map[string]any, error) {
 	value, err := g.vmRequest(ctx, a, http.MethodGet, vmPath(args), nil, nil)
 	if err != nil {
 		return nil, err
@@ -71,7 +71,7 @@ func (g *MCPGroup) vmGet(ctx context.Context, a *auth.AuthInfo, args toolArgs) (
 }
 
 // vmPod resolves the workspace VM and rejects container IDs from previous boots.
-func (g *MCPGroup) vmPod(ctx context.Context, a *auth.AuthInfo, args toolArgs, method, operation string, body map[string]any, query url.Values) (any, error) {
+func (g *Group) vmPod(ctx context.Context, a *auth.AuthInfo, args toolArgs, method, operation string, body map[string]any, query url.Values) (any, error) {
 	info, err := g.vmGet(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -142,7 +142,7 @@ func shellCommand(argv []string) string {
 	return strings.Join(words, " ")
 }
 
-func (g *MCPGroup) vmExec(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmExec(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	argv := args.strings("command")
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, fail("INVALID_ARGS", "command must contain a program and optional arguments")
@@ -197,7 +197,7 @@ func (g *MCPGroup) vmExec(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	return result, nil
 }
 
-func (g *MCPGroup) vmExecCommand(ctx context.Context, a *auth.AuthInfo, args toolArgs, command []string, wait bool) (any, error) {
+func (g *Group) vmExecCommand(ctx context.Context, a *auth.AuthInfo, args toolArgs, command []string, wait bool) (any, error) {
 	copy := toolArgs{"name": args.str("name"), "cwd": "/workspace", "wait": wait, "command": command}
 	items := make([]any, len(command))
 	for i, arg := range command {
@@ -211,7 +211,7 @@ func (g *MCPGroup) vmExecCommand(ctx context.Context, a *auth.AuthInfo, args too
 	return value, err
 }
 
-func (g *MCPGroup) vmProcessOutput(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmProcessOutput(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	query := url.Values{"pid": {strconv.Itoa(int(args.num("pid", 0)))}}
 	stdout, err := g.vmPod(ctx, a, args, http.MethodGet, "/stdout", nil, query)
 	if err != nil {
@@ -224,7 +224,7 @@ func (g *MCPGroup) vmProcessOutput(ctx context.Context, a *auth.AuthInfo, args t
 	return map[string]any{"stdout": stdout, "stderr": stderr}, nil
 }
 
-func (g *MCPGroup) vmLogs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmLogs(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	command := []string{"journalctl", "--no-pager", "-n", strconv.Itoa(int(args.num("tail", 100)))}
 	if unit := args.str("unit"); unit != "" {
 		command = append(command, "-u", unit)
@@ -243,7 +243,7 @@ func (g *MCPGroup) vmLogs(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	return g.vmExecCommand(ctx, a, args, command, true)
 }
 
-func (g *MCPGroup) vmPrompt(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmPrompt(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	info, err := g.vmGet(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -271,7 +271,7 @@ func (g *MCPGroup) vmPrompt(ctx context.Context, a *auth.AuthInfo, args toolArgs
 	return map[string]any{"vm_id": info["id"], "session": session, "log_path": logPath, "launch": result}, err
 }
 
-func (g *MCPGroup) vmList(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmList(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	query := url.Values{}
 	if args.boolean("all") {
 		query.Set("all", "true")
@@ -286,11 +286,11 @@ func (g *MCPGroup) vmList(ctx context.Context, a *auth.AuthInfo, args toolArgs) 
 	return g.vmRequest(ctx, a, http.MethodGet, "", nil, query)
 }
 
-func (g *MCPGroup) vmCreate(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmCreate(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmRequest(ctx, a, http.MethodPost, "", args, nil)
 }
 
-func (g *MCPGroup) vmUpdate(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmUpdate(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	body := map[string]any{}
 	for k, v := range args {
 		if k != "name" {
@@ -300,7 +300,7 @@ func (g *MCPGroup) vmUpdate(ctx context.Context, a *auth.AuthInfo, args toolArgs
 	return g.vmRequest(ctx, a, http.MethodPatch, vmPath(args), body, nil)
 }
 
-func (g *MCPGroup) vmMetrics(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmMetrics(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	info, err := g.vmGet(ctx, a, args)
 	if err != nil {
 		return nil, err
@@ -308,26 +308,26 @@ func (g *MCPGroup) vmMetrics(ctx context.Context, a *auth.AuthInfo, args toolArg
 	return g.metrics(ctx, a, toolArgs{"stub_id": info["stub_id"], "window_minutes": args.num("window_minutes", 60)})
 }
 
-func (g *MCPGroup) vmProcessStatus(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmProcessStatus(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmPod(ctx, a, args, http.MethodGet, "/status", nil, url.Values{"pid": {strconv.Itoa(int(args.num("pid", 0)))}})
 }
 
-func (g *MCPGroup) vmListProcesses(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmListProcesses(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmPod(ctx, a, args, http.MethodGet, "/processes", nil, nil)
 }
 
-func (g *MCPGroup) vmKillProcess(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmKillProcess(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmPod(ctx, a, args, http.MethodPost, "/kill", map[string]any{"pid": args["pid"]}, nil)
 }
 
-func (g *MCPGroup) vmReadFile(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmReadFile(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmPod(ctx, a, args, http.MethodGet, "/files/download/"+url.PathEscape(args.str("path")), nil, url.Values{
 		"offset": {strconv.Itoa(int(args.num("offset", 0)))},
 		"length": {strconv.Itoa(int(args.num("length", 65536)))},
 	})
 }
 
-func (g *MCPGroup) vmWriteFile(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmWriteFile(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	text, hasText := args["text"].(string)
 	encoded, hasData := args["data_base64"].(string)
 	if hasText == hasData {
@@ -348,11 +348,11 @@ func (g *MCPGroup) vmWriteFile(ctx context.Context, a *auth.AuthInfo, args toolA
 	}, nil)
 }
 
-func (g *MCPGroup) vmFindInFiles(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmFindInFiles(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmPod(ctx, a, args, http.MethodPost, "/files/find", map[string]any{"container_path": args.str("path"), "pattern": args.rawString("pattern")}, nil)
 }
 
-func (g *MCPGroup) vmReplaceInFiles(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+func (g *Group) vmReplaceInFiles(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	return g.vmPod(ctx, a, args, http.MethodPost, "/files/replace", map[string]any{
 		"container_path": args.str("path"),
 		"pattern":        args.rawString("pattern"),
