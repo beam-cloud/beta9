@@ -74,15 +74,15 @@ def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Op
         return
 
     terminal.header(f"Setting up {product} for agents")
-    terminal.success(f"CLI — {cli_path() or cli}")
+    terminal.success(f"CLI: {cli_path() or cli}")
     if skills:
-        terminal.success(f"Agent skill `{skill_name()}` — {', '.join(skills)}")
+        terminal.success(f"Agent skill `{skill_name()}`: {', '.join(skills)}")
     if not skip_mcp:
         if mcp:
-            terminal.success(f"{product} MCP — {', '.join(CLIENTS[c].label for c in mcp)}")
+            terminal.success(f"{product} MCP: {', '.join(CLIENTS[c].label for c in mcp)}")
         elif not result["clients"]:
-            terminal.success(
-                f"{product} MCP — no agent clients found; later: {cli} mcp install --client <name>"
+            terminal.detail(
+                f"No coding agents found. Run {cli} mcp install --client <name> after installing one."
             )
         report_failures(failed)
     terminal.print("")
@@ -135,7 +135,7 @@ def configure_agents(
 
 @setup.command(
     name="vm",
-    help="Sign in, connect your agents and start a real persistent CPU VM. Safe to resume.",
+    help="Sign in, connect your agents and start a persistent CPU VM. Run again to resume.",
 )
 @click.option("--name", help="Name of the first VM; defaults to <product>-agent.")
 @click.option("--desktop", is_flag=True, help="Include a browser desktop.")
@@ -162,7 +162,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
             )
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             with ServiceClient(get_config_context(selected)) as service:
-                with terminal.progress("Preparing your VM and checking the guest..."):
+                with terminal.progress("Starting VM and running a test command"):
                     result = prepare_vm(
                         service,
                         get_settings().config_path.parent / "onboarding",
@@ -181,9 +181,9 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                 }
             )
         else:
-            terminal.success(f"VM {result['name']} is ready — guest command verified")
+            terminal.success(f"VM {result['name']} is ready")
             if dashboard:
-                terminal.print(f"  Dashboard and logs: {dashboard}")
+                terminal.print(f"  Dashboard: {dashboard}")
             terminal.print(f"  {cli} --context {selected} vm ssh {result['name']}")
             terminal.print(f"  {cli} --context {selected} vm terminal {result['name']}")
             if result.get("desktop_url"):
@@ -207,21 +207,17 @@ def ensure_credit(context: ConfigContext, unattended: bool) -> None:
     credit = summary.get("credit")
     if not credit or credit.get("ok"):
         return
-    message = credit.get("message") or "This workspace needs credits before compute can start."
+    message = credit.get("message") or "Add credits before starting compute."
     match = re.search(r"https?://[^\s<>]+", message)
     link = match.group(0).rstrip(".,)") if match else ""
     if unattended or not sys.stdin.isatty() or not link:
         raise click.ClickException(message)
-    terminal.header(f"Fund workspace {summary.get('workspace_name', '')}")
+    terminal.header(f"Add credits to {summary.get('workspace_name') or 'your workspace'}")
     terminal.print(message)
-    if not click.confirm(
-        "Open the credits page? You choose the amount and approve checkout in the browser"
-    ):
+    if not click.confirm("Open checkout in your browser?"):
         raise click.Abort()
     webbrowser.open(link, new=2)
-    terminal.print(
-        "Complete checkout in the browser. This terminal will continue when credits are confirmed."
-    )
+    terminal.print("Choose an amount and complete checkout. Setup continues when credits arrive.")
     deadline = time.monotonic() + 900
     with terminal.progress("Waiting for credits"):
         while time.monotonic() < deadline:
@@ -229,9 +225,7 @@ def ensure_credit(context: ConfigContext, unattended: bool) -> None:
                 terminal.success("Credits confirmed")
                 return
             time.sleep(3)
-    raise click.ClickException(
-        "Credits are still pending. Resume this command after checkout completes."
-    )
+    raise click.ClickException("Credits are still pending. Run this command again after checkout.")
 
 
 def connect_onboarding(
@@ -243,10 +237,10 @@ def connect_onboarding(
 
     if context_or_none(selected) is None:
         flow = DeviceLogin.start(context_defaults(selected))
-        terminal.header(f"Connect your {get_settings().name} account")
+        terminal.header(f"Sign in to {get_settings().name}")
         terminal.print(f"  {flow.verification_uri_complete}")
         flow.open_browser()
-        with terminal.progress("Waiting for sign-in..."):
+        with terminal.progress("Waiting for sign-in"):
             save_login(flow.wait(), selected)
     context = get_config_context(selected)
     if context.auth_url and (not context.app_url_template or not context.vm_url_template):
@@ -323,23 +317,21 @@ def workload_options(fn):
 
 
 @setup.command(
-    name="inference", help="Sign in, fund the workspace and deploy a verified hello-world endpoint."
+    name="inference", help="Sign in and deploy a hello-world endpoint. Checks the response."
 )
 @workload_options
 def setup_inference(name, clients, skip_agents, yes, context):
     setup_example("inference", name, clients, skip_agents, yes, context)
 
 
-@setup.command(
-    name="functions", help="Sign in, fund the workspace and run a verified cloud function."
-)
+@setup.command(name="functions", help="Sign in and run a hello-world function. Checks the output.")
 @workload_options
 def setup_functions(name, clients, skip_agents, yes, context):
     setup_example("functions", name, clients, skip_agents, yes, context)
 
 
 @setup.command(
-    name="sandboxes", help="Sign in, fund the workspace and run a verified container sandbox."
+    name="sandboxes", help="Sign in and run hello world in a sandbox. Stops it when finished."
 )
 @workload_options
 def setup_sandboxes(name, clients, skip_agents, yes, context):
@@ -361,14 +353,14 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
                 click.confirm(
                     "Run hello world in a sandbox (1 CPU, 256 MiB; stops when finished)?"
                     if kind == "sandboxes"
-                    else "Start the hello-world workload (1 CPU, 256 MiB; scales to zero when idle)?",
+                    else "Run hello world (1 CPU, 256 MiB; scales to zero when idle)?",
                     abort=True,
                 )
             with ServiceClient(configured) as service:
                 message = (
-                    "Running your sandbox and checking its output..."
+                    "Running hello world in a sandbox"
                     if kind == "sandboxes"
-                    else "Deploying your sample and checking its result..."
+                    else "Deploying hello world and checking the output"
                 )
                 with terminal.progress(message):
                     result = prepare_example(
@@ -391,12 +383,12 @@ def setup_example(kind, name, clients, skip_agents, yes, context):
             )
         else:
             terminal.success(
-                f"{name} complete — hello-world result verified and sandbox stopped"
+                f"{name}: hello world passed. Sandbox stopped."
                 if kind == "sandboxes"
-                else f"{name} is ready — hello-world result verified"
+                else f"{name}: hello world passed"
             )
             if dashboard:
-                terminal.print(f"  Dashboard and logs: {dashboard}")
+                terminal.print(f"  Dashboard: {dashboard}")
             if result.get("url"):
                 terminal.print(f"  Endpoint: {result['url']}")
     except (LoginError, GatewayHTTPError, RuntimeError, TimeoutError, ValueError, OSError) as exc:
