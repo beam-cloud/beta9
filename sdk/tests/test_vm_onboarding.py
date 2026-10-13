@@ -35,6 +35,116 @@ def test_lost_creation_response_resumes_identical_request(tmp_path, monkeypatch)
     assert (next(tmp_path.rglob("*.json")).stat().st_mode & 0o777) == 0o600
 
 
+@pytest.mark.parametrize("lose_response", [False, True])
+def test_removed_vm_renews_request_and_can_resume(tmp_path, monkeypatch, lose_response):
+    directory = tmp_path / "state"
+    directory.mkdir()
+    path = directory / "vm.json"
+    old_request = {
+        "request_id": "removed",
+        "creation_body": {"request_id": "removed", "spec": {"image_id": "old"}},
+    }
+    onboarding._save_state(path, old_request)
+    removed, replacement = MagicMock(), MagicMock()
+    removed.create.side_effect = GatewayHTTPError(410, "the VM for this request_id was removed")
+    replacement._creation_body = None
+    replacement.prepare.side_effect = lambda: setattr(
+        replacement,
+        "_creation_body",
+        {"request_id": factory.call_args.kwargs["request_id"], "spec": {"image_id": "new"}},
+    )
+    replacement.create.side_effect = (
+        [TimeoutError("lost response"), None] if lose_response else None
+    )
+    factory = MagicMock(side_effect=[removed, replacement, replacement])
+    monkeypatch.setattr(onboarding, "VM", factory)
+
+    if lose_response:
+        with pytest.raises(TimeoutError):
+            onboarding._create_vm(object(), path, old_request, "first", False)
+        saved = json.loads(path.read_text())
+        vm = onboarding._create_vm(object(), path, saved, "first", False)
+        assert factory.call_args.kwargs["request_id"] == saved["request_id"]
+    else:
+        vm = onboarding._create_vm(object(), path, old_request, "first", False)
+
+    saved = json.loads(path.read_text())
+    assert vm is replacement
+    assert saved["request_id"] != "removed"
+    assert saved["creation_body"]["request_id"] == saved["request_id"]
+    assert saved["creation_body"]["spec"]["image_id"] == "new"
+    assert factory.call_args.kwargs["metadata"] == {"beam.onboarding": saved["request_id"]}
+    replacement.prepare.assert_called_once()
+
+
+@pytest.mark.parametrize("status", [403, 409, 410, 500])
+def test_creation_retries_only_one_removed_request(tmp_path, monkeypatch, status):
+    vm = MagicMock()
+    vm._creation_body = {"request_id": "original"}
+    vm.create.side_effect = GatewayHTTPError(status, "creation failed")
+    factory = MagicMock(return_value=vm)
+    monkeypatch.setattr(onboarding, "VM", factory)
+    state = {"request_id": "original", "creation_body": vm._creation_body}
+    path = tmp_path / "vm.json"
+    onboarding._save_state(path, state)
+    with pytest.raises(GatewayHTTPError):
+        onboarding._create_vm(object(), path, state, "first", False)
+    assert vm.create.call_count == (2 if status == 410 else 1)
+    if status != 410:
+        assert json.loads(path.read_text()) == state
+
+
+@pytest.mark.parametrize("kind", ["vm", "sandboxes", "inference", "functions"])
+@pytest.mark.parametrize(
+    "answer,exit_code,message", [("n\n", 0, "Setup canceled."), (None, 1, "Aborted!")]
+)
+def test_declining_or_interrupting_setup_never_starts_compute(
+    monkeypatch, kind, answer, exit_code, message
+):
+    from click.testing import CliRunner
+    import click
+
+    from beta9.cli import setup
+
+    monkeypatch.setattr(setup, "connect_onboarding", lambda *_: (ConfigContext(), None))
+    if answer is None:
+        monkeypatch.setattr(setup.click, "confirm", MagicMock(side_effect=click.Abort()))
+    service = MagicMock()
+    monkeypatch.setattr("beta9.channel.ServiceClient", service)
+    result = CliRunner().invoke(setup.common, ["setup", kind], input=answer)
+    assert result.exit_code == exit_code, result.output
+    assert message in result.output
+    assert "Error:" not in result.output
+    service.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["vm", "sandboxes", "inference", "functions"])
+def test_cancelled_setup_emits_one_json_result(monkeypatch, kind):
+    from click.testing import CliRunner
+
+    from beta9.cli import setup
+
+    monkeypatch.setenv("BETA9_JSON", "1")
+    monkeypatch.setattr(setup, "connect_onboarding", lambda *_: (ConfigContext(), None))
+    result = CliRunner(mix_stderr=False).invoke(setup.common, ["setup", kind], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"ready": False, "cancelled": True}
+
+
+@pytest.mark.parametrize("kind", ["vm", "sandboxes", "inference", "functions"])
+def test_interrupting_credit_checkpoint_is_not_wrapped_as_empty_error(monkeypatch, kind):
+    import click
+    from click.testing import CliRunner
+
+    from beta9.cli import setup
+
+    monkeypatch.setattr(setup, "connect_onboarding", MagicMock(side_effect=click.Abort()))
+    result = CliRunner().invoke(setup.common, ["setup", kind])
+    assert result.exit_code == 1
+    assert "Aborted!" in result.output
+    assert "Error:" not in result.output
+
+
 def test_existing_vm_is_never_adopted_by_name(tmp_path, monkeypatch):
     factory = MagicMock()
     factory.get.return_value.info = {"metadata": {}}
