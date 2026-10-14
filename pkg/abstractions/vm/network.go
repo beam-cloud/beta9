@@ -28,6 +28,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	defaultPublicVMConnections      = 16384
+	defaultPublicVMConnectionsPerVM = 256
+	vmSSHPort                       = 2222
+	vmTerminalPort                  = 7681
+	vmDesktopPort                   = 8080
+)
+
 type publicVMNetwork struct {
 	prefix              netip.Prefix
 	prefixes            []netip.Prefix
@@ -80,11 +88,12 @@ func parsePublicVMNetwork(cfg types.VMNetworkConfig) (*publicVMNetwork, error) {
 	}
 	limit := cfg.MaxConnections
 	if limit == 0 {
-		limit = 16384
+		limit = defaultPublicVMConnections
 	}
 	vmLimit := cfg.MaxConnectionsPerVM
 	if vmLimit == 0 {
-		vmLimit = min(256, max(1, limit/4))
+		// Keep capacity for other VMs even on a gateway with a small limit.
+		vmLimit = min(defaultPublicVMConnectionsPerVM, max(1, limit/4))
 	}
 	if vmLimit > limit {
 		return nil, fmt.Errorf("VM maxConnectionsPerVM must not exceed maxConnections")
@@ -264,11 +273,11 @@ func (p *publicVMNetwork) validateHeader(header *proxyproto.Header) error {
 
 func publicVMPort(v *types.VM, port uint32) bool {
 	return v != nil && v.DesiredState != types.VMStateDeleted && slices.Contains(v.Spec.Ports, port) &&
-		port != uint32(types.WorkerSandboxProcessManagerPort) && (port != 2222 || v.Spec.SSH)
+		port != uint32(types.WorkerSandboxProcessManagerPort) && (port != vmSSHPort || v.Spec.SSH)
 }
 
 func managedVMWebPort(v *types.VM, port uint32) bool {
-	return port == 7681 || (port == 8080 && v.Spec.Desktop)
+	return port == vmTerminalPort || (port == vmDesktopPort && v.Spec.Desktop)
 }
 
 func publicVMHTTPPort(v *types.VM, port uint32) bool {
