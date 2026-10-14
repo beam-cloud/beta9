@@ -168,7 +168,8 @@ def test_authorization_failure_does_not_create_vm(tmp_path, monkeypatch):
     factory.assert_not_called()
 
 
-def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("args", "name"), [(["--name", "first"], "first"), ([], "my-first-vm")])
+def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypatch, args, name):
     from click.testing import CliRunner
 
     from beta9.cli import setup
@@ -193,7 +194,7 @@ def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypa
     prepare = MagicMock(return_value={"name": "first", "id": "vm-ready"})
     monkeypatch.setattr(onboarding, "prepare_vm", prepare)
     result = CliRunner(mix_stderr=False).invoke(
-        setup.common, ["setup", "vm", "--context", "staging", "--name", "first", "--yes"]
+        setup.common, ["setup", "vm", "--context", "staging", *args, "--yes"]
     )
     assert result.exit_code == 0, result.output
     report = json.loads(result.stdout)
@@ -205,6 +206,7 @@ def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypa
         "dashboard_url": "https://dashboard.example/vms/vm-ready?tab=logs",
     }
     prepare.assert_called_once()
+    assert prepare.call_args.args[2] == name
 
 
 def test_setup_vm_does_not_report_success_after_failed_probe(tmp_path, monkeypatch):
