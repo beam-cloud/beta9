@@ -203,6 +203,16 @@ def test_update_can_clear_metadata_and_network_rules():
     }
 
 
+@pytest.mark.parametrize("address", ["2600:1f18:1234:5678:100:abcd:ef01:2345", "", None])
+def test_public_ipv6_uses_resolved_metadata_without_an_extra_request(address):
+    selected = service()
+    selected.http.json.return_value = {"name": "dev", "id": "vm-id", "public_ipv6": address}
+    vm = VM.get("dev", _service=selected)
+    selected.http.json.reset_mock()
+    assert vm.public_ipv6 == (address or None)
+    selected.http.json.assert_not_called()
+
+
 def test_metadata_list_filter_and_status_use_gateway_query():
     selected = service()
     VM.list(metadata={"user": "a=b"}, status="stopped", _service=selected)
@@ -283,6 +293,7 @@ def test_vm_cli_registration_and_cpu_only_args():
         "new",
         "list",
         "get",
+        "ip",
         "start",
         "resume",
         "stop",
@@ -386,6 +397,7 @@ def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, 
         "name": "calm-otter-a3b19f",
         "id": "vm-12ab34cd56ef7890",
         "status": "running",
+        "public_ipv6": "2600:1f18:1234:5678:100:abcd:ef01:2345",
         "container_id": "vm-long-internal-runtime",
     }
     monkeypatch.setattr(vm_cli, "VM", lambda *args, **kwargs: vm)
@@ -395,9 +407,40 @@ def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, 
     assert result.output.index("✓ VM ready") < result.output.index("calm-otter-a3b19f")
     assert "calm-otter-a3b19f" in result.output
     assert "vm-12ab34cd56ef7890" in result.output
+    assert "IPv6" in result.output and vm.info["public_ipv6"] in result.output
     assert "Checking image cache" not in result.output
     assert "Waiting for VM" not in result.output
     assert "vm-long-internal-runtime" not in result.output
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_cli_get_shows_ipv6_and_preserves_json(cli_service, as_json):
+    info = {
+        "name": "dev",
+        "id": "vm-id",
+        "status": "running",
+        "public_ipv6": "2600:1f18:1234:5678:100:abcd:ef01:2345",
+    }
+    cli_service.http.json.return_value = info
+    result = CliRunner().invoke(vm_cli.management, ["get", "dev", *(["--json"] if as_json else [])])
+    assert result.exit_code == 0, result.output
+    if as_json:
+        assert json.loads(result.output) == info
+    else:
+        assert "IPv6" in result.output and info["public_ipv6"] in result.output
+
+
+@pytest.mark.parametrize("address", ["2600:1f18:1234:5678:100:abcd:ef01:2345", None])
+def test_cli_ip_is_copyable_and_reports_unallocated_addresses(cli_service, address):
+    cli_service.http.json.return_value = {"name": "dev", "id": "vm-id", "public_ipv6": address}
+    result = CliRunner().invoke(vm_cli.management, ["ip", "dev"])
+    if address:
+        assert result.exit_code == 0, result.output
+        assert result.output == address + "\n"
+    else:
+        assert result.exit_code == 1
+        assert "does not have a public IPv6 address" in result.output
+    cli_service.http.json.assert_called_once()
 
 
 @pytest.mark.parametrize(

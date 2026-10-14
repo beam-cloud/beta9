@@ -52,6 +52,28 @@ def test_setup_vm_confirmation_includes_hourly_price(monkeypatch):
     assert "$0.0342/hour" in result.output
 
 
+def test_setup_vm_displays_allocated_ipv6(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from beta9.cli import setup
+
+    monkeypatch.setattr(setup, "connect_onboarding", lambda *_: (ConfigContext(), None))
+    monkeypatch.setattr(
+        setup, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config")
+    )
+    monkeypatch.setattr(setup, "dashboard_link", lambda *_: None)
+    monkeypatch.setattr("beta9.config.get_config_context", lambda _: ConfigContext())
+    monkeypatch.setattr("beta9.channel.ServiceClient", lambda _: MagicMock())
+    address = "2600:1f18:1234:5678:100:abcd:ef01:2345"
+    monkeypatch.setattr(
+        onboarding,
+        "prepare_vm",
+        lambda *_, **__: {"name": "dev", "id": "vm-id", "public_ipv6": address},
+    )
+    result = CliRunner().invoke(setup.common, ["setup", "vm", "--skip-agents", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "IPv6" in result.output and address in result.output
+
+
 def test_lost_creation_response_resumes_identical_request(tmp_path, monkeypatch):
     selected = SimpleNamespace(http=SimpleNamespace(workspace_id="workspace"))
     vm = MagicMock(info={"id": "vm-id"})
