@@ -69,6 +69,7 @@ jobs:
       - name: Run Tests
         run: |
           make test-pkg
+          go test -v ./cmd/vminit
   
   verify_microvm_image_pin:
     runs-on: ubuntu-latest
