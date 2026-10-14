@@ -90,7 +90,11 @@ func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error 
 	}
 
 	if ready == nil || !ready.Ok {
-		return echo.NewHTTPError(http.StatusServiceUnavailable, "VM process manager is not ready")
+		// Start is already committed. A pending readiness probe must not turn
+		// a successful restore into a failed operation; clients can keep waiting
+		// without changing the checkpoint or bypassing authenticated readiness.
+		response.Status = "starting"
+		return c.JSON(status, response)
 	}
 
 	response.Status = "running"
