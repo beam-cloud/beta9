@@ -107,20 +107,28 @@ func TestHTTPHostRawTCPAndConnectionCap(t *testing.T) {
 	require.NoError(t, err)
 	response.Body.Close()
 	conn.Close()
-	var pending []net.Conn
+	c, _ := f.lookup("box")
+	connectionCount := func() int {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.connections)
+	}
+	// Closing the client does not synchronously release the proxy's slot.
+	// Wait before filling the cap so neither pending connection is rejected.
+	require.Eventually(t, func() bool { return connectionCount() == 0 }, time.Second, time.Millisecond)
 	for range 2 {
 		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.config.TLSPort))
 		require.NoError(t, err)
-		pending = append(pending, conn)
 		defer conn.Close()
 	}
-	require.Eventually(t, func() bool { c, _ := f.lookup("box"); c.mu.Lock(); defer c.mu.Unlock(); return len(c.connections) == 2 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return connectionCount() == 2 }, time.Second, time.Millisecond)
 	extra, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.config.TLSPort))
 	require.NoError(t, err)
 	defer extra.Close()
 	extra.SetDeadline(time.Now().Add(time.Second))
 	_, err = extra.Read(make([]byte, 1))
 	require.Error(t, err)
+	require.False(t, os.IsTimeout(err), "the connection cap must close the socket, not leave it idle")
 }
 
 func TestBindingRefreshDoesNotBlockPolicyOrAccept(t *testing.T) {
