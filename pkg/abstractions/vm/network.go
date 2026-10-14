@@ -451,9 +451,9 @@ func (s *Service) servePublicVMHTTP(w http.ResponseWriter, r *http.Request) {
 		e.HTTPErrorHandler(echo.NewHTTPError(http.StatusNotFound), c)
 		return
 	}
-	// The terminal and desktop normally rely on an unguessable capability URL.
-	// An IP is a discoverable locator, so require the existing traffic token.
-	if managedVMWebPort(v, port) && (v.TrafficAccessToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Beam-VM-Token")), []byte(v.TrafficAccessToken)) != 1) {
+	// Keep legacy managed web ports protected on a discoverable IP. An explicit
+	// public opt-out follows the same live port policy as the hostname proxy.
+	if managedVMWebPort(v, port) && !slices.Contains(v.Spec.PublicPorts, port) && (v.TrafficAccessToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Beam-VM-Token")), []byte(v.TrafficAccessToken)) != 1) {
 		e.HTTPErrorHandler(echo.NewHTTPError(http.StatusForbidden, "VM traffic token required"), c)
 		return
 	}

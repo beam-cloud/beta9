@@ -740,6 +740,32 @@ func TestPublicVMManagedWebTokensDoNotReachGuest(t *testing.T) {
 						require.Empty(t, (<-headers).Values("X-Beam-VM-Token"))
 					}
 				}
+				// Explicit public opt-outs and live protection changes must agree
+				// across hostname and IPv6 access, including an existing keep-alive.
+				v.Spec.PublicPorts = []uint32{uint32(port)}
+				v.Spec.ProtectedPorts = nil
+				require.NoError(t, store.SaveVM(context.Background(), v))
+				_, err = fmt.Fprint(conn, "GET /path HTTP/1.1\r\nHost: vm\r\nX-Beam-VM-Token: unused\r\n\r\n")
+				require.NoError(t, err)
+				response, err := http.ReadResponse(reader, nil)
+				require.NoError(t, err)
+				_, err = io.Copy(io.Discard, response.Body)
+				require.NoError(t, err)
+				require.NoError(t, response.Body.Close())
+				require.Equal(t, http.StatusOK, response.StatusCode)
+				require.Empty(t, (<-headers).Values("X-Beam-VM-Token"))
+				v.Spec.PublicPorts = nil
+				v.Spec.ProtectedPorts = []uint32{uint32(port)}
+				require.NoError(t, store.SaveVM(context.Background(), v))
+				_, err = fmt.Fprint(conn, "GET /path HTTP/1.1\r\nHost: vm\r\n\r\n")
+				require.NoError(t, err)
+				response, err = http.ReadResponse(reader, nil)
+				require.NoError(t, err)
+				_, err = io.Copy(io.Discard, response.Body)
+				require.NoError(t, err)
+				require.NoError(t, response.Body.Close())
+				require.Equal(t, http.StatusForbidden, response.StatusCode)
+				require.Empty(t, headers)
 				dialer := websocket.Dialer{NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 					return publicVMClient(t, ingress, v.PublicIPv6, port), nil
 				}}

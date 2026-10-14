@@ -214,6 +214,7 @@ type vmOptions struct {
 	docker      bool
 	goproc      bool
 	hostname    string
+	mtu         int
 }
 
 func newTestVM(t *testing.T, rt *MicroVM, opts vmOptions) *testVM {
@@ -232,7 +233,7 @@ func newTestVM(t *testing.T, rt *MicroVM, opts vmOptions) *testVM {
 	}
 	vm.rootfs = extractRootfs(t, opts.image)
 	vm.canvas = mountCanvas(t, id, vm.rootfs)
-	vm.netns, vm.vethHost, vm.vethMAC = createTestNetwork(t, id, vm.ip4, vm.ip6)
+	vm.netns, vm.vethHost, vm.vethMAC = createTestNetwork(t, id, vm.ip4, vm.ip6, opts.mtu)
 	vm.spec = vm.buildSpec(opts)
 
 	data, err := json.MarshalIndent(vm.spec, "", "  ")
@@ -471,7 +472,7 @@ func mountCanvas(t *testing.T, id, lower string) string {
 
 // createTestNetwork mirrors network.go: a veth pair with the host side on the
 // bridge and the peer configured inside a named namespace.
-func createTestNetwork(t *testing.T, id string, ip4, ip6 net.IP) (nsPath, hostVeth string, peerMAC net.HardwareAddr) {
+func createTestNetwork(t *testing.T, id string, ip4, ip6 net.IP, mtu int) (nsPath, hostVeth string, peerMAC net.HardwareAddr) {
 	t.Helper()
 	goruntime.LockOSThread()
 	defer goruntime.UnlockOSThread()
@@ -490,7 +491,10 @@ func createTestNetwork(t *testing.T, id string, ip4, ip6 net.IP) (nsPath, hostVe
 
 	bridge, err := netlink.LinkByName(testBridgeName)
 	require.NoError(t, err)
-	require.NoError(t, netlink.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostVeth, MTU: 1500}, PeerName: peerVeth}))
+	if mtu == 0 {
+		mtu = 1500
+	}
+	require.NoError(t, netlink.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostVeth, MTU: mtu}, PeerName: peerVeth}))
 	host, err := netlink.LinkByName(hostVeth)
 	require.NoError(t, err)
 	require.NoError(t, netlink.LinkSetMaster(host, bridge))
@@ -1286,4 +1290,17 @@ func TestMicroVMTimingBaseline(t *testing.T) {
 		require.NoError(t, rt.Kill(context.Background(), vm.id, syscall.SIGKILL, nil))
 		vm.wait(30 * time.Second)
 	}
+}
+
+// AWS workers use jumbo frames. The guest must see the same MTU as its tap,
+// otherwise vminit cannot configure the NIC and every VM fails to boot.
+func TestMicroVMJumboMTUBoot(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true, mtu: 9001})
+	defer vm.cleanup()
+	vm.start()
+	client := vm.goprocClient(60 * time.Second)
+	code, out := vm.sh(client, "cat /sys/class/net/eth0/mtu")
+	require.Equal(t, 0, code, out)
+	require.Equal(t, "9001\n", out)
 }

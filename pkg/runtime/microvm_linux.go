@@ -1536,6 +1536,11 @@ func plumbNetwork(nsPath string) (preparedNetwork, error) {
 		if err != nil {
 			return err
 		}
+		// Tuntap creation uses ioctl and does not apply LinkAttrs.MTU. Set it
+		// explicitly before the hypervisor advertises the guest NIC maximum.
+		if err := netlink.LinkSetMTU(tapLink, network.MTU); err != nil {
+			return fmt.Errorf("set tap mtu: %w", err)
+		}
 		_ = netlink.LinkSetIP6AddrGenMode(tapLink, nl.IN6_ADDR_GEN_MODE_NONE)
 		if err := netlink.LinkSetUp(tapLink); err != nil {
 			return fmt.Errorf("bring tap up: %w", err)
