@@ -170,6 +170,7 @@ verify-protocol:
 
 test-pkg:
 	go test -v ./pkg/...
+	go test -v ./cmd/vminit
 	go test github.com/beam-cloud/clip/pkg/clip -run '^TestBatchedCodecGolden$$'
 
 bench-pkg:
