@@ -160,6 +160,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		t.fs.backendRepo,
 		&stub.Workspace,
 		stubConfig,
+		false,
 	)
 	if err != nil {
 		return err
@@ -172,7 +173,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 
 	env := []string{}
 	env = append(stubConfig.Env, env...)
-	env = append(secrets, env...)
+	env = append(secrets.Env, env...)
 	env = append(env, []string{
 		fmt.Sprintf("TASK_ID=%s", t.msg.TaskId),
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),

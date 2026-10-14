@@ -31,14 +31,14 @@ type taskQueueInstance struct {
 }
 
 func (i *taskQueueInstance) startContainers(containersToRun int) error {
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Ctx, i.BackendRepo, i.Workspace, *i.StubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Ctx, i.BackendRepo, i.Workspace, *i.StubConfig, false)
 	if err != nil {
 		return err
 	}
 
 	env := []string{}
 	env = append(i.StubConfig.Env, env...)
-	env = append(secrets, env...)
+	env = append(secrets.Env, env...)
 	env = append(env, []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),

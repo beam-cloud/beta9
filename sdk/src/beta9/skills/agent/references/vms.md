@@ -63,6 +63,11 @@ list/delete tools manage reusable roots. SSH-enabled forks/template-based
 creations need a public key matching your local private identity. Keep
 private keys on the client. A fork has an independent writable root.
 
+Terminal (7681) and desktop (8080) require a traffic token by default.
+Use `{{cli}} vm new --public-port 7681` or `VM(public_ports=[7681])` to opt out.
+After creation, `{{cli}} vm expose --protected NAME 7681` restores protection;
+`--public` removes it. SSH (2222) cannot use either setting.
+
 `vm_bind_port` keeps a port private for authenticated tunnels.
 `vm_expose_port { protected: true }` requires a traffic credential or a
 limited browser link. Access-token/read/rotation/link tools need the
@@ -85,3 +90,43 @@ systemd session; the agent needs its own sign-in and a suitable working
 directory. Read its session with `vm_logs`; launch acceptance is not a
 completed model task. Codex checks repository trust. `vm_metrics` and
 `vm_logs` provide platform/guest diagnostics without exposing credentials.
+
+## Outbound access and secrets
+
+Sandboxes and VMs receive no automatic workspace token. If an agent needs the
+Beam CLI inside its guest, explicitly bind a `BETA9_TOKEN` or `BEAM_TOKEN`
+workspace secret; these opt-ins use plaintext.
+
+Network allowlists accept up to 64 hostnames, `*.example.com` patterns, bare
+IPs and CIDRs. Hostname rules govern TLS SNI and HTTP Host; other TCP protocols
+need a CIDR. The worker resolves allowed hostnames and rejects private,
+loopback and link-local destinations. UDP/ICMP are blocked except DNS queries
+to the configured resolver. Existing connections close when policy changes.
+Proxied TCP connections use the worker's source IP, including CIDR targets;
+downstream source-IP access rules see the worker.
+
+Create a brokered credential with `{{cli}} secret create KEY VALUE --host api.openai.com`.
+Use `--host` repeatedly for multiple hosts or `*.wildcards`. Bind it with
+`{{cli}} vm new --secret KEY`, or pass `secrets=["KEY"]` to VM exec. The guest
+receives a stable `beam_secret_...` placeholder. The worker replaces it only
+in HTTPS request headers on matching hosts, verifies upstream TLS, and scrubs values
+from response headers, bodies and WebSocket messages. Hosts without bindings
+retain TLS passthrough. Value rotation takes effect on the next request after
+the worker's 15-second cache expires. Plain HTTP to a bound host is blocked.
+
+Brokered secrets require allowed hosts. Serverless workloads retain plaintext
+secret envs. With block_network, credential hosts are the only allowed egress;
+an explicit allow_list must cover each credential host and is never widened.
+
+Substitution is literal and header-only: use Authorization or x-api-key.
+Basic-auth helpers that encode the placeholder will not match; store the
+encoded header value as the secret instead. Certificate-pinned clients cannot
+use TLS interception. Brokered WebSocket messages are limited to 16 MiB,
+and compressed upstream responses are rejected when they cannot be scrubbed.
+Docker containers inside a VM do not inherit its CA;
+mount `/etc/beam/ca-certificates.crt` and configure their trust explicitly.
+
+Protect an existing VM's terminal with `{{cli}} vm expose --protected NAME 7681`.
+Deploy workers with egress enabled before binding brokered secrets; older
+workers fail closed. CA bundles are prepared at sandbox startup so exec can
+add bindings later; only public certificates enter the guest.

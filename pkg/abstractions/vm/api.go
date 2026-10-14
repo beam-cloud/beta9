@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -319,6 +320,19 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string
 }
 
 func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string) (*types.VM, error) {
+	if len(spec.Secrets) > 0 {
+		secrets, err := s.backend.GetSecretsByName(ctx, info.Workspace, spec.Secrets)
+		if err != nil {
+			return nil, err
+		}
+		if len(secrets) != len(spec.Secrets) {
+			return nil, fmt.Errorf("one or more VM secrets do not exist")
+		}
+		if err := common.ValidateSandboxSecrets(secrets, spec.AllowList); err != nil {
+			return nil, err
+		}
+	}
+
 	if spec.Pool == "" {
 		spec.Pool = s.defaultPool
 	}

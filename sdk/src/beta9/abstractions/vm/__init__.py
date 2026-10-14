@@ -192,6 +192,7 @@ class VM:
         block_network: Optional[bool] = None,
         allow_list: Optional[List[str]] = None,
         protected_ports: Optional[List[int]] = None,
+        public_ports: Optional[List[int]] = None,
         request_id: Optional[str] = None,
         disks: Optional[List[DurableDisk]] = None,
         volumes: Optional[List[Volume]] = None,
@@ -233,6 +234,7 @@ class VM:
             "block_network": block_network,
             "allow_list": allow_list,
             "protected_ports": protected_ports,
+            "public_ports": public_ports,
             "disks": (
                 [disk.export().to_dict(casing=betterproto.Casing.SNAKE) for disk in disks]
                 if disks is not None

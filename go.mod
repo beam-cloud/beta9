@@ -146,6 +146,7 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
+	github.com/inetaf/tcpproxy v0.0.0-20250203165043-ded522cbd03f
 	github.com/jacobsa/fuse v0.0.0-20230810134708-ab21db1af836 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect

@@ -33,6 +33,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/worker/egress"
 	goproc "github.com/beam-cloud/goproc/pkg"
 )
 
@@ -131,6 +132,7 @@ type Worker struct {
 	criuManager             CRIUManager
 	containerNetworkManager ContainerNetwork
 	serviceProxy            *ServiceProxy
+	egress                  *egress.Firewall
 	containerGPUManager     GPUManager
 	containerThunderManager GPUManager
 	containerMountManager   *ContainerMountManager
@@ -221,6 +223,7 @@ type ContainerInstance struct {
 	StopEscalationStarted      atomic.Bool
 	StuckMountRecoveryStarted  atomic.Bool
 	statusHeartbeatMu          sync.Mutex
+	egressMu                   sync.Mutex
 	stateMu                    sync.RWMutex
 	oomWatcherMu               sync.Mutex
 	oomWatcher                 runtime.OOMWatcher
@@ -724,6 +727,7 @@ func NewWorker() (_ *Worker, err error) {
 		containerThunderManager: NewContainerThunderManager(thunderClient),
 		containerNetworkManager: containerNetworkManager,
 		serviceProxy:            NewServiceProxy(ctx, config),
+		egress:                  baseContainerNetworkManager.egress,
 		containerMountManager:   NewContainerMountManager(config, poolConfig),
 		podAddr:                 podAddr,
 		routeLocalTargetHost:    routeLocalTargetHost,

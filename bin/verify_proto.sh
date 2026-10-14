@@ -6,11 +6,16 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-tmpWorkDir=$(mktemp -d -t 'twd.XXXXXX')
+tmpWorkRoot=$(mktemp -d -t 'twd.XXXXXX')
+trap 'rm -rf "$tmpWorkRoot"' EXIT
+tmpWorkDir="$tmpWorkRoot"
 mkdir "$tmpWorkDir/beta9"
 tmpWorkDir="$tmpWorkDir/beta9"
 cp -r . "$tmpWorkDir"
 pushd "$tmpWorkDir"
+# Linked worktrees carry a .git pointer to the original checkout.
+rm -rf .git sdk/.venv
+git init -q
 git add -A
 git -c user.name="proto verifier" -c user.email="proto-verifier@example.com" commit --allow-empty -m init
 ./bin/gen_proto.sh

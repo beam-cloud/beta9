@@ -303,6 +303,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 	requestedSecrets = append(requestedSecrets, referenceBindings...)
 	stubConfig.Secrets, err = gws.resolveSecretBindings(ctx, authInfo.Workspace, uniqueByEnvName(requestedSecrets))
+	if err == nil && types.StubType(in.StubType).IsSandbox() {
+		err = common.ValidateSandboxSecrets(stubConfig.Secrets, stubConfig.AllowList)
+	}
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}

@@ -6,33 +6,44 @@ only this run's uniquely named VMs and artifacts, even after a failed check.
 
 import argparse
 import base64
+import copy
+import requests
 import json
 import time
 import uuid
 from pathlib import Path
 
 from beta9.abstractions.vm import VM, identity
+from beta9.abstractions.image import Image
 from beta9.channel import ServiceClient
 from beta9.config import get_config_context
 from beta9.mcp.server import RemoteMCP
 
 
 class Acceptance:
-    def __init__(self, profile, pool):
+    def __init__(self, profile, pool, okteto=False, image_id=None):
         self.context = get_config_context(profile)
         if self.context.gateway_host != "gateway.stage.beam.cloud":
             raise ValueError("This acceptance suite requires a staging profile")
+        if okteto:
+            self.context = copy.copy(self.context)
+            self.context.gateway_host, self.context.gateway_port = "127.0.0.1", 11993
         self.service = ServiceClient(self.context)
         self.remote = RemoteMCP(self.context)
+        if okteto:
+            self.service.http.base_url = "http://127.0.0.1:11994"
+            self.remote.url = self.service.http.base_url + "/api/v1/mcp"
         self.name = "mcp-audit-" + uuid.uuid4().hex[:8]
         self.pool = pool
+        self.image = Image.from_id(image_id) if image_id else None
         self.vms = []
         self.artifacts = []
+        self.secrets = []
         self.passed = set()
         self.public_key = identity().with_suffix(".pub").read_text().strip()
         self.suffix = self.name.rsplit("-", 1)[1]
 
-    def call(self, tool, **arguments):
+    def call(self, tool, expect_error=False, **arguments):
         status, body = self.remote.call(
             {
                 "jsonrpc": "2.0",
@@ -42,7 +53,11 @@ class Acceptance:
             }
         )
         result = body.get("result", {})
-        if status != 200 or body.get("error") or result.get("isError"):
+        if (
+            status != 200
+            or body.get("error")
+            or bool(result.get("isError")) != expect_error
+        ):
             raise RuntimeError(f"{tool}: HTTP {status}, {result or body.get('error')}")
         self.passed.add(tool)
         print("PASS", tool, flush=True)
@@ -55,6 +70,7 @@ class Acceptance:
         name = self.name
         vm = VM(
             name,
+            image=self.image,
             cpu=1,
             memory=2048,
             disk_size="10Gi",
@@ -219,17 +235,117 @@ class Acceptance:
             "vm_delete_directory", name=name, path="/workspace/mcp-audit", confirm=True
         )
 
+    def security(self):
+        secret = "SECURITY_" + self.suffix.upper()
+        value = "stage-" + uuid.uuid4().hex
+        self.secrets.append(secret)
+        self.call("create_secret", name=secret, value=value, hosts=["httpbingo.org"])
+        name = self.name
+        vm = VM(
+            name,
+            image=self.image,
+            pool=self.pool,
+            cpu=1,
+            memory=1024,
+            ttl=300,
+            secrets=[secret],
+            allow_list=["httpbingo.org", "api.openai.com"],
+            _service=self.service,
+        )
+        vm.prepare()
+        self.vms.append(name)
+        self.call("create_vm", **vm._creation_body)
+        self.wait(name)
+        info = self.call("get_vm", name=name)
+        assert 7681 in info["spec"]["protected_ports"]
+        assert requests.get(info["terminal_url"], timeout=15).status_code == 403
+        result = self.call(
+            "vm_exec",
+            name=name,
+            command=["sh", "-c", f'printf "%s" "${secret}"; test -z "$BETA9_TOKEN"'],
+            wait=True,
+        )
+        placeholder = result["stdout"]
+        assert result["exit_code"] == 0 and placeholder.startswith("beam_secret_")
+        assert value not in placeholder
+        for command, allowed in [
+            (
+                [
+                    "sh",
+                    "-c",
+                    f'curl -fsS https://httpbingo.org/headers -H "Authorization: Bearer ${secret}"',
+                ],
+                True,
+            ),
+            (["curl", "-fsS", "--max-time", "5", "https://example.com"], False),
+        ]:
+            result = self.call(
+                "vm_exec",
+                name=name,
+                command=command,
+                wait=True,
+                expect_error=not allowed,
+            )
+            assert (result["exit_code"] == 0) == allowed
+            assert value not in result["stdout"]
+            if allowed:
+                assert placeholder in result["stdout"]
+        self.call("vm_expose_port", name=name, port=7681, protected=False)
+        with requests.get(info["terminal_url"], timeout=15, stream=True) as response:
+            assert response.status_code == 200
+        self.call("vm_expose_port", name=name, port=7681, protected=True)
+        assert requests.get(info["terminal_url"], timeout=15).status_code == 403
+        self.call("update_vm", name=name, allow_list=["api.openai.com"])
+        self.call(
+            "vm_exec",
+            name=name,
+            command=["curl", "-fsS", "--max-time", "5", "https://httpbingo.org"],
+            wait=True,
+            expect_error=True,
+        )
+        self.call(
+            "update_vm", name=name, allow_list=["httpbingo.org", "api.openai.com"]
+        )
+        result = self.call(
+            "vm_exec",
+            name=name,
+            command=["sh", "-c", f'printf "%s" "${secret}"'],
+            secrets=[secret],
+            wait=True,
+        )
+        assert result["stdout"] == placeholder
+        rotated = "rotated-" + uuid.uuid4().hex
+        self.call("update_secret", name=secret, value=rotated)
+        time.sleep(16)
+        result = self.call(
+            "vm_exec",
+            name=name,
+            command=[
+                "sh",
+                "-c",
+                f'curl -fsS https://httpbingo.org/headers -H "Authorization: Bearer ${secret}"',
+            ],
+            wait=True,
+        )
+        assert result["exit_code"] == 0 and placeholder in result["stdout"]
+        assert rotated not in result["stdout"]
+
     def cleanup(self):
         failures = []
         for name in reversed(self.vms):
             try:
                 self.call("delete_vm", name=name, confirm=True)
-            except RuntimeError as exc:
+            except (RuntimeError, requests.RequestException) as exc:
                 failures.append(str(exc))
         for kind, artifact in self.artifacts:
             try:
                 self.call(f"delete_vm_{kind}", artifact=artifact, confirm=True)
-            except RuntimeError as exc:
+            except (RuntimeError, requests.RequestException) as exc:
+                failures.append(str(exc))
+        for secret in self.secrets:
+            try:
+                self.call("delete_secret", name=secret, confirm=True)
+            except (RuntimeError, requests.RequestException) as exc:
                 failures.append(str(exc))
         self.service.close()
         if failures:
@@ -240,6 +356,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default="staging")
     parser.add_argument("--pool", default="microvm-cpu")
+    parser.add_argument("--image-id", help="Use an existing prepared VM image")
+    parser.add_argument(
+        "--security",
+        action="store_true",
+        help="Check token, ports, hostname egress and secret brokering",
+    )
+    parser.add_argument(
+        "--okteto", action="store_true", help="Use the staging Okteto port forwards"
+    )
     parser.add_argument(
         "--output", type=Path, default=Path("/tmp/beam-mcp-vm-result.json")
     )
@@ -247,9 +372,12 @@ def main():
         "--screenshot", type=Path, default=Path("/tmp/beam-mcp-vm-desktop.png")
     )
     args = parser.parse_args()
-    acceptance = Acceptance(args.profile, args.pool)
+    acceptance = Acceptance(args.profile, args.pool, args.okteto, args.image_id)
     try:
-        acceptance.run(args.screenshot)
+        if args.security:
+            acceptance.security()
+        else:
+            acceptance.run(args.screenshot)
     finally:
         acceptance.cleanup()
     args.output.write_text(

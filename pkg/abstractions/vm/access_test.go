@@ -57,6 +57,17 @@ func TestBrowserSessionBoundToVMPortExpiryAndRotation(t *testing.T) {
 	require.False(t, validAccessSession(v, 8080, session, now))
 }
 
+func TestDefaultSystemPortsDenyAnonymousAccess(t *testing.T) {
+	s, v, _, runtime, _ := fixture()
+	v.Spec.Memory = 2048
+	require.NoError(t, validate(&v.Spec))
+	for _, port := range []string{"7681", "8080"} {
+		rec := vmRequest(proxyAPI(s), "GET", "/vm/"+v.Handle+"/"+port+"/", "")
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.Empty(t, runtime.forwarded)
+	}
+}
+
 func TestBrowserSessionExchangesAndNeverReachesGuest(t *testing.T) {
 	s, v, _, _, _ := fixture()
 	s.domain = "vm.example.com"

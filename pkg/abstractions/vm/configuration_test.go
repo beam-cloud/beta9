@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -96,6 +97,66 @@ func TestInternalProcessControlPortCannotBePublished(t *testing.T) {
 	require.Error(t, validate(&spec))
 	spec.Ports, spec.PrivatePorts = nil, []uint32{uint32(types.WorkerSandboxProcessManagerPort)}
 	require.Error(t, validate(&spec))
+}
+
+func TestVMSystemPortProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		spec      types.VMSpec
+		protected []uint32
+		invalid   bool
+	}{
+		{"terminal", types.VMSpec{}, []uint32{7681}, false},
+		{"desktop", types.VMSpec{Desktop: true}, []uint32{7681, 8080}, false},
+		{"public terminal", types.VMSpec{PublicPorts: []uint32{7681}}, nil, false},
+		{"public desktop", types.VMSpec{Desktop: true, PublicPorts: []uint32{8080}}, []uint32{7681}, false},
+		{"conflicting", types.VMSpec{PublicPorts: []uint32{7681}, ProtectedPorts: []uint32{7681}}, nil, true},
+		{"public ssh", types.VMSpec{PublicPorts: []uint32{2222}}, nil, true},
+		{"protected ssh", types.VMSpec{ProtectedPorts: []uint32{2222}}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.spec.ImageID = "base"
+			err := validate(&tc.spec)
+			if tc.invalid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.ElementsMatch(t, tc.protected, tc.spec.ProtectedPorts)
+			require.NoError(t, validate(&tc.spec), "validation is idempotent")
+		})
+	}
+}
+
+func TestToggleSystemPortsWithoutRuntimeRebind(t *testing.T) {
+	for _, port := range []uint32{7681, 8080} {
+		s, v, _, runtime, _ := fixture()
+		for _, protected := range []bool{true, false, true} {
+			require.NoError(t, s.configurePort(context.Background(), v, "expose", port, &protected))
+			require.Contains(t, v.Spec.Ports, port)
+			require.Equal(t, protected, slices.Contains(v.Spec.ProtectedPorts, port))
+			require.Equal(t, !protected, slices.Contains(v.Spec.PublicPorts, port))
+			require.NotEmpty(t, v.TrafficAccessToken)
+		}
+		require.Empty(t, runtime.boundPorts)
+		for _, action := range []string{"expose", "bind", "unexpose"} {
+			require.Error(t, s.configurePort(context.Background(), v, action, port, nil))
+			protected := true
+			require.Error(t, s.configurePort(context.Background(), v, action, 2222, &protected))
+		}
+	}
+}
+
+func TestWorkspaceTokenSecretRequiresExplicitBinding(t *testing.T) {
+	for _, name := range []string{"BETA9_TOKEN", "BEAM_TOKEN", "BETA9_GATEWAY_HOST", "BEAM_VM_ID"} {
+		spec := types.VMSpec{ImageID: "base", Secrets: []string{name}}
+		err := validate(&spec)
+		if name == "BETA9_TOKEN" || name == "BEAM_TOKEN" {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err)
+		}
+	}
 }
 
 func TestCreationRequestIsWorkspaceScopedAndDoesNotLaunchTwice(t *testing.T) {

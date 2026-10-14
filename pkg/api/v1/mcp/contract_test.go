@@ -52,7 +52,7 @@ type mcpSecretRecorder struct {
 	writes int
 }
 
-func (r *mcpSecretRecorder) CreateSecret(context.Context, *types.Workspace, uint, string, string, bool) (*types.Secret, error) {
+func (r *mcpSecretRecorder) CreateSecret(context.Context, *types.Workspace, uint, string, string, bool, []string) (*types.Secret, error) {
 	r.writes++
 	return &types.Secret{}, nil
 }
@@ -192,10 +192,17 @@ func TestMCPVMExecPinsWorkspaceAndArgv(t *testing.T) {
 
 func TestMCPVMWaitPreservesNonzeroExitAndOutput(t *testing.T) {
 	g := newTestGroup()
+	touches := 0
 	g.router.GET("/api/v1/vm/ws/:name", func(c echo.Context) error {
 		return c.JSON(200, map[string]any{"id": "vm", "container_id": "container", "desired_state": "running"})
 	})
-	g.router.POST("/api/v1/vm/ws/:name/touch", func(c echo.Context) error { return c.JSON(200, map[string]any{}) })
+	g.router.POST("/api/v1/vm/ws/:name/touch", func(c echo.Context) error {
+		touches++
+		if touches == 1 {
+			return c.JSON(409, map[string]any{"message": "VM operation already in progress"})
+		}
+		return c.JSON(200, map[string]any{})
+	})
 	g.router.POST("/api/v1/gateway/pods/:container/exec", func(c echo.Context) error { return c.JSON(200, map[string]any{"ok": true, "pid": 42, "exitCode": -1}) })
 	g.router.GET("/api/v1/gateway/pods/:container/status", func(c echo.Context) error {
 		return c.JSON(200, map[string]any{"ok": true, "status": "exited", "exitCode": 7})

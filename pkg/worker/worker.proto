@@ -124,6 +124,7 @@ message ContainerSandboxExecRequest {
   map<string, string> env = 4;
   bool interactive = 5;
   bool wait = 6;
+ repeated types.SecretBinding secret_bindings = 7;
 }
 
 message ContainerSandboxExecResponse {

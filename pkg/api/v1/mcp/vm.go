@@ -27,8 +27,19 @@ func (g *Group) vmRequest(ctx context.Context, a *auth.AuthInfo, method, suffix 
 			return nil, err
 		}
 	}
-	response, err := g.serve(ctx, method, g.config.GatewayService.HTTP.GetExternalURL()+path, raw, nil)
-	return mcpAPIValue(response, err)
+	for attempt := 0; ; attempt++ {
+		response, err := g.serve(ctx, method, g.config.GatewayService.HTTP.GetExternalURL()+path, raw, nil)
+		result, _ := response.(map[string]any)
+		body, _ := result["body"].(map[string]any)
+		if result["status"] != http.StatusConflict || body["message"] != "VM operation already in progress" || attempt == 7 {
+			return mcpAPIValue(response, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 func mcpAPIValue(response any, err error) (any, error) {

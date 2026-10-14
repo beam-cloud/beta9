@@ -616,3 +616,29 @@ func TestGetContainerRuntimeCredentialsBoundsManagedEndpointReplicas(t *testing.
 	require.True(t, resp.Ok, resp.ErrorMsg)
 	require.Equal(t, []string{"HF_TOKEN=hf-secret"}, resp.Env)
 }
+
+func TestBrokeredSecretsVendOutsideEnvironment(t *testing.T) {
+	signingKey, _ := testSigningKey(t)
+	backend := &workerRuntimeCredentialsBackendRepo{
+		workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id", SigningKey: &signingKey},
+		stub:      &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-id", Type: types.StubType(types.StubTypeSandbox), Config: `{}`}},
+		secrets:   []types.Secret{{Name: "KEY", Value: "real-value", Placeholder: "beam_secret_a", Hosts: []string{"api.example.com"}}},
+	}
+	service := &WorkerRepositoryService{backendRepo: backend, containerRepo: &workerRuntimeCredentialsContainerRepo{state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"}}}
+	request := &pb.GetContainerRuntimeCredentialsRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ContainerId: "container-id", BindingNames: []string{"KEY"}}
+	response, err := service.GetContainerRuntimeCredentials(cacheRepositoryWorkspaceAuthContext("workspace-id"), request)
+	require.NoError(t, err)
+	require.True(t, response.Ok, response.ErrorMsg)
+	require.Empty(t, response.Env)
+	require.Equal(t, "real-value", response.SecretBindings[0].Value)
+	backend.secrets[0].Value = "rotated"
+	response, err = service.GetContainerRuntimeCredentials(cacheRepositoryWorkspaceAuthContext("workspace-id"), request)
+	require.NoError(t, err)
+	require.Equal(t, "rotated", response.SecretBindings[0].Value)
+	require.Equal(t, "beam_secret_a", response.SecretBindings[0].Placeholder)
+	request.BindingNames = nil
+	request.SecretNames = []string{"KEY"}
+	response, err = service.GetContainerRuntimeCredentials(cacheRepositoryWorkspaceAuthContext("workspace-id"), request)
+	require.NoError(t, err)
+	require.False(t, response.Ok, "old workers cannot hydrate brokered secrets into env")
+}

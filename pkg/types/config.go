@@ -664,6 +664,17 @@ type WorkerConfig struct {
 	// the worker disables scheduling, lets running containers finish and exits.
 	// Zero disables the bound.
 	MaxAge time.Duration `key:"maxAge" json:"max_age"`
+
+	Egress EgressConfig `key:"egress" json:"egress"`
+}
+
+// Listener port zero allocates a free worker-local port.
+type EgressConfig struct {
+	Enabled                    bool `key:"enabled" json:"enabled"`
+	TLSPort                    int  `key:"tlsPort" json:"tls_port"`
+	HTTPPort                   int  `key:"httpPort" json:"http_port"`
+	OtherPort                  int  `key:"otherPort" json:"other_port"`
+	MaxConnectionsPerContainer int  `key:"maxConnectionsPerContainer" json:"max_connections_per_container"`
 }
 
 type ContainerResourceLimitsConfig struct {

@@ -63,6 +63,8 @@ def list_secrets(
 
     table = Table(
         Column("Name"),
+        Column("Hosts"),
+        Column("Placeholder"),
         Column("Last Updated"),
         Column("Created"),
         box=box.SIMPLE,
@@ -71,8 +73,10 @@ def list_secrets(
     for secret in res.secrets:
         table.add_row(
             secret.name,
-            terminal.humanize_date(secret.created_at),
+            ", ".join(secret.hosts),
+            secret.placeholder,
             terminal.humanize_date(secret.updated_at),
+            terminal.humanize_date(secret.created_at),
         )
 
     table.add_section()
@@ -86,10 +90,15 @@ def list_secrets(
 )
 @click.argument("name")
 @click.argument("value")
+@click.option(
+    "--host", multiple=True, help="Allowed credential hostname or *.wildcard; repeatable."
+)
 @extraclick.pass_service_client
-def create_secret(service: ServiceClient, name: str, value: str):
+def create_secret(service: ServiceClient, name: str, value: str, host=()):
     res: CreateSecretResponse
-    res = service.secret.create_secret(CreateSecretRequest(name=name, value=value))
+    res = service.secret.create_secret(
+        CreateSecretRequest(name=name, value=value, hosts=list(host))
+    )
     if res.ok:
         terminal.header(f"Created secret with name: '{res.name}'")
     else:
@@ -102,10 +111,14 @@ def create_secret(service: ServiceClient, name: str, value: str):
 )
 @click.argument("name")
 @click.argument("value")
+@click.option("--host", multiple=True, help="Replace allowed credential hosts; repeatable.")
+@click.option("--clear-hosts", is_flag=True, help="Remove all allowed credential hosts.")
 @extraclick.pass_service_client
-def modify_secret(service: ServiceClient, name: str, value: str):
+def modify_secret(service: ServiceClient, name: str, value: str, host=(), clear_hosts=False):
     res: UpdateSecretResponse
-    res = service.secret.update_secret(UpdateSecretRequest(name=name, value=value))
+    res = service.secret.update_secret(
+        UpdateSecretRequest(name=name, value=value, hosts=list(host), clear_hosts=clear_hosts)
+    )
     if res.ok:
         terminal.header(f"Modified secret '{name}'")
     else:
@@ -142,3 +155,6 @@ def show_secret(service: ServiceClient, name: str):
         terminal.header(f"Secret '{name}': {res.secret.value}")
     else:
         terminal.error(f"Error: {res.err_msg}")
+
+
+management.add_command(modify_secret, "update")

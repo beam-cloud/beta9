@@ -72,6 +72,7 @@ type VMSpec struct {
 	BlockNetwork     bool              `json:"block_network"`
 	AllowList        []string          `json:"allow_list,omitempty"`
 	ProtectedPorts   []uint32          `json:"protected_ports,omitempty"`
+	PublicPorts      []uint32          `json:"public_ports,omitempty"`
 	Disks            []*pb.DurableDisk `json:"disks,omitempty"`
 	Volumes          []*pb.Volume      `json:"volumes,omitempty"`
 	SourceSnapshotID string            `json:"source_snapshot_id,omitempty"`

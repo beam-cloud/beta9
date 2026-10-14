@@ -122,11 +122,20 @@ func runtimeCredentialsRequest(request *types.ContainerRequest) *pb.GetContainer
 		return credentials
 	}
 
-	credentials.SecretNames = request.RuntimeSecretNames
+	credentials.SecretNames = append([]string(nil), request.RuntimeSecretNames...)
+	for _, binding := range request.SecretBindings {
+		credentials.BindingNames = append(credentials.BindingNames, binding.SecretName)
+		for i := 0; i < len(credentials.SecretNames); i++ {
+			if credentials.SecretNames[i] == binding.SecretName {
+				credentials.SecretNames = append(credentials.SecretNames[:i], credentials.SecretNames[i+1:]...)
+				i--
+			}
+		}
+	}
 	credentials.RuntimeToken = request.RuntimeTokenRequired
 	credentials.WorkspaceStorage = workspaceStorage
 	credentials.MountCredentials = runtimeMountCredentialRequests(request)
-	if !credentials.RuntimeToken && !credentials.WorkspaceStorage && len(credentials.SecretNames) == 0 && len(credentials.MountCredentials) == 0 {
+	if !credentials.RuntimeToken && !credentials.WorkspaceStorage && len(credentials.SecretNames) == 0 && len(credentials.BindingNames) == 0 && len(credentials.MountCredentials) == 0 {
 		return nil
 	}
 	return credentials
@@ -179,6 +188,14 @@ func mergeRuntimeEnv(existing, vended []string) []string {
 
 func applyRuntimeCredentials(request *types.ContainerRequest, resp *pb.GetContainerRuntimeCredentialsResponse) {
 	request.Env = mergeRuntimeEnv(request.Env, resp.Env)
+	for i := range request.SecretBindings {
+		for _, binding := range resp.SecretBindings {
+			if request.SecretBindings[i].SecretName == binding.SecretName {
+				request.SecretBindings[i].Value = binding.Value
+				request.SecretBindings[i].Hosts = append([]string(nil), binding.Hosts...)
+			}
+		}
+	}
 	if resp.WorkspaceStorage != nil {
 		request.Workspace.Storage = mergeWorkspaceStorageCredentials(request.Workspace.Storage, resp.WorkspaceStorage)
 	}
