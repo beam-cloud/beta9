@@ -41,8 +41,9 @@ func installEgressCA() error {
 		}
 		command := exec.Command("/usr/sbin/update-ca-certificates")
 		command.Env = append(os.Environ(), "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
-		if output, err := command.CombinedOutput(); err != nil {
-			return fmt.Errorf("install egress CA: %w: %s", err, output)
+		command.Stdout, command.Stderr = os.Stdout, os.Stderr
+		if err := command.Run(); err != nil {
+			return fmt.Errorf("install egress CA: %w", err)
 		}
 		return nil
 	}

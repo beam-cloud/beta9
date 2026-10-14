@@ -323,7 +323,10 @@ func (s *Service) handlePublicVMConn(ctx context.Context, raw net.Conn, httpList
 		}
 		return
 	}
-	_ = s.forwardPublicVMTCP(ctx, conn, v, port)
+	if err := s.forwardPublicVMTCP(ctx, conn, v, port); err != nil && ctx.Err() == nil {
+		vmetrics.GetOrCreateCounter(`vm_public_connections_rejected_total{reason="backend_error"}`).Inc()
+		p.rejectionLog.Warn().Err(err).Str("vm_id", v.ID).Uint32("port", port).Msg("public VM TCP forwarding failed")
+	}
 }
 
 func (s *Service) forwardPublicVMTCP(ctx context.Context, conn net.Conn, v *types.VM, port uint32) error {

@@ -130,9 +130,11 @@ func run() (int, error) {
 	}
 	logf("boot phase: network configured")
 	if processEnv(spec.Process, "BEAM_VM_SYSTEMD") == "1" {
+		logf("boot phase: installing egress trust")
 		if err := installEgressCA(); err != nil {
 			return -1, err
 		}
+		logf("boot phase: egress trust installed")
 		return -1, bootSystemd(spec, workload)
 	}
 
