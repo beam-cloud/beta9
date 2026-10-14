@@ -141,7 +141,7 @@ def configure_agents(
     name="vm",
     help="Sign in, connect your agents and start a persistent CPU VM. Run again to resume.",
 )
-@click.option("--name", help="Name of the first VM. Defaults to <product>-agent.")
+@click.option("--name", help="Name of the first VM. Generated if omitted.")
 @click.option("--desktop", is_flag=True, help="Include a browser desktop.")
 @click.option("--client", "clients", type=click.Choice(CLIENT_IDS), multiple=True)
 @click.option("--skip-agents", is_flag=True, help="Sign in and prepare the VM only.")
@@ -154,8 +154,6 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
     from ..deployment.onboarding import prepare_vm
 
     selected = context or extraclick.selected_context()
-    cli = get_settings().name.lower()
-    name = name or f"{cli}-agent"
     try:
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             selected_context, agents = connect_onboarding(selected, clients, skip_agents, yes)

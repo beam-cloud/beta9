@@ -26,28 +26,40 @@ print("Hello from the cloud", flush=True)
 
 
 def prepare_vm(
-    service: ServiceClient, state_directory: Path, name: str, *, desktop: bool = False
+    service: ServiceClient,
+    state_directory: Path,
+    name: Optional[str] = None,
+    *,
+    desktop: bool = False,
 ) -> Dict[str, Any]:
-    """Create or resume a setup-owned VM and verify its Linux guest."""
+    """Create or resume a setup-owned VM and verify its Linux guest.
+
+    Without a name the gateway generates one, and reruns find the VM by the ID
+    saved when it was created.
+    """
     workspace = service.http.workspace_id
     directory = state_directory / hashlib.sha256(workspace.encode()).hexdigest()[:24]
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = directory / (hashlib.sha256(name.encode()).hexdigest()[:24] + ".json")
+    path = directory / (hashlib.sha256((name or "").encode()).hexdigest()[:24] + ".json")
 
     with open(path.with_suffix(".lock"), "a", opener=_private_file) as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = json.loads(path.read_text()) if path.exists() else {"request_id": str(uuid.uuid4())}
         marker = {"beam.onboarding": state["request_id"]}
 
-        try:
-            vm = VM.get(name, _service=service)
-        except GatewayHTTPError as exc:
-            if exc.status != 404:
-                raise
+        vm = None
+        if name or state.get("vm_id"):
+            try:
+                vm = VM.get(name or state["vm_id"], _service=service)
+            except GatewayHTTPError as exc:
+                if exc.status != 404:
+                    raise
+
+        if vm is None:
             vm = _create_vm(service, path, state, name, desktop)
         else:
             if (vm.info.get("metadata") or {}).get("beam.onboarding") != marker["beam.onboarding"]:
-                raise ValueError(f"VM {name!r} already exists. Choose a different --name.")
+                raise ValueError(f"VM {vm.name!r} already exists. Choose a different --name.")
             if vm.info.get("desired_state") != "running":
                 vm.start(wait=False)
 
@@ -79,6 +91,8 @@ def _create_vm(service, path, state, name, desktop):
             _save_state(path, state)
         try:
             vm.create(wait=False)
+            state["vm_id"] = vm.info["id"]
+            _save_state(path, state)
             return vm
         except GatewayHTTPError as exc:
             if exc.status != 410:
