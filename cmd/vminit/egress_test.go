@@ -257,3 +257,17 @@ func TestEgressTrustMissingBundleAndAbsentCA(t *testing.T) {
 		t.Fatal("fallback bundle did not retain roots and one managed CA")
 	}
 }
+
+func TestEgressTrustBeforeSystemdSetsPATH(t *testing.T) {
+	root := t.TempDir()
+	ca := newTestTrustCA(t, "Beam container egress CA")
+	trustTestFile(t, filepath.Join(root, "etc/beam/ca-certificates.crt"), ca.pem)
+	t.Setenv("PATH", "")
+	if err := installEgressCAAt(root); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(filepath.Join(root, "etc/ssl/certs/beam-egress.pem"))
+	if err != nil || !bytes.Equal(stored, ca.pem) {
+		t.Fatal("PID 1 did not install trust without PATH")
+	}
+}

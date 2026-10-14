@@ -63,7 +63,8 @@ func installSystemCA(root string, certificate, fallbackBundle []byte) error {
 	}
 
 	// Ask OpenSSL for this one subject's canonical hash; never rehash the store.
-	command := exec.Command("openssl", "x509", "-subject_hash", "-noout")
+	// PID 1 has no PATH before systemd starts.
+	command := exec.Command("/usr/bin/openssl", "x509", "-subject_hash", "-noout")
 	command.Stdin = bytes.NewReader(certificate)
 	output, err := command.Output()
 	if err != nil {
