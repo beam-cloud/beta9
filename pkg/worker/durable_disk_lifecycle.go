@@ -116,7 +116,15 @@ func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, conta
 	progressCtx, stopProgress := s.durableDiskStoppingProgressContext(ctx, containerID, s.containerStoppingLease(containerID, request))
 	defer stopProgress()
 
-	_, syncErr := s.syncDurableDiskMounts(progressCtx, request, durableDiskFinalSyncMode(exitCode))
+	var syncErr error
+	instance, exists := s.containerInstances.Get(containerID)
+	// A successful terminal block-root checkpoint already published the exact
+	// disks paired with RAM. Detach without advancing their sealed generations.
+	sealed := exists && instance != nil && instance.terminalCheckpointCreated.Load() &&
+		instance.Runtime != nil && instance.Runtime.Capabilities().BlockRoot
+	if !sealed {
+		_, syncErr = s.syncDurableDiskMounts(progressCtx, request, durableDiskFinalSyncMode(exitCode))
+	}
 	// Final sync can consume or cancel its transfer budget. Detach gets a fresh
 	// cleanup context so the NBD is still released after the container exits.
 	detachErr := s.detachFinalQcowDurableDisks(request)

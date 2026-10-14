@@ -200,7 +200,9 @@ func (r *PostgresBackendRepository) CreateVMArtifact(ctx context.Context, ws uin
 
 func (r *PostgresBackendRepository) ListVMArtifacts(ctx context.Context, ws uint, kind string) ([]types.VMArtifact, error) {
 	var rows [][]byte
-	err := r.client.SelectContext(ctx, &rows, `SELECT data FROM vm_artifact WHERE workspace_id=$1 AND kind=$2 ORDER BY (data->>'created_at')::timestamptz`, ws, kind)
+	// Source VMs are soft deleted; retain their identity even after the live
+	// VM list stops returning them. The captured name also survives a purge.
+	err := r.client.SelectContext(ctx, &rows, `SELECT a.data || jsonb_build_object('vm_name',COALESCE(v.data->>'name',a.data->>'vm_name'),'vm_deleted',COALESCE(v.data->>'desired_state'='deleted',false)) FROM vm_artifact a LEFT JOIN persistent_vm v ON v.id=a.vm_id AND v.workspace_id=a.workspace_id WHERE a.workspace_id=$1 AND a.kind=$2 ORDER BY (a.data->>'created_at')::timestamptz`, ws, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -210,6 +212,9 @@ func (r *PostgresBackendRepository) ListVMArtifacts(ctx context.Context, ws uint
 		var a types.VMArtifact
 		if err := json.Unmarshal(data, &a); err != nil {
 			return nil, err
+		}
+		if a.Kind == "snapshot" && len(a.ID) >= 8 && a.Name == "stop-"+a.ID[:8] {
+			a.Name = a.ID
 		}
 
 		result = append(result, a)

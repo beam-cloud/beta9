@@ -439,6 +439,23 @@ func TestStopPreservesFinalRootWithoutVisibleSnapshot(t *testing.T) {
 	require.Empty(t, s.repo.(*vmStore).artifacts)
 }
 
+func TestAutomaticSnapshotsUseTheirIDAndRetainSourceName(t *testing.T) {
+	s, v, _, _, _ := fixture()
+	v.DesiredState = types.VMStateStopped
+	require.NoError(t, s.stop(context.Background(), v, true))
+	artifacts := s.repo.(*vmStore).artifacts
+	require.Len(t, artifacts, 1)
+	require.Equal(t, artifacts[0].ID, artifacts[0].Name)
+	require.Equal(t, v.ID, artifacts[0].VMID)
+	require.Equal(t, v.Name, artifacts[0].VMName)
+	manual, err := s.capture(context.Background(), v, "snapshot", "", "")
+	require.NoError(t, err)
+	require.Equal(t, manual.ID, manual.Name)
+	custom, err := s.capture(context.Background(), v, "snapshot", "before-upgrade", "")
+	require.NoError(t, err)
+	require.Equal(t, "before-upgrade", custom.Name)
+}
+
 func TestCreateUsesConfiguredDefaultPoolAndPreservesExplicitPool(t *testing.T) {
 	for _, test := range []struct {
 		defaultPool, requestedPool, wantPool string

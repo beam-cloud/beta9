@@ -246,11 +246,13 @@ func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, description string) (*types.VMArtifact, error) {
+	id := uuid.NewString()
 	if name == "" {
-		name = kind + "-" + uuid.NewString()[:8]
-	}
-
-	if !validName.MatchString(name) {
+		name = id
+		if kind == "template" {
+			name = kind + "-" + id[:8]
+		}
+	} else if !validName.MatchString(name) {
 		return nil, fmt.Errorf("invalid artifact name")
 	}
 
@@ -258,14 +260,14 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 		return nil, err
 	}
 
-	a := artifact(v, uuid.NewString(), kind, name, description)
+	a := artifact(v, id, kind, name, description)
 	return a, s.repo.CreateVMArtifact(ctx, v.WorkspaceID, a)
 }
 
 func artifact(v *types.VM, id, kind, name, description string) *types.VMArtifact {
 	spec := v.Spec
 	spec.SSHPublicKey, spec.SourceSnapshotID = "", ""
-	return &types.VMArtifact{ID: id, Name: name, VMID: v.ID, Kind: kind, RootSnapshotID: v.RootSnapshotID, Spec: spec, Description: description, CreatedAt: time.Now().UTC()}
+	return &types.VMArtifact{ID: id, Name: name, VMID: v.ID, VMName: v.Name, Kind: kind, RootSnapshotID: v.RootSnapshotID, Spec: spec, Description: description, CreatedAt: time.Now().UTC()}
 }
 
 func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
@@ -372,7 +374,7 @@ func (s *Service) finishStop(ctx context.Context, v *types.VM) error {
 	}
 
 	if v.StopSnapshotID != "" && v.RootSnapshotID != "" {
-		a := artifact(v, v.StopSnapshotID, "snapshot", "stop-"+v.StopSnapshotID[:8], "")
+		a := artifact(v, v.StopSnapshotID, "snapshot", v.StopSnapshotID, "")
 		if err := s.repo.CreateVMArtifact(ctx, v.WorkspaceID, a); err != nil {
 			return err
 		}

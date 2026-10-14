@@ -125,6 +125,8 @@ type VMArtifact struct {
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
 	VMID           string    `json:"vm_id"`
+	VMName         string    `json:"vm_name,omitempty"`
+	VMDeleted      bool      `json:"vm_deleted,omitempty"`
 	Kind           string    `json:"kind"`
 	RootSnapshotID string    `json:"root_snapshot_id"`
 	Spec           VMSpec    `json:"spec"`
