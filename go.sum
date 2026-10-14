@@ -161,8 +161,8 @@ github.com/aws/smithy-go v1.27.3/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqx
 github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02 h1:bXAPYSbdYbS5VTy92NIUbeDI1qyggi+JYh5op9IFlcQ=
 github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02/go.mod h1:k08r+Yj1PRAmuayFiRK6MYuR5Ve4IuZtTfxErMIh0+c=
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
-github.com/beam-cloud/clip v0.0.0-20261006212652-48dbe6ab9784 h1:BNtWTcBet/dllu00JWzYTl0FEPtM9oFG8SIKNccxo4k=
-github.com/beam-cloud/clip v0.0.0-20261006212652-48dbe6ab9784/go.mod h1:uymwDNMk1qoxElmDSlPzwYqZDriHDnW5VVyfK3YNuz8=
+github.com/beam-cloud/clip v0.0.0-20261013194657-90b533764e52 h1:n3aPOKt16b8i3IRkg8BYYbPHmybbvE+06JrYKgqt8YM=
+github.com/beam-cloud/clip v0.0.0-20261013194657-90b533764e52/go.mod h1:uymwDNMk1qoxElmDSlPzwYqZDriHDnW5VVyfK3YNuz8=
 github.com/beam-cloud/geesefs v0.0.0-20260925011428-6547a72615ca h1:knV6RB+zdMne0iFIz9tOXTFhej28wB46v+/JHmo1ot0=
 github.com/beam-cloud/geesefs v0.0.0-20260925011428-6547a72615ca/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f h1:XzHOu+erxeBO6D3fKVbd5DAlipl+PYZ3u+Ywb8m7Ovk=
@@ -407,6 +407,8 @@ github.com/google/go-containerregistry v0.21.7/go.mod h1:kjSbt7/zMsKLWfnHrIvKvhX
 github.com/google/go-tpm v0.9.4 h1:awZRf9FwOeTunQmHoDYSHJps3ie6f1UlhS1fOdPEt1I=
 github.com/google/go-tpm v0.9.4/go.mod h1:h9jEsEECg7gtLis0upRBQU+GhYVH6jMjrFxI8u6bVUY=
 github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
+github.com/google/jsonschema-go v0.4.3 h1:/DBOLZTfDow7pe2GmaJNhltueGTtDKICi8V8p+DQPd0=
+github.com/google/jsonschema-go v0.4.3/go.mod h1:r5quNTdLOYEz95Ru18zA0ydNbBuYoo9tgaYcxEYhJVE=
 github.com/google/martian/v3 v3.3.3 h1:DIhPTQrbPkgs2yJYdXU/eNACCG5DVQjySNRNlflZ9Fc=
 github.com/google/martian/v3 v3.3.3/go.mod h1:iEPrYcgCF7jA9OtScMFQyAlZZ4YXTKEtJ1E6RWzmBA0=
 github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806 h1:wG8RYIyctLhdFk6Vl1yPGtSRtwGpVkWyZww1OCil2MI=

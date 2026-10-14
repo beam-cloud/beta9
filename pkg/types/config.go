@@ -261,12 +261,13 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host            string        `key:"host" json:"host"`
-	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
-	HTTP            HTTPConfig    `key:"http" json:"http"`
-	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
+	MCPOAuth        MCPOAuthConfig `key:"mcpOAuth" json:"mcp_oauth"`
+	Host            string         `key:"host" json:"host"`
+	InvokeURLType   string         `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC            GRPCConfig     `key:"grpc" json:"grpc"`
+	HTTP            HTTPConfig     `key:"http" json:"http"`
+	ShutdownTimeout time.Duration  `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits      StubLimits     `key:"stubLimits" json:"stub_limits"`
 	// Applied to workspaces that have no explicit concurrency limit row.
 	// Both values must be > 0 for the default to take effect; otherwise
 	// workspaces without a row remain unlimited (legacy behavior).
@@ -275,6 +276,15 @@ type GatewayServiceConfig struct {
 	// serverless workloads. Independent of the concurrency limit, which is a
 	// capacity cap, not a paywall.
 	CreditGate CreditGateConfig `key:"creditGate" json:"credit_gate"`
+}
+
+// OAuth is opt-in. The public issuer/resource are canonical identifiers; the
+// introspection URL can use the cluster's private account-service endpoint.
+type MCPOAuthConfig struct {
+	Issuer              string `key:"issuer" json:"issuer"`
+	Resource            string `key:"resource" json:"resource"`
+	IntrospectionURL    string `key:"introspectionURL" json:"introspection_url"`
+	IntrospectionSecret string `key:"introspectionSecret" json:"-"`
 }
 
 type DefaultConcurrencyLimitConfig struct {

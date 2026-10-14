@@ -97,10 +97,14 @@ class FileSyncer:
         self,
         gateway_stub: GatewayServiceStub,
         root_dir=".",
+        prune_ignored_directories: bool = True,
+        use_project_ignore: bool = True,
     ):
         self.root_dir = Path(root_dir).absolute()
         self.gateway_stub: GatewayServiceStub = gateway_stub
         self.is_workspace_dir = root_dir == "."
+        self.prune_ignored_directories = prune_ignored_directories
+        self.use_project_ignore = use_project_ignore
 
     @property
     def ignore_file_path(self) -> Path:
@@ -131,8 +135,9 @@ class FileSyncer:
 
         return patterns
 
-    def _should_ignore(self, path: str) -> bool:
-        relative_path = os.path.relpath(path, self.root_dir)
+    def _should_ignore(self, path: str, directory: bool = False) -> bool:
+        # A directory is matched as `dir/`, so `!src/` can re-include it after `*`.
+        relative_path = os.path.relpath(path, self.root_dir) + ("/" if directory else "")
         spec = getattr(self, "_ignore_spec", None) or PathSpec.from_lines(
             "gitwildmatch", self.ignore_patterns
         )
@@ -155,7 +160,12 @@ class FileSyncer:
         terminal.debug(f"Collecting files from {self.root_dir}")
 
         for root, dirs, files in os.walk(self.root_dir):
-            dirs[:] = [d for d in dirs if not self._should_ignore(os.path.join(root, d))]
+            if self.prune_ignored_directories:
+                dirs[:] = [
+                    d
+                    for d in dirs
+                    if not self._should_ignore(os.path.join(root, d), directory=True)
+                ]
 
             for file in files:
                 file_path = os.path.join(root, file)
@@ -172,9 +182,10 @@ class FileSyncer:
 
     def sync(
         self,
-        ignore_patterns: List[str] = [],
-        include_patterns: List[str] = [],
+        ignore_patterns: Optional[List[str]] = None,
+        include_patterns: Optional[List[str]] = None,
     ) -> FileSyncResult:
+        """Sync selected files, using the project's ignore file by default."""
         with _sync_lock:
             return self._sync(
                 ignore_patterns=ignore_patterns,
@@ -183,17 +194,16 @@ class FileSyncer:
 
     def _sync(
         self,
-        ignore_patterns: List[str] = [],
-        include_patterns: List[str] = [],
+        ignore_patterns: Optional[List[str]] = None,
+        include_patterns: Optional[List[str]] = None,
     ) -> FileSyncResult:
         terminal.header("Syncing files")
 
-        self._init_ignore_file()
-
-        if ignore_patterns is None or len(ignore_patterns) == 0:
+        if not ignore_patterns and self.use_project_ignore:
+            self._init_ignore_file()
             self.ignore_patterns = self._read_ignore_file()
         else:
-            self.ignore_patterns = ignore_patterns
+            self.ignore_patterns = ignore_patterns or []
 
         if include_patterns is None or len(include_patterns) == 0:
             self.include_patterns = []

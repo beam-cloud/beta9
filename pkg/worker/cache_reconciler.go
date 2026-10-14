@@ -6,7 +6,6 @@ package worker
 // and short-lived origin credentials are brokered through the gateway.
 
 import (
-	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -26,6 +25,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/clip/pkg/clip"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -2078,14 +2078,14 @@ func (m *WorkerCacheManager) materializeOCILayer(ctx context.Context, server *ca
 	}
 	defer compressed.Close()
 
-	gzr, err := gzip.NewReader(compressed)
+	layerReader, err := clipCommon.DecompressLayer(compressed)
 	if err != nil {
 		log.Debug().Err(err).Str("source", item.Source).Msg("cache reconciliation failed to decompress oci layer")
 		return types.CacheAuditStatusOriginFailure
 	}
-	defer gzr.Close()
+	defer layerReader.Close()
 
-	if _, _, err := server.StoreReader(ctx, gzr, item.Hash); err != nil {
+	if _, _, err := server.StoreReader(ctx, layerReader, item.Hash); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Str("source", item.Source).Msg("cache reconciliation failed to store decompressed oci layer")
 		return types.CacheAuditStatusOriginFailure
 	}

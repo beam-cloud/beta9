@@ -41,13 +41,14 @@ type WebhookRequest struct {
 	Enabled     *bool    `json:"enabled"`
 }
 
-// The secret is returned once, on creation.
-func redact(w types.WorkspaceWebhook) types.WorkspaceWebhook {
+// RedactWebhook returns a copy without its signing secret.
+func RedactWebhook(w types.WorkspaceWebhook) types.WorkspaceWebhook {
 	w.Secret = ""
 	return w
 }
 
-func validateWebhookURL(raw string) error {
+// ValidateWebhookURL requires an absolute HTTP(S) URL.
+func ValidateWebhookURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
 		return HTTPBadRequest("url must be an absolute http(s) URL")
@@ -63,7 +64,7 @@ func (g *WebhookGroup) List(ctx echo.Context) error {
 	}
 	out := make([]types.WorkspaceWebhook, 0, len(webhooks))
 	for _, w := range webhooks {
-		out = append(out, redact(w))
+		out = append(out, RedactWebhook(w))
 	}
 	return ctx.JSON(http.StatusOK, out)
 }
@@ -75,7 +76,7 @@ func (g *WebhookGroup) Create(ctx echo.Context) error {
 	if err := ctx.Bind(&req); err != nil {
 		return HTTPBadRequest("Invalid payload")
 	}
-	if err := validateWebhookURL(req.URL); err != nil {
+	if err := ValidateWebhookURL(req.URL); err != nil {
 		return err
 	}
 
@@ -130,7 +131,7 @@ func (g *WebhookGroup) Update(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid payload")
 	}
 	if req.URL != "" {
-		if err := validateWebhookURL(req.URL); err != nil {
+		if err := ValidateWebhookURL(req.URL); err != nil {
 			return err
 		}
 		webhook.URL = strings.TrimSpace(req.URL)
@@ -147,7 +148,7 @@ func (g *WebhookGroup) Update(ctx echo.Context) error {
 	if err := g.workspaceRepo.SetWebhook(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId, *webhook); err != nil {
 		return HTTPInternalServerError("Failed to save webhook")
 	}
-	return ctx.JSON(http.StatusOK, redact(*webhook))
+	return ctx.JSON(http.StatusOK, RedactWebhook(*webhook))
 }
 
 func (g *WebhookGroup) Delete(ctx echo.Context) error {

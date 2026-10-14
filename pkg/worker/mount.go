@@ -325,7 +325,7 @@ func (c *ContainerMountManager) setupUserCodeMount(ctx context.Context, request 
 		return destPath, nil
 	}
 
-	if request.Stub.Type.IsSandbox() && abstractionscommon.IsEmptyStubObject(request.Stub.Object) {
+	if abstractionscommon.IsEmptyStubObject(request.Stub.Object) {
 		if err := createEmptyContainerWorkspace(destPath, readyPath); err != nil {
 			return "", err
 		}

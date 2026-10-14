@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -188,6 +189,37 @@ func TestServiceProxyAttachFailsOpenWhenTargetUnreachable(t *testing.T) {
 	if p.retryAt.IsZero() {
 		t.Fatal("failed start did not schedule a retry")
 	}
+}
+
+// ioredis and node-redis connect without SNI, which the TCP gateway routes by,
+// so Node processes preload a tls.connect that names the host, keeping their
+// own options.
+func TestServiceProxyNodeSNI(t *testing.T) {
+	proxy := NewServiceProxy(context.Background(), testServiceProxyConfig("tcp.beam.cloud"))
+	request := &types.ContainerRequest{ContainerId: "test-node-sni"}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(baseConfigPath, request.ContainerId)) })
+	spec := &specs.Spec{Process: &specs.Process{Env: []string{
+		"REDIS_URL=rediss://default:x@cache-abc1234-latest-6379.tcp.beam.cloud:443",
+		"NODE_OPTIONS=--max-old-space-size=512",
+	}}}
+
+	proxy.AttachNodeSNI(request, spec)
+
+	require.Equal(t, "NODE_OPTIONS=--require "+nodeSNIPreload+" --max-old-space-size=512", spec.Process.Env[1])
+	require.Len(t, spec.Mounts, 1)
+	require.Equal(t, nodeSNIPreload, spec.Mounts[0].Destination)
+	require.Contains(t, spec.Mounts[0].Options, "ro")
+	source, err := os.ReadFile(spec.Mounts[0].Source)
+	require.NoError(t, err)
+	require.Contains(t, string(source), `const suffix = ".tcp.beam.cloud";`)
+
+	require.Equal(t, []string{"A=1", "NODE_OPTIONS=--require /m.cjs"}, withNodePreload([]string{"A=1"}, "/m.cjs"))
+	require.Equal(t, []string{"NODE_OPTIONS=--require /m.cjs"}, withNodePreload([]string{"NODE_OPTIONS=--require /m.cjs"}, "/m.cjs"))
+
+	other := &specs.Spec{Process: &specs.Process{Env: []string{"REDIS_URL=rediss://cache.example.com:6380"}}}
+	proxy.AttachNodeSNI(request, other)
+	require.Empty(t, other.Mounts)
+	require.Equal(t, []string{"REDIS_URL=rediss://cache.example.com:6380"}, other.Process.Env)
 }
 
 func TestHostsFile(t *testing.T) {

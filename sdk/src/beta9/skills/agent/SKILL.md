@@ -17,13 +17,20 @@ the unit you deploy: a container from a Dockerfile or image, or a Python
 function with a `{{product}}` decorator. Every app gets a URL. Apps share a
 **workspace** (the token's scope), where **secrets**, **volumes**, **durable
 disks**, and managed **databases** also live. A **stack** groups related apps
-on one board with the references between them. Apps and databases wire
-together with **references** in env values, resolved by the platform at
-deploy time:
+on one board with the references between them. There is no private network:
+apps and databases reach each other only through **references** in env
+values, resolved by the platform at deploy time:
 
-    ${{db.<name>.DATABASE_URL}}   also HOST, PORT, USERNAME, PASSWORD, DATABASE
-    ${{app.<name>.URL}}           another app's public URL
-    ${{secret.<NAME>}}            a workspace secret
+    ${{db.<name>.DATABASE_URL}}    also REDIS_URL, HOST, PORT, USERNAME, PASSWORD, DATABASE
+    ${{app.<name>.URL}}            another app's public HTTPS URL (first port)
+    ${{app.<name>.URL.<port>}}     the public HTTPS URL of one port
+    ${{app.<name>.TCP.<port>}}     host:443 of one port on the TLS TCP gateway
+    ${{app.<name>.HOST.<port>}}    its host alone (PORT.<port> likewise), for split settings
+    ${{secret.<NAME>}}             a workspace secret
+
+A secret or credential reference must be the whole value; build URLs from
+`DATABASE_URL`-style references rather than splicing a password into a
+string. Clients of a `TCP` address must use TLS with its host as SNI.
 
 ## Two ways in: MCP and the CLI
 
@@ -48,7 +55,8 @@ workspace tools appear. With those tools you can do the whole job through MCP.
    the link to add credits) and wait for them before deploying anything.
 2. `list_apps` / `{{cli}} status --json`: what already exists. App names are
    workspace-wide, so reuse or pick a distinct name.
-3. Read [references/deploy.md](references/deploy.md) before the first deploy of
+3. Read [references/vms.md](references/vms.md) before provisioning a VM,
+   [references/deploy.md](references/deploy.md) before the first deploy of
    a new codebase, and [references/databases.md](references/databases.md) when
    the app needs one.
 
@@ -60,12 +68,14 @@ The shape is always the same; only the framework details change:
    name such as `<app>-db`. Credentials become secrets; you never see or copy
    them.
 2. **Deploy the app** from its directory: MCP `deploy` with `name`, the
-   `dockerfile` (or `image`, or a `handler`), `ports: [<port the server binds>]`,
-   and `env` that includes `DATABASE_URL: "${{db.<app>-db.DATABASE_URL}}"`.
-   From a terminal that is `{{cli}} deploy --dockerfile Dockerfile --name <app>
-   --port <port> --env DATABASE_URL='${{db.<app>-db.DATABASE_URL}}'`.
-3. **Wait**: poll `deploy_status` (or `{{cli}} deployment wait <id>`). Builds
-   take a minute or two the first time.
+   `dockerfile` (or `image`, or a `handler`), `ports` when the server binds a
+   port its image does not `EXPOSE`, and `env` that includes
+   `DATABASE_URL: "${{db.<app>-db.DATABASE_URL}}"`. From a terminal that is
+   `{{cli}} deploy --dockerfile Dockerfile --name <app> --port <port> --env
+   DATABASE_URL='${{db.<app>-db.DATABASE_URL}}'`.
+3. **Wait**: `deploy_status` until `accepted`, then `wait_deployment` until
+   the new version serves (or `{{cli}} deployment wait <id>`). Builds take a
+   minute or two the first time.
 4. **Wire anything else** with `connect_services` or `set_env`; each call
    deploys a new version.
 5. **Group** with `create_stack` (name it after the project) so the user sees
@@ -73,6 +83,42 @@ The shape is always the same; only the framework details change:
 
 Ask before spending: pick the smallest resources that work (1 CPU, 1–2 Gi for
 web apps; a GPU only when the code needs one) and say what you chose.
+
+## Compute defaults
+
+Apps and stack services default to serverless: `min_replicas: 0`,
+`keep_warm_seconds: 0`; managed databases default to `always_on: false`.
+Keep these defaults. A Compose file, a web app, a stack, or a cold start is
+not a request for continuous compute. Set a positive minimum, `always_on`,
+or `keep_warm_seconds: -1` only when the user explicitly asks for continuous
+capacity and understands the idle cost. A portless queue poller has no incoming
+connection to wake it from zero; explain that requirement and obtain the user's
+choice before setting a positive minimum. Use a job for one-off work.
+
+For a persistent machine, use VM tools. Keep the VM defaults: 4 vCPU, 8 GiB
+memory, 50 GiB disk and no idle timeout. Change them when the user requests it.
+`{{cli}} setup vm` handles browser sign-in and prepares a verified guest.
+VMs keep running until stopped. See [VM operations](references/vms.md).
+
+## Several services: a stack
+
+For a project with more than one service, and always for a docker-compose
+project, deploy a **stack** instead of wiring apps by hand:
+
+1. `stack_from_compose { "path": "/abs/project" }` translates the compose
+   file into a draft spec: postgres/redis become managed databases, service
+   addresses become references, named volumes become disks, and shared
+   placeholder passwords become generated secrets. It provisions nothing.
+2. Resolve every warning: each marks something compose expresses that this
+   platform does not (a client that must enable TLS, a config file that names
+   another service by host, a version pin, a missing health path).
+3. `stack_plan { "name": "<project>", "spec": ... }`, show the user the plan,
+   then call `stack_apply { "plan_id": ... }` repeatedly until it says
+   `Stack applied`; each call advances one step. A failed service names its
+   error; read its logs, fix the spec, plan again, and apply the new plan,
+   which keeps the services that did not change.
+
+See [references/deploy.md](references/deploy.md#docker-compose-projects).
 
 ## When something fails
 
@@ -97,7 +143,8 @@ signal to ask first.
 
 ## References
 
+- [vms.md](references/vms.md): persistent VMs, processes, files, desktops, ports, snapshots, templates and local tools
 - [setup.md](references/setup.md): sign-in, contexts, tokens for CI, MCP registration
-- [deploy.md](references/deploy.md): containers, Dockerfiles, handlers, ports, disks, GPUs, framework notes
+- [deploy.md](references/deploy.md): containers, Dockerfiles, handlers, ports, workers, disks, GPUs, compose projects, framework notes
 - [databases.md](references/databases.md): managed databases and references
 - [operate.md](references/operate.md): logs, metrics, scaling, rollbacks, secrets, stacks

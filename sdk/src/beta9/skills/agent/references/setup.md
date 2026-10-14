@@ -48,3 +48,24 @@ secret is written into agent config and a rotated token needs no reinstall.
 Point the CLI at another gateway with
 `{{cli}} config create <name> --gateway-host <host> --gateway-port <port>`;
 everything else is the same.
+
+## Native remote OAuth
+
+For an OAuth-capable HTTP MCP client, add the workspace MCP URL supplied by
+the platform and follow browser consent. The client handles access-token
+expiry and rotating refresh tokens. Choose the workspace and only the
+scopes needed; access to credentials is separate from reads, writes and VM
+execution. Disconnect under the dashboard’s API keys settings to revoke
+the grant. Do not paste a workspace token into an agent prompt or its MCP
+configuration. The local stdio bridge still uses CLI device login and adds
+operations that need local files or sockets.
+
+## First workload
+
+`{{cli}} setup vm` signs in, checks credits and verifies a persistent VM using
+the defaults: 4 vCPU, 8 GiB memory, 50 GiB disk and no idle timeout.
+`{{cli}} setup sandboxes` runs a verified hello-world
+command in a container sandbox and stops it when finished. `setup inference`
+and `setup functions` verify scale-to-zero sample apps. Add `--skip-agents`
+to preserve local agent configuration and `--yes` only with approval to create
+compute; checkout stays in the browser.

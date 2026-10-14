@@ -267,6 +267,8 @@ func TestExpandReferencesAddressesEachPortOfAMultiPortApp(t *testing.T) {
 	env, bindings, err := gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{
 		"CLICKHOUSE_URL=${{app.clickhouse.URL.8123}}",
 		"CLICKHOUSE_MIGRATION_URL=clickhouse://${{app.clickhouse.TCP.9000}}",
+		"CLICKHOUSE_HOST=${{app.clickhouse.HOST.9000}}",
+		"CLICKHOUSE_PORT=${{app.clickhouse.PORT.9000}}",
 		"NEXTAUTH_URL=${{app.my.web.URL}}",
 	})
 	require.NoError(t, err)
@@ -274,13 +276,15 @@ func TestExpandReferencesAddressesEachPortOfAMultiPortApp(t *testing.T) {
 	require.Equal(t, []string{
 		"CLICKHOUSE_URL=https://clickhouse-abc1234-latest-8123.app.example.com",
 		"CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse-abc1234-latest-9000.tcp.example.com:443",
+		"CLICKHOUSE_HOST=clickhouse-abc1234-latest-9000.tcp.example.com",
+		"CLICKHOUSE_PORT=443",
 		"NEXTAUTH_URL=https://my-web-abc1234-latest-3000.app.example.com",
 	}, env)
 
 	_, _, err = gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{"X=${{app.clickhouse.URL.9440}}"})
 	require.ErrorContains(t, err, `app "clickhouse" does not expose port 9440`)
 
-	for _, bad := range []string{"app.clickhouse.HOST", "app.clickhouse.TCP", "app.clickhouse.TCP.0", "app.clickhouse.URL.http", "app..URL"} {
+	for _, bad := range []string{"app.clickhouse.HOST", "app.clickhouse.PORT", "app.clickhouse.TCP", "app.clickhouse.TCP.0", "app.clickhouse.URL.http", "app..URL"} {
 		_, _, err = gws.expandReferences(context.Background(), authFor(ws), "langfuse-web", []string{"X=${{" + bad + "}}"})
 		require.ErrorContains(t, err, "invalid app reference", bad)
 	}

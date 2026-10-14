@@ -1,9 +1,4 @@
-"""
-Browser sign-in for the CLI: the OAuth 2.0 device grant (RFC 8628) against the
-authorization server of the target context (`ConfigContext.auth_url`; the
-settings' for the default one). The issued token is a workspace token, so the
-saved context is the one `config create` would write.
-"""
+"""CLI browser sign-in using the OAuth 2.0 device grant (RFC 8628)."""
 
 import configparser
 import os
@@ -28,8 +23,7 @@ from .config import (
 
 GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 REQUEST_TIMEOUT = 15
-# Consecutive polls that may fail to reach the service (network errors, 5xx)
-# before the sign-in is given up; one blip must not end a ten-minute wait.
+# Consecutive network or server failures tolerated during device polling.
 MAX_TRANSIENT_FAILURES = 5
 
 
@@ -72,7 +66,7 @@ def save_login(context: ConfigContext, name: str = DEFAULT_CONTEXT_NAME) -> None
 def _post(auth_url: Optional[str], path: str, payload: Dict[str, str]) -> requests.Response:
     if not auth_url:
         raise LoginError(
-            "This install has no browser sign-in; create a token in the dashboard and run `config create`.",
+            "This install has no browser sign-in. Create a token in the dashboard and run `config create`.",
             "LOGIN_NOT_CONFIGURED",
         )
     try:
@@ -164,6 +158,8 @@ class DeviceLogin:
                     data.get("gateway_port") or self.target.gateway_port or DEFAULT_GATEWAY_PORT
                 ),
                 api_url=data.get("api_url") or self.target.api_url,
+                app_url_template=data.get("app_url_template") or self.target.app_url_template,
+                vm_url_template=data.get("vm_url_template") or self.target.vm_url_template,
             )
         error = data.get("error", "")
         if error == "authorization_pending":
@@ -172,7 +168,7 @@ class DeviceLogin:
             self.interval += 2
             return None
         if error == "expired_token":
-            raise LoginError("The sign-in code expired; run login again.", "LOGIN_EXPIRED")
+            raise LoginError("The sign-in code expired. Run login again.", "LOGIN_EXPIRED")
         if error == "access_denied":
             raise LoginError("Sign-in was denied in the browser.", "LOGIN_DENIED")
         raise LoginError(_message(response, "Sign-in failed"))
@@ -192,5 +188,5 @@ class DeviceLogin:
             if context is not None:
                 return context
             if time.monotonic() + self.interval > deadline:
-                raise LoginError("Timed out waiting for sign-in; run login again.", "LOGIN_EXPIRED")
+                raise LoginError("Timed out waiting for sign-in. Run login again.", "LOGIN_EXPIRED")
             time.sleep(self.interval)

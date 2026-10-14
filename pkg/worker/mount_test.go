@@ -50,19 +50,35 @@ func bindMountRetryTestOps(clock *bindMountRetryTestClock, mkdirAll func(string,
 	return ops
 }
 
-func TestSetupContainerMountsUsesLocalWorkspaceForEmptySandbox(t *testing.T) {
-	manager := NewContainerMountManager(types.AppConfig{})
-	manager.codeCacheRoot = filepath.Join(t.TempDir(), "code-cache")
+func TestSetupContainerMountsUsesLocalWorkspaceForEmptyObject(t *testing.T) {
+	for _, stubType := range []types.StubType{"sandbox", "vm", "pod", "pod/deployment", "endpoint/deployment", "taskqueue/deployment"} {
+		t.Run(string(stubType), func(t *testing.T) {
+			manager := NewContainerMountManager(types.AppConfig{})
+			manager.codeCacheRoot = filepath.Join(t.TempDir(), "code-cache")
 
-	request := stubCodeMountRequest("sandbox-empty-code", "workspace-empty", "object-empty")
-	request.Stub.Type = types.StubType(types.StubTypeSandbox)
-	request.Stub.Object.Hash = abstractionscommon.EmptyStubObjectHash()
+			request := stubCodeMountRequest("empty-code-"+stubType.Kind(), "workspace-empty", "object-empty")
+			request.Stub.Type = stubType
+			request.Stub.Object.Hash = abstractionscommon.EmptyStubObjectHash()
+			t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request.ContainerId))) })
+
+			require.NoError(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
+			require.DirExists(t, request.Mounts[0].LocalPath)
+			require.FileExists(t, filepath.Join(filepath.Dir(request.Mounts[0].LocalPath), ".workspace-ready"))
+			require.NoDirExists(t, manager.codeCacheRoot)
+		})
+	}
+}
+
+func TestSetupContainerMountsRejectsMissingNonemptyObject(t *testing.T) {
+	manager := NewContainerMountManager(types.AppConfig{})
+	manager.codeCacheRoot = t.TempDir()
+	request := stubCodeMountRequest("missing-service-code", "workspace-missing", "object-missing")
+	request.Stub.Type = "pod/deployment"
+	request.Stub.Object.Hash = "nonempty-object"
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request.ContainerId))) })
 
-	require.NoError(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
-	require.DirExists(t, request.Mounts[0].LocalPath)
-	require.FileExists(t, filepath.Join(filepath.Dir(request.Mounts[0].LocalPath), ".workspace-ready"))
-	require.NoDirExists(t, manager.codeCacheRoot)
+	require.Error(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
+	require.NoFileExists(t, filepath.Join(filepath.Dir(types.TempContainerWorkspace(request.ContainerId)), ".workspace-ready"))
 }
 
 func TestEnsureBindMountSourceDirsRetriesWorkspaceEAGAIN(t *testing.T) {

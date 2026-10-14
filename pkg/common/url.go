@@ -12,6 +12,9 @@ const (
 	InvokeUrlTypeHost string = "host"
 )
 
+// PortPlaceholder stands in for the port in the URL of a container with several.
+const PortPlaceholder = "<PORT>"
+
 func BuildDeploymentURL(externalUrl, urlType string, stub *types.StubWithRelated, deployment *types.Deployment) string {
 	parsedUrl, err := url.Parse(externalUrl)
 	if err != nil {
@@ -64,7 +67,7 @@ func BuildPodURL(externalUrl, urlType string, stub *types.StubWithRelated, stubC
 
 	url := ""
 
-	portPlaceholder := "<PORT>"
+	portPlaceholder := PortPlaceholder
 	if len(stubConfig.Ports) == 1 {
 		portPlaceholder = fmt.Sprintf("%d", stubConfig.Ports[0])
 	}
@@ -89,7 +92,7 @@ func BuildPodDeploymentURL(externalUrl, urlType string, deployment *types.Deploy
 		return ""
 	}
 
-	portPlaceholder := "<PORT>"
+	portPlaceholder := PortPlaceholder
 	if len(stubConfig.Ports) == 1 {
 		portPlaceholder = fmt.Sprintf("%d", stubConfig.Ports[0])
 	}

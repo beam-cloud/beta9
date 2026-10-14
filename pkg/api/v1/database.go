@@ -20,7 +20,7 @@ type DatabaseManager interface {
 	CheckDatabaseReadiness(ctx context.Context, authInfo *auth.AuthInfo, name, deploymentID string) (*types.DatabaseReadiness, error)
 }
 
-const databaseCreateTimeout = 10 * time.Minute
+const DatabaseCreateTimeout = 10 * time.Minute
 
 type DatabaseGroup struct {
 	routerGroup *echo.Group
@@ -66,7 +66,7 @@ func (g *DatabaseGroup) Create(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid payload")
 	}
 
-	reqCtx, cancel := context.WithTimeout(auth.ContextWithAuthInfo(ctx.Request().Context(), cc.AuthInfo), databaseCreateTimeout)
+	reqCtx, cancel := context.WithTimeout(auth.ContextWithAuthInfo(ctx.Request().Context(), cc.AuthInfo), DatabaseCreateTimeout)
 	defer cancel()
 
 	info, err := g.gws.CreateDatabaseService(reqCtx, cc.AuthInfo, params)

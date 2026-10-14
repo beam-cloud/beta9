@@ -32,7 +32,7 @@ def common(**_):
 )
 @click.option(
     "--environment",
-    help="Built-in environment to sign in to (a staging cluster, say) instead of the default.",
+    help="Sign in to a configured environment, such as staging.",
 )
 @click.option(
     "--name",
@@ -58,16 +58,16 @@ def login(browserless: bool, environment: Optional[str], context_name: Optional[
         return
 
     if not browserless and flow.open_browser():
-        terminal.header("Finish signing in from your browser")
+        terminal.header("Finish signing in through your browser")
         terminal.detail(f"If it didn't open: {flow.verification_uri_complete}")
     else:
-        terminal.header("Sign in with one click:")
+        terminal.header(f"Sign in to {get_settings().name}")
         terminal.print(f"  {flow.verification_uri_complete}\n")
         terminal.detail(f"Or go to {flow.verification_uri} and enter this code:")
         terminal.print(f"  [bold]{flow.user_code}[/bold]")
 
     try:
-        with terminal.progress("Waiting for sign-in..."):
+        with terminal.progress("Waiting for sign-in"):
             context = flow.wait()
     except LoginError as exc:
         terminal.error(str(exc), code=exc.code)

@@ -19,8 +19,18 @@ var authContextKey = "auth"
 type AuthInfo struct {
 	Workspace *types.Workspace
 	Token     *types.Token
+	// OAuth is present only after resource-server introspection. The backing
+	// workspace token never leaves the server; scopes constrain MCP dispatch.
+	OAuth *OAuthGrant
 	// Request attribution.
 	Actor types.EventActor
+}
+
+type OAuthGrant struct {
+	ClientID string
+	Subject  string
+	Resource string
+	Scopes   []string
 }
 
 const (
