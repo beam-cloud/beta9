@@ -154,6 +154,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
     from ..channel import GatewayHTTPError, ServiceClient
     from ..config import get_config_context
     from ..deployment.onboarding import prepare_vm
+    from .vm import _browser_info
 
     selected = context or extraclick.selected_context()
     steps = terminal.StepTracker()
@@ -181,6 +182,8 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                         name,
                         desktop=desktop,
                     )
+                if not terminal.json_output():
+                    result = _browser_info(service, result)
         dashboard = dashboard_link(selected_context, "vm", result["id"])
         if terminal.json_output():
             terminal.print_json(
@@ -208,6 +211,10 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
             terminal.detail(
                 "Restart your agent to use the VM tools. Re-run this setup to resume the same VM."
             )
+            if result.get("spec", {}).get("protected_ports"):
+                terminal.detail(
+                    "Browser links expire after 10 minutes. The commands below open fresh links."
+                )
             command = extraclick.command_hint(selected)
             name = shlex.quote(result["name"])
             terminal.print("")

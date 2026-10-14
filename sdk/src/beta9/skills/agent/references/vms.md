@@ -83,6 +83,17 @@ creations need a public key matching your local private identity. Keep
 private keys on the client. A fork has an independent writable root.
 
 Terminal (7681) and desktop (8080) require a traffic token by default.
+The CLI signs in automatically: `{{cli}} vm terminal NAME` and
+`{{cli}} vm desktop NAME` open authenticated browser links. Use
+`{{cli}} vm open NAME PORT` for any published HTTP port, or add `--url`
+to print the link. Private links expire after 10 minutes; rerun the command
+for a fresh one. Creation, `get`, `expose`, and `ports` show usable browser
+links and distinguish private application ports from public ones. JSON
+output keeps stable URLs without embedding temporary credentials.
+For non-browser clients, `{{cli}} vm port-forward NAME PORT` provides an
+authenticated localhost connection. `ports` also lists tunnel-only ports
+and the SSH command. No traffic token needs to be copied for these flows.
+
 Use `{{cli}} vm new --public-port 7681` or `VM(public_ports=[7681])` to opt out.
 After creation, `{{cli}} vm expose --protected NAME 7681` restores protection;
 `--public` removes it. SSH (2222) cannot use either setting.
