@@ -108,6 +108,7 @@ def _show(info, as_json):
                     ("id", "ID"),
                     ("status", "Status"),
                     ("error", "Error"),
+                    ("public_ipv6", "IPv6"),
                     ("terminal_url", "Terminal"),
                     ("desktop_url", "Desktop"),
                 )
@@ -433,6 +434,17 @@ def _vm_table(records, starts):
 def get_vm(service, name, as_json):
     """Show a VM's identity, state and URLs."""
     _show(_vm(service, name).info, as_json)
+
+
+@management.command("ip")
+@click.argument("name")
+@extraclick.pass_service_client
+def ip_vm(service, name):
+    """Print the persistent public IPv6 address."""
+    address = _vm(service, name).public_ipv6
+    if not address:
+        raise click.ClickException("VM does not have a public IPv6 address")
+    click.echo(address)
 
 
 @management.command("update")

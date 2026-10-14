@@ -24,6 +24,25 @@ port URLs and terminal/desktop links. Poll until the guest is ready before
 announcing success. VM and artifact names are at most 24 lowercase letters,
 digits and hyphens, starting with a letter.
 
+## Public IPv6
+
+`{{cli}} vm new`, `{{cli}} vm get NAME` and `{{cli}} setup vm` show the
+persistent IPv6 address when one is allocated. `{{cli}} vm ip NAME` prints
+just the address for copying or scripts. In Python, use `vm.public_ipv6`
+after `VM(...).create()` or `VM.get("NAME")`; it is `None` when no address
+has been allocated. Reading the property does not make a network request.
+
+The address survives stop/start and pause/resume. Published TCP ports use
+their guest port number; SSH is on 2222. From an IPv6-capable network:
+
+```sh
+ssh -6 -i ~/.{{cli}}/ssh/vm_ed25519 -p 2222 root@"$({{cli}} vm ip NAME)"
+curl -g "http://[$({{cli}} vm ip NAME)]:8000/"
+```
+
+Publish application ports before connecting. Protected HTTP ports still
+require traffic authentication; the IPv6 address does not bypass protection.
+
 ## Commands and files
 
 `vm_exec { name, command: ["python3", "-c", "print('hello')"], wait: true }`

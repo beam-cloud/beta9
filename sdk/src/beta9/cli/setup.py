@@ -199,6 +199,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                 {
                     "ID": result["id"],
                     "Status": result.get("status"),
+                    "IPv6": result.get("public_ipv6"),
                     "Terminal": result.get("terminal_url"),
                     "Desktop": result.get("desktop_url"),
                     "Dashboard": dashboard,

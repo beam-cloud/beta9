@@ -719,6 +719,15 @@ print(json.dumps({'timestamp': time.time(), 'cpu_count': os.cpu_count(),
         return VMDesktop(self)
 
     @property
+    def public_ipv6(self) -> Optional[str]:
+        """Persistent public IPv6 address, or None when one has not been allocated.
+
+        Available after create(), get() or refresh(); reading it does not make
+        a network request. The address survives stop/start and pause/resume.
+        """
+        return self.info.get("public_ipv6") or None
+
+    @property
     def desktop_url(self):
         return self.refresh().info.get("desktop_url")
 
