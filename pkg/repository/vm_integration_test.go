@@ -88,6 +88,8 @@ func TestVMRepositoryIntegration(t *testing.T) {
 		if item.ID == a.ID {
 			found = true
 			require.Equal(t, a.RootSnapshotID, item.RootSnapshotID)
+			require.Equal(t, v.Name, item.VMName)
+			require.True(t, item.VMDeleted)
 		}
 	}
 	require.True(t, found, "template must survive source deletion")

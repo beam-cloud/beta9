@@ -2965,14 +2965,15 @@ func TestCheckpointSelectionKeepsCompatibleLegacyGPUVariant(t *testing.T) {
 func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {
 	dir := t.TempDir()
 	for tool, output := range map[string]string{
-		"runsc":      "runsc version release-test.1",
-		"criu":       "Version: 4.2",
-		"nvidia-smi": "NVIDIA GeForce RTX 4090, 580.126.18",
+		"cloud-hypervisor": "cloud-hypervisor v53.0",
+		"runsc":            "runsc version release-test.1",
+		"criu":             "Version: 4.2",
+		"nvidia-smi":       "NVIDIA GeForce RTX 4090, 580.126.18",
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\necho '"+output+"'\n"), 0755))
 	}
 	t.Setenv("PATH", dir)
-	for _, name := range []string{"runc", "gvisor"} {
+	for _, name := range []string{"runc", "gvisor", "microvm"} {
 		t.Run(name, func(t *testing.T) {
 			worker := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: name}, gpuCount: 1}
 			before, err := worker.readCheckpointHostProfile()

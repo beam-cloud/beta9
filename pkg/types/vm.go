@@ -98,6 +98,7 @@ type VM struct {
 	CreationDigest      string            `json:"creation_digest,omitempty"`
 	TrafficAccessToken  string            `json:"traffic_access_token,omitempty"`
 	Handle              string            `json:"handle"`
+	PublicIPv6          string            `json:"public_ipv6,omitempty"`
 	Spec                VMSpec            `json:"spec"`
 	StubID              string            `json:"stub_id,omitempty"`
 	ContainerID         string            `json:"container_id,omitempty"`
@@ -125,6 +126,8 @@ type VMArtifact struct {
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
 	VMID           string    `json:"vm_id"`
+	VMName         string    `json:"vm_name,omitempty"`
+	VMDeleted      bool      `json:"vm_deleted,omitempty"`
 	Kind           string    `json:"kind"`
 	RootSnapshotID string    `json:"root_snapshot_id"`
 	Spec           VMSpec    `json:"spec"`

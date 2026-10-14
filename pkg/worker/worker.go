@@ -1708,7 +1708,8 @@ func (s *Worker) profile() {
 
 func (s *Worker) startup() error {
 	log.Info().Msg("worker starting up")
-	if s.poolConfig.CRIUEnabled && (s.runtime.Name() == types.ContainerRuntimeRunc.String() || s.runtime.Name() == types.ContainerRuntimeGvisor.String()) {
+	if s.runtime.Name() == types.ContainerRuntimeMicroVM.String() ||
+		(s.poolConfig.CRIUEnabled && (s.runtime.Name() == types.ContainerRuntimeRunc.String() || s.runtime.Name() == types.ContainerRuntimeGvisor.String())) {
 		s.initializeCheckpointCompatibility()
 	}
 

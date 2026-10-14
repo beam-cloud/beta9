@@ -196,8 +196,11 @@ func (s *Worker) readCheckpointHostProfile() (checkpointHostProfile, error) {
 	p.CPU = checkpointSortedUnique(p.CPU)
 	p.XstateSize, _ = features.ExtendedStateSize()
 	executable := "criu"
-	if p.Runtime == types.ContainerRuntimeGvisor.String() {
+	switch p.Runtime {
+	case types.ContainerRuntimeGvisor.String():
 		executable = "runsc"
+	case types.ContainerRuntimeMicroVM.String():
+		executable = "cloud-hypervisor"
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()

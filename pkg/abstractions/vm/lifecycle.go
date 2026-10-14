@@ -114,6 +114,10 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
+	if err := s.ensurePublicIPv6(ctx, v); err != nil {
+		return err
+	}
+
 	state, err := s.runtimeState(v)
 	if err != nil {
 		return err
@@ -242,11 +246,13 @@ func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, description string) (*types.VMArtifact, error) {
+	id := uuid.NewString()
 	if name == "" {
-		name = kind + "-" + uuid.NewString()[:8]
-	}
-
-	if !validName.MatchString(name) {
+		name = id
+		if kind == "template" {
+			name = kind + "-" + id[:8]
+		}
+	} else if !validName.MatchString(name) {
 		return nil, fmt.Errorf("invalid artifact name")
 	}
 
@@ -254,14 +260,14 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 		return nil, err
 	}
 
-	a := artifact(v, uuid.NewString(), kind, name, description)
+	a := artifact(v, id, kind, name, description)
 	return a, s.repo.CreateVMArtifact(ctx, v.WorkspaceID, a)
 }
 
 func artifact(v *types.VM, id, kind, name, description string) *types.VMArtifact {
 	spec := v.Spec
 	spec.SSHPublicKey, spec.SourceSnapshotID = "", ""
-	return &types.VMArtifact{ID: id, Name: name, VMID: v.ID, Kind: kind, RootSnapshotID: v.RootSnapshotID, Spec: spec, Description: description, CreatedAt: time.Now().UTC()}
+	return &types.VMArtifact{ID: id, Name: name, VMID: v.ID, VMName: v.Name, Kind: kind, RootSnapshotID: v.RootSnapshotID, Spec: spec, Description: description, CreatedAt: time.Now().UTC()}
 }
 
 func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
@@ -368,7 +374,7 @@ func (s *Service) finishStop(ctx context.Context, v *types.VM) error {
 	}
 
 	if v.StopSnapshotID != "" && v.RootSnapshotID != "" {
-		a := artifact(v, v.StopSnapshotID, "snapshot", "stop-"+v.StopSnapshotID[:8], "")
+		a := artifact(v, v.StopSnapshotID, "snapshot", v.StopSnapshotID, "")
 		if err := s.repo.CreateVMArtifact(ctx, v.WorkspaceID, a); err != nil {
 			return err
 		}
@@ -463,7 +469,11 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	info := &auth.AuthInfo{Workspace: &workspace, Token: &types.Token{}}
 	ctx = auth.ContextWithAuthInfo(ctx, info)
 	if v.DesiredState != "running" {
-		return s.stopOrDelete(ctx, v)
+		if err := s.stopOrDelete(ctx, v); err != nil {
+			return err
+		}
+		s.backfillPublicIPv6(ctx, v)
+		return nil
 	}
 
 	token, err := s.backend.GetTokenByExternalId(ctx, v.WorkspaceID, v.TokenID)
@@ -531,9 +541,14 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 			}
 
 			if time.Since(v.UpdatedAt) >= time.Minute {
-				return s.snapshotRoot(ctx, v)
+				if err := s.snapshotRoot(ctx, v); err != nil {
+					return err
+				}
 			}
 
+			// Backfill legacy VMs after lifecycle work: allocation failures
+			// must never delay shutdown or idle expiry.
+			s.backfillPublicIPv6(ctx, v)
 			return nil
 		}
 

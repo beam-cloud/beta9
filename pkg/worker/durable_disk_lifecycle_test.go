@@ -4,13 +4,40 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/disk"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTerminalMicroVMCheckpointKeepsItsSealedDiskGeneration(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		request := &types.ContainerRequest{
+			ContainerId: "paused-vm",
+			Mounts:      []types.Mount{{LocalPath: t.TempDir(), DurableDisk: &types.DurableDiskMountConfig{Name: "root", Size: "1Gi", Driver: types.DurableDiskDriverQcow}}},
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(request.Mounts[0].LocalPath, "guest-state"), []byte("paired with memory"), 0600))
+		worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, nil)
+		worker.backendRepoClient = &fakeBackendRepoClient{}
+		worker.diskManager = disk.NewManager(disk.Config{Root: t.TempDir()})
+		instance := &ContainerInstance{Runtime: NewMockRuntime("microvm", runtime.Capabilities{BlockRoot: true})}
+		instance.terminalCheckpointCreated.Store(terminal)
+		worker.containerInstances.Set(request.ContainerId, instance)
+		// The checkpoint's disk is already offline. A regular stop must refuse
+		// an absent disk; a successful memory checkpoint must only detach it.
+		code, _ := worker.finalizeDurableDiskMountsWithContext(context.Background(), request.ContainerId, request, int(types.ContainerExitCodeUser), true)
+		if terminal {
+			require.Equal(t, int(types.ContainerExitCodeUser), code)
+		} else {
+			require.Equal(t, int(types.ContainerExitCodeUnknownError), code)
+		}
+	}
+}
 
 func TestDurableDiskCleanupContextIgnoresWorkerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

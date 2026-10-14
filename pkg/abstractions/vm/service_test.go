@@ -426,6 +426,32 @@ func TestBlockingLaunchResponseVerifiesExecWithoutConsumingCheckpoint(t *testing
 	require.Error(t, s.launchResponse(c, 201, v))
 }
 
+func TestBlockingLaunchResponseKeepsPendingRestoreAccepted(t *testing.T) {
+	for _, storedStatus := range []string{"starting", "running"} {
+		for _, status := range []int{http.StatusOK, http.StatusCreated} {
+			t.Run(fmt.Sprintf("%s/%d", storedStatus, status), func(t *testing.T) {
+				s, v, info, runtime, _ := fixture()
+				v.Status = storedStatus
+				v.MemoryCheckpointID = "owned-checkpoint"
+				runtime.containers.states[v.ContainerID].Status = types.ContainerStatusPending
+				c, rec := actionContext(info, v.Name, "start", "")
+				c.Request().URL.RawQuery = "wait=exec"
+				require.NoError(t, s.launchResponse(c, status, v))
+				require.Equal(t, status, rec.Code)
+				var response struct {
+					types.VM
+					ExecReady bool `json:"exec_ready"`
+				}
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+				require.Equal(t, "starting", response.Status)
+				require.False(t, response.ExecReady, "pending restore must still require authenticated readiness")
+				require.Equal(t, storedStatus, v.Status)
+				require.Equal(t, "owned-checkpoint", v.MemoryCheckpointID)
+			})
+		}
+	}
+}
+
 func TestStopPreservesFinalRootWithoutVisibleSnapshot(t *testing.T) {
 	s, v, info, runtime, gateway := fixture()
 	v.DesiredState = "stopped"
@@ -437,6 +463,23 @@ func TestStopPreservesFinalRootWithoutVisibleSnapshot(t *testing.T) {
 	require.Empty(t, v.ContainerID)
 	require.Equal(t, "stopped", v.Status)
 	require.Empty(t, s.repo.(*vmStore).artifacts)
+}
+
+func TestAutomaticSnapshotsUseTheirIDAndRetainSourceName(t *testing.T) {
+	s, v, _, _, _ := fixture()
+	v.DesiredState = types.VMStateStopped
+	require.NoError(t, s.stop(context.Background(), v, true))
+	artifacts := s.repo.(*vmStore).artifacts
+	require.Len(t, artifacts, 1)
+	require.Equal(t, artifacts[0].ID, artifacts[0].Name)
+	require.Equal(t, v.ID, artifacts[0].VMID)
+	require.Equal(t, v.Name, artifacts[0].VMName)
+	manual, err := s.capture(context.Background(), v, "snapshot", "", "")
+	require.NoError(t, err)
+	require.Equal(t, manual.ID, manual.Name)
+	custom, err := s.capture(context.Background(), v, "snapshot", "before-upgrade", "")
+	require.NoError(t, err)
+	require.Equal(t, "before-upgrade", custom.Name)
 }
 
 func TestCreateUsesConfiguredDefaultPoolAndPreservesExplicitPool(t *testing.T) {
