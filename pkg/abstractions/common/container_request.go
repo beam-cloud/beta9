@@ -24,6 +24,13 @@ func ConfigureContainerRequestNetwork(request *types.ContainerRequest, stubConfi
 		}
 	}
 
+	for _, binding := range request.SecretBindings {
+		for _, host := range binding.Hosts {
+			if len(stubConfig.AllowList) > 0 && !common.HostPatternCovered(host, stubConfig.AllowList) {
+				return fmt.Errorf("secret %q host %q is not allowed by egress", binding.SecretName, host)
+			}
+		}
+	}
 	request.BlockNetwork = stubConfig.BlockNetwork
 	request.AllowList = append([]string(nil), stubConfig.AllowList...)
 	request.DockerEnabled = stubConfig.DockerEnabled

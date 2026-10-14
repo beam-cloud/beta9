@@ -1853,6 +1853,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Error().Str("container_id", containerId).Msgf("failed to attach service proxy: %v", err)
 		return
 	}
+	if err := s.attachEgressTrust(request, spec); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to attach egress trust")
+		return
+	}
 	s.serviceProxy.AttachNodeSNI(request, spec)
 	if assignGPU {
 		// Only use CDI if runtime supports it

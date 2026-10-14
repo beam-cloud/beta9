@@ -184,7 +184,7 @@ func (s *referenceScope) bindSecret(key, expr string) (secretBinding, bool, erro
 		if err != nil {
 			return secretBinding{}, false, err
 		}
-		if _, err := s.gws.backendRepo.CreateSecret(s.ctx, s.workspace, s.tokenId, name, value, false); err != nil {
+		if _, err := s.gws.backendRepo.CreateSecret(s.ctx, s.workspace, s.tokenId, name, value, false, nil); err != nil {
 			return secretBinding{}, false, fmt.Errorf("store generated secret %q: %w", name, err)
 		}
 		return secretBinding{Name: name, EnvName: key}, true, nil
@@ -474,7 +474,8 @@ func (gws *GatewayService) resolveSecretBindings(ctx context.Context, workspace 
 			}
 			return nil, fmt.Errorf("resolve secret %q: %w", b.Name, err)
 		}
-		out = append(out, types.Secret{Name: secret.Name, Value: secret.Value, EnvName: b.EnvName, CreatedAt: secret.CreatedAt, UpdatedAt: secret.UpdatedAt})
+		secret.EnvName = b.EnvName
+		out = append(out, *secret)
 	}
 	return out, nil
 }

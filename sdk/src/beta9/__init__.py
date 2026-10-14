@@ -3,6 +3,7 @@ from importlib import import_module
 
 _EXPORTS = {
     "VM": (".abstractions.vm", "VM"),
+    "Secret": (".clients.secret", "Secret"),
     "Map": (".abstractions.map", "Map"),
     "Image": (".abstractions.image", "Image"),
     "Queue": (".abstractions.queue", "SimpleQueue"),

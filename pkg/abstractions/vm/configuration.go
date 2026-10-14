@@ -132,7 +132,7 @@ func validate(spec *types.VMSpec) error {
 	}
 
 	for _, name := range spec.Secrets {
-		if strings.HasPrefix(name, "BEAM_VM_") || strings.HasPrefix(name, "BETA9_") {
+		if strings.HasPrefix(name, "BEAM_VM_") || (strings.HasPrefix(name, "BETA9_") && name != "BETA9_TOKEN") {
 			return fmt.Errorf("reserved secret name %q", name)
 		}
 	}
@@ -176,6 +176,16 @@ func validate(spec *types.VMSpec) error {
 	for _, port := range spec.ProtectedPorts {
 		if port == 2222 || !slices.Contains(spec.Ports, port) {
 			return fmt.Errorf("protected port %d must be published", port)
+		}
+	}
+	for _, port := range spec.PublicPorts {
+		if port == 2222 || !slices.Contains(spec.Ports, port) || slices.Contains(spec.ProtectedPorts, port) {
+			return fmt.Errorf("public port %d must be published and cannot be protected", port)
+		}
+	}
+	for _, port := range []uint32{7681, 8080} {
+		if (port == 7681 || spec.Desktop) && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
+			spec.ProtectedPorts = append(spec.ProtectedPorts, port)
 		}
 	}
 
@@ -458,11 +468,12 @@ func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port u
 }
 
 func (s *Service) configurePort(ctx context.Context, v *types.VM, action string, port uint32, protected *bool) error {
-	if port == 0 || port > 65535 || port == 2222 || port == 7681 || port == uint32(types.WorkerSandboxProcessManagerPort) || (port == 8080 && v.Spec.Desktop) {
+	systemPort := port == 7681 || (port == 8080 && v.Spec.Desktop)
+	if port == 0 || port > 65535 || port == 2222 || port == uint32(types.WorkerSandboxProcessManagerPort) || (systemPort && (action != "expose" || protected == nil)) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid or reserved port")
 	}
 
-	if v.ContainerID != "" && action != "unexpose" {
+	if v.ContainerID != "" && action != "unexpose" && !systemPort {
 		resp, err := s.runtime.SandboxExposePort(ctx, &pb.PodSandboxExposePortRequest{ContainerId: v.ContainerID, StubId: v.StubID, Port: int32(port)})
 		if err != nil {
 			return err
@@ -486,6 +497,10 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 		v.Spec.Ports = ports
 		if action == "unexpose" || protected != nil {
 			v.Spec.ProtectedPorts = slices.DeleteFunc(slices.Clone(v.Spec.ProtectedPorts), func(current uint32) bool { return current == port })
+			v.Spec.PublicPorts = slices.DeleteFunc(slices.Clone(v.Spec.PublicPorts), func(current uint32) bool { return current == port })
+			if action == "expose" && protected != nil && !*protected {
+				v.Spec.PublicPorts = append(v.Spec.PublicPorts, port)
+			}
 			if action != "unexpose" && protected != nil && *protected {
 				v.Spec.ProtectedPorts = append(v.Spec.ProtectedPorts, port)
 				if v.TrafficAccessToken == "" {

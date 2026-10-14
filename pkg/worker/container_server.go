@@ -30,6 +30,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/worker/egress"
 	pb "github.com/beam-cloud/beta9/proto"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	"github.com/google/shlex"
@@ -763,6 +764,38 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: "Container spec not ready"}, nil
 	}
 
+	if len(in.SecretBindings) > 0 {
+		if instance.Request == nil || s.containerNetworkManager == nil {
+			return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: "container network policy is unavailable"}, nil
+		}
+		instance.egressMu.Lock()
+		request := instance.Request.Clone()
+		byName := map[string]types.SecretBinding{}
+		for _, binding := range request.SecretBindings {
+			byName[binding.SecretName] = binding
+		}
+		for _, binding := range types.SecretBindingsFromProto(in.SecretBindings) {
+			for _, host := range binding.Hosts {
+				if len(request.AllowList) > 0 && !common.HostPatternCovered(host, request.AllowList) {
+					instance.egressMu.Unlock()
+					return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: "secret host is not allowed by egress"}, nil
+				}
+			}
+			byName[binding.SecretName] = binding
+		}
+		request.SecretBindings = nil
+		for _, binding := range byName {
+			request.SecretBindings = append(request.SecretBindings, binding)
+		}
+		err := s.containerNetworkManager.UpdateNetworkPermissions(in.ContainerId, request)
+		if err == nil {
+			instance.Request.SecretBindings = request.SecretBindings
+		}
+		instance.egressMu.Unlock()
+		if err != nil {
+			return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+	}
 	env := append([]string{}, instance.Spec.Process.Env...)
 	formattedEnv := []string{}
 	for key, value := range in.Env {
@@ -770,6 +803,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 	}
 
 	env = append(env, formattedEnv...)
+	if len(in.SecretBindings) > 0 {
+		env = upsertEnvVars(env, egress.TrustEnvironment())
+	}
 
 	log.Info().Str("container_id", in.ContainerId).Str("cmd", in.Cmd).Msg("running sandbox command")
 	return s.handleSandboxExec(ctx, in, instance, env, parsedCmd, in.Cwd)
@@ -1755,7 +1791,7 @@ func recordSandboxExposedPort(containerInstances *common.SafeMap[*ContainerInsta
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxUpdateNetworkPermissions(ctx context.Context, in *pb.ContainerSandboxUpdateNetworkPermissionsRequest) (*pb.ContainerSandboxUpdateNetworkPermissionsResponse, error) {
-	_, exists := s.containerInstances.Get(in.ContainerId)
+	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
@@ -1765,11 +1801,13 @@ func (s *ContainerRuntimeServer) ContainerSandboxUpdateNetworkPermissions(ctx co
 		return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	// Create a container request with the new network permissions
-	request := &types.ContainerRequest{
-		BlockNetwork: in.BlockNetwork,
-		AllowList:    in.AllowList,
+	instance.egressMu.Lock()
+	defer instance.egressMu.Unlock()
+	request := instance.Request.Clone()
+	if request == nil {
+		request = &types.ContainerRequest{}
 	}
+	request.BlockNetwork, request.AllowList = in.BlockNetwork, in.AllowList
 
 	if s.containerNetworkManager == nil {
 		return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: false, ErrorMsg: "container network manager unavailable"}, nil
@@ -1782,6 +1820,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxUpdateNetworkPermissions(ctx co
 		return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	if instance.Request != nil {
+		instance.Request.BlockNetwork, instance.Request.AllowList = request.BlockNetwork, request.AllowList
+	}
 	log.Info().Str("container_id", in.ContainerId).Msgf("updated network permissions: block_network=%v, allow_list=%v", in.BlockNetwork, in.AllowList)
 
 	return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: true}, nil

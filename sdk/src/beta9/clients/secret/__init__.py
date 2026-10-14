@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 @dataclass(eq=False, repr=False)
 class Secret(betterproto.Message):
+    hosts: List[str] = betterproto.string_field(8)
+    placeholder: str = betterproto.string_field(9)
     id: str = betterproto.string_field(1)
     name: str = betterproto.string_field(2)
     value: str = betterproto.string_field(3)
@@ -38,6 +40,7 @@ class Secret(betterproto.Message):
 class CreateSecretRequest(betterproto.Message):
     name: str = betterproto.string_field(2)
     value: str = betterproto.string_field(3)
+    hosts: List[str] = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -46,6 +49,8 @@ class CreateSecretResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
     id: str = betterproto.string_field(3)
     name: str = betterproto.string_field(4)
+    hosts: List[str] = betterproto.string_field(5)
+    placeholder: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -61,6 +66,8 @@ class DeleteSecretResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class UpdateSecretRequest(betterproto.Message):
+    hosts: List[str] = betterproto.string_field(4)
+    clear_hosts: bool = betterproto.bool_field(5)
     name: str = betterproto.string_field(2)
     value: str = betterproto.string_field(3)
 

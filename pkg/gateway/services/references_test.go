@@ -65,7 +65,7 @@ func (r *referenceBackendRepo) GetSecretByName(_ context.Context, _ *types.Works
 	return &types.Secret{Name: name, Value: value}, nil
 }
 
-func (r *referenceBackendRepo) CreateSecret(_ context.Context, _ *types.Workspace, _ uint, name, value string, _ bool) (*types.Secret, error) {
+func (r *referenceBackendRepo) CreateSecret(_ context.Context, _ *types.Workspace, _ uint, name, value string, _ bool, _ []string) (*types.Secret, error) {
 	r.secrets[name] = value
 	return &types.Secret{Name: name, Value: value}, nil
 }

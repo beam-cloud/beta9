@@ -19,20 +19,24 @@ func (g *Group) listSecrets(ctx context.Context, a *auth.AuthInfo, _ toolArgs) (
 	}
 	out := make([]map[string]any, 0, len(secrets))
 	for _, s := range secrets {
-		out = append(out, map[string]any{"name": s.Name, "updated_at": s.UpdatedAt})
+		out = append(out, map[string]any{"name": s.Name, "updated_at": s.UpdatedAt, "hosts": s.Hosts, "placeholder": s.Placeholder})
 	}
 	return out, nil
 }
 
 func (g *Group) createSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	if _, err := g.backendRepo.CreateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.rawString("value"), true); err != nil {
+	if _, err := g.backendRepo.CreateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.rawString("value"), true, args.strings("hosts")); err != nil {
 		return nil, err
 	}
 	return map[string]any{"name": args.str("name"), "created": true}, nil
 }
 
 func (g *Group) updateSecret(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	if _, err := g.backendRepo.UpdateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.rawString("value")); err != nil {
+	var hosts []string
+	if _, ok := args["hosts"]; ok {
+		hosts = args.strings("hosts")
+	}
+	if _, err := g.backendRepo.UpdateSecret(ctx, a.Workspace, a.TokenId(), args.str("name"), args.rawString("value"), hosts); err != nil {
 		return nil, err
 	}
 	return map[string]any{"name": args.str("name"), "updated": true}, nil

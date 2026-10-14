@@ -175,8 +175,8 @@ class Sandbox(Pod):
             make outbound connections to external services, but inbound connections to exposed ports are still
             allowed. Default is False. Cannot be used together with allow_list.
         allow_list (Optional[List[str]]):
-            List of CIDR ranges that the sandbox is allowed to connect to. All other outbound network access
-            will be blocked. Must use CIDR notation (e.g., "8.8.8.8/32" for a single IP, "10.0.0.0/8" for
+            List of hostnames, *.wildcards, IPs or CIDRs the sandbox may connect to. All other outbound access
+            is blocked. Hostname rules apply to TLS/HTTP; raw TCP requires a CIDR (e.g., "8.8.8.8/32" for
             a range). Supports both IPv4 and IPv6. Examples: ["8.8.8.8/32"], ["10.0.0.0/8", "2001:db8::/32"].
             Cannot be used together with block_network. Default is None (no restrictions unless block_network
             is enabled).
@@ -711,13 +711,13 @@ class SandboxInstance(BaseAbstraction):
 
         This method allows you to modify the network access restrictions of a running
         sandbox without needing to restart it. You can either block all network access
-        or specify an allowlist of CIDR ranges that the sandbox can communicate with.
+        or specify an allowlist of hostnames, wildcards, IPs or CIDRs the sandbox can communicate with.
         Does not block access via ports exposed by expose_port.
 
         Parameters:
             block_network (bool): If True, blocks all outbound network access from the
                 sandbox. Cannot be used together with allow_list. Default: False.
-            allow_list (Optional[List[str]]): List of CIDR ranges (e.g., "8.8.8.8/32",
+            allow_list (Optional[List[str]]): List of hostnames, wildcards, IPs or CIDRs (e.g., "api.openai.com",
                 "10.0.0.0/8") that the sandbox is allowed to access. If specified,
                 all other outbound traffic is blocked. Cannot be used with block_network=True.
                 Default: None.
@@ -741,7 +741,7 @@ class SandboxInstance(BaseAbstraction):
             ```
 
         Note:
-            - CIDR notation must be valid (e.g., "192.168.1.0/24", "8.8.8.8/32")
+            - At most 64 entries; hostname rules apply to TLS and HTTP, raw TCP requires a CIDR
             - IPv4 addresses should use /32 suffix for single hosts
             - This replaces all existing network rules atomically
         """
@@ -4334,7 +4334,7 @@ class AsyncSandboxInstance:
 
         Parameters:
             block_network (bool): If True, blocks all outbound network access.
-            allow_list (Optional[List[str]]): List of CIDR ranges to allow.
+            allow_list (Optional[List[str]]): List of hostnames, wildcards, IPs or CIDRs to allow.
 
         Raises:
             SandboxProcessError: If the network permissions update fails.

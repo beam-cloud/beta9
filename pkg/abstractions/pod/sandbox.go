@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -54,7 +55,7 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 		return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
 	}
 
-	env, err := s.sandboxExecEnvironment(ctx, authInfo.Workspace, in.Env, in.Secrets)
+	env, bindings, err := s.sandboxExecEnvironment(ctx, authInfo.Workspace, in.Env, in.Secrets)
 	if err != nil {
 		log.Error().Err(err).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("failed to resolve sandbox exec secrets")
 		return &pb.PodSandboxExecResponse{
@@ -64,7 +65,7 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 	}
 	in.Env = env
 
-	resp, err := s.sandboxExecWithConnectRetry(ctx, in, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	resp, err := s.sandboxExecWithConnectRetry(ctx, in, authInfo.Token.Key, authInfo.Workspace.ExternalId, types.SecretBindingsToProto(bindings))
 	if err != nil {
 		return &pb.PodSandboxExecResponse{
 			Ok:       false,
@@ -94,26 +95,31 @@ func (s *GenericPodService) sandboxExecEnvironment(
 	workspace *types.Workspace,
 	explicit map[string]string,
 	names []string,
-) (map[string]string, error) {
+) (map[string]string, []types.SecretBinding, error) {
 	env := make(map[string]string, len(explicit)+len(names))
 	for key, value := range explicit {
 		env[key] = value
 	}
 	if len(names) == 0 {
-		return env, nil
+		return env, nil, nil
 	}
 
-	secrets, err := s.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, names)
+	config := types.StubConfigV1{}
+	for _, name := range names {
+		config.Secrets = append(config.Secrets, types.Secret{Name: name})
+	}
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(ctx, s.backendRepo, workspace, config, true)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	for _, secret := range secrets {
-		env[secret.Name] = secret.Value
+	for _, item := range secrets.Env {
+		key, value, _ := strings.Cut(item, "=")
+		env[key] = value
 	}
-	return env, nil
+	return env, secrets.Bindings, nil
 }
 
-func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in *pb.PodSandboxExecRequest, token, workspaceID string) (*pb.ContainerSandboxExecResponse, error) {
+func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in *pb.PodSandboxExecRequest, token, workspaceID string, bindings []*pb.SecretBinding) (*pb.ContainerSandboxExecResponse, error) {
 	deadline := time.Now().Add(sandboxExecConnectRetryTimeout)
 	var lastErr error
 
@@ -135,7 +141,7 @@ func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in 
 			lastErr = sandboxConnectionError{err: err}
 			retryable = isTransientSandboxConnectFailure(err)
 		} else {
-			resp, err := client.SandboxExecContext(ctx, in.ContainerId, in.Command, in.Env, in.Cwd, in.Wait)
+			resp, err := client.SandboxExecContext(ctx, in.ContainerId, in.Command, in.Env, in.Cwd, in.Wait, bindings...)
 			if err == nil {
 				return resp, nil
 			}

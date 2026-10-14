@@ -632,7 +632,17 @@ type JobResourceOverheadConfig struct {
 	Memory string `key:"memory" json:"memory"`
 }
 
+// Listener port zero allocates a free worker-local port.
+type EgressConfig struct {
+	Enabled                    bool `key:"enabled" json:"enabled"`
+	TLSPort                    int  `key:"tlsPort" json:"tls_port"`
+	HTTPPort                   int  `key:"httpPort" json:"http_port"`
+	OtherPort                  int  `key:"otherPort" json:"other_port"`
+	MaxConnectionsPerContainer int  `key:"maxConnectionsPerContainer" json:"max_connections_per_container"`
+}
+
 type WorkerConfig struct {
+	Egress                       EgressConfig                  `key:"egress" json:"egress"`
 	Pools                        map[string]WorkerPoolConfig   `key:"pools" json:"pools"`
 	HostNetwork                  bool                          `key:"hostNetwork" json:"host_network"`
 	UseGatewayServiceHostname    bool                          `key:"useGatewayServiceHostname" json:"use_gateway_service_hostname"`

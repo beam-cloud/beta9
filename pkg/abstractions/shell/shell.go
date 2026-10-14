@@ -513,6 +513,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		ss.backendRepo,
 		authInfo.Workspace,
 		stubConfig,
+		false,
 	)
 	if err != nil {
 		return &pb.CreateStandaloneShellResponse{
@@ -536,7 +537,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		fmt.Sprintf("PASSWORD=%s", password),
 	}
 
-	env = append(secrets, env...)
+	env = append(secrets.Env, env...)
 
 	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
 	if stubConfig.Runtime.Gpu != "" {

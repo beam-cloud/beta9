@@ -121,6 +121,7 @@ message ContainerRequest {
   uint32 drain_seconds = 44;
   int32 evict_order = 45;
   bool use_vm = 46;
+  repeated SecretBinding secret_bindings = 47;
 }
 
 message ContainerState {
@@ -234,6 +235,14 @@ message ProcessInfo {
   string cwd = 4;
   repeated string env = 5;
   int32 exit_code = 6;
+}
+
+message SecretBinding {
+  string env_name = 1;
+  string placeholder = 2;
+  repeated string hosts = 3;
+  string value = 4;
+  string secret_name = 5;
 }
 
 message Stub {

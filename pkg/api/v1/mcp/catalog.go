@@ -180,14 +180,14 @@ func (g *Group) catalog() []mcpTool {
 		{
 			Name:        "create_secret",
 			Description: "Create a workspace secret; reference it with ${{secret.NAME}}.",
-			Schema:      schema(props{"name": str(""), "value": str("")}, "name", "value"),
+			Schema:      schema(props{"name": str(""), "value": str(""), "hosts": strList("Allowed credential hostnames or *.wildcards; sandbox/VM secrets use placeholders.")}, "name", "value"),
 			Destructive: true,
 			Run:         g.createSecret,
 		},
 		{
 			Name:        "update_secret",
-			Description: "Change a secret's value; deployments pick it up on their next container start.",
-			Schema:      schema(props{"name": str(""), "value": str("")}, "name", "value"),
+			Description: "Change a secret's value or allowed hosts; brokered sandbox/VM secrets refresh within 15 seconds.",
+			Schema:      schema(props{"name": str(""), "value": str(""), "hosts": strList("Allowed credential hostnames or *.wildcards; sandbox/VM secrets use placeholders.")}, "name", "value"),
 			Destructive: true,
 			Run:         g.updateSecret,
 		},

@@ -131,6 +131,7 @@ class ContainerRequest(betterproto.Message):
     drain_seconds: int = betterproto.uint32_field(44)
     evict_order: int = betterproto.int32_field(45)
     use_vm: bool = betterproto.bool_field(46)
+    secret_bindings: List["SecretBinding"] = betterproto.message_field(47)
 
 
 @dataclass(eq=False, repr=False)
@@ -257,6 +258,15 @@ class ProcessInfo(betterproto.Message):
     cwd: str = betterproto.string_field(4)
     env: List[str] = betterproto.string_field(5)
     exit_code: int = betterproto.int32_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class SecretBinding(betterproto.Message):
+    env_name: str = betterproto.string_field(1)
+    placeholder: str = betterproto.string_field(2)
+    hosts: List[str] = betterproto.string_field(3)
+    value: str = betterproto.string_field(4)
+    secret_name: str = betterproto.string_field(5)
 
 
 @dataclass(eq=False, repr=False)

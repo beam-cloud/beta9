@@ -460,6 +460,7 @@ message GetContainerRuntimeCredentialsRequest {
   bool runtime_token = 5;
   bool workspace_storage = 6;
   repeated RuntimeMountCredentialRequest mount_credentials = 7;
+ repeated string binding_names = 8;
 }
 
 message GetContainerRuntimeCredentialsResponse {
@@ -468,6 +469,7 @@ message GetContainerRuntimeCredentialsResponse {
   repeated string env = 3;
   CacheWorkspaceStorageCredentials workspace_storage = 4;
   repeated RuntimeMountCredentials mount_credentials = 5;
+ repeated types.SecretBinding secret_bindings = 6;
 }
 
 message PruneStaleCacheCheckpointsRequest {

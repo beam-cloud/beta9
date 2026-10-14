@@ -352,14 +352,14 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 	if err != nil {
 		return nil, err
 	}
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(ctx, c.s.backend, workspace, *stubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(ctx, c.s.backend, workspace, *stubConfig, false)
 	if err != nil {
 		return nil, err
 	}
 
 	gpuSpec := endpoint.Spec.Gpu[gpu]
 	drainSeconds := endpoint.Spec.DrainSeconds
-	env := append(append([]string{}, stubConfig.Env...), secrets...)
+	env := append(append([]string{}, stubConfig.Env...), secrets.Env...)
 	env = append(env,
 		EnvReplicaSecret+"="+replicaSecret,
 		"STUB_ID="+stub.ExternalId,
