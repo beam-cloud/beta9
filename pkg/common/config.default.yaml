@@ -200,12 +200,6 @@ imageService:
         ln -s /usr/local/bin/pip3 /usr/bin/pip && \
         ln -s /usr/local/bin/pip3 /usr/bin/pip3
 worker:
-  egress:
-    enabled: true
-    tlsPort: 0
-    httpPort: 0
-    otherPort: 0
-    maxConnectionsPerContainer: 256
   pools:
     default:
       mode: local
@@ -357,6 +351,12 @@ worker:
   containerLogLinesPerHour: 6000
   criu:
     mode: nvidia
+  egress:
+    enabled: true
+    tlsPort: 0
+    httpPort: 0
+    otherPort: 0
+    maxConnectionsPerContainer: 256
 
 cache:
   enabled: true
