@@ -131,7 +131,10 @@ func (p *secretProxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		Transport:     p.transport,
 		FlushInterval: -1,
 		Rewrite: func(request *httputil.ProxyRequest) {
-			request.Out.URL.Scheme, request.Out.URL.Host, request.Out.Host = "https", p.address, p.address
+			request.Out.URL.Scheme, request.Out.URL.Host = "https", p.address
+			// Preserve the validated authority. Adding a default :443 breaks
+			// upstream host routers that match the original hostname.
+			request.Out.Host = req.Host
 			request.Out.Header.Del("Accept-Encoding")
 			// Extensions would make WebSocket frames opaque to the scrubber.
 			request.Out.Header.Del("Sec-WebSocket-Extensions")

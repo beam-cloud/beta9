@@ -92,6 +92,31 @@ type testUpgrade struct{ bytes.Buffer }
 
 func (*testUpgrade) Close() error { return nil }
 
+func TestSecretProxyPreservesValidatedHost(t *testing.T) {
+	for _, authority := range []string{"example.com", "example.com:443"} {
+		t.Run(authority, func(t *testing.T) {
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, authority, r.Host)
+				require.Equal(t, "Bearer real-key", r.Header.Get("Authorization"))
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer upstream.Close()
+			binding := types.SecretBinding{SecretName: "KEY", Placeholder: "beam_secret_key", Value: "real-key", Hosts: []string{"example.com"}}
+			f := testFirewall(t, upstream.Listener.Addr().String(), Policy{AllowList: []string{"example.com"}, Bindings: []types.SecretBinding{binding}})
+			f.deps.RootCertificates = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw})
+			c, err := f.lookup("box")
+			require.NoError(t, err)
+			proxy := f.newSecretProxy(c, "example.com", 443)
+			defer proxy.transport.CloseIdleConnections()
+			request := httptest.NewRequest(http.MethodGet, "https://"+authority+"/", nil)
+			request.Header.Set("Authorization", "Bearer "+binding.Placeholder)
+			response := httptest.NewRecorder()
+			proxy.ServeHTTP(response, request)
+			require.Equal(t, http.StatusNoContent, response.Code)
+		})
+	}
+}
+
 func TestSSEFlushAndWebSocketUpgrade(t *testing.T) {
 	binding := types.SecretBinding{SecretName: "A", Placeholder: "beam_secret_a", Value: "real-key", Hosts: []string{"example.com"}}
 	stop := make(chan struct{})
