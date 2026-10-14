@@ -23,15 +23,30 @@ import (
 const bindingTTL = 15 * time.Second
 
 func (f *Firewall) bindings(ctx context.Context, c *container) ([]types.SecretBinding, error) {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	c.mu.Lock()
+	bindings, generation := c.policy.Bindings, c.generation
+	fresh, closed := f.deps.RefreshBindings == nil || time.Since(c.refreshed) < bindingTTL, c.closed
+	c.mu.Unlock()
+	if closed {
+		return nil, net.ErrClosed
+	}
+	if fresh {
+		return bindings, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, peekTimeout)
+	defer cancel()
+	bindings, err := f.deps.RefreshBindings(ctx, c.id, types.CloneSecretBindings(bindings))
+	if err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if f.deps.RefreshBindings != nil && time.Since(c.refreshed) >= bindingTTL {
-		ctx, cancel := context.WithTimeout(ctx, peekTimeout)
-		defer cancel()
-		bindings, err := f.deps.RefreshBindings(ctx, c.id, c.policy.Bindings)
-		if err != nil {
-			return nil, err
-		}
+	if c.closed {
+		return nil, net.ErrClosed
+	}
+	if generation == c.generation {
 		c.policy.Bindings = bindings
 		if c.policy.BindingsOnly {
 			c.policy.AllowList = nil
@@ -44,29 +59,27 @@ func (f *Firewall) bindings(ctx context.Context, c *container) ([]types.SecretBi
 	return c.policy.Bindings, nil
 }
 
-func (f *Firewall) intercept(conn net.Conn, c *container, host string, port int, secure bool) {
-	if secure {
-		c.mu.Lock()
-		ca := c.ca
-		c.mu.Unlock()
-		if ca == nil {
-			return
-		}
-		cert, err := ca.leaf(host)
-		if err != nil {
-			return
-		}
-		tlsConn := tls.Server(conn, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"h2", "http/1.1"}})
-		ctx, cancel := context.WithTimeout(f.ctx, peekTimeout)
-		err = tlsConn.HandshakeContext(ctx)
-		cancel()
-		if err != nil {
-			return
-		}
-		conn = tlsConn
+func (f *Firewall) intercept(conn net.Conn, c *container, host string, port int) {
+	c.mu.Lock()
+	ca := c.ca
+	c.mu.Unlock()
+	if ca == nil {
+		return
 	}
-	handler := f.handler(c, host, port, secure)
-	if tlsConn, ok := conn.(*tls.Conn); ok && tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
+	cert, err := ca.leaf(host)
+	if err != nil {
+		return
+	}
+	tlsConn := tls.Server(conn, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"h2", "http/1.1"}})
+	ctx, cancel := context.WithTimeout(f.ctx, peekTimeout)
+	err = tlsConn.HandshakeContext(ctx)
+	cancel()
+	if err != nil {
+		return
+	}
+	conn = tlsConn
+	handler := f.handler(c, host, port)
+	if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
 		server := &http2.Server{MaxConcurrentStreams: 32, IdleTimeout: time.Minute}
 		server.ServeConn(conn, &http2.ServeConnOpts{Context: f.ctx, Handler: handler, BaseConfig: &http.Server{MaxHeaderBytes: 1 << 20}})
 		return
@@ -85,11 +98,7 @@ func (f *Firewall) intercept(conn net.Conn, c *container, host string, port int,
 	_ = server.Serve(listener)
 }
 
-func (f *Firewall) handler(c *container, host string, port int, secure bool) http.Handler {
-	scheme := "http"
-	if secure {
-		scheme = "https"
-	}
+func (f *Firewall) handler(c *container, host string, port int) http.Handler {
 	address := net.JoinHostPort(host, strconv.Itoa(port))
 	var roots *x509.CertPool
 	if len(f.deps.RootCertificates) > 0 {
@@ -124,7 +133,7 @@ func (f *Firewall) handler(c *container, host string, port int, secure bool) htt
 		proxy := &httputil.ReverseProxy{
 			Transport: transport, FlushInterval: -1,
 			Rewrite: func(p *httputil.ProxyRequest) {
-				p.Out.URL.Scheme, p.Out.URL.Host, p.Out.Host = scheme, address, address
+				p.Out.URL.Scheme, p.Out.URL.Host, p.Out.Host = "https", address, address
 				p.Out.Header.Del("Accept-Encoding")
 				// Extensions would make WebSocket frames opaque to the scrubber.
 				p.Out.Header.Del("Sec-WebSocket-Extensions")
@@ -157,28 +166,23 @@ func (f *Firewall) handler(c *container, host string, port int, secure bool) htt
 }
 
 func substituteHeaders(headers http.Header, bindings []types.SecretBinding, host string) {
-	for name, values := range headers {
+	for _, values := range headers {
 		for i, value := range values {
 			for _, binding := range bindings {
-				for _, pattern := range binding.Hosts {
-					if common.MatchDomain(host, pattern) {
-						value = strings.ReplaceAll(value, binding.Placeholder, binding.Value)
-						break
-					}
+				if common.HostPatternCovered(host, binding.Hosts) {
+					value = strings.ReplaceAll(value, binding.Placeholder, binding.Value)
 				}
 			}
 			values[i] = value
 		}
-		headers[name] = values
 	}
 }
 
 func scrubHeaders(headers http.Header, bindings []types.SecretBinding) {
-	for name, values := range headers {
+	for _, values := range headers {
 		for i, value := range values {
 			values[i] = scrubString(value, bindings)
 		}
-		headers[name] = values
 	}
 }
 func scrubString(value string, bindings []types.SecretBinding) string {

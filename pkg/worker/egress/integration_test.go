@@ -86,6 +86,9 @@ func TestTransparentFirewall(t *testing.T) {
 		require.Equal(t, binding.Placeholder, response)
 		_, err = curl("other.example.com")
 		require.Error(t, err, "same destination IP with another SNI must be denied")
+		output, err := exec.Command("ip", "netns", "exec", namespace, "curl", "--noproxy", "*", "--silent", "--max-time", "3", "--write-out", "%{http_code}", "--resolve", "example.com:80:"+destination, "-H", "Authorization: "+binding.Placeholder, "http://example.com").CombinedOutput()
+		require.Error(t, err, "bound hosts must reject plaintext HTTP")
+		require.Equal(t, "000", string(output))
 		require.NoError(t, f.Register("box", ips, Policy{}))
 		_, err = curl("example.com")
 		require.Error(t, err, "live update must deny the previous host")
@@ -98,15 +101,20 @@ func TestTransparentFirewall(t *testing.T) {
 	greeting, err := net.Listen("tcp", "192.0.2.1:19022")
 	require.NoError(t, err)
 	defer greeting.Close()
+	source := make(chan string, 1)
 	go func() {
 		conn, err := greeting.Accept()
 		if err == nil {
 			defer conn.Close()
+			source <- conn.RemoteAddr().String()
 			io.WriteString(conn, "SSH-2.0-Beam\r\n")
 		}
 	}()
 	require.NoError(t, f.Register("box", ips, Policy{AllowList: []string{"192.0.2.1/32"}}))
 	output := run("ip", "netns", "exec", namespace, "sh", "-c", "timeout 3 nc 192.0.2.1 19022 | head -1")
 	require.Equal(t, "SSH-2.0-Beam\r\n", output)
+	host, _, err := net.SplitHostPort(<-source)
+	require.NoError(t, err)
+	require.Equal(t, "192.0.2.1", host)
 	require.NoError(t, os.Remove(bundle))
 }

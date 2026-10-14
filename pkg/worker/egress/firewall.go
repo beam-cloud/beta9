@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -46,7 +47,10 @@ type Firewall struct {
 type container struct {
 	id          string
 	mu          sync.Mutex
+	refreshMu   sync.Mutex
 	policy      Policy
+	generation  uint64
+	closed      bool
 	connections map[*trackedConn]struct{}
 	ca          *authority
 	refreshed   time.Time
@@ -89,7 +93,7 @@ func (f *Firewall) Start(ctx context.Context) error {
 			*port = listener.Addr().(*net.TCPAddr).Port
 			address := listener.Addr().String()
 			listeners[address] = &policyListener{Listener: listener, firewall: f}
-			target := &routeTarget{firewall: f, kind: []string{"tls", "http", "other"}[i]}
+			target := &routeTarget{firewall: f, tls: i == 0}
 			anyHost := func(_ context.Context, host string) bool { return host != "" }
 			switch i {
 			case 0:
@@ -134,13 +138,14 @@ func (f *Firewall) Register(id string, ips []string, policy Policy) error {
 		c = &container{id: id, connections: map[*trackedConn]struct{}{}}
 		f.containers[id] = c
 	}
-	c.closeConnections()
 	c.mu.Lock()
 	policy.AllowList = append([]string(nil), policy.AllowList...)
 	policy.Bindings = types.CloneSecretBindings(policy.Bindings)
 	c.policy = policy
+	c.generation++
 	c.refreshed = time.Time{}
 	c.mu.Unlock()
+	c.closeConnections()
 	for ip, peer := range f.peers {
 		if peer == c {
 			delete(f.peers, ip)
@@ -161,6 +166,10 @@ func (f *Firewall) Unregister(id string) {
 	if c == nil {
 		return
 	}
+	c.mu.Lock()
+	c.closed = true
+	c.generation++
+	c.mu.Unlock()
 	c.closeConnections()
 	delete(f.containers, id)
 	for ip, peer := range f.peers {
@@ -208,15 +217,13 @@ func (l *policyListener) Accept() (net.Conn, error) {
 		ip, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 		l.firewall.mu.Lock()
 		c := l.firewall.peers[ip]
-		if c != nil {
-			c.mu.Lock()
-		}
 		l.firewall.mu.Unlock()
 		if c == nil {
 			_ = conn.Close()
 			continue
 		}
-		if len(c.connections) >= l.firewall.config.MaxConnectionsPerContainer {
+		c.mu.Lock()
+		if c.closed || len(c.connections) >= l.firewall.config.MaxConnectionsPerContainer {
 			c.mu.Unlock()
 			_ = conn.Close()
 			continue
@@ -231,7 +238,7 @@ func (l *policyListener) Accept() (net.Conn, error) {
 
 type routeTarget struct {
 	firewall *Firewall
-	kind     string
+	tls      bool
 }
 
 func (r *routeTarget) HandleConn(conn net.Conn) {
@@ -269,15 +276,17 @@ func (r *routeTarget) HandleConn(conn net.Conn) {
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	if hostname != "" && hasBinding(policy.Bindings, hostname) {
-		f.intercept(conn, c, hostname, dst.Port, r.kind == "tls")
+		if !r.tls {
+			return
+		}
+		f.intercept(conn, c, hostname, dst.Port)
 		return
 	}
 	proxy := &tcpproxy.DialProxy{Addr: target, DialTimeout: peekTimeout, OnDialError: func(src net.Conn, _ error) { _ = src.Close() }}
 	if target != dst.String() {
 		proxy.DialContext = f.deps.DialContext
 	} else {
-		dialer := &net.Dialer{Timeout: peekTimeout}
-		proxy.DialContext = dialer.DialContext
+		proxy.DialContext = (&net.Dialer{Timeout: peekTimeout}).DialContext
 	}
 	if peeked, ok := conn.(*tcpproxy.Conn); ok {
 		conn = &tcpproxy.Conn{Conn: tracked.Conn, Peeked: peeked.Peeked}
@@ -312,10 +321,8 @@ func destination(policy Policy, host string, dst *net.TCPAddr) (string, bool) {
 
 func hasBinding(bindings []types.SecretBinding, host string) bool {
 	for _, binding := range bindings {
-		for _, pattern := range binding.Hosts {
-			if common.MatchDomain(host, pattern) {
-				return true
-			}
+		if common.HostPatternCovered(host, binding.Hosts) {
+			return true
 		}
 	}
 	return false
@@ -325,6 +332,14 @@ func hasBinding(bindings []types.SecretBinding, host string) bool {
 func dialPublic(ctx context.Context, network, address string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: peekTimeout, ControlContext: checkPublicAddress}
 	return dialer.DialContext(ctx, network, address)
+}
+
+func checkPublicAddress(_ context.Context, _, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil || !publicIP(net.ParseIP(host)) {
+		return errPrivateAddress
+	}
+	return nil
 }
 
 var errPrivateAddress = errors.New("hostname resolved to a non-public address")

@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -80,7 +84,7 @@ func TestRotationAndWebSocketScrub(t *testing.T) {
 	c.policy.BindingsOnly = true
 	c.policy.AllowList = []string{"other.example.com"}
 	response := httptest.NewRecorder()
-	f.handler(c, "api.example.com", 443, true).ServeHTTP(response, httptest.NewRequest("GET", "https://api.example.com/", nil))
+	f.handler(c, "api.example.com", 443).ServeHTTP(response, httptest.NewRequest("GET", "https://api.example.com/", nil))
 	require.Equal(t, http.StatusForbidden, response.Code)
 }
 
@@ -92,7 +96,7 @@ func TestSSEFlushAndWebSocketUpgrade(t *testing.T) {
 	binding := types.SecretBinding{SecretName: "A", Placeholder: "beam_secret_a", Value: "real-key", Hosts: []string{"example.com"}}
 	stop := make(chan struct{})
 
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "real-key", r.Header.Get("X-Api-Key"))
 		if r.URL.Path == "/sse" {
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -111,11 +115,19 @@ func TestSSEFlushAndWebSocketUpgrade(t *testing.T) {
 	}))
 	defer func() { close(stop); upstream.Close() }()
 	f := testFirewall(t, upstream.Listener.Addr().String(), Policy{AllowList: []string{"example.com"}, Bindings: []types.SecretBinding{binding}})
+	f.deps.RootCertificates = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw})
+	bundle, err := f.TrustBundle("box", t.TempDir())
+	require.NoError(t, err)
+	certs, err := os.ReadFile(bundle)
+	require.NoError(t, err)
+	roots := x509.NewCertPool()
+	require.True(t, roots.AppendCertsFromPEM(certs))
+	tlsConfig := &tls.Config{RootCAs: roots}
 	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, network, fmt.Sprintf("127.0.0.1:%d", f.config.HTTPPort))
+		return (&net.Dialer{}).DialContext(ctx, network, fmt.Sprintf("127.0.0.1:%d", f.config.TLSPort))
 	}
-	client := &http.Client{Transport: &http.Transport{DialContext: dial}, Timeout: time.Second}
-	req, _ := http.NewRequest("GET", "http://example.com/sse", nil)
+	client := &http.Client{Transport: &http.Transport{DialContext: dial, TLSClientConfig: tlsConfig}, Timeout: time.Second}
+	req, _ := http.NewRequest("GET", "https://example.com/sse", nil)
 	req.Header.Set("X-Api-Key", binding.Placeholder)
 	response, err := client.Do(req)
 	require.NoError(t, err)
@@ -123,8 +135,8 @@ func TestSSEFlushAndWebSocketUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "data: beam_secret_a\n", line)
 	response.Body.Close()
-	dialer := websocket.Dialer{NetDialContext: dial, HandshakeTimeout: time.Second}
-	conn, _, err := dialer.Dial("ws://example.com/ws", http.Header{"X-Api-Key": []string{binding.Placeholder}})
+	dialer := websocket.Dialer{NetDialContext: dial, TLSClientConfig: tlsConfig, HandshakeTimeout: time.Second}
+	conn, _, err := dialer.Dial("wss://example.com/ws", http.Header{"X-Api-Key": []string{binding.Placeholder}})
 	require.NoError(t, err)
 	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(time.Second))

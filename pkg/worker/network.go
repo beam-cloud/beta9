@@ -47,6 +47,7 @@ const (
 	containerSubnetIPv6                 string = "fd00:abcd::/64"
 	containerGatewayAddressIPv6         string = "fd00:abcd::1"
 	containerBridgeAddressIPv6          string = "fd00:abcd::1"
+	ipv6AddressNoDAD                           = 0x02 // Linux IFA_F_NODAD.
 	containerNetworkSlotPrefix          string = "network-slot"
 	containerNetworkSlotNamespacePrefix        = "slot-"
 
@@ -2076,7 +2077,7 @@ func (m *ContainerNetworkManager) ensureBridgeConfigured(bridgeName string, brid
 	if m.ipt6 != nil {
 		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
 		bridgeIPv6 := &netlink.Addr{
-			Flags: unix.IFA_F_NODAD,
+			Flags: ipv6AddressNoDAD,
 			IPNet: &net.IPNet{
 				IP:   net.ParseIP(containerBridgeAddressIPv6),
 				Mask: ipv6Net.Mask,

@@ -76,10 +76,14 @@ func TestHTTPHostRawTCPAndConnectionCap(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "allowed") }))
 	defer upstream.Close()
 	for _, tc := range []struct {
-		host string
-		ok   bool
-	}{{"api.example.com", true}, {"api.example.com:80", true}, {"evil.example.com", false}} {
-		f := testFirewall(t, upstream.Listener.Addr().String(), Policy{AllowList: []string{"api.example.com"}})
+		host         string
+		ok, brokered bool
+	}{{"api.example.com", true, false}, {"api.example.com:80", true, false}, {"evil.example.com", false, false}, {"api.example.com", false, true}} {
+		policy := Policy{AllowList: []string{"api.example.com"}}
+		if tc.brokered {
+			policy.Bindings = []types.SecretBinding{{Hosts: []string{"api.example.com"}, Placeholder: "beam_secret_test", Value: "real-key"}}
+		}
+		f := testFirewall(t, upstream.Listener.Addr().String(), policy)
 		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.config.HTTPPort))
 		require.NoError(t, err)
 		conn.SetDeadline(time.Now().Add(time.Second))
@@ -117,6 +121,53 @@ func TestHTTPHostRawTCPAndConnectionCap(t *testing.T) {
 	extra.SetDeadline(time.Now().Add(time.Second))
 	_, err = extra.Read(make([]byte, 1))
 	require.Error(t, err)
+}
+
+func TestBindingRefreshDoesNotBlockPolicyOrAccept(t *testing.T) {
+	releaseCtx, release := context.WithCancel(context.Background())
+	defer release()
+	started := make(chan struct{})
+	f := NewFirewall(types.EgressConfig{}, nil, Dependencies{RefreshBindings: func(_ context.Context, _ string, bindings []types.SecretBinding) ([]types.SecretBinding, error) {
+		close(started)
+		<-releaseCtx.Done()
+		bindings[0].Value = "stale"
+		return bindings, nil
+	}})
+	policy := Policy{Bindings: []types.SecretBinding{{Value: "initial"}}}
+	require.NoError(t, f.Register("box", []string{"127.0.0.1"}, policy))
+	c, _ := f.lookup("box")
+	refreshed := make(chan []types.SecretBinding, 1)
+	go func() { bindings, _ := f.bindings(context.Background(), c); refreshed <- bindings }()
+	<-started
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() { conn, _ := (&policyListener{Listener: listener, firewall: f}).Accept(); accepted <- conn }()
+	client, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer client.Close()
+	select {
+	case conn := <-accepted:
+		require.NotNil(t, conn)
+		defer conn.Close()
+	case <-time.After(time.Second):
+		t.Fatal("refresh blocked the listener")
+	}
+	policy.Bindings[0].Value = "current"
+	updated := make(chan error, 1)
+	go func() { updated <- f.Register("box", nil, policy) }()
+	select {
+	case err := <-updated:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("refresh blocked a policy update")
+	}
+	release()
+	bindings := <-refreshed
+	require.Len(t, bindings, 1)
+	require.Equal(t, "current", bindings[0].Value)
+	f.Unregister("box")
 }
 
 func TestHostnameDialRejectsPrivateAddresses(t *testing.T) {

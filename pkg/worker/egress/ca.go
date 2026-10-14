@@ -89,12 +89,13 @@ func (f *Firewall) TrustBundle(id, directory string) (string, error) {
 		return "", err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.ca == nil {
 		c.ca, err = newAuthority()
-		if err != nil {
-			return "", err
-		}
+	}
+	ca := c.ca
+	c.mu.Unlock()
+	if err != nil {
+		return "", err
 	}
 	roots := f.deps.RootCertificates
 	for _, path := range []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"} {
@@ -113,7 +114,7 @@ func (f *Firewall) TrustBundle(id, directory string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(directory, "ca-certificates.crt")
-	if err := os.WriteFile(path, append(append(append([]byte(nil), roots...), '\n'), c.ca.pem...), 0644); err != nil {
+	if err := os.WriteFile(path, append(append(append([]byte(nil), roots...), '\n'), ca.pem...), 0644); err != nil {
 		return "", err
 	}
 	return path, nil

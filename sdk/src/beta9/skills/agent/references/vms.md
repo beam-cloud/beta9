@@ -101,15 +101,17 @@ IPs and CIDRs. Hostname rules govern TLS SNI and HTTP Host; other TCP protocols
 need a CIDR. The worker resolves allowed hostnames and rejects private,
 loopback and link-local destinations. UDP/ICMP are blocked except DNS queries
 to the configured resolver. Existing connections close when policy changes.
+Proxied TCP connections use the worker's source IP, including CIDR targets;
+downstream source-IP access rules see the worker.
 
 Create a brokered credential with `{{cli}} secret create KEY VALUE --host api.openai.com`.
 Use `--host` repeatedly for multiple hosts or `*.wildcards`. Bind it with
 `{{cli}} vm new --secret KEY`, or pass `secrets=["KEY"]` to VM exec. The guest
 receives a stable `beam_secret_...` placeholder. The worker replaces it only
-in request headers on matching hosts, verifies upstream TLS, and scrubs values
+in HTTPS request headers on matching hosts, verifies upstream TLS, and scrubs values
 from response headers, bodies and WebSocket messages. Hosts without bindings
 retain TLS passthrough. Value rotation takes effect on the next request after
-the worker's 15-second cache expires.
+the worker's 15-second cache expires. Plain HTTP to a bound host is blocked.
 
 Brokered secrets require allowed hosts. Serverless workloads retain plaintext
 secret envs. With block_network, credential hosts are the only allowed egress;
@@ -123,8 +125,7 @@ and compressed upstream responses are rejected when they cannot be scrubbed.
 Docker containers inside a VM do not inherit its CA;
 mount `/etc/beam/ca-certificates.crt` and configure their trust explicitly.
 
-For existing VM records, operators can run `hack/protect-vm-system-ports.sql`
-on the intended database, or protect each terminal using the expose command.
+Protect an existing VM's terminal with `{{cli}} vm expose --protected NAME 7681`.
 Deploy workers with egress enabled before binding brokered secrets; older
 workers fail closed. CA bundles are prepared at sandbox startup so exec can
 add bindings later; only public certificates enter the guest.
