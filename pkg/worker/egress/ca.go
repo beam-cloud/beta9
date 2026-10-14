@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,7 +10,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,14 +33,14 @@ func newAuthority() (*authority, error) {
 	if err != nil {
 		return nil, err
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, err
-	}
+	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: "Beam container egress CA"},
-		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().AddDate(1, 0, 0),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		Subject:               pkix.Name{CommonName: "Beam container egress CA"},
+		NotBefore:             now.Add(-time.Minute),
+		NotAfter:              now.AddDate(1, 0, 0),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
@@ -51,7 +51,12 @@ func newAuthority() (*authority, error) {
 		return nil, err
 	}
 	leaves, _ := lru.New[string, *tls.Certificate](128)
-	return &authority{key: key, cert: cert, pem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), leaves: leaves}, nil
+	return &authority{
+		key:    key,
+		cert:   cert,
+		pem:    pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		leaves: leaves,
+	}, nil
 }
 
 func (a *authority) leaf(host string) (*tls.Certificate, error) {
@@ -64,20 +69,24 @@ func (a *authority) leaf(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, err
-	}
+	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: host}, DNSNames: []string{host},
-		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(24 * time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		Subject:     pkix.Name{CommonName: host},
+		DNSNames:    []string{host},
+		NotBefore:   now.Add(-time.Minute),
+		NotAfter:    now.Add(24 * time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, a.cert, &key.PublicKey, a.key)
 	if err != nil {
 		return nil, err
 	}
-	cert := &tls.Certificate{Certificate: [][]byte{der, a.cert.Raw}, PrivateKey: key, Leaf: template}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, err
+	}
+	cert := &tls.Certificate{Certificate: [][]byte{der, a.cert.Raw}, PrivateKey: key, Leaf: leaf}
 	a.leaves.Add(host, cert)
 	return cert, nil
 }
@@ -114,7 +123,8 @@ func (f *Firewall) TrustBundle(id, directory string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(directory, "ca-certificates.crt")
-	if err := os.WriteFile(path, append(append(append([]byte(nil), roots...), '\n'), ca.pem...), 0644); err != nil {
+	bundle := bytes.Join([][]byte{roots, ca.pem}, []byte("\n"))
+	if err := os.WriteFile(path, bundle, 0644); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -122,7 +132,11 @@ func (f *Firewall) TrustBundle(id, directory string) (string, error) {
 
 func TrustEnvironment() []string {
 	env := []string{"NODE_USE_SYSTEM_CA=1"}
-	for _, key := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "NPM_CONFIG_CAFILE", "PIP_CERT", "GIT_SSL_CAINFO", "AWS_CA_BUNDLE", "CARGO_HTTP_CAINFO", "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"} {
+	for _, key := range []string{
+		"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+		"NPM_CONFIG_CAFILE", "PIP_CERT", "GIT_SSL_CAINFO", "AWS_CA_BUNDLE",
+		"CARGO_HTTP_CAINFO", "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
+	} {
 		env = append(env, key+"="+TrustBundlePath)
 	}
 	return env

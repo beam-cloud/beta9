@@ -34,7 +34,7 @@ func TestHeaderSubstitutionAndStreamingScrub(t *testing.T) {
 	payload := "data: secret-a / secret-b / ordinary SSE\n\n"
 	for split := 1; split < len(payload); split++ {
 		source := io.MultiReader(bytes.NewBufferString(payload[:split]), bytes.NewBufferString(payload[split:]))
-		result, err := io.ReadAll(newScrubber(source, bindings))
+		result, err := io.ReadAll(&scrubber{source: source, bindings: bindings})
 		require.NoError(t, err)
 		require.Equal(t, "data: beam_secret_a / beam_secret_b / ordinary SSE\n\n", string(result))
 	}
@@ -44,7 +44,7 @@ func TestHeaderSubstitutionAndStreamingScrub(t *testing.T) {
 	result := make(chan string, 1)
 	go func() {
 		buffer := make([]byte, 100)
-		n, _ := newScrubber(reader, bindings).Read(buffer)
+		n, _ := (&scrubber{source: reader, bindings: bindings}).Read(buffer)
 		result <- string(buffer[:n])
 	}()
 	select {
@@ -78,13 +78,13 @@ func TestRotationAndWebSocketScrub(t *testing.T) {
 	frame := append(webSocketFrame(1, []byte("n")), webSocketFrame(0, []byte("ew"))...)
 	frame[0] &= 0x7f
 	upstream := &testUpgrade{Buffer: *bytes.NewBuffer(frame)}
-	result, err := io.ReadAll(newWebSocketScrubber(upstream, got))
+	result, err := io.ReadAll(&webSocketScrubber{ReadWriteCloser: upstream, bindings: got})
 	require.NoError(t, err)
 	require.Equal(t, webSocketFrame(1, []byte("beam_secret_a")), result)
 	c.policy.BindingsOnly = true
 	c.policy.AllowList = []string{"other.example.com"}
 	response := httptest.NewRecorder()
-	f.handler(c, "api.example.com", 443).ServeHTTP(response, httptest.NewRequest("GET", "https://api.example.com/", nil))
+	f.newSecretProxy(c, "api.example.com", 443).ServeHTTP(response, httptest.NewRequest("GET", "https://api.example.com/", nil))
 	require.Equal(t, http.StatusForbidden, response.Code)
 }
 

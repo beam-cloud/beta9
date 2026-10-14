@@ -3,9 +3,11 @@ package egress
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,9 +17,14 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/inetaf/tcpproxy"
+	"golang.org/x/sys/unix"
 )
 
-const peekTimeout = 10 * time.Second
+const (
+	peekTimeout               = 10 * time.Second
+	bindingTTL                = 15 * time.Second
+	originalDestinationOption = 80 // Linux SO_ORIGINAL_DST / IP6T_SO_ORIGINAL_DST.
+)
 
 type Policy struct {
 	Open         bool
@@ -66,7 +73,13 @@ func NewFirewall(config types.EgressConfig, addresses []string, deps Dependencie
 	if config.MaxConnectionsPerContainer <= 0 {
 		config.MaxConnectionsPerContainer = 256
 	}
-	return &Firewall{config: config, addresses: addresses, deps: deps, containers: map[string]*container{}, peers: map[string]*container{}}
+	return &Firewall{
+		config:     config,
+		addresses:  addresses,
+		deps:       deps,
+		containers: map[string]*container{},
+		peers:      map[string]*container{},
+	}
 }
 
 func (f *Firewall) Start(ctx context.Context) error {
@@ -81,25 +94,29 @@ func (f *Firewall) Start(ctx context.Context) error {
 		}
 	}()
 	f.proxy.ListenFunc = func(_, address string) (net.Listener, error) { return listeners[address], nil }
-	for i, port := range []*int{&f.config.TLSPort, &f.config.HTTPPort, &f.config.OtherPort} {
-		if *port < 0 || *port > 65535 {
-			return fmt.Errorf("invalid egress listener port %d", *port)
+	for _, route := range []struct {
+		port  *int
+		match func(string, tcpproxy.Matcher, tcpproxy.Target)
+		tls   bool
+	}{
+		{&f.config.TLSPort, f.proxy.AddSNIMatchRoute, true},
+		{&f.config.HTTPPort, f.proxy.AddHTTPHostMatchRoute, false},
+		{&f.config.OtherPort, nil, false},
+	} {
+		if *route.port < 0 || *route.port > 65535 {
+			return fmt.Errorf("invalid egress listener port %d", *route.port)
 		}
 		for _, ip := range f.addresses {
-			listener, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(*port)))
+			listener, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(*route.port)))
 			if err != nil {
 				return err
 			}
-			*port = listener.Addr().(*net.TCPAddr).Port
+			*route.port = listener.Addr().(*net.TCPAddr).Port
 			address := listener.Addr().String()
 			listeners[address] = &policyListener{Listener: listener, firewall: f}
-			target := &routeTarget{firewall: f, tls: i == 0}
-			anyHost := func(_ context.Context, host string) bool { return host != "" }
-			switch i {
-			case 0:
-				f.proxy.AddSNIMatchRoute(address, anyHost, target)
-			case 1:
-				f.proxy.AddHTTPHostMatchRoute(address, anyHost, target)
+			target := &routeTarget{firewall: f, tls: route.tls}
+			if route.match != nil {
+				route.match(address, func(_ context.Context, host string) bool { return host != "" }, target)
 			}
 			f.proxy.AddRoute(address, target)
 		}
@@ -120,9 +137,14 @@ func (f *Firewall) Config() types.EgressConfig { return f.config }
 func (f *Firewall) Stop() {
 	_ = f.proxy.Close()
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	containers := make([]*container, 0, len(f.containers))
 	for _, c := range f.containers {
-		c.closeConnections()
+		containers = append(containers, c)
+	}
+	clear(f.peers)
+	f.mu.Unlock()
+	for _, c := range containers {
+		c.close()
 	}
 }
 
@@ -161,22 +183,27 @@ func (f *Firewall) Register(id string, ips []string, policy Policy) error {
 
 func (f *Firewall) Unregister(id string) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	c := f.containers[id]
 	if c == nil {
+		f.mu.Unlock()
 		return
 	}
-	c.mu.Lock()
-	c.closed = true
-	c.generation++
-	c.mu.Unlock()
-	c.closeConnections()
 	delete(f.containers, id)
 	for ip, peer := range f.peers {
 		if peer == c {
 			delete(f.peers, ip)
 		}
 	}
+	f.mu.Unlock()
+	c.close()
+}
+
+func (c *container) close() {
+	c.mu.Lock()
+	c.closed = true
+	c.generation++
+	c.mu.Unlock()
+	c.closeConnections()
 }
 
 func (c *container) closeConnections() {
@@ -198,8 +225,13 @@ type trackedConn struct {
 }
 
 func (c *trackedConn) Close() error {
-	err := c.Conn.Close()
-	c.once.Do(func() { c.owner.mu.Lock(); delete(c.owner.connections, c); c.owner.mu.Unlock() })
+	var err error
+	c.once.Do(func() {
+		err = c.Conn.Close()
+		c.owner.mu.Lock()
+		delete(c.owner.connections, c)
+		c.owner.mu.Unlock()
+	})
 	return err
 }
 
@@ -245,7 +277,8 @@ func (r *routeTarget) HandleConn(conn net.Conn) {
 	defer conn.Close()
 	var hostname string
 	underlying := conn
-	if peeked, ok := conn.(*tcpproxy.Conn); ok {
+	peeked, _ := conn.(*tcpproxy.Conn)
+	if peeked != nil {
 		hostname = peeked.HostName
 		underlying = peeked.Conn
 	}
@@ -279,16 +312,20 @@ func (r *routeTarget) HandleConn(conn net.Conn) {
 		if !r.tls {
 			return
 		}
-		f.intercept(conn, c, hostname, dst.Port)
+		f.serveTLS(conn, c, hostname, dst.Port)
 		return
 	}
-	proxy := &tcpproxy.DialProxy{Addr: target, DialTimeout: peekTimeout, OnDialError: func(src net.Conn, _ error) { _ = src.Close() }}
+	proxy := &tcpproxy.DialProxy{
+		Addr:        target,
+		DialTimeout: peekTimeout,
+		OnDialError: func(src net.Conn, _ error) { _ = src.Close() },
+	}
 	if target != dst.String() {
 		proxy.DialContext = f.deps.DialContext
 	} else {
 		proxy.DialContext = (&net.Dialer{Timeout: peekTimeout}).DialContext
 	}
-	if peeked, ok := conn.(*tcpproxy.Conn); ok {
+	if peeked != nil {
 		conn = &tcpproxy.Conn{Conn: tracked.Conn, Peeked: peeked.Peeked}
 	} else {
 		conn = tracked.Conn
@@ -305,10 +342,8 @@ func cleanHost(host string) string {
 
 func destination(policy Policy, host string, dst *net.TCPAddr) (string, bool) {
 	cidrs, hosts := common.SplitAllowList(policy.AllowList)
-	for _, pattern := range hosts {
-		if host != "" && common.MatchDomain(host, pattern) {
-			return net.JoinHostPort(host, strconv.Itoa(dst.Port)), true
-		}
+	if host != "" && common.HostPatternCovered(host, hosts) {
+		return net.JoinHostPort(host, strconv.Itoa(dst.Port)), true
 	}
 	for _, cidr := range cidrs {
 		_, network, _ := net.ParseCIDR(cidr)
@@ -363,4 +398,85 @@ func (f *Firewall) lookup(id string) (*container, error) {
 		return nil, fmt.Errorf("egress policy is unavailable for container")
 	}
 	return c, nil
+}
+
+func (f *Firewall) bindings(ctx context.Context, c *container) ([]types.SecretBinding, error) {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	c.mu.Lock()
+	bindings, generation := c.policy.Bindings, c.generation
+	fresh, closed := f.deps.RefreshBindings == nil || time.Since(c.refreshed) < bindingTTL, c.closed
+	c.mu.Unlock()
+	if closed {
+		return nil, net.ErrClosed
+	}
+	if fresh {
+		return bindings, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, peekTimeout)
+	defer cancel()
+	bindings, err := f.deps.RefreshBindings(ctx, c.id, types.CloneSecretBindings(bindings))
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, net.ErrClosed
+	}
+	if generation == c.generation {
+		c.policy.Bindings = bindings
+		if c.policy.BindingsOnly {
+			c.policy.AllowList = nil
+			for _, binding := range bindings {
+				c.policy.AllowList = append(c.policy.AllowList, binding.Hosts...)
+			}
+		}
+		c.refreshed = time.Now()
+	}
+	return c.policy.Bindings, nil
+}
+
+func originalDestination(conn net.Conn) (*net.TCPAddr, error) {
+	if runtime.GOOS != "linux" {
+		return nil, fmt.Errorf("transparent egress requires Linux")
+	}
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		return nil, fmt.Errorf("original destination requires TCP")
+	}
+	raw, err := tcp.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	var dst *net.TCPAddr
+	var socketErr error
+	err = raw.Control(func(fd uintptr) {
+		if tcp.RemoteAddr().(*net.TCPAddr).IP.To4() != nil {
+			// The IPv4 sockaddr fits in Multiaddr's 16-byte buffer.
+			address, err := unix.GetsockoptIPv6Mreq(int(fd), unix.IPPROTO_IP, originalDestinationOption)
+			socketErr = err
+			if err == nil {
+				dst = &net.TCPAddr{
+					IP:   net.IP(address.Multiaddr[4:8]),
+					Port: int(binary.BigEndian.Uint16(address.Multiaddr[2:4])),
+				}
+			}
+			return
+		}
+		address, err := unix.GetsockoptIPv6MTUInfo(int(fd), unix.IPPROTO_IPV6, originalDestinationOption)
+		socketErr = err
+		if err == nil {
+			var port [2]byte
+			binary.NativeEndian.PutUint16(port[:], address.Addr.Port)
+			dst = &net.TCPAddr{
+				IP:   net.IP(address.Addr.Addr[:]),
+				Port: int(binary.BigEndian.Uint16(port[:])),
+			}
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dst, socketErr
 }

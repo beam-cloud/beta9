@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/beta9/pkg/worker/egress"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -20,7 +21,12 @@ func (m *ContainerNetworkManager) registerEgress(id string, request *types.Conta
 	if err != nil {
 		return err
 	}
-	return m.egress.Register(id, []string{info.ContainerIp, info.ContainerIpv6}, egress.Policy{BindingsOnly: request.BlockNetwork && len(request.AllowList) == 0, Open: request.NetworkPolicy() == types.ContainerNetworkPolicyOpen, AllowList: request.EgressAllowList(), Bindings: request.SecretBindings})
+	return m.egress.Register(id, []string{info.ContainerIp, info.ContainerIpv6}, egress.Policy{
+		BindingsOnly: request.BlockNetwork && len(request.AllowList) == 0,
+		Open:         request.NetworkPolicy() == types.ContainerNetworkPolicyOpen,
+		AllowList:    request.EgressAllowList(),
+		Bindings:     request.SecretBindings,
+	})
 }
 
 func (m *ContainerNetworkManager) refreshSecretBindings(ctx context.Context, id string, bindings []types.SecretBinding) ([]types.SecretBinding, error) {
@@ -30,10 +36,17 @@ func (m *ContainerNetworkManager) refreshSecretBindings(ctx context.Context, id 
 	}
 	request := instance.Request
 	names := make([]string, 0, len(bindings))
+	envNames := make(map[string]string, len(bindings))
 	for _, binding := range bindings {
 		names = append(names, binding.SecretName)
+		envNames[binding.SecretName] = binding.EnvName
 	}
-	response, err := m.workerRepoClient.GetContainerRuntimeCredentials(ctx, &pb.GetContainerRuntimeCredentialsRequest{WorkspaceId: request.WorkspaceId, StubId: request.StubId, ContainerId: id, BindingNames: names})
+	response, err := m.workerRepoClient.GetContainerRuntimeCredentials(ctx, &pb.GetContainerRuntimeCredentialsRequest{
+		WorkspaceId:  request.WorkspaceId,
+		StubId:       request.StubId,
+		ContainerId:  id,
+		BindingNames: names,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -42,11 +55,7 @@ func (m *ContainerNetworkManager) refreshSecretBindings(ctx context.Context, id 
 	}
 	latest := types.SecretBindingsFromProto(response.SecretBindings)
 	for i := range latest {
-		for _, binding := range bindings {
-			if latest[i].SecretName == binding.SecretName {
-				latest[i].EnvName = binding.EnvName
-			}
-		}
+		latest[i].EnvName = envNames[latest[i].SecretName]
 	}
 	return latest, nil
 }
@@ -58,30 +67,32 @@ type egressRule struct {
 
 func egressRules(ip, comment string, config types.EgressConfig, restricted bool, resolvers []string) []egressRule {
 	var rules []egressRule
+	add := func(table, chain string, args ...string) {
+		args = append([]string{"-i", containerBridgeLinkName, "-s", ip}, args...)
+		args = append(args, "-m", "comment", "--comment", comment)
+		rules = append(rules, egressRule{table: table, chain: chain, args: args})
+	}
 	for _, route := range []struct{ port, listener int }{{443, config.TLSPort}, {80, config.HTTPPort}, {0, config.OtherPort}} {
-		args := []string{"-i", containerBridgeLinkName, "-s", ip, "-p", "tcp"}
+		args := []string{"-p", "tcp"}
 		if route.port != 0 {
 			args = append(args, "--dport", strconv.Itoa(route.port))
 		}
 		args = append(args, "-j", "REDIRECT", "--to-ports", strconv.Itoa(route.listener))
-		rules = append(rules, egressRule{"nat", "PREROUTING", args})
+		add("nat", "PREROUTING", args...)
 	}
 	if restricted {
 		for _, chain := range []string{"FORWARD", "INPUT"} {
-			rules = append(rules, egressRule{"filter", chain, []string{"-i", containerBridgeLinkName, "-s", ip, "-m", "conntrack", "--ctdir", "ORIGINAL", "-j", "DROP"}})
+			add("filter", chain, "-m", "conntrack", "--ctdir", "ORIGINAL", "-j", "DROP")
 			for _, resolver := range resolvers {
 				if strings.Contains(ip, ":") != strings.Contains(resolver, ":") {
 					continue
 				}
-				rules = append(rules, egressRule{"filter", chain, []string{"-i", containerBridgeLinkName, "-s", ip, "-p", "udp", "--dport", "53", "-d", resolver, "-j", "ACCEPT"}})
+				add("filter", chain, "-p", "udp", "--dport", "53", "-d", resolver, "-j", "ACCEPT")
 			}
 		}
 		for _, port := range []int{config.TLSPort, config.HTTPPort, config.OtherPort} {
-			rules = append(rules, egressRule{"filter", "INPUT", []string{"-i", containerBridgeLinkName, "-s", ip, "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"}})
+			add("filter", "INPUT", "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "ACCEPT")
 		}
-	}
-	for i := range rules {
-		rules[i].args = append(rules[i].args, "-m", "comment", "--comment", comment)
 	}
 	return rules
 }
@@ -105,22 +116,18 @@ func (m *ContainerNetworkManager) setupEgressRules(id string, request *types.Con
 	m.iptablesMu.Lock()
 	defer m.iptablesMu.Unlock()
 	for _, family := range []struct {
-		ip   string
-		ipv6 bool
-	}{{info.ContainerIp, false}, {info.ContainerIpv6, true}} {
-		ipt := m.ipt
-		if family.ipv6 {
-			ipt = m.ipt6
-		}
-		if ipt == nil || family.ip == "" {
+		ip  string
+		ipt *iptables.IPTables
+	}{{info.ContainerIp, m.ipt}, {info.ContainerIpv6, m.ipt6}} {
+		if family.ipt == nil || family.ip == "" {
 			continue
 		}
 		rules := egressRules(family.ip, info.Comment, m.config.Worker.Egress, request.NetworkRestricted(), resolvers)
 		for _, rule := range rules {
 			if rule.table == "nat" {
-				err = ipt.AppendUnique(rule.table, rule.chain, rule.args...)
+				err = family.ipt.AppendUnique(rule.table, rule.chain, rule.args...)
 			} else {
-				err = ipt.InsertUnique(rule.table, rule.chain, 1, rule.args...)
+				err = family.ipt.InsertUnique(rule.table, rule.chain, 1, rule.args...)
 			}
 			if err != nil {
 				return fmt.Errorf("install egress rule: %w", err)
@@ -145,7 +152,12 @@ func (s *Worker) attachEgressTrust(request *types.ContainerRequest, spec *specs.
 		return err
 	}
 	spec.Mounts = slices.DeleteFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == egress.TrustBundlePath })
-	spec.Mounts = append(spec.Mounts, specs.Mount{Type: "none", Source: path, Destination: egress.TrustBundlePath, Options: []string{"ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"}})
+	spec.Mounts = append(spec.Mounts, specs.Mount{
+		Type:        "none",
+		Source:      path,
+		Destination: egress.TrustBundlePath,
+		Options:     []string{"ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"},
+	})
 	if len(request.SecretBindings) > 0 {
 		spec.Process.Env = upsertEnvVars(spec.Process.Env, egress.TrustEnvironment())
 	}
@@ -156,23 +168,19 @@ func (m *ContainerNetworkManager) networkUpdateGuard(info *containerNetworkInfo,
 	m.iptablesMu.Lock()
 	defer m.iptablesMu.Unlock()
 	for _, family := range []struct {
-		ip   string
-		ipv6 bool
-	}{{info.ContainerIp, false}, {info.ContainerIpv6, true}} {
-		ipt := m.ipt
-		if family.ipv6 {
-			ipt = m.ipt6
-		}
-		if ipt == nil || family.ip == "" {
+		ip  string
+		ipt *iptables.IPTables
+	}{{info.ContainerIp, m.ipt}, {info.ContainerIpv6, m.ipt6}} {
+		if family.ipt == nil || family.ip == "" {
 			continue
 		}
 		for _, chain := range []string{"INPUT", "FORWARD"} {
 			rule := []string{"-s", family.ip, "-j", "DROP", "-m", "comment", "--comment", info.Comment + "-beam-egress-update"}
 			var err error
 			if install {
-				err = ipt.InsertUnique("filter", chain, 1, rule...)
+				err = family.ipt.InsertUnique("filter", chain, 1, rule...)
 			} else {
-				err = ipt.DeleteIfExists("filter", chain, rule...)
+				err = family.ipt.DeleteIfExists("filter", chain, rule...)
 			}
 			if err != nil {
 				return err
