@@ -12,7 +12,7 @@ from beta9.deployment import onboarding
 
 def test_lost_creation_response_resumes_identical_request(tmp_path, monkeypatch):
     selected = SimpleNamespace(http=SimpleNamespace(workspace_id="workspace"))
-    vm = MagicMock()
+    vm = MagicMock(info={"id": "vm-id"})
     vm._creation_body = None
     vm.prepare.side_effect = lambda: setattr(
         vm, "_creation_body", {"request_id": "original", "spec": {"image_id": "immutable"}}
@@ -35,6 +35,32 @@ def test_lost_creation_response_resumes_identical_request(tmp_path, monkeypatch)
     assert (next(tmp_path.rglob("*.json")).stat().st_mode & 0o777) == 0o600
 
 
+def test_unnamed_vm_takes_the_generated_name_and_resumes_by_id(tmp_path, monkeypatch):
+    selected = SimpleNamespace(http=SimpleNamespace(workspace_id="workspace"))
+    vm = MagicMock(info={"id": "vm-id"})
+    vm._creation_body = None
+    vm.prepare.side_effect = lambda: setattr(vm, "_creation_body", {"request_id": "original"})
+    vm.process.exec.return_value.wait.return_value = 0
+    vm.process.exec.return_value.stdout.read.return_value = "Linux\n"
+    vm.refresh.return_value.info = {"name": "happy-otter-1a2b3c", "id": "vm-id"}
+    factory = MagicMock(return_value=vm)
+    monkeypatch.setattr(onboarding, "VM", factory)
+
+    assert onboarding.prepare_vm(selected, tmp_path)["name"] == "happy-otter-1a2b3c"
+    assert factory.call_args.args == (None,)
+    factory.get.assert_not_called()
+
+    vm.info.update(
+        metadata={"beam.onboarding": factory.call_args.kwargs["request_id"]},
+        desired_state="stopped",
+    )
+    factory.get.return_value = vm
+    onboarding.prepare_vm(selected, tmp_path)
+    factory.get.assert_called_once_with("vm-id", _service=selected)
+    vm.start.assert_called_once_with(wait=False)
+    assert factory.call_count == 1
+
+
 @pytest.mark.parametrize("lose_response", [False, True])
 def test_removed_vm_renews_request_and_can_resume(tmp_path, monkeypatch, lose_response):
     directory = tmp_path / "state"
@@ -45,7 +71,7 @@ def test_removed_vm_renews_request_and_can_resume(tmp_path, monkeypatch, lose_re
         "creation_body": {"request_id": "removed", "spec": {"image_id": "old"}},
     }
     onboarding._save_state(path, old_request)
-    removed, replacement = MagicMock(), MagicMock()
+    removed, replacement = MagicMock(), MagicMock(info={"id": "vm-id"})
     removed.create.side_effect = GatewayHTTPError(410, "the VM for this request_id was removed")
     replacement._creation_body = None
     replacement.prepare.side_effect = lambda: setattr(
@@ -168,7 +194,7 @@ def test_authorization_failure_does_not_create_vm(tmp_path, monkeypatch):
     factory.assert_not_called()
 
 
-@pytest.mark.parametrize(("args", "name"), [(["--name", "first"], "first"), ([], "my-first-vm")])
+@pytest.mark.parametrize(("args", "name"), [(["--name", "first"], "first"), ([], None)])
 def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypatch, args, name):
     from click.testing import CliRunner
 
