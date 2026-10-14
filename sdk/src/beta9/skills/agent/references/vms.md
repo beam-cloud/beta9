@@ -10,7 +10,8 @@ feature.
 ## First VM
 
 `{{cli}} setup vm --name agent-vm` signs in in the browser, connects local
-agents and verifies a command in the guest. Add `--desktop` if needed.
+agents, verifies a command in the guest and starts a browser desktop. Add
+`--no-desktop` to skip the desktop.
 Re-running resumes the same setup-owned VM. `--skip-agents` skips local
 client configuration; `--yes` explicitly approves creation for an already
 authenticated and funded unattended context.
