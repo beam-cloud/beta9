@@ -189,8 +189,8 @@ def _show(info, as_json):
 @click.option(
     "--allow-network",
     multiple=True,
-    metavar="CIDR",
-    help="Allow outbound access only to these CIDRs.",
+    metavar="HOST_OR_CIDR",
+    help="Allow outbound access only to these hostnames, *.wildcards or CIDRs.",
 )
 @click.option(
     "--protected-port",
@@ -200,6 +200,13 @@ def _show(info, as_json):
     help="Publish a port requiring an access token.",
 )
 @click.option("--request-id", type=click.UUID, help="Reuse a UUID to retry creation safely.")
+@click.option(
+    "--public-port",
+    multiple=True,
+    type=click.IntRange(1, 65535),
+    metavar="PORT",
+    help="Publish a port without an access token, including terminal/desktop ports.",
+)
 @click.option(
     "--disk",
     multiple=True,
@@ -241,6 +248,7 @@ def new(
     block_network=None,
     allow_network=(),
     protected_port=(),
+    public_port=(),
     request_id=None,
     disk=(),
     volume=(),
@@ -268,7 +276,11 @@ def new(
         docker_enabled=docker_enabled,
         env=env_map if env else None,
         secrets=list(secret) if secret else None,
-        ports=(list(dict.fromkeys((*port, *protected_port))) if port or protected_port else None),
+        ports=(
+            list(dict.fromkeys((*port, *protected_port, *public_port)))
+            if port or protected_port or public_port
+            else None
+        ),
         ssh=False if no_ssh else None,
         ttl=ttl,
         idle_action=idle_action,
@@ -279,6 +291,7 @@ def new(
         block_network=block_network,
         allow_list=list(allow_network) if allow_network else None,
         protected_ports=list(protected_port) if protected_port else None,
+        public_ports=list(public_port) if public_port else None,
         request_id=str(request_id) if request_id else None,
         disks=list(disk) if disk else None,
         volumes=_volumes(volume) if volume else None,
@@ -454,7 +467,7 @@ def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json
 @management.command("network")
 @click.argument("name")
 @click.option("--block/--open", default=False)
-@click.option("--allow", multiple=True, metavar="CIDR")
+@click.option("--allow", multiple=True, metavar="HOST_OR_CIDR")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def network_vm(service, name, block, allow, as_json):

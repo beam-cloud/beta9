@@ -351,6 +351,12 @@ worker:
   containerLogLinesPerHour: 6000
   criu:
     mode: nvidia
+  egress:
+    enabled: true
+    tlsPort: 0
+    httpPort: 0
+    otherPort: 0
+    maxConnectionsPerContainer: 256
 
 cache:
   enabled: true

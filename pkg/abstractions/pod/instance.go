@@ -92,16 +92,18 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		}
 	}
 
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Ctx, i.BackendRepo, i.Workspace, *i.StubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Ctx, i.BackendRepo, i.Workspace, *i.StubConfig, i.Stub.Type.IsSandbox())
 	if err != nil {
 		return err
 	}
 
 	env := []string{}
 	env = append(i.StubConfig.Env, env...)
-	env = append(secrets, env...)
+	env = append(secrets.Env, env...)
+	if !i.Stub.Type.IsSandbox() {
+		env = append(env, fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key))
+	}
 	env = append(env, []string{
-		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
@@ -146,6 +148,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		runRequest := &types.ContainerRequest{
 			ContainerId:       containerId,
 			Env:               env,
+			SecretBindings:    secrets.Bindings,
 			Cpu:               i.StubConfig.Runtime.Cpu,
 			Memory:            i.StubConfig.Runtime.Memory,
 			GpuRequest:        gpuRequest,

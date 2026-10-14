@@ -140,10 +140,11 @@ def configure_agents(
 
 @setup.command(
     name="vm",
-    help="Sign in, connect your agents and start a persistent CPU VM. Run again to resume.",
+    help="Sign in, connect your agents and start a persistent CPU VM with a browser desktop. "
+    "Run again to resume.",
 )
 @click.option("--name", help="Name of the first VM. Generated if omitted.")
-@click.option("--desktop", is_flag=True, help="Include a browser desktop.")
+@click.option("--desktop/--no-desktop", default=True, help="Include a browser desktop.")
 @click.option("--client", "clients", type=click.Choice(CLIENT_IDS), multiple=True)
 @click.option("--skip-agents", is_flag=True, help="Sign in and prepare the VM only.")
 @click.option("-y", "--yes", is_flag=True, help="Approve creation without prompting.")

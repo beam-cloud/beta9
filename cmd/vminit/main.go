@@ -129,8 +129,10 @@ func run() (int, error) {
 		return -1, fmt.Errorf("configure network: %w", err)
 	}
 	logf("boot phase: network configured")
-
 	if processEnv(spec.Process, "BEAM_VM_SYSTEMD") == "1" {
+		if err := installEgressCA(); err != nil {
+			return -1, err
+		}
 		return -1, bootSystemd(spec, workload)
 	}
 
@@ -766,6 +768,9 @@ func (c *control) serve(childPid func() int) {
 				continue
 			}
 			err := c.restoreNetwork(*msg.Network)
+			if err == nil && c.systemd {
+				err = installEgressCA()
+			}
 			if err == nil {
 				logf("network reconfigured to %s %s", msg.Network.IPv4, msg.Network.IPv6)
 			}

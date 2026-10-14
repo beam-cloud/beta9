@@ -25,6 +25,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/worker/egress"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -46,6 +47,7 @@ const (
 	containerSubnetIPv6                 string = "fd00:abcd::/64"
 	containerGatewayAddressIPv6         string = "fd00:abcd::1"
 	containerBridgeAddressIPv6          string = "fd00:abcd::1"
+	ipv6AddressNoDAD                           = 0x02 // Linux IFA_F_NODAD.
 	containerNetworkSlotPrefix          string = "network-slot"
 	containerNetworkSlotNamespacePrefix        = "slot-"
 
@@ -82,6 +84,7 @@ const (
 )
 
 type ContainerNetworkManager struct {
+	egress              *egress.Firewall
 	ctx                 context.Context
 	defaultLink         netlink.Link
 	ipt                 *iptables.IPTables
@@ -540,6 +543,17 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		return nil, err
 	}
 
+	if config.Worker.Egress.Enabled {
+		addresses := []string{containerBridgeAddress}
+		if m.ipt6 != nil {
+			addresses = append(addresses, containerBridgeAddressIPv6)
+		}
+		m.egress = egress.NewFirewall(config.Worker.Egress, addresses, egress.Dependencies{RefreshBindings: m.refreshSecretBindings})
+		if err := m.egress.Start(ctx); err != nil {
+			return nil, fmt.Errorf("start egress firewall: %w", err)
+		}
+		m.config.Worker.Egress = m.egress.Config()
+	}
 	go m.cleanupOrphanedNamespaces()
 	if m.slotPoolSize > 0 {
 		m.sweepStaleNetworkState()
@@ -1128,6 +1142,9 @@ func deleteNamedNetworkNamespace(name string) error {
 }
 
 func (m *ContainerNetworkManager) Close() error {
+	if m.egress != nil {
+		m.egress.Stop()
+	}
 	m.stopAllPortExposures()
 
 	slots := m.drainFreeNetworkSlots()
@@ -1913,7 +1930,15 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 }
 
 func (m *ContainerNetworkManager) setupNetworkRestrictions(containerId string, request *types.ContainerRequest) error {
+	if m.egress != nil {
+		if err := m.registerEgress(containerId, request); err != nil {
+			return err
+		}
+	}
 	mode, apply := m.networkRestriction(containerId, request)
+	if request != nil && len(request.SecretBindings) > 0 && request.NetworkPolicy() == types.ContainerNetworkPolicyOpen {
+		return m.setupEgressRules(containerId, request)
+	}
 	if apply == nil {
 		return nil
 	}
@@ -1936,7 +1961,7 @@ func (m *ContainerNetworkManager) networkRestriction(containerId string, request
 	switch request.NetworkPolicy() {
 	case types.ContainerNetworkPolicyAllowList:
 		return "allowlist", func() error {
-			return m.setupAllowList(containerId, request, request.AllowList)
+			return m.setupAllowList(containerId, request, request.EgressAllowList())
 		}
 	case types.ContainerNetworkPolicyBlock:
 		return "block", func() error {
@@ -2052,6 +2077,7 @@ func (m *ContainerNetworkManager) ensureBridgeConfigured(bridgeName string, brid
 	if m.ipt6 != nil {
 		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
 		bridgeIPv6 := &netlink.Addr{
+			Flags: ipv6AddressNoDAD,
 			IPNet: &net.IPNet{
 				IP:   net.ParseIP(containerBridgeAddressIPv6),
 				Mask: ipv6Net.Mask,
@@ -2509,6 +2535,13 @@ func (m *ContainerNetworkManager) setupBlockNetwork(containerId string, request 
 }
 
 func (m *ContainerNetworkManager) setupAllowList(containerId string, request *types.ContainerRequest, allowList []string) error {
+	if m.egress != nil {
+		return m.setupEgressRules(containerId, request)
+	}
+	_, hosts := common.SplitAllowList(allowList)
+	if len(hosts) > 0 || len(request.SecretBindings) > 0 {
+		return fmt.Errorf("hostname egress and brokered secrets require the worker egress firewall")
+	}
 	// First block all network traffic
 	err := m.setupBlockNetwork(containerId, request)
 	if err != nil {
@@ -2600,6 +2633,9 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	defer unlockContainer()
 
 	m.stopContainerPortExposures(containerId)
+	if m.egress != nil {
+		m.egress.Unregister(containerId)
+	}
 
 	if slot := m.containerNetworkSlot(containerId); slot != nil {
 		return m.tearDownPreallocatedNetworkSlot(containerId, slot)
@@ -2775,7 +2811,7 @@ func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *conta
 // rules per exposed port, so the deletes go through one iptables-restore
 // transaction per family; the per-rule path remains as the fallback.
 func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.IPTables) error {
-	chains := [][2]string{{"nat", "PREROUTING"}, {"filter", "FORWARD"}}
+	chains := [][2]string{{"nat", "PREROUTING"}, {"filter", "FORWARD"}, {"filter", "INPUT"}}
 	doomed := make(map[string][]string, len(chains))
 	var batch strings.Builder
 	for _, tableChain := range chains {
@@ -2794,7 +2830,7 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 		if len(matched) == 0 {
 			continue
 		}
-		doomed[table] = matched
+		doomed[table+"/"+chain] = matched
 		fmt.Fprintf(&batch, "*%s\n", table)
 		for _, rule := range matched {
 			fmt.Fprintf(&batch, "-D %s\n", strings.TrimPrefix(rule, "-A "))
@@ -2813,7 +2849,7 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 
 	for _, tableChain := range chains {
 		table, chain := tableChain[0], tableChain[1]
-		for _, rule := range doomed[table] {
+		for _, rule := range doomed[table+"/"+chain] {
 			parts := iptablesRuleFields(rule)
 			if len(parts) < 3 {
 				continue
@@ -3161,68 +3197,60 @@ func (m *ContainerNetworkManager) stopAllPortExposures() {
 func (m *ContainerNetworkManager) UpdateNetworkPermissions(containerId string, request *types.ContainerRequest) error {
 	unlockContainer := m.lockContainerNetwork(containerId)
 	defer unlockContainer()
-
+	if err := common.ValidateAllowList(request.EgressAllowList()); err != nil {
+		return err
+	}
+	if m.egress == nil {
+		_, hosts := common.SplitAllowList(request.EgressAllowList())
+		if len(hosts) > 0 || len(request.SecretBindings) > 0 {
+			return fmt.Errorf("worker egress firewall is disabled")
+		}
+	}
 	info, err := m.getContainerNetworkInfo(containerId)
 	if err != nil {
 		return err
 	}
-
-	// Remove existing restriction rules (search by comment tag)
-	m.iptablesMu.Lock()
-	if err := m.removeNetworkRestrictionRules(info.ContainerIp, m.ipt); err != nil {
-		m.iptablesMu.Unlock()
+	if err := m.networkUpdateGuard(info, true); err != nil {
 		return err
 	}
-
-	if m.ipt6 != nil && info.ContainerIpv6 != "" {
-		if err := m.removeNetworkRestrictionRules(info.ContainerIpv6, m.ipt6); err != nil {
-			m.iptablesMu.Unlock()
+	// Close old connections before removing their routing rules.
+	if m.egress != nil {
+		if err := m.registerEgress(containerId, request); err != nil {
 			return err
 		}
+	}
+	m.iptablesMu.Lock()
+	err = m.removeNetworkRestrictionRules(info.ContainerIp, m.ipt)
+	if err == nil && m.ipt6 != nil {
+		err = m.removeNetworkRestrictionRules(info.ContainerIpv6, m.ipt6)
 	}
 	m.iptablesMu.Unlock()
-
-	// Apply new rules
-	if len(request.AllowList) > 0 {
-		if err := m.setupAllowList(containerId, request, request.AllowList); err != nil {
-			return err
-		}
-	} else if request.BlockNetwork {
-		if err := m.setupBlockNetwork(containerId, request); err != nil {
-			return err
-		}
+	if err != nil {
+		return err
 	}
-
-	return nil
+	if err := m.setupNetworkRestrictions(containerId, request); err != nil {
+		return err
+	}
+	return m.networkUpdateGuard(info, false)
 }
 
 func (m *ContainerNetworkManager) removeNetworkRestrictionRules(ip string, ipt *iptables.IPTables) error {
-	// Similar to removeIPTablesRules but only remove DROP/ACCEPT rules
-	// Preserve DNAT rules (exposed ports) and other infrastructure rules
-	tables := []string{"filter"}
-	for _, table := range tables {
-		chains := []string{"PREROUTING", "FORWARD"}
-
-		for _, chain := range chains {
-			// List rules in the chain
-			rules, err := ipt.List(table, chain)
-			if err != nil {
+	for _, tableChain := range [][2]string{{"nat", "PREROUTING"}, {"filter", "FORWARD"}, {"filter", "INPUT"}} {
+		table, chain := tableChain[0], tableChain[1]
+		rules, err := ipt.List(table, chain)
+		if err != nil {
+			return err
+		}
+		for _, rule := range rules {
+			if strings.Contains(rule, "beam-egress-update") {
 				continue
 			}
-
-			for _, rule := range rules {
-				target := iptablesRuleTarget(rule)
-				if target != "DROP" && target != "ACCEPT" {
-					continue
-				}
-				if !iptablesRuleMatchesSourceIP(rule, ip) {
-					continue
-				}
-
-				parts := iptablesRuleFields(rule)
-				if len(parts) < 3 {
-					continue
-				}
+			target := iptablesRuleTarget(rule)
+			if (target != "DROP" && target != "ACCEPT" && target != "REDIRECT") || !iptablesRuleMatchesSourceIP(rule, ip) {
+				continue
+			}
+			parts := iptablesRuleFields(rule)
+			if len(parts) >= 3 {
 				if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
 					return err
 				}

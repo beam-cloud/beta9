@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
+
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -1135,14 +1137,16 @@ func NewConcurrencyLimitFromProto(in *pb.ConcurrencyLimit) *ConcurrencyLimit {
 }
 
 type Secret struct {
-	Id            uint      `db:"id" json:"-"`
-	ExternalId    string    `db:"external_id" json:"external_id,omitempty"`
-	CreatedAt     time.Time `db:"created_at" json:"created_at,omitempty"`
-	UpdatedAt     time.Time `db:"updated_at" json:"updated_at,omitempty"`
-	Name          string    `db:"name" json:"name"`
-	Value         string    `db:"value" json:"value,omitempty"`
-	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id,omitempty"`
-	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by,omitempty"`
+	Hosts         pq.StringArray `db:"hosts" json:"hosts"`
+	Placeholder   string         `db:"placeholder" json:"placeholder,omitempty"`
+	Id            uint           `db:"id" json:"-"`
+	ExternalId    string         `db:"external_id" json:"external_id,omitempty"`
+	CreatedAt     time.Time      `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt     time.Time      `db:"updated_at" json:"updated_at,omitempty"`
+	Name          string         `db:"name" json:"name"`
+	Value         string         `db:"value" json:"value,omitempty"`
+	WorkspaceId   uint           `db:"workspace_id" json:"workspace_id,omitempty"`
+	LastUpdatedBy *uint          `db:"last_updated_by" json:"last_updated_by,omitempty"`
 	// EnvName is the variable a bound secret is injected under. Stub config only, not a column.
 	EnvName string `db:"-" json:"env_name,omitempty"`
 }

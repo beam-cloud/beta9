@@ -232,21 +232,24 @@ func TestSandboxExecReportsSecretResolutionFailure(t *testing.T) {
 	}
 }
 
-func TestSandboxExecEnvironmentInjectsOnlySecretsThatExist(t *testing.T) {
+func TestSandboxExecEnvironmentInjectsPlaceholders(t *testing.T) {
 	service := &GenericPodService{backendRepo: &sandboxBackendRepository{
-		secrets: []types.Secret{{Name: "OPENAI_API_KEY", Value: "workspace-value"}},
+		secrets: []types.Secret{{Name: "OPENAI_API_KEY", Value: "workspace-value", Hosts: []string{"api.openai.com"}, Placeholder: "beam_secret_test"}},
 	}}
-	env, err := service.sandboxExecEnvironment(
+	env, bindings, err := service.sandboxExecEnvironment(
 		context.Background(),
 		&types.Workspace{},
 		map[string]string{"MODE": "fast"},
-		[]string{"CODEX_API_KEY", "OPENAI_API_KEY"},
+		[]string{"OPENAI_API_KEY"},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env["OPENAI_API_KEY"] != "workspace-value" || env["MODE"] != "fast" {
+	if env["OPENAI_API_KEY"] != "beam_secret_test" || env["MODE"] != "fast" {
 		t.Fatalf("sandbox exec environment = %#v", env)
+	}
+	if len(bindings) != 1 || bindings[0].Value != "workspace-value" {
+		t.Fatal("worker binding was not emitted")
 	}
 	if _, exists := env["CODEX_API_KEY"]; exists {
 		t.Fatal("missing workspace secret was injected")

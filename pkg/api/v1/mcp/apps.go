@@ -344,14 +344,14 @@ func (g *Group) serviceCredential(ctx context.Context, a *auth.AuthInfo, appID, 
 
 	_, err = g.backendRepo.GetSecretByName(ctx, a.Workspace, name)
 	if errors.Is(err, sql.ErrNoRows) {
-		_, err = g.backendRepo.CreateSecret(ctx, a.Workspace, a.TokenId(), name, value, true)
+		_, err = g.backendRepo.CreateSecret(ctx, a.Workspace, a.TokenId(), name, value, true, nil)
 		if err != nil {
 			// A concurrent connection may have created the same binding.
 			_, err = g.backendRepo.GetSecretByName(ctx, a.Workspace, name)
 		}
 	}
 	if err == nil && rotate {
-		_, err = g.backendRepo.UpdateSecret(ctx, a.Workspace, a.TokenId(), name, value)
+		_, err = g.backendRepo.UpdateSecret(ctx, a.Workspace, a.TokenId(), name, value, nil)
 	}
 	return name, err
 }

@@ -2151,11 +2151,14 @@ func validateEnvironmentVariableName(name string) error {
 	return nil
 }
 
-func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string, validateName bool) (*types.Secret, error) {
+func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string, validateName bool, hosts []string) (*types.Secret, error) {
+	if err := pkgCommon.ValidateSecretHosts(hosts, value); err != nil {
+		return nil, err
+	}
 	query := `
-	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
-	VALUES ($1, $2, $3, $4)
-	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
+	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by, hosts)
+	VALUES ($1, $2, $3, $4, $5)
+	RETURNING hosts, placeholder, id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
 	if validateName {
@@ -2176,7 +2179,7 @@ func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace 
 	}
 
 	var secret types.Secret
-	if err := r.client.GetContext(ctx, &secret, query, name, encryptedValue, workspace.Id, tokenId); err != nil {
+	if err := r.client.GetContext(ctx, &secret, query, name, encryptedValue, workspace.Id, tokenId, pq.Array(append([]string{}, hosts...))); err != nil {
 		return nil, err
 	}
 
@@ -2186,7 +2189,7 @@ func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace 
 func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
 	var secret types.Secret
 
-	query := `SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = $1 AND workspace_id = $2;`
+	query := `SELECT hosts, placeholder, id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = $1 AND workspace_id = $2;`
 	err := r.client.GetContext(ctx, &secret, query, name, workspace.Id)
 	if err != nil {
 		return nil, err
@@ -2196,7 +2199,7 @@ func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspa
 }
 
 func (r *PostgresBackendRepository) GetSecretsByName(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
-	query := `SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = ANY($1) AND workspace_id = $2;`
+	query := `SELECT hosts, placeholder, id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = ANY($1) AND workspace_id = $2;`
 
 	var secrets []types.Secret
 	err := r.client.SelectContext(ctx, &secrets, query, pq.Array(names), workspace.Id)
@@ -2259,7 +2262,7 @@ func (r *PostgresBackendRepository) GetSecretsByNameDecrypted(ctx context.Contex
 }
 
 func (r *PostgresBackendRepository) ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error) {
-	query := `SELECT id, external_id, name, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE workspace_id = $1;`
+	query := `SELECT hosts, placeholder, id, external_id, name, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE workspace_id = $1;`
 
 	var secrets []types.Secret
 	err := r.client.SelectContext(ctx, &secrets, query, workspace.Id)
@@ -2280,12 +2283,23 @@ func (r *PostgresBackendRepository) DeleteSecret(ctx context.Context, workspace 
 	return nil
 }
 
-func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretName string, value string) (*types.Secret, error) {
+func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretName string, value string, hosts []string) (*types.Secret, error) {
+	validateHosts := hosts
+	if hosts == nil {
+		existing, err := r.GetSecretByName(ctx, workspace, secretName)
+		if err != nil {
+			return nil, err
+		}
+		validateHosts = existing.Hosts
+	}
+	if err := pkgCommon.ValidateSecretHosts(validateHosts, value); err != nil {
+		return nil, err
+	}
 	query := `
 	UPDATE workspace_secret
-	SET value = $3, last_updated_by = $4, updated_at = CURRENT_TIMESTAMP
+	SET value = $3, hosts = COALESCE($5,hosts), last_updated_by = $4, updated_at = CURRENT_TIMESTAMP
 	WHERE name = $1 AND workspace_id = $2
-	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
+	RETURNING hosts, placeholder, id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
 	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
@@ -2299,7 +2313,7 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	}
 
 	var secret types.Secret
-	if err := r.client.GetContext(ctx, &secret, query, secretName, workspace.Id, encryptedValue, tokenId); err != nil {
+	if err := r.client.GetContext(ctx, &secret, query, secretName, workspace.Id, encryptedValue, tokenId, pq.Array(hosts)); err != nil {
 		return nil, err
 	}
 

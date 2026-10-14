@@ -329,6 +329,16 @@ func NewGitSourceFromProto(in *pb.GitSource) *GitSource {
 	}
 }
 
+// SecretBinding stays on the worker; only its placeholder enters the guest.
+// @go2proto
+type SecretBinding struct {
+	EnvName     string   `json:"env_name"`
+	Placeholder string   `json:"placeholder"`
+	Hosts       []string `json:"hosts"`
+	Value       string   `json:"value,omitempty"`
+	SecretName  string   `json:"secret_name"`
+}
+
 // @go2proto
 type ContainerRequest struct {
 	ContainerId              string          `json:"container_id"`
@@ -397,7 +407,8 @@ type ContainerRequest struct {
 	// UseVM asks for a microvm pool: the sandbox boots in its own virtual
 	// machine. Only such requests are ever scheduled onto microvm workers, and
 	// they never fall back to a container runtime.
-	UseVM bool `json:"use_vm,omitempty"`
+	UseVM          bool            `json:"use_vm,omitempty"`
+	SecretBindings []SecretBinding `json:"secret_bindings,omitempty"`
 }
 
 // @go2proto
@@ -544,13 +555,24 @@ func (c *ContainerRequest) NetworkPolicy() ContainerNetworkPolicy {
 	if c == nil {
 		return ContainerNetworkPolicyOpen
 	}
-	if len(c.AllowList) > 0 {
+	if len(c.EgressAllowList()) > 0 {
 		return ContainerNetworkPolicyAllowList
 	}
 	if c.BlockNetwork {
 		return ContainerNetworkPolicyBlock
 	}
 	return ContainerNetworkPolicyOpen
+}
+
+func (c *ContainerRequest) EgressAllowList() []string {
+	if len(c.AllowList) > 0 || !c.BlockNetwork {
+		return c.AllowList
+	}
+	var hosts []string
+	for _, binding := range c.SecretBindings {
+		hosts = append(hosts, binding.Hosts...)
+	}
+	return uniqueStrings(hosts)
 }
 
 func (c *ContainerRequest) NetworkRestricted() bool {
@@ -586,6 +608,7 @@ func (c *ContainerRequest) Clone() *ContainerRequest {
 		gitSource := *c.BuildOptions.GitSource
 		cloned.BuildOptions.GitSource = &gitSource
 	}
+	cloned.SecretBindings = CloneSecretBindings(c.SecretBindings)
 	cloned.RuntimeSecretNames = append([]string(nil), c.RuntimeSecretNames...)
 	return &cloned
 }
@@ -599,6 +622,9 @@ func (c *ContainerRequest) PrivateWorkerRequest() *ContainerRequest {
 	secretNames := c.runtimeSecretNames()
 	tokenRequired := c.runtimeTokenRequired()
 
+	for i := range request.SecretBindings {
+		request.SecretBindings[i].Value = ""
+	}
 	request.RuntimeSecretNames = secretNames
 	request.RuntimeTokenRequired = tokenRequired
 	request.Workspace = request.Workspace.WithoutPrivateCredentials()
@@ -630,7 +656,14 @@ func (c *ContainerRequest) privateWorkerEnv(secretNames []string, tokenRequired 
 		if tokenRequired && key == ContainerRuntimeTokenEnv {
 			continue
 		}
-		if _, ok := secretNameSet[key]; ok {
+		brokered := false
+		for _, binding := range c.SecretBindings {
+			if key == binding.EnvName {
+				brokered = true
+				break
+			}
+		}
+		if _, ok := secretNameSet[key]; ok && !brokered {
 			continue
 		}
 		env = append(env, item)
@@ -657,6 +690,16 @@ func (c *ContainerRequest) runtimeSecretNames() []string {
 }
 
 func (c *ContainerRequest) runtimeTokenRequired() bool {
+	// An explicitly bound token is a workspace secret, not a runtime token.
+	if c.Stub.Type.IsSandbox() {
+		if config, err := c.Stub.UnmarshalConfig(); err == nil && config != nil {
+			for _, secret := range config.Secrets {
+				if secret.EnvVarName() == ContainerRuntimeTokenEnv {
+					return false
+				}
+			}
+		}
+	}
 	if c.RuntimeTokenRequired {
 		return true
 	}
@@ -776,6 +819,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		DrainSeconds:             c.DrainSeconds,
 		EvictOrder:               c.EvictOrder,
 		UseVm:                    c.UseVM,
+		SecretBindings:           SecretBindingsToProto(c.SecretBindings),
 	}
 }
 
@@ -844,6 +888,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		DrainSeconds:             in.DrainSeconds,
 		EvictOrder:               in.EvictOrder,
 		UseVM:                    in.UseVm,
+		SecretBindings:           SecretBindingsFromProto(in.SecretBindings),
 	}
 }
 
@@ -1167,4 +1212,27 @@ func ToStopContainerArgs(m map[string]any) (*StopContainerArgs, error) {
 	}
 
 	return &result, nil
+}
+
+func SecretBindingsToProto(bindings []SecretBinding) []*pb.SecretBinding {
+	out := make([]*pb.SecretBinding, len(bindings))
+	for i, b := range bindings {
+		out[i] = &pb.SecretBinding{EnvName: b.EnvName, Placeholder: b.Placeholder, Hosts: b.Hosts, Value: b.Value, SecretName: b.SecretName}
+	}
+	return out
+}
+func SecretBindingsFromProto(bindings []*pb.SecretBinding) []SecretBinding {
+	out := make([]SecretBinding, len(bindings))
+	for i, b := range bindings {
+		out[i] = SecretBinding{EnvName: b.EnvName, Placeholder: b.Placeholder, Hosts: b.Hosts, Value: b.Value, SecretName: b.SecretName}
+	}
+	return out
+}
+
+func CloneSecretBindings(bindings []SecretBinding) []SecretBinding {
+	cloned := append([]SecretBinding(nil), bindings...)
+	for i := range cloned {
+		cloned[i].Hosts = append([]string(nil), cloned[i].Hosts...)
+	}
+	return cloned
 }

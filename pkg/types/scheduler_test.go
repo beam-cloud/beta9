@@ -21,6 +21,19 @@ func TestCapacityMemoryReservesNativeVMOverhead(t *testing.T) {
 	}
 }
 
+func TestSandboxPrivateWorkerRuntimeTokenOptIn(t *testing.T) {
+	for _, kind := range []StubType{StubType(StubTypeSandbox), StubType(StubTypeVM)} {
+		request := &ContainerRequest{Stub: StubWithRelated{Stub: Stub{Type: kind, Config: `{}`}}, Env: []string{"SAFE=value"}}
+		require.False(t, request.PrivateWorkerRequest().RuntimeTokenRequired)
+		request.Env = append(request.Env, "BETA9_TOKEN=explicit-secret")
+		request.Stub.Config = `{"secrets":[{"name":"BETA9_TOKEN"}]}`
+		private := request.PrivateWorkerRequest()
+		require.False(t, private.RuntimeTokenRequired)
+		require.Equal(t, []string{"BETA9_TOKEN"}, private.RuntimeSecretNames)
+		require.Equal(t, []string{"SAFE=value"}, private.Env)
+	}
+}
+
 func TestKeylessCheckpointMayEvict(t *testing.T) {
 	request := &ContainerRequest{Gpu: "RTX4090",
 		Checkpoint: &Checkpoint{Status: string(CheckpointStatusAvailable), Runtime: "gvisor"}}
@@ -184,4 +197,17 @@ func TestContainerRequestProtoRoundTripPreservesGitSource(t *testing.T) {
 	private := request.PrivateWorkerRequest()
 	require.Empty(t, private.BuildOptions.GitSource.Token)
 	require.Equal(t, "tok", request.BuildOptions.GitSource.Token, "sanitizing the private copy leaves the original alone")
+}
+
+func TestBrokeredSecretWorkerBoundary(t *testing.T) {
+	request := &ContainerRequest{Env: []string{"ALIAS=beam_secret_a"}, SecretBindings: []SecretBinding{{EnvName: "ALIAS", SecretName: "KEY", Placeholder: "beam_secret_a", Value: "real-value", Hosts: []string{"api.example.com"}}}, Stub: StubWithRelated{Stub: Stub{Config: `{"secrets":[{"name":"KEY","env_name":"ALIAS"}]}`}}, BlockNetwork: true}
+	private := request.PrivateWorkerRequest()
+	require.Equal(t, request.Env, private.Env)
+	require.Empty(t, private.SecretBindings[0].Value)
+	require.Equal(t, "real-value", request.SecretBindings[0].Value)
+	roundTrip := NewContainerRequestFromProto(private.ToProto())
+	require.Equal(t, private.SecretBindings, roundTrip.SecretBindings)
+	require.Equal(t, []string{"api.example.com"}, roundTrip.EgressAllowList())
+	roundTrip.AllowList = []string{"other.example.com"}
+	require.Equal(t, []string{"other.example.com"}, roundTrip.EgressAllowList())
 }

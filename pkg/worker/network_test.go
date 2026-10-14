@@ -1183,3 +1183,21 @@ func TestNetworkSlotPoolLockIsReleasedAfterShutdownCancelsTheWorker(t *testing.T
 	require.Equal(t, []string{"lock", "unlock"}, repoClient.calls)
 	require.NoError(t, repoClient.unlockCtxErr, "the lock is released on a context that outlives the worker's")
 }
+
+func TestEgressRulesRedirectTCPAndOnlyAllowResolverUDP(t *testing.T) {
+	config := types.EgressConfig{TLSPort: 18043, HTTPPort: 18080, OtherPort: 18081}
+	for _, ip := range []string{"192.168.0.2", "fd00:abcd::2"} {
+		rules := egressRules(ip, "box", config, true, []string{"8.8.8.8", "2001:4860:4860::8888"})
+		require.Len(t, rules, 10)
+		for i, listener := range []string{"18043", "18080", "18081"} {
+			require.Equal(t, "nat", rules[i].table)
+			require.Contains(t, strings.Join(rules[i].args, " "), "-j REDIRECT --to-ports "+listener)
+		}
+		for _, rule := range rules {
+			if slices.Contains(rule.args, "udp") {
+				require.Contains(t, strings.Join(rule.args, " "), "--dport 53 -d ")
+			}
+			require.Contains(t, strings.Join(rule.args, " "), "--comment box")
+		}
+	}
+}

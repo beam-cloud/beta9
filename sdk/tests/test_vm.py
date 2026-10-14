@@ -100,6 +100,7 @@ def test_template_preserves_unspecified_fields_and_channel():
         ssh=False,
         cpu=2.5,
         env={"VALUE": "a=b c"},
+        public_ports=[7681],
         _service=selected,
     )
     vm.create(wait=False)
@@ -107,7 +108,7 @@ def test_template_preserves_unspecified_fields_and_channel():
     assert body == {
         "name": "dev",
         "template": "base",
-        "spec": {"ssh": False, "cpu": 2500, "env": ["VALUE=a=b c"]},
+        "spec": {"ssh": False, "cpu": 2500, "env": ["VALUE=a=b c"], "public_ports": [7681]},
         "request_id": vm.request_id,
     }
     assert vm._service is selected
@@ -316,6 +317,7 @@ def test_vm_cli_registration_and_cpu_only_args():
         "ttl",
         "pool",
         "build_context",
+        "public_port",
         "context",
     } <= options
     assert not {"gpu", "gpu_count"} & options

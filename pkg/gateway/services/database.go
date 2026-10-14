@@ -774,12 +774,12 @@ func compact(values ...string) []string {
 
 func (gws *GatewayService) upsertSecret(ctx context.Context, authInfo *auth.AuthInfo, name, value string) error {
 	if _, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, name); err == nil {
-		_, err = gws.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.TokenId(), name, value)
+		_, err = gws.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.TokenId(), name, value, nil)
 		return err
 	} else if err != sql.ErrNoRows {
 		return err
 	}
-	_, err := gws.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.TokenId(), name, value, false)
+	_, err := gws.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.TokenId(), name, value, false, nil)
 	return err
 }
 

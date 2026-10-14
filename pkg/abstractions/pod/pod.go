@@ -452,7 +452,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		return "", err
 	}
 
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(ctx, s.backendRepo, workspace, stubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(ctx, s.backendRepo, workspace, stubConfig, stub.Type.IsSandbox())
 	if err != nil {
 		return "", err
 	}
@@ -474,9 +474,11 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 
 	env := []string{}
 	env = append(stubConfig.Env, env...)
-	env = append(secrets, env...)
+	env = append(secrets.Env, env...)
+	if !stub.Type.IsSandbox() {
+		env = append(env, fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key))
+	}
 	env = append(env, []string{
-		fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", stub.Type),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", stubConfig.KeepWarmSeconds),
@@ -535,6 +537,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		TaskId:            opts.taskId,
 		AppId:             appId,
 		Env:               env,
+		SecretBindings:    secrets.Bindings,
 		Cpu:               stubConfig.Runtime.Cpu,
 		Memory:            stubConfig.Runtime.Memory,
 		GpuRequest:        gpuRequest,

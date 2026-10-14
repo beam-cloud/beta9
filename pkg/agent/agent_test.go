@@ -1648,6 +1648,10 @@ func TestWriteWorkerConfigClearsDefaultRegistryCredentials(t *testing.T) {
 	if config.Worker.CRIU.Mode != types.CRIUConfigModeNvidia {
 		t.Fatalf("worker CRIU mode = %q, want %q", config.Worker.CRIU.Mode, types.CRIUConfigModeNvidia)
 	}
+	wantEgress := types.EgressConfig{Enabled: true, MaxConnectionsPerContainer: 256}
+	if config.Worker.Egress != wantEgress {
+		t.Fatalf("agent worker egress = %+v, want %+v", config.Worker.Egress, wantEgress)
+	}
 
 	s3 := config.ImageService.Registries.S3
 	if s3.BucketName != "" || s3.AccessKey != "" || s3.SecretKey != "" || s3.Endpoint != "" || s3.Region != "" {

@@ -70,7 +70,7 @@ func (s *WorkspaceSecretService) CreateSecret(ctx context.Context, req *pb.Creat
 	}
 
 	// Save the secret
-	secret, err := s.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, req.Name, req.Value, true)
+	secret, err := s.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, req.Name, req.Value, true, req.Hosts)
 	if err != nil {
 		return &pb.CreateSecretResponse{
 			Ok:     false,
@@ -79,9 +79,11 @@ func (s *WorkspaceSecretService) CreateSecret(ctx context.Context, req *pb.Creat
 	}
 
 	return &pb.CreateSecretResponse{
-		Ok:     true,
-		ErrMsg: "",
-		Name:   secret.Name,
+		Ok:          true,
+		Name:        secret.Name,
+		Id:          secret.ExternalId,
+		Hosts:       secret.Hosts,
+		Placeholder: secret.Placeholder,
 	}, nil
 }
 
@@ -100,10 +102,12 @@ func (s *WorkspaceSecretService) GetSecret(ctx context.Context, req *pb.GetSecre
 		Ok:     true,
 		ErrMsg: "",
 		Secret: &pb.Secret{
-			Name:      secret.Name,
-			Value:     secret.Value,
-			UpdatedAt: timestamppb.New(secret.UpdatedAt),
-			CreatedAt: timestamppb.New(secret.CreatedAt),
+			Name:        secret.Name,
+			Hosts:       secret.Hosts,
+			Placeholder: secret.Placeholder,
+			Value:       secret.Value,
+			UpdatedAt:   timestamppb.New(secret.UpdatedAt),
+			CreatedAt:   timestamppb.New(secret.CreatedAt),
 		},
 	}, nil
 }
@@ -129,10 +133,12 @@ func (s *WorkspaceSecretService) ListSecrets(ctx context.Context, req *pb.ListSe
 	secretList := make([]*pb.Secret, 0, len(secrets))
 	for _, secret := range secrets {
 		secretList = append(secretList, &pb.Secret{
-			Name:      secret.Name,
-			Value:     secret.Value,
-			UpdatedAt: timestamppb.New(secret.UpdatedAt),
-			CreatedAt: timestamppb.New(secret.CreatedAt),
+			Name:        secret.Name,
+			Hosts:       secret.Hosts,
+			Placeholder: secret.Placeholder,
+			Value:       secret.Value,
+			UpdatedAt:   timestamppb.New(secret.UpdatedAt),
+			CreatedAt:   timestamppb.New(secret.CreatedAt),
 		})
 	}
 
@@ -153,7 +159,11 @@ func (s *WorkspaceSecretService) UpdateSecret(ctx context.Context, req *pb.Updat
 		}, nil
 	}
 
-	_, err := s.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, req.Name, req.Value)
+	hosts := req.Hosts
+	if req.ClearHosts {
+		hosts = []string{}
+	}
+	_, err := s.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, req.Name, req.Value, hosts)
 	if err != nil {
 		return &pb.UpdateSecretResponse{
 			Ok:     false,

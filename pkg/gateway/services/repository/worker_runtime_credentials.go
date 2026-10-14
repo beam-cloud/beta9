@@ -47,6 +47,13 @@ func (s *WorkerRepositoryService) vendRuntimeCredentials(ctx context.Context, re
 		}
 	}
 
+	if len(req.BindingNames) > 0 {
+		resp.SecretBindings, err = s.workerSecretBindings(ctx, workspace, req)
+		if err != nil {
+			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
+		}
+	}
+
 	if req.WorkspaceStorage {
 		resp.WorkspaceStorage = s.workspaceStorageCredentials(ctx, req.WorkspaceId)
 	}
@@ -111,6 +118,9 @@ func (s *WorkerRepositoryService) authorizeRuntimeEnv(ctx context.Context, req *
 	if err != nil {
 		return err
 	}
+	if stub.Type.IsSandbox() && req.RuntimeToken {
+		return fmt.Errorf("sandboxes do not receive automatic workspace tokens")
+	}
 	if !stub.Type.IsManagedEndpoint() {
 		return nil
 	}
@@ -174,14 +184,14 @@ func (s *WorkerRepositoryService) runtimeCredentialsWorkspace(ctx context.Contex
 }
 
 func runtimeCredentialsNeedsSigningKey(req *pb.GetContainerRuntimeCredentialsRequest) bool {
-	return req != nil && (len(req.SecretNames) > 0 || len(req.MountCredentials) > 0)
+	return req != nil && (len(req.SecretNames) > 0 || len(req.BindingNames) > 0 || len(req.MountCredentials) > 0)
 }
 
 func runtimeCredentialsWorkspaceStorageOnly(req *pb.GetContainerRuntimeCredentialsRequest) bool {
 	return req != nil &&
 		req.WorkspaceStorage &&
 		!req.RuntimeToken &&
-		len(req.SecretNames) == 0 &&
+		len(req.SecretNames) == 0 && len(req.BindingNames) == 0 &&
 		len(req.MountCredentials) == 0
 }
 
@@ -227,7 +237,14 @@ func (s *WorkerRepositoryService) workerRuntimeEnv(ctx context.Context, workspac
 		if err != nil {
 			return nil, err
 		}
+		stub, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId)
+		if err != nil {
+			return nil, err
+		}
 		for _, secret := range secrets {
+			if stub.Type.IsSandbox() && len(secret.Hosts) > 0 && secret.Name != "BETA9_TOKEN" && secret.Name != "BEAM_TOKEN" {
+				return nil, fmt.Errorf("brokered sandbox secrets require a worker with secret binding support")
+			}
 			env = append(env, fmt.Sprintf("%s=%s", secret.Name, secret.Value))
 		}
 	}
@@ -419,4 +436,31 @@ func mountPathsForVolume(volumePath string) []string {
 		paths = append(paths, volumePath)
 	}
 	return paths
+}
+
+func (s *WorkerRepositoryService) workerSecretBindings(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]*pb.SecretBinding, error) {
+	stub, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId)
+	if err != nil {
+		return nil, err
+	}
+	if !stub.Type.IsSandbox() {
+		return nil, fmt.Errorf("secret brokering requires a sandbox or VM")
+	}
+	// Fetch current rows so rotation does not depend on the stub snapshot.
+	names := uniqueRuntimeSecretNames(req.BindingNames)
+	secrets, err := s.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, names)
+	if err != nil {
+		return nil, err
+	}
+	if len(secrets) != len(names) {
+		return nil, fmt.Errorf("secret binding is unavailable")
+	}
+	var bindings []types.SecretBinding
+	for _, secret := range secrets {
+		if len(secret.Hosts) == 0 || secret.Placeholder == "" || secret.Value == "" {
+			return nil, fmt.Errorf("secret %q requires allowed hosts and a nonempty value", secret.Name)
+		}
+		bindings = append(bindings, types.SecretBinding{EnvName: secret.Name, SecretName: secret.Name, Hosts: secret.Hosts, Placeholder: secret.Placeholder, Value: secret.Value})
+	}
+	return types.SecretBindingsToProto(bindings), nil
 }

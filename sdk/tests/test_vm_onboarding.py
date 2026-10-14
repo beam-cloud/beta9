@@ -237,8 +237,13 @@ def test_authorization_failure_does_not_create_vm(tmp_path, monkeypatch):
     factory.assert_not_called()
 
 
-@pytest.mark.parametrize(("args", "name"), [(["--name", "first"], "first"), ([], None)])
-def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypatch, args, name):
+@pytest.mark.parametrize(
+    ("args", "name", "desktop"),
+    [(["--name", "first"], "first", True), ([], None, True), (["--no-desktop"], None, False)],
+)
+def test_setup_vm_emits_one_json_result_after_guest_readiness(
+    tmp_path, monkeypatch, args, name, desktop
+):
     from click.testing import CliRunner
 
     from beta9.cli import setup
@@ -276,6 +281,7 @@ def test_setup_vm_emits_one_json_result_after_guest_readiness(tmp_path, monkeypa
     }
     prepare.assert_called_once()
     assert prepare.call_args.args[2] == name
+    assert prepare.call_args.kwargs["desktop"] is desktop
 
 
 def test_setup_vm_does_not_report_success_after_failed_probe(tmp_path, monkeypatch):
