@@ -21,7 +21,11 @@ func TestContainerSecretInjection(t *testing.T) {
 		name                     string
 		brokered, hosts, invalid bool
 	}{
-		{"serverless", false, false, false}, {"sandbox", true, true, false}, {"VM", true, true, false}, {"missing hosts", true, false, true},
+		{"serverless", false, false, false},
+		{"serverless with approved hosts", false, true, false},
+		{"sandbox", true, true, false},
+		{"VM", true, true, false},
+		{"missing hosts", true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			secret := types.Secret{Name: "KEY", Value: "real-value", Placeholder: "beam_secret_a"}

@@ -41,8 +41,10 @@ for a stack's apps itself.
 
 `list_secrets` returns names, approved hosts and placeholders without values.
 `create_secret { name, value }`, `update_secret`, `delete_secret` (confirm).
-Serverless apps bind names in `secrets` or env references `${{secret.NAME}}`;
-they receive plaintext values on their next container start.
+Containers/pods, functions, endpoints and task queues bind names in `secrets`
+or env references `${{secret.NAME}}`; they receive plaintext values on their
+next container start. Image-build secrets are also plaintext. These workloads
+do not require `hosts`; setting hosts does not opt them into proxying.
 
 For sandbox/VM runtime bindings, create with `hosts: ["api.openai.com"]`:
 the guest receives a placeholder for literal HTTPS request headers, and the
