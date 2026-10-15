@@ -786,6 +786,12 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	}
 
 	if err != nil {
+		if manager, ok := s.gpuManagerForRequest(request).(*ContainerNvidiaManager); request.RequiresGPU() && ok {
+			_, gpuErr := manager.infoClient.AvailableGPUDevices()
+			if s.disableSchedulingForGPUError(gpuErr) {
+				err = errors.Join(err, gpuErr)
+			}
+		}
 		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to restore checkpoint: %v", err)
 
 		hostIncompatible := IsCheckpointHostIncompatible(err)
@@ -809,7 +815,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 				err = errors.Join(err, &checkpointRestoreCleanupError{err: cleanupErr})
 			}
 		}
-		if !hostIncompatible && !durableMountValidationFailed && !runscVersionFallback {
+		if !hostIncompatible && !durableMountValidationFailed && !runscVersionFallback && !errors.Is(err, errGPUUnhealthy) {
 			s.markCheckpointRestoreFailed(request, checkpoint)
 		}
 

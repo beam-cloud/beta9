@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -37,6 +39,7 @@ const defaultDeviceCheckpointPath = types.HostKubeletDeviceCheckpointPath
 
 var (
 	nvidiaProcGPUInfoRoot = "/proc/driver/nvidia/gpus"
+	errGPUUnhealthy       = errors.New("GPU requires recovery")
 )
 
 type kubeletCheckpoint struct {
@@ -129,6 +132,18 @@ var queryDevices = func() ([]byte, error) {
 	return cmd.Output()
 }
 
+// Recovery state changes while the worker is running; do not cache it with inventory.
+var queryGPUHealth = func(deviceUUIDs string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=uuid,gpu_recovery_action", "--format=csv,noheader,nounits", "--id="+deviceUUIDs).CombinedOutput()
+	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 2 &&
+		strings.TrimSpace(string(output)) == `Field "gpu_recovery_action" is not a valid field to query.` {
+		return nil, nil // Older drivers do not expose recovery state.
+	}
+	return output, err
+}
+
 var checkGPUExists = func(busId string) (bool, error) {
 	path := filepath.Join(nvidiaProcGPUInfoRoot, busId)
 	_, err := os.Stat(path)
@@ -175,10 +190,46 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 		return nil, err
 	}
 
-	result := []int{}
+	var visible []nvidiaSMIDevice
+	var uuids []string
 	for _, device := range devices {
-		if !deviceVisible(visibleDevices, device.UUID, strconv.Itoa(device.Index)) {
+		if deviceVisible(visibleDevices, device.UUID, strconv.Itoa(device.Index)) {
+			visible = append(visible, device)
+			uuids = append(uuids, device.UUID)
+		}
+	}
+	if len(visible) == 0 {
+		return []int{}, nil
+	}
+
+	health, err := queryGPUHealth(strings.Join(uuids, ","))
+	if err != nil {
+		return nil, fmt.Errorf("query GPU recovery state: %w", err)
+	}
+	recoveryActions := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(health)), "\n") {
+		if line == "" {
 			continue
+		}
+		uuid, action, ok := strings.Cut(line, ",")
+		if !ok || strings.TrimSpace(uuid) == "" {
+			return nil, fmt.Errorf("invalid GPU recovery state: %q", line)
+		}
+		recoveryActions[strings.TrimSpace(uuid)] = strings.TrimSpace(action)
+	}
+
+	result := []int{}
+	for _, device := range visible {
+		action, reported := recoveryActions[device.UUID]
+		if len(health) > 0 && !reported {
+			return nil, fmt.Errorf("missing GPU recovery state for %s", device.UUID)
+		}
+		switch action {
+		case "", "None", "N/A", "[N/A]":
+		case "Reset", "Reboot", "Drain P2P", "Drain and Reset":
+			return nil, fmt.Errorf("%w: %s requires %s", errGPUUnhealthy, device.UUID, action)
+		default:
+			return nil, fmt.Errorf("unknown GPU recovery state %q for %s", action, device.UUID)
 		}
 
 		if exists, err := checkGPUExists(device.SystemBusID); err == nil && exists {

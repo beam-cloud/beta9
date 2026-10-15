@@ -26,10 +26,11 @@ func TestAgentRolloutBusyThenRevertUsesOriginalSlotAndRecoversWorker(t *testing.
 	require.NoError(t, err)
 	workerRepo := repository.NewWorkerRedisRepositoryForTest(rdb)
 	computeRepo := repository.NewComputeRedisRepository(rdb)
-	agent := &model.AgentTokenState{WorkspaceID: "admin", MachineID: "machine", PoolName: "pool", Mode: string(types.PoolModeExternal)}
-	worker := &types.Worker{Id: "worker", MachineId: "machine", PoolName: "pool", Status: types.WorkerStatusAvailable, TotalCpu: 8000, TotalMemory: 16000}
+	agent := &model.AgentTokenState{TokenHash: "agent-token", WorkspaceID: "admin", MachineID: "machine", PoolName: "pool", Mode: string(types.PoolModeExternal)}
+	worker := &types.Worker{Id: model.AgentMachineWorkerID(agent.MachineID), WorkspaceId: "admin", MachineId: "machine", PoolName: "pool", Status: types.WorkerStatusAvailable, TotalCpu: 8000, TotalMemory: 16000}
 	require.NoError(t, workerRepo.AddWorker(worker))
 	service := &Service{workerRepo: workerRepo, computeRepo: computeRepo, backendRepo: &rolloutTokenBackend{}, appConfig: types.AppConfig{Worker: types.WorkerConfig{ImageTag: "A"}}}
+	require.NoError(t, service.saveComputeAgentTokenState(ctx, agent))
 	slot := agentWorkerSlotState(service.appConfig, agent, worker, types.WorkerPoolConfig{}, "token-id", hashComputeToken("test-token"))
 	require.NoError(t, setAgentWorkerSlotGeneration(slot))
 	require.NoError(t, computeRepo.SaveAgentWorkerSlotState(ctx, slot))
@@ -55,4 +56,38 @@ func TestAgentRolloutBusyThenRevertUsesOriginalSlotAndRecoversWorker(t *testing.
 	require.Equal(t, types.WorkerStatusAvailable, worker.Status)
 	require.Empty(t, worker.RolloutGeneration)
 	require.EqualValues(t, 6000, worker.FreeCpu)
+
+	setCordon := func(t *testing.T, cordoned bool) {
+		t.Helper()
+		handled, err := service.SetAgentWorkerCordon(ctx, worker, cordoned)
+		require.NoError(t, err)
+		require.True(t, handled)
+		agent, err = computeRepo.GetAgentMachineState(ctx, agent.WorkspaceID, agent.PoolName, agent.MachineID)
+		require.NoError(t, err)
+		require.Equal(t, cordoned, agent.Cordoned)
+		current, err := workerRepo.GetWorkerById(worker.Id)
+		require.NoError(t, err)
+		require.Equal(t, cordoned, current.CordonRequested)
+	}
+	t.Run("machine cordon retains the running slot", func(t *testing.T) {
+		setCordon(t, true)
+		returned, err := service.agentSlotsForMachineLocked(ctx, agent)
+		require.NoError(t, err)
+		require.Len(t, returned, 1)
+		require.Equal(t, slot.Generation, returned[0].Generation)
+		saved, err := computeRepo.ListAgentWorkerSlotStates(ctx, agent.WorkspaceID, agent.PoolName, agent.MachineID)
+		require.NoError(t, err)
+		require.Len(t, saved, 1)
+		require.Equal(t, string(types.ContainerStatusRunning), rdb.HGet(ctx, stateKey, "status").Val())
+	})
+	t.Run("transient disable still prunes the slot", func(t *testing.T) {
+		setCordon(t, false)
+		require.NoError(t, workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled))
+		returned, err := service.agentSlotsForMachineLocked(ctx, agent)
+		require.NoError(t, err)
+		require.Empty(t, returned)
+		saved, err := computeRepo.ListAgentWorkerSlotStates(ctx, agent.WorkspaceID, agent.PoolName, agent.MachineID)
+		require.NoError(t, err)
+		require.Empty(t, saved)
+	})
 }

@@ -1197,21 +1197,36 @@ func (s *Worker) listenForShutdown() {
 }
 
 func (s *Worker) disableSchedulingForShutdown() {
-	if err := s.disableScheduling(); err != nil {
+	if err := s.disableScheduling(false); err != nil {
 		log.Warn().Err(err).Msg("failed to disable worker scheduling during shutdown")
 	}
+}
+
+func (s *Worker) disableSchedulingForGPUError(err error) bool {
+	if !errors.Is(err, errGPUUnhealthy) {
+		return false
+	}
+	log.Error().Err(err).Msg("GPU requires recovery; disabling new container placement")
+	if disableErr := s.disableScheduling(true); disableErr != nil {
+		log.Warn().Err(disableErr).Msg("failed to disable scheduling on worker with unhealthy GPU")
+	}
+	return true
 }
 
 // disableScheduling marks the worker disabled at the gateway: the scheduler
 // stops placing containers on it and the pool sizer stops counting its free
 // capacity, so a replacement is provisioned while this one is still running.
-func (s *Worker) disableScheduling() error {
+// Cordoning also persists the exclusion across agent refreshes without stopping containers.
+func (s *Worker) disableScheduling(cordon bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
 	defer cancel()
 
-	_, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, &pb.DisableWorkerRequest{
-		WorkerId: s.workerId,
-	}))
+	request := &pb.DisableWorkerRequest{WorkerId: s.workerId}
+	if cordon {
+		_, err := handleGRPCResponse(s.workerRepoClient.CordonWorker(ctx, request))
+		return err
+	}
+	_, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, request))
 	return err
 }
 
@@ -1266,7 +1281,7 @@ func (s *Worker) maybeStartDraining(now time.Time) {
 	if s.draining || !s.pastMaxAge(now) || now.Before(s.nextDrainAttempt) {
 		return
 	}
-	if err := s.disableScheduling(); err != nil {
+	if err := s.disableScheduling(false); err != nil {
 		s.nextDrainAttempt = now.Add(workerDrainRetryInterval)
 		log.Warn().Err(err).Str("worker_id", s.workerId).Dur("retry_in", workerDrainRetryInterval).Msg("worker past its max age could not disable scheduling, retrying")
 		return

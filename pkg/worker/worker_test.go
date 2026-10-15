@@ -126,6 +126,7 @@ type fakeWorkerRepoClient struct {
 	lastKeepAlive     *pb.SetWorkerKeepAliveRequest
 	disableErr        error
 	disables          int
+	cordons           int
 	metering          *pb.GetWorkerMeteringConfigResponse
 }
 
@@ -151,6 +152,24 @@ func (f *fakeWorkerRepoClient) DisableWorker(ctx context.Context, req *pb.Disabl
 		return nil, err
 	}
 	return &pb.DisableWorkerResponse{Ok: true}, nil
+}
+
+func (f *fakeWorkerRepoClient) CordonWorker(ctx context.Context, req *pb.DisableWorkerRequest, _ ...grpc.CallOption) (*pb.DisableWorkerResponse, error) {
+	if err := f.call(&f.cordons, &f.disableErr, nil); err != nil {
+		return nil, err
+	}
+	return &pb.DisableWorkerResponse{Ok: true}, nil
+}
+
+func TestGPUFaultCordonDoesNotDisableWorkerOnOlderGateway(t *testing.T) {
+	for _, rpcErr := range []error{nil, status.Error(codes.Unimplemented, "unknown method CordonWorker")} {
+		client := &fakeWorkerRepoClient{disableErr: rpcErr}
+		worker := &Worker{workerRepoClient: client}
+		require.False(t, worker.disableSchedulingForGPUError(errors.New("GPU query failed")))
+		require.True(t, worker.disableSchedulingForGPUError(errGPUUnhealthy))
+		require.Equal(t, 1, client.cordons)
+		require.Zero(t, client.disables, "ordinary disable can remove a live agent worker")
+	}
 }
 
 func (f *fakeWorkerRepoClient) SetWorkerKeepAlive(ctx context.Context, req *pb.SetWorkerKeepAliveRequest, _ ...grpc.CallOption) (*pb.SetWorkerKeepAliveResponse, error) {
