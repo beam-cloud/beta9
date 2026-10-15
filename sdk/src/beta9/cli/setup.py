@@ -11,7 +11,7 @@ import click
 from rich.syntax import Syntax
 
 from .. import terminal
-from ..auth import login_configured
+from ..auth import LoginError, login_configured
 from ..config import ConfigContext, cli_path, get_settings
 from ..skills import install_skill, skill_name
 from . import extraclick
@@ -55,19 +55,28 @@ def setup():
 )
 @click.option("--skip-skills", is_flag=True, help="Register MCP only.")
 @click.option("--skip-mcp", is_flag=True, help="Install skills only.")
+@click.option("--login", "sign_in", is_flag=True, help="Sign in and configure the workspace first.")
 @click.option(
     "-y",
     "--yes",
     is_flag=True,
     expose_value=False,
-    help="Accepted for symmetry with installers. Nothing prompts.",
+    help="Accepted for symmetry with installers.",
 )
 @extraclick.config_context_option
-def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Optional[str]):
+def agent(
+    clients: Sequence[str], skip_skills: bool, skip_mcp: bool, sign_in: bool, context: Optional[str]
+):
     product = get_settings().name
     cli = product.lower()
     name = context or extraclick.selected_context()
     can_login = login_configured(name)
+    if sign_in:
+        try:
+            with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+                connect_workspace(name)
+        except LoginError as exc:
+            raise click.ClickException(str(exc)) from exc
     result = configure_agents(clients, skip_skills, skip_mcp, context)
     skills, mcp, failed = result["skills"], result["mcp"], result["failed"]
     signed_in = result["signed_in"]
@@ -211,9 +220,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                 "Restart your agent to use the VM tools. Re-run this setup to resume the same VM."
             )
             if result.get("spec", {}).get("protected_ports"):
-                terminal.detail(
-                    "Share temporary access with the vm share command below."
-                )
+                terminal.detail("Share temporary access with the vm share command below.")
             command = extraclick.command_hint(selected)
             name = shlex.quote(result["name"])
             terminal.print("")
@@ -337,9 +344,8 @@ def credit_checkout(context: ConfigContext) -> str:
     return url if isinstance(url, str) and url.startswith("https://") else ""
 
 
-def connect_onboarding(
-    selected: str, clients: Sequence[str], skip_agents: bool, unattended: bool
-) -> Tuple[ConfigContext, Optional[Dict[str, Any]]]:
+def connect_workspace(selected: str) -> ConfigContext:
+    """Connect the selected workspace without checking credits or creating resources."""
     from ..auth import DeviceLogin, save_login
     from ..config import context_defaults, get_config_context
     from ..mcp.server import context_or_none
@@ -355,6 +361,13 @@ def connect_onboarding(
     if context.auth_url and (not context.app_url_template or not context.vm_url_template):
         context = provider_links(context)
         save_login(context, selected)
+    return context
+
+
+def connect_onboarding(
+    selected: str, clients: Sequence[str], skip_agents: bool, unattended: bool
+) -> Tuple[ConfigContext, Optional[Dict[str, Any]]]:
+    context = connect_workspace(selected)
     ensure_credit(context, unattended)
     agents = None
     if not skip_agents:

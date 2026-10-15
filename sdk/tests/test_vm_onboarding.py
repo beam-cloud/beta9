@@ -10,6 +10,94 @@ from beta9.config import ConfigContext
 from beta9.deployment import onboarding
 
 
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_agent_login_connects_workspace_without_workload_onboarding(monkeypatch, signed_in):
+    from click.testing import CliRunner
+    from beta9.cli import setup
+
+    monkeypatch.setenv("BETA9_JSON", "1")
+    context = ConfigContext(token="workspace-token")
+    monkeypatch.setattr("beta9.config.context_defaults", lambda _: context)
+    monkeypatch.setattr("beta9.config.get_config_context", lambda _: context)
+    monkeypatch.setattr(
+        "beta9.mcp.server.context_or_none", lambda _: context if signed_in else None
+    )
+    start = MagicMock()
+    start.return_value.verification_uri_complete = "https://login.example/device"
+    start.return_value.wait.return_value = context
+    monkeypatch.setattr("beta9.auth.DeviceLogin.start", start)
+    save = MagicMock()
+    monkeypatch.setattr("beta9.auth.save_login", save)
+    credits = MagicMock(side_effect=AssertionError("installation must not check funding"))
+    vm = MagicMock(side_effect=AssertionError("installation must not create a VM"))
+    example = MagicMock(side_effect=AssertionError("installation must not create a workload"))
+    monkeypatch.setattr(setup, "ensure_credit", credits)
+    monkeypatch.setattr(onboarding, "prepare_vm", vm)
+    monkeypatch.setattr(onboarding, "prepare_example", example)
+    configured = {"signed_in": True, "clients": [], "skills": {}, "mcp": {}, "failed": {}}
+    configure = MagicMock(return_value=configured)
+    monkeypatch.setattr(setup, "configure_agents", configure)
+
+    result = CliRunner(mix_stderr=False).invoke(
+        setup.common, ["setup", "agent", "--login", "--context", "staging"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["signed_in"] is True
+    configure.assert_called_once_with((), False, False, "staging")
+    if signed_in:
+        start.assert_not_called()
+        save.assert_not_called()
+    else:
+        start.assert_called_once_with(context)
+        save.assert_called_once_with(context, "staging")
+        assert "https://login.example/device" in result.stderr
+    credits.assert_not_called()
+    vm.assert_not_called()
+    example.assert_not_called()
+
+
+def test_agent_registration_without_login_remains_local(monkeypatch):
+    from click.testing import CliRunner
+    from beta9.cli import setup
+
+    monkeypatch.setenv("BETA9_JSON", "1")
+    connect = MagicMock(side_effect=AssertionError("local registration must not sign in"))
+    monkeypatch.setattr(setup, "connect_workspace", connect)
+    monkeypatch.setattr(
+        setup,
+        "configure_agents",
+        MagicMock(
+            return_value={
+                "signed_in": False,
+                "clients": [],
+                "skills": {},
+                "mcp": {},
+                "failed": {},
+            }
+        ),
+    )
+    result = CliRunner().invoke(setup.common, ["setup", "agent"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["signed_in"] is False
+    connect.assert_not_called()
+
+
+def test_agent_login_failure_stops_setup(monkeypatch):
+    from click.testing import CliRunner
+    from beta9.auth import LoginError
+    from beta9.cli import setup
+
+    monkeypatch.setattr(
+        setup, "connect_workspace", MagicMock(side_effect=LoginError("Sign-in expired"))
+    )
+    configure = MagicMock()
+    monkeypatch.setattr(setup, "configure_agents", configure)
+    result = CliRunner().invoke(setup.common, ["setup", "agent", "--login"])
+    assert result.exit_code != 0
+    assert "Sign-in expired" in result.output
+    configure.assert_not_called()
+
+
 def test_vm_hourly_price_uses_live_vm_rates(monkeypatch):
     from decimal import Decimal
     from beta9.cli import setup
