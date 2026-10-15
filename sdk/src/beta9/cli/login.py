@@ -3,7 +3,7 @@ from typing import Optional
 import click
 
 from .. import terminal
-from ..auth import DeviceLogin, LoginError, save_login
+from ..auth import DeviceLogin, LoginError, finish_login
 from ..config import context_defaults, get_settings
 from .extraclick import ClickCommonGroup, selected_context
 
@@ -53,27 +53,11 @@ def login(browserless: bool, environment: Optional[str], context_name: Optional[
 
     try:
         flow = DeviceLogin.start(target)
+        context = finish_login(flow, name, browserless=browserless)
     except LoginError as exc:
         terminal.error(str(exc), code=exc.code)
         return
 
-    if not browserless and flow.open_browser():
-        terminal.header("Finish signing in through your browser")
-        terminal.detail(f"If it didn't open: {flow.verification_uri_complete}")
-    else:
-        terminal.header(f"Sign in to {get_settings().name}")
-        terminal.print(f"  {flow.verification_uri_complete}\n")
-        terminal.detail(f"Or go to {flow.verification_uri} and enter this code:")
-        terminal.print(f"  [bold]{flow.user_code}[/bold]")
-
-    try:
-        with terminal.progress("Waiting for sign-in"):
-            context = flow.wait()
-    except LoginError as exc:
-        terminal.error(str(exc), code=exc.code)
-        return
-
-    save_login(context, name=name)
     where = f" to {flow.workspace_name}" if flow.workspace_name else ""
     if terminal.json_output():
         terminal.print_json(

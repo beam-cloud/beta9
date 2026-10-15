@@ -16,6 +16,11 @@ var expiredShareHTML string
 
 var expiredSharePage = template.Must(template.New("expired-share").Parse(expiredShareHTML))
 
+func setBrowserHeaders(c echo.Context) {
+	c.Response().Header().Set("Cache-Control", "no-store")
+	c.Response().Header().Set("Referrer-Policy", "no-referrer")
+}
+
 func browserNavigation(r *http.Request) bool {
 	if r.Method != http.MethodGet || !strings.Contains(r.Header.Get("Accept"), "text/html") || r.Header.Get("Upgrade") != "" {
 		return false
@@ -50,9 +55,7 @@ func (s *Service) invalidShareLink(c echo.Context, cleanURL string) error {
 	if err := expiredSharePage.Execute(&page, data); err != nil {
 		return err
 	}
-	headers := c.Response().Header()
-	headers.Set("Cache-Control", "no-store")
-	headers.Set("Referrer-Policy", "no-referrer")
-	headers.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+	setBrowserHeaders(c)
+	c.Response().Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 	return c.HTML(http.StatusForbidden, page.String())
 }

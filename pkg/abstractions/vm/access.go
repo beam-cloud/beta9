@@ -79,46 +79,45 @@ func (s *Service) browserOrigin(c echo.Context, v *types.VM, port uint32) (*url.
 // Exchange a short-lived URL for a host-only cookie before application traffic
 // (including desktop WebSockets). Neither credential reaches the guest.
 func (s *Service) acceptBrowserSession(c echo.Context, v *types.VM, port uint32) (bool, error) {
-	if session := c.QueryParam(sessionParameter); session != "" {
-		if c.Request().Method != http.MethodGet {
-			return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
+	session := c.QueryParam(sessionParameter)
+	if session == "" {
+		return false, nil
+	}
+	if c.Request().Method != http.MethodGet {
+		return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
+	}
+	origin, err := s.browserOrigin(c, v, port)
+	if err != nil {
+		return false, err
+	}
+	clean, err := cleanBrowserURL(c)
+	if err != nil {
+		return false, err
+	}
+	if !validAccessSession(v, port, session, time.Now()) {
+		if browserNavigation(c.Request()) {
+			return true, s.invalidShareLink(c, clean.String())
 		}
-		origin, err := s.browserOrigin(c, v, port)
-		if err != nil {
-			return false, err
-		}
-		clean, err := cleanBrowserURL(c)
-		if err != nil {
-			return false, err
-		}
-		if !validAccessSession(v, port, session, time.Now()) {
-			if browserNavigation(c.Request()) {
-				return true, s.invalidShareLink(c, clean.String())
-			}
-			return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
-		}
-
-		// The configured public origin remains authoritative behind h2c/TLS
-		// termination. Only explicitly local HTTP origins omit Secure.
-		host := origin.Hostname()
-		ip := net.ParseIP(host)
-		localHTTP := origin.Scheme == "http" && (host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback()))
-		c.SetCookie(&http.Cookie{
-			Name:     sessionCookie(v, port),
-			Value:    session,
-			Path:     "/",
-			Expires:  time.Unix(sessionExpiry(session), 0),
-			Secure:   !localHTTP,
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
-
-		c.Response().Header().Set("Referrer-Policy", "no-referrer")
-		c.Response().Header().Set("Cache-Control", "no-store")
-		return true, c.Redirect(http.StatusSeeOther, clean.String())
+		return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
 	}
 
-	return false, nil
+	// The configured public origin remains authoritative behind h2c/TLS
+	// termination. Only explicitly local HTTP origins omit Secure.
+	host := origin.Hostname()
+	ip := net.ParseIP(host)
+	localHTTP := origin.Scheme == "http" && (host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback()))
+	c.SetCookie(&http.Cookie{
+		Name:     sessionCookie(v, port),
+		Value:    session,
+		Path:     "/",
+		Expires:  time.Unix(sessionExpiry(session), 0),
+		Secure:   !localHTTP,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	setBrowserHeaders(c)
+	return true, c.Redirect(http.StatusSeeOther, clean.String())
 }
 
 func (s *Service) browserSession(c echo.Context, v *types.VM, port uint32) bool {
@@ -151,14 +150,13 @@ func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32)
 		return false, nil
 	}
 
-	endpoint := s.browserAuthURL
-	if endpoint == "" {
+	if s.browserAuthURL == "" {
 		return false, nil
 	}
 	if _, err := s.browserOrigin(c, v, port); err != nil {
 		return false, err
 	}
-	login, err := url.Parse(endpoint)
+	login, err := url.Parse(s.browserAuthURL)
 	if err != nil || login.Host == "" || login.User != nil || login.Fragment != "" ||
 		(login.Scheme != "https" && !(login.Scheme == "http" && (login.Hostname() == "localhost" || net.ParseIP(login.Hostname()).IsLoopback()))) {
 		return false, echo.NewHTTPError(http.StatusServiceUnavailable, "VM browser sign-in unavailable")
@@ -174,8 +172,7 @@ func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32)
 	query.Set("port", strconv.FormatUint(uint64(port), 10))
 	query.Set("next", next.String())
 	login.RawQuery = query.Encode()
-	c.Response().Header().Set("Cache-Control", "no-store")
-	c.Response().Header().Set("Referrer-Policy", "no-referrer")
+	setBrowserHeaders(c)
 	return true, c.Redirect(http.StatusSeeOther, login.String())
 }
 

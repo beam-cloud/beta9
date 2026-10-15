@@ -116,11 +116,6 @@ def _port_url(vm, port):
     return url
 
 
-def _browser_info(service, info):
-    """Return direct VM endpoints without minting browser credentials."""
-    return {**info, "urls": _published_urls(info)}
-
-
 def _open_browser(vm, port, url):
     if not vm.info.get("browser_auth") and port in (
         (vm.info.get("spec") or {}).get("protected_ports") or []
@@ -131,7 +126,7 @@ def _open_browser(vm, port, url):
     webbrowser.open(url)
 
 
-def _show(info, as_json, service=None):
+def _show(info, as_json):
     if as_json or terminal.json_output():
         terminal.print_json(info)
     elif isinstance(info, list):
@@ -142,8 +137,7 @@ def _show(info, as_json, service=None):
             )
         terminal.print(table)
     else:
-        if service is not None and not terminal.json_output():
-            info = _browser_info(service, info)
+        urls = _published_urls(info)
         protected = (info.get("spec") or {}).get("protected_ports") or []
         fields = {
             label: info[key]
@@ -157,7 +151,7 @@ def _show(info, as_json, service=None):
             )
             if info.get(key)
         }
-        for port, url in (info.get("urls") or {}).items():
+        for port, url in urls.items():
             if (str(port) == "7681" and info.get("terminal_url")) or (
                 str(port) == "8080" and info.get("desktop_url")
             ):
@@ -168,7 +162,7 @@ def _show(info, as_json, service=None):
             info.get("name", "VM"),
             fields,
         )
-        private = [int(port) for port in (info.get("urls") or {}) if int(port) in protected]
+        private = [int(port) for port in urls if int(port) in protected]
         if private:
             port = 7681 if 7681 in private else private[0]
             target = ""
@@ -383,7 +377,7 @@ def new(
             vm.wait()
         if sync_dir:
             _sync(vm, sync_dir, False)
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 def _volumes(entries):
@@ -512,7 +506,7 @@ def _vm_table(records, starts):
 @extraclick.pass_service_client
 def get_vm(service, name, as_json):
     """Show a VM's identity, state and URLs."""
-    _show(_vm(service, name).info, as_json, service)
+    _show(_vm(service, name).info, as_json)
 
 
 @management.command("ip")
@@ -552,7 +546,7 @@ def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json
     vm = _vm(service, name).update(
         ttl=ttl, idle_action=idle_action, auto_resume=auto_resume, metadata=values
     )
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command("network")
@@ -564,7 +558,7 @@ def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json
 def network_vm(service, name, block, allow, as_json):
     """Set outbound network permissions."""
     vm = _vm(service, name).update_network_permissions(block_network=block, allow_list=list(allow))
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command("access-token")
@@ -674,11 +668,7 @@ def share_vm(service, name, port, desktop, port_option, expires_in, ttl, url_onl
     if ttl is not None and duration_given:
         raise click.UsageError("Choose --expires-in or --ttl.")
     lifetime = ttl if ttl is not None else expires_in
-    selected = 8080 if desktop else 7681
-    if port is not None:
-        selected = port
-    elif port_option is not None:
-        selected = port_option
+    selected = port or port_option or (8080 if desktop else 7681)
     vm = _vm(service, name)
     if desktop and not vm.info.get("desktop_url"):
         raise click.ClickException(
@@ -701,11 +691,10 @@ def share_vm(service, name, port, desktop, port_option, expires_in, ttl, url_onl
     if url_only:
         click.echo(url)
         return
-    label = f"Port {selected}"
-    if selected == 7681:
-        label = "Terminal"
-    elif selected == 8080 and vm.info.get("desktop_url"):
-        label = "Desktop"
+    feature = "terminal" if selected == 7681 else None
+    if selected == 8080 and vm.info.get("desktop_url"):
+        feature = "desktop"
+    label = feature.title() if feature else f"Port {selected}"
     copied = terminal.is_interactive() and _copy_share_link(url)
     terminal.print(f"{label} link" + (" copied to clipboard" if copied else ""), markup=False)
     click.echo(url)
@@ -715,11 +704,7 @@ def share_vm(service, name, port, desktop, port_option, expires_in, ttl, url_onl
             value, unit = lifetime // 3600, "hour"
         elif lifetime % 60 == 0:
             value, unit = lifetime // 60, "minute"
-        access = f"access port {selected}"
-        if selected == 7681:
-            access = "use this terminal"
-        elif selected == 8080 and vm.info.get("desktop_url"):
-            access = "use this desktop"
+        access = f"use this {feature}" if feature else f"access port {selected}"
         terminal.detail(
             f"Expires in {value} {unit}{'' if value == 1 else 's'}. "
             f"Anyone with this link can {access}. No sign-in needed."
@@ -737,7 +722,7 @@ def start_vm(service, name, as_json, cold=False):
     """Start a stopped VM or resume its saved memory."""
     with _progress("Starting VM", "VM ready", as_json):
         vm = _vm(service, name).start(cold=cold)
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 management.add_command(start_vm, "resume")
@@ -751,7 +736,7 @@ def pause_vm(service, name, as_json):
     """Save memory and disk, then release compute."""
     with _progress("Pausing VM", "VM paused", as_json):
         vm = _vm(service, name).pause()
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command("stop")
@@ -764,7 +749,7 @@ def stop_vm(service, name, no_snapshot, as_json):
     message = "Stopping VM" if no_snapshot else "Snapshotting and stopping VM"
     with _progress(message, "VM stopped", as_json):
         vm = _vm(service, name).stop(no_snapshot)
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command("rm")
@@ -789,7 +774,7 @@ def fork_vm(service, source, name, as_json):
             vm = VM(name, snapshot=source, _service=service).create()
         else:
             vm = _vm(service, source).fork(name)
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command(
@@ -955,10 +940,9 @@ def ports_vm(service, name, as_json):
     if as_json or terminal.json_output():
         terminal.print_json(vm.info["urls"])
     else:
-        info = _browser_info(service, vm.info)
-        spec = info.get("spec") or {}
+        spec = vm.info.get("spec") or {}
         table = Table("Port", "Access", "URL / command", box=box.SIMPLE)
-        for port, url in info["urls"].items():
+        for port, url in _published_urls(vm.info).items():
             access = "Private" if int(port) in (spec.get("protected_ports") or []) else "Public"
             table.add_row(str(port), access, Text(url))
         command = extraclick.command_hint()
@@ -990,7 +974,7 @@ def expose_vm(service, name, port, protected=None, as_json=False, url_only=False
     if url_only:
         click.echo(_port_url(vm, port))
     else:
-        _show(vm.info, as_json, service)
+        _show(vm.info, as_json)
 
 
 @management.command("unexpose")

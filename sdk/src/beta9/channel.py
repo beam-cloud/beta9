@@ -361,17 +361,12 @@ def get_channel(context: Optional[ConfigContext] = None) -> Channel:
 
 
 def prompt_first_auth(settings: SDKSettings, name: str = DEFAULT_CONTEXT_NAME) -> None:
-    from .auth import DeviceLogin, LoginError, login_configured, save_login
+    from .auth import DeviceLogin, LoginError, finish_login, login_configured
     from .config import context_defaults
 
     if not settings.api_token and login_configured(name):
         try:
-            flow = DeviceLogin.start(context_defaults(name))
-            terminal.header(f"Sign in to {settings.name}")
-            terminal.detail(flow.verification_uri_complete)
-            flow.open_browser()
-            with terminal.progress("Waiting for sign-in"):
-                save_login(flow.wait(), name)
+            finish_login(DeviceLogin.start(context_defaults(name)), name)
             terminal.success("Signed in")
         except LoginError as exc:
             terminal.error(str(exc), code=exc.code)
