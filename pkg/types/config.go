@@ -1331,9 +1331,13 @@ type VMConfig struct {
 	// Optional pool used when a VM is created without an explicit selector.
 	DefaultPool string `key:"defaultPool" json:"default_pool"`
 	// Wildcard DNS/ingress pointing at the gateway; <handle>-<port>.<domain>.
-	Domain  string          `key:"domain" json:"domain"`
-	BaseURL string          `key:"baseURL" json:"base_url"`
-	Network VMNetworkConfig `key:"network" json:"network"`
+	Domain  string `key:"domain" json:"domain"`
+	BaseURL string `key:"baseURL" json:"base_url"`
+	// Optional external browser sign-in endpoint; empty disables redirects.
+	// Receives workspace, vm, port and a relative next path. The provider must
+	// authorize the viewer and obtain a session through the management API.
+	BrowserAuthURL string          `key:"browserAuthURL" json:"browser_auth_url"`
+	Network        VMNetworkConfig `key:"network" json:"network"`
 }
 
 type VMNetworkConfig struct {

@@ -2,6 +2,7 @@
 
 import os
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -97,10 +98,6 @@ def _published_urls(info):
     return urls
 
 
-def _open_command(name, port):
-    return f"{extraclick.command_hint()} vm open {shlex.quote(name)} {port}"
-
-
 def _port_url(vm, port):
     url = _published_urls(vm.info).get(str(port))
     if not url:
@@ -116,33 +113,20 @@ def _port_url(vm, port):
         raise click.ClickException(
             f"Port {port} is not published. Run: {command} vm expose {name} {port}"
         )
-    if port in ((vm.info.get("spec") or {}).get("protected_ports") or []):
-        return vm.access_url(port)
     return url
 
 
-def _browser_info(service, info):
-    """Give human output usable browser links without changing VM metadata."""
-    result = dict(info)
-    urls = _published_urls(info)
-    protected = (info.get("spec") or {}).get("protected_ports") or []
-    if any(int(port) in protected for port in urls):
-        vm = VM(_service=service)
-        vm._set(info)
-        for port in urls:
-            if int(port) in protected:
-                try:
-                    urls[port] = _port_url(vm, int(port))
-                except (GatewayHTTPError, OSError):
-                    urls[port] = _open_command(info["name"], port)
-    result["urls"] = urls
-    for feature, port in (("terminal", 7681), ("desktop", 8080)):
-        if info.get(feature + "_url"):
-            result[feature + "_url"] = urls[str(port)]
-    return result
+def _open_browser(vm, port, url):
+    if not vm.info.get("browser_auth") and port in (
+        (vm.info.get("spec") or {}).get("protected_ports") or []
+    ):
+        # Older/self-hosted gateways can still seed a cookie directly. Keep
+        # the temporary credential out of normal terminal output.
+        url = vm.access_url(port, ttl=3600)
+    webbrowser.open(url)
 
 
-def _show(info, as_json, service=None):
+def _show(info, as_json):
     if as_json or terminal.json_output():
         terminal.print_json(info)
     elif isinstance(info, list):
@@ -153,8 +137,7 @@ def _show(info, as_json, service=None):
             )
         terminal.print(table)
     else:
-        if service is not None and not terminal.json_output():
-            info = _browser_info(service, info)
+        urls = _published_urls(info)
         protected = (info.get("spec") or {}).get("protected_ports") or []
         fields = {
             label: info[key]
@@ -163,12 +146,12 @@ def _show(info, as_json, service=None):
                 ("status", "Status"),
                 ("error", "Error"),
                 ("public_ipv6", "IPv6"),
-                ("terminal_url", f"Terminal ({'private' if 7681 in protected else 'public'})"),
-                ("desktop_url", f"Desktop ({'private' if 8080 in protected else 'public'})"),
+                ("terminal_url", "Terminal" if 7681 in protected else "Terminal (public)"),
+                ("desktop_url", "Desktop" if 8080 in protected else "Desktop (public)"),
             )
             if info.get(key)
         }
-        for port, url in (info.get("urls") or {}).items():
+        for port, url in urls.items():
             if (str(port) == "7681" and info.get("terminal_url")) or (
                 str(port) == "8080" and info.get("desktop_url")
             ):
@@ -179,13 +162,18 @@ def _show(info, as_json, service=None):
             info.get("name", "VM"),
             fields,
         )
-        for port in info.get("urls") or {}:
-            if int(port) in protected:
-                terminal.detail(
-                    f"Private links expire after 10 minutes. Reopen: "
-                    f"{_open_command(info['name'], port)}"
-                )
-                break
+        private = [int(port) for port in urls if int(port) in protected]
+        if private:
+            port = 7681 if 7681 in private else private[0]
+            target = ""
+            if port == 8080 and info.get("desktop_url"):
+                target = " --desktop"
+            elif port != 7681:
+                target = f" --port {port}"
+            terminal.detail(
+                f"Share a temporary link: {extraclick.command_hint()} vm share "
+                f"{shlex.quote(info['name'])}{target}"
+            )
 
 
 @management.command("new")
@@ -223,7 +211,11 @@ def _show(info, as_json, service=None):
     help="Secret available during image build; repeatable.",
 )
 @click.option("--template", metavar="NAME", help="Create from a saved template.")
-@click.option("--desktop", is_flag=True, default=None, help="Enable the browser desktop.")
+@click.option(
+    "--desktop/--no-desktop",
+    default=None,
+    help="Include a browser desktop (default for new images; templates retain their settings).",
+)
 @click.option("--docker-enabled", is_flag=True, default=None, help="Enable Docker inside the VM.")
 @click.option("--env", multiple=True, metavar="KEY=VALUE", help="Environment variable; repeatable.")
 @click.option(
@@ -354,7 +346,7 @@ def new(
         cpu=cpu,
         memory=memory,
         disk_size=disk_size,
-        desktop=desktop,
+        desktop=True if desktop is None and not (template or image_id) else desktop,
         docker_enabled=docker_enabled,
         env=env_map if env else None,
         secrets=list(secret) if secret else None,
@@ -385,7 +377,7 @@ def new(
             vm.wait()
         if sync_dir:
             _sync(vm, sync_dir, False)
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 def _volumes(entries):
@@ -514,7 +506,7 @@ def _vm_table(records, starts):
 @extraclick.pass_service_client
 def get_vm(service, name, as_json):
     """Show a VM's identity, state and URLs."""
-    _show(_vm(service, name).info, as_json, service)
+    _show(_vm(service, name).info, as_json)
 
 
 @management.command("ip")
@@ -554,7 +546,7 @@ def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json
     vm = _vm(service, name).update(
         ttl=ttl, idle_action=idle_action, auto_resume=auto_resume, metadata=values
     )
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command("network")
@@ -566,7 +558,7 @@ def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json
 def network_vm(service, name, block, allow, as_json):
     """Set outbound network permissions."""
     vm = _vm(service, name).update_network_permissions(block_network=block, allow_list=list(allow))
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command("access-token")
@@ -592,8 +584,133 @@ def access_token_vm(service, name, rotate):
 )
 @extraclick.pass_service_client
 def access_url_vm(service, name, port, ttl):
-    """Print a temporary browser link for a protected port."""
+    """Share temporary browser access to a protected port; anyone with the link can use it."""
     click.echo(_vm(service, name).access_url(port, ttl=ttl))
+
+
+def _share_duration(ctx, param, value):
+    value = value.strip().lower()
+    unit = value[-1:] if not value.isdigit() else "s"
+    amount = value[:-1] if not value.isdigit() else value
+    if unit not in ("s", "m", "h") or not amount.isdigit():
+        raise click.BadParameter("Use a duration such as 10m or 1h.", ctx=ctx, param=param)
+    seconds = int(amount) * {"s": 1, "m": 60, "h": 3600}[unit]
+    if not 1 <= seconds <= 3600:
+        raise click.BadParameter("Choose a duration from 1s to 1h.", ctx=ctx, param=param)
+    return seconds
+
+
+def _copy_share_link(url):
+    if sys.platform == "darwin":
+        commands = [("pbcopy",)]
+    elif sys.platform == "win32":
+        commands = [("clip",)]
+    else:
+        commands = [
+            ("wl-copy",),
+            ("xclip", "-selection", "clipboard"),
+            ("xsel", "--clipboard", "--input"),
+        ]
+    for command in commands:
+        executable = shutil.which(command[0])
+        if not executable:
+            continue
+        try:
+            subprocess.run(
+                [executable, *command[1:]],
+                input=url,
+                text=True,
+                check=True,
+                timeout=2,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
+
+
+@management.command("share")
+@click.argument("name")
+@click.argument("port", required=False, type=click.IntRange(1, 65535))
+@click.option("--desktop", is_flag=True, help="Share the desktop instead of the terminal.")
+@click.option(
+    "--port", "port_option", type=click.IntRange(1, 65535), help="Share an application port."
+)
+@click.option(
+    "--expires-in",
+    default="1h",
+    show_default=True,
+    callback=_share_duration,
+    metavar="DURATION",
+    help="How long the link and recipient access last, from 1s to 1h.",
+)
+@click.option("--ttl", type=click.IntRange(1, 3600), hidden=True)
+@click.option(
+    "--url", "url_only", is_flag=True, help="Print only the link; skip clipboard copying."
+)
+@click.option("--json", "as_json", is_flag=True, help="Print the link and expiry as JSON.")
+@extraclick.pass_service_client
+def share_vm(service, name, port, desktop, port_option, expires_in, ttl, url_only, as_json):
+    """Copy a temporary terminal link. Anyone with the link can connect without signing in.
+
+    Use --desktop for the desktop or --port PORT for an application.
+    """
+    ctx = click.get_current_context()
+    if sum((port is not None, port_option is not None, desktop)) > 1:
+        raise click.UsageError("Choose --desktop, --port, or a positional port.")
+    if url_only and (as_json or terminal.json_output()):
+        raise click.UsageError("Choose --url or --json.")
+    duration_given = (
+        ctx.get_parameter_source("expires_in") == click.core.ParameterSource.COMMANDLINE
+    )
+    if ttl is not None and duration_given:
+        raise click.UsageError("Choose --expires-in or --ttl.")
+    lifetime = ttl if ttl is not None else expires_in
+    selected = port or port_option or (8080 if desktop else 7681)
+    vm = _vm(service, name)
+    if desktop and not vm.info.get("desktop_url"):
+        raise click.ClickException(
+            "This VM does not have a desktop. Use vm share NAME to share its terminal."
+        )
+    url = _port_url(vm, selected)
+    protected = selected in ((vm.info.get("spec") or {}).get("protected_ports") or [])
+    if not protected and (duration_given or ttl is not None):
+        raise click.ClickException(
+            f"Port {selected} is public, so its URL does not expire. "
+            f"Protect it first: {extraclick.command_hint()} vm expose {shlex.quote(vm.name)} {selected} --protected"
+        )
+    result = (
+        vm._action("access-session", port=selected, ttl=lifetime) if protected else {"url": url}
+    )
+    url = result["url"]
+    if as_json or terminal.json_output():
+        terminal.print_json({"name": vm.name, "port": selected, "public": not protected, **result})
+        return
+    if url_only:
+        click.echo(url)
+        return
+    feature = "terminal" if selected == 7681 else None
+    if selected == 8080 and vm.info.get("desktop_url"):
+        feature = "desktop"
+    label = feature.title() if feature else f"Port {selected}"
+    copied = terminal.is_interactive() and _copy_share_link(url)
+    terminal.print(f"{label} link" + (" copied to clipboard" if copied else ""), markup=False)
+    click.echo(url)
+    if protected:
+        value, unit = lifetime, "second"
+        if lifetime % 3600 == 0:
+            value, unit = lifetime // 3600, "hour"
+        elif lifetime % 60 == 0:
+            value, unit = lifetime // 60, "minute"
+        access = f"use this {feature}" if feature else f"access port {selected}"
+        terminal.detail(
+            f"Expires in {value} {unit}{'' if value == 1 else 's'}. "
+            f"Anyone with this link can {access}. No sign-in needed."
+        )
+    else:
+        terminal.detail("This port is public. Anyone can connect, and the link does not expire.")
 
 
 @management.command("start")
@@ -605,7 +722,7 @@ def start_vm(service, name, as_json, cold=False):
     """Start a stopped VM or resume its saved memory."""
     with _progress("Starting VM", "VM ready", as_json):
         vm = _vm(service, name).start(cold=cold)
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 management.add_command(start_vm, "resume")
@@ -619,7 +736,7 @@ def pause_vm(service, name, as_json):
     """Save memory and disk, then release compute."""
     with _progress("Pausing VM", "VM paused", as_json):
         vm = _vm(service, name).pause()
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command("stop")
@@ -632,7 +749,7 @@ def stop_vm(service, name, no_snapshot, as_json):
     message = "Stopping VM" if no_snapshot else "Snapshotting and stopping VM"
     with _progress(message, "VM stopped", as_json):
         vm = _vm(service, name).stop(no_snapshot)
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command("rm")
@@ -657,7 +774,7 @@ def fork_vm(service, source, name, as_json):
             vm = VM(name, snapshot=source, _service=service).create()
         else:
             vm = _vm(service, source).fork(name)
-    _show(vm.info, as_json, service)
+    _show(vm.info, as_json)
 
 
 @management.command(
@@ -775,7 +892,7 @@ def _url(service, name, field, open_url):
     url = _port_url(vm, port)
     click.echo(url)
     if open_url:
-        webbrowser.open(url)
+        _open_browser(vm, port, url)
 
 
 def _url_command(feature):
@@ -805,11 +922,12 @@ terminal_vm = _url_command("terminal")
 @click.option("--url", "url_only", is_flag=True, help="Print the URL without opening a browser.")
 @extraclick.pass_service_client
 def open_vm(service, name, port, url_only):
-    """Open a published HTTP port, signing in to private ports automatically."""
-    url = _port_url(_vm(service, name), port)
+    """Open a published HTTP port in your browser."""
+    vm = _vm(service, name)
+    url = _port_url(vm, port)
     click.echo(url)
     if not url_only:
-        webbrowser.open(url)
+        _open_browser(vm, port, url)
 
 
 @management.command("ports")
@@ -822,10 +940,9 @@ def ports_vm(service, name, as_json):
     if as_json or terminal.json_output():
         terminal.print_json(vm.info["urls"])
     else:
-        info = _browser_info(service, vm.info)
-        spec = info.get("spec") or {}
+        spec = vm.info.get("spec") or {}
         table = Table("Port", "Access", "URL / command", box=box.SIMPLE)
-        for port, url in info["urls"].items():
+        for port, url in _published_urls(vm.info).items():
             access = "Private" if int(port) in (spec.get("protected_ports") or []) else "Public"
             table.add_row(str(port), access, Text(url))
         command = extraclick.command_hint()
@@ -837,7 +954,7 @@ def ports_vm(service, name, as_json):
             table.add_row("2222", "SSH key", f"{command} vm ssh {shlex.quote(vm.name)}")
         terminal.print(table)
         if spec.get("protected_ports"):
-            terminal.detail("Private browser links expire after 10 minutes.")
+            terminal.detail(f"Share a terminal link: {command} vm share {shlex.quote(vm.name)}")
         terminal.detail(f"Open any HTTP port: {command} vm open {shlex.quote(vm.name)} PORT")
 
 
@@ -857,7 +974,7 @@ def expose_vm(service, name, port, protected=None, as_json=False, url_only=False
     if url_only:
         click.echo(_port_url(vm, port))
     else:
-        _show(vm.info, as_json, service)
+        _show(vm.info, as_json)
 
 
 @management.command("unexpose")

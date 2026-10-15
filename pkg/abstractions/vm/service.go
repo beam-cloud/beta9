@@ -30,17 +30,18 @@ type Gateway interface {
 }
 
 type Service struct {
-	ctx           context.Context
-	rdb           *common.RedisClient
-	repo          repository.VMRepository
-	backend       repository.BackendRepository
-	containers    repository.ContainerRepository
-	runtime       Runtime
-	gateway       Gateway
-	domain        string
-	baseURL       string
-	defaultPool   string
-	publicNetwork *publicVMNetwork
+	ctx            context.Context
+	rdb            *common.RedisClient
+	repo           repository.VMRepository
+	backend        repository.BackendRepository
+	containers     repository.ContainerRepository
+	runtime        Runtime
+	gateway        Gateway
+	domain         string
+	baseURL        string
+	browserAuthURL string
+	defaultPool    string
+	publicNetwork  *publicVMNetwork
 }
 
 type ServiceOpts struct {
@@ -62,16 +63,17 @@ func New(ctx context.Context, opts ServiceOpts) error {
 	}
 
 	s := &Service{
-		ctx:         ctx,
-		rdb:         opts.RedisClient,
-		repo:        repo,
-		backend:     opts.BackendRepo,
-		containers:  opts.ContainerRepo,
-		runtime:     opts.Runtime,
-		gateway:     opts.Gateway,
-		domain:      opts.Config.Domain,
-		baseURL:     strings.TrimSuffix(opts.Config.BaseURL, "/"),
-		defaultPool: opts.Config.DefaultPool,
+		ctx:            ctx,
+		rdb:            opts.RedisClient,
+		repo:           repo,
+		backend:        opts.BackendRepo,
+		containers:     opts.ContainerRepo,
+		runtime:        opts.Runtime,
+		gateway:        opts.Gateway,
+		domain:         opts.Config.Domain,
+		baseURL:        strings.TrimSuffix(opts.Config.BaseURL, "/"),
+		browserAuthURL: opts.Config.BrowserAuthURL,
+		defaultPool:    opts.Config.DefaultPool,
 	}
 
 	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {

@@ -6,6 +6,7 @@ import socket
 import sys
 import time
 import webbrowser
+from contextlib import nullcontext, redirect_stdout
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Optional
 
@@ -190,3 +191,24 @@ class DeviceLogin:
             if time.monotonic() + self.interval > deadline:
                 raise LoginError("Timed out waiting for sign-in. Run login again.", "LOGIN_EXPIRED")
             time.sleep(self.interval)
+
+
+def finish_login(
+    flow: DeviceLogin, name: str = DEFAULT_CONTEXT_NAME, *, browserless: bool = False
+) -> ConfigContext:
+    """Complete browser sign-in and save its context, keeping JSON output clean."""
+    from . import terminal
+
+    with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+        if not browserless and flow.open_browser():
+            terminal.header("Finish signing in through your browser")
+            terminal.detail(f"If it didn't open: {flow.verification_uri_complete}")
+        else:
+            terminal.header(f"Sign in to {get_settings().name}")
+            terminal.print(f"  {flow.verification_uri_complete}\n")
+            terminal.detail(f"Or go to {flow.verification_uri} and enter this code:")
+            terminal.print(f"  [bold]{flow.user_code}[/bold]")
+        with terminal.progress("Waiting for sign-in"):
+            context = flow.wait()
+    save_login(context, name)
+    return context

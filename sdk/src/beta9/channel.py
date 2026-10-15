@@ -360,7 +360,18 @@ def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     return channel
 
 
-def prompt_first_auth(settings: SDKSettings) -> None:
+def prompt_first_auth(settings: SDKSettings, name: str = DEFAULT_CONTEXT_NAME) -> None:
+    from .auth import DeviceLogin, LoginError, finish_login, login_configured
+    from .config import context_defaults
+
+    if not settings.api_token and login_configured(name):
+        try:
+            finish_login(DeviceLogin.start(context_defaults(name)), name)
+            terminal.success("Signed in")
+        except LoginError as exc:
+            terminal.error(str(exc), code=exc.code)
+        return
+
     if settings.api_token:
         name = DEFAULT_CONTEXT_NAME
         context = ConfigContext(

@@ -11,7 +11,8 @@ feature.
 
 `{{cli}} setup vm --name agent-vm` signs in in the browser, connects local
 agents, verifies a command in the guest and starts a browser desktop. Add
-`--no-desktop` to skip the desktop.
+`--no-desktop` to skip the desktop. `{{cli}} vm new` also includes a desktop
+when building a fresh image; templates and prebuilt images retain their settings.
 Re-running resumes the same setup-owned VM. `--skip-agents` skips local
 client configuration; `--yes` explicitly approves creation for an already
 authenticated and funded unattended context.
@@ -82,14 +83,38 @@ list/delete tools manage reusable roots. SSH-enabled forks/template-based
 creations need a public key matching your local private identity. Keep
 private keys on the client. A fork has an independent writable root.
 
-Terminal (7681) and desktop (8080) require a traffic token by default.
-The CLI signs in automatically: `{{cli}} vm terminal NAME` and
-`{{cli}} vm desktop NAME` open authenticated browser links. Use
-`{{cli}} vm open NAME PORT` for any published HTTP port, or add `--url`
-to print the link. Private links expire after 10 minutes; rerun the command
-for a fresh one. Creation, `get`, `expose`, and `ports` show usable browser
-links and distinguish private application ports from public ones. JSON
-output keeps stable URLs without embedding temporary credentials.
+Terminal (7681) and desktop (8080) are private by default.
+`{{cli}} vm terminal NAME` and `{{cli}} vm desktop NAME` open the VM itself.
+`{{cli}} vm open NAME PORT` opens any published HTTP port; `--url` prints its
+clean, stable URL. Creation, `get`, `expose`, `ports` and JSON output retain
+these direct endpoints without minting temporary credentials.
+
+When the operator configures `abstractions.vm.browserAuthURL`, a browser
+with no valid VM cookie redirects to that provider. The provider authenticates
+the viewer and authorizes workspace access before requesting a VM session
+through the management API. The session sets a Secure HttpOnly cookie on
+that VM/port's host, then returns to the original VM URL. An existing provider
+login can make this automatic. Normal API/WebSocket requests still require
+their traffic token or valid VM cookie and do not redirect to sign-in.
+
+To share without requiring an account, run `{{cli}} vm share NAME`.
+It shares the terminal for one hour, copies the link to the local clipboard
+in an interactive shell, and clearly states that anyone with the link can
+connect. Use `--desktop` for the desktop or `--port 3000` for an app.
+`--expires-in 10m` chooses a shorter lifetime (1s to 1h); `--url` prints just
+the link and `--json` returns the link and expiry, both without touching the
+clipboard. A public port returns its existing URL and is clearly labeled as
+non-expiring; an explicit expiry requires protecting that port first.
+
+The recipient clicks once: the link sets a host-only cookie and redirects
+to the clean VM URL, with no account sign-in. The link and recipient cookie
+expire together. Expired or revoked shares show a page asking for a fresh
+link; when a sign-in provider is configured, members can use their account instead.
+Rotating the traffic token revokes these sessions. `vm access-url NAME PORT`
+remains the lower-level URL-only command (default lifetime 600 seconds).
+Self-hosted gateways without an account bridge still support browser
+commands that seed a port cookie directly, with the entry credential hidden
+from normal output. Use `vm share` when you need a temporary entry link.
 For non-browser clients, `{{cli}} vm port-forward NAME PORT` provides an
 authenticated localhost connection. `ports` also lists tunnel-only ports
 and the SSH command. No traffic token needs to be copied for these flows.

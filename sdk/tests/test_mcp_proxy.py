@@ -231,7 +231,7 @@ def test_a_rejected_call_keeps_a_sign_in_saved_while_it_ran(settings, monkeypatc
 
 
 def test_an_unreadable_config_never_fails_the_server(settings, monkeypatch):
-    # agents.sh and older CLIs rewrite the file in place; a read can land mid-write.
+    # The installer and older CLIs rewrite the file in place; a read can land mid-write.
     monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: FakeRemote())
     settings.config_path.write_text("[default\ntoken = t")
     proxy = mcp_server.StdioProxy(cwd=os.getcwd())

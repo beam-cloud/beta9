@@ -11,7 +11,7 @@ import click
 from rich.syntax import Syntax
 
 from .. import terminal
-from ..auth import login_configured
+from ..auth import LoginError, login_configured
 from ..config import ConfigContext, cli_path, get_settings
 from ..skills import install_skill, skill_name
 from . import extraclick
@@ -55,19 +55,27 @@ def setup():
 )
 @click.option("--skip-skills", is_flag=True, help="Register MCP only.")
 @click.option("--skip-mcp", is_flag=True, help="Install skills only.")
+@click.option("--login", "sign_in", is_flag=True, help="Sign in and configure the workspace first.")
 @click.option(
     "-y",
     "--yes",
     is_flag=True,
     expose_value=False,
-    help="Accepted for symmetry with installers. Nothing prompts.",
+    help="Accepted for symmetry with installers.",
 )
 @extraclick.config_context_option
-def agent(clients: Sequence[str], skip_skills: bool, skip_mcp: bool, context: Optional[str]):
+def agent(
+    clients: Sequence[str], skip_skills: bool, skip_mcp: bool, sign_in: bool, context: Optional[str]
+):
     product = get_settings().name
     cli = product.lower()
     name = context or extraclick.selected_context()
     can_login = login_configured(name)
+    if sign_in:
+        try:
+            connect_workspace(name)
+        except LoginError as exc:
+            raise click.ClickException(str(exc)) from exc
     result = configure_agents(clients, skip_skills, skip_mcp, context)
     skills, mcp, failed = result["skills"], result["mcp"], result["failed"]
     signed_in = result["signed_in"]
@@ -154,7 +162,6 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
     from ..channel import GatewayHTTPError, ServiceClient
     from ..config import get_config_context
     from ..deployment.onboarding import prepare_vm
-    from .vm import _browser_info
 
     selected = context or extraclick.selected_context()
     steps = terminal.StepTracker()
@@ -182,8 +189,6 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                         name,
                         desktop=desktop,
                     )
-                if not terminal.json_output():
-                    result = _browser_info(service, result)
         dashboard = dashboard_link(selected_context, "vm", result["id"])
         if terminal.json_output():
             terminal.print_json(
@@ -205,20 +210,17 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                     "IPv6": result.get("public_ipv6"),
                     "Terminal": result.get("terminal_url"),
                     "Desktop": result.get("desktop_url"),
-                    "Dashboard": dashboard,
                 },
             )
             terminal.detail(
                 "Restart your agent to use the VM tools. Re-run this setup to resume the same VM."
             )
             if result.get("spec", {}).get("protected_ports"):
-                terminal.detail(
-                    "Browser links expire after 10 minutes. The commands below open fresh links."
-                )
+                terminal.detail("Share temporary access with the vm share command below.")
             command = extraclick.command_hint(selected)
             name = shlex.quote(result["name"])
             terminal.print("")
-            for action in ("ssh", "terminal", "logs", "stop"):
+            for action in ("ssh", "terminal", "share", "logs", "stop"):
                 terminal.print(f"  {command} vm {action} {name}", markup=False)
             if result.get("desktop_url"):
                 terminal.print(f"  {command} vm desktop {name}", markup=False)
@@ -338,24 +340,25 @@ def credit_checkout(context: ConfigContext) -> str:
     return url if isinstance(url, str) and url.startswith("https://") else ""
 
 
-def connect_onboarding(
-    selected: str, clients: Sequence[str], skip_agents: bool, unattended: bool
-) -> Tuple[ConfigContext, Optional[Dict[str, Any]]]:
-    from ..auth import DeviceLogin, save_login
+def connect_workspace(selected: str) -> ConfigContext:
+    """Connect the selected workspace without checking credits or creating resources."""
+    from ..auth import DeviceLogin, finish_login, save_login
     from ..config import context_defaults, get_config_context
     from ..mcp.server import context_or_none
 
     if context_or_none(selected) is None:
-        flow = DeviceLogin.start(context_defaults(selected))
-        terminal.header(f"Sign in to {get_settings().name}")
-        terminal.print(f"  {flow.verification_uri_complete}")
-        flow.open_browser()
-        with terminal.progress("Waiting for sign-in"):
-            save_login(flow.wait(), selected)
+        finish_login(DeviceLogin.start(context_defaults(selected)), selected)
     context = get_config_context(selected)
     if context.auth_url and (not context.app_url_template or not context.vm_url_template):
         context = provider_links(context)
         save_login(context, selected)
+    return context
+
+
+def connect_onboarding(
+    selected: str, clients: Sequence[str], skip_agents: bool, unattended: bool
+) -> Tuple[ConfigContext, Optional[Dict[str, Any]]]:
+    context = connect_workspace(selected)
     ensure_credit(context, unattended)
     agents = None
     if not skip_agents:

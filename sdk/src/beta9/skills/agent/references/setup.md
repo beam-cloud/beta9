@@ -36,8 +36,12 @@ exists. Create tokens in the dashboard; treat them as secrets.
 ## MCP registration
 
 `{{cli}} setup agent` installs this skill and registers the MCP server with
-every supported agent on the machine (Cursor, Claude Code, Codex, Windsurf,
-Claude Desktop). Per client: `{{cli}} mcp install --client <name>`; add
+the supported coding agents on this machine. Add `--login` to connect the
+workspace first, using the same browser sign-in as workload setup. This stops
+after workspace and agent configuration, without credit checks or compute.
+
+Supported clients include Cursor, Claude Code, Codex, Windsurf and Claude
+Desktop. Per client: `{{cli}} mcp install --client <name>`; add
 `--project` for repo-scoped config where supported; `--print` shows the
 snippet. `{{cli}} mcp status` lists what is wired. The registered command is
 `{{cli}} mcp`, a stdio server that uses the context's credentials, so nothing

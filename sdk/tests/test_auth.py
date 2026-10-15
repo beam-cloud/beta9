@@ -143,6 +143,40 @@ DEVICE_CODE = {
 }
 
 
+@pytest.mark.parametrize("browserless", [False, True])
+def test_cli_login_keeps_json_output_clean(settings, monkeypatch, browserless):
+    from unittest.mock import MagicMock
+    from click.testing import CliRunner
+    from beta9.cli.login import common
+
+    monkeypatch.setenv("BETA9_JSON", "1")
+    monkeypatch.setattr(auth, "has_browser", lambda: True)
+    open_browser = MagicMock(return_value=True)
+    monkeypatch.setattr(auth.webbrowser, "open", open_browser)
+    posts(
+        monkeypatch,
+        [
+            FakeResponse(200, DEVICE_CODE),
+            FakeResponse(200, {"access_token": "t" * 64, "workspace_name": "acme"}),
+        ],
+    )
+    result = CliRunner(mix_stderr=False).invoke(
+        common, ["login", "--environment", "staging", *(["--browserless"] if browserless else [])]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {
+        "context": "staging",
+        "workspace": "acme",
+        "gateway": f"{STAGING.gateway_host}:{STAGING.gateway_port}",
+    }
+    assert DEVICE_CODE["verification_uri"] in result.stderr
+    assert load_config()["staging"].token == "t" * 64
+    if browserless:
+        open_browser.assert_not_called()
+    else:
+        open_browser.assert_called_once()
+
+
 def test_login_into_an_environment_saves_a_context_that_points_there(settings, monkeypatch):
     urls = posts(
         monkeypatch,
@@ -232,3 +266,51 @@ def test_device_login_preserves_provider_dashboard_templates(settings, monkeypat
     restored = get_config_context("test")
     assert restored.app_url_template == context.app_url_template
     assert restored.vm_url_template == context.vm_url_template
+
+
+def test_first_cli_auth_uses_browser_login_when_configured(settings, monkeypatch):
+    from unittest.mock import MagicMock
+    from beta9 import channel
+
+    flow = MagicMock(verification_uri_complete="https://auth.example/activate?code=example")
+    flow.wait.return_value = ConfigContext(
+        token="signed-in", gateway_host="gw.example", gateway_port=443
+    )
+    start = MagicMock(return_value=flow)
+    monkeypatch.setattr(auth.DeviceLogin, "start", start)
+    prompt = MagicMock(side_effect=AssertionError("must not ask for a token"))
+    monkeypatch.setattr(channel, "prompt_for_config_context", prompt)
+    channel.prompt_first_auth(settings)
+    flow.open_browser.assert_called_once()
+    assert get_config_context().token == "signed-in"
+    prompt.assert_not_called()
+
+
+def test_first_cli_auth_reports_browser_login_failure(settings, monkeypatch):
+    from unittest.mock import MagicMock
+    from beta9 import channel
+
+    monkeypatch.setattr(
+        auth.DeviceLogin, "start", MagicMock(side_effect=auth.LoginError("sign-in failed"))
+    )
+    report = MagicMock()
+    monkeypatch.setattr(channel.terminal, "error", report)
+    channel.prompt_first_auth(settings)
+    report.assert_called_once()
+    assert not settings.config_path.exists()
+
+
+def test_missing_named_context_signs_into_its_own_environment(settings, monkeypatch):
+    from unittest.mock import MagicMock
+    from beta9 import config
+
+    flow = MagicMock(verification_uri_complete="https://auth.stage.example/activate")
+    flow.wait.return_value = ConfigContext(
+        token="staging-token", gateway_host=STAGING.gateway_host, gateway_port=443
+    )
+    start = MagicMock(return_value=flow)
+    monkeypatch.setattr(auth.DeviceLogin, "start", start)
+    monkeypatch.setattr(config.sys.stdin, "isatty", lambda: True)
+    assert get_config_context("staging").token == "staging-token"
+    assert start.call_args.args[0].auth_url == STAGING.auth_url
+    assert "default" not in load_config()

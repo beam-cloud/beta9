@@ -294,6 +294,11 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
             hint=f"Run `{how}`, or set {cli.upper()}_TOKEN.",
             code="NOT_AUTHENTICATED",
         )
+    if defaults.auth_url:
+        from .channel import prompt_first_auth
+
+        prompt_first_auth(settings, name)
+        return load_config()[name]
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
     contexts[name] = prompt_for_config_context(name=name, require_token=True)[1]
     save_config(contexts)

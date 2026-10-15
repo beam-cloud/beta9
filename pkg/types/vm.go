@@ -117,6 +117,7 @@ type VM struct {
 	LastActiveAt        time.Time         `json:"last_active_at"`
 	TerminalURL         string            `json:"terminal_url,omitempty"`
 	DesktopURL          string            `json:"desktop_url,omitempty"`
+	BrowserAuth         bool              `json:"browser_auth,omitempty"`
 	URLs                map[uint32]string `json:"urls"`
 }
 

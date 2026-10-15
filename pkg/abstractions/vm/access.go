@@ -79,45 +79,45 @@ func (s *Service) browserOrigin(c echo.Context, v *types.VM, port uint32) (*url.
 // Exchange a short-lived URL for a host-only cookie before application traffic
 // (including desktop WebSockets). Neither credential reaches the guest.
 func (s *Service) acceptBrowserSession(c echo.Context, v *types.VM, port uint32) (bool, error) {
-	if session := c.QueryParam(sessionParameter); session != "" {
-		if c.Request().Method != http.MethodGet || !validAccessSession(v, port, session, time.Now()) {
-			return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
+	session := c.QueryParam(sessionParameter)
+	if session == "" {
+		return false, nil
+	}
+	if c.Request().Method != http.MethodGet {
+		return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
+	}
+	origin, err := s.browserOrigin(c, v, port)
+	if err != nil {
+		return false, err
+	}
+	clean, err := cleanBrowserURL(c)
+	if err != nil {
+		return false, err
+	}
+	if !validAccessSession(v, port, session, time.Now()) {
+		if browserNavigation(c.Request()) {
+			return true, s.invalidShareLink(c, clean.String())
 		}
-
-		origin, err := s.browserOrigin(c, v, port)
-		if err != nil {
-			return false, err
-		}
-
-		// The configured public origin remains authoritative behind h2c/TLS
-		// termination. Only explicitly local HTTP origins omit Secure.
-		host := origin.Hostname()
-		ip := net.ParseIP(host)
-		localHTTP := origin.Scheme == "http" && (host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback()))
-		c.SetCookie(&http.Cookie{
-			Name:     sessionCookie(v, port),
-			Value:    session,
-			Path:     "/",
-			Expires:  time.Unix(sessionExpiry(session), 0),
-			Secure:   !localHTTP,
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
-		query := c.Request().URL.Query()
-		query.Del(sessionParameter)
-		// RequestURI preserves the original browser path before host rewriting.
-		u, err := url.ParseRequestURI(c.Request().RequestURI)
-		if err != nil || u.IsAbs() || u.Host != "" || strings.HasPrefix(u.Path, "//") {
-			return false, echo.NewHTTPError(http.StatusBadRequest, "invalid request URI")
-		}
-
-		u.RawQuery = query.Encode()
-		c.Response().Header().Set("Referrer-Policy", "no-referrer")
-		c.Response().Header().Set("Cache-Control", "no-store")
-		return true, c.Redirect(http.StatusSeeOther, u.String())
+		return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
 	}
 
-	return false, nil
+	// The configured public origin remains authoritative behind h2c/TLS
+	// termination. Only explicitly local HTTP origins omit Secure.
+	host := origin.Hostname()
+	ip := net.ParseIP(host)
+	localHTTP := origin.Scheme == "http" && (host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback()))
+	c.SetCookie(&http.Cookie{
+		Name:     sessionCookie(v, port),
+		Value:    session,
+		Path:     "/",
+		Expires:  time.Unix(sessionExpiry(session), 0),
+		Secure:   !localHTTP,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	setBrowserHeaders(c)
+	return true, c.Redirect(http.StatusSeeOther, clean.String())
 }
 
 func (s *Service) browserSession(c echo.Context, v *types.VM, port uint32) bool {
@@ -138,6 +138,42 @@ func (s *Service) browserSession(c echo.Context, v *types.VM, port uint32) bool 
 
 	_, err = s.browserOrigin(c, v, port)
 	return err == nil
+}
+
+// An operator may delegate top-level browser sign-in to an external provider.
+// The provider must authorize the viewer before requesting an access session
+// through the authenticated management API. Redirecting grants no VM access.
+// APIs, WebSockets and embedded apps retain their explicit authentication errors.
+func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32) (bool, error) {
+	r := c.Request()
+	if !browserNavigation(r) || r.Header.Get("X-Beam-VM-Token") != "" || r.Header.Get("Authorization") != "" || v.WorkspaceExternalID == "" || v.TrafficAccessToken == "" {
+		return false, nil
+	}
+
+	if s.browserAuthURL == "" {
+		return false, nil
+	}
+	if _, err := s.browserOrigin(c, v, port); err != nil {
+		return false, err
+	}
+	login, err := url.Parse(s.browserAuthURL)
+	if err != nil || login.Host == "" || login.User != nil || login.Fragment != "" ||
+		(login.Scheme != "https" && !(login.Scheme == "http" && (login.Hostname() == "localhost" || net.ParseIP(login.Hostname()).IsLoopback()))) {
+		return false, echo.NewHTTPError(http.StatusServiceUnavailable, "VM browser sign-in unavailable")
+	}
+	next, err := cleanBrowserURL(c)
+	if err != nil {
+		return false, err
+	}
+
+	query := login.Query()
+	query.Set("workspace", v.WorkspaceExternalID)
+	query.Set("vm", v.ID)
+	query.Set("port", strconv.FormatUint(uint64(port), 10))
+	query.Set("next", next.String())
+	login.RawQuery = query.Encode()
+	setBrowserHeaders(c)
+	return true, c.Redirect(http.StatusSeeOther, login.String())
 }
 
 func (s *Service) hostRoute(next echo.HandlerFunc) echo.HandlerFunc {
@@ -210,6 +246,9 @@ func (s *Service) proxy(c echo.Context) error {
 	if slices.Contains(v.Spec.ProtectedPorts, uint32(port)) {
 		provided := c.Request().Header.Get("X-Beam-VM-Token")
 		if !validSession && (v.TrafficAccessToken == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(v.TrafficAccessToken)) != 1) {
+			if handled, err := s.redirectBrowserLogin(c, v, uint32(port)); handled || err != nil {
+				return err
+			}
 			return echo.NewHTTPError(http.StatusForbidden, "VM traffic token required")
 		}
 	}
@@ -345,6 +384,7 @@ func (s *Service) createAccessSession(c echo.Context, v *types.VM, port uint32, 
 }
 
 func (s *Service) urls(v *types.VM) {
+	v.BrowserAuth = s.domain != "" && s.browserAuthURL != ""
 	v.URLs = map[uint32]string{}
 	for _, port := range v.Spec.Ports {
 		if port == 2222 {
