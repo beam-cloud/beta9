@@ -74,6 +74,56 @@ def test_setup_vm_displays_allocated_ipv6(tmp_path, monkeypatch):
     assert "IPv6" in result.output and address in result.output
 
 
+@pytest.mark.parametrize("as_json", [False, True])
+def test_setup_browser_links_use_existing_session_flow(tmp_path, monkeypatch, as_json):
+    from click.testing import CliRunner
+    from beta9.cli import setup
+
+    if as_json:
+        monkeypatch.setenv("BETA9_JSON", "1")
+    else:
+        monkeypatch.delenv("BETA9_JSON", raising=False)
+    monkeypatch.setattr(setup, "connect_onboarding", lambda *_: (ConfigContext(), None))
+    monkeypatch.setattr(
+        setup, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config")
+    )
+    monkeypatch.setattr(setup, "dashboard_link", lambda *_: None)
+    monkeypatch.setattr("beta9.config.get_config_context", lambda _: ConfigContext())
+    selected = MagicMock()
+    client = MagicMock()
+    client.__enter__.return_value = selected
+    monkeypatch.setattr("beta9.channel.ServiceClient", lambda _: client)
+    info = {
+        "name": "dev",
+        "id": "vm-id",
+        "terminal_url": "https://terminal.example/",
+        "desktop_url": "https://desktop.example/",
+        "spec": {"protected_ports": [7681, 8080]},
+    }
+    monkeypatch.setattr(onboarding, "prepare_vm", lambda *_, **__: info)
+    signed = [
+        "https://terminal.example/?beam_vm_session=terminal",
+        "https://desktop.example/?beam_vm_session=desktop",
+    ]
+    selected.http.json.side_effect = [{"url": url} for url in signed]
+    result = CliRunner(mix_stderr=False).invoke(
+        setup.common, ["setup", "vm", "--skip-agents", "--yes"]
+    )
+    assert result.exit_code == 0, result.output
+    if as_json:
+        assert json.loads(result.stdout)["vm"] == info
+        selected.http.json.assert_not_called()
+    else:
+        for url in signed:
+            assert url in result.stdout
+        assert "Browser links expire after 10 minutes" in result.stdout
+        assert [c.kwargs["json"]["port"] for c in selected.http.json.call_args_list] == [
+            7681,
+            8080,
+        ]
+    assert info["terminal_url"] == "https://terminal.example/"
+
+
 def test_lost_creation_response_resumes_identical_request(tmp_path, monkeypatch):
     selected = SimpleNamespace(http=SimpleNamespace(workspace_id="workspace"))
     vm = MagicMock(info={"id": "vm-id"})

@@ -306,6 +306,7 @@ def test_vm_cli_registration_and_cpu_only_args():
         "desktop",
         "terminal",
         "ports",
+        "open",
         "access-url",
         "expose",
         "unexpose",
@@ -428,6 +429,240 @@ def test_cli_get_shows_ipv6_and_preserves_json(cli_service, as_json):
         assert json.loads(result.output) == info
     else:
         assert "IPv6" in result.output and info["public_ipv6"] in result.output
+
+
+@pytest.mark.parametrize("protected", [None, [], [7681], [7681, 8080]])
+@pytest.mark.parametrize("as_json", [False, True])
+def test_cli_browser_links_authenticate_protected_ports_only(cli_service, protected, as_json):
+    info = {
+        "name": "dev",
+        "id": "vm-id",
+        "terminal_url": "https://terminal.example/",
+        "desktop_url": "https://desktop.example/",
+        "spec": {"protected_ports": protected},
+    }
+    signed = {
+        7681: "https://terminal.example/?beam_vm_session=terminal",
+        8080: "https://desktop.example/?beam_vm_session=desktop",
+    }
+    ports = (protected or []) if not as_json else []
+    cli_service.http.json.side_effect = [info, *({"url": signed[port]} for port in ports)]
+    result = CliRunner().invoke(vm_cli.management, ["get", "dev", *(["--json"] if as_json else [])])
+    assert result.exit_code == 0, result.output
+    if as_json:
+        assert json.loads(result.output) == info
+    else:
+        for port in ports:
+            assert signed[port] in result.output
+        if ports:
+            assert "Private links expire after 10 minutes" in result.output
+    requests = cli_service.http.json.call_args_list
+    assert requests[0].args == ("GET", "/api/v1/vm/{ws}/dev")
+    assert len(requests) == len(ports) + 1
+    for request, port in zip(requests[1:], ports):
+        assert request.args == ("POST", "/api/v1/vm/{ws}/vm-id/access-session")
+        assert request.kwargs["json"] == {"port": port, "ttl": 600}
+    assert info["terminal_url"] == "https://terminal.example/"
+    assert info["desktop_url"] == "https://desktop.example/"
+
+
+def test_cli_browser_link_failure_keeps_vm_visible_and_shows_profile_command(
+    cli_service, monkeypatch
+):
+    monkeypatch.setattr(vm_cli.terminal, "cli_name", lambda: "beam")
+    cli_service.http.json.side_effect = [
+        {
+            "name": "dev",
+            "id": "vm-id",
+            "terminal_url": "https://terminal.example/",
+            "spec": {"protected_ports": [7681]},
+        },
+        GatewayHTTPError(403, "credentials scope required"),
+    ]
+    result = CliRunner().invoke(vm_cli.management, ["get", "dev", "--context", "staging"])
+    assert result.exit_code == 0, result.output
+    assert "vm-id" in result.output
+    assert "beam --context staging vm open dev 7681" in result.output
+    assert "https://terminal.example/" not in result.output
+
+
+@pytest.mark.parametrize("feature,port", [("terminal", 7681), ("desktop", 8080)])
+def test_browser_commands_open_authenticated_links(cli_service, monkeypatch, feature, port):
+    signed = "https://vm.example/?beam_vm_session=signed"
+    cli_service.http.json.side_effect = [
+        {
+            "name": "dev",
+            "id": "vm-id",
+            feature + "_url": "https://vm.example/",
+            "spec": {"protected_ports": [port]},
+        },
+        {"url": signed},
+    ]
+    opened = MagicMock()
+    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
+    result = CliRunner().invoke(vm_cli.management, [feature, "dev"])
+    assert result.exit_code == 0, result.output
+    assert result.output == signed + "\n"
+    opened.assert_called_once_with(signed)
+
+
+@pytest.mark.parametrize("protected", [False, True])
+@pytest.mark.parametrize("url_only", [False, True])
+def test_open_any_port_handles_public_and_private_access(
+    cli_service, monkeypatch, protected, url_only
+):
+    stable = "https://app.example/"
+    signed = stable + "?beam_vm_session=signed"
+    info = {
+        "name": "dev",
+        "id": "vm-id",
+        "urls": {"3000": stable},
+        "spec": {"protected_ports": [3000] if protected else []},
+    }
+    cli_service.http.json.side_effect = [info, {"url": signed}]
+    opened = MagicMock()
+    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
+    result = CliRunner().invoke(
+        vm_cli.management, ["open", "dev", "3000", *(["--url"] if url_only else [])]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output == (signed if protected else stable) + "\n"
+    if url_only:
+        opened.assert_not_called()
+    else:
+        opened.assert_called_once_with(signed if protected else stable)
+    assert cli_service.http.json.call_count == (2 if protected else 1)
+
+
+def test_open_uses_root_cli_profile_and_prints_a_copyable_link(cli_service, monkeypatch):
+    context = MagicMock(return_value=SimpleNamespace())
+    monkeypatch.setattr(extraclick, "get_config_context", context)
+    signed = "https://app.example/?beam_vm_session=signed"
+    cli_service.http.json.side_effect = [
+        {
+            "name": "dev",
+            "id": "vm-id",
+            "urls": {"3000": "https://app.example/"},
+            "spec": {"protected_ports": [3000]},
+        },
+        {"url": signed},
+    ]
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    result = CliRunner().invoke(
+        cli.common_group, ["--context", "staging", "vm", "open", "dev", "3000", "--url"]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output == signed + "\n"
+    context.assert_called_once_with("staging")
+
+
+@pytest.mark.parametrize("command", ["get", "ports"])
+def test_global_json_never_mints_browser_credentials(cli_service, monkeypatch, command):
+    info = {
+        "name": "dev",
+        "id": "vm-id",
+        "urls": {"3000": "https://app.example/"},
+        "spec": {"protected_ports": [3000]},
+    }
+    cli_service.http.json.return_value = info
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    result = CliRunner().invoke(cli.common_group, ["--json", "vm", command, "dev"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == (info if command == "get" else info["urls"])
+    cli_service.http.json.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "port,spec,hint",
+    [
+        (2222, {"ssh": True}, "vm ssh dev"),
+        (5432, {"private_ports": [5432]}, "vm port-forward dev 5432"),
+        (3000, {}, "vm expose dev 3000"),
+    ],
+)
+def test_open_reports_the_correct_access_command(cli_service, port, spec, hint):
+    cli_service.http.json.return_value = {"name": "dev", "id": "vm-id", "urls": {}, "spec": spec}
+    result = CliRunner().invoke(vm_cli.management, ["open", "dev", str(port)])
+    assert result.exit_code == 1
+    assert hint in result.output
+    cli_service.http.json.assert_called_once()
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_ports_explains_all_access_modes_and_preserves_json(cli_service, monkeypatch, as_json):
+    monkeypatch.setattr(vm_cli.terminal, "cli_name", lambda: "beam")
+    info = {
+        "name": "dev",
+        "id": "vm-id",
+        "urls": {"3000": "https://app.example/", "8000": "https://public.example/"},
+        "spec": {"protected_ports": [3000], "private_ports": [5432], "ssh": True},
+    }
+    signed = "https://app.example/?beam_vm_session=signed"
+    cli_service.http.json.side_effect = [info, {"url": signed}]
+    result = CliRunner().invoke(
+        vm_cli.management, ["ports", "dev", *(["--json"] if as_json else [])]
+    )
+    assert result.exit_code == 0, result.output
+    if as_json:
+        assert json.loads(result.output) == info["urls"]
+        cli_service.http.json.assert_called_once()
+    else:
+        for text in [
+            signed,
+            "https://public.example/",
+            "Private",
+            "Public",
+            "Tunnel only",
+            "SSH key",
+            "beam vm port-forward dev 5432",
+            "beam vm ssh dev",
+            "beam vm open dev PORT",
+        ]:
+            assert text in result.output
+        assert cli_service.http.json.call_count == 2
+
+
+@pytest.mark.parametrize("protected", [False, True])
+@pytest.mark.parametrize("mode", [None, "--url", "--json"])
+def test_expose_shows_usable_links_and_access_mode(cli_service, protected, mode):
+    stable = "https://app.example/"
+    signed = stable + "?beam_vm_session=signed"
+    info = {
+        "name": "dev",
+        "id": "vm-id",
+        "urls": {"3000": stable},
+        "spec": {"protected_ports": [3000] if protected else []},
+    }
+    cli_service.http.json.side_effect = [{"name": "dev", "id": "vm-id"}, info, {"url": signed}]
+    result = CliRunner().invoke(
+        vm_cli.management,
+        [
+            "expose",
+            "dev",
+            "3000",
+            "--protected" if protected else "--public",
+            *([mode] if mode else []),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    if mode == "--json":
+        assert json.loads(result.output) == info
+    elif mode == "--url":
+        assert result.output == (signed if protected else stable) + "\n"
+    else:
+        assert f"Port 3000 ({'private' if protected else 'public'})" in result.output
+        assert (signed if protected else stable) in result.output
+    assert cli_service.http.json.call_count == (3 if protected and mode != "--json" else 2)
+    assert cli_service.http.json.call_args_list[1].kwargs["json"] == {
+        "port": 3000,
+        "protected": protected,
+    }
+
+
+def test_expose_rejects_conflicting_output_flags_before_publishing(cli_service):
+    result = CliRunner().invoke(vm_cli.management, ["expose", "dev", "3000", "--json", "--url"])
+    assert result.exit_code == 2
+    cli_service.http.json.assert_not_called()
 
 
 @pytest.mark.parametrize("address", ["2600:1f18:1234:5678:100:abcd:ef01:2345", None])

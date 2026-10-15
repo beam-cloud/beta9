@@ -89,8 +89,61 @@ def _command(command):
     return command[1:] if command[:1] == ("--",) else command
 
 
-def _show(info, as_json):
-    if as_json:
+def _published_urls(info):
+    urls = {str(port): url for port, url in (info.get("urls") or {}).items()}
+    for feature, port in (("terminal", 7681), ("desktop", 8080)):
+        if info.get(feature + "_url"):
+            urls.setdefault(str(port), info[feature + "_url"])
+    return urls
+
+
+def _open_command(name, port):
+    return f"{extraclick.command_hint()} vm open {shlex.quote(name)} {port}"
+
+
+def _port_url(vm, port):
+    url = _published_urls(vm.info).get(str(port))
+    if not url:
+        spec = vm.info.get("spec") or {}
+        command = extraclick.command_hint()
+        name = shlex.quote(vm.name)
+        if port == 2222 and spec.get("ssh"):
+            raise click.ClickException(f"Port 2222 uses SSH. Run: {command} vm ssh {name}")
+        if port in (spec.get("private_ports") or []):
+            raise click.ClickException(
+                f"Port {port} is tunnel-only. Run: {command} vm port-forward {name} {port}"
+            )
+        raise click.ClickException(
+            f"Port {port} is not published. Run: {command} vm expose {name} {port}"
+        )
+    if port in ((vm.info.get("spec") or {}).get("protected_ports") or []):
+        return vm.access_url(port)
+    return url
+
+
+def _browser_info(service, info):
+    """Give human output usable browser links without changing VM metadata."""
+    result = dict(info)
+    urls = _published_urls(info)
+    protected = (info.get("spec") or {}).get("protected_ports") or []
+    if any(int(port) in protected for port in urls):
+        vm = VM(_service=service)
+        vm._set(info)
+        for port in urls:
+            if int(port) in protected:
+                try:
+                    urls[port] = _port_url(vm, int(port))
+                except (GatewayHTTPError, OSError):
+                    urls[port] = _open_command(info["name"], port)
+    result["urls"] = urls
+    for feature, port in (("terminal", 7681), ("desktop", 8080)):
+        if info.get(feature + "_url"):
+            result[feature + "_url"] = urls[str(port)]
+    return result
+
+
+def _show(info, as_json, service=None):
+    if as_json or terminal.json_output():
         terminal.print_json(info)
     elif isinstance(info, list):
         table = Table("Name", "Status", "ID", box=box.SIMPLE, header_style="bold cyan")
@@ -100,21 +153,39 @@ def _show(info, as_json):
             )
         terminal.print(table)
     else:
+        if service is not None and not terminal.json_output():
+            info = _browser_info(service, info)
+        protected = (info.get("spec") or {}).get("protected_ports") or []
+        fields = {
+            label: info[key]
+            for key, label in (
+                ("id", "ID"),
+                ("status", "Status"),
+                ("error", "Error"),
+                ("public_ipv6", "IPv6"),
+                ("terminal_url", f"Terminal ({'private' if 7681 in protected else 'public'})"),
+                ("desktop_url", f"Desktop ({'private' if 8080 in protected else 'public'})"),
+            )
+            if info.get(key)
+        }
+        for port, url in (info.get("urls") or {}).items():
+            if (str(port) == "7681" and info.get("terminal_url")) or (
+                str(port) == "8080" and info.get("desktop_url")
+            ):
+                continue
+            access = "private" if int(port) in protected else "public"
+            fields[f"Port {port} ({access})"] = url
         terminal.resource(
             info.get("name", "VM"),
-            {
-                label: info[key]
-                for key, label in (
-                    ("id", "ID"),
-                    ("status", "Status"),
-                    ("error", "Error"),
-                    ("public_ipv6", "IPv6"),
-                    ("terminal_url", "Terminal"),
-                    ("desktop_url", "Desktop"),
-                )
-                if info.get(key)
-            },
+            fields,
         )
+        for port in info.get("urls") or {}:
+            if int(port) in protected:
+                terminal.detail(
+                    f"Private links expire after 10 minutes. Reopen: "
+                    f"{_open_command(info['name'], port)}"
+                )
+                break
 
 
 @management.command("new")
@@ -304,7 +375,7 @@ def new(
             vm.wait()
         if sync_dir:
             _sync(vm, sync_dir, False)
-    _show(vm.info, as_json)
+    _show(vm.info, as_json, service)
 
 
 def _volumes(entries):
@@ -433,7 +504,7 @@ def _vm_table(records, starts):
 @extraclick.pass_service_client
 def get_vm(service, name, as_json):
     """Show a VM's identity, state and URLs."""
-    _show(_vm(service, name).info, as_json)
+    _show(_vm(service, name).info, as_json, service)
 
 
 @management.command("ip")
@@ -473,7 +544,7 @@ def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json
     vm = _vm(service, name).update(
         ttl=ttl, idle_action=idle_action, auto_resume=auto_resume, metadata=values
     )
-    _show(vm.info, as_json)
+    _show(vm.info, as_json, service)
 
 
 @management.command("network")
@@ -485,7 +556,7 @@ def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json
 def network_vm(service, name, block, allow, as_json):
     """Set outbound network permissions."""
     vm = _vm(service, name).update_network_permissions(block_network=block, allow_list=list(allow))
-    _show(vm.info, as_json)
+    _show(vm.info, as_json, service)
 
 
 @management.command("access-token")
@@ -524,7 +595,7 @@ def start_vm(service, name, as_json, cold=False):
     """Start a stopped VM or resume its saved memory."""
     with _progress("Starting VM", "VM ready", as_json):
         vm = _vm(service, name).start(cold=cold)
-    _show(vm.info, as_json)
+    _show(vm.info, as_json, service)
 
 
 management.add_command(start_vm, "resume")
@@ -538,7 +609,7 @@ def pause_vm(service, name, as_json):
     """Save memory and disk, then release compute."""
     with _progress("Pausing VM", "VM paused", as_json):
         vm = _vm(service, name).pause()
-    _show(vm.info, as_json)
+    _show(vm.info, as_json, service)
 
 
 @management.command("stop")
@@ -551,7 +622,7 @@ def stop_vm(service, name, no_snapshot, as_json):
     message = "Stopping VM" if no_snapshot else "Snapshotting and stopping VM"
     with _progress(message, "VM stopped", as_json):
         vm = _vm(service, name).stop(no_snapshot)
-    _show(vm.info, as_json)
+    _show(vm.info, as_json, service)
 
 
 @management.command("rm")
@@ -576,7 +647,7 @@ def fork_vm(service, source, name, as_json):
             vm = VM(name, snapshot=source, _service=service).create()
         else:
             vm = _vm(service, source).fork(name)
-    _show(vm.info, as_json)
+    _show(vm.info, as_json, service)
 
 
 @management.command(
@@ -689,10 +760,9 @@ def _url(service, name, field, open_url):
     vm = _vm(service, name)
     url = vm.info.get(field)
     port = 8080 if field == "desktop_url" else 7681
-    if url and port in vm.info.get("spec", {}).get("protected_ports", []):
-        url = vm.access_url(port)
     if not url:
         raise click.ClickException(f"VM does not have {field.replace('_url', '')} enabled")
+    url = _port_url(vm, port)
     click.echo(url)
     if open_url:
         webbrowser.open(url)
@@ -719,28 +789,65 @@ desktop_vm = _url_command("desktop")
 terminal_vm = _url_command("terminal")
 
 
+@management.command("open")
+@click.argument("name")
+@click.argument("port", type=click.IntRange(1, 65535))
+@click.option("--url", "url_only", is_flag=True, help="Print the URL without opening a browser.")
+@extraclick.pass_service_client
+def open_vm(service, name, port, url_only):
+    """Open a published HTTP port, signing in to private ports automatically."""
+    url = _port_url(_vm(service, name), port)
+    click.echo(url)
+    if not url_only:
+        webbrowser.open(url)
+
+
 @management.command("ports")
 @click.argument("name")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def ports_vm(service, name, as_json):
-    """List published ports and their stable URLs."""
-    urls = _vm(service, name).info["urls"]
-    if as_json:
-        terminal.print_json(urls)
+    """List ports, access modes and ready-to-open browser links."""
+    vm = _vm(service, name)
+    if as_json or terminal.json_output():
+        terminal.print_json(vm.info["urls"])
     else:
-        for port, url in urls.items():
-            click.echo(f"{port}\t{url}")
+        info = _browser_info(service, vm.info)
+        spec = info.get("spec") or {}
+        table = Table("Port", "Access", "URL / command", box=box.SIMPLE)
+        for port, url in info["urls"].items():
+            access = "Private" if int(port) in (spec.get("protected_ports") or []) else "Public"
+            table.add_row(str(port), access, Text(url))
+        command = extraclick.command_hint()
+        for port in spec.get("private_ports") or []:
+            table.add_row(
+                str(port), "Tunnel only", f"{command} vm port-forward {shlex.quote(vm.name)} {port}"
+            )
+        if spec.get("ssh"):
+            table.add_row("2222", "SSH key", f"{command} vm ssh {shlex.quote(vm.name)}")
+        terminal.print(table)
+        if spec.get("protected_ports"):
+            terminal.detail("Private browser links expire after 10 minutes.")
+        terminal.detail(f"Open any HTTP port: {command} vm open {shlex.quote(vm.name)} PORT")
 
 
 @management.command("expose")
 @click.option("--protected/--public", default=None)
+@click.option("--json", "as_json", is_flag=True, help="Print VM metadata with stable URLs.")
+@click.option("--url", "url_only", is_flag=True, help="Print only the ready-to-use browser link.")
 @click.argument("name")
 @click.argument("port", type=click.IntRange(1, 65535))
 @extraclick.pass_service_client
-def expose_vm(service, name, port, protected=None):
-    """Publish a port with a stable URL."""
-    click.echo(_vm(service, name).expose(port, protected=protected))
+def expose_vm(service, name, port, protected=None, as_json=False, url_only=False):
+    """Publish a port and show how to open it; private links sign you in."""
+    if as_json and url_only:
+        raise click.UsageError("Choose --json or --url")
+    vm = _vm(service, name)
+    vm.expose(port, protected=protected)
+    if url_only:
+        click.echo(_port_url(vm, port))
+    else:
+        _show(vm.info, as_json, service)
 
 
 @management.command("unexpose")
