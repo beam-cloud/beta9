@@ -1331,9 +1331,12 @@ type VMConfig struct {
 	// Optional pool used when a VM is created without an explicit selector.
 	DefaultPool string `key:"defaultPool" json:"default_pool"`
 	// Wildcard DNS/ingress pointing at the gateway; <handle>-<port>.<domain>.
-	Domain  string          `key:"domain" json:"domain"`
-	BaseURL string          `key:"baseURL" json:"base_url"`
-	Network VMNetworkConfig `key:"network" json:"network"`
+	Domain  string `key:"domain" json:"domain"`
+	BaseURL string `key:"baseURL" json:"base_url"`
+	// Account sign-in bridge for protected VM browser navigation. Beam domains
+	// use their matching platform's /vm-access route when this is empty.
+	BrowserAuthURL string          `key:"browserAuthURL" json:"browser_auth_url"`
+	Network        VMNetworkConfig `key:"network" json:"network"`
 }
 
 type VMNetworkConfig struct {

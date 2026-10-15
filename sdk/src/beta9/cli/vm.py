@@ -13,7 +13,7 @@ import webbrowser
 from contextlib import nullcontext, redirect_stdout, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode
 
 import click
 import grpc
@@ -28,7 +28,7 @@ from ..abstractions.vm import VM, identity, prepare_image
 from ..abstractions.volume import Volume
 from ..channel import GatewayHTTPError, ServiceClient, rpc_timeout
 from ..clients.gateway import ListContainersRequest
-from ..config import ConfigContext, SDKSettings, get_config_context, get_settings, set_settings
+from ..config import SDKSettings, get_config_context, get_settings, set_settings
 from ..exceptions import SandboxConnectionError
 from ..logging import StoredStdoutInterceptor
 from ..tunnel import bridge_tunnel
@@ -97,38 +97,6 @@ def _published_urls(info):
     return urls
 
 
-def _open_command(name, port):
-    return f"{extraclick.command_hint()} vm open {shlex.quote(name)} {port}"
-
-
-def _owner_port_url(service, info, port):
-    """A stable dashboard link uses the viewer's account, without granting access."""
-    from .setup import dashboard_link
-
-    if port not in ((info.get("spec") or {}).get("protected_ports") or []):
-        return None
-    context = getattr(service, "_config", None)
-    if not isinstance(context, ConfigContext):
-        return None
-    dashboard = dashboard_link(context, "vm", info["id"])
-    # Older saved Beam contexts predate dashboard metadata, including staging.
-    host = urlsplit(context.http_url).hostname
-    if not dashboard and host in ("app.beam.cloud", "app.stage.beam.cloud"):
-        dashboard = f"https://platform.{host[len('app.') :]}/vms/{quote(info['id'], safe='')}"
-    if not dashboard:
-        return None
-    parsed = urlsplit(dashboard)
-    # Account metadata may select a tab; port links always select their own destination.
-    query = dict(parse_qsl(parsed.query))
-    query.pop("tab", None)
-    path = parsed.path.rstrip("/")
-    if port in (7681, 8080):
-        query["tab"] = "terminal" if port == 7681 else "desktop"
-    else:
-        path += f"/open/{port}"
-    return urlunsplit((parsed.scheme, parsed.netloc, path, urlencode(query), ""))
-
-
 def _port_url(vm, port):
     url = _published_urls(vm.info).get(str(port))
     if not url:
@@ -144,26 +112,22 @@ def _port_url(vm, port):
         raise click.ClickException(
             f"Port {port} is not published. Run: {command} vm expose {name} {port}"
         )
-    if port in ((vm.info.get("spec") or {}).get("protected_ports") or []):
-        return _owner_port_url(vm._service, vm.info, port) or vm.access_url(port, ttl=3600)
     return url
 
 
 def _browser_info(service, info):
-    """Show owner links without minting or printing temporary credentials."""
-    result = dict(info)
-    urls = _published_urls(info)
-    protected = (info.get("spec") or {}).get("protected_ports") or []
-    for port in urls:
-        if int(port) in protected:
-            urls[port] = _owner_port_url(service, info, int(port)) or _open_command(
-                info["name"], port
-            )
-    result["urls"] = urls
-    for feature, port in (("terminal", 7681), ("desktop", 8080)):
-        if info.get(feature + "_url"):
-            result[feature + "_url"] = urls[str(port)]
-    return result
+    """Show the actual VM endpoints; account authentication happens in the browser."""
+    return {**info, "urls": _published_urls(info)}
+
+
+def _open_browser(vm, port, url):
+    if not vm.info.get("browser_auth") and port in (
+        (vm.info.get("spec") or {}).get("protected_ports") or []
+    ):
+        # Older/self-hosted gateways can still seed a cookie directly. Keep
+        # the temporary credential out of normal terminal output.
+        url = vm.access_url(port, ttl=3600)
+    webbrowser.open(url)
 
 
 def _show(info, as_json, service=None):
@@ -187,8 +151,8 @@ def _show(info, as_json, service=None):
                 ("status", "Status"),
                 ("error", "Error"),
                 ("public_ipv6", "IPv6"),
-                ("terminal_url", f"Terminal ({'private' if 7681 in protected else 'public'})"),
-                ("desktop_url", f"Desktop ({'private' if 8080 in protected else 'public'})"),
+                ("terminal_url", "Terminal" if 7681 in protected else "Terminal (public)"),
+                ("desktop_url", "Desktop" if 8080 in protected else "Desktop (public)"),
             )
             if info.get(key)
         }
@@ -805,9 +769,9 @@ def _url(service, name, field, open_url):
     if not url:
         raise click.ClickException(f"VM does not have {field.replace('_url', '')} enabled")
     url = _port_url(vm, port)
-    click.echo((_owner_port_url(service, vm.info, port) or vm.info[field]) if open_url else url)
+    click.echo(url)
     if open_url:
-        webbrowser.open(url)
+        _open_browser(vm, port, url)
 
 
 def _url_command(feature):
@@ -840,14 +804,9 @@ def open_vm(service, name, port, url_only):
     """Open a published HTTP port. Private links use your Beam account."""
     vm = _vm(service, name)
     url = _port_url(vm, port)
-    displayed = (
-        url
-        if url_only
-        else (_owner_port_url(service, vm.info, port) or _published_urls(vm.info)[str(port)])
-    )
-    click.echo(displayed)
+    click.echo(url)
     if not url_only:
-        webbrowser.open(url)
+        _open_browser(vm, port, url)
 
 
 @management.command("ports")

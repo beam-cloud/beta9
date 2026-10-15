@@ -100,8 +100,6 @@ class SDKSettings:
                 self.app_url_template = (
                     f"https://platform.{host[len('app.') :]}/app/{{app_id}}/overview"
                 )
-            if not self.vm_url_template and host.startswith("app."):
-                self.vm_url_template = f"https://platform.{host[len('app.') :]}/vms/{{vm_id}}"
             self.auth_url = os.getenv("BEAM_AUTH_URL", self.auth_url)
             if not self.auth_url and host.startswith("app."):
                 self.auth_url = f"https://api.{host[len('app.') :]}/v2/oauth"

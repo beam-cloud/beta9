@@ -455,20 +455,15 @@ def test_cli_browser_views_never_mint_credentials(cli_service, protected, as_jso
     else:
         for feature, port in (("terminal", 7681), ("desktop", 8080)):
             expected = info[feature + "_url"]
-            if port in (protected or []):
-                expected = (
-                    f"https://dash.example/vms/vm-id?tab={feature}"
-                    if dashboard
-                    else f"vm open dev {port}"
-                )
             assert expected in result.output
         assert "beam_vm_session" not in result.output
+        assert "dash.example" not in result.output
         assert "expire" not in result.output
     cli_service.http.json.assert_called_once()
     assert info["terminal_url"] == "https://terminal.example/"
 
 
-def test_self_hosted_browser_views_show_profile_commands_without_credentials(
+def test_self_hosted_browser_views_show_direct_endpoints_without_credentials(
     cli_service, monkeypatch
 ):
     monkeypatch.setattr(vm_cli.terminal, "cli_name", lambda: "beam")
@@ -481,8 +476,9 @@ def test_self_hosted_browser_views_show_profile_commands_without_credentials(
     result = CliRunner().invoke(vm_cli.management, ["get", "dev", "--context", "staging"])
     assert result.exit_code == 0, result.output
     assert "vm-id" in result.output
-    assert "beam --context staging vm open dev 7681" in result.output
-    assert "https://terminal.example/" not in result.output
+    assert "https://terminal.example/" in result.output
+    assert "beam --context staging vm share dev 7681" in result.output
+    cli_service.http.json.assert_called_once()
 
 
 @pytest.mark.parametrize("feature,port", [("terminal", 7681), ("desktop", 8080)])
@@ -526,12 +522,12 @@ def test_open_any_port_handles_public_and_private_access(
         vm_cli.management, ["open", "dev", "3000", *(["--url"] if url_only else [])]
     )
     assert result.exit_code == 0, result.output
-    assert result.output == (signed if protected and url_only else stable) + "\n"
+    assert result.output == stable + "\n"
     if url_only:
         opened.assert_not_called()
     else:
         opened.assert_called_once_with(signed if protected else stable)
-    assert cli_service.http.json.call_count == (2 if protected else 1)
+    assert cli_service.http.json.call_count == (2 if protected and not url_only else 1)
 
 
 def test_open_uses_root_cli_profile_and_prints_a_copyable_link(cli_service, monkeypatch):
@@ -552,7 +548,8 @@ def test_open_uses_root_cli_profile_and_prints_a_copyable_link(cli_service, monk
         cli.common_group, ["--context", "staging", "vm", "open", "dev", "3000", "--url"]
     )
     assert result.exit_code == 0, result.output
-    assert result.output == signed + "\n"
+    assert result.output == "https://app.example/\n"
+    cli_service.http.json.assert_called_once()
     context.assert_called_once_with("staging")
 
 
@@ -608,7 +605,7 @@ def test_ports_explains_all_access_modes_and_preserves_json(cli_service, monkeyp
         cli_service.http.json.assert_called_once()
     else:
         for text in [
-            "beam vm open dev 3000",
+            "https://app.example/",
             "https://public.example/",
             "Private",
             "Public",
@@ -648,11 +645,11 @@ def test_expose_shows_usable_links_and_access_mode(cli_service, protected, mode)
     if mode == "--json":
         assert json.loads(result.output) == info
     elif mode == "--url":
-        assert result.output == (signed if protected else stable) + "\n"
+        assert result.output == stable + "\n"
     else:
         assert f"Port 3000 ({'private' if protected else 'public'})" in result.output
-        assert ("vm open dev 3000" if protected else stable) in result.output
-    assert cli_service.http.json.call_count == (3 if protected and mode == "--url" else 2)
+        assert stable in result.output
+    assert cli_service.http.json.call_count == 2
     assert cli_service.http.json.call_args_list[1].kwargs["json"] == {
         "port": 3000,
         "protected": protected,
@@ -1348,33 +1345,49 @@ def test_desktop_browser_routing_and_reconnect():
     )
 
 
-@pytest.mark.parametrize(
-    "port,expected",
-    [
-        (7681, "?tab=terminal"),
-        (8080, "?tab=desktop"),
-        (3000, "/open/3000"),
-    ],
-)
-@pytest.mark.parametrize("host", ["app.beam.cloud", "app.stage.beam.cloud"])
-def test_owner_links_use_account_auth_without_credentials_scope(
-    cli_service, monkeypatch, port, expected, host
-):
-    cli_service._config = ConfigContext(api_url=f"https://{host}")
+@pytest.mark.parametrize("port", [7681, 8080, 3000])
+@pytest.mark.parametrize("url_only", [False, True])
+def test_direct_browser_links_never_mint_cli_credentials(cli_service, monkeypatch, port, url_only):
     info = {
         "name": "dev",
         "id": "vm-id",
+        "browser_auth": True,
         "urls": {str(port): "https://port.example/"},
         "spec": {"protected_ports": [port]},
     }
     cli_service.http.json.return_value = info
     opened = MagicMock()
     monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
-    result = CliRunner().invoke(vm_cli.management, ["open", "dev", str(port)])
+    result = CliRunner().invoke(
+        vm_cli.management, ["open", "dev", str(port), *(["--url"] if url_only else [])]
+    )
     assert result.exit_code == 0, result.output
-    owner = f"https://platform.{host[4:]}/vms/vm-id{expected}"
-    assert result.output == owner + "\n"
-    opened.assert_called_once_with(owner)
+    assert result.output == "https://port.example/\n"
+    if url_only:
+        opened.assert_not_called()
+    else:
+        opened.assert_called_once_with("https://port.example/")
+    cli_service.http.json.assert_called_once()
+
+
+@pytest.mark.parametrize("feature,port", [("terminal", 7681), ("desktop", 8080)])
+def test_terminal_and_desktop_open_the_direct_vm_not_a_dashboard(
+    cli_service, monkeypatch, feature, port
+):
+    cli_service._config = ConfigContext(vm_url_template="https://dash.example/vms/{vm_id}")
+    cli_service.http.json.return_value = {
+        "name": "dev",
+        "id": "vm-id",
+        "browser_auth": True,
+        feature + "_url": "https://vm.example/",
+        "spec": {"protected_ports": [port]},
+    }
+    opened = MagicMock()
+    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
+    result = CliRunner().invoke(vm_cli.management, [feature, "dev"])
+    assert result.exit_code == 0, result.output
+    assert result.output == "https://vm.example/\n"
+    opened.assert_called_once_with("https://vm.example/")
     cli_service.http.json.assert_called_once()
 
 

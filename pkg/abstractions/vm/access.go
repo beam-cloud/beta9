@@ -140,6 +140,60 @@ func (s *Service) browserSession(c echo.Context, v *types.VM, port uint32) bool 
 	return err == nil
 }
 
+// Clean VM URLs use account sign-in only for top-level browser navigation.
+// APIs, WebSockets and embedded apps retain their explicit authentication errors.
+func (s *Service) browserAuthEndpoint() string {
+	if s.browserAuthURL != "" {
+		return s.browserAuthURL
+	}
+	if s.domain == "app.beam.cloud" || s.domain == "app.stage.beam.cloud" {
+		return "https://platform." + strings.TrimPrefix(s.domain, "app.") + "/vm-access"
+	}
+	return ""
+}
+
+func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32) (bool, error) {
+	r := c.Request()
+	if r.Method != http.MethodGet || !strings.Contains(r.Header.Get("Accept"), "text/html") ||
+		r.Header.Get("X-Beam-VM-Token") != "" || r.Header.Get("Authorization") != "" ||
+		r.Header.Get("Upgrade") != "" || v.WorkspaceExternalID == "" || v.TrafficAccessToken == "" {
+		return false, nil
+	}
+	if mode := r.Header.Get("Sec-Fetch-Mode"); mode != "" && mode != "navigate" {
+		return false, nil
+	}
+	if dest := r.Header.Get("Sec-Fetch-Dest"); dest != "" && dest != "document" {
+		return false, nil
+	}
+
+	endpoint := s.browserAuthEndpoint()
+	if endpoint == "" {
+		return false, nil
+	}
+	if _, err := s.browserOrigin(c, v, port); err != nil {
+		return false, err
+	}
+	login, err := url.Parse(endpoint)
+	if err != nil || login.Host == "" || login.User != nil || login.Fragment != "" ||
+		(login.Scheme != "https" && !(login.Scheme == "http" && (login.Hostname() == "localhost" || net.ParseIP(login.Hostname()).IsLoopback()))) {
+		return false, echo.NewHTTPError(http.StatusServiceUnavailable, "VM browser sign-in unavailable")
+	}
+	next, err := url.ParseRequestURI(r.RequestURI)
+	if err != nil || next.IsAbs() || next.Host != "" || !strings.HasPrefix(next.Path, "/") ||
+		strings.HasPrefix(next.Path, "//") || strings.Contains(next.Path, "\\") {
+		return false, echo.NewHTTPError(http.StatusBadRequest, "invalid request URI")
+	}
+	query := login.Query()
+	query.Set("workspace", v.WorkspaceExternalID)
+	query.Set("vm", v.ID)
+	query.Set("port", strconv.FormatUint(uint64(port), 10))
+	query.Set("next", next.String())
+	login.RawQuery = query.Encode()
+	c.Response().Header().Set("Cache-Control", "no-store")
+	c.Response().Header().Set("Referrer-Policy", "no-referrer")
+	return true, c.Redirect(http.StatusSeeOther, login.String())
+}
+
 func (s *Service) hostRoute(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		host := strings.ToLower(c.Request().Host)
@@ -210,6 +264,9 @@ func (s *Service) proxy(c echo.Context) error {
 	if slices.Contains(v.Spec.ProtectedPorts, uint32(port)) {
 		provided := c.Request().Header.Get("X-Beam-VM-Token")
 		if !validSession && (v.TrafficAccessToken == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(v.TrafficAccessToken)) != 1) {
+			if handled, err := s.redirectBrowserLogin(c, v, uint32(port)); handled || err != nil {
+				return err
+			}
 			return echo.NewHTTPError(http.StatusForbidden, "VM traffic token required")
 		}
 	}
@@ -345,6 +402,7 @@ func (s *Service) createAccessSession(c echo.Context, v *types.VM, port uint32, 
 }
 
 func (s *Service) urls(v *types.VM) {
+	v.BrowserAuth = s.domain != "" && s.browserAuthEndpoint() != ""
 	v.URLs = map[uint32]string{}
 	for _, port := range v.Spec.Ports {
 		if port == 2222 {

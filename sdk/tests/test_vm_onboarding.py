@@ -113,8 +113,9 @@ def test_setup_browser_links_use_owner_auth_without_minting_credentials(
         assert json.loads(result.stdout)["vm"] == info
         selected.http.json.assert_not_called()
     else:
-        assert "https://dash.example/vms/vm-id?tab=terminal" in result.stdout
-        assert "https://dash.example/vms/vm-id?tab=desktop" in result.stdout
+        assert "https://terminal.example/" in result.stdout
+        assert "https://desktop.example/" in result.stdout
+        assert "dash.example" not in result.stdout
         assert "beam_vm_session" not in result.stdout
         assert "expire" not in result.stdout
     selected.http.json.assert_not_called()
