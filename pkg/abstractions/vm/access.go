@@ -80,13 +80,22 @@ func (s *Service) browserOrigin(c echo.Context, v *types.VM, port uint32) (*url.
 // (including desktop WebSockets). Neither credential reaches the guest.
 func (s *Service) acceptBrowserSession(c echo.Context, v *types.VM, port uint32) (bool, error) {
 	if session := c.QueryParam(sessionParameter); session != "" {
-		if c.Request().Method != http.MethodGet || !validAccessSession(v, port, session, time.Now()) {
+		if c.Request().Method != http.MethodGet {
 			return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
 		}
-
 		origin, err := s.browserOrigin(c, v, port)
 		if err != nil {
 			return false, err
+		}
+		clean, err := cleanBrowserURL(c)
+		if err != nil {
+			return false, err
+		}
+		if !validAccessSession(v, port, session, time.Now()) {
+			if browserNavigation(c.Request()) {
+				return true, s.invalidShareLink(c, clean.String())
+			}
+			return false, echo.NewHTTPError(http.StatusForbidden, "invalid or expired VM access session")
 		}
 
 		// The configured public origin remains authoritative behind h2c/TLS
@@ -103,18 +112,10 @@ func (s *Service) acceptBrowserSession(c echo.Context, v *types.VM, port uint32)
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
 		})
-		query := c.Request().URL.Query()
-		query.Del(sessionParameter)
-		// RequestURI preserves the original browser path before host rewriting.
-		u, err := url.ParseRequestURI(c.Request().RequestURI)
-		if err != nil || u.IsAbs() || u.Host != "" || strings.HasPrefix(u.Path, "//") {
-			return false, echo.NewHTTPError(http.StatusBadRequest, "invalid request URI")
-		}
 
-		u.RawQuery = query.Encode()
 		c.Response().Header().Set("Referrer-Policy", "no-referrer")
 		c.Response().Header().Set("Cache-Control", "no-store")
-		return true, c.Redirect(http.StatusSeeOther, u.String())
+		return true, c.Redirect(http.StatusSeeOther, clean.String())
 	}
 
 	return false, nil
@@ -154,15 +155,7 @@ func (s *Service) browserAuthEndpoint() string {
 
 func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32) (bool, error) {
 	r := c.Request()
-	if r.Method != http.MethodGet || !strings.Contains(r.Header.Get("Accept"), "text/html") ||
-		r.Header.Get("X-Beam-VM-Token") != "" || r.Header.Get("Authorization") != "" ||
-		r.Header.Get("Upgrade") != "" || v.WorkspaceExternalID == "" || v.TrafficAccessToken == "" {
-		return false, nil
-	}
-	if mode := r.Header.Get("Sec-Fetch-Mode"); mode != "" && mode != "navigate" {
-		return false, nil
-	}
-	if dest := r.Header.Get("Sec-Fetch-Dest"); dest != "" && dest != "document" {
+	if !browserNavigation(r) || r.Header.Get("X-Beam-VM-Token") != "" || r.Header.Get("Authorization") != "" || v.WorkspaceExternalID == "" || v.TrafficAccessToken == "" {
 		return false, nil
 	}
 
@@ -178,11 +171,11 @@ func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32)
 		(login.Scheme != "https" && !(login.Scheme == "http" && (login.Hostname() == "localhost" || net.ParseIP(login.Hostname()).IsLoopback()))) {
 		return false, echo.NewHTTPError(http.StatusServiceUnavailable, "VM browser sign-in unavailable")
 	}
-	next, err := url.ParseRequestURI(r.RequestURI)
-	if err != nil || next.IsAbs() || next.Host != "" || !strings.HasPrefix(next.Path, "/") ||
-		strings.HasPrefix(next.Path, "//") || strings.Contains(next.Path, "\\") {
-		return false, echo.NewHTTPError(http.StatusBadRequest, "invalid request URI")
+	next, err := cleanBrowserURL(c)
+	if err != nil {
+		return false, err
 	}
+
 	query := login.Query()
 	query.Set("workspace", v.WorkspaceExternalID)
 	query.Set("vm", v.ID)

@@ -97,11 +97,21 @@ The VM cookie lasts one hour; opening the clean URL after expiry repeats
 account authentication. Normal API/WebSocket requests still require their
 traffic token or valid VM cookie and do not redirect to sign-in.
 
-To grant access to someone without workspace membership, use
-`{{cli}} vm share NAME PORT --ttl 600` (`access-url` remains an alias).
-Anyone holding this temporary link can access that port until expiry. It
-sets a host-only cookie and redirects to the clean URL. TTL is 1–3600
-seconds, default 600. Rotating the traffic token revokes these sessions.
+To share without requiring a Beam account, run `{{cli}} vm share NAME`.
+It shares the terminal for one hour, copies the link to the local clipboard
+in an interactive shell, and clearly states that anyone with the link can
+connect. Use `--desktop` for the desktop or `--port 3000` for an app.
+`--expires-in 10m` chooses a shorter lifetime (1s to 1h); `--url` prints just
+the link and `--json` returns the link and expiry, both without touching the
+clipboard. A public port returns its existing URL and is clearly labeled as
+non-expiring; an explicit expiry requires protecting that port first.
+
+The recipient clicks once: the link sets a host-only cookie and redirects
+to the clean VM URL, with no account sign-in. The link and recipient cookie
+expire together. Expired or revoked shares show a page asking for a fresh
+link; workspace members can open with their own Beam account instead.
+Rotating the traffic token revokes these sessions. `vm access-url NAME PORT`
+remains the lower-level URL-only command (default lifetime 600 seconds).
 Self-hosted gateways without an account bridge still support browser
 commands that seed a port cookie directly, with the entry credential hidden
 from normal output. Use `vm share` when you need a temporary entry link.

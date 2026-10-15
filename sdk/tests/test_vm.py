@@ -477,7 +477,7 @@ def test_self_hosted_browser_views_show_direct_endpoints_without_credentials(
     assert result.exit_code == 0, result.output
     assert "vm-id" in result.output
     assert "https://terminal.example/" in result.output
-    assert "beam --context staging vm share dev 7681" in result.output
+    assert "beam --context staging vm share dev" in result.output
     cli_service.http.json.assert_called_once()
 
 
@@ -1389,21 +1389,6 @@ def test_terminal_and_desktop_open_the_direct_vm_not_a_dashboard(
     assert result.output == "https://vm.example/\n"
     opened.assert_called_once_with("https://vm.example/")
     cli_service.http.json.assert_called_once()
-
-
-def test_share_is_an_explicit_port_scoped_temporary_link(cli_service, monkeypatch):
-    cli_service._config = ConfigContext(api_url="https://app.beam.cloud")
-    cli_service.http.json.side_effect = [
-        {"name": "dev", "id": "vm-id"},
-        {"url": "https://port.example/?beam_vm_session=share"},
-    ]
-    opened = MagicMock()
-    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
-    result = CliRunner().invoke(vm_cli.management, ["share", "dev", "8080", "--ttl", "900"])
-    assert result.exit_code == 0, result.output
-    assert result.output == "https://port.example/?beam_vm_session=share\n"
-    assert cli_service.http.json.call_args.kwargs["json"] == {"port": 8080, "ttl": 900}
-    opened.assert_not_called()
 
 
 @pytest.mark.parametrize(

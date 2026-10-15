@@ -2,6 +2,7 @@
 
 import os
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -167,14 +168,18 @@ def _show(info, as_json, service=None):
             info.get("name", "VM"),
             fields,
         )
-        for port in info.get("urls") or {}:
-            if int(port) in protected:
-                terminal.detail(
-                    "Private links require workspace access. "
-                    f"Share temporary access: {extraclick.command_hint()} vm share "
-                    f"{shlex.quote(info['name'])} {port}"
-                )
-                break
+        private = [int(port) for port in (info.get("urls") or {}) if int(port) in protected]
+        if private:
+            port = 7681 if 7681 in private else private[0]
+            target = ""
+            if port == 8080 and info.get("desktop_url"):
+                target = " --desktop"
+            elif port != 7681:
+                target = f" --port {port}"
+            terminal.detail(
+                f"Share a temporary link: {extraclick.command_hint()} vm share "
+                f"{shlex.quote(info['name'])}{target}"
+            )
 
 
 @management.command("new")
@@ -589,7 +594,138 @@ def access_url_vm(service, name, port, ttl):
     click.echo(_vm(service, name).access_url(port, ttl=ttl))
 
 
-management.add_command(access_url_vm, "share")
+def _share_duration(ctx, param, value):
+    value = value.strip().lower()
+    unit = value[-1:] if not value.isdigit() else "s"
+    amount = value[:-1] if not value.isdigit() else value
+    if unit not in ("s", "m", "h") or not amount.isdigit():
+        raise click.BadParameter("Use a duration such as 10m or 1h.", ctx=ctx, param=param)
+    seconds = int(amount) * {"s": 1, "m": 60, "h": 3600}[unit]
+    if not 1 <= seconds <= 3600:
+        raise click.BadParameter("Choose a duration from 1s to 1h.", ctx=ctx, param=param)
+    return seconds
+
+
+def _copy_share_link(url):
+    if sys.platform == "darwin":
+        commands = [("pbcopy",)]
+    elif sys.platform == "win32":
+        commands = [("clip",)]
+    else:
+        commands = [
+            ("wl-copy",),
+            ("xclip", "-selection", "clipboard"),
+            ("xsel", "--clipboard", "--input"),
+        ]
+    for command in commands:
+        executable = shutil.which(command[0])
+        if not executable:
+            continue
+        try:
+            subprocess.run(
+                [executable, *command[1:]],
+                input=url,
+                text=True,
+                check=True,
+                timeout=2,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
+
+
+@management.command("share")
+@click.argument("name")
+@click.argument("port", required=False, type=click.IntRange(1, 65535))
+@click.option("--desktop", is_flag=True, help="Share the desktop instead of the terminal.")
+@click.option(
+    "--port", "port_option", type=click.IntRange(1, 65535), help="Share an application port."
+)
+@click.option(
+    "--expires-in",
+    default="1h",
+    show_default=True,
+    callback=_share_duration,
+    metavar="DURATION",
+    help="How long the link and recipient access last, from 1s to 1h.",
+)
+@click.option("--ttl", type=click.IntRange(1, 3600), hidden=True)
+@click.option(
+    "--url", "url_only", is_flag=True, help="Print only the link; skip clipboard copying."
+)
+@click.option("--json", "as_json", is_flag=True, help="Print the link and expiry as JSON.")
+@extraclick.pass_service_client
+def share_vm(service, name, port, desktop, port_option, expires_in, ttl, url_only, as_json):
+    """Copy a temporary terminal link. Anyone with the link can connect without signing in.
+
+    Use --desktop for the desktop or --port PORT for an application.
+    """
+    ctx = click.get_current_context()
+    if sum((port is not None, port_option is not None, desktop)) > 1:
+        raise click.UsageError("Choose --desktop, --port, or a positional port.")
+    if url_only and (as_json or terminal.json_output()):
+        raise click.UsageError("Choose --url or --json.")
+    duration_given = (
+        ctx.get_parameter_source("expires_in") == click.core.ParameterSource.COMMANDLINE
+    )
+    if ttl is not None and duration_given:
+        raise click.UsageError("Choose --expires-in or --ttl.")
+    lifetime = ttl if ttl is not None else expires_in
+    selected = 8080 if desktop else 7681
+    if port is not None:
+        selected = port
+    elif port_option is not None:
+        selected = port_option
+    vm = _vm(service, name)
+    if desktop and not vm.info.get("desktop_url"):
+        raise click.ClickException(
+            "This VM does not have a desktop. Use vm share NAME to share its terminal."
+        )
+    url = _port_url(vm, selected)
+    protected = selected in ((vm.info.get("spec") or {}).get("protected_ports") or [])
+    if not protected and (duration_given or ttl is not None):
+        raise click.ClickException(
+            f"Port {selected} is public, so its URL does not expire. "
+            f"Protect it first: {extraclick.command_hint()} vm expose {shlex.quote(vm.name)} {selected} --protected"
+        )
+    result = (
+        vm._action("access-session", port=selected, ttl=lifetime) if protected else {"url": url}
+    )
+    url = result["url"]
+    if as_json or terminal.json_output():
+        terminal.print_json({"name": vm.name, "port": selected, "public": not protected, **result})
+        return
+    if url_only:
+        click.echo(url)
+        return
+    label = f"Port {selected}"
+    if selected == 7681:
+        label = "Terminal"
+    elif selected == 8080 and vm.info.get("desktop_url"):
+        label = "Desktop"
+    copied = terminal.is_interactive() and _copy_share_link(url)
+    terminal.print(f"{label} link" + (" copied to clipboard" if copied else ""), markup=False)
+    click.echo(url)
+    if protected:
+        value, unit = lifetime, "second"
+        if lifetime % 3600 == 0:
+            value, unit = lifetime // 3600, "hour"
+        elif lifetime % 60 == 0:
+            value, unit = lifetime // 60, "minute"
+        access = f"access port {selected}"
+        if selected == 7681:
+            access = "use this terminal"
+        elif selected == 8080 and vm.info.get("desktop_url"):
+            access = "use this desktop"
+        terminal.detail(
+            f"Expires in {value} {unit}{'' if value == 1 else 's'}. "
+            f"Anyone with this link can {access}. No sign-in needed."
+        )
+    else:
+        terminal.detail("This port is public. Anyone can connect, and the link does not expire.")
 
 
 @management.command("start")
@@ -834,9 +970,7 @@ def ports_vm(service, name, as_json):
             table.add_row("2222", "SSH key", f"{command} vm ssh {shlex.quote(vm.name)}")
         terminal.print(table)
         if spec.get("protected_ports"):
-            terminal.detail(
-                "Private links require workspace access. Use vm share for temporary access."
-            )
+            terminal.detail(f"Share a terminal link: {command} vm share {shlex.quote(vm.name)}")
         terminal.detail(f"Open any HTTP port: {command} vm open {shlex.quote(vm.name)} PORT")
 
 
