@@ -226,7 +226,12 @@ def _show(info, as_json, service=None):
 @click.option("--desktop", is_flag=True, default=None, help="Enable the browser desktop.")
 @click.option("--docker-enabled", is_flag=True, default=None, help="Enable Docker inside the VM.")
 @click.option("--env", multiple=True, metavar="KEY=VALUE", help="Environment variable; repeatable.")
-@click.option("--secret", multiple=True, metavar="NAME", help="Workspace secret; repeatable.")
+@click.option(
+    "--secret",
+    multiple=True,
+    metavar="NAME",
+    help="Runtime secret with approved hosts; repeatable.",
+)
 @click.option(
     "--port",
     multiple=True,
@@ -257,19 +262,24 @@ def _show(info, as_json, service=None):
     "--metadata", multiple=True, metavar="KEY=VALUE", help="Resource metadata; repeatable."
 )
 @click.option("--auto-resume/--no-auto-resume", default=None, help="Wake on SDK or URL access.")
-@click.option("--block-network", is_flag=True, default=None, help="Block outbound network access.")
+@click.option(
+    "--block-network",
+    is_flag=True,
+    default=None,
+    help="Block outbound access except bound credential hosts.",
+)
 @click.option(
     "--allow-network",
     multiple=True,
     metavar="HOST_OR_CIDR",
-    help="Allow outbound access only to these hostnames, *.wildcards or CIDRs.",
+    help="Allow only these hostnames, *.wildcards, IPs or CIDRs; up to 64 entries.",
 )
 @click.option(
     "--protected-port",
     multiple=True,
     type=click.IntRange(1, 65535),
     metavar="PORT",
-    help="Publish a port requiring an access token.",
+    help="Publish a protected port; use 'vm open NAME PORT' for browser access.",
 )
 @click.option("--request-id", type=click.UUID, help="Reuse a UUID to retry creation safely.")
 @click.option(

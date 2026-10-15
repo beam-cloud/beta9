@@ -165,19 +165,22 @@ class Sandbox(Pod):
         volumes (List[Union[Volume, CloudBucket]]):
             The volumes and/or cloud buckets to mount into the Sandbox container. Default is an empty list.
         secrets (List[str]):
-            The secrets to pass to the Sandbox container.
+            Workspace secret names with approved credential hosts. The guest receives stable placeholders
+            substituted only in HTTPS request headers on those hosts. BETA9_TOKEN/BEAM_TOKEN bindings are
+            explicit plaintext opt-ins; no workspace token is injected automatically.
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into each Sandbox container. Default is {}.
         sync_local_dir (bool):
             Whether to sync the local directory to the sandbox filesystem on creation. Default is False.
         block_network (bool):
-            Whether to block all outbound network access from the sandbox. When enabled, the sandbox cannot
-            make outbound connections to external services, but inbound connections to exposed ports are still
-            allowed. Default is False. Cannot be used together with allow_list.
+            Block outbound access except approved hosts of bound brokered secrets. Inbound connections to
+            exposed ports are still allowed. Default is False. Cannot be used together with allow_list.
         allow_list (Optional[List[str]]):
-            List of hostnames, *.wildcards, IPs or CIDRs the sandbox may connect to. All other outbound access
-            is blocked. Hostname rules apply to TLS/HTTP; raw TCP requires a CIDR (e.g., "8.8.8.8/32" for
-            a range). Supports both IPv4 and IPv6. Examples: ["8.8.8.8/32"], ["10.0.0.0/8", "2001:db8::/32"].
+            Up to 64 hostnames, *.wildcards, IPs or CIDRs the sandbox may connect to. All other outbound access
+            is blocked. Hostnames match TLS SNI on 443 and HTTP Host on 80; other TCP needs an IP or CIDR.
+            Wildcards exclude the apex. IPv4 and IPv6 are supported; proxied private, loopback and link-local
+            destinations remain blocked even with an IP/CIDR rule. Examples: ["api.openai.com", "8.8.8.8/32"].
+            Hostname rules must cover every bound credential host; IP/CIDR entries alone do not cover them.
             Cannot be used together with block_network. Default is None (no restrictions unless block_network
             is enabled).
         docker_enabled (bool):
@@ -710,15 +713,15 @@ class SandboxInstance(BaseAbstraction):
         Dynamically update network permissions for the sandbox at runtime.
 
         This method allows you to modify the network access restrictions of a running
-        sandbox without needing to restart it. You can either block all network access
+        sandbox without needing to restart it. You can either block outbound access except bound credential hosts
         or specify an allowlist of hostnames, wildcards, IPs or CIDRs the sandbox can communicate with.
         Does not block access via ports exposed by expose_port.
 
         Parameters:
-            block_network (bool): If True, blocks all outbound network access from the
-                sandbox. Cannot be used together with allow_list. Default: False.
+            block_network (bool): If True, blocks outbound access except bound credential hosts.
+                Cannot be used together with allow_list. Default: False.
             allow_list (Optional[List[str]]): List of hostnames, wildcards, IPs or CIDRs (e.g., "api.openai.com",
-                "10.0.0.0/8") that the sandbox is allowed to access. If specified,
+                "8.8.8.8/32") that the sandbox is allowed to access. If specified,
                 all other outbound traffic is blocked. Cannot be used with block_network=True.
                 Default: None.
 
@@ -733,7 +736,7 @@ class SandboxInstance(BaseAbstraction):
                 allow_list=["8.8.8.8/32", "1.1.1.1/32"]
             )
 
-            # Block all network access
+            # Block outbound access except bound credential hosts
             instance.update_network_permissions(block_network=True)
 
             # Remove all restrictions (allow full network access)
@@ -741,9 +744,10 @@ class SandboxInstance(BaseAbstraction):
             ```
 
         Note:
-            - At most 64 entries; hostname rules apply to TLS and HTTP, raw TCP requires a CIDR
-            - IPv4 addresses should use /32 suffix for single hosts
-            - This replaces all existing network rules atomically
+            - At most 64 entries; hostname rules apply to TLS on 443 and HTTP on 80; other TCP needs IP/CIDR rules
+            - Bare IPs are accepted; proxied private, loopback and link-local destinations remain blocked
+            - Hostname rules must cover bound credential hosts; IP/CIDR rules alone do not cover them
+            - This replaces existing network rules and closes existing connections
         """
         if block_network and allow_list:
             raise ValueError("Cannot specify both block_network=True and allow_list")
@@ -4333,8 +4337,9 @@ class AsyncSandboxInstance:
         Dynamically update network permissions for the sandbox asynchronously.
 
         Parameters:
-            block_network (bool): If True, blocks all outbound network access.
-            allow_list (Optional[List[str]]): List of hostnames, wildcards, IPs or CIDRs to allow.
+            block_network (bool): If True, blocks outbound access except bound credential hosts.
+            allow_list (Optional[List[str]]): Up to 64 hostnames, wildcards, IPs or CIDRs.
+                Uses the same public-destination and credential-host rules as the synchronous method.
 
         Raises:
             SandboxProcessError: If the network permissions update fails.

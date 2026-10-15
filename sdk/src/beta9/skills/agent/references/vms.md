@@ -101,9 +101,15 @@ After creation, `{{cli}} vm expose --protected NAME 7681` restores protection;
 `vm_bind_port` keeps a port private for authenticated tunnels.
 `vm_expose_port { protected: true }` requires a traffic credential or a
 limited browser link. Access-token/read/rotation/link tools need the
-credentials scope. Access links grant anyone holding the link access to
-that port until expiry; do not put them in public logs. Use `vm_ports` to
-inspect URLs and `vm_unexpose_port` to remove one.
+`beam:credentials` scope. For a protected browser port, call
+`vm_access_url { name: "NAME", port: 8000, ttl: 600 }` and give the user that
+link. `get_vm`, `vm_ports`, and `vm_expose_port` return stable metadata URLs
+without temporary credentials. Entry links require a VM subdomain; they
+cannot authenticate raw IPv6 URLs. They set a Secure HttpOnly host-scoped
+cookie and redirect to the clean URL. TTL is 1–3600 seconds (default 600);
+anyone holding the link can access that port until expiry. Do not put links
+in public logs. Rotation revokes sessions. Use `vm_unexpose_port` to remove
+a published route.
 
 ## Desktop, Docker and coding agents
 
@@ -128,10 +134,12 @@ Beam CLI inside its guest, explicitly bind a `BETA9_TOKEN` or `BEAM_TOKEN`
 workspace secret; these opt-ins use plaintext.
 
 Network allowlists accept up to 64 hostnames, `*.example.com` patterns, bare
-IPs and CIDRs. Hostname rules govern TLS SNI and HTTP Host; other TCP protocols
-need a CIDR. The worker resolves allowed hostnames and rejects private,
-loopback and link-local destinations. UDP/ICMP are blocked except DNS queries
-to the configured resolver. Existing connections close when policy changes.
+IPs and CIDRs. Hostname rules govern TLS SNI on 443 and HTTP Host on 80;
+other TCP ports/protocols need an IP or CIDR rule. Wildcards exclude the apex.
+The proxy rejects private, loopback and link-local destinations, including
+explicit IP/CIDR targets. Under restricted policies, UDP/ICMP are blocked
+except DNS queries to the configured resolver. Existing connections close
+when policy changes.
 Proxied TCP connections use the worker's source IP, including CIDR targets;
 downstream source-IP access rules see the worker.
 
@@ -146,7 +154,8 @@ the worker's 15-second cache expires. Plain HTTP to a bound host is blocked.
 
 Brokered secrets require allowed hosts. Serverless workloads retain plaintext
 secret envs. With block_network, credential hosts are the only allowed egress;
-an explicit allow_list must cover each credential host and is never widened.
+an explicit allow_list must cover each credential host with hostname rules
+and is never widened. IP/CIDR entries alone do not cover credential hosts.
 
 Substitution is literal and header-only: use Authorization or x-api-key.
 Basic-auth helpers that encode the placeholder will not match; store the

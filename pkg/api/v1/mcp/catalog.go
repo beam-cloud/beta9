@@ -176,18 +176,18 @@ func (g *Group) catalog() []mcpTool {
 			Run:         g.connectServices,
 		},
 		// secrets
-		{Name: "list_secrets", Description: "Workspace secret names.", Schema: schema(props{}), Run: g.listSecrets},
+		{Name: "list_secrets", Description: "Workspace secret names, approved hosts and placeholders; never secret values.", Schema: schema(props{}), Run: g.listSecrets},
 		{
 			Name:        "create_secret",
-			Description: "Create a workspace secret; reference it with ${{secret.NAME}}.",
-			Schema:      schema(props{"name": str(""), "value": str(""), "hosts": strList("Allowed credential hostnames or *.wildcards; sandbox/VM secrets use placeholders.")}, "name", "value"),
+			Description: "Create a workspace secret. Containers/pods, functions, endpoints, task queues and image builds receive plaintext environment values and do not require hosts. Setting hosts does not enable proxying for them. Only sandbox/VM runtime bindings use approved hosts and HTTPS-header placeholders; explicit BETA9_TOKEN/BEAM_TOKEN bindings remain plaintext.",
+			Schema:      schema(props{"name": str(""), "value": str("Secret value; 1–16384 bytes when hosts are set."), "hosts": strList("Optional for ordinary workloads; required for brokered sandbox/VM runtime secrets except BETA9_TOKEN/BEAM_TOKEN. Up to 64 credential hostnames or *.wildcards (subdomains only); no schemes, ports, paths, IPs or CIDRs.")}, "name", "value"),
 			Destructive: true,
 			Run:         g.createSecret,
 		},
 		{
 			Name:        "update_secret",
-			Description: "Change a secret's value or allowed hosts; brokered sandbox/VM secrets refresh within 15 seconds.",
-			Schema:      schema(props{"name": str(""), "value": str(""), "hosts": strList("Allowed credential hostnames or *.wildcards; sandbox/VM secrets use placeholders.")}, "name", "value"),
+			Description: "Change a secret's value or approved hosts. Containers/pods, functions, endpoints and task queues receive plaintext values at their next container start, even when hosts are set. Brokered sandbox/VM bindings refresh on the next request after the worker's 15-second cache expires.",
+			Schema:      schema(props{"name": str(""), "value": str("Secret value; 1–16384 bytes when hosts are set."), "hosts": strList("Up to 64 credential hostnames or *.wildcards; omit to preserve hosts, [] to clear, or supply a list to replace. Clearing hosts prevents ordinary sandbox/VM secret bindings.")}, "name", "value"),
 			Destructive: true,
 			Run:         g.updateSecret,
 		},

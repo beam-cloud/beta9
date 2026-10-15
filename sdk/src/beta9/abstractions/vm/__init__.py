@@ -166,6 +166,14 @@ class VM:
 
     disk_size sets the writable root capacity over the base image
     (1–100 GiB; default 50 GiB).
+
+    Runtime secrets require approved hosts and arrive as placeholders for
+    literal HTTPS request headers. No workspace token is injected automatically;
+    BETA9_TOKEN/BEAM_TOKEN bindings are explicit plaintext opt-ins.
+    Terminal 7681 and enabled desktop 8080 are protected by default; use
+    access_url() for browsers or traffic_access_token for HTTP clients.
+    public_ipv6 reads the persistent address from resolved metadata, or None
+    when no address is allocated. Inbound protection also applies over IPv6.
     """
 
     def __init__(
@@ -524,13 +532,19 @@ class VM:
     def access_url(self, port: int, *, ttl=600) -> str:
         """Create an expiring browser entry URL for a protected application port.
 
-        It exchanges the credential for an HTTP-only cookie and redirects to
-        the stable URL. Rotating the traffic token also revokes these sessions.
+        Requires a published protected HTTP port and a VM subdomain. TTL is
+        1–3600 seconds (default 600). Anyone holding the link can access that
+        port until expiry. It sets a Secure, HTTP-only, host-scoped cookie and
+        redirects to the clean stable URL. Rotating the traffic token also
+        revokes these sessions. Raw IPv6 URLs cannot use browser sessions.
         """
         return self._action("access-session", port=port, ttl=ttl)["url"]
 
     def get_url(self, port: int) -> str:
-        """Return an already published URL; this does not publish a private port."""
+        """Return a stable published URL; protected ports still need authentication.
+
+        Use access_url() for a browser link. This does not publish a private port.
+        """
         url = self.refresh().info["urls"].get(str(port))
         if url is None:
             raise ValueError(f"Port {port} is not published; call expose() first")

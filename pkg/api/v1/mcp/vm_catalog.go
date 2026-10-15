@@ -36,6 +36,14 @@ func boundedInt(low, high, fallback int) map[string]any {
 	return map[string]any{"type": "integer", "minimum": low, "maximum": high, "default": fallback}
 }
 
+func vmAllowListSchema() map[string]any {
+	return strList("Up to 64 outbound hostnames, *.wildcards (excluding apex), IPs or CIDRs. Hostnames match TLS SNI on 443 / HTTP Host on 80; other TCP needs an IP or CIDR. Proxied destinations must be public, even with an explicit IP/CIDR. Explicit hostname rules must cover every bound credential host.")
+}
+
+func vmBlockNetworkSchema() map[string]any {
+	return map[string]any{"type": "boolean", "description": "Block outbound traffic except bound credential hosts. Cannot combine with allow_list; inbound port access is configured separately."}
+}
+
 func vmSpecSchema() map[string]any {
 	return schema(props{
 		"image_id":           str("VM image built with beam vm image build or the local vm_build_image tool"),
@@ -44,10 +52,10 @@ func vmSpecSchema() map[string]any {
 		"disk_size":          str("Root disk capacity, e.g. 50Gi"),
 		"pool":               str("VM-capable worker pool"),
 		"env":                strList("KEY=value entries"),
-		"secrets":            strList("Workspace secret names"),
+		"secrets":            strList("Workspace secret names with approved hosts; guest env receives placeholders for HTTPS request headers. BETA9_TOKEN/BEAM_TOKEN are explicit plaintext opt-ins."),
 		"ports":              map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000)},
-		"private_ports":      map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000)},
-		"protected_ports":    map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000)},
+		"private_ports":      map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Tunnel-only ports; no public URL."},
+		"protected_ports":    map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Published HTTP ports requiring a VM traffic token or vm_access_url browser session."},
 		"public_ports":       map[string]any{"type": "array", "items": boundedInt(1, 65535, 7681), "description": "Publish without a traffic token; terminal and desktop ports are protected by default."},
 		"desktop":            boolean(),
 		"docker_enabled":     boolean(),
@@ -56,8 +64,8 @@ func vmSpecSchema() map[string]any {
 		"idle_timeout":       boundedInt(0, 86400, 300),
 		"idle_action":        enum("stop", "pause"),
 		"auto_resume":        boolean(),
-		"block_network":      boolean(),
-		"allow_list":         strList("At most 64 outbound hostnames, *.wildcards, IPs or CIDRs; raw TCP requires a CIDR"),
+		"block_network":      vmBlockNetworkSchema(),
+		"allow_list":         vmAllowListSchema(),
 		"disks":              map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
 		"volumes":            map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
 		"source_snapshot_id": str("Root disk snapshot ID"),
@@ -96,8 +104,8 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		),
 		vmTool(
 			"get_vm",
-			"VM configuration, lifecycle, container ID, port URLs, terminal and desktop links. Use the ID "+
-				"to pin subsequent operations.",
+			"VM configuration, lifecycle, container ID, public_ipv6 and stable port URLs. Protected URLs "+
+				"require vm_access_url for browser access or a VM traffic token header. Use the ID to pin subsequent operations.",
 			vmSchema(nil),
 			true, true, "beam:read",
 			get,
@@ -126,15 +134,15 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 				"idle_action":   enum("stop", "pause"),
 				"auto_resume":   boolean(),
 				"metadata":      stringMapSchema(),
-				"block_network": boolean(),
-				"allow_list":    strList("At most 64 outbound hostnames, *.wildcards, IPs or CIDRs; raw TCP requires a CIDR"),
+				"block_network": vmBlockNetworkSchema(),
+				"allow_list":    vmAllowListSchema(),
 			}),
 			false, true, "beam:write",
 			g.vmUpdate,
 		),
 		vmTool(
 			"vm_ports",
-			"Exposed port URLs and public/private/protected port configuration.",
+			"Stable port URLs and public/private/protected configuration. For a protected browser URL, call vm_access_url with name and port; metadata URLs contain no temporary credentials.",
 			vmSchema(nil),
 			true, true, "beam:read",
 			get,
@@ -159,12 +167,12 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		{"fork_vm", "fork", "Fork the writable root into a new independent VM. An SSH-enabled source requires ssh_public_key matching your local identity.", "beam:write", "", props{"new_name": str("New VM name"), "ssh_public_key": str("New SSH public key")}, nil, false, false},
 		{"create_vm_snapshot", "snapshot", "Create a durable VM root snapshot.", "beam:write", "", props{"snapshot_name": str("Snapshot name")}, nil, false, false},
 		{"create_vm_template", "template", "Create a reusable VM template from its writable root.", "beam:write", "", props{"template_name": str("Template name"), "description": str("Template description")}, nil, false, false},
-		{"vm_expose_port", "expose", "Publish a VM port; protected=true requires a traffic token or browser access link. For terminal 7681 or desktop 8080, pass protected explicitly to toggle access.", "beam:write", "", props{"port": boundedInt(1, 65535, 8000), "protected": boolean()}, []string{"port"}, false, true},
+		{"vm_expose_port", "expose", "Publish a VM port; protected=true requires a VM traffic token or vm_access_url browser link. Other application ports default public. For terminal 7681 or desktop 8080, pass protected explicitly to toggle access.", "beam:write", "", props{"port": boundedInt(1, 65535, 8000), "protected": boolean()}, []string{"port"}, false, true},
 		{"vm_unexpose_port", "unexpose", "Remove the public URL for a VM port. Requires confirmation.", "beam:write", "Removing the port URL interrupts users of that URL.", props{"port": boundedInt(1, 65535, 8000)}, []string{"port"}, false, true},
 		{"vm_bind_port", "bind", "Bind a port privately for authenticated SSH/tunnel access without a public URL.", "beam:write", "", props{"port": boundedInt(1, 65535, 8000)}, []string{"port"}, false, true},
 		{"vm_access_token", "access-token", "Read the VM traffic token. It grants protected-port access, not workspace management.", "beam:credentials", "", nil, nil, true, true},
 		{"vm_rotate_access_token", "rotate-access-token", "Rotate the VM traffic token and invalidate existing traffic sessions. Requires confirmation.", "beam:credentials", "Rotating the traffic token invalidates existing access.", nil, nil, false, false},
-		{"vm_access_url", "access-session", "Create a shareable browser link for one protected port. Anyone holding it can access the port until expiry.", "beam:credentials", "", props{"port": boundedInt(1, 65535, 8000), "ttl": boundedInt(1, 3600, 600)}, []string{"port"}, false, false},
+		{"vm_access_url", "access-session", "Create a browser link for one protected published HTTP port on its VM subdomain. Opening it sets a Secure HttpOnly host-scoped cookie and removes the credential from the URL. TTL is 1–3600 seconds (default 600); anyone holding the link can access that port until expiry. Mint a fresh link after expiry; rotation revokes sessions. Not for raw IPv6 or SSH.", "beam:credentials", "", props{"port": boundedInt(1, 65535, 8000), "ttl": boundedInt(1, 3600, 600)}, []string{"port"}, false, false},
 		{"vm_keep_alive", "touch", "Renew activity to defer the VM idle policy.", "beam:write", "", nil, nil, false, true},
 	} {
 		op := operation
@@ -258,7 +266,7 @@ func (g *Group) vmProcessCatalog() []mcpTool {
 				"command": map[string]any{"type": "array", "items": str(""), "minItems": 1},
 				"cwd":     str("Working directory"),
 				"env":     stringMapSchema(),
-				"secrets": strList("Secret names"),
+				"secrets": strList("Workspace secret names with approved hosts; env receives stable placeholders for literal HTTPS request headers, not raw values. The VM's explicit allow_list must cover each credential hostname."),
 				"wait":    boolean(),
 			}, "command"),
 			false, false, "beam:exec",
