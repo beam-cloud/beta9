@@ -176,18 +176,18 @@ func (g *Group) catalog() []mcpTool {
 			Run:         g.connectServices,
 		},
 		// secrets
-		{Name: "list_secrets", Description: "Workspace secret names.", Schema: schema(props{}), Run: g.listSecrets},
+		{Name: "list_secrets", Description: "Workspace secret names, approved hosts and placeholders; never secret values.", Schema: schema(props{}), Run: g.listSecrets},
 		{
 			Name:        "create_secret",
-			Description: "Create a workspace secret; reference it with ${{secret.NAME}}.",
-			Schema:      schema(props{"name": str(""), "value": str(""), "hosts": strList("Allowed credential hostnames or *.wildcards; sandbox/VM secrets use placeholders.")}, "name", "value"),
+			Description: "Create a workspace secret. Sandbox/VM runtime bindings require approved hosts and receive placeholders substituted only in HTTPS request headers on those hosts. Serverless and image-build secrets remain plaintext environment variables.",
+			Schema:      schema(props{"name": str(""), "value": str("Secret value; 1–16384 bytes when hosts are set."), "hosts": strList("Up to 64 credential hostnames or *.wildcards (subdomains only); no schemes, ports, paths, IPs or CIDRs. BETA9_TOKEN/BEAM_TOKEN are explicit plaintext opt-ins without hosts.")}, "name", "value"),
 			Destructive: true,
 			Run:         g.createSecret,
 		},
 		{
 			Name:        "update_secret",
-			Description: "Change a secret's value or allowed hosts; brokered sandbox/VM secrets refresh within 15 seconds.",
-			Schema:      schema(props{"name": str(""), "value": str(""), "hosts": strList("Allowed credential hostnames or *.wildcards; sandbox/VM secrets use placeholders.")}, "name", "value"),
+			Description: "Change a secret's value or approved hosts. Brokered sandbox/VM bindings refresh on the next request after the worker's 15-second cache expires; serverless containers refresh at their next start.",
+			Schema:      schema(props{"name": str(""), "value": str("Secret value; 1–16384 bytes when hosts are set."), "hosts": strList("Up to 64 credential hostnames or *.wildcards; omit to preserve hosts, [] to clear, or supply a list to replace. Clearing hosts prevents ordinary sandbox/VM secret bindings.")}, "name", "value"),
 			Destructive: true,
 			Run:         g.updateSecret,
 		},

@@ -78,7 +78,7 @@ func TestMCPOAuthScopeAndFilterCannotBeBypassed(t *testing.T) {
 	g := newTestGroup()
 	a := mcpIdentity()
 	a.OAuth = &auth.OAuthGrant{Scopes: []string{"beam:read"}}
-	for _, name := range []string{"create_vm", "vm_exec", "vm_access_token", "api", "create_secret"} {
+	for _, name := range []string{"create_vm", "vm_exec", "vm_access_token", "vm_access_url", "api", "create_secret"} {
 		require.False(t, g.allowed(a, g.byName[name]), name)
 	}
 	require.True(t, g.allowed(a, g.byName["get_vm"]))

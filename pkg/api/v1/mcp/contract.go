@@ -133,6 +133,9 @@ func (g *Group) instructions() string {
 		"Start with whoami and capabilities. Use list_apps or list_vms to inspect existing resources. " +
 		"Deploy local files through the Beam CLI or local MCP bridge; remote MCP cannot read a laptop directory. " +
 		"VM tools manage lifecycle, ports, snapshots, templates, files, commands, Docker and desktop controls. " +
+		"Protected VM metadata URLs need vm_access_url (beam:credentials) for browser access; never suggest making a terminal public to bypass authentication. " +
+		"Sandbox/VM runtime secrets require approved hosts and use literal HTTPS-header placeholders, except explicit plaintext BETA9_TOKEN/BEAM_TOKEN bindings; no workspace token is injected automatically. " +
+		"Set VM secret bindings and egress rules under create_vm.spec; IP/CIDR rules do not grant access to private proxied destinations or cover credential hostnames. " +
 		"VM commands return process IDs; use vm_process_status and vm_process_output to follow long work. " +
 		"Use environment references to wire apps and databases. Confirmation-required tools name their effect. " +
 		"Apps and stack services default to serverless: min_replicas=0, keep_warm_seconds=0; databases use always_on=false. " +

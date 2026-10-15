@@ -39,10 +39,19 @@ for a stack's apps itself.
 
 ## Secrets
 
-`list_secrets`, `create_secret { name, value }`, `update_secret`,
-`delete_secret` (confirm). Bind a secret to an app by name in `secrets`, or
-reference it in env as `${{secret.NAME}}`. Deployments pick up a changed
-value on their next container start.
+`list_secrets` returns names, approved hosts and placeholders without values.
+`create_secret { name, value }`, `update_secret`, `delete_secret` (confirm).
+Serverless apps bind names in `secrets` or env references `${{secret.NAME}}`;
+they receive plaintext values on their next container start.
+
+For sandbox/VM runtime bindings, create with `hosts: ["api.openai.com"]`:
+the guest receives a placeholder for literal HTTPS request headers, and the
+worker substitutes it only on approved hosts. Bind VM secrets under
+`create_vm.spec.secrets` or `vm_exec.secrets`. `update_secret` preserves hosts
+when omitted, replaces them when supplied, and clears them with `hosts: []`.
+Brokered values refresh on the next request after the worker's 15-second
+cache expires. See [VM outbound access and secrets](vms.md#outbound-access-and-secrets)
+for network rules, plaintext token opt-ins and client compatibility.
 
 ## Stacks
 
