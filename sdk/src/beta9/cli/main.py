@@ -98,6 +98,10 @@ class CLI:
             return
         if sys.argv[1:2] and sys.argv[1] in self.NO_FIRST_AUTH_PROMPT:
             return
+        # Resolve an explicit context after Click parses it. First-time browser
+        # sign-in must target that context, rather than the default cluster.
+        if any(arg in ("--context", "-c") or arg.startswith("--context=") for arg in sys.argv[1:]):
+            return
         # A pipe (an agent, a script) cannot answer prompts; let the command
         # fail with a NOT_AUTHENTICATED error that says how to sign in.
         if not sys.stdin.isatty():

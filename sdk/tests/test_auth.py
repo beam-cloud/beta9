@@ -232,3 +232,51 @@ def test_device_login_preserves_provider_dashboard_templates(settings, monkeypat
     restored = get_config_context("test")
     assert restored.app_url_template == context.app_url_template
     assert restored.vm_url_template == context.vm_url_template
+
+
+def test_first_cli_auth_uses_browser_login_when_configured(settings, monkeypatch):
+    from unittest.mock import MagicMock
+    from beta9 import channel
+
+    flow = MagicMock(verification_uri_complete="https://auth.example/activate?code=example")
+    flow.wait.return_value = ConfigContext(
+        token="signed-in", gateway_host="gw.example", gateway_port=443
+    )
+    start = MagicMock(return_value=flow)
+    monkeypatch.setattr(auth.DeviceLogin, "start", start)
+    prompt = MagicMock(side_effect=AssertionError("must not ask for a token"))
+    monkeypatch.setattr(channel, "prompt_for_config_context", prompt)
+    channel.prompt_first_auth(settings)
+    flow.open_browser.assert_called_once()
+    assert get_config_context().token == "signed-in"
+    prompt.assert_not_called()
+
+
+def test_first_cli_auth_reports_browser_login_failure(settings, monkeypatch):
+    from unittest.mock import MagicMock
+    from beta9 import channel
+
+    monkeypatch.setattr(
+        auth.DeviceLogin, "start", MagicMock(side_effect=auth.LoginError("sign-in failed"))
+    )
+    report = MagicMock()
+    monkeypatch.setattr(channel.terminal, "error", report)
+    channel.prompt_first_auth(settings)
+    report.assert_called_once()
+    assert not settings.config_path.exists()
+
+
+def test_missing_named_context_signs_into_its_own_environment(settings, monkeypatch):
+    from unittest.mock import MagicMock
+    from beta9 import config
+
+    flow = MagicMock(verification_uri_complete="https://auth.stage.example/activate")
+    flow.wait.return_value = ConfigContext(
+        token="staging-token", gateway_host=STAGING.gateway_host, gateway_port=443
+    )
+    start = MagicMock(return_value=flow)
+    monkeypatch.setattr(auth.DeviceLogin, "start", start)
+    monkeypatch.setattr(config.sys.stdin, "isatty", lambda: True)
+    assert get_config_context("staging").token == "staging-token"
+    assert start.call_args.args[0].auth_url == STAGING.auth_url
+    assert "default" not in load_config()

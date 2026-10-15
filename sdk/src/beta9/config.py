@@ -100,6 +100,8 @@ class SDKSettings:
                 self.app_url_template = (
                     f"https://platform.{host[len('app.') :]}/app/{{app_id}}/overview"
                 )
+            if not self.vm_url_template and host.startswith("app."):
+                self.vm_url_template = f"https://platform.{host[len('app.') :]}/vms/{{vm_id}}"
             self.auth_url = os.getenv("BEAM_AUTH_URL", self.auth_url)
             if not self.auth_url and host.startswith("app."):
                 self.auth_url = f"https://api.{host[len('app.') :]}/v2/oauth"
@@ -294,6 +296,11 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
             hint=f"Run `{how}`, or set {cli.upper()}_TOKEN.",
             code="NOT_AUTHENTICATED",
         )
+    if defaults.auth_url:
+        from .channel import prompt_first_auth
+
+        prompt_first_auth(settings, name)
+        return load_config()[name]
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
     contexts[name] = prompt_for_config_context(name=name, require_token=True)[1]
     save_config(contexts)

@@ -30,7 +30,7 @@ def prepare_vm(
     state_directory: Path,
     name: Optional[str] = None,
     *,
-    desktop: bool = False,
+    desktop: bool = True,
 ) -> Dict[str, Any]:
     """Create or resume a setup-owned VM and verify its Linux guest.
 

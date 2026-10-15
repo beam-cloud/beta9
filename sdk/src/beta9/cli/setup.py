@@ -213,7 +213,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
             )
             if result.get("spec", {}).get("protected_ports"):
                 terminal.detail(
-                    "Browser links expire after 10 minutes. The commands below open fresh links."
+                    "Private links require workspace access. Use vm share for temporary access."
                 )
             command = extraclick.command_hint(selected)
             name = shlex.quote(result["name"])

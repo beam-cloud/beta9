@@ -269,3 +269,18 @@ def test_stub_request_round_trips_bindings_and_entrypoint():
     assert request["entrypoint"] == ["sh", "-lc", "exec app"]
     assert request["env"] == ["DATABASE_URL=${{secret.BETA9_POSTGRES_DB_URL}}", "PORT=8080"]
     assert request["secrets"] == [{"name": "HF_TOKEN"}]
+
+
+@pytest.mark.parametrize(
+    "args", [["--context", "staging"], ["-c", "staging"], ["--context=staging"]]
+)
+def test_named_vm_auth_waits_for_click_to_resolve_context(monkeypatch, args):
+    from unittest.mock import MagicMock
+    from beta9.cli import main
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(sys, "argv", ["beam", *args, "vm", "new"])
+    prompt = MagicMock(side_effect=AssertionError("must not sign in to the default context"))
+    monkeypatch.setattr(main, "prompt_first_auth", prompt)
+    load_cli(check_config=True)
+    prompt.assert_not_called()

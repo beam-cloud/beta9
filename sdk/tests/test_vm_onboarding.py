@@ -75,7 +75,9 @@ def test_setup_vm_displays_allocated_ipv6(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("as_json", [False, True])
-def test_setup_browser_links_use_existing_session_flow(tmp_path, monkeypatch, as_json):
+def test_setup_browser_links_use_owner_auth_without_minting_credentials(
+    tmp_path, monkeypatch, as_json
+):
     from click.testing import CliRunner
     from beta9.cli import setup
 
@@ -87,9 +89,11 @@ def test_setup_browser_links_use_existing_session_flow(tmp_path, monkeypatch, as
     monkeypatch.setattr(
         setup, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config")
     )
-    monkeypatch.setattr(setup, "dashboard_link", lambda *_: None)
+    monkeypatch.setattr(
+        setup, "dashboard_link", lambda *_: "https://dash.example/vms/vm-id?tab=logs"
+    )
     monkeypatch.setattr("beta9.config.get_config_context", lambda _: ConfigContext())
-    selected = MagicMock()
+    selected = MagicMock(_config=ConfigContext())
     client = MagicMock()
     client.__enter__.return_value = selected
     monkeypatch.setattr("beta9.channel.ServiceClient", lambda _: client)
@@ -101,11 +105,6 @@ def test_setup_browser_links_use_existing_session_flow(tmp_path, monkeypatch, as
         "spec": {"protected_ports": [7681, 8080]},
     }
     monkeypatch.setattr(onboarding, "prepare_vm", lambda *_, **__: info)
-    signed = [
-        "https://terminal.example/?beam_vm_session=terminal",
-        "https://desktop.example/?beam_vm_session=desktop",
-    ]
-    selected.http.json.side_effect = [{"url": url} for url in signed]
     result = CliRunner(mix_stderr=False).invoke(
         setup.common, ["setup", "vm", "--skip-agents", "--yes"]
     )
@@ -114,13 +113,11 @@ def test_setup_browser_links_use_existing_session_flow(tmp_path, monkeypatch, as
         assert json.loads(result.stdout)["vm"] == info
         selected.http.json.assert_not_called()
     else:
-        for url in signed:
-            assert url in result.stdout
-        assert "Browser links expire after 10 minutes" in result.stdout
-        assert [c.kwargs["json"]["port"] for c in selected.http.json.call_args_list] == [
-            7681,
-            8080,
-        ]
+        assert "https://dash.example/vms/vm-id?tab=terminal" in result.stdout
+        assert "https://dash.example/vms/vm-id?tab=desktop" in result.stdout
+        assert "beam_vm_session" not in result.stdout
+        assert "expire" not in result.stdout
+    selected.http.json.assert_not_called()
     assert info["terminal_url"] == "https://terminal.example/"
 
 
@@ -163,6 +160,7 @@ def test_unnamed_vm_takes_the_generated_name_and_resumes_by_id(tmp_path, monkeyp
 
     assert onboarding.prepare_vm(selected, tmp_path)["name"] == "happy-otter-1a2b3c"
     assert factory.call_args.args == (None,)
+    assert factory.call_args.kwargs["desktop"] is True
     factory.get.assert_not_called()
 
     vm.info.update(

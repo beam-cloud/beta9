@@ -11,7 +11,8 @@ feature.
 
 `{{cli}} setup vm --name agent-vm` signs in in the browser, connects local
 agents, verifies a command in the guest and starts a browser desktop. Add
-`--no-desktop` to skip the desktop.
+`--no-desktop` to skip the desktop. `{{cli}} vm new` also includes a desktop
+when building a fresh image; templates and prebuilt images retain their settings.
 Re-running resumes the same setup-owned VM. `--skip-agents` skips local
 client configuration; `--yes` explicitly approves creation for an already
 authenticated and funded unattended context.
@@ -86,10 +87,17 @@ Terminal (7681) and desktop (8080) require a traffic token by default.
 The CLI signs in automatically: `{{cli}} vm terminal NAME` and
 `{{cli}} vm desktop NAME` open authenticated browser links. Use
 `{{cli}} vm open NAME PORT` for any published HTTP port, or add `--url`
-to print the link. Private links expire after 10 minutes; rerun the command
-for a fresh one. Creation, `get`, `expose`, and `ports` show usable browser
-links and distinguish private application ports from public ones. JSON
-output keeps stable URLs without embedding temporary credentials.
+to print the link. Beam owner links open the dashboard and use the viewer's
+account; they can be bookmarked or shared with workspace members without
+granting access. Creation, `get`, `expose`, and `ports` show these links
+without minting credentials. JSON output retains the raw published URLs.
+To grant temporary access to someone without a workspace account, use
+`{{cli}} vm share NAME PORT --ttl 600` (`access-url` remains an alias).
+Anyone holding this link can access that port until it expires; it sets a
+host-only cookie and redirects to the clean port URL. The TTL is 1–3600
+seconds, default 600. Rotating the traffic token revokes these links.
+Without a dashboard, browser commands set up the port cookie directly;
+normal output hides the entry credential, and `--url` prints it explicitly.
 For non-browser clients, `{{cli}} vm port-forward NAME PORT` provides an
 authenticated localhost connection. `ports` also lists tunnel-only ports
 and the SSH command. No traffic token needs to be copied for these flows.
