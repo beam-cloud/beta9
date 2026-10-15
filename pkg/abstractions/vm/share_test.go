@@ -11,9 +11,12 @@ import (
 
 func TestExpiredOrRevokedShareShowsAUsefulBrowserPage(t *testing.T) {
 	for _, revoked := range []bool{false, true} {
-		for _, domain := range []string{"app.beam.cloud", "vm.example.com"} {
+		for _, configured := range []bool{false, true} {
 			s, v, _, runtime, _ := fixture()
-			s.domain = domain
+			s.domain = "vm.example.com"
+			if configured {
+				s.browserAuthURL = "https://login.example.net/authorize-vm"
+			}
 			v.TrafficAccessToken = "private-traffic-token"
 			v.Spec.ProtectedPorts = []uint32{7681}
 			expiry := time.Now().Add(-time.Minute)
@@ -31,12 +34,13 @@ func TestExpiredOrRevokedShareShowsAUsefulBrowserPage(t *testing.T) {
 			require.Contains(t, rec.Header().Get("Content-Type"), "text/html")
 			require.Contains(t, rec.Body.String(), "This share link is no longer valid.")
 			require.Contains(t, rec.Body.String(), "Ask the sender for a new link.")
-			if domain == "app.beam.cloud" {
+			if configured {
 				require.Contains(t, rec.Body.String(), `href="/?theme=dark"`)
-				require.Contains(t, rec.Body.String(), "Open with my Beam account")
+				require.Contains(t, rec.Body.String(), "Open with my account")
 			} else {
-				require.NotContains(t, rec.Body.String(), "Open with my Beam account")
+				require.NotContains(t, rec.Body.String(), "Open with my account")
 			}
+			require.NotContains(t, rec.Body.String(), "Beam")
 			require.NotContains(t, rec.Body.String(), session)
 			require.NotContains(t, rec.Body.String(), sessionParameter)
 			require.NotContains(t, rec.Body.String(), "private-traffic-token")
@@ -53,7 +57,8 @@ func TestExpiredShareAPIsAndFramesKeepTheirAuthErrors(t *testing.T) {
 	for _, scenario := range []string{"API", "iframe", "websocket"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, _, runtime, _ := fixture()
-			s.domain = "app.beam.cloud"
+			s.domain = "vm.example.com"
+			s.browserAuthURL = "https://login.example.net/authorize-vm"
 			v.TrafficAccessToken = "private-token"
 			v.Spec.ProtectedPorts = []uint32{7681}
 			session := accessSession(v, 7681, time.Now().Add(-time.Minute).Unix())

@@ -117,7 +117,7 @@ def _port_url(vm, port):
 
 
 def _browser_info(service, info):
-    """Show the actual VM endpoints; account authentication happens in the browser."""
+    """Return direct VM endpoints without minting browser credentials."""
     return {**info, "urls": _published_urls(info)}
 
 
@@ -937,7 +937,7 @@ terminal_vm = _url_command("terminal")
 @click.option("--url", "url_only", is_flag=True, help="Print the URL without opening a browser.")
 @extraclick.pass_service_client
 def open_vm(service, name, port, url_only):
-    """Open a published HTTP port. Private links use your Beam account."""
+    """Open a published HTTP port in your browser."""
     vm = _vm(service, name)
     url = _port_url(vm, port)
     click.echo(url)

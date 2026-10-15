@@ -1333,8 +1333,9 @@ type VMConfig struct {
 	// Wildcard DNS/ingress pointing at the gateway; <handle>-<port>.<domain>.
 	Domain  string `key:"domain" json:"domain"`
 	BaseURL string `key:"baseURL" json:"base_url"`
-	// Account sign-in bridge for protected VM browser navigation. Beam domains
-	// use their matching platform's /vm-access route when this is empty.
+	// Optional external browser sign-in endpoint; empty disables redirects.
+	// Receives workspace, vm, port and a relative next path. The provider must
+	// authorize the viewer and obtain a session through the management API.
 	BrowserAuthURL string          `key:"browserAuthURL" json:"browser_auth_url"`
 	Network        VMNetworkConfig `key:"network" json:"network"`
 }

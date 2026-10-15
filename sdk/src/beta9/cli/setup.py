@@ -212,7 +212,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
             )
             if result.get("spec", {}).get("protected_ports"):
                 terminal.detail(
-                    "Private links use your Beam account. Share a link with the command below."
+                    "Share temporary access with the vm share command below."
                 )
             command = extraclick.command_hint(selected)
             name = shlex.quote(result["name"])

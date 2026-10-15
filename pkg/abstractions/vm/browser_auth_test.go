@@ -31,11 +31,14 @@ func browserProxy(s *Service) *echo.Echo {
 	return e
 }
 
-func TestDirectVMURLRedirectsToMatchingAccountSignIn(t *testing.T) {
-	for _, domain := range []string{"app.beam.cloud", "app.stage.beam.cloud"} {
-		t.Run(domain, func(t *testing.T) {
+func TestDirectVMURLUsesExplicitBrowserAuthProvider(t *testing.T) {
+	for _, endpoint := range []string{"https://login.example.net/authorize-vm?tenant=example", "https://identity.example.org/sessions/new?tenant=example"} {
+		t.Run(endpoint, func(t *testing.T) {
 			s, v, info, runtime, _ := fixture()
-			s.domain = domain
+			s.domain = "vm.example.com"
+			s.browserAuthURL = endpoint
+			provider, err := url.Parse(endpoint)
+			require.NoError(t, err)
 			v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
 			v.Spec.ProtectedPorts = []uint32{7681, 8080}
 			for _, port := range []uint32{7681, 8080} {
@@ -46,8 +49,9 @@ func TestDirectVMURLRedirectsToMatchingAccountSignIn(t *testing.T) {
 				location, err := url.Parse(rec.Header().Get("Location"))
 				require.NoError(t, err)
 				require.Equal(t, "https", location.Scheme)
-				require.Equal(t, "platform."+domain[4:], location.Host)
-				require.Equal(t, "/vm-access", location.Path)
+				require.Equal(t, provider.Host, location.Host)
+				require.Equal(t, provider.Path, location.Path)
+				require.Equal(t, "example", location.Query().Get("tenant"))
 				require.Equal(t, v.ID, location.Query().Get("vm"))
 				require.Equal(t, v.WorkspaceExternalID, location.Query().Get("workspace"))
 				require.Equal(t, strconv.Itoa(int(port)), location.Query().Get("port"))
@@ -63,9 +67,45 @@ func TestDirectVMURLRedirectsToMatchingAccountSignIn(t *testing.T) {
 	}
 }
 
-func TestAccountAuthorizedBrowserCookieReturnsToCleanDirectVMURL(t *testing.T) {
+func TestBrowserAuthIsDisabledWithoutExplicitConfiguration(t *testing.T) {
+	// No deployment's domain may implicitly select an external auth service.
+	for _, domain := range []string{"vm.example.com", "app.beam.cloud", "app.stage.beam.cloud"} {
+		t.Run(domain, func(t *testing.T) {
+			s, v, info, runtime, _ := fixture()
+			s.domain = domain
+			v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
+			v.Spec.ProtectedPorts = []uint32{7681}
+			req := browserRequest(s, v, 7681, "/")
+			rec := httptest.NewRecorder()
+			browserProxy(s).ServeHTTP(rec, req)
+			require.Equal(t, http.StatusForbidden, rec.Code)
+			require.Empty(t, rec.Header().Get("Location"))
+			require.False(t, s.response(v).BrowserAuth)
+			require.Empty(t, runtime.forwarded)
+
+			// Disabling delegation does not disable the existing session flow.
+			session := accessSession(v, 7681, time.Now().Add(time.Minute).Unix())
+			req = browserRequest(s, v, 7681, "/?"+sessionParameter+"="+session)
+			rec = httptest.NewRecorder()
+			browserProxy(s).ServeHTTP(rec, req)
+			require.Equal(t, http.StatusSeeOther, rec.Code)
+			require.Equal(t, "/", rec.Header().Get("Location"))
+			cookies := rec.Result().Cookies()
+			require.Len(t, cookies, 1)
+			req = browserRequest(s, v, 7681, "/")
+			req.AddCookie(cookies[0])
+			rec = httptest.NewRecorder()
+			browserProxy(s).ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.NotEmpty(t, runtime.forwarded)
+		})
+	}
+}
+
+func TestAuthorizedBrowserCookieReturnsToCleanDirectVMURL(t *testing.T) {
 	s, v, info, runtime, _ := fixture()
-	s.domain = "app.beam.cloud"
+	s.domain = "vm.example.com"
+	s.browserAuthURL = "https://login.example.net/authorize-vm"
 	v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
 	v.Spec.ProtectedPorts = []uint32{7681}
 	req := browserRequest(s, v, 7681, "/?theme=dark")
@@ -74,8 +114,8 @@ func TestAccountAuthorizedBrowserCookieReturnsToCleanDirectVMURL(t *testing.T) {
 	require.Equal(t, http.StatusSeeOther, rec.Code)
 	require.Empty(t, runtime.forwarded)
 
-	// The sign-in bridge first authorizes workspace membership. Only then can
-	// the authenticated management API issue this port's cookie entry link.
+	// Only the authenticated management API can issue this port's cookie entry
+	// link; redirecting to the external provider alone grants no access.
 	response := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/access-session", `{"port":7681,"ttl":3600}`)
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	var entry struct {
@@ -112,7 +152,7 @@ func TestAccountAuthorizedBrowserCookieReturnsToCleanDirectVMURL(t *testing.T) {
 	rec = httptest.NewRecorder()
 	browserProxy(s).ServeHTTP(rec, req)
 	require.Equal(t, http.StatusSeeOther, rec.Code)
-	require.Contains(t, rec.Header().Get("Location"), "/vm-access?")
+	require.Contains(t, rec.Header().Get("Location"), s.browserAuthURL+"?")
 }
 
 func TestBrowserLoginDoesNotReplaceAPIWebsocketOrEmbeddedAuthFailures(t *testing.T) {
@@ -129,7 +169,8 @@ func TestBrowserLoginDoesNotReplaceAPIWebsocketOrEmbeddedAuthFailures(t *testing
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, v, info, runtime, _ := fixture()
-			s.domain = "app.beam.cloud"
+			s.domain = "vm.example.com"
+			s.browserAuthURL = "https://login.example.net/authorize-vm"
 			v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
 			v.Spec.ProtectedPorts = []uint32{7681}
 			req := browserRequest(s, v, 7681, "/")
@@ -150,26 +191,26 @@ func TestBrowserLoginRequiresPublishedOriginAndLiveCredential(t *testing.T) {
 	for _, scenario := range []string{"shared host", "foreign origin", "revoked", "unconfigured", "invalid return", "insecure auth endpoint"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, info, runtime, _ := fixture()
-			s.domain = "app.beam.cloud"
+			s.domain = "vm.example.com"
+			s.browserAuthURL = "https://login.example.net/authorize-vm"
 			v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
 			v.Spec.ProtectedPorts = []uint32{7681}
 			req := browserRequest(s, v, 7681, "/")
 			want := http.StatusForbidden
 			switch scenario {
 			case "shared host":
-				req.Host = "gateway.beam.cloud"
+				req.Host = "gateway.example.com"
 			case "foreign origin":
 				req.Header.Set("Origin", "https://other.example")
 			case "revoked":
 				s.backend.(*vmBackend).token = &types.Token{Active: false}
 			case "unconfigured":
-				s.domain = "vm.example.com"
-				req = browserRequest(s, v, 7681, "/")
+				s.browserAuthURL = ""
 			case "invalid return":
 				req.RequestURI = "//other.example/"
 				want = http.StatusBadRequest
 			case "insecure auth endpoint":
-				s.browserAuthURL = "http://other.example/vm-access"
+				s.browserAuthURL = "http://other.example/sign-in"
 				want = http.StatusServiceUnavailable
 			}
 			// Exercise the handler directly for shared-host validation: the

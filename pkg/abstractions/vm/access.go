@@ -141,25 +141,17 @@ func (s *Service) browserSession(c echo.Context, v *types.VM, port uint32) bool 
 	return err == nil
 }
 
-// Clean VM URLs use account sign-in only for top-level browser navigation.
+// An operator may delegate top-level browser sign-in to an external provider.
+// The provider must authorize the viewer before requesting an access session
+// through the authenticated management API. Redirecting grants no VM access.
 // APIs, WebSockets and embedded apps retain their explicit authentication errors.
-func (s *Service) browserAuthEndpoint() string {
-	if s.browserAuthURL != "" {
-		return s.browserAuthURL
-	}
-	if s.domain == "app.beam.cloud" || s.domain == "app.stage.beam.cloud" {
-		return "https://platform." + strings.TrimPrefix(s.domain, "app.") + "/vm-access"
-	}
-	return ""
-}
-
 func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32) (bool, error) {
 	r := c.Request()
 	if !browserNavigation(r) || r.Header.Get("X-Beam-VM-Token") != "" || r.Header.Get("Authorization") != "" || v.WorkspaceExternalID == "" || v.TrafficAccessToken == "" {
 		return false, nil
 	}
 
-	endpoint := s.browserAuthEndpoint()
+	endpoint := s.browserAuthURL
 	if endpoint == "" {
 		return false, nil
 	}
@@ -395,7 +387,7 @@ func (s *Service) createAccessSession(c echo.Context, v *types.VM, port uint32, 
 }
 
 func (s *Service) urls(v *types.VM) {
-	v.BrowserAuth = s.domain != "" && s.browserAuthEndpoint() != ""
+	v.BrowserAuth = s.domain != "" && s.browserAuthURL != ""
 	v.URLs = map[uint32]string{}
 	for _, port := range v.Spec.Ports {
 		if port == 2222 {

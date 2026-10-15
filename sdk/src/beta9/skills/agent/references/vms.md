@@ -89,15 +89,15 @@ Terminal (7681) and desktop (8080) are private by default.
 clean, stable URL. Creation, `get`, `expose`, `ports` and JSON output retain
 these direct endpoints without minting temporary credentials.
 
-On Beam, a browser with no valid VM cookie signs in through the account
-provider, verifies workspace membership, sets a Secure HttpOnly cookie on
-that VM/port's host, then returns to the original VM URL. An existing Beam
-browser login normally makes this automatic. This opens no dashboard page.
-The VM cookie lasts one hour; opening the clean URL after expiry repeats
-account authentication. Normal API/WebSocket requests still require their
-traffic token or valid VM cookie and do not redirect to sign-in.
+When the operator configures `abstractions.vm.browserAuthURL`, a browser
+with no valid VM cookie redirects to that provider. The provider authenticates
+the viewer and authorizes workspace access before requesting a VM session
+through the management API. The session sets a Secure HttpOnly cookie on
+that VM/port's host, then returns to the original VM URL. An existing provider
+login can make this automatic. Normal API/WebSocket requests still require
+their traffic token or valid VM cookie and do not redirect to sign-in.
 
-To share without requiring a Beam account, run `{{cli}} vm share NAME`.
+To share without requiring an account, run `{{cli}} vm share NAME`.
 It shares the terminal for one hour, copies the link to the local clipboard
 in an interactive shell, and clearly states that anyone with the link can
 connect. Use `--desktop` for the desktop or `--port 3000` for an app.
@@ -109,7 +109,7 @@ non-expiring; an explicit expiry requires protecting that port first.
 The recipient clicks once: the link sets a host-only cookie and redirects
 to the clean VM URL, with no account sign-in. The link and recipient cookie
 expire together. Expired or revoked shares show a page asking for a fresh
-link; workspace members can open with their own Beam account instead.
+link; when a sign-in provider is configured, members can use their account instead.
 Rotating the traffic token revokes these sessions. `vm access-url NAME PORT`
 remains the lower-level URL-only command (default lifetime 600 seconds).
 Self-hosted gateways without an account bridge still support browser
