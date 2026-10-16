@@ -12611,7 +12611,10 @@ type ExportWorkspaceConfigResponse struct {
 	GatewayGrpcPort int32  `protobuf:"varint,5,opt,name=gateway_grpc_port,json=gatewayGrpcPort,proto3" json:"gateway_grpc_port,omitempty"`
 	GatewayGrpcTls  bool   `protobuf:"varint,6,opt,name=gateway_grpc_tls,json=gatewayGrpcTls,proto3" json:"gateway_grpc_tls,omitempty"`
 	WorkspaceId     string `protobuf:"bytes,7,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	// Allows clients to avoid a separate VM API preflight round trip.
+	// Advertises gateway support for the persistent VM HTTP management API.
+	// When true, clients can skip the VM API capability preflight. False/unset
+	// leaves support unknown (older gateways), so clients must probe the API.
+	// Independent of any VM's existence, lifecycle state or readiness.
 	PersistentVms bool `protobuf:"varint,8,opt,name=persistent_vms,json=persistentVms,proto3" json:"persistent_vms,omitempty"`
 }
 

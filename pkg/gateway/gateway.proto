@@ -1661,7 +1661,10 @@ message ExportWorkspaceConfigResponse {
   int32 gateway_grpc_port = 5;
   bool gateway_grpc_tls = 6;
   string workspace_id = 7;
-  // Allows clients to avoid a separate VM API preflight round trip.
+  // Advertises gateway support for the persistent VM HTTP management API.
+  // When true, clients can skip the VM API capability preflight. False/unset
+  // leaves support unknown (older gateways), so clients must probe the API.
+  // Independent of any VM's existence, lifecycle state or readiness.
   bool persistent_vms = 8;
 }
 
