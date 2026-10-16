@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"path/filepath"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -344,18 +343,21 @@ func (g *volumeGroup) GetUploadURL(ctx echo.Context) error {
 const PresignedGetURLExpiration = 3600 // 1 hour
 
 func (g *volumeGroup) generatePresignedURL(ctx context.Context, workspace *types.Workspace, volumePath string, urlType string) (string, error) {
-	storageClient, err := g.gvs.newWorkspaceStorageClientForPresign(ctx, workspace)
-	if err != nil {
-		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to create storage client")
-	}
-
 	volumeName, volumePath := parseVolumeInput(volumePath)
 	volume, err := g.gvs.getOrCreateVolume(ctx, workspace, volumeName)
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to create volume")
 	}
 
-	key := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
+	key, err := volumeObjectKey(workspace, volume.ExternalId, volumePath)
+	if err != nil {
+		return "", echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	storageClient, err := g.gvs.newWorkspaceStorageClientForPresign(ctx, workspace)
+	if err != nil {
+		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to create storage client")
+	}
 
 	var url string
 	switch urlType {
