@@ -35,7 +35,10 @@ install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
 install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" /opt/beam-vm/
 install -m 0644 "$assets"/*.service /etc/systemd/system/
 # These are managed by Beam at boot, not by image build-time enablement.
-systemctl disable ssh.service ssh.socket getty@tty1.service serial-getty@hvc0.service docker.service docker.socket containerd.service systemd-resolved.service systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
+# A missing unit aborts a batch disable on Noble. Disable each independently.
+for unit in ssh.service ssh.socket getty@tty1.service serial-getty@hvc0.service docker.service docker.socket containerd.service systemd-resolved.service systemd-networkd.service systemd-networkd.socket; do
+  systemctl disable "$unit" 2>/dev/null || true
+done
 rm -f /etc/ssh/ssh_host_* /etc/machine-id /var/lib/dbus/machine-id
 touch /etc/machine-id
 ln -s /etc/machine-id /var/lib/dbus/machine-id
