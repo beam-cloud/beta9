@@ -409,12 +409,16 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	}
 
 	if workspace.StorageAvailable() {
+		volumePath, err = volumeObjectKey(workspace, volume.ExternalId, volumePath)
+		if err != nil {
+			return nil, err
+		}
+
 		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 		if err != nil {
 			return nil, err
 		}
 
-		volumePath = path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
 		deleted, err := storageClient.DeleteWithPrefix(ctx, volumePath)
 		if err != nil {
 			return nil, err
@@ -494,14 +498,18 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 	var files []FileInfo = []FileInfo{}
 
 	if workspace.StorageAvailable() {
+		fullVolumePath, err := volumeObjectKey(workspace, volume.ExternalId, volumePath)
+		if err != nil {
+			return nil, err
+		}
+
 		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 		if err != nil {
 			return nil, err
 		}
 
 		rootVolumePath := path.Join(types.DefaultVolumesPrefix, volume.ExternalId)
-		fullvolumePath := path.Join(rootVolumePath, volumePath)
-		objects, err := storageClient.ListDirectory(ctx, fullvolumePath)
+		objects, err := storageClient.ListDirectory(ctx, fullVolumePath)
 		if err != nil {
 			return nil, errors.New("unable to list files")
 		}
@@ -578,13 +586,19 @@ func (vs *GlobalVolumeService) movePath(ctx context.Context, originalPath string
 	}
 
 	if workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
+		originalVolumePath, err := volumeObjectKey(workspace, volume.ExternalId, originalRelativePath)
+		if err != nil {
+			return "", err
+		}
+		newVolumePath, err := volumeObjectKey(workspace, volume.ExternalId, newRelativePath)
 		if err != nil {
 			return "", err
 		}
 
-		originalVolumePath := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, originalRelativePath)
-		newVolumePath := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, newRelativePath)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
+		if err != nil {
+			return "", err
+		}
 
 		err = storageClient.MoveObject(ctx, originalVolumePath, newVolumePath)
 		if err != nil {
