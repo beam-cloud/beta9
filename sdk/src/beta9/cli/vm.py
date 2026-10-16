@@ -130,7 +130,19 @@ def _open_browser(vm, port, url):
         # Older/self-hosted gateways can still seed a cookie directly. Keep
         # the temporary credential out of normal terminal output.
         url = vm.access_url(port, ttl=3600)
-    webbrowser.open(url)
+    _launch_browser(url)
+
+
+def _launch_browser(url):
+    if sys.platform == "darwin":
+        # The stdlib macOS opener forks osascript; isolate it from gRPC.
+        subprocess.run(
+            [sys.executable, "-c", "import sys, webbrowser; webbrowser.open(sys.argv[1])", url],
+            check=True,
+            **local_process_kwargs(sys.executable),
+        )
+    else:
+        webbrowser.open(url)
 
 
 def _show(info, as_json):
@@ -1327,7 +1339,11 @@ def prompt_vm(service, name, prompt, agent, background, cwd):
     vm = _vm(service, name)
     session = "prompt-" + uuid.uuid4().hex[:12]
     log_dir = "/workspace/.beam-vm/logs"
-    command = ["claude", "-p", prompt] if agent == "claude" else ["codex", "exec", prompt]
+    command = (
+        ["claude", "-p", prompt]
+        if agent == "claude"
+        else ["codex", "exec", "--skip-git-repo-check", prompt]
+    )
     shell = f"mkdir -p {log_dir}; set -o pipefail; {shlex.join(command)} 2>&1 | tee {log_dir}/{session}.log"
     if background:
         process = vm.process.exec(

@@ -665,7 +665,7 @@ def test_browser_commands_open_authenticated_links(cli_service, monkeypatch, fea
         {"url": signed},
     ]
     opened = MagicMock()
-    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
+    monkeypatch.setattr(vm_cli, "_launch_browser", opened)
     result = CliRunner().invoke(vm_cli.management, [feature, "dev"])
     assert result.exit_code == 0, result.output
     assert result.output == "https://vm.example/\n"
@@ -688,7 +688,7 @@ def test_open_any_port_handles_public_and_private_access(
     }
     cli_service.http.json.side_effect = [info, {"url": signed}]
     opened = MagicMock()
-    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
+    monkeypatch.setattr(vm_cli, "_launch_browser", opened)
     result = CliRunner().invoke(
         vm_cli.management, ["open", "dev", "3000", *(["--url"] if url_only else [])]
     )
@@ -1583,7 +1583,7 @@ def test_direct_browser_links_never_mint_cli_credentials(cli_service, monkeypatc
     }
     cli_service.http.json.return_value = info
     opened = MagicMock()
-    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
+    monkeypatch.setattr(vm_cli, "_launch_browser", opened)
     result = CliRunner().invoke(
         vm_cli.management, ["open", "dev", str(port), *(["--url"] if url_only else [])]
     )
@@ -1609,7 +1609,7 @@ def test_terminal_and_desktop_open_the_direct_vm_not_a_dashboard(
         "spec": {"protected_ports": [port]},
     }
     opened = MagicMock()
-    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
+    monkeypatch.setattr(vm_cli, "_launch_browser", opened)
     result = CliRunner().invoke(vm_cli.management, [feature, "dev"])
     assert result.exit_code == 0, result.output
     assert result.output == "https://vm.example/\n"
@@ -1659,3 +1659,38 @@ def test_image_build_json_is_clean(cli_service, monkeypatch, tmp_path, mode):
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == {"image_id": "image-test", "desktop": False}
     assert "Image build output belongs in diagnostics" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS browser fork regression")
+def test_browser_opener_does_not_fork_and_preserves_url(monkeypatch, tmp_path):
+    (tmp_path / "webbrowser.py").write_text(
+        "import os\nfrom pathlib import Path\n"
+        "def open(url):\n Path(os.environ['BROWSER_RESULT']).write_text(url)\n return True\n"
+    )
+    output = tmp_path / "opened-url"
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    monkeypatch.setenv("BROWSER_RESULT", str(output))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Forking while gRPC threads are active")
+
+    monkeypatch.setattr(subprocess, "_fork_exec", forbidden)
+    url = "https://vm.example/?beam_vm_session=literal&x=$VALUE"
+    vm_cli._launch_browser(url)
+    assert output.read_text() == url
+
+
+@pytest.mark.parametrize("background", [False, True])
+def test_codex_prompt_supports_fresh_workspace(cli_service, monkeypatch, background):
+    vm = MagicMock()
+    vm.process.exec.return_value.wait.return_value = 0
+    monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
+    foreground = MagicMock()
+    monkeypatch.setattr(vm_cli.exec_vm.callback, "__wrapped__", foreground)
+    args = ["prompt", "dev", "literal ;$prompt", "--agent", "codex"]
+    if background:
+        args.append("--background")
+    result = CliRunner().invoke(vm_cli.management, args)
+    assert result.exit_code == 0, result.output
+    command = vm.process.exec.call_args.args[-1] if background else foreground.call_args.args[2][-1]
+    assert "codex exec --skip-git-repo-check 'literal ;$prompt'" in command
