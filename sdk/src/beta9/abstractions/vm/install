@@ -77,13 +77,17 @@ from pathlib import Path
 
 count = 0
 for path in Path('/usr/share/kasmvnc/www/assets').glob('*.js'):
+    source = path.read_text()
+    if 'async beamClipboardPasteDataFrom(' in source:
+        count += 1
+        continue
     source, matches = re.subn(
         r'async clipboardPasteDataFrom\(',
         'async clipboardPasteDataFrom(...args){try{return await this.beamClipboardPasteDataFrom(...args)}'
         'catch(error){if(error.name!=="InvalidStateError")throw error;'
         'this._clipHash=0;this._resendClipboardNextUserDrivenEvent=true}}'
         'async beamClipboardPasteDataFrom(',
-        path.read_text(),
+        source,
     )
     if matches:
         path.write_text(source)
