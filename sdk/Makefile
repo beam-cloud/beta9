@@ -1,4 +1,4 @@
-.PHONY: docs tests sandbox-log-streaming-integration build
+.PHONY: docs tests sandbox-log-streaming-integration build vm-assets
 
 init:
 	git submodule update --init --recursive
@@ -18,6 +18,9 @@ format:
 
 build: 
 	uv build
+
+vm-assets:
+	uv run python bin/generate_vm_assets.py
 
 clean:
 	rm -f dist/*

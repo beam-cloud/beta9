@@ -120,7 +120,7 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
     assert a.channel is selected.channel
     assert a.gateway_stub is selected.gateway
     assert len(a.build_steps) == len(original) + 1
-    # Python 3.11/3.12's gzip.compress leaks the client OS into the image ID.
+    # The shipped bundle has a fixed gzip header on every client.
     archive = base64.b64decode(a.build_steps[-1].command.split("'")[3])
     assert archive[9] == 255
     with tarfile.open(fileobj=io.BytesIO(gzip.decompress(archive))) as assets:
@@ -130,6 +130,36 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
         assert "libnss3-tools" in installer
         assert "env GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop" in installer
         assert "/etc/ca-certificates/update.d/beam-browser" in installer
+
+
+def test_vm_image_bundle_matches_guest_files():
+    directory = Path(vm_module.__file__).parent
+    sources = {
+        path.name: path
+        for path in directory.iterdir()
+        if path.is_file()
+        and not path.name.startswith(".")
+        and path.suffix not in (".py", ".pyc", ".gz")
+    }
+    with tarfile.open(directory / "assets.tar.gz") as archive:
+        assert set(archive.getnames()) == set(sources), "Run python bin/generate_vm_assets.py"
+        for name, path in sources.items():
+            assert archive.extractfile(name).read() == path.read_bytes(), (
+                f"Stale VM bundle: run python bin/generate_vm_assets.py after updating {name}"
+            )
+            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg") else 0o755
+            assert archive.getmember(name).mode == mode
+
+
+def test_vm_image_does_not_depend_on_client_archive_libraries(monkeypatch):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("VM image identity must not depend on client tar/gzip output")
+
+    monkeypatch.setattr(tarfile, "open", unexpected)
+    monkeypatch.setattr(gzip, "GzipFile", unexpected)
+    prepared = prepare_image(Image(base_image="ubuntu:24.04"), service(), True)
+    encoded = prepared.build_steps[-1].command.split("'")[3]
+    assert base64.b64decode(encoded) == Path(vm_module.__file__).with_name("assets.tar.gz").read_bytes()
 
 
 def test_desktop_clipboard_patch_is_idempotent_and_checks_upstream(tmp_path):
