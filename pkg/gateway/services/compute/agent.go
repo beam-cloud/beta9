@@ -801,7 +801,7 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 			GPUCount:    worker.TotalGpuCount,
 			GPUs:        agentState.GPUs,
 			Attrs: map[string]string{
-				"cpu_millicores": fmt.Sprintf("%d", worker.TotalCpu),
+				"cpu_millicores": fmt.Sprintf("%d", worker.PhysicalCPU()),
 				"gpu_ids":        strings.Join(agentState.GPUIDs, ","),
 			},
 		})
@@ -910,7 +910,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		ContainerRuntime:          runtimeName,
 		ContainerRuntimeConfig:    poolConfig.ContainerRuntimeConfig.WithDefaults(runtimeName),
 		CPUAffinityEnforced:       cpuAffinityEnforced,
-		CPU:                       worker.TotalCpu,
+		CPU:                       worker.PhysicalCPU(),
 		Memory:                    worker.TotalMemory,
 		GPU:                       worker.Gpu,
 		GPUCount:                  worker.TotalGpuCount,
