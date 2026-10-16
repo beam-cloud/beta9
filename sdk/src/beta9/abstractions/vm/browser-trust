@@ -10,6 +10,13 @@ database=/root/.pki/nssdb
 if [ ! -d "$database" ] && [ -d /root/.local/share/pki/nssdb ]; then
   database=/root/.local/share/pki/nssdb
 fi
+# Desktop startup, headless launches and CA hooks can arrive together.
+mkdir -p /run/beam-vm
+exec 9>/run/beam-vm/browser-trust.lock
+flock 9
+if [ "${1:-}" != --initialize ] && cmp -s "$certificate" "$database/.beam-egress.crt"; then
+  exit 0
+fi
 mkdir -p "$database"
 if [ ! -f "$database/cert9.db" ]; then
   certutil -N --empty-password -d "sql:$database"
@@ -24,3 +31,4 @@ else
   certutil -D -d "sql:$database" -n 'Beam managed egress CA' 2>/dev/null || true
 fi
 certutil -A -d "sql:$database" -n 'Beam managed egress CA' -t 'C,,' -i "$certificate"
+cp "$certificate" "$database/.beam-egress.crt"

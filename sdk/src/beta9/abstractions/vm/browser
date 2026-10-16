@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+/opt/beam-vm/browser-trust
+exec /usr/bin/google-chrome-stable "$@"

@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+# Early vminit installs the system CA before systemd starts. NSS belongs to
+# browser startup; after boot, update hooks must also rotate its managed CA.
+[ "$(cat /proc/1/comm)" = systemd ] || exit 0
+exec /opt/beam-vm/browser-trust

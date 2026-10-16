@@ -70,8 +70,13 @@ if [ "$desktop" = true ]; then
   apt-get update
   apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" libnss3-tools openbox pcmanfm libfm-modules librsvg2-common xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
   install -d /etc/ca-certificates/update.d
-  install -m 0755 "$assets/browser-trust" /etc/ca-certificates/update.d/beam-browser
-  /etc/ca-certificates/update.d/beam-browser --initialize
+  install -m 0755 "$assets/browser-trust" /opt/beam-vm/browser-trust
+  install -m 0755 "$assets/browser-trust-update" /etc/ca-certificates/update.d/beam-browser
+  /opt/beam-vm/browser-trust --initialize
+  if [ "$arch" = amd64 ]; then
+    install -m 0755 "$assets/browser" /usr/local/bin/google-chrome-stable
+    ln -sf google-chrome-stable /usr/local/bin/google-chrome
+  fi
   install -m 0644 "$assets/terminal.svg" /opt/beam-vm/
   install -d -m 0755 /root/Desktop
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/
