@@ -41,6 +41,7 @@ beta9 = [
     "abstractions/vm/*.desktop",
     "abstractions/vm/*.svg",
     "abstractions/vm/boot",
+    "abstractions/vm/browser-trust",
     "abstractions/vm/desktop",
     "abstractions/vm/install",
     "abstractions/vm/xstartup",

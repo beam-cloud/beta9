@@ -124,6 +124,10 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
     assert archive[9] == 255
     with tarfile.open(fileobj=io.BytesIO(gzip.decompress(archive))) as assets:
         assert "beam-desktop.service" in assets.getnames()
+        assert assets.getmember("browser-trust").mode == 0o755
+        installer = assets.extractfile("install").read().decode()
+        assert "libnss3-tools" in installer
+        assert '/etc/ca-certificates/update.d/beam-browser' in installer
 
 
 def test_vm_rejects_gpu_build_and_does_not_modify_explicit_image():

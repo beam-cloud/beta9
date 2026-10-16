@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+# Chromium uses NSS for local roots. Keep its managed CA separate from any
+# customer certificates and replace it on each cold boot or CA rotation.
+certificate=/usr/local/share/ca-certificates/beam-egress.crt
+[ -f "$certificate" ] || exit 0
+# Chrome 146+ prefers the XDG path unless the legacy database already exists.
+# Creating the legacy path also supports older Chromium versions.
+database=/root/.pki/nssdb
+if [ ! -d "$database" ] && [ -d /root/.local/share/pki/nssdb ]; then
+  database=/root/.local/share/pki/nssdb
+fi
+mkdir -p "$database"
+if [ ! -f "$database/cert9.db" ]; then
+  certutil -N --empty-password -d "sql:$database"
+fi
+certutil -D -d "sql:$database" -n 'Beam managed egress CA' 2>/dev/null || true
+certutil -A -d "sql:$database" -n 'Beam managed egress CA' -t 'C,,' -i "$certificate"

@@ -134,6 +134,7 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
             "boot",
             "desktop",
             "browser.desktop",
+            "browser-trust",
             "terminal.desktop",
             "terminal.svg",
             "install",
