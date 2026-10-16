@@ -45,7 +45,7 @@ from ..volume import Volume
 # Keep the stock guest reproducible and avoid a registry tag lookup on launch.
 # Refresh this digest when updating the default Ubuntu guest.
 DEFAULT_VM_BASE_IMAGE = (
-    "ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401"
+    "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
 )
 
 

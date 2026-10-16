@@ -66,7 +66,7 @@ def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
         )
         request = direct.json.call_args.kwargs["json"]
         assert request["image"]["existing_image_uri"] == vm_module.DEFAULT_VM_BASE_IMAGE
-        assert "@sha256:" in vm_module.DEFAULT_VM_BASE_IMAGE
+        assert vm_module.DEFAULT_VM_BASE_IMAGE.startswith("ubuntu:24.04@sha256:")
         assert request["image"]["ignore_python"] is True
         assert request["spec"]["ssh_public_key"] == "ssh-ed25519 test"
         selected._gateway.export_workspace_config.assert_not_called()
@@ -485,7 +485,13 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
 
 
 @pytest.mark.parametrize(
-    "args,base_image", [([], None), (["--template", "base"], None), (["--image", "alpine:3"], "alpine:3")]
+    "args,base_image",
+    [
+        ([], None),
+        (["--template", "base"], None),
+        (["--image", "alpine:3"], "alpine:3"),
+        (["--build-secret", "TOKEN"], vm_module.DEFAULT_VM_BASE_IMAGE),
+    ],
 )
 def test_cli_preserves_default_image_fast_path(cli_service, monkeypatch, args, base_image):
     vm = MagicMock()

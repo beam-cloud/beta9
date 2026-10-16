@@ -49,9 +49,12 @@ AuthorizedKeysFile /run/beam-vm/authorized_keys
 PidFile /run/sshd/sshd.pid
 EOF
 if [ "$desktop" = true ]; then
-  [ "${VERSION_CODENAME:-}" = jammy ] || { echo 'Desktop currently requires Ubuntu 22.04 (jammy)' >&2; exit 1; }
+  case "${ID}:${VERSION_CODENAME:-}" in
+    ubuntu:jammy|ubuntu:noble) ;;
+    *) echo 'Desktop requires Ubuntu 22.04 (jammy) or 24.04 (noble)' >&2; exit 1 ;;
+  esac
   version=1.5.0
-  curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_jammy_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
+  curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_${VERSION_CODENAME}_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
   if [ "$arch" = amd64 ]; then
     apt_repository google-chrome https://dl.google.com/linux/linux_signing_key.pub https://dl.google.com/linux/chrome/deb/ stable main
     browser=google-chrome-stable
