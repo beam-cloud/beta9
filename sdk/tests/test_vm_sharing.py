@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -166,3 +167,16 @@ def test_clipboard_failure_falls_back_without_exposing_the_link_to_a_shell(monke
     assert run.call_args.args == (["/usr/bin/xclip", "-selection", "clipboard"],)
     assert run.call_args.kwargs["input"] == link
     assert "shell" not in run.call_args.kwargs
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS uses the POSIX subprocess implementation")
+def test_macos_clipboard_avoids_fork(monkeypatch):
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    # Consume stdin without touching the user's real clipboard.
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/bin/cat")
+
+    def unexpected_fork(*args, **kwargs):
+        raise AssertionError("Clipboard copying must not fork active gRPC threads")
+
+    monkeypatch.setattr(subprocess, "_fork_exec", unexpected_fork)
+    assert cli._copy_share_link("https://desktop.example/?beam_vm_session=test") is True

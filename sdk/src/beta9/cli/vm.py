@@ -627,6 +627,8 @@ def _copy_share_link(url):
                 timeout=2,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                # Let macOS use posix_spawn instead of forking active gRPC threads.
+                close_fds=sys.platform != "darwin",
             )
             return True
         except (OSError, subprocess.SubprocessError):
