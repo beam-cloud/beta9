@@ -137,7 +137,9 @@ def _launch_browser(url):
     if sys.platform == "darwin":
         # The stdlib macOS opener forks osascript; isolate it from gRPC.
         subprocess.run(
-            [sys.executable, "-c", "import sys, webbrowser; webbrowser.open(sys.argv[1])", url],
+            [sys.executable, "-c", "import sys, webbrowser; webbrowser.open(sys.stdin.read())"],
+            input=url,
+            text=True,
             check=True,
             **local_process_kwargs(sys.executable),
         )
