@@ -95,8 +95,8 @@ capacity and understands the idle cost. A portless queue poller has no incoming
 connection to wake it from zero; explain that requirement and obtain the user's
 choice before setting a positive minimum. Use a job for one-off work.
 
-For a persistent machine, use VM tools. Keep the VM defaults: 4 vCPU, 8 GiB
-memory, 50 GiB disk and no idle timeout. Change them when the user requests it.
+For a persistent machine, use VM tools. Keep the VM defaults: Ubuntu 24.04,
+4 vCPU, 8 GiB memory, 50 GiB disk and no idle timeout. Change them when the user requests it.
 `{{cli}} setup vm` handles browser sign-in and prepares a verified guest.
 VMs keep running until stopped. See [VM operations](references/vms.md).
 

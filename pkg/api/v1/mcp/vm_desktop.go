@@ -123,6 +123,9 @@ func (g *Group) vmDesktopCatalog() []mcpTool {
 			g.vmDesktopStopRecording,
 		),
 	}
+	for i := range tools {
+		tools[i].Description += " Exec readiness is earlier than desktop readiness; first verify beam-desktop.service and port 8080 via vm_exec."
+	}
 	return tools
 }
 

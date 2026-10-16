@@ -47,9 +47,9 @@ func vmBlockNetworkSchema() map[string]any {
 func vmSpecSchema() map[string]any {
 	return schema(props{
 		"image_id":           str("VM image built with beam vm image build or the local vm_build_image tool"),
-		"cpu":                boundedInt(1, 64000, 1000),
-		"memory":             boundedInt(128, 262144, 1024),
-		"disk_size":          str("Root disk capacity, e.g. 50Gi"),
+		"cpu":                map[string]any{"type": "integer", "minimum": 100, "maximum": 64000, "default": 4000, "description": "CPU millicores (1000 = 1 CPU); fresh VM default is 4000."},
+		"memory":             map[string]any{"type": "integer", "minimum": 256, "maximum": 262144, "default": 8192, "description": "RAM in MiB; desktop requires at least 1024. Fresh VM default is 8192."},
+		"disk_size":          str("Writable root capacity; fresh VM default 50Gi, maximum 100Gi"),
 		"pool":               str("VM-capable worker pool"),
 		"env":                strList("KEY=value entries"),
 		"secrets":            strList("Workspace secret names with approved hosts; guest env receives placeholders for HTTPS request headers. BETA9_TOKEN/BEAM_TOKEN are explicit plaintext opt-ins."),
@@ -57,11 +57,11 @@ func vmSpecSchema() map[string]any {
 		"private_ports":      map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Tunnel-only ports; no public URL."},
 		"protected_ports":    map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Published HTTP ports requiring a VM traffic token or vm_access_url browser session."},
 		"public_ports":       map[string]any{"type": "array", "items": boundedInt(1, 65535, 7681), "description": "Publish without a traffic token; terminal and desktop ports are protected by default."},
-		"desktop":            boolean(),
-		"docker_enabled":     boolean(),
-		"ssh":                boolean(),
+		"desktop":            map[string]any{"type": "boolean", "description": "Enable a desktop already installed in image_id (Ubuntu 24.04 or 22.04); opt-in for fresh MCP specs, at least 1024 MiB RAM."},
+		"docker_enabled":     map[string]any{"type": "boolean", "description": "Start the guest Docker daemon; disabled for fresh MCP specs. Wait for docker info before vm_docker."},
+		"ssh":                map[string]any{"type": "boolean", "description": "Enable SSH on port 2222; opt-in for fresh MCP specs and requires ssh_public_key."},
 		"ssh_public_key":     str("SSH public key; never a private key"),
-		"idle_timeout":       boundedInt(0, 86400, 300),
+		"idle_timeout":       boundedInt(0, 365*24*60*60, 0),
 		"idle_action":        enum("stop", "pause"),
 		"auto_resume":        boolean(),
 		"block_network":      vmBlockNetworkSchema(),
@@ -113,7 +113,8 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		vmTool(
 			"create_vm",
 			"Create a persistent CPU VM from a prepared image, template or snapshot. Use request_id (UUID) "+
-				"for safe retries. Poll get_vm for readiness.",
+				"for safe retries. Omitted template/snapshot settings inherit. For lifecycle state poll get_vm; "+
+				"verify exec readiness with vm_exec command=[\"true\"], wait=true. SSH, desktop and Docker may still be starting.",
 			schema(props{
 				"name":       str("Optional VM name"),
 				"spec":       vmSpecSchema(),
@@ -130,7 +131,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 			"Change idle timeout/action, auto-resume, metadata or outbound network policy. metadata "+
 				"replaces the existing map.",
 			vmSchema(props{
-				"idle_timeout":  boundedInt(0, 86400, 300),
+				"idle_timeout":  boundedInt(0, 365*24*60*60, 0),
 				"idle_action":   enum("stop", "pause"),
 				"auto_resume":   boolean(),
 				"metadata":      stringMapSchema(),
@@ -161,7 +162,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		required                                  []string
 		read, idempotent                          bool
 	}{
-		{"start_vm", "start", "Start or resume a VM; cold=true discards saved RAM and starts from disk. Poll get_vm.", "beam:write", "", props{"cold": boolean()}, nil, false, true},
+		{"start_vm", "start", "Start or resume a VM; cold=true discards saved RAM and starts from disk. Poll get_vm, then verify exec readiness with vm_exec; services may still be starting.", "beam:write", "", props{"cold": boolean()}, nil, false, true},
 		{"pause_vm", "pause", "Pause a VM and preserve RAM. Requires confirmation.", "beam:write", "Pausing the VM interrupts its applications.", nil, nil, false, true},
 		{"stop_vm", "stop", "Stop a VM and snapshot its writable root unless no_snapshot=true. Requires confirmation.", "beam:write", "Stopping the VM interrupts its applications.", props{"no_snapshot": boolean()}, nil, false, true},
 		{"fork_vm", "fork", "Fork the writable root into a new independent VM. An SSH-enabled source requires ssh_public_key matching your local identity.", "beam:write", "", props{"new_name": str("New VM name"), "ssh_public_key": str("New SSH public key")}, nil, false, false},
@@ -324,7 +325,7 @@ func (g *Group) vmProcessCatalog() []mcpTool {
 		),
 		vmTool(
 			"vm_docker",
-			"Run Docker CLI argv inside a Docker-enabled VM. The returned PID can be followed using the "+
+			"Run Docker CLI argv inside a Docker-enabled VM after docker info succeeds via vm_exec. The returned PID can be followed using the "+
 				"process tools.",
 			vmSchema(props{"args": map[string]any{"type": "array", "items": str(""), "minItems": 1}, "wait": boolean()}, "args"),
 			false, false, "beam:exec",

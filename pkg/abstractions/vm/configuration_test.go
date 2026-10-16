@@ -72,6 +72,23 @@ func TestRootDiskCapacity(t *testing.T) {
 	}
 }
 
+func TestDesktopMinimumMemory(t *testing.T) {
+	for _, memory := range []int64{512, 1023, 1024, 1536} {
+		t.Run(fmt.Sprint(memory), func(t *testing.T) {
+			s, _, info, runtime, _ := fixture()
+			body := fmt.Sprintf(`{"name":"desktop-min","spec":{"image_id":"base","desktop":true,"cpu":1000,"memory":%d}}`, memory)
+			rec := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId, body)
+			if memory < 1024 {
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				require.Contains(t, rec.Body.String(), "desktop requires at least 1024 MiB")
+				require.Empty(t, runtime.requests)
+			} else {
+				require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestResponsesRedactVolumeCredentialsWithoutMutatingStoredSpec(t *testing.T) {
 	s, v, _, _, _ := fixture()
 	v.Spec.Volumes = []*pb.Volume{{Config: &pb.MountPointConfig{BucketName: "bucket", AccessKey: "volume-access", SecretKey: "volume-secret"}}}

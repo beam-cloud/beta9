@@ -183,6 +183,11 @@ class VM:
     disk_size sets the writable root capacity over the base image
     (1–100 GiB; default 50 GiB).
 
+    Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
+    and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
+    create() waits for exec readiness; wait(services=True) also waits for
+    enabled SSH/terminal/desktop services. Docker helpers wait separately.
+
     Runtime secrets require approved hosts and arrive as placeholders for
     literal HTTPS request headers. No workspace token is injected automatically;
     BETA9_TOKEN/BEAM_TOKEN bindings are explicit plaintext opt-ins.

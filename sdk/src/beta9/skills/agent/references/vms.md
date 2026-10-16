@@ -2,9 +2,9 @@
 
 Use a VM for a real Linux guest with a writable root, SSH, Docker, a desktop,
 or a durable coding-agent session. For HTTP apps and stacks, keep the
-serverless defaults instead. Keep VM defaults: 4 vCPU, 8 GiB memory, a 50 GiB
-root and no idle timeout. VMs keep running until stopped. Ask before starting
-paid compute unless the user has already authorized it. GPUs are not a CPU VM
+serverless defaults instead. Keep VM defaults: digest-pinned Ubuntu 24.04,
+4 vCPU, 8 GiB memory, a 50 GiB root and no idle timeout. VMs keep running
+until stopped. Ask before starting paid compute unless the user has already authorized it. GPUs are not a CPU VM
 feature.
 
 ## First VM
@@ -17,13 +17,33 @@ Re-running resumes the same setup-owned VM. `--skip-agents` skips local
 client configuration; `--yes` explicitly approves creation for an already
 authenticated and funded unattended context.
 
-Through MCP, prepare a base image with the local `vm_build_image` tool or
-reuse a VM template/snapshot, then `create_vm`. CPU in a creation spec is in
-millicores (1000 = 1 CPU); memory is MiB. Use a UUID `request_id` to recover
-a lost creation response. `get_vm` supplies ID, lifecycle, container ID,
-port URLs and terminal/desktop links. Poll until the guest is ready before
-announcing success. VM and artifact names are at most 24 lowercase letters,
-digits and hyphens, starting with a letter.
+Through MCP, `vm_build_image` needs a local project Dockerfile (for example,
+`FROM ubuntu:24.04`); it does not supply a default base. Pass its resulting
+`image_id` as `create_vm.spec.image_id`, or reuse a template/snapshot. Desktop
+requires `desktop=true` in both the image build and creation spec. MCP SSH is
+opt-in with `ssh=true` and a matching `ssh_public_key`; keep private keys local.
+CPU in a creation spec is millicores (1000 = 1 CPU); memory is MiB. Omitted
+template/snapshot settings inherit. Use a UUID `request_id` to recover a lost
+creation response. `get_vm` supplies ID, lifecycle, container ID and URLs;
+running status alone does not prove readiness. Verify a harmless `vm_exec`
+command such as `["true"]` with `wait=true` before announcing exec readiness.
+VM and artifact names are at most 24 lowercase letters, digits and hyphens,
+starting with a letter.
+
+CLI/SDK creation waits for guest commands, while systemd services can still be
+starting. Python `vm.wait(services=True)` or JavaScript
+`await vm.wait({services: true})` also waits for SSH, terminal and enabled
+desktop; desktop SDK helpers do this automatically. Docker helpers wait for
+the daemon separately. Through MCP, check the desktop unit and port before
+controls, and use `vm_exec` to wait for `docker info` before `vm_docker`.
+Follow a long readiness check with the process tools. Image builds, worker
+cache misses, scheduling and network time can exceed a second; do not promise
+always-subsecond creation or equate exec readiness with full service readiness.
+
+Existing roots, prebuilt images and templates retain their OS; stop/start does
+not upgrade them. Custom desktop images support Ubuntu 24.04 (Noble) and
+22.04 (Jammy). SDK desktop is opt-in, unlike CLI fresh-image creation. Docker
+is installed but its daemon requires `docker_enabled` / `dockerEnabled`.
 
 ## Public IPv6
 
@@ -138,9 +158,10 @@ a published route.
 
 ## Desktop, Docker and coding agents
 
-Enable desktop/Docker at creation. Desktop tools cover size/resize, mouse
-move/click/drag/scroll, keyboard shortcuts, literal clipboard text, GUI
-launch, screenshot and recording. Screenshots return real MCP PNG image
+Enable desktop/Docker at creation. Desktop requires at least 1024 MiB RAM.
+Desktop tools cover size/resize, mouse move/click/drag/scroll, keyboard
+shortcuts, literal clipboard text (Ctrl+V; the focused application must support
+it), GUI launch, screenshot and recording. Screenshots return real MCP PNG image
 content. Stop a recording with its pinned container/PID before reading its
 MP4 file. GUI interaction and guest commands can affect external systems;
 normal user authorization still applies.
@@ -193,4 +214,7 @@ mount `/etc/beam/ca-certificates.crt` and configure their trust explicitly.
 Protect an existing VM's terminal with `{{cli}} vm expose --protected NAME 7681`.
 Deploy workers with egress enabled before binding brokered secrets; older
 workers fail closed. CA bundles are prepared at sandbox startup so exec can
-add bindings later; only public certificates enter the guest.
+add bindings later; only public certificates enter the guest. System and managed
+browser trust preserve customer roots. Browser CA import completes before
+desktop startup and managed Chrome launches, separately from exec readiness.
+Clients with their own trust store must trust `/etc/beam/ca-certificates.crt`.

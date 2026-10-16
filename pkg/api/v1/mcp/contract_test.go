@@ -47,6 +47,28 @@ func TestMCPCompleteContracts(t *testing.T) {
 	}
 }
 
+func TestMCPVMResourceContract(t *testing.T) {
+	g := newTestGroup()
+	g.prepareTools()
+	properties := vmSpecSchema()["properties"].(props)
+	require.Equal(t, 4000, properties["cpu"].(map[string]any)["default"])
+	require.Equal(t, 8192, properties["memory"].(map[string]any)["default"])
+	require.Equal(t, 0, properties["idle_timeout"].(map[string]any)["default"])
+	for _, spec := range []map[string]any{
+		{"image_id": "base", "desktop": true, "cpu": 1000, "memory": 1024},
+		{"image_id": "base", "cpu": 100, "memory": 256, "idle_timeout": 365 * 24 * 60 * 60},
+	} {
+		require.NoError(t, g.byName["create_vm"].validate(map[string]any{"spec": spec}))
+	}
+	for _, spec := range []map[string]any{
+		{"image_id": "base", "cpu": 99},
+		{"image_id": "base", "memory": 255},
+		{"image_id": "base", "idle_timeout": -1},
+	} {
+		require.Error(t, g.byName["create_vm"].validate(map[string]any{"spec": spec}))
+	}
+}
+
 type mcpSecretRecorder struct {
 	repository.BackendRepository
 	writes int
