@@ -414,6 +414,9 @@ func microVMKernelCmdline() string {
 		"panic=0",
 		"loglevel=4",
 		"random.trust_cpu=on",
+		// Guest DMA uses 64-bit virtio devices, with no PCI passthrough that
+		// needs the eagerly zeroed software bounce buffer.
+		"swiotlb=noforce",
 		"i8042.noaux",
 		"i8042.nomux",
 		"i8042.nopnp",

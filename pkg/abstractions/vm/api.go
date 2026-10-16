@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -224,6 +225,7 @@ type createRequest struct {
 	Snapshot  string            `json:"snapshot,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
 	RequestID string            `json:"request_id,omitempty"`
+	Image     json.RawMessage   `json:"image,omitempty"`
 }
 
 func (s *Service) create(c echo.Context) error {
@@ -307,11 +309,28 @@ func (s *Service) create(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "use a VM template or fork to initialize a root disk")
 	}
 
+	var image *pb.VerifyImageBuildRequest
+	if len(req.Image) > 0 {
+		if seed != "" || spec.ImageID != "" || spec.SourceSnapshotID != "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "choose image, image_id or a template")
+		}
+		image = &pb.VerifyImageBuildRequest{}
+		if err := protojson.Unmarshal(req.Image, image); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid image specification")
+		}
+		if image.ForceRebuild || image.Gpu != "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "VM image lookup cannot rebuild or use GPUs")
+		}
+		// Validate the remaining spec before resolving the image. Resolution
+		// happens under the creation lock, after recovering an idempotent retry.
+		spec.ImageID = "pending-image-lookup"
+	}
+
 	if err := validate(&spec); err != nil {
 		return apiError(err)
 	}
 
-	v, err := s.createVMWithRequest(ctx, info, req.Name, spec, req.Metadata, req.RequestID)
+	v, err := s.createVMWithImage(ctx, info, req.Name, spec, req.Metadata, req.RequestID, image)
 	if err != nil {
 		return apiError(err)
 	}
@@ -324,6 +343,10 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string
 }
 
 func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string) (*types.VM, error) {
+	return s.createVMWithImage(ctx, info, name, spec, metadata, requestID, nil)
+}
+
+func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string, image *pb.VerifyImageBuildRequest) (*types.VM, error) {
 	if len(spec.Secrets) > 0 {
 		secrets, err := s.backend.GetSecretsByName(ctx, info.Workspace, spec.Secrets)
 		if err != nil {
@@ -347,11 +370,16 @@ func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, 
 		name = defaultVMName(id)
 	}
 
+	var imageSpec []byte
+	if image != nil {
+		imageSpec, _ = (proto.MarshalOptions{Deterministic: true}).Marshal(image)
+	}
 	creation, _ := json.Marshal(struct {
 		Name     string
 		Spec     types.VMSpec
 		Metadata map[string]string
-	}{name, spec, metadata})
+		Image    []byte `json:",omitempty"`
+	}{name, spec, metadata, imageSpec})
 	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
 	v := &types.VM{
 		ID:                  id,
@@ -394,6 +422,20 @@ func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, 
 
 			return existing, nil
 		}
+	}
+
+	if image != nil {
+		if s.images == nil {
+			return nil, echo.NewHTTPError(http.StatusPreconditionRequired, "VM image needs to be built")
+		}
+		verified, err := s.images.VerifyImageBuild(ctx, image)
+		if err != nil {
+			return nil, err
+		}
+		if verified == nil || !verified.Valid || !verified.Exists || verified.ImageId == "" {
+			return nil, echo.NewHTTPError(http.StatusPreconditionRequired, "VM image needs to be built")
+		}
+		v.Spec.ImageID = verified.ImageId
 	}
 
 	// Hold the lifecycle lock before publishing the row to the reconciler.

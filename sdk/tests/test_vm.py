@@ -1,12 +1,15 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from concurrent.futures import ThreadPoolExecutor
+import base64
+import gzip
 import json
 import io
 import shutil
 import subprocess
 import threading
 import socket
+import tarfile
 
 import pytest
 from click.testing import CliRunner
@@ -15,7 +18,7 @@ from beta9.abstractions.image import Image
 from beta9.abstractions.vm import VM, prepare_image
 from beta9.abstractions import vm as vm_module
 from beta9.exceptions import SandboxProcessError, SandboxConnectionError
-from beta9.channel import GatewayHTTPError
+from beta9.channel import GatewayHTTPError, ServiceClient
 from beta9.config import ConfigContext, SDKSettings
 from beta9.cli import extraclick
 from beta9.cli import vm as vm_cli
@@ -29,6 +32,82 @@ def service():
     )
 
 
+def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
+    from requests import ConnectionError
+
+    monkeypatch.setattr(vm_module, "public_key", lambda: "ssh-ed25519 test")
+    with ServiceClient(ConfigContext(token="test", api_url="https://vm.example")) as selected:
+        selected._gateway = MagicMock()
+        direct = selected.vm_http
+        direct.json = MagicMock(
+            side_effect=[
+                ConnectionError("lost response"),
+                {
+                    "id": "vm-id",
+                    "name": "fast",
+                    "status": "running",
+                    "exec_ready": True,
+                    "container_id": "container",
+                    "stub_id": "stub",
+                },
+            ]
+        )
+        metadata = {"owner": "original"}
+        vm = VM("fast", desktop=True, metadata=metadata, _service=selected)
+        with pytest.raises(ConnectionError):
+            vm.create()
+        body = json.dumps(direct.json.call_args.kwargs["json"], sort_keys=True)
+        metadata["owner"] = "changed"
+        vm.create()
+        assert json.dumps(direct.json.call_args.kwargs["json"], sort_keys=True) == body
+        assert direct.workspace_id == "self"
+        assert all(
+            call.args[:2] == ("POST", "/api/v1/vm/{ws}") for call in direct.json.call_args_list
+        )
+        request = direct.json.call_args.kwargs["json"]
+        assert request["image"]["existing_image_uri"] == vm_module.DEFAULT_VM_BASE_IMAGE
+        assert "@sha256:" in vm_module.DEFAULT_VM_BASE_IMAGE
+        assert request["image"]["ignore_python"] is True
+        assert request["spec"]["ssh_public_key"] == "ssh-ed25519 test"
+        selected._gateway.export_workspace_config.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [401, 404, 428])
+def test_default_creation_falls_back_before_allocation(monkeypatch, status):
+    monkeypatch.setattr(vm_module, "public_key", lambda: "ssh-ed25519 test")
+    with ServiceClient(ConfigContext(token="test", api_url="https://vm.example")) as selected:
+        selected.vm_http.json = MagicMock(side_effect=GatewayHTTPError(status, "not supported"))
+        vm = VM("fast", _service=selected)
+        prepare = MagicMock()
+        monkeypatch.setattr(vm, "prepare", prepare)
+        # The second submission represents the established image-build path.
+        submit = vm._submit_creation
+        legacy = MagicMock(return_value=vm)
+        monkeypatch.setattr(
+            vm, "_submit_creation", lambda wait: submit(wait) if vm._vm_http else legacy(wait)
+        )
+        assert vm.create() is vm
+        prepare.assert_called_once()
+        legacy.assert_called_once_with(True)
+        assert vm._creation_body is None
+
+
+@pytest.mark.parametrize("status", [400, 500])
+def test_default_creation_preserves_request_after_server_error(monkeypatch, status):
+    monkeypatch.setattr(vm_module, "public_key", lambda: "ssh-ed25519 test")
+    monkeypatch.setattr(vm_module, "transient_error", lambda _: False)
+    with ServiceClient(ConfigContext(token="test", api_url="https://vm.example")) as selected:
+        selected.vm_http.json = MagicMock(side_effect=GatewayHTTPError(status, "creation failed"))
+        vm = VM("fast", _service=selected)
+        prepare = MagicMock()
+        monkeypatch.setattr(vm, "prepare", prepare)
+        with pytest.raises(GatewayHTTPError):
+            vm.create()
+        prepare.assert_not_called()
+        assert vm._creation_body["request_id"] == vm.request_id
+        assert vm._vm_http is selected.vm_http
+
+
 def test_vm_image_is_deterministic_and_uses_selected_profile():
     image = Image(base_image="ubuntu:22.04").add_commands(["echo custom"])
     original = list(image.build_steps)
@@ -40,6 +119,11 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
     assert a.channel is selected.channel
     assert a.gateway_stub is selected.gateway
     assert len(a.build_steps) == len(original) + 1
+    # Python 3.11/3.12's gzip.compress leaks the client OS into the image ID.
+    archive = base64.b64decode(a.build_steps[-1].command.split("'")[3])
+    assert archive[9] == 255
+    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(archive))) as assets:
+        assert "beam-desktop.service" in assets.getnames()
 
 
 def test_vm_rejects_gpu_build_and_does_not_modify_explicit_image():
@@ -124,6 +208,14 @@ def test_prepare_freezes_request_without_allocating_compute():
     vm.prepare()
     assert vm._creation_body == body
     assert selected.http.json.call_count == 1
+
+
+def test_advertised_vm_support_skips_list_preflight():
+    selected = service()
+    selected.http.persistent_vms = True
+    selected.http.json.return_value = {"id": "resource", "name": "dev", "status": "starting"}
+    VM("dev", template="base", ssh=False, _service=selected).create(wait=False)
+    assert [call.args[0] for call in selected.http.json.call_args_list] == ["POST"]
 
 
 def test_verified_launch_reuses_ready_connection_for_first_operation():
@@ -388,8 +480,23 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     assert options["env"] == {"VALUE": "a=b c"}
     assert options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
-    fake.create.assert_called_once_with(wait=False)
-    fake.wait.assert_called_once_with()
+    fake.create.assert_called_once_with()
+    fake.wait.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "args,base_image", [([], None), (["--template", "base"], None), (["--image", "alpine:3"], "alpine:3")]
+)
+def test_cli_preserves_default_image_fast_path(cli_service, monkeypatch, args, base_image):
+    vm = MagicMock()
+    vm.info = {"name": "fast", "id": "vm-id", "status": "running"}
+    factory = MagicMock(return_value=vm)
+    monkeypatch.setattr(vm_cli, "VM", factory)
+    result = CliRunner().invoke(vm_cli.management, ["new", *args])
+    assert result.exit_code == 0, result.output
+    image = factory.call_args.kwargs["image"]
+    assert (image.base_image if image else None) == base_image
+    vm.create.assert_called_once_with()
 
 
 def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, monkeypatch):

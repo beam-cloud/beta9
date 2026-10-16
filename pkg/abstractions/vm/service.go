@@ -29,6 +29,10 @@ type Gateway interface {
 	StopContainer(context.Context, *pb.StopContainerRequest) (*pb.StopContainerResponse, error)
 }
 
+type ImageVerifier interface {
+	VerifyImageBuild(context.Context, *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error)
+}
+
 type Service struct {
 	ctx            context.Context
 	rdb            *common.RedisClient
@@ -37,6 +41,7 @@ type Service struct {
 	containers     repository.ContainerRepository
 	runtime        Runtime
 	gateway        Gateway
+	images         ImageVerifier
 	domain         string
 	baseURL        string
 	browserAuthURL string
@@ -51,6 +56,7 @@ type ServiceOpts struct {
 	ContainerRepo repository.ContainerRepository
 	Runtime       Runtime
 	Gateway       Gateway
+	Images        ImageVerifier
 	RouteGroup    *echo.Group
 	Server        *echo.Echo
 	BackendDialer *network.BackendDialer
@@ -70,6 +76,7 @@ func New(ctx context.Context, opts ServiceOpts) error {
 		containers:     opts.ContainerRepo,
 		runtime:        opts.Runtime,
 		gateway:        opts.Gateway,
+		images:         opts.Images,
 		domain:         opts.Config.Domain,
 		baseURL:        strings.TrimSuffix(opts.Config.BaseURL, "/"),
 		browserAuthURL: opts.Config.BrowserAuthURL,
@@ -92,6 +99,26 @@ func New(ctx context.Context, opts ServiceOpts) error {
 }
 
 func registerVMRoutes(api *echo.Group, s *Service) {
+	// Resolve the authenticated workspace without a separate discovery RPC.
+	// This alias has exactly the same restricted-token checks as other VM routes.
+	api.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if c.Param("workspaceId") == "self" {
+				cc, ok := c.(*auth.HttpAuthContext)
+				if !ok || cc.AuthInfo == nil || cc.AuthInfo.Workspace == nil {
+					return echo.NewHTTPError(401)
+				}
+				values := append([]string(nil), c.ParamValues()...)
+				for i, name := range c.ParamNames() {
+					if name == "workspaceId" {
+						values[i] = cc.AuthInfo.Workspace.ExternalId
+					}
+				}
+				c.SetParamValues(values...)
+			}
+			return next(c)
+		}
+	})
 	api.GET("/:workspaceId", auth.WithStrictWorkspaceAuth(s.list))
 	api.POST("/:workspaceId", auth.WithStrictWorkspaceAuth(s.create))
 	api.GET("/:workspaceId/artifacts/:kind", auth.WithStrictWorkspaceAuth(s.artifacts))

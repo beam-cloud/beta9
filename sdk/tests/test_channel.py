@@ -11,7 +11,14 @@ import pytest
 
 from beta9.abstractions.function import _Invocation
 from beta9.abstractions.sandbox import SandboxFileSystem
-from beta9.channel import Channel, GatewayHTTP, request_metadata, retry_operation, rpc_timeout
+from beta9.channel import (
+    Channel,
+    GatewayHTTP,
+    ServiceClient,
+    request_metadata,
+    retry_operation,
+    rpc_timeout,
+)
 from beta9.clients.function import FunctionInvokeRequest, FunctionInvokeResponse
 
 
@@ -83,6 +90,37 @@ class TestGatewayHTTP(TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+
+@pytest.mark.parametrize("supported", [False, True])
+def test_http_transport_preserves_vm_capability_from_gateway(supported):
+    from beta9.clients.gateway import ExportWorkspaceConfigResponse
+    from beta9.config import ConfigContext
+
+    with ServiceClient(ConfigContext(token="test-token")) as service:
+        service._gateway = Mock()
+        service._gateway.export_workspace_config.return_value = ExportWorkspaceConfigResponse(
+            workspace_id="workspace",
+            gateway_http_host="gateway.example",
+            gateway_http_port=443,
+            gateway_http_tls=True,
+            persistent_vms=supported,
+        )
+        assert service.http.persistent_vms is supported
+        assert service.http is service.http
+        service._gateway.export_workspace_config.assert_called_once()
+
+
+def test_direct_vm_transport_requires_api_for_another_gateway():
+    from beta9.config import ConfigContext
+
+    with ServiceClient(ConfigContext(token="test-token", gateway_host="custom.example")) as service:
+        assert service.vm_http is None
+    with ServiceClient(
+        ConfigContext(token="test-token", gateway_host="custom.example", api_url="https://custom.example/")
+    ) as service:
+        assert service.vm_http.base_url == "https://custom.example"
+        assert service.vm_http.workspace_id == "self"
 
 
 class Unavailable(grpc.RpcError):

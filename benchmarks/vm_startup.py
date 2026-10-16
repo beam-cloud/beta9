@@ -2,14 +2,20 @@
 """Measure fresh CPU runtime launches through the public SDK and verify first exec.
 
 Image/key/stub preparation is reported separately, as in sandbox_parallel.py.
+For the VM CLI budget, use --include-preparation --fresh-client --budget-phase
+exec-ready: each launch then includes transport discovery, keys and image lookup
+in a fresh Python process, through the same blocking create used by `vm new`.
 Every measured VM has a fresh durable root; no warm VM or RAM restore is reused.
 The budget applies to API submission through the first accepted command, including
 network transport. Use a client near the gateway and compare remote-client results.
 """
+
 import argparse
 import json
 import math
+import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -39,7 +45,9 @@ def arguments():
     p.add_argument(
         "--image-id", help="An already prepared VM image, or ordinary sandbox image"
     )
-    p.add_argument("--image-uri", default="ubuntu:22.04")
+    p.add_argument(
+        "--image-uri", help="Defaults to the VM image, or ubuntu:22.04 for sandboxes"
+    )
     p.add_argument(
         "--use-vm",
         action="store_true",
@@ -48,6 +56,17 @@ def arguments():
     p.add_argument("--no-ssh", action="store_true")
     p.add_argument("--desktop", action="store_true")
     p.add_argument("--budget-ms", type=float, default=500)
+    p.add_argument("--include-preparation", action="store_true")
+    p.add_argument(
+        "--fresh-client",
+        action="store_true",
+        help="Run each sample in a fresh process, including empty SDK caches",
+    )
+    p.add_argument(
+        "--budget-phase",
+        choices=("exec-ready", "first-exec"),
+        default="first-exec",
+    )
     p.add_argument(
         "--http-url", help="Override transport for a client in the gateway's cluster"
     )
@@ -57,7 +76,30 @@ def arguments():
     a = p.parse_args()
     if a.count < 1 or a.cpu <= 0 or a.memory <= 0:
         p.error("count, CPU and memory must be positive")
+    if a.include_preparation and a.mode != "vm":
+        p.error("--include-preparation requires --mode vm")
+    if a.budget_phase == "exec-ready" and a.mode != "vm":
+        p.error("--budget-phase exec-ready requires --mode vm")
     return a
+
+
+def finish(report, args):
+    metric = "exec_ready_ms" if args.budget_phase == "exec-ready" else "first_exec_ms"
+    times = sorted(row[metric] for row in report["samples"] if metric in row)
+    report["summary"] = {
+        "metric": metric,
+        "p50_ms": times[math.ceil(len(times) * 0.5) - 1] if times else None,
+        "p95_ms": times[math.ceil(len(times) * 0.95) - 1] if times else None,
+        "max_ms": times[-1] if times else None,
+        "passed": len(times) == args.count
+        and all(
+            row.get("passed", False) and row.get("removed", False)
+            for row in report["samples"]
+        ),
+    }
+    args.output.write_text(json.dumps(report, indent=2))
+    print(json.dumps(report["summary"]), flush=True)
+    return 0 if report["summary"]["passed"] else 1
 
 
 def main():
@@ -82,6 +124,9 @@ def main():
         "memory": args.memory,
         "disk_size": args.disk_size if args.mode == "vm" else None,
         "budget_ms": args.budget_ms,
+        "budget_phase": args.budget_phase,
+        "include_preparation": args.include_preparation,
+        "fresh_client": args.fresh_client,
         "samples": [],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -89,15 +134,59 @@ def main():
     def save():
         args.output.write_text(json.dumps(report, indent=2))
 
+    if args.fresh_client:
+        with tempfile.TemporaryDirectory(prefix="beam-vm-startup-") as directory:
+            for index in range(args.count):
+                child_output = Path(directory) / f"{index}.json"
+                child_args = list(sys.argv[1:])
+                child_args.remove("--fresh-client")
+                child_args.extend(
+                    [
+                        "--count",
+                        "1",
+                        "--output",
+                        str(child_output),
+                        "--context-stdin",
+                    ]
+                )
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve()), *child_args],
+                    input=json.dumps(context.to_dict()),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                if child_output.exists():
+                    child = json.loads(child_output.read_text())
+                    for row in child["samples"]:
+                        row["index"] = index
+                        report["samples"].append(row)
+                        print(json.dumps(row), flush=True)
+                    save()
+                if result.returncode and (
+                    not child_output.exists()
+                    or any(
+                        "error" in row or not row.get("removed")
+                        for row in child["samples"]
+                    )
+                ):
+                    sys.stderr.write(result.stderr)
+                    break
+        return finish(report, args)
+
     with ServiceClient(context) as service:
         # Connect transport during preparation, without allocating a runtime.
-        _ = service.http.base_url
-        set_channel(channel=service.channel)
+        if not args.include_preparation:
+            _ = service.http.base_url
+        if args.mode == "sandbox":
+            set_channel(channel=service.channel)
         try:
             image = (
                 Image.from_id(args.image_id)
                 if args.image_id
-                else Image.from_registry(args.image_uri)
+                else Image.from_registry(args.image_uri or "ubuntu:22.04")
+                if args.image_uri or args.mode == "sandbox"
+                else None
             )
             sandbox = None
             if args.mode == "sandbox":
@@ -142,13 +231,16 @@ def main():
                             _service=service,
                         )
                         begin = time.perf_counter()
-                        runtime.prepare()
-                        row["preparation_ms"] = (time.perf_counter() - begin) * 1000
-                    begin = time.perf_counter()
+                        if not args.include_preparation:
+                            runtime.prepare()
+                            row["preparation_ms"] = (time.perf_counter() - begin) * 1000
+                    if args.mode != "vm" or not args.include_preparation:
+                        begin = time.perf_counter()
                     if args.mode == "vm":
                         runtime.create()
                         row.update(
                             id=runtime.id,
+                            image_id=runtime.info["spec"]["image_id"],
                             container_id=runtime.info["container_id"],
                             exec_ready_ms=(time.perf_counter() - begin) * 1000,
                         )
@@ -167,7 +259,12 @@ def main():
                     output = process.stdout.read().strip()
                     row["verified_output_ms"] = (time.perf_counter() - begin) * 1000
                     assert output == nonce, f"First command output mismatch: {output!r}"
-                    row["passed"] = row["first_exec_ms"] < args.budget_ms
+                    metric = (
+                        "exec_ready_ms"
+                        if args.budget_phase == "exec-ready"
+                        else "first_exec_ms"
+                    )
+                    row["passed"] = row[metric] < args.budget_ms
                     print(json.dumps(row), flush=True)
                 except Exception as exc:
                     row.update(passed=False, error=str(exc))
@@ -203,16 +300,7 @@ def main():
                         save()
         finally:
             unset_channel()
-    times = sorted(row["first_exec_ms"] for row in report["samples"])
-    report["summary"] = {
-        "p50_ms": times[math.ceil(len(times) * 0.5) - 1],
-        "p95_ms": times[math.ceil(len(times) * 0.95) - 1],
-        "max_ms": times[-1],
-        "passed": all(row["passed"] for row in report["samples"]),
-    }
-    save()
-    print(json.dumps(report["summary"]), flush=True)
-    return 0 if report["summary"]["passed"] else 1
+    return finish(report, args)
 
 
 if __name__ == "__main__":

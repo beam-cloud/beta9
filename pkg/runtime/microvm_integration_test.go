@@ -83,7 +83,13 @@ func requireMicroVMEnv(t *testing.T) *MicroVM {
 	testEnvOnce.Do(func() { testEnvErr = setupTestBridge() })
 	require.NoError(t, testEnvErr, "test bridge")
 
-	rt, err := NewMicroVM(Config{Type: "microvm", MicroVMStateRoot: filepath.Join(testWorkRoot, "state")})
+	rt, err := NewMicroVM(Config{
+		Type:                  "microvm",
+		MicroVMStateRoot:      filepath.Join(testWorkRoot, "state"),
+		MicroVMKernelPath:     os.Getenv("MICROVM_TEST_KERNEL"),
+		MicroVMInitPath:       os.Getenv("MICROVM_TEST_INIT"),
+		MicroVMHypervisorPath: os.Getenv("MICROVM_TEST_HYPERVISOR"),
+	})
 	require.NoError(t, err)
 	return rt.(*MicroVM)
 }
@@ -1289,6 +1295,36 @@ func TestMicroVMTimingBaseline(t *testing.T) {
 		t.Logf("256 MiB fsync write on the overlay upper: %s (%s)", time.Since(startedAt), strings.TrimSpace(out))
 		require.NoError(t, rt.Kill(context.Background(), vm.id, syscall.SIGKILL, nil))
 		vm.wait(30 * time.Second)
+	}
+}
+
+// Keep the default persistent-VM size in the startup gate. Small guests hide
+// kernel initialization costs that scale with RAM. Every sample gets a fresh
+// disk and a cold guest; only host network plumbing is prepared ahead of time.
+func TestMicroVMDefaultStartup(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	budget, err := time.ParseDuration(envOr("MICROVM_TEST_STARTUP_BUDGET", "1s"))
+	require.NoError(t, err)
+	require.Positive(t, budget)
+	for i := 0; i < 3; i++ {
+		t.Run(strconv.Itoa(i+1), func(t *testing.T) {
+			vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true, memoryMiB: 8192, cpuCores: 4})
+			require.NoError(t, rt.PrepareNetworkSlot(vm.netns))
+			startedAt := time.Now()
+			vm.start()
+			client := vm.goprocClient(30 * time.Second)
+			code, out := vm.exec(client, "sh", "-c", "printf startup-ready")
+			elapsed := time.Since(startedAt)
+			require.Equal(t, 0, code, out)
+			require.Equal(t, "startup-ready", out)
+			t.Logf("4-vCPU/8-GiB cold boot to verified exec: %s\n%s", elapsed, vm.output.String())
+			if os.Getenv("MICROVM_TEST_BOOT_TRACE") != "" {
+				code, out := vm.exec(client, "dmesg")
+				require.Equal(t, 0, code, out)
+				t.Logf("guest kernel boot trace:\n%s", out)
+			}
+			require.Less(t, elapsed, budget, "default VM cold boot to verified exec exceeds budget")
+		})
 	}
 }
 

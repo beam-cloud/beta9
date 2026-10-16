@@ -339,7 +339,11 @@ def new(
         env_map = extraclick.env_vars_to_dict(env)
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
-    image = _image(dockerfile, build_context, image_id, image_uri, build_secret)
+    image = (
+        _image(dockerfile, build_context, image_id, image_uri, build_secret)
+        if dockerfile or image_id or image_uri or build_secret
+        else None
+    )
     vm = VM(
         name,
         image=image,
@@ -373,8 +377,7 @@ def new(
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
         with _progress("Creating VM", "VM ready", as_json):
-            vm.create(wait=False)
-            vm.wait()
+            vm.create()
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)

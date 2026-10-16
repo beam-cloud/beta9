@@ -87,9 +87,10 @@ make olddefconfig
 for opt in VIRTIO_FS VIRTIO_BLK VIRTIO_NET VIRTIO_VSOCKETS OVERLAY_FS EXT4_FS IPV6 NETFILTER NF_NAT \
            IP_NF_IPTABLES IP_NF_NAT IP_NF_TARGET_MASQUERADE NETFILTER_XT_MATCH_ADDRTYPE \
            NETFILTER_XT_MATCH_CONNTRACK BRIDGE BRIDGE_NETFILTER VETH CGROUPS MEMCG CGROUP_PIDS \
-           NAMESPACES DEVTMPFS_MOUNT SERIAL_8250_CONSOLE; do
+           NAMESPACES DEVTMPFS_MOUNT SERIAL_8250_CONSOLE DEFERRED_STRUCT_PAGE_INIT; do
     grep -q "^CONFIG_${opt}=y" .config || { echo "guest kernel config lost CONFIG_${opt}" >&2; exit 1; }
 done
+grep -q '^# CONFIG_NUMA is not set$' .config || { echo "guest kernel must expose a single memory node" >&2; exit 1; }
 make -j"$(nproc)" vmlinux
 cp vmlinux /out/vmlinux
 cp .config /out/vmlinux.config

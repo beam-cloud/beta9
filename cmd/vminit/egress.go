@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
@@ -62,17 +64,9 @@ func installSystemCA(root string, certificate, fallbackBundle []byte) error {
 		return err
 	}
 
-	// Ask OpenSSL for this one subject's canonical hash; never rehash the store.
-	// PID 1 has no PATH before systemd starts.
-	command := exec.Command("/usr/bin/openssl", "x509", "-subject_hash", "-noout")
-	command.Stdin = bytes.NewReader(certificate)
-	output, err := command.Output()
+	hash, err := egressCASubjectHash(certificate)
 	if err != nil {
-		return fmt.Errorf("hash egress CA: %w", err)
-	}
-	hash := strings.TrimSpace(string(output))
-	if _, err := hex.DecodeString(hash); err != nil || len(hash) != 8 {
-		return fmt.Errorf("invalid egress CA subject hash %q", hash)
+		return err
 	}
 
 	// Retire the previous boot/worker's CA, including after a memory restore.
@@ -123,6 +117,35 @@ func installSystemCA(root string, certificate, fallbackBundle []byte) error {
 		}
 	}
 	return runEgressTrustHooks(root, filepath.Join(certDir, linkName))
+}
+
+func egressCASubjectHash(certificate []byte) (string, error) {
+	block, _ := pem.Decode(certificate)
+	if block != nil {
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return "", err
+		}
+		// OpenSSL's canonical subject hash depends on the name, not the key.
+		// The worker issues this exact subject. Avoid loading OpenSSL and
+		// its libraries through virtio-fs on every fresh VM boot.
+		subject, _ := asn1.Marshal((pkix.Name{CommonName: "Beam container egress CA"}).ToRDNSequence())
+		if bytes.Equal(cert.RawSubject, subject) {
+			return "950220f5", nil
+		}
+	}
+	// Preserve other subjects/encodings. PID 1 has no PATH before systemd.
+	command := exec.Command("/usr/bin/openssl", "x509", "-subject_hash", "-noout")
+	command.Stdin = bytes.NewReader(certificate)
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("hash egress CA: %w", err)
+	}
+	hash := strings.TrimSpace(string(output))
+	if _, err := hex.DecodeString(hash); err != nil || len(hash) != 8 {
+		return "", fmt.Errorf("invalid egress CA subject hash %q", hash)
+	}
+	return hash, nil
 }
 
 // Preserve distro integrations such as Java's keystore with a one-certificate

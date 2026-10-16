@@ -35,6 +35,7 @@ from .config import (
     ConfigContext,
     SDKSettings,
     get_config_context,
+    get_settings,
     load_config,
     prompt_for_config_context,
     save_config,
@@ -473,6 +474,7 @@ class ServiceClient:
         self._disk: Optional[DiskServiceStub] = None
         self._secret: Optional[SecretServiceStub] = None
         self._http: Optional["GatewayHTTP"] = None
+        self._vm_http: Optional["GatewayHTTP"] = None
 
     def __enter__(self) -> "ServiceClient":
         return self
@@ -511,8 +513,24 @@ class ServiceClient:
                 ).rstrip("/"),
                 workspace_id=config.workspace_id,
                 token=(self._config.token if self._config else "") or self.channel.config.token,
+                persistent_vms=config.persistent_vms,
             )
         return self._http
+
+    @property
+    def vm_http(self) -> Optional["GatewayHTTP"]:
+        """Direct VM REST access when this profile already identifies the API."""
+        if self._vm_http is None and self._config:
+            config, settings = self._config, get_settings()
+            base_url = config.api_url
+            if not base_url and (config.gateway_host, int(config.gateway_port or 0)) == (
+                settings.gateway_host,
+                int(settings.gateway_port),
+            ):
+                base_url = settings.api_url
+            if base_url and config.token:
+                self._vm_http = GatewayHTTP(base_url.rstrip("/"), "self", config.token)
+        return self._vm_http
 
     @property
     def gateway(self) -> GatewayServiceStub:
@@ -539,6 +557,8 @@ class ServiceClient:
         return self._secret
 
     def close(self) -> None:
+        if self._vm_http:
+            self._vm_http.close()
         if self._http:
             self._http.close()
         if self._channel:
@@ -552,9 +572,10 @@ class GatewayHTTP:
     actions are attributed like gRPC calls.
     """
 
-    def __init__(self, base_url: str, workspace_id: str, token: str):
+    def __init__(self, base_url: str, workspace_id: str, token: str, *, persistent_vms=False):
         self.base_url = base_url
         self.workspace_id = workspace_id
+        self.persistent_vms = persistent_vms
         self.headers = {"Authorization": f"Bearer {token}", **dict(caller_metadata())}
         self._session = requests.Session()
 

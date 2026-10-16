@@ -22,5 +22,6 @@ func (gws *GatewayService) ExportWorkspaceConfig(ctx context.Context, in *pb.Exp
 		GatewayGrpcPort: int32(gws.appConfig.GatewayService.GRPC.ExternalPort),
 		GatewayGrpcTls:  gws.appConfig.GatewayService.GRPC.TLS,
 		WorkspaceId:     authInfo.Workspace.ExternalId,
+		PersistentVms:   true,
 	}, nil
 }

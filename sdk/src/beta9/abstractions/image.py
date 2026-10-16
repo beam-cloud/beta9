@@ -617,29 +617,30 @@ class Image(BaseAbstraction):
 
     def _exists(self) -> Tuple[bool, ImageBuildResult]:
         with sdk_timing("image.verify_build"):
-            r: VerifyImageBuildResponse = self.stub.verify_image_build(
-                VerifyImageBuildRequest(
-                    python_packages=self.python_packages,
-                    python_version=self.python_version,
-                    commands=self.commands,
-                    build_steps=self.build_steps,
-                    force_rebuild=False,
-                    existing_image_uri=self.base_image,
-                    env_vars=self.env_vars,
-                    dockerfile=self.dockerfile,
-                    build_ctx_object=self.build_ctx_object,
-                    secrets=self.secrets,
-                    gpu=self.gpu,
-                    ignore_python=self.ignore_python,
-                    image_id=self._explicit_image_id,
-                )
-            )
+            r: VerifyImageBuildResponse = self.stub.verify_image_build(self._verify_request())
 
         return (
             r.exists,
             ImageBuildResult(
                 success=r.exists, image_id=r.image_id, python_version=self.python_version
             ),
+        )
+
+    def _verify_request(self) -> VerifyImageBuildRequest:
+        return VerifyImageBuildRequest(
+            python_packages=self.python_packages,
+            python_version=self.python_version,
+            commands=self.commands,
+            build_steps=self.build_steps,
+            force_rebuild=False,
+            existing_image_uri=self.base_image,
+            env_vars=self.env_vars,
+            dockerfile=self.dockerfile,
+            build_ctx_object=self.build_ctx_object,
+            secrets=self.secrets,
+            gpu=self.gpu,
+            ignore_python=self.ignore_python,
+            image_id=self._explicit_image_id,
         )
 
     def build(

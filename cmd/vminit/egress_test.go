@@ -271,3 +271,19 @@ func TestEgressTrustBeforeSystemdSetsPATH(t *testing.T) {
 		t.Fatal("PID 1 did not install trust without PATH")
 	}
 }
+
+func TestEgressSubjectHashMatchesOpenSSLAcrossKeysAndSubjects(t *testing.T) {
+	for _, name := range []string{"Beam container egress CA", "Beam container egress CA", "Other root"} {
+		ca := newTestTrustCA(t, name)
+		command := exec.Command("/usr/bin/openssl", "x509", "-subject_hash", "-noout")
+		command.Stdin = bytes.NewReader(ca.pem)
+		expected, err := command.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := egressCASubjectHash(ca.pem)
+		if err != nil || actual != strings.TrimSpace(string(expected)) {
+			t.Fatalf("subject %q: hash %q, expected %q, error %v", name, actual, expected, err)
+		}
+	}
+}

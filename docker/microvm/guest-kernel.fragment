@@ -153,3 +153,12 @@ CONFIG_CGROUP_CPUACCT=y
 CONFIG_IKCONFIG=y
 CONFIG_IKCONFIG_PROC=y
 CONFIG_PRINTK_TIME=y
+
+# Boot large guests without initializing the entire page metadata array on
+# the bootstrap CPU. The remaining metadata is initialized by parallel
+# kthreads before the memory is made available to allocations.
+CONFIG_DEFERRED_STRUCT_PAGE_INIT=y
+
+# Cloud Hypervisor exposes a single memory node (no --numa topology). Avoid
+# NUMA discovery, balancing and the memory-tier initialization grace period.
+CONFIG_NUMA=n

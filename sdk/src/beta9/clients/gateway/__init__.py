@@ -1616,6 +1616,8 @@ class ExportWorkspaceConfigResponse(betterproto.Message):
     gateway_grpc_port: int = betterproto.int32_field(5)
     gateway_grpc_tls: bool = betterproto.bool_field(6)
     workspace_id: str = betterproto.string_field(7)
+    persistent_vms: bool = betterproto.bool_field(8)
+    """Allows clients to avoid a separate VM API preflight round trip."""
 
 
 @dataclass(eq=False, repr=False)
