@@ -1,11 +1,22 @@
 import importlib
 import inspect
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
 
 from . import terminal
+
+
+def local_process_kwargs(command: str) -> dict:
+    """Allow macOS to spawn helpers without forking active gRPC threads."""
+    if sys.platform != "darwin":
+        return {}
+    executable = shutil.which(command)
+    if executable is None:
+        raise FileNotFoundError(f"Executable not found: {command}")
+    return {"executable": os.path.abspath(executable), "close_fds": False}
 
 
 def retry_on_transient_error(fn, max_retries: int = 3, delay: float = 0.5):

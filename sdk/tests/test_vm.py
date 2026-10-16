@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import threading
 import socket
+import sys
 import tarfile
 from pathlib import Path
 
@@ -159,7 +160,10 @@ def test_vm_image_does_not_depend_on_client_archive_libraries(monkeypatch):
     monkeypatch.setattr(gzip, "GzipFile", unexpected)
     prepared = prepare_image(Image(base_image="ubuntu:24.04"), service(), True)
     encoded = prepared.build_steps[-1].command.split("'")[3]
-    assert base64.b64decode(encoded) == Path(vm_module.__file__).with_name("assets.tar.gz").read_bytes()
+    assert (
+        base64.b64decode(encoded)
+        == Path(vm_module.__file__).with_name("assets.tar.gz").read_bytes()
+    )
 
 
 def test_desktop_clipboard_patch_is_idempotent_and_checks_upstream(tmp_path):
@@ -857,7 +861,8 @@ def test_cli_ip_is_copyable_and_reports_unallocated_addresses(cli_service, addre
         ["template", "create", "dev", "base"],
     ],
 )
-def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, args):
+@pytest.mark.parametrize("json_mode", ["command", "global", "env"])
+def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, args, json_mode):
     vm = MagicMock(info={"id": "vm-12ab34cd56ef7890", "name": "dev", "status": "running"})
     for method in ("create", "start", "pause", "stop", "fork"):
         getattr(vm, method).return_value = vm
@@ -867,7 +872,13 @@ def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, ar
     factory.get.return_value = vm
     monkeypatch.setattr(vm_cli, "VM", factory)
 
-    result = CliRunner().invoke(vm_cli.management, [*args, "--json"])
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    argv = (["--json"] if json_mode == "global" else []) + ["vm", *args]
+    if json_mode == "command":
+        argv.append("--json")
+    result = CliRunner().invoke(
+        cli.common_group, argv, env={"BETA9_JSON": "1" if json_mode == "env" else "0"}
+    )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == vm.info
 
@@ -916,6 +927,37 @@ def test_identity_reports_missing_openssh(monkeypatch, identity_settings):
     monkeypatch.setattr(vm_module.subprocess, "run", MagicMock(side_effect=FileNotFoundError()))
     with pytest.raises(RuntimeError, match="install ssh-keygen"):
         vm_module.identity()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS spawn regression")
+def test_identity_does_not_fork(monkeypatch, identity_settings):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Forking while gRPC threads are active")
+
+    monkeypatch.setattr(subprocess, "_fork_exec", forbidden)
+    assert vm_module.identity().with_suffix(".pub").exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS spawn regression")
+@pytest.mark.parametrize("command", ["ssh", "scp", "sync"])
+def test_local_vm_commands_do_not_fork(cli_service, monkeypatch, tmp_path, command):
+    for name in ("ssh", "scp", "rsync"):
+        (tmp_path / name).symlink_to("/usr/bin/true")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(vm_cli, "_vm", lambda *_: SimpleNamespace(name="dev"))
+    monkeypatch.setattr(vm_cli, "_ssh_options", lambda *_: [])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Forking while gRPC threads are active")
+
+    monkeypatch.setattr(subprocess, "_fork_exec", forbidden)
+    arguments = {
+        "ssh": ["ssh", "dev", "echo", "a b;$USER"],
+        "scp": ["scp", str(tmp_path), "dev:/workspace/"],
+        "sync": ["sync", "dev", str(tmp_path)],
+    }
+    result = CliRunner().invoke(vm_cli.management, arguments[command])
+    assert result.exit_code == 0, result.output
 
 
 @pytest.mark.parametrize("hung_command", ["systemctl", "python3"])
@@ -1274,13 +1316,20 @@ def test_cli_logs_rejects_conflicting_sources_before_acquiring_vm(
     acquire.assert_not_called()
 
 
-def test_cli_ps_uses_pid_indexed_processes(cli_service, monkeypatch):
+@pytest.mark.parametrize("mode", ["command", "global", "env"])
+def test_cli_ps_uses_pid_indexed_processes(cli_service, monkeypatch, mode):
     vm = MagicMock()
     vm.process.list_processes.return_value = {
         44: SimpleNamespace(pid=44, args=["echo", "two words"], cwd="/", exit_code=0)
     }
     monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
-    result = CliRunner().invoke(vm_cli.management, ["ps", "--json", "dev"])
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    argv = (["--json"] if mode == "global" else []) + ["vm", "ps", "dev"]
+    if mode == "command":
+        argv.append("--json")
+    result = CliRunner().invoke(
+        cli.common_group, argv, env={"BETA9_JSON": "1" if mode == "env" else "0"}
+    )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == [
         {"pid": 44, "args": ["echo", "two words"], "cwd": "/", "exit_code": 0}
@@ -1445,7 +1494,8 @@ def test_activity_lease_surfaces_lost_authorization():
 
 
 @pytest.mark.parametrize("detach", [False, True])
-def test_cli_json_exec_passes_stdin_only_for_foreground(cli_service, monkeypatch, detach):
+@pytest.mark.parametrize("mode", ["command", "global", "env"])
+def test_cli_json_exec_passes_stdin_only_for_foreground(cli_service, monkeypatch, detach, mode):
     vm = MagicMock()
     vm.id = "vm-test"
     vm.info = {"container_id": "current"}
@@ -1462,9 +1512,18 @@ def test_cli_json_exec_passes_stdin_only_for_foreground(cli_service, monkeypatch
     process.stdout.read.return_value = "output"
     process.stderr.read.return_value = ""
     monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
-    args = ["exec", "--json"] + (["--detach"] if detach else []) + ["dev", "cat"]
-    result = CliRunner().invoke(vm_cli.management, args, input="piped input")
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    args = (["--json"] if mode == "global" else []) + ["vm", "exec"]
+    args += (["--json"] if mode == "command" else []) + (["--detach"] if detach else [])
+    args += ["dev", "cat"]
+    result = CliRunner().invoke(
+        cli.common_group,
+        args,
+        input="piped input",
+        env={"BETA9_JSON": "1" if mode == "env" else "0"},
+    )
     assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["pid"] == 44
     stdin = vm._sandbox.return_value.process.exec.call_args.kwargs["stdin"]
     if detach:
         assert stdin is None
@@ -1577,3 +1636,26 @@ def test_new_vm_includes_desktop_and_preserves_prebuilt_settings(
     result = CliRunner().invoke(vm_cli.management, ["new", "dev", "--json", *args])
     assert result.exit_code == 0, result.output
     assert factory.call_args.kwargs["desktop"] is expected
+
+
+@pytest.mark.parametrize("mode", ["command", "global", "env"])
+def test_image_build_json_is_clean(cli_service, monkeypatch, tmp_path, mode):
+    (tmp_path / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    image = MagicMock()
+
+    def build():
+        print("Image build output belongs in diagnostics")
+        return SimpleNamespace(success=True, image_id="image-test")
+
+    image.build.side_effect = build
+    monkeypatch.setattr(vm_cli, "prepare_image", lambda *_: image)
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    args = (["--json"] if mode == "global" else []) + ["vm", "image", "build", str(tmp_path)]
+    if mode == "command":
+        args.append("--json")
+    result = CliRunner(mix_stderr=False).invoke(
+        cli.common_group, args, env={"BETA9_JSON": "1" if mode == "env" else "0"}
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"image_id": "image-test", "desktop": False}
+    assert "Image build output belongs in diagnostics" in result.stderr
