@@ -46,6 +46,7 @@ async function check(pathname) {
   });
 
   assert.equal(new URL(desktop.src).searchParams.get('path'), pathname.slice(1) + 'websockify');
+  assert.equal(new URL(desktop.src).searchParams.get('kasmvnc_mode_preference'), 'image', 'Keep interactive desktops off CPU video encoders');
   state('connected');
   assert.equal(loading.hidden, true);
   assert.equal(timers.size, 0);

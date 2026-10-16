@@ -469,6 +469,19 @@ func (s *Service) action(c echo.Context) error {
 		return err
 	}
 
+	// Issuing a browser credential only reads the VM. It must not contend
+	// with startup, reconciliation or another desktop/terminal sign-in.
+	if c.Param("action") == "access-session" {
+		v, err := s.repo.GetVM(ctx, info.Workspace.Id, c.Param("name"))
+		if err != nil {
+			return apiError(err)
+		}
+		if v.DesiredState == types.VMStateDeleted {
+			return echo.NewHTTPError(http.StatusNotFound, "VM removed")
+		}
+		return s.createAccessSession(c, v, req.Port, req.TTL)
+	}
+
 	v, unlock, err := s.lockedVM(ctx, info.Workspace.Id, c.Param("name"))
 	if err != nil {
 		return apiError(err)
@@ -573,8 +586,6 @@ func (s *Service) action(c echo.Context) error {
 		if err := s.repo.TouchVM(ctx, v.ID); err != nil {
 			return apiError(err)
 		}
-	case "access-session":
-		return s.createAccessSession(c, v, req.Port, req.TTL)
 	case "rotate-access-token":
 		v.TrafficAccessToken = randomHexID()
 		if err := s.repo.SaveVM(ctx, v); err != nil {

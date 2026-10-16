@@ -127,6 +127,7 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
         assert assets.getmember("browser-trust").mode == 0o755
         installer = assets.extractfile("install").read().decode()
         assert "libnss3-tools" in installer
+        assert 'env GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop' in installer
         assert '/etc/ca-certificates/update.d/beam-browser' in installer
 
 
