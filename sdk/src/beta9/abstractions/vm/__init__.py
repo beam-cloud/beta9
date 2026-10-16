@@ -2,13 +2,10 @@
 
 import base64
 import copy
-import gzip
-import io
 import json
 import math
 import os
 import subprocess
-import tarfile
 import tempfile
 import threading
 import time
@@ -126,34 +123,9 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
         # Existing IDs must already include the VM services; no image changes
         # can be silently appended to a prebuilt, content-addressed image.
         return prepared
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name in (
-            "beam-desktop.service",
-            "beam-terminal.service",
-            "boot",
-            "desktop",
-            "browser.desktop",
-            "browser-trust",
-            "browser-trust-update",
-            "browser",
-            "terminal.desktop",
-            "terminal.svg",
-            "install",
-            "xstartup",
-        ):
-            path = Path(__file__).with_name(name)
-            data = path.read_bytes()
-            entry = tarfile.TarInfo(name)
-            entry.size = len(data)
-            entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg") else 0o755
-            archive.addfile(entry, io.BytesIO(data))
-    compressed = io.BytesIO()
-    # gzip.compress(mtime=0) embeds the client's OS on Python 3.11/3.12.
-    # GzipFile keeps identical guest assets under one image ID across clients.
-    with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as archive:
-        archive.write(buffer.getvalue())
-    data = base64.b64encode(compressed.getvalue()).decode("ascii")
+    # Ship one bundle: tar headers and compression can differ between clients,
+    # and the encoded bytes are part of the image cache key.
+    data = base64.b64encode(Path(__file__).with_name("assets.tar.gz").read_bytes()).decode("ascii")
     prepared.add_commands(
         [
             "mkdir -p /tmp/beam-vm-assets && "

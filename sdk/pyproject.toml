@@ -28,7 +28,7 @@ dependencies = [
     "jsonschema>=4.17.3,<5",
 ]
 name = "beta9"
-version = "0.1.287"
+version = "0.1.288"
 description = ""
 
 [project.scripts]
@@ -36,6 +36,7 @@ beta9 = "beta9.cli.main:start"
 
 [tool.setuptools.package-data]
 beta9 = [
+    "abstractions/vm/assets.tar.gz",
     "skills/**/*.md",
     "abstractions/vm/*.service",
     "abstractions/vm/*.desktop",
