@@ -31,6 +31,8 @@
     autoconnect: '1', resize: 'remote', reconnect: 'true', video_quality: '3',
     // The frame already renders at 2x; Kasm's native-density mode would scale it again.
     enable_hidpi: 'false', anti_aliasing: '1', framerate: '60', framerate_image_mode: '60',
+    // Avoid Kasm 1.5 selecting a CPU-heavy video encoder for an interactive desktop.
+    kasmvnc_mode_preference: 'image',
     enable_perf_stats: 'false',
     enable_webp: 'true', clipboard_up: 'true', clipboard_down: 'true', clipboard_seamless: 'true',
     // Kasm defaults to /websockify, which loses a gateway path prefix.

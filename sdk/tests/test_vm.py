@@ -10,6 +10,7 @@ import subprocess
 import threading
 import socket
 import tarfile
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -127,7 +128,26 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
         assert assets.getmember("browser-trust").mode == 0o755
         installer = assets.extractfile("install").read().decode()
         assert "libnss3-tools" in installer
-        assert '/etc/ca-certificates/update.d/beam-browser' in installer
+        assert "env GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop" in installer
+        assert "/etc/ca-certificates/update.d/beam-browser" in installer
+
+
+def test_desktop_clipboard_patch_is_idempotent_and_checks_upstream(tmp_path):
+    installer = Path(vm_module.__file__).with_name("install").read_text()
+    patch = installer.split("  python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    patch = patch.replace(
+        "Path('/usr/share/kasmvnc/www/assets')", "Path(" + repr(str(tmp_path)) + ")"
+    )
+    client = tmp_path / "ui.js"
+    client.write_text("class RFB { async clipboardPasteDataFrom(data) { return data; } }")
+    exec(patch, {})
+    once = client.read_text()
+    exec(patch, {})
+    assert client.read_text() == once, "Custom images may already contain the clipboard fix"
+    assert "async beamClipboardPasteDataFrom(data)" in once
+    client.write_text("class RFB { async differentClipboardAPI(data) { return data; } }")
+    with pytest.raises(AssertionError, match="no longer matches"):
+        exec(patch, {})
 
 
 def test_vm_rejects_gpu_build_and_does_not_modify_explicit_image():

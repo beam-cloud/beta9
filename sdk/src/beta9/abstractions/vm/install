@@ -69,6 +69,31 @@ if [ "$desktop" = true ]; then
   fi
   apt-get update
   apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" libnss3-tools openbox pcmanfm libfm-modules librsvg2-common xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  # Kasm 1.5 leaves getType() rejections unhandled when the host clipboard
+  # changes mid-read. Discard that partial transfer and retry on the next input.
+  python3 - <<'PY'
+import re
+from pathlib import Path
+
+count = 0
+for path in Path('/usr/share/kasmvnc/www/assets').glob('*.js'):
+    source = path.read_text()
+    if 'async beamClipboardPasteDataFrom(' in source:
+        count += 1
+        continue
+    source, matches = re.subn(
+        r'async clipboardPasteDataFrom\(',
+        'async clipboardPasteDataFrom(...args){try{return await this.beamClipboardPasteDataFrom(...args)}'
+        'catch(error){if(error.name!=="InvalidStateError")throw error;'
+        'this._clipHash=0;this._resendClipboardNextUserDrivenEvent=true}}'
+        'async beamClipboardPasteDataFrom(',
+        source,
+    )
+    if matches:
+        path.write_text(source)
+        count += matches
+assert count == 1, 'KasmVNC clipboard patch no longer matches the installed client'
+PY
   install -d /etc/ca-certificates/update.d
   install -m 0755 "$assets/browser-trust" /opt/beam-vm/browser-trust
   install -m 0755 "$assets/browser-trust-update" /etc/ca-certificates/update.d/beam-browser
@@ -99,9 +124,11 @@ show_trash=0
 EOF
   fi
   xdg-user-dirs-update
-  # Start the desktop after Openbox has acquired the window-manager selection.
-  if ! grep -q '^pcmanfm --desktop' /etc/xdg/openbox/autostart; then
-    printf '\npcmanfm --desktop &\n' >> /etc/xdg/openbox/autostart
+  # Noble's PCManFM uses GTK3, which otherwise doubles our already-2x icons.
+  # Keep its fonts at 192 DPI and its icons at their configured pixel size.
+  if ! grep -q '^env GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop' /etc/xdg/openbox/autostart; then
+    sed -i '/^pcmanfm --desktop/d' /etc/xdg/openbox/autostart
+    printf '\nenv GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop &\n' >> /etc/xdg/openbox/autostart
   fi
   if [ "$browser" = firefox ]; then
     sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' /root/Desktop/browser.desktop

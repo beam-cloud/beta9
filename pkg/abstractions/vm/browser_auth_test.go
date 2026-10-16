@@ -102,6 +102,30 @@ func TestBrowserAuthIsDisabledWithoutExplicitConfiguration(t *testing.T) {
 	}
 }
 
+func TestBrowserSessionsDoNotTakeLifecycleLock(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	s.domain = "vm.example.com"
+	v.TrafficAccessToken = "traffic-secret"
+	v.Spec.ProtectedPorts = []uint32{7681, 8080}
+	store := &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
+	s.repo = store
+	for _, port := range []uint32{7681, 8080} {
+		response := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/access-session", `{"port":`+strconv.Itoa(int(port))+`}`)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var entry struct {
+			URL string `json:"url"`
+		}
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &entry))
+		target, err := url.Parse(entry.URL)
+		require.NoError(t, err)
+		require.True(t, validAccessSession(v, port, target.Query().Get(sessionParameter), time.Now()))
+	}
+	// Lifecycle mutations must still respect the held lock.
+	response := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/rotate-access-token", `{}`)
+	require.Equal(t, http.StatusConflict, response.Code)
+	require.True(t, store.locked)
+}
+
 func TestAuthorizedBrowserCookieReturnsToCleanDirectVMURL(t *testing.T) {
 	s, v, info, runtime, _ := fixture()
 	s.domain = "vm.example.com"
