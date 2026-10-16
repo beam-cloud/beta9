@@ -1197,7 +1197,7 @@ func (s *Worker) listenForShutdown() {
 }
 
 func (s *Worker) disableSchedulingForShutdown() {
-	if err := s.disableScheduling(false); err != nil {
+	if err := s.disableScheduling(); err != nil {
 		log.Warn().Err(err).Msg("failed to disable worker scheduling during shutdown")
 	}
 }
@@ -1207,8 +1207,11 @@ func (s *Worker) disableSchedulingForGPUError(err error) bool {
 		return false
 	}
 	log.Error().Err(err).Msg("GPU requires recovery; disabling new container placement")
-	if disableErr := s.disableScheduling(true); disableErr != nil {
-		log.Warn().Err(disableErr).Msg("failed to disable scheduling on worker with unhealthy GPU")
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+	defer cancel()
+	_, cordonErr := handleGRPCResponse(s.workerRepoClient.CordonWorker(ctx, &pb.DisableWorkerRequest{WorkerId: s.workerId}))
+	if cordonErr != nil {
+		log.Warn().Err(cordonErr).Msg("failed to cordon worker with unhealthy GPU")
 	}
 	return true
 }
@@ -1216,17 +1219,13 @@ func (s *Worker) disableSchedulingForGPUError(err error) bool {
 // disableScheduling marks the worker disabled at the gateway: the scheduler
 // stops placing containers on it and the pool sizer stops counting its free
 // capacity, so a replacement is provisioned while this one is still running.
-// Cordoning also persists the exclusion across agent refreshes without stopping containers.
-func (s *Worker) disableScheduling(cordon bool) error {
+func (s *Worker) disableScheduling() error {
 	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
 	defer cancel()
 
-	request := &pb.DisableWorkerRequest{WorkerId: s.workerId}
-	if cordon {
-		_, err := handleGRPCResponse(s.workerRepoClient.CordonWorker(ctx, request))
-		return err
-	}
-	_, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, request))
+	_, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, &pb.DisableWorkerRequest{
+		WorkerId: s.workerId,
+	}))
 	return err
 }
 
@@ -1281,7 +1280,7 @@ func (s *Worker) maybeStartDraining(now time.Time) {
 	if s.draining || !s.pastMaxAge(now) || now.Before(s.nextDrainAttempt) {
 		return
 	}
-	if err := s.disableScheduling(false); err != nil {
+	if err := s.disableScheduling(); err != nil {
 		s.nextDrainAttempt = now.Add(workerDrainRetryInterval)
 		log.Warn().Err(err).Str("worker_id", s.workerId).Dur("retry_in", workerDrainRetryInterval).Msg("worker past its max age could not disable scheduling, retrying")
 		return

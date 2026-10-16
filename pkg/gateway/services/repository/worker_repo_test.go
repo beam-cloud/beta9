@@ -14,43 +14,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type disableWorkerRepo struct {
+type cordonWorkerRepo struct {
 	repository.WorkerRepository
-	cordon, disabled bool
-	err              error
+	cordoned bool
+	err      error
 }
 
-func (r *disableWorkerRepo) GetWorkerById(id string) (*types.Worker, error) {
+func (r *cordonWorkerRepo) GetWorkerById(id string) (*types.Worker, error) {
 	return &types.Worker{Id: id}, nil
 }
 
-func (r *disableWorkerRepo) SetWorkerCordon(_ string, cordon bool) error {
-	r.cordon = cordon
+func (r *cordonWorkerRepo) SetWorkerCordon(_ string, cordon bool) error {
+	r.cordoned = cordon
 	return r.err
 }
 
-func (r *disableWorkerRepo) UpdateWorkerStatus(_ string, status types.WorkerStatus) error {
-	r.disabled = status == types.WorkerStatusDisabled
-	return r.err
-}
-
-func TestDisableWorkerCordon(t *testing.T) {
-	for _, cordon := range []bool{false, true} {
-		for _, repoErr := range []error{nil, errors.New("repository unavailable")} {
-			repo := &disableWorkerRepo{err: repoErr}
-			service := &WorkerRepositoryService{workerRepo: repo}
-			disable := service.DisableWorker
-			if cordon {
-				disable = service.CordonWorker
-			}
-			response, err := disable(context.Background(), &pb.DisableWorkerRequest{WorkerId: "worker-1"})
-			require.NoError(t, err)
-			require.Equal(t, repoErr == nil, response.Ok)
-			require.Equal(t, cordon, repo.cordon)
-			require.Equal(t, !cordon, repo.disabled)
-			if repoErr != nil {
-				require.Equal(t, repoErr.Error(), response.ErrorMsg)
-			}
+func TestCordonWorker(t *testing.T) {
+	for _, repoErr := range []error{nil, errors.New("repository unavailable")} {
+		repo := &cordonWorkerRepo{err: repoErr}
+		service := &WorkerRepositoryService{workerRepo: repo}
+		response, err := service.CordonWorker(context.Background(), &pb.DisableWorkerRequest{WorkerId: "worker-1"})
+		require.NoError(t, err)
+		require.Equal(t, repoErr == nil, response.Ok)
+		require.True(t, repo.cordoned)
+		if repoErr != nil {
+			require.Equal(t, repoErr.Error(), response.ErrorMsg)
 		}
 	}
 }
