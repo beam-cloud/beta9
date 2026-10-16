@@ -45,7 +45,7 @@ func vmBlockNetworkSchema() map[string]any {
 }
 
 func vmSpecSchema() map[string]any {
-	return schema(props{
+	spec := schema(props{
 		"image_id":           str("VM image built with beam vm image build or the local vm_build_image tool"),
 		"cpu":                map[string]any{"type": "integer", "minimum": 100, "maximum": 64000, "default": 4000, "description": "CPU millicores (1000 = 1 CPU); fresh VM default is 4000."},
 		"memory":             map[string]any{"type": "integer", "minimum": 256, "maximum": 262144, "default": 8192, "description": "RAM in MiB; desktop requires at least 1024. Fresh VM default is 8192."},
@@ -70,6 +70,14 @@ func vmSpecSchema() map[string]any {
 		"volumes":            map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
 		"source_snapshot_id": str("Root disk snapshot ID"),
 	})
+	spec["allOf"] = []map[string]any{{
+		"if": map[string]any{
+			"required":   []string{"desktop"},
+			"properties": props{"desktop": map[string]any{"const": true}},
+		},
+		"then": map[string]any{"properties": props{"memory": map[string]any{"minimum": 1024}}},
+	}}
+	return spec
 }
 
 func vmSchema(extra props, required ...string) map[string]any {

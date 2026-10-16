@@ -61,6 +61,7 @@ func TestMCPVMResourceContract(t *testing.T) {
 		require.NoError(t, g.byName["create_vm"].validate(map[string]any{"spec": spec}))
 	}
 	for _, spec := range []map[string]any{
+		{"image_id": "base", "desktop": true, "memory": 1023},
 		{"image_id": "base", "cpu": 99},
 		{"image_id": "base", "memory": 255},
 		{"image_id": "base", "idle_timeout": -1},
