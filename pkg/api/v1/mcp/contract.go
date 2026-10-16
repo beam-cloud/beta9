@@ -142,7 +142,9 @@ func (g *Group) instructions() string {
 		"Apps and stack services default to serverless: min_replicas=0, keep_warm_seconds=0; databases use always_on=false. " +
 		"Keep these defaults unless the user explicitly requests continuous compute; a cold start is " +
 		"not a reason to add an idle floor. " +
-		"VM defaults are 4 vCPU, 8 GiB memory, 50 GiB disk and no idle timeout; keep them unless requested otherwise. " +
+		"CLI/SDK default VM images use digest-pinned Ubuntu 24.04; create_vm requires a prepared image_id, template or snapshot. " +
+		"VM defaults are 4 vCPU (4000 millicores in MCP), 8 GiB memory, 50 GiB disk and no idle timeout; keep them unless requested otherwise. " +
+		"Running status and URLs do not prove service readiness: verify vm_exec, then wait for desktop or Docker before using those tools. " +
 		"Pin container_id for process " +
 		"operations across VM restarts. " +
 		"Filter discovery with ?features=vm,apps,observe or ?tools=whoami,list_vms; ?readonly=true exposes read-only operations."

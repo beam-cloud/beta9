@@ -715,6 +715,7 @@ func (g *Gateway) registerServices() error {
 		ContainerRepo: g.ContainerRepo,
 		Runtime:       vmRuntime,
 		Gateway:       gws,
+		Images:        is,
 		RouteGroup:    g.baseRouteGroup.Group("/vm", g.authMiddleware),
 		Server:        g.echo,
 		BackendDialer: network.NewBackendDialer(g.Tailscale, g.Config.Tailscale, g.ContainerRepo, 10*time.Second),

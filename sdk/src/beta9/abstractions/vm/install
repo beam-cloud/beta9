@@ -35,7 +35,10 @@ install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
 install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" /opt/beam-vm/
 install -m 0644 "$assets"/*.service /etc/systemd/system/
 # These are managed by Beam at boot, not by image build-time enablement.
-systemctl disable ssh.service ssh.socket getty@tty1.service serial-getty@hvc0.service docker.service docker.socket containerd.service systemd-resolved.service systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
+# A missing unit aborts a batch disable on Noble. Disable each independently.
+for unit in ssh.service ssh.socket getty@tty1.service serial-getty@hvc0.service docker.service docker.socket containerd.service systemd-resolved.service systemd-networkd.service systemd-networkd.socket; do
+  systemctl disable "$unit" 2>/dev/null || true
+done
 rm -f /etc/ssh/ssh_host_* /etc/machine-id /var/lib/dbus/machine-id
 touch /etc/machine-id
 ln -s /etc/machine-id /var/lib/dbus/machine-id
@@ -49,9 +52,12 @@ AuthorizedKeysFile /run/beam-vm/authorized_keys
 PidFile /run/sshd/sshd.pid
 EOF
 if [ "$desktop" = true ]; then
-  [ "${VERSION_CODENAME:-}" = jammy ] || { echo 'Desktop currently requires Ubuntu 22.04 (jammy)' >&2; exit 1; }
+  case "${ID}:${VERSION_CODENAME:-}" in
+    ubuntu:jammy|ubuntu:noble) ;;
+    *) echo 'Desktop requires Ubuntu 22.04 (jammy) or 24.04 (noble)' >&2; exit 1 ;;
+  esac
   version=1.5.0
-  curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_jammy_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
+  curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_${VERSION_CODENAME}_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
   if [ "$arch" = amd64 ]; then
     apt_repository google-chrome https://dl.google.com/linux/linux_signing_key.pub https://dl.google.com/linux/chrome/deb/ stable main
     browser=google-chrome-stable
@@ -62,7 +68,15 @@ if [ "$desktop" = true ]; then
     browser=firefox
   fi
   apt-get update
-  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" openbox pcmanfm libfm-modules librsvg2-common xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" libnss3-tools openbox pcmanfm libfm-modules librsvg2-common xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  install -d /etc/ca-certificates/update.d
+  install -m 0755 "$assets/browser-trust" /opt/beam-vm/browser-trust
+  install -m 0755 "$assets/browser-trust-update" /etc/ca-certificates/update.d/beam-browser
+  /opt/beam-vm/browser-trust --initialize
+  if [ "$arch" = amd64 ]; then
+    install -m 0755 "$assets/browser" /usr/local/bin/google-chrome-stable
+    ln -sf google-chrome-stable /usr/local/bin/google-chrome
+  fi
   install -m 0644 "$assets/terminal.svg" /opt/beam-vm/
   install -d -m 0755 /root/Desktop
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/

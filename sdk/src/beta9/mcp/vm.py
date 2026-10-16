@@ -76,7 +76,11 @@ def definitions(local: LocalTools) -> List[Tool]:
         (
             "vm_build_image",
             "build",
-            "Build a VM image from a local project. Returns image_id when the job completes.",
+            (
+                "Build a VM image from a local project Dockerfile (e.g. FROM ubuntu:24.04); "
+                "no default base is supplied. Desktop is opt-in and supports Ubuntu 24.04 or 22.04. "
+                "Returns image_id when the job completes."
+            ),
             {
                 "directory": STRING,
                 "dockerfile": STRING,

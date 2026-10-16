@@ -25,7 +25,7 @@ from rich.text import Text
 
 from .. import terminal
 from ..abstractions.image import Image
-from ..abstractions.vm import VM, identity, prepare_image
+from ..abstractions.vm import DEFAULT_VM_BASE_IMAGE, VM, identity, prepare_image
 from ..abstractions.volume import Volume
 from ..channel import GatewayHTTPError, ServiceClient, rpc_timeout
 from ..clients.gateway import ListContainersRequest
@@ -79,7 +79,7 @@ def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, s
         Image.from_dockerfile(dockerfile, build_context)
         if dockerfile
         else (
-            Image.from_id(image_id) if image_id else Image(base_image=image_uri or "ubuntu:22.04")
+            Image.from_id(image_id) if image_id else Image(base_image=image_uri or DEFAULT_VM_BASE_IMAGE)
         )
     )
     image.ignore_python = True
@@ -194,7 +194,7 @@ def _show(info, as_json):
     "--disk-size",
     help="Writable disk over the base image; 1–100 GiB, default 50 GiB.",
 )
-@click.option("--image", "image_uri", help="Base registry image; defaults to ubuntu:22.04.")
+@click.option("--image", "image_uri", help="Base registry image; defaults to Ubuntu 24.04.")
 @click.option("--image-id", help="Existing image with Beam VM services installed.")
 @click.option(
     "--dockerfile", type=click.Path(exists=True, dir_okay=False), help="Build a custom VM image."
@@ -339,7 +339,11 @@ def new(
         env_map = extraclick.env_vars_to_dict(env)
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
-    image = _image(dockerfile, build_context, image_id, image_uri, build_secret)
+    image = (
+        _image(dockerfile, build_context, image_id, image_uri, build_secret)
+        if dockerfile or image_id or image_uri or build_secret
+        else None
+    )
     vm = VM(
         name,
         image=image,
@@ -373,8 +377,7 @@ def new(
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
         with _progress("Creating VM", "VM ready", as_json):
-            vm.create(wait=False)
-            vm.wait()
+            vm.create()
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)

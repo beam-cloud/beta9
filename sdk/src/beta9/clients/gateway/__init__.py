@@ -1616,6 +1616,13 @@ class ExportWorkspaceConfigResponse(betterproto.Message):
     gateway_grpc_port: int = betterproto.int32_field(5)
     gateway_grpc_tls: bool = betterproto.bool_field(6)
     workspace_id: str = betterproto.string_field(7)
+    persistent_vms: bool = betterproto.bool_field(8)
+    """
+    Advertises gateway support for the persistent VM HTTP management API.
+     When true, clients can skip the VM API capability preflight. False/unset
+     leaves support unknown (older gateways), so clients must probe the API.
+     Independent of any VM's existence, lifecycle state or readiness.
+    """
 
 
 @dataclass(eq=False, repr=False)

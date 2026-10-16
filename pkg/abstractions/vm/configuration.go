@@ -120,8 +120,8 @@ func validate(spec *types.VMSpec) error {
 		return fmt.Errorf("image_id is required; the image must contain systemd and the Beam VM services")
 	}
 
-	if spec.Desktop && spec.Memory < 2048 {
-		return fmt.Errorf("desktop requires at least 2048 MiB")
+	if spec.Desktop && spec.Memory < 1024 {
+		return fmt.Errorf("desktop requires at least 1024 MiB")
 	}
 
 	for _, env := range spec.Env {

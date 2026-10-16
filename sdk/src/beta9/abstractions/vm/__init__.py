@@ -24,6 +24,7 @@ import betterproto
 from ...channel import (
     RECOVERY_TIMEOUT,
     Channel,
+    GatewayHTTP,
     GatewayHTTPError,
     ServiceClient,
     rpc_timeout,
@@ -39,6 +40,13 @@ from ...type import DurableDisk
 from ..image import Image
 from ..sandbox import SandboxInstance
 from ..volume import Volume
+
+
+# Keep the stock guest reproducible and avoid a registry tag lookup on launch.
+# Refresh this digest when updating the default Ubuntu guest.
+DEFAULT_VM_BASE_IMAGE = (
+    "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
+)
 
 
 def identity() -> Path:
@@ -126,6 +134,9 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
             "boot",
             "desktop",
             "browser.desktop",
+            "browser-trust",
+            "browser-trust-update",
+            "browser",
             "terminal.desktop",
             "terminal.svg",
             "install",
@@ -137,7 +148,12 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
             entry.size = len(data)
             entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg") else 0o755
             archive.addfile(entry, io.BytesIO(data))
-    data = base64.b64encode(gzip.compress(buffer.getvalue(), mtime=0)).decode("ascii")
+    compressed = io.BytesIO()
+    # gzip.compress(mtime=0) embeds the client's OS on Python 3.11/3.12.
+    # GzipFile keeps identical guest assets under one image ID across clients.
+    with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as archive:
+        archive.write(buffer.getvalue())
+    data = base64.b64encode(compressed.getvalue()).decode("ascii")
     prepared.add_commands(
         [
             "mkdir -p /tmp/beam-vm-assets && "
@@ -166,6 +182,11 @@ class VM:
 
     disk_size sets the writable root capacity over the base image
     (1–100 GiB; default 50 GiB).
+
+    Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
+    and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
+    create() waits for exec readiness; wait(services=True) also waits for
+    enabled SSH/terminal/desktop services. Docker helpers wait separately.
 
     Runtime secrets require approved hosts and arrive as placeholders for
     literal HTTPS request headers. No workspace token is injected automatically;
@@ -217,6 +238,7 @@ class VM:
         self.request_id = str(uuid.UUID(request_id)) if request_id else str(uuid.uuid4())
         self._metadata = metadata
         self._creation_body = None
+        self._vm_http = None
         self._volumes = volumes
         if template and snapshot:
             raise ValueError("Choose a template or snapshot")
@@ -256,7 +278,7 @@ class VM:
         deadline = time.monotonic() + timeout
         while True:
             try:
-                return self._service.http.json(
+                return (self._vm_http or self._service.http).json(
                     method,
                     "/api/v1/vm/{ws}" + path,
                     timeout=max(1, math.ceil(deadline - time.monotonic())),
@@ -302,6 +324,41 @@ class VM:
         return self
 
     def create(self, wait: bool = True) -> "VM":
+        if (
+            self._creation_body is None
+            and self.image is None
+            and not (self.template or self._snapshot_source or self._volumes)
+            and isinstance(getattr(self._service, "vm_http", None), GatewayHTTP)
+        ):
+            # A cached default image can be resolved by the gateway in the
+            # creation request, without transport discovery or an image RPC.
+            self._vm_http = self._service.vm_http
+            spec = dict(self._spec)
+            spec.setdefault("ssh", True)
+            if spec["ssh"]:
+                spec["ssh_public_key"] = public_key()
+            image = Image(base_image=DEFAULT_VM_BASE_IMAGE)
+            image.ignore_python = True
+            prepared = prepare_image(image, self._service, spec.get("desktop", False))
+            self._creation_body = copy.deepcopy(
+                {
+                    "name": self.name or "",
+                    "spec": spec,
+                    "request_id": self.request_id,
+                    "image": prepared._verify_request().to_dict(casing=betterproto.Casing.SNAKE),
+                    **({"metadata": self._metadata} if self._metadata is not None else {}),
+                }
+            )
+            try:
+                return self._submit_creation(wait)
+            except GatewayHTTPError as exc:
+                # These responses precede resource creation. Older gateways
+                # reject the alias/body; a missing image needs the build flow.
+                unsupported_body = exc.status == 400 and 'unknown field "image"' in exc.message
+                if (exc.status not in (401, 404, 428) and not unsupported_body) or self.info:
+                    raise
+                self._vm_http = None
+                self._creation_body = None
         self.prepare()
         return self._submit_creation(wait)
 
@@ -316,7 +373,10 @@ class VM:
         # Older gateways return a generic route 404, which otherwise appears
         # after a successful (and potentially expensive) image build.
         try:
-            self._api("GET")
+            # New gateways advertise VM support in the transport handshake.
+            # Keep the preflight for older gateways before building an image.
+            if getattr(self._service.http, "persistent_vms", False) is not True:
+                self._api("GET")
         except GatewayHTTPError as exc:
             if exc.status != 404:
                 raise
@@ -357,7 +417,7 @@ class VM:
 
         if not (self.template or self._snapshot_source):
             spec.setdefault("ssh", True)
-            image = self.image or Image(base_image="ubuntu:22.04")
+            image = self.image or Image(base_image=DEFAULT_VM_BASE_IMAGE)
             if self.image is None:
                 image.ignore_python = True
             result = prepare_image(image, self._service, spec.get("desktop", False)).build()

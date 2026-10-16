@@ -657,6 +657,92 @@ func TestCreateRejectsGPUFieldsAndCrossWorkspaceAccess(t *testing.T) {
 	}
 }
 
+type vmImageVerifierFunc func(context.Context, *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error)
+
+func (f vmImageVerifierFunc) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
+	return f(ctx, in)
+}
+
+func TestVMCreateResolvesCachedImageInAuthenticatedWorkspace(t *testing.T) {
+	s, _, info, runtime, gateway := fixture()
+	lookups := 0
+	s.images = vmImageVerifierFunc(func(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
+		lookups++
+		require.Equal(t, 1, lookups, "retry must recover the resolved image even if its registry tag changed")
+		actual, ok := auth.AuthInfoFromContext(ctx)
+		require.True(t, ok)
+		require.Equal(t, info.Workspace.Id, actual.Workspace.Id)
+		require.Equal(t, "ubuntu:22.04", in.ExistingImageUri)
+		return &pb.VerifyImageBuildResponse{Valid: true, Exists: true, ImageId: "cached-vm"}, nil
+	})
+	e := echo.New()
+	api := e.Group("/vm", func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error { return next(&auth.HttpAuthContext{Context: c, AuthInfo: info}) }
+	})
+	registerVMRoutes(api, s)
+	body := fmt.Sprintf(`{"name":"fast-vm","request_id":%q,"spec":{"desktop":true},"image":{"existing_image_uri":"ubuntu:22.04","ignore_python":true}}`, uuid.NewString())
+	var id string
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/vm/self?wait=exec", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+		var result struct {
+			types.VM
+			ExecReady bool `json:"exec_ready"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+		require.True(t, result.ExecReady)
+		stored, err := s.repo.GetVM(context.Background(), info.Workspace.Id, result.ID)
+		require.NoError(t, err)
+		require.Equal(t, info.Workspace.ExternalId, stored.WorkspaceExternalID)
+		require.Equal(t, "cached-vm", result.Spec.ImageID)
+		if i > 0 {
+			require.Equal(t, id, result.ID)
+		}
+		id = result.ID
+	}
+	require.Equal(t, "cached-vm", gateway.stub.ImageId)
+	require.Len(t, runtime.requests, 1, "retry must not allocate a second VM")
+	require.Equal(t, 1, lookups)
+}
+
+func TestVMCachedImageMissAndWorkspaceAliasRejectBeforeAllocation(t *testing.T) {
+	for _, test := range []struct {
+		name, workspace, token, image string
+		status                        int
+	}{
+		{"missing image", "self", "", `{"existing_image_uri":"ubuntu:22.04"}`, 428},
+		{"restricted token", "self", string(types.TokenTypeWorkspaceRestricted), `{}`, 401},
+		{"other workspace", "other", "", `{}`, 401},
+		{"GPU image", "self", "", `{"gpu":"A100"}`, 400},
+		{"rebuild", "self", "", `{"force_rebuild":true}`, 400},
+		{"unknown field", "self", "", `{"unexpected":true}`, 400},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, _, info, runtime, gateway := fixture()
+			info.Token.TokenType = test.token
+			s.images = vmImageVerifierFunc(func(context.Context, *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
+				return &pb.VerifyImageBuildResponse{Valid: true, Exists: false}, nil
+			})
+			e := echo.New()
+			api := e.Group("/vm", func(next echo.HandlerFunc) echo.HandlerFunc {
+				return func(c echo.Context) error { return next(&auth.HttpAuthContext{Context: c, AuthInfo: info}) }
+			})
+			registerVMRoutes(api, s)
+			req := httptest.NewRequest(http.MethodPost, "/vm/"+test.workspace, strings.NewReader(`{"name":"new-vm","spec":{},"image":`+test.image+`}`))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.Equal(t, test.status, rec.Code, rec.Body.String())
+			require.Len(t, s.repo.(*vmStore).rows, 1)
+			require.Empty(t, runtime.requests)
+			require.Nil(t, gateway.stub)
+		})
+	}
+}
+
 func TestTemplateOverridesRetainImageAndRoot(t *testing.T) {
 	s, v, info, _, gateway := fixture()
 	store := s.repo.(*vmStore)
