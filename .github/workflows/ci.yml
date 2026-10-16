@@ -48,6 +48,14 @@ jobs:
           CI: true
         run: make tests
 
+      - name: Verify installed wheel
+        run: |
+          uv build --wheel
+          uv venv "$RUNNER_TEMP/beta9-package"
+          uv pip install --python "$RUNNER_TEMP/beta9-package/bin/python" dist/*.whl
+          uv pip check --python "$RUNNER_TEMP/beta9-package/bin/python"
+          "$RUNNER_TEMP/beta9-package/bin/python" -c 'from beta9 import Bot, VM; from beta9.abstractions.experimental.bot.bot import BotEvent; assert BotEvent(type="agent_message", value="ok").model_dump()["value"] == "ok"'
+
   lint_and_test_go_pkg:
     runs-on: ubuntu-latest
     steps:

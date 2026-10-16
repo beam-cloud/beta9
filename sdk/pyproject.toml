@@ -15,6 +15,7 @@ dependencies = [
     "click<9.0.0,>=8.1.7",
     "protobuf<7.0.0,>=5.29.6",
     "fastapi<1.0.0,>=0.115.11",
+    "pydantic<3.0.0,>=2.10.6",
     "uvicorn<1.0.0,>=0.29.0",
     "watchdog<5.0.0,>=4.0.0",
     "betterproto-beta9==2.0.1",
@@ -28,7 +29,7 @@ dependencies = [
     "jsonschema>=4.17.3,<5",
 ]
 name = "beta9"
-version = "0.1.285"
+version = "0.1.287"
 description = ""
 
 [project.scripts]
