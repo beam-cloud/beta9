@@ -34,6 +34,7 @@ from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
 from ...terminal import cli_name
 from ...type import DurableDisk
+from ...utils import local_process_kwargs
 from ..image import Image
 from ..sandbox import SandboxInstance
 from ..volume import Volume
@@ -72,10 +73,13 @@ def identity() -> Path:
                     ],
                     stdin=subprocess.DEVNULL,
                     check=True,
+                    **local_process_kwargs("ssh-keygen"),
                 )
                 _publish_identity(temporary, path)
             public = subprocess.check_output(
-                ["ssh-keygen", "-y", "-f", str(path)], stdin=subprocess.DEVNULL
+                ["ssh-keygen", "-y", "-f", str(path)],
+                stdin=subprocess.DEVNULL,
+                **local_process_kwargs("ssh-keygen"),
             )
             temporary_public = Path(directory) / "identity.pub"
             temporary_public.write_bytes(public)

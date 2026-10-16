@@ -9,6 +9,8 @@ from click.testing import CliRunner
 
 from beta9.cli import extraclick
 from beta9.cli import vm as vm_cli
+from beta9.cli.main import load_cli
+from beta9.config import SDKSettings
 
 
 @pytest.fixture
@@ -81,9 +83,16 @@ def test_list_uses_current_boot_and_preserves_filters(selected, monkeypatch, wid
 
 
 @pytest.mark.parametrize("records", [[], [record()]])
-def test_json_is_unchanged_and_needs_no_container_lookup(selected, monkeypatch, records):
+@pytest.mark.parametrize("mode", ["command", "global", "env"])
+def test_json_is_unchanged_and_needs_no_container_lookup(selected, monkeypatch, records, mode):
     monkeypatch.setattr(vm_cli.VM, "list", lambda **kwargs: records)
-    result = CliRunner().invoke(vm_cli.management, ["list", "--json"])
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    argv = (["--json"] if mode == "global" else []) + ["vm", "list"]
+    if mode == "command":
+        argv.append("--json")
+    result = CliRunner().invoke(
+        cli.common_group, argv, env={"BETA9_JSON": "1" if mode == "env" else "0"}
+    )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == records
     selected.gateway.list_containers.assert_not_called()

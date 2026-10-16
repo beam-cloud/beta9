@@ -33,6 +33,7 @@ from ..config import SDKSettings, get_config_context, get_settings, set_settings
 from ..exceptions import SandboxConnectionError
 from ..logging import StoredStdoutInterceptor
 from ..tunnel import bridge_tunnel
+from ..utils import local_process_kwargs
 from . import extraclick
 from .extraclick import ClickManagementGroup
 from .machine_format import format_cpu, format_memory
@@ -71,7 +72,11 @@ def _vm(service, name):
 
 
 def _progress(message, done, as_json=False):
-    return nullcontext() if as_json else terminal.StepTracker().step(message, done)
+    return (
+        nullcontext()
+        if as_json or terminal.json_output()
+        else terminal.StepTracker().step(message, done)
+    )
 
 
 def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=()):
@@ -79,7 +84,9 @@ def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, s
         Image.from_dockerfile(dockerfile, build_context)
         if dockerfile
         else (
-            Image.from_id(image_id) if image_id else Image(base_image=image_uri or DEFAULT_VM_BASE_IMAGE)
+            Image.from_id(image_id)
+            if image_id
+            else Image(base_image=image_uri or DEFAULT_VM_BASE_IMAGE)
         )
     )
     image.ignore_python = True
@@ -329,6 +336,7 @@ def new(
     idle_action=None,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
+    as_json = as_json or terminal.json_output()
     if sum(bool(v) for v in (image_uri, image_id, dockerfile, template)) > 1:
         raise click.UsageError("Choose one of --image, --image-id, --dockerfile or --template")
     if build_context and not dockerfile:
@@ -405,6 +413,7 @@ def image_group():
 @extraclick.pass_service_client
 def image_build(service, build_context, dockerfile, build_secret, desktop, as_json):
     """Build a VM image from a local Dockerfile."""
+    as_json = as_json or terminal.json_output()
     dockerfile = dockerfile or str(Path(build_context) / "Dockerfile")
     image = _image(dockerfile, build_context, secrets=build_secret)
     with StoredStdoutInterceptor(capture_logs=as_json):
@@ -426,6 +435,7 @@ def image_build(service, build_context, dockerfile, build_secret, desktop, as_js
 @extraclick.pass_service_client
 def list_vms(service, include_all, as_json, metadata=(), status=None):
     """List VM resources, disk sizes and current uptime."""
+    as_json = as_json or terminal.json_output()
     records = VM.list(
         all=include_all,
         metadata=_key_values(metadata) if metadata else None,
@@ -800,6 +810,7 @@ def fork_vm(service, source, name, as_json):
 @extraclick.pass_service_client
 def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False):
     """Run a command; put CLI options before NAME."""
+    as_json = as_json or terminal.json_output()
     from .container import exec_container
 
     command = _command(command)
@@ -851,6 +862,7 @@ def exec_vm(service, name, command, cwd, timeout=0, detach=False, as_json=False)
 @extraclick.pass_service_client
 def processes_vm(service, name, as_json):
     """List managed processes and their exit status."""
+    as_json = as_json or terminal.json_output()
     processes = _vm(service, name).process.list_processes()
     rows = [
         {"pid": p.pid, "args": p.args, "cwd": p.cwd, "exit_code": p.exit_code}
@@ -972,7 +984,7 @@ def ports_vm(service, name, as_json):
 @extraclick.pass_service_client
 def expose_vm(service, name, port, protected=None, as_json=False, url_only=False):
     """Publish a port and show how to open it; private links sign you in."""
-    if as_json and url_only:
+    if (as_json or terminal.json_output()) and url_only:
         raise click.UsageError("Choose --json or --url")
     vm = _vm(service, name)
     vm.expose(port, protected=protected)
@@ -1084,7 +1096,7 @@ def ssh_vm(service, name, command):
     argv = ["ssh", *_ssh_options(vm), "-p", "2222", "--", "root@" + vm.name]
     if command:
         argv += [shlex.join(command)]
-    raise click.exceptions.Exit(subprocess.call(argv))
+    raise click.exceptions.Exit(subprocess.call(argv, **local_process_kwargs(argv[0])))
 
 
 @management.command("scp")
@@ -1106,7 +1118,7 @@ def scp_vm(service, source, destination, recursive):
         + (["-r"] if recursive else [])
         + [source, destination]
     )
-    raise click.exceptions.Exit(subprocess.call(args))
+    raise click.exceptions.Exit(subprocess.call(args, **local_process_kwargs(args[0])))
 
 
 def _sync(vm, directory, watch):
@@ -1121,7 +1133,7 @@ def _sync(vm, directory, watch):
         f"root@{vm.name}:/workspace/",
     ]
     if not watch:
-        subprocess.run(args, check=True)
+        subprocess.run(args, check=True, **local_process_kwargs(args[0]))
     else:
         from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer
@@ -1136,12 +1148,12 @@ def _sync(vm, directory, watch):
         observer.schedule(Handler(), str(directory), recursive=True)
         observer.start()
         try:
-            subprocess.run(args, check=True)
+            subprocess.run(args, check=True, **local_process_kwargs(args[0]))
             while True:
                 if changed.wait(1):
                     time.sleep(0.2)
                     changed.clear()
-                    subprocess.run(args, check=True)
+                    subprocess.run(args, check=True, **local_process_kwargs(args[0]))
         finally:
             observer.stop()
             observer.join()
