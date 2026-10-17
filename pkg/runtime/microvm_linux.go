@@ -644,6 +644,36 @@ func (m *MicroVM) instance(containerID string) (*microVMInstance, bool) {
 
 var _ GuestFilesystem = (*MicroVM)(nil)
 
+var _ GuestPortDialer = (*MicroVM)(nil)
+
+func (m *MicroVM) DialGuestPort(ctx context.Context, containerID string, port uint32) (net.Conn, error) {
+	inst, ok := m.instance(containerID)
+	if !ok {
+		return nil, ErrContainerNotFound{ContainerID: containerID}
+	}
+	if !inst.alive() {
+		return nil, fmt.Errorf("microvm %s is not running", containerID)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// The service starts before the guest announces readiness. An older
+	// agent refuses it; return promptly so the worker can use the NIC path.
+	conn, err := dialGuestVsockOnce(ctx, filepath.Join(inst.stateDir, microVMVsockSocket), microvm.TunnelPort)
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
+	if err := microvm.ConnectPort(conn, port); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
+
 // GuestFS runs one filesystem operation inside the guest over a dedicated
 // vsock connection: JSON header line out, raw payload for writes, JSON reply
 // line back, raw bytes for reads. See microvm.FSPort.

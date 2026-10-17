@@ -2,12 +2,14 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -16,6 +18,35 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+type guestTunnelRuntime struct {
+	runtime.Runtime
+	dial func(context.Context, string, uint32) (net.Conn, error)
+}
+
+func (r guestTunnelRuntime) DialGuestPort(ctx context.Context, id string, port uint32) (net.Conn, error) {
+	return r.dial(ctx, id, port)
+}
+
+func TestTunnelDialsGuestOnlyForBoundPorts(t *testing.T) {
+	host, guest := net.Pipe()
+	defer guest.Close()
+	instance := &ContainerInstance{Runtime: guestTunnelRuntime{dial: func(_ context.Context, id string, port uint32) (net.Conn, error) {
+		require.Equal(t, "vm", id)
+		require.Equal(t, uint32(3773), port)
+		return host, nil
+	}}}
+	defer instance.tunnels.close()
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	server.containerInstances.Set("vm", instance)
+	request := &pb.ContainerTunnelRequest{ContainerId: "vm", SessionId: uuid.NewString(), Port: 3773, Create: true}
+	_, err := server.ContainerTunnel(context.Background(), request)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	instance.setContainerPortAddress(3773, "192.0.2.1:3773")
+	_, err = server.ContainerTunnel(context.Background(), request)
+	require.NoError(t, err)
+	require.Same(t, host, instance.tunnels.sessions[request.SessionId].conn)
+}
 
 func TestTunnelUsesRequestJournalAcrossAttachments(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -34,7 +65,12 @@ func TestTunnelUsesRequestJournalAcrossAttachments(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 		conn.Write(append([]byte("echo:"), input...))
 	}()
-	instance := &ContainerInstance{ContainerAddressMap: map[int32]string{2222: listener.Addr().String()}}
+	instance := &ContainerInstance{
+		ContainerAddressMap: map[int32]string{2222: listener.Addr().String()},
+		Runtime: guestTunnelRuntime{dial: func(context.Context, string, uint32) (net.Conn, error) {
+			return nil, errors.New("older guest agent without tunnel support")
+		}},
+	}
 	defer instance.tunnels.close()
 	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
 	server.containerInstances.Set("vm", instance)
