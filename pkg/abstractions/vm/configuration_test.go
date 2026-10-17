@@ -304,3 +304,65 @@ func TestAccessResumesStoppedVMAndKeepsItsURL(t *testing.T) {
 	require.Equal(t, v.Handle, stored.Handle)
 	require.Equal(t, "running", stored.DesiredState)
 }
+
+func TestUpdateProjectsLaunchReadinessWithoutPersistingLifecycle(t *testing.T) {
+	for _, test := range []struct {
+		name, status, desired, response string
+		runtime                         types.ContainerStatus
+		missing, lookupError            bool
+	}{
+		{name: "ready launch", status: "starting", desired: "running", response: "running", runtime: types.ContainerStatusRunning},
+		{name: "pending launch", status: "starting", desired: "running", response: "starting", runtime: types.ContainerStatusPending},
+		{name: "absent runtime", status: "starting", desired: "running", response: "starting", missing: true},
+		{name: "pause intent", status: "starting", desired: "paused", response: "starting", runtime: types.ContainerStatusRunning},
+		{name: "stop intent", status: "starting", desired: "stopped", response: "starting", runtime: types.ContainerStatusRunning},
+		{name: "paused", status: "paused", desired: "paused", response: "paused", runtime: types.ContainerStatusRunning},
+		{name: "stopped", status: "stopped", desired: "stopped", response: "stopped", runtime: types.ContainerStatusRunning},
+		{name: "stopping", status: "stopping", desired: "stopped", response: "stopping", runtime: types.ContainerStatusRunning},
+		{name: "runtime error", status: "starting", desired: "running", lookupError: true},
+	} {
+		for _, network := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/network=%t", test.name, network), func(t *testing.T) {
+				s, v, info, runtime, _ := fixture()
+				v.Status, v.DesiredState = test.status, test.desired
+				v.MemoryCheckpointID = "owned-checkpoint"
+				containers := s.containers.(*vmContainers)
+				containers.states[v.ContainerID].Status = test.runtime
+				if test.missing {
+					delete(containers.states, v.ContainerID)
+				}
+				if test.lookupError {
+					containers.readError = fmt.Errorf("runtime lookup unavailable")
+				}
+				body := `{"idle_timeout":90,"idle_action":"pause","auto_resume":true}`
+				wantCode := http.StatusOK
+				if network {
+					body = `{"block_network":true}`
+					if test.response != "running" {
+						wantCode = http.StatusConflict
+					}
+				}
+				if test.lookupError {
+					wantCode = http.StatusBadRequest // Existing API error mapping.
+				}
+				rec := vmRequest(managementAPI(s, info), "PATCH", "/"+info.Workspace.ExternalId+"/"+v.ID, body)
+				require.Equal(t, wantCode, rec.Code, rec.Body.String())
+				if wantCode == http.StatusOK {
+					var response types.VM
+					require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+					require.Equal(t, test.response, response.Status)
+				}
+				stored, err := s.repo.GetVM(context.Background(), v.WorkspaceID, v.ID)
+				require.NoError(t, err)
+				require.Equal(t, test.status, stored.Status)
+				require.Equal(t, test.desired, stored.DesiredState)
+				require.Equal(t, "owned-checkpoint", stored.MemoryCheckpointID)
+				if wantCode != http.StatusOK {
+					require.Zero(t, stored.Spec.IdleTimeout)
+					require.False(t, stored.Spec.BlockNetwork)
+				}
+				require.Equal(t, network && wantCode == http.StatusOK, runtime.network != nil)
+			})
+		}
+	}
+}

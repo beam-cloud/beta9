@@ -5,10 +5,40 @@
 # Worker images copy /microvm/bin and /microvm/share from the tag they pin, so
 # a worker release never rebuilds the kernel.
 
-# Cloud Hypervisor + virtiofsd
+# virtiofsd
 # ========================
-# Static release binaries, pinned and checksummed. virtiofsd publishes x86_64
-# only; on arm64 the hypervisor ships but NewMicroVM reports the runtime
+# Carry the immutable-export fast path without changing writable shares.
+FROM rust:1.89-bookworm AS virtiofsd
+ARG TARGETARCH
+ARG VIRTIOFSD_VERSION=v1.14.0
+ARG VIRTIOFSD_SOURCE_SHA256=52b66e449ca583b4f050a2bff327ff812211a2c349b4130279fcfc6a64540f04
+WORKDIR /build
+COPY docker/virtiofsd/*.patch /patches/
+RUN <<EOT
+set -eux
+mkdir -p /out
+if [ "$TARGETARCH" != "amd64" ]; then exit 0; fi
+apt-get update
+apt-get install -y --no-install-recommends libcap-ng-dev libseccomp-dev patch pkg-config
+curl -fsSL "https://gitlab.com/virtio-fs/virtiofsd/-/archive/${VIRTIOFSD_VERSION}/virtiofsd-${VIRTIOFSD_VERSION}.tar.gz" -o source.tar.gz
+echo "${VIRTIOFSD_SOURCE_SHA256}  source.tar.gz" | sha256sum -c -
+tar -xzf source.tar.gz --strip-components=1
+rm source.tar.gz
+for p in /patches/*.patch; do patch -p1 --forward < "$p"; done
+export CARGO_BUILD_JOBS=2 RUSTFLAGS="-C target-feature=+crt-static"
+export LIBSECCOMP_LINK_TYPE=static LIBCAPNG_LINK_TYPE=static
+export LIBSECCOMP_LIB_PATH=/usr/lib/x86_64-linux-gnu LIBCAPNG_LIB_PATH=/usr/lib/x86_64-linux-gnu
+cargo build --release --locked --target x86_64-unknown-linux-gnu
+cargo test --release --locked --target x86_64-unknown-linux-gnu --lib
+strip target/x86_64-unknown-linux-gnu/release/virtiofsd
+install -m 0755 target/x86_64-unknown-linux-gnu/release/virtiofsd /out/virtiofsd
+/out/virtiofsd --version
+EOT
+
+# Cloud Hypervisor
+# ========================
+# Static release binary, pinned and checksummed. On arm64 the hypervisor
+# ships but NewMicroVM reports the runtime
 # unavailable ("virtiofsd not found in PATH") rather than failing the build.
 FROM debian:bookworm AS tools
 
@@ -16,11 +46,8 @@ ARG TARGETARCH
 ARG CLOUD_HYPERVISOR_VERSION=v53.0
 ARG CLOUD_HYPERVISOR_AMD64_SHA256=448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc
 ARG CLOUD_HYPERVISOR_ARM64_SHA256=f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850
-ARG VIRTIOFSD_VERSION=v1.14.0
-ARG VIRTIOFSD_AMD64_URL=https://gitlab.com/-/project/21523468/uploads/f505704014ae7a816e515f2a05a93d8b/virtiofsd-v1.14.0.zip
-ARG VIRTIOFSD_AMD64_SHA256=2e4fe9571f492b00baa34bc4e708e950039c5da05b830b31a8d179cb6ac8978e
-
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
+COPY --from=virtiofsd /out/ /out/
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
 RUN <<EOT
 set -eux
@@ -30,15 +57,11 @@ case "$TARGETARCH" in
     amd64)
         curl -fsSL "${base}/cloud-hypervisor-static" -o /out/cloud-hypervisor
         echo "${CLOUD_HYPERVISOR_AMD64_SHA256}  /out/cloud-hypervisor" | sha256sum -c -
-        curl -fsSL "${VIRTIOFSD_AMD64_URL}" -o /tmp/virtiofsd.zip
-        echo "${VIRTIOFSD_AMD64_SHA256}  /tmp/virtiofsd.zip" | sha256sum -c -
-        unzip -j -q /tmp/virtiofsd.zip -d /tmp/virtiofsd
-        install -m 0755 /tmp/virtiofsd/virtiofsd /out/virtiofsd
         ;;
     arm64)
         curl -fsSL "${base}/cloud-hypervisor-static-aarch64" -o /out/cloud-hypervisor
         echo "${CLOUD_HYPERVISOR_ARM64_SHA256}  /out/cloud-hypervisor" | sha256sum -c -
-        echo "virtiofsd ${VIRTIOFSD_VERSION} has no published arm64 binary; the microvm runtime is amd64-only" >&2
+        echo "virtiofsd is built for amd64 only; the microvm runtime is amd64-only" >&2
         ;;
     *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;;
 esac

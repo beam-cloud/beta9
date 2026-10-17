@@ -241,6 +241,11 @@ func clearOverlayOrigins(upper string) error {
 }
 
 func assembleRoot(vm *microvm.Spec) error {
+	if vm.SeparateBinds {
+		if err := unix.Mount(microvm.BindsTag, microvm.BindsDir, "virtiofs", 0, ""); err != nil {
+			return fmt.Errorf("mount host binds: %w", err)
+		}
+	}
 	if err := waitForDevice(vm.RootDisk); err != nil {
 		return err
 	}
@@ -272,9 +277,13 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := unix.Mount("/", microvm.ImageMount, "", unix.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind image root: %w", err)
 	}
-	// virtio-fs inode handles change on cold boots and forks. Keep copied-up
-	// data on the durable disk instead of indexing or referencing lower inodes.
-	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=off", microvm.ImageMount, upper, work)
+	// Do not index virtio-fs handles: they change on cold boots and forks.
+	// Metadata-only changes resolve lower data by path without copying it.
+	metacopy := "off"
+	if vm.Metacopy {
+		metacopy = "on"
+	}
+	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=%s", microvm.ImageMount, upper, work, metacopy)
 	if err := unix.Mount("overlay", microvm.NewRoot, "overlay", 0, overlayOpts); err != nil {
 		return fmt.Errorf("mount overlay (%s): %w", overlayOpts, err)
 	}
@@ -286,6 +295,18 @@ func assembleRoot(vm *microvm.Spec) error {
 	}
 	if err := unix.Mount(microvm.DiskMount, filepath.Join(newRoot, microvm.DiskMount), "", unix.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind disk into new root: %w", err)
+	}
+
+	// Preserve an unmasked overlay view for exports. A later bind mount may
+	// hide a metadata-only upper file, whose data still belongs to the image.
+	if vm.Metacopy {
+		view := filepath.Join(newRoot, microvm.OverlayMount)
+		if err := os.MkdirAll(view, 0o755); err != nil {
+			return err
+		}
+		if err := unix.Mount(newRoot, view, "", unix.MS_BIND, ""); err != nil {
+			return fmt.Errorf("bind overlay export view: %w", err)
+		}
 	}
 
 	// The guest's pseudo filesystems go first so a spec mount under one
@@ -1155,6 +1176,12 @@ func writeTree(w io.Writer, root string, exclude []string) error {
 				}
 				hdr.PAXRecords["SCHILY.xattr."+name] = string(value)
 			}
+		}
+		if _, ok := hdr.PAXRecords["SCHILY.xattr.trusted.overlay.metacopy"]; ok && filepath.Clean(root) == filepath.Join(microvm.DiskMount, microvm.DiskOverlayUpper) {
+			// Image layers must contain real data, not references to the live
+			// guest's lower filesystem. Read metadata-only files through overlay.
+			path = filepath.Join(microvm.OverlayMount, rel)
+			delete(hdr.PAXRecords, "SCHILY.xattr.trusted.overlay.metacopy")
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err

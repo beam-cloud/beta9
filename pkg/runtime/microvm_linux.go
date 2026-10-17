@@ -32,6 +32,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 	"github.com/vishvananda/netns"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 )
 
@@ -57,7 +58,7 @@ type microVMInstance struct {
 	tapIndex  int
 	submounts []string
 
-	virtiofsd      *exec.Cmd
+	virtiofsd      []*exec.Cmd
 	hypervisor     *exec.Cmd
 	ctrl           *microVMControl
 	console        *tailWriter
@@ -340,6 +341,21 @@ func (m *MicroVM) newInstance(containerID, bundlePath string) (*microVMInstance,
 // a checkpoint path whose root disk replaces a fresh scratch image.
 func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *specs.Spec, restoreFrom string) (microvm.Network, microVMDisk, []microVMDisk, error) {
 	var none microvm.Network
+	if restoreFrom != "" {
+		config, err := os.ReadFile(filepath.Join(restoreFrom, checkpointVMDir, "config.json"))
+		if err != nil {
+			return none, microVMDisk{}, nil, err
+		}
+		var snapshot struct {
+			FS []json.RawMessage `json:"fs"`
+		}
+		if err := json.Unmarshal(config, &snapshot); err != nil {
+			return none, microVMDisk{}, nil, err
+		}
+		if len(snapshot.FS) != 2 {
+			return none, microVMDisk{}, nil, fmt.Errorf("checkpoint requires its original filesystem runtime (expected image and bind shares)")
+		}
+	}
 	if err := os.RemoveAll(inst.stateDir); err != nil {
 		return none, microVMDisk{}, nil, err
 	}
@@ -1151,6 +1167,9 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 			return err
 		}
 	}
+	if err := os.MkdirAll(filepath.Join(inst.stateDir, "binds"), 0o755); err != nil {
+		return err
+	}
 	if err := copyFile(m.cfg.MicroVMInitPath, filepath.Join(inst.canvas, microvm.InitPath), 0o755); err != nil {
 		return fmt.Errorf("install guest init: %w", err)
 	}
@@ -1221,8 +1240,8 @@ func writeFileNoFollow(path string, data []byte, mode os.FileMode) error {
 	return f.Close()
 }
 
-// bindIntoCanvas mounts one OCI bind mount at a numbered entry under
-// microvm.BindsDir; the guest binds it to the destination.
+// bindIntoCanvas stages an OCI bind outside the immutable image export;
+// the guest sees it through the separate share mounted at microvm.BindsDir.
 func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (microvm.Mount, error) {
 	dest := filepath.Clean(mount.Destination)
 	if !filepath.IsAbs(dest) || dest == "/" {
@@ -1234,7 +1253,7 @@ func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (micro
 	}
 	isFile := !info.IsDir()
 	guestSource := filepath.Join(microvm.BindsDir, strconv.Itoa(index))
-	target := filepath.Join(inst.canvas, guestSource)
+	target := filepath.Join(inst.stateDir, "binds", strconv.Itoa(index))
 	if err := removeCanvasEntry(target); err != nil {
 		return microvm.Mount{}, err
 	}
@@ -1266,16 +1285,30 @@ func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (micro
 // --- virtiofsd -----------------------------------------------------------------
 
 // startVirtiofsd serves the canvas over vhost-user, replacing any earlier
-// daemon of this VM (an in-place restore needs a fresh one).
+// daemons of this VM (an in-place restore needs fresh connections).
 func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) error {
 	inst.mu.Lock()
 	previous := inst.virtiofsd
+	inst.virtiofsd = nil
 	inst.mu.Unlock()
-	if previous != nil && previous.Process != nil {
-		_ = previous.Process.Kill()
-		waitProcessGone(previous.Process, 5*time.Second)
+	for _, cmd := range previous {
+		_ = cmd.Process.Kill()
+		waitProcessGone(cmd.Process, 5*time.Second)
 	}
-	socket := filepath.Join(inst.stateDir, microVMVirtiofsSocket)
+	// Only the immutable image may keep pages across opens. Host-backed
+	// mounts retain close-to-open coherence through their own share.
+	var shares errgroup.Group
+	shares.Go(func() error {
+		return m.startVirtiofsShare(ctx, inst, inst.canvas, microVMVirtiofsSocket, "always")
+	})
+	shares.Go(func() error {
+		return m.startVirtiofsShare(ctx, inst, filepath.Join(inst.stateDir, "binds"), microVMBindsSocket, "auto")
+	})
+	return shares.Wait()
+}
+
+func (m *MicroVM) startVirtiofsShare(ctx context.Context, inst *microVMInstance, dir, name, cache string) error {
+	socket := filepath.Join(inst.stateDir, name)
 	if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -1287,16 +1320,19 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 	// 64 threads cost 40 MB per VM and 300ms of boot under a 96-VM burst.
 	cmd := exec.Command(m.cfg.MicroVMVirtiofsdPath,
 		"--socket-path="+socket,
-		"--shared-dir="+inst.canvas,
+		"--shared-dir="+dir,
 		"--announce-submounts",
 		"--xattr",
 		"--killpriv-v2",
-		"--cache=auto",
+		"--cache="+cache,
 		"--inode-file-handles=never",
 		"--thread-pool-size=16",
 		"--sandbox=chroot",
 		"--log-level=warn",
 	)
+	if cache == "always" {
+		cmd.Args = append(cmd.Args, "--readonly")
+	}
 	cgroupFD, err := inst.cgroupAttr(cmd)
 	if err != nil {
 		return err
@@ -1308,7 +1344,7 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 		return err
 	}
 	inst.mu.Lock()
-	inst.virtiofsd = cmd
+	inst.virtiofsd = append(inst.virtiofsd, cmd)
 	inst.mu.Unlock()
 	exited := make(chan struct{})
 	go func() {
@@ -2092,8 +2128,8 @@ func (inst *microVMInstance) stopProcesses() {
 	inst.exited = true
 	virtiofsd := inst.virtiofsd
 	inst.mu.Unlock()
-	if virtiofsd != nil && virtiofsd.Process != nil {
-		_ = virtiofsd.Process.Kill()
+	for _, cmd := range virtiofsd {
+		_ = cmd.Process.Kill()
 	}
 	inst.ctrl.close()
 }
@@ -2108,8 +2144,8 @@ func (inst *microVMInstance) teardown() error {
 	if hypervisor != nil {
 		waitProcessGone(hypervisor.Process, 5*time.Second)
 	}
-	if virtiofsd != nil {
-		waitProcessGone(virtiofsd.Process, 5*time.Second)
+	for _, cmd := range virtiofsd {
+		waitProcessGone(cmd.Process, 5*time.Second)
 	}
 
 	var errs []error

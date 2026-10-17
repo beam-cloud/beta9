@@ -50,6 +50,7 @@ const (
 	microVMTapName               = "b9tap0"
 	microVMAPISocket             = "api.sock"
 	microVMVirtiofsSocket        = "virtiofs.sock"
+	microVMBindsSocket           = "binds.sock"
 	microVMVsockSocket           = "vsock.sock"
 	microVMBootTimeout           = 90 * time.Second
 	microVMPowerOffTimeout       = 15 * time.Second
@@ -345,6 +346,8 @@ func underAny(path string, prefixes ...string) bool {
 // decided that the guest has to act on.
 func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, mounts []microvm.Mount) *microvm.Spec {
 	vmSpec := &microvm.Spec{
+		SeparateBinds:       true,
+		Metacopy:            root.socket == "",
 		WorkloadMemoryBytes: microVMWorkloadMemoryBytes(spec),
 		Network:             network,
 		RootDisk:            root.device,
@@ -406,9 +409,8 @@ func microVMKernelCmdline() string {
 		"console=ttyS0",
 		"root=" + microvm.VirtiofsTag,
 		"rootfstype=virtiofs",
-		// rw: the share carries the spec's writable bind mounts (volumes,
-		// uploads). The image itself is only ever read as an overlay lower.
-		"rw",
+		// Host-backed writable mounts use their own share.
+		"ro",
 		"init=" + microvm.InitPath,
 		"reboot=k",
 		"panic=0",
@@ -432,6 +434,7 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		"--cpus", fmt.Sprintf("boot=%d", vcpus),
 		"--memory", fmt.Sprintf("size=%d,shared=on", memory),
 		"--fs", fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.VirtiofsTag, filepath.Join(stateDir, microVMVirtiofsSocket)),
+		fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.BindsTag, filepath.Join(stateDir, microVMBindsSocket)),
 		"--disk", root.arg,
 	}
 	for _, disk := range extra {
@@ -462,7 +465,8 @@ func microVMRestoreArgs(stateDir, snapshotDir string) []string {
 
 // rewriteSnapshotConfig points a snapshot's device config at this VM's
 // sockets, disk image and MAC. Devices are matched by position: --disk order
-// is root first, then the extra disks, and there is one net, fs and vsock.
+// is root first, then the extra disks, and there is one net and vsock.
+// Filesystem sockets are matched by tag.
 func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Network, root microVMDisk, extra []microVMDisk) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(config, &cfg); err != nil {
@@ -496,9 +500,14 @@ func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Netwo
 			disk["path"] = want[i].path
 		}
 	}
-	if fs, _ := cfg["fs"].([]any); len(fs) == 1 {
-		if entry, ok := fs[0].(map[string]any); ok {
-			entry["socket"] = filepath.Join(stateDir, microVMVirtiofsSocket)
+	fs, _ := cfg["fs"].([]any)
+	for _, value := range fs {
+		if entry, ok := value.(map[string]any); ok {
+			name := microVMVirtiofsSocket
+			if entry["tag"] == microvm.BindsTag {
+				name = microVMBindsSocket
+			}
+			entry["socket"] = filepath.Join(stateDir, name)
 		}
 	}
 	if vsock, ok := cfg["vsock"].(map[string]any); ok {

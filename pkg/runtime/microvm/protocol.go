@@ -29,6 +29,9 @@ const (
 	// ImageMount is the guest's non-recursive bind of the virtiofs root used
 	// as the overlay lower.
 	ImageMount = CanvasDir + "/image"
+	// OverlayMount retains the merged image without application submounts,
+	// for materializing metadata-only files during upper-layer export.
+	OverlayMount = CanvasDir + "/root"
 	// NewRoot is where the guest assembles the overlay before pivot_root.
 	NewRoot = CanvasDir + "/newroot"
 	// OldRoot is where pivot_root parks the virtiofs root inside the new root.
@@ -43,6 +46,7 @@ const (
 
 	// VirtiofsTag is the virtio-fs mount tag for the canvas share.
 	VirtiofsTag = "beamfs"
+	BindsTag    = "beambinds"
 	// ControlPort is the vsock port the guest connects to on the host (CID 2).
 	ControlPort = 1024
 	// GuestCID is the CID assigned to every VM (one VM per vsock device).
@@ -71,6 +75,12 @@ const (
 
 // Spec is what the host tells the guest init about this VM, at SpecFile.
 type Spec struct {
+	// SeparateBinds keeps mutable host mounts off the cached image share.
+	SeparateBinds bool `json:"separate_binds,omitempty"`
+	// Metacopy is limited to disposable roots; durable uppers must remain
+	// readable by host runtimes and older workers without metacopy enabled.
+	Metacopy bool `json:"metacopy,omitempty"`
+
 	Network Network `json:"network"`
 
 	// Application budget, excluding guest control headroom.

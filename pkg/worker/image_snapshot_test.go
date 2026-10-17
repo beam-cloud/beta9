@@ -11,17 +11,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/google/go-containerregistry/pkg/authn"
+	ggcrregistry "github.com/google/go-containerregistry/pkg/registry"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	ggcrtypes "github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+	"google.golang.org/grpc"
 )
 
 func TestFilesystemExportPublishesArchiveWithoutWorkerAWSCredentials(t *testing.T) {
@@ -435,4 +441,116 @@ func TestParseImageReferenceAppliesInsecureOnlyToBuildRegistry(t *testing.T) {
 	ref, err = client.parseImageReference("registry.internal:5000/beta9/images:snap-1")
 	require.NoError(t, err)
 	require.Equal(t, "https", ref.Context().Registry.Scheme())
+}
+
+// Sparse snapshot layouts omit base blobs. A cold layer-index cache must fall
+// back to the published registry without requesting auth for the new image ID,
+// which is not yet attached to the sandbox's authorized stub.
+func TestFilesystemSnapshotRegistryFallbackKeepsOriginalCredentialScope(t *testing.T) {
+	ctx := context.Background()
+	oldCachePath := baseImageCachePath
+	baseImageCachePath = t.TempDir()
+	t.Cleanup(func() { baseImageCachePath = oldCachePath })
+	_, cacheClient := newCheckpointCacheForTest(t, ctx)
+	var uploaded, baseReads atomic.Int64
+	registry := ggcrregistry.New()
+	var baseBlobPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/archive" {
+			n, err := io.Copy(io.Discard, r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			uploaded.Store(n)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		user, password, _ := r.BasicAuth()
+		if user != "user" || password != "pass" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="snapshot-test"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == baseBlobPath {
+			baseReads.Add(1)
+		}
+		registry.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	host := strings.Replace(strings.TrimPrefix(server.URL, "http://"), "127.0.0.1", "localhost", 1)
+	repo := &snapshotCredentialWorkerRepo{uploadURL: server.URL + "/archive"}
+	c := &ImageClient{
+		workerRepoClient: repo,
+		workerPoolName:   "agent-pool",
+		originCredsCache: make(map[string]*originCredentials),
+		v2ImageRefs:      common.NewSafeMap[string](),
+		cacheClient:      cacheClient,
+		imageCachePath:   t.TempDir(),
+		registry:         &reg.ImageRegistry{ImageFileExtension: reg.RemoteImageFileExtension},
+		config: types.AppConfig{
+			ImageService: types.ImageServiceConfig{RegistryStore: reg.S3ImageRegistryStore, BuildRegistry: host, BuildRepositoryName: "snapshots", BuildRegistryInsecure: true},
+			Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+				"agent-pool": {Mode: types.PoolModePrivate},
+			}},
+		},
+	}
+	baseDir, upperDir, workDir := t.TempDir(), t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "base"), []byte("base image bytes"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(upperDir, "changed"), []byte("snapshot bytes"), 0644))
+	baseLayers, err := packOverlayLayers(baseDir, t.TempDir(), ggcrtypes.DockerLayer)
+	require.NoError(t, err)
+	base, err := appendLayers(empty.Image, baseLayers, "base")
+	require.NoError(t, err)
+	layers, err := packOverlayLayers(upperDir, t.TempDir(), ggcrtypes.DockerLayer)
+	require.NoError(t, err)
+	image, err := appendLayers(base, layers, "snapshot")
+	require.NoError(t, err)
+	baseBlobPath = "/v2/snapshots/blobs/" + baseLayers[0].digest.String()
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "base", PoolSelector: "agent-pool", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}}
+
+	result, err := c.publishLayeredImage(ctx, request, image, layers, "snapshot", workDir)
+
+	require.NoError(t, err)
+	require.Equal(t, host+"/snapshots:snapshot", result.imageTag)
+	require.FileExists(t, c.archiveScratchPath(workDir, "snapshot"))
+	require.Positive(t, uploaded.Load())
+	require.Positive(t, baseReads.Load(), "missing base blob must be read from the authenticated registry fallback")
+	ref, ok := c.v2ImageRefs.Get("snapshot")
+	require.True(t, ok)
+	require.Equal(t, result.imageTag, ref)
+	require.NotEmpty(t, repo.requests)
+	for _, req := range repo.requests {
+		require.Equal(t, "base", req.ImageId, "new image IDs must never broaden gateway credential scope")
+	}
+}
+
+type snapshotCredentialWorkerRepo struct {
+	pb.WorkerRepositoryServiceClient
+	requests  []*pb.GetCacheOriginCredentialsRequest
+	uploadURL string
+}
+
+func (r *snapshotCredentialWorkerRepo) GetCacheOriginCredentials(_ context.Context, req *pb.GetCacheOriginCredentialsRequest, _ ...grpc.CallOption) (*pb.GetCacheOriginCredentialsResponse, error) {
+	r.requests = append(r.requests, req)
+	if req.ImageId != "base" {
+		return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "image is not authorized for this stub"}, nil
+	}
+	if req.ImageArchiveUploadId != "" {
+		return &pb.GetCacheOriginCredentialsResponse{Ok: true, ImageArchiveUploadUrl: r.uploadURL}, nil
+	}
+	return &pb.GetCacheOriginCredentialsResponse{Ok: true, RegistryCredentials: "user:pass"}, nil
+}
+
+func TestFilesystemSnapshotIndexCredentialsStayOnPublishingRegistry(t *testing.T) {
+	provider := snapshotIndexCredentialProvider("build.example.com", &authn.Basic{Username: "user", Password: "pass"})
+	for _, host := range []string{"other.example.com", "build.example.com.evil", "build.example.com:443"} {
+		auth, err := provider.GetCredentials(context.Background(), host, "snapshots")
+		require.NoError(t, err)
+		require.Empty(t, auth, "foreign hosts must receive explicit anonymous auth without ambient keychain fallback")
+	}
+	auth, err := provider.GetCredentials(context.Background(), "build.example.com", "snapshots")
+	require.NoError(t, err)
+	require.Equal(t, "user", auth.Username)
+	require.Equal(t, "pass", auth.Password)
 }

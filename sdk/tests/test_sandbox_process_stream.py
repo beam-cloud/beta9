@@ -111,6 +111,49 @@ def test_process_discovery_preserves_quoted_argument_boundaries():
     assert SandboxProcessManager(sandbox).list_processes()[44].args == ["printf", "%s", "two words"]
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["printf", "%s", "two words"],
+        ["printf", "%s", "two words", "single'quote", 'double"quote', "back\\slash"],
+    ],
+)
+def test_process_discovery_preserves_known_literal_arguments(args):
+    response = SimpleNamespace(
+        ok=True,
+        processes=[SimpleNamespace(pid=44, cmd=" ".join(args), cwd="/", env={}, exit_code=0)],
+    )
+    sandbox = SimpleNamespace(
+        container_id="sandbox", stub=SimpleNamespace(sandbox_list_processes=lambda _: response)
+    )
+    manager = SandboxProcessManager(sandbox)
+    manager.processes[44] = SandboxProcess(sandbox, pid=44, cwd="/", args=args, env={})
+
+    assert manager.list_processes()[44].args == args
+    assert manager.get_process(44).args == args
+
+
+@pytest.mark.parametrize(
+    "command", ["printf stray'quote", 'printf stray"quote', "printf trailing\\"]
+)
+def test_malformed_unknown_process_command_does_not_poison_discovery(command):
+    response = SimpleNamespace(
+        ok=True,
+        processes=[
+            SimpleNamespace(pid=44, cmd=command, cwd="/", env={}, exit_code=0),
+            SimpleNamespace(pid=45, cmd="sleep 30", cwd="/", env={}, exit_code=-1),
+        ],
+    )
+    sandbox = SimpleNamespace(
+        container_id="sandbox", stub=SimpleNamespace(sandbox_list_processes=lambda _: response)
+    )
+    manager = SandboxProcessManager(sandbox)
+
+    assert manager.list_processes()[44].args == [command]
+    assert manager.get_process(45).args == ["sleep", "30"]
+    assert manager.get_process(44).args == [command]
+
+
 def test_process_stream_read_propagates_fetch_errors():
     def fetch():
         raise SandboxProcessError("stdout unavailable")
