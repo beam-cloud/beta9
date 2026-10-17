@@ -5,7 +5,8 @@ assets=/tmp/beam-vm-assets
 desktop=${1:-false}
 command -v apt-get >/dev/null || { echo 'Beam VM images require Debian/Ubuntu and systemd' >&2; exit 1; }
 apt-get update
-apt-get install -y --no-install-recommends systemd systemd-sysv dbus ca-certificates curl openssh-server rsync git sudo procps python3 python3-pip
+# Runtime libraries required by native coding-agent binaries.
+apt-get install -y --no-install-recommends systemd systemd-sysv dbus ca-certificates curl openssh-server rsync git sudo procps python3 python3-pip libatomic1 libstdc++6 libgcc-s1
 arch=$(dpkg --print-architecture)
 case "$arch" in amd64) ttyd_arch=x86_64 ;; arm64) ttyd_arch=aarch64 ;; *) echo "unsupported VM architecture: $arch" >&2; exit 1 ;; esac
 curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.$ttyd_arch" -o /usr/local/bin/ttyd

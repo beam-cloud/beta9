@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -119,11 +121,44 @@ func (c *qmpClient) addOverlay(ctx context.Context, fmtNode, fileNode, path stri
 	return err
 }
 
-// removeNode drops a node added with addOverlay that never got wired into the
-// active chain. Implicitly created children (the file node) go with it.
+// removeNode releases an unused node's monitor reference. Implicitly created
+// children are released with it.
 func (c *qmpClient) removeNode(ctx context.Context, nodeName string) error {
 	_, err := c.execute(ctx, types.QMPCommandBlockdevDel, map[string]any{"node-name": nodeName})
 	return err
+}
+
+// releaseUnusedNodes closes compacted layers retained by the QMP monitor.
+func (c *qmpClient) releaseUnusedNodes(ctx context.Context, head string) error {
+	// Overlay children disappear with their parent. Re-query afterwards to
+	// release the initial file node, which has a separate monitor reference.
+	for _, prefix := range []string{qsdFmtNodePrefix, qsdFileNodePrefix + qsdFmtNodePrefix} {
+		nodes, err := c.namedBlockNodes(ctx)
+		if err != nil {
+			return err
+		}
+		active, ok := nodes[head]
+		if !ok {
+			return fmt.Errorf("node %s not found in block graph", head)
+		}
+		live := active.Image.filenames()
+		var retired []string
+		for name, node := range nodes {
+			if strings.HasPrefix(name, prefix) && !live[node.Image.Filename] {
+				retired = append(retired, name)
+			}
+		}
+		// Parents must go before any retired backing nodes they reference.
+		sort.Slice(retired, func(i, j int) bool {
+			return nodes[retired[i]].BackingFileDepth > nodes[retired[j]].BackingFileDepth
+		})
+		for _, name := range retired {
+			if err := c.removeNode(ctx, name); err != nil {
+				return fmt.Errorf("release retired node %s: %w", name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // pivot re-parents the active qcow2 node under the already-added overlay. On
@@ -214,6 +249,14 @@ type qmpImage struct {
 	BackingImage *qmpImage `json:"backing-image"`
 }
 
+func (image qmpImage) filenames() map[string]bool {
+	filenames := make(map[string]bool)
+	for current := &image; current != nil; current = current.BackingImage {
+		filenames[current.Filename] = true
+	}
+	return filenames
+}
+
 // namedBlockNodes returns all named nodes in the daemon's graph, used during
 // recovery to determine whether a pivot committed.
 func (c *qmpClient) namedBlockNodes(ctx context.Context) (map[string]qmpNode, error) {
@@ -246,11 +289,7 @@ func (c *qmpClient) backingFilenames(ctx context.Context, nodeName string) (map[
 	if !ok {
 		return nil, fmt.Errorf("node %s not found in block graph", nodeName)
 	}
-	filenames := make(map[string]bool)
-	for image := &node.Image; image != nil; image = image.BackingImage {
-		filenames[image.Filename] = true
-	}
-	return filenames, nil
+	return node.Image.filenames(), nil
 }
 
 // writtenBytes reports whether anything was written to a node since the

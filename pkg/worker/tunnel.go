@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -46,7 +47,21 @@ func (s *ContainerRuntimeServer) ContainerTunnel(ctx context.Context, in *pb.Con
 	if !exists {
 		return nil, status.Error(codes.NotFound, "container not found")
 	}
-	session, err := instance.tunnels.get(in, instance.containerAddress(int32(in.Port)))
+	session, err := instance.tunnels.get(in, func() (net.Conn, error) {
+		address := instance.containerAddress(int32(in.Port))
+		if address == "" {
+			return nil, status.Error(codes.FailedPrecondition, "port is not bound")
+		}
+		if guest, ok := instance.Runtime.(runtime.GuestPortDialer); ok {
+			conn, err := guest.DialGuestPort(ctx, in.ContainerId, in.Port)
+			if err == nil {
+				return conn, nil
+			}
+			// Keep supporting listeners bound only to the guest's NIC, and
+			// running VMs whose older guest agent has no tunnel service.
+		}
+		return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", address)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +96,7 @@ func (s *ContainerRuntimeServer) ContainerTunnel(ctx context.Context, in *pb.Con
 	return response, err
 }
 
-func (s *tunnelSessions) get(in *pb.ContainerTunnelRequest, address string) (*tunnelSession, error) {
+func (s *tunnelSessions) get(in *pb.ContainerTunnelRequest, dial func() (net.Conn, error)) (*tunnelSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -116,10 +131,7 @@ func (s *tunnelSessions) get(in *pb.ContainerTunnelRequest, address string) (*tu
 	if active >= 8 || len(s.sessions) >= requestJournalLimit {
 		return nil, status.Error(codes.ResourceExhausted, "too many tunnels")
 	}
-	if address == "" {
-		return nil, status.Error(codes.FailedPrecondition, "port is not bound")
-	}
-	conn, err := net.DialTimeout("tcp", address, 2*time.Second)
+	conn, err := dial()
 	if err != nil {
 		return nil, err
 	}

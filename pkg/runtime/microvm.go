@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -89,6 +90,12 @@ type GuestFilesystem interface {
 	// like a host overlay upper directory. exclude lists paths relative to
 	// guestPath to leave out.
 	ExportGuestTree(ctx context.Context, containerID, guestPath, hostDir string, exclude []string) error
+}
+
+// GuestPortDialer reaches loopback listeners inside a VM, whose network
+// namespace the host cannot enter. The worker still checks the port is bound.
+type GuestPortDialer interface {
+	DialGuestPort(ctx context.Context, containerID string, port uint32) (net.Conn, error)
 }
 
 // GuestUpperDir is where a guest keeps the writable layer of its root

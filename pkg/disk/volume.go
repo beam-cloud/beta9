@@ -807,6 +807,9 @@ func (v *Volume) Compact(ctx context.Context) error {
 	} else if !live[base.Path] {
 		return fmt.Errorf("compact volume %s: neither %s nor %s is in the live chain", state.Key, top.Path, base.Path)
 	}
+	if err := client.releaseUnusedNodes(ctx, v.fmtNode); err != nil {
+		return fmt.Errorf("compact volume %s: %w", state.Key, err)
+	}
 
 	// The base file now holds the newest published generation in full. A
 	// partially committed base stays invisible behind the intact overlays, so
