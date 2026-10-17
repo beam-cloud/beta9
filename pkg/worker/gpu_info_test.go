@@ -22,7 +22,14 @@ var eightGPUOutput = `0x0000, 00000000:23:00.0, 0, GPU-afb8c77a-62ef-a631-48d0-e
 0x0000, 00000000:C2:00.0, 6, GPU-fa89e45e-d56c-a9fd-6672-652c04f2818e
 0x0000, 00000000:E1:00.0, 7, GPU-0fe76e55-b048-6fa9-826e-c71d2266d0cb`
 
+func withMockGPUHealth() func() {
+	original := queryGPUHealth
+	queryGPUHealth = func(string) ([]byte, error) { return nil, nil }
+	return func() { queryGPUHealth = original }
+}
+
 func withMockDevices(output string, gpuExists bool) func() {
+	restoreHealth := withMockGPUHealth()
 	origQuery := queryDevices
 	origCheck := checkGPUExists
 
@@ -34,8 +41,76 @@ func withMockDevices(output string, gpuExists bool) func() {
 	}
 
 	return func() {
+		restoreHealth()
 		queryDevices = origQuery
 		checkGPUExists = origCheck
+	}
+}
+
+func TestQueryGPUHealthUnsupportedField(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	for _, test := range []struct {
+		message     string
+		stderr      bool
+		unsupported bool
+	}{
+		{`Field "gpu_recovery_action" is not a valid field to query.`, false, true},
+		{`Field "gpu_recovery_action" is not a valid field to query.`, true, true},
+		{"Failed to initialize NVML: Unknown Error", true, false},
+	} {
+		redirect := ""
+		if test.stderr {
+			redirect = " >&2"
+		}
+		script := "#!/bin/sh\nif [ \"$3\" != \"--id=GPU-a,GPU-b\" ]; then\n exit 42\nfi\nprintf '%s\\n' '" + test.message + "'" + redirect + "\nexit 2\n"
+		assert.NoError(t, os.WriteFile(filepath.Join(dir, "nvidia-smi"), []byte(script), 0755))
+		_, err := queryGPUHealth("GPU-a,GPU-b")
+		assert.Equal(t, test.unsupported, err == nil, test.message)
+	}
+}
+
+func TestAvailableGPUDevicesChecksRecoveryEachTime(t *testing.T) {
+	cleanup := withMockDevices("0x0000, 00000000:01:00.0, 0, GPU-a\n0x0000, 00000000:24:00.0, 1, GPU-b", true)
+	defer cleanup()
+	client := &NvidiaInfoClient{visibleDevices: "0"}
+
+	for _, test := range []struct {
+		action    string
+		available bool
+	}{
+		{"None", true}, {"Reset", false}, {"None", true},
+		{"Reboot", false}, {"Drain P2P", false}, {"Drain and Reset", false},
+		{"N/A", true}, {"[N/A]", true}, {"", true},
+	} {
+		queryGPUHealth = func(ids string) ([]byte, error) {
+			assert.Equal(t, "GPU-a", ids)
+			return []byte("GPU-a, " + test.action), nil
+		}
+		devices, err := client.AvailableGPUDevices()
+		assert.Equal(t, !test.available, errors.Is(err, errGPUUnhealthy), test.action)
+		assert.Equal(t, test.available, len(devices) == 1, test.action)
+	}
+
+	client.visibleDevices = "1"
+	queryGPUHealth = func(ids string) ([]byte, error) {
+		assert.Equal(t, "GPU-b", ids)
+		return []byte("GPU-a, Reset\nGPU-b, None"), nil
+	}
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err) // Another worker's GPU must not quarantine this worker.
+	assert.Equal(t, []int{1}, devices)
+
+	for _, result := range []struct {
+		output string
+		err    error
+	}{
+		{output: "malformed"}, {output: "GPU-a, None"}, {output: "GPU-b, [Unknown Error]"}, {err: errors.New("nvidia-smi failed")},
+	} {
+		queryGPUHealth = func(string) ([]byte, error) { return []byte(result.output), result.err }
+		_, err := client.AvailableGPUDevices()
+		assert.Error(t, err)
+		assert.NotErrorIs(t, err, errGPUUnhealthy)
 	}
 }
 
@@ -64,6 +139,8 @@ func TestAvailableGPUDevicesAllVisibleDevices(t *testing.T) {
 }
 
 func TestNvidiaInfoClientReusesDeviceInventory(t *testing.T) {
+	restoreHealth := withMockGPUHealth()
+	defer restoreHealth()
 	originalQueryDevices := queryDevices
 	originalCheckGPUExists := checkGPUExists
 	defer func() {
@@ -91,6 +168,8 @@ func TestNvidiaInfoClientReusesDeviceInventory(t *testing.T) {
 }
 
 func TestNvidiaInfoClientRetriesFailedInventoryQuery(t *testing.T) {
+	restoreHealth := withMockGPUHealth()
+	defer restoreHealth()
 	originalQueryDevices := queryDevices
 	originalCheckGPUExists := checkGPUExists
 	defer func() {
@@ -120,6 +199,8 @@ func TestNvidiaInfoClientRetriesFailedInventoryQuery(t *testing.T) {
 }
 
 func TestAvailableGPUDevicesWithNonZeroPCIDomains(t *testing.T) {
+	restoreHealth := withMockGPUHealth()
+	defer restoreHealth()
 	originalQueryDevices := queryDevices
 	defer func() { queryDevices = originalQueryDevices }()
 
@@ -164,6 +245,8 @@ func TestAvailableGPUDevicesVoidReturnsEmpty(t *testing.T) {
 	)
 	defer cleanup()
 
+	queryGPUHealth = func(string) ([]byte, error) { return nil, assert.AnError }
+
 	client := &NvidiaInfoClient{visibleDevices: "void"}
 
 	devices, err := client.AvailableGPUDevices()
@@ -200,6 +283,8 @@ func TestAvailableGPUDevicesReturnsEmptyWhenProcEntryMissing(t *testing.T) {
 }
 
 func TestAvailableGPUDevicesIgnoresProcCheckErrors(t *testing.T) {
+	restoreHealth := withMockGPUHealth()
+	defer restoreHealth()
 	originalQueryDevices := queryDevices
 	defer func() { queryDevices = originalQueryDevices }()
 
@@ -222,6 +307,8 @@ func TestAvailableGPUDevicesIgnoresProcCheckErrors(t *testing.T) {
 }
 
 func TestAvailableGPUDevicesReturnsQueryErrors(t *testing.T) {
+	restoreHealth := withMockGPUHealth()
+	defer restoreHealth()
 	originalQueryDevices := queryDevices
 	defer func() { queryDevices = originalQueryDevices }()
 
@@ -237,6 +324,8 @@ func TestAvailableGPUDevicesReturnsQueryErrors(t *testing.T) {
 }
 
 func TestAvailableGPUDevicesSkipsExcludedProcAdapter(t *testing.T) {
+	restoreHealth := withMockGPUHealth()
+	defer restoreHealth()
 	originalQueryDevices := queryDevices
 	defer func() { queryDevices = originalQueryDevices }()
 	originalCheckGPUExists := checkGPUExists
@@ -259,6 +348,8 @@ func TestAvailableGPUDevicesSkipsExcludedProcAdapter(t *testing.T) {
 }
 
 func TestAvailableGPUDevicesAllowsUnknownVideoBIOS(t *testing.T) {
+	restoreHealth := withMockGPUHealth()
+	defer restoreHealth()
 	originalQueryDevices := queryDevices
 	defer func() { queryDevices = originalQueryDevices }()
 	originalCheckGPUExists := checkGPUExists

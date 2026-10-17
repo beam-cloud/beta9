@@ -64,6 +64,7 @@ const (
 	WorkerRepositoryService_GetContainerIps_FullMethodName                  = "/WorkerRepositoryService/GetContainerIps"
 	WorkerRepositoryService_GetContainerIpAssignments_FullMethodName        = "/WorkerRepositoryService/GetContainerIpAssignments"
 	WorkerRepositoryService_RemoveContainerIp_FullMethodName                = "/WorkerRepositoryService/RemoveContainerIp"
+	WorkerRepositoryService_CordonWorker_FullMethodName                     = "/WorkerRepositoryService/CordonWorker"
 )
 
 // WorkerRepositoryServiceClient is the client API for WorkerRepositoryService service.
@@ -117,6 +118,7 @@ type WorkerRepositoryServiceClient interface {
 	GetContainerIps(ctx context.Context, in *GetContainerIpsRequest, opts ...grpc.CallOption) (*GetContainerIpsResponse, error)
 	GetContainerIpAssignments(ctx context.Context, in *GetContainerIpAssignmentsRequest, opts ...grpc.CallOption) (*GetContainerIpAssignmentsResponse, error)
 	RemoveContainerIp(ctx context.Context, in *RemoveContainerIpRequest, opts ...grpc.CallOption) (*RemoveContainerIpResponse, error)
+	CordonWorker(ctx context.Context, in *DisableWorkerRequest, opts ...grpc.CallOption) (*DisableWorkerResponse, error)
 }
 
 type workerRepositoryServiceClient struct {
@@ -578,6 +580,15 @@ func (c *workerRepositoryServiceClient) RemoveContainerIp(ctx context.Context, i
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) CordonWorker(ctx context.Context, in *DisableWorkerRequest, opts ...grpc.CallOption) (*DisableWorkerResponse, error) {
+	out := new(DisableWorkerResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_CordonWorker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerRepositoryServiceServer is the server API for WorkerRepositoryService service.
 // All implementations must embed UnimplementedWorkerRepositoryServiceServer
 // for forward compatibility
@@ -629,6 +640,7 @@ type WorkerRepositoryServiceServer interface {
 	GetContainerIps(context.Context, *GetContainerIpsRequest) (*GetContainerIpsResponse, error)
 	GetContainerIpAssignments(context.Context, *GetContainerIpAssignmentsRequest) (*GetContainerIpAssignmentsResponse, error)
 	RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error)
+	CordonWorker(context.Context, *DisableWorkerRequest) (*DisableWorkerResponse, error)
 	mustEmbedUnimplementedWorkerRepositoryServiceServer()
 }
 
@@ -770,6 +782,9 @@ func (UnimplementedWorkerRepositoryServiceServer) GetContainerIpAssignments(cont
 }
 func (UnimplementedWorkerRepositoryServiceServer) RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveContainerIp not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) CordonWorker(context.Context, *DisableWorkerRequest) (*DisableWorkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CordonWorker not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) mustEmbedUnimplementedWorkerRepositoryServiceServer() {
 }
@@ -1601,6 +1616,24 @@ func _WorkerRepositoryService_RemoveContainerIp_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_CordonWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisableWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).CordonWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_CordonWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).CordonWorker(ctx, req.(*DisableWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerRepositoryService_ServiceDesc is the grpc.ServiceDesc for WorkerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1779,6 +1812,10 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveContainerIp",
 			Handler:    _WorkerRepositoryService_RemoveContainerIp_Handler,
+		},
+		{
+			MethodName: "CordonWorker",
+			Handler:    _WorkerRepositoryService_CordonWorker_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

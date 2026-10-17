@@ -1841,6 +1841,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
 			if err != nil {
+				s.disableSchedulingForGPUError(err)
 				log.Error().Str("container_id", containerId).Msgf("failed to assign GPUs: %v", err)
 			}
 			return err
@@ -2384,6 +2385,10 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 				return exitCode, err
 			}
 
+			if errors.Is(err, errGPUUnhealthy) {
+				finishRuntimeStarted()
+				return exitCode, err
+			}
 			var durableMountValidationErr *checkpointDurableMountValidationError
 			durableMountValidationFailed := errors.As(err, &durableMountValidationErr)
 			runscVersionFallback := forcedRunscVersionFallback(request, err)

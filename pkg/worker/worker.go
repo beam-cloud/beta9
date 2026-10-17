@@ -1202,6 +1202,20 @@ func (s *Worker) disableSchedulingForShutdown() {
 	}
 }
 
+func (s *Worker) disableSchedulingForGPUError(err error) bool {
+	if !errors.Is(err, errGPUUnhealthy) {
+		return false
+	}
+	log.Error().Err(err).Msg("GPU requires recovery; disabling new container placement")
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+	defer cancel()
+	_, cordonErr := handleGRPCResponse(s.workerRepoClient.CordonWorker(ctx, &pb.DisableWorkerRequest{WorkerId: s.workerId}))
+	if cordonErr != nil {
+		log.Warn().Err(cordonErr).Msg("failed to cordon worker with unhealthy GPU")
+	}
+	return true
+}
+
 // disableScheduling marks the worker disabled at the gateway: the scheduler
 // stops placing containers on it and the pool sizer stops counting its free
 // capacity, so a replacement is provisioned while this one is still running.

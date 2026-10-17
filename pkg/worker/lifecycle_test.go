@@ -2643,7 +2643,28 @@ func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *tes
 }
 
 func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
+	testRunContainerRestoreFailure(t, false)
+}
+
+func TestRunContainerUnhealthyGPUPreservesCheckpointWithoutColdFallback(t *testing.T) {
+	testRunContainerRestoreFailure(t, true)
+}
+
+func testRunContainerRestoreFailure(t *testing.T, unhealthyGPU bool) {
+	t.Helper()
 	t.Setenv("WORKER_POOL_NAME", "default")
+	cleanup := withMockDevices("0x0000, 00000000:81:00.0, 4, GPU-fa1155b7-5557-7c64-2c49-5e90d27cfe48", true)
+	defer cleanup()
+	action := "None"
+	if unhealthyGPU {
+		action = "Reset"
+	}
+	queryGPUHealth = func(string) ([]byte, error) {
+		return []byte("GPU-fa1155b7-5557-7c64-2c49-5e90d27cfe48, " + action), nil
+	}
+	gpuManager := NewContainerNvidiaManagerForTest(1).(*ContainerNvidiaManager)
+	gpuManager.infoClient = &NvidiaInfoClient{visibleDevices: "all"}
+	workerRepoClient := &fakeWorkerRepoClient{}
 
 	restoreErr := assert.AnError
 	containerID := "container-restore-fallback"
@@ -2669,6 +2690,8 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		}}},
 		podAddr:             "10.42.0.10",
 		criuManager:         criuManager,
+		containerGPUManager: gpuManager,
+		workerRepoClient:    workerRepoClient,
 		containerRepoClient: repoClient,
 		backendRepoClient:   backendRepoClient,
 		containerInstances:  common.NewSafeMap[*ContainerInstance](),
@@ -2684,6 +2707,8 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 	rt.runConfigPath = configPath
 	request := &types.ContainerRequest{
 		ContainerId:       containerID,
+		Gpu:               "RTX4090",
+		GpuCount:          1,
 		ConfigPath:        configPath,
 		Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
 		CheckpointEnabled: true,
@@ -2705,6 +2730,17 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		completedCheckpointFilesystemRestore(),
 	)
 
+	if unhealthyGPU {
+		require.ErrorIs(t, err, errGPUUnhealthy)
+		require.False(t, rt.runCalled, "must not cold-start on a GPU requiring recovery")
+		require.Equal(t, 1, rt.deleteCalls)
+		require.Zero(t, backendRepoClient.updateCalls, "a destination GPU fault must not invalidate the shared checkpoint")
+		require.Equal(t, string(types.CheckpointStatusAvailable), request.Checkpoint.Status)
+		require.Equal(t, 1, workerRepoClient.cordons)
+		require.Zero(t, workerRepoClient.disables)
+		return
+	}
+	require.Zero(t, workerRepoClient.disables)
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode)
 	require.True(t, rt.runCalled)

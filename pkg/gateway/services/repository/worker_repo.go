@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
+	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -30,6 +31,7 @@ type WorkerRepositoryService struct {
 	containerRepo         repository.ContainerRepository
 	backendRepo           repository.BackendRepository
 	computeRepo           repository.ComputeRepository
+	computeService        *computesvc.Service
 	eventRepo             repository.EventRepository
 	appConfig             types.AppConfig
 	pb.UnimplementedWorkerRepositoryServiceServer
@@ -41,13 +43,14 @@ const (
 	containerRequestBatchSize         = 128
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, computeRepo repository.ComputeRepository, eventRepo repository.EventRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, computeRepo repository.ComputeRepository, computeService *computesvc.Service, eventRepo repository.EventRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
 	service := &WorkerRepositoryService{
 		ctx:                   ctx,
 		workerRepo:            workerRepo,
 		containerRepo:         containerRepo,
 		backendRepo:           backendRepo,
 		computeRepo:           computeRepo,
+		computeService:        computeService,
 		eventRepo:             eventRepo,
 		appConfig:             appConfig,
 		cacheCoordinatorToken: configuredCacheCoordinatorToken(cacheCoordinatorToken),
@@ -323,6 +326,22 @@ func (s *WorkerRepositoryService) DisableWorker(ctx context.Context, req *pb.Dis
 		return &pb.DisableWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	return &pb.DisableWorkerResponse{Ok: true}, nil
+}
+
+// Use a separate RPC so older gateways reject cordoning without disabling a live worker.
+func (s *WorkerRepositoryService) CordonWorker(ctx context.Context, req *pb.DisableWorkerRequest) (*pb.DisableWorkerResponse, error) {
+	worker, err := s.workerRepo.GetWorkerById(req.WorkerId)
+	if err == nil {
+		var handled bool
+		handled, err = s.computeService.SetAgentWorkerCordon(ctx, worker, true)
+		if err == nil && !handled {
+			err = s.workerRepo.SetWorkerCordon(req.WorkerId, true)
+		}
+	}
+	if err != nil {
+		return &pb.DisableWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	return &pb.DisableWorkerResponse{Ok: true}, nil
 }
 

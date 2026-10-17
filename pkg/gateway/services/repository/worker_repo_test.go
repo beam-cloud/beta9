@@ -14,6 +14,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type cordonWorkerRepo struct {
+	repository.WorkerRepository
+	cordoned bool
+	err      error
+}
+
+func (r *cordonWorkerRepo) GetWorkerById(id string) (*types.Worker, error) {
+	return &types.Worker{Id: id}, nil
+}
+
+func (r *cordonWorkerRepo) SetWorkerCordon(_ string, cordon bool) error {
+	r.cordoned = cordon
+	return r.err
+}
+
+func TestCordonWorker(t *testing.T) {
+	for _, repoErr := range []error{nil, errors.New("repository unavailable")} {
+		repo := &cordonWorkerRepo{err: repoErr}
+		service := &WorkerRepositoryService{workerRepo: repo}
+		response, err := service.CordonWorker(context.Background(), &pb.DisableWorkerRequest{WorkerId: "worker-1"})
+		require.NoError(t, err)
+		require.Equal(t, repoErr == nil, response.Ok)
+		require.True(t, repo.cordoned)
+		if repoErr != nil {
+			require.Equal(t, repoErr.Error(), response.ErrorMsg)
+		}
+	}
+}
+
 func TestGetWorkerMeteringConfigRequiresAssignedManagedSlot(t *testing.T) {
 	service := &WorkerRepositoryService{
 		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{
