@@ -90,6 +90,13 @@ func (s *WorkspaceSecretService) CreateSecret(ctx context.Context, req *pb.Creat
 func (s *WorkspaceSecretService) GetSecret(ctx context.Context, req *pb.GetSecretRequest) (*pb.GetSecretResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if !auth.HasPermission(authInfo) {
+		return &pb.GetSecretResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
+
 	secret, err := s.backendRepo.GetSecretByNameDecrypted(ctx, authInfo.Workspace, req.Name)
 	if err != nil {
 		return &pb.GetSecretResponse{
