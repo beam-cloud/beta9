@@ -185,6 +185,10 @@ func checkpointGPUProfile(output string) ([]string, error) {
 }
 
 func (s *Worker) readCheckpointHostProfile() (checkpointHostProfile, error) {
+	return s.readCheckpointHostProfileWithInit(runtime.DefaultMicroVMInitPath)
+}
+
+func (s *Worker) readCheckpointHostProfileWithInit(initPath string) (checkpointHostProfile, error) {
 	p := checkpointHostProfile{Runtime: s.runtime.Name()}
 	cpuid.Initialize()
 	features := cpuid.HostFeatureSet()
@@ -211,6 +215,16 @@ func (s *Worker) readCheckpointHostProfile() (checkpointHostProfile, error) {
 	p.Version = strings.TrimSpace(string(output))
 	if p.Version == "" {
 		return p, fmt.Errorf("missing %s version", executable)
+	}
+	if p.Runtime == types.ContainerRuntimeMicroVM.String() {
+		// Init's mapped executable is part of guest memory. Never restore it
+		// against different bytes, even when Cloud Hypervisor is unchanged.
+		// The beamfs revision also pins the immutable export/device-state ABI.
+		init, err := os.ReadFile(initPath)
+		if err != nil {
+			return p, fmt.Errorf("read guest init for checkpoint compatibility: %w", err)
+		}
+		p.Version += fmt.Sprintf(" beamfs-v5:%x", sha256.Sum256(init))
 	}
 	if s.gpuCount == 0 {
 		return p, nil

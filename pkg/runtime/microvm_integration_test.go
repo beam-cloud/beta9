@@ -647,7 +647,7 @@ func TestMicroVMCheckpointRestore(t *testing.T) {
 	vm.start()
 	client := vm.goprocClient(60 * time.Second)
 	// A background counter is the memory state that must survive.
-	code, out := vm.sh(client, "(n=0; while true; do n=$((n+1)); echo $n > /counter; sleep 1; done) >/dev/null 2>&1 & echo before-checkpoint > /marker && sleep 3 && cat /counter")
+	code, out := vm.sh(client, "chmod 0600 /etc/passwd && sha256sum /etc/passwd > /passwd.sha; (n=0; while true; do n=$((n+1)); echo $n > /counter; sleep 1; done) >/dev/null 2>&1 & echo before-checkpoint > /marker && sleep 3 && cat /counter")
 	require.Equal(t, 0, code, out)
 	before, err := strconv.Atoi(strings.TrimSpace(out))
 	require.NoError(t, err)
@@ -685,6 +685,10 @@ func TestMicroVMCheckpointRestore(t *testing.T) {
 	require.GreaterOrEqual(t, after, before, "the counter resumes rather than restarting")
 	require.Less(t, after, before+60, "the counter did not run for long between checkpoint and restore")
 	require.Contains(t, lines[2], restored.ip4.String(), "the guest took the new container address; console:\n%s", restored.output.String())
+	code, out = vm.sh(client, "echo 3 > /proc/sys/vm/drop_caches && sha256sum -c /passwd.sha && stat -c %a /etc/passwd")
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, "/etc/passwd: OK")
+	require.Contains(t, out, "600\n")
 	code, out = vm.sh(client, "sleep 2; cat /counter")
 	require.Equal(t, 0, code, out)
 	later, err := strconv.Atoi(strings.TrimSpace(out))
@@ -849,6 +853,14 @@ func TestMicroVMGoprocOverTheWire(t *testing.T) {
 	require.NoError(t, err, "rw directory bind must write through to the host")
 	require.Equal(t, "from-guest\n", string(hostSide))
 
+	// A cached image must not make host-backed mounts stale, including ro
+	// binds. Reopening an already read file must observe a host write.
+	require.NoError(t, os.WriteFile(filepath.Join(sdkDir, "marker.py"), []byte("BOUND = False\n"), 0o644))
+	require.Eventually(t, func() bool {
+		code, out := vm.sh(client, "cat /usr/lib/python3/site-packages/beam/marker.py")
+		return code == 0 && out == "BOUND = False\n"
+	}, 8*time.Second, 100*time.Millisecond)
+
 	// Writes land on the block device, not the virtio-fs share.
 	code, out = vm.sh(client, "echo hi > /written && df -T / | tail -1 && grep -w vda /proc/partitions && df -T "+microvm.DiskMount+" | tail -1")
 	require.Equal(t, 0, code, out)
@@ -913,11 +925,32 @@ func TestMicroVMGoprocOverTheWire(t *testing.T) {
 	// directories opaque, ownership and modes intact, plumbing excluded.
 	code, out = vm.sh(client, "rm /etc/alpine-release && rm -rf /etc/apk && mkdir /etc/apk && echo fresh > /etc/apk/new && chown 1000:1000 /data/notes.txt && chmod 640 /data/notes.txt && ln -s notes.txt /data/link && sync")
 	require.Equal(t, 0, code, out)
+	// Metadata-only copy-up must export the lower file's bytes and the
+	// changed metadata, without leaking a metacopy reference into the layer.
+	code, out = vm.sh(client, "chmod 0600 /etc/passwd && chown 1234:1234 /etc/passwd && cat /etc/passwd")
+	require.Equal(t, 0, code, out)
+	passwd := out
+	rawUpper := filepath.Join(testWorkRoot, "metacopy-"+vm.id)
+	defer os.RemoveAll(rawUpper)
+	require.NoError(t, rt.ExportGuestTree(ctx, vm.id, GuestUpperDir+"/etc", rawUpper, nil))
+	_, err = unix.Lgetxattr(filepath.Join(rawUpper, "passwd"), "trusted.overlay.metacopy", nil)
+	require.NoError(t, err, "chmod/chown must retain a metadata-only upper inode")
+	code, out = vm.sh(client, "mount --bind /data/notes.txt /etc/passwd")
+	require.Equal(t, 0, code, out)
 	exportDir := filepath.Join(testWorkRoot, "export-"+vm.id)
 	require.NoError(t, os.RemoveAll(exportDir))
 	exportStart := time.Now()
 	require.NoError(t, rt.ExportGuestTree(ctx, vm.id, GuestUpperDir, exportDir, []string{".beam"}))
 	t.Logf("guest upper layer exported in %s", time.Since(exportStart).Round(time.Millisecond))
+	exportedPasswd, err := os.ReadFile(filepath.Join(exportDir, "etc/passwd"))
+	require.NoError(t, err)
+	require.Equal(t, passwd, string(exportedPasswd))
+	passwdInfo, err := os.Stat(filepath.Join(exportDir, "etc/passwd"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), passwdInfo.Mode().Perm())
+	require.Equal(t, uint32(1234), passwdInfo.Sys().(*syscall.Stat_t).Uid)
+	_, err = unix.Lgetxattr(filepath.Join(exportDir, "etc/passwd"), "trusted.overlay.metacopy", nil)
+	require.ErrorIs(t, err, unix.ENODATA)
 	whiteout, err := os.Lstat(filepath.Join(exportDir, "etc/alpine-release"))
 	require.NoError(t, err)
 	require.NotZero(t, whiteout.Mode()&os.ModeCharDevice, "deleted image file must export as a whiteout device")
@@ -942,6 +975,8 @@ func TestMicroVMGoprocOverTheWire(t *testing.T) {
 	_, err = os.Lstat(filepath.Join(exportDir, ".beam"))
 	require.True(t, os.IsNotExist(err), "excluded plumbing must not be exported")
 	require.NoError(t, os.RemoveAll(exportDir))
+	code, out = vm.sh(client, "umount /etc/passwd")
+	require.Equal(t, 0, code, out)
 
 	_, err = rt.GuestFS(ctx, vm.id, microvm.FSRequest{Op: microvm.FSOpRemove, Path: "/data"}, nil, nil)
 	require.NoError(t, err)
@@ -956,6 +991,45 @@ func TestMicroVMGoprocOverTheWire(t *testing.T) {
 	// handler would report 143. Either way the signal crossed into the guest.
 	require.Contains(t, []int{0, 128 + int(syscall.SIGTERM)}, res.code, "SIGTERM must reach the process manager through vminit")
 	require.Less(t, time.Since(killedAt), 10*time.Second, "VM must exit promptly after the process ends")
+}
+
+func TestMicroVMImageXattrs(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	vm := newTestVM(t, rt, vmOptions{image: "python", goproc: true})
+	path := filepath.Join(vm.canvas, "image-xattrs")
+	require.NoError(t, os.WriteFile(path, []byte("image bytes"), 0o755))
+	require.NoError(t, unix.Chmod(path, 0o6755))
+	require.NoError(t, unix.Setxattr(path, "user.beam", []byte("value\x00bytes"), 0))
+	// VFS_CAP_REVISION_2, effective CAP_NET_BIND_SERVICE.
+	capability := []byte{1, 0, 0, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	require.NoError(t, unix.Setxattr(path, "security.capability", capability, 0))
+	vm.start()
+	client := vm.goprocClient(60 * time.Second)
+	code, out := vm.sh(client, `python3 - <<'PY'
+import errno, os, stat
+p = '/image-xattrs'
+assert set(os.listxattr(p)) == {'user.beam', 'security.capability'}
+assert os.getxattr(p, 'user.beam') == b'value\x00bytes'
+assert os.getxattr(p, 'security.capability') == bytes.fromhex('0100000200040000000000000000000000000000')
+os.chown(p, 1001, 1001)
+assert os.stat(p).st_uid == 1001
+assert not os.stat(p).st_mode & (stat.S_ISUID | stat.S_ISGID)
+assert os.getxattr(p, 'user.beam') == b'value\x00bytes'
+assert 'security.capability' not in os.listxattr(p)
+try:
+    os.getxattr(p, 'security.capability')
+    raise AssertionError('chown retained file capabilities')
+except OSError as e:
+    assert e.errno == errno.ENODATA
+assert open(p, 'rb').read() == b'image bytes'
+print('image-xattrs-ok')
+PY`)
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, "image-xattrs-ok")
+	back := make([]byte, len(capability))
+	n, err := unix.Getxattr(path, "security.capability", back)
+	require.NoError(t, err)
+	require.Equal(t, capability, back[:n], "guest chown must leave the immutable host image intact")
 }
 
 func TestMicroVMNetworkParity(t *testing.T) {
@@ -1110,8 +1184,10 @@ echo persisted > /data.txt
 echo installed > /etc/apk/persistent-package
 chmod 0700 /etc/apk
 chmod 0600 /etc/alpine-release
+chmod 0600 /etc/issue
+mv /etc/issue /moved-issue
 find /etc/apk -type f -exec sha256sum {} \; | sort > /packages.sha
-sha256sum /etc/alpine-release >> /packages.sha
+sha256sum /etc/alpine-release /moved-issue >> /packages.sha
 sync
 while true; do echo x >> /loop.txt; done
 `},
@@ -1155,7 +1231,7 @@ cat /data.txt
 wc -l < /loop.txt
 sha256sum -c /packages.sha
 find /etc/apk -type f -exec sha256sum {} \; | sort > /actual.sha
-sha256sum /etc/alpine-release >> /actual.sha
+sha256sum /etc/alpine-release /moved-issue >> /actual.sha
 cmp /packages.sha /actual.sha
 test "$(stat -c %a /etc/apk)" = 700
 test "$(stat -c %a /etc/alpine-release)" = 600
@@ -1339,4 +1415,17 @@ func TestMicroVMJumboMTUBoot(t *testing.T) {
 	code, out := vm.sh(client, "cat /sys/class/net/eth0/mtu")
 	require.Equal(t, 0, code, out)
 	require.Equal(t, "9001\n", out)
+}
+
+// Reject the old one-share layout before launching a guest whose init and
+// device state are incompatible with this runtime.
+func TestMicroVMRejectsLegacyFilesystemCheckpoint(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true})
+	imagePath := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(imagePath, checkpointVMDir), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(imagePath, checkpointVMDir, "config.json"), []byte(`{"fs":[{"tag":"beamfs"}]}`), 0o600))
+	_, err := rt.Restore(context.Background(), vm.id, &RestoreOpts{ImagePath: imagePath, BundlePath: vm.canvas})
+	require.ErrorContains(t, err, "checkpoint requires its original filesystem runtime")
+	require.Empty(t, processesMatching(filepath.Join(rt.cfg.MicroVMStateRoot, vm.id)))
 }

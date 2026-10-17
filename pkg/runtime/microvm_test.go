@@ -147,7 +147,7 @@ func TestMicroVMHypervisorArgs(t *testing.T) {
 	assert.Contains(t, joined, "--serial tty --console off")
 
 	cmdline := microVMKernelCmdline()
-	assert.Contains(t, cmdline, "root=beamfs rootfstype=virtiofs rw")
+	assert.Contains(t, cmdline, "root=beamfs rootfstype=virtiofs ro")
 	assert.Contains(t, cmdline, "init="+microvm.InitPath)
 	assert.Contains(t, cmdline, "console=ttyS0")
 }
@@ -164,6 +164,9 @@ func TestMicroVMGuestSpec(t *testing.T) {
 
 	got := microVMGuestSpec(spec, network, root, extra, mounts)
 	assert.True(t, got.Docker)
+	assert.True(t, got.SeparateBinds)
+	assert.True(t, got.Metacopy)
+	assert.False(t, microVMGuestSpec(spec, network, microVMDisk{socket: "/durable/root.sock"}, nil, nil).Metacopy, "durable uppers must remain readable without metacopy")
 	assert.Equal(t, "/dev/vda", got.RootDisk)
 	assert.Equal(t, []microvm.Disk{{Device: "/dev/vdb", MountPath: "/data", ReadOnly: true}}, got.Disks)
 	assert.Equal(t, microvm.Mount{Type: microvm.MountTmpfs, Destination: "/tmp", Options: []string{"size=1g"}}, got.Mounts[0])
@@ -219,7 +222,7 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	    {"path": "/old/scratch.ext4", "image_type": "raw", "id": "_disk0"},
 	    {"vhost_user": true, "vhost_socket": "/old/run/aaa/vhost-user-blk.sock", "id": "_disk1"}
 	  ],
-	  "fs": [{"tag": "beamfs", "socket": "/old/state/virtiofs.sock"}],
+	  "fs": [{"tag": "beamfs", "socket": "/old/state/virtiofs.sock"}, {"tag": "beambinds", "socket": "/old/state/binds.sock"}],
 	  "vsock": {"cid": 3, "socket": "/old/state/vsock.sock"},
 	  "net": [{"tap": "b9tap0", "mac": "02:00:00:00:00:01"}]
 	}`)
@@ -236,6 +239,7 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	assert.Equal(t, "raw", disks[0].(map[string]any)["image_type"], "unrelated keys survive")
 	assert.Equal(t, "/new/run/bbb/vhost-user-blk.sock", disks[1].(map[string]any)["vhost_socket"])
 	assert.Equal(t, "/new/state/virtiofs.sock", cfg["fs"].([]any)[0].(map[string]any)["socket"])
+	assert.Equal(t, "/new/state/binds.sock", cfg["fs"].([]any)[1].(map[string]any)["socket"])
 	assert.Equal(t, "/new/state/vsock.sock", cfg["vsock"].(map[string]any)["socket"])
 	assert.Equal(t, "02:00:00:00:00:02", cfg["net"].([]any)[0].(map[string]any)["mac"], "the guest takes the new slot's MAC")
 

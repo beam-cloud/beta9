@@ -2964,6 +2964,8 @@ func TestCheckpointSelectionKeepsCompatibleLegacyGPUVariant(t *testing.T) {
 
 func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {
 	dir := t.TempDir()
+	initPath := filepath.Join(dir, "guest-init")
+	require.NoError(t, os.WriteFile(initPath, []byte("original init"), 0755))
 	for tool, output := range map[string]string{
 		"cloud-hypervisor": "cloud-hypervisor v53.0",
 		"runsc":            "runsc version release-test.1",
@@ -2976,15 +2978,21 @@ func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {
 	for _, name := range []string{"runc", "gvisor", "microvm"} {
 		t.Run(name, func(t *testing.T) {
 			worker := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: name}, gpuCount: 1}
-			before, err := worker.readCheckpointHostProfile()
+			before, err := worker.readCheckpointHostProfileWithInit(initPath)
 			require.NoError(t, err)
 			require.NotEmpty(t, before.CPU)
 			worker.config.Worker.ImageTag = "next-worker-release"
 			worker.config.Worker.ContainerResourceLimits.MemoryEnforced = true
 			worker.gpuCount = 8
-			after, err := worker.readCheckpointHostProfile()
+			after, err := worker.readCheckpointHostProfileWithInit(initPath)
 			require.NoError(t, err)
 			require.Equal(t, before.key(), after.key())
+			if name == "microvm" {
+				require.NoError(t, os.WriteFile(initPath, []byte("changed init"), 0755))
+				changed, err := worker.readCheckpointHostProfileWithInit(initPath)
+				require.NoError(t, err)
+				require.NotEqual(t, before.key(), changed.key(), "guest executable changes must invalidate memory checkpoints")
+			}
 		})
 	}
 }
