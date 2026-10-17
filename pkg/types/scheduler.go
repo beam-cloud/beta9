@@ -98,6 +98,15 @@ type Worker struct {
 	// Keep internal fields after wire fields: go2proto numbers by struct position.
 	RolloutPreviousStatus      WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
 	CheckpointCompatibilityKey string       `json:"-" redis:"checkpoint_compatibility_key" go2proto:"ignore"`
+	PhysicalCpu                int64        `json:"-" redis:"physical_cpu" go2proto:"ignore"`
+}
+
+// PhysicalCPU keeps host limits and placement separate from shared capacity.
+func (w *Worker) PhysicalCPU() int64 {
+	if w.PhysicalCpu > 0 {
+		return w.PhysicalCpu
+	}
+	return w.TotalCpu // Workers registered before CPU sharing.
 }
 
 type WorkerKeepAlive struct {
@@ -518,7 +527,7 @@ func WorkerStartConcurrency(workerConfig WorkerConfig, worker *Worker) int {
 	}
 
 	poolConfig := workerConfig.Pools[worker.PoolName]
-	return WorkerStartConcurrencyForPool(poolConfig, workerConfig.ContainerRuntime, worker.Runtime, worker.TotalCpu)
+	return WorkerStartConcurrencyForPool(poolConfig, workerConfig.ContainerRuntime, worker.Runtime, worker.PhysicalCPU())
 }
 
 // CapacityMemory includes runtime overhead in MiB without changing the

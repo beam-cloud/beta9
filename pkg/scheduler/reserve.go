@@ -556,6 +556,11 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 
 	if pool, ok := s.poolForController(controller); ok {
 		worker.Priority = pool.Config.Priority
+		if !controllerUsesAgentCapacity(controller) {
+			worker.PhysicalCpu = cpu
+			worker.TotalCpu = pool.Config.ContainerRuntimeConfig.CPUCapacity(cpu)
+			worker.FreeCpu = worker.TotalCpu
+		}
 	}
 
 	return &provisioningReservation{
@@ -564,20 +569,16 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 	}
 }
 
-func (s *Scheduler) workerCPUForRequest(request *types.ContainerRequest) int64 {
-	cpu := request.Cpu
-	if s.config.Worker.DefaultWorkerCPURequest > cpu {
-		cpu = s.config.Worker.DefaultWorkerCPURequest
-	}
-	return cpu
-}
-
 func (s *Scheduler) workerCPUForControllerRequest(controller WorkerPoolController, request *types.ContainerRequest) int64 {
 	if controllerUsesAgentCapacity(controller) {
 		return request.Cpu
 	}
 
-	cpu := s.workerCPUForRequest(request)
+	cpu := request.Cpu
+	if pool, ok := s.poolForController(controller); ok {
+		cpu = pool.Config.ContainerRuntimeConfig.PhysicalCPURequest(cpu)
+	}
+	cpu = max(cpu, s.config.Worker.DefaultWorkerCPURequest)
 	sizing, ok := s.workerPoolSizingForController(controller)
 	if !ok {
 		return cpu

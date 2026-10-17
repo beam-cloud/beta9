@@ -51,6 +51,9 @@ type ProviderWorkerPoolController struct {
 }
 
 func NewProviderWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
+	if err := opts.Config.Worker.Pools[opts.Name].ContainerRuntimeConfig.Validate(); err != nil {
+		return nil, err
+	}
 	var provider providers.Provider = nil
 	var err error = nil
 
@@ -254,7 +257,7 @@ func (wpc *ProviderWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 	remainingMachineMemory := machine.State.Memory
 	remainingMachineGpuCount := machine.State.GpuCount
 	for _, worker := range workers {
-		remainingMachineCpu -= worker.TotalCpu
+		remainingMachineCpu -= worker.PhysicalCPU()
 		remainingMachineMemory -= worker.TotalMemory
 		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
 	}
@@ -412,10 +415,11 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 
 	return job, &types.Worker{
 		Id:            workerId,
-		FreeCpu:       workerCpu,
+		PhysicalCpu:   workerCpu,
+		FreeCpu:       wpc.workerPoolConfig.ContainerRuntimeConfig.CPUCapacity(workerCpu),
 		FreeMemory:    workerMemory,
 		FreeGpuCount:  workerGpuCount,
-		TotalCpu:      workerCpu,
+		TotalCpu:      wpc.workerPoolConfig.ContainerRuntimeConfig.CPUCapacity(workerCpu),
 		TotalMemory:   workerMemory,
 		TotalGpuCount: workerGpuCount,
 		Gpu:           workerGpuType,
@@ -431,7 +435,7 @@ func providerWorkerResources(defaultCPURequest, workerCPU int64, workerGPUType s
 	resources := corev1.ResourceRequirements{}
 	if workerCPU > 0 {
 		// Provider clusters contain one physical node. Request only the normal
-		// scheduling footprint, but cap the worker pod at its advertised CPU so
+		// scheduling footprint, but cap the worker pod at its physical CPU so
 		// nested user cgroups cannot oversubscribe the machine in aggregate.
 		cpuRequest := min(workerCPU, max(defaultCPURequest, 0))
 		resources.Requests = corev1.ResourceList{

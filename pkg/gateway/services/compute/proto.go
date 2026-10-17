@@ -325,7 +325,7 @@ func agentMachineMetrics(state *model.AgentTokenState, worker *types.Worker) *pb
 	var usedMemory int64
 
 	if worker != nil {
-		totalCPU = firstNonZeroInt64(worker.TotalCpu, totalCPU)
+		totalCPU = firstNonZeroInt64(worker.PhysicalCPU(), totalCPU)
 		totalMemory = firstNonZeroInt64(worker.TotalMemory, totalMemory)
 		cpuPct = capacityUtilizationPct(worker.TotalCpu, worker.FreeCpu)
 		memoryPct = capacityUtilizationPct(worker.TotalMemory, worker.FreeMemory)

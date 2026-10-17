@@ -79,8 +79,9 @@ func TestAgentMachineMetricsUseScheduledCapacity(t *testing.T) {
 		},
 	}
 	worker := &types.Worker{
-		TotalCpu:         16000,
-		FreeCpu:          12000,
+		PhysicalCpu:      16000,
+		TotalCpu:         32000,
+		FreeCpu:          24000,
 		TotalMemory:      32768,
 		FreeMemory:       24576,
 		TotalGpuCount:    4,
@@ -89,6 +90,9 @@ func TestAgentMachineMetricsUseScheduledCapacity(t *testing.T) {
 	}
 
 	metrics := agentMachineMetrics(state, worker)
+	if metrics.TotalCpuAvailable != 16000 {
+		t.Fatalf("physical CPU = %v, want 16000", metrics.TotalCpuAvailable)
+	}
 	if metrics.CpuUtilizationPct != 25 {
 		t.Fatalf("cpu utilization = %v, want 25", metrics.CpuUtilizationPct)
 	}

@@ -217,6 +217,17 @@ func TestManagedPoolCPUAffinityDefaultsDisabled(t *testing.T) {
 	}
 }
 
+func TestManagedPoolRejectsInvalidCPUSharing(t *testing.T) {
+	for _, multiplier := range []float64{-1, .5} {
+		_, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{
+			ContainerRuntimeConfig: types.RuntimeConfig{CPUShareMultiplier: multiplier},
+		})
+		if err == nil || !strings.Contains(err.Error(), "cpuShareMultiplier") {
+			t.Fatalf("multiplier %v: expected validation error, got %v", multiplier, err)
+		}
+	}
+}
+
 func TestManagedGPUPoolDefaultsToNvidiaRuntime(t *testing.T) {
 	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{
 		Mode:    types.PoolModeExternal,
@@ -276,6 +287,7 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 		GPUType:                   "H100",
 		RequiresPoolSelector:      true,
 		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+		ContainerRuntimeConfig:    types.RuntimeConfig{CPUShareMultiplier: 1.5},
 		CPUAffinityEnforced:       true,
 		ContainerStartConcurrency: 7,
 		NetworkSlotPoolSize:       48,
@@ -319,6 +331,9 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if state.WorkerConfig == nil || state.WorkerConfig.DurableDisksPath != "/mnt/disks" {
 		t.Fatalf("saved worker config = %+v", state.WorkerConfig)
 	}
+	if state.WorkerConfig.ContainerRuntimeConfig.CPUShareMultiplier != 1.5 {
+		t.Fatalf("CPU sharing not persisted: %+v", state.WorkerConfig.ContainerRuntimeConfig)
+	}
 	if !state.WorkerConfig.CPUAffinityEnforced {
 		t.Fatal("persisted managed pool must preserve CPU affinity configuration")
 	}
@@ -334,12 +349,16 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	createdInstanceID := state.ManagedInstanceID
 
 	config.Priority = 250
+	config.ContainerRuntimeConfig.CPUShareMultiplier = 2
 	updated, err := service.UpdateManagedPool(context.Background(), clusterAdminAuth(), "public-h100", config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.Config.Priority != 250 {
 		t.Fatalf("priority = %d, want 250", updated.Config.Priority)
+	}
+	if updated.Config.ContainerRuntimeConfig.CPUShareMultiplier != 2 {
+		t.Fatalf("CPU sharing not updated: %+v", updated.Config.ContainerRuntimeConfig)
 	}
 	state, err = service.managedPoolRepo.GetManagedPoolState(context.Background(), "admin-workspace", "public-h100")
 	if err != nil || state == nil || state.ManagedInstanceID != createdInstanceID {

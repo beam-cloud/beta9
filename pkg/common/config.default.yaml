@@ -273,6 +273,11 @@ worker:
     #   runtime: nvidia  # Kubernetes RuntimeClass for GPU support
     #   containerRuntime: gvisor  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
     #   containerRuntimeConfig:
+    #     # Fixed schedulable vCPUs per physical CPU; omitted/0 = 1, minimum = 1.
+    #     # 16 physical CPUs at 1.5x admit 24 reserved vCPUs. RAM, guest CPU budgets,
+    #     # worker host limits and billing are unchanged. Benchmark contention first.
+    #     # Recreate Kubernetes workers to apply a new ratio; agent pools reconcile it.
+    #     cpuShareMultiplier: 1.5
     #     gvisorPlatform: systrap
     #     gvisorRoot: /run/gvisor
     #   jobSpec:

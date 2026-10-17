@@ -56,3 +56,10 @@ func TestAgentRolloutBusyThenRevertUsesOriginalSlotAndRecoversWorker(t *testing.
 	require.Empty(t, worker.RolloutGeneration)
 	require.EqualValues(t, 6000, worker.FreeCpu)
 }
+
+func TestAgentSlotCPUUsesPhysicalAllocation(t *testing.T) {
+	worker := &types.Worker{TotalCpu: 8000, PhysicalCpu: 4000, TotalMemory: 16000}
+	slot := agentWorkerSlotState(types.AppConfig{}, &model.AgentTokenState{}, worker, types.WorkerPoolConfig{}, "token", "hash")
+	require.EqualValues(t, 4000, slot.CPU)
+	require.EqualValues(t, 4000, agentWorkerSlotToProto(slot, "token").Cpu, "Docker CPU limit and worker CPU set stay physical")
+}
