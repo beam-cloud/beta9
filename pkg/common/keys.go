@@ -92,6 +92,7 @@ var (
 	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
 	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s:%s"
 	endpointRequestRelease   string = "endpoint:%s:%s:request_release:%s:%s"
+	endpointTasklessRequests string = "endpoint:%s:%s:taskless_requests"
 )
 
 var (
@@ -556,6 +557,10 @@ func (rk *redisKeys) EndpointRequestHeartbeat(workspaceName, stubId, taskId, con
 
 func (rk *redisKeys) EndpointRequestRelease(workspaceName, stubId, taskId, containerId string) string {
 	return fmt.Sprintf(endpointRequestRelease, workspaceName, stubId, taskId, containerId)
+}
+
+func (rk *redisKeys) EndpointTasklessRequests(workspaceName, stubId string) string {
+	return fmt.Sprintf(endpointTasklessRequests, workspaceName, stubId)
 }
 
 // Pod keys

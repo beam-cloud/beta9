@@ -178,6 +178,14 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 }
 
 func (i *endpointInstance) stoppableContainers() ([]string, error) {
+	// A queued taskless request isn't bound to a container yet, so none may stop.
+	if i.IsActive && i.buffer != nil {
+		waiting, err := i.buffer.hasTasklessRequests()
+		if err != nil || waiting {
+			return nil, err
+		}
+	}
+
 	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
 	if err != nil {
 		return nil, err
