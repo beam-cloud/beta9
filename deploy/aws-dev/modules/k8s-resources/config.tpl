@@ -15,15 +15,9 @@ database:
     enableTLS: false
     dialTimeout: 3s
 storage:
-  mode: juicefs
-  fsName: beta9-fs
+  mode: local
   fsPath: /data
   objectPath: /data/objects
-  juicefs:
-    redisURI: redis://:${juicefs_redis_password}@juicefs-redis-master.beta9:6379/0
-    awsS3Bucket: ${juicefs_bucket}
-    awsAccessKeyID: ${aws_access_key_id}
-    awsSecretAccessKey: ${aws_secret_access_key}
 gateway:
   host: gateway.beta9
   port: 1993

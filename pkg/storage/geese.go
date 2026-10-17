@@ -647,7 +647,3 @@ func forceUnmount(localPath string) error {
 	}
 	return errs
 }
-
-func (s *GeeseStorage) Format(fsName string) error {
-	return nil
-}

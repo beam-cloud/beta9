@@ -32,14 +32,13 @@ variable "bucket_user_credentials" {
     access_key = string
     secret_key = string
   })
-  description = "IAM credentials with access to buckets needed for images/juicefs"
+  description = "IAM credentials with access to buckets needed for images"
   sensitive   = true
 }
 
 variable "s3_buckets" {
   type = object({
-    image_bucket_name   = string
-    juicefs_bucket_name = string
+    image_bucket_name = string
   })
 }
 

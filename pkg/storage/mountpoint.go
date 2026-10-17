@@ -81,10 +81,6 @@ func (s *MountPointStorage) Mount(localPath string) error {
 	}
 }
 
-func (s *MountPointStorage) Format(fsName string) error {
-	return nil
-}
-
 func (s *MountPointStorage) Mode() string {
 	return StorageModeMountPoint
 }

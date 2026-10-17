@@ -88,10 +88,6 @@ func (s *MountPointSource) Mount(localPath string) error {
 	}
 }
 
-func (s *MountPointSource) Format(fsName string) error {
-	return nil
-}
-
 func (s *MountPointSource) Unmount(localPath string) error {
 	var errs error
 	if isMounted(localPath) {

@@ -42,10 +42,6 @@ func newVolumePathTestService(endpoint string, dedicated bool) (*GlobalVolumeSer
 	}
 	service := &GlobalVolumeService{
 		backendRepo: &volumePathTestRepository{},
-		config: types.FileServiceConfig{
-			BucketName: "test-bucket", Region: "us-east-1", EndpointURL: endpoint,
-			AccessKey: "test-key", SecretKey: "test-secret",
-		},
 	}
 	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: workspace})
 	return service, workspace, ctx
@@ -54,6 +50,36 @@ func newVolumePathTestService(endpoint string, dedicated bool) (*GlobalVolumeSer
 type volumePathTestResponse interface {
 	GetOk() bool
 	GetErrMsg() string
+}
+
+func TestFileServiceRequiresWorkspaceStorage(t *testing.T) {
+	for _, dedicated := range []bool{false, true} {
+		service, _, ctx := newVolumePathTestService("https://storage.example.com", dedicated)
+		for _, enabled := range []bool{false, true} {
+			service.config.Enabled = enabled
+			info, err := service.GetFileServiceInfo(ctx, &pb.GetFileServiceInfoRequest{})
+			require.NoError(t, err)
+			require.True(t, info.Ok)
+			require.Equal(t, enabled && dedicated, info.Enabled)
+		}
+	}
+}
+
+func TestS3UploadsRejectUnavailableWorkspaceStorage(t *testing.T) {
+	service, _, ctx := newVolumePathTestService("", false)
+
+	presigned, err := service.CreatePresignedURL(ctx, &pb.CreatePresignedURLRequest{VolumeName: "myvol"})
+	require.NoError(t, err)
+	created, err := service.CreateMultipartUpload(ctx, &pb.CreateMultipartUploadRequest{VolumeName: "myvol"})
+	require.NoError(t, err)
+	completed, err := service.CompleteMultipartUpload(ctx, &pb.CompleteMultipartUploadRequest{VolumeName: "myvol"})
+	require.NoError(t, err)
+	aborted, err := service.AbortMultipartUpload(ctx, &pb.AbortMultipartUploadRequest{VolumeName: "myvol"})
+	require.NoError(t, err)
+	for _, response := range []volumePathTestResponse{presigned, created, completed, aborted} {
+		require.False(t, response.GetOk())
+		require.Equal(t, "workspace storage is unavailable", response.GetErrMsg())
+	}
 }
 
 func TestVolumeS3OperationsRejectTraversal(t *testing.T) {
@@ -116,34 +142,27 @@ func TestVolumeS3OperationsRejectTraversal(t *testing.T) {
 }
 
 func TestCreatePresignedURLVolumeKeys(t *testing.T) {
-	for _, dedicated := range []bool{false, true} {
-		t.Run(fmt.Sprintf("dedicated=%t", dedicated), func(t *testing.T) {
-			service, _, ctx := newVolumePathTestService("https://storage.example.com", dedicated)
-			root := "volumes/ws-A/vol-A"
-			if dedicated {
-				root = "volumes/vol-A"
-			}
-			for _, method := range []pb.PresignedURLMethod{pb.PresignedURLMethod_HeadObject, pb.PresignedURLMethod_GetObject, pb.PresignedURLMethod_PutObject, pb.PresignedURLMethod_UploadPart} {
-				t.Run(method.String(), func(t *testing.T) {
-					for input, suffix := range map[string]string{
-						"models/weights.bin":         "/models/weights.bin",
-						"/models//v1/../weights.bin": "/models/weights.bin",
-						"":                           "", ".": "", "models/..": "",
-						"models/my weights.bin": "/models/my weights.bin",
-						"%2e%2e/secret":         "/%2e%2e/secret",
-					} {
-						response, err := service.CreatePresignedURL(ctx, &pb.CreatePresignedURLRequest{
-							VolumeName: "myvol", VolumePath: input, Method: method,
-							Params: &pb.PresignedURLParams{UploadId: "test-upload", PartNumber: 1},
-						})
-						require.NoError(t, err)
-						require.True(t, response.Ok, response.ErrMsg)
-						signed, err := url.Parse(response.Url)
-						require.NoError(t, err)
-						require.Equal(t, "/test-bucket/"+root+suffix, signed.Path)
-						require.NotEmpty(t, signed.Query().Get("X-Amz-Signature"))
-					}
+	service, _, ctx := newVolumePathTestService("https://storage.example.com", true)
+	root := "volumes/vol-A"
+	for _, method := range []pb.PresignedURLMethod{pb.PresignedURLMethod_HeadObject, pb.PresignedURLMethod_GetObject, pb.PresignedURLMethod_PutObject, pb.PresignedURLMethod_UploadPart} {
+		t.Run(method.String(), func(t *testing.T) {
+			for input, suffix := range map[string]string{
+				"models/weights.bin":         "/models/weights.bin",
+				"/models//v1/../weights.bin": "/models/weights.bin",
+				"":                           "", ".": "", "models/..": "",
+				"models/my weights.bin": "/models/my weights.bin",
+				"%2e%2e/secret":         "/%2e%2e/secret",
+			} {
+				response, err := service.CreatePresignedURL(ctx, &pb.CreatePresignedURLRequest{
+					VolumeName: "myvol", VolumePath: input, Method: method,
+					Params: &pb.PresignedURLParams{UploadId: "test-upload", PartNumber: 1},
 				})
+				require.NoError(t, err)
+				require.True(t, response.Ok, response.ErrMsg)
+				signed, err := url.Parse(response.Url)
+				require.NoError(t, err)
+				require.Equal(t, "/test-bucket/"+root+suffix, signed.Path)
+				require.NotEmpty(t, signed.Query().Get("X-Amz-Signature"))
 			}
 		})
 	}
@@ -184,60 +203,53 @@ func TestWorkspaceStorageOperationsRejectTraversalBeforeClientCreation(t *testin
 }
 
 func TestMultipartUploadVolumeKeys(t *testing.T) {
-	for _, dedicated := range []bool{false, true} {
-		t.Run(fmt.Sprintf("dedicated=%t", dedicated), func(t *testing.T) {
-			requests := make(chan string, 3)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests <- r.Method + " " + r.URL.Path
-				w.Header().Set("Content-Type", "application/xml")
-				switch {
-				case r.Method == http.MethodDelete:
-					w.WriteHeader(http.StatusNoContent)
-				case r.URL.Query().Has("uploads"):
-					fmt.Fprint(w, "<InitiateMultipartUploadResult><UploadId>test-upload</UploadId></InitiateMultipartUploadResult>")
-				default:
-					fmt.Fprint(w, "<CompleteMultipartUploadResult/>")
-				}
-			}))
-			defer server.Close()
-			service, _, ctx := newVolumePathTestService(server.URL, dedicated)
-			root := "volumes/ws-A/vol-A"
-			if dedicated {
-				root = "volumes/vol-A"
-			}
-			const input = "models/v1/../weights.bin"
-			wantPath := "/test-bucket/" + root + "/models/weights.bin"
+	requests := make(chan string, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.Method + " " + r.URL.Path
+		w.Header().Set("Content-Type", "application/xml")
+		switch {
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Query().Has("uploads"):
+			fmt.Fprint(w, "<InitiateMultipartUploadResult><UploadId>test-upload</UploadId></InitiateMultipartUploadResult>")
+		default:
+			fmt.Fprint(w, "<CompleteMultipartUploadResult/>")
+		}
+	}))
+	defer server.Close()
+	service, _, ctx := newVolumePathTestService(server.URL, true)
+	root := "volumes/vol-A"
+	const input = "models/v1/../weights.bin"
+	wantPath := "/test-bucket/" + root + "/models/weights.bin"
 
-			created, err := service.CreateMultipartUpload(ctx, &pb.CreateMultipartUploadRequest{
-				VolumeName: "myvol", VolumePath: input, FileSize: 1, ChunkSize: 1,
-			})
-			require.NoError(t, err)
-			require.True(t, created.Ok, created.ErrMsg)
-			require.Len(t, created.FileUploadParts, 1)
-			signed, err := url.Parse(created.FileUploadParts[0].Url)
-			require.NoError(t, err)
-			require.Equal(t, wantPath, signed.Path)
-			require.Equal(t, "test-upload", signed.Query().Get("uploadId"))
-			completed, err := service.CompleteMultipartUpload(ctx, &pb.CompleteMultipartUploadRequest{
-				VolumeName: "myvol", VolumePath: input, UploadId: created.UploadId,
-				CompletedParts: []*pb.CompletedPart{{Number: 1, Etag: "test-etag"}},
-			})
-			require.NoError(t, err)
-			require.True(t, completed.Ok, completed.ErrMsg)
-			aborted, err := service.AbortMultipartUpload(ctx, &pb.AbortMultipartUploadRequest{
-				VolumeName: "myvol", VolumePath: input, UploadId: created.UploadId,
-			})
-			require.NoError(t, err)
-			require.True(t, aborted.Ok, aborted.ErrMsg)
-			for _, method := range []string{http.MethodPost, http.MethodPost, http.MethodDelete} {
-				select {
-				case request := <-requests:
-					require.Equal(t, method+" "+wantPath, request)
-				default:
-					t.Fatal("missing S3 request")
-				}
-			}
-		})
+	created, err := service.CreateMultipartUpload(ctx, &pb.CreateMultipartUploadRequest{
+		VolumeName: "myvol", VolumePath: input, FileSize: 1, ChunkSize: 1,
+	})
+	require.NoError(t, err)
+	require.True(t, created.Ok, created.ErrMsg)
+	require.Len(t, created.FileUploadParts, 1)
+	signed, err := url.Parse(created.FileUploadParts[0].Url)
+	require.NoError(t, err)
+	require.Equal(t, wantPath, signed.Path)
+	require.Equal(t, "test-upload", signed.Query().Get("uploadId"))
+	completed, err := service.CompleteMultipartUpload(ctx, &pb.CompleteMultipartUploadRequest{
+		VolumeName: "myvol", VolumePath: input, UploadId: created.UploadId,
+		CompletedParts: []*pb.CompletedPart{{Number: 1, Etag: "test-etag"}},
+	})
+	require.NoError(t, err)
+	require.True(t, completed.Ok, completed.ErrMsg)
+	aborted, err := service.AbortMultipartUpload(ctx, &pb.AbortMultipartUploadRequest{
+		VolumeName: "myvol", VolumePath: input, UploadId: created.UploadId,
+	})
+	require.NoError(t, err)
+	require.True(t, aborted.Ok, aborted.ErrMsg)
+	for _, method := range []string{http.MethodPost, http.MethodPost, http.MethodDelete} {
+		select {
+		case request := <-requests:
+			require.Equal(t, method+" "+wantPath, request)
+		default:
+			t.Fatal("missing S3 request")
+		}
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	StorageModeJuiceFS    string = types.StorageModeJuiceFS
 	StorageModeMountPoint string = types.StorageModeMountPoint
 	StorageModeGeese      string = types.StorageModeGeese
 	StorageModeAlluxio    string = types.StorageModeAlluxio
@@ -24,7 +23,6 @@ const (
 type Storage interface {
 	Mount(localPath string) error
 	Unmount(localPath string) error
-	Format(fsName string) error
 	Mode() string
 }
 
@@ -81,26 +79,6 @@ func unescapeMountInfoPath(path string) string {
 // NewStorage mounts the configured filesystem and returns mount failures.
 func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage, error) {
 	switch config.Mode {
-	case StorageModeJuiceFS:
-		s, err := NewJuiceFsStorage(config.JuiceFS)
-		if err != nil {
-			return nil, err
-		}
-
-		// Format filesystem
-		// NOTE: this is a no-op if already formatted
-		err = s.Format(config.FilesystemName)
-		if err != nil {
-			return nil, fmt.Errorf("unable to format filesystem: %w", err)
-		}
-
-		// Mount filesystem
-		err = s.Mount(config.FilesystemPath)
-		if err != nil {
-			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
-		}
-
-		return s, nil
 	case StorageModeGeese:
 		s, err := NewGeeseStorage(config.Geese, cacheClient)
 		if err != nil {
