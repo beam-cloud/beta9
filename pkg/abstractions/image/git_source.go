@@ -44,16 +44,15 @@ func resolveGitCommit(ctx context.Context, src *types.GitSource) error {
 	ctx, cancel := context.WithTimeout(ctx, gitResolveTimeout)
 	defer cancel()
 
-	lsRemote := func(patterns ...string) (string, bool) {
-		cmd := exec.CommandContext(ctx, "git", append([]string{"ls-remote", "--exit-code", gitAuthURL(src)}, patterns...)...)
+	lsRemote := func(refs ...string) (string, bool) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"ls-remote", "--exit-code", gitAuthURL(src)}, refs...)...)
 		// A bare environment: the token in the URL is the only credential git may use.
 		cmd.Env = []string{"GIT_TERMINAL_PROMPT=0", "PATH=/usr/bin:/bin:/usr/local/bin"}
 		out, err := cmd.Output()
 		if err != nil {
 			return "", false
 		}
-		sha, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
-		return sha, fullCommit.MatchString(sha)
+		return pickLsRemoteRef(string(out), refs...)
 	}
 
 	if src.Ref == "" {
@@ -76,6 +75,26 @@ func resolveGitCommit(ctx context.Context, src *types.GitSource) error {
 		return nil
 	}
 	return fmt.Errorf("ref %q not found in %s", src.Ref, src.RepoURL)
+}
+
+// pickLsRemoteRef returns the commit of the first ref in refs that ls-remote
+// listed under exactly that name. ls-remote matches a pattern against the
+// trailing components of every ref, so "main" also lists
+// refs/heads/copilot/main, which sorts ahead of refs/heads/main.
+func pickLsRemoteRef(out string, refs ...string) (string, bool) {
+	listed := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		sha, name, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if ok {
+			listed[name] = sha
+		}
+	}
+	for _, ref := range refs {
+		if sha, ok := listed[ref]; ok && fullCommit.MatchString(sha) {
+			return sha, true
+		}
+	}
+	return "", false
 }
 
 // gitAuthURL embeds the token the way GitHub and GitLab accept it over https.
