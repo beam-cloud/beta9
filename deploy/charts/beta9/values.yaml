@@ -94,7 +94,6 @@ controllers:
         - |
           until nc -z postgresql 5432; do echo "Waiting on PostgreSQL..."; sleep 2; done;
           until nc -z redis-master 6379; do echo "Waiting on Redis..."; sleep 2; done;
-          until nc -z juicefs-redis-master 6379; do echo "Waiting on Redis (JuiceFS)..."; sleep 2; done;
           echo "All systems ready!"
 
 persistence:
@@ -178,18 +177,6 @@ postgresql:
   persistence:
     enabled: true
     size: 1Gi
-
-# -- Needed by Gateway's file system
-juicefs-redis:
-  enabled: true
-  nameOverride: juicefs-redis
-  fullnameOverride: juicefs-redis
-  architecture: standalone
-  auth:
-    enabled: false
-  master:
-    persistence:
-      size: 1Gi
 
 # -- Enables deployment of victoria-metrics and grafana
 metrics:

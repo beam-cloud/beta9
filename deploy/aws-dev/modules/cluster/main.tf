@@ -189,10 +189,6 @@ resource "aws_s3_bucket" "image_bucket" {
   bucket = "${var.prefix}-images"
 }
 
-resource "aws_s3_bucket" "juicefs_bucket" {
-  bucket = "${var.prefix}-juicefs"
-}
-
 resource "aws_iam_role" "k3s_role" {
   name = "${var.prefix}-k3s-role"
 
@@ -228,8 +224,6 @@ resource "aws_iam_policy" "k3s_instance_policy" {
         Resource = [
           "${aws_s3_bucket.image_bucket.arn}",
           "${aws_s3_bucket.image_bucket.arn}/*",
-          "${aws_s3_bucket.juicefs_bucket.arn}",
-          "${aws_s3_bucket.juicefs_bucket.arn}/*"
         ]
       },
       {
@@ -708,8 +702,8 @@ resource "aws_iam_user" "bucket_user" {
 }
 
 resource "aws_iam_policy" "bucket_access_policy" {
-  name        = "${var.prefix}-juicefs-images-bucket-access"
-  description = "Policy for JuiceFS and images buckets"
+  name        = "${var.prefix}-images-bucket-access"
+  description = "Policy for images bucket"
 
   policy = jsonencode({
     Version = "2012-10-17",
@@ -722,7 +716,6 @@ resource "aws_iam_policy" "bucket_access_policy" {
         ],
         Effect = "Allow",
         Resource = [
-          aws_s3_bucket.juicefs_bucket.arn,
           aws_s3_bucket.image_bucket.arn
         ]
       },
@@ -735,7 +728,6 @@ resource "aws_iam_policy" "bucket_access_policy" {
         ],
         Effect = "Allow",
         Resource = [
-          "${aws_s3_bucket.juicefs_bucket.arn}/*",
           "${aws_s3_bucket.image_bucket.arn}/*"
         ]
       }

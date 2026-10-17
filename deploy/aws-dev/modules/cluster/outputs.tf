@@ -75,7 +75,6 @@ output "bucket_user_credentials" {
 
 output "s3_buckets" {
   value = {
-    image_bucket_name   = aws_s3_bucket.image_bucket.bucket
-    juicefs_bucket_name = aws_s3_bucket.juicefs_bucket.bucket
+    image_bucket_name = aws_s3_bucket.image_bucket.bucket
   }
 }

@@ -7,7 +7,6 @@ import (
 )
 
 const (
-	StorageModeJuiceFS     = "juicefs"
 	StorageModeMountPoint  = "mountpoint"
 	StorageModeGeese       = "geese"
 	StorageModeAlluxio     = "alluxio"

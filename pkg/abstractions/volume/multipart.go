@@ -11,11 +11,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -24,24 +22,6 @@ const (
 	presignedUrlDefaultExpires = 300    // 5 minutes
 	presignedUrlMaxExpires     = 604800 // 1 week
 )
-
-func (s *GlobalVolumeService) getS3Client() *s3.Client {
-	region := s.config.Region
-	if region == "" {
-		region = "-"
-	}
-
-	return s3.New(s3.Options{
-		Credentials: credentials.NewStaticCredentialsProvider(
-			s.config.AccessKey,
-			s.config.SecretKey,
-			s.config.Region,
-		),
-		BaseEndpoint: aws.String(s.config.EndpointURL),
-		UsePathStyle: true,
-		Region:       region,
-	})
-}
 
 // volumeObjectKey keeps client paths inside the authenticated volume's S3 prefix.
 // S3 keys use slash separators regardless of the gateway's operating system.
@@ -59,9 +39,10 @@ func volumeObjectKey(workspace *types.Workspace, volumeExternalID, volumePath st
 }
 
 func (s *GlobalVolumeService) GetFileServiceInfo(ctx context.Context, in *pb.GetFileServiceInfoRequest) (*pb.GetFileServiceInfoResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	return &pb.GetFileServiceInfoResponse{
 		Ok:      true,
-		Enabled: s.config.Enabled && s.config.EndpointURL != "" && s.config.BucketName != "",
+		Enabled: s.config.Enabled && authInfo.Workspace.StorageAvailable(),
 	}, nil
 }
 
@@ -81,26 +62,15 @@ func (s *GlobalVolumeService) CreatePresignedURL(ctx context.Context, in *pb.Cre
 		return &pb.CreatePresignedURLResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	var s3Client *s3.Client
-	var presignClient *s3.PresignClient
-	bucket := s.config.BucketName
-
-	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := s.newWorkspaceStorageClientForPresign(ctx, authInfo.Workspace)
-		if err != nil {
-			return &pb.CreatePresignedURLResponse{
-				Ok:     false,
-				ErrMsg: err.Error(),
-			}, nil
-		}
-
-		s3Client = storageClient.S3Client()
-		presignClient = storageClient.PresignClient()
-		bucket = storageClient.BucketName()
-	} else {
-		s3Client = s.getS3Client()
-		presignClient = s3.NewPresignClient(s3Client)
+	storageClient, err := s.newWorkspaceStorageClientForPresign(ctx, authInfo.Workspace)
+	if err != nil {
+		return &pb.CreatePresignedURLResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
 	}
+	presignClient := storageClient.PresignClient()
+	bucket := storageClient.BucketName()
 
 	if in.Expires == 0 {
 		in.Expires = presignedUrlDefaultExpires
@@ -190,23 +160,15 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 		return &pb.CreateMultipartUploadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	var s3Client *s3.Client
-	bucket := s.config.BucketName
-
-	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
-		if err != nil {
-			return &pb.CreateMultipartUploadResponse{
-				Ok:     false,
-				ErrMsg: err.Error(),
-			}, nil
-		}
-
-		s3Client = storageClient.S3Client()
-		bucket = storageClient.BucketName()
-	} else {
-		s3Client = s.getS3Client()
+	storageClient, err := s.newWorkspaceStorageClientForPresign(ctx, authInfo.Workspace)
+	if err != nil {
+		return &pb.CreateMultipartUploadResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
 	}
+	s3Client := storageClient.S3Client()
+	bucket := storageClient.BucketName()
 
 	response, err := s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket:  aws.String(bucket),
@@ -283,23 +245,15 @@ func (s *GlobalVolumeService) CompleteMultipartUpload(ctx context.Context, in *p
 		return &pb.CompleteMultipartUploadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	var s3Client *s3.Client
-	bucket := s.config.BucketName
-
-	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
-		if err != nil {
-			return &pb.CompleteMultipartUploadResponse{
-				Ok:     false,
-				ErrMsg: err.Error(),
-			}, nil
-		}
-
-		s3Client = storageClient.S3Client()
-		bucket = storageClient.BucketName()
-	} else {
-		s3Client = s.getS3Client()
+	storageClient, err := s.newWorkspaceStorageClientForPresign(ctx, authInfo.Workspace)
+	if err != nil {
+		return &pb.CompleteMultipartUploadResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
 	}
+	s3Client := storageClient.S3Client()
+	bucket := storageClient.BucketName()
 
 	_, err = s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucket),
@@ -347,23 +301,15 @@ func (s *GlobalVolumeService) AbortMultipartUpload(ctx context.Context, in *pb.A
 		return &pb.AbortMultipartUploadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	var s3Client *s3.Client
-	bucket := s.config.BucketName
-
-	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
-		if err != nil {
-			return &pb.AbortMultipartUploadResponse{
-				Ok:     false,
-				ErrMsg: err.Error(),
-			}, nil
-		}
-
-		s3Client = storageClient.S3Client()
-		bucket = storageClient.BucketName()
-	} else {
-		s3Client = s.getS3Client()
+	storageClient, err := s.newWorkspaceStorageClientForPresign(ctx, authInfo.Workspace)
+	if err != nil {
+		return &pb.AbortMultipartUploadResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
 	}
+	s3Client := storageClient.S3Client()
+	bucket := storageClient.BucketName()
 
 	_, err = s3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 		Bucket:   aws.String(bucket),

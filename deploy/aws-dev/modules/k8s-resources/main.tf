@@ -136,11 +136,6 @@ resource "random_password" "redis_password" {
   special = false
 }
 
-resource "random_password" "juicefs_redis_password" {
-  length  = 16
-  special = false
-}
-
 resource "helm_release" "redis" {
   name             = "redis"
   repository       = "https://charts.bitnami.com/bitnami"
@@ -168,44 +163,16 @@ resource "helm_release" "redis" {
 }
 
 
-resource "helm_release" "juicefs_redis" {
-  name             = "juicefs-redis"
-  repository       = "https://charts.bitnami.com/bitnami"
-  chart            = "redis"
-  version          = "18.7.1"
-  namespace        = "beta9"
-  create_namespace = true
-
-  set {
-    name  = "architecture"
-    value = "standalone"
-  }
-
-  set {
-    name  = "master.persistence.size"
-    value = "5Gi"
-  }
-
-  set {
-    name  = "auth.password"
-    value = random_password.juicefs_redis_password.result
-  }
-
-  depends_on = [helm_release.nginx_ingress]
-}
-
 locals {
   config_content = templatefile("${path.module}/config.tpl", {
-    db_user                = var.db_config.username.value
-    db_host                = var.db_config.host.value
-    db_password            = var.db_config.password.value
-    redis_password         = random_password.redis_password.result
-    juicefs_redis_password = random_password.juicefs_redis_password.result
-    juicefs_bucket         = "https://${var.s3_buckets.juicefs_bucket_name}.s3.amazonaws.com"
-    aws_access_key_id      = var.bucket_user_credentials.access_key
-    aws_secret_access_key  = var.bucket_user_credentials.secret_key
-    images_bucket          = var.s3_buckets.image_bucket_name
-    aws_region             = var.aws_region
+    db_user               = var.db_config.username.value
+    db_host               = var.db_config.host.value
+    db_password           = var.db_config.password.value
+    redis_password        = random_password.redis_password.result
+    aws_access_key_id     = var.bucket_user_credentials.access_key
+    aws_secret_access_key = var.bucket_user_credentials.secret_key
+    images_bucket         = var.s3_buckets.image_bucket_name
+    aws_region            = var.aws_region
   })
 }
 
@@ -219,7 +186,6 @@ resource "kubernetes_secret" "app_config" {
   }
 
   depends_on = [
-    random_password.juicefs_redis_password,
     random_password.redis_password,
     helm_release.nginx_ingress
   ]
