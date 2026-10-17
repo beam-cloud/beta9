@@ -129,7 +129,8 @@ func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, reque
 		return nil, err
 	}
 	pushOpts := []remote.Option{remote.WithContext(ctx), remote.WithJobs(layerSplitMaxLayers)}
-	if auth := c.buildRegistryAuthenticator(ctx, request, buildRegistry); auth != nil {
+	auth := c.buildRegistryAuthenticator(ctx, request, buildRegistry)
+	if auth != nil {
 		pushOpts = append(pushOpts, remote.WithAuth(auth))
 	} else {
 		pushOpts = append(pushOpts, remote.WithAuthFromKeychain(authn.DefaultKeychain))
@@ -162,7 +163,7 @@ func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, reque
 		result.pushed = time.Since(started)
 		pushErr <- err
 	}()
-	indexErr := c.indexImage(ctx, &indexRequest, imageTag, layoutDir, archivePath)
+	indexErr := c.indexImage(ctx, &indexRequest, imageTag, layoutDir, archivePath, auth)
 	result.indexed = time.Since(started)
 	if indexErr == nil {
 		report(60)
@@ -173,7 +174,7 @@ func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, reque
 	published = true
 	if indexErr != nil {
 		log.Warn().Err(indexErr).Str("image_id", imageId).Msg("index from local layout failed, indexing from registry")
-		if indexErr = c.indexImage(ctx, &indexRequest, imageTag, "", archivePath); indexErr != nil {
+		if indexErr = c.indexImage(ctx, &indexRequest, imageTag, "", archivePath, auth); indexErr != nil {
 			return nil, fmt.Errorf("index image: %w", indexErr)
 		}
 		result.indexed = time.Since(started)
@@ -275,9 +276,24 @@ func appendLayers(base v1.Image, layers []*packedLayer, createdBy string) (v1.Im
 
 // indexImage writes the clip index archive for imageTag, reading the image
 // from layoutDir when given and from the registry otherwise.
-func (c *ImageClient) indexImage(ctx context.Context, request *types.ContainerRequest, imageTag, layoutDir, archivePath string) error {
+func (c *ImageClient) indexImage(ctx context.Context, request *types.ContainerRequest, imageTag, layoutDir, archivePath string, auth authn.Authenticator) error {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return c.createOCIImageWithProgress(ctx, quiet, request, imageTag, layoutDir, archivePath, 2)
+	credentials := c.getCredentialProviderForImage(ctx, request.ImageId, request)
+	if auth != nil {
+		// Publishing was authorized for the original stub image. Reuse that
+		// registry auth while indexing the new, not-yet-attached snapshot ID.
+		credentials = snapshotIndexCredentialProvider(registryFromImageRef(imageTag), auth)
+	}
+	return c.createOCIImageWithProgressAndCredentials(ctx, quiet, request, imageTag, layoutDir, archivePath, 2, credentials)
+}
+
+func snapshotIndexCredentialProvider(targetRegistry string, auth authn.Authenticator) clipCommon.RegistryCredentialProvider {
+	return clipCommon.NewCallbackProvider(func(_ context.Context, registry, _ string) (*authn.AuthConfig, error) {
+		if registry != targetRegistry {
+			return &authn.AuthConfig{}, nil
+		}
+		return auth.Authorization()
+	})
 }
 
 func (c *ImageClient) filesystemExportRegistry(ctx context.Context, request *types.ContainerRequest) (types.ImageServiceConfig, error) {
