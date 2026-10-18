@@ -58,6 +58,17 @@ func TestInterfaceBoundTCPAcrossRepeatedNetworkRestore(t *testing.T) {
 	if _, err := exec.LookPath("iptables"); err != nil {
 		t.Fatal(err)
 	}
+	for _, binary := range []string{"iptables", "ip6tables"} {
+		for _, args := range [][]string{
+			{"-t", "nat", "-N", "GUEST_RULES"},
+			{"-t", "nat", "-A", "OUTPUT", "-j", "GUEST_RULES"},
+			{"-t", "nat", "-A", "GUEST_RULES", "-p", "tcp", "--dport", "9", "-j", "RETURN"},
+		} {
+			if output, err := exec.Command(binary, args...).CombinedOutput(); err != nil {
+				t.Fatalf("guest firewall setup: %v: %s", err, output)
+			}
+		}
+	}
 	lo, err := netlink.LinkByName("lo")
 	if err != nil {
 		t.Fatal(err)
@@ -135,5 +146,22 @@ func TestInterfaceBoundTCPAcrossRepeatedNetworkRestore(t *testing.T) {
 	resp.Body.Close()
 	if err != nil || string(body) != "restarted-process" {
 		t.Fatalf("restarted listener: %q %v", body, err)
+	}
+	for _, binary := range []string{"iptables-save", "ip6tables-save"} {
+		rules, err := exec.Command(binary, "-t", "nat").CombinedOutput()
+		if err != nil {
+			t.Fatalf("read restored firewall: %v: %s", err, rules)
+		}
+		for _, rule := range []string{
+			"-A OUTPUT -j GUEST_RULES",
+			"-A GUEST_RULES -p tcp -m tcp --dport 9 -j RETURN",
+			"-A PREROUTING -j BEAM_VM_RESTORE_IN",
+			"-A OUTPUT -j BEAM_VM_RESTORE_IN",
+			"-A POSTROUTING -j BEAM_VM_RESTORE_OUT",
+		} {
+			if strings.Count(string(rules), rule+"\n") != 1 {
+				t.Fatalf("restore must preserve guest rules and avoid duplicate jumps: %s: %s", rule, rules)
+			}
+		}
 	}
 }
