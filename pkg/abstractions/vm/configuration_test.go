@@ -203,6 +203,45 @@ func TestCreationRequestIsWorkspaceScopedAndDoesNotLaunchTwice(t *testing.T) {
 	require.Len(t, runtime.requests, 1)
 }
 
+func TestDeletedCreationRequestReturnsGoneBeforeComparingSettings(t *testing.T) {
+	for _, change := range []string{"none", "settings", "default-pool", "port-defaults"} {
+		t.Run(change, func(t *testing.T) {
+			s, _, info, runtime, _ := fixture()
+			e := managementAPI(s, info)
+			requestID := uuid.NewString()
+			body := `{"request_id":"` + requestID + `","spec":{"image_id":"base"}}`
+			path := "/" + info.Workspace.ExternalId
+			spec := types.VMSpec{ImageID: "base"}
+			require.NoError(t, validate(&spec))
+			if change == "port-defaults" {
+				// Older gateways did not protect the terminal by default.
+				spec.ProtectedPorts = nil
+			}
+			v, err := s.createVMWithRequest(auth.ContextWithAuthInfo(context.Background(), info), info, "", spec, nil, requestID)
+			require.NoError(t, err)
+			v.DesiredState = types.VMStateDeleted
+			switch change {
+			case "settings":
+				body = strings.Replace(body, `"base"`, `"updated-image"`, 1)
+			case "default-pool":
+				// The saved onboarding body can be identical across gateway updates.
+				s.defaultPool = "new-default"
+			}
+			require.NoError(t, s.repo.SaveVM(context.Background(), v))
+
+			replayed := vmRequest(e, "POST", path, body)
+			require.Equal(t, http.StatusGone, replayed.Code, replayed.Body.String())
+			require.Contains(t, replayed.Body.String(), "the VM for this request_id was removed")
+			require.Len(t, runtime.requests, 1, "a deleted request must never launch again")
+
+			body = strings.Replace(body, requestID, uuid.NewString(), 1)
+			replacement := vmRequest(e, "POST", path, body)
+			require.Equal(t, http.StatusCreated, replacement.Code, replacement.Body.String())
+			require.Len(t, runtime.requests, 2, "onboarding can create a replacement with a fresh request")
+		})
+	}
+}
+
 func TestMetadataFilterMatchesPresentKeysAndUpdateClears(t *testing.T) {
 	s, v, info, _, _ := fixture()
 	v.Spec.Memory = 2048
