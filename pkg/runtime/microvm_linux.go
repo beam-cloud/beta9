@@ -49,20 +49,24 @@ var (
 )
 
 type microVMInstance struct {
-	id        string
-	stateDir  string
-	canvas    string
-	scratch   string
-	cgroup    string
-	netnsPath string
-	tapIndex  int
-	submounts []string
+	id            string
+	stateDir      string
+	canvas        string
+	imageRoot     string
+	bootstrapRoot string
+	directImage   bool
+	scratch       string
+	cgroup        string
+	netnsPath     string
+	tapIndex      int
+	submounts     []string
 
 	virtiofsd      []*exec.Cmd
 	hypervisor     *exec.Cmd
 	ctrl           *microVMControl
 	console        *tailWriter
 	prepareTimings string // per-step durations of prepare, for the start log line
+	imageNoXattrs  bool   // worker attested that this image is a CLIP mount without xattr support
 
 	mu     sync.Mutex
 	exited bool
@@ -181,7 +185,7 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 	if err != nil {
 		return -1, err
 	}
-	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra)
+	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMImageKernelCmdline(inst.directImage), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra)
 	return m.boot(ctx, inst, spec, args, opts.OutputWriter, opts.ErrorWriter, opts.Started)
 }
 
@@ -322,10 +326,18 @@ func (m *MicroVM) newInstance(containerID, bundlePath string) (*microVMInstance,
 		canvas = filepath.Join(bundlePath, canvas)
 	}
 	inst := &microVMInstance{
-		id:       containerID,
-		stateDir: filepath.Join(m.cfg.MicroVMStateRoot, containerID),
-		canvas:   canvas,
-		console:  newTailWriter(microVMConsoleTail),
+		id:            containerID,
+		stateDir:      filepath.Join(m.cfg.MicroVMStateRoot, containerID),
+		canvas:        canvas,
+		console:       newTailWriter(microVMConsoleTail),
+		imageNoXattrs: annotationBool(spec, MicroVMImageNoXattrsAnnotation),
+	}
+	inst.imageRoot, inst.bootstrapRoot = canvas, canvas
+	if imageRoot := spec.Annotations[MicroVMImageRootAnnotation]; imageRoot != "" {
+		if !inst.imageNoXattrs || !filepath.IsAbs(imageRoot) || filepath.Clean(imageRoot) != imageRoot {
+			return nil, nil, fmt.Errorf("invalid worker-attested CLIP image root")
+		}
+		inst.imageRoot, inst.bootstrapRoot, inst.directImage = imageRoot, filepath.Join(inst.stateDir, "binds"), true
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -347,13 +359,19 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 			return none, microVMDisk{}, nil, err
 		}
 		var snapshot struct {
-			FS []json.RawMessage `json:"fs"`
+			FS      []any `json:"fs"`
+			Payload struct {
+				Cmdline string `json:"cmdline"`
+			} `json:"payload"`
 		}
 		if err := json.Unmarshal(config, &snapshot); err != nil {
 			return none, microVMDisk{}, nil, err
 		}
-		if len(snapshot.FS) != 2 {
-			return none, microVMDisk{}, nil, fmt.Errorf("checkpoint requires its original filesystem runtime (expected image and bind shares)")
+		if err := validateMicroVMSnapshotFS(snapshot.FS); err != nil {
+			return none, microVMDisk{}, nil, err
+		}
+		if err := validateMicroVMSnapshotRoot(snapshot.Payload.Cmdline, inst.directImage); err != nil {
+			return none, microVMDisk{}, nil, err
 		}
 	}
 	if err := os.RemoveAll(inst.stateDir); err != nil {
@@ -548,14 +566,7 @@ func (m *MicroVM) UpdateResources(ctx context.Context, containerID string, resou
 	if inst.cgroup == "" || resources == nil {
 		return nil
 	}
-	cpuMax := cpuMaxString(resources.CPU)
-	if cpuMax == "" {
-		return nil
-	}
-	if err := os.WriteFile(filepath.Join(inst.cgroup, "cpu.max"), []byte(cpuMax), 0o644); err != nil {
-		return fmt.Errorf("set cpu.max: %w", err)
-	}
-	return nil
+	return applyMicroVMCPU(inst.cgroup, resources.CPU)
 }
 
 func (m *MicroVM) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *KillOpts) error {
@@ -1150,6 +1161,12 @@ func createScratchDisk(ctx context.Context, path string, size int64) error {
 // --- canvas ------------------------------------------------------------------
 
 func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk) error {
+	if inst.bootstrapRoot == "" {
+		inst.bootstrapRoot = inst.canvas
+	}
+	if err := os.MkdirAll(inst.bootstrapRoot, 0o755); err != nil {
+		return err
+	}
 	// The canvas is image content: a symlink at any of these paths would
 	// redirect the host's writes and mounts below, so they are created
 	// without following one, and .beam is recreated empty.
@@ -1158,7 +1175,7 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 			return err
 		}
 	}
-	beam := filepath.Join(inst.canvas, microvm.CanvasDir)
+	beam := filepath.Join(inst.bootstrapRoot, microvm.CanvasDir)
 	if err := removeCanvasEntry(beam); err != nil {
 		return err
 	}
@@ -1170,7 +1187,7 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 	if err := os.MkdirAll(filepath.Join(inst.stateDir, "binds"), 0o755); err != nil {
 		return err
 	}
-	if err := copyFile(m.cfg.MicroVMInitPath, filepath.Join(inst.canvas, microvm.InitPath), 0o755); err != nil {
+	if err := copyFile(m.cfg.MicroVMInitPath, filepath.Join(inst.bootstrapRoot, microvm.InitPath), 0o755); err != nil {
 		return fmt.Errorf("install guest init: %w", err)
 	}
 
@@ -1187,17 +1204,35 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 		}
 		mounts = append(mounts, bind)
 	}
-	data, err := json.MarshalIndent(microVMGuestSpec(spec, network, root, extra, mounts), "", "  ")
+	vm := microVMGuestSpec(spec, network, root, extra, mounts)
+	vm.DirectImage = inst.directImage
+	if inst.directImage {
+		data, err := os.ReadFile(filepath.Join(inst.canvas, microvm.OCISpecFile))
+		if err != nil {
+			return err
+		}
+		if err := writeFileNoFollow(filepath.Join(inst.bootstrapRoot, microvm.OCISpecFile), data, 0o644); err != nil {
+			return err
+		}
+		if err := stageDirectImageMetadata(inst.imageRoot, filepath.Join(inst.bootstrapRoot, microvm.MetadataDir), data); err != nil {
+			return err
+		}
+	}
+	data, err := json.MarshalIndent(vm, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeFileNoFollow(filepath.Join(inst.canvas, microvm.SpecFile), data, 0o644)
+	return writeFileNoFollow(filepath.Join(inst.bootstrapRoot, microvm.SpecFile), data, 0o644)
 }
 
 // canvasDir makes rel a real directory directly under the canvas root (or
 // under .beam), replacing a symlink or file the image put there.
 func (inst *microVMInstance) canvasDir(rel string) error {
-	path := filepath.Join(inst.canvas, rel)
+	root := inst.bootstrapRoot
+	if root == "" {
+		root = inst.canvas
+	}
+	path := filepath.Join(root, rel)
 	info, err := os.Lstat(path)
 	switch {
 	case err == nil && info.IsDir():
@@ -1299,7 +1334,11 @@ func (m *MicroVM) startVirtiofsd(ctx context.Context, inst *microVMInstance) err
 	// mounts retain close-to-open coherence through their own share.
 	var shares errgroup.Group
 	shares.Go(func() error {
-		return m.startVirtiofsShare(ctx, inst, inst.canvas, microVMVirtiofsSocket, "always")
+		image := inst.imageRoot
+		if image == "" {
+			image = inst.canvas
+		}
+		return m.startVirtiofsShare(ctx, inst, image, microVMVirtiofsSocket, "always")
 	})
 	shares.Go(func() error {
 		return m.startVirtiofsShare(ctx, inst, filepath.Join(inst.stateDir, "binds"), microVMBindsSocket, "auto")
@@ -1322,7 +1361,6 @@ func (m *MicroVM) startVirtiofsShare(ctx context.Context, inst *microVMInstance,
 		"--socket-path="+socket,
 		"--shared-dir="+dir,
 		"--announce-submounts",
-		"--xattr",
 		"--killpriv-v2",
 		"--cache="+cache,
 		"--inode-file-handles=never",
@@ -1331,7 +1369,13 @@ func (m *MicroVM) startVirtiofsShare(ctx context.Context, inst *microVMInstance,
 		"--log-level=warn",
 	)
 	if cache == "always" {
-		cmd.Args = append(cmd.Args, "--readonly")
+		cmd.Args = append(cmd.Args, "--readonly", "--readdirplus-always")
+	}
+	if cache == "always" && inst.imageNoXattrs {
+		cmd.Args = append(cmd.Args, "--immutable-open")
+	}
+	if cache != "always" || !inst.imageNoXattrs {
+		cmd.Args = append(cmd.Args, "--xattr")
 	}
 	cgroupFD, err := inst.cgroupAttr(cmd)
 	if err != nil {
@@ -1408,10 +1452,8 @@ func (m *MicroVM) setupCgroup(inst *microVMInstance, spec *specs.Spec, guestMemo
 	if err := os.WriteFile(filepath.Join(path, "memory.max"), []byte(strconv.FormatInt(guestMemory+microVMMemoryHeadroom, 10)), 0o644); err != nil {
 		return fmt.Errorf("set memory.max: %w", err)
 	}
-	if cpuMax := microVMCPUMax(spec); cpuMax != "" {
-		if err := os.WriteFile(filepath.Join(path, "cpu.max"), []byte(cpuMax), 0o644); err != nil {
-			return fmt.Errorf("set cpu.max: %w", err)
-		}
+	if spec != nil && spec.Linux != nil && spec.Linux.Resources != nil {
+		return applyMicroVMCPU(path, spec.Linux.Resources.CPU)
 	}
 	return nil
 }

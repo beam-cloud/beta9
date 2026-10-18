@@ -1,0 +1,394 @@
+Subject: [PATCH] Backport upstream page-backed FUSE readdir batching to 6.12.111
+
+Based on upstream commits by Miklos Szeredi, Jaco Kroon and Matthew R. Ochs:
+  467e245d47e6662a4cbf4184d9e6d0b1b120c0bf
+  dabb90391028799fb524680feb4eb96eb904ca6f
+  4dd6f6d3085a84e74b0a1efec3a05ed0b5125dce
+
+Retain the userspace byte-count hint through VFS and OverlayFS. Bound FUSE
+responses by negotiated max_pages, allocate order-0 pages, and use scatter-
+gather output rather than a large virtiofs GFP_ATOMIC kvec bounce buffer.
+
+Backport API changes only: alloc_pages_bulk_array; folio_descs/uses_folios;
+combined folio-pointer/descriptor allocation instead of fuse_folios_alloc.
+The unchanged parsers, directory cache and fuse_parse_result enum remain.
+No tests were added by the three upstream commits. This backport is not yet
+compiled or runtime-tested; guest-kernel correctness gates remain required.
+
+--- a/include/linux/fs.h
++++ b/include/linux/fs.h
+@@ -2055,6 +2055,8 @@
+ struct dir_context {
+ 	filldir_t actor;
+ 	loff_t pos;
++	/* Hint only: 0 unknown, positive remaining bytes, INT_MAX unlimited. */
++	int count;
+ };
+ 
+ /*
+--- a/fs/readdir.c
++++ b/fs/readdir.c
+@@ -222,6 +222,7 @@
+ 	struct fd f = fdget_pos(fd);
+ 	struct readdir_callback buf = {
+ 		.ctx.actor = fillonedir,
++		.ctx.count = 1,
+ 		.dirent = dirent
+ 	};
+ 
+@@ -253,7 +254,6 @@
+ 	struct dir_context ctx;
+ 	struct linux_dirent __user * current_dir;
+ 	int prev_reclen;
+-	int count;
+ 	int error;
+ };
+ 
+@@ -272,7 +272,7 @@
+ 	if (unlikely(buf->error))
+ 		return false;
+ 	buf->error = -EINVAL;	/* only used if we fail.. */
+-	if (reclen > buf->count)
++	if (reclen > ctx->count)
+ 		return false;
+ 	d_ino = ino;
+ 	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino) {
+@@ -297,7 +297,7 @@
+ 
+ 	buf->current_dir = (void __user *)dirent + reclen;
+ 	buf->prev_reclen = reclen;
+-	buf->count -= reclen;
++	ctx->count -= reclen;
+ 	return true;
+ efault_end:
+ 	user_write_access_end();
+@@ -312,7 +312,7 @@
+ 	struct fd f;
+ 	struct getdents_callback buf = {
+ 		.ctx.actor = filldir,
+-		.count = count,
++		.ctx.count = count,
+ 		.current_dir = dirent
+ 	};
+ 	int error;
+@@ -331,7 +331,7 @@
+ 		if (put_user(buf.ctx.pos, &lastdirent->d_off))
+ 			error = -EFAULT;
+ 		else
+-			error = count - buf.count;
++			error = count - buf.ctx.count;
+ 	}
+ 	fdput_pos(f);
+ 	return error;
+@@ -341,7 +341,6 @@
+ 	struct dir_context ctx;
+ 	struct linux_dirent64 __user * current_dir;
+ 	int prev_reclen;
+-	int count;
+ 	int error;
+ };
+ 
+@@ -359,7 +358,7 @@
+ 	if (unlikely(buf->error))
+ 		return false;
+ 	buf->error = -EINVAL;	/* only used if we fail.. */
+-	if (reclen > buf->count)
++	if (reclen > ctx->count)
+ 		return false;
+ 	prev_reclen = buf->prev_reclen;
+ 	if (prev_reclen && signal_pending(current))
+@@ -379,7 +378,7 @@
+ 
+ 	buf->prev_reclen = reclen;
+ 	buf->current_dir = (void __user *)dirent + reclen;
+-	buf->count -= reclen;
++	ctx->count -= reclen;
+ 	return true;
+ 
+ efault_end:
+@@ -395,7 +394,7 @@
+ 	struct fd f;
+ 	struct getdents_callback64 buf = {
+ 		.ctx.actor = filldir64,
+-		.count = count,
++		.ctx.count = count,
+ 		.current_dir = dirent
+ 	};
+ 	int error;
+@@ -415,7 +414,7 @@
+ 		if (put_user(d_off, &lastdirent->d_off))
+ 			error = -EFAULT;
+ 		else
+-			error = count - buf.count;
++			error = count - buf.ctx.count;
+ 	}
+ 	fdput_pos(f);
+ 	return error;
+@@ -480,6 +479,7 @@
+ 	struct fd f = fdget_pos(fd);
+ 	struct compat_readdir_callback buf = {
+ 		.ctx.actor = compat_fillonedir,
++		.ctx.count = 1,
+ 		.dirent = dirent
+ 	};
+ 
+@@ -505,7 +505,6 @@
+ 	struct dir_context ctx;
+ 	struct compat_linux_dirent __user *current_dir;
+ 	int prev_reclen;
+-	int count;
+ 	int error;
+ };
+ 
+@@ -524,7 +523,7 @@
+ 	if (unlikely(buf->error))
+ 		return false;
+ 	buf->error = -EINVAL;	/* only used if we fail.. */
+-	if (reclen > buf->count)
++	if (reclen > ctx->count)
+ 		return false;
+ 	d_ino = ino;
+ 	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino) {
+@@ -548,7 +547,7 @@
+ 
+ 	buf->prev_reclen = reclen;
+ 	buf->current_dir = (void __user *)dirent + reclen;
+-	buf->count -= reclen;
++	ctx->count -= reclen;
+ 	return true;
+ efault_end:
+ 	user_write_access_end();
+@@ -564,7 +563,7 @@
+ 	struct compat_getdents_callback buf = {
+ 		.ctx.actor = compat_filldir,
+ 		.current_dir = dirent,
+-		.count = count
++		.ctx.count = count
+ 	};
+ 	int error;
+ 
+@@ -582,7 +581,7 @@
+ 		if (put_user(buf.ctx.pos, &lastdirent->d_off))
+ 			error = -EFAULT;
+ 		else
+-			error = count - buf.count;
++			error = count - buf.ctx.count;
+ 	}
+ 	fdput_pos(f);
+ 	return error;
+--- a/fs/exportfs/expfs.c
++++ b/fs/exportfs/expfs.c
+@@ -286,6 +286,7 @@
+ 	};
+ 	struct getdents_callback buffer = {
+ 		.ctx.actor = filldir_one,
++		.ctx.count = INT_MAX,
+ 		.name = name,
+ 	};
+ 
+--- a/fs/overlayfs/readdir.c
++++ b/fs/overlayfs/readdir.c
+@@ -351,6 +351,7 @@
+ 	struct path realpath;
+ 	struct ovl_readdir_data rdd = {
+ 		.ctx.actor = ovl_fill_merge,
++		.ctx.count = INT_MAX,
+ 		.dentry = dentry,
+ 		.list = list,
+ 		.root = root,
+@@ -571,6 +572,7 @@
+ 	struct ovl_cache_entry *p, *n;
+ 	struct ovl_readdir_data rdd = {
+ 		.ctx.actor = ovl_fill_plain,
++		.ctx.count = INT_MAX,
+ 		.list = list,
+ 		.root = root,
+ 	};
+@@ -672,6 +674,7 @@
+ 	struct ovl_readdir_translate *rdt =
+ 		container_of(ctx, struct ovl_readdir_translate, ctx);
+ 	struct dir_context *orig_ctx = rdt->orig_ctx;
++	bool res;
+ 
+ 	if (rdt->parent_ino && namelen == 2 && !strncmp(name, "..", 2)) {
+ 		ino = rdt->parent_ino;
+@@ -686,7 +689,9 @@
+ 					  name, namelen, rdt->xinowarn);
+ 	}
+ 
+-	return orig_ctx->actor(orig_ctx, name, namelen, offset, ino, d_type);
++	res = orig_ctx->actor(orig_ctx, name, namelen, offset, ino, d_type);
++	ctx->count = orig_ctx->count;
++	return res;
+ }
+ 
+ static bool ovl_is_impure_dir(struct file *file)
+@@ -713,6 +718,7 @@
+ 	const struct ovl_layer *lower_layer = ovl_layer_lower(dir);
+ 	struct ovl_readdir_translate rdt = {
+ 		.ctx.actor = ovl_fill_real,
++		.ctx.count = ctx->count,
+ 		.orig_ctx = ctx,
+ 		.xinobits = ovl_xino_bits(ofs),
+ 		.xinowarn = ovl_xino_warn(ofs),
+@@ -1073,6 +1079,7 @@
+ 	int err;
+ 	struct ovl_readdir_data rdd = {
+ 		.ctx.actor = ovl_check_d_type,
++		.ctx.count = INT_MAX,
+ 		.d_type_supported = false,
+ 	};
+ 
+@@ -1094,6 +1101,7 @@
+ 	struct ovl_cache_entry *p;
+ 	struct ovl_readdir_data rdd = {
+ 		.ctx.actor = ovl_fill_plain,
++		.ctx.count = INT_MAX,
+ 		.list = &list,
+ 	};
+ 	bool incompat = false;
+@@ -1178,6 +1186,7 @@
+ 	struct ovl_cache_entry *p;
+ 	struct ovl_readdir_data rdd = {
+ 		.ctx.actor = ovl_fill_plain,
++		.ctx.count = INT_MAX,
+ 		.list = &list,
+ 	};
+ 
+--- a/fs/fuse/readdir.c
++++ b/fs/fuse/readdir.c
+@@ -12,6 +12,7 @@
+ #include <linux/posix_acl.h>
+ #include <linux/pagemap.h>
+ #include <linux/highmem.h>
++#include <linux/vmalloc.h>
+ 
+ static bool fuse_use_readdirplus(struct inode *dir, struct dir_context *ctx)
+ {
+@@ -332,58 +333,94 @@
+ 	return 0;
+ }
+ 
++/* Backport of upstream 4dd6f6d3085a, using the 6.12 folio descriptor API. */
++static struct page **fuse_readdir_alloc_buf(struct fuse_args_pages *ap, size_t *bufsize)
++{
++	unsigned int i, nr_alloc, nr_pages = DIV_ROUND_UP(*bufsize, PAGE_SIZE);
++	struct page **pages = kcalloc(nr_pages, sizeof(*pages), GFP_KERNEL);
++
++	if (!pages)
++		return NULL;
++
++	nr_alloc = alloc_pages_bulk_array(GFP_KERNEL, nr_pages, pages);
++	if (!nr_alloc)
++		goto free_array;
++	if (nr_alloc < nr_pages) {
++		nr_pages = nr_alloc;
++		*bufsize = (size_t) nr_pages << PAGE_SHIFT;
++	}
++
++	ap->folios = kcalloc(nr_pages, sizeof(*ap->folios) + sizeof(*ap->folio_descs), GFP_KERNEL);
++	if (!ap->folios)
++		goto release_pages;
++	ap->folio_descs = (void *)(ap->folios + nr_pages);
++	ap->uses_folios = true;
++	for (i = 0; i < nr_pages; i++) {
++		ap->folios[i] = page_folio(pages[i]);
++		ap->folio_descs[i].length = min_t(size_t, *bufsize - (size_t)i * PAGE_SIZE, PAGE_SIZE);
++	}
++	ap->num_folios = nr_pages;
++	ap->args.out_pages = true;
++	return pages;
++
++release_pages:
++	release_pages(pages, nr_pages);
++free_array:
++	kfree(pages);
++	return NULL;
++}
++
+ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
+ {
+ 	int plus;
+ 	ssize_t res;
+-	struct folio *folio;
+ 	struct inode *inode = file_inode(file);
+ 	struct fuse_mount *fm = get_fuse_mount(inode);
++	struct fuse_conn *fc = fm->fc;
+ 	struct fuse_io_args ia = {};
+ 	struct fuse_args_pages *ap = &ia.ap;
+-	struct fuse_folio_desc desc = { .length = PAGE_SIZE };
++	void *buf;
++	size_t bufsize = clamp((unsigned int) ctx->count, PAGE_SIZE, fc->max_pages << PAGE_SHIFT);
+ 	u64 attr_version = 0, evict_ctr = 0;
+ 	bool locked;
+-
+-	folio = folio_alloc(GFP_KERNEL, 0);
+-	if (!folio)
++	struct page **pages = fuse_readdir_alloc_buf(ap, &bufsize);
++
++	if (!pages)
+ 		return -ENOMEM;
+-
+ 	plus = fuse_use_readdirplus(inode, ctx);
+-	ap->args.out_pages = true;
+-	ap->uses_folios = true;
+-	ap->num_folios = 1;
+-	ap->folios = &folio;
+-	ap->folio_descs = &desc;
+ 	if (plus) {
+ 		attr_version = fuse_get_attr_version(fm->fc);
+ 		evict_ctr = fuse_get_evict_ctr(fm->fc);
+-		fuse_read_args_fill(&ia, file, ctx->pos, PAGE_SIZE,
+-				    FUSE_READDIRPLUS);
++		fuse_read_args_fill(&ia, file, ctx->pos, bufsize, FUSE_READDIRPLUS);
+ 	} else {
+-		fuse_read_args_fill(&ia, file, ctx->pos, PAGE_SIZE,
+-				    FUSE_READDIR);
++		fuse_read_args_fill(&ia, file, ctx->pos, bufsize, FUSE_READDIR);
+ 	}
+ 	locked = fuse_lock_inode(inode);
+ 	res = fuse_simple_request(fm, &ap->args);
+ 	fuse_unlock_inode(inode, locked);
+-	if (res >= 0) {
+-		if (!res) {
+-			struct fuse_file *ff = file->private_data;
+-
+-			if (ff->open_flags & FOPEN_CACHE_DIR)
+-				fuse_readdir_cache_end(file, ctx->pos);
+-		} else if (plus) {
+-			res = parse_dirplusfile(folio_address(folio), res,
+-						file, ctx, attr_version,
+-						evict_ctr);
+-		} else {
+-			res = parse_dirfile(folio_address(folio), res, file,
+-					    ctx);
+-		}
+-	}
+-
+-	folio_put(folio);
++	if (res < 0)
++		goto out;
++	if (!res) {
++		struct fuse_file *ff = file->private_data;
++
++		if (ff->open_flags & FOPEN_CACHE_DIR)
++			fuse_readdir_cache_end(file, ctx->pos);
++		goto out;
++	}
++	buf = vm_map_ram(pages, ap->num_folios, -1);
++	if (!buf) {
++		res = -ENOMEM;
++	} else {
++		if (plus)
++			res = parse_dirplusfile(buf, res, file, ctx, attr_version, evict_ctr);
++		else
++			res = parse_dirfile(buf, res, file, ctx);
++		vm_unmap_ram(buf, ap->num_folios);
++	}
++out:
++	kfree(ap->folios);
++	release_pages(pages, ap->num_folios);
++	kfree(pages);
+ 	fuse_invalidate_atime(inode);
+ 	return res;
+ }

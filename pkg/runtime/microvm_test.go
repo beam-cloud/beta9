@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -247,4 +248,50 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	assert.ErrorContains(t, err, "snapshot has 2 disks, this VM has 1")
 	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, microVMDisk{socket: "/x"}, extra)
 	assert.ErrorContains(t, err, "not a vhost-user export", "a scratch-root snapshot cannot be restored onto a durable root")
+}
+
+func TestRewriteSnapshotFilesystemTags(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		shares []any
+		valid  bool
+	}{
+		{"image_then_binds", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": microvm.BindsTag}}, true},
+		{"binds_then_image", []any{map[string]any{"tag": microvm.BindsTag}, map[string]any{"tag": microvm.VirtiofsTag}}, true},
+		{"legacy_one_share", []any{map[string]any{"tag": microvm.VirtiofsTag}}, false},
+		{"missing_all", nil, false},
+		{"duplicate_image", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": microvm.VirtiofsTag}}, false},
+		{"duplicate_binds", []any{map[string]any{"tag": microvm.BindsTag}, map[string]any{"tag": microvm.BindsTag}}, false},
+		{"unexpected_tag", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": "other"}}, false},
+		{"missing_tag", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{}}, false},
+		{"nonstring_tag", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": 123}}, false},
+		{"nonobject", []any{map[string]any{"tag": microvm.VirtiofsTag}, "beambinds"}, false},
+		{"extra_share", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": microvm.BindsTag}, map[string]any{"tag": "other"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input, err := json.Marshal(map[string]any{"fs": tc.shares, "disks": []any{map[string]any{"path": "/old/root"}}})
+			require.NoError(t, err)
+			output, err := rewriteSnapshotConfig(input, "/new/state", microvm.Network{}, microVMDisk{path: "/new/root"}, nil)
+			if !tc.valid {
+				require.Error(t, err)
+				require.Nil(t, output)
+				return
+			}
+			require.NoError(t, err)
+			var cfg struct {
+				FS []struct {
+					Tag    string
+					Socket string
+				}
+			}
+			require.NoError(t, json.Unmarshal(output, &cfg))
+			for _, share := range cfg.FS {
+				name := microVMVirtiofsSocket
+				if share.Tag == microvm.BindsTag {
+					name = microVMBindsSocket
+				}
+				require.Equal(t, filepath.Join("/new/state", name), share.Socket)
+			}
+		})
+	}
 }

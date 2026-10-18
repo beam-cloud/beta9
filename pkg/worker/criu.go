@@ -159,6 +159,9 @@ type checkpointHostProfile struct {
 func (p checkpointHostProfile) key() string {
 	data, _ := json.Marshal(p)
 	prefix := types.CheckpointCompatibilityLegacyPrefix
+	if p.Runtime == types.ContainerRuntimeMicroVM.String() {
+		prefix = types.CheckpointCompatibilityMicroVMMetadataPrefix
+	}
 	if p.Runtime == types.ContainerRuntimeGvisor.String() && len(p.GPU) > 0 {
 		// gVisor keeps NVIDIA device entries; older workers cleared them.
 		prefix = types.CheckpointCompatibilityGPUDevicesPrefix
@@ -185,10 +188,10 @@ func checkpointGPUProfile(output string) ([]string, error) {
 }
 
 func (s *Worker) readCheckpointHostProfile() (checkpointHostProfile, error) {
-	return s.readCheckpointHostProfileWithInit(runtime.DefaultMicroVMInitPath)
+	return s.readCheckpointHostProfileWithGuestFiles(runtime.DefaultMicroVMInitPath, runtime.DefaultMicroVMKernelPath)
 }
 
-func (s *Worker) readCheckpointHostProfileWithInit(initPath string) (checkpointHostProfile, error) {
+func (s *Worker) readCheckpointHostProfileWithGuestFiles(initPath, kernelPath string) (checkpointHostProfile, error) {
 	p := checkpointHostProfile{Runtime: s.runtime.Name()}
 	cpuid.Initialize()
 	features := cpuid.HostFeatureSet()
@@ -217,14 +220,25 @@ func (s *Worker) readCheckpointHostProfileWithInit(initPath string) (checkpointH
 		return p, fmt.Errorf("missing %s version", executable)
 	}
 	if p.Runtime == types.ContainerRuntimeMicroVM.String() {
-		// Init's mapped executable is part of guest memory. Never restore it
-		// against different bytes, even when Cloud Hypervisor is unchanged.
-		// The beamfs revision also pins the immutable export/device-state ABI.
+		// Saved guest/FUSE state requires the same init, kernel, daemon and policy.
+		// v8 is separate from legacy one-share and v7 block-root checkpoints.
 		init, err := os.ReadFile(initPath)
 		if err != nil {
 			return p, fmt.Errorf("read guest init for checkpoint compatibility: %w", err)
 		}
-		p.Version += fmt.Sprintf(" beamfs-v5:%x", sha256.Sum256(init))
+		daemonPath, err := exec.LookPath("virtiofsd")
+		if err != nil {
+			return p, fmt.Errorf("find virtiofsd for checkpoint compatibility: %w", err)
+		}
+		daemon, err := os.ReadFile(daemonPath)
+		if err != nil {
+			return p, fmt.Errorf("read virtiofsd for checkpoint compatibility: %w", err)
+		}
+		kernel, err := os.ReadFile(kernelPath)
+		if err != nil {
+			return p, fmt.Errorf("read guest kernel for checkpoint compatibility: %w", err)
+		}
+		p.Version += fmt.Sprintf(" beamfs-v8:%x virtiofsd:%x kernel:%x shares:image-ro-always-plus-immutable-open-clip-xattr-capability,binds-auto-xattr;metacopy-disposable;clip-metadata-links-v1;fuse-no-ioctl-v1;clip-stateless-dir-v1", sha256.Sum256(init), sha256.Sum256(daemon), sha256.Sum256(kernel))
 	}
 	if s.gpuCount == 0 {
 		return p, nil
@@ -709,6 +723,9 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	}
 	if instance.Runtime == nil {
 		return -1, false, false, fmt.Errorf("container runtime not found")
+	}
+	if err := s.validateMicroVMCheckpointCompatibility(request, instance.Runtime); err != nil {
+		return -1, false, false, err
 	}
 	if checkpointFilesystemOnDisk(request, instance.Runtime) {
 		// No filesystem restore ran for this checkpoint, so nothing has
@@ -2185,7 +2202,20 @@ func (s *Worker) supportsCheckpointRestore(request *types.ContainerRequest, rt r
 
 func (s *Worker) canRestoreCheckpoint(request *types.ContainerRequest, rt runtime.Runtime) bool {
 	return hasAvailableCheckpoint(request) &&
+		s.validateMicroVMCheckpointCompatibility(request, rt) == nil &&
 		(request.Checkpoint.IsFilesystemOnly() || s.supportsCheckpointRestore(request, rt))
+}
+
+// CPU VM memory checkpoints require the exact guest executable and filesystem
+// device ABI. Empty historical profiles cannot establish that compatibility.
+func (s *Worker) validateMicroVMCheckpointCompatibility(request *types.ContainerRequest, rt runtime.Runtime) error {
+	if rt == nil || rt.Name() != types.ContainerRuntimeMicroVM.String() || !hasAvailableCheckpoint(request) || request.Checkpoint.IsFilesystemOnly() {
+		return nil
+	}
+	if !request.Checkpoint.CompatibleWithWorker(s.checkpointCompatibilityKey) {
+		return &ErrCheckpointHostIncompatible{Stderr: "microvm checkpoint does not match this worker's guest executable and filesystem ABI"}
+	}
+	return nil
 }
 
 type checkpointCreateState struct {
@@ -2462,8 +2492,11 @@ func checkpointStatePublicationContext(ctx context.Context) (context.Context, co
 }
 
 func (s *Worker) createCheckpointState(ctx context.Context, checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp, runtimeName string, metadata *checkpointCacheMetadata) error {
+	if runtimeName == types.ContainerRuntimeMicroVM.String() && status == types.CheckpointStatusAvailable && s.checkpointCompatibilityKey == "" {
+		return fmt.Errorf("cannot publish a microvm memory checkpoint without its compatibility profile")
+	}
 	req := checkpointStateRequest(checkpointId, request, status, containerIp, runtimeName)
-	if runtimeName == types.ContainerRuntimeRunc.String() || runtimeName == types.ContainerRuntimeGvisor.String() {
+	if runtimeName == types.ContainerRuntimeRunc.String() || runtimeName == types.ContainerRuntimeGvisor.String() || runtimeName == types.ContainerRuntimeMicroVM.String() {
 		req.CompatibilityKey = s.checkpointCompatibilityKey
 	}
 	if metadata != nil {

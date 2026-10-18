@@ -1,0 +1,191 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -7,7 +7,7 @@
+ use std::collections::HashSet;
+ use std::convert::TryFrom;
+ use std::ffi::CString;
+-use std::os::unix::io::{FromRawFd, RawFd};
++use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+ use std::path::Path;
+ use std::str::FromStr;
+ use std::sync::Arc;
+@@ -846,6 +846,14 @@
+         error!("Error entering sandbox: {error}");
+         process::exit(1)
+     });
++
++    // Grow the immutable share's FD table before sharing it with worker threads.
++    // No descriptor is retained, and resource/lookup semantics stay unchanged.
++    if opt.immutable_open {
++        if let Err(error) = limits::preallocate_fd_table(listener.as_raw_fd(), fd_count_limit) {
++            warn!("Could not preallocate the file descriptor table: {error}");
++        }
++    }
+ 
+     let fs_cfg = passthrough::Config {
+         entry_timeout: timeout,
+--- a/src/limits.rs
++++ b/src/limits.rs
+@@ -1,7 +1,9 @@
+ // SPDX-License-Identifier: BSD-3-Clause
+ 
+ use libc::{getrlimit, rlim_t, rlimit, setrlimit, RLIMIT_NOFILE};
++use std::convert::TryFrom;
+ use std::mem::MaybeUninit;
++use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+ use std::{cmp, fs, io};
+ 
+ // Default number of open files (RLIMIT_NOFILE)
+@@ -87,3 +89,152 @@
+ 
+     Ok(new_limit)
+ }
++
++/// Reserve at most the existing default FD budget while the table is unshared.
++/// The duplicate is closed immediately; no live target FD is overwritten.
++/// Call after the final sandbox fork and before creating any worker threads.
++pub fn preallocate_fd_table(anchor: RawFd, nofile: u64) -> io::Result<()> {
++    let target = cmp::min(nofile, DEFAULT_NOFILE)
++        .checked_sub(1)
++        .and_then(|n| RawFd::try_from(n).ok())
++        .ok_or(io::ErrorKind::InvalidInput)?;
++    if unsafe { libc::fcntl(anchor, libc::F_GETFD) } < 0 {
++        return Err(io::Error::last_os_error());
++    }
++    // A live target means the table already has sufficient capacity. Do not
++    // let F_DUPFD search above the budget when the soft limit is larger.
++    if unsafe { libc::fcntl(target, libc::F_GETFD) } >= 0 {
++        return Ok(());
++    }
++    let error = io::Error::last_os_error();
++    if error.raw_os_error() != Some(libc::EBADF) {
++        return Err(error);
++    }
++    let duplicate = unsafe { libc::fcntl(anchor, libc::F_DUPFD_CLOEXEC, target) };
++    if duplicate < 0 {
++        return Err(io::Error::last_os_error());
++    }
++    drop(unsafe { OwnedFd::from_raw_fd(duplicate) });
++    Ok(())
++}
++
++#[cfg(all(test, target_os = "linux"))]
++mod fd_table_tests {
++    use super::*;
++    use std::os::fd::AsRawFd;
++    use std::process::Command;
++
++    fn fd_size() -> usize {
++        fs::read_to_string("/proc/self/status")
++            .unwrap()
++            .lines()
++            .find_map(|line| line.strip_prefix("FDSize:").map(|v| v.trim().parse().unwrap()))
++            .unwrap()
++    }
++
++    fn open_count() -> usize {
++        fs::read_dir("/proc/self/fd").unwrap().count()
++    }
++
++    fn run_isolated_contract(case: &str, test_name: &str) {
++        const CASE: &str = "VIRTIOFSD_FD_TABLE_TEST_CASE";
++        if std::env::var(CASE).ok().as_deref() != Some(case) {
++            // Every resource-limit/table mutation occurs in a new owned process.
++            let output = Command::new(std::env::current_exe().unwrap())
++                .args(["--exact", test_name, "--test-threads=1", "--nocapture"])
++                .env(CASE, case)
++                .output()
++                .unwrap();
++            assert!(
++                output.status.success(),
++                "isolated FD contract {case} failed; status={:?}; stdout={}; stderr={}",
++                output.status,
++                String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(16384)]),
++                String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(16384)]),
++            );
++            let stdout = String::from_utf8(output.stdout).unwrap();
++            assert!(stdout.contains("FDTABLE_CONTRACT_PASS"));
++            return;
++        }
++        let diagnostic_limits = get_nofile_limits().unwrap();
++        eprintln!(
++            "FDTABLE_CONTRACT_NUMERIC case={case} nofile_soft={} nofile_hard={} fd_size={} open_fds={}",
++            diagnostic_limits.rlim_cur,
++            diagnostic_limits.rlim_max,
++            fd_size(),
++            open_count(),
++        );
++        if case == "grow" || case == "occupied" {
++            // This isolated test needs a 4096-entry table, within its inherited hard limit.
++            assert!(get_nofile_limits().unwrap().rlim_max >= 4096);
++            setup_rlimit_nofile_to(4096).unwrap();
++            assert_eq!(get_nofile_limits().unwrap().rlim_cur, 4096);
++        }
++        let anchor = fs::File::open("/dev/null").unwrap();
++        let old_limit = get_nofile_limits().unwrap();
++        let initial_size = fd_size();
++        match case {
++            "grow" => {
++                let before = open_count();
++                preallocate_fd_table(anchor.as_raw_fd(), 4096).unwrap();
++                assert!(fd_size() >= 4096 && fd_size() >= initial_size);
++                assert_eq!(open_count(), before);
++                assert!(unsafe { libc::fcntl(anchor.as_raw_fd(), libc::F_GETFD) } >= 0);
++                assert_eq!(unsafe { libc::fcntl(4095, libc::F_GETFD) }, -1);
++                assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
++            }
++            "occupied" => {
++                let high = unsafe { libc::fcntl(anchor.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 4095) };
++                assert_eq!(high, 4095);
++                let high = unsafe { OwnedFd::from_raw_fd(high) };
++                let before = open_count();
++                let size = fd_size();
++                preallocate_fd_table(anchor.as_raw_fd(), 4096).unwrap();
++                assert_eq!(open_count(), before);
++                assert_eq!(fd_size(), size);
++                assert_eq!(unsafe { libc::fcntl(high.as_raw_fd(), libc::F_GETFD) }, libc::FD_CLOEXEC);
++            }
++            "invalid" => {
++                let before = open_count();
++                assert!(preallocate_fd_table(-1, 4096).is_err());
++                assert!(preallocate_fd_table(anchor.as_raw_fd(), 0).is_err());
++                assert_eq!(open_count(), before);
++                assert_eq!(fd_size(), initial_size);
++            }
++            "low-limit" => {
++                setup_rlimit_nofile_to(32).unwrap();
++                let before = open_count();
++                assert!(preallocate_fd_table(anchor.as_raw_fd(), 4096).is_err());
++                assert_eq!(open_count(), before);
++                assert_eq!(fd_size(), initial_size);
++                assert!(unsafe { libc::fcntl(anchor.as_raw_fd(), libc::F_GETFD) } >= 0);
++            }
++            _ => panic!("unknown isolated FD contract case"),
++        }
++        if case != "low-limit" {
++            let after = get_nofile_limits().unwrap();
++            assert_eq!((old_limit.rlim_cur, old_limit.rlim_max), (after.rlim_cur, after.rlim_max));
++        }
++        println!("FDTABLE_CONTRACT_PASS {case}");
++    }
++    #[test]
++    fn preallocation_grows_without_live_fd() {
++        run_isolated_contract("grow", "limits::fd_table_tests::preallocation_grows_without_live_fd");
++    }
++
++    #[test]
++    fn preallocation_preserves_occupied_target() {
++        run_isolated_contract("occupied", "limits::fd_table_tests::preallocation_preserves_occupied_target");
++    }
++
++    #[test]
++    fn preallocation_rejects_invalid_arguments() {
++        run_isolated_contract("invalid", "limits::fd_table_tests::preallocation_rejects_invalid_arguments");
++    }
++
++    #[test]
++    fn preallocation_respects_low_rlimit() {
++        run_isolated_contract("low-limit", "limits::fd_table_tests::preallocation_respects_low_rlimit");
++    }
++
++}

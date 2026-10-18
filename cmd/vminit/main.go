@@ -225,6 +225,16 @@ func readOCISpec() (*specs.Spec, error) {
 
 // --- root assembly -----------------------------------------------------------------
 
+// Internal plumbing never comes from the image or an archived application layer.
+// The caller makes this directory opaque before mounting the overlay.
+func prepareDirectImageUpper(upper string) error {
+	beam := filepath.Join(upper, ".beam")
+	if err := os.RemoveAll(beam); err != nil {
+		return err
+	}
+	return os.Mkdir(beam, 0o755)
+}
+
 // Origin handles refer to the previous virtio-fs instance. Discard those
 // references before mounting; keep file data, whiteouts and opaque directories.
 func clearOverlayOrigins(upper string) error {
@@ -274,7 +284,19 @@ func assembleRoot(vm *microvm.Spec) error {
 
 	// A non-recursive bind of the virtio-fs root gives the overlay a lower
 	// without the pseudo filesystems and submounts stacked on it.
-	if err := unix.Mount("/", microvm.ImageMount, "", unix.MS_BIND, ""); err != nil {
+	lower := microvm.ImageMount
+	if vm.DirectImage {
+		if err := unix.Mount(microvm.VirtiofsTag, microvm.ImageMount, "virtiofs", unix.MS_RDONLY, ""); err != nil {
+			return fmt.Errorf("mount direct image: %w", err)
+		}
+		if err := prepareDirectImageUpper(upper); err != nil {
+			return err
+		}
+		if err := unix.Lsetxattr(filepath.Join(upper, microvm.CanvasDir), "trusted.overlay.opaque", []byte("y"), 0); err != nil {
+			return fmt.Errorf("mask reserved image directory: %w", err)
+		}
+		lower = microvm.MetadataDir + ":" + lower
+	} else if err := unix.Mount("/", microvm.ImageMount, "", unix.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind image root: %w", err)
 	}
 	// Do not index virtio-fs handles: they change on cold boots and forks.
@@ -283,12 +305,18 @@ func assembleRoot(vm *microvm.Spec) error {
 	if vm.Metacopy {
 		metacopy = "on"
 	}
-	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=%s", microvm.ImageMount, upper, work, metacopy)
+	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=%s", lower, upper, work, metacopy)
 	if err := unix.Mount("overlay", microvm.NewRoot, "overlay", 0, overlayOpts); err != nil {
 		return fmt.Errorf("mount overlay (%s): %w", overlayOpts, err)
 	}
 
 	newRoot := microvm.NewRoot
+	// Systemd re-execs the trusted init after pivot; retain only that boot file.
+	if vm.DirectImage {
+		if err := applyBind(newRoot, microvm.Mount{Source: microvm.InitPath, Destination: microvm.InitPath, File: true, ReadOnly: true}); err != nil {
+			return fmt.Errorf("bind guest init: %w", err)
+		}
+	}
 	// Keep the disk reachable in the final root for FIFREEZE and Docker.
 	if err := os.MkdirAll(filepath.Join(newRoot, microvm.DiskMount), 0o755); err != nil {
 		return err
@@ -1121,9 +1149,11 @@ func doFS(req microvm.FSRequest, payload io.Reader) (microvm.FSResponse, io.Read
 
 // writeTree streams root as a PAX tar the host replays into an overlay upper,
 // keeping ownership, modes, mtimes, symlinks, FIFOs, devices (whiteouts) and
-// xattrs (opaque dirs). Sockets are skipped and hard links become copies; a
+// xattrs (opaque dirs) and regular-file hard links. Sockets are skipped; a
 // file that changes size mid-stream is cut or zero-padded to its header size.
 func writeTree(w io.Writer, root string, exclude []string) error {
+	links := make(map[[2]uint64]string)
+	strictUpper := filepath.Clean(root) == filepath.Join(microvm.DiskMount, microvm.DiskOverlayUpper)
 	tw := tar.NewWriter(w)
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -1164,20 +1194,28 @@ func writeTree(w io.Writer, root string, exclude []string) error {
 			hdr.Name += "/"
 		}
 		hdr.Format = tar.FormatPAX
-		hdr.Uname, hdr.Gname = "", ""
-		if names, err := listXattrs(path); err == nil {
-			for _, name := range names {
-				value, err := getXattr(path, name)
-				if err != nil {
-					continue
+		if info.Mode().IsRegular() {
+			if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+				key := [2]uint64{uint64(st.Dev), st.Ino}
+				if first, seen := links[key]; seen {
+					hdr.Typeflag, hdr.Linkname, hdr.Size = tar.TypeLink, first, 0
+				} else {
+					links[key] = hdr.Name
 				}
-				if hdr.PAXRecords == nil {
-					hdr.PAXRecords = map[string]string{}
-				}
-				hdr.PAXRecords["SCHILY.xattr."+name] = string(value)
 			}
 		}
-		if _, ok := hdr.PAXRecords["SCHILY.xattr.trusted.overlay.metacopy"]; ok && filepath.Clean(root) == filepath.Join(microvm.DiskMount, microvm.DiskOverlayUpper) {
+		hdr.Uname, hdr.Gname = "", ""
+		records, err := collectTreeXattrRecords(path, strictUpper, listXattrs, getXattr)
+		if err != nil {
+			return err
+		}
+		for key, value := range records {
+			if hdr.PAXRecords == nil {
+				hdr.PAXRecords = map[string]string{}
+			}
+			hdr.PAXRecords[key] = value
+		}
+		if _, ok := hdr.PAXRecords["SCHILY.xattr.trusted.overlay.metacopy"]; ok && strictUpper {
 			// Image layers must contain real data, not references to the live
 			// guest's lower filesystem. Read metadata-only files through overlay.
 			path = filepath.Join(microvm.OverlayMount, rel)
@@ -1204,6 +1242,34 @@ func writeTree(w io.Writer, root string, exclude []string) error {
 		return err
 	}
 	return tw.Close()
+}
+
+// Upper-layer xattrs determine whether regular bytes are real data or only a
+// metacopy reference. Fail before writing that entry if any attribute cannot be
+// inspected. Generic tree archives retain their existing best-effort behavior.
+func collectTreeXattrRecords(path string, strict bool, list func(string) ([]string, error), get func(string, string) ([]byte, error)) (map[string]string, error) {
+	names, err := list(path)
+	if err != nil {
+		if strict {
+			return nil, fmt.Errorf("list upper xattrs %s: %w", path, err)
+		}
+		return nil, nil
+	}
+	var records map[string]string
+	for _, name := range names {
+		value, err := get(path, name)
+		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("read upper xattr %s on %s: %w", name, path, err)
+			}
+			continue
+		}
+		if records == nil {
+			records = make(map[string]string)
+		}
+		records["SCHILY.xattr."+name] = string(value)
+	}
+	return records, nil
 }
 
 type zeroReader struct{}

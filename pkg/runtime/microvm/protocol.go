@@ -29,6 +29,8 @@ const (
 	// ImageMount is the guest's non-recursive bind of the virtiofs root used
 	// as the overlay lower.
 	ImageMount = CanvasDir + "/image"
+	// MetadataDir is the private, bind-free generated metadata lower.
+	MetadataDir = CanvasDir + "/metadata"
 	// OverlayMount retains the merged image without application submounts,
 	// for materializing metadata-only files during upper-layer export.
 	OverlayMount = CanvasDir + "/root"
@@ -75,6 +77,8 @@ const (
 
 // Spec is what the host tells the guest init about this VM, at SpecFile.
 type Spec struct {
+	// DirectImage boots from the bind share and mounts the attested image separately.
+	DirectImage bool `json:"direct_image,omitempty"`
 	// SeparateBinds keeps mutable host mounts off the cached image share.
 	SeparateBinds bool `json:"separate_binds,omitempty"`
 	// Metacopy is limited to disposable roots; durable uppers must remain
