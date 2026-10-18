@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -174,35 +175,15 @@ func (r *ScopedS2EventRepository) PushEvent(event cloudevents.Event) error {
 }
 
 func (r *ScopedS2EventRepository) runWriter() {
-	ticker := time.NewTicker(s2EventFlushInterval)
-	defer ticker.Stop()
-
-	batch := make([]cloudevents.Event, 0, s2EventBatchSize)
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		if err := r.appendEventBatch(batch); err != nil {
-			warnScopedS2WriteFailure(err, len(batch))
-		}
-		batch = batch[:0]
-	}
-
-	for {
-		select {
-		case event, ok := <-r.queue:
-			if !ok {
-				flush()
-				return
-			}
-			batch = append(batch, event)
-			if len(batch) >= s2EventBatchSize {
-				flush()
-			}
-		case <-ticker.C:
-			flush()
-		}
-	}
+	planner := &S2EventRepository{streamPrefix: r.streamPrefix}
+	writeS2Events(r.queue, func(event cloudevents.Event) (s2.AppendRecord, []s2.StreamName, error) {
+		record, streams, err := planner.appendRecordForEvent(event)
+		return record, slices.DeleteFunc(streams, func(stream s2.StreamName) bool {
+			return r.targetForStream(stream) == nil
+		}), err
+	}, func(stream s2.StreamName, records []s2.AppendRecord) error {
+		return appendScopedS2Records(r.targetForStream(stream).basin, stream, records)
+	}, warnScopedS2WriteFailure)
 }
 
 func warnScopedS2WriteFailure(err error, eventCount int) {
@@ -302,35 +283,7 @@ func (r *S2EventRepository) PushEventSync(event cloudevents.Event) error {
 }
 
 func (r *S2EventRepository) runWriter() {
-	ticker := time.NewTicker(s2EventFlushInterval)
-	defer ticker.Stop()
-
-	batch := make([]cloudevents.Event, 0, s2EventBatchSize)
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		if err := r.appendEventBatch(batch); err != nil {
-			warnS2WriteFailure(err, len(batch))
-		}
-		batch = batch[:0]
-	}
-
-	for {
-		select {
-		case event, ok := <-r.queue:
-			if !ok {
-				flush()
-				return
-			}
-			batch = append(batch, event)
-			if len(batch) >= s2EventBatchSize {
-				flush()
-			}
-		case <-ticker.C:
-			flush()
-		}
-	}
+	writeS2Events(r.queue, r.appendRecordForEvent, r.appendRecordsForWrite, warnS2WriteFailure)
 }
 
 func (r *S2EventRepository) appendEvent(event cloudevents.Event) error {
@@ -369,18 +322,20 @@ func appendS2EventStreams(recordsByStream map[s2.StreamName][]s2.AppendRecord, a
 		if len(records) == 0 {
 			continue
 		}
-		group.Go(func() error {
-			if err := appendRecords(streamName, records); err != nil {
-				if isS2EventStreamDeletionPending(err) {
-					log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
-					return nil
-				}
-				return fmt.Errorf("append %d events to s2 stream %q: %w", len(records), streamName, err)
-			}
-			return nil
-		})
+		group.Go(func() error { return appendS2EventStream(streamName, records, appendRecords) })
 	}
 	return group.Wait()
+}
+
+func appendS2EventStream(stream s2.StreamName, records []s2.AppendRecord, appendRecords func(s2.StreamName, []s2.AppendRecord) error) error {
+	if err := appendRecords(stream, records); err != nil {
+		if isS2EventStreamDeletionPending(err) {
+			log.Debug().Err(err).Str("stream", string(stream)).Msg("dropping event batch for stream pending deletion")
+			return nil
+		}
+		return fmt.Errorf("append %d events to s2 stream %q: %w", len(records), stream, err)
+	}
+	return nil
 }
 
 func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.AppendRecord, []s2.StreamName, error) {
