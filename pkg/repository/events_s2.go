@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,6 +72,20 @@ type stubCacheRequiredContentState struct {
 	items      map[string]types.CacheRequiredContentItem
 }
 
+// Share the HTTP/2-capable transport across event clients. The SDK default
+// disables automatic HTTP/2 and retains only two idle connections, so fleet
+// fanout continually opens new TLS connections instead of reusing them.
+func newS2EventClient(token string) *s2.Client {
+	return s2.New(token, &s2.ClientOptions{
+		HTTPClient:     &http.Client{Transport: http.DefaultTransport, Timeout: s2EventWriteTimeout},
+		RequestTimeout: s2EventWriteTimeout,
+		RetryConfig: &s2.RetryConfig{
+			MaxAttempts:       3,
+			AppendRetryPolicy: s2.AppendRetryPolicyAll,
+		},
+	})
+}
+
 func NewScopedS2EventRepository(config types.S2Config) (*ScopedS2EventRepository, error) {
 	if config.LogApiKey == "" && config.EventApiKey == "" {
 		return nil, nil
@@ -91,13 +106,7 @@ func NewScopedS2EventRepository(config types.S2Config) (*ScopedS2EventRepository
 		if token == "" || prefix == "" {
 			return
 		}
-		client := s2.New(token, &s2.ClientOptions{
-			RequestTimeout: s2EventWriteTimeout,
-			RetryConfig: &s2.RetryConfig{
-				MaxAttempts:       3,
-				AppendRetryPolicy: s2.AppendRetryPolicyAll,
-			},
-		})
+		client := newS2EventClient(token)
 		targets = append(targets, scopedS2EventTarget{
 			name:   name,
 			prefix: prefix,
@@ -133,13 +142,7 @@ func NewS2EventRepository(config types.S2Config) (*S2EventRepository, error) {
 		streamPrefix = defaultS2EventStreamPrefix
 	}
 
-	client := s2.New(config.ApiKey, &s2.ClientOptions{
-		RequestTimeout: s2EventWriteTimeout,
-		RetryConfig: &s2.RetryConfig{
-			MaxAttempts:       3,
-			AppendRetryPolicy: s2.AppendRetryPolicyAll,
-		},
-	})
+	client := newS2EventClient(config.ApiKey)
 
 	repo := &S2EventRepository{
 		basin:            client.Basin(config.Basin),

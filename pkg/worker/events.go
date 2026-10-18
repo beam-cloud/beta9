@@ -406,26 +406,18 @@ func (m *ProcessMonitor) fetchMemory(processes []*process.Process) *process.Memo
 }
 
 func (m *ProcessMonitor) findProcesses() ([]*process.Process, error) {
-	processes, err := process.Processes()
+	p, err := process.NewProcess(m.pid)
 	if err != nil {
 		return nil, err
 	}
-
-	for _, p := range processes {
-		if p.Pid == m.pid {
-			return m.findProcessTree(p), nil
-		}
-	}
-
-	return nil, fmt.Errorf("failed to find processes for pid %v", m.pid)
+	return m.findProcessTree(p), nil
 }
 
 func (m *ProcessMonitor) findProcessTree(p *process.Process) []*process.Process {
 	processes := []*process.Process{p}
 
-	children, err := p.Children()
+	children, err := childProcesses(p)
 	if err != nil {
-		// An error will occur when there are no children (pgrep -P <pid>)
 		return processes
 	}
 

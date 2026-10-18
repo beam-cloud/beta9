@@ -55,7 +55,13 @@ func (s *WorkerRepositoryService) vendRuntimeCredentials(ctx context.Context, re
 	}
 
 	if req.WorkspaceStorage {
-		resp.WorkspaceStorage = s.workspaceStorageCredentials(ctx, req.WorkspaceId)
+		// Storage-only authorization already loaded and decrypted the full
+		// workspace. The signing-key lookup returns metadata without storage.
+		if runtimeCredentialsNeedsSigningKey(req) {
+			resp.WorkspaceStorage = s.workspaceStorageCredentials(ctx, req.WorkspaceId)
+		} else {
+			resp.WorkspaceStorage = cacheWorkspaceStorageCredentials(workspace)
+		}
 	}
 
 	if len(req.MountCredentials) > 0 {

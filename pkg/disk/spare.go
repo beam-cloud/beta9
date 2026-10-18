@@ -249,7 +249,7 @@ func (m *Manager) replenishSpares(size int64) {
 			if done {
 				return
 			}
-			if m.freeNBDDevices() <= spareDeviceReserve {
+			if m.spareExport != ExportVhostUser && m.freeNBDDevices() <= spareDeviceReserve {
 				return
 			}
 			spare, err := m.buildSpare(m.spareCtx, size)
@@ -278,8 +278,10 @@ func (m *Manager) WarmSpares(ctx context.Context, sizes ...int64) error {
 	if err := m.preflight(); err != nil {
 		return err
 	}
-	if err := m.ensureNBDDevices(ctx); err != nil {
-		return err
+	if m.spareExport != ExportVhostUser {
+		if err := m.ensureNBDDevices(ctx); err != nil {
+			return err
+		}
 	}
 	for _, size := range sizes {
 		if size > 0 {
@@ -323,7 +325,7 @@ func (m *Manager) buildSpare(ctx context.Context, size int64) (*Volume, error) {
 	spare := &Volume{
 		manager:   m,
 		dir:       dir,
-		state:     &volumeState{Key: key, VirtualSizeBytes: size, HeadPath: headPath},
+		state:     &volumeState{Key: key, VirtualSizeBytes: size, HeadPath: headPath, Export: string(m.spareExport)},
 		freshHead: true,
 	}
 	if err := spare.start(ctx); err != nil {
@@ -332,19 +334,6 @@ func (m *Manager) buildSpare(ctx context.Context, size int64) (*Volume, error) {
 		_ = os.RemoveAll(m.runtimeDir(key))
 		_ = os.RemoveAll(dir)
 		return nil, err
-	}
-	if m.spareExport == ExportVhostUser {
-		// Formatting requires NBD, but the consumer does not. Finish the
-		// conversion before pooling so attachment only rekeys the live export.
-		if err := spare.detach(ctx); err != nil {
-			spare.destroy()
-			return nil, err
-		}
-		spare.state.Export = string(ExportVhostUser)
-		if err := spare.start(ctx); err != nil {
-			spare.destroy()
-			return nil, err
-		}
 	}
 	return spare, nil
 }

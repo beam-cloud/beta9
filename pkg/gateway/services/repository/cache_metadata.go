@@ -363,11 +363,17 @@ func (s *WorkerRepositoryService) workspaceStorageCredentials(ctx context.Contex
 		return nil
 	}
 	full, err := s.backendRepo.GetWorkspace(ctx, ws.Id)
-	if err != nil || !full.StorageAvailable() {
+	if err != nil {
 		return nil
 	}
+	return cacheWorkspaceStorageCredentials(full)
+}
 
-	st := full.Storage
+func cacheWorkspaceStorageCredentials(workspace *types.Workspace) *pb.CacheWorkspaceStorageCredentials {
+	if workspace == nil || !workspace.StorageAvailable() {
+		return nil
+	}
+	st := workspace.Storage
 	return &pb.CacheWorkspaceStorageCredentials{
 		EndpointUrl:    derefString(st.EndpointUrl),
 		Region:         derefString(st.Region),

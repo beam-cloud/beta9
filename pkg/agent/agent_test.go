@@ -333,6 +333,9 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	if !containsArg(args, "--platform", "linux/amd64") {
 		t.Fatalf("expected worker platform in docker args: %#v", args)
 	}
+	if !slices.Contains(args, "--init") {
+		t.Fatal("worker must reap daemonized disk processes")
+	}
 	for _, want := range []string{
 		types.WorkerPoolEnv + "=private",
 		types.CacheLocalityEnv + "=workspace-one/private",

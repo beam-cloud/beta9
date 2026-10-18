@@ -411,7 +411,7 @@ func (s *Service) reconcile(ctx context.Context) {
 		case <-timer.C:
 		}
 
-		vms, err := s.repo.ListVMs(ctx, 0)
+		vms, err := s.repo.ListVMsToReconcile(ctx, s.publicNetwork != nil)
 		if err != nil {
 			log.Warn().Err(err).Msg("list VMs for reconciliation")
 			continue
@@ -420,10 +420,6 @@ func (s *Service) reconcile(ctx context.Context) {
 		var operations sync.WaitGroup
 		slots := make(chan struct{}, 4)
 		for _, record := range vms {
-			if record.DesiredState == "deleted" && record.Status == "deleted" {
-				continue
-			}
-
 			select {
 			case slots <- struct{}{}:
 			case <-ctx.Done():

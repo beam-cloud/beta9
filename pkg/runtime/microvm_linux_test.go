@@ -7,6 +7,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -254,4 +255,22 @@ func TestExtractTreeReplaysTheGuestTree(t *testing.T) {
 	dir, err := os.Stat(filepath.Join(dst, "etc"))
 	require.NoError(t, err)
 	require.True(t, dir.ModTime().Equal(treeModTime), "directory times are restored after their children")
+}
+
+func TestMicroVMStateWaitsForTerminalResult(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 0")
+	require.NoError(t, cmd.Start())
+	require.NoError(t, cmd.Wait())
+	inst := &microVMInstance{hypervisor: cmd, exitDone: make(chan struct{})}
+	rt := &MicroVM{vms: map[string]*microVMInstance{"vm": inst}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := rt.State(ctx, "vm")
+	require.ErrorIs(t, err, context.DeadlineExceeded, "a reaped process is not yet a collected exit result")
+	inst.finishExit(0, nil)
+	state, err := rt.State(context.Background(), "vm")
+	require.NoError(t, err)
+	require.Equal(t, "stopped", state.Status)
+	require.NotNil(t, state.ExitCode)
+	require.Zero(t, *state.ExitCode)
 }

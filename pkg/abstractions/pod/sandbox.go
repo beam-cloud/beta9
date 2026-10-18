@@ -16,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -973,7 +974,20 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 	}
 	metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
+	var options []grpc.DialOption
+	if routeID, ok := types.ParseBackendRouteAddress(hostname); ok {
+		route, err := s.containerRepo.GetBackendRoute(ctx, routeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if route != nil && route.GRPCKeepalive {
+			options = append(options, common.WithContainerClientKeepalive())
+		}
+	}
 	cacheKey := sandboxClientCacheKey(hostname, token)
+	if len(options) > 0 {
+		cacheKey += ":keepalive"
+	}
 	client, cached, err := s.loadOrCreateSandboxClient(ctx, cacheKey, func() (*common.ContainerClient, error) {
 		dialer := func(connectCtx context.Context, _ string) (net.Conn, error) {
 			phaseStart := time.Now()
@@ -987,7 +1001,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 		}
 
 		phaseStart = time.Now()
-		created, createErr := common.NewContainerClientWithDialer(context.WithoutCancel(ctx), hostname, token, dialer)
+		created, createErr := common.NewContainerClientWithDialer(context.WithoutCancel(ctx), hostname, token, dialer, options...)
 		if createErr != nil {
 			metrics.RecordSandboxConnectPhase("client_create", workspaceId, container.StubId, string(container.Status), "client_create_failed", false, time.Since(phaseStart))
 			return nil, createErr

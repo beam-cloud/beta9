@@ -2472,6 +2472,9 @@ func (s *Worker) waitForRestoredContainerExit(ctx context.Context, rt runtime.Ru
 		}
 		// A checkpoint temporarily reports the container as paused.
 		if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
+			if state.ExitCode != nil {
+				return *state.ExitCode, nil
+			}
 			return -1, nil
 		}
 		observedRunning = true

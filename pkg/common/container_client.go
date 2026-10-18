@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 const (
@@ -69,14 +70,12 @@ func NewContainerClientWithDialer(
 	serviceUrl string,
 	serviceToken string,
 	dialer ContainerClientDialer,
+	options ...grpc.DialOption,
 ) (*ContainerClient, error) {
 	if dialer == nil {
 		return nil, errors.New("container client dialer is required")
 	}
-	return newContainerClient(
-		ctx,
-		serviceUrl,
-		serviceToken,
+	dialOptions := []grpc.DialOption{
 		grpc.WithContextDialer(dialer),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
@@ -88,7 +87,22 @@ func NewContainerClientWithDialer(
 			MinConnectTimeout: containerClientReconnectMinTimeout,
 		}),
 		grpc.WithDefaultServiceConfig(containerClientRetryPolicy),
-	)
+	}
+	dialOptions = append(dialOptions, options...)
+	return newContainerClient(ctx, serviceUrl, serviceToken, dialOptions...)
+}
+
+// WithContainerClientKeepalive is enabled only for workers advertising the
+// matching enforcement policy. Older workers reject frequent idle pings.
+func WithContainerClientKeepalive() grpc.DialOption {
+	// A relay can silently lose a TCP path without closing the socket. Detect
+	// that before an exec deadline so the channel can reconnect and replay
+	// an uncommitted RPC or its journaled request identity.
+	return grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                10 * time.Second,
+		Timeout:             2 * time.Second,
+		PermitWithoutStream: true,
+	})
 }
 
 func newContainerClient(

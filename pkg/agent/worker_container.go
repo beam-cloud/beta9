@@ -20,7 +20,7 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	localTargetHost := firstNonEmpty(os.Getenv(types.AgentTargetHostEnv), types.LoopbackHost)
 	cacheLocality := agentCacheLocality(bootstrap, slot)
 	args := []string{
-		"run", "--rm",
+		"run", "--rm", "--init",
 		"--name", name,
 		"--privileged",
 		"--network", "host",

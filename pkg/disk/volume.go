@@ -362,8 +362,17 @@ func (v *Volume) start(ctx context.Context) (err error) {
 		phases.Fields(event).Msg(msg)
 	}()
 
+	if freshDisk && v.journal == nil {
+		if err := m.formatQcowBase(ctx, openPath, state.VirtualSizeBytes); err != nil {
+			return err
+		}
+		state.Formatted = true
+		v.freshHead = false // These writes predate the daemon's counters.
+		phases.Mark("mkfs")
+	}
+
 	if state.exportMode() == ExportVhostUser {
-		return v.startExported(ctx, openPath, freshDisk, phases)
+		return v.startExported(ctx, openPath, phases)
 	}
 
 	qsd, err := m.startQSD(ctx, m.runtimeDir(state.Key), openPath, v.fmtNode, state.ReadOnly, ExportNBD)
@@ -401,20 +410,18 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	v.nbd = nbd
 	phases.Mark("nbd")
 
-	if freshDisk {
+	if freshDisk && v.journal != nil {
 		if err := m.formatExt4(ctx, nbd.Path); err != nil {
 			cleanupOnError()
 			return err
 		}
-		if v.journal != nil {
-			if _, err := m.run(ctx, "blockdev", "--flushbufs", nbd.Path); err != nil {
-				cleanupOnError()
-				return err
-			}
-			if err := v.journal.Initialize(ctx); err != nil {
-				cleanupOnError()
-				return err
-			}
+		if _, err := m.run(ctx, "blockdev", "--flushbufs", nbd.Path); err != nil {
+			cleanupOnError()
+			return err
+		}
+		if err := v.journal.Initialize(ctx); err != nil {
+			cleanupOnError()
+			return err
 		}
 		state.Formatted = true
 		phases.Mark("mkfs")
@@ -450,21 +457,11 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	return nil
 }
 
-// startExported serves the head over vhost-user-blk for a VM. A fresh disk is
-// first formatted over a short-lived NBD attachment, since the guest init has
-// no mkfs.
-func (v *Volume) startExported(ctx context.Context, openPath string, freshDisk bool, phases *common.PhaseTimer) error {
+// startExported serves the prepared head over vhost-user-blk for a VM.
+func (v *Volume) startExported(ctx context.Context, openPath string, phases *common.PhaseTimer) error {
 	m := v.manager
 	state := v.state
 	runtimeDir := m.runtimeDir(state.Key)
-
-	if freshDisk {
-		if err := m.formatViaNBD(ctx, runtimeDir, openPath, v.fmtNode, state.VirtualSizeBytes); err != nil {
-			return err
-		}
-		state.Formatted = true
-		phases.Mark("mkfs")
-	}
 
 	qsd, err := m.startQSD(ctx, runtimeDir, openPath, v.fmtNode, state.ReadOnly, ExportVhostUser)
 	if err != nil {
@@ -484,24 +481,6 @@ func (v *Volume) startExported(ctx context.Context, openPath string, freshDisk b
 		return err
 	}
 	return nil
-}
-
-// formatViaNBD runs mkfs on a qcow2 head by serving it over NBD just long
-// enough to format it.
-func (m *Manager) formatViaNBD(ctx context.Context, runtimeDir, headPath, fmtNode string, sizeBytes int64) error {
-	qsd, err := m.startQSD(ctx, runtimeDir, headPath, fmtNode, false, ExportNBD)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = m.stopQSD(context.Background(), qsd) }()
-
-	nbd, err := m.acquireNBDDevice(ctx, qsd.nbdSocket, sizeBytes)
-	if err != nil {
-		return err
-	}
-	formatErr := m.formatExt4(ctx, nbd.Path)
-	disconnectErr := m.disconnectNBDDevice(context.Background(), nbd)
-	return errors.Join(formatErr, disconnectErr)
 }
 
 // Seal pivots the writable head onto a new empty overlay and returns every

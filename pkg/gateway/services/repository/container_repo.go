@@ -215,21 +215,22 @@ func backendRouteFromProto(in *pb.BackendRoute) types.BackendRoute {
 		return types.BackendRoute{}
 	}
 	route := types.BackendRoute{
-		RouteID:     in.RouteId,
-		WorkspaceID: in.WorkspaceId,
-		PoolName:    in.PoolName,
-		MachineID:   in.MachineId,
-		WorkerID:    in.WorkerId,
-		ContainerID: in.ContainerId,
-		Kind:        in.Kind,
-		Port:        in.Port,
-		Protocol:    in.Protocol,
-		Transport:   in.Transport,
-		LocalTarget: in.LocalTarget,
-		ProxyTarget: in.ProxyTarget,
-		State:       in.State,
-		Error:       in.Error,
-		UpdatedAt:   in.UpdatedAt,
+		RouteID:       in.RouteId,
+		WorkspaceID:   in.WorkspaceId,
+		PoolName:      in.PoolName,
+		MachineID:     in.MachineId,
+		WorkerID:      in.WorkerId,
+		ContainerID:   in.ContainerId,
+		Kind:          in.Kind,
+		Port:          in.Port,
+		Protocol:      in.Protocol,
+		Transport:     in.Transport,
+		LocalTarget:   in.LocalTarget,
+		ProxyTarget:   in.ProxyTarget,
+		State:         in.State,
+		Error:         in.Error,
+		UpdatedAt:     in.UpdatedAt,
+		GRPCKeepalive: in.GrpcKeepalive,
 	}
 	if route.Protocol == "" {
 		route.Protocol = types.BackendRouteProtocolTCP

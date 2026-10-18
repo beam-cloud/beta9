@@ -857,7 +857,10 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	depth := len(s.qcowChain(key))
 
 	var layer *types.DiskSnapshotFile
-	if parentID != "" && flattenQcowChain(depth, volume.Backlogged()) {
+	// QSD appends clusters in write order; qemu-img packs them in logical
+	// order. Canonicalize the first non-journaled base too, so the first
+	// later flatten can reuse its data chunks instead of uploading them again.
+	if parentID == "" && !volume.Journaled() || parentID != "" && flattenQcowChain(depth, volume.Backlogged()) {
 		// Publish a parentless flattened generation so restore chains stay
 		// short. The local chain is untouched; only the artifact differs.
 		flatPath := sealedPath + ".flat"

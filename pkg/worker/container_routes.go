@@ -22,18 +22,19 @@ func (s *Worker) backendRouteFor(request *types.ContainerRequest, kind string, p
 		routeContainerID = ""
 	}
 	return &pb.BackendRoute{
-		RouteId:     types.BackendRouteID(s.machineID, s.workerId, routeContainerID, kind, port),
-		WorkspaceId: request.WorkspaceId,
-		PoolName:    s.poolName,
-		MachineId:   s.machineID,
-		WorkerId:    s.workerId,
-		ContainerId: routeContainerID,
-		Kind:        kind,
-		Port:        port,
-		Protocol:    types.BackendRouteProtocolTCP,
-		Transport:   s.routeTransport,
-		LocalTarget: localTarget,
-		State:       types.BackendRouteStateOpening,
+		RouteId:       types.BackendRouteID(s.machineID, s.workerId, routeContainerID, kind, port),
+		WorkspaceId:   request.WorkspaceId,
+		PoolName:      s.poolName,
+		MachineId:     s.machineID,
+		WorkerId:      s.workerId,
+		ContainerId:   routeContainerID,
+		Kind:          kind,
+		Port:          port,
+		Protocol:      types.BackendRouteProtocolTCP,
+		Transport:     s.routeTransport,
+		LocalTarget:   localTarget,
+		State:         types.BackendRouteStateOpening,
+		GrpcKeepalive: kind == types.BackendRouteKindWorker,
 	}
 }
 

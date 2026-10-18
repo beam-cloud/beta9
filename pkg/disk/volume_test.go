@@ -221,6 +221,9 @@ func fakeRunner(_ context.Context, name string, args ...string) ([]byte, error) 
 	if strings.Contains(name, "qemu-img") && len(args) > 0 && args[0] == "create" {
 		return nil, os.WriteFile(args[len(args)-2], []byte("qcow2-stub"), 0o600)
 	}
+	if strings.Contains(name, "qemu-img") && len(args) > 0 && args[0] == "convert" {
+		return nil, os.WriteFile(args[len(args)-1], []byte("qcow2-stub"), 0o600)
+	}
 	return nil, nil
 }
 

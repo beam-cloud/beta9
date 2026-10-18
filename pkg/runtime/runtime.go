@@ -26,6 +26,8 @@ type State struct {
 	ID     string
 	Pid    int
 	Status string // "running", "stopped", etc.
+	// ExitCode is present only when the runtime observed a terminal result.
+	ExitCode *int
 }
 
 // Event represents a container event
