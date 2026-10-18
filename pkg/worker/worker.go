@@ -1209,7 +1209,7 @@ func (s *Worker) disableSchedulingForGPUError(err error) bool {
 	log.Error().Err(err).Msg("GPU requires recovery; disabling new container placement")
 	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
 	defer cancel()
-	_, cordonErr := handleGRPCResponse(s.workerRepoClient.CordonWorker(ctx, &pb.DisableWorkerRequest{WorkerId: s.workerId}))
+	_, cordonErr := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, &pb.DisableWorkerRequest{WorkerId: s.workerId, Cordon: true}))
 	if cordonErr != nil {
 		log.Warn().Err(cordonErr).Msg("failed to cordon worker with unhealthy GPU")
 	}

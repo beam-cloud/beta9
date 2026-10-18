@@ -17,6 +17,7 @@ import (
 type cordonWorkerRepo struct {
 	repository.WorkerRepository
 	cordoned bool
+	disabled bool
 	err      error
 }
 
@@ -29,16 +30,24 @@ func (r *cordonWorkerRepo) SetWorkerCordon(_ string, cordon bool) error {
 	return r.err
 }
 
-func TestCordonWorker(t *testing.T) {
-	for _, repoErr := range []error{nil, errors.New("repository unavailable")} {
-		repo := &cordonWorkerRepo{err: repoErr}
-		service := &WorkerRepositoryService{workerRepo: repo}
-		response, err := service.CordonWorker(context.Background(), &pb.DisableWorkerRequest{WorkerId: "worker-1"})
-		require.NoError(t, err)
-		require.Equal(t, repoErr == nil, response.Ok)
-		require.True(t, repo.cordoned)
-		if repoErr != nil {
-			require.Equal(t, repoErr.Error(), response.ErrorMsg)
+func (r *cordonWorkerRepo) UpdateWorkerStatus(_ string, status types.WorkerStatus) error {
+	r.disabled = status == types.WorkerStatusDisabled
+	return r.err
+}
+
+func TestDisableWorker(t *testing.T) {
+	for _, cordon := range []bool{false, true} {
+		for _, repoErr := range []error{nil, errors.New("repository unavailable")} {
+			repo := &cordonWorkerRepo{err: repoErr}
+			service := &WorkerRepositoryService{workerRepo: repo}
+			response, err := service.DisableWorker(context.Background(), &pb.DisableWorkerRequest{WorkerId: "worker-1", Cordon: cordon})
+			require.NoError(t, err)
+			require.Equal(t, repoErr == nil, response.Ok)
+			require.Equal(t, cordon, repo.cordoned)
+			require.Equal(t, !cordon, repo.disabled)
+			if repoErr != nil {
+				require.Equal(t, repoErr.Error(), response.ErrorMsg)
+			}
 		}
 	}
 }

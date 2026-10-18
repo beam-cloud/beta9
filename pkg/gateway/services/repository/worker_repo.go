@@ -321,28 +321,28 @@ func (s *WorkerRepositoryService) ToggleWorkerAvailable(ctx context.Context, req
 }
 
 func (s *WorkerRepositoryService) DisableWorker(ctx context.Context, req *pb.DisableWorkerRequest) (*pb.DisableWorkerResponse, error) {
-	err := s.workerRepo.UpdateWorkerStatus(req.WorkerId, types.WorkerStatusDisabled)
+	var err error
+	if req.Cordon {
+		err = s.cordonWorker(ctx, req.WorkerId)
+	} else {
+		err = s.workerRepo.UpdateWorkerStatus(req.WorkerId, types.WorkerStatusDisabled)
+	}
 	if err != nil {
 		return &pb.DisableWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-
 	return &pb.DisableWorkerResponse{Ok: true}, nil
 }
 
-// Use a separate RPC so older gateways reject cordoning without disabling a live worker.
-func (s *WorkerRepositoryService) CordonWorker(ctx context.Context, req *pb.DisableWorkerRequest) (*pb.DisableWorkerResponse, error) {
-	worker, err := s.workerRepo.GetWorkerById(req.WorkerId)
-	if err == nil {
-		var handled bool
-		handled, err = s.computeService.SetAgentWorkerCordon(ctx, worker, true)
-		if err == nil && !handled {
-			err = s.workerRepo.SetWorkerCordon(req.WorkerId, true)
-		}
-	}
+func (s *WorkerRepositoryService) cordonWorker(ctx context.Context, workerID string) error {
+	worker, err := s.workerRepo.GetWorkerById(workerID)
 	if err != nil {
-		return &pb.DisableWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return err
 	}
-	return &pb.DisableWorkerResponse{Ok: true}, nil
+	handled, err := s.computeService.SetAgentWorkerCordon(ctx, worker, true)
+	if err != nil || handled {
+		return err
+	}
+	return s.workerRepo.SetWorkerCordon(workerID, true)
 }
 
 func (s *WorkerRepositoryService) UpdateWorkerCapacity(ctx context.Context, req *pb.UpdateWorkerCapacityRequest) (*pb.UpdateWorkerCapacityResponse, error) {

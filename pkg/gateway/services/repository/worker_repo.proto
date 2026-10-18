@@ -87,7 +87,6 @@ service WorkerRepositoryService {
       returns (GetContainerIpAssignmentsResponse) {}
   rpc RemoveContainerIp(RemoveContainerIpRequest)
       returns (RemoveContainerIpResponse) {}
-  rpc CordonWorker(DisableWorkerRequest) returns (DisableWorkerResponse) {}
 }
 
 message GetNextContainerRequestRequest { string worker_id = 1; }
@@ -216,7 +215,10 @@ message ToggleWorkerAvailableResponse {
   string error_msg = 2;
 }
 
-message DisableWorkerRequest { string worker_id = 1; }
+message DisableWorkerRequest {
+  string worker_id = 1;
+  bool cordon = 2;
+}
 
 message DisableWorkerResponse {
   bool ok = 1;

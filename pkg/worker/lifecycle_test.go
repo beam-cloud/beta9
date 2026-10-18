@@ -2737,7 +2737,7 @@ func testRunContainerRestoreFailure(t *testing.T, unhealthyGPU bool) {
 		require.Zero(t, backendRepoClient.updateCalls, "a destination GPU fault must not invalidate the shared checkpoint")
 		require.Equal(t, string(types.CheckpointStatusAvailable), request.Checkpoint.Status)
 		require.Equal(t, 1, workerRepoClient.cordons)
-		require.Zero(t, workerRepoClient.disables)
+		require.Equal(t, 1, workerRepoClient.disables)
 		return
 	}
 	require.Zero(t, workerRepoClient.disables)
