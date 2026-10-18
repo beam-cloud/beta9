@@ -1101,12 +1101,6 @@ func TestChangedWorkerRouteReopens(t *testing.T) {
 			},
 		},
 		{
-			name: "gRPC keepalive policy",
-			change: func(route *types.BackendRoute) {
-				route.GRPCKeepalive = true
-			},
-		},
-		{
 			name: "pool",
 			change: func(route *types.BackendRoute) {
 				route.PoolName = "pool-two"

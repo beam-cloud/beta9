@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -24,7 +25,16 @@ const tunnelReconnectTimeout = 2 * time.Minute
 type tunnelSessions struct {
 	mu       sync.Mutex
 	sessions map[string]*tunnelSession
+	pending  map[string]*tunnelDial
 	closed   bool
+}
+
+type tunnelDial struct {
+	port    uint32
+	done    chan struct{}
+	cancel  context.CancelFunc
+	session *tunnelSession
+	err     error
 }
 
 type tunnelSession struct {
@@ -47,18 +57,17 @@ func (s *ContainerRuntimeServer) ContainerTunnel(ctx context.Context, in *pb.Con
 	if !exists {
 		return nil, status.Error(codes.NotFound, "container not found")
 	}
-	session, err := instance.tunnels.get(in, func() (net.Conn, error) {
+	session, err := instance.tunnels.get(ctx, in, func(ctx context.Context) (net.Conn, error) {
 		address := instance.containerAddress(int32(in.Port))
 		if address == "" {
 			return nil, status.Error(codes.FailedPrecondition, "port is not bound")
 		}
 		if guest, ok := instance.Runtime.(runtime.GuestPortDialer); ok {
 			conn, err := guest.DialGuestPort(ctx, in.ContainerId, in.Port)
-			if err == nil {
-				return conn, nil
+			if !errors.Is(err, microvm.ErrPortUnavailable) {
+				return conn, err
 			}
-			// Keep supporting listeners bound only to the guest's NIC, and
-			// running VMs whose older guest agent has no tunnel service.
+			// A listener bound only to the NIC refuses the loopback connection.
 		}
 		return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", address)
 	})
@@ -96,7 +105,7 @@ func (s *ContainerRuntimeServer) ContainerTunnel(ctx context.Context, in *pb.Con
 	return response, err
 }
 
-func (s *tunnelSessions) get(in *pb.ContainerTunnelRequest, dial func() (net.Conn, error)) (*tunnelSession, error) {
+func (s *tunnelSessions) get(ctx context.Context, in *pb.ContainerTunnelRequest, dial func(context.Context) (net.Conn, error)) (*tunnelSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -125,26 +134,66 @@ func (s *tunnelSessions) get(in *pb.ContainerTunnelRequest, dial func() (net.Con
 		session.lease.Reset(tunnelReconnectTimeout)
 		return session, nil
 	}
+	if pending := s.pending[in.SessionId]; pending != nil {
+		if pending.port != in.Port {
+			return nil, status.Error(codes.InvalidArgument, "tunnel port changed")
+		}
+		s.mu.Unlock()
+		select {
+		case <-pending.done:
+		case <-ctx.Done():
+		}
+		s.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if pending.err == nil {
+			if pending.session.closedAt.Load() != 0 {
+				return nil, status.Error(codes.NotFound, "tunnel expired")
+			}
+			pending.session.lease.Reset(tunnelReconnectTimeout)
+		}
+		return pending.session, pending.err
+	}
 	if !in.Create {
 		return nil, status.Error(codes.NotFound, "tunnel not found")
 	}
-	if active >= 8 || len(s.sessions) >= requestJournalLimit {
+	if active+len(s.pending) >= 8 || len(s.sessions)+len(s.pending) >= requestJournalLimit {
 		return nil, status.Error(codes.ResourceExhausted, "too many tunnels")
 	}
-	conn, err := dial()
-	if err != nil {
-		return nil, err
+	dialCtx, cancel := context.WithCancel(ctx)
+	pending := &tunnelDial{port: in.Port, done: make(chan struct{}), cancel: cancel}
+	if s.pending == nil {
+		s.pending = make(map[string]*tunnelDial)
 	}
-	session := &tunnelSession{port: in.Port, conn: conn}
-	s.sessions[in.SessionId] = session
-	session.lease = time.AfterFunc(tunnelReconnectTimeout, session.close)
-	return session, nil
+	s.pending[in.SessionId] = pending
+	s.mu.Unlock()
+	conn, err := dial(dialCtx)
+	cancel()
+	s.mu.Lock()
+	delete(s.pending, in.SessionId)
+	if s.closed && err == nil {
+		conn.Close()
+		err = status.Error(codes.NotFound, "container stopped")
+	}
+	if err == nil {
+		session := &tunnelSession{port: in.Port, conn: conn}
+		session.lease = time.AfterFunc(tunnelReconnectTimeout, session.close)
+		s.sessions[in.SessionId] = session
+		pending.session = session
+	}
+	pending.err = err
+	close(pending.done)
+	return pending.session, err
 }
 
 func (s *tunnelSessions) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
+	for _, pending := range s.pending {
+		pending.cancel()
+	}
 	for _, session := range s.sessions {
 		session.lease.Stop()
 		session.close()

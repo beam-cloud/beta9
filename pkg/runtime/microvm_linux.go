@@ -680,8 +680,7 @@ func (m *MicroVM) DialGuestPort(ctx context.Context, containerID string, port ui
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	// The service starts before the guest announces readiness. An older
-	// agent refuses it; return promptly so the worker can use the NIC path.
+	// The guest starts this service before announcing readiness.
 	conn, err := dialGuestVsockOnce(ctx, filepath.Join(inst.stateDir, microVMVsockSocket), microvm.TunnelPort)
 	if err != nil {
 		return nil, err

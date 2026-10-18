@@ -13,6 +13,9 @@ import (
 // zero once connected to guest localhost, one on failure. Raw TCP bytes follow.
 const TunnelPort = 1026
 
+// ErrPortUnavailable means a reachable guest refused the loopback connection.
+var ErrPortUnavailable = errors.New("guest loopback port unavailable")
+
 // ConnectPort leaves application bytes unread, including server-first banners.
 // The caller owns the stream and bounds the handshake with a deadline.
 func ConnectPort(conn io.ReadWriter, port uint32) error {
@@ -28,8 +31,11 @@ func ConnectPort(conn io.ReadWriter, port uint32) error {
 	if _, err := io.ReadFull(conn, reply[:]); err != nil {
 		return err
 	}
+	if reply[0] == 1 {
+		return fmt.Errorf("%w: %d", ErrPortUnavailable, port)
+	}
 	if reply[0] != 0 {
-		return fmt.Errorf("connect to guest localhost:%d failed", port)
+		return fmt.Errorf("invalid guest tunnel reply %d", reply[0])
 	}
 	return nil
 }

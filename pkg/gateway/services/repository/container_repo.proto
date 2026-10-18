@@ -120,5 +120,4 @@ message BackendRoute {
   string state = 13;
   string error = 14;
   int64 updated_at = 15;
-  bool grpc_keepalive = 16;
 }

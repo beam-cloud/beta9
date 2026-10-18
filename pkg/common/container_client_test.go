@@ -213,7 +213,7 @@ func TestContainerClientRecoversSilentRelayLoss(t *testing.T) {
 			return &blackholeConn{Conn: conn, cut: &cut}, nil
 		}
 		return conn, err
-	}, WithContainerClientKeepalive())
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

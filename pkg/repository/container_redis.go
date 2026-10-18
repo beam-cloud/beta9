@@ -70,8 +70,7 @@ if current ~= false then
 		existing.port == incoming.port and
 		existing.protocol == incoming.protocol and
 		existing.transport == incoming.transport and
-		existing.local_target == incoming.local_target and
-		(existing.grpc_keepalive or false) == (incoming.grpc_keepalive or false) then
+		existing.local_target == incoming.local_target then
 		return 0
 	end
 end

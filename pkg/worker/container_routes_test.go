@@ -26,9 +26,6 @@ func TestBackendRouteForWorkerIsStableAcrossContainers(t *testing.T) {
 	if routeA.RouteId != routeB.RouteId {
 		t.Fatalf("worker route IDs differ: %q != %q", routeA.RouteId, routeB.RouteId)
 	}
-	if !routeA.GrpcKeepalive {
-		t.Fatal("worker route must advertise its gRPC keepalive policy")
-	}
 	if routeA.ContainerId != "" {
 		t.Fatalf("worker route container_id = %q, want empty", routeA.ContainerId)
 	}
@@ -46,9 +43,6 @@ func TestBackendRouteForContainerIsScopedToContainer(t *testing.T) {
 	req := &types.ContainerRequest{ContainerId: "container-a", WorkspaceId: "workspace-one"}
 	route := worker.backendRouteFor(req, types.BackendRouteKindContainer, 8080, "127.0.0.1:38080")
 
-	if route.GrpcKeepalive {
-		t.Fatal("application routes must not advertise the worker gRPC policy")
-	}
 	if route.ContainerId != req.ContainerId {
 		t.Fatalf("container route container_id = %q, want %q", route.ContainerId, req.ContainerId)
 	}
