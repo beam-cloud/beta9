@@ -50,6 +50,31 @@ const (
 // prepareSandboxProcess installs the shared process manager and guest-specific
 // capabilities before runtime preparation.
 func (s *Worker) prepareSandboxProcess(request *types.ContainerRequest, spec *specs.Spec) error {
+	// This host path is authority from the current worker, never image metadata.
+	delete(spec.Annotations, runtime.MicroVMImageRootAnnotation)
+	if s.runtime != nil && s.runtime.Name() == types.ContainerRuntimeMicroVM.String() &&
+		s.imageClient != nil && s.imageClient.mountedFuseServers != nil {
+		if _, mounted := s.imageClient.mountedFuseServers.Get(request.ImageId); mounted {
+			// CLIP currently mounts with DisableXAttrs. Expose the same
+			// unsupported capability to the guest; host-backed mounts keep
+			// their own xattrs through the separate mutable share.
+			if spec.Annotations == nil {
+				spec.Annotations = make(map[string]string)
+			}
+			spec.Annotations[runtime.MicroVMImageNoXattrsAnnotation] = "true"
+			if s.containerInstances != nil {
+				if instance, ok := s.containerInstances.Get(request.ContainerId); ok && instance.Overlay != nil {
+					root := instance.Overlay.RootPath()
+					mount := s.imageClient.imageMountPoint(request.ImageId)
+					if filepath.IsAbs(mount) && (root == mount || root == filepath.Join(mount, "rootfs")) {
+						if info, err := os.Lstat(root); err == nil && info.IsDir() {
+							spec.Annotations[runtime.MicroVMImageRootAnnotation] = root
+						}
+					}
+				}
+			}
+		}
+	}
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.IsSandbox() {
 		instance, exists := s.containerInstances.Get(request.ContainerId)

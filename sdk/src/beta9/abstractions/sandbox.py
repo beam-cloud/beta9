@@ -1118,6 +1118,16 @@ class SandboxProcessManager:
     ) -> PodSandboxExecResponse:
         return _call_with_sandbox_readiness_retry(do_exec)
 
+    def _process_args(self, process) -> List[str]:
+        known = self.processes.get(process.pid)
+        if known is not None:
+            return list(known.args)
+        try:
+            return shlex.split(process.cmd)
+        except ValueError:
+            # Cmd is a diagnostic string and may not preserve shell quoting.
+            return [process.cmd]
+
     def list_processes(self) -> Dict[int, "SandboxProcess"]:
         """
         List all processes running in the sandbox.
@@ -1145,7 +1155,7 @@ class SandboxProcessManager:
                 self.sandbox_instance,
                 pid=process.pid,
                 cwd=process.cwd,
-                args=shlex.split(process.cmd),
+                args=self._process_args(process),
                 env=process.env,
                 exit_code=process.exit_code,
             )

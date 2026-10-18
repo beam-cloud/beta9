@@ -470,7 +470,10 @@ const CheckpointRuntimeFilesystem = "filesystem"
 const (
 	CheckpointCompatibilityLegacyPrefix     string = "v1:"
 	CheckpointCompatibilityGPUDevicesPrefix string = "v2:"
+	CheckpointCompatibilityMicroVMPrefix    string = "microvm-v7:"
 )
+
+const CheckpointCompatibilityMicroVMMetadataPrefix = "microvm-v8:"
 
 func (c *Checkpoint) IsFilesystemOnly() bool {
 	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), CheckpointRuntimeFilesystem)

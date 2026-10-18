@@ -1,0 +1,624 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -178,6 +178,11 @@
+     #[arg(long)]
+     readonly: bool,
+
++    /// Stateless opens for an immutable image, mounted read-only by the guest.
++    /// Requires --readonly --cache=always; incompatible with per-open direct I/O.
++    #[arg(long, requires = "readonly")]
++    immutable_open: bool,
++
+     /// Action to take when seccomp finds a not allowed syscall (none, kill, log, trap)
+     #[arg(long, value_parser = parse_seccomp, default_value = "kill")]
+     seccomp: SeccompAction,
+@@ -222,6 +227,10 @@
+     /// Disable support for READDIRPLUS operations
+     #[arg(long)]
+     no_readdirplus: bool,
++
++    /// Always use READDIRPLUS instead of adaptive READDIRPLUS (unless cache=never).
++    #[arg(long, conflicts_with = "no_readdirplus")]
++    readdirplus_always: bool,
+
+     /// Enable writeback cache
+     #[arg(long)]
+@@ -851,7 +860,9 @@
+         announce_submounts,
+         inode_file_handles: opt.inode_file_handles.into(),
+         readdirplus,
++        readdirplus_auto: !opt.readdirplus_always,
+         writeback: opt.writeback,
++        immutable_open: opt.immutable_open,
+         allow_direct_io: opt.allow_direct_io,
+         killpriv_v2,
+         security_label: opt.security_label,
+@@ -937,3 +948,77 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod readdirplus_cli_tests {
++    use super::*;
++
++    #[test]
++    fn readdirplus_always_is_explicit() {
++        let default = Opt::try_parse_from([
++            "virtiofsd",
++            "--shared-dir=/",
++            "--socket-path=/tmp/test.sock",
++        ])
++        .unwrap();
++        assert!(!default.readdirplus_always);
++        let forced = Opt::try_parse_from([
++            "virtiofsd",
++            "--shared-dir=/",
++            "--socket-path=/tmp/test.sock",
++            "--readdirplus-always",
++        ])
++        .unwrap();
++        assert!(forced.readdirplus_always);
++        assert!(!forced.no_readdirplus);
++    }
++
++    #[test]
++    fn readdirplus_always_conflicts_with_disabling_plus() {
++        let error = Opt::try_parse_from([
++            "virtiofsd",
++            "--shared-dir=/",
++            "--socket-path=/tmp/test.sock",
++            "--readdirplus-always",
++            "--no-readdirplus",
++        ])
++        .unwrap_err();
++        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
++    }
++}
++
++#[cfg(test)]
++mod immutable_open_cli_tests {
++    use super::*;
++    #[test]
++    fn flag_defaults_off_and_requires_readonly() {
++        assert!(
++            !Opt::try_parse_from([
++                "virtiofsd",
++                "--shared-dir=/",
++                "--socket-path=/tmp/test.sock"
++            ])
++            .unwrap()
++            .immutable_open
++        );
++        assert!(Opt::try_parse_from([
++            "virtiofsd",
++            "--shared-dir=/",
++            "--socket-path=/tmp/test.sock",
++            "--immutable-open"
++        ])
++        .is_err());
++        assert!(
++            Opt::try_parse_from([
++                "virtiofsd",
++                "--shared-dir=/",
++                "--socket-path=/tmp/test.sock",
++                "--immutable-open",
++                "--readonly",
++                "--cache=always"
++            ])
++            .unwrap()
++            .immutable_open
++        );
++    }
++}
+--- a/src/passthrough/device_state/mod.rs
++++ b/src/passthrough/device_state/mod.rs
+@@ -80,7 +80,13 @@
+             }
+         }
+
+-        let state = serialized::PassthroughFs::V2(self.into());
++        let no_open = self.no_open.load(Ordering::Relaxed);
++        let no_opendir = self.no_opendir.load(Ordering::Relaxed);
++        let state = if no_open || no_opendir {
++            serialized::PassthroughFs::V3(self.into(), no_open, no_opendir)
++        } else {
++            serialized::PassthroughFs::V2(self.into())
++        };
+         self.inodes.clear_migration_info();
+         let serialized: Vec<u8> = state.try_into()?;
+         state_pipe.write_all(&serialized)?;
+@@ -90,9 +96,19 @@
+     fn deserialize_and_apply(&self, mut state_pipe: File) -> io::Result<()> {
+         let mut serialized: Vec<u8> = Vec::new();
+         state_pipe.read_to_end(&mut serialized)?;
++        self.no_open.store(false, Ordering::Relaxed);
++        self.no_opendir.store(false, Ordering::Relaxed);
+         match serialized::PassthroughFs::try_from(serialized)? {
+             serialized::PassthroughFs::V1(state) => state.apply(self)?,
+             serialized::PassthroughFs::V2(state) => state.apply(self)?,
++            serialized::PassthroughFs::V3(state, no_open, no_opendir) => {
++                if !self.immutable_open_allowed {
++                    return Err(super::util::einval());
++                }
++                state.apply(self)?;
++                self.no_open.store(no_open, Ordering::Relaxed);
++                self.no_opendir.store(no_opendir, Ordering::Relaxed);
++            }
+         };
+         Ok(())
+     }
+--- a/src/passthrough/device_state/serialized.rs
++++ b/src/passthrough/device_state/serialized.rs
+@@ -23,6 +23,8 @@
+
+     /// Version with mount point paths (for migrating file handles)
+     V2(PassthroughFsV2),
++    /// Independently negotiated immutable file/directory stateless opens.
++    V3(PassthroughFsV2, bool, bool),
+ }
+
+ /// v1 of our serialized migration stream.
+--- a/src/passthrough/mod.rs
++++ b/src/passthrough/mod.rs
+@@ -299,6 +299,8 @@
+     ///
+     /// The default value for this option is `false`.
+     pub writeback: bool,
++    /// Opt-in only for an immutable readonly export and read-only guest mount.
++    pub immutable_open: bool,
+
+     /// The path of the root directory.
+     ///
+@@ -373,6 +375,9 @@
+     /// The default is `false`.
+     pub readdirplus: bool,
+
++    /// Let the guest adapt between READDIR and READDIRPLUS. The default is true.
++    pub readdirplus_auto: bool,
++
+     /// Whether the file system should honor the O_DIRECT flag. If this option is disabled (which
+     /// is the default value), that flag will be filtered out at `open_inode`.
+     ///
+@@ -458,6 +463,7 @@
+             attr_timeout: Duration::from_secs(5),
+             cache_policy: Default::default(),
+             writeback: false,
++            immutable_open: false,
+             root_dir: String::from("/"),
+             mountinfo_prefix: None,
+             xattr: false,
+@@ -468,6 +474,7 @@
+             announce_submounts: false,
+             inode_file_handles: Default::default(),
+             readdirplus: true,
++            readdirplus_auto: true,
+             allow_direct_io: false,
+             killpriv_v2: false,
+             posix_acl: NegotiationMode::Never,
+@@ -525,6 +532,9 @@
+     // Whether writeback caching is enabled for this directory. This will only be true when
+     // `cfg.writeback` is true and `init` was called with `FsOptions::WRITEBACK_CACHE`.
+     writeback: AtomicBool,
++    immutable_open_allowed: bool,
++    no_open: AtomicBool,
++    no_opendir: AtomicBool,
+
+     // Whether to announce submounts (i.e., whether the guest supports them and whether they are
+     // enabled in the configuration)
+@@ -609,6 +619,9 @@
+             proc_self_fd,
+             orig_wd_fd,
+             writeback: AtomicBool::new(false),
++            immutable_open_allowed: false,
++            no_open: AtomicBool::new(false),
++            no_opendir: AtomicBool::new(false),
+             announce_submounts: AtomicBool::new(false),
+             posix_acl: AtomicBool::new(false),
+             sup_group_extension: AtomicBool::new(false),
+@@ -663,6 +676,23 @@
+     }
+
+     fn find_handle(&self, handle: Handle, inode: Inode) -> io::Result<Arc<HandleData>> {
++        if handle == 0 {
++            let data = self.inodes.get(inode).ok_or_else(ebadf)?;
++            let enabled = match data.mode & libc::S_IFMT {
++                libc::S_IFREG => self.no_open.load(Ordering::Relaxed),
++                libc::S_IFDIR => self.no_opendir.load(Ordering::Relaxed),
++                _ => false,
++            };
++            if enabled {
++                let file = self.open_inode(&data, libc::O_RDONLY)?;
++                return Ok(Arc::new(HandleData {
++                    inode,
++                    file: self.guest_fds.allocate(file)?.into(),
++                    file_type: FileType::from_mode(data.mode),
++                    migration_info: HandleMigrationInfo::new(libc::O_RDONLY),
++                }));
++            }
++        }
+         self.handles
+             .read()
+             .unwrap()
+@@ -988,6 +1018,14 @@
+         kill_priv: bool,
+         flags: u32,
+     ) -> io::Result<(Option<Handle>, OpenOptions)> {
++        let stateless = if flags & libc::O_DIRECTORY as u32 != 0 {
++            self.no_opendir.load(Ordering::Relaxed)
++        } else {
++            self.no_open.load(Ordering::Relaxed)
++        };
++        if stateless {
++            return Err(io::Error::from_raw_os_error(libc::ENOSYS));
++        }
+         // We need to clean the `O_APPEND` flag in case the file is mem mapped or if the flag
+         // is later modified in the guest using `fcntl(F_SETFL)`. We do a per-write `O_APPEND`
+         // check setting `RWF_APPEND` for non-mmapped writes, if necessary.
+@@ -1591,7 +1629,11 @@
+         // `serialized::NegotiatedOpts::apply()`.
+
+         let mut opts = if self.cfg.readdirplus {
+-            FsOptions::DO_READDIRPLUS | FsOptions::READDIRPLUS_AUTO
++            let mut plus = FsOptions::DO_READDIRPLUS;
++            if self.cfg.readdirplus_auto {
++                plus |= FsOptions::READDIRPLUS_AUTO;
++            }
++            plus
+         } else {
+             FsOptions::empty()
+         };
+@@ -1656,6 +1698,8 @@
+         self.handles.write().unwrap().clear();
+         self.inodes.clear();
+         self.writeback.store(false, Ordering::Relaxed);
++        self.no_open.store(false, Ordering::Relaxed);
++        self.no_opendir.store(false, Ordering::Relaxed);
+         self.announce_submounts.store(false, Ordering::Relaxed);
+         self.posix_acl.store(false, Ordering::Relaxed);
+         self.sup_group_extension.store(false, Ordering::Relaxed);
+@@ -2313,8 +2357,11 @@
+         handle: Handle,
+         _lock_owner: u64,
+     ) -> io::Result<()> {
++        // This share cannot have pending writes or remote per-open locks.
++        if handle == 0 && self.no_open.load(Ordering::Relaxed) {
++            return Err(io::Error::from_raw_os_error(libc::ENOSYS));
++        }
+         let data = self.find_handle(handle, inode)?;
+-
+         // Since this method is called whenever an fd is closed in the client, we can emulate that
+         // behavior by doing the same thing (dup-ing the fd and then immediately closing it). Safe
+         // because this doesn't modify any memory and we check the return values.
+@@ -2799,4 +2846,30 @@
+             name,
+         ));
+     }
++
++    #[test]
++    fn readdirplus_default_and_forced_negotiate_only_the_expected_bit() -> io::Result<()> {
++        assert!(Config::default().readdirplus_auto);
++        let init = |adaptive, enabled| -> io::Result<FsOptions> {
++            let fs = PassthroughFs::new(Config {
++                readdirplus: enabled,
++                readdirplus_auto: adaptive,
++                killpriv_v2: true,
++                ..Default::default()
++            })?;
++            fs.init(FsOptions::all())
++        };
++        let default = init(true, true)?;
++        let forced = init(false, true)?;
++        assert!(default.contains(FsOptions::DO_READDIRPLUS | FsOptions::READDIRPLUS_AUTO));
++        assert!(forced.contains(FsOptions::DO_READDIRPLUS));
++        assert!(!forced.contains(FsOptions::READDIRPLUS_AUTO));
++        assert_eq!(default & !FsOptions::READDIRPLUS_AUTO, forced);
++        assert!(forced.contains(FsOptions::HANDLE_KILLPRIV_V2));
++        for adaptive in [false, true] {
++            let disabled = init(adaptive, false)?;
++            assert!(!disabled.intersects(FsOptions::DO_READDIRPLUS | FsOptions::READDIRPLUS_AUTO));
++        }
++        Ok(())
++    }
+ }
+--- a/src/passthrough/read_only.rs
++++ b/src/passthrough/read_only.rs
+@@ -35,7 +35,18 @@
+     /// Internally creates a `PassthroughFs` filesystem using the `cfg` configuration, then wraps
+     /// it in the `PassthroughFsRo` type.
+     pub fn new(cfg: super::Config) -> io::Result<Self> {
+-        let inner = PassthroughFs::new(cfg)?;
++        if cfg.immutable_open
++            && (!matches!(cfg.cache_policy, super::CachePolicy::Always)
++                || cfg.writeback
++                || cfg.allow_direct_io
++                || !cfg.clean_noatime
++                || cfg.posix_acl != super::NegotiationMode::Never)
++        {
++            return Err(einval());
++        }
++        let enabled = cfg.immutable_open;
++        let mut inner = PassthroughFs::new(cfg)?;
++        inner.immutable_open_allowed = enabled;
+         Ok(PassthroughFsRo(inner))
+     }
+
+@@ -173,9 +184,26 @@
+     type Handle = <PassthroughFs as FileSystem>::Handle;
+     type DirIter = <PassthroughFs as FileSystem>::DirIter;
+
++    fn init(&self, capable: FsOptions) -> io::Result<FsOptions> {
++        let mut opts = self.0.init(capable)?;
++        if self.0.immutable_open_allowed {
++            let selected =
++                capable & (FsOptions::ZERO_MESSAGE_OPEN | FsOptions::ZERO_MESSAGE_OPENDIR);
++            self.0.no_open.store(
++                selected.contains(FsOptions::ZERO_MESSAGE_OPEN),
++                std::sync::atomic::Ordering::Relaxed,
++            );
++            self.0.no_opendir.store(
++                selected.contains(FsOptions::ZERO_MESSAGE_OPENDIR),
++                std::sync::atomic::Ordering::Relaxed,
++            );
++            opts |= selected;
++        }
++        Ok(opts)
++    }
++
+     // Execute these functions without restrictions
+     ops_allow! {
+-        fn init(&self, capable: FsOptions) -> io::Result<FsOptions>;
+         fn destroy(&self);
+         fn lookup(&self, ctx: Context, parent: Self::Inode, name: &CStr) -> io::Result<Entry>;
+         fn forget(&self, ctx: Context, inode: Self::Inode, count: u64);
+@@ -435,3 +463,250 @@
+         fn deserialize_and_apply(&self, state_pipe: File) -> io::Result<()>;
+     }
+ }
++
++#[cfg(test)]
++mod immutable_open_tests {
++    use super::*;
++    use std::os::unix::fs::FileExt;
++    use std::os::unix::io::AsRawFd;
++    use std::sync::atomic::Ordering;
++    struct Fixture(std::path::PathBuf);
++    impl Fixture {
++        fn new() -> io::Result<Self> {
++            let p = std::env::temp_dir().join(format!(
++                "immutable-open-{}-{}",
++                std::process::id(),
++                std::time::SystemTime::now()
++                    .duration_since(std::time::UNIX_EPOCH)
++                    .unwrap()
++                    .as_nanos()
++            ));
++            std::fs::create_dir(&p)?;
++            std::fs::write(p.join("file"), b"contents")?;
++            Ok(Self(p))
++        }
++        fn cfg(&self) -> super::super::Config {
++            super::super::Config {
++                root_dir: self.0.to_str().unwrap().into(),
++                cache_policy: super::super::CachePolicy::Always,
++                immutable_open: true,
++                inode_file_handles: super::super::InodeFileHandlesMode::Never,
++                ..Default::default()
++            }
++        }
++    }
++    impl Drop for Fixture {
++        fn drop(&mut self) {
++            let _ = std::fs::remove_dir_all(&self.0);
++        }
++    }
++    fn context() -> Context {
++        Context {
++            uid: 0.into(),
++            gid: 0.into(),
++            pid: 0,
++        }
++    }
++    fn capable() -> FsOptions {
++        FsOptions::ZERO_MESSAGE_OPEN | FsOptions::ZERO_MESSAGE_OPENDIR
++    }
++    fn file(fs: &PassthroughFsRo) -> io::Result<Entry> {
++        fs.lookup(
++            context(),
++            fuse::ROOT_ID,
++            CStr::from_bytes_with_nul(b"file\0").unwrap(),
++        )
++    }
++    #[test]
++    fn explicit_readonly_policy_and_independent_negotiation() -> io::Result<()> {
++        let f = Fixture::new()?;
++        assert!(!PassthroughFs::new(f.cfg())?
++            .init(capable())?
++            .intersects(capable()));
++        let mut c = f.cfg();
++        c.immutable_open = false;
++        assert!(!PassthroughFsRo::new(c)?
++            .init(capable())?
++            .intersects(capable()));
++        for bit in [
++            FsOptions::empty(),
++            FsOptions::ZERO_MESSAGE_OPEN,
++            FsOptions::ZERO_MESSAGE_OPENDIR,
++            capable(),
++        ] {
++            let fs = PassthroughFsRo::new(f.cfg())?;
++            let out = fs.init(bit)?;
++            assert_eq!(out & capable(), bit);
++            assert_eq!(
++                fs.0.no_open.load(Ordering::Relaxed),
++                bit.contains(FsOptions::ZERO_MESSAGE_OPEN)
++            );
++            assert_eq!(
++                fs.0.no_opendir.load(Ordering::Relaxed),
++                bit.contains(FsOptions::ZERO_MESSAGE_OPENDIR)
++            );
++        }
++        let mut invalid = Vec::new();
++        let mut c = f.cfg();
++        c.cache_policy = super::super::CachePolicy::Auto;
++        invalid.push(c);
++        let mut c = f.cfg();
++        c.writeback = true;
++        invalid.push(c);
++        let mut c = f.cfg();
++        c.allow_direct_io = true;
++        invalid.push(c);
++        let mut c = f.cfg();
++        c.clean_noatime = false;
++        invalid.push(c);
++        let mut c = f.cfg();
++        c.posix_acl = super::super::NegotiationMode::Always;
++        invalid.push(c);
++        for c in invalid {
++            assert!(PassthroughFsRo::new(c).is_err());
++        }
++        Ok(())
++    }
++    #[test]
++    fn ephemeral_pread_handles_forget_and_readonly_flags() -> io::Result<()> {
++        let f = Fixture::new()?;
++        let fs = PassthroughFsRo::new(f.cfg())?;
++        fs.init(capable())?;
++        let entry = file(&fs)?;
++        assert_eq!(
++            fs.open(context(), entry.inode, false, libc::O_RDONLY as u32)
++                .unwrap_err()
++                .raw_os_error(),
++            Some(libc::ENOSYS)
++        );
++        for (flags, errno) in [
++            (libc::O_WRONLY, libc::EROFS),
++            (libc::O_RDWR, libc::EROFS),
++            (libc::O_TRUNC, libc::EINVAL),
++            (libc::O_CREAT | libc::O_EXCL, libc::EROFS),
++        ] {
++            assert_eq!(
++                fs.open(context(), entry.inode, false, flags as u32)
++                    .unwrap_err()
++                    .raw_os_error(),
++                Some(errno)
++            );
++        }
++        assert_eq!(
++            fs.flush(context(), entry.inode, 0, 0)
++                .unwrap_err()
++                .raw_os_error(),
++            Some(libc::ENOSYS)
++        );
++        let a = fs.0.find_handle(0, entry.inode)?;
++        let b = fs.0.find_handle(0, entry.inode)?;
++        assert!(!Arc::ptr_eq(&a, &b));
++        assert_ne!(
++            a.file.get()?.read().unwrap().as_raw_fd(),
++            b.file.get()?.read().unwrap().as_raw_fd()
++        );
++        let mut data = [0; 8];
++        a.file
++            .get()?
++            .read()
++            .unwrap()
++            .get_file()
++            .read_at(&mut data, 0)?;
++        assert_eq!(&data, b"contents");
++        fs.fsync(context(), entry.inode, false, 0)?;
++        let weak = Arc::downgrade(&a);
++        drop(a);
++        assert!(weak.upgrade().is_none());
++        let weak_b = Arc::downgrade(&b);
++        fs.forget(context(), entry.inode, 1);
++        drop(b);
++        assert!(weak_b.upgrade().is_none());
++        assert!(fs.0.find_handle(0, entry.inode).is_err());
++        assert!(fs.0.handles.read().unwrap().is_empty());
++        Ok(())
++    }
++    #[test]
++    fn concurrent_paged_directory_uses_fresh_descriptions() -> io::Result<()> {
++        let f = Fixture::new()?;
++        for i in 0..300 {
++            std::fs::write(f.0.join(format!("page-{i}")), b"x")?;
++        }
++        let fs = Arc::new(PassthroughFsRo::new(f.cfg())?);
++        fs.init(capable())?;
++        assert_eq!(
++            fs.opendir(context(), fuse::ROOT_ID, 0)
++                .unwrap_err()
++                .raw_os_error(),
++            Some(libc::ENOSYS)
++        );
++        let mut threads = Vec::new();
++        for _ in 0..2 {
++            let fs = Arc::clone(&fs);
++            threads.push(std::thread::spawn(move || -> io::Result<()> {
++                let mut offset = 0;
++                let mut names = std::collections::HashSet::new();
++                loop {
++                    let mut iter = fs.readdir(context(), fuse::ROOT_ID, 0, 1024, offset)?;
++                    let mut n = 0;
++                    while let Some(e) = crate::filesystem::DirectoryIterator::next(&mut iter) {
++                        assert!(names.insert(e.name.to_bytes().to_vec()));
++                        offset = e.offset;
++                        n += 1;
++                    }
++                    if n == 0 {
++                        break;
++                    }
++                }
++                assert_eq!(names.len(), 303);
++                Ok(())
++            }));
++        }
++        for t in threads {
++            t.join().unwrap()?;
++        }
++        fs.fsyncdir(context(), fuse::ROOT_ID, false, 0)?;
++        let a = fs.0.find_handle(0, fuse::ROOT_ID)?;
++        assert!(!Arc::ptr_eq(&a, &fs.0.find_handle(0, fuse::ROOT_ID)?));
++        Ok(())
++    }
++    #[test]
++    fn migration_restores_negotiation_and_rejects_mutable_destination() -> io::Result<()> {
++        let f = Fixture::new()?;
++        let fs = PassthroughFsRo::new(f.cfg())?;
++        fs.init(capable())?;
++        let entry = file(&fs)?;
++        let before = fs.0.find_handle(0, entry.inode)?;
++        let old_fd = before.file.get()?.read().unwrap().as_raw_fd();
++        let state = f.0.with_extension("state");
++        fs.prepare_serialization(Arc::new(AtomicBool::new(false)));
++        fs.serialize(File::create(&state)?)?;
++        let restored = PassthroughFsRo::new(f.cfg())?;
++        restored.deserialize_and_apply(File::open(&state)?)?;
++        assert!(restored.0.no_open.load(Ordering::Relaxed));
++        assert!(restored.0.no_opendir.load(Ordering::Relaxed));
++        let after = restored.0.find_handle(0, entry.inode)?;
++        assert_ne!(old_fd, after.file.get()?.read().unwrap().as_raw_fd());
++        let mut data = [0; 8];
++        after
++            .file
++            .get()?
++            .read()
++            .unwrap()
++            .get_file()
++            .read_at(&mut data, 0)?;
++        assert_eq!(&data, b"contents");
++        assert!(PassthroughFs::new(f.cfg())?
++            .deserialize_and_apply(File::open(&state)?)
++            .is_err());
++        // Official V2 streams retain ordinary opens, even with the opt-in configured.
++        let legacy = PassthroughFs::new(f.cfg())?;
++        legacy.init(FsOptions::empty())?;
++        legacy.prepare_serialization(Arc::new(AtomicBool::new(false)));
++        legacy.serialize(File::create(&state)?)?;
++        restored.deserialize_and_apply(File::open(&state)?)?;
++        assert!(!restored.0.no_open.load(Ordering::Relaxed));
++        assert!(!restored.0.no_opendir.load(Ordering::Relaxed));
++        std::fs::remove_file(state)?;
++        Ok(())
++    }
++}

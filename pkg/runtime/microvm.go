@@ -39,17 +39,20 @@ const (
 	DefaultMicroVMStateRoot  = "/run/beam/microvm"
 
 	// Annotations the worker (or a test harness) sets on the OCI spec.
-	MicroVMDockerAnnotation     = "com.beam.microvm.docker"      // "true" binds the disk's docker dir over /var/lib/docker
-	MicroVMRootDiskAnnotation   = "com.beam.microvm.disk.root"   // vhost-user-blk socket serving the writable root disk
-	MicroVMDiskAnnotationPrefix = "com.beam.microvm.disk."       // .<n> = "<socket>:<mount path>[:ro]"
-	MicroVMMemoryMiBAnnotation  = "com.beam.microvm.memory-mib"  // application budget; excludes guest control headroom
-	MicroVMVCPUAnnotation       = "com.beam.microvm.vcpus"       // vCPU count when the spec carries no CPU quota
-	MicroVMScratchGiBAnnotation = "com.beam.microvm.scratch-gib" // sparse scratch disk size for ephemeral sandboxes
+	MicroVMDockerAnnotation        = "com.beam.microvm.docker"          // "true" binds the disk's docker dir over /var/lib/docker
+	MicroVMRootDiskAnnotation      = "com.beam.microvm.disk.root"       // vhost-user-blk socket serving the writable root disk
+	MicroVMImageRootAnnotation     = "com.beam.microvm.image-root"      // worker-attested current CLIP image root
+	MicroVMImageNoXattrsAnnotation = "com.beam.microvm.image-no-xattrs" // current immutable CLIP mount capability
+	MicroVMDiskAnnotationPrefix    = "com.beam.microvm.disk."           // .<n> = "<socket>:<mount path>[:ro]"
+	MicroVMMemoryMiBAnnotation     = "com.beam.microvm.memory-mib"      // application budget; excludes guest control headroom
+	MicroVMVCPUAnnotation          = "com.beam.microvm.vcpus"           // vCPU count when the spec carries no CPU quota
+	MicroVMScratchGiBAnnotation    = "com.beam.microvm.scratch-gib"     // sparse scratch disk size for ephemeral sandboxes
 
 	microVMSysfsCgroupRoot       = "/sys/fs/cgroup"
 	microVMTapName               = "b9tap0"
 	microVMAPISocket             = "api.sock"
 	microVMVirtiofsSocket        = "virtiofs.sock"
+	microVMBindsSocket           = "binds.sock"
 	microVMVsockSocket           = "vsock.sock"
 	microVMBootTimeout           = 90 * time.Second
 	microVMPowerOffTimeout       = 15 * time.Second
@@ -345,6 +348,8 @@ func underAny(path string, prefixes ...string) bool {
 // decided that the guest has to act on.
 func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, mounts []microvm.Mount) *microvm.Spec {
 	vmSpec := &microvm.Spec{
+		SeparateBinds:       true,
+		Metacopy:            root.socket == "",
 		WorkloadMemoryBytes: microVMWorkloadMemoryBytes(spec),
 		Network:             network,
 		RootDisk:            root.device,
@@ -401,14 +406,19 @@ func waitForPath(ctx context.Context, path string, timeout time.Duration, gaveUp
 
 // --- hypervisor ------------------------------------------------------------------
 
-func microVMKernelCmdline() string {
+func microVMKernelCmdline() string { return microVMImageKernelCmdline(false) }
+
+func microVMImageKernelCmdline(direct bool) string {
+	tag, access := microvm.VirtiofsTag, "ro"
+	if direct {
+		tag, access = microvm.BindsTag, "rw"
+	}
 	return strings.Join([]string{
 		"console=ttyS0",
-		"root=" + microvm.VirtiofsTag,
+		"root=" + tag,
 		"rootfstype=virtiofs",
-		// rw: the share carries the spec's writable bind mounts (volumes,
-		// uploads). The image itself is only ever read as an overlay lower.
-		"rw",
+		// Host-backed writable mounts use their own share.
+		access,
 		"init=" + microvm.InitPath,
 		"reboot=k",
 		"panic=0",
@@ -432,6 +442,7 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		"--cpus", fmt.Sprintf("boot=%d", vcpus),
 		"--memory", fmt.Sprintf("size=%d,shared=on", memory),
 		"--fs", fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.VirtiofsTag, filepath.Join(stateDir, microVMVirtiofsSocket)),
+		fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.BindsTag, filepath.Join(stateDir, microVMBindsSocket)),
 		"--disk", root.arg,
 	}
 	for _, disk := range extra {
@@ -460,13 +471,58 @@ func microVMRestoreArgs(stateDir, snapshotDir string) []string {
 	}
 }
 
+// This fresh per-VM lower contains only generated metadata, never external binds.
+// Keep it out of ext4 upper so normal copy-up/export detects application changes.
+func stageDirectImageMetadata(image, metadata string, config []byte) error {
+	if err := os.Mkdir(metadata, 0o755); err != nil {
+		return err
+	}
+	for _, name := range []string{"dev", "proc", "sys", "run", "tmp", "workspace", "volumes"} {
+		info, err := os.Lstat(filepath.Join(image, name))
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil && info.IsDir() && name != "workspace" && name != "volumes" {
+			continue
+		}
+		if err := os.Mkdir(filepath.Join(metadata, name), 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(filepath.Join(metadata, "config.json"), config, 0o644)
+}
+
+// The two tags remain unchanged, but their root role must match saved memory.
+func validateMicroVMSnapshotRoot(cmdline string, direct bool) error {
+	want, roots := "root="+microvm.VirtiofsTag, 0
+	if direct {
+		want = "root=" + microvm.BindsTag
+	}
+	for _, arg := range strings.Fields(cmdline) {
+		if strings.HasPrefix(arg, "root=") {
+			if arg != want {
+				return fmt.Errorf("checkpoint filesystem root does not match current image route")
+			}
+			roots++
+		}
+	}
+	if roots != 1 {
+		return fmt.Errorf("checkpoint requires exactly one filesystem root tag")
+	}
+	return nil
+}
+
 // rewriteSnapshotConfig points a snapshot's device config at this VM's
-// sockets, disk image and MAC. Devices are matched by position: --disk order
-// is root first, then the extra disks, and there is one net, fs and vsock.
+// sockets, disk image and MAC. Disks are matched by position; filesystem
+// sockets are matched by tag.
 func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Network, root microVMDisk, extra []microVMDisk) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return nil, fmt.Errorf("decode snapshot config: %w", err)
+	}
+	shares, _ := cfg["fs"].([]any)
+	if err := validateMicroVMSnapshotFS(shares); err != nil {
+		return nil, err
 	}
 	if nets, _ := cfg["net"].([]any); len(nets) == 1 {
 		if entry, ok := nets[0].(map[string]any); ok {
@@ -496,15 +552,38 @@ func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Netwo
 			disk["path"] = want[i].path
 		}
 	}
-	if fs, _ := cfg["fs"].([]any); len(fs) == 1 {
-		if entry, ok := fs[0].(map[string]any); ok {
-			entry["socket"] = filepath.Join(stateDir, microVMVirtiofsSocket)
+	for _, value := range shares {
+		entry := value.(map[string]any) // validated above
+		name := microVMVirtiofsSocket
+		if entry["tag"] == microvm.BindsTag {
+			name = microVMBindsSocket
 		}
+		entry["socket"] = filepath.Join(stateDir, name)
 	}
 	if vsock, ok := cfg["vsock"].(map[string]any); ok {
 		vsock["socket"] = filepath.Join(stateDir, microVMVsockSocket)
 	}
 	return json.Marshal(cfg)
+}
+
+// Validate before preparing host state or reconnecting checkpoint devices.
+func validateMicroVMSnapshotFS(shares []any) error {
+	if len(shares) != 2 {
+		return fmt.Errorf("checkpoint requires its original filesystem runtime (expected image and bind shares)")
+	}
+	seen := make(map[string]bool, 2)
+	for _, value := range shares {
+		entry, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("snapshot filesystem is not an object")
+		}
+		tag, _ := entry["tag"].(string)
+		if (tag != microvm.VirtiofsTag && tag != microvm.BindsTag) || seen[tag] {
+			return fmt.Errorf("snapshot requires unique %q and %q filesystem tags", microvm.VirtiofsTag, microvm.BindsTag)
+		}
+		seen[tag] = true
+	}
+	return nil
 }
 
 // --- console -----------------------------------------------------------------------

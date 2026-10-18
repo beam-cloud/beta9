@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -147,7 +148,7 @@ func TestMicroVMHypervisorArgs(t *testing.T) {
 	assert.Contains(t, joined, "--serial tty --console off")
 
 	cmdline := microVMKernelCmdline()
-	assert.Contains(t, cmdline, "root=beamfs rootfstype=virtiofs rw")
+	assert.Contains(t, cmdline, "root=beamfs rootfstype=virtiofs ro")
 	assert.Contains(t, cmdline, "init="+microvm.InitPath)
 	assert.Contains(t, cmdline, "console=ttyS0")
 }
@@ -164,6 +165,9 @@ func TestMicroVMGuestSpec(t *testing.T) {
 
 	got := microVMGuestSpec(spec, network, root, extra, mounts)
 	assert.True(t, got.Docker)
+	assert.True(t, got.SeparateBinds)
+	assert.True(t, got.Metacopy)
+	assert.False(t, microVMGuestSpec(spec, network, microVMDisk{socket: "/durable/root.sock"}, nil, nil).Metacopy, "durable uppers must remain readable without metacopy")
 	assert.Equal(t, "/dev/vda", got.RootDisk)
 	assert.Equal(t, []microvm.Disk{{Device: "/dev/vdb", MountPath: "/data", ReadOnly: true}}, got.Disks)
 	assert.Equal(t, microvm.Mount{Type: microvm.MountTmpfs, Destination: "/tmp", Options: []string{"size=1g"}}, got.Mounts[0])
@@ -219,7 +223,7 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	    {"path": "/old/scratch.ext4", "image_type": "raw", "id": "_disk0"},
 	    {"vhost_user": true, "vhost_socket": "/old/run/aaa/vhost-user-blk.sock", "id": "_disk1"}
 	  ],
-	  "fs": [{"tag": "beamfs", "socket": "/old/state/virtiofs.sock"}],
+	  "fs": [{"tag": "beamfs", "socket": "/old/state/virtiofs.sock"}, {"tag": "beambinds", "socket": "/old/state/binds.sock"}],
 	  "vsock": {"cid": 3, "socket": "/old/state/vsock.sock"},
 	  "net": [{"tap": "b9tap0", "mac": "02:00:00:00:00:01"}]
 	}`)
@@ -236,6 +240,7 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	assert.Equal(t, "raw", disks[0].(map[string]any)["image_type"], "unrelated keys survive")
 	assert.Equal(t, "/new/run/bbb/vhost-user-blk.sock", disks[1].(map[string]any)["vhost_socket"])
 	assert.Equal(t, "/new/state/virtiofs.sock", cfg["fs"].([]any)[0].(map[string]any)["socket"])
+	assert.Equal(t, "/new/state/binds.sock", cfg["fs"].([]any)[1].(map[string]any)["socket"])
 	assert.Equal(t, "/new/state/vsock.sock", cfg["vsock"].(map[string]any)["socket"])
 	assert.Equal(t, "02:00:00:00:00:02", cfg["net"].([]any)[0].(map[string]any)["mac"], "the guest takes the new slot's MAC")
 
@@ -243,4 +248,50 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	assert.ErrorContains(t, err, "snapshot has 2 disks, this VM has 1")
 	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, microVMDisk{socket: "/x"}, extra)
 	assert.ErrorContains(t, err, "not a vhost-user export", "a scratch-root snapshot cannot be restored onto a durable root")
+}
+
+func TestRewriteSnapshotFilesystemTags(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		shares []any
+		valid  bool
+	}{
+		{"image_then_binds", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": microvm.BindsTag}}, true},
+		{"binds_then_image", []any{map[string]any{"tag": microvm.BindsTag}, map[string]any{"tag": microvm.VirtiofsTag}}, true},
+		{"legacy_one_share", []any{map[string]any{"tag": microvm.VirtiofsTag}}, false},
+		{"missing_all", nil, false},
+		{"duplicate_image", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": microvm.VirtiofsTag}}, false},
+		{"duplicate_binds", []any{map[string]any{"tag": microvm.BindsTag}, map[string]any{"tag": microvm.BindsTag}}, false},
+		{"unexpected_tag", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": "other"}}, false},
+		{"missing_tag", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{}}, false},
+		{"nonstring_tag", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": 123}}, false},
+		{"nonobject", []any{map[string]any{"tag": microvm.VirtiofsTag}, "beambinds"}, false},
+		{"extra_share", []any{map[string]any{"tag": microvm.VirtiofsTag}, map[string]any{"tag": microvm.BindsTag}, map[string]any{"tag": "other"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input, err := json.Marshal(map[string]any{"fs": tc.shares, "disks": []any{map[string]any{"path": "/old/root"}}})
+			require.NoError(t, err)
+			output, err := rewriteSnapshotConfig(input, "/new/state", microvm.Network{}, microVMDisk{path: "/new/root"}, nil)
+			if !tc.valid {
+				require.Error(t, err)
+				require.Nil(t, output)
+				return
+			}
+			require.NoError(t, err)
+			var cfg struct {
+				FS []struct {
+					Tag    string
+					Socket string
+				}
+			}
+			require.NoError(t, json.Unmarshal(output, &cfg))
+			for _, share := range cfg.FS {
+				name := microVMVirtiofsSocket
+				if share.Tag == microvm.BindsTag {
+					name = microVMBindsSocket
+				}
+				require.Equal(t, filepath.Join("/new/state", name), share.Socket)
+			}
+		})
+	}
 }

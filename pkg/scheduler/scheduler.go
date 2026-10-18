@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -1157,7 +1158,8 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	var checkpoint *types.Checkpoint
 	if candidate := availableCheckpoint(request); canSkipCheckpoint(request) ||
 		(candidate != nil && !candidate.IsFilesystemOnly() &&
-			(candidate.RequiresGPUDeviceSpec() || requiresGPU && candidate.CompatibilityKey != "")) {
+			(request.UseVM || strings.TrimSpace(candidate.Runtime) == types.ContainerRuntimeMicroVM.String() ||
+				candidate.RequiresGPUDeviceSpec() || requiresGPU && candidate.CompatibilityKey != "")) {
 		checkpoint = candidate
 	}
 	gpuCount := gpuCountForScheduling(request)
@@ -1250,12 +1252,34 @@ func canSkipCheckpoint(request *types.ContainerRequest) bool {
 }
 
 func hostMatchesCheckpoint(checkpoint *types.Checkpoint, worker *types.Worker) bool {
+	if checkpoint != nil && !checkpoint.IsFilesystemOnly() &&
+		(strings.TrimSpace(checkpoint.Runtime) == types.ContainerRuntimeMicroVM.String() || workerRuntime(worker) == types.ContainerRuntimeMicroVM.String()) {
+		// Main's historical CPU VM checkpoints were keyless. Keep those on
+		// reported legacy workers; the explicit new prefix identifies workers
+		// requiring exact guest executable and filesystem ABI compatibility.
+		if checkpoint.CompatibilityKey == "" {
+			return validCheckpointProfile(worker.CheckpointCompatibilityKey, types.CheckpointCompatibilityLegacyPrefix)
+		}
+		return (validCheckpointProfile(checkpoint.CompatibilityKey, types.CheckpointCompatibilityMicroVMPrefix) ||
+			validCheckpointProfile(checkpoint.CompatibilityKey, types.CheckpointCompatibilityMicroVMMetadataPrefix) ||
+			validCheckpointProfile(checkpoint.CompatibilityKey, types.CheckpointCompatibilityLegacyPrefix)) &&
+			checkpoint.CompatibilityKey == worker.CheckpointCompatibilityKey
+	}
 	// Checkpoints with NVIDIA device entries need a reported profile during rolling upgrades.
 	if checkpoint == nil || checkpoint.CompatibleWithWorker(worker.CheckpointCompatibilityKey) {
 		return true
 	}
 	return worker.Status == types.WorkerStatusPending && worker.CheckpointCompatibilityKey == "" &&
 		!checkpoint.RequiresGPUDeviceSpec()
+}
+
+func validCheckpointProfile(key, prefix string) bool {
+	profile, ok := strings.CutPrefix(key, prefix)
+	if !ok || len(profile) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(profile)
+	return err == nil
 }
 
 func checkpointRuntime(request *types.ContainerRequest) string {

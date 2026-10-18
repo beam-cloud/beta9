@@ -266,6 +266,11 @@ func (s *Service) update(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
+	status, err := s.launchStatus(v)
+	if err != nil {
+		return apiError(err)
+	}
+
 	oldSpec := v.Spec
 	if req.IdleTimeout != nil {
 		v.Spec.IdleTimeout = *req.IdleTimeout
@@ -298,7 +303,7 @@ func (s *Service) update(c echo.Context) error {
 	// Apply through the existing worker firewall, and carry this same policy
 	// on every cold boot. Updating a stopping guest would race disk shutdown.
 	if (req.BlockNetwork != nil || req.AllowList != nil) && v.ContainerID != "" {
-		if v.Status != "running" {
+		if status != "running" {
 			return echo.NewHTTPError(http.StatusConflict, "wait for the VM to finish starting or stopping before updating its network")
 		}
 
@@ -325,7 +330,9 @@ func (s *Service) update(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, s.response(v))
+	response := s.response(v)
+	response.Status = status
+	return c.JSON(http.StatusOK, response)
 }
 
 func (s *Service) applyNetwork(ctx context.Context, v *types.VM, spec types.VMSpec) error {

@@ -2719,6 +2719,10 @@ func startSilentOutputHeartbeat(ctx context.Context, outputLogger *slog.Logger, 
 }
 
 func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, localLayoutPath, outputPath string, checkpointMiB int64) error {
+	return c.createOCIImageWithProgressAndCredentials(ctx, outputLogger, request, imageRef, localLayoutPath, outputPath, checkpointMiB, c.getCredentialProviderForImage(ctx, request.ImageId, request))
+}
+
+func (c *ImageClient) createOCIImageWithProgressAndCredentials(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, localLayoutPath, outputPath string, checkpointMiB int64, credentials clipCommon.RegistryCredentialProvider) error {
 	outputLogger.Info(fmt.Sprintf("Indexing image (%d concurrent layers)...\n", imageLayerPrepareConcurrency))
 	progressChan := make(chan clip.OCIIndexProgress, 100)
 	reporter := newImageIndexProgressReporter(outputLogger)
@@ -2752,7 +2756,7 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		OutputPath:       outputPath,
 		CheckpointMiB:    checkpointMiB,
 		ProgressChan:     progressChan,
-		CredProvider:     c.getCredentialProviderForImage(ctx, request.ImageId, request),
+		CredProvider:     credentials,
 		ContentCache:     newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build", nil),
 		ContentCacheDir:  c.layerSpoolDir(),
 		SeedDecompressed: true, // first use of a new layer reads page-wise from the cache instead of materializing it

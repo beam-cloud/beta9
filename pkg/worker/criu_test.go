@@ -2964,8 +2964,12 @@ func TestCheckpointSelectionKeepsCompatibleLegacyGPUVariant(t *testing.T) {
 
 func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {
 	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "vmlinux"), []byte("kernel-a"), 0644))
+	initPath := filepath.Join(dir, "guest-init")
+	require.NoError(t, os.WriteFile(initPath, []byte("original init"), 0755))
 	for tool, output := range map[string]string{
 		"cloud-hypervisor": "cloud-hypervisor v53.0",
+		"virtiofsd":        "virtiofsd synthetic fixture",
 		"runsc":            "runsc version release-test.1",
 		"criu":             "Version: 4.2",
 		"nvidia-smi":       "NVIDIA GeForce RTX 4090, 580.126.18",
@@ -2976,15 +2980,27 @@ func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {
 	for _, name := range []string{"runc", "gvisor", "microvm"} {
 		t.Run(name, func(t *testing.T) {
 			worker := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: name}, gpuCount: 1}
-			before, err := worker.readCheckpointHostProfile()
+			before, err := worker.readCheckpointHostProfileWithGuestFiles(initPath, filepath.Join(dir, "vmlinux"))
 			require.NoError(t, err)
 			require.NotEmpty(t, before.CPU)
 			worker.config.Worker.ImageTag = "next-worker-release"
 			worker.config.Worker.ContainerResourceLimits.MemoryEnforced = true
 			worker.gpuCount = 8
-			after, err := worker.readCheckpointHostProfile()
+			after, err := worker.readCheckpointHostProfileWithGuestFiles(initPath, filepath.Join(dir, "vmlinux"))
 			require.NoError(t, err)
 			require.Equal(t, before.key(), after.key())
+			if name == "microvm" {
+				require.Contains(t, before.Version, " beamfs-v8:")
+				mainProfile, customDaemonProfile := before, before
+				mainProfile.Version = strings.Split(before.Version, " beamfs-v8:")[0]
+				customDaemonProfile.Version = strings.Replace(before.Version, " beamfs-v8:", " beamfs-v5:", 1)
+				require.NotEqual(t, before.key(), mainProfile.key(), "one-share main checkpoints use a different ABI")
+				require.NotEqual(t, before.key(), customDaemonProfile.key(), "old custom-daemon checkpoints differ even with identical init bytes")
+				require.NoError(t, os.WriteFile(initPath, []byte("changed init"), 0755))
+				changed, err := worker.readCheckpointHostProfileWithGuestFiles(initPath, filepath.Join(dir, "vmlinux"))
+				require.NoError(t, err)
+				require.NotEqual(t, before.key(), changed.key(), "guest executable changes must invalidate memory checkpoints")
+			}
 		})
 	}
 }
@@ -3004,11 +3020,49 @@ func TestMicroVMNativeCheckpointManagerDoesNotRequireCRIU(t *testing.T) {
 	t.Setenv("PATH", "")
 	manager, err := InitializeMicroVMCheckpointManager(t.TempDir())
 	require.NoError(t, err)
-	worker := &Worker{criuManager: manager}
+	worker := &Worker{criuManager: manager, checkpointCompatibilityKey: "v1:guest-abi"}
 	rt := NewMockRuntime(types.ContainerRuntimeMicroVM.String(), runtime.Capabilities{CheckpointRestore: true})
-	request := &types.ContainerRequest{Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: "microvm"}}
+	request := &types.ContainerRequest{Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: "microvm", CompatibilityKey: worker.checkpointCompatibilityKey}}
 	require.True(t, worker.supportsCheckpointRestore(request, rt))
 	require.True(t, worker.canRestoreCheckpoint(request, rt))
 	worker.criuManager = nil
 	require.False(t, worker.canRestoreCheckpoint(request, rt), "storage manager is still required")
+}
+
+func TestCheckpointHostProfileMicroVMRequiresGuestInit(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "vmlinux"), []byte("kernel-a"), 0644))
+	for _, name := range []string{"cloud-hypervisor", "runsc", "criu", "virtiofsd"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\necho runtime-version\n"), 0755))
+	}
+	t.Setenv("PATH", dir)
+	worker := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: "microvm"}}
+	_, err := worker.readCheckpointHostProfileWithGuestFiles(filepath.Join(dir, "missing-init"), filepath.Join(dir, "vmlinux"))
+	require.ErrorContains(t, err, "read guest init for checkpoint compatibility")
+	initPath := filepath.Join(dir, "init")
+	require.NoError(t, os.WriteFile(initPath, []byte("init-a"), 0755))
+	before, err := worker.readCheckpointHostProfileWithGuestFiles(initPath, filepath.Join(dir, "vmlinux"))
+	require.NoError(t, err)
+	require.True(t, strings.Contains(before.Version, ";clip-metadata-links-v1"))
+	oldMetadata := before
+	oldMetadata.Version = strings.Replace(before.Version, ";clip-metadata-links-v1", "", 1)
+	require.NotEqual(t, before.key(), oldMetadata.key(), "corrected immutable CLIP link metadata requires its own checkpoint profile")
+	require.NoError(t, os.WriteFile(initPath, []byte("init-b"), 0755))
+	after, err := worker.readCheckpointHostProfileWithGuestFiles(initPath, filepath.Join(dir, "vmlinux"))
+	require.NoError(t, err)
+	require.NotEqual(t, before.key(), after.key(), "CPU-only VM checkpoints must include init identity")
+	require.True(t, strings.HasPrefix(after.key(), types.CheckpointCompatibilityMicroVMMetadataPrefix))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "virtiofsd"), []byte("changed daemon bytes"), 0755))
+	changedDaemon, err := worker.readCheckpointHostProfileWithGuestFiles(initPath, filepath.Join(dir, "vmlinux"))
+	require.NoError(t, err)
+	require.NotEqual(t, after.key(), changedDaemon.key(), "exact daemon bytes must invalidate memory checkpoints")
+	require.NoError(t, os.Remove(filepath.Join(dir, "virtiofsd")))
+	_, err = worker.readCheckpointHostProfileWithGuestFiles(initPath, filepath.Join(dir, "vmlinux"))
+	require.ErrorContains(t, err, "find virtiofsd for checkpoint compatibility")
+	for _, name := range []string{"runc", "gvisor"} {
+		worker.runtime = &mockRuntime{name: name}
+		profile, err := worker.readCheckpointHostProfileWithGuestFiles(filepath.Join(dir, "missing-init"), filepath.Join(dir, "vmlinux"))
+		require.NoError(t, err)
+		require.Equal(t, "runtime-version", profile.Version)
+	}
 }

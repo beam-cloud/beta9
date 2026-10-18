@@ -1,0 +1,77 @@
+fuse: scope unsupported ioctl caching to the bundled virtiofs transport
+
+Experimental guest-kernel change for Linux 6.12.111. It adapts the unmerged
+September 14, 2026 "fuse: Cache unsupported ioctl requests" submission:
+https://lists.openwall.net/linux-kernel/2026/09/14/2815
+
+Keep ordinary /dev/fuse and CUSE behavior unchanged: request-level ENOSYS
+is cached only for a connection opted in by virtio_fs_get_tree(). The
+bundled server rejects the ioctl operation globally. Command-level errors
+in fuse_ioctl_out.result, including ENOSYS, never enable the cache.
+
+This is a transport policy for the bundled server, not a general FUSE
+protocol guarantee. A future virtiofs server that supports per-command
+ioctls must disable/review this policy. No wire flags, mount-tag matching,
+permission bypass or user-visible success fabrication is introduced.
+
+--- a/fs/fuse/fuse_i.h
++++ b/fs/fuse/fuse_i.h
+@@ -759,6 +759,10 @@
+ 	/** Is flush not implemented by fs? */
+ 	unsigned no_flush:1;
+ 
++	/** Transport opt-in and learned unsupported state for ioctl requests. */
++	unsigned cache_no_ioctl:1;
++	unsigned no_ioctl:1;
++
+ 	/** Is setxattr not implemented by fs? */
+ 	unsigned no_setxattr:1;
+ 
+--- a/fs/fuse/ioctl.c
++++ b/fs/fuse/ioctl.c
+@@ -20,9 +20,12 @@
+ 
+ 	ret = fuse_simple_request(fm, args);
+ 
+-	/* Translate ENOSYS, which shouldn't be returned from fs */
+-	if (ret == -ENOSYS)
++	/* Cache request-level ENOSYS only on the opted-in transport. */
++	if (ret == -ENOSYS) {
++		if (fm->fc->cache_no_ioctl)
++			fm->fc->no_ioctl = 1;
+ 		ret = -ENOTTY;
++	}
+ 
+ 	if (ret >= 0 && outarg->result == -ENOSYS)
+ 		outarg->result = -ENOTTY;
+@@ -233,6 +236,9 @@
+ 	struct iov_iter ii;
+ 	struct fuse_args_pages ap = {};
+ 
++	if (fm->fc->no_ioctl)
++		return -ENOTTY;
++
+ #if BITS_PER_LONG == 32
+ 	inarg.flags |= FUSE_IOCTL_32BIT;
+ #else
+@@ -493,6 +499,9 @@
+ 	if (!S_ISREG(inode->i_mode) && !isdir)
+ 		return ERR_PTR(-ENOTTY);
+ 
++	if (fm->fc->no_ioctl)
++		return ERR_PTR(-ENOTTY);
++
+ 	return fuse_file_open(fm, get_node_id(inode), O_RDONLY, isdir);
+ }
+ 
+--- a/fs/fuse/virtio_fs.c
++++ b/fs/fuse/virtio_fs.c
+@@ -1697,6 +1697,8 @@
+ 	fc->auto_submounts = true;
+ 	fc->sync_fs = true;
+ 	fc->use_pages_for_kvec_io = true;
++	/* The bundled virtiofs server implements no ioctl commands. */
++	fc->cache_no_ioctl = true;
+ 
+ 	/* Tell FUSE to split requests that exceed the virtqueue's size */
+ 	fc->max_pages_limit = min_t(unsigned int, fc->max_pages_limit,

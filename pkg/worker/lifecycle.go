@@ -873,9 +873,12 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	return nil
 }
 
-// Historical GPU checkpoints use the runtime's checks, but cannot displace
-// running workloads before their compatibility is known.
+// Validate memory checkpoint compatibility before preparing images/disks or
+// allowing a restore to displace running workloads.
 func (s *Worker) validateCheckpointRestorePlacement(request *types.ContainerRequest) error {
+	if err := s.validateMicroVMCheckpointCompatibility(request, s.runtime); err != nil {
+		return err
+	}
 	if !request.Stub.Type.IsDeployment() && hasAvailableCheckpoint(request) && !request.Checkpoint.IsFilesystemOnly() &&
 		request.Checkpoint.CompatibilityKey != "" &&
 		(strings.HasPrefix(s.checkpointCompatibilityKey, types.CheckpointCompatibilityGPUDevicesPrefix) || request.Checkpoint.RequiresGPUDeviceSpec()) &&
@@ -1320,7 +1323,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				startupCPU.Period = nil
 				// gVisor fixes the guest CPU topology when the sandbox starts;
 				// a later resource update cannot change what nproc reports.
-				if !requestForcesResourceLimits(request) {
+				// MicroVM vCPU count is explicit, so retain its reserved host CPUs.
+				if !requestForcesResourceLimits(request) && (s.runtime == nil || s.runtime.Name() != types.ContainerRuntimeMicroVM.String()) {
 					startupCPU.Cpus = ""
 				}
 				spec.Linux.Resources.CPU = &startupCPU
