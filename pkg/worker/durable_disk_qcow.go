@@ -681,60 +681,73 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		return nil, err
 	}
 
-	// A disk with no published generation yet always seals: callers pin
-	// machine state to a snapshot ID, so the first snapshot must produce one
-	// even if nothing was written. Otherwise an unchanged head is skipped even
-	// on the final sync: the last generation is already durable, and a stop
-	// that follows a terminal checkpoint would otherwise publish an empty
-	// layer every time, doubling the chain depth each restore has to resolve.
-	var sealed []disk.SealedLayer
-	if mode == durableDiskSyncCheckpoint {
-		sealed = volume.Unpublished()
-	}
-	if len(sealed) == 0 {
-		var skipped bool
-		if sealed, skipped, err = sealQcowVolume(ctx, volume, latest == nil); err != nil {
-			return nil, err
-		}
-		if skipped {
-			log.Debug().Str("disk", mount.DurableDisk.Name).Msg("qcow durable disk is unchanged; keeping the last generation")
-			return latest, nil
-		}
-	}
-
-	parentID := sealed[0].ParentSnapshotID
 	var published *types.DiskSnapshot
-	for _, layer := range sealed {
-		row, manifest, err := s.publishQcowLayer(ctx, request, mount, volume, store, layer.Path, parentID, latest)
-		if err != nil {
-			return published, err
-		}
-		if err := volume.MarkPublished(layer.Path, row.ExternalId); err != nil {
-			if errors.Is(err, disk.ErrNotCheckpointed) {
-				s.withdrawQcowSnapshot(ctx, request, row, err)
+	publish := func(sealed []disk.SealedLayer) error {
+		parentID := sealed[0].ParentSnapshotID
+		for _, layer := range sealed {
+			row, manifest, err := s.publishQcowLayer(ctx, request, mount, volume, store, layer.Path, parentID, latest)
+			if err != nil {
+				return err
 			}
-			return published, err
+			if err := volume.MarkPublished(layer.Path, row.ExternalId); err != nil {
+				if errors.Is(err, disk.ErrNotCheckpointed) {
+					s.withdrawQcowSnapshot(ctx, request, row, err)
+				}
+				return err
+			}
+			s.reportQcowChainContent(request, s.appendQcowChain(key, qcowChainEntry{row: row, manifest: manifest}))
+			published, latest, parentID = row, row, row.ExternalId
 		}
-		s.reportQcowChainContent(request, s.appendQcowChain(key, qcowChainEntry{row: row, manifest: manifest}))
-		published, latest, parentID = row, row, row.ExternalId
+		return nil
 	}
+	if err := snapshotQcowVolume(ctx, volume, mode, latest == nil, publish); err != nil {
+		return published, err
+	}
+	return latest, nil
+}
 
-	// Fold published layers into the base so a long-running machine can be
-	// snapshotted indefinitely without hitting the local chain depth cap. The
-	// merge holds off the next seal, so it runs just after a checkpoint, when
-	// a journal has the most room for the writes that arrive meanwhile.
-	if volume.Depth() > disk.DefaultFlattenDepth {
-		if err := volume.Compact(ctx); err != nil {
-			log.Warn().Err(err).Str("disk", mount.DurableDisk.Name).Msg("failed to compact qcow backing chain")
+type qcowSnapshotVolume interface {
+	Unpublished() []disk.SealedLayer
+	Seal(context.Context, bool) ([]disk.SealedLayer, bool, error)
+	Compact(context.Context) error
+	Depth() int
+}
+
+// Drain failed publications before another pivot can fill the local chain.
+// Explicit and final snapshots must also capture the current head: publishing
+// a backlog alone would omit writes made since the last successful seal.
+func snapshotQcowVolume(ctx context.Context, volume qcowSnapshotVolume, mode durableDiskSyncMode, force bool, publish func([]disk.SealedLayer) error) error {
+	checkpoint := func(sealed []disk.SealedLayer) error {
+		if err := publish(sealed); err != nil {
+			return err
 		}
+		if volume.Depth() > disk.DefaultFlattenDepth {
+			if err := volume.Compact(ctx); err != nil {
+				log.Warn().Err(err).Msg("failed to compact qcow backing chain")
+			}
+		}
+		return nil
 	}
-	return published, nil
+	if pending := volume.Unpublished(); len(pending) > 0 {
+		if err := checkpoint(pending); err != nil {
+			return err
+		}
+		if mode == durableDiskSyncCheckpoint {
+			return nil
+		}
+		force = false // Publishing the backlog established the first generation.
+	}
+	sealed, skipped, err := sealQcowVolume(ctx, volume, force)
+	if err != nil || skipped {
+		return err
+	}
+	return checkpoint(sealed)
 }
 
 // sealQcowVolume seals the volume, compacting first when its chain is at the
 // depth cap: compaction follows each publish, so nothing else would retry the
 // failed ones that left it there.
-func sealQcowVolume(ctx context.Context, volume *disk.Volume, force bool) ([]disk.SealedLayer, bool, error) {
+func sealQcowVolume(ctx context.Context, volume qcowSnapshotVolume, force bool) ([]disk.SealedLayer, bool, error) {
 	sealed, skipped, err := volume.Seal(ctx, force)
 	if !errors.Is(err, disk.ErrMaxChainDepth) {
 		return sealed, skipped, err
