@@ -183,7 +183,7 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 
 	network, root, extra, err := m.prepare(ctx, inst, spec, "")
 	if err != nil {
-		return -1, err
+		return int(types.ContainerExitCodeStartupFailed), err
 	}
 	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra)
 	return m.boot(ctx, inst, spec, args, opts.OutputWriter, opts.ErrorWriter, opts.Started)
@@ -203,21 +203,23 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 	network, root, extra, err := m.prepare(ctx, inst, spec, opts.ImagePath)
 	if err != nil {
 		inst.stopProcesses()
-		return -1, err
+		return int(types.ContainerExitCodeStartupFailed), err
 	}
 	inst.ctrl.network = &network
 	snapshotDir, err := m.stageSnapshot(inst, opts.ImagePath, network, root, extra)
 	if err != nil {
 		inst.stopProcesses()
-		return -1, fmt.Errorf("stage snapshot: %w", err)
+		return int(types.ContainerExitCodeStartupFailed), fmt.Errorf("stage snapshot: %w", err)
 	}
 
 	booted := make(chan error, 1)
+	bootExitCode := -1
 	go func() {
 		defer inst.stopProcesses()
 		code, err := m.boot(ctx, inst, spec, microVMRestoreArgs(inst.stateDir, snapshotDir), opts.OutputWriter, nil, nil)
 		inst.finishExit(code, err)
 		log.Info().Str("container_id", containerID).Int("exit_code", code).Err(err).Msg("restored microvm exited")
+		bootExitCode = code
 		booted <- err
 	}()
 	select {
@@ -230,7 +232,7 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 		if err == nil {
 			err = errors.New("microvm exited before the restored guest reported in")
 		}
-		return -1, err
+		return bootExitCode, err
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	}
@@ -430,7 +432,7 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	cmd := exec.Command(m.cfg.MicroVMHypervisorPath, args...)
 	cgroupFD, err := inst.cgroupAttr(cmd)
 	if err != nil {
-		return -1, err
+		return int(types.ContainerExitCodeStartupFailed), err
 	}
 	defer cgroupFD.Close()
 	var out io.Writer = inst.console
@@ -457,7 +459,7 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	// Cloud Hypervisor opens the tap by name, so it must start in the container's netns.
 	spawnStart := time.Now()
 	if err := inNetworkNamespace(inst.netnsPath, cmd.Start); err != nil {
-		return -1, fmt.Errorf("start cloud-hypervisor: %w", err)
+		return int(types.ContainerExitCodeStartupFailed), fmt.Errorf("start cloud-hypervisor: %w", err)
 	}
 	inst.mu.Lock()
 	inst.hypervisor = cmd

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"os/exec"
@@ -13,9 +14,28 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
+	"github.com/beam-cloud/beta9/pkg/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMicroVMPreparationFailureIsRetryableStartupFailure(t *testing.T) {
+	bundle := t.TempDir()
+	data, err := json.Marshal(&specs.Spec{
+		Root: &specs.Root{Path: t.TempDir()}, Linux: &specs.Linux{},
+		Process: &specs.Process{Args: []string{"/bin/true"}, Cwd: "/"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(bundle, "config.json"), data, 0600))
+	vm := &MicroVM{cfg: Config{MicroVMStateRoot: t.TempDir()}, vms: map[string]*microVMInstance{}}
+	// The missing network namespace fails before any guest process starts.
+	code, err := vm.Run(context.Background(), "cold", bundle, nil)
+	require.ErrorContains(t, err, "network namespace")
+	require.Equal(t, int(types.ContainerExitCodeStartupFailed), code)
+	code, err = vm.Restore(context.Background(), "restore", &RestoreOpts{BundlePath: bundle, ImagePath: t.TempDir()})
+	require.ErrorContains(t, err, "network namespace")
+	require.Equal(t, int(types.ContainerExitCodeStartupFailed), code)
+}
 
 func TestGuestFilesystemConnectRetriesBeforeSendingRequest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vsock.sock")

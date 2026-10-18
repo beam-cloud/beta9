@@ -2684,48 +2684,61 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 	require.Contains(t, output.String(), restoreErr.Error())
 }
 
-func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *testing.T) {
-	containerID := "container-restore-incompatible-host"
-	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
+func TestAttemptRestoreCheckpointKeepsUnstartedCheckpointAvailable(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		code   int
+		err    error
+		output string
+	}{
+		{"host", -1, &ErrCheckpointHostIncompatible{Stderr: "CPU capabilities do not match run time"}, "incompatible CPU"},
+		{"setup", int(types.ContainerExitCodeStartupFailed), assert.AnError, assert.AnError.Error()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			containerID := "container-restore-" + test.name
+			t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
 
-	backendRepoClient := &fakeBackendRepoClient{}
-	worker := &Worker{
-		criuManager: &restoreErrorCRIUManager{
-			exitCode: -1,
-			err:      &ErrCheckpointHostIncompatible{Stderr: "CPU capabilities do not match run time"},
-		},
-		backendRepoClient:  backendRepoClient,
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
+			backendRepoClient := &fakeBackendRepoClient{}
+			worker := &Worker{
+				criuManager: &restoreErrorCRIUManager{
+					exitCode: test.code,
+					err:      test.err,
+				},
+				backendRepoClient:  backendRepoClient,
+				containerInstances: common.NewSafeMap[*ContainerInstance](),
+			}
+			worker.containerInstances.Set(containerID, &ContainerInstance{
+				Id:      containerID,
+				Runtime: &mockRuntime{name: "runc"},
+			})
+			request := &types.ContainerRequest{
+				ContainerId: containerID,
+				ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
+				Checkpoint: &types.Checkpoint{
+					CheckpointId: "checkpoint-incompatible-host",
+					Status:       string(types.CheckpointStatusAvailable),
+				},
+			}
+			var output strings.Builder
+
+			exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
+				context.Background(),
+				request,
+				slog.New(slog.NewTextHandler(&output, nil)),
+				common.NewOutputWriter(func(message string) { output.WriteString(message) }),
+				make(chan int, 1),
+				make(chan int, 1),
+			)
+
+			require.ErrorIs(t, err, test.err)
+			require.False(t, restored)
+			require.False(t, started)
+			require.Equal(t, test.code, exitCode)
+			require.Equal(t, 0, backendRepoClient.updateCalls)
+			require.Contains(t, output.String(), test.output)
+
+		})
 	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: &mockRuntime{name: "runc"},
-	})
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-incompatible-host",
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-	}
-	var output strings.Builder
-
-	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
-		context.Background(),
-		request,
-		slog.New(slog.NewTextHandler(&output, nil)),
-		common.NewOutputWriter(func(message string) { output.WriteString(message) }),
-		make(chan int, 1),
-		make(chan int, 1),
-	)
-
-	require.True(t, IsCheckpointHostIncompatible(err))
-	require.False(t, restored)
-	require.False(t, started)
-	require.Equal(t, -1, exitCode)
-	require.Equal(t, 0, backendRepoClient.updateCalls)
-	require.Contains(t, output.String(), "incompatible CPU")
 }
 
 func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {

@@ -815,7 +815,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 				err = errors.Join(err, &checkpointRestoreCleanupError{err: cleanupErr})
 			}
 		}
-		if !hostIncompatible && !durableMountValidationFailed && !runscVersionFallback && !errors.Is(err, errGPUUnhealthy) {
+		if exitCode != int(types.ContainerExitCodeStartupFailed) && !hostIncompatible && !durableMountValidationFailed && !runscVersionFallback && !errors.Is(err, errGPUUnhealthy) {
 			s.markCheckpointRestoreFailed(request, checkpoint)
 		}
 

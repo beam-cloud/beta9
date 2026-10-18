@@ -2018,7 +2018,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	isOOMKilled := atomic.Bool{}
 	go func() {
-		pid := <-monitorPIDChan
+		pid, ok := <-monitorPIDChan
+		if !ok || pid <= 0 {
+			return
+		}
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
