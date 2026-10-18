@@ -76,6 +76,32 @@ func TestPortForwardsLoopbackWithIndependentHalfCloses(t *testing.T) {
 	}
 }
 
+func TestPortForwardsIPv6Loopback(t *testing.T) {
+	target, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	defer target.Close()
+	go func() {
+		conn, err := target.Accept()
+		if err == nil {
+			defer conn.Close()
+			conn.Write([]byte("ipv6"))
+		}
+	}()
+	client, done := portTestStream(t)
+	if err := ConnectPort(client, uint32(target.Addr().(*net.TCPAddr).Port)); err != nil {
+		t.Fatal(err)
+	}
+	client.CloseWrite()
+	if got, err := io.ReadAll(client); err != nil || string(got) != "ipv6" {
+		t.Fatalf("IPv6 response: %q, %v", got, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPortRejectsFailedConnections(t *testing.T) {
 	target, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {

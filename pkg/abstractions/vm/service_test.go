@@ -777,6 +777,8 @@ func actionContext(info *auth.AuthInfo, name, action, body string) (*auth.HttpAu
 
 func TestActivityLeasesAreIndependentAndExplicitlyReleased(t *testing.T) {
 	s, v, info, _, _ := fixture()
+	// A background snapshot owns the lifecycle lock throughout this test.
+	s.repo = &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
 	redis := miniredis.RunT(t)
 	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
 	require.NoError(t, err)

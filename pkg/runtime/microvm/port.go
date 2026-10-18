@@ -56,7 +56,11 @@ func ServePort(conn portConn) error {
 	if port == 0 {
 		err = fmt.Errorf("invalid TCP port 0")
 	} else {
-		target, err = net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 2*time.Second)
+		// Minimal images may have no localhost entry or resolver configuration.
+		target, err = net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second)
+		if err != nil {
+			target, err = net.DialTimeout("tcp6", fmt.Sprintf("[::1]:%d", port), 2*time.Second)
+		}
 	}
 	if err != nil {
 		_, _ = conn.Write([]byte{1})

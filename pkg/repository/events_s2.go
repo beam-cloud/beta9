@@ -17,6 +17,7 @@ import (
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -30,6 +31,7 @@ const (
 	s2EventHistoryReadLimit   = uint64(1000)
 	s2EventQueueSize          = 16384
 	s2EventBatchSize          = 256
+	s2EventAppendConcurrency  = 16
 	s2EventWriteTimeout       = 5 * time.Second
 	s2EventEnqueueTimeout     = 250 * time.Millisecond
 	s2EventFlushInterval      = 100 * time.Millisecond
@@ -248,18 +250,9 @@ func (r *ScopedS2EventRepository) appendEventBatch(events []cloudevents.Event) e
 
 	var streamErrs []error
 	for target, recordsByStream := range recordsByTarget {
-		for streamName, records := range recordsByStream {
-			if len(records) == 0 {
-				continue
-			}
-			if err := appendScopedS2Records(target.basin, streamName, records); err != nil {
-				if isS2EventStreamDeletionPending(err) {
-					log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping scoped event batch for stream pending deletion")
-					continue
-				}
-				streamErrs = append(streamErrs, fmt.Errorf("append %d scoped events to s2 stream %q: %w", len(records), streamName, err))
-			}
-		}
+		streamErrs = append(streamErrs, appendS2EventStreams(recordsByStream, func(name s2.StreamName, records []s2.AppendRecord) error {
+			return appendScopedS2Records(target.basin, name, records)
+		}))
 	}
 	return errors.Join(streamErrs...)
 }
@@ -361,21 +354,30 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 		}
 	}
 
-	var streamErrs []error
+	return appendS2EventStreams(recordsByStream, r.appendRecordsForWrite)
+}
+
+// Batches remain sequential, so each stream keeps its event order. Independent
+// streams can append concurrently without a large fleet delaying telemetry.
+func appendS2EventStreams(recordsByStream map[s2.StreamName][]s2.AppendRecord, appendRecords func(s2.StreamName, []s2.AppendRecord) error) error {
+	var group errgroup.Group
+	group.SetLimit(s2EventAppendConcurrency)
 	for streamName, records := range recordsByStream {
 		if len(records) == 0 {
 			continue
 		}
-		if err := r.appendRecordsForWrite(streamName, records); err != nil {
-			if isS2EventStreamDeletionPending(err) {
-				log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
-				continue
+		group.Go(func() error {
+			if err := appendRecords(streamName, records); err != nil {
+				if isS2EventStreamDeletionPending(err) {
+					log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
+					return nil
+				}
+				return fmt.Errorf("append %d events to s2 stream %q: %w", len(records), streamName, err)
 			}
-			streamErrs = append(streamErrs, fmt.Errorf("append %d events to s2 stream %q: %w", len(records), streamName, err))
-		}
+			return nil
+		})
 	}
-
-	return errors.Join(streamErrs...)
+	return group.Wait()
 }
 
 func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.AppendRecord, []s2.StreamName, error) {

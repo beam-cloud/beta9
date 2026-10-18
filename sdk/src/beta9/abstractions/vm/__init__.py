@@ -252,6 +252,11 @@ class VM:
 
     def _api(self, method, path="", *, timeout=240, **kwargs):
         deadline = time.monotonic() + timeout
+        transport_retries = 0
+        body = kwargs.get("json") or {}
+        replayable = method == "GET" or (
+            method == "POST" and (path.endswith("/start") or (not path and body.get("request_id")))
+        )
         while True:
             try:
                 return (self._vm_http or self._service.http).json(
@@ -261,6 +266,17 @@ class VM:
                     **kwargs,
                 )
             except GatewayHTTPError as exc:
+                # Keyed creation, reads and start can be replayed even when
+                # the gateway committed before its connection was interrupted.
+                if (
+                    exc.status == 0
+                    and replayable
+                    and transport_retries < 2
+                    and time.monotonic() < deadline
+                ):
+                    transport_retries += 1
+                    time.sleep(0.25)
+                    continue
                 # Advisory-lock conflicts have no side effects. Wait for the
                 # in-flight operation, while preserving other 409 errors.
                 if (

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -21,6 +22,46 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestS2EventAppendsAreConcurrentAndBounded(t *testing.T) {
+	streams := map[s2.StreamName][]s2.AppendRecord{"empty": nil}
+	for i := range 128 {
+		streams[s2.StreamName(fmt.Sprintf("stream-%d", i))] = []s2.AppendRecord{{Body: []byte("event")}}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{}, len(streams))
+	var calls atomic.Int32
+	failure := errors.New("one stream unavailable")
+	done := make(chan error, 1)
+	go func() {
+		done <- appendS2EventStreams(streams, func(name s2.StreamName, _ []s2.AppendRecord) error {
+			calls.Add(1)
+			started <- struct{}{}
+			<-ctx.Done()
+			if name == "stream-0" {
+				return failure
+			}
+			return nil
+		})
+	}()
+	for range s2EventAppendConcurrency {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("independent streams did not append concurrently")
+		}
+	}
+	require.EqualValues(t, s2EventAppendConcurrency, calls.Load())
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, failure)
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream appends did not finish")
+	}
+	require.EqualValues(t, 128, calls.Load(), "one failed stream must not prevent the others from appending")
+}
 
 func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}

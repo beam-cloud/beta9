@@ -558,7 +558,17 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		return nil, false, err
 	}
 
-	if err := client.addOverlay(ctx, newNode, qsdFileNodePrefix+newNode, newHeadPath); err != nil {
+	err = client.addOverlay(ctx, newNode, qsdFileNodePrefix+newNode, newHeadPath)
+	if err != nil {
+		// Older workers left compacted nodes open. Reclaim those references
+		// before retrying a daemon already at its descriptor limit.
+		if cleanupErr := client.releaseUnusedNodes(ctx, v.fmtNode); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		} else {
+			err = client.addOverlay(ctx, newNode, qsdFileNodePrefix+newNode, newHeadPath)
+		}
+	}
+	if err != nil {
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, fmt.Errorf("add overlay for volume %s: %w", state.Key, err)
 	}

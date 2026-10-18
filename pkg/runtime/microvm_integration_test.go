@@ -832,7 +832,7 @@ with socket.socket() as listener:
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	conn, err := rt.DialGuestPort(ctx, vm.id, 3773)
-	require.NoError(t, err)
+	require.NoError(t, err, "guest console:\n%s", vm.output.String())
 	defer conn.Close()
 	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
 	payload := bytes.Repeat([]byte{0, 1, 128, 255}, 20_000)

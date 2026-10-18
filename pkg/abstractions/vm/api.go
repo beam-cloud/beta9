@@ -469,9 +469,9 @@ func (s *Service) action(c echo.Context) error {
 		return err
 	}
 
-	// Issuing a browser credential only reads the VM. It must not contend
-	// with startup, reconciliation or another desktop/terminal sign-in.
-	if c.Param("action") == "access-session" {
+	// Browser credentials and activity updates do not change lifecycle state.
+	// Activity has its own column, so snapshots must not block lease renewals.
+	if c.Param("action") == "access-session" || c.Param("action") == "touch" {
 		v, err := s.repo.GetVM(ctx, info.Workspace.Id, c.Param("name"))
 		if err != nil {
 			return apiError(err)
@@ -479,7 +479,28 @@ func (s *Service) action(c echo.Context) error {
 		if v.DesiredState == types.VMStateDeleted {
 			return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 		}
-		return s.createAccessSession(c, v, req.Port, req.TTL)
+		if c.Param("action") == "access-session" {
+			return s.createAccessSession(c, v, req.Port, req.TTL)
+		}
+		if lease := c.QueryParam("lease"); lease != "" {
+			if _, err := uuid.Parse(lease); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, "invalid activity lease")
+			}
+			if c.QueryParam("release") == "1" {
+				if s.rdb != nil {
+					err = s.rdb.ZRem(ctx, activityKey(v.ID), lease).Err()
+				}
+			} else {
+				err = s.renewActivity(ctx, v.ID, lease)
+			}
+			if err != nil {
+				return apiError(err)
+			}
+		}
+		if err := s.repo.TouchVM(ctx, v.ID); err != nil {
+			return apiError(err)
+		}
+		return s.launchResponse(c, http.StatusOK, v)
 	}
 
 	v, unlock, err := s.lockedVM(ctx, info.Workspace.Id, c.Param("name"))
@@ -565,25 +586,6 @@ func (s *Service) action(c echo.Context) error {
 		return c.JSON(http.StatusCreated, s.response(child))
 	case "expose", "unexpose", "bind":
 		if err := s.configurePort(ctx, v, c.Param("action"), req.Port, req.Protected); err != nil {
-			return apiError(err)
-		}
-	case "touch":
-		if lease := c.QueryParam("lease"); lease != "" {
-			if _, err := uuid.Parse(lease); err != nil {
-				return echo.NewHTTPError(http.StatusBadRequest, "invalid activity lease")
-			}
-			if c.QueryParam("release") == "1" {
-				if s.rdb != nil {
-					err = s.rdb.ZRem(ctx, activityKey(v.ID), lease).Err()
-				}
-			} else {
-				err = s.renewActivity(ctx, v.ID, lease)
-			}
-			if err != nil {
-				return apiError(err)
-			}
-		}
-		if err := s.repo.TouchVM(ctx, v.ID); err != nil {
 			return apiError(err)
 		}
 	case "rotate-access-token":
