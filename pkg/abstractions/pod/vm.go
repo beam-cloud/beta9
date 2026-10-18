@@ -2,7 +2,6 @@ package pod
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,12 +87,13 @@ func (s *GenericPodService) vmDiskWorker(ctx context.Context, workspaceID uint, 
 			snapshot, err = s.backendRepo.GetDiskSnapshot(ctx, workspaceID, disk.SourceSnapshotId)
 		} else {
 			snapshot, err = s.backendRepo.GetLatestDiskSnapshot(ctx, workspaceID, disk.Name)
-			if errors.Is(err, sql.ErrNoRows) && disk.SourceSnapshotId != "" {
+			var missing *types.ErrDiskSnapshotNotFound
+			if errors.As(err, &missing) {
+				if disk.SourceSnapshotId == "" {
+					return "", nil
+				}
 				snapshot, err = s.backendRepo.GetDiskSnapshot(ctx, workspaceID, disk.SourceSnapshotId)
 			}
-		}
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
 		}
 		if err != nil {
 			return "", err
