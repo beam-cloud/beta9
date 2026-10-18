@@ -30,6 +30,7 @@ type fakeQMP struct {
 	images      map[string][]string // node -> backing chain filenames, head first
 	failCommits bool
 	failDeletes bool
+	failDismiss bool
 	commitPolls int // query-jobs polls a commit job reports running before it concludes
 	commits     []fakeCommit
 	job         *fakeJob
@@ -191,18 +192,32 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			case job == nil:
 				fmt.Fprintf(conn, `{"return":[]}`)
 			case job.running > 0:
-				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"running","current-progress":%d}]}`, job.id, job.progress+1)
+				fmt.Fprintf(conn, `{"return":[{"id":%q,"type":"commit","status":"running","current-progress":%d}]}`, job.id, job.progress+1)
 			case job.err != "":
-				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"concluded","error":%q}]}`, job.id, job.err)
+				fmt.Fprintf(conn, `{"return":[{"id":%q,"type":"commit","status":"concluded","error":%q}]}`, job.id, job.err)
 			default:
-				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"concluded"}]}`, job.id)
+				fmt.Fprintf(conn, `{"return":[{"id":%q,"type":"commit","status":"concluded"}]}`, job.id)
 			}
 		case types.QMPCommandJobDismiss:
 			f.mu.Lock()
-			f.job = nil
+			failed := f.failDismiss
+			if !failed {
+				f.job = nil
+			}
 			f.mu.Unlock()
-			fmt.Fprintf(conn, `{"return":{}}`)
+			if failed {
+				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"injected dismissal failure"}}`)
+			} else {
+				fmt.Fprintf(conn, `{"return":{}}`)
+			}
 		case types.QMPCommandTransaction:
+			f.mu.Lock()
+			busy := f.job != nil
+			f.mu.Unlock()
+			if busy {
+				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"block device is in use by block job"}}`)
+				continue
+			}
 			if f.failPivots.Load() {
 				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"injected pivot failure"}}`)
 				continue
@@ -943,5 +958,62 @@ func TestDetachAllCleansEveryOwnedVolume(t *testing.T) {
 	}
 	if len(manager.volumes) != 0 {
 		t.Fatalf("owned volumes after detach = %d, want 0", len(manager.volumes))
+	}
+}
+
+func TestCancelledCompactCanBeSealedOrCompactedAgain(t *testing.T) {
+	for _, seal := range []bool{true, false} {
+		t.Run(fmt.Sprint("seal=", seal), func(t *testing.T) {
+			volume, server, _ := newCompactVolume(t)
+			server.mu.Lock()
+			server.commitPolls = 3
+			server.mu.Unlock()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := volume.Compact(WithProgress(ctx, cancel)); !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected interrupted commit: %v", err)
+			}
+			if seal {
+				if _, _, err := volume.Seal(context.Background(), true); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := volume.Compact(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			server.mu.Lock()
+			defer server.mu.Unlock()
+			if server.job != nil || len(server.commits) != 1 {
+				t.Fatalf("must finish the original job, not submit another: job=%+v commits=%v", server.job, server.commits)
+			}
+		})
+	}
+}
+
+func TestCompactRetainsRecoveryStateUntilJobDismissed(t *testing.T) {
+	volume, server, paths := newCompactVolume(t)
+	server.mu.Lock()
+	server.failDismiss = true
+	server.mu.Unlock()
+	if err := volume.Compact(context.Background()); err == nil {
+		t.Fatal("expected dismissal failure")
+	}
+	if len(volume.state.Chain) != 3 {
+		t.Fatal("must retain recovery state")
+	}
+	for _, path := range paths {
+		if !fileExists(path) {
+			t.Fatalf("missing recovery layer %s", path)
+		}
+	}
+	server.mu.Lock()
+	server.failDismiss = false
+	server.mu.Unlock()
+	if err := volume.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.job != nil || len(server.commits) != 1 {
+		t.Fatal("must reconcile the original commit")
 	}
 }

@@ -102,3 +102,32 @@ func newQEMUVolume(t *testing.T) (context.Context, *Volume) {
 		Chain: []stateLayer{{SnapshotID: "base", Path: base}},
 	}}
 }
+
+// Submit a real daemon job, then lose the caller before it can dismiss it.
+// A later seal must release that job's graph references without a restart.
+func TestSealFinishesInterruptedQEMUCommit(t *testing.T) {
+	ctx, volume := newQEMUVolume(t)
+	sealed, _, err := volume.Seal(ctx, true)
+	require.NoError(t, err)
+	require.NoError(t, volume.MarkPublished(sealed[0].Path, "snap-1"))
+	client, err := dialQMP(ctx, volume.state.QMPSocket)
+	require.NoError(t, err)
+	defer client.Close()
+	_, err = client.execute(ctx, "block-commit", map[string]any{
+		"job-id": "interrupted", "device": volume.fmtNode,
+		"top": volume.state.Chain[1].Path, "base": volume.state.Chain[0].Path, "auto-dismiss": false,
+	})
+	require.NoError(t, err)
+	jobs, err := client.jobs(ctx)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	require.NoError(t, client.Close())
+	_, _, err = volume.Seal(ctx, true)
+	require.NoError(t, err, "join and dismiss the existing job before pivoting")
+	client, err = dialQMP(ctx, volume.state.QMPSocket)
+	require.NoError(t, err)
+	defer client.Close()
+	jobs, err = client.jobs(ctx)
+	require.NoError(t, err)
+	require.Empty(t, jobs)
+}

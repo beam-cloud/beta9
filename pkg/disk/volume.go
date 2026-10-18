@@ -504,6 +504,9 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		return nil, false, err
 	}
 	defer client.Close()
+	if err := client.finishCommitJobs(ctx); err != nil {
+		return nil, false, fmt.Errorf("finish compaction for volume %s: %w", state.Key, err)
+	}
 
 	if !force && len(state.Pending) == 0 && v.freshHead {
 		written, err := client.writtenBytes(ctx, qsdFileNodePrefix+v.fmtNode)
@@ -782,6 +785,9 @@ func (v *Volume) Compact(ctx context.Context) error {
 		return err
 	}
 	defer client.Close()
+	if err := client.finishCommitJobs(ctx); err != nil {
+		return fmt.Errorf("finish compaction for volume %s: %w", state.Key, err)
+	}
 
 	// The live graph decides what needs merging: a crash after a completed
 	// commit but before the state save leaves the files already merged.
