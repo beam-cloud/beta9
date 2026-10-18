@@ -778,6 +778,60 @@ func actionContext(info *auth.AuthInfo, name, action, body string) (*auth.HttpAu
 	return &auth.HttpAuthContext{Context: c, AuthInfo: info}, rec
 }
 
+func TestRunningStartDoesNotContendWithSnapshot(t *testing.T) {
+	for _, action := range []string{"start", "resume", "wake"} {
+		t.Run(action, func(t *testing.T) {
+			s, v, info, runtime, _ := fixture()
+			v.TokenID = info.Token.ExternalId
+			store := &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
+			s.repo = store
+			v.LastActiveAt = time.Now().Add(-time.Hour)
+			before := v.LastActiveAt
+			c, rec := actionContext(info, v.Name, action, "{}")
+			c.Request().URL.RawQuery = "wait=exec"
+			require.NoError(t, s.action(c))
+			require.Equal(t, http.StatusOK, rec.Code)
+			var response struct {
+				types.VM
+				ExecReady bool `json:"exec_ready"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.True(t, response.ExecReady)
+			require.Equal(t, v.ContainerID, response.ContainerID)
+			require.Empty(t, runtime.requests)
+			require.True(t, store.locked, "the snapshot retains its lifecycle lock")
+			require.True(t, store.rows[v.ID].LastActiveAt.After(before))
+		})
+	}
+}
+
+func TestRunningStartStillLocksLifecycleChanges(t *testing.T) {
+	for _, scenario := range []string{"cold", "owner", "checkpoint", "stopping", "paused"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, v, info, _, _ := fixture()
+			v.TokenID = info.Token.ExternalId
+			s.repo = &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
+			body := "{}"
+			switch scenario {
+			case "cold":
+				body = `{"cold":true}`
+			case "owner":
+				v.TokenID = "another-owner"
+			case "checkpoint":
+				v.MemoryCheckpointID = "pending-restore"
+			case "stopping":
+				s.containers.(*vmContainers).states[v.ContainerID].Status = types.ContainerStatusStopping
+			case "paused":
+				v.DesiredState = "paused"
+			}
+			c, _ := actionContext(info, v.Name, "start", body)
+			err := s.action(c)
+			require.Error(t, err)
+			require.ErrorContains(t, err, "operation already in progress")
+		})
+	}
+}
+
 func TestActivityLeasesAreIndependentAndExplicitlyReleased(t *testing.T) {
 	s, v, info, _, _ := fixture()
 	// A background snapshot owns the lifecycle lock throughout this test.
