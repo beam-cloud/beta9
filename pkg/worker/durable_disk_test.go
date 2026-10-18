@@ -2016,15 +2016,3 @@ func (s *fakeDurableDiskSnapshotCacheReader) ReadContentInto(_ context.Context, 
 	}
 	return int64(copy(dest, data[offset:end])), nil
 }
-
-func TestFreshVMRootSparesMatchStartCapacity(t *testing.T) {
-	for _, tc := range []struct {
-		cpu, memory  int64
-		starts, want int
-	}{
-		{256000, 515738, 128, 50}, {512000, 2 * 515738, 128, 100}, {512000, 2 * 515738, 16, 16}, {16000, 515738, 128, 4}, {1000, 1024, 1, 2},
-	} {
-		w := &Worker{cpuLimit: tc.cpu, memoryLimit: tc.memory, containerStartLimit: tc.starts}
-		require.Equal(t, tc.want, w.freshVMRootSpareCount())
-	}
-}

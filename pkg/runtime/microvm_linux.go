@@ -266,6 +266,11 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
 		return err
 	}
+	// Executable pages can be faulted back from virtio-fs after restore. A
+	// worker upgrade must not substitute new code underneath captured PCs.
+	if err := copyFile(filepath.Join(inst.canvas, microvm.InitPath), filepath.Join(opts.ImagePath, checkpointInitFile), 0o755); err != nil {
+		return fmt.Errorf("checkpoint guest init: %w", err)
+	}
 	api := inst.api()
 	if err := api.put(ctx, "vm.pause", nil); err != nil {
 		return fmt.Errorf("pause vm: %w", err)
@@ -369,7 +374,7 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm disks: %w", err)
 	}
 	took("disks")
-	if err := m.prepareCanvas(inst, spec, network, root, extra); err != nil {
+	if err := m.prepareCanvas(inst, spec, network, root, extra, restoreFrom); err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm rootfs: %w", err)
 	}
 	took("canvas")
@@ -614,6 +619,26 @@ func (m *MicroVM) Events(ctx context.Context, containerID string) (<-chan Event,
 		return nil, ErrContainerNotFound{ContainerID: containerID}
 	}
 	return inst.ctrl.events(ctx), nil
+}
+
+func (m *MicroVM) WaitExecReady(ctx context.Context, containerID string) error {
+	inst, ok := m.instance(containerID)
+	if !ok || inst.ctrl == nil {
+		return ErrContainerNotFound{ContainerID: containerID}
+	}
+	// Restore already waits for the running guest to apply its network. The
+	// process manager survives in RAM; only cold boots need a listener barrier.
+	if inst.ctrl.network != nil {
+		return nil
+	}
+	select {
+	case <-inst.ctrl.execReady:
+		return nil
+	case <-inst.exitDone:
+		return fmt.Errorf("guest exited before its exec listener opened")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (m *MicroVM) Close() error {
@@ -1186,7 +1211,7 @@ func createScratchDisk(ctx context.Context, path string, size int64) error {
 
 // --- canvas ------------------------------------------------------------------
 
-func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk) error {
+func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, restoreFrom string) error {
 	// The canvas is image content: a symlink at any of these paths would
 	// redirect the host's writes and mounts below, so they are created
 	// without following one, and .beam is recreated empty.
@@ -1204,7 +1229,11 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 			return err
 		}
 	}
-	if err := copyFile(m.cfg.MicroVMInitPath, filepath.Join(inst.canvas, microvm.InitPath), 0o755); err != nil {
+	initPath := m.cfg.MicroVMInitPath
+	if restoreFrom != "" {
+		initPath = filepath.Join(restoreFrom, checkpointInitFile)
+	}
+	if err := copyFile(initPath, filepath.Join(inst.canvas, microvm.InitPath), 0o755); err != nil {
 		return fmt.Errorf("install guest init: %w", err)
 	}
 
@@ -1832,9 +1861,11 @@ func (inst *microVMInstance) removeTap() {
 // the container process's pid and exit code out, and signals and freeze
 // requests in.
 type microVMControl struct {
-	listener *net.UnixListener
-	exit     chan int
-	ready    chan struct{}
+	listener      *net.UnixListener
+	exit          chan int
+	ready         chan struct{}
+	execReady     chan struct{}
+	execReadyOnce sync.Once
 
 	applicationOOM chan Event
 	eventDone      chan struct{}
@@ -1864,6 +1895,7 @@ func listenMicroVMControl(vsockPath string) (*microVMControl, error) {
 		listener:       listener,
 		exit:           make(chan int, 1),
 		ready:          make(chan struct{}),
+		execReady:      make(chan struct{}),
 		networkApplied: make(chan error, 1),
 		pending:        map[uint64]chan microvm.Message{},
 		applicationOOM: make(chan Event, 16),
@@ -1932,6 +1964,8 @@ func (c *microVMControl) serve(conn net.Conn) {
 			if c.network != nil {
 				go c.pushNetwork()
 			}
+		case microvm.MsgExecReady:
+			c.execReadyOnce.Do(func() { close(c.execReady) })
 		case microvm.MsgPing:
 		case microvm.MsgApplicationOOM:
 			if msg.OOM != nil {

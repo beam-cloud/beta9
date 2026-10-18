@@ -123,10 +123,15 @@ func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, conta
 			request = s.attachedStartupDisks(request)
 		}
 	}
-	// A successful terminal block-root checkpoint already published the exact
-	// disks paired with RAM. Detach without advancing their sealed generations.
-	sealed := exists && instance != nil && instance.terminalCheckpointCreated.Load() &&
-		instance.Runtime != nil && instance.Runtime.Capabilities().BlockRoot
+	// A successful terminal checkpoint and a restore that failed before the
+	// runtime started both retain the exact disks paired with RAM. Neither
+	// may publish another generation during cleanup.
+	sealed := false
+	if exists && instance != nil && instance.Runtime != nil && instance.Runtime.Capabilities().BlockRoot {
+		started, _ := instance.runtimeStartState()
+		unstartedRestore := request != nil && request.Checkpoint != nil && exitCode == int(types.ContainerExitCodeStartupFailed) && !started
+		sealed = instance.terminalCheckpointCreated.Load() || unstartedRestore
+	}
 	if !sealed {
 		_, syncErr = s.syncDurableDiskMounts(progressCtx, request, durableDiskFinalSyncMode(exitCode))
 	}

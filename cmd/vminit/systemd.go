@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
@@ -393,9 +394,6 @@ func runSystemdAgent() (int, error) {
 		return 1, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go logExecReadiness(ctx)
 	workload, err := openWorkloadMemory()
 	if err != nil {
 		return 1, err
@@ -486,15 +484,16 @@ func moveAgentProcessTree(pid int, group string, visited map[int]bool) error {
 	return nil
 }
 
-// Record when the workload opens exec without adding a boot dependency.
-func logExecReadiness(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+// Announce the local listener over the existing control stream. The host must
+// not repeatedly connect through a NIC that the guest is still configuring.
+func reportExecReadiness(ctx context.Context, ctrl *control) {
 	for {
 		conn, err := (&net.Dialer{Timeout: 20 * time.Millisecond}).DialContext(ctx, "tcp", "127.0.0.1:7111")
 		if err == nil {
 			conn.Close()
 			logf("boot phase: exec TCP listening")
+			ctrl.execReady.Store(true)
+			ctrl.send(microvm.Message{Type: microvm.MsgExecReady})
 			return
 		}
 

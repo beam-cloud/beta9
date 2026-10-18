@@ -116,8 +116,9 @@ type microVMDisk struct {
 
 // Checkpoint layout under CheckpointOpts.ImagePath.
 const (
-	checkpointVMDir    = "vm"       // Cloud Hypervisor snapshot: config.json, state.json, memory-ranges
-	checkpointRootDisk = "root.img" // the scratch root disk, when the VM has one
+	checkpointVMDir    = "vm"         // Cloud Hypervisor snapshot: config.json, state.json, memory-ranges
+	checkpointRootDisk = "root.img"   // the scratch root disk, when the VM has one
+	checkpointInitFile = "guest-init" // executable backing the captured guest agent
 )
 
 // --- bundle -----------------------------------------------------------------
@@ -437,7 +438,9 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		"--kernel", kernel,
 		"--cmdline", cmdline,
 		"--cpus", fmt.Sprintf("boot=%d", vcpus),
-		"--memory", fmt.Sprintf("size=%d,shared=on", memory),
+		// Sparse guest RAM must not synchronously compact host memory for huge
+		// pages when many VMs boot or restore together.
+		"--memory", fmt.Sprintf("size=%d,shared=on,thp=off", memory),
 		"--fs", fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.VirtiofsTag, filepath.Join(stateDir, microVMVirtiofsSocket)),
 		"--disk", root.arg,
 	}
@@ -474,6 +477,9 @@ func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Netwo
 	var cfg map[string]any
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return nil, fmt.Errorf("decode snapshot config: %w", err)
+	}
+	if memory, ok := cfg["memory"].(map[string]any); ok {
+		memory["thp"] = false
 	}
 	if nets, _ := cfg["net"].([]any); len(nets) == 1 {
 		if entry, ok := nets[0].(map[string]any); ok {

@@ -12,6 +12,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -159,6 +161,9 @@ func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (i
 	defer ctrl.close()
 	go workload.watchOOM(ctrl)
 	ctrl.systemd = systemd
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go reportExecReadiness(ctx, ctrl)
 	return runProcess(process, ctrl, workload)
 }
 
@@ -657,11 +662,12 @@ func writeSysctl(path, value string) {
 // --- control channel -------------------------------------------------------------------
 
 type control struct {
-	port    uint32
-	systemd bool
-	mu      sync.Mutex
-	file    *os.File
-	enc     *microvm.Encoder
+	execReady atomic.Bool
+	port      uint32
+	systemd   bool
+	mu        sync.Mutex
+	file      *os.File
+	enc       *microvm.Encoder
 	// Private loopback aliases retain interface-bound sockets across restore.
 	networkAliases  map[string]bool
 	networkMu       sync.Mutex
@@ -765,6 +771,9 @@ func (c *control) serve(childPid func() int) {
 			}
 			logf("control reconnected")
 			c.send(microvm.Message{Type: microvm.MsgStarted, Pid: childPid()})
+			if c.execReady.Load() {
+				c.send(microvm.Message{Type: microvm.MsgExecReady})
+			}
 			dec = microvm.NewDecoder(c.current())
 			continue
 		}

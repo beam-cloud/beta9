@@ -40,6 +40,31 @@ func TestTerminalMicroVMCheckpointKeepsItsSealedDiskGeneration(t *testing.T) {
 	}
 }
 
+func TestFailedBlockRootRestoreKeepsPairedDisks(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		request := &types.ContainerRequest{
+			ContainerId: "failed-memory-restore",
+			Checkpoint:  &types.Checkpoint{CheckpointId: "saved-ram"},
+			Mounts: []types.Mount{{LocalPath: t.TempDir(), DurableDisk: &types.DurableDiskMountConfig{
+				Name: "paired-root", Size: "1Gi", Driver: types.DurableDiskDriverSnapshot,
+			}}},
+		}
+		worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, nil)
+		worker.backendRepoClient = &fakeBackendRepoClient{}
+		instance, _ := worker.containerInstances.Get(request.ContainerId)
+		instance.Runtime = NewMockRuntime("microvm", runtime.Capabilities{BlockRoot: true})
+		if started {
+			instance.markRuntimeStarted(1)
+		}
+		code, _ := worker.finalizeDurableDiskMountsWithContext(context.Background(), request.ContainerId, request, int(types.ContainerExitCodeStartupFailed), true)
+		if started {
+			require.Equal(t, int(types.ContainerExitCodeUnknownError), code, "a guest that ran must still publish its writes")
+		} else {
+			require.Equal(t, int(types.ContainerExitCodeStartupFailed), code, "unused paired disks must not require another snapshot")
+		}
+	}
+}
+
 func TestDurableDiskCleanupContextIgnoresWorkerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

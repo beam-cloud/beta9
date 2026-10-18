@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,6 +113,38 @@ func TestRestoredGuestReadinessWaitsForHostClockAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestMicroVMWaitsForExecListenerAnnouncement(t *testing.T) {
+	host, guest := net.Pipe()
+	defer host.Close()
+	defer guest.Close()
+	ctrl := &microVMControl{ready: make(chan struct{}), execReady: make(chan struct{}), pending: map[uint64]chan microvm.Message{}}
+	inst := &microVMInstance{ctrl: ctrl, exitDone: make(chan struct{})}
+	vm := &MicroVM{vms: map[string]*microVMInstance{"vm": inst}}
+	go ctrl.serve(host)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- vm.WaitExecReady(ctx, "vm") }()
+	<-ctrl.ready
+	select {
+	case <-done:
+		t.Fatal("a control connection does not mean exec is listening")
+	default:
+	}
+	encoder := microvm.NewEncoder(guest)
+	require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgExecReady}))
+	require.NoError(t, <-done)
+	require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgExecReady}), "re-announcements must be idempotent")
+	inst.ctrl = &microVMControl{execReady: make(chan struct{}), network: &microvm.Network{}}
+	require.NoError(t, vm.WaitExecReady(ctx, "vm"), "RAM restore already waits for the running guest's network acknowledgement")
+	inst.ctrl.network = nil
+	canceled, stop := context.WithCancel(context.Background())
+	stop()
+	require.ErrorIs(t, vm.WaitExecReady(canceled, "vm"), context.Canceled)
+	close(inst.exitDone)
+	require.ErrorContains(t, vm.WaitExecReady(ctx, "vm"), "guest exited")
+}
+
 // The canvas is image content: a symlink where the host writes must be
 // replaced, never followed onto the host.
 func TestPrepareCanvasDoesNotFollowImageSymlinks(t *testing.T) {
@@ -144,6 +177,26 @@ func TestPrepareCanvasDoesNotFollowImageSymlinks(t *testing.T) {
 	require.Error(t, writeFileNoFollow(filepath.Join(canvas, microvm.SpecFile), []byte("{}"), 0o644))
 	_, err = os.Stat(filepath.Join(outside, "pwned"))
 	require.True(t, os.IsNotExist(err))
+}
+
+func TestRestoreCanvasKeepsCheckpointExecutable(t *testing.T) {
+	checkpoint := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(checkpoint, checkpointInitFile), []byte("captured agent"), 0o755))
+	current := filepath.Join(t.TempDir(), "init")
+	require.NoError(t, os.WriteFile(current, []byte("upgraded agent"), 0o755))
+	rt := &MicroVM{cfg: Config{MicroVMInitPath: current}}
+	inst := &microVMInstance{canvas: t.TempDir()}
+	spec := &specs.Spec{}
+	require.NoError(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, checkpoint))
+	data, err := os.ReadFile(filepath.Join(inst.canvas, microvm.InitPath))
+	require.NoError(t, err)
+	require.Equal(t, "captured agent", string(data))
+	require.NoError(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, ""))
+	data, err = os.ReadFile(filepath.Join(inst.canvas, microvm.InitPath))
+	require.NoError(t, err)
+	require.Equal(t, "upgraded agent", string(data))
+	require.NoError(t, os.Remove(filepath.Join(checkpoint, checkpointInitFile)))
+	require.Error(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, checkpoint), "never substitute another executable into captured memory")
 }
 
 func TestLinkLocalFromMAC(t *testing.T) {

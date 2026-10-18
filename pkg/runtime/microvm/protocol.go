@@ -127,10 +127,11 @@ type Mount struct {
 // both sides exchange newline-delimited JSON.
 const (
 	// Guest -> host.
-	MsgStarted = "started" // Payload: Pid of the container process.
-	MsgExit    = "exit"    // Payload: Code, the container process exit code.
-	MsgAck     = "ack"     // Payload: ID of the command, OK, Error.
-	MsgPing    = "ping"    // Keepalive; lets init notice a connection that died with a restore.
+	MsgStarted   = "started"    // Payload: Pid of the container process.
+	MsgExecReady = "exec_ready" // The guest's process-manager TCP listener is open.
+	MsgExit      = "exit"       // Payload: Code, the container process exit code.
+	MsgAck       = "ack"        // Payload: ID of the command, OK, Error.
+	MsgPing      = "ping"       // Keepalive; lets init notice a connection that died with a restore.
 
 	MsgApplicationOOM = "application_oom" // Payload: OOM; the VM remains running.
 

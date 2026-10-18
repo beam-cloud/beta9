@@ -40,7 +40,9 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 	diskConfig := disk.Config{}
 	if s.runtimeOwnsBlockRoot() {
 		diskConfig.SpareExport = disk.ExportVhostUser
-		diskConfig.SpareCount = s.freshVMRootSpareCount()
+		// Empty roots consume no guest CPU or RAM. Cover the start gate even
+		// when guests are smaller than the default VM resource allocation.
+		diskConfig.SpareCount = max(2, s.containerStartLimit)
 	}
 
 	if s.agentWorker() {
@@ -63,11 +65,6 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 			log.Warn().Err(err).Msg("failed to warm fresh VM root disks")
 		}
 	}
-}
-
-func (s *Worker) freshVMRootSpareCount() int {
-	guest := &types.ContainerRequest{Memory: types.DefaultVMMemory, UseVM: true}
-	return max(2, min(s.containerStartLimit, int(s.cpuLimit/types.DefaultVMCPU), int(s.memoryLimit/guest.CapacityMemory())))
 }
 
 type durableDiskSyncMode uint8

@@ -661,10 +661,15 @@ func TestMicroVMCheckpointRestore(t *testing.T) {
 	res := vm.wait(30 * time.Second)
 	require.NoError(t, res.err)
 	require.Equal(t, 128+int(syscall.SIGKILL), res.code, "a terminal checkpoint stops the VM like a forced stop")
-	for _, name := range []string{"vm/config.json", "vm/state.json", "vm/memory-ranges", "root.img"} {
+	for _, name := range []string{"vm/config.json", "vm/state.json", "vm/memory-ranges", "root.img", checkpointInitFile} {
 		require.FileExists(t, filepath.Join(imagePath, name))
 	}
 	require.NoError(t, rt.Delete(context.Background(), vm.id, &DeleteOpts{Force: true}))
+	// Upgraded workers may carry completely different init code. A RAM
+	// restore must use the executable captured with its live agent.
+	initPath := rt.cfg.MicroVMInitPath
+	rt.cfg.MicroVMInitPath = filepath.Join(t.TempDir(), "missing-upgraded-init")
+	defer func() { rt.cfg.MicroVMInitPath = initPath }()
 
 	restored := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true})
 	require.NotEqual(t, vm.ip4.String(), restored.ip4.String(), "the restored VM gets a new address")

@@ -2241,6 +2241,92 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestBlockRootRestoreKeepsPreparedCanvas(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+	tmpDir := t.TempDir()
+	checkpointId := "checkpoint-block-root"
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "inventory.img"), []byte("runtime payload"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFilesystemOnDiskFile), []byte(checkpointFilesystemOnDiskV1), 0644))
+
+	bundleDir := filepath.Join(tmpDir, "bundle")
+	require.NoError(t, os.MkdirAll(bundleDir, 0755))
+	configPath := filepath.Join(bundleDir, specBaseName)
+	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0644))
+
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
+	}
+	backendRepoClient := &fakeBackendRepoClient{}
+	var stateCalls atomic.Int32
+	rt := &mockRuntime{
+		name:         types.ContainerRuntimeMicroVM.String(),
+		capabilities: runtime.Capabilities{CheckpointRestore: true, BlockRoot: true},
+		state: func(context.Context, string) (runtime.State, error) {
+			if stateCalls.Add(1) == 1 {
+				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
+			}
+			return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+		},
+	}
+	worker := &Worker{
+		runtime: rt,
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		podAddr:             "10.42.0.10",
+		criuManager:         &startedCRIUManager{},
+		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+		containerRepoClient: repoClient,
+		backendRepoClient:   backendRepoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-block-root",
+		ConfigPath:  configPath,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointId,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGI)}},
+	}
+	fakeBin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "mount"), []byte("#!/bin/sh\nexit 0\n"), 0755))
+	// A prepared canvas can be busy while independent startup work finishes.
+	// Restore must use it directly, without invoking umount at all.
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "umount"), []byte("#!/bin/sh\nexit 32\n"), 0755))
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	overlay := common.NewContainerOverlay(request, t.TempDir(), filepath.Join(tmpDir, "overlays"))
+	require.NoError(t, overlay.Setup())
+	marker := filepath.Join(overlay.TopLayerPath(), "prepared-canvas")
+	require.NoError(t, os.WriteFile(marker, []byte("prepared"), 0644))
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:      request.ContainerId,
+		Runtime: rt,
+		Overlay: overlay,
+	})
+
+	addressesRegistered := registeredAddresses()
+	exitCode, err := worker.runContainer(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+		time.Now(),
+		addressesRegistered,
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.FileExists(t, marker)
+	require.Equal(t, -1, exitCode)
+	require.Eventually(t, func() bool {
+		return backendRepoClient.updateCalls == 1 && backendRepoClient.lastUpdate.LastRestoredAt != nil
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestCheckpointFilesystemRestorePreparesInitialUpperLayer(t *testing.T) {
 	checkpointRoot := t.TempDir()
 	checkpointID := "checkpoint-prepare-upper"

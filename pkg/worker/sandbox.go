@@ -645,12 +645,19 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 	start := time.Now()
 	backoff := goprocInitialBackoff
 	stats := processManagerWaitStats{FailureClasses: map[string]int{}}
+	guest, announced := instance.Runtime.(runtime.GuestExecReadiness)
+	if announced {
+		if err := guest.WaitExecReady(ctx, containerId); err != nil {
+			stats.LastError = err.Error()
+			return nil, false, stats
+		}
+	}
 	nextSlowLog := goprocSlowReadyLogInterval
 
 	for {
 		stats.Attempts++
 		probeTimeout := goprocReadyProbeTimeout
-		fastProbe := time.Since(start) < goprocFastReadyWindow
+		fastProbe := !announced && time.Since(start) < goprocFastReadyWindow
 		if fastProbe {
 			probeTimeout = goprocFastReadyProbeTimeout
 		}
