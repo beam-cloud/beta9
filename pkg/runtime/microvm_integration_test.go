@@ -805,6 +805,48 @@ func TestMicroVMPreparedNetworkSlot(t *testing.T) {
 	require.NoError(t, rt.Delete(context.Background(), vm.id, &DeleteOpts{Force: true}))
 }
 
+func TestMicroVMLoopbackTunnel(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	vm := newTestVM(t, rt, vmOptions{image: "python", goproc: true})
+	vm.start()
+	client := vm.goprocClient(60 * time.Second)
+	pid, err := client.Exec([]string{"python3", "-u", "-c", `
+import socket
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 3773))
+    listener.listen()
+    print("ready", flush=True)
+    conn, _ = listener.accept()
+    with conn:
+        data = b"".join(iter(lambda: conn.recv(65536), b""))
+        conn.sendall(b"loopback:" + data)
+`}, "/", []string{"PATH=/usr/local/bin:/usr/bin:/bin"}, false)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		out, _ := client.Stdout(pid)
+		return strings.Contains(out, "ready")
+	}, 10*time.Second, 10*time.Millisecond)
+
+	// This image has no sshd. Only the guest's loopback interface accepts
+	// the connection, which must preserve binary data and TCP half-closes.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := rt.DialGuestPort(ctx, vm.id, 3773)
+	require.NoError(t, err, "guest console:\n%s", vm.output.String())
+	defer conn.Close()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
+	payload := bytes.Repeat([]byte{0, 1, 128, 255}, 20_000)
+	_, err = conn.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, conn.(interface{ CloseWrite() error }).CloseWrite())
+	response, err := io.ReadAll(conn)
+	require.NoError(t, err)
+	require.Equal(t, append([]byte("loopback:"), payload...), response)
+	code, err := client.Wait(pid)
+	require.NoError(t, err)
+	require.Zero(t, code)
+}
+
 func TestMicroVMGoprocOverTheWire(t *testing.T) {
 	rt := requireMicroVMEnv(t)
 	// A directory bind whose destination does not exist in the image (the

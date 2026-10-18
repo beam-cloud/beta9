@@ -101,6 +101,8 @@ type PostgresBackendRepository struct {
 	adminWorkspace        *types.Workspace
 	adminWorkspaceLoading *adminWorkspaceLoad
 	taskEvents            *taskEventPublisher
+	vmLocksOnce           sync.Once
+	vmLocks               []vmLockSession
 }
 
 type adminWorkspaceLoad struct {

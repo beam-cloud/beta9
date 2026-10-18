@@ -69,8 +69,10 @@ type microVMInstance struct {
 	// killed is set when the host SIGKILLs the hypervisor (a forced stop, a
 	// signal the guest would not take, a terminal checkpoint); Run reports
 	// that as the container's exit, not a VM failure.
-	killed bool
-	waited bool // Wait reaped the hypervisor; its pid must not be signalled again
+	killed   bool
+	waited   bool // Wait reaped the hypervisor; its pid must not be signalled again
+	exitDone chan struct{}
+	exitCode *int
 }
 
 // NewMicroVM validates that the hypervisor, virtiofsd, guest kernel, guest
@@ -164,7 +166,7 @@ func (m *MicroVM) Prepare(ctx context.Context, spec *specs.Spec) error {
 	return nil
 }
 
-func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
+func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (code int, err error) {
 	if opts == nil {
 		opts = &RunOpts{}
 	}
@@ -174,7 +176,10 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 	}
 	// The processes must be gone when Run returns; Delete, which the worker
 	// calls after every Run, releases the rest.
-	defer inst.stopProcesses()
+	defer func() {
+		inst.finishExit(code, err)
+		inst.stopProcesses()
+	}()
 
 	network, root, extra, err := m.prepare(ctx, inst, spec, "")
 	if err != nil {
@@ -211,6 +216,7 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 	go func() {
 		defer inst.stopProcesses()
 		code, err := m.boot(ctx, inst, spec, microVMRestoreArgs(inst.stateDir, snapshotDir), opts.OutputWriter, nil, nil)
+		inst.finishExit(code, err)
 		log.Info().Str("container_id", containerID).Int("exit_code", code).Err(err).Msg("restored microvm exited")
 		booted <- err
 	}()
@@ -325,6 +331,7 @@ func (m *MicroVM) newInstance(containerID, bundlePath string) (*microVMInstance,
 		stateDir: filepath.Join(m.cfg.MicroVMStateRoot, containerID),
 		canvas:   canvas,
 		console:  newTailWriter(microVMConsoleTail),
+		exitDone: make(chan struct{}),
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -580,7 +587,24 @@ func (m *MicroVM) State(ctx context.Context, containerID string) (State, error) 
 	state := State{ID: containerID, Status: "stopped", Pid: inst.pid()}
 	if inst.alive() {
 		state.Status = "running"
+		return state, nil
 	}
+	inst.mu.Lock()
+	done, started := inst.exitDone, inst.hypervisor != nil
+	inst.mu.Unlock()
+	// Wait may have reaped the VMM before boot has collected its result.
+	// A restored VM's supervisor must publish that result before the worker
+	// observes stopped; otherwise a clean poweroff becomes an unknown exit.
+	if started && done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return State{}, ctx.Err()
+		}
+	}
+	inst.mu.Lock()
+	state.ExitCode = inst.exitCode
+	inst.mu.Unlock()
 	return state, nil
 }
 
@@ -643,6 +667,35 @@ func (m *MicroVM) instance(containerID string) (*microVMInstance, bool) {
 }
 
 var _ GuestFilesystem = (*MicroVM)(nil)
+
+var _ GuestPortDialer = (*MicroVM)(nil)
+
+func (m *MicroVM) DialGuestPort(ctx context.Context, containerID string, port uint32) (net.Conn, error) {
+	inst, ok := m.instance(containerID)
+	if !ok {
+		return nil, ErrContainerNotFound{ContainerID: containerID}
+	}
+	if !inst.alive() {
+		return nil, fmt.Errorf("microvm %s is not running", containerID)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// The guest starts this service before announcing readiness.
+	conn, err := dialGuestVsockOnce(ctx, filepath.Join(inst.stateDir, microVMVsockSocket), microvm.TunnelPort)
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
+	if err := microvm.ConnectPort(conn, port); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
 
 // GuestFS runs one filesystem operation inside the guest over a dedicated
 // vsock connection: JSON header line out, raw payload for writes, JSON reply
@@ -2050,6 +2103,15 @@ func (a *hypervisorAPI) put(ctx context.Context, action string, body any) error 
 		return fmt.Errorf("%s: %s: %s", action, resp.Status, strings.TrimSpace(string(msg)))
 	}
 	return nil
+}
+
+func (inst *microVMInstance) finishExit(code int, err error) {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	if err == nil {
+		inst.exitCode = &code
+	}
+	close(inst.exitDone)
 }
 
 func (inst *microVMInstance) alive() bool {

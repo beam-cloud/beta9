@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 const (
@@ -73,10 +74,7 @@ func NewContainerClientWithDialer(
 	if dialer == nil {
 		return nil, errors.New("container client dialer is required")
 	}
-	return newContainerClient(
-		ctx,
-		serviceUrl,
-		serviceToken,
+	return newContainerClient(ctx, serviceUrl, serviceToken,
 		grpc.WithContextDialer(dialer),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
@@ -110,7 +108,14 @@ func newContainerClient(
 		grpcOption = grpc.WithTransportCredentials(h2creds)
 	}
 
-	dialOptions := []grpc.DialOption{grpcOption}
+	dialOptions := []grpc.DialOption{grpcOption,
+		// Detect a silent relay loss so cached worker channels reconnect.
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                10 * time.Second,
+			Timeout:             2 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	}
 
 	maxMessageSize := 1 << 30 // 1Gi
 	if serviceToken != "" {

@@ -13,6 +13,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -177,4 +178,50 @@ func TestContainerClientForwardsLogCursor(t *testing.T) {
 
 	require.NoError(t, client.StreamLogs(ctx, "container-id", output))
 	require.Equal(t, "Bearer token:128", (<-output).Msg)
+}
+
+// A relay may stop delivering bytes while TCP still reports a live connection.
+// This differs from a reset: only a transport heartbeat can discover the loss.
+type blackholeConn struct {
+	net.Conn
+	cut *atomic.Bool
+}
+
+func (c *blackholeConn) Write(b []byte) (int, error) {
+	if c.cut.Load() {
+		return len(b), nil
+	}
+	return c.Conn.Write(b)
+}
+
+func TestContainerClientRecoversSilentRelayLoss(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := grpc.NewServer(grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+		MinTime:             10 * time.Second,
+		PermitWithoutStream: true,
+	}))
+	pb.RegisterContainerServiceServer(srv, statusServer{})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	var cut atomic.Bool
+	var dials atomic.Int32
+	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", "token", func(ctx context.Context, _ string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", lis.Addr().String())
+		if err == nil && dials.Add(1) == 1 {
+			return &blackholeConn{Conn: conn, cut: &cut}, nil
+		}
+		return conn, err
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_, err = client.SandboxReadyContext(ctx, "c")
+	require.NoError(t, err)
+	cut.Store(true)
+	_, err = client.SandboxReadyContext(ctx, "c")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, dials.Load(), int32(2))
 }

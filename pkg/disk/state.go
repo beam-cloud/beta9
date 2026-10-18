@@ -134,21 +134,25 @@ func writeFileAtomic(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
+	defer os.Remove(tmpPath)
 	if _, err := file.Write(data); err != nil {
 		file.Close()
-		os.Remove(tmpPath)
 		return err
 	}
+	return replaceFileAtomic(file, path)
+}
+
+// replaceFileAtomic takes ownership of file and installs it after syncing its
+// contents. Syncing the destination directory makes the rename durable too.
+func replaceFileAtomic(file *os.File, path string) error {
 	if err := file.Sync(); err != nil {
 		file.Close()
-		os.Remove(tmpPath)
 		return err
 	}
 	if err := file.Close(); err != nil {
-		os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := os.Rename(file.Name(), path); err != nil {
 		return err
 	}
 	directory, err := os.Open(filepath.Dir(path))

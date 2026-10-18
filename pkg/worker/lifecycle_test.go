@@ -4243,3 +4243,16 @@ func (m *runContextRuntime) Run(ctx context.Context, containerID, bundlePath str
 	m.ctxErr <- ctx.Err()
 	return 0, nil
 }
+
+func TestWaitForRestoredContainerExitPreservesNativeResult(t *testing.T) {
+	for _, code := range []int{0, 7, 137} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			rt := &mockRuntime{state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{Status: types.RuncContainerStatusStopped, ExitCode: &code}, nil
+			}}
+			actual, err := (&Worker{}).waitForRestoredContainerExit(context.Background(), rt, "restored", -1)
+			require.NoError(t, err)
+			require.Equal(t, code, actual, "the stop event may not have arrived yet")
+		})
+	}
+}

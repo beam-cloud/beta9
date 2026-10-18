@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -143,6 +144,14 @@ func (s *ContainerRuntimeServer) Start() error {
 
 	s.grpcServer = grpc.NewServer(
 		grpc.UnaryInterceptor(s.replaySandboxRequest),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    20 * time.Second,
+			Timeout: 10 * time.Second,
+		}),
 		grpc.MaxRecvMsgSize(gRPCMaxRecvMsgSize),
 		grpc.MaxSendMsgSize(gRPCMaxSendMsgSize),
 	)

@@ -24,6 +24,7 @@ type workerRuntimeCredentialsBackendRepo struct {
 	secrets                    []types.Secret
 	workspaceByExternalIDCalls int
 	workspaceWithSigningCalls  int
+	workspaceCalls             int
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
@@ -41,6 +42,7 @@ func (r *workerRuntimeCredentialsBackendRepo) GetWorkspaceByExternalIdWithSignin
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) GetWorkspace(ctx context.Context, workspaceID uint) (*types.Workspace, error) {
+	r.workspaceCalls++
 	workspace := *r.workspace
 	workspace.Id = workspaceID
 	return &workspace, nil
@@ -281,7 +283,8 @@ func TestGetContainerRuntimeCredentialsAllowsTrustedWorkerAcrossWorkspaces(t *te
 	require.True(t, resp.Ok)
 	require.NotNil(t, resp.WorkspaceStorage)
 	require.Equal(t, storageBucket, resp.WorkspaceStorage.BucketName)
-	require.Equal(t, 2, backendRepo.workspaceByExternalIDCalls)
+	require.Equal(t, 1, backendRepo.workspaceByExternalIDCalls)
+	require.Equal(t, 1, backendRepo.workspaceCalls, "reuse the authorized workspace instead of loading it again")
 }
 
 func TestGetContainerRuntimeCredentialsRejectsPrivateWorkerAcrossWorkspaces(t *testing.T) {

@@ -1444,6 +1444,46 @@ def test_activity_touch_retries_transient_lifecycle_lock():
     assert all(call.kwargs["timeout"] <= 3 for call in selected.http.json.call_args_list)
 
 
+@pytest.mark.parametrize(
+    "method,path", [("GET", "/resource"), ("POST", "/resource/start"), ("POST", "")]
+)
+def test_idempotent_vm_requests_retry_lost_connections(monkeypatch, method, path):
+    monkeypatch.setattr(vm_module.time, "sleep", lambda _: None)
+    selected = service()
+    selected.http.json.side_effect = [
+        GatewayHTTPError(0, "connection closed"),
+        {"status": "running"},
+    ]
+    body = {"request_id": "00000000-0000-4000-8000-000000000001"} if not path else {"cold": True}
+    result = VM(_service=selected)._api(method, path, timeout=3, json=body)
+    assert result == {"status": "running"}
+    assert selected.http.json.call_count == 2
+    assert all(call.kwargs["json"] == body for call in selected.http.json.call_args_list)
+    assert all(call.kwargs["timeout"] <= 3 for call in selected.http.json.call_args_list)
+
+
+@pytest.mark.parametrize(
+    "method,path,status,attempts",
+    [
+        ("GET", "/resource", 0, 3),
+        ("POST", "/resource/start", 0, 3),
+        ("POST", "/resource/snapshot", 0, 1),
+        ("POST", "/resource", 0, 1),
+        ("POST", "", 0, 1),
+        ("POST", "/resource/start", 403, 1),
+    ],
+)
+def test_vm_connection_retries_are_bounded_and_only_idempotent(
+    monkeypatch, method, path, status, attempts
+):
+    monkeypatch.setattr(vm_module.time, "sleep", lambda _: None)
+    selected = service()
+    selected.http.json.side_effect = GatewayHTTPError(status, "request failed")
+    with pytest.raises(GatewayHTTPError):
+        VM(_service=selected)._api(method, path, timeout=3)
+    assert selected.http.json.call_count == attempts
+
+
 def test_cli_rejects_detached_command_deadline(cli_service, monkeypatch):
     resolve = MagicMock()
     monkeypatch.setattr(vm_cli, "_vm", resolve)

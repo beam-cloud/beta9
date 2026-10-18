@@ -66,6 +66,9 @@ func (r *vmStore) ListVMs(_ context.Context, workspace uint) ([]*types.VM, error
 	}
 	return result, nil
 }
+func (r *vmStore) ListVMsToReconcile(ctx context.Context, _ bool) ([]*types.VM, error) {
+	return r.ListVMs(ctx, 0)
+}
 func (r *vmStore) LockVM(context.Context, string) (func(), error) { return func() {}, nil }
 func (r *vmStore) TouchVM(_ context.Context, id string) error {
 	r.rows[id].LastActiveAt = time.Now()
@@ -777,6 +780,8 @@ func actionContext(info *auth.AuthInfo, name, action, body string) (*auth.HttpAu
 
 func TestActivityLeasesAreIndependentAndExplicitlyReleased(t *testing.T) {
 	s, v, info, _, _ := fixture()
+	// A background snapshot owns the lifecycle lock throughout this test.
+	s.repo = &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
 	redis := miniredis.RunT(t)
 	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
 	require.NoError(t, err)

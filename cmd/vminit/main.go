@@ -143,7 +143,12 @@ func run() (int, error) {
 
 func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (int, error) {
 	logf("boot phase: workload agent entered")
-	if err := serveFS(microvm.FSPort); err != nil {
+	if err := serveVsock(microvm.FSPort, handleFSConn); err != nil {
+		return -1, err
+	}
+	if err := serveVsock(microvm.TunnelPort, func(conn *os.File) error {
+		return microvm.ServePort(guestPortConn{conn})
+	}); err != nil {
 		return -1, err
 	}
 	ctrl, err := dialControl(microvm.ControlPort)
@@ -869,14 +874,11 @@ func (f *freezer) thawAll() {
 	}
 }
 
-// --- guest filesystem service ----------------------------------------------------------
+// --- guest services ----------------------------------------------------------
 
-const maxSearchLineBytes = 16 << 20
-
-// serveFS answers the host's filesystem operations, one vsock connection each
-// (see microvm.FSPort). It starts before the container process so file RPCs
-// work as soon as the sandbox is reachable.
-func serveFS(port uint32) error {
+// serveVsock starts a guest service before the container process, one
+// connection per operation. These sockets are private to the VM's host.
+func serveVsock(port uint32, handle func(*os.File) error) error {
 	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("create vsock socket: %w", err)
@@ -891,24 +893,38 @@ func serveFS(port uint32) error {
 	}
 	go func() {
 		for {
-			nfd, _, err := unix.Accept(fd)
+			nfd, _, err := unix.Accept4(fd, unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK)
 			if err != nil {
 				if errors.Is(err, unix.EINTR) {
 					continue
 				}
-				logf("fs accept: %v", err)
+				logf("vsock %d accept: %v", port, err)
 				return
 			}
 			go func(conn *os.File) {
 				defer conn.Close()
-				if err := handleFSConn(conn); err != nil {
-					logf("fs: %v", err)
+				if err := handle(conn); err != nil {
+					logf("vsock %d: %v", port, err)
 				}
-			}(os.NewFile(uintptr(nfd), "vsock-fs"))
+			}(os.NewFile(uintptr(nfd), "vsock"))
 		}
 	}()
 	return nil
 }
+
+type guestPortConn struct{ *os.File }
+
+func (c guestPortConn) CloseWrite() error {
+	raw, err := c.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var shutdownErr error
+	err = raw.Control(func(fd uintptr) { shutdownErr = unix.Shutdown(int(fd), unix.SHUT_WR) })
+	return errors.Join(err, shutdownErr)
+}
+
+const maxSearchLineBytes = 16 << 20
 
 func handleFSConn(conn *os.File) error {
 	reader := bufio.NewReaderSize(conn, microvm.MaxLineBytes)

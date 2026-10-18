@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ type fakeQMP struct {
 	mu          sync.Mutex
 	images      map[string][]string // node -> backing chain filenames, head first
 	failCommits bool
+	failDeletes bool
 	commitPolls int // query-jobs polls a commit job reports running before it concludes
 	commits     []fakeCommit
 	job         *fakeJob
@@ -84,19 +86,39 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			return
 		}
 		switch request.Execute {
-		case types.QMPCommandCapabilities, types.QMPCommandQuit, types.QMPCommandBlockdevAdd, types.QMPCommandBlockdevDel:
+		case types.QMPCommandCapabilities, types.QMPCommandQuit, types.QMPCommandBlockdevAdd:
 			fmt.Fprintf(conn, `{"return":{}}`)
+		case types.QMPCommandBlockdevDel:
+			var args struct {
+				NodeName string `json:"node-name"`
+			}
+			_ = json.Unmarshal(request.Arguments, &args)
+			f.mu.Lock()
+			failed := f.failDeletes
+			if !failed {
+				delete(f.images, args.NodeName)
+				nodes := slices.Clone(f.nodes.Load().([]string))
+				f.nodes.Store(slices.DeleteFunc(nodes, func(name string) bool { return name == args.NodeName }))
+			}
+			f.mu.Unlock()
+			if failed {
+				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"injected node deletion failure"}}`)
+			} else {
+				fmt.Fprintf(conn, `{"return":{}}`)
+			}
 		case types.QMPCommandQueryBlockstats:
 			fmt.Fprintf(conn, `{"return":[{"node-name":"file-fmt-0","stats":{"wr_highest_offset":%d}}]}`, f.writtenB.Load())
 		case types.QMPCommandQueryNamedBlockNodes:
-			// Listed nodes are reported as wired into a backing chain, which
-			// is what pivotCommitted uses to recognize a committed pivot.
+			// Nodes without an image fixture stand for committed pivots.
+			f.mu.Lock()
 			nodes := f.nodes.Load().([]string)
 			entries := make([]map[string]any, 0, len(nodes))
-			f.mu.Lock()
 			for _, node := range nodes {
 				entry := map[string]any{"node-name": node, "file": "", "backing_file_depth": 1}
 				chain := f.images[node]
+				if len(chain) > 0 {
+					entry["backing_file_depth"] = len(chain) - 1
+				}
 				var image map[string]any
 				for i := len(chain) - 1; i >= 0; i-- {
 					next := map[string]any{"filename": chain[i]}
@@ -130,6 +152,11 @@ func (f *fakeQMP) handle(conn net.Conn) {
 				// Merge: drop every filename from top down to (but excluding)
 				// base from each node's chain.
 				for node, chain := range f.images {
+					// A monitor-owned top keeps its own backing links after
+					// the active head bypasses it, until blockdev-del.
+					if len(chain) > 0 && chain[0] == args.Top {
+						continue
+					}
 					merged := make([]string, 0, len(chain))
 					drop := false
 					for _, filename := range chain {
@@ -193,6 +220,9 @@ func (f *fakeQMP) handle(conn net.Conn) {
 func fakeRunner(_ context.Context, name string, args ...string) ([]byte, error) {
 	if strings.Contains(name, "qemu-img") && len(args) > 0 && args[0] == "create" {
 		return nil, os.WriteFile(args[len(args)-2], []byte("qcow2-stub"), 0o600)
+	}
+	if strings.Contains(name, "qemu-img") && len(args) > 0 && args[0] == "convert" {
+		return nil, os.WriteFile(args[len(args)-1], []byte("qcow2-stub"), 0o600)
 	}
 	return nil, nil
 }
@@ -682,9 +712,12 @@ func newCompactVolume(t *testing.T) (*Volume, *fakeQMP, []string) {
 	if err := saveVolumeState(volume.dir, volume.state); err != nil {
 		t.Fatal(err)
 	}
-	server.nodes.Store([]string{"fmt-0"})
+	server.nodes.Store([]string{"fmt-0", "fmt-1", "fmt-2", "file-fmt-2"})
 	server.setImages(map[string][]string{
-		"fmt-0": {volume.state.HeadPath, paths[2], paths[1], paths[0]},
+		"fmt-0":      {volume.state.HeadPath, paths[2], paths[1], paths[0]},
+		"fmt-1":      {paths[1], paths[0]},
+		"fmt-2":      {paths[2], paths[1], paths[0]},
+		"file-fmt-2": {paths[2]},
 	})
 	return volume, server, paths
 }
@@ -725,6 +758,9 @@ func TestCompactMergesPublishedChainIntoBase(t *testing.T) {
 	}
 	if !fileExists(paths[0]) {
 		t.Fatal("base layer must survive compaction")
+	}
+	if nodes := server.nodes.Load().([]string); len(nodes) != 1 || nodes[0] != volume.fmtNode {
+		t.Fatalf("compacted nodes remain open: %v", nodes)
 	}
 }
 
@@ -806,6 +842,36 @@ func TestCompactSurfacesCommitFailure(t *testing.T) {
 		if !fileExists(path) {
 			t.Fatalf("layer %s must survive a failed commit", path)
 		}
+	}
+}
+
+func TestCompactKeepsFilesAndRetriesWhenNodeCleanupFails(t *testing.T) {
+	volume, server, paths := newCompactVolume(t)
+	server.mu.Lock()
+	server.failDeletes = true
+	server.mu.Unlock()
+	if err := volume.Compact(context.Background()); err == nil {
+		t.Fatal("expected node cleanup failure")
+	}
+	if len(volume.state.Chain) != 3 {
+		t.Fatal("cleanup failure must retain the recovery record")
+	}
+	for _, path := range paths {
+		if !fileExists(path) {
+			t.Fatalf("cleanup failure must retain layer %s", path)
+		}
+	}
+	server.mu.Lock()
+	server.failDeletes = false
+	server.mu.Unlock()
+	if err := volume.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(volume.state.Chain) != 1 {
+		t.Fatal("retry must finish the already-committed merge")
+	}
+	if nodes := server.nodes.Load().([]string); len(nodes) != 1 || nodes[0] != volume.fmtNode {
+		t.Fatalf("retry left compacted nodes open: %v", nodes)
 	}
 }
 

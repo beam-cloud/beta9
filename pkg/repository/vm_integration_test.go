@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,7 +13,62 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
+
+func TestVMLockPoolIntegration(t *testing.T) {
+	dsn := os.Getenv("BETA9_VM_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set BETA9_VM_TEST_DSN for a development database")
+	}
+	db, err := sqlx.Connect("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	db.SetMaxOpenConns(4)
+	repo := &PostgresBackendRepository{client: db}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	group, ctx := errgroup.WithContext(ctx)
+	var acquired atomic.Int32
+	ready := make(chan struct{})
+	for range 100 {
+		group.Go(func() error {
+			unlock, err := repo.LockVM(ctx, uuid.NewString())
+			if err != nil {
+				return err
+			}
+			defer unlock()
+			// All locks must coexist while ordinary queries still have capacity.
+			if acquired.Add(1) == 100 {
+				close(ready)
+			}
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			var value int
+			return db.GetContext(ctx, &value, `SELECT 1`)
+		})
+	}
+	require.NoError(t, group.Wait())
+	require.Zero(t, db.Stats().InUse)
+
+	// Different gateways must still contend on the original PostgreSQL key.
+	peer := &PostgresBackendRepository{client: db}
+	ctx, peerCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer peerCancel()
+	id := uuid.NewString()
+	unlock, err := repo.LockVM(ctx, id)
+	require.NoError(t, err)
+	_, err = peer.LockVM(ctx, id)
+	require.ErrorContains(t, err, "operation already in progress")
+	unlock()
+	unlock, err = peer.LockVM(ctx, id)
+	require.NoError(t, err)
+	unlock()
+	require.Zero(t, db.Stats().InUse)
+}
 
 // Run against a migrated development database only. Rows use random names and
 // are removed on completion; no existing workspace data is changed.
@@ -93,4 +149,67 @@ func TestVMRepositoryIntegration(t *testing.T) {
 		}
 	}
 	require.True(t, found, "template must survive source deletion")
+}
+
+func TestVMReconciliationCandidatesIntegration(t *testing.T) {
+	dsn := os.Getenv("BETA9_VM_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set BETA9_VM_TEST_DSN for a development database")
+	}
+	ws, err := strconv.ParseUint(os.Getenv("BETA9_VM_TEST_WORKSPACE_ID"), 10, 32)
+	require.NoError(t, err)
+	db, err := sqlx.Connect("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repo := &PostgresBackendRepository{client: db}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id := uuid.NewString()
+	// Hold the normal lifecycle fence so a live development reconciler cannot
+	// act on this fixture while its selection states are being exercised.
+	unlock, err := repo.LockVM(ctx, id)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM persistent_vm WHERE id=$1`, id)
+		unlock()
+	})
+	now := time.Now().UTC()
+	v := &types.VM{ID: id, WorkspaceID: uint(ws), WorkspaceExternalID: "test", TokenID: "test", Name: "vm-query-" + id[:8], Handle: "test-" + id, CreatedAt: now, LastActiveAt: now}
+	require.NoError(t, repo.CreateVM(ctx, v))
+	for _, tt := range []struct {
+		desired, status  string
+		normal, backfill bool
+	}{
+		{"running", "running", true, true},
+		{"running", "starting", true, true},
+		{"stopped", "stopped", false, true},
+		{"paused", "paused", false, true},
+		{"deleted", "stopped", true, true},
+		{"deleted", "deleted", false, false},
+	} {
+		v.DesiredState, v.Status = tt.desired, tt.status
+		require.NoError(t, repo.SaveVM(ctx, v))
+		for _, backfill := range []bool{false, true} {
+			rows, err := repo.ListVMsToReconcile(ctx, backfill)
+			require.NoError(t, err)
+			found := false
+			for _, row := range rows {
+				found = found || row.ID == id
+			}
+			expected := tt.normal
+			if backfill {
+				expected = tt.backfill
+			}
+			require.Equal(t, expected, found, "desired=%s status=%s backfill=%v", tt.desired, tt.status, backfill)
+		}
+	}
+	v.DesiredState, v.Status = "paused", "paused"
+	require.NoError(t, repo.SaveVM(ctx, v))
+	_, err = repo.AssignVMPublicIPv6(ctx, id, "2001:db8:"+id[:4]+":"+id[4:8]+"::1")
+	require.NoError(t, err)
+	rows, err := repo.ListVMsToReconcile(ctx, true)
+	require.NoError(t, err)
+	for _, row := range rows {
+		require.NotEqual(t, id, row.ID, "settled VM with an address needs no backfill")
+	}
 }

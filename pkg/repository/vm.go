@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -17,6 +16,7 @@ type VMRepository interface {
 	GetVM(context.Context, uint, string) (*types.VM, error)
 	GetVMByHandle(context.Context, string) (*types.VM, error)
 	ListVMs(context.Context, uint) ([]*types.VM, error)
+	ListVMsToReconcile(context.Context, bool) ([]*types.VM, error)
 	LockVM(context.Context, string) (func(), error)
 	TouchVM(context.Context, string) error
 	ClaimVMIdleStop(context.Context, string, time.Time) (bool, error)
@@ -117,8 +117,22 @@ func (r *PostgresBackendRepository) getVM(ctx context.Context, filter string, ar
 }
 
 func (r *PostgresBackendRepository) ListVMs(ctx context.Context, ws uint) ([]*types.VM, error) {
+	return r.listVMs(ctx, `WHERE ($1=0 OR workspace_id=$1)`, ws)
+}
+
+// Keep settled history out of the reconciler's recurring database reads.
+// Stopped/paused VMs are candidates only while public IPv6 needs backfilling.
+func (r *PostgresBackendRepository) ListVMsToReconcile(ctx context.Context, backfillIPv6 bool) ([]*types.VM, error) {
+	filter := `data->>'desired_state' IS DISTINCT FROM data->>'status' OR data->>'desired_state'='running'`
+	if backfillIPv6 {
+		filter += ` OR (public_ipv6 IS NULL AND data->>'desired_state' IN ('stopped','paused'))`
+	}
+	return r.listVMs(ctx, "WHERE "+filter)
+}
+
+func (r *PostgresBackendRepository) listVMs(ctx context.Context, filter string, args ...any) ([]*types.VM, error) {
 	rows := []vmRow{}
-	err := r.client.SelectContext(ctx, &rows, selectVM+`WHERE ($1=0 OR workspace_id=$1) ORDER BY (data->>'created_at')::timestamptz`, ws)
+	err := r.client.SelectContext(ctx, &rows, selectVM+filter+` ORDER BY (data->>'created_at')::timestamptz`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -134,43 +148,6 @@ func (r *PostgresBackendRepository) ListVMs(ctx context.Context, ws uint) ([]*ty
 	}
 
 	return result, nil
-}
-
-// A session advisory lock fences lifecycle operations across gateway replicas.
-// Writes are committed before external side effects, so a replacement gateway
-// can resume the persisted intent after a crash. Closing the session releases
-// the lock, including when a gateway dies during a snapshot.
-func (r *PostgresBackendRepository) LockVM(ctx context.Context, id string) (func(), error) {
-	conn, err := r.client.Connx(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var acquired bool
-	err = conn.GetContext(ctx, &acquired, `SELECT pg_try_advisory_lock(hashtextextended($1, 947))`, id)
-	if err != nil || !acquired {
-		if err != nil {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-		}
-
-		conn.Close()
-		if err == nil {
-			err = fmt.Errorf("VM operation already in progress")
-		}
-
-		return nil, err
-	}
-
-	return func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := conn.ExecContext(cleanup, `SELECT pg_advisory_unlock(hashtextextended($1, 947))`, id); err != nil {
-			// A failed unlock must not return a locked session to the pool.
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-		}
-
-		conn.Close()
-	}, nil
 }
 
 func (r *PostgresBackendRepository) TouchVM(ctx context.Context, id string) error {

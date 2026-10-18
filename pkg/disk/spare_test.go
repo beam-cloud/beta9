@@ -28,7 +28,12 @@ func (h *fakeHost) run(_ context.Context, name string, args ...string) ([]byte, 
 	h.mu.Unlock()
 	switch name {
 	case "qemu-img":
-		return nil, os.WriteFile(args[len(args)-2], []byte("qcow2-stub"), 0o600)
+		if args[0] == "create" {
+			return nil, os.WriteFile(args[len(args)-2], []byte("qcow2-stub"), 0o600)
+		}
+		if args[0] == "convert" {
+			return nil, os.WriteFile(args[len(args)-1], []byte("qcow2-stub"), 0o600)
+		}
 	case "qemu-storage-daemon":
 		for i, arg := range args {
 			switch {
@@ -704,7 +709,7 @@ func TestWarmSparesDoesNotBlockWorkerShutdown(t *testing.T) {
 }
 
 func TestPreparedVhostSpareAdoptsWithoutRestartingOrFormatting(t *testing.T) {
-	manager, host := newSpareTestManager(t)
+	manager, host := newSpareTestManagerWithDevices(t, 0)
 	manager.spareExport = ExportVhostUser
 	ctx := context.Background()
 	defer manager.Close(ctx)
@@ -722,6 +727,9 @@ func TestPreparedVhostSpareAdoptsWithoutRestartingOrFormatting(t *testing.T) {
 	before := len(host.ran("qemu-storage-daemon"))
 	formatted := len(host.ran("mkfs.ext4"))
 	connected := len(host.ran("nbd-client"))
+	if connected != 0 {
+		t.Fatal("VM spare preparation must not attach a kernel NBD device")
+	}
 	freezeCalls := 0
 	volume, err := manager.Attach(ctx, AttachSpec{Key: "vm-root", Owner: "vm-c1", VirtualSizeBytes: testSpareSize, Export: ExportVhostUser, Freeze: func(context.Context) (func(), error) { freezeCalls++; return func() {}, nil }}, nil)
 	if err != nil {
