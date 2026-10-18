@@ -6,9 +6,28 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/disk"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConcurrentQcowRestoresGoStraightToOriginOnLocalCacheMiss(t *testing.T) {
+	content := []byte("durable qcow layer")
+	store := &fakeDurableDiskSnapshotStore{objects: map[string][]byte{"layer": content}}
+	// No network cache configuration: entering distributed cache discovery on
+	// a local miss would fail instead of restoring from the durable origin.
+	source := &qcowChunkSource{cacheReader: localSnapshotCacheReader{&cache.Client{}}, stores: []durableDiskSnapshotStore{store}}
+	for range 100 {
+		t.Run("restore", func(t *testing.T) {
+			t.Parallel()
+			dest := make([]byte, len(content))
+			err := source.ReadChunk(context.Background(), types.DiskSnapshotChunk{ObjectKey: "layer", Digest: "sha256:missing"}, dest)
+			require.NoError(t, err)
+			require.Equal(t, content, dest)
+		})
+	}
+}
 
 type backloggedQcowVolume struct {
 	pending []disk.SealedLayer

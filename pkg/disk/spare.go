@@ -28,9 +28,8 @@ import (
 // are released when a real attach finds none.
 const (
 	sparePrefix = ".spare-"
-	// spareTarget is how many spares are kept per virtual size once a size has
-	// been requested. Two covers the usual pair of containers a worker starts
-	// together.
+	// The default pool keeps NBD device usage small. Native VM workers size
+	// their vhost-user pool to the number of guests they can start together.
 	spareTarget = 2
 	// spareDeviceReserve keeps spares from taking the last few NBD devices;
 	// those are for real attaches, and other workers on the same node share
@@ -221,11 +220,11 @@ func (m *Manager) rememberedSpareSizes() []int64 {
 	return sizes
 }
 
-// replenishSpares tops the pool for size up to spareTarget in the background.
+// replenishSpares tops the pool for size up to spareCount in the background.
 // One builder runs per size at a time; destroySpares cancels and joins them.
 func (m *Manager) replenishSpares(size int64) {
 	m.mu.Lock()
-	if m.closed || m.spareBuilds[size] || len(m.spares[size]) >= spareTarget {
+	if m.closed || m.spareBuilds[size] || len(m.spares[size]) >= m.spareCount {
 		m.mu.Unlock()
 		return
 	}
@@ -244,7 +243,7 @@ func (m *Manager) replenishSpares(size int64) {
 		}()
 		for {
 			m.mu.Lock()
-			done := m.closed || len(m.spares[size]) >= spareTarget
+			done := m.closed || len(m.spares[size]) >= m.spareCount
 			m.mu.Unlock()
 			if done {
 				return

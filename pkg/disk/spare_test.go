@@ -798,3 +798,56 @@ func TestPreparedVhostSpareConversionFailureCleansUp(t *testing.T) {
 		}
 	}
 }
+
+func TestPreparedRootsCoverConcurrentVMBursts(t *testing.T) {
+	manager, host := newSpareTestManagerWithDevices(t, 0)
+	manager.spareExport = ExportVhostUser
+	manager.spareCount = 100
+	ctx := context.Background()
+	defer manager.Close(ctx)
+	for wave := range 2 {
+		if err := manager.WarmSpares(ctx, testSpareSize); err != nil {
+			t.Fatal(err)
+		}
+		if got := spareCount(manager, testSpareSize); got != 100 {
+			t.Fatalf("prepared %d roots, want 100", got)
+		}
+		// Keep replenishment out of the measured launch path.
+		manager.mu.Lock()
+		manager.spareBuilds[testSpareSize] = true
+		manager.mu.Unlock()
+		formatted, daemons := len(host.ran("mkfs.ext4")), len(host.ran("qemu-storage-daemon"))
+		var wg sync.WaitGroup
+		for i := range 100 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				key := "burst-" + strconv.Itoa(wave) + "-" + strconv.Itoa(i)
+				volume, err := manager.Attach(ctx, AttachSpec{Key: key, Owner: key, VirtualSizeBytes: testSpareSize, Export: ExportVhostUser}, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if !volume.state.Formatted {
+					t.Error("unformatted root")
+				}
+				if _, owned := manager.VolumeOwned(key, key); !owned {
+					t.Error("lost root ownership")
+				}
+				if err := manager.DetachOwned(ctx, key, key); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		wg.Wait()
+		if len(host.ran("mkfs.ext4")) != formatted || len(host.ran("qemu-storage-daemon")) != daemons {
+			t.Fatal("burst performed formatting or daemon startup on the launch path")
+		}
+		if len(host.ran("nbd-client")) != 0 {
+			t.Fatal("native root spares consumed NBD devices")
+		}
+		manager.mu.Lock()
+		delete(manager.spareBuilds, testSpareSize)
+		manager.mu.Unlock()
+	}
+}

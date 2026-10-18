@@ -74,6 +74,44 @@ func TestMicroVMOOMEventsDoNotBlockControlAcknowledgements(t *testing.T) {
 	}
 }
 
+func TestRestoredGuestReadinessWaitsForHostClockAcknowledgement(t *testing.T) {
+	for _, accepted := range []bool{true, false} {
+		host, guest := net.Pipe()
+		ctrl := &microVMControl{
+			ready: make(chan struct{}), pending: map[uint64]chan microvm.Message{},
+			network: &microvm.Network{IPv4: "10.0.0.2"}, networkApplied: make(chan error, 1),
+		}
+		go ctrl.serve(host)
+		require.NoError(t, guest.SetDeadline(time.Now().Add(2*time.Second)))
+		encoder, decoder := microvm.NewEncoder(guest), microvm.NewDecoder(guest)
+		before := time.Now().UnixNano()
+		require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgStarted, Pid: 1}))
+		msg, err := decoder.Decode()
+		require.NoError(t, err)
+		require.Equal(t, microvm.MsgNetwork, msg.Type)
+		require.GreaterOrEqual(t, msg.TimeUnixNano, before)
+		require.LessOrEqual(t, msg.TimeUnixNano, time.Now().UnixNano())
+		select {
+		case <-ctrl.networkApplied:
+			t.Fatal("restore became ready before the guest applied the clock")
+		default:
+		}
+		require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgAck, ID: msg.ID, OK: accepted, Error: "clock rejected"}))
+		select {
+		case err := <-ctrl.networkApplied:
+			if accepted {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "clock rejected")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("restore acknowledgement was lost")
+		}
+		guest.Close()
+		host.Close()
+	}
+}
+
 // The canvas is image content: a symlink where the host writes must be
 // replaced, never followed onto the host.
 func TestPrepareCanvasDoesNotFollowImageSymlinks(t *testing.T) {

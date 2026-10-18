@@ -989,6 +989,28 @@ func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
 	require.Equal(t, content, dst)
 }
 
+func TestLocalContentReadNeverDiscoversOrContactsRemoteHosts(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("durable-snapshot-chunk")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+	client := &Client{localServers: map[string]*Server{"local": {cas: store}}}
+	// No host map, hasher or gRPC clients: a local miss must be returned to
+	// the durable origin rather than entering any network discovery path.
+	for range 100 {
+		t.Run("concurrent_restore", func(t *testing.T) {
+			t.Parallel()
+			dst := make([]byte, len(content))
+			n, err := client.ReadLocalContentInto(context.Background(), hash, 0, dst)
+			require.NoError(t, err)
+			require.Equal(t, int64(len(content)), n)
+			require.Equal(t, content, dst)
+			_, err = client.ReadLocalContentInto(context.Background(), "not-on-this-node", 0, dst)
+			require.ErrorIs(t, err, ErrContentNotFound)
+		})
+	}
+}
+
 func TestContentReadsPreferMaterializedLocalContentOverSelectedRemoteHost(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("materialized-local-content")

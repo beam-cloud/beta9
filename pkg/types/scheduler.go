@@ -409,6 +409,9 @@ type ContainerRequest struct {
 	// they never fall back to a container runtime.
 	UseVM          bool            `json:"use_vm,omitempty"`
 	SecretBindings []SecretBinding `json:"secret_bindings,omitempty"`
+	// PreferredWorkerId preserves VM disk locality within the same placement
+	// tier. It never bypasses capacity, isolation or runtime requirements.
+	PreferredWorkerId string `json:"preferred_worker_id,omitempty" go2proto:"ignore"`
 }
 
 // @go2proto

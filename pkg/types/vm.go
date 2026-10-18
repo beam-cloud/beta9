@@ -19,8 +19,10 @@ const (
 	VMStateDeleted  = "deleted"
 )
 
-// Writable VM root capacity in bytes, layered over the separate base image.
+// Default VM resources; root capacity is in bytes and memory is in MiB.
 const (
+	DefaultVMCPU           int64 = 4000
+	DefaultVMMemory        int64 = 8192
 	DefaultVMRootSizeBytes int64 = 50 << 30
 	MaxVMRootSizeBytes     int64 = 100 << 30
 )

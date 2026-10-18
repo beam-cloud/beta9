@@ -118,6 +118,11 @@ func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, conta
 
 	var syncErr error
 	instance, exists := s.containerInstances.Get(containerID)
+	if exists && instance != nil && exitCode == int(types.ContainerExitCodeStartupFailed) {
+		if started, _ := instance.runtimeStartState(); !started {
+			request = s.attachedStartupDisks(request)
+		}
+	}
 	// A successful terminal block-root checkpoint already published the exact
 	// disks paired with RAM. Detach without advancing their sealed generations.
 	sealed := exists && instance != nil && instance.terminalCheckpointCreated.Load() &&
@@ -137,6 +142,29 @@ func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, conta
 		}
 	}
 	return finalExitCode, finalExitReported
+}
+
+// An attach that failed before starting the guest has no writes to publish.
+// Finalize only mounts acquired by this attempt; syncing an absent volume
+// would hide StartupFailed behind a finalization error and prevent deletion.
+func (s *Worker) attachedStartupDisks(request *types.ContainerRequest) *types.ContainerRequest {
+	if request == nil {
+		return nil
+	}
+	copy := *request
+	copy.Mounts = nil
+	for _, mount := range request.Mounts {
+		if isQcowDurableDiskMount(&mount) {
+			if s.diskManager == nil {
+				continue
+			}
+			if _, owned := s.diskManager.VolumeOwned(s.qcowVolumeKey(request, &mount), request.ContainerId); !owned {
+				continue
+			}
+		}
+		copy.Mounts = append(copy.Mounts, mount)
+	}
+	return &copy
 }
 
 func (s *Worker) detachFinalQcowDurableDisks(request *types.ContainerRequest) error {

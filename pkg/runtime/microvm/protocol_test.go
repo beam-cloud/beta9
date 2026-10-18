@@ -35,7 +35,7 @@ func TestReadLineDoesNotConsumePastTheLine(t *testing.T) {
 func TestEncoderDecoderRoundTrip(t *testing.T) {
 	var buf strings.Builder
 	enc := NewEncoder(&buf)
-	want := []Message{{Type: MsgSignal, ID: 7, Signal: 15}, {Type: MsgExit, Code: 3}}
+	want := []Message{{Type: MsgSignal, ID: 7, Signal: 15}, {Type: MsgExit, Code: 3}, {Type: MsgNetwork, TimeUnixNano: 1792346400123456789}}
 	for _, msg := range want {
 		if err := enc.Encode(msg); err != nil {
 			t.Fatal(err)
@@ -44,7 +44,7 @@ func TestEncoderDecoderRoundTrip(t *testing.T) {
 	dec := NewDecoder(strings.NewReader(buf.String()))
 	for _, msg := range want {
 		got, err := dec.Decode()
-		if err != nil || got.Type != msg.Type || got.ID != msg.ID || got.Signal != msg.Signal || got.Code != msg.Code {
+		if err != nil || got.Type != msg.Type || got.ID != msg.ID || got.Signal != msg.Signal || got.Code != msg.Code || got.TimeUnixNano != msg.TimeUnixNano {
 			t.Fatalf("got %+v, %v; want %+v", got, err, msg)
 		}
 	}

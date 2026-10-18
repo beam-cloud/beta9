@@ -404,6 +404,7 @@ type runOptions struct {
 	forceResourceLimits bool
 	taskId              string
 	containerId         string
+	preferredWorkerId   string
 }
 
 func createPodRunOptions(ctx context.Context, in *pb.CreatePodRequest, checkpoint *types.Checkpoint) runOptions {
@@ -555,6 +556,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		PoolSelector:      stubConfig.PoolSelector(),
 		MachineId:         stubConfig.MachineID,
 		Hostname:          stubConfig.Hostname,
+		PreferredWorkerId: opts.preferredWorkerId,
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return "", err

@@ -1961,7 +1961,7 @@ func (c *microVMControl) serve(conn net.Conn) {
 }
 
 func (c *microVMControl) pushNetwork() {
-	_, err := c.request(context.Background(), microvm.Message{Type: microvm.MsgNetwork, Network: c.network})
+	_, err := c.request(context.Background(), microvm.Message{Type: microvm.MsgNetwork, Network: c.network, TimeUnixNano: time.Now().UnixNano()})
 	if err != nil {
 		log.Error().Err(err).Msg("restored microvm did not take its network configuration")
 	}

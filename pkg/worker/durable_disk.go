@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -39,6 +40,7 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 	diskConfig := disk.Config{}
 	if s.runtimeOwnsBlockRoot() {
 		diskConfig.SpareExport = disk.ExportVhostUser
+		diskConfig.SpareCount = s.freshVMRootSpareCount()
 	}
 
 	if s.agentWorker() {
@@ -54,13 +56,18 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 	}
 
 	if s.runtimeOwnsBlockRoot() {
-		warmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := s.diskManager.WarmSpares(warmCtx, types.DefaultVMRootSizeBytes)
-		cancel()
-		if err != nil {
+		// Prepare the burst capacity before accepting containers. Formatting
+		// the remaining roots after an arbitrary startup deadline pushes that
+		// work back onto the first burst's critical path.
+		if err := s.diskManager.WarmSpares(ctx, types.DefaultVMRootSizeBytes); err != nil {
 			log.Warn().Err(err).Msg("failed to warm fresh VM root disks")
 		}
 	}
+}
+
+func (s *Worker) freshVMRootSpareCount() int {
+	guest := &types.ContainerRequest{Memory: types.DefaultVMMemory, UseVM: true}
+	return max(2, min(s.containerStartLimit, int(s.cpuLimit/types.DefaultVMCPU), int(s.memoryLimit/guest.CapacityMemory())))
 }
 
 type durableDiskSyncMode uint8
@@ -725,7 +732,13 @@ func (s *Worker) durableDiskSnapshotCacheReader() durableDiskSnapshotCacheReader
 	if s == nil || s.cacheManager == nil || s.cacheManager.client == nil {
 		return nil
 	}
-	return s.cacheManager.client
+	return localSnapshotCacheReader{s.cacheManager.client}
+}
+
+type localSnapshotCacheReader struct{ client *cache.Client }
+
+func (r localSnapshotCacheReader) ReadContentInto(ctx context.Context, hash string, offset int64, dest []byte, _ cache.ClientOptions) (int64, error) {
+	return r.client.ReadLocalContentInto(ctx, hash, offset, dest)
 }
 
 // The workspace-bucket layout for durable disk artifacts:
