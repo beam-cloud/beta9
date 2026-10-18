@@ -126,6 +126,7 @@ type fakeWorkerRepoClient struct {
 	lastKeepAlive     *pb.SetWorkerKeepAliveRequest
 	disableErr        error
 	disables          int
+	cordons           int
 	metering          *pb.GetWorkerMeteringConfigResponse
 }
 
@@ -147,10 +148,26 @@ func (f *fakeWorkerRepoClient) count(calls *int) int {
 }
 
 func (f *fakeWorkerRepoClient) DisableWorker(ctx context.Context, req *pb.DisableWorkerRequest, _ ...grpc.CallOption) (*pb.DisableWorkerResponse, error) {
-	if err := f.call(&f.disables, &f.disableErr, nil); err != nil {
+	if err := f.call(&f.disables, &f.disableErr, func() {
+		if req.Cordon {
+			f.cordons++
+		}
+	}); err != nil {
 		return nil, err
 	}
 	return &pb.DisableWorkerResponse{Ok: true}, nil
+}
+
+func TestGPUFaultRequestsPersistentCordon(t *testing.T) {
+	client := &fakeWorkerRepoClient{}
+	worker := &Worker{workerRepoClient: client}
+	require.False(t, worker.disableSchedulingForGPUError(errors.New("GPU query failed")))
+	require.True(t, worker.disableSchedulingForGPUError(errGPUUnhealthy))
+	require.Equal(t, 1, client.cordons)
+	require.Equal(t, 1, client.disables)
+	require.NoError(t, worker.disableScheduling())
+	require.Equal(t, 1, client.cordons, "ordinary shutdown must not cordon the machine")
+	require.Equal(t, 2, client.disables)
 }
 
 func (f *fakeWorkerRepoClient) SetWorkerKeepAlive(ctx context.Context, req *pb.SetWorkerKeepAliveRequest, _ ...grpc.CallOption) (*pb.SetWorkerKeepAliveResponse, error) {

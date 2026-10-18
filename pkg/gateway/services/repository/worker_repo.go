@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
+	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -30,6 +31,7 @@ type WorkerRepositoryService struct {
 	containerRepo         repository.ContainerRepository
 	backendRepo           repository.BackendRepository
 	computeRepo           repository.ComputeRepository
+	computeService        *computesvc.Service
 	eventRepo             repository.EventRepository
 	appConfig             types.AppConfig
 	pb.UnimplementedWorkerRepositoryServiceServer
@@ -41,13 +43,14 @@ const (
 	containerRequestBatchSize         = 128
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, computeRepo repository.ComputeRepository, eventRepo repository.EventRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, computeRepo repository.ComputeRepository, computeService *computesvc.Service, eventRepo repository.EventRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
 	service := &WorkerRepositoryService{
 		ctx:                   ctx,
 		workerRepo:            workerRepo,
 		containerRepo:         containerRepo,
 		backendRepo:           backendRepo,
 		computeRepo:           computeRepo,
+		computeService:        computeService,
 		eventRepo:             eventRepo,
 		appConfig:             appConfig,
 		cacheCoordinatorToken: configuredCacheCoordinatorToken(cacheCoordinatorToken),
@@ -318,12 +321,28 @@ func (s *WorkerRepositoryService) ToggleWorkerAvailable(ctx context.Context, req
 }
 
 func (s *WorkerRepositoryService) DisableWorker(ctx context.Context, req *pb.DisableWorkerRequest) (*pb.DisableWorkerResponse, error) {
-	err := s.workerRepo.UpdateWorkerStatus(req.WorkerId, types.WorkerStatusDisabled)
+	var err error
+	if req.Cordon {
+		err = s.cordonWorker(ctx, req.WorkerId)
+	} else {
+		err = s.workerRepo.UpdateWorkerStatus(req.WorkerId, types.WorkerStatusDisabled)
+	}
 	if err != nil {
 		return &pb.DisableWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-
 	return &pb.DisableWorkerResponse{Ok: true}, nil
+}
+
+func (s *WorkerRepositoryService) cordonWorker(ctx context.Context, workerID string) error {
+	worker, err := s.workerRepo.GetWorkerById(workerID)
+	if err != nil {
+		return err
+	}
+	handled, err := s.computeService.SetAgentWorkerCordon(ctx, worker, true)
+	if err != nil || handled {
+		return err
+	}
+	return s.workerRepo.SetWorkerCordon(workerID, true)
 }
 
 func (s *WorkerRepositoryService) UpdateWorkerCapacity(ctx context.Context, req *pb.UpdateWorkerCapacityRequest) (*pb.UpdateWorkerCapacityResponse, error) {
