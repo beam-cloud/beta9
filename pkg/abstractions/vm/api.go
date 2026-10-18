@@ -412,12 +412,14 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		}
 
 		if err == nil {
-			if existing.CreationDigest != digest {
-				return nil, echo.NewHTTPError(http.StatusConflict, "request_id was already used with different VM settings")
-			}
-
+			// A removed request cannot be replayed, even if defaults have changed
+			// since creation. Onboarding uses Gone to prepare a fresh request.
 			if existing.DesiredState == "deleted" {
 				return nil, echo.NewHTTPError(http.StatusGone, "the VM for this request_id was removed")
+			}
+
+			if existing.CreationDigest != digest {
+				return nil, echo.NewHTTPError(http.StatusConflict, "request_id was already used with different VM settings")
 			}
 
 			return existing, nil
