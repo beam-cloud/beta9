@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	runtime "github.com/beam-cloud/beta9/pkg/runtime"
@@ -21,6 +22,10 @@ const (
 	cgroupV2Root      = "/sys/fs/cgroup"
 	cgroupCPUStatFile = "cpu.stat"
 )
+
+// Reading cpu.stat flushes counters under the kernel's global cgroup rstat
+// lock. Concurrent VM samplers otherwise spin on that lock during bursts.
+var cgroupCPUReadMu sync.Mutex
 
 func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, containerPid int) {
 	ticker := time.NewTicker(w.config.Monitoring.ContainerMetricsInterval)
@@ -336,7 +341,9 @@ func (m *ProcessMonitor) readCgroupCPUSeconds() (float64, bool) {
 	if m.cpuStatPath == "" {
 		return 0, false
 	}
+	cgroupCPUReadMu.Lock()
 	data, err := os.ReadFile(m.cpuStatPath)
+	cgroupCPUReadMu.Unlock()
 	if err != nil {
 		m.hasLastCgroupCPU = false
 		return 0, false
@@ -379,11 +386,9 @@ func cgroupCPUStatPath(pid int) string {
 		return ""
 	}
 	path := filepath.Join(cgroupV2Root, cgroupPath, cgroupCPUStatFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	if _, err := parseCgroupCPUUsage(data); err != nil {
+	// Resolving the path must not flush the counter too. Prime reads it once
+	// to establish the baseline; later read failures use the process tree.
+	if _, err := os.Stat(path); err != nil {
 		return ""
 	}
 	return path
