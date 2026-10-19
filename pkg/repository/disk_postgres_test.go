@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -78,6 +79,45 @@ func TestGetDiskSnapshotOnlySharesAvailableSnapshots(t *testing.T) {
 	_, err := repo.GetDiskSnapshot(context.Background(), 7, "snapshot-1")
 	require.ErrorAs(t, err, new(*types.ErrDiskSnapshotNotFound))
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetDiskSnapshotChainIsBoundedAndRequiresEveryParent(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		count int
+		root  string
+		want  string
+	}{
+		{name: "complete", count: 16},
+		{name: "missing head", want: "not found"},
+		{name: "missing parent", count: 1, root: "hidden", want: "missing or inaccessible"},
+		{name: "cycle or excessive depth", count: types.DiskSnapshotMaxChainDepth + 1, root: "cycle", want: "exceeds"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, mock := NewBackendPostgresRepositoryForTest()
+			rows := sqlmock.NewRows([]string{"external_id", "parent_snapshot_id"})
+			for i := range test.count {
+				parent := test.root
+				if i > 0 {
+					parent = fmt.Sprint(i - 1)
+				}
+				rows.AddRow(fmt.Sprint(i), parent)
+			}
+			mock.ExpectQuery(`WITH RECURSIVE chain AS .*parent.deleted_at IS NULL.*parent.workspace_id = \$1 OR \(parent.public = TRUE AND parent.status = \$3\).*chain.depth <= \$4.*ORDER BY depth DESC`).
+				WithArgs(uint(7), "head", types.DiskSnapshotStatusAvailable, types.DiskSnapshotMaxChainDepth).
+				WillReturnRows(rows)
+			chain, err := repo.GetDiskSnapshotChain(context.Background(), 7, "head")
+			if test.want == "" {
+				require.NoError(t, err)
+				require.Len(t, chain, test.count)
+				require.Empty(t, chain[0].ParentSnapshotId)
+			} else {
+				require.ErrorContains(t, err, test.want)
+				require.Nil(t, chain)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestDeleteDiskOnlyUnregistersMutableDisk(t *testing.T) {

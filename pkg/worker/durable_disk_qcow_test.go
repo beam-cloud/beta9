@@ -9,8 +9,37 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
+
+func TestQcowRestoreResolvesAncestorsInOneRequest(t *testing.T) {
+	backend := &fakeBackendRepoClient{}
+	for i := range 16 {
+		row := &pb.DiskSnapshot{ExternalId: fmt.Sprint(i), Format: types.DiskSnapshotFormatQcowV1, ManifestKey: "manifest"}
+		if i > 0 {
+			row.ParentSnapshotId = fmt.Sprint(i - 1)
+		}
+		backend.snapshotChain = append(backend.snapshotChain, row)
+	}
+	worker := &Worker{backendRepoClient: backend}
+	request := &types.ContainerRequest{}
+	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "root"}}
+	head := durableDiskSnapshotFromProto(backend.snapshotChain[15])
+	rows, err := worker.resolveQcowSnapshotChain(context.Background(), request, mount, head)
+	require.NoError(t, err)
+	require.Len(t, rows, 16)
+	require.Empty(t, rows[0].ParentSnapshotId)
+	require.Equal(t, head.ExternalId, backend.requestedSnapshotId)
+	require.Equal(t, head.ExternalId, rows[15].ExternalId)
+
+	backend.snapshotChain = nil
+	_, err = worker.resolveQcowSnapshotChain(context.Background(), request, mount, head)
+	require.ErrorContains(t, err, "is missing")
+	backend.getDiskSnapshotErr = context.Canceled
+	_, err = worker.resolveQcowSnapshotChain(context.Background(), request, mount, head)
+	require.ErrorIs(t, err, context.Canceled)
+}
 
 func TestConcurrentQcowRestoresGoStraightToOriginOnLocalCacheMiss(t *testing.T) {
 	content := []byte("durable qcow layer")

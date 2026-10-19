@@ -206,6 +206,22 @@ func (s *BackendRepositoryService) GetDiskSnapshot(ctx context.Context, req *pb.
 	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
 }
 
+func (s *BackendRepositoryService) GetDiskSnapshotChain(ctx context.Context, req *pb.GetDiskSnapshotRequest) (*pb.GetDiskSnapshotChainResponse, error) {
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	if err != nil {
+		return &pb.GetDiskSnapshotChainResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	rows, err := s.backendRepo.GetDiskSnapshotChain(ctx, workspace.Id, req.SnapshotId)
+	if err != nil {
+		return &pb.GetDiskSnapshotChainResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	snapshots := make([]*pb.DiskSnapshot, len(rows))
+	for i := range rows {
+		snapshots[i] = diskSnapshotToProto(&rows[i])
+	}
+	return &pb.GetDiskSnapshotChainResponse{Ok: true, Snapshots: snapshots}, nil
+}
+
 func (s *BackendRepositoryService) GetDiskSnapshotDownloadURL(ctx context.Context, req *pb.GetDiskSnapshotDownloadURLRequest) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
 	url, err := s.diskSnapshotDownloadURL(ctx, req)
 	if err != nil {

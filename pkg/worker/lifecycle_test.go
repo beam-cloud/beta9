@@ -4232,6 +4232,7 @@ type fakeBackendRepoClient struct {
 	createCalls         int
 	lastCreate          *pb.CreateCheckpointRequest
 	sourceSnapshot      *pb.DiskSnapshot
+	snapshotChain       []*pb.DiskSnapshot
 	latestSnapshot      *pb.DiskSnapshot
 	getDiskSnapshotErr  error
 	requestedSnapshotId string
@@ -4288,6 +4289,14 @@ func (f *fakeBackendRepoClient) GetDiskSnapshot(ctx context.Context, in *pb.GetD
 
 func (f *fakeBackendRepoClient) GetDiskSnapshotDownloadURL(context.Context, *pb.GetDiskSnapshotDownloadURLRequest, ...grpc.CallOption) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (f *fakeBackendRepoClient) GetDiskSnapshotChain(ctx context.Context, in *pb.GetDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetDiskSnapshotChainResponse, error) {
+	f.requestedSnapshotId = in.SnapshotId
+	if f.getDiskSnapshotErr != nil {
+		return nil, f.getDiskSnapshotErr
+	}
+	return &pb.GetDiskSnapshotChainResponse{Ok: true, Snapshots: f.snapshotChain}, nil
 }
 
 type mockResourceRuntime struct {

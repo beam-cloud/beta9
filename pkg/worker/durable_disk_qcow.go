@@ -588,9 +588,8 @@ func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile) *ty
 	return &upload
 }
 
-// resolveQcowSnapshotChain walks ParentSnapshotId links from the newest
-// generation (or a seed snapshot for forks) back to a parentless root and
-// returns the rows base first.
+// resolveQcowSnapshotChain fetches the complete ancestry in one request, base
+// first. Serial parent RPCs make restore latency grow with every snapshot.
 func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, newest *types.DiskSnapshot) ([]*types.DiskSnapshot, error) {
 	if (newest == nil || newest.ManifestKey == "") && mount.DurableDisk.SourceSnapshotId != "" {
 		// Fork: seed a brand new disk from another disk's snapshot chain.
@@ -604,32 +603,33 @@ func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.Co
 		return nil, nil
 	}
 
-	var rows []*types.DiskSnapshot
-	row := newest
-	for {
+	rows := []*types.DiskSnapshot{newest}
+	if newest.ParentSnapshotId != "" {
+		response, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshotChain(ctx, &pb.GetDiskSnapshotRequest{
+			WorkspaceId: cacheRequestWorkspaceID(request), SnapshotId: newest.ExternalId,
+		}))
+		if err != nil {
+			return nil, fmt.Errorf("resolve qcow snapshot chain %s: %w", newest.ExternalId, err)
+		}
+		if response == nil || len(response.Snapshots) == 0 {
+			return nil, fmt.Errorf("qcow snapshot chain %s is missing", newest.ExternalId)
+		}
+		rows = make([]*types.DiskSnapshot, len(response.Snapshots))
+		for i, row := range response.Snapshots {
+			rows[i] = durableDiskSnapshotFromProto(row)
+		}
+	}
+	for _, row := range rows {
+		if row == nil {
+			return nil, fmt.Errorf("qcow snapshot chain %s contains a missing layer", newest.ExternalId)
+		}
 		if row.Format != types.DiskSnapshotFormatQcowV1 {
 			return nil, fmt.Errorf("disk %q has snapshot %s in format %q; the qcow driver cannot restore it",
 				mount.DurableDisk.Name, row.ExternalId, row.Format)
 		}
-		rows = append(rows, row)
-		if row.ParentSnapshotId == "" {
-			break
+		if row.ManifestKey == "" {
+			return nil, fmt.Errorf("qcow snapshot manifest %s is missing", row.ExternalId)
 		}
-		if len(rows) > disk.DefaultMaxChainDepth {
-			return nil, fmt.Errorf("disk %q snapshot chain exceeds %d generations", mount.DurableDisk.Name, disk.DefaultMaxChainDepth)
-		}
-		parent, err := s.diskSnapshotByID(ctx, request, row.ParentSnapshotId)
-		if err != nil {
-			return nil, fmt.Errorf("resolve qcow snapshot parent %s: %w", row.ParentSnapshotId, err)
-		}
-		row = parent
-		if row == nil || row.ManifestKey == "" {
-			return nil, fmt.Errorf("qcow snapshot parent %s is missing", rows[len(rows)-1].ParentSnapshotId)
-		}
-	}
-	// Reverse into base-first order.
-	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-		rows[i], rows[j] = rows[j], rows[i]
 	}
 	return rows, nil
 }

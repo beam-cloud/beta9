@@ -380,6 +380,40 @@ func (r *PostgresBackendRepository) GetDiskSnapshot(ctx context.Context, workspa
 	return &snapshot, nil
 }
 
+// GetDiskSnapshotChain resolves all ancestors in one database round trip.
+// Visibility and deletion checks apply to every layer, including public forks.
+func (r *PostgresBackendRepository) GetDiskSnapshotChain(ctx context.Context, workspaceId uint, snapshotId string) ([]types.DiskSnapshot, error) {
+	query := fmt.Sprintf(`
+		WITH RECURSIVE chain AS (
+			SELECT ds.*, 1 AS depth
+			FROM disk_snapshot ds
+			WHERE external_id = $2 AND deleted_at IS NULL
+				AND (workspace_id = $1 OR (public = TRUE AND status = $3))
+			UNION ALL
+			SELECT parent.*, chain.depth + 1
+			FROM disk_snapshot parent
+			JOIN chain ON parent.external_id = NULLIF(chain.parent_snapshot_id, '')::uuid
+			WHERE parent.deleted_at IS NULL
+				AND (parent.workspace_id = $1 OR (parent.public = TRUE AND parent.status = $3))
+				AND chain.depth <= $4
+		)
+		SELECT %s FROM chain ORDER BY depth DESC;`, diskSnapshotColumns(""))
+	var snapshots []types.DiskSnapshot
+	if err := r.client.SelectContext(ctx, &snapshots, query, workspaceId, snapshotId, types.DiskSnapshotStatusAvailable, types.DiskSnapshotMaxChainDepth); err != nil {
+		return nil, err
+	}
+	if len(snapshots) == 0 {
+		return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: snapshotId}
+	}
+	if len(snapshots) > types.DiskSnapshotMaxChainDepth {
+		return nil, fmt.Errorf("disk snapshot %s chain exceeds %d generations", snapshotId, types.DiskSnapshotMaxChainDepth)
+	}
+	if snapshots[0].ParentSnapshotId != "" {
+		return nil, fmt.Errorf("disk snapshot parent %s is missing or inaccessible", snapshots[0].ParentSnapshotId)
+	}
+	return snapshots, nil
+}
+
 func (r *PostgresBackendRepository) GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error) {
 	query := fmt.Sprintf(`
 		SELECT %s
