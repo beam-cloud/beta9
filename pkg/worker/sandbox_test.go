@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
-	containerruntime "github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
@@ -134,76 +133,6 @@ func TestVMReservationOwnsSandboxReadiness(t *testing.T) {
 
 func (readyGoProcServer) Ready(context.Context, *goprocpb.ReadyRequest) (*goprocpb.ReadyResponse, error) {
 	return &goprocpb.ReadyResponse{Ok: true}, nil
-}
-
-type announcedExecRuntime struct {
-	containerruntime.Runtime
-	listening chan struct{}
-	waiting   chan struct{}
-}
-
-func (r *announcedExecRuntime) WaitExecReady(ctx context.Context, _ string) error {
-	close(r.waiting)
-	select {
-	case <-r.listening:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-type countingExecListener struct {
-	net.Listener
-	accepted atomic.Int64
-}
-
-func (l *countingExecListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err == nil {
-		l.accepted.Add(1)
-	}
-	return conn, err
-}
-
-func TestGuestAnnouncementPrecedesProcessManagerConnection(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	listener := &countingExecListener{Listener: lis}
-	server := grpc.NewServer()
-	goprocpb.RegisterGoProcServer(server, readyGoProcServer{})
-	go server.Serve(listener)
-	t.Cleanup(server.Stop)
-	rt := &announcedExecRuntime{listening: make(chan struct{}), waiting: make(chan struct{})}
-	instance := &ContainerInstance{Runtime: rt, ContainerAddressMap: map[int32]string{types.WorkerSandboxProcessManagerPort: lis.Addr().String()}}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	done := make(chan *goproc.GoProcClient, 1)
-	go func() {
-		client, _, _ := (&Worker{}).waitForProcessManager(ctx, "announced", instance)
-		done <- client
-	}()
-	select {
-	case <-rt.waiting:
-	case <-ctx.Done():
-		t.Fatal("worker did not wait for the guest")
-	}
-	require.Zero(t, listener.accepted.Load(), "startup must not flood the unready guest with connections")
-	close(rt.listening)
-	client := <-done
-	require.NotNil(t, client)
-	defer client.Cleanup()
-	require.NoError(t, client.ReadyContext(ctx))
-	require.EqualValues(t, 1, listener.accepted.Load(), "use the successful connection after readiness")
-}
-
-func TestGuestAnnouncementWaitStopsWithContainer(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	instance := &ContainerInstance{Runtime: &announcedExecRuntime{listening: make(chan struct{}), waiting: make(chan struct{})}}
-	client, ready, stats := (&Worker{}).waitForProcessManager(ctx, "canceled", instance)
-	require.Nil(t, client)
-	require.False(t, ready)
-	require.Equal(t, context.Canceled.Error(), stats.LastError)
 }
 
 // The process manager comes up only after the runtime has exec'd it, which on a

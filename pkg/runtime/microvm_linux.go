@@ -623,26 +623,6 @@ func (m *MicroVM) Events(ctx context.Context, containerID string) (<-chan Event,
 	return inst.ctrl.events(ctx), nil
 }
 
-func (m *MicroVM) WaitExecReady(ctx context.Context, containerID string) error {
-	inst, ok := m.instance(containerID)
-	if !ok || inst.ctrl == nil {
-		return ErrContainerNotFound{ContainerID: containerID}
-	}
-	// Restore already waits for the running guest to apply its network. The
-	// process manager survives in RAM; only cold boots need a listener barrier.
-	if inst.ctrl.network != nil {
-		return nil
-	}
-	select {
-	case <-inst.ctrl.execReady:
-		return nil
-	case <-inst.exitDone:
-		return fmt.Errorf("guest exited before its exec listener opened")
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 func (m *MicroVM) Close() error {
 	m.mu.Lock()
 	instances := make([]*microVMInstance, 0, len(m.vms))
@@ -1863,11 +1843,9 @@ func (inst *microVMInstance) removeTap() {
 // the container process's pid and exit code out, and signals and freeze
 // requests in.
 type microVMControl struct {
-	listener      *net.UnixListener
-	exit          chan int
-	ready         chan struct{}
-	execReady     chan struct{}
-	execReadyOnce sync.Once
+	listener *net.UnixListener
+	exit     chan int
+	ready    chan struct{}
 
 	applicationOOM chan Event
 	eventDone      chan struct{}
@@ -1897,7 +1875,6 @@ func listenMicroVMControl(vsockPath string) (*microVMControl, error) {
 		listener:       listener,
 		exit:           make(chan int, 1),
 		ready:          make(chan struct{}),
-		execReady:      make(chan struct{}),
 		networkApplied: make(chan error, 1),
 		pending:        map[uint64]chan microvm.Message{},
 		applicationOOM: make(chan Event, 16),
@@ -1966,8 +1943,6 @@ func (c *microVMControl) serve(conn net.Conn) {
 			if c.network != nil {
 				go c.pushNetwork()
 			}
-		case microvm.MsgExecReady:
-			c.execReadyOnce.Do(func() { close(c.execReady) })
 		case microvm.MsgPing:
 		case microvm.MsgApplicationOOM:
 			if msg.OOM != nil {

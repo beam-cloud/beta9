@@ -28,7 +28,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -104,11 +103,6 @@ type PostgresBackendRepository struct {
 	taskEvents            *taskEventPublisher
 	vmLocksOnce           sync.Once
 	vmLocks               []vmLockSession
-	workspaceReads        singleflight.Group
-	latestDiskReads       operationBatch[diskSnapshotKey, *types.DiskSnapshot]
-	stubReads             operationBatch[string, stubRead]
-	vmReads               operationBatch[vmReadKey, vmRow]
-	vmCreates             commitBatch[uint, *vmLaunchInsert, error]
 }
 
 type adminWorkspaceLoad struct {
@@ -222,20 +216,21 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 }
 
 func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error) {
-	return r.readWorkspace(ctx, "external/"+externalId, func(ctx context.Context) (types.Workspace, error) {
-		var workspace types.Workspace
+	var workspace types.Workspace
 
-		query := `SELECT id, external_id, name, created_at, updated_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled, storage_id FROM workspace WHERE external_id = $1;`
-		err := r.client.GetContext(ctx, &workspace, query, externalId)
-		return workspace, err
-	})
+	query := `SELECT id, external_id, name, created_at, updated_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled, storage_id FROM workspace WHERE external_id = $1;`
+	err := r.client.GetContext(ctx, &workspace, query, externalId)
+	if err != nil {
+		return types.Workspace{}, err
+	}
+
+	return workspace, nil
 }
 
 func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceId uint) (*types.Workspace, error) {
-	workspace, err := r.readWorkspace(ctx, fmt.Sprintf("id/%d", workspaceId), func(ctx context.Context) (types.Workspace, error) {
-		var workspace types.Workspace
+	var workspace types.Workspace
 
-		query := `
+	query := `
 	SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
 	ws.id "storage.id", ws.bucket_name "storage.bucket_name", ws.access_key "storage.access_key",
 	ws.secret_key "storage.secret_key", ws.endpoint_url "storage.endpoint_url", ws.region "storage.region",
@@ -245,19 +240,15 @@ func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceI
 	WHERE w.id = $1;
 	`
 
-		if err := r.client.GetContext(ctx, &workspace, query, workspaceId); err != nil {
-			return workspace, err
-		}
-
-		if workspace.StorageAvailable() {
-			if err := r.decryptFields(workspace.Storage); err != nil {
-				return workspace, err
-			}
-		}
-		return workspace, nil
-	})
+	err := r.client.GetContext(ctx, &workspace, query, workspaceId)
 	if err != nil {
 		return nil, err
+	}
+
+	if workspace.StorageAvailable() {
+		if err := r.decryptFields(workspace.Storage); err != nil {
+			return nil, err
+		}
 	}
 
 	return &workspace, nil
@@ -1084,35 +1075,55 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 // Stub
 
 func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error) {
+	var stub types.Stub
+
+	// Serialize config to JSON
 	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return types.Stub{}, err
 	}
 
-	// Reuse/touch, creation and app activity share one transaction and pool
-	// checkout. Concurrent launches must not queue for three separate queries.
-	const columns = "id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id"
-	query := `
-	WITH matched AS (
-		SELECT id FROM stub
-		WHERE name=$1 AND type=$2 AND object_id=$3 AND config::jsonb=$4::text::jsonb
-		  AND workspace_id=$5 AND app_id=$6 AND NOT $7
-		LIMIT 1
-	), reused AS (
-		UPDATE stub SET updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT id FROM matched)
-		RETURNING ` + columns + `
-	), created AS (
-		INSERT INTO stub (name, type, config, object_id, workspace_id, app_id)
-		SELECT $1, $2, $4::text::json, $3, $5, $6 WHERE NOT EXISTS (SELECT 1 FROM matched)
-		RETURNING ` + columns + `
-	), activity AS (
-		UPDATE app SET updated_at=NOW() WHERE id=$6 AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')
-	)
-	SELECT ` + columns + ` FROM reused
-	UNION ALL SELECT ` + columns + ` FROM created`
-	var stub types.Stub
-	err = r.client.GetContext(ctx, &stub, query, name, stubType, objectId, string(configJSON), workspaceId, appId, forceCreate)
-	return stub, err
+	// @Luke slightly concerned that this is can get the wrong stub. If name + stubtype + objectId + config matches (Likely can happen from clone but haven't seen it yet)
+	if !forceCreate {
+		// Query to check if a stub with the same name, type, object_id, and config exists
+		queryGet := `
+    SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id
+    FROM stub
+    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb AND workspace_id = $5 AND app_id = $6;
+    `
+		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON), workspaceId, appId)
+		if err == nil {
+			queryTouch := `
+    UPDATE stub
+    SET updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1
+    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id;
+    `
+			if err := r.client.GetContext(ctx, &stub, queryTouch, stub.Id); err != nil {
+				return types.Stub{}, err
+			}
+			if err := r.updateAppActivity(ctx, appId); err != nil {
+				return stub, err
+			}
+			return stub, nil
+		}
+	}
+
+	// Stub not found, create a new one
+	queryCreate := `
+    INSERT INTO stub (name, type, config, object_id, workspace_id, app_id)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id;
+  `
+	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, workspaceId, appId); err != nil {
+		return types.Stub{}, err
+	}
+
+	if err := r.updateAppActivity(ctx, appId); err != nil {
+		return stub, err
+	}
+
+	return stub, nil
 }
 
 func (r *PostgresBackendRepository) UpdateStubConfig(ctx context.Context, stubId uint, config *types.StubConfigV1) error {
@@ -1130,37 +1141,9 @@ func (r *PostgresBackendRepository) UpdateStubConfig(ctx context.Context, stubId
 	return nil
 }
 
-// Batch independent launches as well as repeated reads of the same stub. Keep
-// filtered reads scoped in SQL and give each caller independent nested values.
 func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
-	if len(queryFilters) > 0 {
-		return r.getStubByExternalId(ctx, externalId, queryFilters...)
-	}
-	id, err := uuid.Parse(externalId)
-	if err != nil {
-		// Keep invalid keys in their own query so their database errors cannot
-		// abort valid lookups collected in the same batch.
-		return r.getStubByExternalId(ctx, externalId)
-	}
-	result, err := r.stubReads.get(ctx, id.String(), r.readStubs)
-	if err != nil {
-		return nil, err
-	}
-	if result.err != nil || result.data == nil {
-		return nil, result.err
-	}
 	var stub types.StubWithRelated
-	err = json.Unmarshal(result.data, &stub)
-	return &stub, err
-}
-
-type stubRead struct {
-	data []byte
-	err  error
-}
-
-func stubQuery() squirrel.SelectBuilder {
-	return squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public, s.app_id,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at",
@@ -1173,35 +1156,9 @@ func stubQuery() squirrel.SelectBuilder {
 		Join("workspace w ON s.workspace_id = w.id").
 		Join("app a ON s.app_id = a.id").
 		LeftJoin("object o ON s.object_id = o.id").
-		LeftJoin("workspace_storage ws ON w.storage_id = ws.id")
-}
+		LeftJoin("workspace_storage ws ON w.storage_id = ws.id").
+		Where(squirrel.Eq{"s.external_id": externalId})
 
-func (r *PostgresBackendRepository) readStubs(ctx context.Context, ids []string) (map[string]stubRead, error) {
-	query, args, err := stubQuery().Where(squirrel.Eq{"s.external_id": ids}).ToSql()
-	if err != nil {
-		return nil, err
-	}
-	var stubs []types.StubWithRelated
-	if err := r.client.SelectContext(ctx, &stubs, query, args...); err != nil {
-		return nil, err
-	}
-	results := make(map[string]stubRead, len(stubs))
-	for _, stub := range stubs {
-		var result stubRead
-		if stub.Workspace.StorageAvailable() {
-			result.err = r.decryptFields(stub.Workspace.Storage)
-		}
-		if result.err == nil {
-			result.data, result.err = json.Marshal(stub)
-		}
-		results[stub.ExternalId] = result
-	}
-	return results, nil
-}
-
-func (r *PostgresBackendRepository) getStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
-	var stub types.StubWithRelated
-	qb := stubQuery().Where(squirrel.Eq{"s.external_id": externalId})
 	var stubFilters types.StubFilter
 	types.ParseConditionFromQueryFilters(&stubFilters, queryFilters...)
 
@@ -1233,7 +1190,21 @@ func (r *PostgresBackendRepository) getStubByExternalId(ctx context.Context, ext
 
 func (r *PostgresBackendRepository) GetStubById(ctx context.Context, stubId uint, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
 	var stub types.StubWithRelated
-	qb := stubQuery().Where(squirrel.Eq{"s.id": stubId})
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public, s.app_id,
+	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
+	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at",
+			a.id as "app.id", a.external_id as "app.external_id", a.name as "app.name"
+		`,
+		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key", 
+		ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"`,
+	).
+		From("stub s").
+		Join("workspace w ON s.workspace_id = w.id").
+		Join("app a ON s.app_id = a.id").
+		LeftJoin("object o ON s.object_id = o.id").
+		LeftJoin("workspace_storage ws ON w.storage_id = ws.id").
+		Where(squirrel.Eq{"s.id": stubId})
 
 	var stubFilters types.StubFilter
 	types.ParseConditionFromQueryFilters(&stubFilters, queryFilters...)
@@ -3019,10 +2990,7 @@ func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, ac
 		INNER JOIN stub s ON c.stub_id = s.id
 		INNER JOIN workspace w ON s.workspace_id = w.id
 		WHERE c.deleted_at IS NULL
-		  AND NOT EXISTS (
-			SELECT 1 FROM unnest($1::text[]) recent(stub_key)
-			WHERE recent.stub_key = w.external_id || '|' || s.external_id
-		  )
+		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]))
 		  AND s.updated_at < $2
 		  ` + unreferencedVMCheckpoint + `;`
 

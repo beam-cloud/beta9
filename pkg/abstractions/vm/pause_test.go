@@ -78,11 +78,7 @@ func TestPauseReleasesComputeAndRestoresPairedMemory(t *testing.T) {
 	v, err := s.repo.GetVM(ctx, v.WorkspaceID, v.ID)
 	require.NoError(t, err)
 	require.Equal(t, "memory", v.MemoryCheckpointID)
-	store := &atomicLaunchStore{vmStore: s.repo.(*vmStore)}
-	s.repo = store
-	s.runtime = &persistedLaunchRuntime{vmRuntime: runtime, store: store.vmStore, t: t, vmID: v.ID}
 	require.NoError(t, s.activate(ctx, info, v))
-	require.Equal(t, 1, store.saves, "resume must commit its launch identity and intent together")
 	require.Equal(t, "memory", runtime.checkpoint)
 	require.Equal(t, map[string]string{rootDisk(v): "root-after-shutdown"}, runtime.checkpointDisks)
 	require.NotEmpty(t, v.ContainerID)

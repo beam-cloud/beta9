@@ -14,7 +14,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"golang.org/x/sync/singleflight"
 )
 
 type GatewayService struct {
@@ -37,7 +36,6 @@ type GatewayService struct {
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
 	clientCache      *sync.Map
-	stubIdentities   singleflight.Group
 	endpointRepo     repository.ManagedEndpointRepository // nil when managed endpoints are disabled
 	imageService     pb.ImageServiceServer                // optional; needed to create database services
 	pb.UnimplementedGatewayServiceServer

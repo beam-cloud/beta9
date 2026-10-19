@@ -131,30 +131,10 @@ func (s *Service) recordAgentLogs(agentState *model.AgentTokenState, logs []*pb.
 }
 
 func redactTelemetryLogLine(line string) string {
-	if !telemetryLogMayContainCredentials(line) {
-		return line
-	}
 	line = telemetryAuthorizationPattern.ReplaceAllString(line, "${1}${2}${3}${4}"+telemetryRedactedValue+"${6}")
 	line = telemetryBearerTokenPattern.ReplaceAllString(line, "${1}${2}"+telemetryRedactedValue)
 	line = telemetrySensitivePhrasePattern.ReplaceAllString(line, "${1}${2}"+telemetryRedactedValue)
 	return telemetrySensitiveKeyValuePattern.ReplaceAllString(line, "${1}"+telemetryRedactedValue)
-}
-
-// The replacement patterns only match these ASCII terms. Keep Unicode and
-// malformed UTF-8 on the full path so its case folding remains authoritative.
-func telemetryLogMayContainCredentials(line string) bool {
-	for i := range len(line) {
-		if line[i] >= 0x80 {
-			return true
-		}
-	}
-	lower := strings.ToLower(line)
-	for _, marker := range []string{"authorization", "bearer", "key", "secret", "token", "password", "credential"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Service) recordAgentEvents(agentState *model.AgentTokenState, events []*pb.AgentEventRecord) {

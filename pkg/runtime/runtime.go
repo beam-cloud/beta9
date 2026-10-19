@@ -102,12 +102,6 @@ type NetworkSlotPreparer interface {
 	PrepareNetworkSlot(netnsPath string) error
 }
 
-// GuestExecReadiness lets a guest agent announce its listener before the
-// worker opens a process-manager connection. Container runtimes probe directly.
-type GuestExecReadiness interface {
-	WaitExecReady(ctx context.Context, containerID string) error
-}
-
 // Runtime defines the interface for different container/microvm runtime implementations
 type Runtime interface {
 	// Name returns the name of the runtime (e.g., "runc", "gvisor")

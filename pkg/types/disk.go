@@ -16,10 +16,6 @@ const (
 // the value recorded in snapshot rows and manifests.
 const DiskFilesystemExt4 = "ext4"
 
-// DiskSnapshotMaxChainDepth bounds both metadata traversal and local backing
-// chains when compaction cannot keep up.
-const DiskSnapshotMaxChainDepth = 64
-
 // QMP command names the qcow disk engine drives against qemu-storage-daemon.
 const (
 	QMPCommandCapabilities         = "qmp_capabilities"

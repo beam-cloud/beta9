@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -15,46 +14,6 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
-
-type diskSnapshotChainBackendRepo struct {
-	repository.BackendRepository
-	workspaceID uint
-	snapshotID  string
-	rows        []types.DiskSnapshot
-	err         error
-}
-
-func (r *diskSnapshotChainBackendRepo) GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error) {
-	return types.Workspace{Id: 7}, nil
-}
-
-func (r *diskSnapshotChainBackendRepo) GetDiskSnapshotChain(_ context.Context, workspaceID uint, snapshotID string) ([]types.DiskSnapshot, error) {
-	r.workspaceID, r.snapshotID = workspaceID, snapshotID
-	return r.rows, r.err
-}
-
-func TestGetDiskSnapshotChainPreservesOrderAndLookupErrors(t *testing.T) {
-	repo := &diskSnapshotChainBackendRepo{rows: []types.DiskSnapshot{
-		{ExternalId: "base"}, {ExternalId: "head", ParentSnapshotId: "base"},
-	}}
-	service := &BackendRepositoryService{backendRepo: repo}
-	request := &pb.GetDiskSnapshotRequest{WorkspaceId: "workspace", SnapshotId: "head"}
-	response, err := service.GetDiskSnapshotChain(context.Background(), request)
-	require.NoError(t, err)
-	require.True(t, response.Ok)
-	require.Equal(t, uint(7), repo.workspaceID)
-	require.Equal(t, "head", repo.snapshotID)
-	require.Equal(t, "base", response.Snapshots[0].ExternalId)
-	require.Equal(t, "head", response.Snapshots[1].ExternalId)
-	for _, lookupErr := range []error{&types.ErrDiskSnapshotNotFound{SnapshotId: "head"}, errors.New("inaccessible parent")} {
-		repo.err = lookupErr
-		response, err = service.GetDiskSnapshotChain(context.Background(), request)
-		require.NoError(t, err)
-		require.False(t, response.Ok)
-		require.Equal(t, lookupErr.Error(), response.ErrorMsg)
-		require.Empty(t, response.Snapshots)
-	}
-}
 
 func TestBuildRegistryCredentialsUsesFallbackWithoutLeakingToOtherHosts(t *testing.T) {
 	service := &WorkerRepositoryService{appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{

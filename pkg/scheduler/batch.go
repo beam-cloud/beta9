@@ -23,16 +23,10 @@ type schedulingBatch struct {
 	workers   []*types.Worker
 	batchSize int
 
-	schedules          []plannedSchedule
-	livePrivateWorkers map[privatePoolKey]map[string]bool
+	schedules []plannedSchedule
 	// deferred is background work that found no idle capacity; it is failed
 	// after dispatch so serverless requests never wait behind its cleanup.
 	deferred []*schedulingAttempt
-}
-
-type privatePoolKey struct {
-	workspaceID string
-	selector    string
 }
 
 type plannedSchedule struct {
@@ -46,11 +40,10 @@ type containerStatusBatchReader interface {
 
 func newSchedulingBatch(scheduler *Scheduler, workers []*types.Worker, batchSize int) *schedulingBatch {
 	return &schedulingBatch{
-		scheduler:          scheduler,
-		workers:            workers,
-		batchSize:          batchSize,
-		schedules:          make([]plannedSchedule, 0),
-		livePrivateWorkers: make(map[privatePoolKey]map[string]bool),
+		scheduler: scheduler,
+		workers:   workers,
+		batchSize: batchSize,
+		schedules: make([]plannedSchedule, 0),
 	}
 }
 
@@ -112,7 +105,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 	normalizeGPURequest(request)
 
 	selectionStart := time.Now()
-	worker, err := b.scheduler.selectAvailableWorker(b.workers, request, b.filterLivePrivateAgentWorkers)
+	worker, err := b.scheduler.selectWorkerFromWorkers(b.workers, request)
 	b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerSelection, selectionStart, time.Now(), err == nil && worker != nil, map[string]string{
 		"candidate_workers": fmt.Sprintf("%d", len(b.workers)),
 	})
@@ -137,30 +130,6 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 		request: request,
 	})
 	planned = true
-}
-
-// Pool liveness is part of this batch's worker snapshot. Only worker identities
-// are shared: capacity is still reserved separately for every planned request.
-func (b *schedulingBatch) filterLivePrivateAgentWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
-	key := privatePoolKey{request.WorkspaceId, request.PoolSelector}
-	live, loaded := b.livePrivateWorkers[key]
-	if !loaded {
-		eligible := b.scheduler.filterLivePrivateAgentWorkers(b.workers, request)
-		live = make(map[string]bool, len(eligible))
-		for _, worker := range eligible {
-			if worker != nil {
-				live[worker.Id] = true
-			}
-		}
-		b.livePrivateWorkers[key] = live
-	}
-	filtered := make([]*types.Worker, 0, len(workers))
-	for _, worker := range workers {
-		if worker != nil && live[worker.Id] {
-			filtered = append(filtered, worker)
-		}
-	}
-	return filtered
 }
 
 // unplaced handles a request that fits no worker in this batch.

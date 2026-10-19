@@ -8,7 +8,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
@@ -19,7 +18,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/metadata"
@@ -33,19 +31,6 @@ const (
 )
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
-	return gws.getOrCreateStub(ctx, in, nil)
-}
-
-// CreateVMStub applies the normal stub validation, but lets VM creation commit
-// its fresh root disk, stub and launch identity together before scheduling.
-func (gws *GatewayService) CreateVMStub(ctx context.Context, in *pb.GetOrCreateStubRequest, persist func(types.Stub) error) (*pb.GetOrCreateStubResponse, error) {
-	if in.StubType != types.StubTypeVM || persist == nil {
-		return nil, fmt.Errorf("VM stub persistence is required")
-	}
-	return gws.getOrCreateStub(ctx, in, persist)
-}
-
-func (gws *GatewayService) getOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest, persist func(types.Stub) error) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	var warning string
@@ -340,17 +325,17 @@ func (gws *GatewayService) getOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	disks := stubConfig.Disks
-	if persist != nil {
-		// Only the fresh VM root joins the creation transaction. Other disks
-		// retain their normal ownership, resize and compatibility checks.
-		disks = slices.DeleteFunc(slices.Clone(disks), func(d *pb.DurableDisk) bool {
-			return d != nil && d.MountPath == types.DurableDiskRootMountPath
-		})
-	}
-	app, object, err := gws.prepareStubIdentity(ctx, authInfo.Workspace, in, disks)
+	app, object, err := gws.prepareStubIdentity(ctx, authInfo.Workspace, in, stubConfig.Disks)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+
+	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id, in.ForceCreate, app.Id)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: "Failed to get or create stub",
+		}, nil
 	}
 
 	if resourcePolicy.pool != nil && resourcePolicy.pool.RequiresReservation() {
@@ -366,28 +351,6 @@ func (gws *GatewayService) getOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				ErrMsg: res.ErrMsg,
 			}, nil
 		}
-	}
-
-	var stub types.Stub
-	if persist == nil {
-		stub, err = gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id, in.ForceCreate, app.Id)
-	} else {
-		var config []byte
-		config, err = json.Marshal(stubConfig)
-		stub = types.Stub{ExternalId: uuid.NewString(), Name: in.Name, Type: types.StubType(types.StubTypeVM),
-			Config: string(config), ConfigVersion: 1, ObjectId: object.Id, WorkspaceId: authInfo.Workspace.Id, AppId: app.Id}
-		if err == nil {
-			err = persist(stub)
-		}
-	}
-	if err != nil {
-		if persist != nil {
-			return nil, err
-		}
-		return &pb.GetOrCreateStubResponse{
-			Ok:     false,
-			ErrMsg: "Failed to get or create stub",
-		}, nil
 	}
 
 	gws.cachePreparedStub(ctx, authInfo.Workspace.ExternalId, stub.ExternalId)
@@ -428,56 +391,23 @@ func (gws *GatewayService) prepareStubIdentity(ctx context.Context, workspace *t
 		if name == "" {
 			name = in.Name
 		}
-		// Share only overlapping requests; no cached identity can survive an app
-		// deletion or credential change. Disk registration stays per launch.
-		key := fmt.Sprintf("%d/%q/%q/%t", workspace.Id, name, in.ObjectId, types.StubType(in.StubType).IsSandbox())
-		result := gws.stubIdentities.DoChan(key, func() (any, error) {
-			shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			return gws.prepareSharedStubIdentity(shared, workspace, name, in)
-		})
-		select {
-		case <-prepareCtx.Done():
-			return prepareCtx.Err()
-		case resolved := <-result:
-			if resolved.Err != nil {
-				return resolved.Err
-			}
-			identity := resolved.Val.(stubIdentity)
-			app, object = &identity.app, identity.object
-			return nil
-		}
-	})
-	if err := group.Wait(); err != nil {
-		return nil, types.Object{}, err
-	}
-	return app, object, nil
-}
-
-type stubIdentity struct {
-	app    types.App
-	object types.Object
-}
-
-func (gws *GatewayService) prepareSharedStubIdentity(ctx context.Context, workspace *types.Workspace, name string, in *pb.GetOrCreateStubRequest) (stubIdentity, error) {
-	var identity stubIdentity
-	group, ctx := errgroup.WithContext(ctx)
-	group.Go(func() error {
-		app, err := gws.backendRepo.GetOrCreateApp(ctx, workspace.Id, name)
+		var err error
+		app, err = gws.backendRepo.GetOrCreateApp(prepareCtx, workspace.Id, name)
 		if err != nil {
 			return errors.New("Failed to get or create app")
 		}
-		identity.app = *app
 		return nil
 	})
 	group.Go(func() error {
 		var err error
-		if strings.TrimSpace(in.ObjectId) != "" {
-			identity.object, err = gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, workspace.Id)
-		} else if types.StubType(in.StubType).IsSandbox() {
-			identity.object, err = abstractions.GetOrCreateEmptyStubObject(ctx, gws.backendRepo, workspace)
+		if strings.TrimSpace(in.ObjectId) == "" {
+			if types.StubType(in.StubType).IsSandbox() {
+				object, err = abstractions.GetOrCreateEmptyStubObject(prepareCtx, gws.backendRepo, workspace)
+			} else {
+				object, err = gws.ensureEmptyStubObject(prepareCtx, workspace)
+			}
 		} else {
-			identity.object, err = gws.ensureEmptyStubObject(ctx, workspace)
+			object, err = gws.backendRepo.GetObjectByExternalId(prepareCtx, in.ObjectId, workspace.Id)
 		}
 		if err != nil {
 			log.Error().Err(err).Str("workspace_id", workspace.ExternalId).Msg("failed to prepare canonical stub object")
@@ -485,8 +415,10 @@ func (gws *GatewayService) prepareSharedStubIdentity(ctx context.Context, worksp
 		}
 		return nil
 	})
-	err := group.Wait()
-	return identity, err
+	if err := group.Wait(); err != nil {
+		return nil, types.Object{}, err
+	}
+	return app, object, nil
 }
 
 func (gws *GatewayService) cachePreparedStub(ctx context.Context, workspaceID, stubID string) {

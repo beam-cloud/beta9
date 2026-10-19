@@ -37,10 +37,6 @@ func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 }
 
 func (s *Service) prepare(ctx context.Context, v *types.VM) error {
-	return s.prepareStub(ctx, v, nil)
-}
-
-func (s *Service) prepareStub(ctx context.Context, v *types.VM, persist func(types.Stub) error) error {
 	if v.StubID != "" {
 		return nil
 	}
@@ -103,13 +99,7 @@ func (s *Service) prepareStub(ctx context.Context, v *types.VM, persist func(typ
 		req.Pool = &pb.PoolConfig{Name: v.Spec.Pool}
 	}
 
-	var resp *pb.GetOrCreateStubResponse
-	var err error
-	if persist == nil {
-		resp, err = s.gateway.GetOrCreateStub(ctx, req)
-	} else {
-		resp, err = s.gateway.CreateVMStub(ctx, req, persist)
-	}
+	resp, err := s.gateway.GetOrCreateStub(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -154,19 +144,9 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		return err
 	}
 
-	// Creation already persisted the first attempt. Before it has a runtime
-	// identity, crash recovery continues that attempt; known failures and
-	// later launches are counted durably before trying again.
-	initialLaunch := v.Generation == 0 && v.LaunchAttempts == 1 && v.Error == ""
-	if !initialLaunch {
-		v.LaunchAttempts++
-		// Stub preparation can perform external work. Count that attempt first;
-		// an existing stub needs only the complete launch commit below.
-		if v.StubID == "" {
-			if err := s.repo.SaveVM(ctx, v); err != nil {
-				return err
-			}
-		}
+	v.LaunchAttempts++
+	if err := s.repo.SaveVM(ctx, v); err != nil {
+		return err
 	}
 
 	if err := s.prepare(ctx, v); err != nil {
@@ -185,11 +165,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		return err
 	}
 
-	return s.run(ctx, info, v)
-}
-
-func (s *Service) run(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
-	err := s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
+	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
 			v.ContainerID = ""

@@ -3,13 +3,11 @@ package pod
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
-	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
 )
 
@@ -66,44 +64,8 @@ func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stub
 	}
 
 	stub.Config = string(data)
-	workerID, err := s.vmDiskWorker(ctx, info.Workspace.Id, spec.Disks, checkpoint != nil)
-	if err != nil {
-		return err
-	}
-	_, err = s.run(ctx, info, stub, runOptions{containerId: containerID, checkpoint: checkpoint, preferredWorkerId: workerID})
+	_, err = s.run(ctx, info, stub, runOptions{containerId: containerID, checkpoint: checkpoint})
 	return err
-}
-
-// The publishing worker retains the local qcow layers. Prefer it when it
-// still fits, rather than downloading the whole disk on another idle node.
-func (s *GenericPodService) vmDiskWorker(ctx context.Context, workspaceID uint, disks []*pb.DurableDisk, restoringMemory bool) (string, error) {
-	for _, disk := range disks {
-		if disk.MountPath != types.DurableDiskRootMountPath {
-			continue
-		}
-		var snapshot *types.DiskSnapshot
-		var err error
-		if restoringMemory {
-			snapshot, err = s.backendRepo.GetDiskSnapshot(ctx, workspaceID, disk.SourceSnapshotId)
-		} else {
-			snapshot, err = s.backendRepo.GetLatestDiskSnapshot(ctx, workspaceID, disk.Name)
-			var missing *types.ErrDiskSnapshotNotFound
-			if errors.As(err, &missing) {
-				if disk.SourceSnapshotId == "" {
-					return "", nil
-				}
-				snapshot, err = s.backendRepo.GetDiskSnapshot(ctx, workspaceID, disk.SourceSnapshotId)
-			}
-		}
-		if err != nil {
-			return "", err
-		}
-		if snapshot != nil {
-			return snapshot.SourceWorkerId, nil
-		}
-		return "", nil
-	}
-	return "", nil
 }
 
 // Reuse the proxy's actual backend route, including private worker transport.

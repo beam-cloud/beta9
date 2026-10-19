@@ -14,20 +14,20 @@ const (
 	postgresReadinessUser          = "postgres"
 )
 
-func (pb *PodProxyBuffer) checkContainerReady(port int32, address string, timeout time.Duration, opts ...network.BackendDialerOption) bool {
+func (pb *PodProxyBuffer) checkContainerReady(port int32, address string, timeout time.Duration) bool {
 	if pb.stubConfig != nil {
 		if database := pb.stubConfig.EffectiveDatabaseConfig(); database != nil && database.IsPostgres() && uint32(port) == database.Port {
-			return pb.checkPostgresContainerReady(address, timeout, opts...)
+			return pb.checkPostgresContainerReady(address, timeout)
 		}
 	}
-	return pb.checkContainerAvailableWithTimeout(address, timeout, opts...)
+	return pb.checkContainerAvailableWithTimeout(address, timeout)
 }
 
-func (pb *PodProxyBuffer) checkPostgresContainerReady(address string, timeout time.Duration, opts ...network.BackendDialerOption) bool {
+func (pb *PodProxyBuffer) checkPostgresContainerReady(address string, timeout time.Duration) bool {
 	if timeout <= 0 {
 		timeout = containerAvailableTimeout
 	}
-	conn, err := network.NewBackendDialer(pb.tailscale, pb.tsConfig, pb.containerRepo, timeout, opts...).Dial(pb.baseContext(), address)
+	conn, err := network.ConnectToBackend(pb.baseContext(), address, timeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
 	if err != nil {
 		return false
 	}

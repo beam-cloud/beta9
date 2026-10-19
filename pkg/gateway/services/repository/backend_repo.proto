@@ -21,7 +21,6 @@ service BackendRepositoryService {
   rpc GetLatestDiskSnapshot(GetLatestDiskSnapshotRequest)
       returns (GetLatestDiskSnapshotResponse);
   rpc GetDiskSnapshot(GetDiskSnapshotRequest) returns (GetDiskSnapshotResponse);
-  rpc GetDiskSnapshotChain(GetDiskSnapshotRequest) returns (GetDiskSnapshotChainResponse);
   rpc GetDiskSnapshotDownloadURL(GetDiskSnapshotDownloadURLRequest)
       returns (GetDiskSnapshotDownloadURLResponse);
 }
@@ -172,12 +171,5 @@ message GetDiskSnapshotDownloadURLRequest {
 message GetDiskSnapshotDownloadURLResponse {
   bool ok = 1;
   string url = 2;
-  string error_msg = 3;
-}
-
-message GetDiskSnapshotChainResponse {
-  bool ok = 1;
-  // Complete chain ordered base first.
-  repeated DiskSnapshot snapshots = 2;
   string error_msg = 3;
 }

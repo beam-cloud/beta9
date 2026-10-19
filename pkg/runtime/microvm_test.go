@@ -138,7 +138,7 @@ func TestMicroVMHypervisorArgs(t *testing.T) {
 
 	assert.Contains(t, joined, "--kernel /vmlinux")
 	assert.Contains(t, joined, "--cpus boot=2")
-	assert.Contains(t, joined, "--memory size=1073741824,shared=on,thp=off")
+	assert.Contains(t, joined, "--memory size=1073741824,shared=on")
 	assert.Contains(t, joined, "--fs tag=beamfs,socket=/run/beam/microvm/c1/virtiofs.sock")
 	assert.Contains(t, joined, "--disk path=/tmp/scratch.ext4 vhost_user=on,socket=/s")
 	assert.Contains(t, joined, "--net tap=b9tap0,mac=02:00:00:00:00:01")
@@ -214,7 +214,7 @@ func TestLineWriterEmitsWholeLines(t *testing.T) {
 func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	snapshot := []byte(`{
 	  "cpus": {"boot_vcpus": 2},
-	  "memory": {"size": 1073741824, "shared": true, "thp": true},
+	  "memory": {"size": 1073741824, "shared": true},
 	  "disks": [
 	    {"path": "/old/scratch.ext4", "image_type": "raw", "id": "_disk0"},
 	    {"vhost_user": true, "vhost_socket": "/old/run/aaa/vhost-user-blk.sock", "id": "_disk1"}
@@ -231,8 +231,6 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 
 	var cfg map[string]any
 	require.NoError(t, json.Unmarshal(out, &cfg))
-	assert.Equal(t, false, cfg["memory"].(map[string]any)["thp"])
-	assert.Equal(t, float64(1073741824), cfg["memory"].(map[string]any)["size"])
 	disks := cfg["disks"].([]any)
 	assert.Equal(t, "/new/scratch.ext4", disks[0].(map[string]any)["path"])
 	assert.Equal(t, "raw", disks[0].(map[string]any)["image_type"], "unrelated keys survive")

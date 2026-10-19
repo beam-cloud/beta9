@@ -12,7 +12,6 @@ import (
 
 type VMRepository interface {
 	CreateVM(context.Context, *types.VM) error
-	CreateVMWithStub(context.Context, *types.VM, types.Stub) error
 	SaveVM(context.Context, *types.VM) error
 	GetVM(context.Context, uint, string) (*types.VM, error)
 	GetVMByHandle(context.Context, string) (*types.VM, error)
@@ -89,16 +88,7 @@ func (row vmRow) vm() (*types.VM, error) {
 }
 
 func (r *PostgresBackendRepository) GetVM(ctx context.Context, ws uint, name string) (*types.VM, error) {
-	row, err := r.vmReads.get(ctx, vmReadKey{WorkspaceID: ws, Name: name}, r.readVMs)
-	if err != nil {
-		return nil, err
-	}
-	if row.Data == nil {
-		return nil, sql.ErrNoRows
-	}
-	// Decode separately for each caller; overlapping reads must not share a
-	// mutable VM, its spec, or nested metadata.
-	return row.vm()
+	return r.getVM(ctx, `WHERE workspace_id=$1 AND (name=$2 OR id=$2) ORDER BY (data->>'desired_state'='deleted') LIMIT 1`, ws, name)
 }
 
 func (r *PostgresBackendRepository) GetVMByHandle(ctx context.Context, handle string) (*types.VM, error) {

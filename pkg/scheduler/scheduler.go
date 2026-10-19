@@ -1425,28 +1425,18 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	return s.selectWorkerFromWorkers(workers, request)
 }
 
-type workerLivenessFilter func([]*types.Worker, *types.ContainerRequest) []*types.Worker
-
 func (s *Scheduler) selectWorkerFromWorkers(workers []*types.Worker, request *types.ContainerRequest) (*types.Worker, error) {
-	return s.selectAvailableWorker(workers, request, s.filterLivePrivateAgentWorkers)
-}
-
-func (s *Scheduler) selectAvailableWorker(workers []*types.Worker, request *types.ContainerRequest, live workerLivenessFilter) (*types.Worker, error) {
-	worker, err := s.selectWorkerByStatus(workers, request, live, types.WorkerStatusAvailable)
+	worker, err := s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusAvailable)
 	if err == nil || !canSkipCheckpoint(request) {
 		return worker, err
 	}
 	request = request.Clone()
 	request.Checkpoint = nil
 	request.CheckpointEnabled = false
-	return s.selectWorkerByStatus(workers, request, live, types.WorkerStatusAvailable)
+	return s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusAvailable)
 }
 
 func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, request *types.ContainerRequest, statuses ...types.WorkerStatus) (*types.Worker, error) {
-	return s.selectWorkerByStatus(workers, request, s.filterLivePrivateAgentWorkers, statuses...)
-}
-
-func (s *Scheduler) selectWorkerByStatus(workers []*types.Worker, request *types.ContainerRequest, live workerLivenessFilter, statuses ...types.WorkerStatus) (*types.Worker, error) {
 	normalizeGPURequest(request)
 
 	if len(workers) == 0 {
@@ -1463,7 +1453,7 @@ func (s *Scheduler) selectWorkerByStatus(workers []*types.Worker, request *types
 	filteredWorkers = filterWorkersByPoolSelectorForFailover(filteredWorkers, request, chain)
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterProviderWorkers(filteredWorkers, request)
-	filteredWorkers = live(filteredWorkers, request)
+	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request, chain) // Filter workers resource requirements
 	filteredWorkers = s.filterWorkersByFlags(filteredWorkers, request)          // Filter workers by flags
 	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...)       // Filter workers by lifecycle status
@@ -1506,13 +1496,6 @@ func (s *Scheduler) selectWorkerByStatus(workers []*types.Worker, request *types
 		}
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
-		}
-		if request.PreferredWorkerId != "" {
-			iLocal := scoredWorkers[i].worker.Id == request.PreferredWorkerId
-			jLocal := scoredWorkers[j].worker.Id == request.PreferredWorkerId
-			if iLocal != jLocal {
-				return iLocal
-			}
 		}
 		// Best-fit: prefer the fullest worker that still fits so idle workers
 		// drain to zero, hit their spindown timeout, and release their nodes.

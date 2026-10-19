@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -583,18 +582,14 @@ func TestEnsureGVisorShmemTHP(t *testing.T) {
 	}
 }
 
-func TestEnsureHostSysctlMinimum(t *testing.T) {
+func TestEnsureGVisorMaxMapCount(t *testing.T) {
 	for _, tc := range []struct {
 		name, value string
-		minimum     int64
 		changed     bool
 	}{
-		{"raise VMA default", "65530\n", gvisorMinMaxMapCount, true},
-		{"preserve VMA minimum", "4194304\n", gvisorMinMaxMapCount, false},
-		{"preserve higher VMA limit", "8388608\n", gvisorMinMaxMapCount, false},
-		{"raise reclaim default", "10\n", microVMMinWatermarkScaleFactor, true},
-		{"preserve reclaim minimum", "300\n", microVMMinWatermarkScaleFactor, false},
-		{"preserve higher reclaim watermark", "500\n", microVMMinWatermarkScaleFactor, false},
+		{"raise default", "65530\n", true},
+		{"preserve minimum", "4194304\n", false},
+		{"preserve higher", "8388608\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "max_map_count")
@@ -602,24 +597,24 @@ func TestEnsureHostSysctlMinimum(t *testing.T) {
 			if tc.changed {
 				require.NoError(t, os.Chmod(path, 0600))
 			}
-			changed, err := ensureHostSysctlMinimum(path, tc.minimum)
+			changed, err := ensureGVisorMaxMapCount(path)
 			require.NoError(t, err)
 			require.Equal(t, tc.changed, changed)
 			value, err := os.ReadFile(path)
 			require.NoError(t, err)
 			if tc.changed {
-				require.Equal(t, strconv.FormatInt(tc.minimum, 10)+"\n", string(value))
+				require.Equal(t, "4194304\n", string(value))
 			} else {
 				require.Equal(t, tc.value, string(value))
 			}
 		})
 	}
 	path := filepath.Join(t.TempDir(), "max_map_count")
-	_, err := ensureHostSysctlMinimum(path, gvisorMinMaxMapCount)
+	_, err := ensureGVisorMaxMapCount(path)
 	require.Error(t, err)
 	require.NoError(t, os.WriteFile(path, []byte("invalid\n"), 0600))
-	_, err = ensureHostSysctlMinimum(path, gvisorMinMaxMapCount)
-	require.ErrorContains(t, err, "parse host sysctl "+path)
+	_, err = ensureGVisorMaxMapCount(path)
+	require.ErrorContains(t, err, "parse vm.max_map_count")
 }
 
 func TestContainerStartLimitForRuntimeUsesRuntimeName(t *testing.T) {

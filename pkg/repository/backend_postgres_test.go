@@ -406,12 +406,39 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 		"app_id",
 	}
 
-	mock.ExpectQuery(`WITH matched AS`).
-		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11), uint(13), false).
+	mock.ExpectQuery(`app_id = \$6`).
+		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11), uint(13)).
 		WillReturnRows(sqlmock.NewRows(stubRows).AddRow(
-			uint(5), "stub-external", "stub-name", types.StubTypeFunction,
-			`{"runtime":"python3"}`, uint(1), uint(7), uint(11), createdAt, updatedAt, uint(13),
+			uint(5),
+			"stub-external",
+			"stub-name",
+			types.StubTypeFunction,
+			`{"runtime":"python3"}`,
+			uint(1),
+			uint(7),
+			uint(11),
+			createdAt,
+			createdAt,
+			uint(13),
 		))
+	mock.ExpectQuery("UPDATE stub").
+		WithArgs(uint(5)).
+		WillReturnRows(sqlmock.NewRows(stubRows).AddRow(
+			uint(5),
+			"stub-external",
+			"stub-name",
+			types.StubTypeFunction,
+			`{"runtime":"python3"}`,
+			uint(1),
+			uint(7),
+			uint(11),
+			createdAt,
+			updatedAt,
+			uint(13),
+		))
+	mock.ExpectExec(`UPDATE app SET updated_at = NOW\(\) WHERE id = \$1 AND \(updated_at IS NULL OR updated_at < NOW\(\) - INTERVAL '1 second'\)`).
+		WithArgs(uint(13)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	stub, err := postgresRepo.GetOrCreateStub(
 		context.Background(),
@@ -505,7 +532,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 	postgresRepo := repo.(*PostgresBackendRepository)
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 
-	mock.ExpectQuery(`unnest\(\$1::text\[\]\).*s\.updated_at < \$2 AND NOT EXISTS .*memory_checkpoint_id.*desired_state`).
+	mock.ExpectQuery(`s\.updated_at < \$2 AND NOT EXISTS .*memory_checkpoint_id.*desired_state`).
 		WithArgs(sqlmock.AnyArg(), cutoff).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"checkpoint_id",

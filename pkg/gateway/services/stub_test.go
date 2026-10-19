@@ -98,51 +98,6 @@ func TestStubIdentityPreparesIndependentRecordsAndCancelsFailures(t *testing.T) 
 	}
 }
 
-func TestStubIdentitySharesOverlappingReadsWithoutSharingCancellation(t *testing.T) {
-	repo := &parallelStubIdentityRepo{started: make(chan string, 100), release: make(chan struct{})}
-	service := &GatewayService{backendRepo: repo}
-	workspace := &types.Workspace{Id: 7}
-	request := &pb.GetOrCreateStubRequest{Name: "dev", ObjectId: "object"}
-	ctx, cancel := context.WithCancel(context.Background())
-	first := make(chan error, 1)
-	go func() {
-		_, _, err := service.prepareStubIdentity(ctx, workspace, request, nil)
-		first <- err
-	}()
-	for range 2 {
-		select {
-		case <-repo.started:
-		case <-time.After(time.Second):
-			t.Fatal("shared identity reads did not start")
-		}
-	}
-	cancel()
-	require.ErrorIs(t, <-first, context.Canceled)
-	t.Cleanup(func() { close(repo.release) })
-	// Every caller joins the still-running reads even after their original
-	// caller leaves. Cancellation must neither poison peers nor start more SQL.
-	for range 100 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-		_, _, err := service.prepareStubIdentity(ctx, workspace, request, nil)
-		cancel()
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-	}
-	require.Empty(t, repo.started, "overlapping callers repeated shared reads")
-}
-
-func TestStubIdentityReadsAgainAfterPreviousRequestCompletes(t *testing.T) {
-	repo := &parallelStubIdentityRepo{started: make(chan string, 10), release: make(chan struct{})}
-	close(repo.release)
-	service := &GatewayService{backendRepo: repo}
-	for range 2 {
-		app, object, err := service.prepareStubIdentity(context.Background(), &types.Workspace{Id: 7}, &pb.GetOrCreateStubRequest{Name: "dev", ObjectId: "object"}, nil)
-		require.NoError(t, err)
-		require.Equal(t, "dev", app.Name)
-		require.Equal(t, "object", object.ExternalId)
-	}
-	require.Len(t, repo.started, 4, "completed requests must not cache mutable app or object records")
-}
-
 func TestVMStubRequiresCPUMicroVMAndAllowsPersistence(t *testing.T) {
 	in := &pb.GetOrCreateStubRequest{StubType: types.StubTypeVM}
 	require.Equal(t, "VMs require use_vm", validateUseVM(in, nil))

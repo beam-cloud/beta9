@@ -17,18 +17,84 @@ import (
 // snapshots must not consume a hundred connections or block unrelated starts.
 // The local set prevents PostgreSQL's same-session, reentrant lock acquisition.
 type vmLockSession struct {
-	gate     chan struct{}
-	client   *sqlx.DB
-	conn     *sqlx.Conn
-	held     map[string]chan struct{}
-	acquires commitBatch[struct{}, *vmLockAcquire, vmLockResult]
+	gate   chan struct{}
+	client *sqlx.DB
+	conn   *sqlx.Conn
+	held   map[string]chan struct{}
+
+	batchMu      sync.Mutex
+	batchRunning bool
+	pending      []*vmLockAcquire
 }
 
-type vmLockAcquire struct{ id string }
+type vmLockAcquire struct {
+	id     string
+	ctx    context.Context
+	result chan vmLockResult
+}
 
 type vmLockResult struct {
 	conn *sqlx.Conn
 	busy *vmOperationBusy
+	err  error
+}
+
+func (s *vmLockSession) enqueue(ctx context.Context, id string) vmLockResult {
+	if err := ctx.Err(); err != nil {
+		return vmLockResult{err: err}
+	}
+	request := &vmLockAcquire{id: id, ctx: ctx, result: make(chan vmLockResult, 1)}
+	s.batchMu.Lock()
+	s.pending = append(s.pending, request)
+	if !s.batchRunning {
+		s.batchRunning = true
+		time.AfterFunc(time.Millisecond, s.flushAcquires)
+	}
+	s.batchMu.Unlock()
+	select {
+	case result := <-request.result:
+		return result
+	case <-ctx.Done():
+		s.batchMu.Lock()
+		for i, queued := range s.pending {
+			if queued == request {
+				copy(s.pending[i:], s.pending[i+1:])
+				s.pending[len(s.pending)-1] = nil
+				s.pending = s.pending[:len(s.pending)-1]
+				s.batchMu.Unlock()
+				return vmLockResult{err: ctx.Err()}
+			}
+		}
+		s.batchMu.Unlock()
+		// An executing acquisition must settle before its caller can release
+		// the lock. Cancellation cannot leave an ownerless PostgreSQL lock.
+		return <-request.result
+	}
+}
+
+func (s *vmLockSession) flushAcquires() {
+	for {
+		s.batchMu.Lock()
+		if len(s.pending) == 0 {
+			s.pending = nil
+			s.batchRunning = false
+			s.batchMu.Unlock()
+			return
+		}
+		n := min(len(s.pending), 128)
+		requests := s.pending[:n:n]
+		s.pending = s.pending[n:]
+		s.batchMu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(requests[0].ctx), 30*time.Second)
+		results, err := s.acquire(ctx, requests)
+		cancel()
+		for _, request := range requests {
+			result := results[request]
+			result.err = err
+			request.result <- result
+		}
+	}
 }
 
 // Concurrent lifecycles acquire their independent locks in one round trip per
@@ -175,9 +241,9 @@ func (r *PostgresBackendRepository) TryLockVM(ctx context.Context, id string) (f
 		return nil, errors.New("VM lifecycle requires at least two database connections")
 	}
 	s := &r.vmLocks[crc32.ChecksumIEEE([]byte(id))%uint32(len(r.vmLocks))]
-	result, err := s.acquires.commit(ctx, struct{}{}, &vmLockAcquire{id: id}, s.acquire)
-	if err != nil {
-		return nil, err
+	result := s.enqueue(ctx, id)
+	if result.err != nil {
+		return nil, result.err
 	}
 	if result.busy != nil {
 		return nil, result.busy

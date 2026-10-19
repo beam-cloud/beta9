@@ -10,7 +10,6 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/lib/pq"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -43,6 +42,48 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 		return nil, err
 	}
 
+	if existing, err := r.GetDisk(ctx, workspaceId, name); err == nil {
+		if disk.Driver != "" && types.NormalizeDurableDiskDriver(disk.Driver) != existing.Driver {
+			return nil, fmt.Errorf("disk %s uses driver %s; changing drivers requires an explicit data migration", name, existing.Driver)
+		}
+		if disk.Filesystem != "" && disk.Filesystem != existing.Filesystem {
+			return nil, fmt.Errorf("disk %s filesystem cannot be changed", name)
+		}
+
+		if disk.Size != "" && disk.Size != existing.Size {
+			requested, err := configuredDiskBytes(disk.Size)
+			if err != nil {
+				return nil, err
+			}
+
+			previous, err := configuredDiskBytes(existing.Size)
+			if err != nil {
+				return nil, fmt.Errorf("disk %s has an invalid stored size; reconcile it before resizing", name)
+			}
+			if requested < previous {
+				return nil, fmt.Errorf("disk %s cannot shrink from %s to %s", name, existing.Size, disk.Size)
+			}
+
+			// This records desired capacity. The worker must grow and verify the
+			// actual block device/filesystem on the next attachment.
+			query := `
+			UPDATE disk SET size = $1, updated_at = CURRENT_TIMESTAMP
+			WHERE id = $2 AND size = $3
+			RETURNING ` + diskColumns + `;
+			`
+
+			var updated types.Disk
+			if err := r.client.GetContext(ctx, &updated, query, strings.TrimSpace(disk.Size), existing.Id, existing.Size); err != nil {
+				return nil, fmt.Errorf("disk size changed concurrently or could not be saved: %w", err)
+			}
+			return &updated, nil
+		}
+
+		return existing, nil
+	} else if err != sql.ErrNoRows {
+		return nil, err
+	}
+
 	filesystem := disk.Filesystem
 	if filesystem == "" {
 		filesystem = "ext4"
@@ -51,86 +92,34 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 	if driver == "" {
 		driver = types.DurableDiskDriverSnapshot
 	}
-	var creationErr error
 	if driver != types.DurableDiskDriverSnapshot && driver != types.DurableDiskDriverQcow {
-		creationErr = fmt.Errorf("unsupported durable disk driver %q", driver)
-	} else {
-		_, creationErr = configuredDiskBytes(disk.Size)
+		return nil, fmt.Errorf("unsupported durable disk driver %q", driver)
 	}
-
-	// Existing disks need no write. A new disk is registered in the same
-	// round trip; invalid creation options still allow a lookup by name.
-	query := `
-	WITH existing AS (
-		SELECT ` + diskColumns + ` FROM disk
-		WHERE workspace_id=$1 AND name=$2 AND deleted_at IS NULL
-	), created AS (
-		INSERT INTO disk (workspace_id, name, size, filesystem, driver, mount_path)
-		SELECT $1,$2,$3,$4,$5,$6 WHERE $7 AND NOT EXISTS (SELECT 1 FROM existing)
-		ON CONFLICT (workspace_id, name) WHERE deleted_at IS NULL DO NOTHING
-		RETURNING ` + diskColumns + `
-	)
-	SELECT existing.*,false AS created FROM existing
-	UNION ALL SELECT created.*,true AS created FROM created`
-	var result struct {
-		types.Disk
-		Created bool `db:"created"`
-	}
-	err = r.client.GetContext(ctx, &result, query, workspaceId, name,
-		strings.TrimSpace(disk.Size), strings.TrimSpace(filesystem), driver,
-		strings.TrimSpace(disk.MountPath), creationErr == nil)
-	if err == sql.ErrNoRows && creationErr != nil {
-		return nil, creationErr
-	}
-	existing := &result.Disk
-	if err == sql.ErrNoRows {
-		// A competing insert can commit outside this statement's snapshot.
-		// Re-read its row, then apply the same compatibility checks below.
-		existing, err = r.GetDisk(ctx, workspaceId, name)
-	}
-	if err != nil {
+	if _, err := configuredDiskBytes(disk.Size); err != nil {
 		return nil, err
 	}
-	if result.Created {
-		return existing, nil
-	}
 
-	if disk.Driver != "" && types.NormalizeDurableDiskDriver(disk.Driver) != existing.Driver {
-		return nil, fmt.Errorf("disk %s uses driver %s; changing drivers requires an explicit data migration", name, existing.Driver)
-	}
-	if disk.Filesystem != "" && disk.Filesystem != existing.Filesystem {
-		return nil, fmt.Errorf("disk %s filesystem cannot be changed", name)
-	}
+	query := fmt.Sprintf(`
+		INSERT INTO disk (workspace_id, name, size, filesystem, driver, mount_path)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (workspace_id, name) WHERE deleted_at IS NULL DO NOTHING
+		RETURNING %s;`, diskColumns)
 
-	if disk.Size != "" && disk.Size != existing.Size {
-		requested, err := configuredDiskBytes(disk.Size)
-		if err != nil {
-			return nil, err
+	var created types.Disk
+	if err := r.client.GetContext(ctx, &created, query,
+		workspaceId,
+		name,
+		strings.TrimSpace(disk.Size),
+		strings.TrimSpace(filesystem),
+		driver,
+		strings.TrimSpace(disk.MountPath),
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return r.GetDisk(ctx, workspaceId, name)
 		}
-
-		previous, err := configuredDiskBytes(existing.Size)
-		if err != nil {
-			return nil, fmt.Errorf("disk %s has an invalid stored size; reconcile it before resizing", name)
-		}
-		if requested < previous {
-			return nil, fmt.Errorf("disk %s cannot shrink from %s to %s", name, existing.Size, disk.Size)
-		}
-
-		// This records desired capacity. The worker must grow and verify the
-		// actual block device/filesystem on the next attachment.
-		query := `
-		UPDATE disk SET size = $1, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2 AND size = $3
-		RETURNING ` + diskColumns + `;
-		`
-
-		var updated types.Disk
-		if err := r.client.GetContext(ctx, &updated, query, strings.TrimSpace(disk.Size), existing.Id, existing.Size); err != nil {
-			return nil, fmt.Errorf("disk size changed concurrently or could not be saved: %w", err)
-		}
-		return &updated, nil
+		return nil, err
 	}
-	return existing, nil
+	return &created, nil
 }
 
 var diskSizePattern = regexp.MustCompile(`^[1-9][0-9]*(Ki|Mi|Gi|Ti|K|M|G|T)?$`)
@@ -391,82 +380,25 @@ func (r *PostgresBackendRepository) GetDiskSnapshot(ctx context.Context, workspa
 	return &snapshot, nil
 }
 
-// GetDiskSnapshotChain resolves all ancestors in one database round trip.
-// Visibility and deletion checks apply to every layer, including public forks.
-func (r *PostgresBackendRepository) GetDiskSnapshotChain(ctx context.Context, workspaceId uint, snapshotId string) ([]types.DiskSnapshot, error) {
-	query := fmt.Sprintf(`
-		WITH RECURSIVE chain AS (
-			SELECT ds.*, 1 AS depth
-			FROM disk_snapshot ds
-			WHERE external_id = $2 AND deleted_at IS NULL
-				AND (workspace_id = $1 OR (public = TRUE AND status = $3))
-			UNION ALL
-			SELECT parent.*, chain.depth + 1
-			FROM disk_snapshot parent
-			JOIN chain ON parent.external_id = NULLIF(chain.parent_snapshot_id, '')::uuid
-			WHERE parent.deleted_at IS NULL
-				AND (parent.workspace_id = $1 OR (parent.public = TRUE AND parent.status = $3))
-				AND chain.depth <= $4
-		)
-		SELECT %s FROM chain ORDER BY depth DESC;`, diskSnapshotColumns(""))
-	var snapshots []types.DiskSnapshot
-	if err := r.client.SelectContext(ctx, &snapshots, query, workspaceId, snapshotId, types.DiskSnapshotStatusAvailable, types.DiskSnapshotMaxChainDepth); err != nil {
-		return nil, err
-	}
-	if len(snapshots) == 0 {
-		return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: snapshotId}
-	}
-	if len(snapshots) > types.DiskSnapshotMaxChainDepth {
-		return nil, fmt.Errorf("disk snapshot %s chain exceeds %d generations", snapshotId, types.DiskSnapshotMaxChainDepth)
-	}
-	if snapshots[0].ParentSnapshotId != "" {
-		return nil, fmt.Errorf("disk snapshot parent %s is missing or inaccessible", snapshots[0].ParentSnapshotId)
-	}
-	return snapshots, nil
-}
-
-type diskSnapshotKey struct {
-	workspaceID uint
-	diskName    string
-}
-
 func (r *PostgresBackendRepository) GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error) {
-	snapshot, err := r.latestDiskReads.get(ctx, diskSnapshotKey{workspaceId, diskName}, r.readLatestDiskSnapshots)
-	if err != nil {
-		return nil, err
-	}
-	if snapshot == nil {
-		return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: fmt.Sprintf("latest:%d:%s", workspaceId, diskName)}
-	}
-	copy := *snapshot
-	return &copy, nil
-}
-
-func (r *PostgresBackendRepository) readLatestDiskSnapshots(ctx context.Context, keys []diskSnapshotKey) (map[diskSnapshotKey]*types.DiskSnapshot, error) {
-	workspaces, names := make([]int64, len(keys)), make([]string, len(keys))
-	for i, key := range keys {
-		workspaces[i], names[i] = int64(key.workspaceID), key.diskName
-	}
-	// Each lateral lookup uses the available-generation index. One query serves
-	// the burst without scanning unrelated disks or retaining a stale head.
 	query := fmt.Sprintf(`
-		SELECT latest.*
-		FROM unnest($1::bigint[], $2::text[]) AS requested(workspace_id,disk_name)
-		CROSS JOIN LATERAL (
-			SELECT %s FROM disk_snapshot ds
-			WHERE ds.workspace_id=requested.workspace_id AND ds.disk_name=requested.disk_name
-			  AND ds.status='available' AND ds.deleted_at IS NULL
-			ORDER BY generation DESC, created_at DESC, id DESC LIMIT 1
-		) latest`, diskSnapshotColumns("ds"))
-	var snapshots []*types.DiskSnapshot
-	if err := r.client.SelectContext(ctx, &snapshots, query, pq.Array(workspaces), pq.Array(names)); err != nil {
+		SELECT %s
+		FROM disk_snapshot
+		WHERE workspace_id = $1
+		  AND disk_name = $2
+		  AND status = $3
+		  AND deleted_at IS NULL
+		ORDER BY generation DESC, created_at DESC, id DESC
+		LIMIT 1;`, diskSnapshotColumns(""))
+
+	var snapshot types.DiskSnapshot
+	if err := r.client.GetContext(ctx, &snapshot, query, workspaceId, diskName, types.DiskSnapshotStatusAvailable); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: fmt.Sprintf("latest:%d:%s", workspaceId, diskName)}
+		}
 		return nil, err
 	}
-	result := make(map[diskSnapshotKey]*types.DiskSnapshot, len(snapshots))
-	for _, snapshot := range snapshots {
-		result[diskSnapshotKey{snapshot.WorkspaceId, snapshot.DiskName}] = snapshot
-	}
-	return result, nil
+	return &snapshot, nil
 }
 
 func (r *PostgresBackendRepository) ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error) {

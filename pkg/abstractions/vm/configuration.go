@@ -380,6 +380,10 @@ func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM
 		return err
 	}
 
+	if err := s.repo.SaveVM(ctx, v); err != nil {
+		return err
+	}
+
 	return s.start(ctx, info, v)
 }
 

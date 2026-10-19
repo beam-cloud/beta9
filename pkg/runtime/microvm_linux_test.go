@@ -133,38 +133,6 @@ func TestRestoredGuestReadinessWaitsForHostClockAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestMicroVMWaitsForExecListenerAnnouncement(t *testing.T) {
-	host, guest := net.Pipe()
-	defer host.Close()
-	defer guest.Close()
-	ctrl := &microVMControl{ready: make(chan struct{}), execReady: make(chan struct{}), pending: map[uint64]chan microvm.Message{}}
-	inst := &microVMInstance{ctrl: ctrl, exitDone: make(chan struct{})}
-	vm := &MicroVM{vms: map[string]*microVMInstance{"vm": inst}}
-	go ctrl.serve(host)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- vm.WaitExecReady(ctx, "vm") }()
-	<-ctrl.ready
-	select {
-	case <-done:
-		t.Fatal("a control connection does not mean exec is listening")
-	default:
-	}
-	encoder := microvm.NewEncoder(guest)
-	require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgExecReady}))
-	require.NoError(t, <-done)
-	require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgExecReady}), "re-announcements must be idempotent")
-	inst.ctrl = &microVMControl{execReady: make(chan struct{}), network: &microvm.Network{}}
-	require.NoError(t, vm.WaitExecReady(ctx, "vm"), "RAM restore already waits for the running guest's network acknowledgement")
-	inst.ctrl.network = nil
-	canceled, stop := context.WithCancel(context.Background())
-	stop()
-	require.ErrorIs(t, vm.WaitExecReady(canceled, "vm"), context.Canceled)
-	close(inst.exitDone)
-	require.ErrorContains(t, vm.WaitExecReady(ctx, "vm"), "guest exited")
-}
-
 // The canvas is image content: a symlink where the host writes must be
 // replaced, never followed onto the host.
 func TestPrepareCanvasDoesNotFollowImageSymlinks(t *testing.T) {

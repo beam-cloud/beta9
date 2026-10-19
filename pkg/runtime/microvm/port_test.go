@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"io"
 	"net"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -126,16 +124,9 @@ func TestPortRejectsFailedConnections(t *testing.T) {
 	}
 }
 
-func portTestStream(t *testing.T) (portConn, <-chan error) {
+func portTestStream(t *testing.T) (*net.TCPConn, <-chan error) {
 	t.Helper()
-	// Model the vsock stream without occupying a loopback TCP port. A TCP
-	// listener here can collide with the IPv6 target and accept its IPv4 probe.
-	dir, err := os.MkdirTemp("", "b9-port-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	listener, err := net.Listen("unix", filepath.Join(dir, "port.sock"))
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,13 +139,13 @@ func portTestStream(t *testing.T) (portConn, <-chan error) {
 			return
 		}
 		defer conn.Close()
-		done <- ServePort(conn.(*net.UnixConn))
+		done <- ServePort(conn.(*net.TCPConn))
 	}()
-	conn, err := net.Dial("unix", listener.Addr().String())
+	conn, err := net.Dial("tcp4", listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	return conn.(*net.UnixConn), done
+	return conn.(*net.TCPConn), done
 }

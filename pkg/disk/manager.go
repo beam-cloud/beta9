@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
 
@@ -30,7 +29,7 @@ const (
 
 	// DefaultMaxChainDepth is a backstop on the local backing chain. Compact
 	// keeps chains shallow; the cap only trips if compaction keeps failing.
-	DefaultMaxChainDepth = types.DiskSnapshotMaxChainDepth
+	DefaultMaxChainDepth = 64
 
 	// DefaultFlattenDepth is the published chain length at which the adapter
 	// publishes a flattened parentless generation instead of a delta.

@@ -176,47 +176,6 @@ type networkVMStore struct {
 	touchCalls int
 }
 
-func (r *networkVMStore) CreateVMWithStub(ctx context.Context, v *types.VM, _ types.Stub) error {
-	return r.SaveVM(ctx, v)
-}
-
-func TestVMCreationReservesAddressInInitialWrite(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		failure error
-		writes  int
-	}{
-		{name: "allocated", writes: 1},
-		{name: "address collision", failure: &pq.Error{Code: "23505", Constraint: "persistent_vm_public_ipv6"}, writes: 2},
-		{name: "name collision", failure: &pq.Error{Code: "23505", Constraint: "persistent_vm_name"}, writes: 1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			s, v, _, _, _ := fixture()
-			delete(s.repo.(*vmStore).rows, v.ID)
-			store := &networkVMStore{vmStore: s.repo.(*vmStore), saveError: test.failure}
-			s.repo = store
-			var err error
-			s.publicNetwork, err = parsePublicVMNetwork(publicNetworkConfig())
-			require.NoError(t, err)
-			s.publicNetwork.repo = unavailableVMAddresses{}
-			err = s.createVMRecord(context.Background(), v, types.Stub{})
-			require.Equal(t, test.writes, store.saveCalls)
-			if test.name == "name collision" {
-				require.ErrorIs(t, err, test.failure)
-				require.Empty(t, v.PublicIPv6)
-				require.NotContains(t, store.rows, v.ID)
-				return
-			}
-			require.NoError(t, err)
-			address, err := netip.ParseAddr(v.PublicIPv6)
-			require.NoError(t, err)
-			require.True(t, s.publicNetwork.prefix.Contains(address))
-			require.Equal(t, v.PublicIPv6, store.rows[v.ID].PublicIPv6)
-			require.NoError(t, s.ensurePublicIPv6(context.Background(), v), "launch must not allocate again")
-		})
-	}
-}
-
 func (r *networkVMStore) SaveVM(ctx context.Context, v *types.VM) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -71,13 +71,6 @@ const (
 	workerDrainRetryInterval time.Duration = 30 * time.Second
 )
 
-const (
-	// Reclaim file cache before concurrent guest allocations enter direct
-	// reclaim. Linux expresses the watermark gap in fractions of 10,000.
-	microVMMinWatermarkScaleFactor  int64 = 300
-	microVMWatermarkScaleFactorPath       = "/proc/sys/vm/watermark_scale_factor"
-)
-
 func ensureGVisorShmemTHP(path string) (bool, error) {
 	policy, err := os.ReadFile(path)
 	if err != nil {
@@ -94,19 +87,19 @@ func ensureGVisorShmemTHP(path string) (bool, error) {
 	return true, nil
 }
 
-func ensureHostSysctlMinimum(path string, minimum int64) (bool, error) {
+func ensureGVisorMaxMapCount(path string) (bool, error) {
 	value, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
 	}
 	current, err := strconv.ParseInt(strings.TrimSpace(string(value)), 10, 64)
 	if err != nil {
-		return false, fmt.Errorf("parse host sysctl %s: %w", path, err)
+		return false, fmt.Errorf("parse vm.max_map_count: %w", err)
 	}
-	if current >= minimum {
+	if current >= gvisorMinMaxMapCount {
 		return false, nil
 	}
-	if err := os.WriteFile(path, []byte(strconv.FormatInt(minimum, 10)+"\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(strconv.FormatInt(gvisorMinMaxMapCount, 10)+"\n"), 0644); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -606,7 +599,7 @@ func NewWorker() (_ *Worker, err error) {
 		// Page decommit fragments systrap's host mappings. At Linux's default
 		// VMA limit, even munmap can return ENOMEM and panic the sentry while
 		// the application remains below its memory limit.
-		if changed, err := ensureHostSysctlMinimum(gvisorMaxMapCountPath, gvisorMinMaxMapCount); err != nil {
+		if changed, err := ensureGVisorMaxMapCount(gvisorMaxMapCountPath); err != nil {
 			return nil, fmt.Errorf("configure gVisor host vm.max_map_count: %w", err)
 		} else if changed {
 			log.Info().Int64("max_map_count", gvisorMinMaxMapCount).Msg("increased host VMA limit for gVisor")
@@ -647,11 +640,6 @@ func NewWorker() (_ *Worker, err error) {
 				Msg("gVisor runtime initialized successfully")
 		}
 	case types.ContainerRuntimeMicroVM.String():
-		if changed, err := ensureHostSysctlMinimum(microVMWatermarkScaleFactorPath, microVMMinWatermarkScaleFactor); err != nil {
-			log.Warn().Err(err).Msg("failed to configure microvm host reclaim watermark")
-		} else if changed {
-			log.Info().Int64("watermark_scale_factor", microVMMinWatermarkScaleFactor).Msg("increased background reclaim for microvm allocation bursts")
-		}
 		// A pool declared as microvm must be one: falling back to runc would
 		// silently downgrade the isolation the sandbox asked for.
 		defaultRuntime, err = runtime.New(runtime.Config{

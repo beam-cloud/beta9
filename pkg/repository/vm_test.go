@@ -2,6 +2,9 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +12,65 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVMLockQueueBatchesAndBoundsIndependentRequests(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	s := &vmLockSession{client: r.client, gate: make(chan struct{}, 1), batchRunning: true}
+	var done sync.WaitGroup
+	for i := range 300 {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			result := s.enqueue(context.Background(), fmt.Sprint(i))
+			require.NoError(t, result.err)
+			require.NotNil(t, result.busy)
+		}()
+	}
+	require.Eventually(t, func() bool {
+		s.batchMu.Lock()
+		defer s.batchMu.Unlock()
+		return len(s.pending) == 300
+	}, time.Second, time.Millisecond)
+	for offset := 0; offset < 300; offset += 128 {
+		ids := []string{}
+		rows := sqlmock.NewRows([]string{"id", "acquired"})
+		for _, request := range s.pending[offset:min(offset+128, 300)] {
+			ids = append(ids, request.id)
+			rows.AddRow(request.id, false)
+		}
+		mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array(ids)).WillReturnRows(rows)
+	}
+	s.flushAcquires()
+	done.Wait()
+	require.Empty(t, s.pending)
+	require.False(t, s.batchRunning)
+	require.Zero(t, r.client.Stats().InUse)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVMLockQueueCancellationDoesNotWaitForAnotherBatch(t *testing.T) {
+	s := &vmLockSession{batchRunning: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan vmLockResult, 1)
+	go func() { done <- s.enqueue(ctx, "queued") }()
+	require.Eventually(t, func() bool {
+		s.batchMu.Lock()
+		defer s.batchMu.Unlock()
+		return len(s.pending) == 1
+	}, time.Second, time.Millisecond)
+	cancel()
+	select {
+	case result := <-done:
+		require.ErrorIs(t, result.err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("a canceled queued request waited for another acquisition")
+	}
+	s.flushAcquires()
+	require.Empty(t, s.pending)
+	require.False(t, s.batchRunning)
+}
 
 func TestVMLocksLeaveConnectionsForLifecycleQueries(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
@@ -167,6 +229,59 @@ func TestVMLockWaitsForAnotherGateway(t *testing.T) {
 	require.NoError(t, err)
 	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("a").WillReturnResult(sqlmock.NewResult(0, 1))
 	unlock()
+	require.Zero(t, r.client.Stats().InUse)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVMLockBatchPreservesIndependentOwners(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	r.client.SetMaxOpenConns(2)
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"a"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("a", true))
+	owner, err := r.LockVM(context.Background(), "a")
+	require.NoError(t, err)
+	defer owner()
+	s := &r.vmLocks[0]
+	requests := []*vmLockAcquire{{id: "a"}, {id: "b"}, {id: "b"}, {id: "foreign"}}
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"b", "foreign"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("foreign", false).AddRow("b", true))
+	results, err := s.acquire(context.Background(), requests)
+	require.NoError(t, err)
+	require.Equal(t, (<-chan struct{})(s.held["a"]), results[requests[0]].busy.released)
+	require.NotNil(t, results[requests[1]].conn)
+	require.Equal(t, (<-chan struct{})(s.held["b"]), results[requests[2]].busy.released)
+	require.NotNil(t, results[requests[3]].busy)
+	require.Nil(t, results[requests[3]].busy.released, "a remote owner must not become a local owner")
+	require.Len(t, s.held, 2)
+	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("b").WillReturnResult(sqlmock.NewResult(0, 1))
+	s.gate <- struct{}{}
+	s.release("b", results[requests[1]].conn)
+	<-s.gate
+	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("a").WillReturnResult(sqlmock.NewResult(0, 1))
+	owner()
+	require.Zero(t, r.client.Stats().InUse)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVMLockBatchDiscardsAmbiguousAcquisitions(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	r.client.SetMaxOpenConns(2)
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"a"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("a", true))
+	owner, err := r.LockVM(context.Background(), "a")
+	require.NoError(t, err)
+	defer owner()
+	s := &r.vmLocks[0]
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"b", "c"})).
+		WillReturnError(errors.New("connection lost while acquiring locks"))
+	_, err = s.acquire(context.Background(), []*vmLockAcquire{{id: "b"}, {id: "c"}})
+	require.ErrorContains(t, err, "connection lost")
+	require.Nil(t, s.conn, "possibly acquired locks must never return to the connection pool")
+	require.Len(t, s.held, 1, "the existing caller keeps its local fence until it finishes")
+	owner()
+	require.Empty(t, s.held)
 	require.Zero(t, r.client.Stats().InUse)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
