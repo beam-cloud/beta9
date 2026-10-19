@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,14 +152,34 @@ func (s *Service) lockedVM(ctx context.Context, workspace uint, name string) (*t
 	return v, unlock, nil
 }
 
-func (s *Service) list(c echo.Context) error {
-	ctx, info := requestContext(c)
-	vms, err := s.repo.ListVMs(ctx, info.Workspace.Id)
-	if err != nil {
-		return apiError(err)
+const maxPageSize = 200
+
+// Listings return every item as an array unless ?limit= asks for a page, as
+// the SDK, CLI and MCP tools expect. A zero limit returns only the totals.
+func pageParams(c echo.Context) (limit, offset int, err error) {
+	limit, err = strconv.Atoi(c.QueryParam("limit"))
+	if err != nil || limit < 0 || limit > maxPageSize {
+		return 0, 0, echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("limit must be an integer from 0 to %d", maxPageSize))
 	}
 
-	result := []types.VM{}
+	if value := c.QueryParam("offset"); value != "" {
+		if offset, err = strconv.Atoi(value); err != nil || offset < 0 {
+			return 0, 0, echo.NewHTTPError(http.StatusBadRequest, "offset must be a non-negative integer")
+		}
+	}
+
+	return limit, offset, nil
+}
+
+type vmPage struct {
+	Data  []types.VM `json:"data"`
+	Total int        `json:"total"`
+	// VMs by stored status, ignoring the status and search filters.
+	Counts map[string]int `json:"counts"`
+}
+
+func (s *Service) list(c echo.Context) error {
+	ctx, info := requestContext(c)
 	var metadata map[string]string
 	if filter := c.QueryParam("metadata"); filter != "" {
 		if err := json.Unmarshal([]byte(filter), &metadata); err != nil {
@@ -166,6 +187,16 @@ func (s *Service) list(c echo.Context) error {
 		}
 	}
 
+	if c.QueryParams().Has("limit") {
+		return s.listPage(c, metadata)
+	}
+
+	vms, err := s.repo.ListVMs(ctx, info.Workspace.Id)
+	if err != nil {
+		return apiError(err)
+	}
+
+	result := []types.VM{}
 	for _, v := range vms {
 		if v.DesiredState == "deleted" && c.QueryParam("all") != "true" {
 			continue
@@ -193,6 +224,38 @@ func (s *Service) list(c echo.Context) error {
 		response := s.response(v)
 		response.Status = status
 		result = append(result, response)
+	}
+
+	return c.JSON(http.StatusOK, result)
+}
+
+// Unlike the full listing, which matches the projected launch status, a page
+// filters on stored status: a comma-separated list, matched in the database.
+func (s *Service) listPage(c echo.Context, metadata map[string]string) error {
+	ctx, info := requestContext(c)
+	limit, offset, err := pageParams(c)
+	if err != nil {
+		return err
+	}
+
+	filter := types.VMFilter{Limit: limit, Offset: offset, Search: c.QueryParam("q"), Metadata: metadata, All: c.QueryParam("all") == "true"}
+	if status := c.QueryParam("status"); status != "" {
+		filter.Statuses = strings.Split(status, ",")
+	}
+
+	page, err := s.repo.ListVMPage(ctx, info.Workspace.Id, filter)
+	if err != nil {
+		return apiError(err)
+	}
+
+	result := vmPage{Data: []types.VM{}, Total: page.Total, Counts: page.Counts}
+	for _, v := range page.VMs {
+		response := s.response(v)
+		if response.Status, err = s.launchStatus(v); err != nil {
+			return apiError(err)
+		}
+
+		result.Data = append(result.Data, response)
 	}
 
 	return c.JSON(http.StatusOK, result)
@@ -262,40 +325,32 @@ func (s *Service) create(c echo.Context) error {
 	}
 
 	if seed != "" {
-		items, err := s.repo.ListVMArtifacts(ctx, info.Workspace.Id, kind)
+		a, err := s.repo.GetVMArtifact(ctx, info.Workspace.Id, kind, seed)
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, kind+" not found")
+		}
 		if err != nil {
 			return apiError(err)
 		}
 
-		found := false
-		for _, a := range items {
-			if a.ID == seed || a.Name == seed {
-				base, _ := json.Marshal(a.Spec)
-				var fields, overrides map[string]json.RawMessage
-				if err := json.Unmarshal(base, &fields); err != nil {
-					return apiError(err)
-				}
+		base, _ := json.Marshal(a.Spec)
+		var fields, overrides map[string]json.RawMessage
+		if err := json.Unmarshal(base, &fields); err != nil {
+			return apiError(err)
+		}
 
-				if len(req.Spec) > 0 {
-					if err := json.Unmarshal(req.Spec, &overrides); err != nil {
-						return apiError(err)
-					}
-				}
-
-				for key, value := range overrides {
-					fields[key] = value
-				}
-
-				fields["source_snapshot_id"], _ = json.Marshal(a.RootSnapshotID)
-				req.Spec, _ = json.Marshal(fields)
-				found = true
-				break
+		if len(req.Spec) > 0 {
+			if err := json.Unmarshal(req.Spec, &overrides); err != nil {
+				return apiError(err)
 			}
 		}
 
-		if !found {
-			return echo.NewHTTPError(http.StatusNotFound, kind+" not found")
+		for key, value := range overrides {
+			fields[key] = value
 		}
+
+		fields["source_snapshot_id"], _ = json.Marshal(a.RootSnapshotID)
+		req.Spec, _ = json.Marshal(fields)
 	}
 
 	var spec types.VMSpec
@@ -668,7 +723,48 @@ func (s *Service) artifacts(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
 	}
 
+	var filter types.VMArtifactFilter
+	if name := c.QueryParam("vm"); name != "" {
+		v, err := s.repo.GetVM(ctx, info.Workspace.Id, name)
+		if err != nil {
+			return apiError(err)
+		}
+
+		filter.VMID = v.ID
+	}
+
+	if c.QueryParams().Has("limit") {
+		return s.artifactPage(c, kind, filter)
+	}
+
 	a, err := s.repo.ListVMArtifacts(ctx, info.Workspace.Id, kind)
+	if err != nil {
+		return apiError(err)
+	}
+
+	result := []types.VMArtifact{}
+	for _, item := range a {
+		if filter.VMID == "" || item.VMID == filter.VMID {
+			result = append(result, artifactResponse(item))
+		}
+	}
+
+	return c.JSON(http.StatusOK, result)
+}
+
+type artifactPage struct {
+	Data  []types.VMArtifact `json:"data"`
+	Total int                `json:"total"`
+}
+
+func (s *Service) artifactPage(c echo.Context, kind string, filter types.VMArtifactFilter) error {
+	ctx, info := requestContext(c)
+	var err error
+	if filter.Limit, filter.Offset, err = pageParams(c); err != nil {
+		return err
+	}
+
+	a, total, err := s.repo.ListVMArtifactPage(ctx, info.Workspace.Id, kind, filter)
 	if err != nil {
 		return apiError(err)
 	}
@@ -677,7 +773,7 @@ func (s *Service) artifacts(c echo.Context) error {
 		a[i] = artifactResponse(a[i])
 	}
 
-	return c.JSON(http.StatusOK, a)
+	return c.JSON(http.StatusOK, artifactPage{Data: a, Total: total})
 }
 
 func (s *Service) removeArtifact(c echo.Context) error {

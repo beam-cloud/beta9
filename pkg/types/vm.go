@@ -135,3 +135,29 @@ type VMArtifact struct {
 	CreatedAt      time.Time `json:"created_at"`
 	Description    string    `json:"description,omitempty"`
 }
+
+// VMFilter selects one page of a workspace's VMs, newest first. A zero Limit
+// returns only the counts.
+type VMFilter struct {
+	Limit, Offset int
+	// Stored statuses; reconciliation keeps them within seconds of the runtime.
+	Statuses []string
+	// Case-insensitive substring of the name or ID.
+	Search   string
+	Metadata map[string]string
+	All      bool
+}
+
+// VMPage counts the VMs in scope by status, so each status can show its count
+// before it is selected. Statuses and Search narrow only VMs and Total.
+type VMPage struct {
+	VMs    []*VM
+	Total  int
+	Counts map[string]int
+}
+
+// VMArtifactFilter selects one page of artifacts, newest first.
+type VMArtifactFilter struct {
+	Limit, Offset int
+	VMID          string
+}
