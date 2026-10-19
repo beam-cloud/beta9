@@ -262,6 +262,7 @@ func newTestVolume(t *testing.T) (*Volume, *fakeQMP) {
 	t.Cleanup(func() { os.RemoveAll(socketDir) })
 	qmpSocket := filepath.Join(socketDir, "qmp.sock")
 	server := newFakeQMP(t, qmpSocket)
+	server.nodes.Store([]string{"fmt-0"})
 
 	manager := NewManager(Config{Root: filepath.Join(dir, "root"), Runner: fakeRunner})
 	state := &volumeState{
@@ -613,7 +614,7 @@ func TestSealAtTheChainDepthCapReportsIt(t *testing.T) {
 func TestUnpublishedLeavesTheHeadAlone(t *testing.T) {
 	volume, server := newTestVolume(t)
 	server.writtenB.Store(4096)
-	if layers := volume.Unpublished(); len(layers) != 0 {
+	if layers, err := volume.Unpublished(context.Background()); err != nil || len(layers) != 0 {
 		t.Fatalf("nothing is sealed yet, got %v", layers)
 	}
 	sealed, _, err := volume.Seal(context.Background(), false)
@@ -621,7 +622,10 @@ func TestUnpublishedLeavesTheHeadAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	layers := volume.Unpublished()
+	layers, err := volume.Unpublished(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(layers) != 1 || layers[0] != sealed[0] {
 		t.Fatalf("expected the sealed layer %v, got %v", sealed, layers)
 	}

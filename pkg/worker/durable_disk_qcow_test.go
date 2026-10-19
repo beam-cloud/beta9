@@ -30,14 +30,17 @@ func TestConcurrentQcowRestoresGoStraightToOriginOnLocalCacheMiss(t *testing.T) 
 }
 
 type backloggedQcowVolume struct {
-	pending []disk.SealedLayer
-	depth   int
-	writes  int
-	events  []string
+	pending    []disk.SealedLayer
+	pendingErr error
+	depth      int
+	writes     int
+	events     []string
 }
 
-func (v *backloggedQcowVolume) Unpublished() []disk.SealedLayer { return v.pending }
-func (v *backloggedQcowVolume) Depth() int                      { return v.depth }
+func (v *backloggedQcowVolume) Unpublished(context.Context) ([]disk.SealedLayer, error) {
+	return v.pending, v.pendingErr
+}
+func (v *backloggedQcowVolume) Depth() int { return v.depth }
 func (v *backloggedQcowVolume) Compact(context.Context) error {
 	v.events = append(v.events, "compact")
 	if len(v.pending) == 0 {
@@ -128,4 +131,17 @@ func TestQcowSnapshotDoesNotForceAnEmptyHeadAfterFirstPublication(t *testing.T) 
 	volume := &backloggedQcowVolume{pending: []disk.SealedLayer{{Path: "first"}}, depth: 2}
 	require.NoError(t, snapshotQcowVolume(context.Background(), volume, durableDiskSyncExplicit, true, volume.publish))
 	require.Equal(t, []string{"publish first", "seal"}, volume.events)
+}
+
+func TestSnapshotQcowCannotPublishAnUnresolvedPivot(t *testing.T) {
+	uncertain := errors.New("live graph unavailable")
+	volume := &backloggedQcowVolume{pending: []disk.SealedLayer{{Path: "possibly-writable"}}, pendingErr: uncertain}
+	published := false
+	err := snapshotQcowVolume(context.Background(), volume, durableDiskSyncExplicit, true, func([]disk.SealedLayer) error {
+		published = true
+		return nil
+	})
+	require.ErrorIs(t, err, uncertain)
+	require.False(t, published)
+	require.Empty(t, volume.events, "neither sealing nor compaction can proceed with an unknown head")
 }

@@ -707,7 +707,7 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 }
 
 type qcowSnapshotVolume interface {
-	Unpublished() []disk.SealedLayer
+	Unpublished(context.Context) ([]disk.SealedLayer, error)
 	Seal(context.Context, bool) ([]disk.SealedLayer, bool, error)
 	Compact(context.Context) error
 	Depth() int
@@ -728,7 +728,11 @@ func snapshotQcowVolume(ctx context.Context, volume qcowSnapshotVolume, mode dur
 		}
 		return nil
 	}
-	if pending := volume.Unpublished(); len(pending) > 0 {
+	pending, err := volume.Unpublished(ctx)
+	if err != nil {
+		return err
+	}
+	if len(pending) > 0 {
 		if err := checkpoint(pending); err != nil {
 			return err
 		}

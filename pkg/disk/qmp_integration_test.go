@@ -2,10 +2,13 @@ package disk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,4 +133,128 @@ func TestSealFinishesInterruptedQEMUCommit(t *testing.T) {
 	jobs, err = client.jobs(ctx)
 	require.NoError(t, err)
 	require.Empty(t, jobs)
+}
+
+func TestSealResolvesLostQEMUPivotReply(t *testing.T) {
+	for _, scenario := range []struct {
+		name              string
+		commit, failProbe bool
+	}{
+		{"committed", true, false}, {"uncommitted", false, false}, {"probe-unavailable", true, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			parent, volume := newQEMUVolume(t)
+			ctx, cancel := context.WithCancel(parent)
+			defer cancel()
+			oldHead := volume.state.HeadPath
+			volume.state.QMPSocket = lostPivotReplyProxy(t, volume.state.QMPSocket, scenario.commit, scenario.failProbe, cancel)
+			sealed, _, err := volume.Seal(ctx, true)
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			if scenario.failProbe {
+				require.Error(t, err)
+				require.FileExists(t, oldHead)
+				require.FileExists(t, volume.state.HeadPath, "an unknown outcome must retain the possible active head")
+				require.Equal(t, "fmt-0", volume.fmtNode)
+				sealed, err = volume.Unpublished(parent)
+				require.Error(t, err, "a failed probe must not expose a potentially writable layer")
+				require.Empty(t, sealed)
+				sealed, err = volume.Unpublished(parent)
+				require.NoError(t, err, "reconcile before exposing a sealed layer to its publisher")
+			} else if !scenario.commit {
+				require.Error(t, err)
+				require.Equal(t, oldHead, volume.state.HeadPath)
+				require.Empty(t, volume.state.Pending)
+				require.Equal(t, "fmt-0", volume.fmtNode)
+			} else {
+				require.NoError(t, err, "confirm a committed pivot despite the cancelled caller")
+			}
+			if scenario.commit {
+				require.Len(t, sealed, 1)
+				require.Equal(t, oldHead, sealed[0].Path)
+				require.Equal(t, "fmt-1", volume.fmtNode)
+			}
+			_, _, err = volume.Seal(parent, true)
+			require.NoError(t, err, "the same live daemon must remain usable")
+		})
+	}
+}
+
+// A real QEMU transaction can commit after its caller loses the reply. This
+// proxy also cancels that caller, exercising reconnection to the exclusive QMP
+// monitor with a fresh recovery context rather than the expired request.
+func lostPivotReplyProxy(t *testing.T, upstream string, commit, failProbe bool, cancel context.CancelFunc) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "qmp-proxy")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "qmp.sock")
+	listener, err := net.Listen("unix", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { listener.Close() })
+	var dropped atomic.Bool
+	var probeFailures atomic.Int32
+	go func() {
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer client.Close()
+				server, err := net.Dial("unix", upstream)
+				if err != nil {
+					return
+				}
+				defer server.Close()
+				fromServer, fromClient := json.NewDecoder(server), json.NewDecoder(client)
+				toServer, toClient := json.NewEncoder(server), json.NewEncoder(client)
+				var greeting json.RawMessage
+				if fromServer.Decode(&greeting) != nil || toClient.Encode(greeting) != nil {
+					return
+				}
+				for {
+					var request map[string]json.RawMessage
+					if fromClient.Decode(&request) != nil {
+						return
+					}
+					var command string
+					if json.Unmarshal(request["execute"], &command) != nil {
+						return
+					}
+					loseReply := command == "transaction" && dropped.CompareAndSwap(false, true)
+					if loseReply && !commit {
+						cancel()
+						return
+					}
+					if toServer.Encode(request) != nil {
+						return
+					}
+					for {
+						var response map[string]json.RawMessage
+						if fromServer.Decode(&response) != nil {
+							return
+						}
+						if _, event := response["event"]; event {
+							if toClient.Encode(response) != nil {
+								return
+							}
+							continue
+						}
+						if loseReply {
+							cancel()
+							return
+						}
+						if command == "query-named-block-nodes" && failProbe && dropped.Load() && probeFailures.Add(1) <= 2 {
+							response = map[string]json.RawMessage{"error": json.RawMessage(`{"class":"GenericError","desc":"probe unavailable"}`)}
+						}
+						if toClient.Encode(response) != nil {
+							return
+						}
+						break
+					}
+				}
+			}()
+		}
+	}()
+	return path
 }
