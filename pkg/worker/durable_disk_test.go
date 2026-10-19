@@ -1392,7 +1392,7 @@ func TestQcowUploadChunksSkipsChunksKnownToTheChain(t *testing.T) {
 	}
 	worker := &Worker{}
 	worker.qcowChains.Store("volume-key", []qcowChainEntry{{
-		row: &types.DiskSnapshot{ExternalId: "snap-1"},
+		row: &types.DiskSnapshot{ExternalId: "snap-1", BucketName: "bucket"},
 		manifest: &types.DiskSnapshotManifest{Files: []types.DiskSnapshotFile{{
 			Type: "file", Chunks: []types.DiskSnapshotChunk{chunk("a"), chunk("b")},
 		}}},
@@ -1402,15 +1402,38 @@ func TestQcowUploadChunksSkipsChunksKnownToTheChain(t *testing.T) {
 		Type:   "file",
 		Chunks: []types.DiskSnapshotChunk{chunk("a"), chunk("b"), chunk("c")},
 	}
-	upload := worker.qcowUploadChunks("volume-key", layer)
+	upload := worker.qcowUploadChunks("volume-key", layer, "bucket")
 	require.Len(t, upload.Chunks, 1)
 	require.Equal(t, chunk("c").ObjectKey, upload.Chunks[0].ObjectKey)
 	require.Len(t, layer.Chunks, 3, "the manifest layer must keep every chunk")
 
 	// An empty chain (first publish, or a worker that just restarted) skips
 	// nothing.
-	full := worker.qcowUploadChunks("other-volume", layer)
+	full := worker.qcowUploadChunks("other-volume", layer, "bucket")
 	require.Len(t, full.Chunks, 3)
+
+	forkLayer := func() *types.DiskSnapshotFile {
+		fork := &types.DiskSnapshotFile{Chunks: []types.DiskSnapshotChunk{chunk("a"), chunk("c")}}
+		for i := range fork.Chunks {
+			fork.Chunks[i].ObjectKey = strings.Replace(fork.Chunks[i].ObjectKey, "machine-root", "fork-root", 1)
+		}
+		return fork
+	}
+	fork := forkLayer()
+	upload = worker.qcowUploadChunks("volume-key", fork, "bucket")
+	require.Len(t, upload.Chunks, 1, "a fork must reuse its parent's identical data")
+	require.Equal(t, chunk("a").ObjectKey, fork.Chunks[0].ObjectKey, "the manifest must reference the existing object")
+	require.Contains(t, upload.Chunks[0].ObjectKey, "fork-root")
+
+	foreign := forkLayer()
+	upload = worker.qcowUploadChunks("volume-key", foreign, "another-bucket")
+	require.Len(t, upload.Chunks, 2, "another bucket's data must be uploaded")
+	require.Contains(t, foreign.Chunks[0].ObjectKey, "fork-root")
+	worker.qcowChain("volume-key")[0].row.Public = true
+	foreign = forkLayer()
+	upload = worker.qcowUploadChunks("volume-key", foreign, "bucket")
+	require.Len(t, upload.Chunks, 2, "public sources may belong to another workspace")
+	require.Contains(t, foreign.Chunks[0].ObjectKey, "fork-root")
 }
 
 // Writers wait on a backlogged journal's checkpoint, so it publishes its small
@@ -2015,4 +2038,20 @@ func (s *fakeDurableDiskSnapshotCacheReader) ReadContentInto(_ context.Context, 
 		return 0, fmt.Errorf("invalid cache range")
 	}
 	return int64(copy(dest, data[offset:end])), nil
+}
+
+func TestMemoryCheckpointCancelsQcowMerge(t *testing.T) {
+	ctx, stop := context.WithCancelCause(context.Background())
+	defer stop(nil)
+	request := &types.ContainerRequest{Mounts: []types.Mount{{
+		DurableDisk: &types.DurableDiskMountConfig{Name: "disk", Driver: types.DurableDiskDriverQcow},
+	}}}
+	worker := &Worker{diskManager: disk.NewManager(disk.Config{})}
+	worker.qcowMerges.Store(worker.qcowVolumeKey(request, &request.Mounts[0]), &qcowMerge{stop: stop})
+
+	// Cancellation must happen before the disk is inspected or sealed. The
+	// unattached volume makes the sync stop at that first inspection.
+	_, err := worker.syncDurableDiskMounts(context.Background(), request, durableDiskSyncMemoryCheckpoint)
+	require.ErrorContains(t, err, "not attached")
+	require.ErrorIs(t, context.Cause(ctx), errQcowMergeStopped)
 }

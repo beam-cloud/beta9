@@ -81,6 +81,9 @@ const (
 	durableDiskSyncFinal durableDiskSyncMode = iota
 	// An explicit snapshot may return the latest generation when nothing changed.
 	durableDiskSyncExplicit
+	// Pair a disk generation with RAM without starting a merge that could
+	// replace the disk's head before the checkpoint finishes persisting.
+	durableDiskSyncMemoryCheckpoint
 	// Cleanup after a container failed on its own is the same fence, except
 	// that a journaled database disk publishes nothing: its journal already
 	// holds every acknowledged write, and a crash-looping database would
@@ -312,7 +315,7 @@ func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.Conta
 				// The final sync is the container's durability boundary; the
 				// volume comes offline afterwards even if publishing failed,
 				// leaving sealed layers cached for the next attachment.
-				if mode != durableDiskSyncExplicit {
+				if mode == durableDiskSyncFinal || mode == durableDiskSyncFailed {
 					if detachErr := s.detachQcowDurableDiskMount(ctx, request, mount); detachErr != nil {
 						return errors.Join(snapErr, fmt.Errorf("detach: %w", detachErr))
 					}
@@ -442,7 +445,7 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 		},
 		defaultDurableDiskSnapshotChunkSize,
 		previousManifest,
-		mode == durableDiskSyncExplicit,
+		mode == durableDiskSyncExplicit || mode == durableDiskSyncMemoryCheckpoint,
 	)
 	if err != nil {
 		return nil, err

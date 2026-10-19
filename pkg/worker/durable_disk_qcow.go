@@ -558,20 +558,18 @@ func (s *Worker) reportQcowChainContent(request *types.ContainerRequest, chain [
 	}
 }
 
-// qcowUploadChunks returns a copy of layer without the chunks the live
-// chain's manifests already reference: chunk objects are content-addressed
-// and never deleted, so those are known to exist in the bucket. Flattened
-// publishes overlap heavily with the previous flatten, so this usually
-// reduces the periodic full-image publish to just the clusters that changed.
-func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile) *types.DiskSnapshotFile {
-	existing := make(map[string]bool)
+// qcowUploadChunks retains existing object keys for identical chunks in this
+// workspace's bucket, including a fork's parent disk, and returns only the
+// chunks still needing an upload. The full manifest keeps every chunk.
+func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile, bucket string) *types.DiskSnapshotFile {
+	existing := make(map[string]types.DiskSnapshotChunk)
 	for _, entry := range s.qcowChain(key) {
-		if entry.manifest == nil {
+		if entry.manifest == nil || entry.row.Public || entry.row.BucketName != bucket {
 			continue
 		}
 		for _, file := range entry.manifest.Files {
 			for _, chunk := range file.Chunks {
-				existing[chunk.ObjectKey] = true
+				existing[chunk.Digest] = chunk
 			}
 		}
 	}
@@ -580,8 +578,10 @@ func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile) *ty
 	}
 	upload := *layer
 	upload.Chunks = nil
-	for _, chunk := range layer.Chunks {
-		if !existing[chunk.ObjectKey] {
+	for i, chunk := range layer.Chunks {
+		if known, ok := existing[chunk.Digest]; ok && chunk.Digest != "" && known.SizeBytes == chunk.SizeBytes {
+			layer.Chunks[i].ObjectKey = known.ObjectKey
+		} else {
 			upload.Chunks = append(upload.Chunks, chunk)
 		}
 	}
@@ -702,6 +702,13 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 	}
 	if err := snapshotQcowVolume(ctx, volume, mode, latest == nil, publish); err != nil {
 		return published, err
+	}
+	// A flatten can overtake a background merge, leaving fewer published
+	// layers than local ones even below the normal compaction threshold.
+	if !volume.Journaled() && len(s.qcowChain(key))+1 < volume.Depth() {
+		if err := volume.Compact(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to compact qcow backing chain")
+		}
 	}
 	if mode == durableDiskSyncExplicit && !volume.Journaled() {
 		s.scheduleQcowMerge(request, mount, key)
@@ -890,6 +897,13 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	flatten := flattenQcowChainForced(depth)
 	if volume.Journaled() {
 		flatten = flattenQcowChain(depth, volume.Backlogged())
+	} else if flatten && depth+1 < disk.DefaultMaxChainDepth {
+		// A committed merge still uploading will shorten this chain. Keep
+		// publishing deltas while that result remains within the restore cap.
+		layers, _ := volume.Published()
+		if merged, ok := qcowMergedLayer(layers, s.qcowChain(key)); ok && merged >= 0 {
+			flatten = false
+		}
 	}
 	if parentID != "" && flatten {
 		// Publish a parentless flattened generation so restore chains stay
@@ -1013,7 +1027,7 @@ func (s *Worker) uploadQcowLayer(ctx context.Context, mount *types.Mount, store 
 		return nil, fmt.Errorf("scan qcow layer: %w", err)
 	}
 
-	upload := s.qcowUploadChunks(key, layer)
+	upload := s.qcowUploadChunks(key, layer, store.bucket)
 	sink := &qcowChunkSink{ctx: ctx, store: store}
 	if err := disk.UploadLayer(ctx, sink, imagePath, upload); err != nil {
 		return nil, err
