@@ -119,6 +119,28 @@ func (s *Service) ensurePublicIPv6(ctx context.Context, v *types.VM) error {
 	if s.publicNetwork == nil || v.PublicIPv6 != "" || v.DesiredState == types.VMStateDeleted {
 		return nil
 	}
+	return s.reservePublicIPv6(v, func(candidate string) (string, error) {
+		return s.publicNetwork.repo.AssignVMPublicIPv6(ctx, v.ID, candidate)
+	})
+}
+
+// New VMs reserve their address in the initial insert, using the same unique
+// index as reconciliation. No separate allocation write is needed at launch.
+func (s *Service) createVMRecord(ctx context.Context, v *types.VM) error {
+	if s.publicNetwork == nil {
+		return s.repo.CreateVM(ctx, v)
+	}
+	return s.reservePublicIPv6(v, func(candidate string) (string, error) {
+		v.PublicIPv6 = candidate
+		if err := s.repo.CreateVM(ctx, v); err != nil {
+			v.PublicIPv6 = ""
+			return "", err
+		}
+		return candidate, nil
+	})
+}
+
+func (s *Service) reservePublicIPv6(v *types.VM, reserve func(string) (string, error)) error {
 	for range 16 {
 		var address [16]byte
 		if _, err := rand.Read(address[:]); err != nil {
@@ -138,7 +160,7 @@ func (s *Service) ensurePublicIPv6(ctx context.Context, v *types.VM) error {
 		if candidate == prefix.Addr() {
 			continue
 		}
-		assigned, err := s.publicNetwork.repo.AssignVMPublicIPv6(ctx, v.ID, candidate.String())
+		assigned, err := reserve(candidate.String())
 		if err == nil {
 			v.PublicIPv6 = assigned
 			return nil
