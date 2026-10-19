@@ -1259,7 +1259,7 @@ func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32
 		wg.Add(1)
 		go func(port int32, address string) {
 			defer wg.Done()
-			if !pb.checkContainerReady(port, address, containerAvailableTimeout) {
+			if !pb.checkContainerReady(port, address, containerAvailableTimeout, network.WithBackgroundDialSlots()) {
 				return
 			}
 
@@ -1292,12 +1292,12 @@ func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool 
 	return pb.checkContainerAvailableWithTimeout(containerAddress, containerAvailableTimeout)
 }
 
-func (pb *PodProxyBuffer) checkContainerAvailableWithTimeout(containerAddress string, timeout time.Duration) bool {
+func (pb *PodProxyBuffer) checkContainerAvailableWithTimeout(containerAddress string, timeout time.Duration, opts ...network.BackendDialerOption) bool {
 	if timeout <= 0 {
 		timeout = containerAvailableTimeout
 	}
 	start := time.Now()
-	conn, err := network.ConnectToBackend(pb.baseContext(), containerAddress, timeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
+	conn, err := network.NewBackendDialer(pb.tailscale, pb.tsConfig, pb.containerRepo, timeout, opts...).Dial(pb.baseContext(), containerAddress)
 	if err != nil {
 		metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", false, time.Since(start))
 		return false
