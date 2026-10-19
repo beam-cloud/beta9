@@ -962,6 +962,11 @@ func (s *Worker) signalRestoredSandboxProcessManager(ctx context.Context, reques
 	if !request.Stub.Type.IsSandbox() || rt == nil {
 		return
 	}
+	// Native snapshots retain the guest kernel's live TCP listeners. Sending
+	// the CRIU listener-repair signal races the first readiness connection.
+	if rt.Name() == types.ContainerRuntimeMicroVM.String() {
+		return
+	}
 
 	signalCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
