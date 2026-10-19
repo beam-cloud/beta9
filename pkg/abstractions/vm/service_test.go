@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,42 @@ func (r *vmStore) ListVMArtifacts(_ context.Context, _ uint, kind string) ([]typ
 		}
 	}
 	return result, nil
+}
+func (r *vmStore) GetVMArtifact(_ context.Context, _ uint, kind, name string) (*types.VMArtifact, error) {
+	for _, a := range r.artifacts {
+		if a.Kind == kind && (a.ID == name || a.Name == name) {
+			return &a, nil
+		}
+	}
+	return nil, sql.ErrNoRows
+}
+func (r *vmStore) ListVMArtifactPage(_ context.Context, _ uint, kind string, filter types.VMArtifactFilter) ([]types.VMArtifact, int, error) {
+	matches := []types.VMArtifact{}
+	for _, a := range r.artifacts {
+		if a.Kind == kind && (filter.VMID == "" || a.VMID == filter.VMID) {
+			matches = append(matches, a)
+		}
+	}
+	slices.SortFunc(matches, func(a, b types.VMArtifact) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	return matches[min(filter.Offset, len(matches)):min(filter.Offset+filter.Limit, len(matches))], len(matches), nil
+}
+func (r *vmStore) ListVMPage(_ context.Context, ws uint, filter types.VMFilter) (*types.VMPage, error) {
+	page := &types.VMPage{Counts: map[string]int{}}
+	matches := []*types.VM{}
+	for _, v := range r.rows {
+		if v.WorkspaceID != ws || (v.DesiredState == "deleted" && !filter.All) {
+			continue
+		}
+		page.Counts[v.Status]++
+		if strings.Contains(strings.ToLower(v.Name+" "+v.ID), strings.ToLower(filter.Search)) && (len(filter.Statuses) == 0 || slices.Contains(filter.Statuses, v.Status)) {
+			copy := *v
+			matches = append(matches, &copy)
+		}
+	}
+	slices.SortFunc(matches, func(a, b *types.VM) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	page.Total = len(matches)
+	page.VMs = matches[min(filter.Offset, len(matches)):min(filter.Offset+filter.Limit, len(matches))]
+	return page, nil
 }
 
 type vmContainers struct {
@@ -766,6 +803,71 @@ func TestTemplateOverridesRetainImageAndRoot(t *testing.T) {
 	require.Equal(t, "template-root", gateway.stub.Disks[0].SourceSnapshotId)
 	require.NotEqual(t, rootDisk(v), gateway.stub.Disks[0].Name)
 	require.NotContains(t, child.Handle, strings.ReplaceAll(child.ID, "-", ""), "routing capability must be independent of the resource UUID")
+}
+
+func TestListingsPageOnlyWhenLimitIsRequested(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	store := s.repo.(*vmStore)
+	now := time.Now()
+	for i, status := range []string{"running", "paused", "stopped"} {
+		other := &types.VM{ID: uuid.NewString(), WorkspaceID: v.WorkspaceID, Name: fmt.Sprintf("web-%d", i), Handle: uuid.NewString(), DesiredState: status, Status: status, CreatedAt: now.Add(time.Duration(i) * time.Minute)}
+		store.rows[other.ID] = other
+	}
+	store.artifacts = []types.VMArtifact{
+		{ID: uuid.NewString(), Name: "older", VMID: v.ID, Kind: "snapshot", CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: uuid.NewString(), Name: "elsewhere", VMID: uuid.NewString(), Kind: "snapshot", CreatedAt: now.Add(-time.Minute)},
+		{ID: uuid.NewString(), Name: "newer", VMID: v.ID, Kind: "snapshot", CreatedAt: now, Spec: types.VMSpec{Env: []string{"TOKEN=secret"}}},
+	}
+	e := echo.New()
+	api := e.Group("/vm", func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error { return next(&auth.HttpAuthContext{Context: c, AuthInfo: info}) }
+	})
+	registerVMRoutes(api, s)
+	get := func(path string, result any) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), result))
+	}
+
+	// The SDK, CLI and MCP tools list without a limit and expect arrays.
+	var vms []types.VM
+	get("/vm/self", &vms)
+	require.Len(t, vms, 4)
+	var snapshots []types.VMArtifact
+	get("/vm/self/artifacts/snapshot", &snapshots)
+	require.Len(t, snapshots, 3)
+	get("/vm/self/artifacts/snapshot?vm=dev", &snapshots)
+	require.Len(t, snapshots, 2)
+
+	var page vmPage
+	get("/vm/self?limit=1&offset=1&status=running,paused&q=WEB", &page)
+	require.Equal(t, 2, page.Total)
+	require.Equal(t, map[string]int{"running": 2, "paused": 1, "stopped": 1}, page.Counts)
+	require.Len(t, page.Data, 1)
+	require.Equal(t, "web-0", page.Data[0].Name)
+	get("/vm/self?limit=0", &page)
+	require.Equal(t, 4, page.Total)
+	require.Empty(t, page.Data)
+
+	var artifacts artifactPage
+	get("/vm/self/artifacts/snapshot?vm=dev&limit=1", &artifacts)
+	require.Equal(t, 2, artifacts.Total)
+	require.Len(t, artifacts.Data, 1)
+	require.Equal(t, "newer", artifacts.Data[0].Name)
+	require.Empty(t, artifacts.Data[0].Spec.Env)
+
+	for path, status := range map[string]int{
+		"/vm/self?limit=201":                          http.StatusBadRequest,
+		"/vm/self?limit=10&offset=-1":                 http.StatusBadRequest,
+		"/vm/self/artifacts/snapshot?limit=x":         http.StatusBadRequest,
+		"/vm/self/artifacts/snapshot?vm=gone&limit=1": http.StatusNotFound,
+	} {
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, status, rec.Code, path)
+	}
 }
 
 func actionContext(info *auth.AuthInfo, name, action, body string) (*auth.HttpAuthContext, *httptest.ResponseRecorder) {

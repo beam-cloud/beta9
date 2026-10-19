@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/lib/pq"
 )
 
 type VMRepository interface {
@@ -16,12 +19,15 @@ type VMRepository interface {
 	GetVM(context.Context, uint, string) (*types.VM, error)
 	GetVMByHandle(context.Context, string) (*types.VM, error)
 	ListVMs(context.Context, uint) ([]*types.VM, error)
+	ListVMPage(context.Context, uint, types.VMFilter) (*types.VMPage, error)
 	ListVMsToReconcile(context.Context, bool) ([]*types.VM, error)
 	LockVM(context.Context, string) (func(), error)
 	TouchVM(context.Context, string) error
 	ClaimVMIdleStop(context.Context, string, time.Time) (bool, error)
 	CreateVMArtifact(context.Context, uint, *types.VMArtifact) error
+	GetVMArtifact(context.Context, uint, string, string) (*types.VMArtifact, error)
 	ListVMArtifacts(context.Context, uint, string) ([]types.VMArtifact, error)
+	ListVMArtifactPage(context.Context, uint, string, types.VMArtifactFilter) ([]types.VMArtifact, int, error)
 	DeleteVMArtifact(context.Context, uint, string, string) error
 }
 
@@ -120,6 +126,71 @@ func (r *PostgresBackendRepository) ListVMs(ctx context.Context, ws uint) ([]*ty
 	return r.listVMs(ctx, `WHERE ($1=0 OR workspace_id=$1)`, ws)
 }
 
+// Each condition is inert at its zero value, so one statement covers every
+// combination of filters.
+const (
+	vmPageScope  = `WHERE workspace_id=$1 AND ($2 OR data->>'desired_state'<>'deleted') AND COALESCE(data->'metadata','{}')@>$3::jsonb`
+	vmPageSearch = `($4='' OR name ILIKE $4 OR id ILIKE $4)`
+)
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func (r *PostgresBackendRepository) ListVMPage(ctx context.Context, ws uint, filter types.VMFilter) (*types.VMPage, error) {
+	metadata, err := json.Marshal(filter.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	if filter.Metadata == nil {
+		metadata = []byte("{}")
+	}
+	search := ""
+	if filter.Search != "" {
+		search = "%" + likeEscaper.Replace(filter.Search) + "%"
+	}
+	statuses := pq.StringArray(filter.Statuses)
+	if statuses == nil {
+		statuses = pq.StringArray{}
+	}
+	args := []any{ws, filter.All, string(metadata), search}
+
+	var counts []struct {
+		Status  string `db:"status"`
+		Count   int    `db:"count"`
+		Matches int    `db:"matches"`
+	}
+	if err := r.client.SelectContext(ctx, &counts, `SELECT COALESCE(data->>'status','') AS status,COUNT(*) AS count,COUNT(*) FILTER (WHERE `+vmPageSearch+`) AS matches FROM persistent_vm `+vmPageScope+` GROUP BY 1`, args...); err != nil {
+		return nil, err
+	}
+
+	page := &types.VMPage{VMs: []*types.VM{}, Counts: map[string]int{}}
+	for _, row := range counts {
+		page.Counts[row.Status] = row.Count
+		if len(statuses) == 0 || slices.Contains(statuses, row.Status) {
+			page.Total += row.Matches
+		}
+	}
+	if filter.Limit == 0 || filter.Offset >= page.Total {
+		return page, nil
+	}
+
+	rows := []vmRow{}
+	err = r.client.SelectContext(ctx, &rows, selectVM+vmPageScope+` AND `+vmPageSearch+` AND (cardinality($5::text[])=0 OR data->>'status'=ANY($5)) ORDER BY (data->>'created_at')::timestamptz DESC,id DESC LIMIT $6 OFFSET $7`, append(args, statuses, filter.Limit, filter.Offset)...)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, row := range rows {
+		vm, err := row.vm()
+		if err != nil {
+			return nil, err
+		}
+
+		page.VMs = append(page.VMs, vm)
+	}
+
+	return page, nil
+}
+
 // Keep settled history out of the reconciler's recurring database reads.
 // Stopped/paused VMs are candidates only while public IPv6 needs backfilling.
 func (r *PostgresBackendRepository) ListVMsToReconcile(ctx context.Context, backfillIPv6 bool) ([]*types.VM, error) {
@@ -171,15 +242,47 @@ func (r *PostgresBackendRepository) CreateVMArtifact(ctx context.Context, ws uin
 		return err
 	}
 
-	_, err = r.client.ExecContext(ctx, `INSERT INTO vm_artifact(id,workspace_id,name,kind,vm_id,data) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`, a.ID, ws, a.Name, a.Kind, a.VMID, data)
+	_, err = r.client.ExecContext(ctx, `INSERT INTO vm_artifact(id,workspace_id,name,kind,vm_id,data,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`, a.ID, ws, a.Name, a.Kind, a.VMID, data, a.CreatedAt)
 	return err
 }
 
+// Source VMs are soft deleted; retain their identity even after the live
+// VM list stops returning them. The captured name also survives a purge.
+const selectVMArtifact = `SELECT a.data || jsonb_build_object('vm_name',COALESCE(v.data->>'name',a.data->>'vm_name'),'vm_deleted',COALESCE(v.data->>'desired_state'='deleted',false)) FROM vm_artifact a LEFT JOIN persistent_vm v ON v.id=a.vm_id AND v.workspace_id=a.workspace_id `
+
+func (r *PostgresBackendRepository) GetVMArtifact(ctx context.Context, ws uint, kind, name string) (*types.VMArtifact, error) {
+	items, err := r.listVMArtifacts(ctx, `WHERE a.workspace_id=$1 AND a.kind=$2 AND (a.id::text=$3 OR a.name=$3) ORDER BY a.id::text=$3 DESC LIMIT 1`, ws, kind, name)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, sql.ErrNoRows
+	}
+
+	return &items[0], nil
+}
+
 func (r *PostgresBackendRepository) ListVMArtifacts(ctx context.Context, ws uint, kind string) ([]types.VMArtifact, error) {
+	return r.listVMArtifacts(ctx, `WHERE a.workspace_id=$1 AND a.kind=$2 ORDER BY a.created_at,a.id`, ws, kind)
+}
+
+func (r *PostgresBackendRepository) ListVMArtifactPage(ctx context.Context, ws uint, kind string, filter types.VMArtifactFilter) ([]types.VMArtifact, int, error) {
+	const scope = `WHERE a.workspace_id=$1 AND a.kind=$2 AND ($3='' OR a.vm_id=$3)`
+	var total int
+	if err := r.client.GetContext(ctx, &total, `SELECT COUNT(*) FROM vm_artifact a `+scope, ws, kind, filter.VMID); err != nil {
+		return nil, 0, err
+	}
+	if filter.Limit == 0 || filter.Offset >= total {
+		return []types.VMArtifact{}, total, nil
+	}
+
+	items, err := r.listVMArtifacts(ctx, scope+` ORDER BY a.created_at DESC,a.id DESC LIMIT $4 OFFSET $5`, ws, kind, filter.VMID, filter.Limit, filter.Offset)
+	return items, total, err
+}
+
+func (r *PostgresBackendRepository) listVMArtifacts(ctx context.Context, filter string, args ...any) ([]types.VMArtifact, error) {
 	var rows [][]byte
-	// Source VMs are soft deleted; retain their identity even after the live
-	// VM list stops returning them. The captured name also survives a purge.
-	err := r.client.SelectContext(ctx, &rows, `SELECT a.data || jsonb_build_object('vm_name',COALESCE(v.data->>'name',a.data->>'vm_name'),'vm_deleted',COALESCE(v.data->>'desired_state'='deleted',false)) FROM vm_artifact a LEFT JOIN persistent_vm v ON v.id=a.vm_id AND v.workspace_id=a.workspace_id WHERE a.workspace_id=$1 AND a.kind=$2 ORDER BY (a.data->>'created_at')::timestamptz`, ws, kind)
+	err := r.client.SelectContext(ctx, &rows, selectVMArtifact+filter, args...)
 	if err != nil {
 		return nil, err
 	}
