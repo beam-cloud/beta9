@@ -107,7 +107,7 @@ type PostgresBackendRepository struct {
 	workspaceReads        singleflight.Group
 	latestDiskReads       operationBatch[diskSnapshotKey, *types.DiskSnapshot]
 	stubReads             operationBatch[string, stubRead]
-	vmCreates             operationBatch[*vmLaunchInsert, error]
+	vmCreates             commitBatch[uint, *vmLaunchInsert, error]
 }
 
 type adminWorkspaceLoad struct {

@@ -20,7 +20,7 @@ func (r *PostgresBackendRepository) CreateVMWithStub(ctx context.Context, vm *ty
 	if err != nil {
 		return err
 	}
-	result, err := r.vmCreates.commit(ctx, launch, r.createVMLaunches)
+	result, err := r.vmCreates.commit(ctx, launch.WorkspaceID, launch, r.createVMLaunches)
 	if err != nil {
 		return err
 	}

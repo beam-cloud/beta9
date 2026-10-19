@@ -71,14 +71,14 @@ func TestOperationBatchCancellationDoesNotCancelSharedQuery(t *testing.T) {
 	require.NoError(t, shared.Err())
 }
 
-func TestOperationBatchCommitSettlesBeforeReturningOnCancellation(t *testing.T) {
-	var batch operationBatch[int, int]
+func TestCommitBatchSettlesBeforeReturningOnCancellation(t *testing.T) {
+	var batch commitBatch[int, int, int]
 	started, release := make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		value, err := batch.commit(ctx, 1, func(shared context.Context, keys []int) (map[int]int, error) {
+		value, err := batch.commit(ctx, 1, 1, func(shared context.Context, keys []int) (map[int]int, error) {
 			close(started)
 			<-release
 			require.NoError(t, shared.Err())
@@ -141,4 +141,114 @@ func TestOperationBatchCombinesBurstAndDoesNotCacheFailures(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 9, value)
+}
+
+func TestCommitBatchCoalescesInFlightWritesWithoutBlockingOtherGroups(t *testing.T) {
+	var batch commitBatch[int, int, int]
+	started, release := make(chan struct{}), make(chan struct{})
+	var queries atomic.Int32
+	load := func(_ context.Context, keys []int) (map[int]int, error) {
+		if queries.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		values := make(map[int]int, len(keys))
+		for _, key := range keys {
+			values[key] = key + 10
+		}
+		return values, nil
+	}
+	var done sync.WaitGroup
+	commit := func(key int) {
+		defer done.Done()
+		value, err := batch.commit(context.Background(), 1, key, load)
+		require.NoError(t, err)
+		require.Equal(t, key+10, value)
+	}
+	done.Add(1)
+	go commit(-1)
+	<-started
+	for key := range 100 {
+		done.Add(1)
+		go commit(key)
+	}
+	require.Eventually(t, func() bool {
+		batch.mu.Lock()
+		defer batch.mu.Unlock()
+		return len(batch.pending[1]) == 100
+	}, time.Second, time.Millisecond)
+	require.Equal(t, int32(1), queries.Load(), "writes must collect behind the in-flight commit")
+	value, err := batch.commit(context.Background(), 2, 9, func(_ context.Context, keys []int) (map[int]int, error) {
+		return map[int]int{9: 19}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 19, value, "another workspace must commit independently")
+	close(release)
+	done.Wait()
+	require.Equal(t, int32(2), queries.Load())
+	require.Eventually(t, func() bool {
+		batch.mu.Lock()
+		defer batch.mu.Unlock()
+		return len(batch.pending) == 0
+	}, time.Second, time.Millisecond, "idle groups must not be retained")
+}
+
+func TestCommitBatchCancelsQueuedWritesWithoutWaitingForAnExecutingWrite(t *testing.T) {
+	var batch commitBatch[int, int, int]
+	started, release, first := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(first)
+		_, err := batch.commit(context.Background(), 1, 1, func(_ context.Context, keys []int) (map[int]int, error) {
+			require.Equal(t, []int{1}, keys)
+			close(started)
+			<-release
+			return nil, nil
+		})
+		require.NoError(t, err)
+	}()
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := batch.commit(ctx, 1, 2, func(context.Context, []int) (map[int]int, error) {
+			t.Error("a canceled queued write must not execute")
+			return nil, nil
+		})
+		done <- err
+	}()
+	require.Eventually(t, func() bool {
+		batch.mu.Lock()
+		defer batch.mu.Unlock()
+		return len(batch.pending[1]) == 1
+	}, time.Second, time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Error("a canceled queued writer waited for another commit")
+	}
+	close(release)
+	<-first
+}
+
+func TestCommitBatchBoundsWritesAndRoutesErrors(t *testing.T) {
+	var batch commitBatch[int, int, int]
+	requests := make([]batchRequest[int, int], 300)
+	for i := range requests {
+		requests[i] = batchRequest[int, int]{ctx: context.Background(), key: i, result: make(chan batchResult[int], 1)}
+	}
+	batch.pending = map[int][]batchRequest[int, int]{1: requests}
+	failure := errors.New("commit failed")
+	queries := 0
+	batch.flush(1, func(_ context.Context, keys []int) (map[int]int, error) {
+		require.LessOrEqual(t, len(keys), repositoryBatchSize)
+		queries++
+		return nil, failure
+	})
+	require.Equal(t, 3, queries)
+	for _, request := range requests {
+		require.ErrorIs(t, (<-request.result).err, failure)
+	}
+	require.Empty(t, batch.pending)
 }
