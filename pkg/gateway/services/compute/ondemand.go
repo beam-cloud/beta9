@@ -359,7 +359,7 @@ func (s *Service) onDemandJoinCommand(ctx context.Context, state *model.PoolStat
 	if err := s.savePoolJoinToken(ctx, tokenState, 0); err != nil {
 		return "", "", err
 	}
-	return s.joinCommandForToken(token), token, nil
+	return s.providerJoinCommandForToken(token), token, nil
 }
 
 // onDemandBudgetHeadroom reports how much hourly spend the cluster budget still

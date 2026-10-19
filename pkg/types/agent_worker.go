@@ -51,6 +51,7 @@ const (
 	NvidiaVisibleDevicesEnv         = "NVIDIA_VISIBLE_DEVICES"
 	AgentDockerHostsEnv             = "BEAM_AGENT_DOCKER_HOST_ALIASES"
 	AgentInContainerEnv             = "BEAM_AGENT_CONTAINER"
+	AgentManagedIngressEnv          = "BEAM_AGENT_MANAGED_INGRESS"
 	AgentHostnameEnv                = "BEAM_AGENT_HOSTNAME"
 	AgentRegistryForwardEnv         = "BEAM_AGENT_LOCAL_REGISTRY_FORWARD"
 	AgentTargetHostEnv              = "BEAM_AGENT_LOCAL_TARGET_HOST"

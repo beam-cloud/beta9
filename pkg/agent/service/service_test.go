@@ -126,6 +126,21 @@ func TestSystemdUnitEscapesSpecifierInWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestManagedAgentRequiresIngressService(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		env := map[string]string{}
+		if enabled {
+			env[types.AgentManagedIngressEnv] = "true"
+		}
+		unit := SystemdUnit(Spec{BinaryPath: types.DefaultAgentBinaryPath, Env: env})
+		for _, dependency := range []string{"Requires=beam-managed-ingress.service\n", "After=beam-managed-ingress.service\n"} {
+			if strings.Contains(unit, dependency) != enabled {
+				t.Fatalf("managed ingress=%v, incorrect dependency %q:\n%s", enabled, dependency, unit)
+			}
+		}
+	}
+}
+
 func TestLaunchdPlistRendersAgentProgram(t *testing.T) {
 	spec := Spec{
 		Name:       "private pool",

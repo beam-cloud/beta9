@@ -2752,6 +2752,19 @@ func TestAgentInstallCommandLeavesCapacityUnboundedByDefault(t *testing.T) {
 	}
 }
 
+func TestOnlyProviderBootstrapEnablesManagedIngress(t *testing.T) {
+	manual := agentInstallCommand("https://app.beam.cloud", "token", false, "worker:test")
+	provider := agentInstallCommandWithIngress("https://app.beam.cloud", "token", false, "worker:test", true)
+	dev := agentInstallCommandWithIngress("http://localhost:1994", "token", true, "worker:test", true)
+	if strings.Contains(manual, "--managed-ingress") || strings.Contains(dev, "--managed-ingress") {
+		t.Fatal("manual/local joins must not change host ingress")
+	}
+	// Both the root and sudo branches must enable the policy.
+	if strings.Count(provider, "--managed-ingress") != 2 {
+		t.Fatalf("provider bootstrap omitted managed ingress: %s", provider)
+	}
+}
+
 func TestAgentInstallCommandDoesNotUseSudoOnDarwin(t *testing.T) {
 	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test")
 

@@ -43,6 +43,7 @@ MAX_GPUS=""
 GPU_IDS=""
 NETWORK_SLOTS=""
 CONTAINER_START_CONCURRENCY=""
+MANAGED_INGRESS="0"
 OS=""
 ARCH=""
 RUN_GATEWAY=""
@@ -53,6 +54,7 @@ main() {
   detect_platform
   validate_input
   configure_dev_environment
+  ensure_linux_managed_ingress
 
   set -- join --gateway "$RUN_GATEWAY" --join-token "$JOIN_TOKEN"
   [ "$DEV" = "1" ] && set -- "$@" --dev
@@ -110,6 +112,7 @@ parse_args() {
       --gpu-ids) require_value "$1" "${2:-}"; GPU_IDS="$2"; shift 2 ;;
       --network-slots) require_value "$1" "${2:-}"; NETWORK_SLOTS="$2"; shift 2 ;;
       --container-start-concurrency) require_value "$1" "${2:-}"; CONTAINER_START_CONCURRENCY="$2"; shift 2 ;;
+      --managed-ingress) MANAGED_INGRESS="1"; shift ;;
       *) fail "unknown argument: $1" 2 ;;
     esac
   done
@@ -553,6 +556,7 @@ is_false() {
   esac
 }
 
+` + managedIngressInstallScript + `
 main "$@"
 `
 

@@ -38,6 +38,7 @@ func TestJoinArgsIncludeCacheDir(t *testing.T) {
 
 func TestServiceEnvIncludesCacheDir(t *testing.T) {
 	t.Setenv(types.AgentCPUAffinityEnforcedEnv, "true")
+	t.Setenv(types.AgentManagedIngressEnv, "true")
 	env := serviceEnv("worker:latest", "/var/lib/beam/agent", "/mnt/cache")
 
 	if got := env[types.AgentCacheDirEnv]; got != "/mnt/cache" {
@@ -48,6 +49,9 @@ func TestServiceEnvIncludesCacheDir(t *testing.T) {
 	}
 	if got := env[types.AgentCPUAffinityEnforcedEnv]; got != "true" {
 		t.Fatalf("CPU affinity env = %q, want true", got)
+	}
+	if env[types.AgentManagedIngressEnv] != "true" {
+		t.Fatal("managed ingress transport setting must survive agent restart")
 	}
 }
 

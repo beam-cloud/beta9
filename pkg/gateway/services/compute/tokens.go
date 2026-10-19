@@ -109,7 +109,12 @@ func (s *Service) createPersistentPrivatePoolJoinCommandForWorkspace(ctx context
 	if err != nil {
 		return "", "", err
 	}
-	return s.joinCommandForToken(token), token, nil
+	return s.providerJoinCommandForToken(token), token, nil
+}
+
+func (s *Service) providerJoinCommandForToken(token string) string {
+	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
+	return agentInstallCommandWithIngress(gatewayURL, token, isLocalGatewayURL(gatewayURL), agentWorkerImage(s.appConfig), true)
 }
 
 func (s *Service) joinCommandForToken(token string) string {
@@ -119,6 +124,10 @@ func (s *Service) joinCommandForToken(token string) string {
 }
 
 func agentInstallCommand(gatewayURL, token string, devMode bool, workerImage string) string {
+	return agentInstallCommandWithIngress(gatewayURL, token, devMode, workerImage, false)
+}
+
+func agentInstallCommandWithIngress(gatewayURL, token string, devMode bool, workerImage string, managedIngress bool) string {
 	installURL := common.ShellQuote(strings.TrimRight(gatewayURL, "/") + "/install/agent")
 	args := fmt.Sprintf("--gateway %s --join-token %s", common.ShellQuote(gatewayURL), common.ShellQuote(token))
 	if workerImage = strings.TrimSpace(workerImage); workerImage != "" {
@@ -126,6 +135,9 @@ func agentInstallCommand(gatewayURL, token string, devMode bool, workerImage str
 	}
 	if devMode {
 		return fmt.Sprintf("curl -fsSL %s | sh -s -- %s --dev", installURL, args)
+	}
+	if managedIngress {
+		args += " --managed-ingress"
 	}
 	return fmt.Sprintf(`if [ "$(uname -s)" = "Darwin" ] || [ "$(id -u)" -eq 0 ]; then curl -fsSL %[1]s | sh -s -- %[2]s; else curl -fsSL %[1]s | sudo sh -s -- %[2]s; fi`, installURL, args)
 }
