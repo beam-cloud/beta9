@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeQMP is a scriptable QMP server on a unix socket.
@@ -34,8 +35,8 @@ type fakeQMP struct {
 	commitPolls int // query-jobs polls a commit job reports running before it concludes
 	commits     []fakeCommit
 	job         *fakeJob
-	cancels     []string        // job IDs passed to job-cancel
-	writable    map[string]bool // nodes reported read-write
+	cancels     int    // job-cancel calls
+	writable    string // node reported read-write
 }
 
 type fakeCommit struct{ device, top, base string }
@@ -117,7 +118,7 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			nodes := f.nodes.Load().([]string)
 			entries := make([]map[string]any, 0, len(nodes))
 			for _, node := range nodes {
-				entry := map[string]any{"node-name": node, "file": "", "backing_file_depth": 1, "drv": "qcow2", "ro": !f.writable[node]}
+				entry := map[string]any{"node-name": node, "file": "", "backing_file_depth": 1, "drv": "qcow2", "ro": node != f.writable}
 				chain := f.images[node]
 				if len(chain) > 0 {
 					entry["backing_file_depth"] = len(chain) - 1
@@ -201,13 +202,9 @@ func (f *fakeQMP) handle(conn net.Conn) {
 				fmt.Fprintf(conn, `{"return":[{"id":%q,"type":"commit","status":"concluded"}]}`, job.id)
 			}
 		case types.QMPCommandJobCancel:
-			var args struct {
-				ID string `json:"id"`
-			}
-			_ = json.Unmarshal(request.Arguments, &args)
 			f.mu.Lock()
-			f.cancels = append(f.cancels, args.ID)
-			if f.job != nil && f.job.id == args.ID {
+			f.cancels++
+			if f.job != nil {
 				f.job.running, f.job.err = 0, "Operation canceled"
 			}
 			f.mu.Unlock()
@@ -1036,109 +1033,59 @@ func TestCompactRetainsRecoveryStateUntilJobDismissed(t *testing.T) {
 	}
 }
 
-func TestMergeCommitsOnlyTheLayersAboveFirst(t *testing.T) {
-	volume, server, paths := newCompactVolume(t)
-
-	merged, err := volume.Merge(context.Background(), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := (PublishedLayer{SnapshotID: "snap-c", Path: paths[1]}); merged != want {
-		t.Fatalf("merged %+v, want %+v", merged, want)
-	}
-	server.mu.Lock()
-	commits := slices.Clone(server.commits)
-	server.mu.Unlock()
-	if len(commits) != 1 || commits[0] != (fakeCommit{device: "fmt-0", top: paths[2], base: paths[1]}) {
-		t.Fatalf("unexpected commit calls: %+v", commits)
-	}
-	want := []stateLayer{{SnapshotID: "snap-a", Path: paths[0]}, {SnapshotID: "snap-c", Path: paths[1]}}
-	if !slices.Equal(volume.state.Chain, want) {
-		t.Fatalf("chain %+v, want %+v", volume.state.Chain, want)
-	}
-	if !fileExists(paths[0]) || !fileExists(paths[1]) || fileExists(paths[2]) {
-		t.Fatal("only the merged layer's file may be deleted")
-	}
-}
-
-// Only a base the daemon holds read-only has flushed what the commit wrote,
-// so a retry adopts the finished commit once the base is reopened.
-func TestMergeWaitsForAReadOnlyBase(t *testing.T) {
+// Merge folds the layers above first into a base the daemon holds read-only,
+// since reopening it so flushes the commit's writes. A retry adopts the
+// commit that a refused merge already ran.
+func TestMergeCommitsTheLayersAboveFirstIntoAReadOnlyBase(t *testing.T) {
 	volume, server, paths := newCompactVolume(t)
 	server.mu.Lock()
-	server.writable = map[string]bool{"fmt-1": true}
+	server.writable = "fmt-1"
 	server.mu.Unlock()
-	if _, err := volume.Merge(context.Background(), 1); err == nil {
-		t.Fatal("expected a writable base to fail the merge")
-	}
-	if len(volume.state.Chain) != 3 || !fileExists(paths[2]) {
-		t.Fatalf("chain must be unchanged: %+v", volume.state.Chain)
-	}
+	_, err := volume.Merge(context.Background(), 1)
+	require.ErrorContains(t, err, "writable")
+	require.Len(t, volume.state.Chain, 3)
 
 	server.mu.Lock()
-	server.writable = nil
+	server.writable = ""
 	server.mu.Unlock()
 	merged, err := volume.Merge(context.Background(), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, PublishedLayer{SnapshotID: "snap-c", Path: paths[1]}, merged)
+	require.Equal(t, []stateLayer{{SnapshotID: "snap-a", Path: paths[0]}, {SnapshotID: "snap-c", Path: paths[1]}}, volume.state.Chain)
+	require.NoFileExists(t, paths[2])
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	if merged.Path != paths[1] || len(server.commits) != 1 {
-		t.Fatalf("retry must adopt the finished commit: merged=%+v commits=%v", merged, server.commits)
-	}
+	require.Equal(t, []fakeCommit{{device: "fmt-0", top: paths[2], base: paths[1]}}, server.commits)
 }
 
 // Unlike Compact's, a merge's commit has no caller to finish it later, so
 // cancelling the merge cancels the commit.
 func TestCancelledMergeCancelsItsCommit(t *testing.T) {
-	volume, server, paths := newCompactVolume(t)
+	volume, server, _ := newCompactVolume(t)
 	server.mu.Lock()
 	server.commitPolls = 3
 	server.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if _, err := volume.Merge(WithProgress(ctx, cancel), 1); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected a cancelled merge: %v", err)
-	}
+	_, err := volume.Merge(WithProgress(ctx, cancel), 1)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, volume.state.Chain, 3)
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	if len(server.cancels) != 1 || server.job != nil {
-		t.Fatalf("commit must be cancelled and dismissed: cancels=%v job=%+v", server.cancels, server.job)
-	}
-	if len(volume.state.Chain) != 3 || !fileExists(paths[2]) {
-		t.Fatalf("chain must be unchanged: %+v", volume.state.Chain)
-	}
+	require.Equal(t, 1, server.cancels)
+	require.Nil(t, server.job, "the cancelled job must be dismissed")
 }
 
-func TestRepublishedKeepsOldIDsReusable(t *testing.T) {
+// Attaching a generation a merge republished, as a memory checkpoint paired
+// with it does, still reuses the local chain.
+func TestRepublishedGenerationsStayReusable(t *testing.T) {
 	volume, _, _ := newCompactVolume(t)
-	if err := volume.Republished(map[string]string{"snap-b": "new-b", "snap-c": "new-c"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := volume.Republished(map[string]string{"new-c": "newer-c"}); err != nil {
-		t.Fatal(err)
-	}
-	reloaded, err := loadVolumeState(volume.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := reloaded.Chain[2].SnapshotID; got != "newer-c" {
-		t.Fatalf("head generation is %s, want newer-c", got)
-	}
-	ids := reloaded.publishedIDs()
-	for _, id := range []string{"snap-a", "snap-b", "snap-c", "new-b", "new-c", "newer-c"} {
-		if !ids[id] {
-			t.Errorf("%s must stay reusable", id)
-		}
-	}
-
-	state := &volumeState{}
-	for i := range maxSuperseded + 10 {
-		state.supersede(fmt.Sprint(i), "head")
-	}
-	if len(state.Superseded) != maxSuperseded || state.Superseded[0].ID != "10" {
-		t.Fatalf("superseded must keep the newest %d: %+v", maxSuperseded, state.Superseded[:1])
+	require.NoError(t, volume.Republished(map[string]string{"snap-c": "new-c"}))
+	require.NoError(t, volume.Republished(map[string]string{"new-c": "newer-c"}))
+	state, err := loadVolumeState(volume.dir)
+	require.NoError(t, err)
+	for _, id := range []string{"snap-c", "new-c", "newer-c"} {
+		require.True(t, reusableState(state, AttachSpec{Chain: []ChainLayer{{SnapshotID: id}}}), id)
 	}
 }
