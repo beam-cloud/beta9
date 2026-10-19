@@ -105,8 +105,9 @@ type PostgresBackendRepository struct {
 	vmLocksOnce           sync.Once
 	vmLocks               []vmLockSession
 	workspaceReads        singleflight.Group
-	latestDiskReads       readBatch[diskSnapshotKey, *types.DiskSnapshot]
-	stubReads             readBatch[string, stubRead]
+	latestDiskReads       operationBatch[diskSnapshotKey, *types.DiskSnapshot]
+	stubReads             operationBatch[string, stubRead]
+	vmCreates             operationBatch[*vmLaunchInsert, error]
 }
 
 type adminWorkspaceLoad struct {

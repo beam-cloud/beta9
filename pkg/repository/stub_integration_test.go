@@ -242,6 +242,57 @@ func TestVMCreationTransactionIntegration(t *testing.T) {
 			require.Equal(t, 2000, touched.Year(), "app activity must roll back too")
 		})
 	}
+	t.Run("batch commit", func(t *testing.T) {
+		var inserts []*vmLaunchInsert
+		for range 100 {
+			v, stub := launch(uuid.NewString())
+			insert, err := newVMLaunchInsert(v, stub)
+			require.NoError(t, err)
+			inserts = append(inserts, insert)
+		}
+		results, err := repo.createVMLaunches(ctx, inserts)
+		require.NoError(t, err)
+		require.Empty(t, results)
+		for _, insert := range inserts {
+			stored, err := repo.GetVM(ctx, 1, insert.ID)
+			require.NoError(t, err)
+			require.Equal(t, insert.StubID, stored.StubID)
+			var count int
+			require.NoError(t, db.GetContext(ctx, &count, `SELECT count(*) FROM disk d JOIN stub s ON d.name=$1 AND s.external_id=$2`, insert.ID, insert.StubID))
+			require.Equal(t, 1, count, "every committed VM must have its root and stub")
+		}
+		// One rejected launch must leave no partial records and must not
+		// reject the other rows that shared its original transaction.
+		for _, failure := range []string{"name collision", "malformed identity", "foreign key"} {
+			t.Run(failure, func(t *testing.T) {
+				var mixed []*vmLaunchInsert
+				for i := range 3 {
+					v, stub := launch(uuid.NewString())
+					if i == 1 {
+						switch failure {
+						case "name collision":
+							v.Name = first.Name
+						case "malformed identity":
+							v.StubID, stub.ExternalId = "invalid-uuid", "invalid-uuid"
+						case "foreign key":
+							stub.ObjectId = 999
+						}
+					}
+					insert, err := newVMLaunchInsert(v, stub)
+					require.NoError(t, err)
+					mixed = append(mixed, insert)
+				}
+				results, err = repo.createVMLaunches(ctx, mixed)
+				require.NoError(t, err)
+				require.NoError(t, results[mixed[0]])
+				require.Error(t, results[mixed[1]])
+				require.NoError(t, results[mixed[2]])
+				var count int
+				require.NoError(t, db.GetContext(ctx, &count, `SELECT (SELECT count(*) FROM persistent_vm WHERE id=$1)+(SELECT count(*) FROM disk WHERE name=$1)+(SELECT count(*) FROM stub WHERE name=$2)`, mixed[1].ID, mixed[1].StubName))
+				require.Zero(t, count, "a rejected batch row must leave no launch records")
+			})
+		}
+	})
 }
 
 func TestCheckpointPruneSetIntegration(t *testing.T) {
