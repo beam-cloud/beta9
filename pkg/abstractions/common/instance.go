@@ -217,7 +217,10 @@ func (i *AutoscaledInstance) sendContainerEvent(event types.ContainerEvent) {
 }
 
 func (i *AutoscaledInstance) Monitor() error {
-	go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
+	persistentVM := i.StubConfig.IsPersistentVM()
+	if !persistentVM {
+		go i.Autoscaler.Start(i.Ctx)
+	}
 
 	ignoreScalingEventWindow := time.Now().Add(-IgnoreScalingEventInterval)
 
@@ -236,6 +239,13 @@ func (i *AutoscaledInstance) Monitor() error {
 				i.Containers[containerEvent.ContainerId] = true
 			case exists && containerEvent.Change == -1: // Container removed and exists in map
 				delete(i.Containers, containerEvent.ContainerId)
+			}
+
+			// VM lifecycle owns scheduling; no scale-to-zero result will retire
+			// its routing controller after the last runtime exits.
+			if persistentVM && containerEvent.Change == -1 && len(i.Containers) == 0 {
+				i.CancelFunc()
+				return nil
 			}
 
 			if initialContainerCount != len(i.Containers) {

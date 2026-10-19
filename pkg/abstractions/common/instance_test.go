@@ -14,6 +14,78 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+type monitorTestAutoscaler struct{ started chan struct{} }
+
+func (a *monitorTestAutoscaler) Start(ctx context.Context) {
+	close(a.started)
+	<-ctx.Done()
+}
+
+func (*monitorTestAutoscaler) Trigger() {}
+
+func TestPersistentVMMonitorRetiresAfterLastContainer(t *testing.T) {
+	for _, tracked := range []bool{false, true} {
+		t.Run(fmt.Sprint(tracked), func(t *testing.T) {
+			instance, _, _ := newTestAutoscaledInstance(t, true, nil)
+			instance.StubConfig.UseVM = true
+			instance.StubConfig.Env = []string{"BEAM_VM_SYSTEMD=1"}
+			instance.Containers = map[string]bool{}
+			if tracked {
+				instance.Containers["retired"] = true
+				instance.Containers["current"] = true
+			}
+			instance.ContainerEventChan = make(chan types.ContainerEvent)
+			autoscaler := &monitorTestAutoscaler{started: make(chan struct{})}
+			instance.Autoscaler = autoscaler
+			done := make(chan struct{})
+			go func() { defer close(done); _ = instance.Monitor() }()
+			t.Cleanup(func() { instance.CancelFunc(); <-done })
+			send := func(event types.ContainerEvent) {
+				t.Helper()
+				select {
+				case instance.ContainerEventChan <- event:
+				case <-done:
+					t.Fatal("monitor stopped while another runtime remained")
+				case <-time.After(5 * time.Second):
+					t.Fatal("monitor stopped consuming container events")
+				}
+			}
+			if tracked {
+				send(types.ContainerEvent{ContainerId: "retired", Change: -1})
+				// Reaching the next receive proves the previous event settled.
+				send(types.ContainerEvent{ContainerId: "retired", Change: -1})
+			}
+			send(types.ContainerEvent{ContainerId: "current", Change: -1})
+			select {
+			case <-instance.Ctx.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("VM routing instance survived its last runtime")
+			}
+			<-done
+			select {
+			case <-autoscaler.started:
+				t.Fatal("VM monitor started a sandbox autoscaler")
+			default:
+			}
+		})
+	}
+}
+
+func TestOrdinaryMonitorStartsAutoscaler(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	autoscaler := &monitorTestAutoscaler{started: make(chan struct{})}
+	instance := &AutoscaledInstance{Ctx: ctx, Autoscaler: autoscaler}
+	done := make(chan struct{})
+	go func() { defer close(done); _ = instance.Monitor() }()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-autoscaler.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary instance lost its autoscaler")
+	}
+}
+
 func TestConsumeScaleResultDoesNotBlockWhenChannelIsFull(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
