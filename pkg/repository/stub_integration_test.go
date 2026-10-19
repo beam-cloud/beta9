@@ -112,6 +112,9 @@ func TestVMCreationTransactionIntegration(t *testing.T) {
 	require.Equal(t, first.StubID, stored.StubID)
 	require.Equal(t, first.ContainerID, stored.ContainerID)
 	require.Equal(t, first.PublicIPv6, stored.PublicIPv6)
+	var appUpdated time.Time
+	require.NoError(t, db.GetContext(ctx, &appUpdated, `SELECT updated_at FROM app WHERE id=1`))
+	require.Equal(t, 2000, appUpdated.Year(), "VM launches must not write shared app activity")
 	var disk types.Disk
 	require.NoError(t, db.GetContext(ctx, &disk, `SELECT `+diskColumns+` FROM disk WHERE name=$1`, first.ID))
 	require.Equal(t, "50Gi", disk.Size)

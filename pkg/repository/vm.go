@@ -45,6 +45,8 @@ func (r *PostgresBackendRepository) CreateVM(ctx context.Context, vm *types.VM) 
 
 // CreateVMWithStub publishes a complete first launch in one commit. A failed
 // name, address or stub write must not leave a root disk or a partial VM.
+// VM activity belongs to persistent_vm; touching their shared hidden app would
+// serialize otherwise independent launches on the same app row.
 func (r *PostgresBackendRepository) CreateVMWithStub(ctx context.Context, vm *types.VM, stub types.Stub) error {
 	config, err := stub.UnmarshalConfig()
 	if err != nil {
@@ -80,8 +82,6 @@ func (r *PostgresBackendRepository) CreateVMWithStub(ctx context.Context, vm *ty
 	), launch_stub AS (
 		INSERT INTO stub (external_id,name,type,config,object_id,workspace_id,app_id)
 		SELECT $11,$12,'vm',$13::json,$14,$2,$15 FROM root RETURNING id
-	), activity AS (
-		UPDATE app SET updated_at=NOW() WHERE id=$15 AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')
 	)
 	INSERT INTO persistent_vm (id,workspace_id,workspace_external_id,token_id,name,handle,data,last_active_at,public_ipv6)
 	SELECT $1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::inet FROM launch_stub`,
