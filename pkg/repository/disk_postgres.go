@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/lib/pq"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -424,25 +425,48 @@ func (r *PostgresBackendRepository) GetDiskSnapshotChain(ctx context.Context, wo
 	return snapshots, nil
 }
 
-func (r *PostgresBackendRepository) GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error) {
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM disk_snapshot
-		WHERE workspace_id = $1
-		  AND disk_name = $2
-		  AND status = $3
-		  AND deleted_at IS NULL
-		ORDER BY generation DESC, created_at DESC, id DESC
-		LIMIT 1;`, diskSnapshotColumns(""))
+type diskSnapshotKey struct {
+	workspaceID uint
+	diskName    string
+}
 
-	var snapshot types.DiskSnapshot
-	if err := r.client.GetContext(ctx, &snapshot, query, workspaceId, diskName, types.DiskSnapshotStatusAvailable); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: fmt.Sprintf("latest:%d:%s", workspaceId, diskName)}
-		}
+func (r *PostgresBackendRepository) GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error) {
+	snapshot, err := r.latestDiskReads.get(ctx, diskSnapshotKey{workspaceId, diskName}, r.readLatestDiskSnapshots)
+	if err != nil {
 		return nil, err
 	}
-	return &snapshot, nil
+	if snapshot == nil {
+		return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: fmt.Sprintf("latest:%d:%s", workspaceId, diskName)}
+	}
+	copy := *snapshot
+	return &copy, nil
+}
+
+func (r *PostgresBackendRepository) readLatestDiskSnapshots(ctx context.Context, keys []diskSnapshotKey) (map[diskSnapshotKey]*types.DiskSnapshot, error) {
+	workspaces, names := make([]int64, len(keys)), make([]string, len(keys))
+	for i, key := range keys {
+		workspaces[i], names[i] = int64(key.workspaceID), key.diskName
+	}
+	// Each lateral lookup uses the available-generation index. One query serves
+	// the burst without scanning unrelated disks or retaining a stale head.
+	query := fmt.Sprintf(`
+		SELECT latest.*
+		FROM unnest($1::bigint[], $2::text[]) AS requested(workspace_id,disk_name)
+		CROSS JOIN LATERAL (
+			SELECT %s FROM disk_snapshot ds
+			WHERE ds.workspace_id=requested.workspace_id AND ds.disk_name=requested.disk_name
+			  AND ds.status='available' AND ds.deleted_at IS NULL
+			ORDER BY generation DESC, created_at DESC, id DESC LIMIT 1
+		) latest`, diskSnapshotColumns("ds"))
+	var snapshots []*types.DiskSnapshot
+	if err := r.client.SelectContext(ctx, &snapshots, query, pq.Array(workspaces), pq.Array(names)); err != nil {
+		return nil, err
+	}
+	result := make(map[diskSnapshotKey]*types.DiskSnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		result[diskSnapshotKey{snapshot.WorkspaceId, snapshot.DiskName}] = snapshot
+	}
+	return result, nil
 }
 
 func (r *PostgresBackendRepository) ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error) {

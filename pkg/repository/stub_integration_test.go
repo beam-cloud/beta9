@@ -28,6 +28,87 @@ func postgresIntegrationSession(t *testing.T) *sqlx.DB {
 	return db
 }
 
+func TestDiskHeadBatchIntegration(t *testing.T) {
+	db := postgresIntegrationSession(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := db.ExecContext(ctx, `
+		CREATE TEMP TABLE disk_snapshot (LIKE public.disk_snapshot INCLUDING DEFAULTS);
+		INSERT INTO disk_snapshot (id,workspace_id,disk_name,status,generation,created_at,deleted_at)
+		VALUES (1,1,'root','available',1,'2000-01-01',NULL),
+		       (2,1,'root','available',2,'2000-01-01',NULL),
+		       (3,1,'root','available',2,'2000-01-01',NULL),
+		       (4,1,'root','pending',3,'2000-01-01',NULL),
+		       (5,1,'root','available',4,'2000-01-01',NOW()),
+		       (6,2,'root','available',8,'2000-01-01',NULL);`)
+	require.NoError(t, err)
+	repo := &PostgresBackendRepository{client: db}
+	heads, err := repo.readLatestDiskSnapshots(ctx, []diskSnapshotKey{{1, "root"}, {2, "root"}, {3, "root"}, {1, "missing"}})
+	require.NoError(t, err)
+	require.Len(t, heads, 2)
+	require.EqualValues(t, 3, heads[diskSnapshotKey{1, "root"}].Id)
+	require.EqualValues(t, 6, heads[diskSnapshotKey{2, "root"}].Id)
+	first, err := repo.GetLatestDiskSnapshot(ctx, 1, "root")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE disk_snapshot SET status='available' WHERE id=4`)
+	require.NoError(t, err)
+	latest, err := repo.GetLatestDiskSnapshot(ctx, 1, "root")
+	require.NoError(t, err)
+	require.EqualValues(t, 4, latest.Id, "a completed read must not cache the previous head")
+	require.EqualValues(t, 3, first.Id)
+	_, err = repo.GetLatestDiskSnapshot(ctx, 3, "root")
+	require.ErrorAs(t, err, new(*types.ErrDiskSnapshotNotFound))
+}
+
+func TestStubReadBatchIntegration(t *testing.T) {
+	db := postgresIntegrationSession(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := db.ExecContext(ctx, `
+		CREATE TEMP TABLE workspace (LIKE public.workspace INCLUDING DEFAULTS);
+		CREATE TEMP TABLE workspace_storage (LIKE public.workspace_storage INCLUDING DEFAULTS);
+		CREATE TEMP TABLE app (LIKE public.app INCLUDING DEFAULTS);
+		CREATE TEMP TABLE object (LIKE public.object INCLUDING DEFAULTS);
+		CREATE TEMP TABLE stub (LIKE public.stub INCLUDING DEFAULTS);
+		INSERT INTO workspace (id,name) VALUES (1,'one'),(2,'two'),(3,'bad-storage');
+		INSERT INTO workspace_storage (id,bucket_name,access_key,secret_key,endpoint_url,region)
+		VALUES (1,'test','invalid','invalid','https://example.invalid','test');
+		UPDATE workspace SET storage_id=1 WHERE id=3;
+		INSERT INTO app (id,name,description,workspace_id) VALUES (1,'one','',1),(2,'two','',2),(3,'three','',3);
+		INSERT INTO object (id,hash,size,workspace_id) VALUES (1,'one',0,1),(2,'two',0,2),(3,'three',0,3);
+		INSERT INTO stub (id,name,type,config,object_id,workspace_id,app_id)
+		SELECT id,name,'vm','{}',id,id,id FROM workspace;`)
+	require.NoError(t, err)
+	var ids []string
+	require.NoError(t, db.SelectContext(ctx, &ids, `SELECT external_id FROM stub ORDER BY id`))
+	repo := &PostgresBackendRepository{client: db, config: types.PostgresConfig{EncryptionKey: "sk_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}
+	results, err := repo.readStubs(ctx, append(ids, uuid.NewString()))
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	require.NoError(t, results[ids[0]].err)
+	require.NoError(t, results[ids[1]].err)
+	require.Error(t, results[ids[2]].err, "one workspace's invalid credentials must not poison other results")
+	first, err := repo.GetStubByExternalId(ctx, ids[0])
+	require.NoError(t, err)
+	require.EqualValues(t, 1, first.Workspace.Id)
+	first.App.Name = "changed by caller"
+	again, err := repo.GetStubByExternalId(ctx, ids[0])
+	require.NoError(t, err)
+	require.Equal(t, "one", again.App.Name)
+	var otherWorkspace string
+	require.NoError(t, db.GetContext(ctx, &otherWorkspace, `SELECT external_id FROM workspace WHERE id=2`))
+	foreign, err := repo.GetStubByExternalId(ctx, ids[0], types.QueryFilter{Field: "workspace_id", Value: otherWorkspace})
+	require.NoError(t, err)
+	require.Nil(t, foreign, "filtered reads must still enforce workspace ownership")
+	_, err = repo.GetStubByExternalId(ctx, "not-a-uuid")
+	require.Error(t, err)
+	_, err = db.ExecContext(ctx, `DELETE FROM stub WHERE id=1`)
+	require.NoError(t, err)
+	missing, err := repo.GetStubByExternalId(ctx, ids[0])
+	require.NoError(t, err)
+	require.Nil(t, missing, "a completed read must not cache a deleted stub")
+}
+
 func TestStubIdentityIntegration(t *testing.T) {
 	db := postgresIntegrationSession(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

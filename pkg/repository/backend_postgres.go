@@ -105,6 +105,8 @@ type PostgresBackendRepository struct {
 	vmLocksOnce           sync.Once
 	vmLocks               []vmLockSession
 	workspaceReads        singleflight.Group
+	latestDiskReads       readBatch[diskSnapshotKey, *types.DiskSnapshot]
+	stubReads             readBatch[string, stubRead]
 }
 
 type adminWorkspaceLoad struct {
@@ -1126,9 +1128,35 @@ func (r *PostgresBackendRepository) UpdateStubConfig(ctx context.Context, stubId
 	return nil
 }
 
+// Batch independent launches as well as repeated reads of the same stub. Keep
+// filtered reads scoped in SQL and give each caller independent nested values.
 func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
+	if len(queryFilters) > 0 {
+		return r.getStubByExternalId(ctx, externalId, queryFilters...)
+	}
+	id, err := uuid.Parse(externalId)
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.stubReads.get(ctx, id.String(), r.readStubs)
+	if err != nil {
+		return nil, err
+	}
+	if result.err != nil || result.data == nil {
+		return nil, result.err
+	}
 	var stub types.StubWithRelated
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+	err = json.Unmarshal(result.data, &stub)
+	return &stub, err
+}
+
+type stubRead struct {
+	data []byte
+	err  error
+}
+
+func stubQuery() squirrel.SelectBuilder {
+	return squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public, s.app_id,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at",
@@ -1141,9 +1169,35 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 		Join("workspace w ON s.workspace_id = w.id").
 		Join("app a ON s.app_id = a.id").
 		LeftJoin("object o ON s.object_id = o.id").
-		LeftJoin("workspace_storage ws ON w.storage_id = ws.id").
-		Where(squirrel.Eq{"s.external_id": externalId})
+		LeftJoin("workspace_storage ws ON w.storage_id = ws.id")
+}
 
+func (r *PostgresBackendRepository) readStubs(ctx context.Context, ids []string) (map[string]stubRead, error) {
+	query, args, err := stubQuery().Where(squirrel.Eq{"s.external_id": ids}).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	var stubs []types.StubWithRelated
+	if err := r.client.SelectContext(ctx, &stubs, query, args...); err != nil {
+		return nil, err
+	}
+	results := make(map[string]stubRead, len(stubs))
+	for _, stub := range stubs {
+		var result stubRead
+		if stub.Workspace.StorageAvailable() {
+			result.err = r.decryptFields(stub.Workspace.Storage)
+		}
+		if result.err == nil {
+			result.data, result.err = json.Marshal(stub)
+		}
+		results[stub.ExternalId] = result
+	}
+	return results, nil
+}
+
+func (r *PostgresBackendRepository) getStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
+	var stub types.StubWithRelated
+	qb := stubQuery().Where(squirrel.Eq{"s.external_id": externalId})
 	var stubFilters types.StubFilter
 	types.ParseConditionFromQueryFilters(&stubFilters, queryFilters...)
 
@@ -1175,21 +1229,7 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 
 func (r *PostgresBackendRepository) GetStubById(ctx context.Context, stubId uint, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
 	var stub types.StubWithRelated
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public, s.app_id,
-	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
-	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at",
-			a.id as "app.id", a.external_id as "app.external_id", a.name as "app.name"
-		`,
-		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key", 
-		ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"`,
-	).
-		From("stub s").
-		Join("workspace w ON s.workspace_id = w.id").
-		Join("app a ON s.app_id = a.id").
-		LeftJoin("object o ON s.object_id = o.id").
-		LeftJoin("workspace_storage ws ON w.storage_id = ws.id").
-		Where(squirrel.Eq{"s.id": stubId})
+	qb := stubQuery().Where(squirrel.Eq{"s.id": stubId})
 
 	var stubFilters types.StubFilter
 	types.ParseConditionFromQueryFilters(&stubFilters, queryFilters...)

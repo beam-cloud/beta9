@@ -436,7 +436,7 @@ func TestGetLatestDiskSnapshotOrdersConcurrentGenerationsDeterministically(t *te
 
 	now := time.Now()
 	mock.ExpectQuery("ORDER BY generation DESC, created_at DESC, id DESC").
-		WithArgs(uint(7), "pg-data", types.DiskSnapshotStatusAvailable).
+		WithArgs("{7}", "{\"pg-data\"}").
 		WillReturnRows(diskSnapshotRows().AddRow(
 			uint(2),
 			"snapshot-2",
