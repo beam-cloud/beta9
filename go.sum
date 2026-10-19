@@ -180,6 +180,8 @@ github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8 h1:lc3G6/sHW
 github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8/go.mod h1:rqrE88LppghBMjFICaVTVJ8CnAhg9UmdQUVA7iDNUow=
 github.com/beam-cloud/ristretto v0.0.0-20241013204426-d1403e359aa2 h1:RvgYbYPfBiq2IvimR4Vll2ImJsElX3oPLU9OjVvjE0c=
 github.com/beam-cloud/ristretto v0.0.0-20241013204426-d1403e359aa2/go.mod h1:62+lvDbHv0JqIFy0bR8z8TJ7nIxTbDey7TDNMSWQXjA=
+github.com/beam-cloud/tailscale-go v1.95.0-pre.0.20261019094554-b7eecf9ca636 h1:iWOuYcX+5bt43na1Ir9jo/xCtoh3Z4JxlXZbmP5nAok=
+github.com/beam-cloud/tailscale-go v1.95.0-pre.0.20261019094554-b7eecf9ca636/go.mod h1:jW2LdIY4f4Jz1rJcXBvSkgEHIgIVa+qhXtNc4Fn+7m8=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/blang/semver/v4 v4.0.0 h1:1PFHFE6yCCTv8C1TeyNNarDzntLi7wMI5i/pzqYIsAM=
@@ -1104,5 +1106,3 @@ tags.cncf.io/container-device-interface v0.8.0 h1:8bCFo/g9WODjWx3m6EYl3GfUG31eKJ
 tags.cncf.io/container-device-interface v0.8.0/go.mod h1:Apb7N4VdILW0EVdEMRYXIDVRZfNJZ+kmEUss2kRRQ6Y=
 tags.cncf.io/container-device-interface/specs-go v0.8.0 h1:QYGFzGxvYK/ZLMrjhvY0RjpUavIn4KcmRmVP/JjdBTA=
 tags.cncf.io/container-device-interface/specs-go v0.8.0/go.mod h1:BhJIkjjPh4qpys+qm4DAYtUyryaTDg9zris+AczXyws=
-tailscale.com v1.95.0-pre.0.20260305003012-d58bfb8a1b51 h1:Wuvfpo5BcZaRpZQcLwbRuUy4Y0QZGFnh6aFTJ+cGEPo=
-tailscale.com v1.95.0-pre.0.20260305003012-d58bfb8a1b51/go.mod h1:jW2LdIY4f4Jz1rJcXBvSkgEHIgIVa+qhXtNc4Fn+7m8=
