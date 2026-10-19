@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +49,7 @@ func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 		`Environment="BEAM_AGENT_STATE_DIR=` + filepath.Join(tmp, "state") + `"`,
 		`Environment="BEAM_WORKER_IMAGE=registry.example.com/worker:latest"`,
 		`Environment="HOME=` + filepath.Join(tmp, "state") + `"`,
+		`ExecStartPre="/bin/sh" "-ec" "for governor in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do\n  [ -e \"$$governor\" ] || continue\n  echo performance > \"$$governor\"\ndone"`,
 		`ExecStart="` + types.DefaultAgentBinaryPath + `" "join" "--gateway" "https://gateway.beam.cloud" "--join-token" "token with spaces"`,
 		`ExecStopPost="/bin/sh" "-c" "if [ -x /usr/local/bin/uninstall-thunder.sh ]; then sudo THUNDER_UNINSTALL_NOWARN=1 /usr/local/bin/uninstall-thunder.sh; fi"`,
 		`RequiresMountsFor=` + filepath.Join(tmp, "state"),
@@ -71,6 +73,44 @@ func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 		types.AgentSystemctlCommand + " enable --now " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
 	}, "\n"); got != want {
 		t.Fatalf("unexpected commands:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestCPUPerformancePolicy(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cpufreq")
+	script := strings.ReplaceAll(cpuPerformanceScript, "/sys/devices/system/cpu/cpufreq", root)
+	run := func() {
+		t.Helper()
+		if out, err := exec.Command("/bin/sh", "-ec", script).CombinedOutput(); err != nil {
+			t.Fatalf("apply CPU policy: %v: %s", err, out)
+		}
+	}
+	// Machines without cpufreq must still start.
+	run()
+	for _, name := range []string{"policy0", "policy1"} {
+		path := filepath.Join(root, name, "scaling_governor")
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("schedutil\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		run()
+		for _, name := range []string{"policy0", "policy1"} {
+			data, err := os.ReadFile(filepath.Join(root, name, "scaling_governor"))
+			if err != nil || string(data) != "performance\n" {
+				t.Fatalf("%s governor = %q, error = %v", name, data, err)
+			}
+		}
+	}
+	// A policy that cannot be applied must fail the pre-start hook.
+	if err := os.MkdirAll(filepath.Join(root, "policy2", "scaling_governor"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command("/bin/sh", "-ec", script).Run(); err == nil {
+		t.Fatal("unwritable policy was ignored")
 	}
 }
 
