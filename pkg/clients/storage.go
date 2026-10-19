@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
@@ -124,11 +125,31 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 
 func newS3Client(cfg aws.Config, endpointUrl string) *s3.Client {
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.Retryer = storageDNSRetryer{o.Retryer}
 		if endpointUrl != "" {
 			o.BaseEndpoint = aws.String(endpointUrl)
 			o.UsePathStyle = true
 		}
 	})
+}
+
+// A transient negative DNS answer must use the same retry budget as other
+// connection failures instead of immediately aborting a durable write.
+type storageDNSRetryer struct{ aws.Retryer }
+
+func (r storageDNSRetryer) IsErrorRetryable(err error) bool {
+	if (retry.NoRetryCanceledError{}).IsErrorRetryable(err) == aws.FalseTernary {
+		return false
+	}
+	var dnsError *net.DNSError
+	return errors.As(err, &dnsError) && dnsError.IsNotFound || r.Retryer.IsErrorRetryable(err)
+}
+
+func (r storageDNSRetryer) GetAttemptToken(ctx context.Context) (func(error) error, error) {
+	if v2, ok := r.Retryer.(aws.RetryerV2); ok {
+		return v2.GetAttemptToken(ctx)
+	}
+	return r.GetInitialToken(), nil
 }
 
 func firstNonEmpty(values ...string) string {
