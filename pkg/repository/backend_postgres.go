@@ -28,6 +28,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -103,6 +104,7 @@ type PostgresBackendRepository struct {
 	taskEvents            *taskEventPublisher
 	vmLocksOnce           sync.Once
 	vmLocks               []vmLockSession
+	workspaceReads        singleflight.Group
 }
 
 type adminWorkspaceLoad struct {
@@ -216,21 +218,20 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 }
 
 func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error) {
-	var workspace types.Workspace
+	return r.readWorkspace(ctx, "external/"+externalId, func(ctx context.Context) (types.Workspace, error) {
+		var workspace types.Workspace
 
-	query := `SELECT id, external_id, name, created_at, updated_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled, storage_id FROM workspace WHERE external_id = $1;`
-	err := r.client.GetContext(ctx, &workspace, query, externalId)
-	if err != nil {
-		return types.Workspace{}, err
-	}
-
-	return workspace, nil
+		query := `SELECT id, external_id, name, created_at, updated_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled, storage_id FROM workspace WHERE external_id = $1;`
+		err := r.client.GetContext(ctx, &workspace, query, externalId)
+		return workspace, err
+	})
 }
 
 func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceId uint) (*types.Workspace, error) {
-	var workspace types.Workspace
+	workspace, err := r.readWorkspace(ctx, fmt.Sprintf("id/%d", workspaceId), func(ctx context.Context) (types.Workspace, error) {
+		var workspace types.Workspace
 
-	query := `
+		query := `
 	SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
 	ws.id "storage.id", ws.bucket_name "storage.bucket_name", ws.access_key "storage.access_key",
 	ws.secret_key "storage.secret_key", ws.endpoint_url "storage.endpoint_url", ws.region "storage.region",
@@ -240,15 +241,19 @@ func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceI
 	WHERE w.id = $1;
 	`
 
-	err := r.client.GetContext(ctx, &workspace, query, workspaceId)
+		if err := r.client.GetContext(ctx, &workspace, query, workspaceId); err != nil {
+			return workspace, err
+		}
+
+		if workspace.StorageAvailable() {
+			if err := r.decryptFields(workspace.Storage); err != nil {
+				return workspace, err
+			}
+		}
+		return workspace, nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	if workspace.StorageAvailable() {
-		if err := r.decryptFields(workspace.Storage); err != nil {
-			return nil, err
-		}
 	}
 
 	return &workspace, nil
