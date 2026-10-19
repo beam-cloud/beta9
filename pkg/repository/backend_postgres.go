@@ -2984,13 +2984,18 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 const unreferencedVMCheckpoint = `AND NOT EXISTS (SELECT 1 FROM persistent_vm v WHERE v.data->>'memory_checkpoint_id' = c.checkpoint_id AND v.data->>'desired_state' <> 'deleted')`
 
 func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error) {
+	// Treat recent keys as a relation: ANY's selectivity estimate can make
+	// PostgreSQL rescan all checkpoints for each stub as launch history grows.
 	query := `
 		SELECT ` + checkpointColumns + `
 		FROM checkpoint c
 		INNER JOIN stub s ON c.stub_id = s.id
 		INNER JOIN workspace w ON s.workspace_id = w.id
 		WHERE c.deleted_at IS NULL
-		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]))
+		  AND NOT EXISTS (
+			SELECT 1 FROM unnest($1::text[]) recent(stub_key)
+			WHERE recent.stub_key = w.external_id || '|' || s.external_id
+		  )
 		  AND s.updated_at < $2
 		  ` + unreferencedVMCheckpoint + `;`
 
