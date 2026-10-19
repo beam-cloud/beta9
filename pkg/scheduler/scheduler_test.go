@@ -2671,6 +2671,16 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 	assert.True(t, shouldSanitize)
 }
 
+type countedAgentStates struct {
+	repo.ComputeRepository
+	calls int
+}
+
+func (r *countedAgentStates) ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error) {
+	r.calls++
+	return r.ComputeRepository.ListAgentTokenStates(ctx, workspaceID, poolName)
+}
+
 func TestSelectPrivateAgentWorkerIgnoresStaleMachine(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.NoError(t, err)
@@ -2750,6 +2760,51 @@ func TestSelectPrivateAgentWorkerIgnoresStaleMachine(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, compute.AgentMachineWorkerID("live-machine"), worker.Id)
+
+	counted := &countedAgentStates{ComputeRepository: wb.computeRepo}
+	wb.computeRepo = counted
+	requests := make([]*types.ContainerRequest, 100)
+	for i := range requests {
+		requests[i] = &types.ContainerRequest{
+			ContainerId: uuid.NewString(), WorkspaceId: workspaceID, PoolSelector: poolState.Selector,
+			Cpu: 10, Memory: 10, Workspace: testWorkspaceWithStorage(),
+		}
+	}
+	setPendingSchedulerRequests(t, wb, requests...)
+	workers, err := wb.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	batch := newSchedulingBatch(wb, workers, len(requests))
+	batch.plan(requests)
+	require.Len(t, batch.schedules, 100)
+	for _, planned := range batch.schedules {
+		require.Equal(t, worker.Id, planned.worker.Id, "stale capacity must stay excluded throughout the burst")
+	}
+	require.Equal(t, 1, counted.calls, "one scheduling batch should read pool liveness once")
+	for _, snapshot := range workers {
+		if snapshot.Id == worker.Id {
+			require.Zero(t, snapshot.FreeCpu, "liveness sharing must not share away capacity reservations")
+		}
+	}
+
+	machines, err := counted.ComputeRepository.ListAgentTokenStates(ctx, workspaceID, poolState.Name)
+	require.NoError(t, err)
+	for _, machine := range machines {
+		if machine.MachineID == "live-machine" {
+			machine.LastJoinAt = now.Add(-2 * compute.AgentHeartbeatTimeout)
+			machine.LastHeartbeatAt = machine.LastJoinAt
+			require.NoError(t, counted.SaveAgentTokenState(ctx, machine, time.Hour))
+		}
+	}
+	counted.calls = 0
+	next := newSchedulingBatch(wb, workers, 1)
+	require.Empty(t, next.filterLivePrivateAgentWorkers(workers, requests[0]), "the next batch must observe the expired heartbeat")
+	require.Equal(t, 1, counted.calls)
+	other := requests[0].Clone()
+	other.PoolSelector = "another-pool"
+	require.Len(t, next.filterLivePrivateAgentWorkers(workers, other), len(workers), "another pool must not reuse this pool's liveness")
+	other = requests[0].Clone()
+	other.WorkspaceId = "another-workspace"
+	require.Len(t, next.filterLivePrivateAgentWorkers(workers, other), len(workers), "another workspace must not reuse this workspace's liveness")
 }
 
 func TestSelectGPUWorker(t *testing.T) {
