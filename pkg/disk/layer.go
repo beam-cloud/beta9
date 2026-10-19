@@ -34,6 +34,9 @@ const (
 
 	uploadConcurrency = 16
 	scanConcurrency   = 8
+	// Share the upload budget across volumes so a VM burst cannot multiply
+	// chunk buffers and object-store connections by the fleet size.
+	chunkUploadConcurrency = 256
 	// chunkFetchConcurrency bounds in-flight chunk fetches across every layer
 	// of a chain, shared so one large layer gets full parallelism and a deep
 	// chain does not multiply into hundreds of requests. Each in-flight chunk
@@ -45,6 +48,8 @@ const (
 // Share scratch space across scans and uploads. Small qcow metadata extents
 // should not retain a full 8 MiB chunk buffer.
 var layerBuffers = mem.NewTieredBufferPool(64<<10, 256<<10, 1<<20, LayerChunkSize, chunkMaxSize)
+
+var chunkUploads = newChunkGate(chunkUploadConcurrency)
 
 // gearTable drives the boundary rolling hash. Changing it (or the size
 // constants) re-cuts every future publish, costing each disk one full
@@ -229,6 +234,10 @@ func UploadLayer(ctx context.Context, sink ChunkSink, path string, layer *types.
 	group.SetLimit(uploadConcurrency)
 	for _, chunk := range layer.Chunks {
 		group.Go(func() error {
+			if err := chunkUploads.acquire(groupCtx); err != nil {
+				return err
+			}
+			defer chunkUploads.release()
 			buffer := layerBuffers.Get(int(chunk.SizeBytes))
 			defer layerBuffers.Put(buffer)
 			data := *buffer
