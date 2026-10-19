@@ -42,48 +42,6 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 		return nil, err
 	}
 
-	if existing, err := r.GetDisk(ctx, workspaceId, name); err == nil {
-		if disk.Driver != "" && types.NormalizeDurableDiskDriver(disk.Driver) != existing.Driver {
-			return nil, fmt.Errorf("disk %s uses driver %s; changing drivers requires an explicit data migration", name, existing.Driver)
-		}
-		if disk.Filesystem != "" && disk.Filesystem != existing.Filesystem {
-			return nil, fmt.Errorf("disk %s filesystem cannot be changed", name)
-		}
-
-		if disk.Size != "" && disk.Size != existing.Size {
-			requested, err := configuredDiskBytes(disk.Size)
-			if err != nil {
-				return nil, err
-			}
-
-			previous, err := configuredDiskBytes(existing.Size)
-			if err != nil {
-				return nil, fmt.Errorf("disk %s has an invalid stored size; reconcile it before resizing", name)
-			}
-			if requested < previous {
-				return nil, fmt.Errorf("disk %s cannot shrink from %s to %s", name, existing.Size, disk.Size)
-			}
-
-			// This records desired capacity. The worker must grow and verify the
-			// actual block device/filesystem on the next attachment.
-			query := `
-			UPDATE disk SET size = $1, updated_at = CURRENT_TIMESTAMP
-			WHERE id = $2 AND size = $3
-			RETURNING ` + diskColumns + `;
-			`
-
-			var updated types.Disk
-			if err := r.client.GetContext(ctx, &updated, query, strings.TrimSpace(disk.Size), existing.Id, existing.Size); err != nil {
-				return nil, fmt.Errorf("disk size changed concurrently or could not be saved: %w", err)
-			}
-			return &updated, nil
-		}
-
-		return existing, nil
-	} else if err != sql.ErrNoRows {
-		return nil, err
-	}
-
 	filesystem := disk.Filesystem
 	if filesystem == "" {
 		filesystem = "ext4"
@@ -92,34 +50,86 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 	if driver == "" {
 		driver = types.DurableDiskDriverSnapshot
 	}
+	var creationErr error
 	if driver != types.DurableDiskDriverSnapshot && driver != types.DurableDiskDriverQcow {
-		return nil, fmt.Errorf("unsupported durable disk driver %q", driver)
-	}
-	if _, err := configuredDiskBytes(disk.Size); err != nil {
-		return nil, err
+		creationErr = fmt.Errorf("unsupported durable disk driver %q", driver)
+	} else {
+		_, creationErr = configuredDiskBytes(disk.Size)
 	}
 
-	query := fmt.Sprintf(`
+	// Existing disks need no write. A new disk is registered in the same
+	// round trip; invalid creation options still allow a lookup by name.
+	query := `
+	WITH existing AS (
+		SELECT ` + diskColumns + ` FROM disk
+		WHERE workspace_id=$1 AND name=$2 AND deleted_at IS NULL
+	), created AS (
 		INSERT INTO disk (workspace_id, name, size, filesystem, driver, mount_path)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		SELECT $1,$2,$3,$4,$5,$6 WHERE $7 AND NOT EXISTS (SELECT 1 FROM existing)
 		ON CONFLICT (workspace_id, name) WHERE deleted_at IS NULL DO NOTHING
-		RETURNING %s;`, diskColumns)
-
-	var created types.Disk
-	if err := r.client.GetContext(ctx, &created, query,
-		workspaceId,
-		name,
-		strings.TrimSpace(disk.Size),
-		strings.TrimSpace(filesystem),
-		driver,
-		strings.TrimSpace(disk.MountPath),
-	); err != nil {
-		if err == sql.ErrNoRows {
-			return r.GetDisk(ctx, workspaceId, name)
-		}
+		RETURNING ` + diskColumns + `
+	)
+	SELECT existing.*,false AS created FROM existing
+	UNION ALL SELECT created.*,true AS created FROM created`
+	var result struct {
+		types.Disk
+		Created bool `db:"created"`
+	}
+	err = r.client.GetContext(ctx, &result, query, workspaceId, name,
+		strings.TrimSpace(disk.Size), strings.TrimSpace(filesystem), driver,
+		strings.TrimSpace(disk.MountPath), creationErr == nil)
+	if err == sql.ErrNoRows && creationErr != nil {
+		return nil, creationErr
+	}
+	existing := &result.Disk
+	if err == sql.ErrNoRows {
+		// A competing insert can commit outside this statement's snapshot.
+		// Re-read its row, then apply the same compatibility checks below.
+		existing, err = r.GetDisk(ctx, workspaceId, name)
+	}
+	if err != nil {
 		return nil, err
 	}
-	return &created, nil
+	if result.Created {
+		return existing, nil
+	}
+
+	if disk.Driver != "" && types.NormalizeDurableDiskDriver(disk.Driver) != existing.Driver {
+		return nil, fmt.Errorf("disk %s uses driver %s; changing drivers requires an explicit data migration", name, existing.Driver)
+	}
+	if disk.Filesystem != "" && disk.Filesystem != existing.Filesystem {
+		return nil, fmt.Errorf("disk %s filesystem cannot be changed", name)
+	}
+
+	if disk.Size != "" && disk.Size != existing.Size {
+		requested, err := configuredDiskBytes(disk.Size)
+		if err != nil {
+			return nil, err
+		}
+
+		previous, err := configuredDiskBytes(existing.Size)
+		if err != nil {
+			return nil, fmt.Errorf("disk %s has an invalid stored size; reconcile it before resizing", name)
+		}
+		if requested < previous {
+			return nil, fmt.Errorf("disk %s cannot shrink from %s to %s", name, existing.Size, disk.Size)
+		}
+
+		// This records desired capacity. The worker must grow and verify the
+		// actual block device/filesystem on the next attachment.
+		query := `
+		UPDATE disk SET size = $1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2 AND size = $3
+		RETURNING ` + diskColumns + `;
+		`
+
+		var updated types.Disk
+		if err := r.client.GetContext(ctx, &updated, query, strings.TrimSpace(disk.Size), existing.Id, existing.Size); err != nil {
+			return nil, fmt.Errorf("disk size changed concurrently or could not be saved: %w", err)
+		}
+		return &updated, nil
+	}
+	return existing, nil
 }
 
 var diskSizePattern = regexp.MustCompile(`^[1-9][0-9]*(Ki|Mi|Gi|Ti|K|M|G|T)?$`)

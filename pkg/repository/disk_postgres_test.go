@@ -17,14 +17,11 @@ func TestGetOrCreateDiskAcceptsQcowDriver(t *testing.T) {
 	postgresRepo := repo.(*PostgresBackendRepository)
 	now := time.Now().UTC()
 
-	mock.ExpectQuery(`SELECT .* FROM disk`).
-		WithArgs(uint(7), "machine-root").
-		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`INSERT INTO disk`).
-		WithArgs(uint(7), "machine-root", "32Gi", "ext4", types.DurableDiskDriverQcow, "/").
+	mock.ExpectQuery(`WITH existing AS`).
+		WithArgs(uint(7), "machine-root", "32Gi", "ext4", types.DurableDiskDriverQcow, "/", true).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "external_id", "workspace_id", "name", "size", "filesystem", "driver", "mount_path",
-			"created_at", "updated_at", "deleted_at",
+			"created_at", "updated_at", "deleted_at", "created",
 		}).AddRow(
 			uint(1),
 			"disk-1",
@@ -37,6 +34,7 @@ func TestGetOrCreateDiskAcceptsQcowDriver(t *testing.T) {
 			now,
 			now,
 			nil,
+			true,
 		))
 
 	disk, err := postgresRepo.GetOrCreateDisk(context.Background(), 7, &types.Disk{
@@ -57,8 +55,8 @@ func TestGetOrCreateDiskRejectsUnsupportedDriver(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
 
-	mock.ExpectQuery(`SELECT .* FROM disk`).
-		WithArgs(uint(7), "machine-root").
+	mock.ExpectQuery(`WITH existing AS`).
+		WithArgs(uint(7), "machine-root", "", "ext4", "unsupported", "", false).
 		WillReturnError(sql.ErrNoRows)
 
 	_, err := postgresRepo.GetOrCreateDisk(context.Background(), 7, &types.Disk{
@@ -68,6 +66,65 @@ func TestGetOrCreateDiskRejectsUnsupportedDriver(t *testing.T) {
 
 	require.EqualError(t, err, `unsupported durable disk driver "unsupported"`)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestConcurrentDiskRegistrationStillValidatesWinningRow(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`WITH existing AS`).
+		WithArgs(uint(7), "root", "32Gi", "ext4", types.DurableDiskDriverQcow, "/", true).
+		WillReturnError(sql.ErrNoRows)
+	now := time.Now()
+	mock.ExpectQuery(`SELECT .* FROM disk`).WithArgs(uint(7), "root").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "external_id", "workspace_id", "name", "size", "filesystem", "driver", "mount_path",
+			"created_at", "updated_at", "deleted_at",
+		}).AddRow(1, "existing", 7, "root", "32Gi", "ext4", types.DurableDiskDriverSnapshot, "/", now, now, nil))
+	_, err := repo.GetOrCreateDisk(context.Background(), 7, &types.Disk{
+		Name: "root", Size: "32Gi", Driver: types.DurableDiskDriverQcow, MountPath: "/",
+	})
+	require.ErrorContains(t, err, "changing drivers requires an explicit data migration")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDiskRegistrationIntegration(t *testing.T) {
+	db := postgresIntegrationSession(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := db.ExecContext(ctx, `
+		CREATE TEMP TABLE disk (LIKE public.disk INCLUDING DEFAULTS);
+		CREATE TEMP SEQUENCE disk_registration_id;
+		ALTER TABLE disk ALTER COLUMN id SET DEFAULT nextval('pg_temp.disk_registration_id');
+		CREATE UNIQUE INDEX ON disk (workspace_id,name) WHERE deleted_at IS NULL;`)
+	require.NoError(t, err)
+	repo := &PostgresBackendRepository{client: db}
+	spec := &types.Disk{Name: "root", Size: "32Gi", Driver: types.DurableDiskDriverQcow, MountPath: "/"}
+	first, err := repo.GetOrCreateDisk(ctx, 7, spec)
+	require.NoError(t, err)
+	again, err := repo.GetOrCreateDisk(ctx, 7, spec)
+	require.NoError(t, err)
+	require.Equal(t, first, again, "reusing a disk must not write or touch its timestamp")
+	lookup, err := repo.GetOrCreateDisk(ctx, 7, &types.Disk{Name: "root"})
+	require.NoError(t, err)
+	require.Equal(t, first, lookup, "lookup by name must not require creation options")
+	_, err = repo.GetOrCreateDisk(ctx, 7, &types.Disk{Name: "root", Driver: types.DurableDiskDriverSnapshot})
+	require.ErrorContains(t, err, "changing drivers")
+	_, err = repo.GetOrCreateDisk(ctx, 7, &types.Disk{Name: "root", Filesystem: "xfs"})
+	require.ErrorContains(t, err, "filesystem cannot be changed")
+	_, err = repo.GetOrCreateDisk(ctx, 7, &types.Disk{Name: "root", Size: "16Gi"})
+	require.ErrorContains(t, err, "cannot shrink")
+	grown, err := repo.GetOrCreateDisk(ctx, 7, &types.Disk{Name: "root", Size: "64Gi"})
+	require.NoError(t, err)
+	require.Equal(t, first.Id, grown.Id)
+	require.Equal(t, "64Gi", grown.Size)
+	require.NoError(t, repo.DeleteDisk(ctx, 7, "root"))
+	recreated, err := repo.GetOrCreateDisk(ctx, 7, spec)
+	require.NoError(t, err)
+	require.NotEqual(t, first.Id, recreated.Id)
+	_, err = repo.GetOrCreateDisk(ctx, 7, &types.Disk{Name: "missing"})
+	require.ErrorContains(t, err, "invalid disk size")
+	var count int
+	require.NoError(t, db.GetContext(ctx, &count, `SELECT count(*) FROM disk`))
+	require.Equal(t, 2, count)
 }
 
 func TestGetDiskSnapshotOnlySharesAvailableSnapshots(t *testing.T) {
