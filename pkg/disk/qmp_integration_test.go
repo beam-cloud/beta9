@@ -17,7 +17,9 @@ import (
 
 func TestCompactReleasesQEMUOverlays(t *testing.T) {
 	ctx, volume := newQEMUVolume(t)
-	for i := 1; i <= 32; i++ {
+	// Keep one daemon alive beyond the original 1,024-snapshot failure point.
+	// Its enforced 128-FD limit also catches unnamed monitor/job references.
+	for i := 1; i <= 1_104; i++ {
 		sealed, _, err := volume.Seal(ctx, true)
 		require.NoError(t, err)
 		require.Len(t, sealed, 1)
