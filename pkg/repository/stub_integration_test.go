@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -102,6 +103,16 @@ func TestStubReadBatchIntegration(t *testing.T) {
 	require.Nil(t, foreign, "filtered reads must still enforce workspace ownership")
 	_, err = repo.GetStubByExternalId(ctx, "not-a-uuid")
 	require.Error(t, err)
+	var lookup sync.WaitGroup
+	lookup.Add(2)
+	var valid *types.StubWithRelated
+	var validErr, invalidErr error
+	go func() { defer lookup.Done(); valid, validErr = repo.GetStubByExternalId(ctx, ids[0]) }()
+	go func() { defer lookup.Done(); _, invalidErr = repo.GetStubByExternalId(ctx, "invalid-uuid") }()
+	lookup.Wait()
+	require.NoError(t, validErr, "a malformed key must not abort another caller's lookup")
+	require.NotNil(t, valid)
+	require.Error(t, invalidErr)
 	_, err = db.ExecContext(ctx, `DELETE FROM stub WHERE id=1`)
 	require.NoError(t, err)
 	missing, err := repo.GetStubByExternalId(ctx, ids[0])

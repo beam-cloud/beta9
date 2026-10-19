@@ -1136,7 +1136,9 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	}
 	id, err := uuid.Parse(externalId)
 	if err != nil {
-		return nil, err
+		// Keep invalid keys in their own query so their database errors cannot
+		// abort valid lookups collected in the same batch.
+		return r.getStubByExternalId(ctx, externalId)
 	}
 	result, err := r.stubReads.get(ctx, id.String(), r.readStubs)
 	if err != nil {
