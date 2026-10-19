@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,8 +17,8 @@ func TestVMLocksLeaveConnectionsForLifecycleQueries(t *testing.T) {
 	ctx := context.Background()
 
 	lock := func(id string, acquired bool) {
-		mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs(id).
-			WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(acquired))
+		mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{id})).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow(id, acquired))
 	}
 	unlock := func(id string) {
 		mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs(id).
@@ -60,16 +61,16 @@ func TestCanceledVMLockKeepsOtherSessionLocks(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	r := repo.(*PostgresBackendRepository)
 	r.client.SetMaxOpenConns(2)
-	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs("a").
-		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"a"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("a", true))
 	a, err := r.LockVM(context.Background(), "a")
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs("b").
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"b"})).
 		WillDelayFor(20 * time.Millisecond).
-		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("b", true))
 	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("b").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	time.AfterFunc(5*time.Millisecond, cancel)
@@ -91,8 +92,8 @@ func TestVMLockWaitLeavesSharedSessionAvailable(t *testing.T) {
 	r.client.SetMaxOpenConns(2)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs("a").
-		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"a"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("a", true))
 	owner, err := r.LockVM(ctx, "a")
 	require.NoError(t, err)
 
@@ -108,8 +109,8 @@ func TestVMLockWaitLeavesSharedSessionAvailable(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 	// Waiting on a cannot hold its shared session gate or a pool connection.
-	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs("b").
-		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"b"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("b", true))
 	other, err := r.TryLockVM(ctx, "b")
 	require.NoError(t, err)
 	mock.ExpectExec(`UPDATE persistent_vm SET last_active_at`).WithArgs("b").
@@ -118,8 +119,8 @@ func TestVMLockWaitLeavesSharedSessionAvailable(t *testing.T) {
 	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("b").WillReturnResult(sqlmock.NewResult(0, 1))
 	other()
 	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("a").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs("a").
-		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"a"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("a", true))
 	owner()
 	var acquired result
 	select {
@@ -137,8 +138,8 @@ func TestVMLockWaitLeavesSharedSessionAvailable(t *testing.T) {
 func TestVMLockWaitCancellationKeepsOwner(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	r := repo.(*PostgresBackendRepository)
-	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs("a").
-		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"a"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("a", true))
 	owner, err := r.LockVM(context.Background(), "a")
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -158,10 +159,10 @@ func TestVMLockWaitsForAnotherGateway(t *testing.T) {
 	r := repo.(*PostgresBackendRepository)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs("a").
-		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(false))
-	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs("a").
-		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"a"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("a", false))
+	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"a"})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow("a", true))
 	unlock, err := r.LockVM(ctx, "a")
 	require.NoError(t, err)
 	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("a").WillReturnResult(sqlmock.NewResult(0, 1))

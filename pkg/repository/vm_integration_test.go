@@ -31,6 +31,7 @@ func TestVMLockPoolIntegration(t *testing.T) {
 	group, ctx := errgroup.WithContext(ctx)
 	var acquired atomic.Int32
 	ready := make(chan struct{})
+	started := time.Now()
 	for range 100 {
 		group.Go(func() error {
 			unlock, err := repo.LockVM(ctx, uuid.NewString())
@@ -40,6 +41,7 @@ func TestVMLockPoolIntegration(t *testing.T) {
 			defer unlock()
 			// All locks must coexist while ordinary queries still have capacity.
 			if acquired.Add(1) == 100 {
+				t.Logf("100 independent VM locks acquired in %s", time.Since(started))
 				close(ready)
 			}
 			select {
@@ -61,7 +63,7 @@ func TestVMLockPoolIntegration(t *testing.T) {
 	id := uuid.NewString()
 	unlock, err := repo.LockVM(ctx, id)
 	require.NoError(t, err)
-	_, err = peer.LockVM(ctx, id)
+	_, err = peer.TryLockVM(ctx, id)
 	require.ErrorContains(t, err, "operation already in progress")
 	unlock()
 	unlock, err = peer.LockVM(ctx, id)
@@ -95,7 +97,7 @@ func TestVMRepositoryIntegration(t *testing.T) {
 
 	unlock, err := repo.LockVM(ctx, id)
 	require.NoError(t, err)
-	_, err = repo.LockVM(ctx, id)
+	_, err = repo.TryLockVM(ctx, id)
 	require.ErrorContains(t, err, "operation already in progress")
 	unlock()
 	unlock, err = repo.LockVM(ctx, id)

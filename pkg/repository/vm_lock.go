@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 )
 
 // Each session can hold many independent advisory locks. Keep their short
@@ -17,9 +18,80 @@ import (
 // snapshots must not consume a hundred connections or block unrelated starts.
 // The local set prevents PostgreSQL's same-session, reentrant lock acquisition.
 type vmLockSession struct {
-	gate chan struct{}
+	gate     chan struct{}
+	client   *sqlx.DB
+	conn     *sqlx.Conn
+	held     map[string]chan struct{}
+	acquires commitBatch[struct{}, *vmLockAcquire, vmLockResult]
+}
+
+type vmLockAcquire struct{ id string }
+
+type vmLockResult struct {
 	conn *sqlx.Conn
-	held map[string]chan struct{}
+	busy *vmOperationBusy
+}
+
+// Concurrent lifecycles acquire their independent locks in one round trip per
+// session. The local set still rejects duplicate keys before PostgreSQL's
+// reentrant advisory locks can grant the same lock to two callers.
+func (s *vmLockSession) acquire(ctx context.Context, requests []*vmLockAcquire) (map[*vmLockAcquire]vmLockResult, error) {
+	select {
+	case s.gate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-s.gate }()
+	ids := make([]string, 0, len(requests))
+	acquired := make(map[string]bool, len(requests))
+	for _, request := range requests {
+		if _, seen := acquired[request.id]; s.held[request.id] == nil && !seen {
+			ids = append(ids, request.id)
+			acquired[request.id] = false
+		}
+	}
+	if len(ids) > 0 {
+		if s.conn == nil {
+			conn, err := s.client.Connx(ctx)
+			if err != nil {
+				return nil, err
+			}
+			s.conn = conn
+		}
+		// The batch context outlives individual callers. Canceling one HTTP
+		// request must not close a session holding another VM's locks.
+		queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		var rows []struct {
+			ID       string `db:"id"`
+			Acquired bool   `db:"acquired"`
+		}
+		err := s.conn.SelectContext(queryCtx, &rows, `SELECT id, pg_try_advisory_lock(hashtextextended(id, 947)) AS acquired FROM unnest($1::text[]) AS locks(id)`, pq.Array(ids))
+		for _, row := range rows {
+			acquired[row.ID] = row.Acquired
+		}
+
+		if err != nil {
+			s.discard()
+			return nil, err
+		}
+	}
+	results := make(map[*vmLockAcquire]vmLockResult, len(requests))
+	for _, request := range requests {
+		if released := s.held[request.id]; released != nil {
+			results[request] = vmLockResult{busy: &vmOperationBusy{released: released}}
+		} else if acquired[request.id] {
+			s.held[request.id] = make(chan struct{})
+			results[request] = vmLockResult{conn: s.conn}
+		} else {
+			results[request] = vmLockResult{busy: &vmOperationBusy{}}
+		}
+	}
+	if len(s.held) == 0 && s.conn != nil {
+		s.conn.Close()
+		s.conn = nil
+	}
+	return results, nil
 }
 
 func (s *vmLockSession) discard() {
@@ -97,62 +169,32 @@ func (r *PostgresBackendRepository) TryLockVM(ctx context.Context, id string) (f
 		}
 		r.vmLocks = make([]vmLockSession, count)
 		for i := range r.vmLocks {
-			r.vmLocks[i] = vmLockSession{gate: make(chan struct{}, 1), held: make(map[string]chan struct{})}
+			r.vmLocks[i] = vmLockSession{client: r.client, gate: make(chan struct{}, 1), held: make(map[string]chan struct{})}
 		}
 	})
 	if len(r.vmLocks) == 0 {
 		return nil, fmt.Errorf("VM lifecycle requires at least two database connections")
 	}
 	s := &r.vmLocks[crc32.ChecksumIEEE([]byte(id))%uint32(len(r.vmLocks))]
-	select {
-	case s.gate <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	defer func() { <-s.gate }()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if released := s.held[id]; released != nil {
-		return nil, &vmOperationBusy{released: released}
-	}
-	if s.conn == nil {
-		conn, err := r.client.Connx(ctx)
-		if err != nil {
-			return nil, err
-		}
-		s.conn = conn
-	}
-	// Canceling one HTTP request must not tear down a session holding locks
-	// for other VMs. Finish this short query, then release a canceled caller's
-	// lock before returning. A failed database session is always discarded.
-	queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	var acquired bool
-	err := s.conn.GetContext(queryCtx, &acquired, `SELECT pg_try_advisory_lock(hashtextextended($1, 947))`, id)
+	result, err := s.acquires.commit(ctx, struct{}{}, &vmLockAcquire{id: id}, s.acquire)
 	if err != nil {
-		s.discard()
 		return nil, err
 	}
-	if !acquired {
-		if len(s.held) == 0 {
-			s.conn.Close()
-			s.conn = nil
-		}
-		return nil, &vmOperationBusy{}
+	if result.busy != nil {
+		return nil, result.busy
 	}
-	s.held[id] = make(chan struct{})
-	conn := s.conn
-	if err := ctx.Err(); err != nil {
-		s.release(id, conn)
-		return nil, err
-	}
+	conn := result.conn
 	var once sync.Once
-	return func() {
+	release := func() {
 		once.Do(func() {
 			s.gate <- struct{}{}
 			defer func() { <-s.gate }()
 			s.release(id, conn)
 		})
-	}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
 }
