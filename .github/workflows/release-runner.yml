@@ -8,39 +8,56 @@ jobs:
   build_and_release_runner:
     if: startsWith(github.ref, 'refs/tags/runner-')
     environment: Release
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.image.tag }}, ${{ matrix.architecture.platform }})
+    runs-on: ${{ matrix.architecture.runner }}
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          # Python versions
+        image:
           - version: '3.8'
             target: 'py38'
+            tag: 'py38'
           - version: '3.9'
             target: 'py39'
+            tag: 'py39'
           - version: '3.10'
             target: 'py310'
+            tag: 'py310'
           - version: '3.11'
             target: 'py311'
+            tag: 'py311'
           - version: '3.12'
             target: 'py312'
-          # Micromamba versions
+            tag: 'py312'
           - version: '3.8'
             target: 'micromamba'
+            tag: 'micromamba3.8'
           - version: '3.9'
             target: 'micromamba'
+            tag: 'micromamba3.9'
           - version: '3.10'
             target: 'micromamba'
+            tag: 'micromamba3.10'
           - version: '3.11'
             target: 'micromamba'
+            tag: 'micromamba3.11'
           - version: '3.12'
             target: 'micromamba'
+            tag: 'micromamba3.12'
+        architecture:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -57,18 +74,67 @@ jobs:
         run: echo "RUNNER_TAG=${GITHUB_REF#refs/tags/runner-}" >> $GITHUB_ENV
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./docker/Dockerfile.runner
           push: true
-          tags: ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.target == 'micromamba' && format('micromamba{0}', matrix.version) || matrix.target }}-${{ env.RUNNER_TAG }},${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.target == 'micromamba' && format('micromamba{0}', matrix.version) || matrix.target }}-latest
-          target: ${{ matrix.target }}
+          tags: ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.image.tag }}-${{ env.RUNNER_TAG }}-${{ matrix.architecture.arch }}
+          target: ${{ matrix.image.target }}
           build-args: |
-            ${{ matrix.target == 'micromamba' && format('PYTHON_VERSION={0}', matrix.version) || '' }}
-          platforms: linux/amd64
+            ${{ matrix.image.target == 'micromamba' && format('PYTHON_VERSION={0}', matrix.image.version) || '' }}
+          platforms: ${{ matrix.architecture.platform }}
           load: false
-          registry: ${{ steps.login-ecr.outputs.registry }}
-          repository: ${{ steps.login-ecr.outputs.registry }}/beta9-runner
-          add_git_labels: true
-          tag_with_ref: true
+
+  publish_runner_manifests:
+    if: startsWith(github.ref, 'refs/tags/runner-')
+    needs: build_and_release_runner
+    environment: Release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - tag: 'py38'
+          - tag: 'py39'
+          - tag: 'py310'
+          - tag: 'py311'
+          - tag: 'py312'
+          - tag: 'micromamba3.8'
+          - tag: 'micromamba3.9'
+          - tag: 'micromamba3.10'
+          - tag: 'micromamba3.11'
+          - tag: 'micromamba3.12'
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        with:
+          mask-password: 'true'
+          registry-type: public
+
+      - name: Extract tag name
+        run: echo "RUNNER_TAG=${GITHUB_REF#refs/tags/runner-}" >> $GITHUB_ENV
+
+      - name: Publish multi-platform image manifests
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/beta9-runner
+          IMAGE_TAG: ${{ matrix.image.tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${IMAGE_TAG}-${RUNNER_TAG}" \
+            "${IMAGE}:${IMAGE_TAG}-${RUNNER_TAG}-amd64" \
+            "${IMAGE}:${IMAGE_TAG}-${RUNNER_TAG}-arm64"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${IMAGE_TAG}-latest" \
+            "${IMAGE}:${IMAGE_TAG}-${RUNNER_TAG}-amd64" \
+            "${IMAGE}:${IMAGE_TAG}-${RUNNER_TAG}-arm64"
