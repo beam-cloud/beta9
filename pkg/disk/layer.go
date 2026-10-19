@@ -6,11 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
+	"google.golang.org/grpc/mem"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -42,6 +42,10 @@ const (
 	layerFetchConcurrency = 4
 )
 
+// Share scratch space across scans and uploads. Small qcow metadata extents
+// should not retain a full 8 MiB chunk buffer.
+var layerBuffers = mem.NewTieredBufferPool(64<<10, 256<<10, 1<<20, LayerChunkSize, chunkMaxSize)
+
 // gearTable drives the boundary rolling hash. Changing it (or the size
 // constants) re-cuts every future publish, costing each disk one full
 // re-upload before dedup recovers.
@@ -56,6 +60,7 @@ var gearTable = func() [256]uint64 {
 }()
 
 // ChunkSink stores a chunk body under a content-addressed object key.
+// WriteChunk must finish reading data before returning.
 type ChunkSink interface {
 	WriteChunk(ctx context.Context, key string, data []byte) error
 }
@@ -102,8 +107,10 @@ func ScanLayer(ctx context.Context, path string, keyForDigest func(digest string
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			data := make([]byte, span.size)
-			if _, err := file.ReadAt(data, span.offset); err != nil && err != io.EOF {
+			buffer := layerBuffers.Get(int(span.size))
+			defer layerBuffers.Put(buffer)
+			data := *buffer
+			if _, err := file.ReadAt(data, span.offset); err != nil {
 				return fmt.Errorf("read layer chunk at %d: %w", span.offset, err)
 			}
 			reportProgress(ctx)
@@ -143,7 +150,9 @@ type chunkSpan struct{ offset, size int64 }
 // chunk identically regardless of surrounding holes.
 func chunkSpans(ctx context.Context, file *os.File, fileSize int64) ([]chunkSpan, error) {
 	var spans []chunkSpan
-	buffer := make([]byte, LayerChunkSize)
+	scratch := layerBuffers.Get(LayerChunkSize)
+	defer layerBuffers.Put(scratch)
+	buffer := *scratch
 	for offset := int64(0); offset < fileSize; {
 		dataStart, err := unix.Seek(int(file.Fd()), offset, unix.SEEK_DATA)
 		if err != nil {
@@ -190,11 +199,8 @@ func splitExtent(ctx context.Context, file *os.File, buffer []byte, start, end i
 		hash := uint64(0)
 		for pos := chunkStart + chunkMinSize; pos < windowEnd && cut == windowEnd; {
 			read, err := file.ReadAt(buffer[:min(int64(len(buffer)), windowEnd-pos)], pos)
-			if err != nil && err != io.EOF {
+			if err != nil {
 				return nil, fmt.Errorf("scan layer at %d: %w", pos, err)
-			}
-			if read == 0 {
-				break
 			}
 			for i := range read {
 				hash = hash<<1 + gearTable[buffer[i]]
@@ -223,8 +229,10 @@ func UploadLayer(ctx context.Context, sink ChunkSink, path string, layer *types.
 	group.SetLimit(uploadConcurrency)
 	for _, chunk := range layer.Chunks {
 		group.Go(func() error {
-			data := make([]byte, chunk.SizeBytes)
-			if _, err := file.ReadAt(data, chunk.OffsetBytes); err != nil && err != io.EOF {
+			buffer := layerBuffers.Get(int(chunk.SizeBytes))
+			defer layerBuffers.Put(buffer)
+			data := *buffer
+			if _, err := file.ReadAt(data, chunk.OffsetBytes); err != nil {
 				return fmt.Errorf("read chunk %s: %w", chunk.Digest, err)
 			}
 			if err := sink.WriteChunk(groupCtx, chunk.ObjectKey, data); err != nil {
