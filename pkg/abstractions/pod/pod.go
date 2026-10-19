@@ -78,6 +78,7 @@ type GenericPodService struct {
 	eventRepo       repository.EventRepository
 	controller      *abstractions.InstanceController
 	podInstances    *common.SafeMap[*podInstance]
+	instanceLoads   singleflight.Group
 	stubLoadGroup   singleflight.Group
 	clientCache     sync.Map
 	clientDialGroup singleflight.Group
@@ -291,21 +292,28 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 		return instance, nil
 	}
 
-	// The reason we lock here, and then check again -- is because if the instance does not exist, we may have two separate
-	// goroutines trying to create the instance. So, we check first, then get the mutex. If another
-	// routine got the lock, it should have created the instance, so we check once again. That way
-	// we don't create two instances of the same stub, but we also ensure that we return quickly if the instance
-	// _does_ already exist.
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
+	// Join creation for this stub without serializing unrelated VMs behind its
+	// database reads and controller setup.
+	loaded, err, _ := ps.instanceLoads.Do(stubId, func() (any, error) {
+		return ps.createPodInstance(stubId, options...)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return loaded.(*podInstance), nil
+}
 
-	instance, exists = ps.podInstances.Get(stubId)
+func (ps *GenericPodService) createPodInstance(stubId string, options ...func(*podInstance)) (*podInstance, error) {
+	ps.mu.Lock()
+	instance, exists := ps.podInstances.Get(stubId)
 	if exists && instance.Ctx.Err() == nil {
+		ps.mu.Unlock()
 		return instance, nil
 	}
 	if exists {
 		ps.podInstances.Delete(stubId)
 	}
+	ps.mu.Unlock()
 
 	stub, err := ps.backendRepo.GetStubByExternalId(ps.ctx, stubId)
 	if err != nil {
@@ -372,7 +380,9 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 		instance.EntryPoint = instance.StubConfig.EntryPoint
 	}
 
+	ps.mu.Lock()
 	ps.podInstances.Set(stubId, instance)
+	ps.mu.Unlock()
 
 	// Monitor and then clean up the instance once it's done
 	go instance.Monitor()
