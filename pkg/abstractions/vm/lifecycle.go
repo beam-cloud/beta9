@@ -37,6 +37,10 @@ func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 }
 
 func (s *Service) prepare(ctx context.Context, v *types.VM) error {
+	return s.prepareStub(ctx, v, nil)
+}
+
+func (s *Service) prepareStub(ctx context.Context, v *types.VM, persist func(types.Stub) error) error {
 	if v.StubID != "" {
 		return nil
 	}
@@ -99,7 +103,13 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		req.Pool = &pb.PoolConfig{Name: v.Spec.Pool}
 	}
 
-	resp, err := s.gateway.GetOrCreateStub(ctx, req)
+	var resp *pb.GetOrCreateStubResponse
+	var err error
+	if persist == nil {
+		resp, err = s.gateway.GetOrCreateStub(ctx, req)
+	} else {
+		resp, err = s.gateway.CreateVMStub(ctx, req, persist)
+	}
 	if err != nil {
 		return err
 	}
@@ -171,7 +181,11 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		return err
 	}
 
-	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
+	return s.run(ctx, info, v)
+}
+
+func (s *Service) run(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
+	err := s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
 			v.ContainerID = ""

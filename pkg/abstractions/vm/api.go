@@ -441,12 +441,19 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		v.Spec.ImageID = verified.ImageId
 	}
 
-	// Hold the lifecycle lock before publishing the row to the reconciler.
-	if err := s.createVMRecord(ctx, v); err != nil {
+	// Validate once, then publish the root, stub and first runtime identity in
+	// one transaction while holding the lifecycle lock. No compute is queued
+	// until all three records are durable.
+	if err := s.prepareStub(ctx, v, func(stub types.Stub) error {
+		v.StubID = stub.ExternalId
+		v.Generation = 1
+		v.ContainerID = types.StubTypeVM + "-" + v.StubID + "-" + randomHexID()[:8]
+		return s.createVMRecord(ctx, v, stub)
+	}); err != nil {
 		return nil, err
 	}
 
-	if err := s.start(ctx, info, v); err != nil {
+	if err := s.run(ctx, info, v); err != nil {
 		s.failed(ctx, v, err)
 		return v, nil
 	}

@@ -12,6 +12,7 @@ import (
 
 type VMRepository interface {
 	CreateVM(context.Context, *types.VM) error
+	CreateVMWithStub(context.Context, *types.VM, types.Stub) error
 	SaveVM(context.Context, *types.VM) error
 	GetVM(context.Context, uint, string) (*types.VM, error)
 	GetVMByHandle(context.Context, string) (*types.VM, error)
@@ -39,6 +40,53 @@ func (r *PostgresBackendRepository) CreateVM(ctx context.Context, vm *types.VM) 
 	}
 
 	_, err = r.client.ExecContext(ctx, `INSERT INTO persistent_vm (id,workspace_id,workspace_external_id,token_id,name,handle,data,last_active_at,public_ipv6) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::inet)`, vm.ID, vm.WorkspaceID, vm.WorkspaceExternalID, vm.TokenID, vm.Name, vm.Handle, data, vm.LastActiveAt, vm.PublicIPv6)
+	return err
+}
+
+// CreateVMWithStub publishes a complete first launch in one commit. A failed
+// name, address or stub write must not leave a root disk or a partial VM.
+func (r *PostgresBackendRepository) CreateVMWithStub(ctx context.Context, vm *types.VM, stub types.Stub) error {
+	config, err := stub.UnmarshalConfig()
+	if err != nil {
+		return err
+	}
+	if config == nil || stub.Type != types.StubType(types.StubTypeVM) || stub.WorkspaceId != vm.WorkspaceID || stub.ExternalId != vm.StubID || vm.ContainerID == "" {
+		return fmt.Errorf("VM and stub launch identities do not match")
+	}
+	var root *types.Disk
+	for _, disk := range config.Disks {
+		if disk == nil || disk.MountPath != types.DurableDiskRootMountPath {
+			continue
+		}
+		if root != nil || disk.Name != vm.ID || disk.Driver != types.DurableDiskDriverQcow || disk.Filesystem != "ext4" || disk.ReadOnly {
+			return fmt.Errorf("VM requires its own writable qcow root disk")
+		}
+		if _, err := configuredDiskBytes(disk.Size); err != nil {
+			return err
+		}
+		root = &types.Disk{Name: disk.Name, Size: disk.Size, Driver: disk.Driver, Filesystem: disk.Filesystem}
+	}
+	if root == nil {
+		return fmt.Errorf("VM root disk is missing")
+	}
+	data, err := json.Marshal(vm)
+	if err != nil {
+		return err
+	}
+	_, err = r.client.ExecContext(ctx, `
+	WITH root AS (
+		INSERT INTO disk (workspace_id,name,size,filesystem,driver,mount_path)
+		VALUES ($2,$1,$10,'ext4','qcow','/') RETURNING id
+	), launch_stub AS (
+		INSERT INTO stub (external_id,name,type,config,object_id,workspace_id,app_id)
+		SELECT $11,$12,'vm',$13::json,$14,$2,$15 FROM root RETURNING id
+	), activity AS (
+		UPDATE app SET updated_at=NOW() WHERE id=$15 AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')
+	)
+	INSERT INTO persistent_vm (id,workspace_id,workspace_external_id,token_id,name,handle,data,last_active_at,public_ipv6)
+	SELECT $1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::inet FROM launch_stub`,
+		vm.ID, vm.WorkspaceID, vm.WorkspaceExternalID, vm.TokenID, vm.Name, vm.Handle, data, vm.LastActiveAt, vm.PublicIPv6,
+		root.Size, stub.ExternalId, stub.Name, stub.Config, stub.ObjectId, stub.AppId)
 	return err
 }
 

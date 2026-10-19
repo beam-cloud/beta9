@@ -176,7 +176,7 @@ type networkVMStore struct {
 	touchCalls int
 }
 
-func (r *networkVMStore) CreateVM(ctx context.Context, v *types.VM) error {
+func (r *networkVMStore) CreateVMWithStub(ctx context.Context, v *types.VM, _ types.Stub) error {
 	return r.SaveVM(ctx, v)
 }
 
@@ -199,7 +199,7 @@ func TestVMCreationReservesAddressInInitialWrite(t *testing.T) {
 			s.publicNetwork, err = parsePublicVMNetwork(publicNetworkConfig())
 			require.NoError(t, err)
 			s.publicNetwork.repo = unavailableVMAddresses{}
-			err = s.createVMRecord(context.Background(), v)
+			err = s.createVMRecord(context.Background(), v, types.Stub{})
 			require.Equal(t, test.writes, store.saveCalls)
 			if test.name == "name collision" {
 				require.ErrorIs(t, err, test.failure)

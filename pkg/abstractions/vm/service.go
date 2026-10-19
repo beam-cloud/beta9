@@ -26,6 +26,7 @@ type Runtime interface {
 
 type Gateway interface {
 	GetOrCreateStub(context.Context, *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error)
+	CreateVMStub(context.Context, *pb.GetOrCreateStubRequest, func(types.Stub) error) (*pb.GetOrCreateStubResponse, error)
 	StopContainer(context.Context, *pb.StopContainerRequest) (*pb.StopContainerResponse, error)
 }
 

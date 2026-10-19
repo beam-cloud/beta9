@@ -31,6 +31,9 @@ type vmStore struct {
 }
 
 func (r *vmStore) CreateVM(ctx context.Context, v *types.VM) error { return r.SaveVM(ctx, v) }
+func (r *vmStore) CreateVMWithStub(ctx context.Context, v *types.VM, _ types.Stub) error {
+	return r.CreateVM(ctx, v)
+}
 func (r *vmStore) SaveVM(_ context.Context, v *types.VM) error {
 	copy := *v
 	copy.UpdatedAt = time.Now()
@@ -103,7 +106,7 @@ func (r *createRaceStore) LockVM(context.Context, string) (func(), error) {
 	return func() { r.locked = false }, nil
 }
 
-func (r *createRaceStore) CreateVM(ctx context.Context, v *types.VM) error {
+func (r *createRaceStore) CreateVMWithStub(ctx context.Context, v *types.VM, _ types.Stub) error {
 	if err := r.vmStore.CreateVM(ctx, v); err != nil {
 		return err
 	}
@@ -124,6 +127,60 @@ func TestCreatePreventsReconcilerClaimingPublishedVM(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, v.ContainerID)
 	require.False(t, store.locked)
+}
+
+type atomicLaunchStore struct {
+	*vmStore
+	creates int
+	saves   int
+	fail    bool
+}
+
+func (r *atomicLaunchStore) CreateVMWithStub(ctx context.Context, v *types.VM, stub types.Stub) error {
+	r.creates++
+	if r.fail {
+		return fmt.Errorf("atomic creation unavailable")
+	}
+	if stub.ExternalId != v.StubID || v.ContainerID == "" || v.Generation != 1 || v.LaunchAttempts != 1 {
+		return fmt.Errorf("first launch identity is incomplete")
+	}
+	return r.vmStore.CreateVM(ctx, v)
+}
+
+func (r *atomicLaunchStore) SaveVM(ctx context.Context, v *types.VM) error {
+	r.saves++
+	return r.vmStore.SaveVM(ctx, v)
+}
+
+func TestCreateCommitsLaunchOnceBeforeScheduling(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			s, _, info, runtime, _ := fixture()
+			store := &atomicLaunchStore{vmStore: s.repo.(*vmStore), fail: fail}
+			s.repo = store
+			requestID := uuid.NewString()
+			spec := types.VMSpec{ImageID: "base"}
+			ctx := auth.ContextWithAuthInfo(context.Background(), info)
+			v, err := s.createVMWithRequest(ctx, info, "atomic-vm", spec, nil, requestID)
+			require.Equal(t, 1, store.creates)
+			require.Zero(t, store.saves, "creation must not save a second launch identity")
+			if fail {
+				require.ErrorContains(t, err, "atomic creation unavailable")
+				require.Nil(t, v)
+				require.Empty(t, runtime.requests)
+				require.NotContains(t, store.rows, vmID(info.Workspace.Id, requestID))
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, v.ContainerID, store.rows[v.ID].ContainerID)
+			require.Equal(t, []string{v.ContainerID}, runtime.requests)
+			again, err := s.createVMWithRequest(ctx, info, "atomic-vm", spec, nil, requestID)
+			require.NoError(t, err)
+			require.Equal(t, v.ContainerID, again.ContainerID)
+			require.Equal(t, 1, store.creates)
+			require.Len(t, runtime.requests, 1, "replay must not enqueue again")
+		})
+	}
 }
 func (r *vmStore) CreateVMArtifact(_ context.Context, _ uint, a *types.VMArtifact) error {
 	if r.artifactError {
@@ -365,6 +422,16 @@ type vmGateway struct {
 func (g *vmGateway) GetOrCreateStub(_ context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	g.stub = in
 	return &pb.GetOrCreateStubResponse{Ok: true, StubId: uuid.NewString()}, nil
+}
+func (g *vmGateway) CreateVMStub(ctx context.Context, in *pb.GetOrCreateStubRequest, persist func(types.Stub) error) (*pb.GetOrCreateStubResponse, error) {
+	r, err := g.GetOrCreateStub(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if err := persist(types.Stub{ExternalId: r.StubId}); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 func (g *vmGateway) StopContainer(_ context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {
 	g.stops++

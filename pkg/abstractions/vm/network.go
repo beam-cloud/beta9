@@ -126,13 +126,13 @@ func (s *Service) ensurePublicIPv6(ctx context.Context, v *types.VM) error {
 
 // New VMs reserve their address in the initial insert, using the same unique
 // index as reconciliation. No separate allocation write is needed at launch.
-func (s *Service) createVMRecord(ctx context.Context, v *types.VM) error {
+func (s *Service) createVMRecord(ctx context.Context, v *types.VM, stub types.Stub) error {
 	if s.publicNetwork == nil {
-		return s.repo.CreateVM(ctx, v)
+		return s.repo.CreateVMWithStub(ctx, v, stub)
 	}
 	return s.reservePublicIPv6(v, func(candidate string) (string, error) {
 		v.PublicIPv6 = candidate
-		if err := s.repo.CreateVM(ctx, v); err != nil {
+		if err := s.repo.CreateVMWithStub(ctx, v, stub); err != nil {
 			v.PublicIPv6 = ""
 			return "", err
 		}
