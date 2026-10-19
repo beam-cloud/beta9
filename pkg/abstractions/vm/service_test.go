@@ -70,6 +70,9 @@ func (r *vmStore) ListVMsToReconcile(ctx context.Context, _ bool) ([]*types.VM, 
 	return r.ListVMs(ctx, 0)
 }
 func (r *vmStore) LockVM(context.Context, string) (func(), error) { return func() {}, nil }
+
+func (r *vmStore) TryLockVM(ctx context.Context, id string) (func(), error) { return r.LockVM(ctx, id) }
+
 func (r *vmStore) TouchVM(_ context.Context, id string) error {
 	r.rows[id].LastActiveAt = time.Now()
 	return nil

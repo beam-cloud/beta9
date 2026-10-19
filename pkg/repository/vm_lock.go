@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"sync"
@@ -18,7 +19,7 @@ import (
 type vmLockSession struct {
 	gate chan struct{}
 	conn *sqlx.Conn
-	held map[string]bool
+	held map[string]chan struct{}
 }
 
 func (s *vmLockSession) discard() {
@@ -41,6 +42,7 @@ func (s *vmLockSession) release(id string, conn *sqlx.Conn) {
 			s.discard()
 		}
 	}
+	close(s.held[id])
 	delete(s.held, id)
 	if len(s.held) == 0 && s.conn != nil {
 		s.conn.Close()
@@ -48,11 +50,46 @@ func (s *vmLockSession) release(id string, conn *sqlx.Conn) {
 	}
 }
 
-// A session advisory lock fences lifecycle operations across gateway replicas.
-// The hash and namespace are shared with older gateways during rolling deploys.
-// Sessions close when their last lock is released; PostgreSQL also releases all
-// their locks when a gateway dies. Persisted intent remains recoverable.
+type vmOperationBusy struct {
+	released <-chan struct{}
+}
+
+func (*vmOperationBusy) Error() string { return "VM operation already in progress" }
+
+// LockVM queues user operations behind an existing lifecycle operation without
+// holding a connection or blocking other VMs on the shared lock session.
 func (r *PostgresBackendRepository) LockVM(ctx context.Context, id string) (func(), error) {
+	for {
+		unlock, err := r.TryLockVM(ctx, id)
+		var busy *vmOperationBusy
+		if !errors.As(err, &busy) {
+			return unlock, err
+		}
+		if busy.released != nil {
+			select {
+			case <-busy.released:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		// Another gateway owns the PostgreSQL lock. A blocking SQL lock on
+		// this multiplexed session would also prevent its owners unlocking.
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// TryLockVM lets background reconciliation skip busy VMs. Session advisory
+// locks fence lifecycle operations across gateway replicas. Sessions close
+// when their last lock is released; PostgreSQL also releases all
+// their locks when a gateway dies. Persisted intent remains recoverable.
+func (r *PostgresBackendRepository) TryLockVM(ctx context.Context, id string) (func(), error) {
 	r.vmLocksOnce.Do(func() {
 		count := 4
 		if max := r.client.Stats().MaxOpenConnections; max > 0 {
@@ -60,7 +97,7 @@ func (r *PostgresBackendRepository) LockVM(ctx context.Context, id string) (func
 		}
 		r.vmLocks = make([]vmLockSession, count)
 		for i := range r.vmLocks {
-			r.vmLocks[i] = vmLockSession{gate: make(chan struct{}, 1), held: make(map[string]bool)}
+			r.vmLocks[i] = vmLockSession{gate: make(chan struct{}, 1), held: make(map[string]chan struct{})}
 		}
 	})
 	if len(r.vmLocks) == 0 {
@@ -76,8 +113,8 @@ func (r *PostgresBackendRepository) LockVM(ctx context.Context, id string) (func
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if s.held[id] {
-		return nil, fmt.Errorf("VM operation already in progress")
+	if released := s.held[id]; released != nil {
+		return nil, &vmOperationBusy{released: released}
 	}
 	if s.conn == nil {
 		conn, err := r.client.Connx(ctx)
@@ -102,9 +139,9 @@ func (r *PostgresBackendRepository) LockVM(ctx context.Context, id string) (func
 			s.conn.Close()
 			s.conn = nil
 		}
-		return nil, fmt.Errorf("VM operation already in progress")
+		return nil, &vmOperationBusy{}
 	}
-	s.held[id] = true
+	s.held[id] = make(chan struct{})
 	conn := s.conn
 	if err := ctx.Err(); err != nil {
 		s.release(id, conn)
