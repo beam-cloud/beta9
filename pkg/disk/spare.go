@@ -195,7 +195,11 @@ func (m *Manager) takeSpare(size int64, export ExportMode) *Volume {
 func (m *Manager) rememberSpareSize(size int64) {
 	m.spareSizesMu.Lock()
 	defer m.spareSizesMu.Unlock()
-	sizes := append([]int64{size}, slices.DeleteFunc(m.rememberedSpareSizes(), func(s int64) bool { return s == size })...)
+	sizes := m.rememberedSpareSizes()
+	if len(sizes) > 0 && sizes[0] == size {
+		return
+	}
+	sizes = append([]int64{size}, slices.DeleteFunc(sizes, func(s int64) bool { return s == size })...)
 	if len(sizes) > spareSizesKept {
 		sizes = sizes[:spareSizesKept]
 	}

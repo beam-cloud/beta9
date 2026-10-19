@@ -498,6 +498,38 @@ func TestAdoptIndexResolvesUnderRelativeRoot(t *testing.T) {
 	manager.destroySpares()
 }
 
+func TestRememberSpareSizePersistsOnlyChanges(t *testing.T) {
+	manager, _ := newSpareTestManager(t)
+	if err := os.MkdirAll(manager.root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager.rememberSpareSize(1 << 30)
+	manager.rememberSpareSize(2 << 30)
+	path := filepath.Join(manager.root, spareSizesFile)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		manager.rememberSpareSize(2 << 30)
+	}
+	after, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("unchanged sizes replaced the shared file: %v", err)
+	}
+	manager.rememberSpareSize(1 << 30)
+	if got := manager.rememberedSpareSizes(); !slices.Equal(got, []int64{1 << 30, 2 << 30}) {
+		t.Fatalf("most recent size was not persisted: %v", got)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	manager.rememberSpareSize(1 << 30)
+	if got := manager.rememberedSpareSizes(); !slices.Equal(got, []int64{1 << 30}) {
+		t.Fatalf("missing size record was not rebuilt: %v", got)
+	}
+}
+
 func TestRememberSpareSizeSurvivesConcurrentAttaches(t *testing.T) {
 	manager, _ := newSpareTestManager(t)
 	if err := os.MkdirAll(manager.root, 0o700); err != nil {
