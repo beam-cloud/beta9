@@ -144,9 +144,15 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		return err
 	}
 
-	v.LaunchAttempts++
-	if err := s.repo.SaveVM(ctx, v); err != nil {
-		return err
+	// Creation already persisted the first attempt. Before it has a runtime
+	// identity, crash recovery continues that attempt; known failures and
+	// later launches are counted durably before trying again.
+	initialLaunch := v.Generation == 0 && v.LaunchAttempts == 1 && v.Error == ""
+	if !initialLaunch {
+		v.LaunchAttempts++
+		if err := s.repo.SaveVM(ctx, v); err != nil {
+			return err
+		}
 	}
 
 	if err := s.prepare(ctx, v); err != nil {

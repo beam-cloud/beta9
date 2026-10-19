@@ -570,13 +570,45 @@ func TestPrepareForcesCPUVMAndIndependentRoot(t *testing.T) {
 type launchPersistenceStore struct {
 	*vmStore
 	failRuntimeSave bool
+	attemptSaves    int
 }
 
 func (r *launchPersistenceStore) SaveVM(ctx context.Context, v *types.VM) error {
+	if v.ContainerID == "" {
+		r.attemptSaves++
+	}
 	if r.failRuntimeSave && v.ContainerID != "" {
 		return errors.New("runtime identity persistence unavailable")
 	}
 	return r.vmStore.SaveVM(ctx, v)
+}
+
+func TestInitialLaunchReusesDurableCreationAttempt(t *testing.T) {
+	for _, knownFailure := range []string{"", "stub preparation failed"} {
+		t.Run(knownFailure, func(t *testing.T) {
+			s, v, info, runtime, _ := fixture()
+			delete(runtime.containers.states, v.ContainerID)
+			v.ContainerID, v.StubID, v.Error = "", "", knownFailure
+			v.Generation, v.LaunchAttempts = 0, 1
+			store := &launchPersistenceStore{vmStore: s.repo.(*vmStore), failRuntimeSave: true}
+			s.repo = store
+			ctx := auth.ContextWithAuthInfo(context.Background(), info)
+			require.NoError(t, store.CreateVM(ctx, v))
+			require.ErrorContains(t, s.start(ctx, info, v), "identity persistence unavailable")
+			require.Empty(t, runtime.requests, "compute must wait for both launch identities to persist")
+			stored, err := store.GetVM(ctx, info.Workspace.Id, v.ID)
+			require.NoError(t, err)
+			require.Empty(t, stored.ContainerID)
+			require.Empty(t, stored.StubID)
+			if knownFailure == "" {
+				require.Zero(t, store.attemptSaves)
+				require.Equal(t, 1, stored.LaunchAttempts)
+			} else {
+				require.Equal(t, 1, store.attemptSaves)
+				require.Equal(t, 2, stored.LaunchAttempts)
+			}
+		})
+	}
 }
 
 type persistedLaunchRuntime struct {

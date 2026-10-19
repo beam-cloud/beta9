@@ -397,6 +397,7 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		CreatedAt:           now,
 		UpdatedAt:           now,
 		LastActiveAt:        now,
+		LaunchAttempts:      1,
 	}
 
 	unlock, err := s.repo.LockVM(ctx, id)
