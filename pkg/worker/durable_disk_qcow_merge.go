@@ -23,7 +23,7 @@ var errQcowMergeStopped = errors.New("qcow disk is detaching")
 type qcowMerge struct{ stop context.CancelCauseFunc }
 
 // scheduleQcowMerge merges a volume's layers in the background unless a merge
-// is already running for it.
+// is already running for it or its volume is detaching.
 func (s *Worker) scheduleQcowMerge(request *types.ContainerRequest, mount *types.Mount, key string) {
 	ctx, stop := context.WithCancelCause(s.durableDiskContext(nil))
 	merge := &qcowMerge{stop: stop}
@@ -44,11 +44,13 @@ func (s *Worker) scheduleQcowMerge(request *types.ContainerRequest, mount *types
 }
 
 // stopQcowMerge cancels a volume's merge, which would hold the disk lock its
-// final snapshot needs.
-func (s *Worker) stopQcowMerge(key string) {
-	if merge, ok := s.qcowMerges.Load(key); ok {
+// final snapshot needs, and keeps another from starting until resume runs.
+func (s *Worker) stopQcowMerge(key string) (resume func()) {
+	detaching := &qcowMerge{stop: func(error) {}}
+	if merge, ok := s.qcowMerges.Swap(key, detaching); ok {
 		merge.(*qcowMerge).stop(errQcowMergeStopped)
 	}
+	return func() { s.qcowMerges.CompareAndDelete(key, detaching) }
 }
 
 // mergeQcowLayers merges the newest layers, unless an earlier merge is still
@@ -106,7 +108,7 @@ type qcowMergeVolume interface {
 // keep their generations except the last, which outranks the disk's head, so
 // readers move to the new chain at once. The old rows stay valid for memory
 // checkpoints paired with them.
-func (s *Worker) publishQcowMerge(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, volume qcowMergeVolume, store *durableDiskSnapshotBucketStore, key string, merged disk.PublishedLayer, layer *types.DiskSnapshotFile) error {
+func (s *Worker) publishQcowMerge(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, volume qcowMergeVolume, store *durableDiskSnapshotBucketStore, key string, merged disk.PublishedLayer, layer *types.DiskSnapshotFile) (err error) {
 	layers, _ := volume.Published()
 	chain := s.qcowChain(key)
 	first, ok := qcowMergedLayer(layers, chain)
@@ -127,6 +129,15 @@ func (s *Worker) publishQcowMerge(ctx context.Context, request *types.ContainerR
 		parentID = chain[first-1].row.ExternalId
 	}
 	republished := slices.Clone(chain[:first])
+	defer func() {
+		// A retry creates its own rows, and the last may already outrank the
+		// disk's head.
+		if err != nil {
+			for _, entry := range slices.Backward(republished[first:]) {
+				s.withdrawQcowSnapshot(ctx, request, entry.row, err)
+			}
+		}
+	}()
 	renamed := make(map[string]string)
 	replaced := chain[first+len(chain)-len(layers):]
 	for i, entry := range replaced {

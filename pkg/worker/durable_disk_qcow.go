@@ -774,11 +774,12 @@ func sealQcowVolume(ctx context.Context, volume qcowSnapshotVolume, force bool) 
 
 const qcowSnapshotWithdrawTimeout = 30 * time.Second
 
-// withdrawQcowSnapshot marks failed a generation its journal never recorded.
-// As an available row it would stand as the disk's latest generation, and
-// every later publish would fork the chain around it. A checkpoint that did
-// commit despite its error stays restorable: attach looks up the journal's
-// snapshot by ID, whatever its status.
+// withdrawQcowSnapshot marks failed a generation its journal never recorded,
+// or one a merge created before failing to publish. As an available row it
+// could stand as the disk's latest generation, and every later publish would
+// fork the chain around it. A checkpoint that did commit despite its error
+// stays restorable: attach looks up the journal's snapshot by ID, whatever
+// its status.
 func (s *Worker) withdrawQcowSnapshot(ctx context.Context, request *types.ContainerRequest, row *types.DiskSnapshot, cause error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qcowSnapshotWithdrawTimeout)
 	defer cancel()
@@ -789,7 +790,7 @@ func (s *Worker) withdrawQcowSnapshot(ctx context.Context, request *types.Contai
 	}))
 	if err != nil {
 		log.Warn().Err(err).Str("container_id", request.ContainerId).Str("disk", row.DiskName).
-			Str("snapshot_id", row.ExternalId).Msg("failed to withdraw a snapshot its journal never recorded")
+			Str("snapshot_id", row.ExternalId).Msg("failed to withdraw a qcow snapshot")
 	}
 }
 

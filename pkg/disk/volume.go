@@ -885,17 +885,25 @@ func (s *volumeState) committedRun(live map[string]bool) (base, top int, err err
 }
 
 // Republished records that a merge republished generations under new IDs,
-// old to new. An attach naming an old ID still reuses the local chain.
+// old to new. An attach naming an old ID still reuses the local chain. A
+// failed save changes nothing.
 func (v *Volume) Republished(ids map[string]string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	for i, layer := range v.state.Chain {
+	state := *v.state
+	state.Chain = slices.Clone(state.Chain)
+	state.Superseded = slices.Clone(state.Superseded)
+	for i, layer := range state.Chain {
 		if id, ok := ids[layer.SnapshotID]; ok {
-			v.state.supersede(layer.SnapshotID, id)
-			v.state.Chain[i].SnapshotID = id
+			state.supersede(layer.SnapshotID, id)
+			state.Chain[i].SnapshotID = id
 		}
 	}
-	return saveVolumeState(v.dir, v.state)
+	if err := saveVolumeState(v.dir, &state); err != nil {
+		return err
+	}
+	*v.state = state
+	return nil
 }
 
 // detach unmounts, disconnects, and stops the daemon. Layer files and state

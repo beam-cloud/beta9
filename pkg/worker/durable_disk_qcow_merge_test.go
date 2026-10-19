@@ -90,7 +90,9 @@ type qcowMergeFake struct {
 	*fakeBackendRepoClient
 	layers  []disk.PublishedLayer
 	created []*pb.DiskSnapshot
+	failed  []string
 	renamed map[string]string
+	failAt  int // the CreateDiskSnapshot call that fails, from 1
 }
 
 func (f *qcowMergeFake) Published() ([]disk.PublishedLayer, bool) { return f.layers, false }
@@ -100,9 +102,16 @@ func (f *qcowMergeFake) Republished(ids map[string]string) error {
 	return nil
 }
 func (f *qcowMergeFake) CreateDiskSnapshot(_ context.Context, in *pb.CreateDiskSnapshotRequest, _ ...grpc.CallOption) (*pb.CreateDiskSnapshotResponse, error) {
+	if len(f.created)+1 == f.failAt {
+		return &pb.CreateDiskSnapshotResponse{ErrorMsg: "repository unavailable"}, nil
+	}
 	in.Snapshot.ExternalId = fmt.Sprintf("new-%d", len(f.created))
 	f.created = append(f.created, in.Snapshot)
 	return &pb.CreateDiskSnapshotResponse{Ok: true, Snapshot: in.Snapshot}, nil
+}
+func (f *qcowMergeFake) FailDiskSnapshot(_ context.Context, in *pb.FailDiskSnapshotRequest, _ ...grpc.CallOption) (*pb.FailDiskSnapshotResponse, error) {
+	f.failed = append(f.failed, in.SnapshotId)
+	return &pb.FailDiskSnapshotResponse{Ok: true}, nil
 }
 
 // The published chain is r0 to r4; local layer 1 holds r1 to r3, merged.
@@ -115,8 +124,9 @@ func TestPublishQcowMerge(t *testing.T) {
 	store := &durableDiskSnapshotBucketStore{client: client, bucket: "disks"}
 	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "disk"}}
 	layer := &types.DiskSnapshotFile{Path: disk.LayerFileName, Chunks: []types.DiskSnapshotChunk{{Digest: "sha256:merged"}}}
+	var failAt int
 	publish := func(latest string, local ...string) (*Worker, *qcowMergeFake, error) {
-		fake := &qcowMergeFake{fakeBackendRepoClient: &fakeBackendRepoClient{latestSnapshot: &pb.DiskSnapshot{ExternalId: latest, Generation: 5}}, layers: qcowTestLayers(local...)}
+		fake := &qcowMergeFake{fakeBackendRepoClient: &fakeBackendRepoClient{latestSnapshot: &pb.DiskSnapshot{ExternalId: latest, Generation: 5}}, layers: qcowTestLayers(local...), failAt: failAt}
 		worker := &Worker{backendRepoClient: fake}
 		worker.qcowChains.Store("disk", qcowTestChain(1, 1, 1, 1, 1))
 		err := worker.publishQcowMerge(context.Background(), &types.ContainerRequest{}, mount, fake, store, "disk", qcowTestLayers("r3")[0], layer)
@@ -134,6 +144,7 @@ func TestPublishQcowMerge(t *testing.T) {
 	require.Equal(t, int64(4), fake.created[0].Generation, "the merged layer keeps r3's generation")
 	require.Greater(t, fake.created[1].Generation, int64(5), "the copy of r4 outranks it")
 	require.Equal(t, map[string]string{"r3": "new-0", "r4": "new-1"}, fake.renamed)
+	require.Empty(t, fake.failed)
 
 	_, fake, err = publish("elsewhere", "r0", "r3", "r4")
 	require.ErrorContains(t, err, "did not publish")
@@ -142,4 +153,26 @@ func TestPublishQcowMerge(t *testing.T) {
 	_, fake, err = publish("r4", "r4") // compacted after the merge
 	require.NoError(t, err)
 	require.Empty(t, fake.created)
+
+	failAt = 2 // the copy of r4
+	worker, fake, err = publish("r4", "r0", "r3", "r4")
+	require.ErrorContains(t, err, "repository unavailable")
+	require.Equal(t, []string{"new-0"}, fake.failed, "the merged layer's row is withdrawn")
+	require.Nil(t, fake.renamed)
+	require.Len(t, worker.qcowChain("disk"), 5)
+}
+
+func TestStoppedQcowMergeKeepsAnotherFromStarting(t *testing.T) {
+	var worker Worker
+	var stopped error
+	running := &qcowMerge{stop: func(cause error) { stopped = cause }}
+	worker.qcowMerges.Store("disk", running)
+	resume := worker.stopQcowMerge("disk")
+	require.ErrorIs(t, stopped, errQcowMergeStopped)
+
+	worker.qcowMerges.CompareAndDelete("disk", running) // the stopped merge exits
+	worker.scheduleQcowMerge(&types.ContainerRequest{}, &types.Mount{}, "disk")
+	resume()
+	_, scheduled := worker.qcowMerges.Load("disk")
+	require.False(t, scheduled, "no merge starts while the disk detaches")
 }

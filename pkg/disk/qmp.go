@@ -3,6 +3,7 @@ package disk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -49,8 +50,13 @@ func dialQMP(ctx context.Context, socketPath string) (*qmpClient, error) {
 	return client, nil
 }
 
+// Close is idempotent, so a caller can free the daemon's one monitor
+// connection before its deferred Close runs.
 func (c *qmpClient) Close() error {
-	return c.conn.Close()
+	if err := c.conn.Close(); !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
 }
 
 func (c *qmpClient) decode(ctx context.Context, v any) error {
