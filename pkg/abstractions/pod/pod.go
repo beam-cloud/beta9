@@ -320,9 +320,8 @@ func (ps *GenericPodService) createPodInstance(stubId string, options ...func(*p
 		return nil, errors.New("invalid stub id")
 	}
 
-	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
-	err = json.Unmarshal([]byte(stub.Config), stubConfig)
-	if err != nil {
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stub.Config), stubConfig); err != nil {
 		return nil, err
 	}
 

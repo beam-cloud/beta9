@@ -381,7 +381,10 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	}
 	phases.Mark("qsd")
 
-	cleanupOnError := func() {
+	defer func() {
+		if err == nil {
+			return
+		}
 		if v.nbd != nil {
 			_ = m.disconnectNBDDevice(context.Background(), v.nbd)
 			v.nbd = nil
@@ -391,20 +394,18 @@ func (v *Volume) start(ctx context.Context) (err error) {
 			v.journalNBD = nil
 		}
 		_ = m.stopQSD(context.Background(), qsd)
-	}
+	}()
 
 	nbdSocket := qsd.nbdSocket
 	if v.journal != nil {
 		nbdSocket = filepath.Join(m.runtimeDir(state.Key), "durable.sock")
 		v.journalNBD, err = startJournalNBD(ctx, nbdSocket, qsd.nbdSocket, v.journal)
 		if err != nil {
-			cleanupOnError()
 			return err
 		}
 	}
 	nbd, err := m.acquireNBDDevice(ctx, nbdSocket, state.VirtualSizeBytes)
 	if err != nil {
-		cleanupOnError()
 		return err
 	}
 	v.nbd = nbd
@@ -412,15 +413,12 @@ func (v *Volume) start(ctx context.Context) (err error) {
 
 	if freshDisk && v.journal != nil {
 		if err := m.formatExt4(ctx, nbd.Path); err != nil {
-			cleanupOnError()
 			return err
 		}
 		if _, err := m.run(ctx, "blockdev", "--flushbufs", nbd.Path); err != nil {
-			cleanupOnError()
 			return err
 		}
 		if err := v.journal.Initialize(ctx); err != nil {
-			cleanupOnError()
 			return err
 		}
 		state.Formatted = true
@@ -428,7 +426,6 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	}
 	if state.Mountpoint != "" {
 		if err := m.mountExt4(ctx, nbd.Path, state.Mountpoint, state.ReadOnly); err != nil {
-			cleanupOnError()
 			return err
 		}
 		if !freshDisk && !state.ReadOnly {
@@ -436,7 +433,6 @@ func (v *Volume) start(ctx context.Context) (err error) {
 			// Grow ext4 too; changing only the advertised block size leaves the old limit.
 			if _, err := m.run(ctx, "resize2fs", nbd.Path); err != nil {
 				_ = m.unmount(context.Background(), state.Mountpoint)
-				cleanupOnError()
 				return fmt.Errorf("grow filesystem for %s: %w", state.Key, err)
 			}
 		}
@@ -451,7 +447,6 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	state.NBDDevice = nbd.Path
 	if err := saveVolumeState(v.dir, state); err != nil {
 		_ = m.unmount(context.Background(), state.Mountpoint)
-		cleanupOnError()
 		return err
 	}
 	return nil

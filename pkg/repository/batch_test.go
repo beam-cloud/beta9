@@ -98,14 +98,14 @@ func TestCommitBatchSettlesBeforeReturningOnCancellation(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
-func TestOperationBatchSkipsCanceledWriteBeforeExecution(t *testing.T) {
+func TestOperationBatchSkipsCanceledRequestBeforeExecution(t *testing.T) {
 	var batch operationBatch[int, int]
 	ctx, cancel := context.WithCancel(context.Background())
 	request := batchRequest[int, int]{ctx: ctx, key: 1, result: make(chan batchResult[int], 1)}
 	batch.pending = append(batch.pending, request)
 	cancel()
 	batch.flush(func(context.Context, []int) (map[int]int, error) {
-		t.Fatal("a canceled write must not execute")
+		t.Fatal("a canceled request must not execute")
 		return nil, nil
 	})
 	require.ErrorIs(t, (<-request.result).err, context.Canceled)

@@ -28,21 +28,8 @@ type batchResult[V any] struct {
 
 func (b *operationBatch[K, V]) get(ctx context.Context, key K, load func(context.Context, []K) (map[K]V, error)) (V, error) {
 	var zero V
-	result, err := b.enqueue(ctx, key, load)
-	if err != nil {
-		return zero, err
-	}
-	select {
-	case <-ctx.Done():
-		return zero, ctx.Err()
-	case resolved := <-result:
-		return resolved.value, resolved.err
-	}
-}
-
-func (b *operationBatch[K, V]) enqueue(ctx context.Context, key K, load func(context.Context, []K) (map[K]V, error)) (<-chan batchResult[V], error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return zero, err
 	}
 	request := batchRequest[K, V]{ctx: ctx, key: key, result: make(chan batchResult[V], 1)}
 	b.mu.Lock()
@@ -51,7 +38,12 @@ func (b *operationBatch[K, V]) enqueue(ctx context.Context, key K, load func(con
 		time.AfterFunc(time.Millisecond, func() { b.flush(load) })
 	}
 	b.mu.Unlock()
-	return request.result, nil
+	select {
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case resolved := <-request.result:
+		return resolved.value, resolved.err
+	}
 }
 
 func (b *operationBatch[K, V]) flush(load func(context.Context, []K) (map[K]V, error)) {

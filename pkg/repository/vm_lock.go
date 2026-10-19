@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
-	"fmt"
 	"hash/crc32"
 	"sync"
 	"time"
@@ -173,7 +172,7 @@ func (r *PostgresBackendRepository) TryLockVM(ctx context.Context, id string) (f
 		}
 	})
 	if len(r.vmLocks) == 0 {
-		return nil, fmt.Errorf("VM lifecycle requires at least two database connections")
+		return nil, errors.New("VM lifecycle requires at least two database connections")
 	}
 	s := &r.vmLocks[crc32.ChecksumIEEE([]byte(id))%uint32(len(r.vmLocks))]
 	result, err := s.acquires.commit(ctx, struct{}{}, &vmLockAcquire{id: id}, s.acquire)
