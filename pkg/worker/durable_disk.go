@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -772,6 +773,16 @@ func durableDiskChunkPrefix(mount *types.Mount) string {
 func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerRequest, snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest, chainGeneration int64) {
 	if s == nil || s.cacheManager == nil || request == nil || snapshot == nil || manifest == nil {
 		return
+	}
+	if s.cacheManager.client != nil {
+		// The publishing/restoring worker already has these bytes. Retain them
+		// locally so a worker restart does not fetch every ancestor from S3.
+		if data, err := json.Marshal(manifest); err == nil {
+			hash := strings.TrimPrefix(snapshot.ManifestDigest, "sha256:")
+			if err := s.cacheManager.client.StoreLocalContent(s.ctx, hash, data); err != nil {
+				log.Debug().Err(err).Str("snapshot_id", snapshot.ExternalId).Msg("could not cache disk snapshot manifest locally")
+			}
+		}
 	}
 	reporter := s.cacheManager.ContentReporter()
 	if reporter == nil {

@@ -389,6 +389,26 @@ func (c *Client) ReadLocalContentInto(ctx context.Context, hash string, offset i
 	return 0, ErrContentNotFound
 }
 
+// StoreLocalContent retains verified content on this node without routing it
+// to a peer. Complete markers make it readable after a client restart.
+func (c *Client) StoreLocalContent(ctx context.Context, hash string, content []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(content)) != hash {
+		return errors.New("local cache content digest mismatch")
+	}
+	stores := c.preferredLocalStores()
+	if len(stores) == 0 {
+		return ErrHostNotFound
+	}
+	store := stores[0].store
+	if store.contentStatusForRead(hash, int64(len(content))) == contentStatusComplete {
+		return nil
+	}
+	return store.Add(ctx, hash, content)
+}
+
 func (c *Client) initLocalDiskStore(cfg Config, locality string) {
 	if cfg.Server.DiskCacheDir == "" || cfg.Server.PageSizeBytes <= 0 {
 		return

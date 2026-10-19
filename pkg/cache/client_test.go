@@ -989,6 +989,48 @@ func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
 	require.Equal(t, content, dst)
 }
 
+func TestLocalContentWriteSurvivesClientRestart(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t, 4096)
+	client := &Client{localDiskStore: store}
+	content := []byte(`{"format":"qcow.v1","files":[]}`)
+	hash := fmt.Sprintf("%x", sha256.Sum256(content))
+	require.NoError(t, client.StoreLocalContent(ctx, hash, content))
+	before, err := os.Stat(store.completeMarkerPath(hash))
+	require.NoError(t, err)
+	for range 100 {
+		require.NoError(t, client.StoreLocalContent(ctx, hash, content))
+	}
+	after, err := os.Stat(store.completeMarkerPath(hash))
+	require.NoError(t, err)
+	require.True(t, os.SameFile(before, after), "repeated reports must reuse complete content")
+
+	restarted, err := NewStore(ctx, &Host{HostId: "restarted"}, "test", NewMockCacheMetadataStore(), Config{Server: store.serverConfig})
+	require.NoError(t, err)
+	t.Cleanup(restarted.Cleanup)
+	client = &Client{localDiskStore: restarted}
+	dst := make([]byte, len(content))
+	n, err := client.ReadLocalContentInto(ctx, hash, 0, dst)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
+func TestLocalContentWriteRejectsInvalidDataWithoutRemoteFallback(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t, 4096)
+	client := &Client{localDiskStore: store}
+	content := []byte("snapshot manifest")
+	hash := fmt.Sprintf("%x", sha256.Sum256(content))
+	require.Error(t, client.StoreLocalContent(ctx, hash, []byte("corrupt")))
+	require.False(t, store.Exists(hash))
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorIs(t, client.StoreLocalContent(canceled, hash, content), context.Canceled)
+	require.False(t, store.Exists(hash))
+	require.ErrorIs(t, (&Client{}).StoreLocalContent(ctx, hash, content), ErrHostNotFound)
+}
+
 func TestLocalContentReadNeverDiscoversOrContactsRemoteHosts(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("durable-snapshot-chunk")
