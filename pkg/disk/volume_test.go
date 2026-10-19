@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeQMP is a scriptable QMP server on a unix socket.
@@ -34,6 +35,8 @@ type fakeQMP struct {
 	commitPolls int // query-jobs polls a commit job reports running before it concludes
 	commits     []fakeCommit
 	job         *fakeJob
+	cancels     int    // job-cancel calls
+	writable    string // node reported read-write
 }
 
 type fakeCommit struct{ device, top, base string }
@@ -115,7 +118,7 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			nodes := f.nodes.Load().([]string)
 			entries := make([]map[string]any, 0, len(nodes))
 			for _, node := range nodes {
-				entry := map[string]any{"node-name": node, "file": "", "backing_file_depth": 1}
+				entry := map[string]any{"node-name": node, "file": "", "backing_file_depth": 1, "drv": "qcow2", "ro": node != f.writable}
 				chain := f.images[node]
 				if len(chain) > 0 {
 					entry["backing_file_depth"] = len(chain) - 1
@@ -198,6 +201,14 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			default:
 				fmt.Fprintf(conn, `{"return":[{"id":%q,"type":"commit","status":"concluded"}]}`, job.id)
 			}
+		case types.QMPCommandJobCancel:
+			f.mu.Lock()
+			f.cancels++
+			if f.job != nil {
+				f.job.running, f.job.err = 0, "Operation canceled"
+			}
+			f.mu.Unlock()
+			fmt.Fprintf(conn, `{"return":{}}`)
 		case types.QMPCommandJobDismiss:
 			f.mu.Lock()
 			failed := f.failDismiss
@@ -1019,5 +1030,62 @@ func TestCompactRetainsRecoveryStateUntilJobDismissed(t *testing.T) {
 	defer server.mu.Unlock()
 	if server.job != nil || len(server.commits) != 1 {
 		t.Fatal("must reconcile the original commit")
+	}
+}
+
+// Merge folds the layers above first into a base the daemon holds read-only,
+// since reopening it so flushes the commit's writes. A retry adopts the
+// commit that a refused merge already ran.
+func TestMergeCommitsTheLayersAboveFirstIntoAReadOnlyBase(t *testing.T) {
+	volume, server, paths := newCompactVolume(t)
+	server.mu.Lock()
+	server.writable = "fmt-1"
+	server.mu.Unlock()
+	_, err := volume.Merge(context.Background(), 1)
+	require.ErrorContains(t, err, "writable")
+	require.Len(t, volume.state.Chain, 3)
+
+	server.mu.Lock()
+	server.writable = ""
+	server.mu.Unlock()
+	merged, err := volume.Merge(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, PublishedLayer{SnapshotID: "snap-c", Path: paths[1]}, merged)
+	require.Equal(t, []stateLayer{{SnapshotID: "snap-a", Path: paths[0]}, {SnapshotID: "snap-c", Path: paths[1]}}, volume.state.Chain)
+	require.NoFileExists(t, paths[2])
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	require.Equal(t, []fakeCommit{{device: "fmt-0", top: paths[2], base: paths[1]}}, server.commits)
+}
+
+// Unlike Compact's, a merge's commit has no caller to finish it later, so
+// cancelling the merge cancels the commit.
+func TestCancelledMergeCancelsItsCommit(t *testing.T) {
+	volume, server, _ := newCompactVolume(t)
+	server.mu.Lock()
+	server.commitPolls = 3
+	server.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := volume.Merge(WithProgress(ctx, cancel), 1)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, volume.state.Chain, 3)
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	require.Equal(t, 1, server.cancels)
+	require.Nil(t, server.job, "the cancelled job must be dismissed")
+}
+
+// Attaching a generation a merge republished, as a memory checkpoint paired
+// with it does, still reuses the local chain.
+func TestRepublishedGenerationsStayReusable(t *testing.T) {
+	volume, _, _ := newCompactVolume(t)
+	require.NoError(t, volume.Republished(map[string]string{"snap-c": "new-c"}))
+	require.NoError(t, volume.Republished(map[string]string{"new-c": "newer-c"}))
+	state, err := loadVolumeState(volume.dir)
+	require.NoError(t, err)
+	for _, id := range []string{"snap-c", "new-c", "newer-c"} {
+		require.True(t, reusableState(state, AttachSpec{Chain: []ChainLayer{{SnapshotID: id}}}), id)
 	}
 }

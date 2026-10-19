@@ -1319,7 +1319,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		// Runtimes that stop the container to checkpoint seal the disks while
 		// it is stopped, so disk and memory image are from the same instant.
 		sealDisks := func(sealCtx context.Context) error {
-			snapshots, sealErr := s.syncDurableDiskMounts(sealCtx, opts.Request, durableDiskSyncExplicit)
+			snapshots, sealErr := s.syncDurableDiskMounts(sealCtx, opts.Request, durableDiskSyncMemoryCheckpoint)
 			if sealErr != nil {
 				return sealErr
 			}
@@ -1395,7 +1395,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	// A checkpoint must never outrun its disks: capture every durable disk at
 	// the same boundary as the memory image so a restore pairs the two.
 	if !disksSealed {
-		if opts.DiskSnapshots, err = s.syncDurableDiskMounts(checkpointCtx, opts.Request, durableDiskSyncExplicit); err != nil {
+		if opts.DiskSnapshots, err = s.syncDurableDiskMounts(checkpointCtx, opts.Request, durableDiskSyncMemoryCheckpoint); err != nil {
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to snapshot durable disks with checkpoint: %v", err)
 			if opts.OutputLogger != nil {
 				opts.OutputLogger.Error(fmt.Sprintf("Failed to snapshot durable disks with checkpoint: %v", err))

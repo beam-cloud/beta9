@@ -28,5 +28,6 @@ const (
 	QMPCommandQueryNamedBlockNodes = "query-named-block-nodes"
 	QMPCommandBlockCommit          = "block-commit"
 	QMPCommandQueryJobs            = "query-jobs"
+	QMPCommandJobCancel            = "job-cancel"
 	QMPCommandJobDismiss           = "job-dismiss"
 )

@@ -46,6 +46,9 @@ type volumeState struct {
 	// HeadPath is the writable tip. Empty for read-only volumes.
 	HeadPath   string `json:"head_path,omitempty"`
 	PivotCount int    `json:"pivot_count"`
+	// Superseded holds generations a merge republished under new IDs, oldest
+	// first, so an attach naming one still reuses the local chain.
+	Superseded []supersededID `json:"superseded,omitempty"`
 
 	QSDPid    int    `json:"qsd_pid,omitempty"`
 	QMPSocket string `json:"qmp_socket,omitempty"`
@@ -73,6 +76,15 @@ type stateLayer struct {
 	Path            string `json:"path"`
 }
 
+type supersededID struct {
+	ID string `json:"id"`
+	By string `json:"by"`
+}
+
+// maxSuperseded bounds Superseded: an attach names the newest generation or
+// the one a memory checkpoint was paired with.
+const maxSuperseded = 64
+
 func (s *volumeState) publishedIDs() map[string]bool {
 	ids := make(map[string]bool, len(s.Chain))
 	for _, layer := range s.Chain {
@@ -80,7 +92,23 @@ func (s *volumeState) publishedIDs() map[string]bool {
 			ids[layer.SnapshotID] = true
 		}
 	}
+	for _, superseded := range s.Superseded {
+		if ids[superseded.By] {
+			ids[superseded.ID] = true
+		}
+	}
 	return ids
+}
+
+// supersede records that a merge republished generation id as by.
+func (s *volumeState) supersede(id, by string) {
+	for i := range s.Superseded {
+		if s.Superseded[i].By == id {
+			s.Superseded[i].By = by
+		}
+	}
+	s.Superseded = append(s.Superseded, supersededID{ID: id, By: by})
+	s.Superseded = s.Superseded[max(0, len(s.Superseded)-maxSuperseded):]
 }
 
 // lastLayerPath returns the backing parent for a new head: the newest pending

@@ -34,13 +34,15 @@ type backloggedQcowVolume struct {
 	pendingErr error
 	depth      int
 	writes     int
+	merges     bool
 	events     []string
 }
 
 func (v *backloggedQcowVolume) Unpublished(context.Context) ([]disk.SealedLayer, error) {
 	return v.pending, v.pendingErr
 }
-func (v *backloggedQcowVolume) Depth() int { return v.depth }
+func (v *backloggedQcowVolume) Depth() int      { return v.depth }
+func (v *backloggedQcowVolume) Journaled() bool { return !v.merges }
 func (v *backloggedQcowVolume) Compact(context.Context) error {
 	v.events = append(v.events, "compact")
 	if len(v.pending) == 0 {
@@ -125,6 +127,22 @@ func TestQcowSnapshotCompactsPublishedChainBeforeRetryingSeal(t *testing.T) {
 	volume := &backloggedQcowVolume{depth: disk.DefaultMaxChainDepth, writes: 1}
 	require.NoError(t, snapshotQcowVolume(context.Background(), volume, durableDiskSyncExplicit, false, volume.publish))
 	require.Equal(t, []string{"seal", "compact", "seal", "publish head-1"}, volume.events)
+}
+
+// Merges commit a disk's local layers, so a disk that merges keeps them until
+// a forced flatten has published its whole chain.
+func TestQcowSnapshotCompactsAMergingDiskOnlyAfterAForcedFlatten(t *testing.T) {
+	for _, tc := range []struct {
+		depth  int
+		events []string
+	}{
+		{depth: disk.DefaultFlattenDepth + 1, events: []string{"seal", "publish head-1"}},
+		{depth: disk.DefaultMaxChainDepth / 2, events: []string{"seal", "publish head-1", "compact"}},
+	} {
+		volume := &backloggedQcowVolume{depth: tc.depth, writes: 1, merges: true}
+		require.NoError(t, snapshotQcowVolume(context.Background(), volume, durableDiskSyncExplicit, false, volume.publish))
+		require.Equal(t, tc.events, volume.events)
+	}
 }
 
 func TestQcowSnapshotDoesNotForceAnEmptyHeadAfterFirstPublication(t *testing.T) {

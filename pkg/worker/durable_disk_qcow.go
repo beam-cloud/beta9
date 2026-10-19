@@ -179,8 +179,8 @@ func (s *Worker) prepareQcowDurableDiskMountAfterHead(ctx context.Context, reque
 		Msg("qcow durable disk prepared")
 
 	// The chain is rooted at its last parentless row, so its length is the
-	// generation count since the last flatten, which drives the periodic
-	// flattened publish that bounds restore chains.
+	// generation count since the last flatten, which drives the merges and
+	// flattened publishes that bound restore chains.
 	s.qcowChains.Store(key, entries)
 	s.reportQcowChainContent(request, entries)
 	if journal != nil {
@@ -558,20 +558,18 @@ func (s *Worker) reportQcowChainContent(request *types.ContainerRequest, chain [
 	}
 }
 
-// qcowUploadChunks returns a copy of layer without the chunks the live
-// chain's manifests already reference: chunk objects are content-addressed
-// and never deleted, so those are known to exist in the bucket. Flattened
-// publishes overlap heavily with the previous flatten, so this usually
-// reduces the periodic full-image publish to just the clusters that changed.
-func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile) *types.DiskSnapshotFile {
-	existing := make(map[string]bool)
+// qcowUploadChunks retains existing object keys for identical chunks in this
+// workspace's bucket, including a fork's parent disk, and returns only the
+// chunks still needing an upload. The full manifest keeps every chunk.
+func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile, bucket string) *types.DiskSnapshotFile {
+	existing := make(map[string]types.DiskSnapshotChunk)
 	for _, entry := range s.qcowChain(key) {
-		if entry.manifest == nil {
+		if entry.manifest == nil || entry.row.Public || entry.row.BucketName != bucket {
 			continue
 		}
 		for _, file := range entry.manifest.Files {
 			for _, chunk := range file.Chunks {
-				existing[chunk.ObjectKey] = true
+				existing[chunk.Digest] = chunk
 			}
 		}
 	}
@@ -580,8 +578,10 @@ func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile) *ty
 	}
 	upload := *layer
 	upload.Chunks = nil
-	for _, chunk := range layer.Chunks {
-		if !existing[chunk.ObjectKey] {
+	for i, chunk := range layer.Chunks {
+		if known, ok := existing[chunk.Digest]; ok && chunk.Digest != "" && known.SizeBytes == chunk.SizeBytes {
+			layer.Chunks[i].ObjectKey = known.ObjectKey
+		} else {
 			upload.Chunks = append(upload.Chunks, chunk)
 		}
 	}
@@ -703,6 +703,16 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 	if err := snapshotQcowVolume(ctx, volume, mode, latest == nil, publish); err != nil {
 		return published, err
 	}
+	// A flatten can overtake a background merge, leaving fewer published
+	// layers than local ones even below the normal compaction threshold.
+	if !volume.Journaled() && len(s.qcowChain(key))+1 < volume.Depth() {
+		if err := volume.Compact(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to compact qcow backing chain")
+		}
+	}
+	if mode == durableDiskSyncExplicit && !volume.Journaled() {
+		s.scheduleQcowMerge(request, mount, key)
+	}
 	return latest, nil
 }
 
@@ -711,6 +721,7 @@ type qcowSnapshotVolume interface {
 	Seal(context.Context, bool) ([]disk.SealedLayer, bool, error)
 	Compact(context.Context) error
 	Depth() int
+	Journaled() bool
 }
 
 // Drain failed publications before another pivot can fill the local chain.
@@ -721,7 +732,13 @@ func snapshotQcowVolume(ctx context.Context, volume qcowSnapshotVolume, mode dur
 		if err := publish(sealed); err != nil {
 			return err
 		}
-		if volume.Depth() > disk.DefaultFlattenDepth {
+		// Compaction collapses the local chain behind a flattened publish; a
+		// disk that merges flattens only at the forced depth.
+		compactDepth := disk.DefaultMaxChainDepth / 2
+		if volume.Journaled() {
+			compactDepth = disk.DefaultFlattenDepth
+		}
+		if volume.Depth() > compactDepth {
 			if err := volume.Compact(ctx); err != nil {
 				log.Warn().Err(err).Msg("failed to compact qcow backing chain")
 			}
@@ -764,11 +781,12 @@ func sealQcowVolume(ctx context.Context, volume qcowSnapshotVolume, force bool) 
 
 const qcowSnapshotWithdrawTimeout = 30 * time.Second
 
-// withdrawQcowSnapshot marks failed a generation its journal never recorded.
-// As an available row it would stand as the disk's latest generation, and
-// every later publish would fork the chain around it. A checkpoint that did
-// commit despite its error stays restorable: attach looks up the journal's
-// snapshot by ID, whatever its status.
+// withdrawQcowSnapshot marks failed a generation its journal never recorded,
+// or one a merge created before failing to publish. As an available row it
+// could stand as the disk's latest generation, and every later publish would
+// fork the chain around it. A checkpoint that did commit despite its error
+// stays restorable: attach looks up the journal's snapshot by ID, whatever
+// its status.
 func (s *Worker) withdrawQcowSnapshot(ctx context.Context, request *types.ContainerRequest, row *types.DiskSnapshot, cause error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qcowSnapshotWithdrawTimeout)
 	defer cancel()
@@ -779,7 +797,7 @@ func (s *Worker) withdrawQcowSnapshot(ctx context.Context, request *types.Contai
 	}))
 	if err != nil {
 		log.Warn().Err(err).Str("container_id", request.ContainerId).Str("disk", row.DiskName).
-			Str("snapshot_id", row.ExternalId).Msg("failed to withdraw a snapshot its journal never recorded")
+			Str("snapshot_id", row.ExternalId).Msg("failed to withdraw a qcow snapshot")
 	}
 }
 
@@ -874,10 +892,20 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	depth := len(s.qcowChain(key))
 
 	var layer *types.DiskSnapshotFile
-	// QSD appends clusters in write order; qemu-img packs them in logical
-	// order. Canonicalize the first non-journaled base too, so the first
-	// later flatten can reuse its data chunks instead of uploading them again.
-	if parentID == "" && !volume.Journaled() || parentID != "" && flattenQcowChain(depth, volume.Backlogged()) {
+	// Merges bound any other disk's chain, so only a journaled one flattens
+	// short of the forced depth.
+	flatten := flattenQcowChainForced(depth)
+	if volume.Journaled() {
+		flatten = flattenQcowChain(depth, volume.Backlogged())
+	} else if flatten && depth+1 < disk.DefaultMaxChainDepth {
+		// A committed merge still uploading will shorten this chain. Keep
+		// publishing deltas while that result remains within the restore cap.
+		layers, _ := volume.Published()
+		if merged, ok := qcowMergedLayer(layers, s.qcowChain(key)); ok && merged >= 0 {
+			flatten = false
+		}
+	}
+	if parentID != "" && flatten {
 		// Publish a parentless flattened generation so restore chains stay
 		// short. The local chain is untouched; only the artifact differs.
 		flatPath := sealedPath + ".flat"
@@ -910,6 +938,12 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		return nil, nil, err
 	}
 	sizeBytes, _ := durableDiskSizeBytes(mount.DurableDisk.Size)
+	return s.createQcowGeneration(ctx, request, mount, store, layer, parentID, generation, sizeBytes, volume.Check)
+}
+
+// createQcowGeneration publishes a layer whose chunks are in the bucket: its
+// manifest, then its repository row unless check fails in between.
+func (s *Worker) createQcowGeneration(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, store *durableDiskSnapshotBucketStore, layer *types.DiskSnapshotFile, parentID string, generation, sizeBytes int64, check func() error) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
 	manifest := &types.DiskSnapshotManifest{
 		Version:          1,
 		Format:           types.DiskSnapshotFormatQcowV1,
@@ -957,7 +991,7 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	// A journal that failed during the upload can no longer checkpoint this
 	// layer, so it gets no row. One that fails after this check has its row
 	// withdrawn once the checkpoint is refused.
-	if err := volume.Check(); err != nil {
+	if err := check(); err != nil {
 		return nil, nil, err
 	}
 	resp, err := handleGRPCResponse(s.backendRepoClient.CreateDiskSnapshot(ctx, &pb.CreateDiskSnapshotRequest{
@@ -993,7 +1027,7 @@ func (s *Worker) uploadQcowLayer(ctx context.Context, mount *types.Mount, store 
 		return nil, fmt.Errorf("scan qcow layer: %w", err)
 	}
 
-	upload := s.qcowUploadChunks(key, layer)
+	upload := s.qcowUploadChunks(key, layer, store.bucket)
 	sink := &qcowChunkSink{ctx: ctx, store: store}
 	if err := disk.UploadLayer(ctx, sink, imagePath, upload); err != nil {
 		return nil, err

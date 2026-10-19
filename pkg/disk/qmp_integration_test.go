@@ -36,6 +36,39 @@ func TestCompactReleasesQEMUOverlays(t *testing.T) {
 	}
 }
 
+// The merged layer is uploaded from its file, so Merge must leave the commit's
+// writes on disk rather than only in the daemon's metadata cache.
+func TestMergedQEMULayerIsCompleteOnDisk(t *testing.T) {
+	ctx, volume := newQEMUVolume(t)
+	if _, err := exec.LookPath("qemu-io"); err != nil {
+		t.Skip("qemu-io is not installed")
+	}
+	qemuIO := func(args ...string) {
+		out, err := exec.CommandContext(ctx, "qemu-io", args...).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	pattern := func(i int) string { return fmt.Sprintf("-P %d %d 64k", i, i<<16) }
+	export := fmt.Sprintf("nbd+unix:///%s?socket=%s", qsdExportName, filepath.Join(volume.dir, "run", "nbd.sock"))
+	for i := 1; i <= 3; i++ {
+		qemuIO("-f", "raw", export, "-c", "write "+pattern(i))
+		sealed, _, err := volume.Seal(ctx, true)
+		require.NoError(t, err)
+		require.NoError(t, volume.MarkPublished(sealed[0].Path, fmt.Sprint(i)))
+	}
+
+	merged, err := volume.Merge(ctx, 1)
+	require.NoError(t, err)
+	alone, err := json.Marshal(map[string]any{"driver": "qcow2", "backing": nil, "file": map[string]any{"driver": "file", "filename": merged.Path}})
+	require.NoError(t, err)
+	for i := 1; i <= 3; i++ {
+		qemuIO("-U", "-r", "json:"+string(alone), "-c", "read "+pattern(i))
+	}
+	client, err := dialQMP(ctx, volume.state.QMPSocket)
+	require.NoError(t, err)
+	defer client.Close()
+	require.Error(t, client.checkReadOnly(ctx, volume.state.HeadPath), "the writable head must not pass for a flushed layer")
+}
+
 func TestSealRecoversExhaustedQEMUDaemon(t *testing.T) {
 	ctx, volume := newQEMUVolume(t)
 	client, err := dialQMP(ctx, volume.state.QMPSocket)
