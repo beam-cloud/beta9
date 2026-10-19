@@ -37,6 +37,30 @@ func TestRedactTelemetryLogLine(t *testing.T) {
 	}
 }
 
+func FuzzTelemetryRedactionPreservesOutput(f *testing.F) {
+	for _, line := range []string{
+		`level=info container_id=vm-example message="process manager is ready"`,
+		`Authorization: Bearer private-value`,
+		`api` + "\n" + `key private-value auth key private-value`,
+		`{"AZURE_CLIENT_SECRET":"private-value","apiKey":"private-value"}`,
+		`ſecret=private-value access_Key=private-value`,
+		`logCredential=private-value PASSWORD='private-value'`,
+	} {
+		f.Add(line)
+	}
+	f.Fuzz(func(t *testing.T, line string) {
+		// Differential check against the original replacement pipeline: the
+		// marker scan must preserve every redaction, including Unicode folding.
+		want := telemetryAuthorizationPattern.ReplaceAllString(line, "${1}${2}${3}${4}"+telemetryRedactedValue+"${6}")
+		want = telemetryBearerTokenPattern.ReplaceAllString(want, "${1}${2}"+telemetryRedactedValue)
+		want = telemetrySensitivePhrasePattern.ReplaceAllString(want, "${1}${2}"+telemetryRedactedValue)
+		want = telemetrySensitiveKeyValuePattern.ReplaceAllString(want, "${1}"+telemetryRedactedValue)
+		if got := redactTelemetryLogLine(line); got != want {
+			t.Fatalf("redaction changed: got %q, want %q", got, want)
+		}
+	})
+}
+
 func TestAppendPathMetricAttrsUsesBoundedFixedKeys(t *testing.T) {
 	metrics := make([]model.AgentPathMetric, 0, telemetryMaxPathMetricAttrs+2)
 	metrics = append(metrics, model.AgentPathMetric{
@@ -68,5 +92,19 @@ func TestAppendPathMetricAttrsUsesBoundedFixedKeys(t *testing.T) {
 	}
 	if _, ok := attrs[fmt.Sprintf("path_metric_%d_label", telemetryMaxPathMetricAttrs)]; ok {
 		t.Fatal("path metrics exceeded bounded attr count")
+	}
+}
+
+func BenchmarkRedactTelemetryLogLine(b *testing.B) {
+	for name, line := range map[string]string{
+		"startup":    `level=info container_id=vm-48e5c8bb1a07568a worker_id=6448a3d1 duration=610.601 startup_phase=sandbox.process_manager_ready message="process manager is ready"`,
+		"credential": `Authorization: Bearer private-value {"AZURE_CLIENT_SECRET":"private-value","apiKey":"private-value"} normal=value`,
+	} {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = redactTelemetryLogLine(line)
+			}
+		})
 	}
 }
