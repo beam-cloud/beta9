@@ -22,6 +22,8 @@ func rootDisk(v *types.VM) string {
 	return vmIDPrefix + strings.TrimPrefix(v.ID, vmIDPrefix)
 }
 
+const vmFailureSaveTimeout = 10 * time.Second
+
 func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 	v.Error = err.Error()
 	v.Status = "error"
@@ -445,7 +447,11 @@ func (s *Service) reconcile(ctx context.Context) {
 				}
 
 				if err != nil && v != nil {
-					s.failed(op, v, err)
+					// A timed-out operation must still save its failure, which
+					// moves updated_at and so spaces out the next attempt.
+					save, cancel := context.WithTimeout(context.WithoutCancel(op), vmFailureSaveTimeout)
+					s.failed(save, v, err)
+					cancel()
 				}
 			}(record)
 		}

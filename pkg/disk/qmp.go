@@ -210,6 +210,32 @@ func (c *qmpClient) jobs(ctx context.Context) ([]qmpJob, error) {
 	return jobs, err
 }
 
+// cancelCommitJobs cancels and dismisses the daemon's commit jobs over a new
+// monitor connection: an expired deadline can leave a reply unread on the old.
+func cancelCommitJobs(socket string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), qmpDialTimeout)
+	defer cancel()
+	client, err := dialQMP(ctx, socket)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	jobs, err := client.jobs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if job.Type == "commit" && job.Status != "concluded" {
+			if _, err := client.execute(ctx, types.QMPCommandJobCancel, map[string]any{"id": job.ID}); err != nil {
+				return err
+			}
+		}
+	}
+	// A cancelled job concludes with an error of its own.
+	_ = client.finishCommitJobs(ctx)
+	return nil
+}
+
 // A cancelled caller does not cancel QEMU's job. Join and dismiss any previous
 // commit before inspecting or mutating the graph; even a concluded job pins it.
 func (c *qmpClient) finishCommitJobs(ctx context.Context) error {
@@ -271,6 +297,8 @@ func (c *qmpClient) waitForCommitJob(ctx context.Context, jobID string) error {
 // pivot from a dangling add.
 type qmpNode struct {
 	BackingFileDepth int      `json:"backing_file_depth"`
+	Driver           string   `json:"drv"`
+	ReadOnly         bool     `json:"ro"`
 	Image            qmpImage `json:"image"`
 }
 
@@ -321,6 +349,23 @@ func (c *qmpClient) backingFilenames(ctx context.Context, nodeName string) (map[
 		return nil, fmt.Errorf("node %s not found in block graph", nodeName)
 	}
 	return node.Image.filenames(), nil
+}
+
+// checkReadOnly fails if the daemon holds the qcow2 image at path writable.
+// Pivots and commits reopen images read-only, which flushes qcow2's cached
+// metadata, but ignore a failed reopen; only a flushed image is consistent on
+// disk.
+func (c *qmpClient) checkReadOnly(ctx context.Context, path string) error {
+	nodes, err := c.namedBlockNodes(ctx)
+	if err != nil {
+		return err
+	}
+	for name, node := range nodes {
+		if node.Driver == "qcow2" && node.Image.Filename == path && !node.ReadOnly {
+			return fmt.Errorf("node %s still holds %s writable", name, path)
+		}
+	}
+	return nil
 }
 
 // writtenBytes reports whether anything was written to a node since the

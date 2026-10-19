@@ -298,6 +298,9 @@ func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.Conta
 				syncErrs = append(syncErrs, err)
 			}
 		case types.DurableDiskDriverQcow:
+			if mode != durableDiskSyncExplicit {
+				s.stopQcowMerge(s.qcowVolumeKey(request, mount))
+			}
 			err := withDurableDiskLock(ctx, mount, func() error {
 				snapshot, snapErr := s.snapshotQcowDurableDiskMount(ctx, request, mount, mode)
 				if snapshot != nil {

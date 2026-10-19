@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 
@@ -773,53 +774,128 @@ func (v *Volume) Flatten(ctx context.Context, sealedPath, destPath string) error
 // deltas the publisher still needs byte-for-byte, so compaction waits until
 // the whole chain is published.
 func (v *Volume) Compact(ctx context.Context) error {
+	_, err := v.merge(ctx, 0, false)
+	return err
+}
+
+// PublishedLayer is a layer of the local published chain.
+type PublishedLayer struct {
+	SnapshotID string
+	Path       string
+}
+
+// Published returns the local published chain, base first, and whether
+// sealed layers wait to be published above it.
+func (v *Volume) Published() ([]PublishedLayer, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	layers := make([]PublishedLayer, len(v.state.Chain))
+	for i, layer := range v.state.Chain {
+		layers[i] = PublishedLayer{SnapshotID: layer.SnapshotID, Path: layer.Path}
+	}
+	return layers, len(v.state.Pending) > 0
+}
+
+// Merge commits the published layers above layer first into it, like
+// Compact, and returns the merged layer, which takes the newest one's
+// snapshot ID. Nobody waits for a merge, so the daemon's commit is cancelled
+// with ctx; what a cancelled commit wrote stays shadowed by its source layers.
+func (v *Volume) Merge(ctx context.Context, first int) (PublishedLayer, error) {
+	return v.merge(ctx, first, true)
+}
+
+func (v *Volume) merge(ctx context.Context, first int, cancel bool) (PublishedLayer, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	state := v.state
-	if !state.Attached || state.ReadOnly || len(state.Pending) > 0 || len(state.Chain) < 2 {
-		return nil
+	last := len(state.Chain) - 1
+	if !state.Attached || state.ReadOnly || len(state.Pending) > 0 || first < 0 || first >= last {
+		return PublishedLayer{}, nil
 	}
-	base, top := state.Chain[0], state.Chain[len(state.Chain)-1]
 
 	client, err := dialQMP(ctx, state.QMPSocket)
 	if err != nil {
-		return err
+		return PublishedLayer{}, err
 	}
 	defer client.Close()
 	if err := client.finishCommitJobs(ctx); err != nil {
-		return fmt.Errorf("finish compaction for volume %s: %w", state.Key, err)
+		return PublishedLayer{}, fmt.Errorf("finish compaction for volume %s: %w", state.Key, err)
 	}
 
 	// The live graph decides what needs merging: a crash after a completed
 	// commit but before the state save leaves the files already merged.
 	live, err := client.backingFilenames(ctx, v.fmtNode)
 	if err != nil {
-		return err
+		return PublishedLayer{}, err
 	}
-	if live[top.Path] {
-		if err := client.commitChain(ctx, v.fmtNode, top.Path, base.Path); err != nil {
-			return fmt.Errorf("compact volume %s: %w", state.Key, err)
+	base, top, err := state.committedRun(live)
+	if err != nil {
+		return PublishedLayer{}, fmt.Errorf("merge layers of volume %s: %w", state.Key, err)
+	}
+	if top < 0 {
+		base, top = first, last
+		if err := client.commitChain(ctx, v.fmtNode, state.Chain[top].Path, state.Chain[base].Path); err != nil {
+			if cancel && ctx.Err() != nil {
+				client.Close()
+				err = errors.Join(err, cancelCommitJobs(state.QMPSocket))
+			}
+			return PublishedLayer{}, fmt.Errorf("merge layers of volume %s: %w", state.Key, err)
 		}
-	} else if !live[base.Path] {
-		return fmt.Errorf("compact volume %s: neither %s nor %s is in the live chain", state.Key, top.Path, base.Path)
 	}
 	if err := client.releaseUnusedNodes(ctx, v.fmtNode); err != nil {
-		return fmt.Errorf("compact volume %s: %w", state.Key, err)
+		return PublishedLayer{}, fmt.Errorf("merge layers of volume %s: %w", state.Key, err)
+	}
+	if err := client.checkReadOnly(ctx, state.Chain[base].Path); err != nil {
+		return PublishedLayer{}, fmt.Errorf("merge layers of volume %s: %w", state.Key, err)
 	}
 
-	// The base file now holds the newest published generation in full. A
-	// partially committed base stays invisible behind the intact overlays, so
-	// merged files are deleted only after the collapsed state is durable.
-	merged := state.Chain[1:]
-	state.Chain = []stateLayer{{SnapshotID: top.SnapshotID, Path: base.Path}}
+	// A partially committed base stays invisible behind the intact overlays,
+	// so merged files are deleted only after the collapsed state is durable.
+	merged := state.Chain[base+1 : top+1]
+	layer := stateLayer{SnapshotID: state.Chain[top].SnapshotID, Path: state.Chain[base].Path}
+	state.Chain = slices.Concat(state.Chain[:base], []stateLayer{layer}, state.Chain[top+1:])
 	if err := saveVolumeState(v.dir, state); err != nil {
-		return err
+		return PublishedLayer{}, err
 	}
-	for _, layer := range merged {
-		os.Remove(layer.Path)
+	for _, old := range merged {
+		os.Remove(old.Path)
 	}
-	log.Info().Str("volume", state.Key).Int("layers", len(merged)+1).Msg("compacted qcow backing chain")
-	return nil
+	log.Info().Str("volume", state.Key).Int("base", base).Int("layers", len(merged)+1).Msg("merged qcow layers")
+	return PublishedLayer{SnapshotID: layer.SnapshotID, Path: layer.Path}, nil
+}
+
+// committedRun finds published layers missing from the live graph, which a
+// commit whose state save was lost merged into the nearest live layer below.
+// It returns that layer's index and the newest merged one's, or top -1.
+func (s *volumeState) committedRun(live map[string]bool) (base, top int, err error) {
+	base, top = -1, -1
+	for i, layer := range s.Chain {
+		switch {
+		case !live[layer.Path] && i == 0:
+			return 0, 0, fmt.Errorf("base layer %s is not in the live chain", layer.Path)
+		case !live[layer.Path]:
+			top = i
+		case top >= 0:
+			return base, top, nil
+		default:
+			base = i
+		}
+	}
+	return base, top, nil
+}
+
+// Republished records that a merge republished generations under new IDs,
+// old to new. An attach naming an old ID still reuses the local chain.
+func (v *Volume) Republished(ids map[string]string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for i, layer := range v.state.Chain {
+		if id, ok := ids[layer.SnapshotID]; ok {
+			v.state.supersede(layer.SnapshotID, id)
+			v.state.Chain[i].SnapshotID = id
+		}
+	}
+	return saveVolumeState(v.dir, v.state)
 }
 
 // detach unmounts, disconnects, and stops the daemon. Layer files and state
