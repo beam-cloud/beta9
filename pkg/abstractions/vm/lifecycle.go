@@ -160,8 +160,12 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	initialLaunch := v.Generation == 0 && v.LaunchAttempts == 1 && v.Error == ""
 	if !initialLaunch {
 		v.LaunchAttempts++
-		if err := s.repo.SaveVM(ctx, v); err != nil {
-			return err
+		// Stub preparation can perform external work. Count that attempt first;
+		// an existing stub needs only the complete launch commit below.
+		if v.StubID == "" {
+			if err := s.repo.SaveVM(ctx, v); err != nil {
+				return err
+			}
 		}
 	}
 
