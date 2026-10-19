@@ -89,7 +89,16 @@ func (row vmRow) vm() (*types.VM, error) {
 }
 
 func (r *PostgresBackendRepository) GetVM(ctx context.Context, ws uint, name string) (*types.VM, error) {
-	return r.getVM(ctx, `WHERE workspace_id=$1 AND (name=$2 OR id=$2) ORDER BY (data->>'desired_state'='deleted') LIMIT 1`, ws, name)
+	row, err := r.vmReads.get(ctx, vmReadKey{WorkspaceID: ws, Name: name}, r.readVMs)
+	if err != nil {
+		return nil, err
+	}
+	if row.Data == nil {
+		return nil, sql.ErrNoRows
+	}
+	// Decode separately for each caller; overlapping reads must not share a
+	// mutable VM, its spec, or nested metadata.
+	return row.vm()
 }
 
 func (r *PostgresBackendRepository) GetVMByHandle(ctx context.Context, handle string) (*types.VM, error) {
