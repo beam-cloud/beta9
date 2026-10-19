@@ -138,7 +138,7 @@ func TestMicroVMHypervisorArgs(t *testing.T) {
 
 	assert.Contains(t, joined, "--kernel /vmlinux")
 	assert.Contains(t, joined, "--cpus boot=2")
-	assert.Contains(t, joined, "--memory size=1073741824,shared=on,thp=off")
+	assert.Contains(t, args, "size=1073741824,shared=on")
 	assert.Contains(t, joined, "--fs tag=beamfs,socket=/run/beam/microvm/c1/virtiofs.sock")
 	assert.Contains(t, joined, "--disk path=/tmp/scratch.ext4 vhost_user=on,socket=/s")
 	assert.Contains(t, joined, "--net tap=b9tap0,mac=02:00:00:00:00:01")

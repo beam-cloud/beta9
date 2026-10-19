@@ -438,9 +438,7 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		"--kernel", kernel,
 		"--cmdline", cmdline,
 		"--cpus", fmt.Sprintf("boot=%d", vcpus),
-		// Sparse guest RAM must not synchronously compact host memory for huge
-		// pages when many VMs boot or restore together.
-		"--memory", fmt.Sprintf("size=%d,shared=on,thp=off", memory),
+		"--memory", fmt.Sprintf("size=%d,shared=on", memory),
 		"--fs", fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.VirtiofsTag, filepath.Join(stateDir, microVMVirtiofsSocket)),
 		"--disk", root.arg,
 	}
@@ -478,6 +476,8 @@ func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Netwo
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return nil, fmt.Errorf("decode snapshot config: %w", err)
 	}
+	// Eager RAM restore must not synchronously compact host memory for huge
+	// pages. Cold boots retain the hypervisor's normal allocation policy.
 	if memory, ok := cfg["memory"].(map[string]any); ok {
 		memory["thp"] = false
 	}
