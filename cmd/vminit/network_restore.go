@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -223,54 +224,55 @@ func (c *control) restoreSocketRules(family iptables.Protocol, current net.IP, n
 	}
 
 	sort.Strings(aliases)
-	ipt, err := iptables.New(iptables.IPFamily(family), iptables.Timeout(5))
-	if err != nil {
-		return err
-	}
-
-	const incoming, outgoing = "BEAM_VM_RESTORE_IN", "BEAM_VM_RESTORE_OUT"
-	for _, chain := range []string{incoming, outgoing} {
-		if err := ipt.ClearChain("nat", chain); err != nil {
-			return err
-		}
-	}
-
-	// First priority, scoped to this guest and only addresses it previously
-	// owned. Preserve existing user/Docker firewall chains.
-	for _, rule := range []struct{ chain, target string }{{"PREROUTING", incoming}, {"OUTPUT", incoming}, {"POSTROUTING", outgoing}} {
-		if exists, err := ipt.Exists("nat", rule.chain, "-j", rule.target); err != nil {
-			return err
-		} else if !exists {
-			if err := ipt.Insert("nat", rule.chain, 1, "-j", rule.target); err != nil {
-				return err
-			}
-		}
-	}
-
 	ports := map[int]string{}
 	for _, address := range aliases {
 		for _, port := range listeners[address] {
 			if previous := ports[port]; previous != "" && previous != address {
 				return fmt.Errorf("multiple paused interfaces listen on TCP port %d", port)
 			}
-
 			ports[port] = address
 		}
-
-		if err := ipt.Append("nat", outgoing, "-s", address, "-o", nic, "-j", "SNAT", "--to-source", current.String()); err != nil {
-			return err
-		}
 	}
-
 	for _, port := range listeners[current.String()] {
 		delete(ports, port)
 	}
 
-	for port, address := range ports {
-		if err := ipt.Append("nat", incoming, "-d", current.String(), "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "DNAT", "--to-destination", net.JoinHostPort(address, strconv.Itoa(port))); err != nil {
-			return err
+	binary := "iptables"
+	if family == iptables.ProtocolIPv6 {
+		binary = "ip6tables"
+	}
+	existing, err := exec.Command(binary+"-save", "-t", "nat").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("read restore rules: %w: %s", err, existing)
+	}
+	installed := "\n" + string(existing)
+
+	const incoming, outgoing = "BEAM_VM_RESTORE_IN", "BEAM_VM_RESTORE_OUT"
+	var rules strings.Builder
+	fmt.Fprintf(&rules, "*nat\n:%s - [0:0]\n:%s - [0:0]\n-F %s\n-F %s\n", incoming, outgoing, incoming, outgoing)
+	// Replace only our chains, in one transaction. Guest and Docker rules
+	// stay intact, and listeners never see a partially rebuilt translation.
+	for _, rule := range []struct{ chain, target string }{{"PREROUTING", incoming}, {"OUTPUT", incoming}, {"POSTROUTING", outgoing}} {
+		if !strings.Contains(installed, "\n-A "+rule.chain+" -j "+rule.target+"\n") {
+			fmt.Fprintf(&rules, "-I %s 1 -j %s\n", rule.chain, rule.target)
 		}
 	}
-
+	for _, address := range aliases {
+		fmt.Fprintf(&rules, "-A %s -s %s -o %q -j SNAT --to-source %s\n", outgoing, address, nic, current)
+	}
+	orderedPorts := make([]int, 0, len(ports))
+	for port := range ports {
+		orderedPorts = append(orderedPorts, port)
+	}
+	sort.Ints(orderedPorts)
+	for _, port := range orderedPorts {
+		fmt.Fprintf(&rules, "-A %s -d %s -p tcp --dport %d -j DNAT --to-destination %s\n", incoming, current, port, net.JoinHostPort(ports[port], strconv.Itoa(port)))
+	}
+	rules.WriteString("COMMIT\n")
+	command := exec.Command(binary+"-restore", "--noflush", "--wait", "5")
+	command.Stdin = strings.NewReader(rules.String())
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("apply restore rules: %w: %s", err, output)
+	}
 	return nil
 }

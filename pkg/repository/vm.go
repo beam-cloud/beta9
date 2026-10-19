@@ -18,6 +18,7 @@ type VMRepository interface {
 	ListVMs(context.Context, uint) ([]*types.VM, error)
 	ListVMsToReconcile(context.Context, bool) ([]*types.VM, error)
 	LockVM(context.Context, string) (func(), error)
+	TryLockVM(context.Context, string) (func(), error)
 	TouchVM(context.Context, string) error
 	ClaimVMIdleStop(context.Context, string, time.Time) (bool, error)
 	CreateVMArtifact(context.Context, uint, *types.VMArtifact) error

@@ -87,6 +87,9 @@ type Config struct {
 	// SpareExport prepares empty formatted roots with the worker runtime's
 	// export. The default retains host-mounted NBD spares.
 	SpareExport ExportMode
+	// SpareCount is the number of formatted roots retained per virtual size.
+	// Zero uses the small default pool suitable for NBD exports.
+	SpareCount int
 
 	// Test hooks.
 	SysBlockPath string
@@ -104,6 +107,7 @@ type Manager struct {
 	execs         bool // run is the real exec runner, so binaries and devices are the host's
 	maxChainDepth int
 	spareExport   ExportMode
+	spareCount    int
 
 	mu      sync.Mutex
 	volumes map[string]*Volume
@@ -142,6 +146,9 @@ func NewManager(config Config) *Manager {
 	if config.MaxChainDepth <= 0 {
 		config.MaxChainDepth = DefaultMaxChainDepth
 	}
+	if config.SpareCount <= 0 {
+		config.SpareCount = spareTarget
+	}
 	config.Binaries.applyDefaults()
 	run := runner(execRunner)
 	if config.Runner != nil {
@@ -157,6 +164,7 @@ func NewManager(config Config) *Manager {
 		execs:         config.Runner == nil,
 		maxChainDepth: config.MaxChainDepth,
 		spareExport:   config.SpareExport,
+		spareCount:    config.SpareCount,
 		volumes:       make(map[string]*Volume),
 		spares:        make(map[int64][]*Volume),
 		spareBuilds:   make(map[int64]bool),
@@ -259,6 +267,12 @@ func (m *Manager) Volume(key string) (*Volume, bool) {
 	return volume, ok && volume != nil
 }
 
+// VolumeOwned returns a volume only while it belongs to this attacher.
+func (m *Manager) VolumeOwned(key, owner string) (*Volume, bool) {
+	volume, ok := m.Volume(key)
+	return volume, ok && volume.owner == owner
+}
+
 // Detach takes a volume offline. Unknown keys are a no-op so cleanup paths
 // can call this unconditionally.
 func (m *Manager) Detach(ctx context.Context, key string) error {
@@ -275,10 +289,8 @@ func (m *Manager) Detach(ctx context.Context, key string) error {
 // is currently held by a different owner, which happens when a container's
 // final cleanup runs after its successor re-attached the same key.
 func (m *Manager) DetachOwned(ctx context.Context, key, owner string) error {
-	m.mu.Lock()
-	volume, ok := m.volumes[key]
-	m.mu.Unlock()
-	if !ok || volume == nil || volume.owner != owner {
+	volume, ok := m.VolumeOwned(key, owner)
+	if !ok {
 		return nil
 	}
 	return m.detachVolume(ctx, key, volume)

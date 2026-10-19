@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -39,6 +41,9 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 	diskConfig := disk.Config{}
 	if s.runtimeOwnsBlockRoot() {
 		diskConfig.SpareExport = disk.ExportVhostUser
+		// Empty roots consume no guest CPU or RAM. Cover the start gate even
+		// when guests are smaller than the default VM resource allocation.
+		diskConfig.SpareCount = max(2, s.containerStartLimit)
 	}
 
 	if s.agentWorker() {
@@ -54,10 +59,10 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 	}
 
 	if s.runtimeOwnsBlockRoot() {
-		warmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := s.diskManager.WarmSpares(warmCtx, types.DefaultVMRootSizeBytes)
-		cancel()
-		if err != nil {
+		// Prepare the burst capacity before accepting containers. Formatting
+		// the remaining roots after an arbitrary startup deadline pushes that
+		// work back onto the first burst's critical path.
+		if err := s.diskManager.WarmSpares(ctx, types.DefaultVMRootSizeBytes); err != nil {
 			log.Warn().Err(err).Msg("failed to warm fresh VM root disks")
 		}
 	}
@@ -725,7 +730,13 @@ func (s *Worker) durableDiskSnapshotCacheReader() durableDiskSnapshotCacheReader
 	if s == nil || s.cacheManager == nil || s.cacheManager.client == nil {
 		return nil
 	}
-	return s.cacheManager.client
+	return localSnapshotCacheReader{s.cacheManager.client}
+}
+
+type localSnapshotCacheReader struct{ client *cache.Client }
+
+func (r localSnapshotCacheReader) ReadContentInto(ctx context.Context, hash string, offset int64, dest []byte, _ cache.ClientOptions) (int64, error) {
+	return r.client.ReadLocalContentInto(ctx, hash, offset, dest)
 }
 
 // The workspace-bucket layout for durable disk artifacts:
@@ -762,6 +773,16 @@ func durableDiskChunkPrefix(mount *types.Mount) string {
 func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerRequest, snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest, chainGeneration int64) {
 	if s == nil || s.cacheManager == nil || request == nil || snapshot == nil || manifest == nil {
 		return
+	}
+	if s.cacheManager.client != nil {
+		// The publishing/restoring worker already has these bytes. Retain them
+		// locally so a worker restart does not fetch every ancestor from S3.
+		if data, err := json.Marshal(manifest); err == nil {
+			hash := strings.TrimPrefix(snapshot.ManifestDigest, "sha256:")
+			if err := s.cacheManager.client.StoreLocalContent(s.ctx, hash, data); err != nil {
+				log.Debug().Err(err).Str("snapshot_id", snapshot.ExternalId).Msg("could not cache disk snapshot manifest locally")
+			}
+		}
 	}
 	reporter := s.cacheManager.ContentReporter()
 	if reporter == nil {

@@ -381,7 +381,10 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	}
 	phases.Mark("qsd")
 
-	cleanupOnError := func() {
+	defer func() {
+		if err == nil {
+			return
+		}
 		if v.nbd != nil {
 			_ = m.disconnectNBDDevice(context.Background(), v.nbd)
 			v.nbd = nil
@@ -391,20 +394,18 @@ func (v *Volume) start(ctx context.Context) (err error) {
 			v.journalNBD = nil
 		}
 		_ = m.stopQSD(context.Background(), qsd)
-	}
+	}()
 
 	nbdSocket := qsd.nbdSocket
 	if v.journal != nil {
 		nbdSocket = filepath.Join(m.runtimeDir(state.Key), "durable.sock")
 		v.journalNBD, err = startJournalNBD(ctx, nbdSocket, qsd.nbdSocket, v.journal)
 		if err != nil {
-			cleanupOnError()
 			return err
 		}
 	}
 	nbd, err := m.acquireNBDDevice(ctx, nbdSocket, state.VirtualSizeBytes)
 	if err != nil {
-		cleanupOnError()
 		return err
 	}
 	v.nbd = nbd
@@ -412,15 +413,12 @@ func (v *Volume) start(ctx context.Context) (err error) {
 
 	if freshDisk && v.journal != nil {
 		if err := m.formatExt4(ctx, nbd.Path); err != nil {
-			cleanupOnError()
 			return err
 		}
 		if _, err := m.run(ctx, "blockdev", "--flushbufs", nbd.Path); err != nil {
-			cleanupOnError()
 			return err
 		}
 		if err := v.journal.Initialize(ctx); err != nil {
-			cleanupOnError()
 			return err
 		}
 		state.Formatted = true
@@ -428,7 +426,6 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	}
 	if state.Mountpoint != "" {
 		if err := m.mountExt4(ctx, nbd.Path, state.Mountpoint, state.ReadOnly); err != nil {
-			cleanupOnError()
 			return err
 		}
 		if !freshDisk && !state.ReadOnly {
@@ -436,7 +433,6 @@ func (v *Volume) start(ctx context.Context) (err error) {
 			// Grow ext4 too; changing only the advertised block size leaves the old limit.
 			if _, err := m.run(ctx, "resize2fs", nbd.Path); err != nil {
 				_ = m.unmount(context.Background(), state.Mountpoint)
-				cleanupOnError()
 				return fmt.Errorf("grow filesystem for %s: %w", state.Key, err)
 			}
 		}
@@ -451,7 +447,6 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	state.NBDDevice = nbd.Path
 	if err := saveVolumeState(v.dir, state); err != nil {
 		_ = m.unmount(context.Background(), state.Mountpoint)
-		cleanupOnError()
 		return err
 	}
 	return nil
@@ -499,11 +494,20 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		return nil, false, fmt.Errorf("seal volume %s: %w", state.Key, err)
 	}
 
+	if v.fmtNode != fmtNodeName(state.PivotCount) {
+		if err := v.reconcileHeadNode(ctx); err != nil {
+			return nil, false, err
+		}
+	}
+
 	client, err := dialQMP(ctx, state.QMPSocket)
 	if err != nil {
 		return nil, false, err
 	}
 	defer client.Close()
+	if err := client.finishCommitJobs(ctx); err != nil {
+		return nil, false, fmt.Errorf("finish compaction for volume %s: %w", state.Key, err)
+	}
 
 	if !force && len(state.Pending) == 0 && v.freshHead {
 		written, err := client.writtenBytes(ctx, qsdFileNodePrefix+v.fmtNode)
@@ -571,14 +575,21 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	thaw()
 
 	if pivotErr != nil {
-		// A lost reply is indeterminate: ask the daemon whether the overlay
-		// got wired into the chain before deciding to roll back.
-		if committed := v.pivotCommitted(ctx, newNode); !committed {
-			_ = client.removeNode(ctx, newNode)
-			v.rollbackSeal(previousState, newHeadPath)
+		// The monitor accepts one connection. Release the failed connection
+		// before resolving the transaction, even when its caller was cancelled.
+		client.Close()
+		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), qmpDialTimeout)
+		err := v.reconcileHeadNode(recovery)
+		cancel()
+		if err != nil {
+			// Preserve the intent and both files until the live graph is known.
+			return nil, false, errors.Join(pivotErr, err)
+		}
+		if v.fmtNode != newNode {
 			return nil, false, fmt.Errorf("pivot volume %s: %w", state.Key, pivotErr)
 		}
 	}
+
 	v.fmtNode = newNode
 	v.freshHead = true
 	if v.journal != nil {
@@ -602,12 +613,17 @@ const thawCommitBytes = 12 + 4096
 // leave a chain there, and nothing more seals until it shrinks.
 var ErrMaxChainDepth = errors.New("layers are not being compacted or published")
 
-// Unpublished returns the layers earlier seals left awaiting publication,
-// oldest first, without sealing another.
-func (v *Volume) Unpublished() []SealedLayer {
+// Unpublished resolves an uncertain pivot before returning the immutable
+// layers awaiting publication, oldest first, without sealing another.
+func (v *Volume) Unpublished(ctx context.Context) ([]SealedLayer, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.sealedLayers()
+	if v.fmtNode != fmtNodeName(v.state.PivotCount) {
+		if err := v.reconcileHeadNode(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return v.sealedLayers(), nil
 }
 
 func (v *Volume) sealedLayers() []SealedLayer {
@@ -668,23 +684,6 @@ func (v *Volume) rollbackSeal(previous volumeState, newHeadPath string) {
 	os.Remove(newHeadPath)
 }
 
-// pivotCommitted reports whether the overlay actually became the active
-// head. Merely existing is not enough: addOverlay creates it with no backing,
-// and only a committed pivot wires the old head underneath it.
-func (v *Volume) pivotCommitted(ctx context.Context, newNode string) bool {
-	client, err := dialQMP(ctx, v.state.QMPSocket)
-	if err != nil {
-		return false
-	}
-	defer client.Close()
-	nodes, err := client.namedBlockNodes(ctx)
-	if err != nil {
-		return false
-	}
-	node, ok := nodes[newNode]
-	return ok && node.BackingFileDepth > 0
-}
-
 // reconcileHeadNode aligns adopted state with the daemon's actual graph. A
 // crash between recording a seal intent and committing the pivot leaves the
 // state one pivot ahead of the daemon; the intent is rolled back so writes
@@ -701,18 +700,22 @@ func (v *Volume) reconcileHeadNode(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if node, ok := nodes[v.fmtNode]; ok {
+	expected := fmtNodeName(v.state.PivotCount)
+	if node, ok := nodes[expected]; ok {
 		// A pivot intent (Pending non-empty) is only committed once the
 		// overlay has a backing chain; a base head never has one.
 		if len(v.state.Pending) == 0 || node.BackingFileDepth > 0 {
+			v.fmtNode = expected
 			return nil
 		}
-		_ = client.removeNode(ctx, v.fmtNode)
+		if err := client.removeNode(ctx, expected); err != nil {
+			return err
+		}
 	}
 
 	previousNode := fmtNodeName(v.state.PivotCount - 1)
 	if _, ok := nodes[previousNode]; !ok || len(v.state.Pending) == 0 {
-		return fmt.Errorf("daemon graph has neither %s nor %s", v.fmtNode, previousNode)
+		return fmt.Errorf("daemon graph has neither %s nor %s", expected, previousNode)
 	}
 	orphanHead := v.state.HeadPath
 	last := len(v.state.Pending) - 1
@@ -723,6 +726,7 @@ func (v *Volume) reconcileHeadNode(ctx context.Context) error {
 	if err := saveVolumeState(v.dir, v.state); err != nil {
 		return err
 	}
+	v.fmtNode = previousNode
 	os.Remove(orphanHead)
 	log.Warn().Str("volume", v.state.Key).Msg("rolled back uncommitted pivot intent during adoption")
 	return nil
@@ -782,6 +786,9 @@ func (v *Volume) Compact(ctx context.Context) error {
 		return err
 	}
 	defer client.Close()
+	if err := client.finishCommitJobs(ctx); err != nil {
+		return fmt.Errorf("finish compaction for volume %s: %w", state.Key, err)
+	}
 
 	// The live graph decides what needs merging: a crash after a completed
 	// commit but before the state save leaves the files already merged.

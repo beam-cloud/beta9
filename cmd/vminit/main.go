@@ -774,7 +774,10 @@ func (c *control) serve(childPid func() int) {
 				c.ack(msg.ID, errors.New("network config is missing"))
 				continue
 			}
-			err := c.restoreNetwork(*msg.Network)
+			err := restoreHostClock(msg.TimeUnixNano, unix.ClockSettime)
+			if err == nil {
+				err = c.restoreNetwork(*msg.Network)
+			}
 			if err == nil && c.systemd {
 				err = installEgressCA()
 			}

@@ -367,6 +367,48 @@ func (c *Client) LocalContentComplete(hash string) bool {
 	return false
 }
 
+// ReadLocalContentInto reads materialized content without host discovery or a
+// network request. Callers with a durable origin can use it as an optional
+// local cache rather than waiting for an unavailable remote cache replica.
+func (c *Client) ReadLocalContentInto(ctx context.Context, hash string, offset int64, dst []byte) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(dst) == 0 {
+		return 0, nil
+	}
+	for _, candidate := range c.preferredLocalStores() {
+		if candidate.store.contentStatusForRead(hash) != contentStatusComplete {
+			continue
+		}
+		n, err := candidate.store.ReadAt(hash, offset, dst)
+		if err == nil && n == int64(len(dst)) {
+			return n, nil
+		}
+	}
+	return 0, ErrContentNotFound
+}
+
+// StoreLocalContent retains verified content on this node without routing it
+// to a peer. Complete markers make it readable after a client restart.
+func (c *Client) StoreLocalContent(ctx context.Context, hash string, content []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(content)) != hash {
+		return errors.New("local cache content digest mismatch")
+	}
+	stores := c.preferredLocalStores()
+	if len(stores) == 0 {
+		return ErrHostNotFound
+	}
+	store := stores[0].store
+	if store.contentStatusForRead(hash, int64(len(content))) == contentStatusComplete {
+		return nil
+	}
+	return store.Add(ctx, hash, content)
+}
+
 func (c *Client) initLocalDiskStore(cfg Config, locality string) {
 	if cfg.Server.DiskCacheDir == "" || cfg.Server.PageSizeBytes <= 0 {
 		return

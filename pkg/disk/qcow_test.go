@@ -124,3 +124,58 @@ func TestCanonicalBaseKeepsChunksAcrossFlatten(t *testing.T) {
 	}
 	require.Greater(t, reused, int64(48<<20), "flatten must retain most of the unchanged 64 MiB")
 }
+
+func TestFlattenRetainsChunksWhenSparseGapsAreWritten(t *testing.T) {
+	for _, name := range []string{"qemu-img", "qemu-io"} {
+		if _, err := exec.LookPath(name); err != nil {
+			t.Skip(name + " is not installed")
+		}
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	m := NewManager(Config{Root: dir})
+	base := filepath.Join(dir, "base.qcow2")
+	require.NoError(t, m.createQcowBase(ctx, base, 50<<30))
+	rng := rand.NewChaCha8([32]byte{'s', 'p', 'a', 'r', 's', 'e'})
+	data := make([]byte, 8<<20)
+	source := filepath.Join(dir, "data")
+	for i := range 16 {
+		rng.Read(data)
+		require.NoError(t, os.WriteFile(source, data, 0o600))
+		_, err := execRunner(ctx, "qemu-io", "-f", "qcow2", "-c", fmt.Sprintf("write -s %s %d %d", source, i*(128<<20), len(data)), base)
+		require.NoError(t, err)
+	}
+	canonical := filepath.Join(dir, "canonical.qcow2")
+	require.NoError(t, m.flattenQcow(ctx, base, canonical))
+	first, err := ScanLayer(ctx, canonical, chunkKey)
+	require.NoError(t, err)
+	overlay := filepath.Join(dir, "head.qcow2")
+	require.NoError(t, m.createQcowOverlay(ctx, overlay, base, 50<<30))
+	for i := range 16 {
+		_, err := execRunner(ctx, "qemu-io", "-f", "qcow2", "-c", fmt.Sprintf("write -P 0x41 %d 4k", i*(128<<20)+(64<<20)), overlay)
+		require.NoError(t, err)
+	}
+	flat := filepath.Join(dir, "flat.qcow2")
+	require.NoError(t, m.flattenQcow(ctx, overlay, flat))
+	second, err := ScanLayer(ctx, flat, chunkKey)
+	require.NoError(t, err)
+	known := make(map[string]bool)
+	for _, chunk := range first.Chunks {
+		known[chunk.Digest] = true
+	}
+	var uploaded int64
+	for _, chunk := range second.Chunks {
+		if !known[chunk.Digest] {
+			uploaded += chunk.SizeBytes
+		}
+	}
+	t.Logf("flatten after 64 KiB of gap writes uploads %d of %d bytes", uploaded, StoredBytes(second))
+	require.Less(t, uploaded, int64(8<<20), "small sparse writes must not re-upload unchanged extents")
+	require.Less(t, StoredBytes(second), int64(160<<20), "metadata allocation must leave unwritten data sparse")
+	store := newMemoryChunkStore()
+	require.NoError(t, UploadLayer(ctx, store, flat, second))
+	restored := filepath.Join(dir, "restored.qcow2")
+	require.NoError(t, fetchLayer(ctx, store, second, restored, nil))
+	_, err = execRunner(ctx, "qemu-img", "compare", "-q", overlay, restored)
+	require.NoError(t, err, "published image must contain the identical virtual disk")
+}

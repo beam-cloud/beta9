@@ -116,8 +116,9 @@ type microVMDisk struct {
 
 // Checkpoint layout under CheckpointOpts.ImagePath.
 const (
-	checkpointVMDir    = "vm"       // Cloud Hypervisor snapshot: config.json, state.json, memory-ranges
-	checkpointRootDisk = "root.img" // the scratch root disk, when the VM has one
+	checkpointVMDir    = "vm"         // Cloud Hypervisor snapshot: config.json, state.json, memory-ranges
+	checkpointRootDisk = "root.img"   // the scratch root disk, when the VM has one
+	checkpointInitFile = "guest-init" // executable backing the captured guest agent
 )
 
 // --- bundle -----------------------------------------------------------------
@@ -474,6 +475,11 @@ func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Netwo
 	var cfg map[string]any
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return nil, fmt.Errorf("decode snapshot config: %w", err)
+	}
+	// Eager RAM restore must not synchronously compact host memory for huge
+	// pages. Cold boots retain the hypervisor's normal allocation policy.
+	if memory, ok := cfg["memory"].(map[string]any); ok {
+		memory["thp"] = false
 	}
 	if nets, _ := cfg["net"].([]any); len(nets) == 1 {
 		if entry, ok := nets[0].(map[string]any); ok {

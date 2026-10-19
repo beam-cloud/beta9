@@ -2573,6 +2573,18 @@ func TestSignalRestoredSandboxProcessManagerSkipsNonSandbox(t *testing.T) {
 	}
 }
 
+func TestSignalRestoredSandboxProcessManagerPreservesNativeVMListener(t *testing.T) {
+	rt := NewMockRuntime(types.ContainerRuntimeMicroVM.String(), runtime.Capabilities{CheckpointRestore: true})
+	request := &types.ContainerRequest{
+		ContainerId: "vm-restore",
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM)}},
+	}
+	(&Worker{}).signalRestoredSandboxProcessManager(context.Background(), request, rt)
+	if rt.killCalled {
+		t.Fatal("native VM restore must preserve its running TCP listener")
+	}
+}
+
 func TestMaterializeCheckpointArchiveFilesystemOnlyMarker(t *testing.T) {
 	for _, marked := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marked=%t", marked), func(t *testing.T) {

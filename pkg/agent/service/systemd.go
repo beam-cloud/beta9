@@ -17,6 +17,13 @@ type Systemd struct {
 	UnitDir string
 }
 
+// Apply before accepting work, including after host reboots. Hosts without
+// CPU frequency scaling have no matching policy files.
+const cpuPerformanceScript = `for governor in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do
+  [ -e "$governor" ] || continue
+  echo performance > "$governor"
+done`
+
 func (m Systemd) Name() string {
 	return types.AgentServiceManagerSystemd
 }
@@ -73,6 +80,10 @@ func (m Systemd) runner() Runner {
 func SystemdUnit(spec Spec) string {
 	spec, _ = spec.normalized()
 	spec.Env = systemdEnv(spec.Env, spec.StateDir)
+	// Preserve shell variables through systemd's own environment expansion.
+	cpuPerformanceHook := systemdCommand([]string{
+		"/bin/sh", "-ec", strings.ReplaceAll(cpuPerformanceScript, "$", "$$"),
+	})
 	thunderUninstallHook := systemdCommand([]string{
 		"/bin/sh",
 		"-c",
@@ -96,6 +107,7 @@ func SystemdUnit(spec Spec) string {
 		b.WriteString("Environment=" + systemdQuote(key+"="+spec.Env[key]) + "\n")
 	}
 	writeLines(&b,
+		"ExecStartPre="+cpuPerformanceHook,
 		"ExecStart="+systemdCommand(append([]string{spec.BinaryPath}, spec.Args...)),
 		"ExecStopPost="+thunderUninstallHook,
 		"Restart=always",

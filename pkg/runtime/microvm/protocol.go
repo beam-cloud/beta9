@@ -138,7 +138,7 @@ const (
 	MsgSignal  = "signal"  // Payload: Signal to deliver to the container process.
 	MsgFreeze  = "freeze"  // FIFREEZE the filesystem at Text (a guest mount path; empty means the root disk).
 	MsgThaw    = "thaw"    // FITHAW the same.
-	MsgNetwork = "network" // Payload: Network; reconfigure the NIC (after a restore, the container's new addresses).
+	MsgNetwork = "network" // Payload: Network and TimeUnixNano; restore addresses and wall time.
 )
 
 // FreezeLimit is how long the guest keeps a filesystem frozen without a thaw
@@ -233,6 +233,9 @@ type Message struct {
 	Error   string   `json:"error,omitempty"`
 	Text    string   `json:"text,omitempty"`
 	Network *Network `json:"network,omitempty"`
+	// A restored kernel clock excludes the time spent paused. The host sends
+	// current wall time with the network configuration before exec is ready.
+	TimeUnixNano int64 `json:"time_unix_nano,omitempty"`
 
 	OOM *ApplicationOOM `json:"oom,omitempty"`
 }

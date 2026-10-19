@@ -189,23 +189,52 @@ func (c *qmpClient) commitChain(ctx context.Context, device, topPath, basePath s
 		return err
 	}
 
-	type jobInfo struct {
-		ID       string `json:"id"`
-		Status   string `json:"status"`
-		Error    string `json:"error"`
-		Progress int64  `json:"current-progress"`
+	return c.waitForCommitJob(ctx, jobID)
+}
+
+type qmpJob struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Status   string `json:"status"`
+	Error    string `json:"error"`
+	Progress int64  `json:"current-progress"`
+}
+
+func (c *qmpClient) jobs(ctx context.Context) ([]qmpJob, error) {
+	raw, err := c.execute(ctx, types.QMPCommandQueryJobs, nil)
+	if err != nil {
+		return nil, err
 	}
+	var jobs []qmpJob
+	err = json.Unmarshal(raw, &jobs)
+	return jobs, err
+}
+
+// A cancelled caller does not cancel QEMU's job. Join and dismiss any previous
+// commit before inspecting or mutating the graph; even a concluded job pins it.
+func (c *qmpClient) finishCommitJobs(ctx context.Context) error {
+	jobs, err := c.jobs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if job.Type == "commit" {
+			if err := c.waitForCommitJob(ctx, job.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *qmpClient) waitForCommitJob(ctx context.Context, jobID string) error {
 	var progress int64
 	for {
-		raw, err := c.execute(ctx, types.QMPCommandQueryJobs, nil)
+		jobs, err := c.jobs(ctx)
 		if err != nil {
 			return err
 		}
-		var jobs []jobInfo
-		if err := json.Unmarshal(raw, &jobs); err != nil {
-			return err
-		}
-		var job *jobInfo
+		var job *qmpJob
 		for i := range jobs {
 			if jobs[i].ID == jobID {
 				job = &jobs[i]
@@ -216,7 +245,9 @@ func (c *qmpClient) commitChain(ctx context.Context, device, topPath, basePath s
 			return fmt.Errorf("commit job %s disappeared before concluding", jobID)
 		}
 		if job.Status == "concluded" {
-			_, _ = c.execute(ctx, types.QMPCommandJobDismiss, map[string]any{"id": jobID})
+			if _, err := c.execute(ctx, types.QMPCommandJobDismiss, map[string]any{"id": jobID}); err != nil {
+				return err
+			}
 			if job.Error != "" {
 				return fmt.Errorf("commit job: %s", job.Error)
 			}

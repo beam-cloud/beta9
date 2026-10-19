@@ -183,7 +183,7 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 
 	network, root, extra, err := m.prepare(ctx, inst, spec, "")
 	if err != nil {
-		return -1, err
+		return int(types.ContainerExitCodeStartupFailed), err
 	}
 	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra)
 	return m.boot(ctx, inst, spec, args, opts.OutputWriter, opts.ErrorWriter, opts.Started)
@@ -203,21 +203,23 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 	network, root, extra, err := m.prepare(ctx, inst, spec, opts.ImagePath)
 	if err != nil {
 		inst.stopProcesses()
-		return -1, err
+		return int(types.ContainerExitCodeStartupFailed), err
 	}
 	inst.ctrl.network = &network
 	snapshotDir, err := m.stageSnapshot(inst, opts.ImagePath, network, root, extra)
 	if err != nil {
 		inst.stopProcesses()
-		return -1, fmt.Errorf("stage snapshot: %w", err)
+		return int(types.ContainerExitCodeStartupFailed), fmt.Errorf("stage snapshot: %w", err)
 	}
 
 	booted := make(chan error, 1)
+	bootExitCode := -1
 	go func() {
 		defer inst.stopProcesses()
 		code, err := m.boot(ctx, inst, spec, microVMRestoreArgs(inst.stateDir, snapshotDir), opts.OutputWriter, nil, nil)
 		inst.finishExit(code, err)
 		log.Info().Str("container_id", containerID).Int("exit_code", code).Err(err).Msg("restored microvm exited")
+		bootExitCode = code
 		booted <- err
 	}()
 	select {
@@ -230,7 +232,7 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 		if err == nil {
 			err = errors.New("microvm exited before the restored guest reported in")
 		}
-		return -1, err
+		return bootExitCode, err
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	}
@@ -265,6 +267,11 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	}
 	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
 		return err
+	}
+	// Executable pages can be faulted back from virtio-fs after restore. A
+	// worker upgrade must not substitute new code underneath captured PCs.
+	if err := copyFile(filepath.Join(inst.canvas, microvm.InitPath), filepath.Join(opts.ImagePath, checkpointInitFile), 0o755); err != nil {
+		return fmt.Errorf("checkpoint guest init: %w", err)
 	}
 	api := inst.api()
 	if err := api.put(ctx, "vm.pause", nil); err != nil {
@@ -369,7 +376,7 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm disks: %w", err)
 	}
 	took("disks")
-	if err := m.prepareCanvas(inst, spec, network, root, extra); err != nil {
+	if err := m.prepareCanvas(inst, spec, network, root, extra, restoreFrom); err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm rootfs: %w", err)
 	}
 	took("canvas")
@@ -425,7 +432,7 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	cmd := exec.Command(m.cfg.MicroVMHypervisorPath, args...)
 	cgroupFD, err := inst.cgroupAttr(cmd)
 	if err != nil {
-		return -1, err
+		return int(types.ContainerExitCodeStartupFailed), err
 	}
 	defer cgroupFD.Close()
 	var out io.Writer = inst.console
@@ -452,7 +459,7 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	// Cloud Hypervisor opens the tap by name, so it must start in the container's netns.
 	spawnStart := time.Now()
 	if err := inNetworkNamespace(inst.netnsPath, cmd.Start); err != nil {
-		return -1, fmt.Errorf("start cloud-hypervisor: %w", err)
+		return int(types.ContainerExitCodeStartupFailed), fmt.Errorf("start cloud-hypervisor: %w", err)
 	}
 	inst.mu.Lock()
 	inst.hypervisor = cmd
@@ -1186,7 +1193,7 @@ func createScratchDisk(ctx context.Context, path string, size int64) error {
 
 // --- canvas ------------------------------------------------------------------
 
-func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk) error {
+func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, restoreFrom string) error {
 	// The canvas is image content: a symlink at any of these paths would
 	// redirect the host's writes and mounts below, so they are created
 	// without following one, and .beam is recreated empty.
@@ -1204,7 +1211,11 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 			return err
 		}
 	}
-	if err := copyFile(m.cfg.MicroVMInitPath, filepath.Join(inst.canvas, microvm.InitPath), 0o755); err != nil {
+	initPath := m.cfg.MicroVMInitPath
+	if restoreFrom != "" {
+		initPath = filepath.Join(restoreFrom, checkpointInitFile)
+	}
+	if err := copyFile(initPath, filepath.Join(inst.canvas, microvm.InitPath), 0o755); err != nil {
 		return fmt.Errorf("install guest init: %w", err)
 	}
 
@@ -1961,7 +1972,7 @@ func (c *microVMControl) serve(conn net.Conn) {
 }
 
 func (c *microVMControl) pushNetwork() {
-	_, err := c.request(context.Background(), microvm.Message{Type: microvm.MsgNetwork, Network: c.network})
+	_, err := c.request(context.Background(), microvm.Message{Type: microvm.MsgNetwork, Network: c.network, TimeUnixNano: time.Now().UnixNano()})
 	if err != nil {
 		log.Error().Err(err).Msg("restored microvm did not take its network configuration")
 	}

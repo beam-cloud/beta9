@@ -13,6 +13,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type disconnectingPauseRuntime struct {
+	*vmRuntime
+	cancel context.CancelFunc
+}
+
+func (r *disconnectingPauseRuntime) SandboxSnapshotMemory(ctx context.Context, in *pb.PodSandboxSnapshotMemoryRequest) (*pb.PodSandboxSnapshotMemoryResponse, error) {
+	r.cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return r.vmRuntime.SandboxSnapshotMemory(ctx, in)
+}
+
+type contextAwarePauseStore struct{ *vmStore }
+
+func (s *contextAwarePauseStore) SaveVM(ctx context.Context, v *types.VM) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.vmStore.SaveVM(ctx, v)
+}
+
+func TestAcceptedPausePersistsPairingAfterClientDisconnect(t *testing.T) {
+	s, v, info, rt, _ := fixture()
+	rt.memoryResponse = &pb.PodSandboxSnapshotMemoryResponse{Ok: true, Runtime: "microvm", CheckpointId: "memory", DiskSnapshots: []*pb.PodSandboxDiskSnapshot{{DiskName: rootDisk(v), SnapshotId: "root-after-shutdown"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.runtime = &disconnectingPauseRuntime{vmRuntime: rt, cancel: cancel}
+	s.repo = &contextAwarePauseStore{vmStore: s.repo.(*vmStore)}
+	c, _ := actionContext(info, v.Name, "pause", "{}")
+	c.SetRequest(c.Request().WithContext(ctx))
+	require.NoError(t, s.action(c))
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	stored, err := s.repo.GetVM(context.Background(), v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	require.Equal(t, "paused", stored.Status)
+	require.Equal(t, "memory", stored.MemoryCheckpointID)
+	require.Equal(t, "root-after-shutdown", stored.MemoryDiskSnapshots[rootDisk(v)])
+	require.Empty(t, stored.ContainerID)
+}
+
 func (r *vmRuntime) SandboxSnapshotMemory(_ context.Context, req *pb.PodSandboxSnapshotMemoryRequest) (*pb.PodSandboxSnapshotMemoryResponse, error) {
 	if r.memoryResponse == nil {
 		return &pb.PodSandboxSnapshotMemoryResponse{ErrorMsg: "checkpoint unavailable"}, nil

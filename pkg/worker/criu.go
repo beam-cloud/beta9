@@ -815,7 +815,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 				err = errors.Join(err, &checkpointRestoreCleanupError{err: cleanupErr})
 			}
 		}
-		if !hostIncompatible && !durableMountValidationFailed && !runscVersionFallback && !errors.Is(err, errGPUUnhealthy) {
+		if exitCode != int(types.ContainerExitCodeStartupFailed) && !hostIncompatible && !durableMountValidationFailed && !runscVersionFallback && !errors.Is(err, errGPUUnhealthy) {
 			s.markCheckpointRestoreFailed(request, checkpoint)
 		}
 
@@ -960,6 +960,11 @@ func (s *Worker) markCheckpointRestoreFailed(request *types.ContainerRequest, ch
 
 func (s *Worker) signalRestoredSandboxProcessManager(ctx context.Context, request *types.ContainerRequest, rt runtime.Runtime) {
 	if !request.Stub.Type.IsSandbox() || rt == nil {
+		return
+	}
+	// Native snapshots retain the guest kernel's live TCP listeners. Sending
+	// the CRIU listener-repair signal races the first readiness connection.
+	if rt.Name() == types.ContainerRuntimeMicroVM.String() {
 		return
 	}
 

@@ -208,8 +208,7 @@ func (s *Service) startPublicNetwork(cfg types.VMNetworkConfig, dialer *network.
 			select {
 			case slots <- struct{}{}:
 				go func() {
-					defer func() { <-slots }()
-					s.handlePublicVMConn(ctx, conn, httpListener)
+					s.handlePublicVMConn(ctx, conn, httpListener, func() { <-slots })
 				}()
 			default:
 				p.rejectConnection("gateway_limit", "")
@@ -284,11 +283,20 @@ func publicVMHTTPPort(v *types.VM, port uint32) bool {
 	return managedVMWebPort(v, port) || slices.Contains(v.Spec.ProtectedPorts, port)
 }
 
-func (s *Service) handlePublicVMConn(ctx context.Context, raw net.Conn, httpListener *publicVMHTTPListener) {
-	defer raw.Close()
+func (s *Service) handlePublicVMConn(ctx context.Context, raw net.Conn, httpListener *publicVMHTTPListener, releaseSlot func()) {
+	p := s.publicNetwork
+	var vmID string
+	defer func() {
+		// Make global capacity available before exposing a released VM slot
+		// or closing a rejected socket, both of which can trigger a new dial.
+		releaseSlot()
+		if vmID != "" {
+			p.releaseVMConnection(vmID)
+		}
+		raw.Close()
+	}()
 	stop := context.AfterFunc(ctx, func() { raw.Close() })
 	defer stop()
-	p := s.publicNetwork
 	// Check the actual peer before parsing any client-controlled metadata.
 	if !p.trustedProxy(raw.RemoteAddr()) {
 		return
@@ -310,7 +318,7 @@ func (s *Service) handlePublicVMConn(ctx context.Context, raw net.Conn, httpList
 	}
 	// Keep the slot until the TCP socket closes, including HTTP keep-alives
 	// and upgraded terminal/desktop sessions, rather than one HTTP request.
-	defer p.releaseVMConnection(v.ID)
+	vmID = v.ID
 	if publicVMHTTPPort(v, port) {
 		tracked := &publicVMHTTPConn{Conn: conn, done: make(chan struct{})}
 		select {

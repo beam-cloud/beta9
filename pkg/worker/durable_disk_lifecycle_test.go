@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,11 +40,63 @@ func TestTerminalMicroVMCheckpointKeepsItsSealedDiskGeneration(t *testing.T) {
 	}
 }
 
+func TestFailedBlockRootRestoreKeepsPairedDisks(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		request := &types.ContainerRequest{
+			ContainerId: "failed-memory-restore",
+			Checkpoint:  &types.Checkpoint{CheckpointId: "saved-ram"},
+			Mounts: []types.Mount{{LocalPath: t.TempDir(), DurableDisk: &types.DurableDiskMountConfig{
+				Name: "paired-root", Size: "1Gi", Driver: types.DurableDiskDriverSnapshot,
+			}}},
+		}
+		worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, nil)
+		worker.backendRepoClient = &fakeBackendRepoClient{}
+		instance, _ := worker.containerInstances.Get(request.ContainerId)
+		instance.Runtime = NewMockRuntime("microvm", runtime.Capabilities{BlockRoot: true})
+		if started {
+			instance.markRuntimeStarted(1)
+		}
+		code, _ := worker.finalizeDurableDiskMountsWithContext(context.Background(), request.ContainerId, request, int(types.ContainerExitCodeStartupFailed), true)
+		if started {
+			require.Equal(t, int(types.ContainerExitCodeUnknownError), code, "a guest that ran must still publish its writes")
+		} else {
+			require.Equal(t, int(types.ContainerExitCodeStartupFailed), code, "unused paired disks must not require another snapshot")
+		}
+	}
+}
+
 func TestDurableDiskCleanupContextIgnoresWorkerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	require.NoError(t, (&Worker{ctx: ctx}).durableDiskCleanupContext().Err())
+}
+
+func TestFailedStartupFinalizesOnlyAcquiredDisks(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(fmt.Sprint(started), func(t *testing.T) {
+			request := &types.ContainerRequest{ContainerId: "failed-attach", Mounts: []types.Mount{{
+				LocalPath:   t.TempDir(),
+				DurableDisk: &types.DurableDiskMountConfig{Name: "root", Size: "1Gi", Driver: types.DurableDiskDriverQcow},
+			}}}
+			worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, nil)
+			worker.diskManager = disk.NewManager(disk.Config{Root: t.TempDir()})
+			worker.backendRepoClient = &fakeBackendRepoClient{}
+			instance, _ := worker.containerInstances.Get(request.ContainerId)
+			if started {
+				instance.markRuntimeStarted(1)
+			}
+			code, reported := worker.finalizeDurableDiskMountsWithContext(context.Background(), request.ContainerId, request, int(types.ContainerExitCodeStartupFailed), true)
+			if started {
+				require.Equal(t, int(types.ContainerExitCodeUnknownError), code, "a running guest's missing disk must fail closed")
+				require.False(t, reported)
+			} else {
+				require.Equal(t, int(types.ContainerExitCodeStartupFailed), code)
+				require.True(t, reported)
+			}
+			require.Len(t, request.Mounts, 1, "finalization must not mutate the original request")
+		})
+	}
 }
 
 func TestDurableDiskCleanupBudgetCoversEveryDiskAllowance(t *testing.T) {

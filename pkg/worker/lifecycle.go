@@ -2018,12 +2018,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	isOOMKilled := atomic.Bool{}
 	go func() {
-		pid := <-monitorPIDChan
+		pid, ok := <-monitorPIDChan
+		if !ok || pid <= 0 {
+			return
+		}
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.AddressesRegistered, opts.CheckpointFilesystemRestore)
+	exitCode, err = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.AddressesRegistered, opts.CheckpointFilesystemRestore)
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("container runtime failed")
+	}
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -2312,20 +2318,19 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			restoreErr = filesystemRestore.wait()
 		} else if originalConfigErr != nil {
 			restoreErr = fmt.Errorf("checkpoint filesystem restore requires the original container config: %w", originalConfigErr)
-		} else if checkpointFilesystemOnDisk(request, s.runtime) {
-			// The restored disk already holds the checkpoint filesystem;
-			// reseeding would wipe it and re-extract the same bytes.
-			restoreErr = s.prepareRestoreFallback(request, originalConfig, nil)
-		} else {
+		} else if !checkpointFilesystemOnDisk(request, s.runtime) {
 			restoreErr = s.prepareRestoreFallback(request, originalConfig, func(upperPath string) error {
 				return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
 			})
 		}
+		// A disk-backed restore uses the freshly prepared canvas and config.
+		// Resetting that mount adds an unnecessary unmount/remount race before
+		// the runtime starts; its writable filesystem already lives on the disk.
 		if restoreErr != nil {
 			// A local fetch failure does not prove the checkpoint itself is invalid.
 			if !request.Stub.Type.IsDeployment() {
 				finishRuntimeStarted()
-				return -1, restoreErr
+				return int(types.ContainerExitCodeStartupFailed), restoreErr
 			}
 			if err := fallbackFromCheckpoint(false); err != nil {
 				finishRuntimeStarted()

@@ -35,7 +35,7 @@ func (m *Manager) formatQcowBase(ctx context.Context, headPath string, sizeBytes
 	}
 	converted := raw.Name() + ".qcow2"
 	defer os.Remove(converted)
-	if err := m.convertQcow(ctx, raw.Name(), converted, "raw"); err != nil {
+	if err := m.convertQcow(ctx, raw.Name(), converted, "raw", qcowCreateOpts); err != nil {
 		return fmt.Errorf("convert formatted filesystem: %w", err)
 	}
 	file, err := os.OpenFile(converted, os.O_RDWR, 0)
@@ -91,13 +91,17 @@ func (m *Manager) rebaseQcow(ctx context.Context, path, parentPath string) error
 func (m *Manager) flattenQcow(ctx context.Context, sourcePath, destPath string) error {
 	stop := reportFileGrowth(ctx, destPath)
 	defer stop()
-	return m.convertQcow(ctx, sourcePath, destPath, "qcow2")
+	// Reserve the guest-to-file mapping before copying data. Packing allocated
+	// clusters together shifts unchanged extents whenever a sparse gap gets a
+	// write, destroying chunk reuse at the next flatten. Metadata preallocation
+	// keeps their positions stable while leaving unwritten data sparse.
+	return m.convertQcow(ctx, sourcePath, destPath, "qcow2", qcowCreateOpts+",preallocation=metadata")
 }
 
-func (m *Manager) convertQcow(ctx context.Context, sourcePath, destPath, sourceFormat string) error {
+func (m *Manager) convertQcow(ctx context.Context, sourcePath, destPath, sourceFormat, options string) error {
 	_, err := m.run(ctx, m.binaries.QemuImg,
 		"convert", "-q", "-f", sourceFormat, "-O", "qcow2",
-		"-o", qcowCreateOpts, "-S", "4k",
+		"-o", options, "-S", "4k",
 		sourcePath, destPath)
 	return err
 }

@@ -333,3 +333,6 @@ replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 
 replace github.com/jacobsa/fuse => github.com/beam-cloud/gofuse v0.0.0-20260903160913-d6bd57646e38
+
+// Backport tailscale/tailscale#20722 for IPv6-only gateway connections.
+replace tailscale.com => github.com/beam-cloud/tailscale-go v1.95.0-pre.0.20261019094554-b7eecf9ca636

@@ -433,7 +433,7 @@ func (s *Service) reconcile(ctx context.Context) {
 				defer func() { <-slots }()
 				op, cancel := context.WithTimeout(ctx, 3*time.Minute)
 				defer cancel()
-				unlock, err := s.repo.LockVM(op, record.ID)
+				unlock, err := s.repo.TryLockVM(op, record.ID)
 				if err != nil {
 					return
 				}

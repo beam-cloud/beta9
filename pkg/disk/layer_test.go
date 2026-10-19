@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"io"
 	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
@@ -43,6 +45,66 @@ func (s *memoryChunkStore) ReadChunk(_ context.Context, chunk types.DiskSnapshot
 
 func chunkKey(digest string) string {
 	return "chunks/" + digest
+}
+
+func TestUploadLayerRejectsTruncatedSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "layer.qcow2")
+	if err := os.WriteFile(path, bytes.Repeat([]byte{1}, 64<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layer, err := ScanLayer(context.Background(), path, chunkKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, 1); err != nil {
+		t.Fatal(err)
+	}
+	store := newMemoryChunkStore()
+	if err := UploadLayer(context.Background(), store, path, layer); !errors.Is(err, io.EOF) {
+		t.Fatalf("truncated layer must fail before upload, got %v", err)
+	}
+	if len(store.objects) != 0 {
+		t.Fatal("uploaded a partial chunk under the original content hash")
+	}
+}
+
+func TestSplitExtentRejectsTruncatedSource(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "layer.qcow2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := file.Truncate(chunkMinSize + 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := splitExtent(context.Background(), file, make([]byte, 4096), 0, chunkMinSize+4096); !errors.Is(err, io.EOF) {
+		t.Fatalf("truncated extent must fail, got %v", err)
+	}
+}
+
+type discardChunkSink struct{}
+
+func (discardChunkSink) WriteChunk(context.Context, string, []byte) error { return nil }
+
+func BenchmarkLayerScanUpload(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "layer.qcow2")
+	data := make([]byte, 64<<20)
+	mathrand.NewChaCha8([32]byte{'l', 'a', 'y', 'e', 'r'}).Read(data)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(data)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		layer, err := ScanLayer(context.Background(), path, chunkKey)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := UploadLayer(context.Background(), discardChunkSink{}, path, layer); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestLayerScanUploadFetchRoundTrip(t *testing.T) {

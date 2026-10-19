@@ -504,6 +504,27 @@ func (s *Service) action(c echo.Context) error {
 		}
 		return s.launchResponse(c, http.StatusOK, v)
 	}
+	// An already-running VM needs no lifecycle mutation. In particular, an
+	// automatic snapshot must not prevent the same caller from reconnecting.
+	if !req.Cold && (c.Param("action") == "start" || c.Param("action") == "resume" || c.Param("action") == "wake") {
+		v, err := s.repo.GetVM(ctx, info.Workspace.Id, c.Param("name"))
+		if err != nil {
+			return apiError(err)
+		}
+		if v.DesiredState == "running" && v.Status == "running" && v.Error == "" &&
+			v.TokenID == info.Token.ExternalId && v.MemoryCheckpointID == "" {
+			state, err := s.runtimeState(v)
+			if err != nil {
+				return apiError(err)
+			}
+			if state != nil && state.Status == types.ContainerStatusRunning {
+				if err := s.repo.TouchVM(ctx, v.ID); err != nil {
+					return apiError(err)
+				}
+				return s.launchResponse(c, http.StatusOK, v)
+			}
+		}
+	}
 
 	v, unlock, err := s.lockedVM(ctx, info.Workspace.Id, c.Param("name"))
 	if err != nil {
@@ -537,6 +558,11 @@ func (s *Service) action(c echo.Context) error {
 
 		err = s.activate(ctx, info, v)
 	case "pause":
+		// The worker owns a terminal checkpoint once pause is accepted. Keep
+		// its RAM/disk pairing durable even if the HTTP caller disconnects.
+		operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+		defer cancel()
+		ctx = operationCtx
 		err = s.pause(ctx, v)
 	case "wake":
 		if !v.Spec.AutoResume && v.DesiredState != "running" {
