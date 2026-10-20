@@ -397,7 +397,7 @@ func TestNewProcessManagerClientKeepsRetryableErrorWhenFallbackFailsHard(t *test
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	client, err := newProcessManagerClientFromEndpoints(ctx, endpoints, goprocReadyProbeTimeout)
+	client, err := newProcessManagerClientFromEndpoints(ctx, endpoints)
 	require.Nil(t, client)
 	require.Error(t, err)
 	require.True(t, isProcessManagerDialFailure(err), "expected the primary's retryable error, got: %v", err)

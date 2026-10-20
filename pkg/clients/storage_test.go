@@ -141,26 +141,39 @@ func TestStorageMultipartUploaderLimitsStreamingConcurrency(t *testing.T) {
 }
 
 func TestStorageExistsUsesHead(t *testing.T) {
-	var method string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		method = r.Method
+		if r.Method != http.MethodHead {
+			t.Errorf("Exists() method = %q, want HEAD", r.Method)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	client, err := NewWorkspaceStorageClient(context.Background(), "workspace", testWorkspaceStorage(server.URL))
+	ctx := context.Background()
+	storage := testWorkspaceStorage(server.URL)
+	workspace, err := NewWorkspaceStorageClient(ctx, "workspace", storage)
 	if err != nil {
 		t.Fatalf("NewWorkspaceStorageClient() error = %v", err)
 	}
-	exists, err := client.Exists(context.Background(), "chunks/hash")
+	defaultClient, err := NewDefaultStorageClient(ctx, types.AppConfig{Storage: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{
+		DefaultRegion:      *storage.Region,
+		DefaultAccessKey:   *storage.AccessKey,
+		DefaultSecretKey:   *storage.SecretKey,
+		DefaultEndpointUrl: server.URL,
+	}}})
 	if err != nil {
-		t.Fatalf("Exists() error = %v", err)
+		t.Fatalf("NewDefaultStorageClient() error = %v", err)
 	}
-	if !exists {
-		t.Fatal("Exists() = false, want true")
-	}
-	if method != http.MethodHead {
-		t.Fatalf("Exists() method = %q, want HEAD", method)
+	for name, exists := range map[string]func() (bool, error){
+		"workspace": func() (bool, error) { return workspace.Exists(ctx, "chunks/hash") },
+		"default":   func() (bool, error) { return defaultClient.Exists(ctx, "chunks/hash", *storage.BucketName) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ok, err := exists()
+			if err != nil || !ok {
+				t.Fatalf("Exists() = %t, %v; want true, nil", ok, err)
+			}
+		})
 	}
 }
 

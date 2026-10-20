@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
-	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 
 	pkgCommon "github.com/beam-cloud/beta9/pkg/common"
@@ -1098,7 +1097,7 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		RETURNING ` + columns + `
 	), activity AS (
 		UPDATE app SET updated_at=NOW() WHERE id=$6
-			AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')
+			AND ` + appActivityNeedsRefresh + `
 	)
 	SELECT * FROM created UNION ALL SELECT * FROM touched`
 	var stub types.Stub
@@ -2667,17 +2666,14 @@ func (r *PostgresBackendRepository) CountApps(ctx context.Context, workspaceId u
 	return count, err
 }
 
-// Use to update the updated_at field of app when stub and deployment is created with app_id
+const appActivityNeedsRefresh = `(updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')`
+
+// updateAppActivity refreshes activity when a stub or deployment is created.
 // Skipped while the row is fresh so concurrent stub creations in one app
 // don't queue on its lock.
 func (r *PostgresBackendRepository) updateAppActivity(ctx context.Context, appId uint) error {
-	query := `UPDATE app SET updated_at = NOW() WHERE id = $1 AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')`
-
-	if _, err := r.client.ExecContext(ctx, query, appId); err != nil {
-		return err
-	}
-
-	return nil
+	_, err := r.client.ExecContext(ctx, `UPDATE app SET updated_at = NOW() WHERE id = $1 AND `+appActivityNeedsRefresh, appId)
+	return err
 }
 
 // decryptFields decrypts fields of a struct using AES-GCM

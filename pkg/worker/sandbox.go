@@ -721,15 +721,11 @@ func nextProcessManagerBackoff(delay time.Duration) time.Duration {
 }
 
 func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
-	return newProcessManagerClientWithProbeTimeout(ctx, instance, goprocReadyProbeTimeout)
-}
-
-func newProcessManagerClientWithProbeTimeout(ctx context.Context, instance *ContainerInstance, probeTimeout time.Duration) (*goproc.GoProcClient, error) {
 	endpoints := sandboxProcessManagerEndpoints(instance)
 	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("sandbox process manager address unavailable")
+		return nil, errors.New("sandbox process manager address unavailable")
 	}
-	return newProcessManagerClientFromEndpoints(ctx, endpoints, probeTimeout)
+	return newProcessManagerClientFromEndpoints(ctx, endpoints)
 }
 
 // newProcessManagerClientFromEndpoints tries each endpoint in order and returns
@@ -738,32 +734,23 @@ func newProcessManagerClientWithProbeTimeout(ctx context.Context, instance *Cont
 // briefly refuses on its container IP while its published host-mapped address
 // fails hard (the worker itself cannot reach a PREROUTING-only DNAT), and the
 // later hard failure must not turn the transient refusal into a fatal exec.
-func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint, probeTimeout time.Duration) (*goproc.GoProcClient, error) {
+func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint) (*goproc.GoProcClient, error) {
 	var lastErr, retryableErr error
-	recordErr := func(err error) {
+	for _, endpoint := range endpoints {
+		client, err := goproc.NewGoProcClient(ctx, endpoint.dialHost(), uint(endpoint.port))
+		if err == nil {
+			probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+			err = client.ReadyContext(probeCtx)
+			cancel()
+			if err == nil {
+				return client, nil
+			}
+			_ = client.Cleanup()
+		}
 		lastErr = err
 		if retryableErr == nil && isProcessManagerDialFailure(err) {
 			retryableErr = err
 		}
-	}
-
-	for _, endpoint := range endpoints {
-		client, err := goproc.NewGoProcClient(ctx, endpoint.dialHost(), uint(endpoint.port))
-		if err != nil {
-			recordErr(err)
-			continue
-		}
-
-		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		err = client.ReadyContext(probeCtx)
-		cancel()
-		if err != nil {
-			_ = client.Cleanup()
-			recordErr(err)
-			continue
-		}
-
-		return client, nil
 	}
 
 	if retryableErr != nil {

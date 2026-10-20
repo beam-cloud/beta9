@@ -60,12 +60,16 @@ func (c *qmpClient) Close() error {
 	return nil
 }
 
-func (c *qmpClient) decode(ctx context.Context, v any) error {
+func qmpDeadline(ctx context.Context) time.Time {
 	deadline := time.Now().Add(qmpDialTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
+		return d
 	}
-	_ = c.conn.SetReadDeadline(deadline)
+	return deadline
+}
+
+func (c *qmpClient) decode(ctx context.Context, v any) error {
+	_ = c.conn.SetReadDeadline(qmpDeadline(ctx))
 	return c.dec.Decode(v)
 }
 
@@ -84,11 +88,7 @@ func (c *qmpClient) execute(ctx context.Context, command string, arguments any) 
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(qmpDialTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = c.conn.SetWriteDeadline(deadline)
+	_ = c.conn.SetWriteDeadline(qmpDeadline(ctx))
 	if _, err := c.conn.Write(payload); err != nil {
 		return nil, fmt.Errorf("write qmp command %s: %w", command, err)
 	}
