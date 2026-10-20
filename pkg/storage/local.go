@@ -19,10 +19,6 @@ func (s *LocalStorage) Unmount(localPath string) error {
 	return nil
 }
 
-func (s *LocalStorage) Format(fsName string) error {
-	return nil
-}
-
 func (s *LocalStorage) Mode() string {
 	return StorageModeLocal
 }

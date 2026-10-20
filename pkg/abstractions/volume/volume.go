@@ -70,6 +70,9 @@ func NewGlobalVolumeService(config types.FileServiceConfig, workspaceStorageConf
 }
 
 func (vs *GlobalVolumeService) newWorkspaceStorageClientForPresign(ctx context.Context, workspace *types.Workspace) (*clients.WorkspaceStorageClient, error) {
+	if !workspace.StorageAvailable() {
+		return nil, errors.New("workspace storage is unavailable")
+	}
 	return clients.NewWorkspaceStorageClientWithDefaultPresignEndpoint(
 		ctx,
 		workspace.Name,

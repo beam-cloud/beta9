@@ -22,7 +22,6 @@ func (s *trackedStorage) Unmount(string) error {
 	s.unmounted = true
 	return nil
 }
-func (*trackedStorage) Format(string) error { return nil }
 func (s *trackedStorage) Mode() string {
 	if s.mode != "" {
 		return s.mode

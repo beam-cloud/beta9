@@ -401,21 +401,8 @@ func FSMetadataFromWorkerCacheProto(metadata *proto.WorkerCacheFSMetadata) *FSMe
 
 type SourceConfig struct {
 	Mode           string           `key:"mode" json:"mode"`
-	FilesystemName string           `key:"fsName" json:"filesystem_name"`
 	FilesystemPath string           `key:"fsPath" json:"filesystem_path"`
-	JuiceFS        JuiceFSConfig    `key:"juicefs" json:"juicefs"`
 	MountPoint     MountPointConfig `key:"mountpoint" json:"mountpoint"`
-}
-
-type JuiceFSConfig struct {
-	RedisURI   string `key:"redisURI" json:"redis_uri"`
-	Bucket     string `key:"bucket" json:"bucket"`
-	AccessKey  string `key:"accessKey" json:"access_key"`
-	SecretKey  string `key:"secretKey" json:"secret_key"`
-	CacheSize  int64  `key:"cacheSize" json:"cache_size"`
-	BlockSize  int64  `key:"blockSize" json:"block_size"`
-	Prefetch   int64  `key:"prefetch" json:"prefetch"`
-	BufferSize int64  `key:"bufferSize" json:"buffer_size"`
 }
 
 type MountPointConfig struct {

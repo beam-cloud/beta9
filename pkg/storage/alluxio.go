@@ -116,7 +116,3 @@ func (s *AlluxioStorage) stripLocalPath(localPath string) string {
 	base := filepath.Base(localPath)
 	return filepath.Join("/", base)
 }
-
-func (s *AlluxioStorage) Format(fsName string) error {
-	return nil
-}

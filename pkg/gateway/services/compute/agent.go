@@ -1177,7 +1177,6 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 		DisabledServices: []string{
 			"redis",
 			"postgres",
-			"juicefs",
 			"fluent-bit",
 			"alluxio",
 			"configman",

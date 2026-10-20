@@ -362,14 +362,6 @@ func (c CreditGateConfig) EnforceIntervalOrDefault() time.Duration {
 }
 
 type FileServiceConfig struct {
-	EndpointURL string `key:"endpointUrl" json:"endpoint_url"`
-	BucketName  string `key:"bucketName" json:"bucket_name"`
-	AccessKey   string `key:"accessKey" json:"access_key"`
-	SecretKey   string `key:"secretKey" json:"secret_key"`
-	Region      string `key:"region" json:"region"`
-
-	// Determines if the SDK should use this service
-	// Requires that EndpointURL and BucketName are set
 	Enabled bool `key:"enabled" json:"enabled"`
 }
 
@@ -487,10 +479,8 @@ type PythonStandaloneConfig struct {
 
 type StorageConfig struct {
 	Mode             string                 `key:"mode" json:"mode"`
-	FilesystemName   string                 `key:"fsName" json:"filesystem_name"`
 	FilesystemPath   string                 `key:"fsPath" json:"filesystem_path"`
 	ObjectPath       string                 `key:"objectPath" json:"object_path"`
-	JuiceFS          JuiceFSConfig          `key:"juicefs" json:"juicefs"`
 	Geese            GeeseConfig            `key:"geese" json:"geese"`
 	Alluxio          AlluxioConfig          `key:"alluxio" json:"alluxio"`
 	MountPoint       MountPointConfig       `key:"mountpoint" json:"mountpoint"`
@@ -510,24 +500,6 @@ type WorkspaceStorageConfig struct {
 	// Storage mode configs
 	Geese   GeeseConfig   `key:"geese" json:"geese"`
 	Alluxio AlluxioConfig `key:"alluxio" json:"alluxio"`
-}
-
-type JuiceFSConfig struct {
-	RedisURI     string `key:"redisURI" json:"redis_uri"`
-	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
-	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
-	CacheSize    int64  `key:"cacheSize" json:"cache_size"`
-	BlockSize    int64  `key:"blockSize" json:"block_size"`
-	Prefetch     int64  `key:"prefetch" json:"prefetch"`
-	BufferSize   int64  `key:"bufferSize" json:"buffer_size"`
-	// CacheDir holds the local block cache (--cache-dir); CacheSize bounds it in MiB.
-	CacheDir string `key:"cacheDir" json:"cache_dir"`
-	// Writeback acknowledges writes once they are in the local cache and
-	// uploads them in the background (--writeback). Needs a CacheDir.
-	Writeback bool `key:"writeback" json:"writeback"`
-	// MaxUploads is the number of blocks uploaded concurrently (--max-uploads, juicefs default 20).
-	MaxUploads int64 `key:"maxUploads" json:"max_uploads"`
 }
 
 type GeeseConfig struct {

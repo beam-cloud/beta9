@@ -144,7 +144,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 			continue
 		}
 
-		Logger.Infof("Configured and mounted source: %+v", sourceConfig.FilesystemName)
+		Logger.Infof("Configured and mounted source: %+v", sourceConfig.FilesystemPath)
 	}
 
 	cs := &Server{

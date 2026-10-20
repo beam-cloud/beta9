@@ -8,7 +8,6 @@ components:
 - ../../components/monitoring
 - ../../components/redis
 - ../../components/postgresql
-- ../../components/juicefs
 - ../../components/localstack
 - ../../components/beta9-gateway
 patches:
