@@ -319,6 +319,14 @@ func (cs *Server) HasCompleteContent(hash string, expectedSize int64) bool {
 	return cs.cas.ContentStatus(hash, expectedSize) == contentStatusComplete
 }
 
+// PinContent keeps an archive available for the duration of a multi-page read.
+func (cs *Server) PinContent(hash string) func() {
+	if cs == nil || cs.cas == nil {
+		return func() {}
+	}
+	return cs.cas.index.pin(hash)
+}
+
 // ReserveDiskSpace admits non-page cache writes, such as checkpoint extraction,
 // against the same capacity budget as page writes. Release after writing ends.
 func (cs *Server) ReserveDiskSpace(size int64) (func(), error) {
@@ -639,6 +647,7 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 	}
 
 	const chunkSize = getContentStreamChunkSize
+	defer cs.PinContent(req.Hash)()
 	offset := req.Offset
 	remainingLength := req.Length
 	if remainingLength == 0 {

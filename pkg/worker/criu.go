@@ -1290,6 +1290,13 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	checkpointCtx, checkpointCancel := context.WithDeadline(checkpointParent, checkpointDeadline)
 	defer func() { checkpointCancel() }()
 	checkpointStateCtx = checkpointCtx
+	if s.cacheManager != nil {
+		release, lockErr := s.cacheManager.acquireCheckpointMaterialization(checkpointCtx, opts.CheckpointId)
+		if lockErr != nil {
+			return lockErr
+		}
+		defer release()
+	}
 	resumeOOMWatcher := func() {}
 	if terminateRuntime {
 		resumeOOMWatcher = instance.suspendOOMWatcher()
@@ -1599,18 +1606,11 @@ func (s *Worker) ensureCheckpointMaterializedWithLogger(ctx context.Context, req
 	if checkpointPath == "" {
 		return "", fmt.Errorf("checkpoint path is unavailable")
 	}
-	metadataComplete := checkpoint.CacheHash != "" && checkpoint.CacheSizeBytes > 0 && checkpoint.OriginKey != ""
-	if checkpointMaterialized(checkpointPath) {
-		return checkpointPath, validateCheckpointKind(checkpointPath, checkpoint.IsFilesystemOnly())
-	}
-	if metadataComplete {
-		s.reportCheckpointRequiredContent(request, checkpoint.CheckpointId, checkpointCacheMetadataFromRecord(request, checkpoint))
-	}
-	if !metadataComplete {
-		return "", fmt.Errorf("checkpoint cache metadata is incomplete")
-	}
 	if s.cacheManager == nil {
 		return "", fmt.Errorf("checkpoint cache manager is unavailable")
+	}
+	if request != nil {
+		s.cacheManager.retainCheckpointForContainer(request.ContainerId, checkpoint.CheckpointId)
 	}
 	release, err := s.cacheManager.acquireCheckpointMaterialization(ctx, checkpoint.CheckpointId)
 	if err != nil {
@@ -1620,6 +1620,20 @@ func (s *Worker) ensureCheckpointMaterializedWithLogger(ctx context.Context, req
 	if checkpointMaterialized(checkpointPath) {
 		return checkpointPath, validateCheckpointKind(checkpointPath, checkpoint.IsFilesystemOnly())
 	}
+	if checkpoint.CacheHash == "" || checkpoint.CacheSizeBytes <= 0 || checkpoint.OriginKey == "" {
+		return "", fmt.Errorf("checkpoint cache metadata is incomplete")
+	}
+	s.reportCheckpointRequiredContent(request, checkpoint.CheckpointId, checkpointCacheMetadataFromRecord(request, checkpoint))
+	s.cacheManager.mu.Lock()
+	server := s.cacheManager.server
+	s.cacheManager.mu.Unlock()
+	defer server.PinContent(checkpoint.CacheHash)()
+	// An origin restore may hold both the archive and extracted files temporarily.
+	releaseSpace, err := s.cacheManager.reserveCheckpointSpace(server, 2*checkpoint.CacheSizeBytes)
+	if err != nil {
+		return "", err
+	}
+	defer releaseSpace()
 	s.cacheManager.requestReconcile()
 
 	started := time.Now()

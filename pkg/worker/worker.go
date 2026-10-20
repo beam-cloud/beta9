@@ -190,6 +190,7 @@ func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManage
 }
 
 type ContainerInstance struct {
+	checkpointCacheID          atomic.Pointer[string]
 	tunnels                    tunnelSessions
 	requests                   requestJournal
 	workerAddressPublished     atomic.Bool

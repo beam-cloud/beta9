@@ -404,6 +404,7 @@ func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {
 	kept := []byte("old")
 	keptHash := fmt.Sprintf("%x", sha256.Sum256(kept))
 	require.NoError(t, store.Add(context.Background(), keptHash, kept))
+	releaseKept := (&Server{cas: store}).PinContent(keptHash)
 	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 940, availableBytes: 60, usagePct: .94}, nil
 	})
@@ -416,17 +417,18 @@ func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {
 		} else {
 			err = store.Add(context.Background(), hash, content)
 		}
-		require.ErrorIs(t, err, errDiskCacheCapacity)
+		require.ErrorIs(t, err, ErrDiskCacheCapacity)
 		store.cache.Wait()
 		require.False(t, store.Exists(hash), "refused completion must not advertise a RAM-only object")
 		_, err = os.Stat(store.pageDir(hash))
 		require.True(t, os.IsNotExist(err), "refused completion must remove new pages")
 	}
+	releaseKept()
 	for _, unindexed := range []bool{false, true} {
 		if unindexed {
 			store.index.forget(keptHash) // A different Store can have published the marker.
 		}
-		require.ErrorIs(t, store.Add(context.Background(), keptHash, kept), errDiskCacheCapacity)
+		require.ErrorIs(t, store.Add(context.Background(), keptHash, kept), ErrDiskCacheCapacity)
 		_, _, _, complete := store.completeMarker(keptHash)
 		require.True(t, complete, "failed replacement must retain the existing complete object")
 	}

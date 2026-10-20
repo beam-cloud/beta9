@@ -1452,12 +1452,19 @@ func TestReconcileCheckpointExtractsEmbeddedCacheArchive(t *testing.T) {
 	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))
 	require.NoFileExists(t, filepath.Join(checkpointRoot, checkpointID+checkpointArchiveExtension))
 
-	err = manager.extractCheckpointArchive(ctx, server, types.CacheRequiredContentItem{
+}
+
+func TestCheckpointExtractionRejectsInsufficientSpace(t *testing.T) {
+	ctx := context.Background()
+	server, _ := newCheckpointCacheForTest(t, ctx)
+	root := t.TempDir()
+	manager := &WorkerCacheManager{checkpointRoot: root}
+	err := manager.extractCheckpointArchive(ctx, server, types.CacheRequiredContentItem{
 		CheckpointID: "no-space",
 		SizeBytes:    math.MaxInt64,
 	})
 	require.ErrorContains(t, err, "disk cache capacity exceeded")
-	require.NoDirExists(t, filepath.Join(checkpointRoot, "no-space"))
+	require.NoDirExists(t, filepath.Join(root, "no-space"))
 }
 
 func TestReconcileCheckpointIgnoresSuccessBackoffWhenExtractedPayloadMissing(t *testing.T) {
@@ -1851,7 +1858,7 @@ func TestPruneLocalCheckpointsKeepsActiveAndFresh(t *testing.T) {
 	require.NoError(t, os.Chtimes(filepath.Join(root, "drop"), old, old))
 	require.NoError(t, os.Chtimes(filepath.Join(root, "drop"+checkpointArchiveExtension), old, old))
 
-	manager.pruneLocalCheckpoints(map[string]struct{}{"keep": struct{}{}})
+	manager.pruneLocalCheckpoints(map[string]struct{}{"keep": struct{}{}}, 0)
 
 	require.DirExists(t, filepath.Join(root, "keep"))
 	require.FileExists(t, filepath.Join(root, "keep"+checkpointArchiveExtension))
@@ -1860,6 +1867,35 @@ func TestPruneLocalCheckpointsKeepsActiveAndFresh(t *testing.T) {
 	require.DirExists(t, filepath.Join(root, "fresh"))
 	require.FileExists(t, filepath.Join(root, "fresh"+checkpointArchiveExtension))
 	require.DirExists(t, filepath.Join(root, ".extracting"))
+}
+
+func TestCheckpointPressureEvictsOldestWarmCopy(t *testing.T) {
+	root := t.TempDir()
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("running", &ContainerInstance{})
+	manager := &WorkerCacheManager{checkpointRoot: root, containerInstances: instances}
+	manager.retainCheckpointForContainer("running", "running")
+	for i, id := range []string{"extracting", "running", "old", "new"} {
+		path := filepath.Join(root, id)
+		createMaterializedCheckpointForTest(t, path)
+		modified := time.Now().Add(time.Duration(i-4) * time.Minute)
+		require.NoError(t, os.Chtimes(path, modified, modified))
+	}
+	release, err := manager.acquireCheckpointMaterialization(context.Background(), "extracting")
+	require.NoError(t, err)
+	defer release()
+
+	manager.pruneLocalCheckpoints(map[string]struct{}{"old": {}, "new": {}}, 1)
+
+	require.NoDirExists(t, filepath.Join(root, "old"))
+	for _, id := range []string{"extracting", "running", "new"} {
+		require.DirExists(t, filepath.Join(root, id))
+	}
+
+	instances.Delete("running")
+	manager.pruneLocalCheckpoints(map[string]struct{}{"new": {}}, 1)
+	require.NoDirExists(t, filepath.Join(root, "running"))
+	require.DirExists(t, filepath.Join(root, "new"))
 }
 
 func testClipV1Metadata(t *testing.T) *clipCommon.ClipArchiveMetadata {

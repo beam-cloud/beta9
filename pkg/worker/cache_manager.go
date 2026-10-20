@@ -102,6 +102,7 @@ type WorkerCacheManager struct {
 	reconcileFailures    map[string]time.Time
 	reconcileSuccessesMu sync.Mutex
 	reconcileSuccesses   map[string]time.Time
+	checkpointPruneMu    sync.Mutex
 	checkpointLocksMu    sync.Mutex
 	checkpointLocks      map[string]*checkpointMaterializationLock
 	ownerLastLiveMu      sync.Mutex

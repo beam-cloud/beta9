@@ -7,6 +7,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -875,7 +876,8 @@ func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protecte
 			Dur("recent_stub_ttl", m.recentStubTTL()).
 			Msg("pruned stale embedded cache content")
 	}
-	m.pruneLocalCheckpoints(activeCheckpointIDs)
+	usage, _ := fastDiskUsage(m.checkpointRoot)
+	m.pruneLocalCheckpoints(activeCheckpointIDs, reconcilePressureBytesToFree(usage, server.EvictWatermarkPct(), server.DiskMinFreeBytes()))
 	m.pruneStaleCacheCheckpoints()
 }
 
@@ -1673,43 +1675,125 @@ func (m *WorkerCacheManager) pruneReconcileFailures() {
 	}
 }
 
-func (m *WorkerCacheManager) pruneLocalCheckpoints(active map[string]struct{}) {
+// Warm checkpoint copies are evictable under pressure. Running restores and
+// checkpoint writers are protected by their instance references and file locks.
+func (m *WorkerCacheManager) pruneLocalCheckpoints(warm map[string]struct{}, bytesToFree int64) {
 	if m.checkpointRoot == "" {
 		return
 	}
+	m.checkpointPruneMu.Lock()
+	defer m.checkpointPruneMu.Unlock()
 	entries, err := os.ReadDir(m.checkpointRoot)
 	if err != nil {
 		return
 	}
-	pruneCutoff := time.Now().Add(-m.recentStubTTL())
+	type candidate struct {
+		name     string
+		modified time.Time
+	}
+	candidates := make([]candidate, 0, len(entries))
 	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
+		if strings.HasPrefix(entry.Name(), ".") || (!entry.IsDir() && !strings.HasSuffix(entry.Name(), checkpointArchiveExtension)) {
 			continue
 		}
-		checkpointID := name
-		if strings.HasSuffix(name, checkpointArchiveExtension) {
-			checkpointID = strings.TrimSuffix(name, checkpointArchiveExtension)
-		} else if !entry.IsDir() {
+		if info, err := entry.Info(); err == nil {
+			candidates = append(candidates, candidate{entry.Name(), info.ModTime()})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].modified.Before(candidates[j].modified) })
+	lockDir := filepath.Join(m.checkpointRoot, ".locks")
+	if os.MkdirAll(lockDir, 0755) != nil {
+		return
+	}
+	cutoff := time.Now().Add(-m.recentStubTTL())
+	for _, entry := range candidates {
+		id := strings.TrimSuffix(entry.name, checkpointArchiveExtension)
+		if bytesToFree <= 0 {
+			if _, ok := warm[id]; ok {
+				continue
+			}
+			if entry.modified.After(cutoff) {
+				continue
+			}
+		}
+		lock := NewFileLock(filepath.Join(lockDir, id+".lock"))
+		if lock.Acquire() != nil {
 			continue
 		}
-		if _, ok := active[checkpointID]; ok {
-			continue
+		path := filepath.Join(m.checkpointRoot, entry.name)
+		info, err := os.Stat(path)
+		if err == nil && info.ModTime().Equal(entry.modified) && !m.checkpointInUse(id) {
+			size := allocatedCheckpointBytes(path)
+			if err := os.RemoveAll(path); err == nil {
+				bytesToFree -= size
+			} else {
+				log.Warn().Err(err).Str("checkpoint_id", id).Msg("checkpoint cache eviction failed")
+			}
 		}
-		path := filepath.Join(m.checkpointRoot, name)
-		if checkpointLocalPathFresh(path, pruneCutoff) {
-			continue
-		}
-		_ = os.RemoveAll(path)
+		_ = lock.Release()
 	}
 }
 
-func checkpointLocalPathFresh(path string, pruneCutoff time.Time) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
+func (m *WorkerCacheManager) retainCheckpointForContainer(containerID, checkpointID string) {
+	if m.containerInstances != nil {
+		if instance, exists := m.containerInstances.Get(containerID); exists && instance != nil {
+			instance.checkpointCacheID.Store(&checkpointID)
+		}
 	}
-	return info.ModTime().After(pruneCutoff)
+}
+
+func (m *WorkerCacheManager) checkpointInUse(id string) bool {
+	inUse := false
+	if m.containerInstances != nil {
+		m.containerInstances.Range(func(_ string, instance *ContainerInstance) bool {
+			if instance != nil {
+				checkpointID := instance.checkpointCacheID.Load()
+				inUse = checkpointID != nil && *checkpointID == id
+			}
+			return !inUse
+		})
+	}
+	return inUse
+}
+
+func allocatedCheckpointBytes(root string) int64 {
+	var size int64
+	_ = filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if info, err := entry.Info(); err == nil {
+			if stat, ok := info.Sys().(*syscall.Stat_t); ok && (info.IsDir() || stat.Nlink == 1) {
+				// Blocks are 512-byte units; sparse holes and shared links free no data.
+				size += stat.Blocks * 512
+			}
+		}
+		return nil
+	})
+	return size
+}
+
+func (m *WorkerCacheManager) reserveCheckpointSpace(server *cache.Server, size int64) (func(), error) {
+	if server == nil {
+		return func() {}, nil
+	}
+	release, err := server.ReserveDiskSpace(size)
+	if err == nil {
+		return release, nil
+	}
+	if !errors.Is(err, cache.ErrDiskCacheCapacity) {
+		return nil, err
+	}
+	usage, statErr := fastDiskUsage(m.checkpointRoot)
+	if statErr != nil || size <= 0 || uint64(size) > usage.TotalBytes {
+		return nil, err
+	}
+	projected := usage
+	projected.UsedBytes += uint64(size)
+	projected.AvailableBytes -= min(uint64(size), projected.AvailableBytes)
+	projected.UsagePct = float64(projected.UsedBytes) / float64(projected.TotalBytes)
+	m.pruneLocalCheckpoints(nil, reconcilePressureBytesToFree(projected, server.EvictWatermarkPct(), server.DiskMinFreeBytes()))
+	return server.ReserveDiskSpace(size)
 }
 
 func (m *WorkerCacheManager) pruneStaleCacheCheckpoints() {
@@ -1994,7 +2078,8 @@ func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, serve
 	if server == nil {
 		return fmt.Errorf("cache server is unavailable")
 	}
-	release, err := server.ReserveDiskSpace(item.SizeBytes)
+	defer server.PinContent(item.Hash)()
+	release, err := m.reserveCheckpointSpace(server, item.SizeBytes)
 	if err != nil {
 		return fmt.Errorf("reserve checkpoint cache space: %w", err)
 	}
