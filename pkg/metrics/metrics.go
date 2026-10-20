@@ -346,6 +346,13 @@ func RecordWorkerQueueDepth(workerId string, depth int64) {
 	vmetrics.GetDefaultSet().GetOrCreateGauge(metricName, nil).Set(float64(depth))
 }
 
+func RecordWorkerConntrack(workerID string, entries, capacity uint64) {
+	for name, value := range map[string]uint64{"worker_conntrack_entries": entries, "worker_conntrack_capacity": capacity} {
+		metricName := metricWithLabels(name, map[string]string{"worker_id": workerID})
+		vmetrics.GetDefaultSet().GetOrCreateGauge(metricName, nil).Set(float64(value))
+	}
+}
+
 func RecordWorkerQueueReceiveLatency(workerId string, duration time.Duration, request *types.ContainerRequest) {
 	labels := requestMetricLabels(request)
 	labels["worker_id"] = workerId

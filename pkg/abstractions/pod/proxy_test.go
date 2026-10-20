@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/time/rate"
 )
 
 func TestPodBackendURLUsesPlaceholderHostForRouteAddresses(t *testing.T) {
@@ -973,7 +974,7 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 
 	pb := &PodProxyBuffer{ctx: context.Background()}
 	readyAddress := listener.Addr().String()
-	ready := pb.readyAddressMap(map[int32]string{
+	ready := pb.readyAddressMap("container", map[int32]string{
 		8000: readyAddress,
 		9000: "127.0.0.1:1",
 	})
@@ -983,6 +984,100 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 	}
 	if _, ok := ready[9000]; ok {
 		t.Fatal("unready port was included in ready address map")
+	}
+}
+
+func TestDiscoveryReusesHealthyPortsAcrossFleet(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan struct{}, 6000)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+			accepted <- struct{}{}
+		}
+	}()
+	pb := &PodProxyBuffer{ctx: context.Background(), readiness: readinessCache{refreshLimiter: rate.NewLimiter(0, 0)}}
+	ports := map[int32]string{2222: listener.Addr().String(), 7681: listener.Addr().String(), 8080: listener.Addr().String()}
+	for round := 0; round < 20; round++ {
+		for vm := 0; vm < 100; vm++ {
+			if got := pb.readyAddressMap(fmt.Sprintf("vm-%d", vm), ports); len(got) != len(ports) {
+				t.Fatalf("VM %d round %d: ready ports = %v", vm, round, got)
+			}
+		}
+	}
+	for range 300 {
+		select {
+		case <-accepted:
+		case <-time.After(time.Second):
+			t.Fatal("initial discovery did not probe every VM port")
+		}
+	}
+	select {
+	case <-accepted:
+		t.Fatal("healthy discovery opened another TCP connection")
+	default:
+	}
+}
+
+func TestReadinessCacheRechecksChangedExpiredAndFailedTargets(t *testing.T) {
+	pb := &PodProxyBuffer{readiness: readinessCache{refreshLimiter: rate.NewLimiter(rate.Inf, 1)}}
+	target := readinessTarget{"vm", 8080, "127.0.0.1:8080"}
+	checks := 0
+	probe := func() bool { checks++; return true }
+	if !pb.readiness.check(target, probe) || !pb.readiness.check(target, probe) || checks != 1 {
+		t.Fatal("healthy target was not reused")
+	}
+	for _, changed := range []readinessTarget{{"new-vm", target.port, target.address}, {target.containerID, target.port, "127.0.0.1:8081"}} {
+		if pb.readiness.check(changed, func() bool { return false }) {
+			t.Fatal("a replacement VM or address inherited readiness")
+		}
+	}
+	pb.readiness.ready[target.containerID][target.port] = readinessResult{target.address, time.Now().Add(-time.Second)}
+	if !pb.readiness.check(target, probe) || checks != 2 {
+		t.Fatal("expired target was not rechecked")
+	}
+	pb.removeAvailableContainer(target.containerID)
+	if pb.readiness.check(target, func() bool { return false }) {
+		t.Fatal("failed backend retained cached readiness")
+	}
+	pb.readiness.check(target, probe)
+	pb.readiness.prune(nil)
+	if len(pb.readiness.ready) != 0 {
+		t.Fatal("departed VM retained cached readiness")
+	}
+}
+
+func TestBackgroundReadinessBudgetDoesNotDelayNewContainers(t *testing.T) {
+	cache := readinessCache{refreshLimiter: rate.NewLimiter(0, 1)}
+	probes := 0
+	probe := func() bool { probes++; return true }
+	for vm := 0; vm < 1000; vm++ {
+		target := readinessTarget{fmt.Sprintf("vm-%d", vm), 8080, "backend"}
+		cache.check(target, probe)
+		cache.ready[target.containerID][target.port] = readinessResult{target.address, time.Now().Add(-time.Second)}
+	}
+	probes = 0
+	for vm := 0; vm < 1000; vm++ {
+		if !cache.check(readinessTarget{fmt.Sprintf("vm-%d", vm), 8080, "backend"}, probe) {
+			t.Fatal("background budget removed a healthy container")
+		}
+	}
+	if probes != 1 {
+		t.Fatalf("background probes = %d, want 1", probes)
+	}
+	cache.check(readinessTarget{"new-vm", 8080, "backend"}, probe)
+	cache.invalidate("vm-0")
+	cache.check(readinessTarget{"vm-0", 8080, "backend"}, probe)
+	if probes != 3 {
+		t.Fatal("background budget delayed a new container or failed-backend recheck")
 	}
 }
 
@@ -1011,7 +1106,7 @@ func TestReadyAddressMapOnlyWaitsForConfiguredPorts(t *testing.T) {
 		containerRepo: repo,
 	}
 	start := time.Now()
-	ready := pb.readyAddressMap(map[int32]string{
+	ready := pb.readyAddressMap("container", map[int32]string{
 		8000: listener.Addr().String(),
 		2222: types.BackendRouteAddress(routeID),
 	})
