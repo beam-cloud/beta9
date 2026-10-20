@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"time"
@@ -159,19 +160,32 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 		return err
 	}
 
-	for c := 0; c < containersToStop && len(containerIds) > 0; c++ {
+	for c := 0; c < containersToStop && len(containerIds) > 0; {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
+		containerIds = append(containerIds[:idx], containerIds[idx+1:]...)
+
+		draining := false
+		if i.IsActive && i.buffer != nil {
+			draining, err = i.buffer.setContainerDraining(i.Ctx, containerId, true)
+			if err != nil {
+				return err
+			}
+			if !draining {
+				continue
+			}
+		}
 
 		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Reason: types.StopContainerReasonScheduler})
 		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to stop container")
+			if draining {
+				_, rollbackErr := i.buffer.setContainerDraining(i.Ctx, containerId, false)
+				return errors.Join(err, rollbackErr)
+			}
 			return err
 		}
-
-		// Remove the containerId from the containerIds slice to avoid
-		// sending multiple stop requests to the same container
-		containerIds = append(containerIds[:idx], containerIds[idx+1:]...)
+		c++
 	}
 
 	return nil

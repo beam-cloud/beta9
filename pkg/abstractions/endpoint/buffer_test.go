@@ -585,6 +585,61 @@ func TestStoppableContainersSkipsInFlightEndpointRequests(t *testing.T) {
 	}
 }
 
+func TestIdleDrainExcludesRequestAdmission(t *testing.T) {
+	rdb := newEndpointBufferTestRedis(t)
+	rb := newEndpointRequestTokenTestBuffer(rdb, 1)
+	ctx := context.Background()
+	state := &types.ContainerState{ContainerId: "container-1", StubId: "stub", WorkspaceId: "workspace", Status: types.ContainerStatusRunning}
+	if err := rb.containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := rb.acquireRequestToken("container-1"); err != nil {
+		t.Fatal(err)
+	}
+	if drained, err := rb.setContainerDraining(ctx, "container-1", true); err != nil || drained {
+		t.Fatalf("busy replica drained: %v, error: %v", drained, err)
+	}
+	if err := rb.releaseRequestToken("container-1", "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if drained, err := rb.setContainerDraining(ctx, "container-1", true); err != nil || !drained {
+		t.Fatalf("idle replica not drained: %v, error: %v", drained, err)
+	}
+	if err := rb.releaseRequestToken("container-1", "late-completion"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, Keys.endpointRequestTokens("workspace", "stub", "container-1")); got != -1 {
+		t.Fatalf("late completion reopened draining replica: %d", got)
+	}
+	if err := rb.acquireRequestToken("container-1"); err == nil {
+		t.Fatal("request admitted after draining began")
+	}
+	rb.refreshRequestTokenTTL("container-1")
+	key := Keys.endpointRequestTokens("workspace", "stub", "container-1")
+	if ttl := rdb.TTL(ctx, key).Val(); ttl < time.Duration(types.ContainerStateTtlSWhileStopping-1)*time.Second {
+		t.Fatalf("request activity shortened the drain lease: %s", ttl)
+	}
+	if reopened, err := rb.setContainerDraining(ctx, "container-1", false); err != nil || !reopened {
+		t.Fatalf("failed stop could not reopen admission: %v, error: %v", reopened, err)
+	}
+	if err := rb.acquireRequestToken("container-1"); err != nil {
+		t.Fatalf("request rejected after drain rollback: %v", err)
+	}
+	if err := rb.releaseRequestToken("container-1", "after-rollback"); err != nil {
+		t.Fatal(err)
+	}
+	if drained, err := rb.setContainerDraining(ctx, "container-1", true); err != nil || !drained {
+		t.Fatalf("replica not drained: %v, error: %v", drained, err)
+	}
+	state.Status = types.ContainerStatusStopping
+	if err := rb.containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+	if reopened, err := rb.setContainerDraining(ctx, "container-1", false); err != nil || reopened {
+		t.Fatalf("rollback reopened a stopping replica: %v, error: %v", reopened, err)
+	}
+}
+
 func newEndpointBufferTestRedis(t *testing.T) *common.RedisClient {
 	t.Helper()
 

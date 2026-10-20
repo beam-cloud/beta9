@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -569,6 +570,29 @@ func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
 		maxTokens,
 		rb.requestTokenTTL(),
 	)
+}
+
+// Close an idle replica's token bucket before stopping it. Request admission
+// and draining must contend on the same Redis key, without a check/stop gap.
+var endpointDrainScript = redis.NewScript(`
+local max_tokens = tonumber(ARGV[1])
+local current = tonumber(redis.call("GET", KEYS[1])) or max_tokens
+if ARGV[3] == "0" then
+  if current >= 0 or redis.call("HGET", KEYS[2], "status") ~= ARGV[4] then return 0 end
+  redis.call("SET", KEYS[1], max_tokens, "EX", ARGV[2])
+  return 1
+end
+if current < max_tokens then return 0 end
+redis.call("SET", KEYS[1], -1, "EX", ARGV[2])
+return 1
+`)
+
+func (rb *RequestBuffer) setContainerDraining(ctx context.Context, containerID string, draining bool) (bool, error) {
+	result, err := endpointDrainScript.Run(ctx, rb.rdb,
+		[]string{Keys.endpointRequestTokens(rb.workspaceName(), rb.stubId, containerID), common.RedisKeys.SchedulerContainerState(containerID)},
+		rb.effectiveMaxTokens(), types.ContainerStateTtlSWhileStopping, draining, string(types.ContainerStatusRunning),
+	).Int64()
+	return result == 1, err
 }
 
 func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
