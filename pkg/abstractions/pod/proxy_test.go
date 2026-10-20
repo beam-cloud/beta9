@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 )
 
@@ -1027,7 +1030,7 @@ func TestDiscoveryReusesHealthyPortsAcrossFleet(t *testing.T) {
 	}
 }
 
-func TestReadinessCacheRechecksChangedExpiredAndFailedTargets(t *testing.T) {
+func TestReadinessCacheRechecksChangedAndFailedTargets(t *testing.T) {
 	pb := &PodProxyBuffer{readiness: readinessCache{refreshLimiter: rate.NewLimiter(rate.Inf, 1)}}
 	target := readinessTarget{"vm", 8080, "127.0.0.1:8080"}
 	checks := 0
@@ -1039,10 +1042,6 @@ func TestReadinessCacheRechecksChangedExpiredAndFailedTargets(t *testing.T) {
 		if pb.readiness.check(changed, func() bool { return false }) {
 			t.Fatal("a replacement VM or address inherited readiness")
 		}
-	}
-	pb.readiness.ready[target.containerID][target.port] = readinessResult{target.address, time.Now().Add(-time.Second)}
-	if !pb.readiness.check(target, probe) || checks != 2 {
-		t.Fatal("expired target was not rechecked")
 	}
 	pb.removeAvailableContainer(target.containerID)
 	if pb.readiness.check(target, func() bool { return false }) {
@@ -1056,28 +1055,98 @@ func TestReadinessCacheRechecksChangedExpiredAndFailedTargets(t *testing.T) {
 }
 
 func TestBackgroundReadinessBudgetDoesNotDelayNewContainers(t *testing.T) {
-	cache := readinessCache{refreshLimiter: rate.NewLimiter(0, 1)}
-	probes := 0
-	probe := func() bool { probes++; return true }
-	for vm := 0; vm < 1000; vm++ {
-		target := readinessTarget{fmt.Sprintf("vm-%d", vm), 8080, "backend"}
-		cache.check(target, probe)
-		cache.ready[target.containerID][target.port] = readinessResult{target.address, time.Now().Add(-time.Second)}
-	}
-	probes = 0
-	for vm := 0; vm < 1000; vm++ {
-		if !cache.check(readinessTarget{fmt.Sprintf("vm-%d", vm), 8080, "backend"}, probe) {
-			t.Fatal("background budget removed a healthy container")
+	cache := readinessCache{refreshLimiter: rate.NewLimiter(0, containerReadinessRefreshConcurrency)}
+	targets := make([]readinessTarget, 0, 15000)
+	for vm := 0; vm < 5000; vm++ {
+		for _, port := range []int32{2222, 7681, 8080} {
+			target := readinessTarget{fmt.Sprintf("vm-%d", vm), port, "backend"}
+			cache.check(target, func() bool { return true })
+			cache.ready[target.containerID][target.port].until = time.Time{}
+			targets = append(targets, target)
 		}
 	}
-	if probes != 1 {
-		t.Fatalf("background probes = %d, want 1", probes)
+	started := make(chan struct{}, containerReadinessRefreshConcurrency)
+	release := make(chan struct{})
+	var unblock sync.Once
+	t.Cleanup(func() { unblock.Do(func() { close(release) }) })
+	discovered := make(chan bool, 1)
+	go func() {
+		ready := true
+		for _, target := range targets {
+			ready = cache.check(target, func() bool {
+				started <- struct{}{}
+				<-release
+				return true
+			}) && ready
+		}
+		discovered <- ready
+	}()
+	for range containerReadinessRefreshConcurrency {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("background refresh did not start")
+		}
 	}
-	cache.check(readinessTarget{"new-vm", 8080, "backend"}, probe)
-	cache.invalidate("vm-0")
-	cache.check(readinessTarget{"vm-0", 8080, "backend"}, probe)
-	if probes != 3 {
-		t.Fatal("background budget delayed a new container or failed-backend recheck")
+	select {
+	case ready := <-discovered:
+		require.True(t, ready)
+	case <-time.After(time.Second):
+		t.Fatal("slow background refresh blocked fleet discovery")
+	}
+	// All refresh slots and rate tokens remain occupied during the cold burst.
+	var cold sync.WaitGroup
+	for vm := range 100 {
+		cold.Add(1)
+		go func() {
+			defer cold.Done()
+			if !cache.check(readinessTarget{fmt.Sprintf("new-%d", vm), 8080, "backend"}, func() bool { return true }) {
+				t.Error("new container was not ready")
+			}
+		}()
+	}
+	complete := make(chan struct{})
+	go func() { cold.Wait(); close(complete) }()
+	select {
+	case <-complete:
+	case <-time.After(time.Second):
+		t.Fatal("background work delayed new-container readiness")
+	}
+	cache.invalidate(targets[0].containerID)
+	require.False(t, cache.check(targets[0], func() bool { return false }), "failed targets must bypass the background budget too")
+	unblock.Do(func() { close(release) })
+	require.Eventually(t, func() bool { return len(readinessRefreshSlots) == 0 }, time.Second, time.Millisecond)
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	require.Empty(t, cache.ready[targets[0].containerID], "an old refresh resurrected invalidated readiness")
+}
+
+func BenchmarkCachedReadinessFleet(b *testing.B) {
+	for _, size := range []int{100, 1000, 5000} {
+		for _, expired := range []bool{false, true} {
+			b.Run(fmt.Sprintf("%d/expired=%t", size, expired), func(b *testing.B) {
+				cache := readinessCache{refreshLimiter: rate.NewLimiter(0, 0)}
+				targets := make([]readinessTarget, 0, size*3)
+				probe := func() bool { return true }
+				for vm := range size {
+					for _, port := range []int32{2222, 7681, 8080} {
+						target := readinessTarget{strconv.Itoa(vm), port, "backend"}
+						cache.check(target, probe)
+						if expired {
+							cache.ready[target.containerID][target.port].until = time.Time{}
+						}
+						targets = append(targets, target)
+					}
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					for _, target := range targets {
+						cache.check(target, probe)
+					}
+				}
+			})
+		}
 	}
 }
 

@@ -30,8 +30,9 @@ type readinessTarget struct {
 }
 
 type readinessResult struct {
-	address string
-	until   time.Time
+	address    string
+	until      time.Time
+	refreshing bool
 }
 
 // Discovery runs frequently to find new containers and newly listening ports.
@@ -39,7 +40,7 @@ type readinessResult struct {
 // conntrack table. Request failures invalidate them immediately.
 type readinessCache struct {
 	mu             sync.Mutex
-	ready          map[string]map[int32]readinessResult
+	ready          map[string]map[int32]*readinessResult
 	refreshLimiter *rate.Limiter
 }
 
@@ -49,38 +50,49 @@ func (c *readinessCache) check(target readinessTarget, probe func() bool) bool {
 	}
 	c.mu.Lock()
 	cached := c.ready[target.containerID][target.port]
-	c.mu.Unlock()
-	if cached.address == target.address {
+	if cached != nil && cached.address == target.address {
 		limiter := c.refreshLimiter
 		if limiter == nil {
 			limiter = readinessRefreshBudget
 		}
-		if time.Now().Before(cached.until) || !limiter.Allow() {
-			return true
+		if !cached.refreshing && time.Now().After(cached.until) && limiter.Allow() {
+			select {
+			case readinessRefreshSlots <- struct{}{}:
+				cached.refreshing = true
+				// Discovery waits for first probes, never background refreshes.
+				go func() {
+					defer func() { <-readinessRefreshSlots }()
+					c.probe(target, probe, cached)
+				}()
+			default:
+			}
 		}
-		select {
-		case readinessRefreshSlots <- struct{}{}:
-			defer func() { <-readinessRefreshSlots }()
-		default:
-			return true
-		}
-	}
-	// First probes and retries after failures never wait for background work.
-	if !probe() {
-		c.mu.Lock()
-		delete(c.ready[target.containerID], target.port)
 		c.mu.Unlock()
+		return true
+	}
+	c.mu.Unlock()
+	// First probes and retries after failures never wait for background work.
+	return c.probe(target, probe, nil)
+}
+
+func (c *readinessCache) probe(target readinessTarget, probe func() bool, previous *readinessResult) bool {
+	ready := probe()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if previous != nil && c.ready[target.containerID][target.port] != previous {
+		return ready // Do not resurrect an invalidated or replaced target.
+	}
+	if !ready {
+		delete(c.ready[target.containerID], target.port)
 		return false
 	}
-	c.mu.Lock()
 	if c.ready == nil {
-		c.ready = make(map[string]map[int32]readinessResult)
+		c.ready = make(map[string]map[int32]*readinessResult)
 	}
 	if c.ready[target.containerID] == nil {
-		c.ready[target.containerID] = make(map[int32]readinessResult)
+		c.ready[target.containerID] = make(map[int32]*readinessResult)
 	}
-	c.ready[target.containerID][target.port] = readinessResult{target.address, time.Now().Add(containerReadinessRefresh)}
-	c.mu.Unlock()
+	c.ready[target.containerID][target.port] = &readinessResult{address: target.address, until: time.Now().Add(containerReadinessRefresh)}
 	return true
 }
 
