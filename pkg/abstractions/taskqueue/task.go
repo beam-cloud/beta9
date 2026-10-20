@@ -2,8 +2,10 @@ package taskqueue
 
 import (
 	"context"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 type TaskQueueTask struct {
@@ -23,6 +25,13 @@ func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) err
 		WorkspaceId: instance.Stub.WorkspaceId,
 	})
 	if err != nil {
+		// Send persisted the pending state before task creation. No message has
+		// been queued yet, so release that state even if the request was canceled.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if cleanupErr := t.tq.taskDispatcher.Complete(cleanupCtx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId); cleanupErr != nil {
+			log.Error().Err(cleanupErr).Str("task_id", t.msg.TaskId).Msg("unable to clean up state after task creation failed")
+		}
 		return err
 	}
 
