@@ -39,6 +39,28 @@ func TestConntrackCapacityScalesWithHostAndPreservesLargerSettings(t *testing.T)
 	}
 }
 
+func TestConntrackCapacityStillAppliesWhenHashTuningIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "nf_conntrack_max")
+	require.NoError(t, os.WriteFile(path, []byte("262144"), 0o644))
+	require.ErrorIs(t, configureConntrack(root, 512<<30), os.ErrNotExist)
+	capacity, err := readKernelUint(path)
+	require.NoError(t, err)
+	require.EqualValues(t, 2097152, capacity)
+}
+
+type hostIPv6RouteRecorder struct{ replaced, removed []netlink.Route }
+
+func (r *hostIPv6RouteRecorder) RouteReplace(route *netlink.Route) error {
+	r.replaced = append(r.replaced, *route)
+	return nil
+}
+
+func (r *hostIPv6RouteRecorder) RouteDel(route *netlink.Route) error {
+	r.removed = append(r.removed, *route)
+	return nil
+}
+
 func TestHostIPv6GuardPreservesUsableAndExplicitRoutes(t *testing.T) {
 	address := func(ip string, link int) netlink.Addr {
 		return netlink.Addr{IPNet: &net.IPNet{IP: net.ParseIP(ip), Mask: net.CIDRMask(128, 128)}, LinkIndex: link}
@@ -46,6 +68,10 @@ func TestHostIPv6GuardPreservesUsableAndExplicitRoutes(t *testing.T) {
 	ra := netlink.Route{LinkIndex: 2, Protocol: routeProtocolRA, Gw: net.ParseIP("fe80::1")}
 	static := ra
 	static.Protocol = 4
+	tentative := address("2001:4860::2", 2)
+	tentative.Flags = ipv6AddressTentative
+	failed := tentative
+	failed.Flags = ipv6AddressDADFailed
 	for _, tc := range []struct {
 		name      string
 		addresses []netlink.Addr
@@ -56,13 +82,34 @@ func TestHostIPv6GuardPreservesUsableAndExplicitRoutes(t *testing.T) {
 		{"RA arrives later", nil, nil, true},
 		{"link local WAN", []netlink.Addr{address("fe80::2", 2)}, []netlink.Route{ra}, true},
 		{"public WAN", []netlink.Addr{address("2001:4860::2", 2)}, []netlink.Route{ra}, false},
+		{"tentative public WAN", []netlink.Addr{tentative}, []netlink.Route{ra}, true},
+		{"duplicate public WAN", []netlink.Addr{failed}, []netlink.Route{ra}, true},
 		{"public loopback source", []netlink.Addr{address("2001:4860::2", 1)}, []netlink.Route{ra}, false},
 		{"private WAN with NAT66", []netlink.Addr{address("fd00:1234::2", 2)}, []netlink.Route{ra}, false},
 		{"static configuration", nil, []netlink.Route{static}, false},
+		{"alternate WAN", nil, []netlink.Route{{LinkIndex: 3, Protocol: routeProtocolRA}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			addresses := append([]netlink.Addr{address("fd00:abcd::1", 10)}, tc.addresses...)
 			require.Equal(t, tc.want, shouldGuardHostIPv6(2, addresses, tc.routes))
+			table := &hostIPv6RouteRecorder{}
+			require.NoError(t, reconcileHostIPv6(2, addresses, tc.routes, table))
+			if tc.want {
+				require.Len(t, table.replaced, 1)
+				require.True(t, isWorkerIPv6Guard(table.replaced[0]))
+			} else {
+				require.Empty(t, table.replaced)
+			}
+			guard := netlink.Route{Protocol: workerIPv6GuardProtocol, Type: routeTypeUnreachable, Priority: 1}
+			routes := append(append([]netlink.Route{}, tc.routes...), guard)
+			table = &hostIPv6RouteRecorder{}
+			require.NoError(t, reconcileHostIPv6(2, addresses, routes, table))
+			require.Empty(t, table.replaced, "existing guard must be idempotent")
+			if tc.want {
+				require.Empty(t, table.removed)
+			} else {
+				require.Equal(t, []netlink.Route{guard}, table.removed, "only the worker's obsolete guard may be removed")
+			}
 		})
 	}
 	require.False(t, shouldGuardHostIPv6(2, nil, []netlink.Route{ra}), "IPv6-disabled hosts need no guard")

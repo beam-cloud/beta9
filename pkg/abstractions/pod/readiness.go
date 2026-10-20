@@ -29,85 +29,132 @@ type readinessTarget struct {
 	address     string
 }
 
-type readinessResult struct {
-	address    string
-	until      time.Time
-	refreshing bool
+type readinessEntry struct {
+	address   string
+	refreshAt time.Time
+	ready     bool
+	probing   chan struct{}
 }
 
-// Discovery runs frequently to find new containers and newly listening ports.
-// Reuse successful probes so healthy ports do not continuously fill the host's
-// conntrack table. Request failures invalidate them immediately.
+// Idle discovery reuses both successful and failed probes. New targets and
+// queued requests bypass refresh limits; request failures invalidate only
+// their target. All entry state is protected by mu, never held during I/O.
 type readinessCache struct {
 	mu             sync.Mutex
-	ready          map[string]map[int32]*readinessResult
+	entries        map[string]map[int32]*readinessEntry
 	refreshLimiter *rate.Limiter
 }
 
-func (c *readinessCache) check(target readinessTarget, probe func() bool) bool {
+func (c *readinessCache) check(target readinessTarget, foreground bool, probe func() bool) bool {
 	if target.address == "" {
 		return false
 	}
 	c.mu.Lock()
-	cached := c.ready[target.containerID][target.port]
-	if cached != nil && cached.address == target.address {
-		limiter := c.refreshLimiter
-		if limiter == nil {
-			limiter = readinessRefreshBudget
+	cached := c.entries[target.containerID][target.port]
+	first := cached == nil || cached.address != target.address
+	if first {
+		cached = &readinessEntry{address: target.address}
+		if c.entries == nil {
+			c.entries = make(map[string]map[int32]*readinessEntry)
 		}
-		if !cached.refreshing && time.Now().After(cached.until) && limiter.Allow() {
-			select {
-			case readinessRefreshSlots <- struct{}{}:
-				cached.refreshing = true
-				// Discovery waits for first probes, never background refreshes.
-				go func() {
-					defer func() { <-readinessRefreshSlots }()
-					c.probe(target, probe, cached)
-				}()
-			default:
-			}
+		if c.entries[target.containerID] == nil {
+			c.entries[target.containerID] = make(map[int32]*readinessEntry)
 		}
-		c.mu.Unlock()
-		return true
+		c.entries[target.containerID][target.port] = cached
 	}
+	if !cached.ready && cached.probing != nil {
+		if !foreground {
+			c.mu.Unlock()
+			return false
+		}
+		done := cached.probing
+		c.mu.Unlock()
+		<-done
+		c.mu.Lock()
+		ready := c.entries[target.containerID][target.port] == cached && cached.ready
+		c.mu.Unlock()
+		return ready
+	}
+	if first || (!cached.ready && foreground) {
+		cached.probing = make(chan struct{})
+		c.mu.Unlock()
+		// First checks and queued requests bypass idle refresh limits. Keeping
+		// the entry during I/O makes invalidation authoritative for every probe.
+		return c.probe(target, probe, cached)
+	}
+	limiter := c.refreshLimiter
+	if limiter == nil {
+		limiter = readinessRefreshBudget
+	}
+	if cached.probing == nil && time.Now().After(cached.refreshAt) && acquireReadinessRefresh(limiter) {
+		cached.probing = make(chan struct{})
+		// Discovery waits for first probes, never background refreshes.
+		go func() {
+			defer func() { <-readinessRefreshSlots }()
+			c.probe(target, probe, cached)
+		}()
+	}
+	ready := cached.ready
 	c.mu.Unlock()
-	// First probes and retries after failures never wait for background work.
-	return c.probe(target, probe, nil)
+	return ready
 }
 
-func (c *readinessCache) probe(target readinessTarget, probe func() bool, previous *readinessResult) bool {
+func acquireReadinessRefresh(limiter *rate.Limiter) bool {
+	select {
+	case readinessRefreshSlots <- struct{}{}:
+		if limiter.Allow() {
+			return true
+		}
+		<-readinessRefreshSlots
+	default:
+	}
+	return false
+}
+
+func (c *readinessCache) probe(target readinessTarget, probe func() bool, entry *readinessEntry) bool {
 	ready := probe()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if previous != nil && c.ready[target.containerID][target.port] != previous {
-		return ready // Do not resurrect an invalidated or replaced target.
+	close(entry.probing)
+	entry.probing = nil
+	if c.entries[target.containerID][target.port] != entry {
+		return false // Do not resurrect an invalidated or replaced target.
 	}
-	if !ready {
-		delete(c.ready[target.containerID], target.port)
-		return false
-	}
-	if c.ready == nil {
-		c.ready = make(map[string]map[int32]*readinessResult)
-	}
-	if c.ready[target.containerID] == nil {
-		c.ready[target.containerID] = make(map[int32]*readinessResult)
-	}
-	c.ready[target.containerID][target.port] = &readinessResult{address: target.address, until: time.Now().Add(containerReadinessRefresh)}
-	return true
+	entry.ready = ready
+	entry.refreshAt = time.Now().Add(containerReadinessRefresh)
+	return ready
 }
 
 func (c *readinessCache) invalidate(containerID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.ready, containerID)
+	delete(c.entries, containerID)
+}
+
+func (c *readinessCache) invalidateTarget(target readinessTarget) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry := c.entries[target.containerID][target.port]; entry != nil && entry.address == target.address {
+		delete(c.entries[target.containerID], target.port)
+	}
+}
+
+func (c *readinessCache) prunePorts(containerID string, addresses map[int32]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for port, entry := range c.entries[containerID] {
+		if addresses[port] != entry.address {
+			delete(c.entries[containerID], port)
+		}
+	}
 }
 
 func (c *readinessCache) prune(active map[string]struct{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for containerID := range c.ready {
+	for containerID := range c.entries {
 		if _, ok := active[containerID]; !ok {
-			delete(c.ready, containerID)
+			delete(c.entries, containerID)
 		}
 	}
 }

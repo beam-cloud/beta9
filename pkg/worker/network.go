@@ -544,7 +544,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	}
 	if envBool(types.WorkerPersistentEnv) {
 		if err := configureHostNetwork(defaultLink); err != nil {
-			return nil, fmt.Errorf("configure host networking: %w", err)
+			log.Warn().Err(err).Msg("could not configure host network settings; retrying in background")
 		}
 		go monitorHostNetwork(ctx, workerId, defaultLink)
 	}

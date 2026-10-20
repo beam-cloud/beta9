@@ -26,18 +26,30 @@ const (
 	// up to a power of two and never reduce an operator's larger setting.
 	conntrackBytesPerEntry  = 256 << 10
 	conntrackMinimum        = 1 << 18
-	routeProtocolRA         = 9   // Linux RTPROT_RA.
-	workerIPv6GuardProtocol = 253 // Agent-owned routing protocol, distinct from RA/static routes.
-	routeTypeUnreachable    = 7   // Linux RTN_UNREACHABLE.
+	routeProtocolRA         = 9    // Linux RTPROT_RA.
+	workerIPv6GuardProtocol = 253  // Agent-owned routing protocol, distinct from RA/static routes.
+	routeTypeUnreachable    = 7    // Linux RTN_UNREACHABLE.
+	ipv6AddressDADFailed    = 0x08 // Linux IFA_F_DADFAILED.
+	ipv6AddressTentative    = 0x40 // Linux IFA_F_TENTATIVE.
 )
 
 func configureHostNetwork(link netlink.Link) error {
+	var conntrackErr error
 	if memory, err := mem.VirtualMemory(); err != nil {
-		return fmt.Errorf("read host memory: %w", err)
+		conntrackErr = fmt.Errorf("read host memory: %w", err)
 	} else if err := configureConntrack(conntrackSysctlRoot, memory.Total); err != nil {
-		return fmt.Errorf("configure conntrack: %w", err)
+		conntrackErr = fmt.Errorf("configure conntrack: %w", err)
 	}
-	return configureHostIPv6(link)
+	ipv6Err := configureHostIPv6(link)
+	if ipv6Err != nil {
+		ipv6Err = fmt.Errorf("configure host IPv6: %w", ipv6Err)
+	}
+	return errors.Join(conntrackErr, ipv6Err)
+}
+
+type hostIPv6Routes interface {
+	RouteReplace(*netlink.Route) error
+	RouteDel(*netlink.Route) error
 }
 
 func configureHostIPv6(link netlink.Link) error {
@@ -49,28 +61,28 @@ func configureHostIPv6(link netlink.Link) error {
 	if err != nil {
 		return err
 	}
-	if hasHostIPv6Source(link.Attrs().Index, addresses) {
-		for _, route := range routes {
-			if isWorkerIPv6Guard(route) {
-				if err := netlink.RouteDel(&route); err != nil && !errors.Is(err, syscall.ESRCH) {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	if !shouldGuardHostIPv6(link.Attrs().Index, addresses, routes) {
-		return nil
-	}
+	return reconcileHostIPv6(link.Attrs().Index, addresses, routes, &netlink.Handle{})
+}
+
+func reconcileHostIPv6(linkIndex int, addresses []netlink.Addr, routes []netlink.Route, table hostIPv6Routes) error {
+	needed := shouldGuardHostIPv6(linkIndex, addresses, routes)
 	for _, route := range routes {
 		if isWorkerIPv6Guard(route) {
-			return nil
+			if needed {
+				return nil
+			}
+			if err := table.RouteDel(&route); err != nil && !errors.Is(err, syscall.ESRCH) {
+				return err
+			}
 		}
+	}
+	if !needed {
+		return nil
 	}
 	// Networkd may reinstall RA routes independently of kernel accept_ra.
 	// Reject unusable public IPv6 immediately so dual-stack clients fall back
 	// to IPv4, while connected guest IPv6 routes continue to work.
-	return netlink.RouteReplace(&netlink.Route{
+	return table.RouteReplace(&netlink.Route{
 		Family: syscall.AF_INET6, Dst: &net.IPNet{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
 		Type: routeTypeUnreachable, Protocol: workerIPv6GuardProtocol, Priority: 1,
 	})
@@ -90,6 +102,9 @@ func isWorkerIPv6Guard(route netlink.Route) bool {
 
 func hasHostIPv6Source(linkIndex int, addresses []netlink.Addr) bool {
 	for _, address := range addresses {
+		if address.IPNet == nil || address.Flags&(ipv6AddressDADFailed|ipv6AddressTentative) != 0 {
+			continue
+		}
 		ip := address.IP
 		// A public address on another interface may intentionally source this
 		// route. Private WAN addresses also support explicitly configured NAT66.
@@ -105,8 +120,9 @@ func shouldGuardHostIPv6(linkIndex int, addresses []netlink.Addr, routes []netli
 		return false
 	}
 	bridgeIPv6 := false
+	bridgeIP := net.ParseIP(containerBridgeAddressIPv6)
 	for _, address := range addresses {
-		bridgeIPv6 = bridgeIPv6 || address.IP.Equal(net.ParseIP(containerBridgeAddressIPv6))
+		bridgeIPv6 = bridgeIPv6 || (address.IPNet != nil && address.IP.Equal(bridgeIP))
 	}
 	if !bridgeIPv6 {
 		return false // IPv6-disabled hosts do not need a guard.
@@ -134,6 +150,7 @@ func configureConntrack(root string, memoryBytes uint64) error {
 	}
 	desired := uint64(1) << bits.Len64(max(uint64(conntrackMinimum), memoryBytes/conntrackBytesPerEntry)-1)
 	desired = max(desired, capacity)
+	var failures []error
 	// Resize buckets before admitting more flows; increasing only the limit
 	// would lengthen the chains searched on every packet.
 	for _, setting := range []struct {
@@ -143,26 +160,34 @@ func configureConntrack(root string, memoryBytes uint64) error {
 		path := filepath.Join(root, setting.name)
 		current, err := readKernelUint(path)
 		if err != nil {
-			return err
+			failures = append(failures, fmt.Errorf("%s: %w", setting.name, err))
+			continue
 		}
 		if current >= setting.value {
 			continue
 		}
 		if err := os.WriteFile(path, []byte(strconv.FormatUint(setting.value, 10)+"\n"), 0o644); err != nil {
-			return err
+			failures = append(failures, fmt.Errorf("%s: %w", setting.name, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func monitorHostNetwork(ctx context.Context, workerID string, link netlink.Link) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	pressured := false
+	lastError := ""
 	for {
-		if err := configureHostIPv6(link); err != nil {
-			log.Warn().Err(err).Msg("could not refresh host IPv6 route guard")
+		configErr := configureHostNetwork(link)
+		message := ""
+		if configErr != nil {
+			message = configErr.Error()
 		}
+		if message != "" && message != lastError {
+			log.Warn().Err(configErr).Msg("could not refresh host network settings")
+		}
+		lastError = message
 		count, countErr := readKernelUint(filepath.Join(conntrackSysctlRoot, "nf_conntrack_count"))
 		capacity, capacityErr := readKernelUint(filepath.Join(conntrackSysctlRoot, "nf_conntrack_max"))
 		if countErr == nil && capacityErr == nil && capacity > 0 {
