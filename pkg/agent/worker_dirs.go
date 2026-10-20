@@ -13,7 +13,6 @@ type workerDirs struct {
 	Slot         string
 	Images       string
 	Tmp          string
-	Data         string
 	Workspace    string
 	Cache        string
 	CacheMount   string
@@ -28,7 +27,6 @@ func (d workerDirs) All() []string {
 		d.Slot,
 		d.Images,
 		d.Tmp,
-		d.Data,
 		d.Workspace,
 		d.Checkpoints,
 		d.DurableDisk,
@@ -46,7 +44,6 @@ func agentWorkerDirs(stateDir, cacheDir, workerID string) workerDirs {
 		Slot:         filepath.Join(stateDir, "slots", slotName),
 		Images:       filepath.Join(stateDir, "images"),
 		Tmp:          filepath.Join(stateDir, "tmp", slotName),
-		Data:         filepath.Join(stateDir, "data"),
 		Workspace:    filepath.Join(stateDir, "workspace-data"),
 		Cache:        agentCacheDir(stateDir, cacheDir),
 		CacheMount:   types.AgentCachePath,
@@ -70,7 +67,6 @@ func agentWorkerDirsForSlot(stateDir, cacheDir string, slot *pb.AgentWorkerSlot)
 
 	if path := strings.TrimSpace(config.GetStoragePath()); path != "" {
 		storagePath := filepath.Clean(path)
-		dirs.Data = storagePath
 		dirs.Workspace = filepath.Join(storagePath, "workspace-data")
 		dirs.Checkpoints = filepath.Join(storagePath, "checkpoints")
 		if strings.TrimSpace(config.GetDurableDisksPath()) == "" {

@@ -25,11 +25,8 @@ const (
 
 // volumeObjectKey keeps client paths inside the authenticated volume's S3 prefix.
 // S3 keys use slash separators regardless of the gateway's operating system.
-func volumeObjectKey(workspace *types.Workspace, volumeExternalID, volumePath string) (string, error) {
-	root := path.Join(types.DefaultVolumesPrefix, workspace.Name, volumeExternalID)
-	if workspace.StorageAvailable() {
-		root = path.Join(types.DefaultVolumesPrefix, volumeExternalID)
-	}
+func volumeObjectKey(volumeExternalID, volumePath string) (string, error) {
+	root := path.Join(types.DefaultVolumesPrefix, volumeExternalID)
 
 	key := path.Join(root, volumePath)
 	if key != root && !strings.HasPrefix(key, root+"/") {
@@ -57,7 +54,7 @@ func (s *GlobalVolumeService) CreatePresignedURL(ctx context.Context, in *pb.Cre
 		}, nil
 	}
 
-	key, err := volumeObjectKey(authInfo.Workspace, volume.ExternalId, in.VolumePath)
+	key, err := volumeObjectKey(volume.ExternalId, in.VolumePath)
 	if err != nil {
 		return &pb.CreatePresignedURLResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -155,7 +152,7 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 		}, nil
 	}
 
-	key, err := volumeObjectKey(authInfo.Workspace, volume.ExternalId, in.VolumePath)
+	key, err := volumeObjectKey(volume.ExternalId, in.VolumePath)
 	if err != nil {
 		return &pb.CreateMultipartUploadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -240,7 +237,7 @@ func (s *GlobalVolumeService) CompleteMultipartUpload(ctx context.Context, in *p
 		}, nil
 	}
 
-	key, err := volumeObjectKey(authInfo.Workspace, volume.ExternalId, in.VolumePath)
+	key, err := volumeObjectKey(volume.ExternalId, in.VolumePath)
 	if err != nil {
 		return &pb.CompleteMultipartUploadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -296,7 +293,7 @@ func (s *GlobalVolumeService) AbortMultipartUpload(ctx context.Context, in *pb.A
 		}, nil
 	}
 
-	key, err := volumeObjectKey(authInfo.Workspace, volume.ExternalId, in.VolumePath)
+	key, err := volumeObjectKey(volume.ExternalId, in.VolumePath)
 	if err != nil {
 		return &pb.AbortMultipartUploadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}

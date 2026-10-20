@@ -36,7 +36,7 @@ func TestMicroVMMountPlanKeepsSpecOrder(t *testing.T) {
 		{Destination: "/tmp", Type: "tmpfs", Source: "none", Options: []string{"size=1g"}},
 		{Destination: "/usr/bin/goproc", Type: "bind", Source: "/usr/local/bin/goproc", Options: []string{"ro", "rbind"}},
 		{Destination: "/volumes", Type: "tmpfs", Source: "none"},
-		{Destination: "/volumes/data", Type: "bind", Source: "/data/volumes/x", Options: []string{"rbind", "rw"}},
+		{Destination: "/volumes/data", Type: "bind", Source: "/workspace/data/workspace/volumes/x", Options: []string{"rbind", "rw"}},
 		{Destination: "relative", Type: "bind", Source: "/x"},
 		{Destination: "/dev/nvidia0", Type: "bind", Source: "/dev/nvidia0"},
 	})

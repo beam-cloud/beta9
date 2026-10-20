@@ -285,13 +285,13 @@ func (g *TaskGroup) taskDetails(ctx context.Context, authInfo *auth.AuthInfo, ta
 
 func (g *TaskGroup) addOutputsToTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
 	task.Outputs = []types.TaskOutput{}
-	outputFiles, err := output.GetTaskOutputFiles(ctx, authInfo, authInfo.Workspace.Name, task)
+	outputFiles, err := output.GetTaskOutputFiles(ctx, authInfo, task)
 	if err != nil {
 		return err
 	}
 
 	for outputId, fileName := range outputFiles {
-		url, err := output.SetPublicURL(ctx, g.config, g.backendRepo, g.redisClient, authInfo, task.ExternalId, outputId, fileName, DefaultTaskOutputExpirationS)
+		url, err := output.SetPublicURL(ctx, g.config, g.backendRepo, authInfo, task.ExternalId, outputId, fileName, DefaultTaskOutputExpirationS)
 		if err != nil {
 			return err
 		}

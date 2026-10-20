@@ -2,7 +2,6 @@ package apiv1
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"path"
 	"strconv"
@@ -293,29 +292,15 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to get object")
 	}
 
-	if workspace.StorageId != nil {
-		workspaceStorage, err := g.backendRepo.GetWorkspaceStorage(ctx.Request().Context(), *workspace.StorageId)
-		if err != nil {
-			return HTTPInternalServerError("Failed to get workspace storage")
-		}
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx.Request().Context(), workspace.Name, workspaceStorage)
-		if err != nil {
-			return HTTPInternalServerError("Failed to get object")
-		}
-		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), fmt.Sprintf("%s/%s", types.DefaultObjectPrefix, object.ExternalId), presignedURLExpirationS)
-		if err != nil {
-			return HTTPInternalServerError("Failed to generate presigned URL")
-		}
-
-		return ctx.Redirect(http.StatusTemporaryRedirect, presignedURL)
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx.Request().Context(), workspace.Name, workspace.Storage)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get workspace storage")
 	}
-
-	path := getPackagePath(workspace.Name, object.ExternalId)
-	return ctx.File(path)
-}
-
-func getPackagePath(workspaceName, objectId string) string {
-	return path.Join("/data/objects/", workspaceName, objectId)
+	presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), path.Join(types.DefaultObjectPrefix, object.ExternalId), presignedURLExpirationS)
+	if err != nil {
+		return HTTPInternalServerError("Failed to generate presigned URL")
+	}
+	return ctx.Redirect(http.StatusTemporaryRedirect, presignedURL)
 }
 
 func (g *DeploymentGroup) getDeploymentByNameAndVersion(ctx echo.Context, workspaceId, stubType, deploymentName, version string) (*types.DeploymentWithRelated, error) {

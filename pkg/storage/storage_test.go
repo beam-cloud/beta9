@@ -1,35 +1,33 @@
 package storage
 
 import (
-	"errors"
-	"os"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNewStorageReturnsMountFailuresInsteadOfExiting(t *testing.T) {
-	blocked := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(blocked, nil, 0644); err != nil {
-		t.Fatalf("failed to seed the test: %v", err)
-	}
-
-	storage, err := NewStorage(types.StorageConfig{
-		Mode:           StorageModeLocal,
-		FilesystemPath: filepath.Join(blocked, "workspace"),
-	}, nil)
-
-	if err == nil {
-		t.Fatal("expected a mount failure to be returned")
-	}
-	if storage != nil {
-		t.Fatal("expected no storage to be handed back alongside the error")
-	}
-	if !errors.Is(err, syscall.ENOTDIR) {
-		t.Fatalf("expected the filesystem error from Mount, got %v", err)
+func TestNewStorageUsesWorkspaceMetadata(t *testing.T) {
+	bucket, access, secret, endpoint, region := "workspace-bucket", "access", "secret", "https://s3.example.com", "us-east-1"
+	metadata := &types.WorkspaceStorage{BucketName: &bucket, AccessKey: &access, SecretKey: &secret, EndpointUrl: &endpoint, Region: &region}
+	config := types.WorkspaceStorageConfig{Geese: types.GeeseConfig{Debug: true, AccessKey: "unused-global-key"}}
+	for _, mode := range []string{StorageModeGeese, StorageModeMountPoint} {
+		t.Run(mode, func(t *testing.T) {
+			backend, err := NewStorage(mode, config, metadata, nil)
+			require.NoError(t, err)
+			require.Equal(t, mode, backend.Mode())
+			switch backend := backend.(type) {
+			case *GeeseStorage:
+				require.Equal(t, types.GeeseConfig{Debug: true, BucketName: bucket, AccessKey: access, SecretKey: secret, EndpointUrl: endpoint, Region: region}, backend.config)
+			case *MountPointStorage:
+				require.Equal(t, types.MountPointConfig{BucketName: bucket, AccessKey: access, SecretKey: secret, EndpointURL: endpoint, Region: region}, backend.config)
+			}
+			_, err = NewStorage(mode, config, nil, nil)
+			require.ErrorContains(t, err, "metadata is required")
+			_, err = NewStorage(mode, config, &types.WorkspaceStorage{BucketName: &bucket}, nil)
+			require.ErrorContains(t, err, "metadata is incomplete")
+		})
 	}
 }
 

@@ -40,18 +40,18 @@ func TestGeeseFileModes(t *testing.T) {
 
 	manager, err := NewConfigManager[types.AppConfig]()
 	require.NoError(t, err)
-	require.NoError(t, manager.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(`{"storage":{"geese":{"dir_mode":511,"file_mode":438}}}`))))
+	require.NoError(t, manager.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(`{"storage":{"workspace_storage":{"geese":{"dir_mode":511,"file_mode":438}}}}`))))
 	manager.tag = "json"
-	require.Equal(t, "0777", manager.GetConfig().Storage.Geese.DirMode)
-	require.Equal(t, "0666", manager.GetConfig().Storage.Geese.FileMode)
+	require.Equal(t, "0777", manager.GetConfig().Storage.WorkspaceStorage.Geese.DirMode)
+	require.Equal(t, "0666", manager.GetConfig().Storage.WorkspaceStorage.Geese.FileMode)
 
-	require.NoError(t, manager.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(`{"storage":{"geese":{"dir_mode":"511","file_mode":"0000"}}}`))))
-	require.Equal(t, "511", manager.GetConfig().Storage.Geese.DirMode)
-	require.Equal(t, "0000", manager.GetConfig().Storage.Geese.FileMode)
+	require.NoError(t, manager.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(`{"storage":{"workspace_storage":{"geese":{"dir_mode":"511","file_mode":"0000"}}}}`))))
+	require.Equal(t, "511", manager.GetConfig().Storage.WorkspaceStorage.Geese.DirMode)
+	require.Equal(t, "0000", manager.GetConfig().Storage.WorkspaceStorage.Geese.FileMode)
 
 	before := manager.kf.Raw()
 	for _, mode := range []string{"511.5", "-1", "4096"} {
-		input := `{"debug_mode":true,"storage":{"geese":{"dir_mode":` + mode + `}}}`
+		input := `{"debug_mode":true,"storage":{"workspace_storage":{"geese":{"dir_mode":` + mode + `}}}}`
 		require.Error(t, manager.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(input))))
 		require.Equal(t, before, manager.kf.Raw(), "a rejected load must leave configuration unchanged")
 	}

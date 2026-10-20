@@ -2,8 +2,14 @@ package output
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -42,12 +48,52 @@ func TestOutputMissingTask(t *testing.T) {
 	})
 
 	t.Run("save", func(t *testing.T) {
-		contentCh := make(chan OutputSaveContent, 1)
-		contentCh <- OutputSaveContent{Filename: "test.txt", Content: []byte("test")}
-		close(contentCh)
-
-		id, err := service.writeToFile(ctx, contentCh, "workspace")
+		id, err := service.saveOutput(ctx, &types.Workspace{Name: "workspace"}, "", "test.txt", strings.NewReader("test"))
 		require.EqualError(t, err, "task not found")
 		require.Empty(t, id)
 	})
+}
+
+type outputStorageTestRepo struct {
+	repository.BackendRepository
+	task *types.TaskWithRelated
+}
+
+func (r outputStorageTestRepo) GetTaskWithRelated(context.Context, string) (*types.TaskWithRelated, error) {
+	return r.task, nil
+}
+
+func TestOutputUsesWorkspaceStorage(t *testing.T) {
+	var uploaded []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.True(t, strings.HasPrefix(r.URL.Path, "/bucket/outputs/stub/task/"), r.URL.Path)
+		switch r.Method {
+		case http.MethodPut:
+			var err error
+			uploaded, err = io.ReadAll(r.Body)
+			require.NoError(t, err)
+		case http.MethodHead:
+			w.Header().Set("Content-Length", "5")
+			w.Header().Set("Last-Modified", time.Unix(100, 0).UTC().Format(http.TimeFormat))
+		default:
+			t.Errorf("unexpected request: %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	workspace := &types.Workspace{Name: "workspace", Storage: &types.WorkspaceStorage{
+		EndpointUrl: &server.URL, BucketName: aws.String("bucket"), Region: aws.String("us-east-1"), AccessKey: aws.String("access"), SecretKey: aws.String("secret"),
+	}}
+	task := &types.TaskWithRelated{Task: types.Task{ExternalId: "task"}, Stub: types.Stub{ExternalId: "stub"}}
+	service := &OutputRedisService{backendRepo: outputStorageTestRepo{task: task}}
+	authInfo := &auth.AuthInfo{Workspace: workspace}
+	id, err := service.saveOutput(context.Background(), workspace, "task", "file.txt", strings.NewReader("hello"))
+	require.NoError(t, err)
+	require.NotEmpty(t, id)
+	require.Equal(t, "hello", string(uploaded))
+	stat, err := service.statOutput(context.Background(), authInfo, "task", id, "file.txt")
+	require.NoError(t, err)
+	require.Equal(t, int64(5), stat.Size)
+	location, err := service.setPublicURL(context.Background(), authInfo, "task", id, "file.txt", 60)
+	require.NoError(t, err)
+	require.Contains(t, location, "/bucket/outputs/stub/task/"+id+"/file.txt?")
 }

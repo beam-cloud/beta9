@@ -2,14 +2,20 @@ package types
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"time"
 )
 
+// WorkspaceMountPath is the canonical source path sent to a worker. The worker
+// resolves it against its configured workspace mount root.
+func WorkspaceMountPath(workspaceName string, parts ...string) string {
+	return path.Join(append([]string{AgentWorkspacePath, workspaceName}, parts...)...)
+}
+
 const (
 	StorageModeMountPoint  = "mountpoint"
 	StorageModeGeese       = "geese"
-	StorageModeAlluxio     = "alluxio"
 	StorageModeLocal       = "local"
 	StorageModeDurableDisk = "durable_disk"
 )

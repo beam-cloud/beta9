@@ -82,6 +82,9 @@ func NewWorkspaceStorageClientWithDefaultPresignEndpoint(ctx context.Context, wo
 }
 
 func NewWorkspaceStorageClientWithPresignEndpoint(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage, presignEndpointUrl string) (*WorkspaceStorageClient, error) {
+	if workspaceStorage == nil || workspaceStorage.Region == nil || workspaceStorage.AccessKey == nil || workspaceStorage.SecretKey == nil || workspaceStorage.BucketName == nil {
+		return nil, errors.New("workspace storage is unavailable")
+	}
 	client, err := (storageClientConfig{
 		region:             *workspaceStorage.Region,
 		accessKey:          *workspaceStorage.AccessKey,
@@ -356,6 +359,10 @@ func newStorageMultipartUploader(client *s3.Client, body io.Reader) *manager.Upl
 	return manager.NewUploader(client, func(u *manager.Uploader) {
 		u.PartSize = storageMultipartUploadPartSize
 		u.Concurrency = storageMultipartConcurrency(body)
+		// Unseekable streams buffer each part; keep concurrent uploads bounded.
+		if _, seekable := body.(seekableReaderAt); !seekable {
+			u.PartSize = manager.MinUploadPartSize
+		}
 	})
 }
 

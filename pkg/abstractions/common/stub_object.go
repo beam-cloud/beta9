@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"os"
 	"path"
 	"sync"
 
@@ -95,23 +94,14 @@ func GetOrCreateEmptyStubObject(ctx context.Context, backendRepo repository.Back
 }
 
 // finalizeEmptyStubObject uploads the object's content to workspace storage
-// (or local disk) and returns the record.
+// and returns the record.
 func finalizeEmptyStubObject(ctx context.Context, workspace *types.Workspace, object *types.Object, data []byte) (types.Object, error) {
-	key := path.Join(types.DefaultObjectPrefix, object.ExternalId)
-	if workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
-		if err != nil {
-			return types.Object{}, err
-		}
-		if err := storageClient.EnsureLocalBucket(ctx); err != nil {
-			return types.Object{}, err
-		}
-		return *object, storageClient.Upload(ctx, key, data)
-	}
-
-	objectPath := path.Join(types.DefaultObjectPath, workspace.Name)
-	if err := os.MkdirAll(objectPath, 0755); err != nil {
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
+	if err != nil {
 		return types.Object{}, err
 	}
-	return *object, os.WriteFile(path.Join(objectPath, object.ExternalId), data, 0644)
+	if err := storageClient.EnsureLocalBucket(ctx); err != nil {
+		return types.Object{}, err
+	}
+	return *object, storageClient.Upload(ctx, path.Join(types.DefaultObjectPrefix, object.ExternalId), data)
 }

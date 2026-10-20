@@ -2,7 +2,6 @@ package abstractions
 
 import (
 	"encoding/base64"
-	"path"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -42,7 +41,7 @@ func TestConfigureContainerRequestMountsOmitsSandboxOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPersistentPath := path.Join(types.DefaultOutputsPath, workspace.Name, "stub-123")
+	wantPersistentPath := types.WorkspaceMountPath(workspace.Name, types.DefaultOutputsPrefix, "stub-123")
 	if podMounts[1].LocalPath != wantPersistentPath || podMounts[1].MountType != "" {
 		t.Fatalf("pod output mount = %#v, want persistent path %q", podMounts[1], wantPersistentPath)
 	}

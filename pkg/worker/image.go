@@ -775,7 +775,9 @@ func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.C
 					complete = false
 					log.Warn().Err(err).Str("image_id", request.ImageId).Msg("failed to prepare fast image metadata")
 				} else {
-					go c.publishImageArchiveToEmbeddedCache(c.localArchivePath(request.ImageId)+".batch", request.ImageId)
+					// Reporting already runs off the startup path. Finish publication
+					// before the report is marked complete and its caller can exit.
+					c.publishImageArchiveToEmbeddedCache(c.localArchivePath(request.ImageId)+".batch", request.ImageId)
 					items = append(items, item)
 				}
 			}
@@ -2946,18 +2948,9 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// and on a persistent build cache it carries over between builds.
 		budArgs = append(budArgs, "--volume", uvCacheDir(tmpdir)+":"+uvBuildCachePath)
 	}
-	// Synced local files are visible to RUN steps where they are at run
-	// time, so add_local_dir(copy=True) and commands that install from the
-	// working directory work the same way in a build as in a container. The
-	// container's copy is writable, so the build's is too (a throwaway one:
-	// see writableBuildContext).
+	// Each build owns its downloaded context; RUN steps may write to it.
 	if request.BuildOptions.BuildCtxObject != nil && *request.BuildOptions.BuildCtxObject != "" {
-		codeDir, cleanupCodeDir, err := c.writableBuildContext(ctx, request, buildPath, buildCtxPath)
-		if err != nil {
-			return err
-		}
-		defer cleanupCodeDir()
-		budArgs = append(budArgs, "--volume", codeDir+":"+types.WorkerUserCodeVolume)
+		budArgs = append(budArgs, "--volume", buildCtxPath+":"+types.WorkerUserCodeVolume)
 	}
 
 	// Add credentials for multi-stage builds and private base images
@@ -3324,80 +3317,15 @@ func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, req
 	if request.BuildOptions.BuildCtxObject == nil {
 		return ".", nil
 	}
-
-	buildCtxPath := filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
-	objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
-
-	if request.StorageAvailable() {
-		buildCtxPath = path.Join(buildPath, "build-ctx")
-
-		if !workspaceStorageDownloadAvailable(request.Workspace.Storage) {
-			return "", fmt.Errorf("workspace storage credentials are required to download build context %q directly", *request.BuildOptions.BuildCtxObject)
-		}
-
-		objectPath = path.Join(buildPath, "build-ctx.zip")
-		if err := downloadWorkspaceBuildContext(ctx, request, *request.BuildOptions.BuildCtxObject, objectPath); err != nil {
-			return "", err
-		}
-	}
-
-	err := common.ExtractObjectFile(ctx, objectPath, buildCtxPath)
-	if err != nil {
+	objectPath := filepath.Join(buildPath, "build-ctx.zip")
+	if err := downloadWorkspaceBuildContext(ctx, request, *request.BuildOptions.BuildCtxObject, objectPath); err != nil {
 		return "", err
 	}
-
+	buildCtxPath := filepath.Join(buildPath, "build-ctx")
+	if err := common.ExtractObjectFile(ctx, objectPath, buildCtxPath); err != nil {
+		return "", err
+	}
 	return buildCtxPath, nil
-}
-
-// writableBuildContext returns a directory holding the build context that RUN
-// steps may write to, mounted at the working directory during the build. The
-// container an image runs in gets a private, writable copy of the synced code
-// there, so a step that writes into the working directory (pip install .,
-// npm install, generated files) has to work in the build as well. The
-// context extracted under the build's own directory is private to the build
-// and is mounted as is. The extraction under the worker's shared object path
-// is read by other builds and containers, so it stays read-only: an overlay
-// puts a throwaway upper over it, or, where the mount is not possible, the
-// context is copied. Either lives on the disk-backed spool dir, as the
-// build's own temp dirs are in /dev/shm. Writes are discarded with the build,
-// as they would be in the container.
-func (c *ImageClient) writableBuildContext(ctx context.Context, request *types.ContainerRequest, buildPath, buildCtxPath string) (string, func(), error) {
-	if rel, err := filepath.Rel(buildPath, buildCtxPath); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
-		return buildCtxPath, func() {}, nil
-	}
-
-	work, err := os.MkdirTemp(c.layerSpoolDir(), "build-ctx-"+request.ImageId+"-")
-	if err != nil {
-		return "", nil, fmt.Errorf("create writable build context: %w", err)
-	}
-	upper := filepath.Join(work, "upper")
-	if err := os.MkdirAll(upper, 0o755); err != nil {
-		os.RemoveAll(work)
-		return "", nil, fmt.Errorf("create writable build context: %w", err)
-	}
-	overlay := common.NewContainerOverlay(request, buildCtxPath, filepath.Join(work, "overlay"))
-	if err := overlay.AddLayer(upper); err == nil {
-		return overlay.TopLayerPath(), func() {
-			if err := overlay.Cleanup(); err != nil {
-				log.Warn().Err(err).Str("image_id", request.ImageId).Msg("unmount writable build context")
-			}
-			os.RemoveAll(work)
-		}, nil
-	} else {
-		log.Debug().Err(err).Str("image_id", request.ImageId).Msg("overlay for writable build context unavailable, copying the context")
-		os.RemoveAll(filepath.Join(work, "overlay"))
-	}
-
-	copyDir := filepath.Join(work, "code")
-	if err := os.MkdirAll(copyDir, 0o755); err != nil {
-		os.RemoveAll(work)
-		return "", nil, fmt.Errorf("create writable build context: %w", err)
-	}
-	if out, err := exec.CommandContext(ctx, "cp", "-a", buildCtxPath+"/.", copyDir).CombinedOutput(); err != nil {
-		os.RemoveAll(work)
-		return "", nil, fmt.Errorf("copy build context: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return copyDir, func() { os.RemoveAll(work) }, nil
 }
 
 func downloadWorkspaceBuildContext(ctx context.Context, request *types.ContainerRequest, objectID, destPath string) error {

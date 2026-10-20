@@ -2,15 +2,10 @@ package types
 
 const (
 	DefaultGatewayServiceName          string = "gateway"
-	DefaultExtractedObjectPath         string = "/data/unpacked"
-	DefaultVolumesPath                 string = "/data/volumes"
 	DefaultDurableDisksPath            string = "/var/lib/beta9/durable-disks"
-	DefaultObjectPath                  string = "/data/objects"
-	DefaultOutputsPath                 string = "/data/outputs"
 	DefaultObjectPrefix                string = "objects"
 	DefaultVolumesPrefix               string = "volumes"
 	DefaultOutputsPrefix               string = "outputs"
-	DefaultFilesystemPath              string = "/data"
 	FailedDeploymentContainerThreshold int    = 3
 	FailedContainerThreshold           int    = 1
 )

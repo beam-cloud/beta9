@@ -73,7 +73,6 @@ const (
 	AgentImageCachePath             = "/images/cache"
 	AgentImageMountPattern          = "/images/mnt/%s"
 	AgentTmpPath                    = "/tmp"
-	AgentDataPath                   = "/data"
 	AgentWorkspacePath              = "/workspace/data"
 	AgentCachePath                  = "/var/lib/beta9/cache"
 	AgentCheckpointPath             = "/checkpoints"

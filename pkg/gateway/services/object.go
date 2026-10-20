@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -36,74 +36,89 @@ func (gws *GatewayService) ensureEmptyStubObject(ctx context.Context, workspace 
 	return abstractions.EnsureEmptyStubObject(ctx, gws.backendRepo, workspace)
 }
 
+func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {
+	ctx := stream.Context()
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if !auth.HasPermission(authInfo) || authInfo.Workspace == nil {
+		return status.Error(codes.PermissionDenied, "Unauthorized Access")
+	}
+	first, err := stream.Recv()
+	if err == io.EOF {
+		return status.Error(codes.InvalidArgument, "object stream is empty")
+	}
+	if err != nil {
+		return err
+	}
+	client, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+	if err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{ErrorMsg: "Unable to create storage client"})
+	}
+	object, err := gws.backendRepo.CreateObject(ctx, first.Hash, 0, authInfo.Workspace.Id)
+	if err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{ErrorMsg: "Unable to create object"})
+	}
+	key := path.Join(types.DefaultObjectPrefix, object.ExternalId)
+	complete := false
+	defer func() {
+		if !complete {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			_ = client.Delete(cleanupCtx, key)
+			_ = gws.backendRepo.DeleteObjectByExternalId(cleanupCtx, object.ExternalId)
+		}
+	}()
+	size := len(first.ObjectContent)
+	reader := common.NewChunkReader(first.ObjectContent, func() ([]byte, error) {
+		chunk, err := stream.Recv()
+		if err != nil {
+			return nil, err
+		}
+		if chunk.Hash != "" && chunk.Hash != first.Hash {
+			return nil, fmt.Errorf("object hash changed during upload")
+		}
+		size += len(chunk.ObjectContent)
+		return chunk.ObjectContent, nil
+	})
+	if err := client.UploadWithReaderAndMetadata(ctx, key, reader, map[string]string{workspaceObjectHashMetadataKey: first.Hash}); err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{ErrorMsg: "Unable to upload object"})
+	}
+	if err := gws.backendRepo.UpdateObjectSizeByExternalId(ctx, object.ExternalId, size); err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{ErrorMsg: "Unable to record object size"})
+	}
+	complete = true
+	return stream.SendAndClose(&pb.PutObjectResponse{Ok: true, ObjectId: object.ExternalId})
+}
+
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	useWorkspaceStorage := authInfo.Workspace.StorageAvailable()
-	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
-	if err == nil {
-		exists := true
-
-		if !useWorkspaceStorage {
-			objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
-			if _, err := os.Stat(objectPath); os.IsNotExist(err) {
-				exists = false
-			}
-		}
-
-		if useWorkspaceStorage {
-			storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
-			if err != nil {
-				return &pb.HeadObjectResponse{
-					Ok:       false,
-					ErrorMsg: "Unable to create storage client",
-				}, nil
-			}
-			if err := storageClient.EnsureLocalBucket(ctx); err != nil {
-				return &pb.HeadObjectResponse{
-					Ok:       false,
-					ErrorMsg: "Unable to ensure workspace storage bucket",
-				}, nil
-			}
-
-			objectExists, head, err := storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
-			if err != nil {
-				return &pb.HeadObjectResponse{
-					Ok:       false,
-					ErrorMsg: "Unable to check if object exists",
-				}, nil
-			}
-			exists = objectExists
-			if exists && in.SupportsPutHeaders && !workspaceObjectHasHashMetadata(head, existingObject.Hash) {
-				exists = false
-			}
-		}
-
-		if exists {
-			return &pb.HeadObjectResponse{
-				Ok:     true,
-				Exists: true,
-				ObjectMetadata: &pb.ObjectMetadata{
-					Name: existingObject.Hash,
-					Size: existingObject.Size,
-				},
-				ObjectId:            existingObject.ExternalId,
-				UseWorkspaceStorage: useWorkspaceStorage,
-			}, nil
-		} else {
-			return &pb.HeadObjectResponse{
-				Ok:                  true,
-				Exists:              false,
-				UseWorkspaceStorage: useWorkspaceStorage,
-			}, nil
-		}
+	if !authInfo.Workspace.StorageAvailable() {
+		return &pb.HeadObjectResponse{ErrorMsg: "workspace storage is unavailable"}, nil
 	}
-
-	return &pb.HeadObjectResponse{
-		Ok:                  true,
-		Exists:              false,
-		UseWorkspaceStorage: useWorkspaceStorage,
-	}, nil
+	response := &pb.HeadObjectResponse{Ok: true, UseWorkspaceStorage: true}
+	object, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
+	if err != nil {
+		return response, nil
+	}
+	client, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+	if err != nil {
+		return &pb.HeadObjectResponse{ErrorMsg: err.Error()}, nil
+	}
+	if err := client.EnsureLocalBucket(ctx); err != nil {
+		return &pb.HeadObjectResponse{ErrorMsg: "Unable to ensure workspace storage bucket"}, nil
+	}
+	exists, head, err := client.Head(ctx, path.Join(types.DefaultObjectPrefix, object.ExternalId))
+	if err != nil {
+		return &pb.HeadObjectResponse{ErrorMsg: "Unable to check if object exists"}, nil
+	}
+	if exists && in.SupportsPutHeaders && !workspaceObjectHasHashMetadata(head, object.Hash) {
+		exists = false
+	}
+	if exists {
+		response.Exists = true
+		response.ObjectId = object.ExternalId
+		response.ObjectMetadata = &pb.ObjectMetadata{Name: object.Hash, Size: object.Size}
+	}
+	return response, nil
 }
 
 func workspaceObjectHasHashMetadata(head *s3.HeadObjectOutput, expectedHash string) bool {
@@ -343,84 +358,4 @@ func (gws *GatewayService) CompleteObjectUpload(ctx context.Context, in *pb.Comp
 		return &pb.CompleteObjectUploadResponse{Ok: false, ErrorMsg: "Unable to complete upload"}, nil
 	}
 	return &pb.CompleteObjectUploadResponse{Ok: true}, nil
-}
-
-func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {
-	ctx := stream.Context()
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	if !auth.HasPermission(authInfo) {
-		return status.Error(codes.PermissionDenied, "Unauthorized Access")
-	}
-
-	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
-	if err := os.MkdirAll(objectPath, 0755); err != nil {
-		return stream.SendAndClose(&pb.PutObjectResponse{
-			Ok:       false,
-			ErrorMsg: "Unable to create object directory",
-		})
-	}
-
-	var size int
-	var file *os.File
-	var newObject *types.Object
-
-	for {
-		request, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			return stream.SendAndClose(&pb.PutObjectResponse{
-				Ok:       false,
-				ErrorMsg: "Unable to receive stream of bytes",
-			})
-		}
-
-		if file == nil {
-			newObject, err = gws.backendRepo.CreateObject(ctx, request.Hash, 0, authInfo.Workspace.Id)
-			if err != nil {
-				return stream.SendAndClose(&pb.PutObjectResponse{
-					Ok:       false,
-					ErrorMsg: "Unable to create object",
-				})
-			}
-
-			file, err = os.Create(path.Join(objectPath, newObject.ExternalId))
-			if err != nil {
-				gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
-				return stream.SendAndClose(&pb.PutObjectResponse{
-					Ok:       false,
-					ErrorMsg: "Unable to create file",
-				})
-			}
-			defer file.Close()
-		}
-
-		s, err := file.Write(request.ObjectContent)
-		if err != nil {
-			os.Remove(path.Join(objectPath, newObject.ExternalId))
-			gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
-			return stream.SendAndClose(&pb.PutObjectResponse{
-				Ok:       false,
-				ErrorMsg: "Unable to write file content",
-			})
-		}
-		size += s
-	}
-
-	if err := gws.backendRepo.UpdateObjectSizeByExternalId(ctx, newObject.ExternalId, size); err != nil {
-		os.Remove(path.Join(objectPath, newObject.ExternalId))
-		gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
-		return stream.SendAndClose(&pb.PutObjectResponse{
-			Ok:       false,
-			ErrorMsg: "Unable to complete file upload",
-		})
-	}
-
-	return stream.SendAndClose(&pb.PutObjectResponse{
-		Ok:       true,
-		ObjectId: newObject.ExternalId,
-	})
 }

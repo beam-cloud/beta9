@@ -16,7 +16,6 @@ import (
 const (
 	StorageModeMountPoint string = types.StorageModeMountPoint
 	StorageModeGeese      string = types.StorageModeGeese
-	StorageModeAlluxio    string = types.StorageModeAlluxio
 	StorageModeLocal      string = types.StorageModeLocal
 )
 
@@ -24,6 +23,46 @@ type Storage interface {
 	Mount(localPath string) error
 	Unmount(localPath string) error
 	Mode() string
+}
+
+// NewStorage constructs the selected workspace filesystem using workspace credentials.
+// The caller owns mounting and unmounting the returned backend.
+func NewStorage(mode string, config types.WorkspaceStorageConfig, workspaceStorage *types.WorkspaceStorage, cacheClient *cache.Client) (Storage, error) {
+	if mode != StorageModeGeese && mode != StorageModeMountPoint {
+		return nil, fmt.Errorf("workspace storage mode %q is invalid: workspace storage mounts request-scoped credentials through a FUSE backend", mode)
+	}
+	if err := validateWorkspaceStorage(workspaceStorage); err != nil {
+		return nil, err
+	}
+
+	switch mode {
+	case StorageModeGeese:
+		geeseConfig := config.Geese
+		geeseConfig.EndpointUrl = *workspaceStorage.EndpointUrl
+		geeseConfig.BucketName = *workspaceStorage.BucketName
+		geeseConfig.AccessKey = *workspaceStorage.AccessKey
+		geeseConfig.SecretKey = *workspaceStorage.SecretKey
+		geeseConfig.Region = *workspaceStorage.Region
+		return NewGeeseStorage(geeseConfig, cacheClient)
+	default:
+		return NewMountPointStorage(types.MountPointConfig{
+			BucketName:  *workspaceStorage.BucketName,
+			AccessKey:   *workspaceStorage.AccessKey,
+			SecretKey:   *workspaceStorage.SecretKey,
+			EndpointURL: *workspaceStorage.EndpointUrl,
+			Region:      *workspaceStorage.Region,
+		})
+	}
+}
+
+func validateWorkspaceStorage(workspaceStorage *types.WorkspaceStorage) error {
+	if workspaceStorage == nil {
+		return errors.New("workspace storage metadata is required")
+	}
+	if workspaceStorage.EndpointUrl == nil || workspaceStorage.BucketName == nil || workspaceStorage.AccessKey == nil || workspaceStorage.SecretKey == nil || workspaceStorage.Region == nil {
+		return errors.New("workspace storage metadata is incomplete")
+	}
+	return nil
 }
 
 // IsMounted reports whether mountPoint is present in mountinfo without touching
@@ -74,58 +113,4 @@ func unescapeMountInfoPath(path string) string {
 		`\134`, `\`,
 	)
 	return replacer.Replace(path)
-}
-
-// NewStorage mounts the configured filesystem and returns mount failures.
-func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage, error) {
-	switch config.Mode {
-	case StorageModeGeese:
-		s, err := NewGeeseStorage(config.Geese, cacheClient)
-		if err != nil {
-			return nil, err
-		}
-
-		// Mount filesystem
-		err = s.Mount(config.FilesystemPath)
-		if err != nil {
-			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
-		}
-
-		return s, nil
-	case StorageModeAlluxio:
-		s, err := NewAlluxioStorage(config.Alluxio)
-		if err != nil {
-			return nil, err
-		}
-
-		// Mount filesystem
-		err = s.Mount(config.FilesystemPath)
-		if err != nil {
-			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
-		}
-
-		return s, nil
-	case StorageModeMountPoint:
-		s, err := NewMountPointStorage(config.MountPoint)
-		if err != nil {
-			return nil, err
-		}
-
-		// Mount filesystem
-		err = s.Mount(config.FilesystemPath)
-		if err != nil {
-			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
-		}
-
-		return s, nil
-	case StorageModeLocal:
-		s := NewLocalStorage()
-		if err := s.Mount(config.FilesystemPath); err != nil {
-			return nil, err
-		}
-
-		return s, nil
-	}
-
-	return nil, errors.New("invalid storage mode")
 }

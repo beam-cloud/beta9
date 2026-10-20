@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -98,105 +97,21 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 		_ = os.RemoveAll(mountPath)
 	}
 
-	var err error
-	switch sm.poolConfig.StorageMode {
-	case storage.StorageModeGeese:
-		if err := validateWorkspaceStorage(workspaceStorage); err != nil {
-			return nil, err
-		}
-		os.MkdirAll(mountPath, 0755)
-
-		mount, err = storage.NewStorage(types.StorageConfig{
-			Mode:           storage.StorageModeGeese,
-			FilesystemPath: mountPath,
-			Geese: types.GeeseConfig{
-				// Workspace specific config
-				EndpointUrl: *workspaceStorage.EndpointUrl,
-				BucketName:  *workspaceStorage.BucketName,
-				AccessKey:   *workspaceStorage.AccessKey,
-				SecretKey:   *workspaceStorage.SecretKey,
-				Region:      *workspaceStorage.Region,
-
-				// Global config
-				Debug:                  sm.config.WorkspaceStorage.Geese.Debug,
-				FsyncOnClose:           sm.config.WorkspaceStorage.Geese.FsyncOnClose,
-				MemoryLimit:            sm.config.WorkspaceStorage.Geese.MemoryLimit,
-				MaxFlushers:            sm.config.WorkspaceStorage.Geese.MaxFlushers,
-				MaxParallelParts:       sm.config.WorkspaceStorage.Geese.MaxParallelParts,
-				PartSizeMB:             sm.config.WorkspaceStorage.Geese.PartSizeMB,
-				HTTPTimeout:            sm.config.WorkspaceStorage.Geese.HTTPTimeout,
-				DirMode:                sm.config.WorkspaceStorage.Geese.DirMode,
-				FileMode:               sm.config.WorkspaceStorage.Geese.FileMode,
-				ListType:               sm.config.WorkspaceStorage.Geese.ListType,
-				MountOptions:           sm.config.WorkspaceStorage.Geese.MountOptions,
-				ReadAheadKB:            sm.config.WorkspaceStorage.Geese.ReadAheadKB,
-				ReadAheadLargeKB:       sm.config.WorkspaceStorage.Geese.ReadAheadLargeKB,
-				ReadAheadParallelKB:    sm.config.WorkspaceStorage.Geese.ReadAheadParallelKB,
-				FuseReadAheadKB:        sm.config.WorkspaceStorage.Geese.FuseReadAheadKB,
-				DisableVolumeCaching:   sm.config.WorkspaceStorage.Geese.DisableVolumeCaching,
-				StagedWriteModeEnabled: sm.config.WorkspaceStorage.Geese.StagedWriteModeEnabled,
-				StagedWritePath:        sm.config.WorkspaceStorage.Geese.StagedWritePath,
-				StagedWriteDebounce:    sm.config.WorkspaceStorage.Geese.StagedWriteDebounce,
-				CacheStreamingEnabled:  sm.config.WorkspaceStorage.Geese.CacheStreamingEnabled,
-				CacheDirectIO:          sm.config.WorkspaceStorage.Geese.CacheDirectIO,
-				CacheThroughEnabled:    sm.config.WorkspaceStorage.Geese.CacheThroughEnabled,
-			},
-		}, sm.cacheClient)
-		if err != nil {
-			return nil, err
-		}
-
-	case storage.StorageModeAlluxio:
-		if err := validateWorkspaceStorage(workspaceStorage); err != nil {
-			return nil, err
-		}
-		mount, err = storage.NewStorage(types.StorageConfig{
-			Mode:           storage.StorageModeAlluxio,
-			FilesystemPath: mountPath,
-			Alluxio: types.AlluxioConfig{
-				// Global config
-				Debug:          sm.config.WorkspaceStorage.Alluxio.Debug,
-				ImageUrl:       sm.config.WorkspaceStorage.Alluxio.ImageUrl,
-				EtcdEndpoint:   sm.config.WorkspaceStorage.Alluxio.EtcdEndpoint,
-				EtcdUsername:   sm.config.WorkspaceStorage.Alluxio.EtcdUsername,
-				EtcdPassword:   sm.config.WorkspaceStorage.Alluxio.EtcdPassword,
-				EtcdTlsEnabled: sm.config.WorkspaceStorage.Alluxio.EtcdTlsEnabled,
-
-				// Workspace specific config
-				BucketName:     *workspaceStorage.BucketName,
-				AccessKey:      *workspaceStorage.AccessKey,
-				SecretKey:      *workspaceStorage.SecretKey,
-				EndpointURL:    *workspaceStorage.EndpointUrl,
-				Region:         *workspaceStorage.Region,
-				ReadOnly:       false,
-				ForcePathStyle: false,
-			},
-		}, sm.cacheClient)
-		if err != nil {
-			return nil, err
-		}
-
-	case storage.StorageModeLocal:
-		return nil, fmt.Errorf("workspace storage mode %q is invalid: workspace storage mounts request-scoped credentials through a FUSE backend", storage.StorageModeLocal)
-
-	default:
-		return nil, errors.New("invalid storage mode")
+	mount, err := storage.NewStorage(sm.poolConfig.StorageMode, sm.config.WorkspaceStorage, workspaceStorage, sm.cacheClient)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(mountPath, 0755); err != nil {
+		return nil, err
+	}
+	if err := mount.Mount(mountPath); err != nil {
+		return nil, fmt.Errorf("unable to mount filesystem: %w", err)
 	}
 
 	sm.mounts.Set(workspaceName, mount)
 	sm.mountLastUsed.Set(workspaceName, time.Now())
 
 	return mount, nil
-}
-
-func validateWorkspaceStorage(workspaceStorage *types.WorkspaceStorage) error {
-	if workspaceStorage == nil {
-		return errors.New("workspace storage metadata is required")
-	}
-	if workspaceStorage.EndpointUrl == nil || workspaceStorage.BucketName == nil || workspaceStorage.AccessKey == nil || workspaceStorage.SecretKey == nil || workspaceStorage.Region == nil {
-		return fmt.Errorf("workspace storage metadata is incomplete")
-	}
-	return nil
 }
 
 func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
@@ -216,21 +131,11 @@ func (sm *WorkspaceStorageManager) unmountLocked(workspaceName string) error {
 
 	localPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
-	switch mount.Mode() {
-	case storage.StorageModeGeese:
-		err := mount.Unmount(localPath)
-		if err != nil {
-			return err
-		}
-
-		os.RemoveAll(localPath)
-	case storage.StorageModeLocal:
-		if err := mount.Unmount(localPath); err != nil {
-			return err
-		}
-	case storage.StorageModeAlluxio:
-		fallthrough
-	default:
+	if err := mount.Unmount(localPath); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(localPath); err != nil {
+		return err
 	}
 
 	sm.mounts.Delete(workspaceName)

@@ -248,13 +248,10 @@ func TestSetupContainerMountsCachesStubCodeWithoutSharingContainerWorkspaces(t *
 
 	workspace := "workspace-1"
 	objectID := "object-1"
-	objectPath := filepath.Join(manager.storageConfig.WorkspaceStorage.BaseMountPath, workspace, types.DefaultObjectPrefix, objectID)
-	require.NoError(t, writeZipObject(objectPath, map[string]string{
-		"main.py":         "print('hello')\n",
-		"pkg/__init__.py": "",
-	}))
+	objectStorage, _ := stubCodeStorage(t, map[string]string{"main.py": "print('hello')\n", "pkg/__init__.py": ""})
 
 	request1 := stubCodeMountRequest("container-cache-1", workspace, objectID)
+	request1.Workspace.Storage = objectStorage
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request1.ContainerId))) })
 	require.NoError(t, manager.SetupContainerMounts(context.Background(), request1, discardLogger()))
 
@@ -263,6 +260,7 @@ func TestSetupContainerMountsCachesStubCodeWithoutSharingContainerWorkspaces(t *
 	require.NoError(t, os.WriteFile(filepath.Join(workspace1, "main.py"), []byte("mutated\n"), 0644))
 
 	request2 := stubCodeMountRequest("container-cache-2", workspace, objectID)
+	request2.Workspace.Storage = objectStorage
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request2.ContainerId))) })
 	require.NoError(t, manager.SetupContainerMounts(context.Background(), request2, discardLogger()))
 
@@ -302,17 +300,16 @@ func TestSetupContainerMountsReusesDurableStubCodeCacheAcrossManagers(t *testing
 
 	workspace := "workspace-durable"
 	objectID := "object-durable"
-	objectPath := filepath.Join(storageRoot, workspace, types.DefaultObjectPrefix, objectID)
-	require.NoError(t, writeZipObject(objectPath, map[string]string{
-		"main.py": "print('durable')\n",
-	}))
+	objectStorage, server := stubCodeStorage(t, map[string]string{"main.py": "print('durable')\n"})
 
 	request1 := stubCodeMountRequest("container-durable-1", workspace, objectID)
+	request1.Workspace.Storage = objectStorage
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request1.ContainerId))) })
 	require.NoError(t, NewContainerMountManager(config).SetupContainerMounts(context.Background(), request1, discardLogger()))
-	require.NoError(t, os.Remove(objectPath))
+	server.Close()
 
 	request2 := stubCodeMountRequest("container-durable-2", workspace, objectID)
+	request2.Workspace.Storage = objectStorage
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request2.ContainerId))) })
 	require.NoError(t, NewContainerMountManager(config).SetupContainerMounts(context.Background(), request2, discardLogger()))
 
@@ -364,7 +361,7 @@ func TestSetupContainerMountsRecoversFromAnUnusableStubCodeCache(t *testing.T) {
 	})
 	manager.codeCacheRoot = cacheRoot
 	workspace, objectID := "workspace-1", "object-1"
-	require.NoError(t, writeZipObject(filepath.Join(manager.storageConfig.WorkspaceStorage.BaseMountPath, workspace, types.DefaultObjectPrefix, objectID), map[string]string{"main.py": "print('hello')\n"}))
+	objectStorage, _ := stubCodeStorage(t, map[string]string{"main.py": "print('hello')\n"})
 
 	cachePath := filepath.Join(cacheRoot, stubCodeCacheKey(workspace, objectID))
 	require.NoError(t, os.MkdirAll(cachePath, 0755))
@@ -374,6 +371,7 @@ func TestSetupContainerMountsRecoversFromAnUnusableStubCodeCache(t *testing.T) {
 	t.Cleanup(func() { socket.Close() })
 
 	request := stubCodeMountRequest("container-torn-cache", workspace, objectID)
+	request.Workspace.Storage = objectStorage
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request.ContainerId))) })
 	require.NoError(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
 	data, err := os.ReadFile(filepath.Join(request.Mounts[0].LocalPath, "main.py"))
@@ -389,9 +387,10 @@ func TestSetupContainerMountsSkipsFailedBucketAndResolvesLaterMounts(t *testing.
 	})
 	manager.codeCacheRoot = t.TempDir()
 	workspace, objectID := "workspace-1", "object-1"
-	require.NoError(t, writeZipObject(filepath.Join(manager.storageConfig.WorkspaceStorage.BaseMountPath, workspace, types.DefaultObjectPrefix, objectID), map[string]string{"main.py": ""}))
+	objectStorage, _ := stubCodeStorage(t, map[string]string{"main.py": ""})
 
 	request := stubCodeMountRequest("container-bucket", workspace, objectID)
+	request.Workspace.Storage = objectStorage
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request.ContainerId))) })
 	request.Mounts = append(request.Mounts,
 		types.Mount{
@@ -402,7 +401,7 @@ func TestSetupContainerMountsSkipsFailedBucketAndResolvesLaterMounts(t *testing.
 		},
 		types.Mount{
 			MountPath: types.WorkerContainerVolumePath + "/data",
-			LocalPath: filepath.Join(types.DefaultVolumesPath, workspace, "vol-1"),
+			LocalPath: types.WorkspaceMountPath(workspace, types.DefaultVolumesPrefix, "vol-1"),
 		},
 	)
 
@@ -420,7 +419,7 @@ func TestStubCodeCacheKeyDoesNotCollideAcrossWorkspaceObjectPairs(t *testing.T) 
 	require.NotContains(t, key2, string(filepath.Separator))
 }
 
-func TestSetupContainerMountsPrefersDirectWorkspaceStorageForStubCode(t *testing.T) {
+func TestSetupContainerMountsDownloadsStubCodeFromWorkspaceStorage(t *testing.T) {
 	manager := NewContainerMountManager(types.AppConfig{
 		Storage: types.StorageConfig{
 			WorkspaceStorage: types.WorkspaceStorageConfig{
@@ -432,10 +431,6 @@ func TestSetupContainerMountsPrefersDirectWorkspaceStorageForStubCode(t *testing
 
 	workspace := "workspace-direct"
 	objectID := "object-direct"
-	mountedObjectPath := filepath.Join(manager.storageConfig.WorkspaceStorage.BaseMountPath, workspace, types.DefaultObjectPrefix, objectID)
-	require.NoError(t, writeZipObject(mountedObjectPath, map[string]string{
-		"main.py": "mounted\n",
-	}))
 
 	directObject, err := zipObjectBytes(map[string]string{
 		"main.py": "direct\n",
@@ -487,7 +482,7 @@ func TestSetupContainerMountsUsesWorkspaceStorageForCheckpointModelCacheVolume(t
 		},
 	})
 	cacheVolumeName := types.CheckpointModelCacheVolumeName("qwen")
-	legacyVolumePath := filepath.Join(types.DefaultVolumesPath, workspace, volumeID)
+	volumePath := types.WorkspaceMountPath(workspace, types.DefaultVolumesPrefix, volumeID)
 	request := &types.ContainerRequest{
 		ContainerId: "container-checkpoint-volume",
 		Workspace: types.Workspace{
@@ -496,11 +491,11 @@ func TestSetupContainerMountsUsesWorkspaceStorageForCheckpointModelCacheVolume(t
 		},
 		Mounts: []types.Mount{
 			{
-				LocalPath: legacyVolumePath,
+				LocalPath: volumePath,
 				MountPath: filepath.Join(types.WorkerContainerVolumePath, cacheVolumeName),
 			},
 			{
-				LocalPath: legacyVolumePath,
+				LocalPath: volumePath,
 				MountPath: "/" + cacheVolumeName,
 			},
 		},
@@ -512,8 +507,6 @@ func TestSetupContainerMountsUsesWorkspaceStorageForCheckpointModelCacheVolume(t
 	expectedWorkspaceVolumePath := filepath.Join(storageRoot, workspace, types.DefaultVolumesPrefix, volumeID)
 	require.Equal(t, expectedWorkspaceVolumePath, request.Mounts[0].LocalPath)
 	require.Equal(t, expectedWorkspaceVolumePath, request.Mounts[1].LocalPath)
-	require.NotContains(t, request.Mounts[0].LocalPath, types.DefaultVolumesPath)
-	require.NotContains(t, request.Mounts[1].LocalPath, types.DefaultVolumesPath)
 }
 
 func TestStubCodeCacheRootUsesDiskCacheWhenEnabled(t *testing.T) {
@@ -600,14 +593,15 @@ func TestRequiresWorkspaceStorageMount(t *testing.T) {
 	t.Run("direct storage user code only", func(t *testing.T) {
 		request := stubCodeMountRequest("container-direct-code", "workspace", "object")
 		request.Workspace.Storage = directWorkspaceStorage()
+		request.Mounts[0].LocalPath = types.WorkspaceMountPath(request.Workspace.Name, types.DefaultObjectPrefix, "object")
 
 		require.False(t, manager.RequiresWorkspaceStorageMount(request))
 	})
 
-	t.Run("legacy storage user code", func(t *testing.T) {
-		request := stubCodeMountRequest("container-legacy-code", "workspace", "object")
+	t.Run("code does not require a workspace mount", func(t *testing.T) {
+		request := stubCodeMountRequest("container-code", "workspace", "object")
 
-		require.True(t, manager.RequiresWorkspaceStorageMount(request))
+		require.False(t, manager.RequiresWorkspaceStorageMount(request))
 	})
 
 	t.Run("workspace volume", func(t *testing.T) {
@@ -615,7 +609,7 @@ func TestRequiresWorkspaceStorageMount(t *testing.T) {
 		request.Workspace.Storage = directWorkspaceStorage()
 		request.Mounts = append(request.Mounts, types.Mount{
 			MountPath: types.WorkerContainerVolumePath + "/data",
-			LocalPath: filepath.Join(types.DefaultVolumesPath, request.Workspace.Name, "data"),
+			LocalPath: types.WorkspaceMountPath(request.Workspace.Name, types.DefaultVolumesPrefix, "data"),
 		})
 
 		require.True(t, manager.RequiresWorkspaceStorageMount(request))
@@ -648,7 +642,7 @@ func TestRequiresWorkspaceStorageMount(t *testing.T) {
 		request.BuildOptions.Dockerfile = &dockerfile
 		request.BuildOptions.BuildCtxObject = &request.Stub.Object.ExternalId
 
-		require.True(t, manager.RequiresWorkspaceStorageMount(request))
+		require.False(t, manager.RequiresWorkspaceStorageMount(request))
 	})
 }
 
@@ -686,33 +680,6 @@ func directWorkspaceStorage() *types.WorkspaceStorage {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-func writeZipObject(path string, files map[string]string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := zip.NewWriter(file)
-	defer writer.Close()
-
-	for name, contents := range files {
-		entry, err := writer.Create(name)
-		if err != nil {
-			return err
-		}
-		if _, err := entry.Write([]byte(contents)); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func zipObjectBytes(files map[string]string) ([]byte, error) {
@@ -763,7 +730,7 @@ func TestEnsureBindMountSourceDirsNeverCreatesTheUserCodeSource(t *testing.T) {
 	})
 
 	err := manager.ensureBindMountSourceDirsWithOps(context.Background(), []types.Mount{
-		{LocalPath: filepath.Join(types.DefaultObjectPath, "ws", "object-id"), MountPath: types.WorkerUserCodeVolume},
+		{LocalPath: types.WorkspaceMountPath("ws", types.DefaultObjectPrefix, "object-id"), MountPath: types.WorkerUserCodeVolume},
 		{LocalPath: "/volumes/ws/vol", MountPath: "/vol"},
 	}, ops)
 
@@ -804,4 +771,15 @@ func TestMkdirBindSourceRejectsExistingFile(t *testing.T) {
 	link := filepath.Join(root, "link")
 	require.NoError(t, os.Symlink(dir, link))
 	require.NoError(t, mkdirBindSource(link, 0755))
+}
+
+func stubCodeStorage(t *testing.T, files map[string]string) (*types.WorkspaceStorage, *httptest.Server) {
+	t.Helper()
+	data, err := zipObjectBytes(files)
+	require.NoError(t, err)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(data) }))
+	t.Cleanup(server.Close)
+	storage := directWorkspaceStorage()
+	storage.EndpointUrl = &server.URL
+	return storage, server
 }
