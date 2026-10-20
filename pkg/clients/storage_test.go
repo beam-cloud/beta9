@@ -19,50 +19,42 @@ import (
 )
 
 func TestStorageResponseChecksums(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		checksum string
-		wantErr  bool
-	}{
-		{name: "absent"},
-		{name: "valid", checksum: "NhCmhg=="}, // CRC32 of "hello".
-		{name: "corrupt", checksum: "AAAAAA==", wantErr: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("X-Amz-Checksum-Mode") != "ENABLED" {
-					t.Error("response checksum validation was not requested")
-				}
-				if test.checksum != "" {
-					w.Header().Set("X-Amz-Checksum-Crc32", test.checksum)
-				}
-				_, _ = io.WriteString(w, "hello")
-			}))
-			defer server.Close()
-
-			var logs bytes.Buffer
-			cfg, err := config.LoadDefaultConfig(context.Background(),
-				config.WithRegion("us-east-1"),
-				config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("access", "secret", "")),
-				config.WithLogger(logging.NewStandardLogger(&logs)),
-				config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenSupported),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			client := &StorageClient{s3Client: newS3Client(cfg, server.URL)}
-			data, err := client.Download(context.Background(), "object", "bucket")
-			if test.wantErr {
+	checksums := map[string]string{"absent": "", "valid": "NhCmhg==", "corrupt": "AAAAAA=="} // CRC32 of "hello" is NhCmhg==.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Amz-Checksum-Mode") != "ENABLED" {
+			t.Error("response checksum validation was not requested")
+		}
+		if checksum := checksums[strings.TrimPrefix(r.URL.Path, "/bucket/")]; checksum != "" {
+			w.Header().Set("X-Amz-Checksum-Crc32", checksum)
+		}
+		_, _ = io.WriteString(w, "hello")
+	}))
+	defer server.Close()
+	var logs bytes.Buffer
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("access", "secret", "")),
+		config.WithLogger(logging.NewStandardLogger(&logs)),
+		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenSupported),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &StorageClient{s3Client: newS3Client(cfg, server.URL)}
+	for _, name := range []string{"absent", "valid", "corrupt"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := client.Download(context.Background(), name, "bucket")
+			if name == "corrupt" {
 				if err == nil || !strings.Contains(err.Error(), "checksum") {
 					t.Fatalf("Download() error = %v, want checksum mismatch", err)
 				}
 			} else if err != nil || string(data) != "hello" {
 				t.Fatalf("Download() = %q, %v", data, err)
 			}
-			if strings.Contains(logs.String(), "no supported checksum") {
-				t.Fatalf("unexpected missing-checksum warning: %s", logs.String())
-			}
 		})
+	}
+	if strings.Contains(logs.String(), "no supported checksum") {
+		t.Fatalf("unexpected missing-checksum warning: %s", logs.String())
 	}
 }
 

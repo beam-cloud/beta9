@@ -1655,39 +1655,41 @@ func (f *fakeContainerRepoClient) SetWorkerAddress(ctx context.Context, in *pb.S
 }
 
 func TestStatusHeartbeatRepositoryDeadline(t *testing.T) {
-	for _, phase := range []string{"lookup", "renewal"} {
-		for _, scenario := range []struct {
-			name      string
-			timeout   time.Duration
-			cancelled bool
-		}{
-			{"reconnect", 3 * time.Second, false}, {"cancelled", 20 * time.Millisecond, true},
-		} {
-			t.Run(phase+"/"+scenario.name, func(t *testing.T) {
-				const containerID = "container-reconnecting-heartbeat"
-				release := make(chan struct{})
-				repoClient := &fakeContainerRepoClient{state: &pb.ContainerState{ContainerId: containerID, Status: string(types.ContainerStatusRunning)}}
-				if phase == "lookup" {
-					repoClient.getStateRelease = release
-				} else {
-					repoClient.updateStatusRelease = release
-				}
-				// A fresh TCP/TLS handshake took 1.2s on the staging host.
-				timer := time.AfterFunc(1200*time.Millisecond, func() { close(release) })
-				t.Cleanup(func() { timer.Stop() })
-				worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance](), containerRepoClient: repoClient}
-				worker.containerInstances.Set(containerID, &ContainerInstance{ExitCode: -1})
-				ctx, cancel := context.WithTimeout(context.Background(), scenario.timeout)
-				defer cancel()
-				done, err := worker.updateContainerStatusOnce(ctx, &types.ContainerRequest{ContainerId: containerID})
-				require.False(t, done)
-				if scenario.cancelled {
-					require.ErrorIs(t, err, context.DeadlineExceeded)
-				} else {
-					require.NoError(t, err)
-					require.Len(t, repoClient.containerStatusUpdates(), 1)
-				}
-			})
-		}
+	for _, test := range []struct {
+		name    string
+		renewal bool
+		timeout time.Duration
+		wantErr error
+	}{
+		{name: "lookup reconnect", timeout: 3 * time.Second},
+		{name: "renewal reconnect", renewal: true, timeout: 3 * time.Second},
+		{name: "lookup cancelled", timeout: 20 * time.Millisecond, wantErr: context.DeadlineExceeded},
+		{name: "renewal cancelled", renewal: true, timeout: 20 * time.Millisecond, wantErr: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const containerID = "container-reconnecting-heartbeat"
+			release := make(chan struct{})
+			repoClient := &fakeContainerRepoClient{state: &pb.ContainerState{ContainerId: containerID, Status: string(types.ContainerStatusRunning)}}
+			if test.renewal {
+				repoClient.updateStatusRelease = release
+			} else {
+				repoClient.getStateRelease = release
+			}
+			// Let a reconnect outlast the previous one-second repository timeout.
+			timer := time.AfterFunc(1200*time.Millisecond, func() { close(release) })
+			t.Cleanup(func() { timer.Stop() })
+			worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance](), containerRepoClient: repoClient}
+			worker.containerInstances.Set(containerID, &ContainerInstance{ExitCode: -1})
+			ctx, cancel := context.WithTimeout(context.Background(), test.timeout)
+			defer cancel()
+			done, err := worker.updateContainerStatusOnce(ctx, &types.ContainerRequest{ContainerId: containerID})
+			require.False(t, done)
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, repoClient.containerStatusUpdates(), 1)
+		})
 	}
 }

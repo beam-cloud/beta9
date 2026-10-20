@@ -391,47 +391,11 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
 
-	createdAt := time.Now().Add(-time.Hour)
 	updatedAt := time.Now()
-	stubRows := []string{
-		"id",
-		"external_id",
-		"name",
-		"type",
-		"config",
-		"config_version",
-		"object_id",
-		"workspace_id",
-		"created_at",
-		"updated_at",
-		"app_id",
-	}
-
 	mock.ExpectQuery(`WITH existing AS MATERIALIZED`).
 		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11), uint(13), false).
-		WillReturnRows(sqlmock.NewRows(stubRows).AddRow(
-			uint(5),
-			"stub-external",
-			"stub-name",
-			types.StubTypeFunction,
-			`{"runtime":"python3"}`,
-			uint(1),
-			uint(7),
-			uint(11),
-			createdAt,
-			updatedAt,
-			uint(13),
-		))
-	stub, err := postgresRepo.GetOrCreateStub(
-		context.Background(),
-		"stub-name",
-		string(types.StubTypeFunction),
-		types.StubConfigV1{},
-		7,
-		11,
-		false,
-		13,
-	)
+		WillReturnRows(sqlmock.NewRows([]string{"id", "workspace_id", "updated_at"}).AddRow(5, 11, updatedAt))
+	stub, err := postgresRepo.GetOrCreateStub(context.Background(), "stub-name", string(types.StubTypeFunction), types.StubConfigV1{}, 7, 11, false, 13)
 
 	require.NoError(t, err)
 	require.Equal(t, uint(5), stub.Id)
@@ -463,42 +427,50 @@ func TestGetOrCreateStubIntegration(t *testing.T) {
 	require.NoError(t, err)
 	repo := &PostgresBackendRepository{client: db}
 	ctx := context.Background()
-	config := types.StubConfigV1{Runtime: types.Runtime{ImageId: "stub-test"}}
-	create := func(app uint, force bool) (types.Stub, error) {
+	create := func(app uint, force bool, image string) (types.Stub, error) {
+		config := types.StubConfigV1{Runtime: types.Runtime{ImageId: image}}
 		return repo.GetOrCreateStub(ctx, "stub-test", string(types.StubTypeVM), config, 1, 1, force, app)
 	}
-	first, err := create(1, false)
+	first, err := create(1, false, "stub-test")
 	require.NoError(t, err)
-	_, err = db.Exec(`UPDATE stub SET updated_at=NOW() - INTERVAL '1 hour' WHERE id=$1`, first.Id)
-	require.NoError(t, err)
-	reused, err := create(1, false)
-	require.NoError(t, err)
-	require.Equal(t, first.Id, reused.Id)
-	require.Equal(t, first.CreatedAt, reused.CreatedAt)
-	require.True(t, reused.UpdatedAt.Time.After(time.Now().Add(-time.Minute)))
-	var active bool
-	require.NoError(t, db.Get(&active, `SELECT updated_at > NOW() - INTERVAL '1 minute' FROM app WHERE id=1`))
-	require.True(t, active)
-	other, err := create(2, false)
-	require.NoError(t, err)
-	require.NotEqual(t, first.Id, other.Id)
-	forced, err := create(1, true)
-	require.NoError(t, err)
-	require.NotEqual(t, first.Id, forced.Id)
-	config.Runtime.ImageId = "different-image"
-	different, err := create(1, false)
-	require.NoError(t, err)
-	require.NotEqual(t, first.Id, different.Id)
 
-	// An activity failure must roll back the stub insert as well.
-	_, err = db.Exec(`UPDATE app SET updated_at='2000-01-01';
-		ALTER TABLE app ADD CHECK (updated_at < '2020-01-01');`)
-	require.NoError(t, err)
-	_, err = create(1, true)
-	require.Error(t, err)
-	var count int
-	require.NoError(t, db.Get(&count, `SELECT count(*) FROM stub`))
-	require.Equal(t, 4, count)
+	t.Run("reuse updates activity", func(t *testing.T) {
+		_, err := db.Exec(`UPDATE stub SET updated_at=NOW() - INTERVAL '1 hour' WHERE id=$1`, first.Id)
+		require.NoError(t, err)
+		reused, err := create(1, false, "stub-test")
+		require.NoError(t, err)
+		require.Equal(t, first.Id, reused.Id)
+		require.Equal(t, first.CreatedAt, reused.CreatedAt)
+		require.WithinDuration(t, time.Now(), reused.UpdatedAt.Time, time.Minute)
+		var active bool
+		require.NoError(t, db.Get(&active, `SELECT updated_at > NOW() - INTERVAL '1 minute' FROM app WHERE id=1`))
+		require.True(t, active)
+	})
+	for _, test := range []struct {
+		name, image string
+		app         uint
+		force       bool
+	}{
+		{name: "different app", image: "stub-test", app: 2},
+		{name: "forced creation", image: "stub-test", app: 1, force: true},
+		{name: "different config", image: "different-image", app: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub, err := create(test.app, test.force, test.image)
+			require.NoError(t, err)
+			require.NotEqual(t, first.Id, stub.Id)
+		})
+	}
+	t.Run("activity failure rolls back creation", func(t *testing.T) {
+		_, err := db.Exec(`UPDATE app SET updated_at='2000-01-01';
+			ALTER TABLE app ADD CHECK (updated_at < '2020-01-01');`)
+		require.NoError(t, err)
+		_, err = create(1, true, "stub-test")
+		require.Error(t, err)
+		var count int
+		require.NoError(t, db.Get(&count, `SELECT count(*) FROM stub`))
+		require.Equal(t, 4, count)
+	})
 }
 
 func TestAppListingsSkipVMApp(t *testing.T) {
