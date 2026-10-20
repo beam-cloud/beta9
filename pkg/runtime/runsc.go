@@ -401,10 +401,6 @@ func (r *Runsc) loadState(ctx context.Context, containerID string) (runscState, 
 	return state, nil
 }
 
-func (r *Runsc) Events(ctx context.Context, containerID string) (<-chan Event, error) {
-	return r.guestOOMEvents(ctx, containerID)
-}
-
 func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
 	if opts == nil {
 		return fmt.Errorf("checkpoint options cannot be nil")

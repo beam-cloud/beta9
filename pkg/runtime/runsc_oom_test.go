@@ -14,9 +14,8 @@ import (
 )
 
 func TestRunscGuestOOMEventsUseActualKillsOnly(t *testing.T) {
-	runscPath := filepath.Join(t.TempDir(), "runsc")
-	require.NoError(t, os.WriteFile(runscPath, []byte(`#!/bin/sh
-cat <<'EOF'
+	events := runscEvents(t, t.Context(), `cat <<'EOF'
+{"type":"stats","id":"container","data":null}
 {"type":"stats","id":"container","data":{"memory":{"usage":{"usage":9999999999}}}}
 {"type":"stats","id":"container","data":{"memory":{"raw":{"guest_oom_kill":0}}}}
 {"type":"stats","id":"other","data":{"memory":{"raw":{"guest_oom_kill":99}}}}
@@ -24,47 +23,39 @@ cat <<'EOF'
 {"type":"stats","id":"container","data":{"memory":{"raw":{"guest_oom_kill":1}}}}
 {"type":"stats","id":"container","data":{"memory":{"raw":{"guest_oom_kill":2}}}}
 EOF
-`), 0o755))
-	rt := &Runsc{cfg: Config{RunscPath: runscPath}}
-	events, err := rt.Events(context.Background(), "container")
-	require.NoError(t, err)
-	var kills int
+`)
+	var got []Event
 	for event := range events {
-		require.NoError(t, event.Err)
-		require.Equal(t, "application_oom", event.Type)
-		kills++
-		require.Equal(t, uint64(kills), event.ApplicationOOM.Kills)
-		if kills == 1 {
-			require.Equal(t, int64(64<<20), event.ApplicationOOM.MemoryLimit)
-			require.Equal(t, uint64(60000000), event.ApplicationOOM.MemoryUsage)
-		}
+		got = append(got, event)
 	}
-	require.Equal(t, 2, kills)
+	require.Equal(t, []Event{
+		{Type: "application_oom", ApplicationOOM: &microvm.ApplicationOOM{Kills: 1, MemoryLimit: 64 << 20, MemoryUsage: 60000000}},
+		{Type: "application_oom", ApplicationOOM: &microvm.ApplicationOOM{Kills: 2}},
+	}, got)
+}
+
+func runscEvents(t *testing.T, ctx context.Context, script string) <-chan Event {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "runsc")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755))
+	rt := &Runsc{cfg: Config{RunscPath: path}}
+	events, err := rt.Events(ctx, "container")
+	require.NoError(t, err)
+	return events
 }
 
 func TestRunscGuestOOMEventsStopOnCancellationAndInvalidJSON(t *testing.T) {
-	for _, invalid := range []bool{false, true} {
-		t.Run(map[bool]string{false: "cancel", true: "invalid JSON"}[invalid], func(t *testing.T) {
-			runscPath := filepath.Join(t.TempDir(), "runsc")
-			script := "#!/bin/sh\n"
-			if invalid {
-				script += "echo invalid-json\n"
-			}
-			// exec avoids leaving a child behind when the stream is cancelled.
-			script += "exec sleep 60\n"
-			require.NoError(t, os.WriteFile(runscPath, []byte(script), 0o755))
-			rt := &Runsc{cfg: Config{RunscPath: runscPath}}
-			ctx, cancel := context.WithCancel(context.Background())
+	for _, test := range []struct{ name, script string }{
+		{"cancel", "exec sleep 60"},
+		{"invalid JSON", "echo invalid-json; exec sleep 60"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			events, err := rt.Events(ctx, "container")
-			require.NoError(t, err)
-			if invalid {
-				select {
-				case event := <-events:
-					require.ErrorContains(t, event.Err, "decode gVisor OOM")
-				case <-time.After(time.Second):
-					t.Fatal("invalid JSON did not terminate the stream")
-				}
+			// exec keeps cancellation from leaving a shell child behind.
+			events := runscEvents(t, ctx, test.script)
+			if test.name == "invalid JSON" {
+				require.ErrorContains(t, receive(t, events).Err, "decode gVisor OOM")
 			} else {
 				cancel()
 			}
@@ -147,12 +138,7 @@ func TestRuntimeOOMWatcherReportsRepeatedSandboxOOMsWithoutTerminating(t *testin
 	require.NoError(t, watcher.Watch(func() { terminalCalls.Add(1) }))
 	for count := uint64(1); count <= 2; count++ {
 		rt.events <- Event{Type: "application_oom", ApplicationOOM: &microvm.ApplicationOOM{Kills: count}}
-		select {
-		case got := <-reported:
-			require.Equal(t, count, got)
-		case <-time.After(time.Second):
-			t.Fatal("sandbox OOM was not reported")
-		}
+		require.Equal(t, count, receive(t, reported))
 		require.Zero(t, terminalCalls.Load())
 	}
 	// A real host OOM is still terminal for the sandbox runtime.
@@ -162,4 +148,17 @@ func TestRuntimeOOMWatcherReportsRepeatedSandboxOOMsWithoutTerminating(t *testin
 	rt.events <- Event{Type: "application_oom", ApplicationOOM: &microvm.ApplicationOOM{Kills: 3}}
 	close(rt.events)
 	require.Never(t, func() bool { return len(reported) != 0 }, 20*time.Millisecond, time.Millisecond)
+}
+
+func receive[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case value, ok := <-ch:
+		require.True(t, ok, "channel closed before notification")
+		return value
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for notification")
+		var zero T
+		return zero
+	}
 }

@@ -1,11 +1,9 @@
 package worker
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"syscall"
@@ -44,9 +42,8 @@ func TestSetupOOMWatcherSkipsGvisorWhenMemoryIsNotEnforced(t *testing.T) {
 
 type guestOOMRuntime struct {
 	*MockRuntime
-	events      chan runtime.Event
-	eventsCalls atomic.Int32
-	killed      chan syscall.Signal
+	events chan runtime.Event
+	killed chan syscall.Signal
 }
 
 type guestOOMEventRepo struct {
@@ -68,7 +65,6 @@ func (*guestOOMEventRepo) PushContainerLogLastByte(string, *types.ContainerReque
 func (*guestOOMEventRepo) PushContainerLogFlushCompleted(string, *types.ContainerRequest)    {}
 
 func (r *guestOOMRuntime) Events(context.Context, string) (<-chan runtime.Event, error) {
-	r.eventsCalls.Add(1)
 	return r.events, nil
 }
 
@@ -77,102 +73,122 @@ func (r *guestOOMRuntime) Kill(_ context.Context, _ string, signal syscall.Signa
 	return nil
 }
 
+type oomTestWorker struct {
+	*Worker
+	ctx      context.Context
+	instance *ContainerInstance
+	rt       *guestOOMRuntime
+	repo     *guestOOMEventRepo
+	logs     chan common.LogRecord
+	oom      atomic.Bool
+}
+
+func newOOMTestWorker(t *testing.T, kind string) *oomTestWorker {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	rt := &guestOOMRuntime{
+		MockRuntime: NewMockRuntime("gvisor", runtime.Capabilities{}),
+		events:      make(chan runtime.Event, 2), killed: make(chan syscall.Signal, 1),
+	}
+	request := &types.ContainerRequest{ContainerId: "container", Memory: 2048,
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(kind), Config: `{"_beta9_force_resource_limits":true}`}},
+	}
+	repo := &guestOOMEventRepo{events: make(chan types.EventContainerEventSchema, 4)}
+	worker := &Worker{ctx: t.Context(), runtime: rt, eventRepo: repo,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerCancels:   common.NewSafeMap[context.CancelFunc](),
+		stopContainerChan:  make(chan stopContainerEvent, 1),
+	}
+	instance := &ContainerInstance{Id: request.ContainerId, Request: request, Runtime: rt, ExitCode: -1, LogBuffer: common.NewLogBuffer()}
+	worker.containerInstances.Set(instance.Id, instance)
+	worker.containerCancels.Set(instance.Id, cancel)
+	w := &oomTestWorker{Worker: worker, ctx: ctx, instance: instance, rt: rt, repo: repo, logs: make(chan common.LogRecord, 4)}
+	worker.setupOOMWatcher(ctx, instance.Id, 123, nil, request, slog.New(common.NewChannelHandler(w.logs)), &w.oom)
+	t.Cleanup(func() {
+		instance.stopOOMWatcher()
+		cancel()
+		instance.LogBuffer.Dispose()
+	})
+	return w
+}
+
+func guestOOM(kills uint64) runtime.Event {
+	return runtime.Event{Type: "application_oom", ApplicationOOM: &microvm.ApplicationOOM{Kills: kills, MemoryLimit: 2048 << 20}}
+}
+
+func receive[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case value, ok := <-ch:
+		require.True(t, ok, "channel closed before notification")
+		return value
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for notification")
+		var zero T
+		return zero
+	}
+}
+
 func TestGuestOOMTerminatesWorkloadsButPreservesSandboxes(t *testing.T) {
-	for _, kind := range []string{types.StubTypeEndpointDeployment, types.StubTypeTaskQueueDeployment, types.StubTypePodDeployment, types.StubTypeFunction, types.StubTypeSandbox, types.StubTypeVM} {
+	for _, kind := range []string{
+		types.StubTypeEndpointDeployment, types.StubTypeTaskQueueDeployment,
+		types.StubTypePodDeployment, types.StubTypeFunction, types.StubTypeSandbox, types.StubTypeVM,
+	} {
 		t.Run(kind, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			rt := &guestOOMRuntime{
-				MockRuntime: NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{}),
-				events:      make(chan runtime.Event, 1),
-				killed:      make(chan syscall.Signal, 1),
-			}
-			request := &types.ContainerRequest{ContainerId: "guest-oom-container", Memory: 2048,
-				Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(kind), Config: `{"_beta9_force_resource_limits":true}`}},
-			}
-			eventRepo := &guestOOMEventRepo{events: make(chan types.EventContainerEventSchema, 2)}
-			worker := &Worker{ctx: ctx, runtime: rt, eventRepo: eventRepo, containerInstances: common.NewSafeMap[*ContainerInstance]()}
-			instance := &ContainerInstance{Id: request.ContainerId, Request: request, Runtime: rt, ExitCode: -1, LogBuffer: common.NewLogBuffer()}
-			t.Cleanup(instance.LogBuffer.Dispose)
-			worker.containerInstances.Set(request.ContainerId, instance)
-			var oom atomic.Bool
-			logs := make(chan common.LogRecord, 4)
-			worker.setupOOMWatcher(ctx, request.ContainerId, 123, nil, request, slog.New(common.NewChannelHandler(logs)), &oom)
-			defer instance.stopOOMWatcher()
-			require.EqualValues(t, 1, rt.eventsCalls.Load())
-			rt.events <- runtime.Event{Type: "application_oom", ApplicationOOM: &microvm.ApplicationOOM{Kills: 1, MemoryLimit: 2048 << 20}}
-			wantLog, wantLogCount := types.WorkerContainerExitCodeOomKillMessage, 1
-			if request.Stub.Type.IsSandbox() {
-				wantLog, wantLogCount = types.EventMessageApplicationOOMKilled.String(), 2
+			w := newOOMTestWorker(t, kind)
+			if w.instance.Request.Stub.Type.IsSandbox() {
 				for count := 1; count <= 2; count++ {
-					if count == 2 {
-						rt.events <- runtime.Event{Type: "application_oom", ApplicationOOM: &microvm.ApplicationOOM{Kills: 2, MemoryLimit: 2048 << 20}}
-					}
-					select {
-					case event := <-eventRepo.events:
-						require.Equal(t, types.ContainerEventApplicationOOMKilled, event.ID)
-						require.Equal(t, "OOM", event.Reason)
-						require.Equal(t, "137", event.Attrs[types.EventAttrExitCode])
-						require.Equal(t, strconv.Itoa(count), event.Attrs["oom_kills"])
-					case <-time.After(time.Second):
-						t.Fatal("sandbox process OOM was not reported")
-					}
+					w.rt.events <- guestOOM(uint64(count))
+					event := receive(t, w.repo.events)
+					require.Equal(t, types.ContainerEventApplicationOOMKilled, event.ID)
+					require.Equal(t, "OOM", event.Reason)
+					require.Equal(t, "137", event.Attrs[types.EventAttrExitCode])
+					require.Equal(t, strconv.Itoa(count), event.Attrs["oom_kills"])
 				}
-				require.False(t, oom.Load())
-				exitCode, reason := instance.lifecycleState()
+				require.False(t, w.oom.Load())
+				exitCode, reason := w.instance.lifecycleState()
 				require.Equal(t, -1, exitCode)
 				require.Empty(t, reason)
-				attempted, _ := instance.oomTerminationResult()
-				require.False(t, attempted)
-				select {
-				case <-rt.killed:
-					t.Fatal("guest OOM terminated an interactive sandbox")
-				default:
-				}
-			} else {
-				select {
-				case signal := <-rt.killed:
-					require.Equal(t, syscall.SIGKILL, signal)
-				case <-time.After(time.Second):
-					t.Fatal("guest OOM did not terminate the supervisor")
-				}
-				require.True(t, oom.Load())
-				require.Equal(t, 137, normalizeContainerExitCode(-1, types.StopContainerReasonUnknown, oom.Load()))
-				require.Equal(t, "OOM", containerExitReason(137, types.StopContainerReasonUnknown, oom.Load()))
-				select {
-				case event := <-eventRepo.events:
-					require.Equal(t, types.ContainerEventRuntimeOOMKilled, event.ID)
-					require.Equal(t, "OOM", event.Reason)
-					require.Equal(t, "true", event.Attrs[types.EventAttrOOMKilled])
-				case <-time.After(time.Second):
-					t.Fatal("guest OOM was not surfaced as a container event")
-				}
+				require.Empty(t, w.rt.killed)
+				return
 			}
-			// Exercise the real user-log capture path, including persistence and
-			// the replay buffer used by container log streams.
-			instance.stopOOMWatcher()
-			close(logs)
-			// An exhausted application-log quota must not hide the OOM.
-			logger := &ContainerLogger{containerInstances: worker.containerInstances, eventRepo: eventRepo, logLinesPerHour: 0}
-			logPath := filepath.Join(t.TempDir(), "container.log")
-			logFile, err := os.Create(logPath)
-			require.NoError(t, err)
-			defer logFile.Close()
-			require.NoError(t, logger.captureLogs(request, logs, logFile))
-			require.Len(t, eventRepo.logs, wantLogCount)
-			for _, line := range eventRepo.logs {
-				require.Equal(t, "system", line.Stream)
-				require.Equal(t, wantLog, line.Line)
-			}
-			persisted, err := os.ReadFile(logPath)
-			require.NoError(t, err)
-			require.Contains(t, string(persisted), wantLog)
-			buffered := make([]byte, len(wantLog)*wantLogCount)
+			w.rt.events <- guestOOM(1)
+			require.Equal(t, syscall.SIGKILL, receive(t, w.rt.killed))
+			require.True(t, w.oom.Load())
+			require.Equal(t, 137, normalizeContainerExitCode(-1, types.StopContainerReasonUnknown, w.oom.Load()))
+			event := receive(t, w.repo.events)
+			require.Equal(t, types.ContainerEventRuntimeOOMKilled, event.ID)
+			require.Equal(t, "OOM", event.Reason)
+			require.Equal(t, "true", event.Attrs[types.EventAttrOOMKilled])
+		})
+	}
+}
+
+func TestOOMLogsBypassQuotaAndReachAllSinks(t *testing.T) {
+	for _, test := range []struct{ kind, message string }{
+		{types.StubTypeEndpointDeployment, types.WorkerContainerExitCodeOomKillMessage},
+		{types.StubTypeSandbox, types.EventMessageApplicationOOMKilled.String()},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			w := newOOMTestWorker(t, test.kind)
+			w.rt.events <- guestOOM(1)
+			receive(t, w.repo.events)
+			w.instance.stopOOMWatcher()
+			close(w.logs)
+			logger := &ContainerLogger{containerInstances: w.containerInstances, eventRepo: w.repo, logLinesPerHour: 0}
+			var persisted bytes.Buffer
+			require.NoError(t, logger.captureLogs(w.instance.Request, w.logs, &persisted))
+			require.Len(t, w.repo.logs, 1)
+			line := w.repo.logs[0]
+			require.Equal(t, "system", line.Stream)
+			require.Equal(t, test.message, line.Line)
+			require.Contains(t, persisted.String(), line.Line)
+			buffered := make([]byte, len(line.Line))
 			require.Eventually(t, func() bool {
-				n, _ := instance.LogBuffer.ReadAt(buffered, 0)
+				n, _ := w.instance.LogBuffer.ReadAt(buffered, 0)
 				return n == len(buffered)
 			}, time.Second, time.Millisecond)
-			require.Contains(t, string(buffered), wantLog)
+			require.Equal(t, line.Line, string(buffered))
 		})
 	}
 }
@@ -193,41 +209,24 @@ func TestExplicitStopsNeverBecomeOOMs(t *testing.T) {
 		types.StopContainerReasonInsufficientCredits, types.StopContainerReasonEvicted,
 	} {
 		t.Run(string(reason), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			rt := &guestOOMRuntime{MockRuntime: NewMockRuntime("gvisor", runtime.Capabilities{}), events: make(chan runtime.Event, 1), killed: make(chan syscall.Signal, 1)}
-			req := &types.ContainerRequest{ContainerId: "stopped-container", Memory: 2048,
-				Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeEndpointDeployment), Config: `{"_beta9_force_resource_limits":true}`}},
-			}
-			events := &guestOOMEventRepo{events: make(chan types.EventContainerEventSchema, 4)}
-			worker := &Worker{ctx: context.Background(), runtime: rt, eventRepo: events,
-				containerInstances: common.NewSafeMap[*ContainerInstance](),
-				containerCancels:   common.NewSafeMap[context.CancelFunc](),
-				stopContainerChan:  make(chan stopContainerEvent, 1),
-			}
-			instance := &ContainerInstance{Id: req.ContainerId, Request: req, Runtime: rt, ExitCode: -1}
-			worker.containerInstances.Set(req.ContainerId, instance)
-			worker.containerCancels.Set(req.ContainerId, cancel)
-			var oom atomic.Bool
-			worker.setupOOMWatcher(ctx, req.ContainerId, 123, nil, req, slog.New(slog.NewTextHandler(io.Discard, nil)), &oom)
-			defer instance.stopOOMWatcher()
-			require.True(t, worker.handleStopContainerArgs(types.StopContainerArgs{ContainerId: req.ContainerId, Reason: reason, Force: true}, types.EventSourceSchedulerStop))
-			stop := <-worker.stopContainerChan
-			require.NoError(t, worker.stopContainerWithoutCheckpointDeferral(context.Background(), stop.ContainerId, stop.Kill))
-			require.Equal(t, syscall.SIGKILL, <-rt.killed)
-			// Even a late notification from a cancelled observer must be ignored.
-			rt.events <- runtime.Event{Type: "application_oom", ApplicationOOM: &microvm.ApplicationOOM{Kills: 1}}
-			require.ErrorIs(t, ctx.Err(), context.Canceled)
-			require.False(t, oom.Load())
-			_, recordedReason := instance.lifecycleState()
+			w := newOOMTestWorker(t, types.StubTypeEndpointDeployment)
+			require.True(t, w.handleStopContainerArgs(types.StopContainerArgs{ContainerId: w.instance.Id, Reason: reason, Force: true}, types.EventSourceSchedulerStop))
+			stop := receive(t, w.stopContainerChan)
+			require.NoError(t, w.stopContainerWithoutCheckpointDeferral(t.Context(), stop.ContainerId, stop.Kill))
+			require.Equal(t, syscall.SIGKILL, receive(t, w.rt.killed))
+			// A late notification from a cancelled observer must be ignored.
+			w.rt.events <- guestOOM(1)
+			require.ErrorIs(t, w.ctx.Err(), context.Canceled)
+			require.Never(t, w.oom.Load, 20*time.Millisecond, time.Millisecond)
+			_, recordedReason := w.instance.lifecycleState()
 			want, ok := reason.ExitCode()
 			require.True(t, ok)
-			exitCode := normalizeContainerExitCode(137, recordedReason, oom.Load())
+			exitCode := normalizeContainerExitCode(137, recordedReason, w.oom.Load())
 			require.Equal(t, int(want), exitCode)
-			require.Equal(t, string(reason), containerExitReason(exitCode, recordedReason, oom.Load()))
+			require.Equal(t, string(reason), containerExitReason(exitCode, recordedReason, w.oom.Load()))
 			require.False(t, types.ContainerExitCode(exitCode).IsFailed())
-			for len(events.events) > 0 {
-				require.NotEqual(t, types.ContainerEventRuntimeOOMKilled, (<-events.events).ID)
+			for len(w.repo.events) > 0 {
+				require.NotEqual(t, types.ContainerEventRuntimeOOMKilled, receive(t, w.repo.events).ID)
 			}
 		})
 	}

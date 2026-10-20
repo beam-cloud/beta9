@@ -19,17 +19,12 @@ func (s *Worker) watchApplicationOOM(ctx context.Context, request *types.Contain
 		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("application OOM watcher failed to start")
 		return
 	}
-	for {
-		select {
-		case <-ctx.Done():
+	for event := range events {
+		if ctx.Err() != nil {
 			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-			if event.ApplicationOOM != nil && ctx.Err() == nil {
-				s.reportApplicationOOM(ctx, request, outputLogger, event.ApplicationOOM)
-			}
+		}
+		if event.ApplicationOOM != nil {
+			s.reportApplicationOOM(ctx, request, outputLogger, event.ApplicationOOM)
 		}
 	}
 }
