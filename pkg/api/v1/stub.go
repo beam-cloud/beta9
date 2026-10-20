@@ -65,7 +65,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, conta
 	g.POST("/:workspaceId/:stubId/scale", auth.WithStrictWorkspaceAuth(group.ScaleStub))                // Allows workspace admins to scale pod deployment stubs directly
 	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                                      // Allows users to clone a public stub
 	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                                  // Allows users to get the URL of a stub
-	g.GET("/:stubId/config", auth.WithAuth(group.GetConfig))                                            // Allows users to get the config of a stub
+	g.GET("/:stubId/config", group.GetConfig)                                                           // Public stubs expose limited config; private stubs require ownership
 
 	return group
 }
@@ -546,20 +546,17 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 
 func (g *StubGroup) GetConfig(ctx echo.Context) error {
 	stubID := ctx.Param("stubId")
-	cc, ok := ctx.(*auth.HttpAuthContext)
-	if !ok || cc.AuthInfo == nil || cc.AuthInfo.Workspace == nil {
-		return echo.NewHTTPError(http.StatusUnauthorized)
-	}
-
 	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
 	if err != nil {
 		return HTTPInternalServerError("Failed to retrieve stub")
 	} else if stub == nil {
 		return HTTPNotFound()
 	}
-	// Only the owning workspace may read the stub config.
-	if cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
-		return HTTPNotFound()
+	if !stub.Public {
+		cc, ok := ctx.(*auth.HttpAuthContext)
+		if !ok || cc.AuthInfo == nil || cc.AuthInfo.Workspace == nil || cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
+			return HTTPNotFound()
+		}
 	}
 
 	err = stub.Stub.SanitizeConfig()

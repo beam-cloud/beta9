@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -64,9 +65,6 @@ type container struct {
 func NewFirewall(config types.EgressConfig, addresses []string, deps Dependencies) *Firewall {
 	if deps.OriginalDestination == nil {
 		deps.OriginalDestination = originalDestination
-	}
-	if deps.DialContext == nil {
-		deps.DialContext = dialPublic
 	}
 	if config.MaxConnectionsPerContainer <= 0 {
 		config.MaxConnectionsPerContainer = 256
@@ -316,7 +314,9 @@ func (r *routeTarget) HandleConn(conn net.Conn) {
 	proxy := &tcpproxy.DialProxy{
 		Addr:        target,
 		DialTimeout: peekTimeout,
-		DialContext: f.deps.DialContext,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return f.dialContext(ctx, network, address, policy.AllowList)
+		},
 		OnDialError: func(src net.Conn, _ error) { _ = src.Close() },
 	}
 	if peeked != nil {
@@ -357,10 +357,38 @@ func hasBinding(bindings []types.SecretBinding, host string) bool {
 	return false
 }
 
-// Validate the dialed address to prevent DNS rebinding.
-func dialPublic(ctx context.Context, network, address string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: peekTimeout, ControlContext: common.CheckPublicAddress}
+// Validate the resolved address at connect time, including explicit private CIDRs.
+func (f *Firewall) dialContext(ctx context.Context, network, address string, allowList []string) (net.Conn, error) {
+	if f.deps.DialContext != nil {
+		return f.deps.DialContext(ctx, network, address)
+	}
+	dialer := &net.Dialer{Timeout: peekTimeout, ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
+		return checkEgressAddress(address, allowList)
+	}}
 	return dialer.DialContext(ctx, network, address)
+}
+
+func checkEgressAddress(address string, allowList []string) error {
+	host, _, err := net.SplitHostPort(address)
+	ip := net.ParseIP(host)
+	if err != nil || ip == nil {
+		return common.ErrPrivateAddress
+	}
+	if common.IsPublicIP(ip) {
+		return nil
+	}
+	// Only RFC1918 and IPv6 ULA destinations can be explicitly allowed.
+	// Metadata, loopback and other special-use ranges remain blocked.
+	if ip.IsPrivate() {
+		cidrs, _ := common.SplitAllowList(allowList)
+		for _, cidr := range cidrs {
+			_, network, _ := net.ParseCIDR(cidr)
+			if network.Contains(ip) {
+				return nil
+			}
+		}
+	}
+	return common.ErrPrivateAddress
 }
 
 func (f *Firewall) lookup(id string) (*container, error) {

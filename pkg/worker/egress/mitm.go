@@ -90,8 +90,13 @@ func (f *Firewall) newSecretProxy(c *container, host string, port int) *secretPr
 		roots.AppendCertsFromPEM(f.deps.RootCertificates)
 	}
 	transport := &http.Transport{
-		TLSClientConfig:       &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
-		DialContext:           f.deps.DialContext,
+		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			c.mu.Lock()
+			allowList := c.policy.AllowList
+			c.mu.Unlock()
+			return f.dialContext(ctx, network, address, allowList)
+		},
 		ForceAttemptHTTP2:     true,
 		DisableCompression:    true,
 		TLSHandshakeTimeout:   peekTimeout,

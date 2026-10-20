@@ -117,6 +117,60 @@ func NewStubGroupForTest() *StubGroup {
 	)
 }
 
+type stubConfigBackendRepo struct {
+	repository.BackendRepository
+	stub types.StubWithRelated
+}
+
+func (r *stubConfigBackendRepo) GetStubByExternalId(context.Context, string, ...types.QueryFilter) (*types.StubWithRelated, error) {
+	stub := r.stub
+	return &stub, nil
+}
+
+func TestGetStubConfigPublicAccessAndOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		public    bool
+		workspace uint
+		status    int
+	}{
+		{"anonymous public", true, 0, http.StatusOK},
+		{"anonymous private", false, 0, http.StatusNotFound},
+		{"owner private", false, 1, http.StatusOK},
+		{"foreign private", false, 2, http.StatusNotFound},
+		{"foreign public", true, 2, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := echo.New()
+			if tc.workspace != 0 {
+				e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+					return func(ctx echo.Context) error {
+						return next(&auth.HttpAuthContext{Context: ctx, AuthInfo: &auth.AuthInfo{Workspace: &types.Workspace{Id: tc.workspace}}})
+					}
+				})
+			}
+			repo := &stubConfigBackendRepo{stub: types.StubWithRelated{Stub: types.Stub{
+				ExternalId: "stub", WorkspaceId: 1, Public: tc.public,
+				Config: `{"python_version":"python3.11","runtime":{"cpu":1000},"env":["HIDDEN=value"],"secrets":[{"name":"secret-name","value":"secret-value"}]}`,
+			}}}
+			NewStubGroup(e.Group("/stub"), repo, nil, nil, nil, types.AppConfig{})
+			response := httptest.NewRecorder()
+			e.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/stub/stub/config", nil))
+			if response.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", response.Code, tc.status, response.Body.String())
+			}
+			if response.Code == http.StatusOK && !strings.Contains(response.Body.String(), `"python_version":"python3.11"`) {
+				t.Fatalf("limited config missing: %s", response.Body.String())
+			}
+			for _, hidden := range []string{"HIDDEN", "secret-name", "secret-value"} {
+				if strings.Contains(response.Body.String(), hidden) {
+					t.Fatalf("config response exposed %q", hidden)
+				}
+			}
+		})
+	}
+}
+
 func TestSandboxHistoryQueryKeyDoesNotAliasDelimitedInput(t *testing.T) {
 	left, err := sandboxHistoryQueryKey(types.EventQuery{WorkspaceID: "workspace", AppID: "app\x00stub", StubID: "container"})
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/stretchr/testify/require"
@@ -99,7 +100,9 @@ func TestWebhookDeliveryRejectsPrivateDestination(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	require.Error(t, DeliverWebhook(context.Background(), types.WorkspaceWebhook{URL: server.URL}, cloudevents.NewEvent()))
+	err := DeliverWebhook(context.Background(), types.WorkspaceWebhook{URL: server.URL}, cloudevents.NewEvent())
+	require.ErrorIs(t, err, common.ErrPrivateAddress)
+	require.ErrorContains(t, err, "update the webhook URL to a public endpoint")
 	require.Zero(t, requests.Load())
 }
 

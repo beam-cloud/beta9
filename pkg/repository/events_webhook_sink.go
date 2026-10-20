@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -124,7 +125,7 @@ func (s *workspaceWebhookSink) webhooksFor(workspaceId string) []types.Workspace
 func (s *workspaceWebhookSink) run() {
 	for delivery := range s.queue {
 		if err := deliverWebhook(context.Background(), s.client, delivery.webhook, delivery.event); err != nil {
-			log.Debug().Err(err).Str("event_type", delivery.event.Type()).Str("webhook_id", delivery.webhook.ExternalId).Msg("webhook delivery failed")
+			log.Warn().Err(err).Str("workspace_id", extensionString(delivery.event.Extensions(), "workspaceid")).Str("event_type", delivery.event.Type()).Str("webhook_id", delivery.webhook.ExternalId).Msg("webhook delivery failed")
 		}
 	}
 }
@@ -172,6 +173,9 @@ func deliverWebhook(ctx context.Context, client *http.Client, webhook types.Work
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, common.ErrPrivateAddress) {
+			return fmt.Errorf("webhook destination is not public; update the webhook URL to a public endpoint: %w", common.ErrPrivateAddress)
+		}
 		return err
 	}
 	defer resp.Body.Close()
