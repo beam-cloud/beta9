@@ -1994,6 +1994,11 @@ func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, serve
 	if server == nil {
 		return fmt.Errorf("cache server is unavailable")
 	}
+	release, err := server.ReserveDiskSpace(item.SizeBytes)
+	if err != nil {
+		return fmt.Errorf("reserve checkpoint cache space: %w", err)
+	}
+	defer release()
 	reader := newCheckpointCacheReader(ctx, item.Hash, item.SizeBytes, server.ReadContentInto)
 	return materializeCheckpointReader(ctx, reader, item.Hash, item.SizeBytes, checkpointPath, item.CheckpointID, nil)
 }

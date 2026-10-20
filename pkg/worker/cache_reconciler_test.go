@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1450,6 +1451,13 @@ func TestReconcileCheckpointExtractsEmbeddedCacheArchive(t *testing.T) {
 	require.Equal(t, types.CacheAuditStatusMaterialized, status)
 	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))
 	require.NoFileExists(t, filepath.Join(checkpointRoot, checkpointID+checkpointArchiveExtension))
+
+	err = manager.extractCheckpointArchive(ctx, server, types.CacheRequiredContentItem{
+		CheckpointID: "no-space",
+		SizeBytes:    math.MaxInt64,
+	})
+	require.ErrorContains(t, err, "disk cache capacity exceeded")
+	require.NoDirExists(t, filepath.Join(checkpointRoot, "no-space"))
 }
 
 func TestReconcileCheckpointIgnoresSuccessBackoffWhenExtractedPayloadMissing(t *testing.T) {

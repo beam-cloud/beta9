@@ -64,6 +64,18 @@ func TestRemoveContentSkipsContentTouchedSinceItWasChosen(t *testing.T) {
 	require.False(t, store.Exists(hash))
 }
 
+func TestCompletenessChecksDoNotExtendCacheRetention(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "expired-content", time.Now().Add(-8*24*time.Hour))
+	server := &Server{cas: store}
+
+	require.True(t, server.HasCompleteContent(hash, int64(len("expired-content"))))
+
+	evicted, _ := store.PruneContentNotProtected(nil, 7*24*time.Hour)
+	require.Equal(t, 1, evicted)
+	require.False(t, store.Exists(hash))
+}
+
 func TestReadProbeKeepsOldContentUntilProtectionArrives(t *testing.T) {
 	store := newTestStore(t, 5)
 	hash := addEvictionTestContent(t, store, "active-image", time.Now().Add(-2*time.Hour))
@@ -704,11 +716,32 @@ func TestDiskAdmissionAccountsForConcurrentWrites(t *testing.T) {
 	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 		return diskUsageSnapshot{totalBytes: 1000, availableBytes: 1000}, nil
 	})
-	first, err := store.reserveDiskWrite(600)
-	require.NoError(t, err)
-	_, err = store.reserveDiskWrite(600)
+	server := &Server{cas: store}
+	type result struct {
+		release func()
+		err     error
+	}
+	results := make(chan result, 100)
+	for range cap(results) {
+		go func() {
+			release, err := server.ReserveDiskSpace(600)
+			results <- result{release, err}
+		}()
+	}
+	var releases []func()
+	for range cap(results) {
+		r := <-results
+		if r.err != nil {
+			require.ErrorIs(t, r.err, errDiskCacheCapacity)
+		} else {
+			releases = append(releases, r.release)
+		}
+	}
+	require.Len(t, releases, 1)
+	// A checkpoint reservation must also constrain concurrent page writes.
+	_, err := store.reserveDiskWrite(600)
 	require.ErrorIs(t, err, errDiskCacheCapacity)
-	first.release()
+	releases[0]()
 	second, err := store.reserveDiskWrite(600)
 	require.NoError(t, err)
 	second.release()

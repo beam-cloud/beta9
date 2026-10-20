@@ -310,12 +310,29 @@ func (cs *Server) HostID() string {
 }
 
 // HasCompleteContent reports whether the local store holds the full content for
-// hash. When expectedSize > 0 it is validated against the stored size.
+// hash without renewing its recency. When expectedSize > 0 it is validated
+// against the stored size.
 func (cs *Server) HasCompleteContent(hash string, expectedSize int64) bool {
 	if cs == nil || cs.cas == nil {
 		return false
 	}
-	return cs.cas.contentStatusForRead(hash, expectedSize) == contentStatusComplete
+	return cs.cas.ContentStatus(hash, expectedSize) == contentStatusComplete
+}
+
+// ReserveDiskSpace admits non-page cache writes, such as checkpoint extraction,
+// against the same capacity budget as page writes. Release after writing ends.
+func (cs *Server) ReserveDiskSpace(size int64) (func(), error) {
+	if cs == nil || cs.cas == nil {
+		return nil, fmt.Errorf("cache server store is not available")
+	}
+	if size < 0 || int64(int(size)) != size {
+		return nil, fmt.Errorf("invalid cache reservation size: %d", size)
+	}
+	reservation, err := cs.cas.reserveDiskWrite(int(size))
+	if err != nil {
+		return nil, err
+	}
+	return reservation.release, nil
 }
 
 // StoreReader stores the full contents of reader into the local store,
@@ -625,7 +642,7 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 	offset := req.Offset
 	remainingLength := req.Length
 	if remainingLength == 0 {
-		if !cs.HasCompleteContent(req.Hash, 0) {
+		if cs.cas.contentStatusForRead(req.Hash) != contentStatusComplete {
 			return status.Error(codes.NotFound, "complete content not found")
 		}
 		remainingLength = cs.ContentSizeBytes(req.Hash) - offset
