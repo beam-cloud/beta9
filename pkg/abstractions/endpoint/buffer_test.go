@@ -311,16 +311,11 @@ func TestDeleteEndpointInstancePreservesReplacement(t *testing.T) {
 }
 
 func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
-	server, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(server.Close)
-
-	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
-	if err != nil {
-		t.Fatal(err)
-	}
+	rdb := newEndpointBufferTestRedis(t)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
 
 	e := echo.New()
 	httpReq := httptest.NewRequest(http.MethodPost, "/", nil)
@@ -332,6 +327,7 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 
 	rb := &RequestBuffer{
 		ctx:                 ctx,
+		isASGI:              true,
 		rdb:                 rdb,
 		containerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		workspace:           &types.Workspace{Name: "workspace"},
@@ -344,7 +340,6 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 	}
 	req := &request{
 		ctx:       reqCtx,
-		task:      &EndpointTask{msg: &types.TaskMessage{TaskId: "task"}},
 		requestID: "task",
 		done:      make(chan struct{}),
 		started:   make(chan struct{}),
@@ -362,16 +357,21 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 	}
 
 	rb.availableContainersLock.Lock()
-	rb.availableContainers = []container{{id: "container-1", address: "127.0.0.1:8000"}}
+	rb.availableContainers = []container{{id: "container-1", address: backend.Listener.Addr().String()}}
 	rb.availableContainersLock.Unlock()
 	if err := rdb.Set(ctx, Keys.endpointRequestTokens("workspace", "stub", "container-1"), 1, 0).Err(); err != nil {
 		t.Fatal(err)
 	}
 	rb.signalWork()
 
-	waitForCondition(t, 50*time.Millisecond, func() bool {
-		return rb.buffer.Len() == 0
-	})
+	select {
+	case <-req.done:
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("backend response = %d", rec.Code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request did not complete after its backend became available")
+	}
 }
 
 func TestEnqueueRequestFailsOverwrittenRequest(t *testing.T) {
