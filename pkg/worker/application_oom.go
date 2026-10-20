@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -18,28 +19,39 @@ func (s *Worker) watchApplicationOOM(ctx context.Context, request *types.Contain
 		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("application OOM watcher failed to start")
 		return
 	}
-	for event := range events {
-		oom := event.ApplicationOOM
-		if oom == nil {
-			continue
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+			if event.ApplicationOOM != nil && ctx.Err() == nil {
+				s.reportApplicationOOM(ctx, request, outputLogger, event.ApplicationOOM)
+			}
 		}
-		outputLogger.Info(types.EventMessageApplicationOOMKilled.String(),
-			"oom_kills", oom.Kills, "memory_limit", oom.MemoryLimit,
-			"memory_usage", oom.MemoryUsage, "memory_peak", oom.MemoryPeak)
-		s.recordContainerEvent(ctx, request, types.EventContainerEventSchema{
-			ID:        types.ContainerEventApplicationOOMKilled,
-			Domain:    types.EventDomainRuntime,
-			Timestamp: time.Now().UTC(),
-			Reason:    "OOM",
-			Source:    types.EventSourceWorkerRuntime.String(),
-			Message:   types.EventMessageApplicationOOMKilled.String(),
-			Attrs: map[string]string{
-				types.EventAttrExitCode: "137",
-				"oom_kills":             strconv.FormatUint(oom.Kills, 10),
-				"memory_limit":          strconv.FormatInt(oom.MemoryLimit, 10),
-				"memory_usage":          strconv.FormatUint(oom.MemoryUsage, 10),
-				"memory_peak":           strconv.FormatUint(oom.MemoryPeak, 10),
-			},
-		})
 	}
+}
+
+func (s *Worker) reportApplicationOOM(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, oom *microvm.ApplicationOOM) {
+	outputLogger.Info(types.EventMessageApplicationOOMKilled.String(),
+		types.EventAttrOOMKilled, true,
+		"oom_kills", oom.Kills, "memory_limit", oom.MemoryLimit,
+		"memory_usage", oom.MemoryUsage, "memory_peak", oom.MemoryPeak)
+	s.recordContainerEvent(ctx, request, types.EventContainerEventSchema{
+		ID:        types.ContainerEventApplicationOOMKilled,
+		Domain:    types.EventDomainRuntime,
+		Timestamp: time.Now().UTC(),
+		Reason:    "OOM",
+		Source:    types.EventSourceWorkerRuntime.String(),
+		Message:   types.EventMessageApplicationOOMKilled.String(),
+		Attrs: map[string]string{
+			types.EventAttrExitCode: "137",
+			"oom_kills":             strconv.FormatUint(oom.Kills, 10),
+			"memory_limit":          strconv.FormatInt(oom.MemoryLimit, 10),
+			"memory_usage":          strconv.FormatUint(oom.MemoryUsage, 10),
+			"memory_peak":           strconv.FormatUint(oom.MemoryPeak, 10),
+		},
+	})
 }

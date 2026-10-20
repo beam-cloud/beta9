@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/stretchr/testify/require"
 )
 
 type monitorTestAutoscaler struct{ started chan struct{} }
@@ -616,6 +617,23 @@ func seedFailedContainers(t *testing.T, containerRepo repository.ContainerReposi
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestEndpointOOMFailuresStopAutomaticReplacement(t *testing.T) {
+	instance, repo, _ := newTestAutoscaledInstance(t, true, nil)
+	instance.Stub.Type = types.StubType(types.StubTypeEndpointDeployment)
+	instance.StubConfig.Autoscaler.MinContainers = 0
+	instance.FailedContainerThreshold = 1
+	containerID := seedTestContainer(t, repo, types.ContainerStatusRunning)
+	require.NoError(t, repo.SetContainerExitCode(containerID, int(types.ContainerExitCodeOomKill)))
+	require.NoError(t, repo.DeleteContainerState(containerID))
+	failed, err := repo.GetFailedContainersByStubId(instance.Stub.ExternalId)
+	require.NoError(t, err)
+	require.Equal(t, []string{containerID}, failed)
+	started := countStarts(t, instance)
+	require.NoError(t, instance.HandleScalingEvent(1))
+	require.Zero(t, *started)
+	require.ErrorIs(t, instance.Ctx.Err(), context.Canceled)
 }
 
 // stubStateEvents records the unhealthy states an instance reports for its stub.

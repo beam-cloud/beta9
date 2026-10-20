@@ -118,25 +118,14 @@ func (w *CgroupOOMWatcher) readOOMKillCount() (int64, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// For cgroup v2: Look for "oom_kill N" line in memory.events
+		// Both memory.events (v2) and memory.oom_control (v1) expose
+		// oom_kill. under_oom is pressure state, not evidence of a kill.
 		if strings.HasPrefix(line, "oom_kill ") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				count, err := strconv.ParseInt(parts[1], 10, 64)
 				if err != nil {
 					return 0, fmt.Errorf("failed to parse oom_kill count: %w", err)
-				}
-				return count, nil
-			}
-		}
-
-		// For cgroup v1: Look for "oom_kill N" or "under_oom N" in memory.oom_control
-		if strings.HasPrefix(line, "oom_kill ") || strings.HasPrefix(line, "under_oom ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				count, err := strconv.ParseInt(parts[1], 10, 64)
-				if err != nil {
-					return 0, fmt.Errorf("failed to parse oom count: %w", err)
 				}
 				return count, nil
 			}

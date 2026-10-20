@@ -1461,6 +1461,7 @@ func TestDeleteContainerStateCleansIndexesByExitHistory(t *testing.T) {
 		{name: "completed function", retainLogs: true},
 		{name: "non-failure stop", exitCode: types.ContainerExitCodeUser, setExitCode: true},
 		{name: "failed exit", exitCode: types.ContainerExitCodeUnknownError, setExitCode: true, retainStubHistory: true},
+		{name: "oom exit", exitCode: types.ContainerExitCodeOomKill, setExitCode: true, retainStubHistory: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rdb, err := NewRedisClientForTest()
