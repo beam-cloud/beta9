@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 )
 
 // qmpClient is a minimal QMP client for qemu-storage-daemon. It supports the
@@ -74,7 +75,8 @@ type qmpError struct {
 }
 
 func (c *qmpClient) execute(ctx context.Context, command string, arguments any) (json.RawMessage, error) {
-	request := map[string]any{"execute": command}
+	id := uuid.NewString()
+	request := map[string]any{"execute": command, "id": id}
 	if arguments != nil {
 		request["arguments"] = arguments
 	}
@@ -91,9 +93,11 @@ func (c *qmpClient) execute(ctx context.Context, command string, arguments any) 
 		return nil, fmt.Errorf("write qmp command %s: %w", command, err)
 	}
 
-	// Skip asynchronous events until we see a return or error for our command.
+	// A timed-out command can reply after the monitor reconnects. Match IDs
+	// across connections so its result cannot stand in for a recovery query.
 	for {
 		var response struct {
+			ID     string           `json:"id"`
 			Return json.RawMessage  `json:"return"`
 			Error  *qmpError        `json:"error"`
 			Event  *json.RawMessage `json:"event"`
@@ -101,7 +105,7 @@ func (c *qmpClient) execute(ctx context.Context, command string, arguments any) 
 		if err := c.decode(ctx, &response); err != nil {
 			return nil, fmt.Errorf("read qmp response for %s: %w", command, err)
 		}
-		if response.Event != nil {
+		if response.Event != nil || response.ID != id {
 			continue
 		}
 		if response.Error != nil {

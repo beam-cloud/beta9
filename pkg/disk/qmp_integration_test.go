@@ -215,8 +215,8 @@ func TestSealResolvesLostQEMUPivotReply(t *testing.T) {
 }
 
 // A real QEMU transaction can commit after its caller loses the reply. This
-// proxy also cancels that caller, exercising reconnection to the exclusive QMP
-// monitor with a fresh recovery context rather than the expired request.
+// proxy cancels that caller and delivers the delayed reply after reconnection,
+// so recovery must use both a fresh context and a distinct command identity.
 func lostPivotReplyProxy(t *testing.T, upstream string, commit, failProbe bool, cancel context.CancelFunc) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "qmp-proxy")
@@ -227,6 +227,7 @@ func lostPivotReplyProxy(t *testing.T, upstream string, commit, failProbe bool, 
 	require.NoError(t, err)
 	t.Cleanup(func() { listener.Close() })
 	var dropped atomic.Bool
+	var delayed atomic.Pointer[map[string]json.RawMessage]
 	var probeFailures atomic.Int32
 	go func() {
 		for {
@@ -276,11 +277,17 @@ func lostPivotReplyProxy(t *testing.T, upstream string, commit, failProbe bool, 
 							continue
 						}
 						if loseReply {
+							delayed.Store(&response)
 							cancel()
 							return
 						}
+						if command == "qmp_capabilities" {
+							if late := delayed.Swap(nil); late != nil && toClient.Encode(*late) != nil {
+								return
+							}
+						}
 						if command == "query-named-block-nodes" && failProbe && dropped.Load() && probeFailures.Add(1) <= 2 {
-							response = map[string]json.RawMessage{"error": json.RawMessage(`{"class":"GenericError","desc":"probe unavailable"}`)}
+							response = map[string]json.RawMessage{"id": request["id"], "error": json.RawMessage(`{"class":"GenericError","desc":"probe unavailable"}`)}
 						}
 						if toClient.Encode(response) != nil {
 							return
