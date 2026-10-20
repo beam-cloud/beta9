@@ -292,7 +292,13 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to get object")
 	}
 
-	storageClient, err := clients.NewWorkspaceStorageClient(ctx.Request().Context(), workspace.Name, workspace.Storage)
+	storedWorkspace, err := g.backendRepo.GetWorkspace(ctx.Request().Context(), workspace.Id)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get workspace storage")
+	}
+	storageClient, err := clients.NewWorkspaceStorageClientWithDefaultPresignEndpoint(
+		ctx.Request().Context(), workspace.Name, storedWorkspace.Storage, g.config.Storage.WorkspaceStorage,
+	)
 	if err != nil {
 		return HTTPInternalServerError("Failed to get workspace storage")
 	}
