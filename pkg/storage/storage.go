@@ -13,7 +13,6 @@ import (
 const (
 	StorageModeMountPoint string = types.StorageModeMountPoint
 	StorageModeGeese      string = types.StorageModeGeese
-	StorageModeAlluxio    string = types.StorageModeAlluxio
 	StorageModeLocal      string = types.StorageModeLocal
 )
 

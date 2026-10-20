@@ -16,7 +16,6 @@ func WorkspaceMountPath(workspaceName string, parts ...string) string {
 const (
 	StorageModeMountPoint  = "mountpoint"
 	StorageModeGeese       = "geese"
-	StorageModeAlluxio     = "alluxio"
 	StorageModeLocal       = "local"
 	StorageModeDurableDisk = "durable_disk"
 )

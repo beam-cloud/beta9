@@ -675,7 +675,7 @@ func TestAgentWorkerConfigUsesManagedPoolRuntimeAndCacheSettings(t *testing.T) {
 			GpuVirtualized:       true,
 			CriuEnabled:          false,
 			TmpSizeLimit:         "50Gi",
-			StorageMode:          types.StorageModeAlluxio,
+			StorageMode:          types.StorageModeMountPoint,
 			ConfigGroup:          "raid-cache",
 			Cache: &pb.AgentPoolCacheConfig{
 				Enabled: true,
@@ -692,7 +692,7 @@ func TestAgentWorkerConfigUsesManagedPoolRuntimeAndCacheSettings(t *testing.T) {
 	config := newAgentWorkerConfig(bootstrapConfig{WorkspaceID: "admin-workspace"}, slot).sanitizedForAgent()
 	pool := config.Worker.Pools[slot.PoolName]
 
-	if pool.NetworkPreallocation || pool.CRIUEnabled || !pool.GPUVirtualized || pool.TmpSizeLimit != "50Gi" || pool.StorageMode != types.StorageModeAlluxio {
+	if pool.NetworkPreallocation || pool.CRIUEnabled || !pool.GPUVirtualized || pool.TmpSizeLimit != "50Gi" || pool.StorageMode != types.StorageModeMountPoint {
 		t.Fatalf("managed pool runtime settings were not preserved: %#v", pool)
 	}
 	if !config.Cache.Enabled || !config.Worker.CacheEnabled ||

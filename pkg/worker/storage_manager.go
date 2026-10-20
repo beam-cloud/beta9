@@ -98,43 +98,11 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 		_ = os.RemoveAll(mountPath)
 	}
 
-	var err error
-	switch sm.poolConfig.StorageMode {
-	case storage.StorageModeGeese:
-		if err := validateWorkspaceStorage(workspaceStorage); err != nil {
-			return nil, err
-		}
-		os.MkdirAll(mountPath, 0755)
-
-		config := sm.config.WorkspaceStorage.Geese
-		config.EndpointUrl = *workspaceStorage.EndpointUrl
-		config.BucketName = *workspaceStorage.BucketName
-		config.AccessKey = *workspaceStorage.AccessKey
-		config.SecretKey = *workspaceStorage.SecretKey
-		config.Region = *workspaceStorage.Region
-		mount, err = storage.NewGeeseStorage(config, sm.cacheClient)
-
-	case storage.StorageModeAlluxio:
-		if err := validateWorkspaceStorage(workspaceStorage); err != nil {
-			return nil, err
-		}
-		config := sm.config.WorkspaceStorage.Alluxio
-		config.BucketName = *workspaceStorage.BucketName
-		config.AccessKey = *workspaceStorage.AccessKey
-		config.SecretKey = *workspaceStorage.SecretKey
-		config.EndpointURL = *workspaceStorage.EndpointUrl
-		config.Region = *workspaceStorage.Region
-		config.ReadOnly = false
-		config.ForcePathStyle = false
-		mount, err = storage.NewAlluxioStorage(config)
-
-	case storage.StorageModeLocal:
-		return nil, fmt.Errorf("workspace storage mode %q is invalid: workspace storage mounts request-scoped credentials through a FUSE backend", storage.StorageModeLocal)
-
-	default:
-		return nil, errors.New("invalid storage mode")
-	}
+	mount, err := sm.newWorkspaceMount(workspaceStorage)
 	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(mountPath, 0755); err != nil {
 		return nil, err
 	}
 	if err := mount.Mount(mountPath); err != nil {
@@ -145,6 +113,35 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	sm.mountLastUsed.Set(workspaceName, time.Now())
 
 	return mount, nil
+}
+
+func (sm *WorkspaceStorageManager) newWorkspaceMount(workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
+	mode := sm.poolConfig.StorageMode
+	if mode != storage.StorageModeGeese && mode != storage.StorageModeMountPoint {
+		return nil, fmt.Errorf("workspace storage mode %q is invalid: workspace storage mounts request-scoped credentials through a FUSE backend", mode)
+	}
+	if err := validateWorkspaceStorage(workspaceStorage); err != nil {
+		return nil, err
+	}
+
+	switch mode {
+	case storage.StorageModeGeese:
+		config := sm.config.WorkspaceStorage.Geese
+		config.EndpointUrl = *workspaceStorage.EndpointUrl
+		config.BucketName = *workspaceStorage.BucketName
+		config.AccessKey = *workspaceStorage.AccessKey
+		config.SecretKey = *workspaceStorage.SecretKey
+		config.Region = *workspaceStorage.Region
+		return storage.NewGeeseStorage(config, sm.cacheClient)
+	default:
+		return storage.NewMountPointStorage(types.MountPointConfig{
+			BucketName:  *workspaceStorage.BucketName,
+			AccessKey:   *workspaceStorage.AccessKey,
+			SecretKey:   *workspaceStorage.SecretKey,
+			EndpointURL: *workspaceStorage.EndpointUrl,
+			Region:      *workspaceStorage.Region,
+		})
+	}
 }
 
 func validateWorkspaceStorage(workspaceStorage *types.WorkspaceStorage) error {
@@ -174,21 +171,11 @@ func (sm *WorkspaceStorageManager) unmountLocked(workspaceName string) error {
 
 	localPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
-	switch mount.Mode() {
-	case storage.StorageModeGeese:
-		err := mount.Unmount(localPath)
-		if err != nil {
-			return err
-		}
-
-		os.RemoveAll(localPath)
-	case storage.StorageModeLocal:
-		if err := mount.Unmount(localPath); err != nil {
-			return err
-		}
-	case storage.StorageModeAlluxio:
-		fallthrough
-	default:
+	if err := mount.Unmount(localPath); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(localPath); err != nil {
+		return err
 	}
 
 	sm.mounts.Delete(workspaceName)

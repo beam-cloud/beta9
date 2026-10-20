@@ -36,8 +36,6 @@ storage:
     defaultEndpointUrl: http://localstack:4566
     defaultPresignedEndpointUrl: http://127.0.0.1:4566
     defaultRegion: us-east-1
-    alluxio:
-      debug: false
     geese:
       debug: false
       fsyncOnClose: true

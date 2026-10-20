@@ -492,8 +492,7 @@ type WorkspaceStorageConfig struct {
 	DefaultRegion               string `key:"defaultRegion" json:"default_region"`
 
 	// Storage mode configs
-	Geese   GeeseConfig   `key:"geese" json:"geese"`
-	Alluxio AlluxioConfig `key:"alluxio" json:"alluxio"`
+	Geese GeeseConfig `key:"geese" json:"geese"`
 }
 
 type GeeseConfig struct {
@@ -524,22 +523,6 @@ type GeeseConfig struct {
 	CacheStreamingEnabled  bool          `key:"cacheStreamingEnabled" json:"cache_streaming_enabled"`
 	CacheDirectIO          bool          `key:"cacheDirectIO" json:"cache_direct_io"`
 	CacheThroughEnabled    bool          `key:"cacheThroughEnabled" json:"cache_through_enabled"`
-}
-
-type AlluxioConfig struct {
-	Debug          bool   `key:"debug" json:"debug"`
-	EtcdEndpoint   string `key:"etcdEndpoint" json:"etcd_endpoint"`
-	EtcdUsername   string `key:"etcdUsername" json:"etcd_username"`
-	EtcdPassword   string `key:"etcdPassword" json:"etcd_password"`
-	EtcdTlsEnabled bool   `key:"etcdTlsEnabled" json:"etcd_tls_enabled"`
-	ImageUrl       string `key:"imageUrl" json:"image_url"`
-	BucketName     string `key:"bucketName" json:"bucket_name"`
-	AccessKey      string `key:"accessKey" json:"access_key"`
-	SecretKey      string `key:"secretKey" json:"secret_key"`
-	EndpointURL    string `key:"endpointURL" json:"endpoint_url"`
-	Region         string `key:"region" json:"region"`
-	ReadOnly       bool   `key:"readOnly" json:"read_only"`
-	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
 }
 
 // @go2proto
