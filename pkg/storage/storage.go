@@ -2,14 +2,11 @@ package storage
 
 import (
 	"bufio"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -74,58 +71,4 @@ func unescapeMountInfoPath(path string) string {
 		`\134`, `\`,
 	)
 	return replacer.Replace(path)
-}
-
-// NewStorage mounts the configured filesystem and returns mount failures.
-func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage, error) {
-	switch config.Mode {
-	case StorageModeGeese:
-		s, err := NewGeeseStorage(config.Geese, cacheClient)
-		if err != nil {
-			return nil, err
-		}
-
-		// Mount filesystem
-		err = s.Mount(config.FilesystemPath)
-		if err != nil {
-			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
-		}
-
-		return s, nil
-	case StorageModeAlluxio:
-		s, err := NewAlluxioStorage(config.Alluxio)
-		if err != nil {
-			return nil, err
-		}
-
-		// Mount filesystem
-		err = s.Mount(config.FilesystemPath)
-		if err != nil {
-			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
-		}
-
-		return s, nil
-	case StorageModeMountPoint:
-		s, err := NewMountPointStorage(config.MountPoint)
-		if err != nil {
-			return nil, err
-		}
-
-		// Mount filesystem
-		err = s.Mount(config.FilesystemPath)
-		if err != nil {
-			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
-		}
-
-		return s, nil
-	case StorageModeLocal:
-		s := NewLocalStorage()
-		if err := s.Mount(config.FilesystemPath); err != nil {
-			return nil, err
-		}
-
-		return s, nil
-	}
-
-	return nil, errors.New("invalid storage mode")
 }

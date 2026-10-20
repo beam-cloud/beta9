@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/logging"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -132,8 +133,8 @@ func TestStorageMultipartUploaderConfig(t *testing.T) {
 func TestStorageMultipartUploaderLimitsStreamingConcurrency(t *testing.T) {
 	uploader := newStorageMultipartUploader(nil, bytes.NewBuffer(nil))
 
-	if uploader.PartSize != storageMultipartUploadPartSize {
-		t.Fatalf("uploader PartSize = %d, want %d", uploader.PartSize, storageMultipartUploadPartSize)
+	if uploader.PartSize != manager.MinUploadPartSize {
+		t.Fatalf("uploader PartSize = %d, want %d", uploader.PartSize, manager.MinUploadPartSize)
 	}
 	if uploader.Concurrency != storageStreamingUploadWorkers {
 		t.Fatalf("uploader Concurrency = %d, want %d", uploader.Concurrency, storageStreamingUploadWorkers)
@@ -340,5 +341,14 @@ func testWorkspaceStorage(endpoint string) *types.WorkspaceStorage {
 		SecretKey:   &secretKey,
 		EndpointUrl: &endpoint,
 		Region:      &region,
+	}
+}
+
+func TestWorkspaceStorageClientRejectsMissingCredentials(t *testing.T) {
+	for _, storage := range []*types.WorkspaceStorage{nil, {}, {BucketName: aws.String("bucket")}} {
+		client, err := NewWorkspaceStorageClient(context.Background(), "workspace", storage)
+		if err == nil || client != nil {
+			t.Fatal("expected missing workspace credentials to be rejected")
+		}
 	}
 }

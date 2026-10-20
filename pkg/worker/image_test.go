@@ -787,44 +787,11 @@ func TestRestoreV1ArchiveDataCacheDefersLargeRemoteArchive(t *testing.T) {
 	require.Equal(t, "images", archive.sourceRegistry.BucketName)
 }
 
-func TestGetBuildContextDoesNotFallBackToWorkspaceFuseMount(t *testing.T) {
-	baseMountPath := t.TempDir()
-	buildPath := t.TempDir()
-	workspaceName := "workspace"
+func TestGetBuildContextRequiresWorkspaceCredentials(t *testing.T) {
 	objectID := "build-context"
-	storageID := uint(1)
-	bucket := "bucket"
-
-	fuseFallbackPath := filepath.Join(baseMountPath, workspaceName, types.DefaultObjectPrefix, objectID)
-	require.NoError(t, writeZipObject(fuseFallbackPath, map[string]string{
-		"main.py": "print('do not read through fuse')\n",
-	}))
-
-	client := &ImageClient{
-		config: types.AppConfig{
-			Storage: types.StorageConfig{
-				WorkspaceStorage: types.WorkspaceStorageConfig{
-					BaseMountPath: baseMountPath,
-				},
-			},
-		},
-	}
-	request := &types.ContainerRequest{
-		Workspace: types.Workspace{
-			Name: workspaceName,
-			Storage: &types.WorkspaceStorage{
-				Id:         &storageID,
-				BucketName: &bucket,
-			},
-		},
-		BuildOptions: types.BuildOptions{
-			BuildCtxObject: &objectID,
-		},
-	}
-
-	_, err := client.getBuildContext(context.Background(), buildPath, request)
-
-	require.ErrorContains(t, err, "workspace storage credentials are required")
+	request := &types.ContainerRequest{BuildOptions: types.BuildOptions{BuildCtxObject: &objectID}}
+	_, err := (&ImageClient{}).getBuildContext(context.Background(), t.TempDir(), request)
+	require.ErrorContains(t, err, "workspace storage is unavailable")
 }
 
 // Credentials the gateway vends arrive as username:password or as JSON, and
@@ -843,50 +810,20 @@ func TestGetBuildahAuthArgsParsesEveryCredentialForm(t *testing.T) {
 	require.Nil(t, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", `{"AWS_ACCESS_KEY_ID":"a","AWS_SECRET_ACCESS_KEY":"b"}`))
 }
 
-// RUN steps get a writable working directory holding the build context, and
-// what they write there does not reach the shared extracted context.
-func TestWritableBuildContextIsPrivateToTheBuild(t *testing.T) {
-	ctxDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(ctxDir, "pkg"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(ctxDir, "pkg", "main.py"), []byte("print('hi')\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(ctxDir, "setup.py"), []byte("setup()\n"), 0o755))
-
-	client := &ImageClient{imageCachePath: t.TempDir()}
-	request := &types.ContainerRequest{ContainerId: "build-1", ImageId: "img-1"}
-	// A context extracted into the build's own directory is already private
-	// and is handed back as is.
-	buildPath := t.TempDir()
-	privateCtx := filepath.Join(buildPath, "build-ctx")
-	require.NoError(t, os.MkdirAll(privateCtx, 0o755))
-	dir, cleanup, err := client.writableBuildContext(context.Background(), request, buildPath, privateCtx)
+func TestDownloadedBuildContextIsPrivateToTheBuild(t *testing.T) {
+	storage, _ := stubCodeStorage(t, map[string]string{"main.py": "original"})
+	request := stubCodeMountRequest("build-test", "workspace", "object")
+	request.Workspace.Storage = storage
+	request.BuildOptions.BuildCtxObject = &request.Stub.Object.ExternalId
+	client := &ImageClient{}
+	first, err := client.getBuildContext(context.Background(), t.TempDir(), request)
 	require.NoError(t, err)
-	require.Equal(t, privateCtx, dir)
-	cleanup()
-
-	dir, cleanup, err = client.writableBuildContext(context.Background(), request, buildPath, ctxDir)
+	require.NoError(t, os.WriteFile(filepath.Join(first, "main.py"), []byte("changed"), 0644))
+	second, err := client.getBuildContext(context.Background(), t.TempDir(), request)
 	require.NoError(t, err)
-	require.NotEqual(t, ctxDir, dir)
-
-	body, err := os.ReadFile(filepath.Join(dir, "pkg", "main.py"))
+	data, err := os.ReadFile(filepath.Join(second, "main.py"))
 	require.NoError(t, err)
-	require.Equal(t, "print('hi')\n", string(body))
-	info, err := os.Stat(filepath.Join(dir, "setup.py"))
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o755), info.Mode().Perm())
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "generated.py"), []byte("x"), 0o644))
-	require.NoError(t, os.Remove(filepath.Join(dir, "setup.py")))
-	_, err = os.Stat(filepath.Join(ctxDir, "pkg", "generated.py"))
-	require.True(t, os.IsNotExist(err), "a build step's writes must not land in the shared context")
-	_, err = os.Stat(filepath.Join(ctxDir, "setup.py"))
-	require.NoError(t, err, "a build step's removals must not land in the shared context")
-
-	cleanup()
-	_, err = os.Stat(dir)
-	require.True(t, os.IsNotExist(err), "the build's copy is removed with the build")
-	entries, err := os.ReadDir(filepath.Join(client.imageCachePath, "spool"))
-	require.NoError(t, err)
-	require.Empty(t, entries)
+	require.Equal(t, "original", string(data), "a build must not change another build's context")
 }
 
 func TestNewBuildahCommandUsesCancelableProcessGroup(t *testing.T) {

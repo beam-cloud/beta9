@@ -50,9 +50,6 @@ type agentConfigEndpoint struct {
 }
 
 type agentConfigStorage struct {
-	Mode             string                      `json:"mode"`
-	FSPath           string                      `json:"fsPath"`
-	ObjectPath       string                      `json:"objectPath"`
 	WorkspaceStorage agentConfigWorkspaceStorage `json:"workspaceStorage"`
 }
 
@@ -261,9 +258,6 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			},
 		},
 		Storage: agentConfigStorage{
-			Mode:       types.StorageModeLocal,
-			FSPath:     types.AgentDataPath,
-			ObjectPath: pathpkg.Join(types.AgentDataPath, "objects"),
 			WorkspaceStorage: agentConfigWorkspaceStorage{
 				BaseMountPath:      types.AgentWorkspacePath,
 				DefaultStorageMode: workspaceStorageMode,

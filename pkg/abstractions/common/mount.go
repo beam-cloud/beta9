@@ -39,7 +39,6 @@ func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRel
 
 	mounts := []types.Mount{
 		{
-			LocalPath: path.Join(types.DefaultObjectPath, workspace.Name, stub.Object.ExternalId),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  false,
 		},
@@ -47,7 +46,7 @@ func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRel
 	// A database's only storage is its durable disk.
 	if !stub.Type.IsSandbox() && config.EffectiveDatabaseConfig() == nil {
 		mounts = append(mounts, types.Mount{
-			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stub.ExternalId),
+			LocalPath: types.WorkspaceMountPath(workspace.Name, types.DefaultOutputsPrefix, stub.ExternalId),
 			MountPath: types.WorkerUserOutputVolume,
 			ReadOnly:  false,
 		})
@@ -59,7 +58,7 @@ func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRel
 			return nil, err
 		}
 		mount := types.Mount{
-			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
+			LocalPath: types.WorkspaceMountPath(workspace.Name, types.DefaultVolumesPrefix, v.Id),
 			LinkPath:  path.Join(types.TempContainerWorkspace(containerId), v.MountPath),
 			MountPath: path.Join(types.WorkerContainerVolumePath, v.MountPath),
 			ReadOnly:  false,

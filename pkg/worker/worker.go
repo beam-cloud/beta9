@@ -158,7 +158,6 @@ type Worker struct {
 	qcowChains              sync.Map // live published qcow chain (rows + manifests) per volume key
 	qcowMerges              sync.Map // running background layer merge (*qcowMerge) per volume key, or a placeholder while it detaches
 	verifiedJournalStores   sync.Map // endpoint/region/bucket keys whose conditional writes passed the journal probe
-	userDataStorage         storage.Storage
 	persistent              bool
 	// poolHeadroom is the gateway's answer on the last keepalive: this worker
 	// holds the pool's minimum free capacity and must not idle out.
@@ -659,11 +658,6 @@ func NewWorker() (_ *Worker, err error) {
 
 	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, config.Worker.ContainerRuntime, defaultRuntime.Name(), cpuLimit)
 
-	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
-	if err != nil {
-		return nil, err
-	}
-
 	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, poolConfig, containerInstances, cacheClient)
 	if err != nil {
 		return nil, err
@@ -755,7 +749,6 @@ func NewWorker() (_ *Worker, err error) {
 		eventRepo:           eventRepo,
 		completedRequests:   make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
-		userDataStorage:     userDataStorage,
 		persistent:          persistent,
 		startedAt:           time.Now(),
 		headroomMaxAge:      jitteredWorkerAge(config.Worker.HeadroomWorkerMaxAge, workerId),
@@ -1798,12 +1791,7 @@ func (s *Worker) shutdown() error {
 		}
 	}
 
-	err := s.userDataStorage.Unmount(s.config.Storage.FilesystemPath)
-	if err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to unmount data storage: %v", err))
-	}
-
-	err = s.imageClient.Cleanup()
+	err := s.imageClient.Cleanup()
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup fuse mounts: %v", err))
 	}

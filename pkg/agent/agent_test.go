@@ -355,9 +355,14 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 			t.Fatalf("expected %s env in docker args: %#v", want, args)
 		}
 	}
+	for _, arg := range args {
+		if strings.HasSuffix(arg, ":/data") {
+			t.Fatalf("obsolete global /data mount in Docker args: %s", arg)
+		}
+	}
+
 	for _, want := range []string{
 		"/tmp/agent-state/images:" + types.AgentImagesPath,
-		"/tmp/agent-state/data:" + types.AgentDataPath,
 		"/tmp/agent-state/workspace-data:" + types.AgentWorkspacePath,
 		"/tmp/agent-state/cache:" + types.AgentCachePath,
 		"/tmp/agent-state/checkpoints:" + types.AgentCheckpointPath,
@@ -419,7 +424,6 @@ func TestManagedPoolPathsOverrideAgentInstallerDirectories(t *testing.T) {
 	dirs := agentWorkerDirsForSlot("/var/lib/beam/agent", "/installer/cache", slot)
 	for label, gotWant := range map[string][2]string{
 		"images":        {dirs.Images, "/mnt/raid/images"},
-		"data":          {dirs.Data, "/mnt/raid/storage"},
 		"workspace":     {dirs.Workspace, "/mnt/raid/storage/workspace-data"},
 		"checkpoints":   {dirs.Checkpoints, "/mnt/raid/storage/checkpoints"},
 		"durable disks": {dirs.DurableDisk, "/mnt/raid/durable-disks"},
@@ -443,7 +447,6 @@ func TestManagedPoolPathsOverrideAgentInstallerDirectories(t *testing.T) {
 	)
 	for _, volume := range []string{
 		"/mnt/raid/images:" + types.AgentImagesPath,
-		"/mnt/raid/storage:" + types.AgentDataPath,
 		"/mnt/raid/storage/workspace-data:" + types.AgentWorkspacePath,
 		"/mnt/raid/storage/checkpoints:" + types.AgentCheckpointPath,
 		"/mnt/raid/durable-disks:" + types.DefaultDurableDisksPath,
@@ -1497,11 +1500,10 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 
 	storageConfig := config["storage"].(map[string]any)
-	if got := storageConfig["fsPath"]; got != types.AgentDataPath {
-		t.Fatalf("storage fsPath = %v, want %q", got, types.AgentDataPath)
-	}
-	if got := storageConfig["objectPath"]; got != filepath.Join(types.AgentDataPath, "objects") {
-		t.Fatalf("storage objectPath = %v, want %q", got, filepath.Join(types.AgentDataPath, "objects"))
+	for _, key := range []string{"mode", "fsPath", "objectPath"} {
+		if _, exists := storageConfig[key]; exists {
+			t.Fatalf("obsolete global storage setting %q in worker config", key)
+		}
 	}
 	workspaceStorage := storageConfig["workspaceStorage"].(map[string]any)
 	if got := workspaceStorage["baseMountPath"]; got != types.AgentWorkspacePath {

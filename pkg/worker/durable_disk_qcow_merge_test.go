@@ -118,8 +118,8 @@ func (f *qcowMergeFake) FailDiskSnapshot(_ context.Context, in *pb.FailDiskSnaps
 func TestPublishQcowMerge(t *testing.T) {
 	bucket := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer bucket.Close()
-	region, key := "us-east-1", "key"
-	client, err := clients.NewWorkspaceStorageClient(context.Background(), "workspace", &types.WorkspaceStorage{EndpointUrl: &bucket.URL, Region: &region, AccessKey: &key, SecretKey: &key})
+	region, key, bucketName := "us-east-1", "key", "disks"
+	client, err := clients.NewWorkspaceStorageClient(context.Background(), "workspace", &types.WorkspaceStorage{EndpointUrl: &bucket.URL, Region: &region, AccessKey: &key, SecretKey: &key, BucketName: &bucketName})
 	require.NoError(t, err)
 	store := &durableDiskSnapshotBucketStore{client: client, bucket: "disks"}
 	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "disk"}}

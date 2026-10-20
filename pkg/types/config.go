@@ -478,12 +478,6 @@ type PythonStandaloneConfig struct {
 }
 
 type StorageConfig struct {
-	Mode             string                 `key:"mode" json:"mode"`
-	FilesystemPath   string                 `key:"fsPath" json:"filesystem_path"`
-	ObjectPath       string                 `key:"objectPath" json:"object_path"`
-	Geese            GeeseConfig            `key:"geese" json:"geese"`
-	Alluxio          AlluxioConfig          `key:"alluxio" json:"alluxio"`
-	MountPoint       MountPointConfig       `key:"mountpoint" json:"mountpoint"`
 	WorkspaceStorage WorkspaceStorageConfig `key:"workspaceStorage" json:"workspace_storage"`
 }
 
@@ -707,7 +701,7 @@ type WorkerPoolConfig struct {
 	TmpSizeLimit              string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup               string                            `key:"configGroup" json:"config_group"`
 	K3sInstallDir             string                            `key:"k3sInstallDir" json:"k3s_install_dir"` // Provider/Kubernetes install path; agent-hosted pools do not run K3s.
-	StoragePath               string                            `key:"storagePath" json:"storage_path"`      // Host storage root; agent workers mount it at /data.
+	StoragePath               string                            `key:"storagePath" json:"storage_path"`      // Host root for workspace mounts, checkpoints, and durable disks.
 	StorageMode               string                            `key:"storageMode" json:"storage_mode"`
 	ImagesPath                string                            `key:"imagesPath" json:"images_path"`              // Host path backing the worker's /images volume; agent pools fall back to the installer state dir.
 	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; agent pools fall back to storagePath or the installer state dir.

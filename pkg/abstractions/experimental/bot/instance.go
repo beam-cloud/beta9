@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -416,7 +417,12 @@ func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 		timeout = -1
 	}
 
-	filePath := filepath.Join(types.DefaultVolumesPath, i.authInfo.Workspace.Name, i.botInputsVolume.ExternalId, sessionId, fileId)
+	client, err := clients.NewWorkspaceStorageClient(i.ctx, i.authInfo.Workspace.Name, i.authInfo.Workspace.Storage)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to access bot input storage")
+		return
+	}
+	filePath := path.Join(types.DefaultVolumesPrefix, i.botInputsVolume.ExternalId, sessionId, fileId)
 	log.Info().Str("stub_id", i.stub.ExternalId).Str("session_id", sessionId).Str("file_path", filePath).Msg("waiting on input file")
 
 	ctx, cancel := common.GetTimeoutContext(i.ctx, timeout)
@@ -429,7 +435,7 @@ func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 			log.Info().Str("stub_id", i.stub.ExternalId).Str("session_id", sessionId).Str("file_path", filePath).Msg("input file upload timeout")
 			return
 		case <-time.After(time.Second):
-			if _, err := os.Stat(filePath); err != nil {
+			if exists, _, err := client.Head(ctx, filePath); err != nil || !exists {
 				continue
 			}
 

@@ -60,7 +60,6 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	volumeArgs := []string{
 		dirs.Images + ":" + types.AgentImagesPath,
 		dirs.Tmp + ":" + types.AgentTmpPath,
-		dirs.Data + ":" + types.AgentDataPath,
 		dirs.Workspace + ":" + types.AgentWorkspacePath,
 		dirs.Checkpoints + ":" + types.AgentCheckpointPath,
 		dirs.DurableDisk + ":" + types.DefaultDurableDisksPath,

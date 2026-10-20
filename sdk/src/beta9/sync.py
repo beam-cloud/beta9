@@ -29,7 +29,6 @@ from .clients.gateway import (
     HeadObjectResponse,
     ObjectMetadata,
     ObjectUploadedPart,
-    PutObjectRequest,
     SyncContainerWorkspaceOperation,
 )
 from .config import get_settings
@@ -253,13 +252,10 @@ class FileSyncer:
                 _empty_sync_results[empty_key] = result
             return result
 
-        if not head_response.use_workspace_storage:
-            object_id = self._upload_stream(manifest, hash, size)
-        else:
-            if cache.object_id and cache.manifest is not None:
-                object_id = self._upload_delta(manifest, hash, size, cache)
-            if object_id is None:
-                object_id = self._upload_full(manifest, hash)
+        if cache.object_id and cache.manifest is not None:
+            object_id = self._upload_delta(manifest, hash, size, cache)
+        if object_id is None:
+            object_id = self._upload_full(manifest, hash)
 
         if object_id is None:
             terminal.error("File sync failed")
@@ -471,25 +467,6 @@ class FileSyncer:
         finally:
             os.remove(temp_zip_name)
 
-    def _upload_stream(self, manifest: "_Manifest", hash: str, size: int) -> Optional[str]:
-        # TODO: remove this once all workspaces are migrated to use workspace storage
-        temp_zip_name = self._write_archive(sorted(manifest.entries))
-        metadata = ObjectMetadata(name=hash, size=size)
-
-        def stream_requests():
-            with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
-                while chunk := file.read(CHUNK_SIZE):
-                    yield PutObjectRequest(chunk, metadata, hash, False)
-
-        try:
-            terminal.header("Uploading")
-            put_response = self.gateway_stub.put_object_stream(stream_requests())
-            if put_response.ok:
-                return put_response.object_id
-            terminal.error("File sync failed")
-            return None
-        finally:
-            os.remove(temp_zip_name)
 
 
 class _ManifestEntry(NamedTuple):

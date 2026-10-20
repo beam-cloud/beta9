@@ -27,9 +27,6 @@ database:
 events:
   callbacks: []
 storage:
-  mode: local
-  fsPath: /data
-  objectPath: /data/objects
   workspaceStorage:
     baseMountPath: /workspace/data
     defaultStorageMode: geese

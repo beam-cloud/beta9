@@ -52,7 +52,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	usage "github.com/beam-cloud/beta9/pkg/repository/usage"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
-	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -87,7 +86,6 @@ type Gateway struct {
 	UsageMetricsRepo     repository.UsageMetricsRepository
 	Tailscale            *network.Tailscale
 	workerRepo           repository.WorkerRepository
-	Storage              storage.Storage
 	DefaultStorageClient *clients.StorageClient
 	Scheduler            *scheduler.Scheduler
 	ctx                  context.Context
@@ -127,11 +125,6 @@ func NewGateway() (*Gateway, error) {
 	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
 	eventRepo := repository.NewEventClientRepo(config, repository.WithWorkspaceWebhooks(workspaceRepo))
 
-	storage, err := storage.NewStorage(config.Storage, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	drainCtx, drainCancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
@@ -140,7 +133,6 @@ func NewGateway() (*Gateway, error) {
 		cancelFunc:      cancel,
 		drainCtx:        drainCtx,
 		drainCancelFunc: drainCancel,
-		Storage:         storage,
 	}
 
 	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
@@ -545,7 +537,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
-	vs, err := volume.NewGlobalVolumeService(g.Config.FileService, g.Config.Storage.WorkspaceStorage, g.BackendRepo, g.WorkspaceRepo, g.RedisClient, g.rootRouteGroup)
+	vs, err := volume.NewGlobalVolumeService(g.Config.FileService, g.Config.Storage.WorkspaceStorage, g.BackendRepo, g.WorkspaceRepo, g.rootRouteGroup)
 	if err != nil {
 		return err
 	}
@@ -584,7 +576,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterPodServiceServer(g.grpcServer, ps)
 
 	// Register output service
-	o, err := output.NewOutputRedisService(g.Config, g.RedisClient, g.BackendRepo, g.rootRouteGroup)
+	o, err := output.NewOutputRedisService(g.Config, g.BackendRepo)
 	if err != nil {
 		return err
 	}

@@ -14,10 +14,6 @@ database:
     password: "${redis_password}"
     enableTLS: false
     dialTimeout: 3s
-storage:
-  mode: local
-  fsPath: /data
-  objectPath: /data/objects
 gateway:
   host: gateway.beta9
   port: 1993

@@ -140,7 +140,7 @@ func envListContains(value string, item string) bool {
 }
 
 func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) {
-	workspaceVolumePath := filepath.Join(types.DefaultVolumesPath, workspaceName)
+	workspaceVolumePath := types.WorkspaceMountPath(workspaceName, types.DefaultVolumesPrefix)
 	_, err, _ := cm.initializationGroup.Do(workspaceVolumePath, func() (interface{}, error) {
 		fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
 		if cm.client.IsPathCachedReachable(context.Background(), fileName) {
