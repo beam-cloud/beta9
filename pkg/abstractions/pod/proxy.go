@@ -110,6 +110,7 @@ type PodProxyBuffer struct {
 	appID                   string
 	httpClient              *http.Client
 	backendTransports       sync.Map
+	readiness               readinessCache
 	tailscale               *network.Tailscale
 	tsConfig                types.TailscaleConfig
 	availableContainers     []container
@@ -634,7 +635,8 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 	if err == nil {
 		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, -1)
 		abstractions.SetConnOptions(tc.Conn, true, connectionKeepAliveInterval, -1)
-	} else if err != nil {
+	} else {
+		pb.readiness.invalidateTarget(readinessTarget{container.id, int32(port), targetHost})
 		tc.Conn.Close()
 		return
 	}
@@ -729,7 +731,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 
 	// If it's a websocket request, upgrade the connection
 	if websocket.IsWebSocketUpgrade(request) {
-		pb.proxyWebSocket(conn, container, targetHost, subPath)
+		pb.proxyWebSocket(conn, container, port, targetHost, subPath)
 		return false
 	}
 
@@ -755,10 +757,13 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	var retryErr error
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 		var dialErr *backendDialError
+		dialFailed := errors.As(err, &dialErr) && req.Context().Err() == nil
+		if dialFailed {
+			pb.readiness.invalidateTarget(readinessTarget{container.id, port, targetHost})
+		}
 		if conn.retryBackendDial &&
 			conn.retryCount < backendDialRetryLimit &&
-			errors.As(err, &dialErr) &&
-			req.Context().Err() == nil &&
+			dialFailed &&
 			!conn.ctx.Response().Committed {
 			retryErr = err
 			return
@@ -831,6 +836,7 @@ func (pb *PodProxyBuffer) removeAvailableContainer(containerID string) {
 	if containerID == "" {
 		return
 	}
+	pb.readiness.invalidate(containerID)
 
 	pb.availableContainersLock.Lock()
 	available := make([]container, 0, len(pb.availableContainers))
@@ -856,6 +862,7 @@ func (pb *PodProxyBuffer) retireAvailableContainer(containerID string) {
 	if containerID == "" {
 		return
 	}
+	pb.readiness.invalidate(containerID)
 
 	pb.availableContainersLock.Lock()
 	if pb.retiringContainers == nil {
@@ -1009,7 +1016,7 @@ func (pb *PodProxyBuffer) pruneBackendTransports(containers []container) {
 	})
 }
 
-func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, addr string, path string) error {
+func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, port int32, addr string, path string) error {
 	subprotocols := websocket.Subprotocols(conn.ctx.Request())
 
 	wsURL, err := url.Parse(podBackendURL("ws", addr, path, conn.ctx.Request().URL.RawQuery))
@@ -1017,14 +1024,19 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 		return err
 	}
 	dstDialer := websocket.Dialer{
-		ReadBufferSize:  64 << 10,
-		WriteBufferSize: 64 << 10,
+		ReadBufferSize:   64 << 10,
+		WriteBufferSize:  64 << 10,
+		HandshakeTimeout: conn.backendDialTimeout(),
 		NetDialContext: func(ctx context.Context, _, dialAddr string) (net.Conn, error) {
 			dialAddress := dialAddr
 			if _, isRoute := types.ParseBackendRouteAddress(addr); isRoute {
 				dialAddress = addr
 			}
-			return network.ConnectToBackend(ctx, dialAddress, conn.backendDialTimeout(), pb.tailscale, pb.tsConfig, pb.containerRepo)
+			backend, err := network.ConnectToBackend(ctx, dialAddress, conn.backendDialTimeout(), pb.tailscale, pb.tsConfig, pb.containerRepo)
+			if err != nil {
+				return nil, &backendDialError{err: err}
+			}
+			return backend, nil
 		},
 		Subprotocols: subprotocols,
 	}
@@ -1037,9 +1049,13 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	var serverConn *websocket.Conn
 	for attempt := 0; ; attempt++ {
 		var err error
-		serverConn, _, err = dstDialer.Dial(wsURL.String(), forwardedWebSocketHeaders(conn.ctx.Request()))
+		serverConn, _, err = dstDialer.DialContext(conn.ctx.Request().Context(), wsURL.String(), forwardedWebSocketHeaders(conn.ctx.Request()))
 		if err == nil {
 			break
+		}
+		var dialErr *backendDialError
+		if errors.As(err, &dialErr) && conn.ctx.Request().Context().Err() == nil {
+			pb.readiness.invalidateTarget(readinessTarget{container.id, port, addr})
 		}
 		if attempt < backendDialRetryLimit && conn.ctx.Request().Context().Err() == nil {
 			log.Warn().Err(err).Str("container_id", container.id).Str("stub_id", pb.stubId).Msg("websocket backend dial failed; dialing again")
@@ -1156,20 +1172,20 @@ func (pb *PodProxyBuffer) discoverContainers() {
 
 			for _, containerState := range containerStates {
 				activeContainerIDs[containerState.ContainerId] = struct{}{}
+				if containerState.Status != types.ContainerStatusRunning {
+					pb.readiness.invalidate(containerState.ContainerId)
+					continue
+				}
 				wg.Add(1)
 
 				go func(cs types.ContainerState) {
 					defer wg.Done()
-					if cs.Status != types.ContainerStatusRunning {
-						return
-					}
-
 					addressMap, err := pb.containerRepo.GetContainerAddressMap(cs.ContainerId)
 					if err != nil {
 						return
 					}
 
-					readyAddressMap := pb.readyAddressMap(addressMap)
+					readyAddressMap := pb.readyAddressMap(cs.ContainerId, addressMap)
 					if len(readyAddressMap) == 0 {
 						return
 					}
@@ -1228,6 +1244,7 @@ func (pb *PodProxyBuffer) discoverContainers() {
 }
 
 func (pb *PodProxyBuffer) updateDiscoveredContainers(discovered []container, activeContainerIDs map[string]struct{}) {
+	pb.readiness.prune(activeContainerIDs)
 	pb.availableContainersLock.Lock()
 	for containerID := range pb.retiringContainers {
 		if _, active := activeContainerIDs[containerID]; !active {
@@ -1248,8 +1265,10 @@ func (pb *PodProxyBuffer) updateDiscoveredContainers(discovered []container, act
 	pb.signalWork()
 }
 
-func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32]string {
+func (pb *PodProxyBuffer) readyAddressMap(containerID string, addressMap map[int32]string) map[int32]string {
 	addressMap = pb.configuredAddressMap(addressMap)
+	pb.readiness.prunePorts(containerID, addressMap)
+	foreground := pb.buffer != nil && pb.buffer.Len() > 0
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -1259,7 +1278,9 @@ func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32
 		wg.Add(1)
 		go func(port int32, address string) {
 			defer wg.Done()
-			if !pb.checkContainerReady(port, address, containerAvailableTimeout) {
+			if !pb.readiness.check(readinessTarget{containerID, port, address}, foreground, func() bool {
+				return pb.checkContainerReady(port, address, containerAvailableTimeout)
+			}) {
 				return
 			}
 

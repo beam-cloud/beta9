@@ -542,6 +542,12 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	if _, err := m.getOrSetupBridge(containerBridgeLinkName); err != nil {
 		return nil, err
 	}
+	if envBool(types.WorkerPersistentEnv) {
+		if err := configureHostNetwork(defaultLink); err != nil {
+			log.Warn().Err(err).Msg("could not configure host network settings; retrying in background")
+		}
+		go monitorHostNetwork(ctx, workerId, defaultLink)
+	}
 
 	if config.Worker.Egress.Enabled {
 		addresses := []string{containerBridgeAddress}

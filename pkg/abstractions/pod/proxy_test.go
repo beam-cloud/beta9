@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +23,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 func TestPodBackendURLUsesPlaceholderHostForRouteAddresses(t *testing.T) {
@@ -973,7 +977,7 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 
 	pb := &PodProxyBuffer{ctx: context.Background()}
 	readyAddress := listener.Addr().String()
-	ready := pb.readyAddressMap(map[int32]string{
+	ready := pb.readyAddressMap("container", map[int32]string{
 		8000: readyAddress,
 		9000: "127.0.0.1:1",
 	})
@@ -983,6 +987,320 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 	}
 	if _, ok := ready[9000]; ok {
 		t.Fatal("unready port was included in ready address map")
+	}
+}
+
+func TestDiscoveryReusesHealthyPortsAcrossFleet(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan struct{}, 6000)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+			accepted <- struct{}{}
+		}
+	}()
+	pb := &PodProxyBuffer{ctx: context.Background(), readiness: readinessCache{refreshLimiter: rate.NewLimiter(0, 0)}}
+	ports := map[int32]string{2222: listener.Addr().String(), 7681: listener.Addr().String(), 8080: listener.Addr().String()}
+	for round := 0; round < 20; round++ {
+		for vm := 0; vm < 100; vm++ {
+			if got := pb.readyAddressMap(fmt.Sprintf("vm-%d", vm), ports); len(got) != len(ports) {
+				t.Fatalf("VM %d round %d: ready ports = %v", vm, round, got)
+			}
+		}
+	}
+	for range 300 {
+		select {
+		case <-accepted:
+		case <-time.After(time.Second):
+			t.Fatal("initial discovery did not probe every VM port")
+		}
+	}
+	select {
+	case <-accepted:
+		t.Fatal("healthy discovery opened another TCP connection")
+	default:
+	}
+}
+
+func TestReadinessCacheRechecksChangedAndFailedTargets(t *testing.T) {
+	pb := &PodProxyBuffer{readiness: readinessCache{refreshLimiter: rate.NewLimiter(rate.Inf, 1)}}
+	target := readinessTarget{"vm", 8080, "127.0.0.1:8080"}
+	checks := 0
+	probe := func() bool { checks++; return true }
+	if !pb.readiness.check(target, true, probe) || !pb.readiness.check(target, true, probe) || checks != 1 {
+		t.Fatal("healthy target was not reused")
+	}
+	for _, changed := range []readinessTarget{{"new-vm", target.port, target.address}, {target.containerID, target.port, "127.0.0.1:8081"}} {
+		if pb.readiness.check(changed, true, func() bool { return false }) {
+			t.Fatal("a replacement VM or address inherited readiness")
+		}
+	}
+	pb.removeAvailableContainer(target.containerID)
+	if pb.readiness.check(target, true, func() bool { return false }) {
+		t.Fatal("failed backend retained cached readiness")
+	}
+	pb.readiness.check(target, true, probe)
+	pb.readiness.prune(nil)
+	if len(pb.readiness.entries) != 0 {
+		t.Fatal("departed VM retained cached readiness")
+	}
+}
+
+func TestInitialReadinessProbeCannotOutliveItsTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		oldReady bool
+		replace  bool
+		prune    bool
+	}{
+		{name: "invalidated", oldReady: true},
+		{name: "departed", oldReady: true, prune: true},
+		{name: "replaced before success", oldReady: true, replace: true},
+		{name: "replaced before failure", replace: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := readinessCache{}
+			target := readinessTarget{"vm", 8080, "old"}
+			started, release := make(chan struct{}), make(chan struct{})
+			var unblock sync.Once
+			t.Cleanup(func() { unblock.Do(func() { close(release) }) })
+			done := make(chan bool, 1)
+			go func(target readinessTarget) {
+				done <- cache.check(target, true, func() bool {
+					close(started)
+					<-release
+					return tc.oldReady
+				})
+			}(target)
+			<-started
+			switch {
+			case tc.replace:
+				target.address = "new"
+				require.True(t, cache.check(target, true, func() bool { return true }))
+			case tc.prune:
+				cache.prune(nil)
+			default:
+				cache.invalidate(target.containerID)
+			}
+			unblock.Do(func() { close(release) })
+			require.False(t, <-done, "stale probe was published as ready")
+			require.Equal(t, tc.replace, cache.check(target, true, func() bool { return false }))
+		})
+	}
+}
+
+func TestConcurrentInitialReadinessUsesOneProbe(t *testing.T) {
+	cache := readinessCache{}
+	target := readinessTarget{"vm", 8080, "backend"}
+	started, release := make(chan struct{}, 100), make(chan struct{})
+	var calls atomic.Int32
+	var pending sync.WaitGroup
+	for range 100 {
+		pending.Add(1)
+		go func() {
+			defer pending.Done()
+			if !cache.check(target, true, func() bool {
+				calls.Add(1)
+				started <- struct{}{}
+				<-release
+				return true
+			}) {
+				t.Error("initial readiness failed")
+			}
+		}()
+	}
+	<-started
+	cache.mu.Lock()
+	tracked := cache.entries[target.containerID][target.port] != nil
+	cache.mu.Unlock()
+	close(release)
+	pending.Wait()
+	require.True(t, tracked, "in-flight probe was not tracked")
+	require.EqualValues(t, 1, calls.Load())
+}
+
+func TestReadinessInvalidationPreservesOtherPortsAndNewAddresses(t *testing.T) {
+	cache := readinessCache{}
+	first, second := readinessTarget{"vm", 8080, "first"}, readinessTarget{"vm", 9000, "second"}
+	cache.check(first, true, func() bool { return true })
+	cache.check(second, true, func() bool { return true })
+	cache.invalidateTarget(readinessTarget{first.containerID, first.port, "retired address"})
+	require.True(t, cache.check(first, true, func() bool { return false }))
+	cache.invalidateTarget(first)
+	require.False(t, cache.check(first, true, func() bool { return false }))
+	require.True(t, cache.check(second, true, func() bool { return false }))
+	cache.prunePorts(second.containerID, nil)
+	require.False(t, cache.check(second, true, func() bool { return false }), "removed port retained readiness")
+}
+
+func TestRequestErrorsOnlyInvalidateUnreachableBackends(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	t.Cleanup(backend.Close)
+	for _, tc := range []struct {
+		name, address              string
+		websocket, canceled, ready bool
+	}{
+		{"HTTP cancellation", backend.Listener.Addr().String(), false, true, true},
+		{"HTTP dial failure", "127.0.0.1:1", false, false, false},
+		{"WebSocket cancellation", backend.Listener.Addr().String(), true, true, true},
+		{"WebSocket rejected upgrade", backend.Listener.Addr().String(), true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pb := newPodProxyConnectionTestBuffer(newPodProxyTestRedis(t))
+			pb.containerRepo = repository.NewContainerRedisRepositoryForTest(pb.rdb)
+			target := readinessTarget{"vm", 8080, tc.address}
+			other := readinessTarget{"vm", 9000, "other"}
+			pb.readiness.check(target, true, func() bool { return true })
+			pb.readiness.check(other, true, func() bool { return true })
+			require.NoError(t, pb.containerRepo.SetContainerAddressMap(target.containerID, map[int32]string{target.port: target.address}))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			request := httptest.NewRequest(http.MethodGet, "/8080/", nil).WithContext(ctx)
+			if tc.websocket {
+				request.Header.Set("Connection", "Upgrade")
+				request.Header.Set("Upgrade", "websocket")
+			}
+			e := echo.New().NewContext(request, httptest.NewRecorder())
+			e.SetParamNames("port")
+			e.SetParamValues("8080")
+			require.NoError(t, pb.ForwardContainerRequest(e, target.containerID))
+			require.Equal(t, tc.ready, pb.readiness.check(target, true, func() bool { return false }))
+			require.True(t, pb.readiness.check(other, true, func() bool { return false }), "unrelated port was invalidated")
+		})
+	}
+}
+
+func TestBackgroundReadinessBudgetDoesNotDelayNewContainers(t *testing.T) {
+	for _, healthy := range []bool{true, false} {
+		t.Run(fmt.Sprintf("healthy=%t", healthy), func(t *testing.T) {
+			cache := readinessCache{refreshLimiter: rate.NewLimiter(0, containerReadinessRefreshConcurrency)}
+			targets := make([]readinessTarget, 0, 15000)
+			for vm := 0; vm < 5000; vm++ {
+				for _, port := range []int32{2222, 7681, 8080} {
+					target := readinessTarget{fmt.Sprintf("vm-%d", vm), port, "backend"}
+					cache.check(target, true, func() bool { return healthy })
+					cache.entries[target.containerID][target.port].refreshAt = time.Time{}
+					targets = append(targets, target)
+				}
+			}
+			started := make(chan struct{}, containerReadinessRefreshConcurrency)
+			release := make(chan struct{})
+			var unblock sync.Once
+			t.Cleanup(func() { unblock.Do(func() { close(release) }) })
+			discovered := make(chan bool, 1)
+			go func() {
+				ready := true
+				for round := 0; round < 2; round++ {
+					for _, target := range targets {
+						ready = cache.check(target, false, func() bool {
+							started <- struct{}{}
+							<-release
+							return healthy
+						}) && ready
+					}
+				}
+				discovered <- ready
+			}()
+			for range containerReadinessRefreshConcurrency {
+				select {
+				case <-started:
+				case <-time.After(time.Second):
+					t.Fatal("background refresh did not start")
+				}
+			}
+			select {
+			case ready := <-discovered:
+				require.Equal(t, healthy, ready)
+			case <-time.After(time.Second):
+				t.Fatal("slow background refresh blocked fleet discovery")
+			}
+			// All refresh slots and rate tokens remain occupied during the cold burst.
+			var cold sync.WaitGroup
+			for vm := range 100 {
+				cold.Add(1)
+				go func() {
+					defer cold.Done()
+					if !cache.check(readinessTarget{fmt.Sprintf("new-%d", vm), 8080, "backend"}, true, func() bool { return true }) {
+						t.Error("new container was not ready")
+					}
+				}()
+			}
+			complete := make(chan struct{})
+			go func() { cold.Wait(); close(complete) }()
+			select {
+			case <-complete:
+			case <-time.After(time.Second):
+				t.Fatal("background work delayed new-container readiness")
+			}
+			cache.invalidate(targets[0].containerID)
+			require.False(t, cache.check(targets[0], true, func() bool { return false }), "failed targets must bypass the background budget too")
+			unblock.Do(func() { close(release) })
+			require.Eventually(t, func() bool { return len(readinessRefreshSlots) == 0 }, time.Second, time.Millisecond)
+			require.False(t, cache.check(targets[0], true, func() bool { return false }), "an old refresh resurrected invalidated readiness")
+		})
+	}
+}
+
+func TestBusyReadinessSlotsPreserveRateBudget(t *testing.T) {
+	for range cap(readinessRefreshSlots) {
+		readinessRefreshSlots <- struct{}{}
+		defer func() { <-readinessRefreshSlots }()
+	}
+	limiter := rate.NewLimiter(0, 1)
+	require.False(t, acquireReadinessRefresh(limiter))
+	require.True(t, limiter.Allow(), "busy refresh slots consumed the rate budget")
+}
+
+func TestIdleFailedReadinessDoesNotDelayQueuedRequests(t *testing.T) {
+	cache := readinessCache{refreshLimiter: rate.NewLimiter(0, 0)}
+	target := readinessTarget{"vm", 8080, "backend"}
+	probes := 0
+	failed := func() bool { probes++; return false }
+	for range 1000 {
+		require.False(t, cache.check(target, false, failed))
+	}
+	require.Equal(t, 1, probes, "idle failed port was probed on every discovery pass")
+	require.True(t, cache.check(target, true, func() bool { probes++; return true }))
+	require.Equal(t, 2, probes, "queued request must retry immediately despite negative caching")
+}
+
+func BenchmarkCachedReadinessFleet(b *testing.B) {
+	for _, size := range []int{100, 1000, 5000} {
+		for _, expired := range []bool{false, true} {
+			b.Run(fmt.Sprintf("%d/expired=%t", size, expired), func(b *testing.B) {
+				cache := readinessCache{refreshLimiter: rate.NewLimiter(0, 0)}
+				targets := make([]readinessTarget, 0, size*3)
+				probe := func() bool { return true }
+				for vm := range size {
+					for _, port := range []int32{2222, 7681, 8080} {
+						target := readinessTarget{strconv.Itoa(vm), port, "backend"}
+						cache.check(target, true, probe)
+						if expired {
+							cache.entries[target.containerID][target.port].refreshAt = time.Time{}
+						}
+						targets = append(targets, target)
+					}
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					for _, target := range targets {
+						cache.check(target, true, probe)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -1011,7 +1329,7 @@ func TestReadyAddressMapOnlyWaitsForConfiguredPorts(t *testing.T) {
 		containerRepo: repo,
 	}
 	start := time.Now()
-	ready := pb.readyAddressMap(map[int32]string{
+	ready := pb.readyAddressMap("container", map[int32]string{
 		8000: listener.Addr().String(),
 		2222: types.BackendRouteAddress(routeID),
 	})
