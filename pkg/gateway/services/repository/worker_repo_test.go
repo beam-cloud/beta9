@@ -563,3 +563,60 @@ func TestPrivateWorkerNetworkIsolation(t *testing.T) {
 		require.Equal(t, ips[i], response.IpAddress)
 	}
 }
+
+func workerNetworkRequests() map[string]interface{ GetNetworkPrefix() string } {
+	const prefix = "cluster:beta9:node:shared"
+	return map[string]interface{ GetNetworkPrefix() string }{
+		"SetNetworkLock":            &pb.SetNetworkLockRequest{NetworkPrefix: prefix},
+		"RemoveNetworkLock":         &pb.RemoveNetworkLockRequest{NetworkPrefix: prefix},
+		"SetContainerIp":            &pb.SetContainerIpRequest{NetworkPrefix: prefix},
+		"MoveContainerIp":           &pb.MoveContainerIpRequest{NetworkPrefix: prefix},
+		"GetContainerIp":            &pb.GetContainerIpRequest{NetworkPrefix: prefix},
+		"GetContainerIps":           &pb.GetContainerIpsRequest{NetworkPrefix: prefix},
+		"GetContainerIpAssignments": &pb.GetContainerIpAssignmentsRequest{NetworkPrefix: prefix},
+		"RemoveContainerIp":         &pb.RemoveContainerIpRequest{NetworkPrefix: prefix},
+	}
+}
+
+func TestWorkerNetworkAuthorizationDoesNotAccessRepositories(t *testing.T) {
+	// Nil repositories ensure authorization and scoping cannot add remote lookups.
+	service := &WorkerRepositoryService{}
+	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
+		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+			Token: &types.Token{TokenType: tokenType}, Workspace: &types.Workspace{ExternalId: "own"},
+		})
+		for name, req := range workerNetworkRequests() {
+			t.Run(tokenType+"/"+name, func(t *testing.T) {
+				require.NoError(t, service.AuthorizeRequest(ctx, req))
+				want := req.GetNetworkPrefix()
+				if tokenType == types.TokenTypeWorkerPrivate {
+					want = "workspace:own:" + want
+				}
+				require.Equal(t, want, service.scopedNetworkPrefix(ctx, req.GetNetworkPrefix()))
+			})
+		}
+	}
+}
+
+// Benchmark only the added local work; transport, token validation and the
+// existing Redis operations are outside the measured section.
+func BenchmarkWorkerNetworkRequestPreparation(b *testing.B) {
+	service := &WorkerRepositoryService{}
+	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
+		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+			Token:     &types.Token{TokenType: tokenType},
+			Workspace: &types.Workspace{ExternalId: "00000000-0000-4000-8000-000000000001"},
+		})
+		for name, req := range workerNetworkRequests() {
+			b.Run(tokenType+"/"+name, func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					if err := service.AuthorizeRequest(ctx, req); err != nil {
+						b.Fatal(err)
+					}
+					service.scopedNetworkPrefix(ctx, req.GetNetworkPrefix())
+				}
+			})
+		}
+	}
+}

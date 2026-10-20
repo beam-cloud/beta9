@@ -93,6 +93,7 @@ func (s *WorkerRepositoryService) AuthorizeRequest(ctx context.Context, req inte
 	if authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
 		return nil
 	}
+	// Network RPCs use scopedNetworkPrefix and do not need worker or slot lookups.
 	if request, ok := req.(workerRepositoryRequest); ok {
 		workerID := request.GetWorkerId()
 		if workerID == "" {

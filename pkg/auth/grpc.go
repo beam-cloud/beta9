@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-var authContextKey = "auth"
+const authContextKey = "auth"
 
 type AuthInfo struct {
 	Workspace *types.Workspace
