@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 	"time"
@@ -13,9 +14,12 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -30,6 +34,59 @@ const (
 
 func (gws *GatewayService) ensureEmptyStubObject(ctx context.Context, workspace *types.Workspace) (types.Object, error) {
 	return abstractions.EnsureEmptyStubObject(ctx, gws.backendRepo, workspace)
+}
+
+func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {
+	ctx := stream.Context()
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if !auth.HasPermission(authInfo) || authInfo.Workspace == nil {
+		return status.Error(codes.PermissionDenied, "Unauthorized Access")
+	}
+	first, err := stream.Recv()
+	if err == io.EOF {
+		return status.Error(codes.InvalidArgument, "object stream is empty")
+	}
+	if err != nil {
+		return err
+	}
+	client, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+	if err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{ErrorMsg: "Unable to create storage client"})
+	}
+	object, err := gws.backendRepo.CreateObject(ctx, first.Hash, 0, authInfo.Workspace.Id)
+	if err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{ErrorMsg: "Unable to create object"})
+	}
+	key := path.Join(types.DefaultObjectPrefix, object.ExternalId)
+	complete := false
+	defer func() {
+		if !complete {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			_ = client.Delete(cleanupCtx, key)
+			_ = gws.backendRepo.DeleteObjectByExternalId(cleanupCtx, object.ExternalId)
+		}
+	}()
+	size := len(first.ObjectContent)
+	reader := common.NewChunkReader(first.ObjectContent, func() ([]byte, error) {
+		chunk, err := stream.Recv()
+		if err != nil {
+			return nil, err
+		}
+		if chunk.Hash != "" && chunk.Hash != first.Hash {
+			return nil, fmt.Errorf("object hash changed during upload")
+		}
+		size += len(chunk.ObjectContent)
+		return chunk.ObjectContent, nil
+	})
+	if err := client.UploadWithReaderAndMetadata(ctx, key, reader, map[string]string{workspaceObjectHashMetadataKey: first.Hash}); err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{ErrorMsg: "Unable to upload object"})
+	}
+	if err := gws.backendRepo.UpdateObjectSizeByExternalId(ctx, object.ExternalId, size); err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{ErrorMsg: "Unable to record object size"})
+	}
+	complete = true
+	return stream.SendAndClose(&pb.PutObjectResponse{Ok: true, ObjectId: object.ExternalId})
 }
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
