@@ -204,6 +204,12 @@ func TestSelectiveTLSInterceptionAndHTTP2(t *testing.T) {
 	require.NoError(t, err)
 	data, err := os.ReadFile(bundle)
 	require.NoError(t, err)
+	first, rest := pem.Decode(data)
+	require.NotNil(t, first)
+	managed, err := x509.ParseCertificate(first.Bytes)
+	require.NoError(t, err)
+	require.Equal(t, "Beam container egress CA", managed.Subject.CommonName)
+	require.Contains(t, string(rest), string(f.deps.RootCertificates))
 	roots := x509.NewCertPool()
 	require.True(t, roots.AppendCertsFromPEM(data))
 	for _, h2 := range []bool{false, true} {
