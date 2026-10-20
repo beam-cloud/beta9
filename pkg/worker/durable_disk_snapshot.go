@@ -326,9 +326,11 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 			return nil
 		}
 
-		// Metadata settles an unchanged file without reading it, for less than a worker costs.
 		previousFile := previousFiles[file.Path]
-		if durableDiskSnapshotFileReusable(previousFile, file) {
+		// Filesystems may give successive writes the same coarse timestamp.
+		// Rehash files changed near the previous snapshot before trusting metadata.
+		if previous != nil && previous.CreatedAt.Sub(time.Unix(0, previousFile.ChangeUnixNano)) >= time.Second &&
+			durableDiskSnapshotFileReusable(previousFile, file) {
 			file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
 			record(file)
 			return nil
