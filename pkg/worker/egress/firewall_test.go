@@ -13,9 +13,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -180,11 +182,40 @@ func TestBindingRefreshDoesNotBlockPolicyOrAccept(t *testing.T) {
 
 func TestHostnameDialRejectsPrivateAddresses(t *testing.T) {
 	for _, ip := range []string{"127.0.0.1", "10.0.0.1", "192.168.0.1", "169.254.169.254", "::1", "fd00:abcd::1", "fe80::1", "100.64.0.1", "0.0.0.0", "64:ff9b::a00:1", "64:ff9b::7f00:1"} {
-		require.ErrorIs(t, checkPublicAddress(context.Background(), "tcp", net.JoinHostPort(ip, "443"), nil), errPrivateAddress)
+		require.ErrorIs(t, common.CheckPublicAddress(context.Background(), "tcp", net.JoinHostPort(ip, "443"), nil), common.ErrPrivateAddress)
 	}
 	_, err := dialPublic(context.Background(), "tcp", "localhost:443")
 	require.Error(t, err)
-	require.NoError(t, checkPublicAddress(context.Background(), "tcp", "8.8.8.8:443", nil))
+	require.NoError(t, common.CheckPublicAddress(context.Background(), "tcp", "8.8.8.8:443", nil))
+}
+
+func TestDirectIPDialRejectsPrivateDestination(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	dst, err := net.ResolveTCPAddr("tcp", upstream.Listener.Addr().String())
+	require.NoError(t, err)
+	for _, policy := range []Policy{{Open: true}, {AllowList: []string{"127.0.0.0/8"}}} {
+		f := NewFirewall(types.EgressConfig{}, []string{"127.0.0.1"}, Dependencies{
+			OriginalDestination: func(net.Conn) (*net.TCPAddr, error) { return dst, nil },
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		require.NoError(t, f.Register("box", []string{"127.0.0.1"}, policy))
+		require.NoError(t, f.Start(ctx))
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.config.OtherPort))
+		require.NoError(t, err)
+		conn.SetDeadline(time.Now().Add(time.Second))
+		fmt.Fprint(conn, "GET / HTTP/1.0\r\n\r\n")
+		_, err = http.ReadResponse(bufio.NewReader(conn), nil)
+		require.Error(t, err)
+		conn.Close()
+		cancel()
+		f.Stop()
+	}
+	require.Zero(t, requests.Load(), "private upstream must not receive a request")
 }
 
 func TestSelectiveTLSInterceptionAndHTTP2(t *testing.T) {

@@ -54,7 +54,10 @@ const keepAliveInterval = 1 * time.Second
 const eventPollingInterval = 500 * time.Millisecond
 
 func (g *botGroup) BotOpenSession(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
+	cc, ok := ctx.(*auth.HttpAuthContext)
+	if !ok || cc.AuthInfo == nil || cc.AuthInfo.Workspace == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
 
 	stubId := ctx.Param("stubId")
 	deploymentName := ctx.Param("deploymentName")
@@ -93,6 +96,19 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		}
 
 		stubId = deployment.Stub.ExternalId
+	}
+
+	// Authorize before upgrading or creating an instance, which loads the
+	// owner's token. Check the repository even when an instance is cached.
+	stub, err := g.pbs.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubId)
+	if err != nil || stub == nil {
+		return apiv1.HTTPNotFound()
+	}
+	if stub.Workspace.ExternalId != cc.AuthInfo.Workspace.ExternalId {
+		config, err := stub.UnmarshalConfig()
+		if err != nil || config == nil || config.Authorized {
+			return apiv1.HTTPNotFound()
+		}
 	}
 
 	// Upgrade HTTP connection to WebSocket

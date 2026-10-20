@@ -88,6 +88,9 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 	}
 
 	if tasks, err := g.backendRepo.AggregateTasksByTimeWindow(ctx.Request().Context(), *filters); err != nil {
+		if errors.Is(err, repository.ErrInvalidTaskInterval) {
+			return HTTPBadRequest(err.Error())
+		}
 		return HTTPInternalServerError("Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
@@ -357,6 +360,10 @@ type StopTasksRequest struct {
 }
 
 func (g *TaskGroup) StopTasks(ctx echo.Context) error {
+	cc, ok := ctx.(*auth.HttpAuthContext)
+	if !ok || cc.AuthInfo == nil || cc.AuthInfo.Workspace == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
 	var req StopTasksRequest
 	if err := ctx.Bind(&req); err != nil {
 		return HTTPBadRequest("Failed to decode task ids")
@@ -368,7 +375,7 @@ func (g *TaskGroup) StopTasks(ctx echo.Context) error {
 			continue
 		}
 
-		if task == nil {
+		if !hasWorkspaceTaskAccess(task, cc.AuthInfo, ctx.Param("workspaceId")) {
 			continue
 		}
 

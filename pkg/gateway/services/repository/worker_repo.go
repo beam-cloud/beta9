@@ -233,7 +233,7 @@ func (s *WorkerRepositoryService) ClaimContainer(ctx context.Context, req *pb.Cl
 	// moves it. A retry uses the same source, destination and IP fence.
 	if state.Status != types.ContainerStatusStopping {
 		if network := req.Network; network != nil {
-			if err := s.workerRepo.MoveContainerIp(network.NetworkPrefix, network.FromContainerId, network.ToContainerId, network.IpAddress); err != nil {
+			if err := s.workerRepo.MoveContainerIp(scopedWorkerNetwork(ctx, network.NetworkPrefix), network.FromContainerId, network.ToContainerId, network.IpAddress); err != nil {
 				resp.ErrorMsg = err.Error()
 				return resp, nil
 			}
@@ -281,7 +281,7 @@ func (s *WorkerRepositoryService) GetWorkerMeteringConfig(ctx context.Context, r
 		return &pb.GetWorkerMeteringConfigResponse{ErrorMsg: msg}, nil
 	}
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo.Token == nil || authInfo.Workspace == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Workspace == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
 		return fail("managed worker token is required")
 	}
 	worker, err := s.workerRepo.GetWorkerById(req.GetWorkerId())
@@ -389,7 +389,7 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 }
 
 func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.SetNetworkLockRequest) (*pb.SetNetworkLockResponse, error) {
-	token, err := s.workerRepo.SetNetworkLock(req.NetworkPrefix, int(req.Ttl), int(req.Retries))
+	token, err := s.workerRepo.SetNetworkLock(scopedWorkerNetwork(ctx, req.NetworkPrefix), int(req.Ttl), int(req.Retries))
 	if err != nil {
 		return &pb.SetNetworkLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -398,7 +398,7 @@ func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.Se
 }
 
 func (s *WorkerRepositoryService) RemoveNetworkLock(ctx context.Context, req *pb.RemoveNetworkLockRequest) (*pb.RemoveNetworkLockResponse, error) {
-	err := s.workerRepo.RemoveNetworkLock(req.NetworkPrefix, req.Token)
+	err := s.workerRepo.RemoveNetworkLock(scopedWorkerNetwork(ctx, req.NetworkPrefix), req.Token)
 	if err != nil {
 		return &pb.RemoveNetworkLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -407,7 +407,7 @@ func (s *WorkerRepositoryService) RemoveNetworkLock(ctx context.Context, req *pb
 }
 
 func (s *WorkerRepositoryService) SetContainerIp(ctx context.Context, req *pb.SetContainerIpRequest) (*pb.SetContainerIpResponse, error) {
-	err := s.workerRepo.SetContainerIp(req.NetworkPrefix, req.ContainerId, req.IpAddress)
+	err := s.workerRepo.SetContainerIp(scopedWorkerNetwork(ctx, req.NetworkPrefix), req.ContainerId, req.IpAddress)
 	if err != nil {
 		return &pb.SetContainerIpResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -416,7 +416,7 @@ func (s *WorkerRepositoryService) SetContainerIp(ctx context.Context, req *pb.Se
 }
 
 func (s *WorkerRepositoryService) MoveContainerIp(ctx context.Context, req *pb.MoveContainerIpRequest) (*pb.MoveContainerIpResponse, error) {
-	err := s.workerRepo.MoveContainerIp(req.NetworkPrefix, req.FromContainerId, req.ToContainerId, req.IpAddress)
+	err := s.workerRepo.MoveContainerIp(scopedWorkerNetwork(ctx, req.NetworkPrefix), req.FromContainerId, req.ToContainerId, req.IpAddress)
 	if err != nil {
 		return &pb.MoveContainerIpResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -425,7 +425,7 @@ func (s *WorkerRepositoryService) MoveContainerIp(ctx context.Context, req *pb.M
 }
 
 func (s *WorkerRepositoryService) GetContainerIp(ctx context.Context, req *pb.GetContainerIpRequest) (*pb.GetContainerIpResponse, error) {
-	ip, err := s.workerRepo.GetContainerIp(req.NetworkPrefix, req.ContainerId)
+	ip, err := s.workerRepo.GetContainerIp(scopedWorkerNetwork(ctx, req.NetworkPrefix), req.ContainerId)
 	if err != nil {
 		return &pb.GetContainerIpResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -434,7 +434,7 @@ func (s *WorkerRepositoryService) GetContainerIp(ctx context.Context, req *pb.Ge
 }
 
 func (s *WorkerRepositoryService) GetContainerIps(ctx context.Context, req *pb.GetContainerIpsRequest) (*pb.GetContainerIpsResponse, error) {
-	ips, err := s.workerRepo.GetContainerIps(req.NetworkPrefix)
+	ips, err := s.workerRepo.GetContainerIps(scopedWorkerNetwork(ctx, req.NetworkPrefix))
 	if err != nil {
 		return &pb.GetContainerIpsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -443,7 +443,7 @@ func (s *WorkerRepositoryService) GetContainerIps(ctx context.Context, req *pb.G
 }
 
 func (s *WorkerRepositoryService) GetContainerIpAssignments(ctx context.Context, req *pb.GetContainerIpAssignmentsRequest) (*pb.GetContainerIpAssignmentsResponse, error) {
-	assignments, err := s.workerRepo.GetContainerIpAssignments(req.NetworkPrefix)
+	assignments, err := s.workerRepo.GetContainerIpAssignments(scopedWorkerNetwork(ctx, req.NetworkPrefix))
 	if err != nil {
 		return &pb.GetContainerIpAssignmentsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -460,7 +460,7 @@ func (s *WorkerRepositoryService) GetContainerIpAssignments(ctx context.Context,
 }
 
 func (s *WorkerRepositoryService) RemoveContainerIp(ctx context.Context, req *pb.RemoveContainerIpRequest) (*pb.RemoveContainerIpResponse, error) {
-	err := s.workerRepo.RemoveContainerIp(req.NetworkPrefix, req.ContainerId)
+	err := s.workerRepo.RemoveContainerIp(scopedWorkerNetwork(ctx, req.NetworkPrefix), req.ContainerId)
 	if err != nil {
 		return &pb.RemoveContainerIpResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}

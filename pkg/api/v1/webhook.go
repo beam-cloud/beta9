@@ -1,10 +1,10 @@
 package apiv1
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -47,11 +47,12 @@ func RedactWebhook(w types.WorkspaceWebhook) types.WorkspaceWebhook {
 	return w
 }
 
-// ValidateWebhookURL requires an absolute HTTP(S) URL.
+// ValidateWebhookURL requires an absolute HTTP(S) URL resolving only to public IPs.
 func ValidateWebhookURL(raw string) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
-		return HTTPBadRequest("url must be an absolute http(s) URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := common.ValidatePublicHTTPURL(ctx, strings.TrimSpace(raw)); err != nil {
+		return HTTPBadRequest("url must be an absolute http(s) URL with a public destination")
 	}
 	return nil
 }

@@ -80,7 +80,7 @@ type EventClientOption func(*EventClientRepo)
 // WithWorkspaceWebhooks fans events out to workspace webhooks. Gateway only.
 func WithWorkspaceWebhooks(source WebhookSource) EventClientOption {
 	return func(r *EventClientRepo) {
-		r.callbackSinks = append(r.callbackSinks, newWorkspaceWebhookSink(source))
+		r.callbackSinks = append(r.callbackSinks, newWorkspaceWebhookSink(source, webhookClient))
 	}
 }
 
