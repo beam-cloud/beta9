@@ -48,8 +48,8 @@ func RedactWebhook(w types.WorkspaceWebhook) types.WorkspaceWebhook {
 }
 
 // ValidateWebhookURL requires an absolute HTTP(S) URL resolving only to public IPs.
-func ValidateWebhookURL(raw string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func ValidateWebhookURL(ctx context.Context, raw string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := common.ValidatePublicHTTPURL(ctx, strings.TrimSpace(raw)); err != nil {
 		return HTTPBadRequest("url must be an absolute http(s) URL with a public destination")
@@ -58,8 +58,7 @@ func ValidateWebhookURL(raw string) error {
 }
 
 func (g *WebhookGroup) List(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	webhooks, err := g.workspaceRepo.ListWebhooks(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId)
+	webhooks, err := g.workspaceRepo.ListWebhooks(ctx.Request().Context(), ctx.Param("workspaceId"))
 	if err != nil {
 		return HTTPInternalServerError("Failed to list webhooks")
 	}
@@ -71,13 +70,11 @@ func (g *WebhookGroup) List(ctx echo.Context) error {
 }
 
 func (g *WebhookGroup) Create(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-
 	var req WebhookRequest
 	if err := ctx.Bind(&req); err != nil {
 		return HTTPBadRequest("Invalid payload")
 	}
-	if err := ValidateWebhookURL(req.URL); err != nil {
+	if err := ValidateWebhookURL(ctx.Request().Context(), req.URL); err != nil {
 		return err
 	}
 
@@ -99,16 +96,15 @@ func (g *WebhookGroup) Create(ctx echo.Context) error {
 		Enabled:     req.Enabled == nil || *req.Enabled,
 		CreatedAt:   time.Now().UTC(),
 	}
-	if err := g.workspaceRepo.SetWebhook(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId, webhook); err != nil {
+	if err := g.workspaceRepo.SetWebhook(ctx.Request().Context(), ctx.Param("workspaceId"), webhook); err != nil {
 		return HTTPInternalServerError("Failed to save webhook")
 	}
 	return ctx.JSON(http.StatusCreated, webhook)
 }
 
-// find is the webhook named by the route's :webhookId in the caller's workspace.
+// find looks up :webhookId within the workspace authorized by the route wrapper.
 func (g *WebhookGroup) find(ctx echo.Context) (*types.WorkspaceWebhook, error) {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	webhooks, err := g.workspaceRepo.ListWebhooks(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId)
+	webhooks, err := g.workspaceRepo.ListWebhooks(ctx.Request().Context(), ctx.Param("workspaceId"))
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to list webhooks")
 	}
@@ -121,7 +117,6 @@ func (g *WebhookGroup) find(ctx echo.Context) (*types.WorkspaceWebhook, error) {
 }
 
 func (g *WebhookGroup) Update(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
 	webhook, err := g.find(ctx)
 	if err != nil {
 		return err
@@ -132,7 +127,7 @@ func (g *WebhookGroup) Update(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid payload")
 	}
 	if req.URL != "" {
-		if err := ValidateWebhookURL(req.URL); err != nil {
+		if err := ValidateWebhookURL(ctx.Request().Context(), req.URL); err != nil {
 			return err
 		}
 		webhook.URL = strings.TrimSpace(req.URL)
@@ -146,18 +141,17 @@ func (g *WebhookGroup) Update(ctx echo.Context) error {
 	if req.Enabled != nil {
 		webhook.Enabled = *req.Enabled
 	}
-	if err := g.workspaceRepo.SetWebhook(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId, *webhook); err != nil {
+	if err := g.workspaceRepo.SetWebhook(ctx.Request().Context(), ctx.Param("workspaceId"), *webhook); err != nil {
 		return HTTPInternalServerError("Failed to save webhook")
 	}
 	return ctx.JSON(http.StatusOK, RedactWebhook(*webhook))
 }
 
 func (g *WebhookGroup) Delete(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
 	if _, err := g.find(ctx); err != nil {
 		return err
 	}
-	if err := g.workspaceRepo.DeleteWebhook(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId, ctx.Param("webhookId")); err != nil {
+	if err := g.workspaceRepo.DeleteWebhook(ctx.Request().Context(), ctx.Param("workspaceId"), ctx.Param("webhookId")); err != nil {
 		return HTTPInternalServerError("Failed to delete webhook")
 	}
 	return ctx.NoContent(http.StatusNoContent)
@@ -165,7 +159,6 @@ func (g *WebhookGroup) Delete(ctx echo.Context) error {
 
 // Test posts a `webhook.test` event synchronously and reports the receiver's status.
 func (g *WebhookGroup) Test(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
 	webhook, err := g.find(ctx)
 	if err != nil {
 		return err
@@ -176,7 +169,7 @@ func (g *WebhookGroup) Test(ctx echo.Context) error {
 	event.SetSource("beta9-cluster")
 	event.SetType("webhook.test")
 	event.SetTime(time.Now().UTC())
-	if err := event.SetData(cloudevents.ApplicationJSON, map[string]string{"workspace_id": cc.AuthInfo.Workspace.ExternalId, "webhook_id": webhook.ExternalId}); err != nil {
+	if err := event.SetData(cloudevents.ApplicationJSON, map[string]string{"workspace_id": ctx.Param("workspaceId"), "webhook_id": webhook.ExternalId}); err != nil {
 		return HTTPInternalServerError("Failed to build test event")
 	}
 

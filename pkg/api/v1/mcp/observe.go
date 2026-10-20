@@ -314,8 +314,9 @@ func (g *Group) listWebhooks(ctx context.Context, a *auth.AuthInfo, _ toolArgs) 
 }
 
 func (g *Group) createWebhook(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	if err := apiv1.ValidateWebhookURL(args.str("url")); err != nil {
-		return nil, fail("INVALID_ARGS", "url must be an absolute http(s) URL")
+	webhookURL := strings.TrimSpace(args.str("url"))
+	if err := apiv1.ValidateWebhookURL(ctx, webhookURL); err != nil {
+		return nil, fail("INVALID_ARGS", "url must be an absolute http(s) URL with a public destination")
 	}
 	id, err := common.GenerateObjectId()
 	if err != nil {
@@ -331,7 +332,7 @@ func (g *Group) createWebhook(ctx context.Context, a *auth.AuthInfo, args toolAr
 	}
 	webhook := types.WorkspaceWebhook{
 		ExternalId:  id,
-		URL:         args.str("url"),
+		URL:         webhookURL,
 		EventTypes:  eventTypes,
 		Secret:      "whsec_" + hex.EncodeToString(secret),
 		Description: args.str("description"),

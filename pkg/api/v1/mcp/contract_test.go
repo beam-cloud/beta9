@@ -75,6 +75,54 @@ type mcpSecretRecorder struct {
 	writes int
 }
 
+type mcpWebhookRecorder struct {
+	repository.WorkspaceRepository
+	workspace string
+	webhooks  []types.WorkspaceWebhook
+}
+
+func (r *mcpWebhookRecorder) SetWebhook(_ context.Context, workspace string, webhook types.WorkspaceWebhook) error {
+	r.workspace = workspace
+	r.webhooks = append(r.webhooks, webhook)
+	return nil
+}
+
+func TestMCPWebhookCreation(t *testing.T) {
+	for _, tc := range []struct {
+		name, url string
+		canceled  bool
+		allowed   bool
+	}{
+		{name: "normalized URL", url: "  https://8.8.8.8/hook  ", allowed: true},
+		{name: "canceled", url: "https://8.8.8.8/hook", canceled: true},
+		{name: "invalid port", url: "https://8.8.8.8:65536/hook"},
+		{name: "local destination", url: "http://127.0.0.1/hook"},
+		{name: "reserved destination", url: "http://0.0.0.1/hook"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newTestGroup()
+			recorder := &mcpWebhookRecorder{}
+			g.workspaceRepo = recorder
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			out, err := g.createWebhook(ctx, mcpIdentity(), toolArgs{"url": tc.url})
+			if tc.allowed {
+				require.NoError(t, err)
+				require.Len(t, recorder.webhooks, 1)
+				require.Equal(t, "ws", recorder.workspace)
+				require.Equal(t, strings.TrimSpace(tc.url), recorder.webhooks[0].URL)
+				require.Equal(t, recorder.webhooks[0].URL, out.(types.WorkspaceWebhook).URL)
+			} else {
+				require.Error(t, err)
+				require.Empty(t, recorder.webhooks)
+			}
+		})
+	}
+}
+
 func (r *mcpSecretRecorder) CreateSecret(context.Context, *types.Workspace, uint, string, string, bool, []string) (*types.Secret, error) {
 	r.writes++
 	return &types.Secret{}, nil
