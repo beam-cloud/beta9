@@ -154,10 +154,11 @@ func (e *ExitCodeError) Error() string {
 type ContainerExitCode int
 
 func (c ContainerExitCode) IsFailed() bool {
+	// A terminal container OOM must participate in autoscaler failure cooldowns.
+	// Sandbox process OOMs do not set a container exit code.
 	return !slices.Contains(
 		[]ContainerExitCode{
 			ContainerExitCodeSuccess,
-			ContainerExitCodeOomKill,
 			ContainerExitCodeScheduler,
 			ContainerExitCodeTtl,
 			ContainerExitCodeUser,

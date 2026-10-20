@@ -117,7 +117,7 @@ func (c *ContainerGroup) StopAllWorkspaceContainers(ctx echo.Context) error {
 	}
 
 	for _, state := range containerStates {
-		err := c.scheduler.Stop(&types.StopContainerArgs{ContainerId: state.ContainerId})
+		err := c.scheduler.Stop(&types.StopContainerArgs{ContainerId: state.ContainerId, Reason: types.StopContainerReasonUser})
 		if err != nil {
 			log.Error().Str("container_id", state.ContainerId).Err(err).Msg("failed to stop container")
 		}
@@ -142,7 +142,7 @@ func (c *ContainerGroup) StopContainer(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid workspace id")
 	}
 
-	err = c.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: force})
+	err = c.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: force, Reason: types.StopContainerReasonUser})
 	if err != nil {
 		if strings.Contains(err.Error(), "event already exists") {
 			return HTTPConflict("Container is already stopping")

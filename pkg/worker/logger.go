@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
@@ -75,6 +76,10 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 	}
 	defer logFile.Close()
 
+	return r.captureLogs(request, logChan, logFile)
+}
+
+func (r *ContainerLogger) captureLogs(request *types.ContainerRequest, logChan chan common.LogRecord, logFile io.Writer) error {
 	// Create a new file logger
 	f := logrus.New()
 	f.SetOutput(logFile)
@@ -102,7 +107,10 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 	firstByteRecorded := false
 
 	for o := range logChan {
-		if !request.IsBuildRequest() && !limiter.Allow() {
+		// Preserve worker-generated OOM diagnostics even after application logs
+		// exhaust the quota. This attribute is outside user stdout envelopes.
+		oomKilled, _ := o.Attrs[types.EventAttrOOMKilled].(bool)
+		if !request.IsBuildRequest() && !oomKilled && !limiter.Allow() {
 			if !rateLimitMessageLogged {
 				log.Info().Str("container_id", request.ContainerId).Msg(rateLimitMsg)
 				f.WithFields(logrus.Fields{

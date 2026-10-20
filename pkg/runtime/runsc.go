@@ -107,7 +107,7 @@ func (r *Runsc) Capabilities() Capabilities {
 	return Capabilities{
 		CheckpointRestore: true,
 		GPU:               true,
-		OOMEvents:         false,
+		OOMEvents:         true,
 		JoinExistingNetNS: true,
 		CDI:               true,
 	}
@@ -399,15 +399,6 @@ func (r *Runsc) loadState(ctx context.Context, containerID string) (runscState, 
 		return runscState{}, fmt.Errorf("failed to parse state output: %w", err)
 	}
 	return state, nil
-}
-
-func (r *Runsc) Events(ctx context.Context, containerID string) (<-chan Event, error) {
-	// gVisor doesn't support events API natively
-	// Return a closed channel to indicate no events will be sent
-	// Caller should use cgroup poller instead
-	ch := make(chan Event)
-	close(ch)
-	return ch, nil
 }
 
 func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	runtime "github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
@@ -58,7 +59,14 @@ func (s *Worker) setupOOMWatcher(
 			cgroupPath = strings.TrimPrefix(spec.Linux.CgroupsPath, "/")
 		}
 		newOOMWatcher = func() runtime.OOMWatcher {
-			return runtime.NewCgroupOOMWatcher(ctx, cgroupPath)
+			watcher := runtime.NewCgroupOOMWatcher(ctx, cgroupPath)
+			var onApplicationOOM func(*microvm.ApplicationOOM)
+			if request.Stub.Type.IsSandbox() {
+				onApplicationOOM = func(oom *microvm.ApplicationOOM) {
+					s.reportApplicationOOM(ctx, request, outputLogger, oom)
+				}
+			}
+			return runtime.NewRuntimeOOMWatcher(ctx, containerRuntime, containerId, watcher, onApplicationOOM)
 		}
 	} else {
 		cgroupPath, err := runtime.GetCgroupPathFromPID(pid)
@@ -95,7 +103,7 @@ func (s *Worker) handleOOMKill(
 ) error {
 	log.Warn().Str("container_id", containerId).Msg("OOM kill detected")
 	isOOMKilled.Store(true)
-	outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
+	outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage, types.EventAttrOOMKilled, true)
 
 	go s.recordContainerEvent(ctx, request, types.EventContainerEventSchema{
 		ID:        types.ContainerEventRuntimeOOMKilled,

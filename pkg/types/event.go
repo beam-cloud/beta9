@@ -499,7 +499,7 @@ const (
 	EventMessageEvicted                        EventMessage = "container evicted to make room for a higher priority workload"
 	EventMessageRuntimeExited                  EventMessage = "runtime process exited"
 	EventMessageRuntimeOOMKilled               EventMessage = "runtime process was oom killed"
-	EventMessageApplicationOOMKilled           EventMessage = "application process was oom killed; sandbox remains running"
+	EventMessageApplicationOOMKilled           EventMessage = "Application process killed by OOM (exit code 137); sandbox remains running"
 )
 
 func (m EventMessage) String() string {
