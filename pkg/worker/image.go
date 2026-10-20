@@ -775,7 +775,9 @@ func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.C
 					complete = false
 					log.Warn().Err(err).Str("image_id", request.ImageId).Msg("failed to prepare fast image metadata")
 				} else {
-					go c.publishImageArchiveToEmbeddedCache(c.localArchivePath(request.ImageId)+".batch", request.ImageId)
+					// Reporting already runs off the startup path. Finish publication
+					// before the report is marked complete and its caller can exit.
+					c.publishImageArchiveToEmbeddedCache(c.localArchivePath(request.ImageId)+".batch", request.ImageId)
 					items = append(items, item)
 				}
 			}

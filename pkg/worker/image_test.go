@@ -551,6 +551,14 @@ func TestFastMetadataCacheRestoreAndLegacyFallback(t *testing.T) {
 	client.contentReporter.flush()
 	require.Len(t, fake.pushed, 2)
 	require.Len(t, fake.pushed[1].Items, 4, "a later successful start retries compact metadata")
+	for _, item := range fake.pushed[1].Items {
+		if item.RoutingKey == "/images/image.rclip.batch" {
+			metadata, err := contentCache.CacheFSMetadata(ctx, item.RoutingKey)
+			require.NoError(t, err)
+			require.Equal(t, item.Hash, metadata.Hash)
+			require.True(t, server.HasCompleteContent(item.Hash, item.SizeBytes), "reported metadata must finish publishing")
+		}
+	}
 	memoCount := 0
 	client.archiveMetadata.Range(func(_, _ any) bool { memoCount++; return true })
 	require.Equal(t, 1, memoCount, "canonical and derived metadata share one memo per image")
