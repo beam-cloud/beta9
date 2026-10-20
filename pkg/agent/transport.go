@@ -92,7 +92,7 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		UserLogf:   agentTSNetLogf(stderr),
 	}
 	if envBool(types.AgentManagedIngressEnv) {
-		server.Port = 41641
+		server.Port = types.AgentTSNetPort
 	}
 	defer server.Close()
 	if _, err := server.Up(ctx); err != nil {

@@ -18,6 +18,7 @@ const (
 	AgentServiceUnitExtension       = ".service"
 	AgentSystemdNetworkOnlineTarget = "network-online.target"
 	AgentSystemdDockerService       = "docker.service"
+	AgentSystemdIngressService      = "beam-managed-ingress.service"
 	AgentSystemdUnitDir             = "/etc/systemd/system"
 	AgentSystemdRuntimeDir          = "/run/systemd/system"
 	AgentLaunchdUserDir             = "Library/LaunchAgents"

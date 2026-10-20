@@ -50,8 +50,8 @@ func TestServiceEnvIncludesCacheDir(t *testing.T) {
 	if got := env[types.AgentCPUAffinityEnforcedEnv]; got != "true" {
 		t.Fatalf("CPU affinity env = %q, want true", got)
 	}
-	if env[types.AgentManagedIngressEnv] != "true" {
-		t.Fatal("managed ingress transport setting must survive agent restart")
+	if got := env[types.AgentManagedIngressEnv]; got != "true" {
+		t.Fatalf("managed ingress env = %q, want true", got)
 	}
 }
 

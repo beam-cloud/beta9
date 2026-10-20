@@ -22,6 +22,10 @@ const (
 	DefaultAgentLocalDevMode         = "local-dev"
 )
 
+// AgentTSNetPort is the UDP port tsnet uses on managed ingress hosts; the
+// ingress policy admits it.
+const AgentTSNetPort = 41641
+
 type BackendRoute struct {
 	RouteID     string `json:"route_id"`
 	WorkspaceID string `json:"workspace_id"`

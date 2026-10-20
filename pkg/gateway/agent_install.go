@@ -302,6 +302,101 @@ install_linux_agent_for_docker() {
 	install_from_url "$URL" "$BIN" "Installing Beam agent"
 }
 
+ensure_linux_managed_ingress() {
+  if [ "$MANAGED_INGRESS" != "1" ]; then
+    return
+  fi
+  if [ "$OS" != "linux" ] || [ "$(id -u)" -ne 0 ] || ! command -v systemctl >/dev/null 2>&1; then
+    fail "--managed-ingress requires a root install on Linux with systemd" 1
+  fi
+  install_firewall_tools
+  INGRESS_INTERFACES="${BEAM_AGENT_INGRESS_INTERFACES:-$(default_route_interfaces)}"
+  INGRESS_TCP_PORTS="22 ${BEAM_AGENT_PUBLIC_TCP_PORTS:-}"
+  validate_managed_ingress
+  install_managed_ingress_service
+  export BEAM_AGENT_MANAGED_INGRESS=true
+}
+
+install_firewall_tools() {
+  if firewall_tools_ready; then
+    return
+  fi
+  say "Installing iptables"
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iproute2 iptables
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y iproute iptables
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y iproute iptables
+  fi
+  if ! firewall_tools_ready; then
+    fail "--managed-ingress requires ip, iptables and ip6tables" 1
+  fi
+}
+
+firewall_tools_ready() {
+  for tool in ip iptables ip6tables iptables-restore ip6tables-restore; do
+    command -v "$tool" >/dev/null 2>&1 || return 1
+  done
+}
+
+default_route_interfaces() {
+  { ip -o -4 route show default; ip -o -6 route show default; } |
+    awk '{ for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1) }' |
+    sort -u | tr '\n' ' '
+}
+
+validate_managed_ingress() {
+  if [ -z "$(printf '%s' "$INGRESS_INTERFACES" | tr -d ' ')" ]; then
+    fail "--managed-ingress could not detect public interfaces; set BEAM_AGENT_INGRESS_INTERFACES" 1
+  fi
+  for iface in $INGRESS_INTERFACES; do
+    case "$iface" in
+      lo|*[!a-zA-Z0-9_.:-]*) fail "invalid managed ingress interface: $iface" 2 ;;
+    esac
+    ip link show dev "$iface" >/dev/null 2>&1 || fail "managed ingress interface not found: $iface" 1
+  done
+  for port in $INGRESS_TCP_PORTS; do
+    case "$port" in
+      *[!0-9]*) fail "invalid public TCP port: $port" 2 ;;
+    esac
+    [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail "invalid public TCP port: $port" 2
+  done
+}
+
+install_managed_ingress_service() {
+  say "Configuring managed ingress"
+  mkdir -p /usr/local/sbin
+  {
+    printf '#!/bin/sh\nset -eu\nINTERFACES="%s"\nTCP_PORTS="%s"\n' "$INGRESS_INTERFACES" "$INGRESS_TCP_PORTS"
+    cat <<'BEAM_INGRESS_RULES'
+` + managedIngressRulesScript + `
+BEAM_INGRESS_RULES
+  } > /usr/local/sbin/beam-managed-ingress
+  chmod 0755 /usr/local/sbin/beam-managed-ingress
+  cat > /etc/systemd/system/beam-managed-ingress.service <<'BEAM_INGRESS_UNIT'
+[Unit]
+Description=Beam managed ingress
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/beam-managed-ingress
+
+[Install]
+WantedBy=multi-user.target
+BEAM_INGRESS_UNIT
+  systemctl daemon-reload
+  systemctl enable beam-managed-ingress.service
+  # The oneshot stays active, so only a restart reapplies rules on a rerun.
+  systemctl restart beam-managed-ingress.service
+}
+
 ensure_linux_docker() {
   if [ "$OS" != "linux" ] || ! needs_worker_container; then
     return
@@ -556,8 +651,42 @@ is_false() {
   esac
 }
 
-` + managedIngressInstallScript + `
 main "$@"
+`
+
+// Mangle PREROUTING runs before Docker's DNAT, so the policy also covers
+// published container ports. The script owns only BEAM-INGRESS and its
+// PREROUTING jumps: never flush or replace other components' chains or
+// policies. UDP 41641 is types.AgentTSNetPort.
+const managedIngressRulesScript = `for family in iptables ip6tables; do
+  if [ "$family" = iptables ]; then
+    icmp=icmp
+    dhcp="--sport 67 --dport 68"
+  else
+    icmp=ipv6-icmp
+    dhcp="--sport 547 --dport 546"
+  fi
+  {
+    printf '%s\n' \
+      '*mangle' \
+      ':BEAM-INGRESS - [0:0]' \
+      '-F BEAM-INGRESS' \
+      '-A BEAM-INGRESS -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j RETURN' \
+      "-A BEAM-INGRESS -p $icmp -j RETURN" \
+      "-A BEAM-INGRESS -p udp $dhcp -j RETURN"
+    for port in $TCP_PORTS; do
+      printf '%s\n' "-A BEAM-INGRESS -p tcp --dport $port -j RETURN"
+    done
+    printf '%s\n' \
+      '-A BEAM-INGRESS -p udp --dport 41641 -j RETURN' \
+      '-A BEAM-INGRESS -j DROP' \
+      'COMMIT'
+  } | "$family-restore" --wait 5 --noflush
+  for iface in $INTERFACES; do
+    "$family" --wait 5 -t mangle -C PREROUTING -i "$iface" -j BEAM-INGRESS 2>/dev/null ||
+      "$family" --wait 5 -t mangle -I PREROUTING 1 -i "$iface" -j BEAM-INGRESS
+  done
+done
 `
 
 func agentInstallScriptHandler() echo.HandlerFunc {

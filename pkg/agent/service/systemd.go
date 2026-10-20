@@ -99,8 +99,8 @@ func SystemdUnit(spec Spec) string {
 	)
 	if spec.Env[types.AgentManagedIngressEnv] == "true" {
 		writeLines(&b,
-			"Requires=beam-managed-ingress.service",
-			"After=beam-managed-ingress.service",
+			"Requires="+types.AgentSystemdIngressService,
+			"After="+types.AgentSystemdIngressService,
 		)
 	}
 	writeLines(&b,
