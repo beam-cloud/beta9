@@ -1653,3 +1653,41 @@ func (f *fakeContainerRepoClient) GetContainerAddressMap(ctx context.Context, in
 func (f *fakeContainerRepoClient) SetWorkerAddress(ctx context.Context, in *pb.SetWorkerAddressRequest, opts ...grpc.CallOption) (*pb.SetWorkerAddressResponse, error) {
 	return &pb.SetWorkerAddressResponse{Ok: true}, nil
 }
+
+func TestStatusHeartbeatRepositoryDeadline(t *testing.T) {
+	for _, phase := range []string{"lookup", "renewal"} {
+		for _, scenario := range []struct {
+			name      string
+			timeout   time.Duration
+			cancelled bool
+		}{
+			{"reconnect", 3 * time.Second, false}, {"cancelled", 20 * time.Millisecond, true},
+		} {
+			t.Run(phase+"/"+scenario.name, func(t *testing.T) {
+				const containerID = "container-reconnecting-heartbeat"
+				release := make(chan struct{})
+				repoClient := &fakeContainerRepoClient{state: &pb.ContainerState{ContainerId: containerID, Status: string(types.ContainerStatusRunning)}}
+				if phase == "lookup" {
+					repoClient.getStateRelease = release
+				} else {
+					repoClient.updateStatusRelease = release
+				}
+				// A fresh TCP/TLS handshake took 1.2s on the staging host.
+				timer := time.AfterFunc(1200*time.Millisecond, func() { close(release) })
+				t.Cleanup(func() { timer.Stop() })
+				worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance](), containerRepoClient: repoClient}
+				worker.containerInstances.Set(containerID, &ContainerInstance{ExitCode: -1})
+				ctx, cancel := context.WithTimeout(context.Background(), scenario.timeout)
+				defer cancel()
+				done, err := worker.updateContainerStatusOnce(ctx, &types.ContainerRequest{ContainerId: containerID})
+				require.False(t, done)
+				if scenario.cancelled {
+					require.ErrorIs(t, err, context.DeadlineExceeded)
+				} else {
+					require.NoError(t, err)
+					require.Len(t, repoClient.containerStatusUpdates(), 1)
+				}
+			})
+		}
+	}
+}
