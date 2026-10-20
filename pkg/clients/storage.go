@@ -126,6 +126,7 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 func newS3Client(cfg aws.Config, endpointUrl string) *s3.Client {
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.Retryer = storageDNSRetryer{o.Retryer}
+		o.DisableLogOutputChecksumValidationSkipped = true
 		if endpointUrl != "" {
 			o.BaseEndpoint = aws.String(endpointUrl)
 			o.UsePathStyle = true
