@@ -108,7 +108,6 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeGeese,
-			FilesystemName: workspaceName,
 			FilesystemPath: mountPath,
 			Geese: types.GeeseConfig{
 				// Workspace specific config
@@ -153,7 +152,6 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 		}
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeAlluxio,
-			FilesystemName: workspaceName,
 			FilesystemPath: mountPath,
 			Alluxio: types.AlluxioConfig{
 				// Global config
@@ -300,7 +298,7 @@ func (sm *WorkspaceStorageManager) workspaceMountLock(workspaceName string) *syn
 
 func workspaceMountHealthy(mount storage.Storage, mountPath string) bool {
 	switch mount.Mode() {
-	case storage.StorageModeGeese, storage.StorageModeJuiceFS, storage.StorageModeMountPoint:
+	case storage.StorageModeGeese, storage.StorageModeMountPoint:
 		return storage.IsMounted(mountPath)
 	default:
 		return true
