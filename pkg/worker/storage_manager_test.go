@@ -91,25 +91,17 @@ func TestWorkspaceStorageManagerRejectsLocalStorage(t *testing.T) {
 }
 
 func TestWorkspaceStorageBackendSelection(t *testing.T) {
-	bucket, access, secret, endpoint, region := "workspace-bucket", "access", "secret", "https://s3.example.com", "us-east-1"
-	metadata := &types.WorkspaceStorage{BucketName: &bucket, AccessKey: &access, SecretKey: &secret, EndpointUrl: &endpoint, Region: &region}
 	for _, override := range []string{"", storage.StorageModeMountPoint} {
 		t.Run("pool="+override, func(t *testing.T) {
 			manager, err := NewWorkspaceStorageManager(context.Background(), types.StorageConfig{
 				WorkspaceStorage: types.WorkspaceStorageConfig{DefaultStorageMode: storage.StorageModeGeese},
 			}, types.WorkerPoolConfig{StorageMode: override}, nil, nil)
 			require.NoError(t, err)
-			mount, err := manager.newWorkspaceMount(metadata)
-			require.NoError(t, err)
 			want := storage.StorageModeGeese
 			if override != "" {
 				want = override
 			}
-			require.Equal(t, want, mount.Mode())
-			_, err = manager.newWorkspaceMount(nil)
-			require.ErrorContains(t, err, "metadata is required")
-			_, err = manager.newWorkspaceMount(&types.WorkspaceStorage{BucketName: &bucket})
-			require.ErrorContains(t, err, "metadata is incomplete")
+			require.Equal(t, want, manager.poolConfig.StorageMode)
 		})
 	}
 }

@@ -3,7 +3,33 @@ package storage
 import (
 	"strings"
 	"testing"
+
+	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
 )
+
+func TestNewStorageUsesWorkspaceMetadata(t *testing.T) {
+	bucket, access, secret, endpoint, region := "workspace-bucket", "access", "secret", "https://s3.example.com", "us-east-1"
+	metadata := &types.WorkspaceStorage{BucketName: &bucket, AccessKey: &access, SecretKey: &secret, EndpointUrl: &endpoint, Region: &region}
+	config := types.WorkspaceStorageConfig{Geese: types.GeeseConfig{Debug: true, AccessKey: "unused-global-key"}}
+	for _, mode := range []string{StorageModeGeese, StorageModeMountPoint} {
+		t.Run(mode, func(t *testing.T) {
+			backend, err := NewStorage(mode, config, metadata, nil)
+			require.NoError(t, err)
+			require.Equal(t, mode, backend.Mode())
+			switch backend := backend.(type) {
+			case *GeeseStorage:
+				require.Equal(t, types.GeeseConfig{Debug: true, BucketName: bucket, AccessKey: access, SecretKey: secret, EndpointUrl: endpoint, Region: region}, backend.config)
+			case *MountPointStorage:
+				require.Equal(t, types.MountPointConfig{BucketName: bucket, AccessKey: access, SecretKey: secret, EndpointURL: endpoint, Region: region}, backend.config)
+			}
+			_, err = NewStorage(mode, config, nil, nil)
+			require.ErrorContains(t, err, "metadata is required")
+			_, err = NewStorage(mode, config, &types.WorkspaceStorage{BucketName: &bucket}, nil)
+			require.ErrorContains(t, err, "metadata is incomplete")
+		})
+	}
+}
 
 func TestMountInfoContains(t *testing.T) {
 	mountInfo := strings.NewReader(strings.Join([]string{

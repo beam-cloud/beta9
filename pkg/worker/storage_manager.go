@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -98,7 +97,7 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 		_ = os.RemoveAll(mountPath)
 	}
 
-	mount, err := sm.newWorkspaceMount(workspaceStorage)
+	mount, err := storage.NewStorage(sm.poolConfig.StorageMode, sm.config.WorkspaceStorage, workspaceStorage, sm.cacheClient)
 	if err != nil {
 		return nil, err
 	}
@@ -113,45 +112,6 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	sm.mountLastUsed.Set(workspaceName, time.Now())
 
 	return mount, nil
-}
-
-func (sm *WorkspaceStorageManager) newWorkspaceMount(workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
-	mode := sm.poolConfig.StorageMode
-	if mode != storage.StorageModeGeese && mode != storage.StorageModeMountPoint {
-		return nil, fmt.Errorf("workspace storage mode %q is invalid: workspace storage mounts request-scoped credentials through a FUSE backend", mode)
-	}
-	if err := validateWorkspaceStorage(workspaceStorage); err != nil {
-		return nil, err
-	}
-
-	switch mode {
-	case storage.StorageModeGeese:
-		config := sm.config.WorkspaceStorage.Geese
-		config.EndpointUrl = *workspaceStorage.EndpointUrl
-		config.BucketName = *workspaceStorage.BucketName
-		config.AccessKey = *workspaceStorage.AccessKey
-		config.SecretKey = *workspaceStorage.SecretKey
-		config.Region = *workspaceStorage.Region
-		return storage.NewGeeseStorage(config, sm.cacheClient)
-	default:
-		return storage.NewMountPointStorage(types.MountPointConfig{
-			BucketName:  *workspaceStorage.BucketName,
-			AccessKey:   *workspaceStorage.AccessKey,
-			SecretKey:   *workspaceStorage.SecretKey,
-			EndpointURL: *workspaceStorage.EndpointUrl,
-			Region:      *workspaceStorage.Region,
-		})
-	}
-}
-
-func validateWorkspaceStorage(workspaceStorage *types.WorkspaceStorage) error {
-	if workspaceStorage == nil {
-		return errors.New("workspace storage metadata is required")
-	}
-	if workspaceStorage.EndpointUrl == nil || workspaceStorage.BucketName == nil || workspaceStorage.AccessKey == nil || workspaceStorage.SecretKey == nil || workspaceStorage.Region == nil {
-		return fmt.Errorf("workspace storage metadata is incomplete")
-	}
-	return nil
 }
 
 func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
