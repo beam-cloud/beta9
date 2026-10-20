@@ -48,16 +48,20 @@ var (
 	globalIPv6Prefix = netip.MustParsePrefix("2000::/3")
 )
 
-// IsPublicIP excludes local and special-use address space, including addresses
-// that tunnel to an unchecked IPv4 destination.
+// IsPublicIP excludes local and special-use address space. IPv4-mapped and
+// well-known NAT64 addresses are checked against their embedded IPv4 address.
 func IsPublicIP(ip net.IP) bool {
-	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+	address, ok := netip.AddrFromSlice(ip)
+	if !ok {
 		return false
 	}
-	address, _ := netip.AddrFromSlice(ip)
 	address = address.Unmap()
 	if nat64Prefix.Contains(address) {
-		return IsPublicIP(net.IP(ip.To16()[12:]))
+		bytes := address.As16()
+		address = netip.AddrFrom4([4]byte(bytes[12:]))
+	}
+	if !address.IsGlobalUnicast() || address.IsPrivate() {
+		return false
 	}
 	if address.Is6() && !globalIPv6Prefix.Contains(address) {
 		return false
