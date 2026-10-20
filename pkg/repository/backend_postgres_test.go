@@ -527,8 +527,8 @@ func TestAggregateTasksByTimeWindowScopesAppStubSubquery(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
 
-	mock.ExpectQuery(`FROM task t JOIN stub s ON t\.stub_id = s\.id WHERE t\.workspace_id = \$1 AND s\.external_id IN \(\$2\) AND t\.stub_id IN \(SELECT app_stub\.id FROM stub app_stub JOIN app app_scope ON app_stub\.app_id = app_scope\.id WHERE app_scope\.workspace_id = \$3 AND app_scope\.external_id = \$4 AND app_scope\.deleted_at IS NULL\)`).
-		WithArgs(uint(11), "stub-external", uint(11), "app-external").
+	mock.ExpectQuery(`FROM task t JOIN stub s ON t\.stub_id = s\.id WHERE t\.workspace_id = \$2 AND s\.external_id IN \(\$3\) AND t\.stub_id IN \(SELECT app_stub\.id FROM stub app_stub JOIN app app_scope ON app_stub\.app_id = app_scope\.id WHERE app_scope\.workspace_id = \$4 AND app_scope\.external_id = \$5 AND app_scope\.deleted_at IS NULL\)`).
+		WithArgs("hour", uint(11), "stub-external", uint(11), "app-external").
 		WillReturnRows(sqlmock.NewRows([]string{"time", "count", "status_counts"}))
 
 	result, err := postgresRepo.AggregateTasksByTimeWindow(context.Background(), types.TaskFilter{

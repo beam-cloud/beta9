@@ -4,7 +4,6 @@ package egress
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"runtime"
@@ -66,9 +65,6 @@ type container struct {
 func NewFirewall(config types.EgressConfig, addresses []string, deps Dependencies) *Firewall {
 	if deps.OriginalDestination == nil {
 		deps.OriginalDestination = originalDestination
-	}
-	if deps.DialContext == nil {
-		deps.DialContext = dialPublic
 	}
 	if config.MaxConnectionsPerContainer <= 0 {
 		config.MaxConnectionsPerContainer = 256
@@ -318,12 +314,10 @@ func (r *routeTarget) HandleConn(conn net.Conn) {
 	proxy := &tcpproxy.DialProxy{
 		Addr:        target,
 		DialTimeout: peekTimeout,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return f.dialContext(ctx, network, address, policy.AllowList)
+		},
 		OnDialError: func(src net.Conn, _ error) { _ = src.Close() },
-	}
-	if target != dst.String() {
-		proxy.DialContext = f.deps.DialContext
-	} else {
-		proxy.DialContext = (&net.Dialer{Timeout: peekTimeout}).DialContext
 	}
 	if peeked != nil {
 		conn = &tcpproxy.Conn{Conn: tracked.Conn, Peeked: peeked.Peeked}
@@ -363,31 +357,38 @@ func hasBinding(bindings []types.SecretBinding, host string) bool {
 	return false
 }
 
-// Validate the dialed address to prevent DNS rebinding.
-func dialPublic(ctx context.Context, network, address string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: peekTimeout, ControlContext: checkPublicAddress}
+// Validate the resolved address at connect time, including explicit private CIDRs.
+func (f *Firewall) dialContext(ctx context.Context, network, address string, allowList []string) (net.Conn, error) {
+	if f.deps.DialContext != nil {
+		return f.deps.DialContext(ctx, network, address)
+	}
+	dialer := &net.Dialer{Timeout: peekTimeout, ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
+		return checkEgressAddress(address, allowList)
+	}}
 	return dialer.DialContext(ctx, network, address)
 }
 
-func checkPublicAddress(_ context.Context, _, address string, _ syscall.RawConn) error {
+func checkEgressAddress(address string, allowList []string) error {
 	host, _, err := net.SplitHostPort(address)
-	if err != nil || !publicIP(net.ParseIP(host)) {
-		return errPrivateAddress
+	ip := net.ParseIP(host)
+	if err != nil || ip == nil {
+		return common.ErrPrivateAddress
 	}
-	return nil
-}
-
-var errPrivateAddress = errors.New("hostname resolved to a non-public address")
-
-func publicIP(ip net.IP) bool {
-	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-		return false
+	if common.IsPublicIP(ip) {
+		return nil
 	}
-	if strings.HasPrefix(ip.String(), "64:ff9b::") {
-		return publicIP(net.IP(ip.To16()[12:]))
+	// Only RFC1918 and IPv6 ULA destinations can be explicitly allowed.
+	// Metadata, loopback and other special-use ranges remain blocked.
+	if ip.IsPrivate() {
+		cidrs, _ := common.SplitAllowList(allowList)
+		for _, cidr := range cidrs {
+			_, network, _ := net.ParseCIDR(cidr)
+			if network.Contains(ip) {
+				return nil
+			}
+		}
 	}
-	v4 := ip.To4()
-	return v4 == nil || !(v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127)
+	return common.ErrPrivateAddress
 }
 
 func (f *Firewall) lookup(id string) (*container, error) {

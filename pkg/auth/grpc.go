@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-var authContextKey = "auth"
+const authContextKey = "auth"
 
 type AuthInfo struct {
 	Workspace *types.Workspace
@@ -24,6 +24,12 @@ type AuthInfo struct {
 	OAuth *OAuthGrant
 	// Request attribution.
 	Actor types.EventActor
+}
+
+// RequestAuthorizer lets a service enforce resource permissions after token
+// authentication, before either a unary handler or a stream receives a request.
+type RequestAuthorizer interface {
+	AuthorizeRequest(context.Context, interface{}) error
 }
 
 type OAuthGrant struct {
@@ -174,11 +180,22 @@ func (ai *AuthInterceptor) validateToken(ctx context.Context, md metadata.MD) (*
 
 type wrappedStream struct {
 	grpc.ServerStream
-	ctx context.Context
+	ctx       context.Context
+	authorize func(interface{}) error
 }
 
 func (w *wrappedStream) Context() context.Context {
 	return w.ctx
+}
+
+func (w *wrappedStream) RecvMsg(req interface{}) error {
+	if err := w.ServerStream.RecvMsg(req); err != nil {
+		return err
+	}
+	if w.authorize != nil {
+		return w.authorize(req)
+	}
+	return nil
 }
 
 func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
@@ -204,6 +221,11 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 			ServerStream: stream,
 			ctx:          ctxWithAuth,
 		}
+		if service, ok := srv.(RequestAuthorizer); ok && ai.isAuthRequired(info.FullMethod) {
+			wrappedStr.authorize = func(req interface{}) error {
+				return service.AuthorizeRequest(ctxWithAuth, req)
+			}
+		}
 
 		return handler(srv, wrappedStr)
 	}
@@ -227,6 +249,11 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 
 		// Attach the auth info to context
 		ctx = ai.newContextWithAuth(ctx, authInfo)
+		if service, ok := info.Server.(RequestAuthorizer); ok && ai.isAuthRequired(info.FullMethod) {
+			if err := service.AuthorizeRequest(ctx, req); err != nil {
+				return nil, err
+			}
+		}
 		return handler(ctx, req)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,18 @@ func TestRemoveContentSkipsContentTouchedSinceItWasChosen(t *testing.T) {
 	require.True(t, store.Exists(hash))
 
 	require.NoError(t, store.removeContent(evictionCandidateFor(t, store, hash)))
+	require.False(t, store.Exists(hash))
+}
+
+func TestCompletenessChecksDoNotExtendCacheRetention(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "expired-content", time.Now().Add(-8*24*time.Hour))
+	server := &Server{cas: store}
+
+	require.True(t, server.HasCompleteContent(hash, int64(len("expired-content"))))
+
+	evicted, _ := store.PruneContentNotProtected(nil, 7*24*time.Hour)
+	require.Equal(t, 1, evicted)
 	require.False(t, store.Exists(hash))
 }
 
@@ -301,64 +314,30 @@ func TestMaybeEvictDiskCachePreservesRecentUnprotectedBeforeReport(t *testing.T)
 	require.False(t, events[0].Timestamp.IsZero())
 }
 
-func TestMaybeEvictDiskCachePreservesProtectedContentAboveSoftWatermark(t *testing.T) {
-	store := newTestStore(t, 5)
-	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
-	store.serverConfig.DiskCacheMaxUsagePct = 0.95
-	store.diskConfig.MinFreeBytes = 100
-	var events []CacheChurnEvent
-	store.SetChurnSink(func(event CacheChurnEvent) {
-		events = append(events, event)
-	})
+func TestBackgroundEvictionPreservesWarmAndFreshContent(t *testing.T) {
+	for _, reserve := range []int64{100, 180} {
+		t.Run(fmt.Sprintf("free_reserve_%d", reserve), func(t *testing.T) {
+			store := newTestStore(t, 5)
+			store.serverConfig.DiskCacheEvictWatermarkPct = .80
+			store.serverConfig.DiskCacheMaxUsagePct = .95
+			store.diskConfig.MinFreeBytes = reserve
+			var events []CacheChurnEvent
+			store.SetChurnSink(func(event CacheChurnEvent) { events = append(events, event) })
+			warm := addEvictionTestContent(t, store, "warm working set", time.Now().Add(-time.Hour))
+			fresh := addEvictionTestContent(t, store, "freshly cached content", time.Now().Add(-20*time.Minute))
+			store.SetProtectedContent(map[string]struct{}{warm: {}})
 
-	protected := addEvictionTestContent(t, store, "protected-hot-content", time.Now().Add(-time.Hour))
-	fresh := addEvictionTestContent(t, store, "fresh-volume-content", time.Now().Add(-20*time.Minute))
-	store.SetProtectedContent(map[string]struct{}{protected: struct{}{}})
+			evicted := store.maybeEvictDiskCache(diskUsageSnapshot{totalBytes: 1000, usedBytes: 850, availableBytes: 150, usagePct: .85})
 
-	evicted := store.maybeEvictDiskCache(diskUsageSnapshot{
-		totalBytes:     1000,
-		usedBytes:      850,
-		availableBytes: 150,
-		usagePct:       0.85,
-	})
-
-	require.False(t, evicted)
-	require.True(t, store.Exists(protected))
-	require.True(t, store.Exists(fresh))
-	require.Len(t, events, 1)
-	require.Equal(t, CacheChurnStatusNothingEvictable, events[0].Status)
-	require.Equal(t, 1, events[0].ProtectedCandidates)
-	require.Equal(t, 1, events[0].RecentCandidates)
-}
-
-func TestMaybeEvictDiskCachePreservesProtectedContentBelowHardReserve(t *testing.T) {
-	store := newTestStore(t, 5)
-	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
-	store.serverConfig.DiskCacheMaxUsagePct = 0.95
-	store.diskConfig.MinFreeBytes = 180
-	var events []CacheChurnEvent
-	store.SetChurnSink(func(event CacheChurnEvent) {
-		events = append(events, event)
-	})
-
-	protected := addEvictionTestContent(t, store, "protected-hot-content", time.Now().Add(-time.Hour))
-	fresh := addEvictionTestContent(t, store, "fresh-volume-content", time.Now().Add(-20*time.Minute))
-	store.SetProtectedContent(map[string]struct{}{protected: struct{}{}})
-
-	evicted := store.maybeEvictDiskCache(diskUsageSnapshot{
-		totalBytes:     1000,
-		usedBytes:      850,
-		availableBytes: 150,
-		usagePct:       0.85,
-	})
-
-	require.False(t, evicted)
-	require.True(t, store.Exists(protected))
-	require.True(t, store.Exists(fresh))
-	require.Len(t, events, 1)
-	require.Equal(t, CacheChurnStatusNothingEvictable, events[0].Status)
-	require.Zero(t, events[0].ProtectedObjects)
-	require.Zero(t, events[0].ProtectedFreedBytes)
+			require.False(t, evicted)
+			require.True(t, store.Exists(warm))
+			require.True(t, store.Exists(fresh))
+			require.Len(t, events, 1)
+			require.Equal(t, CacheChurnStatusNothingEvictable, events[0].Status)
+			require.Equal(t, 1, events[0].ProtectedCandidates)
+			require.Equal(t, 1, events[0].RecentCandidates)
+		})
+	}
 }
 
 func TestIndexReadRenewalThrottlesMarkerPersistence(t *testing.T) {
@@ -646,102 +625,143 @@ func TestDiskWriteGuardEvictsStartupPressure(t *testing.T) {
 	require.False(t, store.Exists(old))
 }
 
-// A write that finds an eviction pass already running waits for it and goes
-// through on the room it made, rather than failing on the stale gate.
-func TestDiskWriteGuardConcurrentWritersWaitForInflightEviction(t *testing.T) {
-	store := newTestStore(t, 5)
-	store.serverConfig.DiskCacheMaxUsagePct = 0.95
-	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
-
-	old := addEvictionTestContent(t, store, "stale content nobody has read in a while", time.Now().Add(-time.Hour))
-
-	// The first stat taken by an evicting pass blocks until released, holding
-	// the pass (and the guard) open.
-	evictingStat := make(chan struct{})
-	release := make(chan struct{})
-	var evictPasses int
-	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
-		if store.evictMu.TryLock() {
-			store.evictMu.Unlock()
-		} else if store.Exists(old) {
-			evictPasses++
-			if evictPasses == 1 {
-				close(evictingStat)
-				<-release
-			}
-		}
-		if !store.Exists(old) {
-			return diskUsageSnapshot{totalBytes: 1000, usedBytes: 700, availableBytes: 300, usagePct: 0.70}, nil
-		}
-		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 960, availableBytes: 40, usagePct: 0.96}, nil
-	})
-
-	_, err := store.refreshDiskCacheUsage(false)
-	require.NoError(t, err)
-	require.True(t, store.diskCachedUsageExceeded)
-
-	first := make(chan bool, 1)
-	go func() { first <- store.diskWriteAllowed() }()
-	<-evictingStat
-
-	second := make(chan bool, 1)
-	go func() { second <- store.diskWriteAllowed() }()
-	select {
-	case allowed := <-second:
-		t.Fatalf("second writer answered %v while the eviction was still running", allowed)
-	case <-time.After(50 * time.Millisecond):
+func TestNewStartsReplaceOlderWarmCache(t *testing.T) {
+	store := newTestStore(t, 256)
+	const starts = 100
+	warm := make(map[string]struct{}, starts)
+	for i := range starts {
+		hash := addEvictionTestContent(t, store, fmt.Sprintf("%0256d", i), time.Now().Add(-time.Hour))
+		warm[hash] = struct{}{}
 	}
-
-	close(release)
-	require.True(t, <-first)
-	require.True(t, <-second)
-	require.False(t, store.Exists(old))
-	require.Equal(t, 1, evictPasses, "the waiting writer must not start a second eviction pass")
+	store.SetProtectedContent(warm)
+	store.serverConfig.DiskCacheMaxUsagePct = .95
+	const capacity = 200_000
+	baseline := 189_000 - dirSizeBytesRecursiveForTest(t, store.diskCacheDir)
+	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
+		used := uint64(baseline + dirSizeBytesRecursiveForTest(t, store.diskCacheDir))
+		return diskUsageSnapshot{totalBytes: capacity, usedBytes: used, availableBytes: capacity - used, usagePct: float64(used) / capacity}, nil
+	})
+	hashes := make([]string, starts)
+	failures := make([]error, starts)
+	var writers sync.WaitGroup
+	for i := range starts {
+		writers.Go(func() {
+			hashes[i], _, failures[i] = store.AddReader(context.Background(), strings.NewReader(fmt.Sprintf("new-start-%d", i)))
+		})
+	}
+	writers.Wait()
+	for i, hash := range hashes {
+		require.NoError(t, failures[i])
+		require.True(t, store.Exists(hash), "new start %d must remain cached", i)
+	}
+	require.Less(t, len(store.evictionCandidates()), 2*starts, "older warm data must make room")
+	require.Zero(t, store.diskWrites.pending)
 }
 
-func TestDiskAdmissionAccountsForConcurrentWrites(t *testing.T) {
+func TestConcurrentReservationsDoNotOvercommitDisk(t *testing.T) {
 	store := newTestStore(t, 5)
 	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
 		return diskUsageSnapshot{totalBytes: 1000, availableBytes: 1000}, nil
 	})
-	first, err := store.reserveDiskWrite(600)
+	server := &Server{cas: store}
+	const writers = 100
+	results := make(chan func(), writers)
+	for range writers {
+		go func() {
+			release, _ := server.ReserveDiskSpace(600)
+			results <- release
+		}()
+	}
+	var admitted []func()
+	for range writers {
+		if release := <-results; release != nil {
+			admitted = append(admitted, release)
+		}
+	}
+	require.Len(t, admitted, 1)
+	_, err := store.reserveDiskWrite(600)
+	require.ErrorIs(t, err, ErrDiskCacheCapacity)
+	admitted[0]()
+	reservation, err := store.reserveDiskWrite(600)
 	require.NoError(t, err)
-	_, err = store.reserveDiskWrite(600)
-	require.ErrorIs(t, err, errDiskCacheCapacity)
-	first.release()
-	second, err := store.reserveDiskWrite(600)
-	require.NoError(t, err)
-	second.release()
+	reservation.release()
 	require.Zero(t, store.diskWrites.pending)
 }
 
-func TestDiskAdmissionStopsStreamsWithoutEvictingProtectedContent(t *testing.T) {
+func TestNewWritesReclaimOlderWarmContent(t *testing.T) {
+	store := newTestStore(t, 5)
+	old := addEvictionTestContent(t, store, "older warm content", time.Now().Add(-time.Minute))
+	store.SetProtectedContent(map[string]struct{}{old: {}})
+	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
+		used := uint64(700)
+		if store.Exists(old) {
+			used = 940
+		}
+		return diskUsageSnapshot{totalBytes: 1000, usedBytes: used, availableBytes: 1000 - used, usagePct: float64(used) / 1000}, nil
+	})
+	reservation, err := store.reserveDiskWrite(100)
+	require.NoError(t, err)
+	reservation.release()
+	require.False(t, store.Exists(old))
+}
+
+func TestNewWritesKeepActiveReaders(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "currently being read", time.Now().Add(-time.Hour))
+	releaseRead := (&Server{cas: store}).PinContent(hash)
+	stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
+		used := uint64(700)
+		if store.Exists(hash) {
+			used = 940
+		}
+		return diskUsageSnapshot{totalBytes: 1000, usedBytes: used, availableBytes: 1000 - used, usagePct: float64(used) / 1000}, nil
+	})
+	_, err := store.reserveDiskWrite(100)
+	require.ErrorIs(t, err, ErrDiskCacheCapacity)
+	require.True(t, store.Exists(hash))
+
+	releaseRead()
+	reservation, err := store.reserveDiskWrite(100)
+	require.NoError(t, err)
+	reservation.release()
+	require.False(t, store.Exists(hash))
+}
+
+func dirSizeBytesRecursiveForTest(t *testing.T, root string) int64 {
+	t.Helper()
+	var size int64
+	require.NoError(t, filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		info, err := entry.Info()
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err == nil {
+			size += info.Size()
+		}
+		return err
+	}))
+	return size
+}
+
+func TestDiskAdmissionStopsStreamsWithoutEvictingActiveReaders(t *testing.T) {
 	for _, method := range []string{"reader", "expected-hash", "parallel-pages", "add"} {
 		t.Run(method, func(t *testing.T) {
 			store := newTestStore(t, 5)
 			store.serverConfig.DiskCacheMaxUsagePct = 0.95
-			protected := addEvictionTestContent(t, store, "keep", time.Now().Add(-time.Hour))
-			store.SetProtectedContent(map[string]struct{}{protected: {}})
+			active := addEvictionTestContent(t, store, "keep", time.Now().Add(-time.Hour))
+			defer (&Server{cas: store}).PinContent(active)()
 			store.lastDiskGuardCheckNanos.Store(time.Now().UnixNano())
+			baseline := dirSizeBytesRecursiveForTest(t, store.diskCacheDir)
 			stubDiskUsage(t, func(string) (diskUsageSnapshot, error) {
-				var written uint64
-				err := filepath.WalkDir(store.diskCacheDir, func(path string, entry fs.DirEntry, err error) error {
-					if err != nil {
-						return err
-					}
-					if path == store.pageDir(protected) {
-						return filepath.SkipDir
-					}
-					if !entry.IsDir() {
-						info, err := entry.Info()
-						if err != nil {
-							return err
-						}
-						written += uint64(info.Size())
-					}
-					return nil
-				})
-				return diskUsageSnapshot{totalBytes: 1000, usedBytes: 940 + written, availableBytes: 60 - written, usagePct: float64(940+written) / 1000}, err
+				written := dirSizeBytesRecursiveForTest(t, store.diskCacheDir) - baseline
+				used := uint64(940 + written)
+				return diskUsageSnapshot{totalBytes: 1000, usedBytes: used, availableBytes: 1000 - used, usagePct: float64(used) / 1000}, nil
 			})
 			content := []byte("more-than-one-page")
 			hash := fmt.Sprintf("%x", sha256.Sum256(content))
@@ -765,7 +785,7 @@ func TestDiskAdmissionStopsStreamsWithoutEvictingProtectedContent(t *testing.T) 
 				_, statErr := os.Stat(store.pageDir(hash))
 				require.True(t, os.IsNotExist(statErr), "mid-stream refusal must remove published partial pages")
 			}
-			require.True(t, store.Exists(protected))
+			require.True(t, store.Exists(active))
 			require.Zero(t, store.diskWrites.pending)
 		})
 	}

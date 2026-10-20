@@ -954,16 +954,21 @@ func (c *PostgresBackendRepository) AggregateTaskActivityByApp(ctx context.Conte
 	return result, nil
 }
 
+var ErrInvalidTaskInterval = errors.New("invalid task aggregation interval")
+
 func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
 	interval := strings.ToLower(filters.Interval)
 	if interval == "" {
 		interval = "hour"
 	}
+	switch interval {
+	case "microseconds", "milliseconds", "second", "minute", "hour", "day", "week", "month", "quarter", "year", "decade", "century", "millennium":
+	default:
+		return nil, ErrInvalidTaskInterval
+	}
 
-	date_truc := fmt.Sprintf("DATE_TRUNC('%s', t.created_at)", interval)
-
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		date_truc + ` as time, COUNT(t.id) as count,
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select().Column(
+		`DATE_TRUNC(?, t.created_at) as time, COUNT(t.id) as count,
 			json_build_object(
 				'COMPLETE', SUM(CASE WHEN t.status = 'COMPLETE' THEN 1 ELSE 0 END),
 				'ERROR', SUM(CASE WHEN t.status = 'ERROR' THEN 1 ELSE 0 END),
@@ -972,7 +977,7 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 				'RETRY', SUM(CASE WHEN t.status = 'RETRY' THEN 1 ELSE 0 END),
 				'PENDING', SUM(CASE WHEN t.status = 'PENDING' THEN 1 ELSE 0 END),
 				'RUNNING', SUM(CASE WHEN t.status = 'RUNNING' THEN 1 ELSE 0 END)
-			)::json AS status_counts`,
+			)::json AS status_counts`, interval,
 	).
 		From("task t").GroupBy("time").OrderBy("time DESC")
 

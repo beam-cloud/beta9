@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type ContainerRepositoryService struct {
@@ -15,8 +18,49 @@ type ContainerRepositoryService struct {
 	pb.UnimplementedContainerRepositoryServiceServer
 }
 
+var _ auth.RequestAuthorizer = (*ContainerRepositoryService)(nil)
+
+type containerRepositoryRequest interface {
+	GetContainerId() string
+}
+
 func NewContainerRepositoryService(ctx context.Context, containerRepo repository.ContainerRepository) *ContainerRepositoryService {
 	return &ContainerRepositoryService{ctx: ctx, containerRepo: containerRepo}
+}
+
+// AuthorizeRequest restricts private workers to containers in their workspace.
+// The auth interceptor calls it before dispatching a repository RPC.
+func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req interface{}) error {
+	authInfo, err := workerRepositoryAuth(ctx)
+	if err != nil {
+		return err
+	}
+	if authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
+		return nil
+	}
+	request, ok := req.(containerRepositoryRequest)
+	if !ok {
+		return status.Error(codes.PermissionDenied, "container is required")
+	}
+	state, err := containerStateForWorkspace(s.containerRepo, request.GetContainerId(), authInfo.Workspace.ExternalId)
+	if err != nil {
+		return err
+	}
+	var routes []*pb.BackendRoute
+	switch req := req.(type) {
+	case *pb.SetContainerAddressRequest:
+		routes = []*pb.BackendRoute{req.Route}
+	case *pb.SetContainerAddressMapRequest:
+		routes = req.Routes
+	case *pb.SetWorkerAddressRequest:
+		routes = []*pb.BackendRoute{req.Route}
+	}
+	for _, route := range routes {
+		if err := authorizeBackendRoute(state, route); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req *pb.GetContainerStateRequest) (*pb.GetContainerStateResponse, error) {
@@ -26,6 +70,17 @@ func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req 
 	}
 
 	return &pb.GetContainerStateResponse{Ok: true, ContainerId: req.ContainerId, State: containerStateToProto(state)}, nil
+}
+
+func containerStateForWorkspace(repo repository.ContainerRepository, containerID, workspaceID string) (*types.ContainerState, error) {
+	if containerID == "" {
+		return nil, status.Error(codes.PermissionDenied, "container is required")
+	}
+	state, err := repo.GetContainerState(containerID)
+	if err != nil || state == nil || state.WorkspaceId != workspaceID {
+		return nil, status.Error(codes.PermissionDenied, "container is not in worker workspace")
+	}
+	return state, nil
 }
 
 func containerStateToProto(state *types.ContainerState) *pb.ContainerState {
@@ -196,6 +251,25 @@ func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, c
 		return "", err
 	}
 	return address, nil
+}
+
+func authorizeBackendRoute(state *types.ContainerState, route *pb.BackendRoute) error {
+	if route == nil {
+		return nil
+	}
+	if route.WorkspaceId != state.WorkspaceId || route.WorkerId != state.WorkerId || route.MachineId != state.MachineId {
+		return status.Error(codes.PermissionDenied, "route does not belong to container")
+	}
+	containerID := state.ContainerId
+	if route.Kind == types.BackendRouteKindWorker {
+		containerID = ""
+	} else if route.Kind != types.BackendRouteKindContainer {
+		return status.Error(codes.PermissionDenied, "invalid route kind")
+	}
+	if route.ContainerId != containerID || route.RouteId != types.BackendRouteID(state.MachineId, state.WorkerId, containerID, route.Kind, route.Port) {
+		return status.Error(codes.PermissionDenied, "invalid route identity")
+	}
+	return nil
 }
 
 func backendRoute(containerID string, routeProto *pb.BackendRoute, defaultLocalTarget string) (types.BackendRoute, string, error) {

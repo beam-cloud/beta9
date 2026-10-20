@@ -3,6 +3,8 @@ package endpoint
 import (
 	"context"
 	stdjson "encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,9 +15,59 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
+
+type endpointFailureBackend struct {
+	repository.BackendRepository
+	task types.Task
+}
+
+func (b *endpointFailureBackend) GetTask(context.Context, string) (*types.Task, error) {
+	return &b.task, nil
+}
+
+func (b *endpointFailureBackend) UpdateTask(_ context.Context, _ string, updated types.Task) (*types.Task, error) {
+	b.task = updated
+	return &b.task, nil
+}
+
+func TestBackendFailureCompletesTask(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tasks := repository.NewTaskRedisRepository(newEndpointBufferTestRedis(t))
+	msg := &types.TaskMessage{TaskId: "task", StubId: "stub", WorkspaceName: "workspace"}
+	if err := tasks.SetTaskState(ctx, msg.WorkspaceName, msg.StubId, msg.TaskId, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := task.NewDispatcher(ctx, tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &endpointFailureBackend{task: types.Task{Status: types.TaskStatusRunning}}
+	response := httptest.NewRecorder()
+	rb := &RequestBuffer{
+		ctx: ctx, isASGI: true,
+		stubConfig: &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 1}},
+		httpClient: &http.Client{Transport: &http.Transport{
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("backend unavailable")
+			},
+		}},
+	}
+	rb.handleHttpRequest(&request{
+		ctx:  echo.New().NewContext(httptest.NewRequest(http.MethodGet, "/", nil), response),
+		task: &EndpointTask{msg: msg, es: &HttpEndpointService{backendRepo: backend, taskDispatcher: dispatcher}},
+	}, container{address: "backend:8001"})
+	if response.Code != http.StatusBadGateway || backend.task.Status != types.TaskStatusError {
+		t.Fatalf("backend failure: HTTP %d, task status %s", response.Code, backend.task.Status)
+	}
+	if count, err := tasks.TasksInFlight(ctx, msg.WorkspaceName, msg.StubId); err != nil || count != 0 {
+		t.Fatalf("tasks left in flight: %d, error: %v", count, err)
+	}
+}
 
 func TestBackendHTTPURLUsesPlaceholderHostForRouteAddresses(t *testing.T) {
 	routeAddress := types.BackendRouteAddress("machine:worker:container:container:8001")
@@ -259,16 +311,11 @@ func TestDeleteEndpointInstancePreservesReplacement(t *testing.T) {
 }
 
 func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
-	server, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(server.Close)
-
-	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
-	if err != nil {
-		t.Fatal(err)
-	}
+	rdb := newEndpointBufferTestRedis(t)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
 
 	e := echo.New()
 	httpReq := httptest.NewRequest(http.MethodPost, "/", nil)
@@ -280,6 +327,7 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 
 	rb := &RequestBuffer{
 		ctx:                 ctx,
+		isASGI:              true,
 		rdb:                 rdb,
 		containerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		workspace:           &types.Workspace{Name: "workspace"},
@@ -292,7 +340,6 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 	}
 	req := &request{
 		ctx:       reqCtx,
-		task:      &EndpointTask{msg: &types.TaskMessage{TaskId: "task"}},
 		requestID: "task",
 		done:      make(chan struct{}),
 		started:   make(chan struct{}),
@@ -310,16 +357,21 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 	}
 
 	rb.availableContainersLock.Lock()
-	rb.availableContainers = []container{{id: "container-1", address: "127.0.0.1:8000"}}
+	rb.availableContainers = []container{{id: "container-1", address: backend.Listener.Addr().String()}}
 	rb.availableContainersLock.Unlock()
 	if err := rdb.Set(ctx, Keys.endpointRequestTokens("workspace", "stub", "container-1"), 1, 0).Err(); err != nil {
 		t.Fatal(err)
 	}
 	rb.signalWork()
 
-	waitForCondition(t, 50*time.Millisecond, func() bool {
-		return rb.buffer.Len() == 0
-	})
+	select {
+	case <-req.done:
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("backend response = %d", rec.Code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request did not complete after its backend became available")
+	}
 }
 
 func TestEnqueueRequestFailsOverwrittenRequest(t *testing.T) {
@@ -530,6 +582,61 @@ func TestStoppableContainersSkipsInFlightEndpointRequests(t *testing.T) {
 	}
 	if len(containers) != 1 || containers[0] != "container-1" {
 		t.Fatalf("stoppable containers = %v, want [container-1] after request token release", containers)
+	}
+}
+
+func TestIdleDrainExcludesRequestAdmission(t *testing.T) {
+	rdb := newEndpointBufferTestRedis(t)
+	rb := newEndpointRequestTokenTestBuffer(rdb, 1)
+	ctx := context.Background()
+	state := &types.ContainerState{ContainerId: "container-1", StubId: "stub", WorkspaceId: "workspace", Status: types.ContainerStatusRunning}
+	if err := rb.containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := rb.acquireRequestToken("container-1"); err != nil {
+		t.Fatal(err)
+	}
+	if drained, err := rb.setContainerDraining(ctx, "container-1", true); err != nil || drained {
+		t.Fatalf("busy replica drained: %v, error: %v", drained, err)
+	}
+	if err := rb.releaseRequestToken("container-1", "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if drained, err := rb.setContainerDraining(ctx, "container-1", true); err != nil || !drained {
+		t.Fatalf("idle replica not drained: %v, error: %v", drained, err)
+	}
+	if err := rb.releaseRequestToken("container-1", "late-completion"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, Keys.endpointRequestTokens("workspace", "stub", "container-1")); got != -1 {
+		t.Fatalf("late completion reopened draining replica: %d", got)
+	}
+	if err := rb.acquireRequestToken("container-1"); err == nil {
+		t.Fatal("request admitted after draining began")
+	}
+	rb.refreshRequestTokenTTL("container-1")
+	key := Keys.endpointRequestTokens("workspace", "stub", "container-1")
+	if ttl := rdb.TTL(ctx, key).Val(); ttl < time.Duration(types.ContainerStateTtlSWhileStopping-1)*time.Second {
+		t.Fatalf("request activity shortened the drain lease: %s", ttl)
+	}
+	if reopened, err := rb.setContainerDraining(ctx, "container-1", false); err != nil || !reopened {
+		t.Fatalf("failed stop could not reopen admission: %v, error: %v", reopened, err)
+	}
+	if err := rb.acquireRequestToken("container-1"); err != nil {
+		t.Fatalf("request rejected after drain rollback: %v", err)
+	}
+	if err := rb.releaseRequestToken("container-1", "after-rollback"); err != nil {
+		t.Fatal(err)
+	}
+	if drained, err := rb.setContainerDraining(ctx, "container-1", true); err != nil || !drained {
+		t.Fatalf("replica not drained: %v, error: %v", drained, err)
+	}
+	state.Status = types.ContainerStatusStopping
+	if err := rb.containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+	if reopened, err := rb.setContainerDraining(ctx, "container-1", false); err != nil || reopened {
+		t.Fatalf("rollback reopened a stopping replica: %v, error: %v", reopened, err)
 	}
 }
 

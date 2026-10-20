@@ -62,10 +62,6 @@ type Store struct {
 	diskMonitorStarted      atomic.Bool
 	lastDiskGuardCheckNanos atomic.Int64
 	diskWrites              diskWriteAdmission
-	// diskGuardEvictMu serializes the write guard's on-demand eviction (see
-	// diskWriteAllowed); lastDiskGuardEvictNanos is written under it.
-	diskGuardEvictMu        sync.Mutex
-	lastDiskGuardEvictNanos int64
 	index                   contentIndex
 	// evictMu serializes eviction passes. The disk monitor and the embedded
 	// cache owner's ReclaimDisk both evict from a usage snapshot; two passes
@@ -161,11 +157,15 @@ func (cas *Store) pageFileBuckets() int {
 // completion never lands in a directory that is half deleted. Page reads and
 // on-demand single-page fills use their page lock. It returns the locked mutex.
 func (cas *Store) lockObject(hash string) *sync.Mutex {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(hash))
-	lock := &cas.objectLocks[h.Sum64()%objectLockStripeCount]
+	lock := cas.objectLock(hash)
 	lock.Lock()
 	return lock
+}
+
+func (cas *Store) objectLock(hash string) *sync.Mutex {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(hash))
+	return &cas.objectLocks[h.Sum64()%objectLockStripeCount]
 }
 
 func (cas *Store) pageLock(hash string, pageIdx int64) *sync.RWMutex {
@@ -246,6 +246,7 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	if !isContentHash(hash) {
 		return fmt.Errorf("cache content key %q is not a sha256 hex digest", hash)
 	}
+	defer cas.index.pin(hash)()
 	size := int64(len(content))
 	chunkKeys := []string{}
 
@@ -256,7 +257,7 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	dirPath := cas.pageDir(hash)
 	writeToDisk := cas.diskWriteAllowed()
 	if !writeToDisk && (!cas.memoryCacheEnabled || cas.diskConfig.Enabled) {
-		return errDiskCacheCapacity
+		return ErrDiskCacheCapacity
 	}
 	if writeToDisk {
 		defer cas.lockObject(hash).Unlock()
@@ -336,7 +337,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	}
 	if !cas.diskWriteAllowed() {
 		if !cas.memoryCacheEnabled || cas.diskConfig.Enabled {
-			return "", 0, errDiskCacheCapacity
+			return "", 0, ErrDiskCacheCapacity
 		}
 		return cas.addReaderToMemory(ctx, reader)
 	}
@@ -444,6 +445,7 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 	if expectedHash == "" {
 		return cas.AddReader(ctx, reader)
 	}
+	defer cas.index.pin(expectedHash)()
 	if reader == nil {
 		return "", 0, errors.New("nil content reader")
 	}
@@ -452,7 +454,7 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 	}
 	if !cas.diskWriteAllowed() {
 		if !cas.memoryCacheEnabled || cas.diskConfig.Enabled {
-			return "", 0, errDiskCacheCapacity
+			return "", 0, ErrDiskCacheCapacity
 		}
 		return cas.addReaderToMemory(ctx, reader)
 	}
@@ -525,6 +527,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 	if expectedHash == "" {
 		return "", 0, errors.New("expected hash is required")
 	}
+	defer cas.index.pin(expectedHash)()
 	if size < 0 {
 		return "", 0, errors.New("invalid content size")
 	}
@@ -535,7 +538,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		return "", 0, errors.New("invalid page size")
 	}
 	if !cas.diskWriteAllowed() {
-		return "", 0, errDiskCacheCapacity
+		return "", 0, ErrDiskCacheCapacity
 	}
 	tmpDir, err := cas.newExpectedHashTempDir(expectedHash)
 	if err != nil {
@@ -991,7 +994,7 @@ func (cas *Store) writeCompleteMarker(hash string, size int64, pageCount int64) 
 }
 
 func (cas *Store) canFallbackToMemory(err error) bool {
-	return cas.memoryCacheEnabled && !cas.diskConfig.Enabled && errors.Is(err, errDiskCacheCapacity)
+	return cas.memoryCacheEnabled && !cas.diskConfig.Enabled && errors.Is(err, ErrDiskCacheCapacity)
 }
 
 // Caller holds the object lock; a failed replacement must retain prior content.
@@ -1150,6 +1153,7 @@ func minInt64ToInt(a int64, b int64) int {
 }
 
 func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (read int64, err error) {
+	defer cas.index.pin(hash)()
 	atomic.AddInt64(&cachePathStats.storeReadAtRequests, 1)
 	atomic.AddInt64(&cachePathStats.storeReadAtBytes, int64(len(dst)))
 	if offset < 0 {
@@ -1600,27 +1604,12 @@ func (cas *Store) diskWriteAllowed() bool {
 		return true
 	}
 
-	// The disk is over the hard limit and a write is waiting. The periodic
-	// monitor evicts every diskCacheUsageCheckInterval, but a burst of writes
-	// (a worker materializing several layers next to this store, a multi-GiB
-	// seed) can cross the limit well inside one interval, and refusing the
-	// store then costs the next container a registry pull. Evict now, once
-	// per guard interval, and answer from the usage that leaves behind.
-	// Writers that arrive while a pass is running queue behind it and answer
-	// from its result too, instead of failing on the flag it is about to
-	// clear. Only writes that would otherwise be refused get here.
-	cas.diskGuardEvictMu.Lock()
-	now = time.Now().UnixNano()
-	if cas.lastDiskGuardEvictNanos == 0 || time.Duration(now-cas.lastDiskGuardEvictNanos) >= diskCacheWriteGuardInterval {
-		cas.lastDiskGuardEvictNanos = now
-		cas.refreshDiskCacheUsage(true)
+	reservation, err := cas.reserveDiskWrite(0)
+	if err != nil {
+		return false
 	}
-	cas.diskGuardEvictMu.Unlock()
-
-	cas.mu.Lock()
-	exceeded = cas.diskCachedUsageExceeded
-	cas.mu.Unlock()
-	return !exceeded
+	reservation.release()
+	return true
 }
 
 // diskWriteAdmission accounts for pages admitted concurrently but not yet on
@@ -1635,7 +1624,8 @@ type diskWriteReservation struct {
 	bytes uint64
 }
 
-var errDiskCacheCapacity = errors.New("disk cache capacity exceeded")
+// ErrDiskCacheCapacity means no reclaimable space can satisfy a write.
+var ErrDiskCacheCapacity = errors.New("disk cache capacity exceeded")
 
 func (cas *Store) reserveDiskWrite(size int) (diskWriteReservation, error) {
 	cas.diskWrites.mu.Lock()
@@ -1649,17 +1639,47 @@ func (cas *Store) reserveDiskWrite(size int) (diskWriteReservation, error) {
 		bytes = ((bytes+block-1)/block + 2) * block // Page, temporary file and marker metadata.
 	}
 	requested := cas.diskWrites.pending + bytes
+	if bytes > snapshot.totalBytes || requested > snapshot.totalBytes {
+		return diskWriteReservation{}, ErrDiskCacheCapacity
+	}
+	if !cas.diskWriteFits(snapshot, requested) {
+		snapshot, err = cas.reclaimForWrite(requested)
+		if err != nil {
+			return diskWriteReservation{}, err
+		}
+	}
+	if !cas.diskWriteFits(snapshot, requested) {
+		return diskWriteReservation{}, ErrDiskCacheCapacity
+	}
+	cas.diskWrites.pending += bytes
+	return diskWriteReservation{store: cas, bytes: bytes}, nil
+}
+
+func (cas *Store) reclaimForWrite(requested uint64) (diskUsageSnapshot, error) {
+	cas.evictMu.Lock()
+	defer cas.evictMu.Unlock()
+	snapshot, err := statDiskUsage(cas.diskCacheDir)
+	if err != nil {
+		return snapshot, err
+	}
+	if !cas.diskWriteFits(snapshot, requested) {
+		toFree := int64(snapshot.usedBytes+requested) - int64(cas.evictWatermarkPct()*float64(snapshot.totalBytes))
+		if reserve := cas.diskConfig.MinFreeBytes + int64(requested) - int64(snapshot.availableBytes); reserve > toFree {
+			toFree = reserve
+		}
+		cas.evictContent(toFree, nil, true)
+	}
+	return cas.refreshDiskCacheUsage(false)
+}
+
+func (cas *Store) diskWriteFits(snapshot diskUsageSnapshot, requested uint64) bool {
 	if snapshot.totalBytes == 0 || requested > snapshot.availableBytes {
-		return diskWriteReservation{}, errDiskCacheCapacity
+		return false
 	}
 	snapshot.usedBytes += requested
 	snapshot.availableBytes -= requested
 	snapshot.usagePct = float64(snapshot.usedBytes) / float64(snapshot.totalBytes)
-	if cas.diskPressureExceeded(snapshot) {
-		return diskWriteReservation{}, errDiskCacheCapacity
-	}
-	cas.diskWrites.pending += bytes
-	return diskWriteReservation{store: cas, bytes: bytes}, nil
+	return !cas.diskPressureExceeded(snapshot)
 }
 
 func (r diskWriteReservation) release() {

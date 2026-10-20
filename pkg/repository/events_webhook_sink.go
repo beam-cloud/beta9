@@ -7,12 +7,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/rs/zerolog/log"
@@ -53,6 +56,7 @@ type webhookDelivery struct {
 type workspaceWebhookSink struct {
 	source WebhookSource
 	queue  chan webhookDelivery
+	client *http.Client
 
 	mu    sync.Mutex
 	cache map[string]webhookCacheEntry
@@ -63,9 +67,10 @@ type webhookCacheEntry struct {
 	expires  time.Time
 }
 
-func newWorkspaceWebhookSink(source WebhookSource) *workspaceWebhookSink {
+func newWorkspaceWebhookSink(source WebhookSource, client *http.Client) *workspaceWebhookSink {
 	sink := &workspaceWebhookSink{
 		source: source,
+		client: client,
 		queue:  make(chan webhookDelivery, webhookQueueSize),
 		cache:  map[string]webhookCacheEntry{},
 	}
@@ -119,16 +124,38 @@ func (s *workspaceWebhookSink) webhooksFor(workspaceId string) []types.Workspace
 
 func (s *workspaceWebhookSink) run() {
 	for delivery := range s.queue {
-		if err := DeliverWebhook(context.Background(), delivery.webhook, delivery.event); err != nil {
-			log.Debug().Err(err).Str("event_type", delivery.event.Type()).Str("webhook_id", delivery.webhook.ExternalId).Msg("webhook delivery failed")
+		if err := deliverWebhook(context.Background(), s.client, delivery.webhook, delivery.event); err != nil {
+			log.Warn().Err(err).Str("workspace_id", extensionString(delivery.event.Extensions(), "workspaceid")).Str("event_type", delivery.event.Type()).Str("webhook_id", delivery.webhook.ExternalId).Msg("webhook delivery failed")
 		}
 	}
 }
 
-var webhookClient = &http.Client{Timeout: webhookHTTPTimeout}
+var webhookClient = newWebhookClient()
+
+func newWebhookClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Resolve and connect directly so an environment proxy cannot bypass the
+	// destination check. ControlContext checks each address after DNS resolution.
+	transport.Proxy = nil
+	transport.DialContext = (&net.Dialer{
+		Timeout:        webhookHTTPTimeout,
+		ControlContext: common.CheckPublicAddress,
+	}).DialContext
+	return &http.Client{
+		Timeout:   webhookHTTPTimeout,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
 
 // DeliverWebhook posts one signed CloudEvent; non-2xx is an error.
 func DeliverWebhook(ctx context.Context, webhook types.WorkspaceWebhook, event cloudevents.Event) error {
+	return deliverWebhook(ctx, webhookClient, webhook, event)
+}
+
+func deliverWebhook(ctx context.Context, client *http.Client, webhook types.WorkspaceWebhook, event cloudevents.Event) error {
 	body, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -144,8 +171,11 @@ func DeliverWebhook(ctx context.Context, webhook types.WorkspaceWebhook, event c
 		req.Header.Set(webhookSignatureHeader, signWebhookBody(webhook.Secret, body))
 	}
 
-	resp, err := webhookClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, common.ErrPrivateAddress) {
+			return fmt.Errorf("webhook destination is not public; update the webhook URL to a public endpoint: %w", common.ErrPrivateAddress)
+		}
 		return err
 	}
 	defer resp.Body.Close()

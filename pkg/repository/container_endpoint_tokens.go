@@ -17,13 +17,22 @@ if current == false then
 else
   current = tonumber(current)
 end
-if current <= 0 then
+if current < 0 then return -1 end
+if current == 0 then
   redis.call("SET", KEYS[1], current, "EX", ttl_seconds)
   return -1
 end
 local next = current - 1
 redis.call("SET", KEYS[1], next, "EX", ttl_seconds)
 return next
+`)
+
+var refreshEndpointRequestTokenScript = redis.NewScript(`
+local current = tonumber(redis.call("GET", KEYS[1]))
+if current and current >= 0 then
+  return redis.call("PEXPIRE", KEYS[1], ARGV[1])
+end
+return 0
 `)
 
 var releaseEndpointRequestTokenScript = redis.NewScript(`
@@ -43,6 +52,9 @@ if current == false then
   current = max_tokens
 else
   current = tonumber(current)
+end
+if current < 0 then
+  return current
 end
 if current >= max_tokens then
   redis.call("SET", KEYS[1], max_tokens, "EX", ttl_seconds)
@@ -150,7 +162,7 @@ func (c *ContainerRedisRepository) RefreshEndpointRequestTokenTTL(ctx context.Co
 	if !ok {
 		return nil
 	}
-	return c.rdb.Expire(ctx, key, ttl).Err()
+	return refreshEndpointRequestTokenScript.Run(ctx, c.rdb, []string{key}, ttl.Milliseconds()).Err()
 }
 
 func (c *ContainerRedisRepository) SetEndpointRequestHeartbeat(ctx context.Context, workspaceName, stubId, taskId, containerId string, ttl time.Duration) error {

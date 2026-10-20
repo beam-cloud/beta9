@@ -13,9 +13,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -180,11 +182,75 @@ func TestBindingRefreshDoesNotBlockPolicyOrAccept(t *testing.T) {
 
 func TestHostnameDialRejectsPrivateAddresses(t *testing.T) {
 	for _, ip := range []string{"127.0.0.1", "10.0.0.1", "192.168.0.1", "169.254.169.254", "::1", "fd00:abcd::1", "fe80::1", "100.64.0.1", "0.0.0.0", "64:ff9b::a00:1", "64:ff9b::7f00:1"} {
-		require.ErrorIs(t, checkPublicAddress(context.Background(), "tcp", net.JoinHostPort(ip, "443"), nil), errPrivateAddress)
+		require.ErrorIs(t, common.CheckPublicAddress(context.Background(), "tcp", net.JoinHostPort(ip, "443"), nil), common.ErrPrivateAddress)
 	}
-	_, err := dialPublic(context.Background(), "tcp", "localhost:443")
+	_, err := (&Firewall{}).dialContext(context.Background(), "tcp", "localhost:443", nil)
 	require.Error(t, err)
-	require.NoError(t, checkPublicAddress(context.Background(), "tcp", "8.8.8.8:443", nil))
+	require.NoError(t, common.CheckPublicAddress(context.Background(), "tcp", "8.8.8.8:443", nil))
+}
+
+func TestEgressAddressAllowsExplicitPrivateCIDRs(t *testing.T) {
+	for _, tc := range []struct {
+		address string
+		allow   []string
+		ok      bool
+	}{
+		{"8.8.8.8:443", nil, true},
+		{"[2606:4700:4700::1111]:443", nil, true},
+		{"10.1.2.3:443", nil, false},
+		{"10.1.2.3:443", []string{"internal.example.com"}, false},
+		{"10.1.2.3:443", []string{"10.0.0.0/8"}, true},
+		{"172.16.0.1:443", []string{"172.16.0.0/12"}, true},
+		{"192.168.1.1:443", []string{"192.168.0.0/16"}, true},
+		{"192.168.1.1:443", []string{"10.0.0.0/8"}, false},
+		{"[fd00::1]:443", []string{"fc00::/7"}, true},
+		{"[fd00::1]:443", nil, false},
+		{"[::ffff:10.1.2.3]:443", []string{"10.0.0.0/8"}, true},
+		{"169.254.169.254:80", []string{"169.254.169.254/32"}, false},
+		{"127.0.0.1:80", []string{"127.0.0.0/8"}, false},
+		{"[::1]:80", []string{"::1/128"}, false},
+		{"[fe80::1]:80", []string{"fe80::/10"}, false},
+		{"100.64.0.1:80", []string{"100.64.0.0/10"}, false},
+		{"[64:ff9b::a9fe:a9fe]:80", []string{"64:ff9b::/96"}, false},
+	} {
+		t.Run(tc.address+fmt.Sprint(tc.allow), func(t *testing.T) {
+			err := checkEgressAddress(tc.address, tc.allow)
+			if tc.ok {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, common.ErrPrivateAddress)
+			}
+		})
+	}
+}
+
+func TestDirectIPDialRejectsPrivateDestination(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	dst, err := net.ResolveTCPAddr("tcp", upstream.Listener.Addr().String())
+	require.NoError(t, err)
+	for _, policy := range []Policy{{Open: true}, {AllowList: []string{"127.0.0.0/8"}}} {
+		f := NewFirewall(types.EgressConfig{}, []string{"127.0.0.1"}, Dependencies{
+			OriginalDestination: func(net.Conn) (*net.TCPAddr, error) { return dst, nil },
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		require.NoError(t, f.Register("box", []string{"127.0.0.1"}, policy))
+		require.NoError(t, f.Start(ctx))
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.config.OtherPort))
+		require.NoError(t, err)
+		conn.SetDeadline(time.Now().Add(time.Second))
+		fmt.Fprint(conn, "GET / HTTP/1.0\r\n\r\n")
+		_, err = http.ReadResponse(bufio.NewReader(conn), nil)
+		require.Error(t, err)
+		conn.Close()
+		cancel()
+		f.Stop()
+	}
+	require.Zero(t, requests.Load(), "private upstream must not receive a request")
 }
 
 func TestSelectiveTLSInterceptionAndHTTP2(t *testing.T) {

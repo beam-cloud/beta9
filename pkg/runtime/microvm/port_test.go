@@ -82,6 +82,13 @@ func TestPortForwardsIPv6Loopback(t *testing.T) {
 		t.Skipf("IPv6 loopback unavailable: %v", err)
 	}
 	defer target.Close()
+	// Reserve the IPv4 port until the tunnel fixture is ready, so neither it
+	// nor an unrelated listener can intercept the IPv6 fallback test.
+	ipv4, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: target.Addr().(*net.TCPAddr).Port})
+	if err != nil {
+		t.Skipf("IPv4 port already occupied: %v", err)
+	}
+	defer ipv4.Close()
 	go func() {
 		conn, err := target.Accept()
 		if err == nil {
@@ -90,6 +97,9 @@ func TestPortForwardsIPv6Loopback(t *testing.T) {
 		}
 	}()
 	client, done := portTestStream(t)
+	if err := ipv4.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := ConnectPort(client, uint32(target.Addr().(*net.TCPAddr).Port)); err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +118,8 @@ func TestPortRejectsFailedConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := uint32(target.Addr().(*net.TCPAddr).Port)
-	target.Close()
 	client, done := portTestStream(t)
+	target.Close()
 	if err := ConnectPort(client, port); err == nil {
 		t.Fatal("a failed TCP connection must fail the handshake")
 	}
