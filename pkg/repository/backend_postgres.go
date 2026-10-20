@@ -1075,55 +1075,35 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 // Stub
 
 func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error) {
-	var stub types.Stub
-
-	// Serialize config to JSON
 	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return types.Stub{}, err
 	}
 
-	// @Luke slightly concerned that this is can get the wrong stub. If name + stubtype + objectId + config matches (Likely can happen from clone but haven't seen it yet)
-	if !forceCreate {
-		// Query to check if a stub with the same name, type, object_id, and config exists
-		queryGet := `
-    SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id
-    FROM stub
-    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb AND workspace_id = $5 AND app_id = $6;
-    `
-		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON), workspaceId, appId)
-		if err == nil {
-			queryTouch := `
-    UPDATE stub
-    SET updated_at = CURRENT_TIMESTAMP
-    WHERE id = $1
-    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id;
-    `
-			if err := r.client.GetContext(ctx, &stub, queryTouch, stub.Id); err != nil {
-				return types.Stub{}, err
-			}
-			if err := r.updateAppActivity(ctx, appId); err != nil {
-				return stub, err
-			}
-			return stub, nil
-		}
-	}
-
-	// Stub not found, create a new one
-	queryCreate := `
-    INSERT INTO stub (name, type, config, object_id, workspace_id, app_id)
-    VALUES ($1, $2, $3, $4, $5, $6)
-    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id;
-  `
-	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, workspaceId, appId); err != nil {
-		return types.Stub{}, err
-	}
-
-	if err := r.updateAppActivity(ctx, appId); err != nil {
-		return stub, err
-	}
-
-	return stub, nil
+	// Resolve, create/touch, and update app activity in one transaction and
+	// round trip. Concurrent VM starts otherwise queue for a connection three times.
+	const columns = `id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id`
+	query := `
+	WITH existing AS MATERIALIZED (
+		SELECT id FROM stub
+		WHERE name=$1 AND type=$2 AND object_id=$3 AND config::jsonb=$4::jsonb
+			AND workspace_id=$5 AND app_id=$6 AND NOT $7
+		LIMIT 1
+	), created AS (
+		INSERT INTO stub (name, type, config, object_id, workspace_id, app_id)
+		SELECT $1, $2, $4, $3, $5, $6 WHERE NOT EXISTS (SELECT 1 FROM existing)
+		RETURNING ` + columns + `
+	), touched AS (
+		UPDATE stub SET updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT id FROM existing)
+		RETURNING ` + columns + `
+	), activity AS (
+		UPDATE app SET updated_at=NOW() WHERE id=$6
+			AND (updated_at IS NULL OR updated_at < NOW() - INTERVAL '1 second')
+	)
+	SELECT * FROM created UNION ALL SELECT * FROM touched`
+	var stub types.Stub
+	err = r.client.GetContext(ctx, &stub, query, name, stubType, objectId, string(configJSON), workspaceId, appId, forceCreate)
+	return stub, err
 }
 
 func (r *PostgresBackendRepository) UpdateStubConfig(ctx context.Context, stubId uint, config *types.StubConfigV1) error {
