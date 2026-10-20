@@ -836,6 +836,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
+		rb.cancelInFlightTask(req.task, types.TaskBackendUnavailable)
 		req.ctx.JSON(http.StatusBadGateway, map[string]interface{}{
 			"error": "Backend route unavailable",
 		})

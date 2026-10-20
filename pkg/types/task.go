@@ -29,6 +29,7 @@ const (
 	TaskExceededRetryLimit    TaskCancellationReason = "exceeded_retry_limit"
 	TaskRequestCancelled      TaskCancellationReason = "request_cancelled"
 	TaskInvalidRequestPayload TaskCancellationReason = "invalid_request_payload"
+	TaskBackendUnavailable    TaskCancellationReason = "backend_unavailable"
 )
 
 type TaskInterface interface {

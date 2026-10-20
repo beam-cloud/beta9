@@ -3,6 +3,8 @@ package endpoint
 import (
 	"context"
 	stdjson "encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,9 +15,59 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
+
+type endpointFailureBackend struct {
+	repository.BackendRepository
+	task types.Task
+}
+
+func (b *endpointFailureBackend) GetTask(context.Context, string) (*types.Task, error) {
+	return &b.task, nil
+}
+
+func (b *endpointFailureBackend) UpdateTask(_ context.Context, _ string, updated types.Task) (*types.Task, error) {
+	b.task = updated
+	return &b.task, nil
+}
+
+func TestBackendFailureCompletesTask(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tasks := repository.NewTaskRedisRepository(newEndpointBufferTestRedis(t))
+	msg := &types.TaskMessage{TaskId: "task", StubId: "stub", WorkspaceName: "workspace"}
+	if err := tasks.SetTaskState(ctx, msg.WorkspaceName, msg.StubId, msg.TaskId, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := task.NewDispatcher(ctx, tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &endpointFailureBackend{task: types.Task{Status: types.TaskStatusRunning}}
+	response := httptest.NewRecorder()
+	rb := &RequestBuffer{
+		ctx: ctx, isASGI: true,
+		stubConfig: &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 1}},
+		httpClient: &http.Client{Transport: &http.Transport{
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("backend unavailable")
+			},
+		}},
+	}
+	rb.handleHttpRequest(&request{
+		ctx:  echo.New().NewContext(httptest.NewRequest(http.MethodGet, "/", nil), response),
+		task: &EndpointTask{msg: msg, es: &HttpEndpointService{backendRepo: backend, taskDispatcher: dispatcher}},
+	}, container{address: "backend:8001"})
+	if response.Code != http.StatusBadGateway || backend.task.Status != types.TaskStatusError {
+		t.Fatalf("backend failure: HTTP %d, task status %s", response.Code, backend.task.Status)
+	}
+	if count, err := tasks.TasksInFlight(ctx, msg.WorkspaceName, msg.StubId); err != nil || count != 0 {
+		t.Fatalf("tasks left in flight: %d, error: %v", count, err)
+	}
+}
 
 func TestBackendHTTPURLUsesPlaceholderHostForRouteAddresses(t *testing.T) {
 	routeAddress := types.BackendRouteAddress("machine:worker:container:container:8001")
