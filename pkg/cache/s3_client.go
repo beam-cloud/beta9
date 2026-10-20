@@ -65,6 +65,7 @@ func NewS3Client(ctx context.Context, sourceConfig S3SourceConfig, serverConfig 
 
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = sourceConfig.ForcePathStyle
+		o.DisableLogOutputChecksumValidationSkipped = true
 	})
 	return &S3Client{
 		Client:              s3Client,

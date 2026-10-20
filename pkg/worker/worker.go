@@ -1397,12 +1397,13 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 		return true, nil
 	}
 
-	// Stop container if it is "orphaned" - meaning it's running but has no associated state.
-	getStateCtx, cancelGetState := context.WithTimeout(ctx, containerRepositoryAttemptTimeout)
-	getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(getStateCtx, &pb.GetContainerStateRequest{
+	// Allow a drained gateway connection to complete its TCP/TLS handshake.
+	// Bound the whole heartbeat to half its refresh interval.
+	ctx, cancel := context.WithTimeout(ctx, containerStatusUpdateInterval/2)
+	defer cancel()
+	getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(ctx, &pb.GetContainerStateRequest{
 		ContainerId: request.ContainerId,
 	}))
-	cancelGetState()
 	if err != nil {
 		notFoundErr := &types.ErrContainerStateNotFound{}
 		if notFoundErr.From(err) {
@@ -1483,9 +1484,7 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 	if exitCode, _ = instance.lifecycleState(); exitCode >= 0 {
 		return true, nil
 	}
-	updateCtx, cancelUpdate := context.WithTimeout(ctx, containerRepositoryAttemptTimeout)
-	defer cancelUpdate()
-	_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(updateCtx, &pb.UpdateContainerStatusRequest{
+	_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(ctx, &pb.UpdateContainerStatusRequest{
 		ContainerId:   request.ContainerId,
 		Status:        string(state.Status),
 		ExpirySeconds: expirySeconds,

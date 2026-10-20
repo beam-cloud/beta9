@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 )
 
 // qmpClient is a minimal QMP client for qemu-storage-daemon. It supports the
@@ -59,12 +60,16 @@ func (c *qmpClient) Close() error {
 	return nil
 }
 
-func (c *qmpClient) decode(ctx context.Context, v any) error {
+func qmpDeadline(ctx context.Context) time.Time {
 	deadline := time.Now().Add(qmpDialTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
+		return d
 	}
-	_ = c.conn.SetReadDeadline(deadline)
+	return deadline
+}
+
+func (c *qmpClient) decode(ctx context.Context, v any) error {
+	_ = c.conn.SetReadDeadline(qmpDeadline(ctx))
 	return c.dec.Decode(v)
 }
 
@@ -74,7 +79,8 @@ type qmpError struct {
 }
 
 func (c *qmpClient) execute(ctx context.Context, command string, arguments any) (json.RawMessage, error) {
-	request := map[string]any{"execute": command}
+	id := uuid.NewString()
+	request := map[string]any{"execute": command, "id": id}
 	if arguments != nil {
 		request["arguments"] = arguments
 	}
@@ -82,18 +88,16 @@ func (c *qmpClient) execute(ctx context.Context, command string, arguments any) 
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(qmpDialTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = c.conn.SetWriteDeadline(deadline)
+	_ = c.conn.SetWriteDeadline(qmpDeadline(ctx))
 	if _, err := c.conn.Write(payload); err != nil {
 		return nil, fmt.Errorf("write qmp command %s: %w", command, err)
 	}
 
-	// Skip asynchronous events until we see a return or error for our command.
+	// A timed-out command can reply after the monitor reconnects. Match IDs
+	// across connections so its result cannot stand in for a recovery query.
 	for {
 		var response struct {
+			ID     string           `json:"id"`
 			Return json.RawMessage  `json:"return"`
 			Error  *qmpError        `json:"error"`
 			Event  *json.RawMessage `json:"event"`
@@ -101,7 +105,7 @@ func (c *qmpClient) execute(ctx context.Context, command string, arguments any) 
 		if err := c.decode(ctx, &response); err != nil {
 			return nil, fmt.Errorf("read qmp response for %s: %w", command, err)
 		}
-		if response.Event != nil {
+		if response.Event != nil || response.ID != id {
 			continue
 		}
 		if response.Error != nil {

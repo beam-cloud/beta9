@@ -130,6 +130,7 @@ func NewS3StoreWithOptions(config types.S3ImageRegistryConfig, opts S3StoreOptio
 
 	return &S3Store{
 		client: s3.NewFromConfig(cfg, func(o *s3.Options) {
+			o.DisableLogOutputChecksumValidationSkipped = true
 			if config.ForcePathStyle {
 				o.UsePathStyle = true
 			}

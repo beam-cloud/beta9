@@ -201,7 +201,7 @@ func (s *delayedReadyGoProcServer) Ready(ctx context.Context, _ *goprocpb.ReadyR
 	}
 }
 
-func TestWaitForProcessManagerAllowsSlowReadinessAfterFastProbes(t *testing.T) {
+func TestWaitForProcessManagerAcceptsReadyReplyWithinProbeBudget(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	server := grpc.NewServer()
@@ -212,11 +212,12 @@ func TestWaitForProcessManagerAllowsSlowReadinessAfterFastProbes(t *testing.T) {
 	instance := &ContainerInstance{
 		ContainerAddressMap: map[int32]string{types.WorkerSandboxProcessManagerPort: listener.Addr().String()},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	client, ready, _ := (&Worker{}).waitForProcessManager(ctx, "slow-rpc", instance)
-	require.True(t, ready, "a guest slower than the fast probe deadline must still become usable")
-	require.Positive(t, service.cancelled.Load())
+	client, ready, stats := (&Worker{}).waitForProcessManager(ctx, "slow-rpc", instance)
+	require.True(t, ready, "a ready reply within the probe budget must not wait behind a second of cancelled probes")
+	require.Equal(t, 1, stats.Attempts)
+	require.Zero(t, service.cancelled.Load())
 	t.Cleanup(func() { _ = client.Cleanup() })
 	// The short readiness deadline must not become the client's lifetime.
 	time.Sleep(goprocReadyProbeTimeout)
@@ -396,7 +397,7 @@ func TestNewProcessManagerClientKeepsRetryableErrorWhenFallbackFailsHard(t *test
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	client, err := newProcessManagerClientFromEndpoints(ctx, endpoints, goprocReadyProbeTimeout)
+	client, err := newProcessManagerClientFromEndpoints(ctx, endpoints)
 	require.Nil(t, client)
 	require.Error(t, err)
 	require.True(t, isProcessManagerDialFailure(err), "expected the primary's retryable error, got: %v", err)

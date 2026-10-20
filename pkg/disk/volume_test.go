@@ -81,17 +81,22 @@ func (f *fakeQMP) handle(conn net.Conn) {
 	defer conn.Close()
 	fmt.Fprintf(conn, `{"QMP":{"version":{}}}`)
 	dec := json.NewDecoder(conn)
+	enc := json.NewEncoder(conn)
 	for {
 		var request struct {
+			ID        json.RawMessage `json:"id"`
 			Execute   string          `json:"execute"`
 			Arguments json.RawMessage `json:"arguments"`
 		}
 		if err := dec.Decode(&request); err != nil {
 			return
 		}
+		reply := func(key string, value any) {
+			_ = enc.Encode(map[string]any{"id": request.ID, key: value})
+		}
 		switch request.Execute {
 		case types.QMPCommandCapabilities, types.QMPCommandQuit, types.QMPCommandBlockdevAdd:
-			fmt.Fprintf(conn, `{"return":{}}`)
+			reply("return", struct{}{})
 		case types.QMPCommandBlockdevDel:
 			var args struct {
 				NodeName string `json:"node-name"`
@@ -106,12 +111,12 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			}
 			f.mu.Unlock()
 			if failed {
-				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"injected node deletion failure"}}`)
+				reply("error", qmpError{Class: "GenericError", Desc: "injected node deletion failure"})
 			} else {
-				fmt.Fprintf(conn, `{"return":{}}`)
+				reply("return", struct{}{})
 			}
 		case types.QMPCommandQueryBlockstats:
-			fmt.Fprintf(conn, `{"return":[{"node-name":"file-fmt-0","stats":{"wr_highest_offset":%d}}]}`, f.writtenB.Load())
+			reply("return", []any{map[string]any{"node-name": "file-fmt-0", "stats": map[string]any{"wr_highest_offset": f.writtenB.Load()}}})
 		case types.QMPCommandQueryNamedBlockNodes:
 			// Nodes without an image fixture stand for committed pivots.
 			f.mu.Lock()
@@ -137,8 +142,7 @@ func (f *fakeQMP) handle(conn net.Conn) {
 				entries = append(entries, entry)
 			}
 			f.mu.Unlock()
-			payload, _ := json.Marshal(map[string]any{"return": entries})
-			conn.Write(payload)
+			reply("return", entries)
 		case types.QMPCommandBlockCommit:
 			var args struct {
 				JobID  string `json:"job-id"`
@@ -178,7 +182,7 @@ func (f *fakeQMP) handle(conn net.Conn) {
 				}
 			}
 			f.mu.Unlock()
-			fmt.Fprintf(conn, `{"return":{}}`)
+			reply("return", struct{}{})
 		case types.QMPCommandQueryJobs:
 			f.mu.Lock()
 			var job *fakeJob
@@ -193,13 +197,13 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			f.mu.Unlock()
 			switch {
 			case job == nil:
-				fmt.Fprintf(conn, `{"return":[]}`)
+				reply("return", []any{})
 			case job.running > 0:
-				fmt.Fprintf(conn, `{"return":[{"id":%q,"type":"commit","status":"running","current-progress":%d}]}`, job.id, job.progress+1)
+				reply("return", []any{map[string]any{"id": job.id, "type": "commit", "status": "running", "current-progress": job.progress + 1}})
 			case job.err != "":
-				fmt.Fprintf(conn, `{"return":[{"id":%q,"type":"commit","status":"concluded","error":%q}]}`, job.id, job.err)
+				reply("return", []any{map[string]any{"id": job.id, "type": "commit", "status": "concluded", "error": job.err}})
 			default:
-				fmt.Fprintf(conn, `{"return":[{"id":%q,"type":"commit","status":"concluded"}]}`, job.id)
+				reply("return", []any{map[string]any{"id": job.id, "type": "commit", "status": "concluded"}})
 			}
 		case types.QMPCommandJobCancel:
 			f.mu.Lock()
@@ -208,7 +212,7 @@ func (f *fakeQMP) handle(conn net.Conn) {
 				f.job.running, f.job.err = 0, "Operation canceled"
 			}
 			f.mu.Unlock()
-			fmt.Fprintf(conn, `{"return":{}}`)
+			reply("return", struct{}{})
 		case types.QMPCommandJobDismiss:
 			f.mu.Lock()
 			failed := f.failDismiss
@@ -217,26 +221,26 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			}
 			f.mu.Unlock()
 			if failed {
-				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"injected dismissal failure"}}`)
+				reply("error", qmpError{Class: "GenericError", Desc: "injected dismissal failure"})
 			} else {
-				fmt.Fprintf(conn, `{"return":{}}`)
+				reply("return", struct{}{})
 			}
 		case types.QMPCommandTransaction:
 			f.mu.Lock()
 			busy := f.job != nil
 			f.mu.Unlock()
 			if busy {
-				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"block device is in use by block job"}}`)
+				reply("error", qmpError{Class: "GenericError", Desc: "block device is in use by block job"})
 				continue
 			}
 			if f.failPivots.Load() {
-				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"injected pivot failure"}}`)
+				reply("error", qmpError{Class: "GenericError", Desc: "injected pivot failure"})
 				continue
 			}
 			f.pivots.Add(1)
-			fmt.Fprintf(conn, `{"return":{}}`)
+			reply("return", struct{}{})
 		default:
-			fmt.Fprintf(conn, `{"error":{"class":"CommandNotFound","desc":%q}}`, request.Execute)
+			reply("error", qmpError{Class: "CommandNotFound", Desc: request.Execute})
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -390,72 +391,86 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
 
-	createdAt := time.Now().Add(-time.Hour)
 	updatedAt := time.Now()
-	stubRows := []string{
-		"id",
-		"external_id",
-		"name",
-		"type",
-		"config",
-		"config_version",
-		"object_id",
-		"workspace_id",
-		"created_at",
-		"updated_at",
-		"app_id",
-	}
-
-	mock.ExpectQuery(`app_id = \$6`).
-		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11), uint(13)).
-		WillReturnRows(sqlmock.NewRows(stubRows).AddRow(
-			uint(5),
-			"stub-external",
-			"stub-name",
-			types.StubTypeFunction,
-			`{"runtime":"python3"}`,
-			uint(1),
-			uint(7),
-			uint(11),
-			createdAt,
-			createdAt,
-			uint(13),
-		))
-	mock.ExpectQuery("UPDATE stub").
-		WithArgs(uint(5)).
-		WillReturnRows(sqlmock.NewRows(stubRows).AddRow(
-			uint(5),
-			"stub-external",
-			"stub-name",
-			types.StubTypeFunction,
-			`{"runtime":"python3"}`,
-			uint(1),
-			uint(7),
-			uint(11),
-			createdAt,
-			updatedAt,
-			uint(13),
-		))
-	mock.ExpectExec(`UPDATE app SET updated_at = NOW\(\) WHERE id = \$1 AND \(updated_at IS NULL OR updated_at < NOW\(\) - INTERVAL '1 second'\)`).
-		WithArgs(uint(13)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	stub, err := postgresRepo.GetOrCreateStub(
-		context.Background(),
-		"stub-name",
-		string(types.StubTypeFunction),
-		types.StubConfigV1{},
-		7,
-		11,
-		false,
-		13,
-	)
+	mock.ExpectQuery(`WITH existing AS MATERIALIZED`).
+		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11), uint(13), false).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "workspace_id", "updated_at"}).AddRow(5, 11, updatedAt))
+	stub, err := postgresRepo.GetOrCreateStub(context.Background(), "stub-name", string(types.StubTypeFunction), types.StubConfigV1{}, 7, 11, false, 13)
 
 	require.NoError(t, err)
 	require.Equal(t, uint(5), stub.Id)
 	require.Equal(t, uint(11), stub.WorkspaceId)
 	require.True(t, stub.UpdatedAt.Time.Equal(updatedAt))
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetOrCreateStubIntegration(t *testing.T) {
+	dsn := os.Getenv("BETA9_VM_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set BETA9_VM_TEST_DSN for a development database")
+	}
+	db, err := sqlx.Connect("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	// Temporary tables on one session exercise the migrated column types
+	// without reading or modifying existing workspace records.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	_, err = db.Exec(`
+		CREATE TEMP TABLE app (LIKE public.app INCLUDING DEFAULTS);
+		CREATE TEMP TABLE stub (LIKE public.stub INCLUDING DEFAULTS);
+		CREATE TEMP SEQUENCE stub_test_id;
+		ALTER TABLE stub ALTER COLUMN id SET DEFAULT nextval('stub_test_id');
+		INSERT INTO app (id, name, workspace_id, description, updated_at)
+		VALUES (1, 'stub-test', 1, '', NOW() - INTERVAL '1 hour'),
+		       (2, 'stub-test-other', 1, '', NOW() - INTERVAL '1 hour');`)
+	require.NoError(t, err)
+	repo := &PostgresBackendRepository{client: db}
+	ctx := context.Background()
+	create := func(app uint, force bool, image string) (types.Stub, error) {
+		config := types.StubConfigV1{Runtime: types.Runtime{ImageId: image}}
+		return repo.GetOrCreateStub(ctx, "stub-test", string(types.StubTypeVM), config, 1, 1, force, app)
+	}
+	first, err := create(1, false, "stub-test")
+	require.NoError(t, err)
+
+	t.Run("reuse updates activity", func(t *testing.T) {
+		_, err := db.Exec(`UPDATE stub SET updated_at=NOW() - INTERVAL '1 hour' WHERE id=$1`, first.Id)
+		require.NoError(t, err)
+		reused, err := create(1, false, "stub-test")
+		require.NoError(t, err)
+		require.Equal(t, first.Id, reused.Id)
+		require.Equal(t, first.CreatedAt, reused.CreatedAt)
+		require.WithinDuration(t, time.Now(), reused.UpdatedAt.Time, time.Minute)
+		var active bool
+		require.NoError(t, db.Get(&active, `SELECT updated_at > NOW() - INTERVAL '1 minute' FROM app WHERE id=1`))
+		require.True(t, active)
+	})
+	for _, test := range []struct {
+		name, image string
+		app         uint
+		force       bool
+	}{
+		{name: "different app", image: "stub-test", app: 2},
+		{name: "forced creation", image: "stub-test", app: 1, force: true},
+		{name: "different config", image: "different-image", app: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub, err := create(test.app, test.force, test.image)
+			require.NoError(t, err)
+			require.NotEqual(t, first.Id, stub.Id)
+		})
+	}
+	t.Run("activity failure rolls back creation", func(t *testing.T) {
+		_, err := db.Exec(`UPDATE app SET updated_at='2000-01-01';
+			ALTER TABLE app ADD CHECK (updated_at < '2020-01-01');`)
+		require.NoError(t, err)
+		_, err = create(1, true, "stub-test")
+		require.Error(t, err)
+		var count int
+		require.NoError(t, db.Get(&count, `SELECT count(*) FROM stub`))
+		require.Equal(t, 4, count)
+	})
 }
 
 func TestAppListingsSkipVMApp(t *testing.T) {

@@ -123,7 +123,8 @@ func (f *Firewall) TrustBundle(id, directory string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(directory, "ca-certificates.crt")
-	bundle := bytes.Join([][]byte{roots, ca.pem}, []byte("\n"))
+	// Guest init can find its managed CA without parsing every system root.
+	bundle := bytes.Join([][]byte{ca.pem, roots}, []byte("\n"))
 	if err := os.WriteFile(path, bundle, 0644); err != nil {
 		return "", err
 	}

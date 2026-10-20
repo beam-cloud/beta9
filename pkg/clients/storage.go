@@ -42,6 +42,26 @@ type StorageClient struct {
 	presignClient *s3.PresignClient
 }
 
+type storageClientConfig struct {
+	region, accessKey, secretKey    string
+	endpointURL, presignEndpointURL string
+}
+
+func (c storageClientConfig) newClient(ctx context.Context) (*StorageClient, error) {
+	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithHTTPClient(common.AWSHTTPClient()),
+		config.WithRegion(c.region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(c.accessKey, c.secretKey, "")),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+	return &StorageClient{
+		s3Client:      newS3Client(cfg, c.endpointURL),
+		presignClient: s3.NewPresignClient(newS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL))),
+	}, nil
+}
+
 type WorkspaceStorageClient struct {
 	WorkspaceName    string
 	WorkspaceStorage *types.WorkspaceStorage
@@ -62,70 +82,38 @@ func NewWorkspaceStorageClientWithDefaultPresignEndpoint(ctx context.Context, wo
 }
 
 func NewWorkspaceStorageClientWithPresignEndpoint(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage, presignEndpointUrl string) (*WorkspaceStorageClient, error) {
-	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithHTTPClient(common.AWSHTTPClient()),
-		config.WithRegion(*workspaceStorage.Region),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			*workspaceStorage.AccessKey,
-			*workspaceStorage.SecretKey,
-			"",
-		)),
-	)
+	client, err := (storageClientConfig{
+		region:             *workspaceStorage.Region,
+		accessKey:          *workspaceStorage.AccessKey,
+		secretKey:          *workspaceStorage.SecretKey,
+		endpointURL:        aws.ToString(workspaceStorage.EndpointUrl),
+		presignEndpointURL: presignEndpointUrl,
+	}).newClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+		return nil, err
 	}
-
-	endpointUrl := ""
-	if workspaceStorage.EndpointUrl != nil {
-		endpointUrl = *workspaceStorage.EndpointUrl
-	}
-
-	s3Client := newS3Client(cfg, endpointUrl)
-	presignClient := s3.NewPresignClient(newS3Client(cfg, presignEndpointForStorage(endpointUrl, presignEndpointUrl)))
-
 	return &WorkspaceStorageClient{
 		WorkspaceName:    workspaceName,
 		WorkspaceStorage: workspaceStorage,
-		StorageClient: &StorageClient{
-			s3Client:      s3Client,
-			presignClient: presignClient,
-		},
+		StorageClient:    client,
 	}, nil
 }
 
 func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*StorageClient, error) {
-
-	s3Cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithHTTPClient(common.AWSHTTPClient()),
-		config.WithRegion(cfg.Storage.WorkspaceStorage.DefaultRegion),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			cfg.Storage.WorkspaceStorage.DefaultAccessKey,
-			cfg.Storage.WorkspaceStorage.DefaultSecretKey,
-			"",
-		)),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
-	}
-
-	s3Client := newS3Client(s3Cfg, cfg.Storage.WorkspaceStorage.DefaultEndpointUrl)
-	presignClient := s3.NewPresignClient(newS3Client(
-		s3Cfg,
-		presignEndpointForStorage(
-			cfg.Storage.WorkspaceStorage.DefaultEndpointUrl,
-			cfg.Storage.WorkspaceStorage.DefaultPresignedEndpointUrl,
-		),
-	))
-
-	return &StorageClient{
-		s3Client:      s3Client,
-		presignClient: presignClient,
-	}, nil
+	storage := cfg.Storage.WorkspaceStorage
+	return (storageClientConfig{
+		region:             storage.DefaultRegion,
+		accessKey:          storage.DefaultAccessKey,
+		secretKey:          storage.DefaultSecretKey,
+		endpointURL:        storage.DefaultEndpointUrl,
+		presignEndpointURL: storage.DefaultPresignedEndpointUrl,
+	}).newClient(ctx)
 }
 
 func newS3Client(cfg aws.Config, endpointUrl string) *s3.Client {
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.Retryer = storageDNSRetryer{o.Retryer}
+		o.DisableLogOutputChecksumValidationSkipped = true
 		if endpointUrl != "" {
 			o.BaseEndpoint = aws.String(endpointUrl)
 			o.UsePathStyle = true

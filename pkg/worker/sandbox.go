@@ -33,8 +33,6 @@ const (
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyProbeTimeout       = 50 * time.Millisecond
-	goprocFastReadyProbeTimeout   = 10 * time.Millisecond
-	goprocFastReadyWindow         = time.Second
 	goprocSlowReadyLogInterval    = 30 * time.Second
 	goprocInitialBackoff          = 5 * time.Millisecond
 	goprocMaxBackoff              = 15 * time.Millisecond
@@ -649,12 +647,7 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 
 	for {
 		stats.Attempts++
-		probeTimeout := goprocReadyProbeTimeout
-		fastProbe := time.Since(start) < goprocFastReadyWindow
-		if fastProbe {
-			probeTimeout = goprocFastReadyProbeTimeout
-		}
-		client, err := newProcessManagerClientWithProbeTimeout(ctx, instance, probeTimeout)
+		client, err := newProcessManagerClient(ctx, instance)
 		if err == nil {
 			log.Info().
 				Str("container_id", containerId).
@@ -682,13 +675,7 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 			stats.LastError = err.Error()
 			return nil, false, stats
 		}
-		// Before a microVM configures its NIC, ARP can hold a dial until
-		// the probe deadline. Keep early probes short so that a listening
-		// guest does not wait behind an obsolete dial and a long backoff.
-		// Slow guests retain the usual probe budget and retry cadence.
-		if !fastProbe {
-			backoff = nextProcessManagerBackoff(backoff)
-		}
+		backoff = nextProcessManagerBackoff(backoff)
 	}
 }
 
@@ -734,15 +721,11 @@ func nextProcessManagerBackoff(delay time.Duration) time.Duration {
 }
 
 func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
-	return newProcessManagerClientWithProbeTimeout(ctx, instance, goprocReadyProbeTimeout)
-}
-
-func newProcessManagerClientWithProbeTimeout(ctx context.Context, instance *ContainerInstance, probeTimeout time.Duration) (*goproc.GoProcClient, error) {
 	endpoints := sandboxProcessManagerEndpoints(instance)
 	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("sandbox process manager address unavailable")
+		return nil, errors.New("sandbox process manager address unavailable")
 	}
-	return newProcessManagerClientFromEndpoints(ctx, endpoints, probeTimeout)
+	return newProcessManagerClientFromEndpoints(ctx, endpoints)
 }
 
 // newProcessManagerClientFromEndpoints tries each endpoint in order and returns
@@ -751,32 +734,23 @@ func newProcessManagerClientWithProbeTimeout(ctx context.Context, instance *Cont
 // briefly refuses on its container IP while its published host-mapped address
 // fails hard (the worker itself cannot reach a PREROUTING-only DNAT), and the
 // later hard failure must not turn the transient refusal into a fatal exec.
-func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint, probeTimeout time.Duration) (*goproc.GoProcClient, error) {
+func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint) (*goproc.GoProcClient, error) {
 	var lastErr, retryableErr error
-	recordErr := func(err error) {
+	for _, endpoint := range endpoints {
+		client, err := goproc.NewGoProcClient(ctx, endpoint.dialHost(), uint(endpoint.port))
+		if err == nil {
+			probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+			err = client.ReadyContext(probeCtx)
+			cancel()
+			if err == nil {
+				return client, nil
+			}
+			_ = client.Cleanup()
+		}
 		lastErr = err
 		if retryableErr == nil && isProcessManagerDialFailure(err) {
 			retryableErr = err
 		}
-	}
-
-	for _, endpoint := range endpoints {
-		client, err := goproc.NewGoProcClient(ctx, endpoint.dialHost(), uint(endpoint.port))
-		if err != nil {
-			recordErr(err)
-			continue
-		}
-
-		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		err = client.ReadyContext(probeCtx)
-		cancel()
-		if err != nil {
-			_ = client.Cleanup()
-			recordErr(err)
-			continue
-		}
-
-		return client, nil
 	}
 
 	if retryableErr != nil {
