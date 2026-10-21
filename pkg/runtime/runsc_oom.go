@@ -187,7 +187,11 @@ func runscOutputPipe(output OutputWriter) (*os.File, func(), error) {
 		defer reader.Close()
 		_, _ = io.Copy(output, reader)
 	}()
-	return writer, func() { _ = writer.Close(); <-done }, nil
+	return writer, func() {
+		_ = writer.Close()
+		_ = reader.SetReadDeadline(time.Now().Add(runscOutputDrainTimeout))
+		<-done
+	}, nil
 }
 
 func (r *Runsc) waitForExit(ctx context.Context, containerID string, dockerEnabled bool, counter *CgroupOOMWatcher, initialOOMs int64) (int, error) {
@@ -275,14 +279,20 @@ func (r *Runsc) Wait(ctx context.Context, containerID string) (int, error) {
 	defer os.Remove(r.finalMetricsPath(containerID))
 	counter := &CgroupOOMWatcher{cgroupRoot: cgroupV2Root, cgroupPath: containerID}
 	code, err := r.waitForExit(ctx, containerID, false, counter, 0)
+	r.drainRestoreOutput(containerID)
+	return code, err
+}
+
+// Called only after exit or a successful delete, after capturing OOM evidence.
+func (r *Runsc) drainRestoreOutput(containerID string) {
 	if output, ok := r.restoreOutput.LoadAndDelete(containerID); ok {
-		done := output.(chan runscCommandResult)
+		output := output.(*runscRestoreOutput)
 		select {
-		case <-done:
+		case <-output.done:
 		default:
 			r.forceDelete(containerID, false)
-			<-done
+			_ = output.process.Kill()
+			<-output.done
 		}
 	}
-	return code, err
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -342,4 +344,63 @@ esac
 	close(gate)
 	require.Equal(t, 42, receive(t, done))
 	require.Equal(t, "first-line\nfinal-line\n", output.buffer.String())
+}
+
+func TestRunscBoundsOrphanedOutput(t *testing.T) {
+	for _, action := range []string{"run", "wait", "delete", "no wait"} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			path := filepath.Join(root, "runsc")
+			require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+ *" run "*|*" restore "*) sleep 60 & echo $! > "$0.child"; echo final-output ;;
+ *" state "*) echo '{"pid":4321,"status":"running"}' ;;
+ *" wait --restore "*|*" delete "*) exit 0 ;;
+ *" wait "*) echo '{"exitStatus":42}' ;;
+esac
+`), 0o755))
+			t.Cleanup(func() {
+				data, _ := os.ReadFile(path + ".child")
+				if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 1 {
+					process, _ := os.FindProcess(pid)
+					_ = process.Kill()
+				}
+			})
+			var output bytes.Buffer
+			rt := &Runsc{cfg: Config{RunscPath: path, RunscRoot: root}}
+			bundle := writeRunscBundle(t, root, false)
+			if action != "run" {
+				_, err := rt.Restore(t.Context(), "container", &RestoreOpts{BundlePath: bundle, OutputWriter: &output})
+				require.NoError(t, err)
+			}
+			finished := make(chan struct{})
+			go func() {
+				switch action {
+				case "run":
+					code, err := rt.Run(t.Context(), "container", bundle, &RunOpts{OutputWriter: &output})
+					if err != nil || code != 42 {
+						t.Errorf("exit = %d, %v; want 42, nil", code, err)
+					}
+				case "wait":
+					code, err := rt.Wait(t.Context(), "container")
+					if err != nil || code != 42 {
+						t.Errorf("exit = %d, %v; want 42, nil", code, err)
+					}
+				case "delete":
+					if err := rt.Delete(t.Context(), "container", &DeleteOpts{Force: true}); err != nil {
+						t.Error(err)
+					}
+				}
+				close(finished)
+			}()
+			select {
+			case <-finished:
+			case <-time.After(runscOutputDrainTimeout + 2*time.Second):
+				t.Fatal("orphaned output prevented cleanup")
+			}
+			require.Eventually(t, func() bool { _, ok := rt.restoreOutput.Load("container"); return !ok }, runscOutputDrainTimeout+time.Second, 10*time.Millisecond)
+			require.Equal(t, "final-output\n", output.String())
+		})
+	}
 }
