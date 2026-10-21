@@ -305,6 +305,7 @@ func (g *Gateway) initHttp() error {
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo, g.isReady)
+	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.workerRepo)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.DefaultStorageClient, g.Config)
 	apiv1.NewWebhookGroup(g.baseRouteGroup.Group("/webhook", authMiddleware), g.WorkspaceRepo)
 	apiv1.NewStackGroup(g.baseRouteGroup.Group("/stack", authMiddleware), g.BackendRepo)
