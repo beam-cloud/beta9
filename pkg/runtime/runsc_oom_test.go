@@ -37,7 +37,11 @@ EOF
 func runscEvents(t *testing.T, ctx context.Context, script string) <-chan Event {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "runsc")
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+  *" state "*) echo '{"id":"container","pid":1,"status":"running"}'; exit 0 ;;
+esac
+`+script), 0o755))
 	rt := &Runsc{cfg: Config{RunscPath: path}}
 	events, err := rt.Events(ctx, "container")
 	require.NoError(t, err)
@@ -45,17 +49,18 @@ func runscEvents(t *testing.T, ctx context.Context, script string) <-chan Event 
 }
 
 func TestRunscGuestOOMEventsStopOnCancellationAndInvalidJSON(t *testing.T) {
-	for _, test := range []struct{ name, script string }{
-		{"cancel", "exec sleep 60"},
-		{"invalid JSON", "echo invalid-json; exec sleep 60"},
+	for _, test := range []struct{ name, script, error string }{
+		{"cancel", "exec sleep 60", ""},
+		{"invalid JSON", "echo invalid-json; exec sleep 60", "decode gVisor OOM"},
+		{"failed command", "echo event-stream-failed >&2; exit 1", "event-stream-failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			// exec keeps cancellation from leaving a shell child behind.
 			events := runscEvents(t, ctx, test.script)
-			if test.name == "invalid JSON" {
-				require.ErrorContains(t, receive(t, events).Err, "decode gVisor OOM")
+			if test.error != "" {
+				require.ErrorContains(t, receive(t, events).Err, test.error)
 			} else {
 				cancel()
 			}
@@ -67,6 +72,28 @@ func TestRunscGuestOOMEventsStopOnCancellationAndInvalidJSON(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunscGuestOOMEventsWaitForSandboxStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runsc")
+	require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+  *" state "*)
+    if [ ! -f "$0.ready" ]; then
+      touch "$0.ready"
+      echo 'loading container: file does not exist' >&2
+      exit 128
+    fi
+    echo '{"id":"container","pid":1,"status":"running"}' ;;
+  *" events "*)
+    test -f "$0.ready" || exit 128
+    echo '{"type":"stats","id":"container","data":{"memory":{"raw":{"guest_oom_kill":1}}}}' ;;
+esac
+`), 0o755))
+	rt := &Runsc{cfg: Config{RunscPath: path}}
+	events, err := rt.Events(t.Context(), "container")
+	require.NoError(t, err)
+	require.Equal(t, &microvm.ApplicationOOM{Kills: 1}, receive(t, events).ApplicationOOM)
 }
 
 type eventTestRuntime struct {
