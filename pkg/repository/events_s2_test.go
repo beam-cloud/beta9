@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -563,6 +564,7 @@ func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	want := []s2.StreamName{
 		"events/workspaces/workspace-123/stubs/stub-456",
 		"events/workspaces/workspace-123",
+		"events/workspaces/workspace-123/stub-states",
 	}
 	if len(streams) != len(want) {
 		t.Fatalf("unexpected stub stream count: got %d want %d: %#v", len(streams), len(want), streams)
@@ -571,6 +573,37 @@ func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 		if streams[i] != want[i] {
 			t.Fatalf("unexpected stub stream at %d: got %q want %q", i, streams[i], want[i])
 		}
+	}
+}
+
+func TestStubStateHistoryReadsSparseStubStateStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	metadata := eventMetadata{WorkspaceID: "workspace-1", StubID: "stub-1"}
+	sparse := s2.StreamName("events/workspaces/workspace-1/stub-states")
+
+	written := repo.streamNamesForEvent("stub.state.degraded", metadata)
+	require.Contains(t, written, sparse)
+	require.NotContains(t, repo.streamNamesForEvent(types.EventStubDeploy, metadata), sparse,
+		"only health transitions belong in the sparse stream")
+
+	for _, query := range []types.EventQuery{
+		{WorkspaceID: "workspace-1", EventTypes: []string{"stub.state.warning", "stub.state.degraded"}},
+		{WorkspaceID: "workspace-1", EventTypes: []string{"stub.state.*"}},
+		{WorkspaceID: "workspace-1", StubID: "stub-1", EventTypes: []string{"stub.state.degraded"}},
+	} {
+		read, err := repo.resolveEventHistoryStreams(context.Background(), query)
+		require.NoError(t, err)
+		require.Equal(t, []s2.StreamName{sparse}, read, "query %#v", query)
+	}
+
+	for _, query := range []types.EventQuery{
+		{WorkspaceID: "workspace-1"},
+		{WorkspaceID: "workspace-1", EventTypes: []string{"stub.state.degraded", types.EventContainerEvent}},
+		{WorkspaceID: "workspace-1", EventTypes: []string{"stub.*"}},
+	} {
+		read, err := repo.resolveEventHistoryStreams(context.Background(), query)
+		require.NoError(t, err)
+		require.NotContains(t, read, sparse, "query %#v must keep reading the workspace stream", query)
 	}
 }
 
@@ -819,25 +852,183 @@ func TestResolveLogStreamsUsesAliasForUnscopedContainerIDWithoutPrefixList(t *te
 	}
 }
 
-func TestNextTailReadWindow(t *testing.T) {
-	// Streams shorter than the chunk size must still be read in full.
-	if offset, count := nextTailReadWindow(0, 2, 100); offset != 2 || count != 2 {
-		t.Fatalf("unexpected short stream window: got offset=%d count=%d want offset=2 count=2", offset, count)
+func TestScanSeqFromTailVisitsEveryRecordNewestFirst(t *testing.T) {
+	// Emulate S2's 1 MiB unary cap: every read returns at most 3 records.
+	// A scan that took the first short batch as the whole window skipped the
+	// newest records of every window, so recent events went missing from
+	// history reads of dense workspace streams.
+	read := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		batch := &s2.ReadBatch{}
+		for seq := seqNum; seq < min(seqNum+min(count, 3), 25); seq++ {
+			batch.Records = append(batch.Records, s2.SequencedRecord{SeqNum: seq})
+		}
+		return batch, nil
 	}
-	if offset, count := nextTailReadWindow(0, 250, 100); offset != 100 || count != 100 {
-		t.Fatalf("unexpected first window: got offset=%d count=%d want offset=100 count=100", offset, count)
+
+	var visited []uint64
+	err := scanSeqFromTail(context.Background(), read, 25, 10, 1000, func(record s2.SequencedRecord) bool {
+		visited = append(visited, record.SeqNum)
+		return true
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	// The final (oldest) window must clamp count so already scanned records
-	// are not re-read and returned as duplicates.
-	if offset, count := nextTailReadWindow(200, 250, 100); offset != 250 || count != 50 {
-		t.Fatalf("unexpected final window: got offset=%d count=%d want offset=250 count=50", offset, count)
+	if len(visited) != 25 {
+		t.Fatalf("expected all 25 records, got %d: %v", len(visited), visited)
 	}
-	if offset, count := nextTailReadWindow(0, 250, 0); offset != 250 || count != 250 {
-		t.Fatalf("unexpected zero chunk window: got offset=%d count=%d want offset=250 count=250", offset, count)
+	for i, seq := range visited {
+		if seq != uint64(24-i) {
+			t.Fatalf("record %d has seq %d, want %d (newest first)", i, seq, 24-i)
+		}
+	}
+
+	visited = nil
+	err = scanSeqFromTail(context.Background(), read, 25, 10, 1000, func(record s2.SequencedRecord) bool {
+		visited = append(visited, record.SeqNum)
+		return len(visited) < 4
+	})
+	if err != nil || len(visited) != 4 || visited[3] != 21 {
+		t.Fatalf("expected the scan to stop after 4 records at seq 21, got %v (err %v)", visited, err)
 	}
 }
 
-func TestReadLogSeqWindowCoversByteCappedBatches(t *testing.T) {
+func TestScanSeqFromTailStopsAtTrimmedPrefixAndScanLimit(t *testing.T) {
+	// Records below 15 were trimmed: S2 clamps a read forward to the first
+	// retained record.
+	read := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		batch := &s2.ReadBatch{}
+		for seq := max(seqNum, 15); seq < min(max(seqNum, 15)+count, 25); seq++ {
+			batch.Records = append(batch.Records, s2.SequencedRecord{SeqNum: seq})
+		}
+		return batch, nil
+	}
+
+	var visited []uint64
+	visit := func(record s2.SequencedRecord) bool {
+		visited = append(visited, record.SeqNum)
+		return true
+	}
+	if err := scanSeqFromTail(context.Background(), read, 25, 4, 1000, visit); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(visited) != 10 || visited[0] != 24 || visited[9] != 15 {
+		t.Fatalf("expected records 24..15, got %v", visited)
+	}
+
+	visited = nil
+	if err := scanSeqFromTail(context.Background(), read, 25, 4, 6, visit); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(visited) != 8 {
+		t.Fatalf("expected the scan to stop after the window that crossed the limit (8 records), got %v", visited)
+	}
+}
+
+func TestScanSeqFromTailReadsAheadInWindowsThatFitOneRead(t *testing.T) {
+	// 3000 records of 10 KiB: S2 serves a 1000-record window 1 MiB at a time,
+	// one request after another, so fixed windows made a deep scan of large
+	// records strictly sequential.
+	const tail = 3000
+	body := make([]byte, 10<<10)
+	var mu sync.Mutex
+	var inFlight, maxInFlight, truncated int
+	read := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		mu.Lock()
+		inFlight++
+		maxInFlight = max(maxInFlight, inFlight)
+		mu.Unlock()
+		time.Sleep(2 * time.Millisecond)
+
+		batch := &s2.ReadBatch{}
+		size := uint64(0)
+		for seq := seqNum; seq < min(seqNum+count, tail); seq++ {
+			record := s2.SequencedRecord{SeqNum: seq, Body: body}
+			if size += s2.MeteredSequencedRecordBytes(record); size > s2.MaxBatchMeteredBytes {
+				break
+			}
+			batch.Records = append(batch.Records, record)
+		}
+		mu.Lock()
+		inFlight--
+		// The first window is sized before any record has been seen.
+		if seqNum < tail-s2TailScanFirstWindow && uint64(len(batch.Records)) < min(count, tail-seqNum) {
+			truncated++
+		}
+		mu.Unlock()
+		return batch, nil
+	}
+
+	var visited []uint64
+	err := scanSeqFromTail(context.Background(), read, tail, 1000, s2EventAggregateScanLimit, func(record s2.SequencedRecord) bool {
+		visited = append(visited, record.SeqNum)
+		return true
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(visited) != tail {
+		t.Fatalf("expected all %d records, got %d", tail, len(visited))
+	}
+	for i, seq := range visited {
+		if seq != uint64(tail-1-i) {
+			t.Fatalf("record %d has seq %d, want %d (newest first)", i, seq, tail-1-i)
+		}
+	}
+	if maxInFlight < 2 || maxInFlight > s2TailScanReadAhead {
+		t.Fatalf("expected between 2 and %d reads in flight, got %d", s2TailScanReadAhead, maxInFlight)
+	}
+	if truncated > 0 {
+		t.Fatalf("expected windows after the first to fit one read, %d reads hit the byte cap", truncated)
+	}
+}
+
+func TestScanSeqFromTailCancelsReadAheadWhenVisitorStops(t *testing.T) {
+	var active atomic.Int32
+	records := func(seqNum, count uint64) *s2.ReadBatch {
+		batch := &s2.ReadBatch{}
+		for seq := seqNum; seq < min(seqNum+count, 1000); seq++ {
+			batch.Records = append(batch.Records, s2.SequencedRecord{SeqNum: seq})
+		}
+		return batch
+	}
+	// Windows below 800 are read ahead but never reached by the visitor.
+	blocking := func(ctx context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		active.Add(1)
+		defer active.Add(-1)
+		if seqNum < 800 {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return records(seqNum, count), nil
+	}
+	visited := 0
+	err := scanSeqFromTail(context.Background(), blocking, 1000, 100, s2EventAggregateScanLimit, func(s2.SequencedRecord) bool {
+		visited++
+		return visited < 150
+	})
+	if err != nil {
+		t.Fatalf("expected the error of a window the visitor never reached to be dropped, got %v", err)
+	}
+	if visited != 150 {
+		t.Fatalf("expected the scan to stop after 150 records, got %d", visited)
+	}
+	if n := active.Load(); n != 0 {
+		t.Fatalf("expected no reads running after the scan returned, %d still are", n)
+	}
+
+	failing := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		if seqNum < 800 {
+			return nil, errors.New("read failed")
+		}
+		return records(seqNum, count), nil
+	}
+	err = scanSeqFromTail(context.Background(), failing, 1000, 100, s2EventAggregateScanLimit, func(s2.SequencedRecord) bool { return true })
+	if err == nil {
+		t.Fatal("expected the error of a window the visitor reached")
+	}
+}
+
+func TestReadSeqWindowCoversByteCappedBatches(t *testing.T) {
 	// Emulate S2's 1 MiB unary cap: every read returns at most 3 records
 	// regardless of count, so a 10-record window needs several requests.
 	var calls [][2]uint64
@@ -850,7 +1041,7 @@ func TestReadLogSeqWindowCoversByteCappedBatches(t *testing.T) {
 		return batch, nil
 	}
 
-	records, err := readLogSeqWindow(context.Background(), read, 100, 110)
+	records, err := readSeqWindow(context.Background(), read, 100, 110)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -873,7 +1064,7 @@ func TestReadLogSeqWindowCoversByteCappedBatches(t *testing.T) {
 	}
 }
 
-func TestReadLogSeqWindowStopsAtTrimmedPrefixAndTail(t *testing.T) {
+func TestReadSeqWindowStopsAtTrimmedPrefixAndTail(t *testing.T) {
 	// Records below 50 were trimmed: S2 clamps the read forward to the first
 	// retained record, so a request for [40, 60) yields records past 60.
 	read := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
@@ -883,7 +1074,7 @@ func TestReadLogSeqWindowStopsAtTrimmedPrefixAndTail(t *testing.T) {
 		}
 		return batch, nil
 	}
-	records, err := readLogSeqWindow(context.Background(), read, 40, 60)
+	records, err := readSeqWindow(context.Background(), read, 40, 60)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -893,16 +1084,16 @@ func TestReadLogSeqWindowStopsAtTrimmedPrefixAndTail(t *testing.T) {
 
 	// An empty batch or a 416 past the tail ends the window without error.
 	empty := func(context.Context, uint64, uint64) (*s2.ReadBatch, error) { return &s2.ReadBatch{}, nil }
-	if records, err := readLogSeqWindow(context.Background(), empty, 0, 5); err != nil || len(records) != 0 {
+	if records, err := readSeqWindow(context.Background(), empty, 0, 5); err != nil || len(records) != 0 {
 		t.Fatalf("expected no records from an empty read, got %d err=%v", len(records), err)
 	}
 	pastTail := func(context.Context, uint64, uint64) (*s2.ReadBatch, error) {
 		return nil, &s2.RangeNotSatisfiableError{S2Error: &s2.S2Error{Status: httpStatusRangeNotSatisfiable, Origin: "server"}}
 	}
-	if records, err := readLogSeqWindow(context.Background(), pastTail, 0, 5); err != nil || len(records) != 0 {
+	if records, err := readSeqWindow(context.Background(), pastTail, 0, 5); err != nil || len(records) != 0 {
 		t.Fatalf("expected no records from a past-tail read, got %d err=%v", len(records), err)
 	}
-	if records, err := readLogSeqWindow(context.Background(), read, 60, 60); err != nil || len(records) != 0 {
+	if records, err := readSeqWindow(context.Background(), read, 60, 60); err != nil || len(records) != 0 {
 		t.Fatalf("expected an empty window, got %d err=%v", len(records), err)
 	}
 }
