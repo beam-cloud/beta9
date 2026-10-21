@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"strconv"
+	"syscall"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -14,6 +16,9 @@ import (
 )
 
 func main() {
+	if err := ensureInit(); err != nil {
+		log.Fatal().Err(err).Msg("worker init failed")
+	}
 	configureGOMAXPROCS()
 
 	configManager, err := common.NewConfigManager[types.AppConfig]()
@@ -59,6 +64,20 @@ func main() {
 
 		log.Fatal().Err(err).Msg("worker failed to run")
 	}
+}
+
+// Older agents launch the worker directly as PID 1. Detached runsc children
+// then remain zombies, and runsc wait mistakes them for running sandboxes.
+func ensureInit() error {
+	if os.Getpid() != 1 {
+		return nil
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve worker executable: %w", err)
+	}
+	args := append([]string{"tini", "-g", "--", binary}, os.Args[1:]...)
+	return syscall.Exec("/usr/bin/tini", args, os.Environ())
 }
 
 func configureGOMAXPROCS() {

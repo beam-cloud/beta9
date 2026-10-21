@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,6 +45,7 @@ var runscStateFileMagic = []byte{0x67, 0x56, 0x69, 0x73, 0x6f, 0x72, 0x53, 0x46}
 type Runsc struct {
 	cfg                   Config
 	dockerPacketWriteFlag string
+	restoreOutput         sync.Map // container ID -> chan runscCommandResult, joined by Wait
 }
 
 // runscBundle owns one operation's OCI spec; GPU state is never shared between containers.
@@ -204,6 +206,8 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	}
 
 	args := r.baseArgs(dockerEnabled)
+	args = append(args, "--final-metrics-log", r.finalMetricsPath(containerID))
+	defer os.Remove(r.finalMetricsPath(containerID))
 	if bundle.usesGPU() {
 		args = append(args, "--nvproxy=true")
 	}
@@ -358,6 +362,7 @@ func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal
 }
 
 func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts) error {
+	defer os.Remove(r.finalMetricsPath(containerID))
 	args := r.baseArgs(false)
 	args = append(args, "delete")
 
@@ -509,6 +514,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	if bundle.usesGPU() {
 		args = append(args, "--nvproxy=true")
 	}
+	args = append(args, "--final-metrics-log", r.finalMetricsPath(containerID))
 	args = append(args, "restore", "--background", "--direct")
 	if opts.ImagePath != "" {
 		args = append(args, "--image-path", opts.ImagePath)
@@ -560,6 +566,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	restoreDone := make(chan runscCommandResult, 1)
 	go func() {
 		restoreDone <- runscWaitResult(cmd.Wait(), stderr.String(), "restore")
+		close(restoreDone)
 	}()
 
 	pid, err := r.waitForRestoredContainerPID(ctx, containerID, restoreDone)
@@ -580,6 +587,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	}
 
 	cleanupOnFailure = false
+	r.restoreOutput.Store(containerID, restoreDone)
 	return 0, nil
 }
 

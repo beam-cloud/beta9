@@ -8,6 +8,9 @@ import (
 // ErrOOMKilled indicates a terminal kill confirmed by the kernel OOM counter.
 var ErrOOMKilled = errors.New("container killed by OOM")
 
+// ErrGuestOOM reports guest process kills, which are nonterminal for sandboxes.
+var ErrGuestOOM = errors.New("guest process killed by OOM")
+
 // ErrUnsupportedRuntime is returned when an unsupported runtime type is requested
 type ErrUnsupportedRuntime struct {
 	Runtime string

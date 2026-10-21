@@ -107,10 +107,6 @@ func (s *Worker) handleOOMKill(
 	// A restored container may use a different runtime than the worker default.
 	containerRuntime := s.runtime
 	if instance, exists := s.containerInstances.Get(containerId); exists {
-		if _, stopReason := instance.lifecycleState(); stopReason == "" {
-			instance.setStopReason(types.StopContainerReasonUnknown)
-			s.containerInstances.Set(containerId, instance)
-		}
 		if instance.Runtime != nil {
 			containerRuntime = instance.Runtime
 		}
@@ -164,7 +160,11 @@ func oomOperationContext(parent context.Context, timeout time.Duration) (context
 // reportOOMKill also handles final-exit evidence when the polling watcher lost
 // the race. Both paths share a flag so the user gets one terminal OOM log/event.
 func (s *Worker) reportOOMKill(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *atomic.Bool) {
-	if !isOOMKilled.CompareAndSwap(false, true) {
+	if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+		if !instance.markOOMKilled(isOOMKilled) {
+			return
+		}
+	} else if !isOOMKilled.CompareAndSwap(false, true) {
 		return
 	}
 	log.Warn().Str("container_id", request.ContainerId).Msg("OOM kill detected")
