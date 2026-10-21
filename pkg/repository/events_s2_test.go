@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -920,6 +921,110 @@ func TestScanSeqFromTailStopsAtTrimmedPrefixAndScanLimit(t *testing.T) {
 	}
 	if len(visited) != 8 {
 		t.Fatalf("expected the scan to stop after the window that crossed the limit (8 records), got %v", visited)
+	}
+}
+
+func TestScanSeqFromTailReadsAheadInWindowsThatFitOneRead(t *testing.T) {
+	// 3000 records of 10 KiB: S2 serves a 1000-record window 1 MiB at a time,
+	// one request after another, so fixed windows made a deep scan of large
+	// records strictly sequential.
+	const tail = 3000
+	body := make([]byte, 10<<10)
+	var mu sync.Mutex
+	var inFlight, maxInFlight, truncated int
+	read := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		mu.Lock()
+		inFlight++
+		maxInFlight = max(maxInFlight, inFlight)
+		mu.Unlock()
+		time.Sleep(2 * time.Millisecond)
+
+		batch := &s2.ReadBatch{}
+		size := uint64(0)
+		for seq := seqNum; seq < min(seqNum+count, tail); seq++ {
+			record := s2.SequencedRecord{SeqNum: seq, Body: body}
+			if size += s2.MeteredSequencedRecordBytes(record); size > s2.MaxBatchMeteredBytes {
+				break
+			}
+			batch.Records = append(batch.Records, record)
+		}
+		mu.Lock()
+		inFlight--
+		// The first window is sized before any record has been seen.
+		if seqNum < tail-s2TailScanFirstWindow && uint64(len(batch.Records)) < min(count, tail-seqNum) {
+			truncated++
+		}
+		mu.Unlock()
+		return batch, nil
+	}
+
+	var visited []uint64
+	err := scanSeqFromTail(context.Background(), read, tail, 1000, s2EventAggregateScanLimit, func(record s2.SequencedRecord) bool {
+		visited = append(visited, record.SeqNum)
+		return true
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(visited) != tail {
+		t.Fatalf("expected all %d records, got %d", tail, len(visited))
+	}
+	for i, seq := range visited {
+		if seq != uint64(tail-1-i) {
+			t.Fatalf("record %d has seq %d, want %d (newest first)", i, seq, tail-1-i)
+		}
+	}
+	if maxInFlight < 2 || maxInFlight > s2TailScanReadAhead {
+		t.Fatalf("expected between 2 and %d reads in flight, got %d", s2TailScanReadAhead, maxInFlight)
+	}
+	if truncated > 0 {
+		t.Fatalf("expected windows after the first to fit one read, %d reads hit the byte cap", truncated)
+	}
+}
+
+func TestScanSeqFromTailCancelsReadAheadWhenVisitorStops(t *testing.T) {
+	var active atomic.Int32
+	records := func(seqNum, count uint64) *s2.ReadBatch {
+		batch := &s2.ReadBatch{}
+		for seq := seqNum; seq < min(seqNum+count, 1000); seq++ {
+			batch.Records = append(batch.Records, s2.SequencedRecord{SeqNum: seq})
+		}
+		return batch
+	}
+	// Windows below 800 are read ahead but never reached by the visitor.
+	blocking := func(ctx context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		active.Add(1)
+		defer active.Add(-1)
+		if seqNum < 800 {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return records(seqNum, count), nil
+	}
+	visited := 0
+	err := scanSeqFromTail(context.Background(), blocking, 1000, 100, s2EventAggregateScanLimit, func(s2.SequencedRecord) bool {
+		visited++
+		return visited < 150
+	})
+	if err != nil {
+		t.Fatalf("expected the error of a window the visitor never reached to be dropped, got %v", err)
+	}
+	if visited != 150 {
+		t.Fatalf("expected the scan to stop after 150 records, got %d", visited)
+	}
+	if n := active.Load(); n != 0 {
+		t.Fatalf("expected no reads running after the scan returned, %d still are", n)
+	}
+
+	failing := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		if seqNum < 800 {
+			return nil, errors.New("read failed")
+		}
+		return records(seqNum, count), nil
+	}
+	err = scanSeqFromTail(context.Background(), failing, 1000, 100, s2EventAggregateScanLimit, func(s2.SequencedRecord) bool { return true })
+	if err == nil {
+		t.Fatal("expected the error of a window the visitor reached")
 	}
 }
 

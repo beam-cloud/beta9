@@ -24,6 +24,16 @@ const (
 	s2MetricsReadLimit    = 1000
 	s2ReadScanLimit       = 50000
 
+	// Tail scans size windows from the records read so far to fit one unary
+	// read, which S2 caps at 1 MiB of metered bytes, with headroom for records
+	// larger than the running average.
+	s2TailScanWindowBytes = 896 << 10
+	// Sized so the first window fits one read for event records of up to about
+	// 2 KiB; a read costs about the same whether it returns 100 records or 500.
+	s2TailScanFirstWindow = 512
+	// The most windows a tail scan reads ahead of the visitor.
+	s2TailScanReadAhead = 4
+
 	// Ranges longer than this switch from a full sequential scan to per-bucket
 	// tail sampling; scanning every heartbeat over long windows blows through
 	// the scan budget and truncates results.
@@ -871,34 +881,71 @@ func readSeqWindow(ctx context.Context, read s2SeqReader, lo, hi uint64) ([]s2.S
 }
 
 // scanSeqFromTail visits the records below tailSeq newest-first, walking back
-// in absolute sequence windows of chunkSize, until visit returns false, the
-// start of the stream (or a trimmed prefix) is reached, or at least scanLimit
-// records have been read.
-func scanSeqFromTail(ctx context.Context, read s2SeqReader, tailSeq, chunkSize, scanLimit uint64, visit func(s2.SequencedRecord) bool) error {
-	var scanned uint64
-	for end := tailSeq; end > 0 && scanned < scanLimit; {
-		start := uint64(0)
-		if end > chunkSize {
-			start = end - chunkSize
+// in absolute sequence windows of at most maxWindow records, until visit
+// returns false, the start of the stream (or a trimmed prefix) is reached, or
+// at least scanLimit records have been read.
+//
+// Windows double in size up to what the records read so far say fits one
+// request, and are read ahead of the visitor: one, then two, then up to
+// s2TailScanReadAhead at a time. visit runs on the calling goroutine.
+func scanSeqFromTail(ctx context.Context, read s2SeqReader, tailSeq, maxWindow, scanLimit uint64, visit func(s2.SequencedRecord) bool) error {
+	ctx, cancel := context.WithCancel(ctx)
+	type windowRead struct {
+		start   uint64
+		records []s2.SequencedRecord
+		err     error
+		done    chan struct{}
+	}
+	var pending []*windowRead
+	defer func() {
+		cancel()
+		for _, window := range pending {
+			<-window.done
 		}
-		window, err := readSeqWindow(ctx, read, start, end)
-		if err != nil {
-			return err
+	}()
+
+	end, requested := tailSeq, uint64(0)
+	size, readAhead := min(maxWindow, s2TailScanFirstWindow), 1
+	var visitedRecords, visitedBytes uint64
+	for {
+		for len(pending) < readAhead && end > 0 && requested < scanLimit {
+			window := &windowRead{start: end - min(end, size), done: make(chan struct{})}
+			go func(hi uint64) {
+				defer close(window.done)
+				window.records, window.err = readSeqWindow(ctx, read, window.start, hi)
+			}(end)
+			pending = append(pending, window)
+			requested += end - window.start
+			end = window.start
 		}
-		scanned += uint64(len(window))
-		for i := len(window) - 1; i >= 0; i-- {
-			if !visit(window[i]) {
+		if len(pending) == 0 {
+			return nil
+		}
+
+		window := pending[0]
+		pending = pending[1:]
+		<-window.done
+		if window.err != nil {
+			return window.err
+		}
+		for i := len(window.records) - 1; i >= 0; i-- {
+			if !visit(window.records[i]) {
 				return nil
 			}
 		}
 		// S2 clamps a read below a trimmed prefix forward, so a window that
 		// starts late has nothing older before it.
-		if len(window) == 0 || window[0].SeqNum > start {
+		if len(window.records) == 0 || window.records[0].SeqNum > window.start {
 			return nil
 		}
-		end = start
+
+		for _, record := range window.records {
+			visitedBytes += s2.MeteredSequencedRecordBytes(record)
+		}
+		visitedRecords += uint64(len(window.records))
+		size = max(1, min(maxWindow, 2*size, s2TailScanWindowBytes*visitedRecords/visitedBytes))
+		readAhead = min(2*readAhead, s2TailScanReadAhead)
 	}
-	return nil
 }
 
 func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
