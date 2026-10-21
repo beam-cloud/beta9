@@ -463,16 +463,6 @@ func TestPullImageFromRegistryAgentPoolsUseWorkerPoolWhenRequestSelectorIsEmpty(
 	require.Equal(t, "image-a", repo.requests[0].ImageId)
 }
 
-func TestLegacyProviderExternalPoolDoesNotUseAgentCredentials(t *testing.T) {
-	provider := types.ProviderEC2
-	client := agentPoolImageClient(types.PoolModeExternal, &fakeImageCredentialWorkerRepo{})
-	pool := client.config.Worker.Pools["agent-pool"]
-	pool.Provider = &provider
-	client.config.Worker.Pools["agent-pool"] = pool
-
-	require.False(t, client.brokeredImageAccessRequest(&types.ContainerRequest{PoolSelector: "agent-pool"}))
-}
-
 func agentPoolImageClient(mode types.PoolMode, repo *fakeImageCredentialWorkerRepo) *ImageClient {
 	return &ImageClient{
 		workerRepoClient: repo,

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -38,26 +37,20 @@ func TestDeleteMachineDoesNotFallBackWithoutComputeService(t *testing.T) {
 }
 
 func TestClassifyMachinePool(t *testing.T) {
-	agentProvider := types.ProviderAgent
-	externalProvider := types.ProviderEC2
 	gateway := &GatewayService{appConfig: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-		"local":             {Mode: types.PoolModeLocal},
-		"agent-external":    {Mode: types.PoolModeExternal},
-		"agent-provider":    {Mode: types.PoolModeExternal, Provider: &agentProvider},
-		"provider-external": {Mode: types.PoolModeExternal, Provider: &externalProvider},
-		"private":           {Mode: types.PoolModePrivate},
-		"provider-pool":     {Mode: types.PoolModeProvider},
+		"local":          {Mode: types.PoolModeLocal},
+		"agent-external": {Mode: types.PoolModeExternal},
+		"private":        {Mode: types.PoolModePrivate},
+		"provider-pool":  {Mode: types.PoolModeProvider},
 	}}}}
 
 	tests := map[string]machinePoolBackend{
-		"":                  machinePoolManagedAgent,
-		"unknown":           machinePoolManagedAgent,
-		"local":             machinePoolLocal,
-		"agent-external":    machinePoolManagedAgent,
-		"agent-provider":    machinePoolManagedAgent,
-		"provider-external": machinePoolProvider,
-		"private":           machinePoolManagedAgent,
-		"provider-pool":     machinePoolManagedAgent,
+		"":               machinePoolManagedAgent,
+		"unknown":        machinePoolManagedAgent,
+		"local":          machinePoolLocal,
+		"agent-external": machinePoolManagedAgent,
+		"private":        machinePoolManagedAgent,
+		"provider-pool":  machinePoolManagedAgent,
 	}
 	for poolName, want := range tests {
 		t.Run(poolName, func(t *testing.T) {
@@ -74,42 +67,5 @@ func TestMachineListResponseReportsConfiguredStubLimits(t *testing.T) {
 
 	if response.MaxCpuMillicores != 96_000 || response.MaxMemoryMb != 48*1024 {
 		t.Fatalf("machineListResponse() limits = %d/%d, want %d/%d", response.MaxCpuMillicores, response.MaxMemoryMb, 96_000, 48*1024)
-	}
-}
-
-func TestDeleteMachineRoutesConfiguredExternalPoolToProviderRepository(t *testing.T) {
-	rdb, err := repository.NewRedisClientForTest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := repository.NewProviderRedisRepositoryForTest(rdb)
-	provider := types.ProviderEC2
-	if err := repo.AddMachine(string(provider), "external", "machine-1", &types.ProviderMachineState{PoolName: "external"}); err != nil {
-		t.Fatal(err)
-	}
-	gateway := &GatewayService{
-		appConfig: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"external": {Mode: types.PoolModeExternal, Provider: &provider},
-		}}},
-		providerRepo: repo,
-	}
-	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Workspace: &types.Workspace{ExternalId: "admin-workspace"},
-		Token:     &types.Token{ExternalId: "admin-token", TokenType: types.TokenTypeClusterAdmin},
-	})
-
-	response, err := gateway.DeleteMachine(ctx, &pb.DeleteMachineRequest{PoolName: "external", MachineId: "machine-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !response.Ok {
-		t.Fatalf("DeleteMachine() response = %+v", response)
-	}
-	machines, err := repo.ListAllMachines(string(provider), "external", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(machines) != 0 {
-		t.Fatalf("provider machines = %+v", machines)
 	}
 }

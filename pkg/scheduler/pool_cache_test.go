@@ -66,19 +66,6 @@ func TestWorkerCacheHostPathIsCreatedForLocalPools(t *testing.T) {
 	require.Equal(t, corev1.HostPathDirectoryOrCreate, *volume.HostPath.Type)
 }
 
-func TestWorkerCacheHostPathIsCreatedForExternalPools(t *testing.T) {
-	config, poolConfig := cacheVolumeTestConfig()
-	controller := &ProviderWorkerPoolController{
-		config:           config,
-		workerPoolConfig: poolConfig,
-	}
-
-	volume := requireCacheVolume(t, controller.getWorkerVolumes(1024))
-	require.Equal(t, "/mnt/nvme/beta9/cache", volume.HostPath.Path)
-	require.NotNil(t, volume.HostPath.Type)
-	require.Equal(t, corev1.HostPathDirectoryOrCreate, *volume.HostPath.Type)
-}
-
 func cacheVolumeTestConfig() (types.AppConfig, types.WorkerPoolConfig) {
 	config := types.AppConfig{
 		Worker: types.WorkerConfig{CacheEnabled: true},

@@ -114,14 +114,6 @@ var (
 )
 
 var (
-	providerPrefix         string = "provider"
-	providerMachineState   string = "provider:machine:%s:%s:%s"
-	providerMachineMetrics string = "provider:machine:%s:%s:%s:metrics"
-	providerMachineIndex   string = "provider:machine:%s:%s:machine_index"
-	providerMachineLock    string = "provider:machine:%s:%s:%s:lock"
-)
-
-var (
 	tailscalePrefix               string = "tailscale"
 	tailscaleServiceHostname      string = "tailscale:%s:%s"
 	tailscaleServiceHostnameIndex string = "tailscale:%s:index"
@@ -619,27 +611,6 @@ func (rk *redisKeys) TailscaleServiceHostname(serviceName, hostName string) stri
 
 func (rk *redisKeys) TailscaleServiceHostnameIndex(serviceName string) string {
 	return fmt.Sprintf(tailscaleServiceHostnameIndex, serviceName)
-}
-
-// Provider keys
-func (rk *redisKeys) ProviderPrefix() string {
-	return providerPrefix
-}
-
-func (rk *redisKeys) ProviderMachineState(providerName, poolName, machineId string) string {
-	return fmt.Sprintf(providerMachineState, providerName, poolName, machineId)
-}
-
-func (rk *redisKeys) ProviderMachineMetrics(providerName, poolName, machineId string) string {
-	return fmt.Sprintf(providerMachineMetrics, providerName, poolName, machineId)
-}
-
-func (rk *redisKeys) ProviderMachineIndex(providerName, poolName string) string {
-	return fmt.Sprintf(providerMachineIndex, providerName, poolName)
-}
-
-func (rk *redisKeys) ProviderMachineLock(providerName, poolName, machineId string) string {
-	return fmt.Sprintf(providerMachineLock, providerName, poolName, machineId)
 }
 
 // Thunder keys

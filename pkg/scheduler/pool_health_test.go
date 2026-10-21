@@ -7,14 +7,13 @@ import (
 )
 
 func TestPoolMetricsEventAggregatesAvailableWorkers(t *testing.T) {
-	provider := types.MachineProvider("test")
 	workers := []*types.Worker{
 		{Id: "worker-1", MachineId: "machine-1", Status: types.WorkerStatusAvailable, TotalCpu: 2000, FreeCpu: 1000, TotalMemory: 4000, FreeMemory: 1000, TotalGpuCount: 2, FreeGpuCount: 1},
 		{Id: "worker-2", MachineId: "machine-1", Status: types.WorkerStatusAvailable, TotalCpu: 1000, TotalMemory: 2000, TotalGpuCount: 1},
 		{Id: "worker-3", MachineId: "machine-2", Status: types.WorkerStatusAvailable, TotalCpu: 1000, FreeCpu: 1000, TotalMemory: 2000, FreeMemory: 2000, TotalGpuCount: 1, FreeGpuCount: 1},
 		{Id: "pending", MachineId: "machine-3", Status: types.WorkerStatusPending, TotalCpu: 8000, TotalMemory: 16_000, TotalGpuCount: 8},
 	}
-	event := poolMetricsEvent("gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModeExternal, Provider: &provider, HourlyCostCents: 120}, &types.WorkerPoolState{
+	event := poolMetricsEvent("gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModeExternal, HourlyCostCents: 120}, &types.WorkerPoolState{
 		Status: types.WorkerPoolStatusHealthy, RunningContainers: 5, AvailableWorkers: 3, PendingWorkers: 1, ReadyMachines: 2, PendingMachines: 1,
 	}, workers)
 

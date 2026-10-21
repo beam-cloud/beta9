@@ -422,7 +422,7 @@ func repositoryAuthClient(t *testing.T, workers *WorkerRepositoryService, contai
 // repositories make any access before authorization fail the test.
 func TestRepositoryRPCsRejectCustomerTokensBeforeAccess(t *testing.T) {
 	conn := repositoryAuthClient(t, &WorkerRepositoryService{}, &ContainerRepositoryService{})
-	for _, tokenType := range []string{"", types.TokenTypeWorkspacePrimary, types.TokenTypeWorkspace, types.TokenTypeWorkspaceRestricted, types.TokenTypeMachine, types.TokenTypePlatformDeployer, types.TokenTypeClusterAdmin} {
+	for _, tokenType := range []string{"", types.TokenTypeWorkspacePrimary, types.TokenTypeWorkspace, types.TokenTypeWorkspaceRestricted, "machine", types.TokenTypePlatformDeployer, types.TokenTypeClusterAdmin} {
 		for _, file := range []protoreflect.FileDescriptor{pb.File_container_repo_proto, pb.File_worker_repo_proto} {
 			service := file.Services().Get(0)
 			for i := 0; i < service.Methods().Len(); i++ {

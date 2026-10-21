@@ -1472,13 +1472,12 @@ message Machine {
   string pool_name = 7;
   string provider_name = 8;
   string registration_token = 9;
-  string tailscale_url = 10;
-  string tailscale_auth = 11;
+  reserved 10, 11, 16;
+  reserved "tailscale_url", "tailscale_auth", "user_data";
   string last_keepalive = 12;
   string created = 13;
   string agent_version = 14;
   MachineMetrics machine_metrics = 15;
-  string user_data = 16;
   MachineSSHAccess ssh = 17;
   string public_ip = 18;
   string tailnet_hostname = 19;
@@ -1542,9 +1541,8 @@ message CreateMachineResponse {
   bool ok = 1;
   string err_msg = 2;
   Machine machine = 3;
-  string agent_upstream_url = 4;
-  string agent_upstream_branch = 5;
-  string agent_upstream_token = 6;
+  reserved 4, 5, 6;
+  reserved "agent_upstream_url", "agent_upstream_branch", "agent_upstream_token";
   // Agent-backed managed pools return the systemd installer here. The join
   // token embedded in the command is short-lived and machine-bound.
   string install_command = 7;

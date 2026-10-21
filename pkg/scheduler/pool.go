@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -85,11 +84,8 @@ type WorkerPoolControllerOptions struct {
 	WorkerRepo      repository.WorkerRepository
 	WorkerPoolRepo  repository.WorkerPoolRepository
 	ContainerRepo   repository.ContainerRepository
-	ProviderName    *types.MachineProvider
-	ProviderRepo    repository.ProviderRepository
 	EventRepo       repository.EventRepository
 	PushPoolMetrics func(types.EventComputeSchema)
-	Tailscale       *network.Tailscale
 }
 
 func GenerateWorkerId() string {
@@ -166,10 +162,8 @@ func workerPodTerminationGracePeriod(workerStopGraceS int64) int64 {
 func MonitorPoolSize(wpc WorkerPoolController,
 	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
-	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
-	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
+	workerPoolRepo repository.WorkerPoolRepository) error {
+	poolSizer, err := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerPoolRepo)
 	if err != nil {
 		return err
 	}

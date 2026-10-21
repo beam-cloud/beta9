@@ -494,7 +494,7 @@ func newFillService(t *testing.T) *Service {
 	key := "sk_" + base64.StdEncoding.EncodeToString(make([]byte, 32))
 	s.adminWorkspace.SigningKey = &key
 	var err error
-	s.scheduler, err = scheduler.NewScheduler(s.ctx, types.AppConfig{}, s.rdb, nil, s.backend, nil, nil)
+	s.scheduler, err = scheduler.NewScheduler(s.ctx, types.AppConfig{}, s.rdb, nil, s.backend, nil)
 	require.NoError(t, err)
 	return s
 }

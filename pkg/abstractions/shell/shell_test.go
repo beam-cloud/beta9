@@ -64,7 +64,7 @@ func TestShellPermissionRejectsRuntimeTokens(t *testing.T) {
 		types.TokenTypeWorkspaceRestricted,
 		types.TokenTypeWorker,
 		types.TokenTypeWorkerPrivate,
-		types.TokenTypeMachine,
+		"machine",
 	} {
 		if hasShellPermission(&auth.AuthInfo{
 			Workspace: workspace,

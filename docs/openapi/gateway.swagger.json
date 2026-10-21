@@ -2724,15 +2724,6 @@
         "machine": {
           "$ref": "#/definitions/gatewayMachine"
         },
-        "agentUpstreamUrl": {
-          "type": "string"
-        },
-        "agentUpstreamBranch": {
-          "type": "string"
-        },
-        "agentUpstreamToken": {
-          "type": "string"
-        },
         "installCommand": {
           "type": "string",
           "description": "Agent-backed managed pools return the systemd installer here. The join\ntoken embedded in the command is short-lived and machine-bound."
@@ -4110,12 +4101,6 @@
         "registrationToken": {
           "type": "string"
         },
-        "tailscaleUrl": {
-          "type": "string"
-        },
-        "tailscaleAuth": {
-          "type": "string"
-        },
         "lastKeepalive": {
           "type": "string"
         },
@@ -4127,9 +4112,6 @@
         },
         "machineMetrics": {
           "$ref": "#/definitions/gatewayMachineMetrics"
-        },
-        "userData": {
-          "type": "string"
         },
         "ssh": {
           "$ref": "#/definitions/gatewayMachineSSHAccess"

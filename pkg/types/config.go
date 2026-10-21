@@ -29,7 +29,6 @@ type AppConfig struct {
 	ManagedCompute ManagedComputeConfig `key:"managedCompute" json:"managed_compute"`
 	Abstractions   AbstractionConfig    `key:"abstractions" json:"abstractions"`
 	Cache          cache.Config         `key:"cache" json:"cache"`
-	Agent          AgentConfig          `key:"agent" json:"agent"`
 	// ManagedEndpoints configures the platform-owned inference endpoints
 	// (GitOps-driven stubs filled onto spare GPU capacity, served under /v1).
 	ManagedEndpoints ManagedEndpointsConfig `key:"managedEndpoints" json:"managed_endpoints"`
@@ -650,9 +649,8 @@ const (
 	WorkerPoolManagementSourceConfig WorkerPoolManagementSource = "config"
 	WorkerPoolManagementSourceAPI    WorkerPoolManagementSource = "api"
 
-	WorkerPoolControllerLocal    WorkerPoolController = "local"
-	WorkerPoolControllerAgent    WorkerPoolController = "agent"
-	WorkerPoolControllerProvider WorkerPoolController = "provider"
+	WorkerPoolControllerLocal WorkerPoolController = "local"
+	WorkerPoolControllerAgent WorkerPoolController = "agent"
 )
 
 // AgentHosted reports whether pools of this mode run on agent-managed
@@ -673,18 +671,15 @@ type WorkerPoolConfig struct {
 	NetworkPreallocation      *bool                             `key:"networkPreallocation" json:"network_preallocation"`
 	NetworkSlotPoolSize       int                               `key:"networkSlotPoolSize" json:"network_slot_pool_size"`
 	Mode                      PoolMode                          `key:"mode" json:"mode"`
-	Provider                  *MachineProvider                  `key:"provider" json:"provider"`
 	JobSpec                   WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
 	PoolSizing                WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
 	RequiresPoolSelector      bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority                  int32                             `key:"priority" json:"priority"`
 	Preemptable               bool                              `key:"preemptable" json:"preemptable"`
-	UserData                  string                            `key:"userData" json:"user_data"`
 	CRIUEnabled               bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit              string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup               string                            `key:"configGroup" json:"config_group"`
-	K3sInstallDir             string                            `key:"k3sInstallDir" json:"k3s_install_dir"` // Provider/Kubernetes install path; agent-hosted pools do not run K3s.
-	StoragePath               string                            `key:"storagePath" json:"storage_path"`      // Host root for workspace mounts, checkpoints, and durable disks.
+	StoragePath               string                            `key:"storagePath" json:"storage_path"` // Host root for workspace mounts, checkpoints, and durable disks.
 	StorageMode               string                            `key:"storageMode" json:"storage_mode"`
 	ImagesPath                string                            `key:"imagesPath" json:"images_path"`              // Host path backing the worker's /images volume; agent pools fall back to the installer state dir.
 	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; agent pools fall back to storagePath or the installer state dir.
@@ -699,7 +694,7 @@ type WorkerPoolConfig struct {
 
 // AgentHosted reports whether this concrete pool uses the agent control path.
 func (c WorkerPoolConfig) AgentHosted() bool {
-	return c.Mode.AgentHosted() || (c.Mode == PoolModeExternal && (c.Provider == nil || *c.Provider == ProviderAgent))
+	return c.Mode.AgentHosted() || c.Mode == PoolModeExternal
 }
 
 type WorkerPoolCacheConfig struct {
@@ -915,26 +910,10 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 
 type MachineProvider string
 
-var (
-	ProviderEC2        MachineProvider = "ec2"
-	ProviderOCI        MachineProvider = "oci"
-	ProviderLambdaLabs MachineProvider = "lambda"
-	ProviderCrusoe     MachineProvider = "crusoe"
-	ProviderHydra      MachineProvider = "hydra"
-	ProviderGeneric    MachineProvider = "generic"
-	ProviderAgent      MachineProvider = MachineProvider(DefaultAgentName)
-)
-
 type ProviderConfig struct {
-	EC2        EC2ProviderConfig        `key:"ec2" json:"ec2"`
-	OCI        OCIProviderConfig        `key:"oci" json:"oci"`
-	LambdaLabs LambdaLabsProviderConfig `key:"lambda" json:"lambda"`
-	Crusoe     CrusoeProviderConfig     `key:"crusoe" json:"crusoe"`
-	Hydra      HydraProviderConfig      `key:"hydra" json:"hydra"`
-	Generic    GenericProviderConfig    `key:"generic" json:"generic"`
-	Vast       VastProviderConfig       `key:"vast" json:"vast"`
-	Shadeform  ShadeformProviderConfig  `key:"shadeform" json:"shadeform"`
-	Hetzner    HetznerProviderConfig    `key:"hetzner" json:"hetzner"`
+	Vast      VastProviderConfig      `key:"vast" json:"vast"`
+	Shadeform ShadeformProviderConfig `key:"shadeform" json:"shadeform"`
+	Hetzner   HetznerProviderConfig   `key:"hetzner" json:"hetzner"`
 }
 
 type VastProviderConfig struct {
@@ -973,61 +952,6 @@ type HetznerRegionConfig struct {
 	DisplayName string  `key:"displayName" json:"display_name"`
 	Latitude    float64 `key:"latitude" json:"latitude"`
 	Longitude   float64 `key:"longitude" json:"longitude"`
-}
-
-type AgentConfig struct {
-	VictoriaLogs   VictoriaLogsConfig `key:"victoriaLogs" json:"victoria_logs"`
-	UpstreamURL    string             `key:"upstreamURL" json:"upstream_url"`
-	UpstreamBranch string             `key:"upstreamBranch" json:"upstream_branch"`
-	UpstreamToken  string             `key:"upstreamToken" json:"upstream_token"`
-	Configman      ConfigmanConfig    `key:"configman" json:"configman"`
-}
-
-type ConfigmanConfig struct {
-	ControllerAddress      string `key:"controllerAddress" json:"controller_address"`
-	ControllerToken        string `key:"controllerToken" json:"controller_token"`
-	ControllerDefaultGroup string `key:"controllerDefaultGroup" json:"controller_default_group"`
-}
-
-type VictoriaLogsConfig struct {
-	Host     string `key:"host" json:"host"`
-	Port     string `key:"port" json:"port"`
-	Username string `key:"username" json:"username"`
-	Password string `key:"password" json:"password"`
-}
-
-type EC2ProviderConfig struct {
-	AWSAccessKey string  `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string  `key:"awsSecretKey" json:"aws_secret_key"`
-	AWSRegion    string  `key:"awsRegion" json:"aws_region"`
-	AMI          string  `key:"ami" json:"ami"`
-	SubnetId     *string `key:"subnetId" json:"subnet_id"`
-}
-
-type OCIProviderConfig struct {
-	Tenancy            string `key:"tenancy" json:"tenancy"`
-	UserId             string `key:"userId" json:"user_id"`
-	Region             string `key:"region" json:"region"`
-	FingerPrint        string `key:"fingerprint" json:"fingerprint"`
-	PrivateKey         string `key:"privateKey" json:"private_key"`
-	PrivateKeyPassword string `key:"privateKeyPassword" json:"private_key_password"`
-	CompartmentId      string `key:"compartmentId" json:"compartment_id"`
-	SubnetId           string `key:"subnetId" json:"subnet_id"`
-	AvailabilityDomain string `key:"availabilityDomain" json:"availability_domain"`
-	ImageId            string `key:"imageId" json:"image_id"`
-}
-
-type LambdaLabsProviderConfig struct {
-	ApiKey string `key:"apiKey" json:"apiKey"`
-}
-
-type CrusoeProviderConfig struct {
-}
-
-type HydraProviderConfig struct {
-}
-
-type GenericProviderConfig struct {
 }
 
 type MetricsCollector string
