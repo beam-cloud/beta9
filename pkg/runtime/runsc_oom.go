@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -20,18 +21,9 @@ const runscEventSourceTimeout = 30 * time.Second
 
 // Events reports guest OOM counter increments, independently of host cgroup OOMs.
 func (r *Runsc) Events(ctx context.Context, containerID string) (<-chan Event, error) {
-	args := append(r.baseArgs(false), "events", "--interval=1", containerID)
-	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
 	events := make(chan Event, 1)
 	go func() {
 		defer close(events)
-		defer stdout.Close()
 		report := func(err error) {
 			if ctx.Err() == nil {
 				select {
@@ -46,6 +38,16 @@ func (r *Runsc) Events(ctx context.Context, containerID string) (<-chan Event, e
 			report(err)
 			return
 		}
+		args := append(r.baseArgs(false), "events", "--interval=1", containerID)
+		cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			report(err)
+			return
+		}
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		defer stdout.Close()
 		if err := cmd.Start(); err != nil {
 			report(fmt.Errorf("start gVisor OOM events: %w", err))
 			return
@@ -163,4 +165,41 @@ func (w *RuntimeOOMWatcher) Watch(onOOM func()) error {
 func (w *RuntimeOOMWatcher) Stop() {
 	w.cancel()
 	w.fallback.Stop()
+}
+
+// runscOutputPipe keeps output alive after a detached startup command exits.
+func runscOutputPipe(output OutputWriter) (*os.File, func(), error) {
+	if output == nil {
+		return nil, func() {}, nil
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer reader.Close()
+		_, _ = io.Copy(output, reader)
+	}()
+	return writer, func() { _ = writer.Close(); <-done }, nil
+}
+
+func (r *Runsc) waitForExit(ctx context.Context, containerID string, dockerEnabled bool, counter *CgroupOOMWatcher, initialOOMs int64) (int, error) {
+	args := append(r.baseArgs(dockerEnabled), "wait", containerID)
+	output, err := exec.CommandContext(ctx, r.cfg.RunscPath, args...).Output()
+	// Check before forceDelete removes memory.events. A SIGKILL alone is not OOM.
+	if count, readErr := counter.readOOMKillCount(); readErr == nil && count > initialOOMs {
+		return int(types.ContainerExitCodeOomKill), ErrOOMKilled
+	}
+	if err != nil {
+		return -1, fmt.Errorf("wait for gVisor container: %w", err)
+	}
+	var result struct {
+		ExitStatus int `json:"exitStatus"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return -1, fmt.Errorf("decode gVisor exit status: %w", err)
+	}
+	return result.ExitStatus, nil
 }

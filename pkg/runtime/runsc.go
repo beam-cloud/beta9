@@ -203,57 +203,73 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 		return -1, err
 	}
 
-	defer func() {
-		r.forceDelete(containerID, dockerEnabled)
-	}()
-
 	args := r.baseArgs(dockerEnabled)
 	if bundle.usesGPU() {
 		args = append(args, "--nvproxy=true")
 	}
-	args = append(args, "run", "--bundle", bundlePath, containerID)
+	// Attached `run` deletes its cgroup before returning, losing OOM evidence.
+	args = append(args, "run", "--detach", "--bundle", bundlePath, containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // Kill entire process tree
 
-	if opts != nil && opts.OutputWriter != nil {
-		cmd.Stdout = opts.OutputWriter
-		cmd.Stderr = opts.OutputWriter
+	// Detached children retain these descriptors. Drain output independently of
+	// cmd.Wait, which must return when startup completes, not when output ends.
+	var output, stderr OutputWriter
+	if opts != nil {
+		output, stderr = opts.OutputWriter, opts.ErrorWriter
 	}
+	stdoutPipe, closeStdout, err := runscOutputPipe(output)
+	if err != nil {
+		return -1, err
+	}
+	defer closeStdout()
+	if stdoutPipe != nil {
+		cmd.Stdout, cmd.Stderr = stdoutPipe, stdoutPipe
+	}
+	var stderrPipe *os.File
+	if stderr != nil {
+		var closeStderr func()
+		stderrPipe, closeStderr, err = runscOutputPipe(stderr)
+		if err != nil {
+			return -1, err
+		}
+		defer closeStderr()
+		cmd.Stderr = stderrPipe
+	}
+	// Delete before draining output, including descriptors held by children.
+	defer r.forceDelete(containerID, dockerEnabled)
 
-	if opts != nil && opts.ErrorWriter != nil {
-		cmd.Stderr = opts.ErrorWriter
+	cgroupPath := containerID
+	if bundle.spec.Linux != nil && bundle.spec.Linux.CgroupsPath != "" {
+		cgroupPath = strings.TrimPrefix(bundle.spec.Linux.CgroupsPath, "/")
 	}
+	counter := &CgroupOOMWatcher{cgroupRoot: cgroupV2Root, cgroupPath: cgroupPath}
+	initialOOMs, _ := counter.readOOMKillCount()
 
 	if err := cmd.Start(); err != nil {
 		return -1, err
 	}
 
-	if opts != nil && opts.Started != nil {
-		opts.Started <- cmd.Process.Pid
+	// Only the child owns the pipe writers after startup.
+	if stdoutPipe != nil {
+		_ = stdoutPipe.Close()
 	}
-
-	// Handle cancellation by killing process group
-	go func() {
-		<-ctx.Done()
-		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
-			syscall.Kill(-pgid, syscall.SIGKILL)
-		}
-	}()
-
-	// Wait for exit
-	err = cmd.Wait()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				return ws.ExitStatus(), nil
-			}
-		}
-
+	if stderrPipe != nil {
+		_ = stderrPipe.Close()
+	}
+	if err := cmd.Wait(); err != nil {
 		return -1, err
 	}
-
-	return 0, nil
+	// Detached startup has exited; observers must follow the live sentry PID.
+	state, err := r.loadState(ctx, containerID)
+	if err != nil {
+		return -1, err
+	}
+	if opts != nil && opts.Started != nil && state.Pid > 0 {
+		opts.Started <- state.Pid
+	}
+	return r.waitForExit(ctx, containerID, dockerEnabled, counter, initialOOMs)
 }
 
 func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {

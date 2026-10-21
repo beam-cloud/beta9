@@ -231,3 +231,16 @@ func TestExplicitStopsNeverBecomeOOMs(t *testing.T) {
 		})
 	}
 }
+
+func TestFinalOOMReportDeduplicatesWatcherEvidence(t *testing.T) {
+	w := newOOMTestWorker(t, types.StubTypeSandbox)
+	logger := slog.New(common.NewChannelHandler(w.logs))
+	for range 2 {
+		w.reportOOMKill(t.Context(), w.instance.Request, logger, &w.oom)
+	}
+	require.True(t, w.oom.Load())
+	require.Equal(t, types.ContainerEventRuntimeOOMKilled, receive(t, w.repo.events).ID)
+	require.Empty(t, w.repo.events)
+	require.Len(t, w.logs, 1)
+	require.Empty(t, w.rt.killed, "final evidence reports an already-exited runtime")
+}
