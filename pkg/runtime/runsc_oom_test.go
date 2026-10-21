@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -219,6 +221,34 @@ echo '{"exitStatus":137}'
 	}
 }
 
+func TestRunscFinalMetricsSurviveLostWaitRPC(t *testing.T) {
+	for _, test := range []struct {
+		name                      string
+		status, guest, init, want int
+		err                       error
+	}{
+		{"success", 0, 0, 0, 0, nil},
+		{"boot failure", 42 << 8, 0, 0, 42, nil},
+		{"exit 255", 255 << 8, 0, 0, 255, nil},
+		{"SIGKILL", 9, 0, 0, 137, nil},
+		{"init OOM", 9, 1, 1, 137, ErrOOMKilled},
+		{"child OOM then SIGKILL", 9, 1, 0, 137, ErrGuestOOM},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "runsc")
+			require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho 'sandbox no longer running' >&2; exit 128\n"), 0o755))
+			rt := &Runsc{cfg: Config{RunscPath: path, RunscRoot: root}}
+			metrics := fmt.Sprintf("runsc_task_init_exit_status %d 123\nrunsc_memory_guest_oom_kills %d 123\nrunsc_memory_guest_init_oom_kills %d 123\n", test.status, test.guest, test.init)
+			require.NoError(t, os.WriteFile(rt.finalMetricsPath("container"), []byte(metrics), 0o600))
+			code, err := rt.Wait(t.Context(), "container")
+			require.ErrorIs(t, err, test.err)
+			require.Equal(t, test.want, code)
+			require.NoFileExists(t, rt.finalMetricsPath("container"))
+		})
+	}
+}
+
 func TestRunscDetachedRunDrainsOutputAndReturnsContainerExit(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "runsc")
@@ -272,4 +302,105 @@ esac
 	cancel()
 	require.Error(t, receive(t, done))
 	require.FileExists(t, path+".deleted")
+}
+
+type gatedRestoreOutput struct {
+	buffer bytes.Buffer
+	gate   <-chan struct{}
+}
+
+func (w *gatedRestoreOutput) Write(p []byte) (int, error) {
+	<-w.gate
+	return w.buffer.Write(p)
+}
+
+func TestRunscWaitDrainsRestoredOutputBeforeReturning(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "runsc")
+	require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+ *" restore "*) echo first-line; sleep .1; echo final-line ;;
+ *" state "*) echo '{"pid":4321,"status":"running"}' ;;
+ *" wait --restore "*) exit 0 ;;
+ *" wait "*) sleep .2; echo '{"exitStatus":42}' ;;
+ *" delete "*) exit 0 ;;
+esac
+`), 0o755))
+	gate := make(chan struct{})
+	output := &gatedRestoreOutput{gate: gate}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	rt := &Runsc{cfg: Config{RunscPath: path, RunscRoot: root}}
+	_, err := rt.Restore(ctx, "container", &RestoreOpts{BundlePath: writeRunscBundle(t, root, false), OutputWriter: output})
+	require.NoError(t, err)
+	done := make(chan int, 1)
+	go func() { code, _ := rt.Wait(ctx, "container"); done <- code }()
+	select {
+	case <-done:
+		close(gate)
+		t.Fatal("restore completed before stdout drained")
+	case <-time.After(350 * time.Millisecond):
+	}
+	close(gate)
+	require.Equal(t, 42, receive(t, done))
+	require.Equal(t, "first-line\nfinal-line\n", output.buffer.String())
+}
+
+func TestRunscBoundsOrphanedOutput(t *testing.T) {
+	for _, action := range []string{"run", "wait", "delete", "no wait"} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			path := filepath.Join(root, "runsc")
+			require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+ *" run "*|*" restore "*) sleep 60 & echo $! > "$0.child"; echo final-output ;;
+ *" state "*) echo '{"pid":4321,"status":"running"}' ;;
+ *" wait --restore "*|*" delete "*) exit 0 ;;
+ *" wait "*) echo '{"exitStatus":42}' ;;
+esac
+`), 0o755))
+			t.Cleanup(func() {
+				data, _ := os.ReadFile(path + ".child")
+				if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 1 {
+					process, _ := os.FindProcess(pid)
+					_ = process.Kill()
+				}
+			})
+			var output bytes.Buffer
+			rt := &Runsc{cfg: Config{RunscPath: path, RunscRoot: root}}
+			bundle := writeRunscBundle(t, root, false)
+			if action != "run" {
+				_, err := rt.Restore(t.Context(), "container", &RestoreOpts{BundlePath: bundle, OutputWriter: &output})
+				require.NoError(t, err)
+			}
+			finished := make(chan struct{})
+			go func() {
+				switch action {
+				case "run":
+					code, err := rt.Run(t.Context(), "container", bundle, &RunOpts{OutputWriter: &output})
+					if err != nil || code != 42 {
+						t.Errorf("exit = %d, %v; want 42, nil", code, err)
+					}
+				case "wait":
+					code, err := rt.Wait(t.Context(), "container")
+					if err != nil || code != 42 {
+						t.Errorf("exit = %d, %v; want 42, nil", code, err)
+					}
+				case "delete":
+					if err := rt.Delete(t.Context(), "container", &DeleteOpts{Force: true}); err != nil {
+						t.Error(err)
+					}
+				}
+				close(finished)
+			}()
+			select {
+			case <-finished:
+			case <-time.After(runscOutputDrainTimeout + 2*time.Second):
+				t.Fatal("orphaned output prevented cleanup")
+			}
+			require.Eventually(t, func() bool { _, ok := rt.restoreOutput.Load("container"); return !ok }, runscOutputDrainTimeout+time.Second, 10*time.Millisecond)
+			require.Equal(t, "final-output\n", output.String())
+		})
+	}
 }

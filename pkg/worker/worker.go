@@ -226,6 +226,7 @@ type ContainerInstance struct {
 	statusHeartbeatMu          sync.Mutex
 	egressMu                   sync.Mutex
 	stateMu                    sync.RWMutex
+	terminalOOM                bool // guarded by stateMu; later cleanup stops cannot replace an OOM
 	oomWatcherMu               sync.Mutex
 	oomWatcher                 runtime.OOMWatcher
 	oomWatcherFactory          func(func()) runtime.OOMWatcher
@@ -258,7 +259,22 @@ func (i *ContainerInstance) startupError() error {
 func (i *ContainerInstance) setStopReason(reason types.StopContainerReason) {
 	i.stateMu.Lock()
 	defer i.stateMu.Unlock()
-	i.StopReason = reason
+	if !i.terminalOOM {
+		i.StopReason = reason
+	}
+}
+
+func (i *ContainerInstance) markOOMKilled(isOOMKilled *atomic.Bool) bool {
+	i.stateMu.Lock()
+	defer i.stateMu.Unlock()
+	if !isOOMKilled.CompareAndSwap(false, true) {
+		return false
+	}
+	if _, stopped := i.StopReason.ExitCode(); !stopped {
+		i.terminalOOM = true
+		i.StopReason = types.StopContainerReasonUnknown
+	}
+	return true
 }
 
 func (i *ContainerInstance) runtimeStartState() (bool, int) {

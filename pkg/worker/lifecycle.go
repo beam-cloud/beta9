@@ -2027,9 +2027,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}()
 
 	exitCode, err = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.AddressesRegistered, opts.CheckpointFilesystemRestore)
-	if errors.Is(err, runtime.ErrOOMKilled) {
+	if errors.Is(err, runtime.ErrOOMKilled) || (errors.Is(err, runtime.ErrGuestOOM) && !request.Stub.Type.IsSandbox()) {
 		s.reportOOMKill(context.Background(), request, outputLogger, &isOOMKilled)
-	} else if err != nil {
+	} else if err != nil && !errors.Is(err, runtime.ErrGuestOOM) {
 		log.Error().Str("container_id", containerId).Err(err).Msg("container runtime failed")
 	}
 
@@ -2467,6 +2467,11 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 }
 
 func (s *Worker) waitForRestoredContainerExit(ctx context.Context, rt runtime.Runtime, containerId string, fallbackExitCode int) (int, error) {
+	if waiter, ok := rt.(interface {
+		Wait(context.Context, string) (int, error)
+	}); ok {
+		return waiter.Wait(context.WithoutCancel(ctx), containerId)
+	}
 	ticker := time.NewTicker(restoredContainerPollInterval)
 	defer ticker.Stop()
 	observedRunning := false

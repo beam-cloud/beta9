@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ const (
 	runscRestoreStateTimeout      = 30 * time.Second
 	runscRestoreStatePollInterval = 25 * time.Millisecond
 	runscDeleteTimeout            = 5 * time.Second
+	runscOutputDrainTimeout       = 5 * time.Second
 	runscGPUAnnotation            = "com.beam.gvisor.nvproxy"
 	// RunscTotalMemoryAnnotation tells runsc (beam-cloud/gvisor
 	// release-20260714.0-beam.9 and later) the total memory, in bytes, to report
@@ -44,6 +46,7 @@ var runscStateFileMagic = []byte{0x67, 0x56, 0x69, 0x73, 0x6f, 0x72, 0x53, 0x46}
 type Runsc struct {
 	cfg                   Config
 	dockerPacketWriteFlag string
+	restoreOutput         sync.Map // container ID -> *runscRestoreOutput
 }
 
 // runscBundle owns one operation's OCI spec; GPU state is never shared between containers.
@@ -62,6 +65,11 @@ type runscState struct {
 type runscCommandResult struct {
 	exitCode int
 	err      error
+}
+
+type runscRestoreOutput struct {
+	process *os.Process
+	done    chan struct{}
 }
 
 // NewRunsc creates a new runsc (gVisor) runtime
@@ -204,6 +212,8 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	}
 
 	args := r.baseArgs(dockerEnabled)
+	args = append(args, "--final-metrics-log", r.finalMetricsPath(containerID))
+	defer os.Remove(r.finalMetricsPath(containerID))
 	if bundle.usesGPU() {
 		args = append(args, "--nvproxy=true")
 	}
@@ -358,6 +368,7 @@ func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal
 }
 
 func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts) error {
+	defer os.Remove(r.finalMetricsPath(containerID))
 	args := r.baseArgs(false)
 	args = append(args, "delete")
 
@@ -368,7 +379,11 @@ func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts
 	args = append(args, containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-	return cmd.Run()
+	err := cmd.Run()
+	if err == nil {
+		r.drainRestoreOutput(containerID)
+	}
+	return err
 }
 
 func (r *Runsc) State(ctx context.Context, containerID string) (State, error) {
@@ -509,6 +524,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	if bundle.usesGPU() {
 		args = append(args, "--nvproxy=true")
 	}
+	args = append(args, "--final-metrics-log", r.finalMetricsPath(containerID))
 	args = append(args, "restore", "--background", "--direct")
 	if opts.ImagePath != "" {
 		args = append(args, "--image-path", opts.ImagePath)
@@ -524,6 +540,9 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Restore is attached: this timer starts after the CLI exits, so live logs
+	// remain open, but an orphan retaining stdout cannot prevent cleanup.
+	cmd.WaitDelay = runscOutputDrainTimeout
 	cleanupOnFailure := true
 	defer func() {
 		if cleanupOnFailure {
@@ -551,15 +570,22 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
+	output := &runscRestoreOutput{process: cmd.Process, done: make(chan struct{})}
+	r.restoreOutput.Store(containerID, output)
 	go func() {
-		<-ctx.Done()
-		r.forceDelete(containerID, false)
-		_ = cmd.Process.Kill()
+		select {
+		case <-ctx.Done():
+			r.forceDelete(containerID, false)
+			_ = cmd.Process.Kill()
+		case <-output.done:
+		}
 	}()
-
 	restoreDone := make(chan runscCommandResult, 1)
 	go func() {
 		restoreDone <- runscWaitResult(cmd.Wait(), stderr.String(), "restore")
+		close(restoreDone)
+		close(output.done)
+		r.restoreOutput.CompareAndDelete(containerID, output)
 	}()
 
 	pid, err := r.waitForRestoredContainerPID(ctx, containerID, restoreDone)

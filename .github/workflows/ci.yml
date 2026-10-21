@@ -70,6 +70,9 @@ jobs:
         run: |
           make test-pkg
           go test -v ./cmd/vminit
+          sudo apt-get update && sudo apt-get install -y tini
+          go test -c -o /tmp/worker-init.test ./cmd/worker
+          sudo /tmp/worker-init.test -test.v
   
   verify_microvm_image_pin:
     runs-on: ubuntu-latest

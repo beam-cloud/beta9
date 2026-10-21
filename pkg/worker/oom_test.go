@@ -232,6 +232,23 @@ func TestExplicitStopsNeverBecomeOOMs(t *testing.T) {
 	}
 }
 
+func TestOOMIsNotReclassifiedByLaterCleanupStop(t *testing.T) {
+	for _, reason := range []types.StopContainerReason{
+		types.StopContainerReasonScheduler, types.StopContainerReasonUser, types.StopContainerReasonAdmin,
+		types.StopContainerReasonTtl, types.StopContainerReasonInsufficientCredits, types.StopContainerReasonEvicted,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			w := newOOMTestWorker(t, types.StubTypeEndpointDeployment)
+			w.rt.events <- guestOOM(1)
+			require.Equal(t, syscall.SIGKILL, receive(t, w.rt.killed))
+			w.handleStopContainerArgs(types.StopContainerArgs{ContainerId: w.instance.Id, Reason: reason}, types.EventSourceSchedulerStop)
+			_, recorded := w.instance.lifecycleState()
+			require.Equal(t, 137, normalizeContainerExitCode(-1, recorded, w.oom.Load()))
+			require.Equal(t, "OOM", containerExitReason(137, recorded, w.oom.Load()))
+		})
+	}
+}
+
 func TestFinalOOMReportDeduplicatesWatcherEvidence(t *testing.T) {
 	w := newOOMTestWorker(t, types.StubTypeSandbox)
 	logger := slog.New(common.NewChannelHandler(w.logs))

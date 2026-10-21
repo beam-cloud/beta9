@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,7 +9,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
@@ -182,7 +187,11 @@ func runscOutputPipe(output OutputWriter) (*os.File, func(), error) {
 		defer reader.Close()
 		_, _ = io.Copy(output, reader)
 	}()
-	return writer, func() { _ = writer.Close(); <-done }, nil
+	return writer, func() {
+		_ = writer.Close()
+		_ = reader.SetReadDeadline(time.Now().Add(runscOutputDrainTimeout))
+		<-done
+	}, nil
 }
 
 func (r *Runsc) waitForExit(ctx context.Context, containerID string, dockerEnabled bool, counter *CgroupOOMWatcher, initialOOMs int64) (int, error) {
@@ -192,14 +201,98 @@ func (r *Runsc) waitForExit(ctx context.Context, containerID string, dockerEnabl
 	if count, readErr := counter.readOOMKillCount(); readErr == nil && count > initialOOMs {
 		return int(types.ContainerExitCodeOomKill), ErrOOMKilled
 	}
+	final := r.finalMetrics(containerID)
+	if final.initKills > 0 {
+		return int(types.ContainerExitCodeOomKill), ErrOOMKilled
+	}
+	code := final.exitCode
+	if code < 0 {
+		if err != nil {
+			if final.guestKills > 0 {
+				return -1, ErrGuestOOM
+			}
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				return -1, fmt.Errorf("wait for gVisor container: %w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
+			}
+			return -1, fmt.Errorf("wait for gVisor container: %w", err)
+		}
+		var result struct {
+			ExitStatus int `json:"exitStatus"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil {
+			return -1, fmt.Errorf("decode gVisor exit status: %w", err)
+		}
+		code = result.ExitStatus
+	}
+	if final.guestKills > 0 {
+		return code, ErrGuestOOM
+	}
+	return code, nil
+}
+
+func (r *Runsc) finalMetricsPath(containerID string) string {
+	return filepath.Join(r.cfg.RunscRoot, containerID+".metrics")
+}
+
+type runscFinalMetrics struct {
+	guestKills, initKills uint64
+	exitCode              int
+}
+
+func (r *Runsc) finalMetrics(containerID string) (result runscFinalMetrics) {
+	result.exitCode = -1
+	file, err := os.Open(r.finalMetricsPath(containerID))
 	if err != nil {
-		return -1, fmt.Errorf("wait for gVisor container: %w", err)
+		return result // A host kill may prevent the sentry from writing final metrics.
 	}
-	var result struct {
-		ExitStatus int `json:"exitStatus"`
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 {
+			continue
+		}
+		count, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch fields[0] {
+		case "runsc_memory_guest_oom_kills":
+			result.guestKills = count
+		case "runsc_memory_guest_init_oom_kills":
+			result.initKills = count
+		case "runsc_task_init_exit_status":
+			status := syscall.WaitStatus(count)
+			if status.Exited() {
+				result.exitCode = status.ExitStatus()
+			}
+			if status.Signaled() {
+				result.exitCode = 128 + int(status.Signal())
+			}
+		}
 	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return -1, fmt.Errorf("decode gVisor exit status: %w", err)
+	return result
+}
+
+// Wait preserves the native exit status after a detached restore.
+func (r *Runsc) Wait(ctx context.Context, containerID string) (int, error) {
+	defer os.Remove(r.finalMetricsPath(containerID))
+	counter := &CgroupOOMWatcher{cgroupRoot: cgroupV2Root, cgroupPath: containerID}
+	code, err := r.waitForExit(ctx, containerID, false, counter, 0)
+	r.drainRestoreOutput(containerID)
+	return code, err
+}
+
+// Called only after exit or a successful delete, after capturing OOM evidence.
+func (r *Runsc) drainRestoreOutput(containerID string) {
+	if output, ok := r.restoreOutput.LoadAndDelete(containerID); ok {
+		output := output.(*runscRestoreOutput)
+		select {
+		case <-output.done:
+		default:
+			r.forceDelete(containerID, false)
+			_ = output.process.Kill()
+			<-output.done
+		}
 	}
-	return result.ExitStatus, nil
 }
