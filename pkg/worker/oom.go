@@ -101,21 +101,7 @@ func (s *Worker) handleOOMKill(
 	outputLogger *slog.Logger,
 	isOOMKilled *atomic.Bool,
 ) error {
-	log.Warn().Str("container_id", containerId).Msg("OOM kill detected")
-	isOOMKilled.Store(true)
-	outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage, types.EventAttrOOMKilled, true)
-
-	go s.recordContainerEvent(ctx, request, types.EventContainerEventSchema{
-		ID:        types.ContainerEventRuntimeOOMKilled,
-		Domain:    types.EventDomainRuntime,
-		Timestamp: time.Now().UTC(),
-		Reason:    "OOM",
-		Source:    types.EventSourceWorkerRuntime.String(),
-		Message:   types.EventMessageRuntimeOOMKilled.String(),
-		Attrs: map[string]string{
-			types.EventAttrOOMKilled: "true",
-		},
-	})
+	s.reportOOMKill(ctx, request, outputLogger, isOOMKilled)
 
 	// For gVisor, manually stop the container (kernel won't do it automatically).
 	// A restored container may use a different runtime than the worker default.
@@ -173,4 +159,26 @@ func oomOperationContext(parent context.Context, timeout time.Duration) (context
 		deadline = parentDeadline
 	}
 	return context.WithDeadline(context.WithoutCancel(parent), deadline)
+}
+
+// reportOOMKill also handles final-exit evidence when the polling watcher lost
+// the race. Both paths share a flag so the user gets one terminal OOM log/event.
+func (s *Worker) reportOOMKill(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *atomic.Bool) {
+	if !isOOMKilled.CompareAndSwap(false, true) {
+		return
+	}
+	log.Warn().Str("container_id", request.ContainerId).Msg("OOM kill detected")
+	outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage, types.EventAttrOOMKilled, true)
+
+	go s.recordContainerEvent(ctx, request, types.EventContainerEventSchema{
+		ID:        types.ContainerEventRuntimeOOMKilled,
+		Domain:    types.EventDomainRuntime,
+		Timestamp: time.Now().UTC(),
+		Reason:    "OOM",
+		Source:    types.EventSourceWorkerRuntime.String(),
+		Message:   types.EventMessageRuntimeOOMKilled.String(),
+		Attrs: map[string]string{
+			types.EventAttrOOMKilled: "true",
+		},
+	})
 }

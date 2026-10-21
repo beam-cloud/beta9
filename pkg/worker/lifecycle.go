@@ -2027,7 +2027,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}()
 
 	exitCode, err = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.AddressesRegistered, opts.CheckpointFilesystemRestore)
-	if err != nil {
+	if errors.Is(err, runtime.ErrOOMKilled) {
+		s.reportOOMKill(context.Background(), request, outputLogger, &isOOMKilled)
+	} else if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("container runtime failed")
 	}
 

@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -37,7 +39,11 @@ EOF
 func runscEvents(t *testing.T, ctx context.Context, script string) <-chan Event {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "runsc")
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+  *" state "*) echo '{"id":"container","pid":1,"status":"running"}'; exit 0 ;;
+esac
+`+script), 0o755))
 	rt := &Runsc{cfg: Config{RunscPath: path}}
 	events, err := rt.Events(ctx, "container")
 	require.NoError(t, err)
@@ -45,17 +51,18 @@ func runscEvents(t *testing.T, ctx context.Context, script string) <-chan Event 
 }
 
 func TestRunscGuestOOMEventsStopOnCancellationAndInvalidJSON(t *testing.T) {
-	for _, test := range []struct{ name, script string }{
-		{"cancel", "exec sleep 60"},
-		{"invalid JSON", "echo invalid-json; exec sleep 60"},
+	for _, test := range []struct{ name, script, error string }{
+		{"cancel", "exec sleep 60", ""},
+		{"invalid JSON", "echo invalid-json; exec sleep 60", "decode gVisor OOM"},
+		{"failed command", "echo event-stream-failed >&2; exit 1", "event-stream-failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			// exec keeps cancellation from leaving a shell child behind.
 			events := runscEvents(t, ctx, test.script)
-			if test.name == "invalid JSON" {
-				require.ErrorContains(t, receive(t, events).Err, "decode gVisor OOM")
+			if test.error != "" {
+				require.ErrorContains(t, receive(t, events).Err, test.error)
 			} else {
 				cancel()
 			}
@@ -67,6 +74,28 @@ func TestRunscGuestOOMEventsStopOnCancellationAndInvalidJSON(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunscGuestOOMEventsWaitForSandboxStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runsc")
+	require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+  *" state "*)
+    if [ ! -f "$0.ready" ]; then
+      touch "$0.ready"
+      echo 'loading container: file does not exist' >&2
+      exit 128
+    fi
+    echo '{"id":"container","pid":1,"status":"running"}' ;;
+  *" events "*)
+    test -f "$0.ready" || exit 128
+    echo '{"type":"stats","id":"container","data":{"memory":{"raw":{"guest_oom_kill":1}}}}' ;;
+esac
+`), 0o755))
+	rt := &Runsc{cfg: Config{RunscPath: path}}
+	events, err := rt.Events(t.Context(), "container")
+	require.NoError(t, err)
+	require.Equal(t, &microvm.ApplicationOOM{Kills: 1}, receive(t, events).ApplicationOOM)
 }
 
 type eventTestRuntime struct {
@@ -161,4 +190,86 @@ func receive[T any](t *testing.T, ch <-chan T) T {
 		var zero T
 		return zero
 	}
+}
+
+func TestRunscFinalExitRequiresNewKernelOOMKill(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		count int
+		oom   bool
+	}{
+		{"plain SIGKILL", 4, false}, {"host OOM", 5, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "runsc")
+			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf(`#!/bin/sh
+printf 'oom_kill %d\n' > '%s/memory.events'
+echo '{"exitStatus":137}'
+`, test.count, root)), 0o755))
+			rt := &Runsc{cfg: Config{RunscPath: path}}
+			code, err := rt.waitForExit(t.Context(), "container", false, &CgroupOOMWatcher{cgroupRoot: root}, 4)
+			require.Equal(t, 137, code)
+			if test.oom {
+				require.ErrorIs(t, err, ErrOOMKilled)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestRunscDetachedRunDrainsOutputAndReturnsContainerExit(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "runsc")
+	require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+  *" run "*)
+    case " $* " in *" --detach "*) ;; *) exit 1 ;; esac
+    (sleep .1; echo application-output; echo application-error >&2) & ;;
+  *" state "*) echo '{"id":"container","pid":4321,"status":"running"}' ;;
+  *" wait "*) echo '{"exitStatus":137}' ;;
+  *" delete "*) touch "$0.deleted" ;;
+  *) exit 1 ;;
+esac
+`), 0o755))
+	rt := &Runsc{cfg: Config{RunscPath: path}}
+	var stdout, stderr bytes.Buffer
+	started := make(chan int, 1)
+	code, err := rt.Run(t.Context(), "container", writeRunscBundle(t, root, false), &RunOpts{OutputWriter: &stdout, ErrorWriter: &stderr, Started: started})
+	require.NoError(t, err)
+	require.Equal(t, 137, code)
+	require.Equal(t, "application-output\n", stdout.String())
+	require.Equal(t, "application-error\n", stderr.String())
+	require.FileExists(t, path+".deleted")
+	require.Equal(t, 4321, receive(t, started))
+}
+
+func TestRunscDetachedRunCleansUpAfterCancellation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "runsc")
+	require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
+case " $* " in
+  *" run "*)
+    sleep 60 &
+    echo $! > "$0.child" ;;
+  *" state "*) echo '{"pid":4321,"status":"running"}' ;;
+  *" wait "*) exec sleep 60 ;;
+  *" delete "*) kill "$(cat "$0.child")"; touch "$0.deleted" ;;
+esac
+`), 0o755))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started := make(chan int, 1)
+	done := make(chan error, 1)
+	rt := &Runsc{cfg: Config{RunscPath: path}}
+	bundle := writeRunscBundle(t, root, false)
+	go func() {
+		_, err := rt.Run(ctx, "container", bundle, &RunOpts{OutputWriter: &bytes.Buffer{}, Started: started})
+		done <- err
+	}()
+	require.Equal(t, 4321, receive(t, started))
+	cancel()
+	require.Error(t, receive(t, done))
+	require.FileExists(t, path+".deleted")
 }

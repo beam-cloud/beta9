@@ -1,6 +1,12 @@
 package runtime
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrOOMKilled indicates a terminal kill confirmed by the kernel OOM counter.
+var ErrOOMKilled = errors.New("container killed by OOM")
 
 // ErrUnsupportedRuntime is returned when an unsupported runtime type is requested
 type ErrUnsupportedRuntime struct {
