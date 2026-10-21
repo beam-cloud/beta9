@@ -304,7 +304,6 @@ func agentMachineToProto(state *model.AgentTokenState, worker *types.Worker) *pb
 		GpuCount:        state.GPUCount,
 		Status:          string(agentMachineStatus(state, worker, time.Now())),
 		PoolName:        state.PoolName,
-		ProviderName:    types.DefaultAgentName,
 		Created:         formatComputeTime(state.CreatedAt),
 		LastKeepalive:   formatComputeTime(lastKeepalive),
 		MachineMetrics:  metrics,

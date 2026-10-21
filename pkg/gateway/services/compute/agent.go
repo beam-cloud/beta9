@@ -1174,13 +1174,6 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 		ImageBuildRepositoryName:   s.appConfig.ImageService.BuildRepositoryName,
 		ImageBuildRegistryInsecure: s.appConfig.ImageService.BuildRegistryInsecure,
 		Telemetry:                  telemetryConfig,
-		DisabledServices: []string{
-			"redis",
-			"postgres",
-			"fluent-bit",
-			"configman",
-			"k3s",
-		},
 	}, nil
 }
 

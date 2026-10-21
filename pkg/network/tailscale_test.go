@@ -29,7 +29,7 @@ func statusWithPeers(hosts ...string) *ipnstate.Status {
 
 func testTailscale(t *testing.T, status *ipnstate.Status) *Tailscale {
 	t.Helper()
-	ts := newTailscale(TailscaleConfig{Hostname: "test-node"}, nil)
+	ts := newTailscale(TailscaleConfig{Hostname: "test-node"})
 	ts.initialized = true
 	ts.statusFunc = func(ctx context.Context) (*ipnstate.Status, error) {
 		return status, nil

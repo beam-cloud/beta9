@@ -143,8 +143,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
-	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config), tailscaleRepo)
+	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config))
 
 	computeRepo := repository.NewComputeRedisRepository(redisClient)
 	managedPoolRepo := repository.NewManagedPoolRedisRepository(redisClient)

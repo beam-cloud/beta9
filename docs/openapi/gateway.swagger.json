@@ -2014,12 +2014,6 @@
         "fallback": {
           "type": "string"
         },
-        "disabledServices": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
         "imageRegistryStore": {
           "type": "string"
         },
@@ -4093,12 +4087,6 @@
           "type": "string"
         },
         "poolName": {
-          "type": "string"
-        },
-        "providerName": {
-          "type": "string"
-        },
-        "registrationToken": {
           "type": "string"
         },
         "lastKeepalive": {

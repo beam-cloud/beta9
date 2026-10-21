@@ -1144,7 +1144,6 @@ type OpenMeterConfig struct {
 
 type TailscaleConfig struct {
 	ControlURL   string                  `key:"controlUrl" json:"control_url"`
-	User         string                  `key:"user" json:"user"`
 	AuthKey      string                  `key:"authKey" json:"auth_key"`
 	AgentAuthKey string                  `key:"agentAuthKey" json:"agent_auth_key"`
 	HostName     string                  `key:"hostName" json:"host_name"`

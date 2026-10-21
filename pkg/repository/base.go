@@ -18,7 +18,6 @@ type WorkerRepository interface {
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
-	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId, generation string) error
 	SetWorkerCordon(workerId string, cordoned bool) error
@@ -347,11 +346,6 @@ type TaskRepository interface {
 	TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error)
 	SetTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
 	RemoveTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
-}
-
-type TailscaleRepository interface {
-	GetHostnamesForService(serviceName string) ([]string, error)
-	SetHostname(serviceName, serviceId, hostName string) error
 }
 
 type EventRepository interface {

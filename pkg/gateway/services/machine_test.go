@@ -36,7 +36,7 @@ func TestDeleteMachineDoesNotFallBackWithoutComputeService(t *testing.T) {
 	}
 }
 
-func TestClassifyMachinePool(t *testing.T) {
+func TestLocalMachinePool(t *testing.T) {
 	gateway := &GatewayService{appConfig: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
 		"local":          {Mode: types.PoolModeLocal},
 		"agent-external": {Mode: types.PoolModeExternal},
@@ -44,19 +44,19 @@ func TestClassifyMachinePool(t *testing.T) {
 		"provider-pool":  {Mode: types.PoolModeProvider},
 	}}}}
 
-	tests := map[string]machinePoolBackend{
-		"":               machinePoolManagedAgent,
-		"unknown":        machinePoolManagedAgent,
-		"local":          machinePoolLocal,
-		"agent-external": machinePoolManagedAgent,
-		"private":        machinePoolManagedAgent,
-		"provider-pool":  machinePoolManagedAgent,
+	tests := map[string]bool{
+		"":               false,
+		"unknown":        false,
+		"local":          true,
+		"agent-external": false,
+		"private":        false,
+		"provider-pool":  false,
 	}
 	for poolName, want := range tests {
 		t.Run(poolName, func(t *testing.T) {
-			got, _ := gateway.classifyMachinePool(poolName)
+			got := gateway.localMachinePool(poolName)
 			if got != want {
-				t.Fatalf("classifyMachinePool(%q) = %d, want %d", poolName, got, want)
+				t.Fatalf("localMachinePool(%q) = %t, want %t", poolName, got, want)
 			}
 		})
 	}

@@ -437,7 +437,6 @@ providers:
     - hil
 tailscale:
   controlUrl:
-  user: beta9
   # Gateway tsnet auth key. Use an environment-scoped gateway tag, for example tag:beam-staging-gateway.
   authKey:
   # Private pool agent tsnet auth key. Use a separate environment-scoped agent tag, for example tag:beam-staging-agent.

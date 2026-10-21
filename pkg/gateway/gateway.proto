@@ -1229,7 +1229,8 @@ message AgentBootstrapConfig {
   string transport = 7;
   string executor = 8;
   string fallback = 9;
-  repeated string disabled_services = 10;
+  reserved 10;
+  reserved "disabled_services";
   string image_registry_store = 11;
   uint32 image_clip_version = 12;
   bool image_local_cache_enabled = 13;
@@ -1470,10 +1471,8 @@ message Machine {
   uint32 gpu_count = 5;
   string status = 6;
   string pool_name = 7;
-  string provider_name = 8;
-  string registration_token = 9;
-  reserved 10, 11, 16;
-  reserved "tailscale_url", "tailscale_auth", "user_data";
+  reserved 8, 9, 10, 11, 16;
+  reserved "provider_name", "registration_token", "tailscale_url", "tailscale_auth", "user_data";
   string last_keepalive = 12;
   string created = 13;
   string agent_version = 14;

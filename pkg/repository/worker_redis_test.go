@@ -725,22 +725,7 @@ func TestGetAllWorkersInPoolUsesPoolIndex(t *testing.T) {
 	assert.Equal(t, "worker-pool-a", workers[0].Id)
 }
 
-func TestGetAllWorkersOnMachineUsesMachineIndex(t *testing.T) {
-	rdb, err := NewRedisClientForTest()
-	assert.NotNil(t, rdb)
-	assert.Nil(t, err)
-
-	repo := NewWorkerRedisRepositoryForTest(rdb)
-	assert.Nil(t, repo.AddWorker(&types.Worker{Id: "worker-machine-a", PoolName: "pool-a", MachineId: "machine-a"}))
-	assert.Nil(t, repo.AddWorker(&types.Worker{Id: "worker-machine-b", PoolName: "pool-a", MachineId: "machine-b"}))
-
-	workers, err := repo.GetAllWorkersOnMachine("machine-a")
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(workers))
-	assert.Equal(t, "worker-machine-a", workers[0].Id)
-}
-
-func TestSetWorkerKeepAliveUpdatesMachineIndex(t *testing.T) {
+func TestSetWorkerKeepAliveUpdatesMachineID(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
 	assert.Nil(t, err)
@@ -754,15 +739,6 @@ func TestSetWorkerKeepAliveUpdatesMachineIndex(t *testing.T) {
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, "machine-b", updatedWorker.MachineId)
-
-	oldWorkers, err := repo.GetAllWorkersOnMachine("machine-a")
-	assert.Nil(t, err)
-	assert.Equal(t, 0, len(oldWorkers))
-
-	newWorkers, err := repo.GetAllWorkersOnMachine("machine-b")
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(newWorkers))
-	assert.Equal(t, worker.Id, newWorkers[0].Id)
 }
 
 func TestWorkerCheckpointCompatibilityKey(t *testing.T) {
@@ -839,28 +815,6 @@ func TestWorkerSecondaryIndexesIgnoreWrongPoolMembers(t *testing.T) {
 	assert.False(t, inWrongPool)
 }
 
-func TestWorkerSecondaryIndexesIgnoreWrongMachineMembers(t *testing.T) {
-	rdb, err := NewRedisClientForTest()
-	assert.NotNil(t, rdb)
-	assert.Nil(t, err)
-
-	repo := NewWorkerRedisRepositoryForTest(rdb)
-	worker := &types.Worker{Id: "worker-wrong-machine", MachineId: "machine-a"}
-	assert.Nil(t, repo.AddWorker(worker))
-
-	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
-	wrongMachineIndex := common.RedisKeys.SchedulerWorkerMachineIndex("machine-b")
-	assert.Nil(t, rdb.SAdd(context.TODO(), wrongMachineIndex, stateKey).Err())
-
-	workers, err := repo.GetAllWorkersOnMachine("machine-b")
-	assert.Nil(t, err)
-	assert.Equal(t, 0, len(workers))
-
-	inWrongMachine, err := rdb.SIsMember(context.TODO(), wrongMachineIndex, stateKey).Result()
-	assert.Nil(t, err)
-	assert.False(t, inWrongMachine)
-}
-
 func TestWorkerSecondaryIndexesUpdateAndRemove(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
@@ -881,18 +835,11 @@ func TestWorkerSecondaryIndexesUpdateAndRemove(t *testing.T) {
 	inNewPool, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerWorkerPoolIndex("pool-b"), stateKey).Result()
 	assert.Nil(t, err)
 	assert.True(t, inNewPool)
-	inOldMachine, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerWorkerMachineIndex("machine-a"), stateKey).Result()
-	assert.Nil(t, err)
-	assert.False(t, inOldMachine)
-	inNewMachine, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerWorkerMachineIndex("machine-b"), stateKey).Result()
-	assert.Nil(t, err)
-	assert.True(t, inNewMachine)
 
 	assert.Nil(t, repo.RemoveWorker(worker.Id))
 	for _, indexKey := range []string{
 		common.RedisKeys.SchedulerWorkerIndex(),
 		common.RedisKeys.SchedulerWorkerPoolIndex("pool-b"),
-		common.RedisKeys.SchedulerWorkerMachineIndex("machine-b"),
 	} {
 		exists, err := rdb.SIsMember(context.TODO(), indexKey, stateKey).Result()
 		assert.Nil(t, err)

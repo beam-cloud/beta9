@@ -41,8 +41,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		return machineListResponse(gpus, supportedGpus, machines, in.Limit, gws.appConfig.GatewayService.StubLimits), nil
 	}
 
-	backend, _ := gws.classifyMachinePool(in.PoolName)
-	if backend == machinePoolLocal {
+	if gws.localMachinePool(in.PoolName) {
 		return &pb.ListMachinesResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q is managed by its local controller", in.PoolName)}, nil
 	}
 	if gws.computeService == nil {
@@ -89,21 +88,9 @@ func machineListResponse(gpus map[string]bool, supportedGpus map[string]bool, ma
 	}
 }
 
-type machinePoolBackend uint8
-
-const (
-	machinePoolManagedAgent machinePoolBackend = iota
-	machinePoolLocal
-)
-
-// classifyMachinePool routes cluster-admin machine operations before any
-// repository call, so one pool can never fall through into another backend.
-func (gws *GatewayService) classifyMachinePool(name string) (machinePoolBackend, types.WorkerPoolConfig) {
+func (gws *GatewayService) localMachinePool(name string) bool {
 	pool, configured := gws.appConfig.Worker.Pools[name]
-	if !configured || pool.AgentHosted() {
-		return machinePoolManagedAgent, pool
-	}
-	return machinePoolLocal, pool
+	return configured && !pool.AgentHosted()
 }
 
 func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachineRequest) (*pb.CreateMachineResponse, error) {
@@ -120,8 +107,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 		return &pb.CreateMachineResponse{Ok: false, ErrMsg: "machine creation is managed through private pool join or BYOC scaling"}, nil
 	}
 
-	backend, _ := gws.classifyMachinePool(in.PoolName)
-	if backend == machinePoolLocal {
+	if gws.localMachinePool(in.PoolName) {
 		return &pb.CreateMachineResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q is managed by its local controller", in.PoolName)}, nil
 	}
 	if gws.computeService == nil {
@@ -134,10 +120,8 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 	return &pb.CreateMachineResponse{
 		Ok: true,
 		Machine: &pb.Machine{
-			Id:                bootstrap.MachineID,
-			PoolName:          bootstrap.PoolName,
-			ProviderName:      types.DefaultAgentName,
-			RegistrationToken: bootstrap.Token,
+			Id:       bootstrap.MachineID,
+			PoolName: bootstrap.PoolName,
 		},
 		InstallCommand: bootstrap.InstallCommand,
 	}, nil
@@ -149,8 +133,7 @@ func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachi
 		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "Unauthorized Access"}, nil
 	}
 	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin {
-		backend, _ := gws.classifyMachinePool(in.PoolName)
-		if backend == machinePoolLocal {
+		if gws.localMachinePool(in.PoolName) {
 			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q is managed by its local controller", in.PoolName)}, nil
 		}
 		if gws.computeService == nil {
