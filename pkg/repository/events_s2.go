@@ -603,6 +603,10 @@ func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, quer
 		return addKnown(r.legacyTaskStreamName(query.TaskID))
 	case query.AppID != "" && query.WorkspaceID != "":
 		return addKnown(r.appNamespaceStreamName(query.WorkspaceID, query.AppID))
+	// Unlike compute history, there is no workspace-stream fallback when this
+	// stream is empty: no failures is the usual answer, and dashboards poll it.
+	case query.WorkspaceID != "" && allStubStateEventTypes(query.EventTypes):
+		return addKnown(r.workspaceStubStateStreamName(query.WorkspaceID))
 	case query.StubID != "" && query.WorkspaceID != "":
 		return addKnown(r.stubStreamName(query.WorkspaceID, query.StubID))
 	case query.WorkspaceID != "" && allComputeEventTypes(query.EventTypes):
@@ -628,6 +632,20 @@ func allComputeEventTypes(eventTypes []string) bool {
 	return true
 }
 
+// allStubStateEventTypes reports whether the query is scoped exclusively to
+// stub.state.* transitions, so it can be served from the sparse stub-state stream.
+func allStubStateEventTypes(eventTypes []string) bool {
+	if len(eventTypes) == 0 {
+		return false
+	}
+	for _, eventType := range eventTypes {
+		if !isStubStateEvent(strings.TrimSpace(eventType)) {
+			return false
+		}
+	}
+	return true
+}
+
 func allWorkspaceContainerRealtimeEventTypes(eventTypes []string) bool {
 	if len(eventTypes) == 0 {
 		return false
@@ -645,64 +663,42 @@ func allWorkspaceContainerRealtimeEventTypes(eventTypes []string) bool {
 
 func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName s2.StreamName, limit uint64, query types.EventQuery, response *types.ContainerEventsResponse) error {
 	response.Streams = append(response.Streams, string(streamName))
+	if uint64(len(response.Events)) >= limit {
+		return nil
+	}
 
-	tail, err := r.basin.Stream(streamName).CheckTail(ctx)
+	err := r.scanStreamFromTail(ctx, streamName, max(limit, s2EventAggregateScanLimit), func(record s2.SequencedRecord) bool {
+		if eventRecordHeadersSkip(record, query) {
+			return true
+		}
+		eventRecord, ok := containerEventRecordFromS2(record, query, response)
+		if !ok || !eventRecordMatchesQuery(eventRecord, query) {
+			return true
+		}
+		augmentContainerEventResponse(response, &eventRecord)
+		response.Events = append(response.Events, eventRecord)
+		return uint64(len(response.Events)) < limit
+	})
+	if err != nil {
+		return fmt.Errorf("read container events from s2 stream %q: %w", streamName, err)
+	}
+	return nil
+}
+
+// scanStreamFromTail visits a stream's records newest-first; see scanSeqFromTail.
+func (r *S2EventRepository) scanStreamFromTail(ctx context.Context, streamName s2.StreamName, scanLimit uint64, visit func(s2.SequencedRecord) bool) error {
+	stream := r.basin.Stream(streamName)
+	tail, err := stream.CheckTail(ctx)
 	if err != nil {
 		if isS2ReadEmpty(err) {
 			return nil
 		}
-		return fmt.Errorf("check tail for container events s2 stream %q: %w", streamName, err)
+		return fmt.Errorf("check tail: %w", err)
 	}
-	if tail.Tail.SeqNum == 0 {
-		return nil
+	read := func(ctx context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		return stream.Read(ctx, &s2.ReadOptions{SeqNum: &seqNum, Count: &count})
 	}
-
-	chunkSize := uint64(s2EventHistoryReadLimit)
-	if chunkSize == 0 {
-		chunkSize = 1000
-	}
-	scanLimit := uint64(s2EventAggregateScanLimit)
-	if limit > scanLimit {
-		scanLimit = limit
-	}
-
-	var recordsScanned uint64
-	var scannedFromTail uint64
-	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < scanLimit && uint64(len(response.Events)) < limit {
-		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
-		tailOffsetValue := int64(tailOffset)
-		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			TailOffset: &tailOffsetValue,
-			Count:      &count,
-		})
-		if err != nil {
-			if isS2ReadEmpty(err) {
-				return nil
-			}
-			return fmt.Errorf("read container events from s2 stream %q: %w", streamName, err)
-		}
-		if len(batch.Records) == 0 {
-			return nil
-		}
-		recordsScanned += uint64(len(batch.Records))
-		scannedFromTail = tailOffset
-
-		for i := len(batch.Records) - 1; i >= 0; i-- {
-			if eventRecordHeadersSkip(batch.Records[i], query) {
-				continue
-			}
-			eventRecord, ok := containerEventRecordFromS2(batch.Records[i], query, response)
-			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
-				continue
-			}
-			augmentContainerEventResponse(response, &eventRecord)
-			response.Events = append(response.Events, eventRecord)
-			if uint64(len(response.Events)) >= limit {
-				break
-			}
-		}
-	}
-	return nil
+	return scanSeqFromTail(ctx, read, tail.Tail.SeqNum, s2EventHistoryReadLimit, scanLimit, visit)
 }
 
 func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamName s2.StreamName, query types.EventQuery, limit uint64, response *types.EventHistoryResponse) error {
@@ -801,61 +797,24 @@ func eventHistoryQueryReadsFromTail(query types.EventQuery) bool {
 // history read returns the latest matching events instead of the first
 // records ever written to the stream.
 func (r *S2EventRepository) readEventHistoryStreamFromTail(ctx context.Context, streamName s2.StreamName, query types.EventQuery, limit uint64, response *types.EventHistoryResponse) error {
-	tail, err := r.basin.Stream(streamName).CheckTail(ctx)
-	if err != nil {
-		if isS2ReadEmpty(err) {
-			return nil
-		}
-		return fmt.Errorf("check tail for event history s2 stream %q: %w", streamName, err)
-	}
-	if tail.Tail.SeqNum == 0 {
+	if uint64(len(response.Events)) >= limit {
 		return nil
 	}
 
-	chunkSize := uint64(s2EventHistoryReadLimit)
-	if chunkSize == 0 {
-		chunkSize = 1000
-	}
-	scanLimit := uint64(s2EventAggregateScanLimit)
-	if limit > scanLimit {
-		scanLimit = limit
-	}
-
-	var recordsScanned uint64
-	var scannedFromTail uint64
-	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < scanLimit && uint64(len(response.Events)) < limit {
-		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
-		tailOffsetValue := int64(tailOffset)
-		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			TailOffset: &tailOffsetValue,
-			Count:      &count,
-		})
-		if err != nil {
-			if isS2ReadEmpty(err) {
-				return nil
-			}
-			return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
+	err := r.scanStreamFromTail(ctx, streamName, max(limit, s2EventAggregateScanLimit), func(record s2.SequencedRecord) bool {
+		if eventRecordHeadersSkip(record, query) {
+			return true
 		}
-		if len(batch.Records) == 0 {
-			return nil
+		eventRecord, ok := containerEventRecordFromS2(record, query, &types.ContainerEventsResponse{})
+		if !ok || !eventRecordMatchesQuery(eventRecord, query) {
+			return true
 		}
-		recordsScanned += uint64(len(batch.Records))
-		scannedFromTail = tailOffset
-
-		for i := len(batch.Records) - 1; i >= 0; i-- {
-			if eventRecordHeadersSkip(batch.Records[i], query) {
-				continue
-			}
-			eventRecord, ok := containerEventRecordFromS2(batch.Records[i], query, &types.ContainerEventsResponse{})
-			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
-				continue
-			}
-			augmentContainerEventResponse(&types.ContainerEventsResponse{}, &eventRecord)
-			response.Events = append(response.Events, eventRecord)
-			if uint64(len(response.Events)) >= limit {
-				break
-			}
-		}
+		augmentContainerEventResponse(&types.ContainerEventsResponse{}, &eventRecord)
+		response.Events = append(response.Events, eventRecord)
+		return uint64(len(response.Events)) < limit
+	})
+	if err != nil {
+		return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
 	}
 	return nil
 }
@@ -1339,6 +1298,9 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	}
 	if isStubEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
+		if isStubStateEvent(eventType) {
+			add(r.workspaceStubStateStreamName(metadata.WorkspaceID))
+		}
 	}
 	// Request stats also feed the app-scoped history.
 	if eventType == types.EventEndpointRequestStats && metadata.WorkspaceID != "" && metadata.AppID != "" {
@@ -1385,6 +1347,10 @@ func isTaskEvent(eventType string) bool {
 
 func isStubEvent(eventType string) bool {
 	return strings.HasPrefix(eventType, "stub.")
+}
+
+func isStubStateEvent(eventType string) bool {
+	return strings.HasPrefix(eventType, "stub.state.")
 }
 
 func isWorkspaceContainerRealtimeEvent(eventType string) bool {
@@ -1558,6 +1524,13 @@ func (r *S2EventRepository) workspaceStreamName(workspaceID string) s2.StreamNam
 // shared workspace stream (which also carries container metrics/lifecycle).
 func (r *S2EventRepository) workspaceComputeStreamName(workspaceID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/compute", r.streamPrefix, eventStreamPart(workspaceID)))
+}
+
+// workspaceStubStateStreamName holds only stub health transitions, so
+// recent-failure reads don't page through the container metrics in the
+// workspace stream.
+func (r *S2EventRepository) workspaceStubStateStreamName(workspaceID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/stub-states", r.streamPrefix, eventStreamPart(workspaceID)))
 }
 
 func (r *S2EventRepository) workspacePoolMetricsStreamName(workspaceID string) s2.StreamName {

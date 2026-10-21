@@ -764,7 +764,7 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		if nextSeq > chunkSize {
 			windowStart = nextSeq - chunkSize
 		}
-		window, err := readLogSeqWindow(ctx, read, windowStart, nextSeq)
+		window, err := readSeqWindow(ctx, read, windowStart, nextSeq)
 		if err != nil {
 			return 0, nil, fmt.Errorf("read logs from s2 stream %q: %w", streamName, err)
 		}
@@ -832,12 +832,12 @@ func logEndPositionSeq(tailSeqNum uint64, batch *s2.ReadBatch, err error) (uint6
 // s2SeqReader reads up to count records starting at seqNum.
 type s2SeqReader func(ctx context.Context, seqNum, count uint64) (*s2.ReadBatch, error)
 
-// readLogSeqWindow returns every record with a sequence number in [lo, hi),
+// readSeqWindow returns every record with a sequence number in [lo, hi),
 // oldest first. A unary S2 read is capped at 1 MiB as well as by count, so a
-// window of long lines can take several requests to cover; taking the first
-// short batch as the whole window silently dropped its newest records and
-// made the scan believe it had reached the start of the stream.
-func readLogSeqWindow(ctx context.Context, read s2SeqReader, lo, hi uint64) ([]s2.SequencedRecord, error) {
+// window of large records can take several requests to cover; taking the
+// first short batch as the whole window silently dropped its newest records
+// and made the scan believe it had reached the start of the stream.
+func readSeqWindow(ctx context.Context, read s2SeqReader, lo, hi uint64) ([]s2.SequencedRecord, error) {
 	if hi <= lo {
 		return nil, nil
 	}
@@ -870,16 +870,35 @@ func readLogSeqWindow(ctx context.Context, read s2SeqReader, lo, hi uint64) ([]s
 	return records, nil
 }
 
-// nextTailReadWindow returns the next tail offset and record count for scanning
-// a stream backwards from the tail in chunkSize windows. The count is clamped to
-// the unscanned remainder so the final (oldest) window does not re-read records
-// that earlier windows already covered.
-func nextTailReadWindow(scannedFromTail, tailSeqNum, chunkSize uint64) (uint64, uint64) {
-	tailOffset := tailSeqNum
-	if chunkSize != 0 && scannedFromTail+chunkSize < tailSeqNum {
-		tailOffset = scannedFromTail + chunkSize
+// scanSeqFromTail visits the records below tailSeq newest-first, walking back
+// in absolute sequence windows of chunkSize, until visit returns false, the
+// start of the stream (or a trimmed prefix) is reached, or at least scanLimit
+// records have been read.
+func scanSeqFromTail(ctx context.Context, read s2SeqReader, tailSeq, chunkSize, scanLimit uint64, visit func(s2.SequencedRecord) bool) error {
+	var scanned uint64
+	for end := tailSeq; end > 0 && scanned < scanLimit; {
+		start := uint64(0)
+		if end > chunkSize {
+			start = end - chunkSize
+		}
+		window, err := readSeqWindow(ctx, read, start, end)
+		if err != nil {
+			return err
+		}
+		scanned += uint64(len(window))
+		for i := len(window) - 1; i >= 0; i-- {
+			if !visit(window[i]) {
+				return nil
+			}
+		}
+		// S2 clamps a read below a trimmed prefix forward, so a window that
+		// starts late has nothing older before it.
+		if len(window) == 0 || window[0].SeqNum > start {
+			return nil
+		}
+		end = start
 	}
-	return tailOffset, tailOffset - scannedFromTail
+	return nil
 }
 
 func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
