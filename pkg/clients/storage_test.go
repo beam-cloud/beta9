@@ -3,7 +3,6 @@ package clients
 import (
 	"bytes"
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -730,109 +729,5 @@ func TestStorageVersionReadUsesBucketConsistency(t *testing.T) {
 	data, version, err := client.ReadVersion(context.Background(), "lease")
 	if err != nil || len(data) != 0 || version != "" || requests != 1 {
 		t.Fatalf("missing version = %q, %q, %v after %d requests", data, version, err, requests)
-	}
-}
-
-func TestStorageBucketCreationLocation(t *testing.T) {
-	for _, tc := range []struct {
-		name, location string
-		ensure, exists bool
-	}{
-		{"provider default", "", false, false},
-		{"multi-region", "usa", false, false},
-		{"ensure multi-region", "eur", true, false},
-		{"existing bucket unchanged", "fra", true, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			created := make(chan string, 1)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodHead {
-					if !tc.exists {
-						w.WriteHeader(http.StatusNotFound)
-					}
-					return
-				}
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Error(err)
-				}
-				var configuration struct {
-					Location string `xml:"LocationConstraint"`
-				}
-				if len(body) > 0 {
-					if err := xml.Unmarshal(body, &configuration); err != nil {
-						t.Error(err)
-					}
-				}
-				created <- configuration.Location
-			}))
-			defer server.Close()
-			var cfg types.AppConfig
-			cfg.Storage.WorkspaceStorage = types.WorkspaceStorageConfig{DefaultEndpointUrl: server.URL, DefaultRegion: "auto", DefaultAccessKey: "access", DefaultSecretKey: "secret", DefaultBucketLocation: tc.location}
-			client, err := NewDefaultStorageClient(context.Background(), cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.ensure {
-				err = client.EnsureBucket(context.Background(), "bucket")
-			} else {
-				err = client.CreateBucket(context.Background(), "bucket")
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case location := <-created:
-				if tc.exists || location != tc.location {
-					t.Fatalf("created location %q", location)
-				}
-			default:
-				if !tc.exists {
-					t.Fatal("bucket was not created")
-				}
-			}
-		})
-	}
-}
-
-func TestStorageJournalBucketConsistency(t *testing.T) {
-	for _, tc := range []struct {
-		name, endpoint, location string
-		status                   int
-		wantError                bool
-	}{
-		{"USA multi", "https://t3.storage.dev", "usa", 200, false},
-		{"EUR multi", "https://t3.storage.dev", "eur", 200, false},
-		{"single", "https://t3.storage.dev", "fra", 200, false},
-		{"global", "https://t3.storage.dev", "global", 200, true},
-		{"dual", "https://t3.storage.dev", "iad,sjc", 200, true},
-		{"unknown", "https://t3.storage.dev", "future-location", 200, true},
-		{"empty", "https://t3.storage.dev", "", 200, true},
-		{"denied", "https://t3.storage.dev", "", 403, true},
-		{"AWS", "https://s3.amazonaws.com", "", 200, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			requests := 0
-			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-				requests++
-				if r.Method != http.MethodGet || !r.URL.Query().Has("location") || r.Header.Get(common.TigrisConsistencyHeader) != "" {
-					t.Fatalf("policy verification must only read bucket location: %s %s", r.Method, r.URL.Path)
-				}
-				body := "<LocationConstraint>" + tc.location + "</LocationConstraint>"
-				if tc.status != 200 {
-					body = "<Error><Code>AccessDenied</Code></Error>"
-				}
-				return &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
-			})
-			client := &WorkspaceStorageClient{WorkspaceStorage: &types.WorkspaceStorage{EndpointUrl: &tc.endpoint, BucketName: aws.String("bucket")}, StorageClient: &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, tc.endpoint)}}
-			err := client.VerifyStrongConsistency(context.Background())
-			wantRequests := 1
-			if tc.name == "AWS" {
-				wantRequests = 0
-			}
-			if (err != nil) != tc.wantError || requests != wantRequests {
-				t.Fatalf("verification = %v after %d requests", err, requests)
-			}
-		})
 	}
 }

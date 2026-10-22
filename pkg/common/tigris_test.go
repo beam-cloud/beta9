@@ -2,19 +2,6 @@ package common
 
 import "testing"
 
-func TestIsStrongTigrisBucketLocation(t *testing.T) {
-	for _, location := range []string{"usa", "eur", "sjc", "ord", "iad", "ams", "fra", "lhr", "sin", "nrt", "syd", "gru", "jnb", " USA "} {
-		if !IsStrongTigrisBucketLocation(location) {
-			t.Errorf("IsStrongTigrisBucketLocation(%q) = false", location)
-		}
-	}
-	for _, location := range []string{"", "auto", "global", "iad,sjc", "fra,ams", "single", "multi", "strong", "iad1", "us-east-1", "unknown"} {
-		if IsStrongTigrisBucketLocation(location) {
-			t.Errorf("IsStrongTigrisBucketLocation(%q) = true", location)
-		}
-	}
-}
-
 func TestIsTigrisEndpoint(t *testing.T) {
 	for _, endpoint := range []string{
 		"https://t3.storage.dev", "https://fly.storage.tigris.dev",

@@ -492,9 +492,6 @@ type WorkspaceStorageConfig struct {
 	DefaultPresignedEndpointUrl string `key:"defaultPresignedEndpointUrl" json:"default_presigned_endpoint_url"`
 	DefaultRegion               string `key:"defaultRegion" json:"default_region"`
 
-	// Bucket creation policy, separate from the SDK signing region. Existing buckets are unchanged.
-	DefaultBucketLocation string `key:"defaultBucketLocation" json:"default_bucket_location"`
-
 	// Storage mode configs
 	Geese GeeseConfig `key:"geese" json:"geese"`
 }

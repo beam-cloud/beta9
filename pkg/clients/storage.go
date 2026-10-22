@@ -39,15 +39,13 @@ type seekableReaderAt interface {
 }
 
 type StorageClient struct {
-	s3Client       *s3.Client
-	presignClient  *s3.PresignClient
-	bucketLocation string
+	s3Client      *s3.Client
+	presignClient *s3.PresignClient
 }
 
 type storageClientConfig struct {
 	region, accessKey, secretKey    string
 	endpointURL, presignEndpointURL string
-	bucketLocation                  string
 }
 
 func (c storageClientConfig) newClient(ctx context.Context) (*StorageClient, error) {
@@ -60,9 +58,8 @@ func (c storageClientConfig) newClient(ctx context.Context) (*StorageClient, err
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 	return &StorageClient{
-		s3Client:       newS3Client(cfg, c.endpointURL),
-		presignClient:  s3.NewPresignClient(newS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL))),
-		bucketLocation: c.bucketLocation,
+		s3Client:      newS3Client(cfg, c.endpointURL),
+		presignClient: s3.NewPresignClient(newS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL))),
 	}, nil
 }
 
@@ -114,7 +111,6 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 		secretKey:          storage.DefaultSecretKey,
 		endpointURL:        storage.DefaultEndpointUrl,
 		presignEndpointURL: storage.DefaultPresignedEndpointUrl,
-		bucketLocation:     storage.DefaultBucketLocation,
 	}).newClient(ctx)
 }
 
@@ -283,11 +279,9 @@ func endpointHostname(endpoint string) string {
 }
 
 func (c *StorageClient) CreateBucket(ctx context.Context, bucket string) error {
-	input := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
-	if c.bucketLocation != "" {
-		input.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{LocationConstraint: s3types.BucketLocationConstraint(c.bucketLocation)}
-	}
-	_, err := c.s3Client.CreateBucket(ctx, input)
+	_, err := c.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
 	return err
 }
 
@@ -548,17 +542,13 @@ func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []str
 }
 
 func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string, bucket string) ([]s3types.Object, error) {
-	return c.listWithPrefix(ctx, prefix, bucket)
-}
-
-func (c *StorageClient) listWithPrefix(ctx context.Context, prefix string, bucket string, options ...func(*s3.Options)) ([]s3types.Object, error) {
 	paginator := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),
 	})
 	var allObjects []s3types.Object
 	for paginator.HasMorePages() {
-		resp, err := paginator.NextPage(ctx, options...)
+		resp, err := paginator.NextPage(ctx)
 		if err != nil {
 			return allObjects, err
 		}
@@ -774,22 +764,6 @@ func (c *WorkspaceStorageClient) WriteVersion(ctx context.Context, key string, d
 		return "", fmt.Errorf("object store returned no version for %s", key)
 	}
 	return aws.ToString(result.ETag), nil
-}
-
-// VerifyStrongConsistency checks the bucket policy required for cross-region
-// journal fencing. A successful same-region CAS probe cannot establish it.
-func (c *WorkspaceStorageClient) VerifyStrongConsistency(ctx context.Context) error {
-	if !common.IsTigrisEndpoint(aws.ToString(c.WorkspaceStorage.EndpointUrl)) {
-		return nil
-	}
-	location, err := c.StorageClient.s3Client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: c.WorkspaceStorage.BucketName})
-	if err != nil {
-		return fmt.Errorf("read Tigris bucket location for journal fencing: %w", err)
-	}
-	if !common.IsStrongTigrisBucketLocation(string(location.LocationConstraint)) {
-		return fmt.Errorf("Tigris bucket %q location %q does not provide global strong consistency; object-store flush durability requires a Single-region or Multi-region bucket", c.BucketName(), location.LocationConstraint)
-	}
-	return nil
 }
 
 // VerifyConditionalWrites rejects S3-compatible stores that silently ignore

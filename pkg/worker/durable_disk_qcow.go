@@ -267,16 +267,14 @@ func (s *Worker) openDatabaseDiskJournal(ctx context.Context, request *types.Con
 	return journal, committed, nil
 }
 
-// verifyJournalStore checks the consistency policy and conditional writes the
-// journal's ownership fence depends on, once per store for this worker. The
-// write probe gets a few tries for stores that are merely slow to settle.
+// verifyJournalStore checks, once per store for the life of this worker,
+// that the store honours the conditional writes the journal's ownership
+// fence depends on. The probe is several conditional writes, so a store that
+// is merely slow to settle gets a few tries before the attach fails.
 func (s *Worker) verifyJournalStore(ctx context.Context, client *clients.WorkspaceStorageClient) error {
 	key := journalStoreKey(client.WorkspaceStorage)
 	if _, verified := s.verifiedJournalStores.Load(key); verified {
 		return nil
-	}
-	if err := client.VerifyStrongConsistency(ctx); err != nil {
-		return fmt.Errorf("verify journal store consistency on %s: %w", key, err)
 	}
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
