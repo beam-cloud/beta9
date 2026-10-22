@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/require"
 	"github.com/tj/assert"
 )
 
@@ -260,6 +261,61 @@ func TestToggleWorkerAvailablePreservesDisabledWorker(t *testing.T) {
 	worker, err = repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, types.WorkerStatusDisabled, worker.Status)
+}
+
+func TestWorkerStartupAcknowledgesPublishedImage(t *testing.T) {
+	for _, initialStatus := range []types.WorkerStatus{types.WorkerStatusPending, types.WorkerStatusAvailable, types.WorkerStatusDisabled} {
+		t.Run(string(initialStatus), func(t *testing.T) {
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			repo := NewWorkerRedisRepository(rdb, types.WorkerConfig{ImageTag: "gateway-desired", CleanupPendingWorkerAgeLimit: time.Minute})
+			worker := &types.Worker{Id: "agent-worker", WorkspaceId: "admin", PoolName: "pool", MachineId: "machine", Status: initialStatus, BuildVersion: "old", CordonRequested: initialStatus == types.WorkerStatusDisabled}
+			require.NoError(t, repo.AddWorker(worker))
+			slotKey := common.RedisKeys.ComputeAgentSlot(worker.WorkspaceId, worker.PoolName, worker.MachineId, worker.Id)
+			require.NoError(t, rdb.Set(context.Background(), slotKey, `{"worker_id":"agent-worker","generation":"running-generation","worker_image":"registry/worker:running-image"}`, 0).Err())
+
+			// Startup from an obsolete slot cannot acknowledge a different image.
+			require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, "obsolete-generation"))
+			state, err := repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, "old", state.BuildVersion)
+			require.Equal(t, initialStatus, state.Status)
+
+			require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, "running-generation"))
+			state, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, "running-image", state.BuildVersion)
+			if initialStatus == types.WorkerStatusDisabled {
+				require.Equal(t, types.WorkerStatusDisabled, state.Status)
+			} else {
+				require.Equal(t, types.WorkerStatusAvailable, state.Status)
+			}
+
+			// A stale controller snapshot must not overwrite the acknowledged image.
+			require.NoError(t, repo.AddWorker(worker))
+			state, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, "running-image", state.BuildVersion)
+
+			_, err = repo.PrepareWorkerRollout(worker.Id, "next-generation")
+			require.NoError(t, err)
+			require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, ""))
+			require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, "running-generation"))
+			state, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, "next-generation", state.RolloutGeneration)
+			require.Equal(t, types.WorkerStatusDisabled, state.Status)
+			require.Equal(t, "running-image", state.BuildVersion)
+
+			require.NoError(t, rdb.Set(context.Background(), slotKey, `{"worker_id":"agent-worker","generation":"next-generation","worker_image":"registry/worker:next-image"}`, 0).Err())
+			require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, "next-generation"))
+			state, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Empty(t, state.RolloutGeneration)
+			require.Equal(t, "next-image", state.BuildVersion)
+			require.Equal(t, worker.CordonRequested, state.Status == types.WorkerStatusDisabled)
+		})
+	}
 }
 
 func TestToggleWorkerAvailableReconcilesCapacityFromQueueAndContainerIndex(t *testing.T) {

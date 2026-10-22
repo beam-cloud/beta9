@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -12,6 +14,72 @@ import (
 	core "github.com/yandex-cloud/geesefs/core"
 	cfg "github.com/yandex-cloud/geesefs/core/cfg"
 )
+
+type geeseReadRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f geeseReadRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestGeeseReadRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, key        string
+		status, attempts int
+		recovered        bool
+	}{
+		{"regional miss", "outputs/stub/task/id/file", 404, 2, true},
+		{"missing object", "outputs/stub/task/id/file", 404, 2, false},
+		{"deleted volume", "volumes/id/file", 404, 1, false},
+		{"permission denied", "outputs/stub/task/id/file", 403, 1, false},
+	} {
+		for _, method := range []string{"GET", "HEAD"} {
+			t.Run(tc.name+"/"+method, func(t *testing.T) {
+				config, err := geeseS3Config(types.GeeseConfig{EndpointUrl: "https://t3.storage.dev", Region: "auto", AccessKey: "access", SecretKey: "secret"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				requests := 0
+				config.Session.Config.HTTPClient = &http.Client{Transport: geeseReadRoundTripper(func(r *http.Request) (*http.Response, error) {
+					requests++
+					status, body := tc.status, `<Error><Code>NoSuchKey</Code></Error>`
+					if requests == 2 {
+						if r.Header.Get(common.TigrisConsistencyHeader) != "" || strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") {
+							t.Error("recovery request still signs consistency header")
+						}
+						if tc.recovered {
+							status, body = 200, "old"
+						}
+					}
+					return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+				})}
+				flags := cfg.DefaultFlags()
+				flags.Endpoint = "https://t3.storage.dev"
+				backend, err := core.NewS3("bucket", flags, config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				backend.S3.Config.HTTPClient = config.Session.Config.HTTPClient
+				if method == "HEAD" {
+					_, err = backend.HeadObject(&s3.HeadObjectInput{Bucket: aws.String("bucket"), Key: aws.String(tc.key)})
+				} else {
+					var result *s3.GetObjectOutput
+					result, err = backend.GetObject(&s3.GetObjectInput{Bucket: aws.String("bucket"), Key: aws.String(tc.key)})
+					if err == nil {
+						data, readErr := io.ReadAll(result.Body)
+						_ = result.Body.Close()
+						if readErr != nil || string(data) != "old" {
+							t.Fatalf("read = %q, %v", data, readErr)
+						}
+					}
+				}
+				if (err == nil) != tc.recovered {
+					t.Fatalf("recovery error = %v", err)
+				}
+				if requests != tc.attempts {
+					t.Fatalf("requests = %d, want %d", requests, tc.attempts)
+				}
+			})
+		}
+	}
+}
 
 type testVolumeReporter struct {
 	workspaceID string

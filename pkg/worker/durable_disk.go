@@ -750,7 +750,7 @@ func (r localSnapshotCacheReader) ReadContentInto(ctx context.Context, hash stri
 // manifests and durable-disks/<disk>/chunks/<hash> for content-addressed
 // chunks.
 const (
-	durableDiskObjectRoot       = "durable-disks"
+	durableDiskObjectRoot       = types.DefaultDurableDisksPrefix
 	durableDiskManifestFileName = "manifest.json"
 )
 
@@ -761,7 +761,7 @@ func durableDiskSnapshotObjectPrefix(mount *types.Mount, generation int64) strin
 	return path.Join(
 		durableDiskObjectRoot,
 		types.SafeDurableDiskName(mount.DurableDisk.Name),
-		"snapshots",
+		types.DurableDiskSnapshotsPrefix,
 		strconv.FormatInt(generation, 10),
 		uuid.NewString(),
 	)
@@ -770,7 +770,7 @@ func durableDiskSnapshotObjectPrefix(mount *types.Mount, generation int64) strin
 // durableDiskChunkPrefix is where a disk's content-addressed chunks live,
 // shared by every generation of the disk.
 func durableDiskChunkPrefix(mount *types.Mount) string {
-	return path.Join(durableDiskObjectRoot, types.SafeDurableDiskName(mount.DurableDisk.Name), "chunks")
+	return path.Join(durableDiskObjectRoot, types.SafeDurableDiskName(mount.DurableDisk.Name), types.DurableDiskChunksPrefix)
 }
 
 // reportDurableDiskSnapshotContent registers a snapshot's manifest and chunks

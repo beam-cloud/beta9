@@ -11,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/VictoriaMetrics/metrics"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -424,6 +426,12 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	return nil
 }
 
+// Mounted data reads normally have SDK retries disabled. Reserve one attempt
+// for recovering an object hidden by Tigris's consistent metadata view.
+type tigrisReadRetryer struct{ request.Retryer }
+
+func (r tigrisReadRetryer) MaxRetries() int { return r.Retryer.MaxRetries() + 1 }
+
 func geeseS3Config(config types.GeeseConfig) (*cfg.S3Config, error) {
 	s3Config := (&cfg.S3Config{}).Init()
 	s3Config.MetadataSDKMaxRetries = cfg.DefaultMetadataSDKMaxRetries
@@ -441,6 +449,29 @@ func geeseS3Config(config types.GeeseConfig) (*cfg.S3Config, error) {
 			Name: "beam.TigrisConsistency",
 			Fn: func(r *request.Request) {
 				r.HTTPRequest.Header.Set(common.TigrisConsistencyHeader, "true")
+			},
+		})
+		sess.Handlers.Retry.PushBackNamed(request.NamedHandler{
+			Name: "beam.TigrisReadRecovery",
+			Fn: func(r *request.Request) {
+				var key *string
+				switch input := r.Params.(type) {
+				case *s3.GetObjectInput:
+					key = input.Key
+				case *s3.HeadObjectInput:
+					key = input.Key
+				}
+				if key != nil && common.IsImmutableStorageArtifact(*key) &&
+					r.HTTPResponse != nil && r.HTTPResponse.StatusCode == 404 &&
+					r.HTTPRequest.Header.Get(common.TigrisConsistencyHeader) == "true" {
+					// Retry once through the ordinary object lookup. The SDK signs
+					// the changed headers again; writes never use this recovery path.
+					r.HTTPRequest.Header.Del(common.TigrisConsistencyHeader)
+					r.Retryer = tigrisReadRetryer{r.Retryer}
+					retry := true
+					r.Retryable = &retry
+					metrics.GetOrCreateCounter(`beta9_tigris_read_recovery_total{operation="GeeseRead"}`).Inc()
+				}
 			},
 		})
 		s3Config.Session = sess

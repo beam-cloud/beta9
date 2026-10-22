@@ -259,13 +259,16 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	MCPOAuth        MCPOAuthConfig `key:"mcpOAuth" json:"mcp_oauth"`
-	Host            string         `key:"host" json:"host"`
-	InvokeURLType   string         `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC            GRPCConfig     `key:"grpc" json:"grpc"`
-	HTTP            HTTPConfig     `key:"http" json:"http"`
-	ShutdownTimeout time.Duration  `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits      StubLimits     `key:"stubLimits" json:"stub_limits"`
+	// DeploymentRevision orders configuration publications across rolling
+	// gateway replicas. Helm rollbacks receive a new revision as well.
+	DeploymentRevision int64          `key:"deploymentRevision" json:"deployment_revision"`
+	MCPOAuth           MCPOAuthConfig `key:"mcpOAuth" json:"mcp_oauth"`
+	Host               string         `key:"host" json:"host"`
+	InvokeURLType      string         `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC               GRPCConfig     `key:"grpc" json:"grpc"`
+	HTTP               HTTPConfig     `key:"http" json:"http"`
+	ShutdownTimeout    time.Duration  `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits         StubLimits     `key:"stubLimits" json:"stub_limits"`
 	// Applied to workspaces that have no explicit concurrency limit row.
 	// Both values must be > 0 for the default to take effect; otherwise
 	// workspaces without a row remain unlimited (legacy behavior).

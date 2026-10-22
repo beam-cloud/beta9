@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +27,25 @@ const sseKeepaliveEvent = "ping"
 // sseEncoder turns a stream record into an SSE event. Returning ok=false skips
 // the record.
 type sseEncoder func(record types.ContainerEventRecord) (name string, payload []byte, ok bool)
+
+// DrainOnShutdown disconnects resumable subscriptions when a gateway drains.
+// Ordinary API calls and application requests retain their graceful shutdown
+// budget; idle observers should reconnect to a serving replica immediately.
+func DrainOnShutdown(drain context.Context) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if drain.Err() != nil {
+				return echo.NewHTTPError(http.StatusServiceUnavailable, "Gateway is draining")
+			}
+			ctx, cancel := context.WithCancel(c.Request().Context())
+			defer cancel()
+			stop := context.AfterFunc(drain, cancel)
+			defer stop()
+			c.SetRequest(c.Request().WithContext(ctx))
+			return next(c)
+		}
+	}
+}
 
 // streamSSE relays an event stream to the client as server-sent events. Each
 // event carries the record's sequence number as its id, so a client resumes

@@ -9,6 +9,15 @@
   {{- $_ := include "beta9" . | fromYaml | merge .Values -}}
 {{- end -}}
 
+{{/* The stamped config and pod checksum must describe the same release. */}}
+{{- define "beta9.config" -}}
+{{- $config := deepCopy (default dict .Values.config) -}}
+{{- $gateway := get $config "gatewayService" | default dict -}}
+{{- $_ := set $gateway "deploymentRevision" .Release.Revision -}}
+{{- $_ := set $config "gatewayService" $gateway -}}
+{{- toYaml $config -}}
+{{- end -}}
+
 
 {{/* Disable main controller */}}
 {{- define "beta9.disable-main-controller" -}}
@@ -40,7 +49,7 @@ controllers:
     type: deployment
     pod:
       annotations:
-        secret-hash: {{ include "sha256sum" (toYaml .Values.config) }}
+        secret-hash: {{ include "sha256sum" (include "beta9.config" .) }}
     containers:
       main:
         command:

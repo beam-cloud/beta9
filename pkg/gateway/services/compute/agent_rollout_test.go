@@ -19,6 +19,9 @@ func (r *rolloutTokenBackend) GetWorkspaceByExternalId(_ context.Context, id str
 func (r *rolloutTokenBackend) GetTokenByExternalId(context.Context, uint, string) (*types.Token, error) {
 	return &types.Token{ExternalId: "token-id", Key: "test-token", Active: true, TokenType: types.TokenTypeWorker}, nil
 }
+func (r *rolloutTokenBackend) CreateToken(_ context.Context, _ uint, tokenType string, _ bool) (types.Token, error) {
+	return types.Token{ExternalId: "token-id", Key: "test-token", Active: true, TokenType: tokenType}, nil
+}
 
 func TestAgentRolloutBusyThenRevertUsesOriginalSlotAndRecoversWorker(t *testing.T) {
 	ctx := context.Background()
@@ -75,4 +78,60 @@ func TestAgentRolloutBusyThenRevertUsesOriginalSlotAndRecoversWorker(t *testing.
 	require.Len(t, saved, 1)
 	require.Equal(t, slot.Generation, saved[0].Generation)
 	require.Equal(t, string(types.ContainerStatusRunning), rdb.HGet(ctx, stateKey, "status").Val())
+}
+
+func TestAgentWorkerImageFollowsDeploymentRevisionAcrossGateways(t *testing.T) {
+	ctx := context.Background()
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	workerRepo := repository.NewWorkerRedisRepositoryForTest(rdb)
+	computeRepo := repository.NewComputeRedisRepository(rdb)
+	agent := &model.AgentTokenState{WorkspaceID: "admin", MachineID: "machine", PoolName: "pool", Mode: string(types.PoolModeExternal)}
+	worker := &types.Worker{Id: model.AgentMachineWorkerID(agent.MachineID), WorkspaceId: agent.WorkspaceID, MachineId: agent.MachineID, PoolName: agent.PoolName, Status: types.WorkerStatusAvailable, BuildVersion: "A"}
+	require.NoError(t, workerRepo.AddWorker(worker))
+	service := func(revision int64, image string) *Service {
+		return &Service{workerRepo: workerRepo, computeRepo: computeRepo, backendRepo: &rolloutTokenBackend{}, redisClient: rdb,
+			appConfig: types.AppConfig{GatewayService: types.GatewayServiceConfig{DeploymentRevision: revision}, Worker: types.WorkerConfig{ImageTag: image}}}
+	}
+	oldGateway, newGateway := service(1, "A"), service(2, "B")
+	slot, _, err := oldGateway.ensureAgentWorkerSlot(ctx, agent, worker, types.WorkerPoolConfig{}, nil)
+	require.NoError(t, err)
+	seedState := &types.ContainerState{ContainerId: "busy", WorkerId: worker.Id, Status: types.ContainerStatusRunning}
+	stateKey := common.RedisKeys.SchedulerContainerState(seedState.ContainerId)
+	require.NoError(t, rdb.HSet(ctx, stateKey, common.ToSlice(seedState)).Err())
+	require.NoError(t, rdb.SAdd(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), stateKey).Err())
+	oldGeneration := slot.Generation
+
+	// The new gateway starts draining A. An old replica must not cancel B.
+	for _, gateway := range []*Service{newGateway, oldGateway} {
+		worker, err = workerRepo.GetWorkerById(worker.Id)
+		require.NoError(t, err)
+		slot, _, err = gateway.ensureAgentWorkerSlot(ctx, agent, worker, types.WorkerPoolConfig{}, []*model.AgentWorkerSlotState{slot})
+		require.NoError(t, err)
+		require.Equal(t, oldGeneration, slot.Generation)
+		worker, err = workerRepo.GetWorkerById(worker.Id)
+		require.NoError(t, err)
+		require.NotEmpty(t, worker.RolloutGeneration)
+	}
+	require.NoError(t, rdb.Del(ctx, stateKey).Err())
+	slot, _, err = oldGateway.ensureAgentWorkerSlot(ctx, agent, worker, types.WorkerPoolConfig{}, []*model.AgentWorkerSlotState{slot})
+	require.NoError(t, err)
+	require.Equal(t, agentWorkerImage(newGateway.appConfig), slot.WorkerImage)
+	require.NotEqual(t, oldGeneration, slot.Generation)
+	require.NoError(t, workerRepo.ToggleWorkerAvailable(worker.Id, slot.Generation))
+	worker, err = workerRepo.GetWorkerById(worker.Id)
+	require.NoError(t, err)
+	require.Equal(t, "B", worker.BuildVersion)
+
+	// An intentional rollback has a newer deployment revision and wins even
+	// while the previous release's gateway continues serving agent snapshots.
+	for _, gateway := range []*Service{service(3, "A"), newGateway, oldGateway} {
+		slot, _, err = gateway.ensureAgentWorkerSlot(ctx, agent, worker, types.WorkerPoolConfig{}, []*model.AgentWorkerSlotState{slot})
+		require.NoError(t, err)
+		require.Equal(t, agentWorkerImage(oldGateway.appConfig), slot.WorkerImage)
+	}
+	require.NoError(t, workerRepo.ToggleWorkerAvailable(worker.Id, slot.Generation))
+	worker, err = workerRepo.GetWorkerById(worker.Id)
+	require.NoError(t, err)
+	require.Equal(t, "A", worker.BuildVersion)
 }

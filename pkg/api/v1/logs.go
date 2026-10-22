@@ -22,7 +22,7 @@ type LogGroup struct {
 	eventRepo     repository.EventRepository
 }
 
-func NewLogGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, computeRepo repository.ComputeRepository, eventRepo repository.EventRepository) *LogGroup {
+func NewLogGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, computeRepo repository.ComputeRepository, eventRepo repository.EventRepository, streamMiddleware echo.MiddlewareFunc) *LogGroup {
 	group := &LogGroup{
 		routerGroup:   g,
 		backendRepo:   backendRepo,
@@ -32,7 +32,7 @@ func NewLogGroup(g *echo.Group, backendRepo repository.BackendRepository, contai
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.GetLogs))
-	g.GET("/:workspaceId/stream", auth.WithWorkspaceAuth(group.StreamLogs))
+	g.GET("/:workspaceId/stream", auth.WithWorkspaceAuth(group.StreamLogs), streamMiddleware)
 
 	return group
 }

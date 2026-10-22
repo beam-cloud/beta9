@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -633,5 +634,133 @@ func TestTigrisPresignedHeaders(t *testing.T) {
 				t.Fatal("consistency header is not signed")
 			}
 		})
+	}
+}
+
+func TestStorageReadRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint, key string
+		status, attempts    int
+	}{
+		{"regional miss", "https://t3.storage.dev", "outputs/stub/task/output/file", 404, 2},
+		{"durable chunk", "https://t3.storage.dev", "durable-disks/disk/chunks/hash", 404, 2},
+		{"snapshot manifest", "https://t3.storage.dev", "durable-disks/disk/snapshots/1/uuid/manifest.json", 404, 2},
+		{"object", "https://t3.storage.dev", "objects/uuid", 404, 2},
+		{"checkpoint", "https://t3.storage.dev", "checkpoints/uuid.tar", 404, 2},
+		{"deleted volume", "https://t3.storage.dev", "volumes/id/file", 404, 1},
+		{"mutable journal head", "https://t3.storage.dev", "durable-disks/disk/journal/head.json", 404, 1},
+		{"permission denied", "https://t3.storage.dev", "outputs/file", 403, 1},
+		{"AWS miss", "https://s3.amazonaws.com", "outputs/file", 404, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, operation := range []string{"head", "download", "stream"} {
+				t.Run(operation, func(t *testing.T) {
+					requests := 0
+					transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+						requests++
+						status, body := tc.status, `<Error><Code>NoSuchKey</Code></Error>`
+						if requests == 2 {
+							if r.Header.Get(common.TigrisConsistencyHeader) != "" || strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") {
+								t.Error("ordinary recovery request still signs consistency header")
+							}
+							status, body = 200, "verified bytes"
+						}
+						return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+					})
+					client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, tc.endpoint)}
+					var err error
+					switch operation {
+					case "head":
+						var exists bool
+						exists, _, err = client.Head(context.Background(), tc.key, "bucket")
+						if exists != (tc.attempts == 2) {
+							t.Errorf("exists = %t", exists)
+						}
+					case "download", "stream":
+						var data []byte
+						if operation == "download" {
+							data, err = client.Download(context.Background(), tc.key, "bucket")
+						} else {
+							var reader io.ReadCloser
+							reader, err = client.DownloadWithReader(context.Background(), tc.key, "bucket")
+							if err == nil {
+								data, err = io.ReadAll(reader)
+								_ = reader.Close()
+							}
+						}
+						if tc.attempts == 2 && string(data) != "verified bytes" {
+							t.Errorf("download = %q", data)
+						}
+					}
+					if tc.attempts == 2 && err != nil {
+						t.Fatal(err)
+					}
+					if tc.status == 403 && err == nil {
+						t.Error("permission error was suppressed")
+					}
+					if requests != tc.attempts {
+						t.Errorf("requests = %d, want %d", requests, tc.attempts)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestStorageRegionalDiscovery(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint("region error=", fail), func(t *testing.T) {
+			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				region := r.Header.Get(common.TigrisRegionsHeader)
+				if region == "lhr" && fail {
+					return nil, errors.New("regional outage")
+				}
+				contents, token := "", ""
+				if region == "sjc" || region == "fra" {
+					key := "outputs/a"
+					if region == "sjc" {
+						if r.URL.Query().Get("continuation-token") == "page2" {
+							key = "outputs/b"
+						} else {
+							token = "page2"
+						}
+					}
+					contents = "<Contents><Key>" + key + "</Key></Contents>"
+				}
+				body := fmt.Sprintf("<ListBucketResult>%s<IsTruncated>%t</IsTruncated><NextContinuationToken>%s</NextContinuationToken></ListBucketResult>", contents, token != "", token)
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}, Retryer: func() aws.Retryer { return aws.NopRetryer{} }}, "https://t3.storage.dev")}
+			objects, err := client.ListWithPrefixAllRegions(context.Background(), "outputs/", "bucket")
+			if (err != nil) != fail {
+				t.Fatalf("discovery error = %v", err)
+			}
+			var keys []string
+			for _, object := range objects {
+				keys = append(keys, aws.ToString(object.Key))
+			}
+			if !reflect.DeepEqual(keys, []string{"outputs/a", "outputs/b"}) {
+				t.Fatalf("regional union = %v", keys)
+			}
+		})
+	}
+}
+
+func TestStorageVersionReadDoesNotRecoverStaleMetadata(t *testing.T) {
+	requests := 0
+	transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if r.Header.Get(common.TigrisConsistencyHeader) != "true" {
+			t.Fatal("versioned read used an ordinary, potentially stale lookup")
+		}
+		return &http.Response{StatusCode: 404, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`<Error><Code>NoSuchKey</Code></Error>`)), Request: r}, nil
+	})
+	client := &WorkspaceStorageClient{
+		WorkspaceStorage: &types.WorkspaceStorage{BucketName: aws.String("bucket")},
+		StorageClient:    &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, "https://t3.storage.dev")},
+	}
+	data, version, err := client.ReadVersion(context.Background(), "lease")
+	if err != nil || len(data) != 0 || version != "" || requests != 1 {
+		t.Fatalf("missing version = %q, %q, %v after %d requests", data, version, err, requests)
 	}
 }

@@ -310,9 +310,10 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewWebhookGroup(g.baseRouteGroup.Group("/webhook", authMiddleware), g.WorkspaceRepo)
 	apiv1.NewStackGroup(g.baseRouteGroup.Group("/stack", authMiddleware), g.BackendRepo)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
-	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.EventRepo, g.BackendRepo, g.TaskDispatcher, g.Scheduler, g.Config)
-	apiv1.NewEventGroup(g.baseRouteGroup.Group("/events", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo)
-	apiv1.NewLogGroup(g.baseRouteGroup.Group("/logs", authMiddleware), g.BackendRepo, g.ContainerRepo, repository.NewComputeRedisRepository(g.RedisClient), g.EventRepo)
+	streamDrain := apiv1.DrainOnShutdown(g.drainCtx)
+	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.EventRepo, g.BackendRepo, g.TaskDispatcher, g.Scheduler, g.Config, streamDrain)
+	apiv1.NewEventGroup(g.baseRouteGroup.Group("/events", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo, streamDrain)
+	apiv1.NewLogGroup(g.baseRouteGroup.Group("/logs", authMiddleware), g.BackendRepo, g.ContainerRepo, repository.NewComputeRedisRepository(g.RedisClient), g.EventRepo, streamDrain)
 	apiv1.NewMetricsGroup(g.baseRouteGroup.Group("/metrics", authMiddleware), g.BackendRepo, g.EventRepo)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)
 	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo, g.RedisClient, g.Config)
@@ -880,7 +881,13 @@ func (g *Gateway) shutdown() {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
-		return g.httpServer.Shutdown(ctx)
+		if err := g.httpServer.Shutdown(ctx); err != nil {
+			// Shutdown leaves active connections open when its deadline expires.
+			// Close them before the gateway exits so clients reconnect promptly.
+			_ = g.httpServer.Close()
+			return err
+		}
+		return nil
 	})
 
 	eg.Go(func() error {

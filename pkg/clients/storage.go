@@ -8,9 +8,12 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/VictoriaMetrics/metrics"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -19,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -129,8 +133,8 @@ func newStorageS3Client(cfg aws.Config, endpointUrl string, consistent bool) *s3
 			o.UsePathStyle = true
 		}
 		if consistent && common.IsTigrisEndpoint(endpointUrl) {
-			// Readers and writers must both use the bucket's consistency leader;
-			// a regional LIST can omit a successfully fsynced worker upload.
+			// Prefer the consistent view for publication and metadata. Immutable
+			// object reads recover regional misses separately in getObject/Head.
 			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"))
 		}
 	})
@@ -386,12 +390,19 @@ func storageMultipartConcurrency(body io.Reader) int {
 }
 
 func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bool, *s3.HeadObjectOutput, error) {
-	output, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+	input := &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	})
+	}
+	output, err := c.s3Client.HeadObject(ctx, input)
+	if common.IsImmutableStorageArtifact(key) && c.tigrisObjectMiss(err) && ctx.Err() == nil {
+		output, err = c.s3Client.HeadObject(ctx, input, ordinaryTigrisRead)
+		if err == nil {
+			metrics.GetOrCreateCounter(`beta9_tigris_read_recovery_total{operation="HeadObject"}`).Inc()
+		}
+	}
 	if err != nil {
-		if errors.As(err, new(*s3types.NoSuchKey)) || errors.As(err, new(*s3types.NotFound)) {
+		if storageObjectNotFound(err) {
 			return false, nil, nil
 		}
 		return false, nil, err
@@ -406,7 +417,7 @@ func (c *StorageClient) Exists(ctx context.Context, key string, bucket string) (
 }
 
 func (c *StorageClient) Download(ctx context.Context, key string, bucket string) ([]byte, error) {
-	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
+	resp, err := c.getObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -419,7 +430,7 @@ func (c *StorageClient) Download(ctx context.Context, key string, bucket string)
 }
 
 func (c *StorageClient) DownloadWithReader(ctx context.Context, key string, bucket string) (io.ReadCloser, error) {
-	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
+	resp, err := c.getObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -428,6 +439,52 @@ func (c *StorageClient) DownloadWithReader(ctx context.Context, key string, buck
 	}
 
 	return resp.Body, nil
+}
+
+func storageObjectNotFound(err error) bool {
+	var responseError *smithyhttp.ResponseError
+	if errors.As(err, &responseError) {
+		return responseError.HTTPStatusCode() == 404
+	}
+	var apiError smithy.APIError
+	if errors.As(err, &apiError) {
+		switch apiError.ErrorCode() {
+		case "NoSuchKey", "NotFound", "404":
+			return true
+		}
+	}
+	return false
+}
+
+func (c *StorageClient) tigrisObjectMiss(err error) bool {
+	return storageObjectNotFound(err) && common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint))
+}
+
+// Tigris can return a persistent 404 from its consistency view while the object
+// remains readable through its ordinary lookup. Recover that specific failure;
+// authorization, transport and checksum failures must still propagate.
+func (c *StorageClient) getObject(ctx context.Context, input *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
+	result, err := c.s3Client.GetObject(ctx, input)
+	if common.IsImmutableStorageArtifact(aws.ToString(input.Key)) && c.tigrisObjectMiss(err) && ctx.Err() == nil {
+		result, err = c.s3Client.GetObject(ctx, input, ordinaryTigrisRead)
+		if err == nil {
+			metrics.GetOrCreateCounter(`beta9_tigris_read_recovery_total{operation="GetObject"}`).Inc()
+		}
+	}
+	return result, err
+}
+
+func ordinaryTigrisRead(options *s3.Options) {
+	options.APIOptions = append(options.APIOptions, func(stack *middleware.Stack) error {
+		return stack.Build.Add(middleware.BuildMiddlewareFunc("TigrisOrdinaryRead", func(ctx context.Context, input middleware.BuildInput, next middleware.BuildHandler) (middleware.BuildOutput, middleware.Metadata, error) {
+			request, ok := input.Request.(*smithyhttp.Request)
+			if !ok {
+				return middleware.BuildOutput{}, middleware.Metadata{}, fmt.Errorf("unexpected S3 transport %T", input.Request)
+			}
+			request.Header.Del(common.TigrisConsistencyHeader)
+			return next.HandleBuild(ctx, input)
+		}), middleware.After)
+	})
 }
 
 func (c *StorageClient) Delete(ctx context.Context, key string, bucket string) error {
@@ -544,13 +601,17 @@ func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []str
 }
 
 func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string, bucket string) ([]s3types.Object, error) {
+	return c.listWithPrefix(ctx, prefix, bucket)
+}
+
+func (c *StorageClient) listWithPrefix(ctx context.Context, prefix string, bucket string, options ...func(*s3.Options)) ([]s3types.Object, error) {
 	paginator := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),
 	})
 	var allObjects []s3types.Object
 	for paginator.HasMorePages() {
-		resp, err := paginator.NextPage(ctx)
+		resp, err := paginator.NextPage(ctx, options...)
 		if err != nil {
 			return nil, err
 		}
@@ -558,6 +619,70 @@ func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string, bucke
 	}
 
 	return allObjects, nil
+}
+
+// ListWithPrefixAllRegions reconciles divergent Tigris listings. It is used to
+// recover historical output indexes, not on every registered-output lookup.
+// An incomplete scan returns its discoveries and an error so callers cannot
+// permanently record a partial view as complete.
+func (c *StorageClient) ListWithPrefixAllRegions(ctx context.Context, prefix, bucket string) ([]s3types.Object, error) {
+	if !common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
+		return c.ListWithPrefix(ctx, prefix, bucket)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	// Tigris's documented storage regions. The ordinary view is also queried
+	// because it can expose cached objects absent from a regional index.
+	regions := []string{"", "iad", "ord", "sjc", "fra", "lhr", "mad", "gru", "hkg", "nrt", "sin", "syd", "jnb"}
+	type result struct {
+		objects []s3types.Object
+		err     error
+	}
+	results := make([]result, len(regions))
+	var group sync.WaitGroup
+	limit := make(chan struct{}, 4)
+	for i, region := range regions {
+		group.Add(1)
+		go func(i int, region string) {
+			defer group.Done()
+			select {
+			case limit <- struct{}{}:
+				defer func() { <-limit }()
+			case <-ctx.Done():
+				results[i].err = ctx.Err()
+				return
+			}
+			options := ordinaryTigrisRead
+			if region != "" {
+				options = func(o *s3.Options) {
+					o.APIOptions = append(o.APIOptions,
+						smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"),
+						smithyhttp.SetHeaderValue(common.TigrisRegionsHeader, region))
+				}
+			}
+			results[i].objects, results[i].err = c.listWithPrefix(ctx, prefix, bucket, options)
+		}(i, region)
+	}
+	group.Wait()
+	objects := map[string]s3types.Object{}
+	var scanError error
+	for i, result := range results {
+		if result.err != nil {
+			scanError = errors.Join(scanError, fmt.Errorf("Tigris listing region %q: %w", regions[i], result.err))
+		}
+		for _, object := range result.objects {
+			key := aws.ToString(object.Key)
+			if previous, found := objects[key]; !found || aws.ToTime(object.LastModified).After(aws.ToTime(previous.LastModified)) {
+				objects[key] = object
+			}
+		}
+	}
+	union := make([]s3types.Object, 0, len(objects))
+	for _, object := range objects {
+		union = append(union, object)
+	}
+	sort.Slice(union, func(i, j int) bool { return aws.ToString(union[i].Key) < aws.ToString(union[j].Key) })
+	return union, scanError
 }
 
 func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, bucket string) ([]string, error) {
@@ -722,6 +847,8 @@ func (c *WorkspaceStorageClient) Download(ctx context.Context, key string) ([]by
 // ReadVersion returns one object's contents and the ETag used for conditional
 // replacement. A missing object has an empty version; other failures propagate.
 func (c *WorkspaceStorageClient) ReadVersion(ctx context.Context, key string) ([]byte, string, error) {
+	// Conditional mutable metadata must stay on the consistent view; ordinary
+	// lookup recovery could return an obsolete lease or checkpoint version.
 	result, err := c.StorageClient.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: c.WorkspaceStorage.BucketName,
 		Key:    aws.String(key),
@@ -830,6 +957,10 @@ func (c *WorkspaceStorageClient) GeneratePresignedPutURLs(ctx context.Context, k
 
 func (c *WorkspaceStorageClient) ListWithPrefix(ctx context.Context, prefix string) ([]s3types.Object, error) {
 	return c.StorageClient.ListWithPrefix(ctx, prefix, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) ListWithPrefixAllRegions(ctx context.Context, prefix string) ([]s3types.Object, error) {
+	return c.StorageClient.ListWithPrefixAllRegions(ctx, prefix, *c.WorkspaceStorage.BucketName)
 }
 
 func (c *WorkspaceStorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]string, error) {
