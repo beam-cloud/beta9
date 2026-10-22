@@ -24,7 +24,6 @@ type AppConfig struct {
 	Scheduling     SchedulingConfig     `key:"scheduling" json:"scheduling"`
 	Providers      ProviderConfig       `key:"providers" json:"providers"`
 	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
-	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig     `key:"monitoring" json:"monitoring"`
 	ManagedCompute ManagedComputeConfig `key:"managedCompute" json:"managed_compute"`
 	Abstractions   AbstractionConfig    `key:"abstractions" json:"abstractions"`
@@ -1156,17 +1155,6 @@ type TailscaleConfig struct {
 // owned pools. Workspace-owned private/BYOC machines never get it.
 type TailscaleAgentSSHConfig struct {
 	Enabled bool `key:"enabled" json:"enabled"`
-}
-
-type ProxyConfig struct {
-	HTTPPort int               `key:"httpPort" json:"http_port"`
-	Services []InternalService `key:"services" json:"services"`
-}
-
-type InternalService struct {
-	Name        string `key:"name" json:"name"`
-	LocalPort   int    `key:"localPort" json:"local_port"`
-	Destination string `key:"destination" json:"destination"`
 }
 
 type ObjectStoreConfig struct {

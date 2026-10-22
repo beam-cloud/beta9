@@ -26,7 +26,6 @@ const (
 	PrometheusScrapeKey         string  = "prometheus.io/scrape"
 	tmpVolumeName               string  = "beta9-tmp"
 	imagesVolumeName            string  = "beta9-images"
-	storageVolumeName           string  = "beta9-storage"
 	cacheVolumeName             string  = "beta9-cache"
 	durableDiskVolumeName       string  = "beta9-durable-disks"
 	kernelModulesVolumeName     string  = "host-kernel-modules"
@@ -36,7 +35,6 @@ const (
 	defaultWorkerInit           string  = "/usr/bin/tini"
 	defaultWorkerEntrypoint     string  = "/usr/local/bin/worker"
 	defaultImagesPath           string  = "/images"
-	defaultStoragePath          string  = "/storage"
 	defaultCachePath            string  = "/var/lib/beta9/cache"
 	defaultSharedMemoryPct      float32 = 0.5
 	defaultWorkerStopGraceS     int64   = 30

@@ -77,12 +77,3 @@ func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tail
 	}
 	return conn, nil
 }
-
-func GetDialer(host string, tailscale *Tailscale, tsConfig types.TailscaleConfig) func(ctx context.Context, network, address string) (net.Conn, error) {
-	if tsConfig.Enabled && strings.Contains(host, tsConfig.HostName) {
-		return tailscale.Dial
-	}
-
-	dialer := &net.Dialer{DualStack: true}
-	return dialer.DialContext
-}

@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
@@ -113,33 +112,6 @@ func (t *Tailscale) ensureUp(ctx context.Context) error {
 
 func (t *Tailscale) Start(ctx context.Context) error {
 	return t.ensureUp(ctx)
-}
-
-// Serve connects to a tailnet and serves a local service
-func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (net.Listener, error) {
-	server := t.currentServer()
-	log.Info().Str("url", server.ControlURL).Msg("connecting to tailnet")
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	addr := fmt.Sprintf(":%d", service.LocalPort)
-	listener, err := server.Listen("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = server.Up(timeoutCtx)
-	if err != nil {
-		return nil, err
-	}
-
-	t.mu.Lock()
-	t.initialized = true
-	t.mu.Unlock()
-
-	log.Info().Str("addr", addr).Msg("connected to tailnet")
-	return listener, nil
 }
 
 // Dial attempts to establish a TCP connection to a tailscale service
