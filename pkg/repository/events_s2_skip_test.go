@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -27,6 +28,8 @@ type historySkipTestStream struct {
 	mu      sync.Mutex
 	records []*s2pb.SequencedRecord
 	served  int
+	// recreated counts resets; each starts timestamps a day later.
+	recreated int64
 }
 
 func (s *historySkipTestStream) append(t *testing.T, eventType string, n int) {
@@ -35,7 +38,7 @@ func (s *historySkipTestStream) append(t *testing.T, eventType string, n int) {
 	defer s.mu.Unlock()
 	for range n {
 		seq := uint64(len(s.records))
-		eventTime := time.UnixMilli(historySkipTestEpochMs + int64(seq)).UTC()
+		eventTime := time.UnixMilli(historySkipTestEpochMs + s.recreated*24*time.Hour.Milliseconds() + int64(seq)).UTC()
 		body, err := json.Marshal(map[string]any{
 			"type":        eventType,
 			"time":        eventTime,
@@ -57,6 +60,7 @@ func (s *historySkipTestStream) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.records = nil
+	s.recreated++
 }
 
 func (s *historySkipTestStream) takeServed() int {
@@ -137,24 +141,25 @@ func TestEventHistoryPollsReadOnlyRecordsNotAlreadyChecked(t *testing.T) {
 	require.Empty(t, pollHistorySkipTestStream(t, repo, metrics))
 	require.Equal(t, 5000, stream.takeServed())
 
-	// Later polls read the batch their start position seeks to, then only
-	// the records appended since.
+	// Later polls check that one record read before is still there, read the
+	// batch their start position seeks to, then only the records appended
+	// since.
 	stream.append(t, types.EventContainerLifecycle, 50)
 	later := start.Add(time.Millisecond)
 	metrics.StartTime = &later
 	require.Empty(t, pollHistorySkipTestStream(t, repo, metrics))
-	require.Equal(t, 100+50, stream.takeServed())
+	require.Equal(t, 1+100+50, stream.takeServed())
 
 	stream.append(t, types.EventContainerMetrics, 1)
 	stream.append(t, types.EventContainerLifecycle, 10)
 	events := pollHistorySkipTestStream(t, repo, metrics)
 	require.Len(t, events, 1)
 	require.EqualValues(t, 5050, events[0].SeqNum)
-	require.Equal(t, 100+11, stream.takeServed())
+	require.Equal(t, 1+100+11, stream.takeServed())
 
 	// A match splits the skipped records into two ranges; both are kept.
 	require.Len(t, pollHistorySkipTestStream(t, repo, metrics), 1)
-	require.Equal(t, 100+1, stream.takeServed())
+	require.Equal(t, 1+100+1, stream.takeServed())
 
 	// Other filters are unaffected.
 	lifecycle := metrics
@@ -162,62 +167,66 @@ func TestEventHistoryPollsReadOnlyRecordsNotAlreadyChecked(t *testing.T) {
 	require.Len(t, pollHistorySkipTestStream(t, repo, lifecycle), 100)
 }
 
-func TestEventHistorySkipIsDroppedWhenItOutlivesTheStream(t *testing.T) {
+// A stream deleted and recreated under the same name reuses sequence numbers,
+// so ranges found before must not apply to it, however long it grows.
+func TestEventHistorySkipIsDroppedWhenTheStreamIsRecreated(t *testing.T) {
 	zero := uint64(0)
 	start := time.UnixMilli(historySkipTestEpochMs).UTC()
 	metrics := types.EventQuery{StubID: "stub", EventTypes: []string{types.EventContainerMetrics}, Limit: 100}
 	fromSeq, fromTime := metrics, metrics
 	fromSeq.SeqNum, fromTime.StartTime = &zero, &start
 
-	for name, query := range map[string]types.EventQuery{"sequence start": fromSeq, "time start": fromTime} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query types.EventQuery
+		// after is how many records follow the metric in the new stream.
+		after int
+	}{
+		{name: "shorter, sequence start", query: fromSeq},
+		{name: "shorter, time start", query: fromTime},
+		{name: "longer, sequence start", query: fromSeq, after: 4000},
+		{name: "longer, time start", query: fromTime, after: 4000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			repo, stream := newHistorySkipTestRepository(t)
 			stream.append(t, types.EventContainerLifecycle, 3000)
-			require.Empty(t, pollHistorySkipTestStream(t, repo, query))
+			require.Empty(t, pollHistorySkipTestStream(t, repo, tc.query))
 
-			// Recreated under the same name, shorter than the remembered ranges.
 			stream.reset()
 			stream.append(t, types.EventContainerLifecycle, 500)
 			stream.append(t, types.EventContainerMetrics, 1)
-			events := pollHistorySkipTestStream(t, repo, query)
+			stream.append(t, types.EventContainerLifecycle, tc.after)
+			events := pollHistorySkipTestStream(t, repo, tc.query)
 			require.Len(t, events, 1)
 			require.EqualValues(t, 500, events[0].SeqNum)
 		})
 	}
 }
 
-func TestRememberHistorySkipMergesRangesAndKeepsTheLongest(t *testing.T) {
-	repo := &S2EventRepository{}
-	key := "stream\x00{}"
+func TestSeqRangesMergeAndKeepTheLongest(t *testing.T) {
+	var ranges seqRanges
+	for _, r := range []seqRange{{10, 20}, {20, 30}, {40, 50}, {45, 60}} {
+		ranges = ranges.with(r)
+	}
+	require.Equal(t, seqRanges{{10, 30}, {40, 60}}, ranges)
 
-	repo.rememberHistorySkip(key, 10, 20)
-	repo.rememberHistorySkip(key, 20, 30)
-	repo.rememberHistorySkip(key, 40, 50)
-	repo.rememberHistorySkip(key, 45, 60)
-	require.Equal(t, []s2SeqRange{{10, 30}, {40, 60}}, repo.historySkip(key).ranges)
-
-	skip := repo.historySkip(key)
-	for _, tc := range []struct {
-		seq, start, nextRange uint64
-		bounded               bool
-	}{
-		{seq: 0, start: 0, nextRange: 10, bounded: true},
-		{seq: 15, start: 30, nextRange: 40, bounded: true},
-		{seq: 30, start: 30, nextRange: 40, bounded: true},
-		{seq: 55, start: 60},
-		{seq: 70, start: 70},
+	for _, tc := range []struct{ seq, start, count uint64 }{
+		{seq: 0, start: 0, count: 10},
+		{seq: 15, start: 30, count: 10},
+		{seq: 30, start: 30, count: 10},
+		{seq: 55, start: 60, count: math.MaxUint64 - 60},
+		{seq: 70, start: 70, count: math.MaxUint64 - 70},
 	} {
-		start, nextRange, bounded := skip.resume(tc.seq)
-		require.Equal(t, []any{tc.start, tc.nextRange, tc.bounded}, []any{start, nextRange, bounded}, "resume(%d)", tc.seq)
+		start, count := ranges.next(tc.seq)
+		require.Equal(t, []uint64{tc.start, tc.count}, []uint64{start, count}, "next(%d)", tc.seq)
 	}
 
-	for i := range uint64(s2HistorySkipMaxRanges) {
-		repo.rememberHistorySkip(key, 1000+100*i, 1000+100*i+1+i)
+	for i := range uint64(historySkipMaxRanges) {
+		ranges = ranges.with(seqRange{1000 + 100*i, 1000 + 100*i + 1 + i})
 	}
-	ranges := repo.historySkip(key).ranges
-	require.Len(t, ranges, s2HistorySkipMaxRanges)
-	require.NotContains(t, ranges, s2SeqRange{1000, 1001}, "the shortest range is dropped first")
-	require.Contains(t, ranges, s2SeqRange{10, 30})
+	require.Len(t, ranges, historySkipMaxRanges)
+	require.NotContains(t, ranges, seqRange{1000, 1001}, "the shortest range is dropped first")
+	require.Contains(t, ranges, seqRange{10, 30})
 }
 
 func TestHistorySkipKeyIgnoresOnlyPositionAndWindow(t *testing.T) {

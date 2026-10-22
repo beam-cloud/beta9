@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
 	"golang.org/x/sync/errgroup"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -53,8 +54,7 @@ type S2EventRepository struct {
 	queue              chan cloudevents.Event
 	stubCacheContentMu sync.Mutex
 	stubCacheContent   map[s2.StreamName]*stubCacheRequiredContentState
-	historySkipsMu     sync.Mutex
-	historySkips       map[string]s2HistorySkip
+	historySkips       historySkips
 }
 
 type ScopedS2EventRepository struct {
@@ -710,122 +710,36 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 		return r.readEventHistoryStreamFromTail(ctx, streamName, query, limit, response)
 	}
 
-	var nextSeqNum *uint64
-	if query.SeqNum != nil {
-		seq := *query.SeqNum
-		nextSeqNum = &seq
+	scan, err := r.startHistoryScan(ctx, streamName, query)
+	if err != nil {
+		return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
 	}
-	var startTimestamp *uint64
-	if query.StartTime != nil {
-		ts := uint64(query.StartTime.UTC().UnixMilli())
-		startTimestamp = &ts
-	} else if query.Timestamp != nil {
-		ts := *query.Timestamp
-		startTimestamp = &ts
-	}
-	var until *uint64
-	if query.EndTime != nil {
-		ts := uint64(query.EndTime.UTC().UnixMilli())
-		until = &ts
-	} else if query.Until != nil {
-		ts := *query.Until
-		until = &ts
-	}
+	defer scan.flush()
 
-	skipKey := historySkipKey(streamName, query)
-	skip := r.historySkip(skipKey)
-	// [runFrom, scannedTo) is the current stretch, read or skipped, in which
-	// no record passed the filters. It is remembered when a passing record
-	// ends it, and also when the read fails or the client goes away, so the
-	// next poll resumes past it.
-	var runFrom, scannedTo uint64
-	inRun := false
-	endRun := func(to uint64) {
-		if inRun {
-			r.rememberHistorySkip(skipKey, runFrom, to)
-			inRun = false
-		}
-	}
-	defer func() { endRun(scannedTo) }()
-
-	// Ranges can only outlive their stream if it was deleted and recreated
-	// under the same name. Drop them and read again from the start.
-	initialSeqNum, initialTimestamp := nextSeqNum, startTimestamp
-	eventsBefore := len(response.Events)
-	dropSkip := func() {
-		r.forgetHistorySkip(skipKey)
-		skip, inRun = s2HistorySkip{}, false
-		nextSeqNum, startTimestamp = initialSeqNum, initialTimestamp
-		response.Events = response.Events[:eventsBefore]
-	}
-
+	opts := historyReadStart(query)
 	for uint64(len(response.Events)) < limit {
-		count := s2EventHistoryReadLimit
-		if remaining := limit - uint64(len(response.Events)); remaining < count {
-			count = remaining
+		count := min(s2EventHistoryReadLimit, limit-uint64(len(response.Events)))
+		if opts.SeqNum != nil {
+			start, unchecked := scan.resume(*opts.SeqNum)
+			opts.SeqNum, count = &start, min(count, unchecked)
 		}
-		jumped := false
-		if nextSeqNum != nil {
-			start, nextRange, bounded := skip.resume(*nextSeqNum)
-			if start != *nextSeqNum {
-				if !inRun {
-					runFrom, inRun = *nextSeqNum, true
-				}
-				nextSeqNum, scannedTo, jumped = &start, start, true
-			}
-			if bounded && nextRange-start < count {
-				count = nextRange - start
-			}
-		}
-		opts := &s2.ReadOptions{
-			Count: &count,
-			Until: until,
-		}
-		if nextSeqNum != nil {
-			opts.SeqNum = nextSeqNum
-		} else if startTimestamp != nil {
-			opts.Timestamp = startTimestamp
-		} else {
-			seq := uint64(0)
-			opts.SeqNum = &seq
-		}
+		opts.Count = &count
 
 		batch, err := r.basin.Stream(streamName).Read(ctx, opts)
-		if err != nil {
-			// Reading at the tail returns no records; only reading past it
-			// fails, so a jump that lands past the tail used stale ranges.
-			if jumped && isS2RangeNotSatisfiable(err) {
-				dropSkip()
-				continue
-			}
-			if isS2StreamNotFound(err) {
-				r.forgetHistorySkip(skipKey)
-				inRun = false
-			}
-			if isS2ReadEmpty(err) {
-				return nil
-			}
-			return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
+		if isS2ReadEmpty(err) {
+			return nil
 		}
-		if batch.Tail != nil && batch.Tail.SeqNum < skip.end() {
-			dropSkip()
-			continue
+		if err != nil {
+			return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
 		}
 		if len(batch.Records) == 0 {
 			return nil
 		}
 
 		for _, record := range batch.Records {
-			scannedTo = record.SeqNum + 1
 			eventRecord, ok := eventRecordPassingFilters(record, query)
-			if !ok {
-				if !inRun {
-					runFrom, inRun = record.SeqNum, true
-				}
-				continue
-			}
-			endRun(record.SeqNum)
-			if !eventRecordInQueryWindow(eventRecord, query) {
+			scan.observe(record, ok)
+			if !ok || !eventRecordInQueryWindow(eventRecord, query) {
 				continue
 			}
 			augmentContainerEventResponse(&types.ContainerEventsResponse{}, &eventRecord)
@@ -835,12 +749,29 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 			}
 		}
 
-		last := batch.Records[len(batch.Records)-1]
-		seq := last.SeqNum + 1
-		nextSeqNum = &seq
-		startTimestamp = nil
+		next := batch.Records[len(batch.Records)-1].SeqNum + 1
+		opts.SeqNum, opts.Timestamp = &next, nil
 	}
 	return nil
+}
+
+// historyReadStart positions a forward history read at the query's start, by
+// sequence number or else by time, and ends it at the query's end.
+func historyReadStart(query types.EventQuery) *s2.ReadOptions {
+	opts := &s2.ReadOptions{Timestamp: query.Timestamp, Until: query.Until}
+	if query.StartTime != nil {
+		opts.Timestamp = ptr.To(uint64(query.StartTime.UTC().UnixMilli()))
+	}
+	if query.EndTime != nil {
+		opts.Until = ptr.To(uint64(query.EndTime.UTC().UnixMilli()))
+	}
+	switch {
+	case query.SeqNum != nil:
+		opts.SeqNum, opts.Timestamp = ptr.To(*query.SeqNum), nil
+	case opts.Timestamp == nil:
+		opts.SeqNum = ptr.To(uint64(0))
+	}
+	return opts
 }
 
 // eventRecordPassingFilters parses record if it passes the query's filters,
