@@ -159,18 +159,22 @@ func TestTigrisPresignedHeaders(t *testing.T) {
 			t.Fatalf("URL-only %s requires a consistency header", method)
 		}
 	}
-	location, headers, err := client.GeneratePresignedPutURLWithMetadata(context.Background(), "object.zip", 60, "bucket", map[string]string{"hash": "content"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if headers[common.TigrisConsistencyHeader] != "true" {
-		t.Fatalf("upload headers = %v", headers)
-	}
-	u, err := url.Parse(location)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "x-tigris-consistent") {
-		t.Fatal("consistency header is not signed")
+	for name, metadata := range map[string]map[string]string{"full upload": {"hash": "content"}, "delta upload": nil} {
+		t.Run(name, func(t *testing.T) {
+			location, headers, err := client.GeneratePresignedPutURLWithMetadata(context.Background(), "object.zip", 60, "bucket", metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if headers[common.TigrisConsistencyHeader] != "true" {
+				t.Fatalf("upload headers = %v", headers)
+			}
+			u, err := url.Parse(location)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "x-tigris-consistent") {
+				t.Fatal("consistency header is not signed")
+			}
+		})
 	}
 }
