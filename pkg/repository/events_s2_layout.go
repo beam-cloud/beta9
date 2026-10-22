@@ -469,7 +469,23 @@ func eventMetadataFromCloudEvent(event cloudevents.Event) eventMetadata {
 		ServiceName: extensionString(extensions, "servicename"),
 		InstanceID:  extensionString(extensions, "instanceid"),
 		PoolName:    extensionString(extensions, "poolname"),
+		Action:      computeEventAction(event),
 	}
+}
+
+// computeEventAction reads a compute event's action from its payload, the only
+// place it is kept. Heartbeats are routed by it.
+func computeEventAction(event cloudevents.Event) string {
+	if !isComputeEvent(event.Type()) {
+		return ""
+	}
+	var payload struct {
+		Action string `json:"action"`
+	}
+	if err := event.DataAs(&payload); err != nil {
+		return ""
+	}
+	return payload.Action
 }
 
 func extensionString(extensions map[string]interface{}, key string) string {

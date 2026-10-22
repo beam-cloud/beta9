@@ -1684,25 +1684,30 @@ func TestComputeEventMetadataExtensionsRoundTrip(t *testing.T) {
 
 func TestComputeHeartbeatUsesDedicatedPoolMetricsStream(t *testing.T) {
 	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
+	metrics := s2.StreamName("events/workspaces/workspace-1/compute/metrics")
+	history := s2.StreamName("events/workspaces/workspace-1/compute")
 	tests := []struct {
 		eventType, action string
+		want, not         s2.StreamName
 	}{
-		{types.EventComputeMachine, types.EventComputeActionMachineHeartbeat},
-		{types.EventComputePool, types.EventComputeActionPoolHeartbeat},
+		{types.EventComputeMachine, types.EventComputeActionMachineHeartbeat, metrics, history},
+		{types.EventComputePool, types.EventComputeActionPoolHeartbeat, metrics, history},
+		{types.EventComputePool, types.EventComputeActionPoolCreated, history, metrics},
 	}
 	for _, test := range tests {
-		streams := repo.streamNamesForEvent(test.eventType, eventMetadata{
+		// Build the event as producers do: the action is only in its payload.
+		event, err := (&EventClientRepo{}).createEventObject(test.eventType, types.EventComputeSchemaVersion, types.EventComputeSchema{
 			WorkspaceID: "workspace-1",
 			MachineID:   "machine-1",
+			PoolName:    "pool-1",
 			Action:      test.action,
 		})
+		require.NoError(t, err)
 
-		if !slices.Contains(streams, s2.StreamName("events/workspaces/workspace-1/compute/metrics")) {
-			t.Fatalf("pool metrics stream missing for %q from %#v", test.action, streams)
-		}
-		if slices.Contains(streams, s2.StreamName("events/workspaces/workspace-1/compute")) {
-			t.Fatalf("heartbeat %q leaked into lifecycle history: %#v", test.action, streams)
-		}
+		_, streams, err := repo.appendRecordForEvent(event)
+		require.NoError(t, err)
+		require.Contains(t, streams, test.want, "action %q", test.action)
+		require.NotContains(t, streams, test.not, "action %q", test.action)
 	}
 }
 
