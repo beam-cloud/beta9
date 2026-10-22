@@ -66,8 +66,8 @@ func main() {
 	}
 }
 
-// Older agents launch the worker directly as PID 1. Detached runsc children
-// then remain zombies, and runsc wait mistakes them for running sandboxes.
+// Workers launched directly as PID 1 need an init to reap detached runsc
+// children so runsc wait does not mistake zombies for running sandboxes.
 func ensureInit() error {
 	if os.Getpid() != 1 {
 		return nil

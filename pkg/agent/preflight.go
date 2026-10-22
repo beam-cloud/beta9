@@ -33,18 +33,6 @@ type preflightResult struct {
 func runPreflight(devMode bool, executor string) preflightResult {
 	checks := []check{
 		{
-			Name:     "k3s",
-			Ok:       true,
-			Message:  "not required for agent worker-container mode",
-			Severity: types.AgentPreflightSeverityInfo,
-		},
-		{
-			Name:     "flux",
-			Ok:       true,
-			Message:  "not installed or required for agent worker-container mode",
-			Severity: types.AgentPreflightSeverityInfo,
-		},
-		{
 			Name:     "tailscale-daemon",
 			Ok:       true,
 			Message:  "not installed or required; agent transport is embedded and route-scoped",
@@ -55,7 +43,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 		checks = append(checks, check{
 			Name:     "local-dev",
 			Ok:       true,
-			Message:  "macOS and Linux local joins use the agent route listener without k3s, Flux, or a system Tailscale daemon",
+			Message:  "macOS and Linux local joins use the agent route listener",
 			Severity: types.AgentPreflightSeverityInfo,
 		})
 	}

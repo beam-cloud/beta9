@@ -22,7 +22,6 @@ require (
 	github.com/beam-cloud/goproc v0.1.17
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
 	github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8
-	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cloudevents/sdk-go/v2 v2.15.2
 	github.com/cockroachdb/redact v1.1.8
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
@@ -51,7 +50,6 @@ require (
 	github.com/opencontainers/runtime-spec v1.2.0
 	github.com/opencontainers/umoci v0.4.7
 	github.com/openmeterio/openmeter v1.0.0-beta.47
-	github.com/oracle/oci-go-sdk v24.3.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.21.1
 	github.com/prometheus/client_golang v1.23.2

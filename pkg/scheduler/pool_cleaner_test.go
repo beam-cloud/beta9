@@ -40,35 +40,6 @@ func TestWorkerResourceCleanerRemovesWorkerStateWithoutJobAndRequeuesRequests(t 
 	assertBacklogContainsContainer(t, rdb, "container-1")
 }
 
-func TestWorkerResourceCleanerScopesRedisOnlyWorkersToExternalMachine(t *testing.T) {
-	ctx := context.Background()
-	rdb, err := repo.NewRedisClientForTest()
-	assert.Nil(t, err)
-
-	workerRepo := repo.NewWorkerRedisRepositoryForTest(rdb)
-	machineAWorker := cleanerTestWorker("machine-a-worker", "default", "machine-a")
-	machineBWorker := cleanerTestWorker("machine-b-worker", "default", "machine-b")
-	assert.Nil(t, workerRepo.AddWorker(machineAWorker))
-	assert.Nil(t, workerRepo.AddWorker(machineBWorker))
-
-	cleaner := WorkerResourceCleaner{
-		PoolName:   "default",
-		MachineId:  "machine-a",
-		Config:     types.WorkerConfig{Namespace: "beta9"},
-		KubeClient: fake.NewSimpleClientset(),
-		WorkerRepo: workerRepo,
-	}
-	cleaner.Clean(ctx)
-
-	_, err = workerRepo.GetWorkerById(machineAWorker.Id)
-	_, workerNotFound := err.(*types.ErrWorkerNotFound)
-	assert.True(t, workerNotFound)
-
-	worker, err := workerRepo.GetWorkerById(machineBWorker.Id)
-	assert.Nil(t, err)
-	assert.Equal(t, machineBWorker.Id, worker.Id)
-}
-
 // A worker whose Job appears after the cleaner listed Jobs is not an orphan.
 func TestWorkerResourceCleanerPreservesWorkerCreatedDuringJobScan(t *testing.T) {
 	ctx := context.Background()

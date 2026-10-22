@@ -483,7 +483,7 @@ def release_machine(service: ServiceClient, machine_id: Optional[str], pool: str
 
       Examples:
 
-        {cli_name} machine create --pool ec2-t4
+        {cli_name} machine create --pool gpu-pool
         \b
     """,
 )
@@ -500,52 +500,13 @@ def create_machine(service: ServiceClient, pool: str):
     if not res.ok:
         return terminal.error(f"Error: {res.err_msg}")
 
-    if res.install_command:
-        terminal.header(
-            f"Created machine with ID: '{res.machine.id}'. Run the following command on the node:"
-        )
-        terminal.detail(res.install_command, crop=False, overflow="ignore")
-        terminal.detail(
-            "Leave --worker-image unchanged to follow cluster rollouts, or edit its tag to pin this machine to a test build."
-        )
-        return
-
     terminal.header(
-        f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
+        f"Created machine with ID: '{res.machine.id}'. Run the following command on the node:"
     )
-
-    cmd_args = [
-        f'--token "{res.machine.registration_token}"',
-        f'--machine-id "{res.machine.id}"',
-        f'--tailscale-url "{res.machine.tailscale_url}"',
-        f'--tailscale-auth "{res.machine.tailscale_auth}"',
-        f'--pool-name "{res.machine.pool_name}"',
-        f'--provider-name "{res.machine.provider_name}"',
-    ]
-
-    agent_url = "https://release.beam.cloud/agent/agent"
-    if res.agent_upstream_url:
-        cmd_args.append(f'--flux-upstream "{res.agent_upstream_url}"')
-
-    if res.agent_upstream_branch:
-        cmd_args.append(f'--flux-branch "{res.agent_upstream_branch}"')
-        if res.agent_upstream_branch != "main":
-            agent_url += f"-{res.agent_upstream_branch}"
-
-    if res.agent_upstream_token:
-        cmd_args.append(f'--flux-github-token "{res.agent_upstream_token}"')
-
-    cmd_args_formatted = " \\\n\t  ".join(cmd_args)
-    text = f"""# -- Agent setup
-    sudo curl -L -o agent {agent_url} &&
-    sudo chmod +x agent &&
-    sudo ./agent {cmd_args_formatted}
-    """
-
-    if res.machine.user_data:
-        text = f"""# -- User data\n{res.machine.user_data}\n{text}"""
-
-    terminal.detail(text, crop=False, overflow="ignore")
+    terminal.detail(res.install_command, crop=False, overflow="ignore")
+    terminal.detail(
+        "Leave --worker-image unchanged to follow cluster rollouts, or edit its tag to pin this machine to a test build."
+    )
 
 
 @management.command(
