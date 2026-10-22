@@ -16,7 +16,6 @@ var (
 	schedulerWorkerPendingRequests    string = "scheduler:worker:requests:pending:%s"
 	schedulerWorkerIndex              string = "scheduler:worker:worker_index"
 	schedulerWorkerPoolIndex          string = "scheduler:worker:pool_index:%s"
-	schedulerWorkerMachineIndex       string = "scheduler:worker:machine_index:%s"
 	schedulerWorkerState              string = "scheduler:worker:state:%s"
 	schedulerContainerConfig          string = "scheduler:container:config:%s"
 	schedulerContainerState           string = "scheduler:container:state:%s"
@@ -114,20 +113,6 @@ var (
 )
 
 var (
-	providerPrefix         string = "provider"
-	providerMachineState   string = "provider:machine:%s:%s:%s"
-	providerMachineMetrics string = "provider:machine:%s:%s:%s:metrics"
-	providerMachineIndex   string = "provider:machine:%s:%s:machine_index"
-	providerMachineLock    string = "provider:machine:%s:%s:%s:lock"
-)
-
-var (
-	tailscalePrefix               string = "tailscale"
-	tailscaleServiceHostname      string = "tailscale:%s:%s"
-	tailscaleServiceHostnameIndex string = "tailscale:%s:index"
-)
-
-var (
 	computePoolState            string = "compute:{%s}:pool:%s"
 	computePoolStateLock        string = "compute:{%s}:pool:%s:lock"
 	computePoolIndex            string = "compute:{%s}:pools"
@@ -189,10 +174,6 @@ func (rk *redisKeys) SchedulerWorkerIndex() string {
 
 func (rk *redisKeys) SchedulerWorkerPoolIndex(poolName string) string {
 	return fmt.Sprintf(schedulerWorkerPoolIndex, poolName)
-}
-
-func (rk *redisKeys) SchedulerWorkerMachineIndex(machineId string) string {
-	return fmt.Sprintf(schedulerWorkerMachineIndex, machineId)
 }
 
 func (rk *redisKeys) SchedulerContainerRequests() string {
@@ -606,40 +587,6 @@ func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {
 
 func (rl *redisKeys) WorkspaceAuthorizedToken(token string) string {
 	return fmt.Sprintf(workspaceAuthorizedToken, token)
-}
-
-// Tailscale keys
-func (rk *redisKeys) TailscalePrefix() string {
-	return tailscalePrefix
-}
-
-func (rk *redisKeys) TailscaleServiceHostname(serviceName, hostName string) string {
-	return fmt.Sprintf(tailscaleServiceHostname, serviceName, hostName)
-}
-
-func (rk *redisKeys) TailscaleServiceHostnameIndex(serviceName string) string {
-	return fmt.Sprintf(tailscaleServiceHostnameIndex, serviceName)
-}
-
-// Provider keys
-func (rk *redisKeys) ProviderPrefix() string {
-	return providerPrefix
-}
-
-func (rk *redisKeys) ProviderMachineState(providerName, poolName, machineId string) string {
-	return fmt.Sprintf(providerMachineState, providerName, poolName, machineId)
-}
-
-func (rk *redisKeys) ProviderMachineMetrics(providerName, poolName, machineId string) string {
-	return fmt.Sprintf(providerMachineMetrics, providerName, poolName, machineId)
-}
-
-func (rk *redisKeys) ProviderMachineIndex(providerName, poolName string) string {
-	return fmt.Sprintf(providerMachineIndex, providerName, poolName)
-}
-
-func (rk *redisKeys) ProviderMachineLock(providerName, poolName, machineId string) string {
-	return fmt.Sprintf(providerMachineLock, providerName, poolName, machineId)
 }
 
 // Thunder keys

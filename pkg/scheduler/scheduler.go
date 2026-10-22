@@ -18,7 +18,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/metrics"
-	"github.com/beam-cloud/beta9/pkg/network"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -40,7 +39,6 @@ type Scheduler struct {
 	ctx                   context.Context
 	config                types.AppConfig
 	backendRepo           repo.BackendRepository
-	providerRepo          repo.ProviderRepository
 	workerRepo            repo.WorkerRepository
 	workerPoolRepo        repo.WorkerPoolRepository
 	computeRepo           repo.ComputeRepository
@@ -72,7 +70,7 @@ type schedulerCredentialAttachResult struct {
 	source         string
 }
 
-func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository) (*Scheduler, error) {
 	// A malformed failover chain would silently misroute placement, so refuse
 	// to start rather than guess at the operator's intent.
 	if err := config.Scheduling.Failover.Validate(config.Worker.Pools); err != nil {
@@ -81,7 +79,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
-	providerRepo := repo.NewProviderRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
@@ -104,7 +101,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 			Config:          config,
 			BackendRepo:     backendRepo,
 			WorkerRepo:      workerRepo,
-			ProviderRepo:    providerRepo,
 			WorkerPoolRepo:  workerPoolRepo,
 			ContainerRepo:   containerRepo,
 			EventRepo:       eventRepo,
@@ -116,13 +112,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		switch pool.Mode {
 		case types.PoolModeLocal:
 			controller, err = NewLocalKubernetesWorkerPoolController(controllerOptions)
-		case types.PoolModeExternal:
-			if pool.AgentHosted() {
-				continue
-			}
-			controllerOptions.ProviderName = pool.Provider
-			controllerOptions.Tailscale = tailscale
-			controller, err = NewProviderWorkerPoolController(controllerOptions)
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
@@ -142,7 +131,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		config:                    config,
 		eventBus:                  eventBus,
 		backendRepo:               backendRepo,
-		providerRepo:              providerRepo,
 		workerRepo:                workerRepo,
 		workerPoolRepo:            workerPoolRepo,
 		computeRepo:               computeRepo,
@@ -262,7 +250,6 @@ func (s *Scheduler) ensureAgentPool(workspaceID string, state *compute.PoolState
 		WorkerRepo:     s.workerRepo,
 		ComputeRepo:    s.computeRepo,
 		WorkerPoolRepo: s.workerPoolRepo,
-		ProviderRepo:   s.providerRepo,
 		ContainerRepo:  s.containerRepo,
 		PushMetrics:    s.pushComputeEvent,
 	})
@@ -294,7 +281,7 @@ func (s *Scheduler) DeleteAgentPool(workspaceID string, state *compute.PoolState
 }
 
 // DeleteManagedAgentPool removes only the managed controller generation the
-// caller reconciled. It cannot delete a private, local, provider-backed, or newly
+// caller reconciled. It cannot delete a private, local, or newly
 // recreated controller that happens to reuse the same selector.
 func (s *Scheduler) DeleteManagedAgentPool(selector, instanceID string) {
 	if s == nil || selector == "" {
@@ -321,7 +308,6 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 	if state != nil && state.ManagementSource != "" && state.WorkerConfig != nil {
 		config := *state.WorkerConfig
 		config.Mode = types.PoolModeExternal
-		config.Provider = nil
 		config.RequiresPoolSelector = state.CreatedByTokenID == types.FailoverOnDemandPoolCreator
 		if config.ContainerRuntime == "" {
 			config.ContainerRuntime = types.ContainerRuntimeRunc.String()
@@ -1476,7 +1462,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	}
 
 	// Native requested GPUs take precedence over failover capacity. Within the
-	// same tier, storage-backed work prefers agent capacity so legacy workers
+	// same tier, storage-backed work prefers agent capacity so local workers
 	// remain available to workspaces that cannot run on agents. Explicit chain
 	// order still takes precedence over ordinary pool priority.
 	sort.Slice(scoredWorkers, func(i, j int) bool {

@@ -36,7 +36,6 @@ type AgentWorkerPoolControllerOptions struct {
 	WorkerRepo     repository.WorkerRepository
 	ComputeRepo    repository.ComputeRepository
 	WorkerPoolRepo repository.WorkerPoolRepository
-	ProviderRepo   repository.ProviderRepository
 	ContainerRepo  repository.ContainerRepository
 	PushMetrics    func(types.EventComputeSchema)
 }
@@ -128,7 +127,6 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (*Agent
 			FailoverHealth:   opts.Config.Scheduling.Failover.Health,
 			WorkerRepo:       opts.WorkerRepo,
 			WorkerPoolRepo:   opts.WorkerPoolRepo,
-			ProviderRepo:     opts.ProviderRepo,
 			ContainerRepo:    opts.ContainerRepo,
 			PushMetrics:      opts.PushMetrics,
 		}); err != nil {

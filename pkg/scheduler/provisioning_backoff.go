@@ -34,9 +34,6 @@ func (s *Scheduler) workerProvisioningControllerForRequest(controllers []WorkerP
 		if controller == nil {
 			continue
 		}
-		if pool, ok := s.poolForController(controller); ok && !workerPoolSupportsProvisioning(pool.Config) {
-			continue
-		}
 		if request != nil {
 			if checker, ok := controller.(workerPoolCapacityChecker); ok {
 				hasCapacity, err := checker.HasWorkerCapacity(

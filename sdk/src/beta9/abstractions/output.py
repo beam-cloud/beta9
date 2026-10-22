@@ -19,7 +19,6 @@ from ..clients.output import (
     OutputStatResponse,
 )
 from ..env import is_local
-from ..runner.common import USER_OUTPUTS_DIR
 from ..sync import CHUNK_SIZE
 
 
@@ -184,6 +183,8 @@ class Output(BaseAbstraction):
         as a single file. If the Output is a file, it will be uploaded as-is
         (not zipped).
 
+        Returns only after the gateway has uploaded the file to object storage.
+
         Raises:
             OutputSaveError: An error indicating the output failed to save.
         """
@@ -191,20 +192,9 @@ class Output(BaseAbstraction):
         if self.path.is_dir():
             path = self.zip_dir(self.path)
 
-        storage_available = os.getenv("STORAGE_AVAILABLE", "false").lower() == "true"
-        if storage_available:
-            output_id = str(uuid.uuid4())
-            output_path = Path(USER_OUTPUTS_DIR) / self.task_id / output_id / path.name
-            output_path.parent.mkdir(mode=755, parents=True, exist_ok=True)
-            shutil.copy(path, output_path)
-
-            # Ensure the file is written to disk
-            with open(output_path, "rb+") as f:
-                os.fsync(f.fileno())
-
-            self.id = output_id
-            return self
-
+        # Task output discovery reads object storage directly. A mounted-file
+        # write can succeed before the object is published, so always wait for
+        # the gateway upload acknowledgement.
         def stream_request(p: Path) -> Generator[OutputSaveRequest, None, None]:
             if p.stat().st_size == 0:
                 yield OutputSaveRequest(self.task_id, p.name, b"")

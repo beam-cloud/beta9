@@ -86,13 +86,9 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	if config.Mode != types.PoolModeExternal {
 		return types.WorkerPoolConfig{}, fmt.Errorf("managed pools must use mode %q", types.PoolModeExternal)
 	}
-	if !config.AgentHosted() {
-		return types.WorkerPoolConfig{}, errors.New("managed pools are agent-backed and cannot set provider")
-	}
-	config.Provider = nil
 	// Selector-bound agent capacity uses private pool state, not managed pools.
 	config.RequiresPoolSelector = false
-	// Runtime is the Kubernetes RuntimeClass used by provider-backed workers.
+	// Runtime is the Kubernetes RuntimeClass used by local workers.
 	// Agent-backed workers use Docker GPU injection, but keeping the canonical
 	// NVIDIA default in the stored config makes GPU pool behavior consistent
 	// across the API, config files, and the dashboard editor.
@@ -106,9 +102,6 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	case types.ContainerRuntimeRunc.String(), types.ContainerRuntimeGvisor.String(), types.ContainerRuntimeMicroVM.String():
 	default:
 		return types.WorkerPoolConfig{}, fmt.Errorf("unsupported container runtime %q", config.ContainerRuntime)
-	}
-	if len(config.UserData) > 256*1024 {
-		return types.WorkerPoolConfig{}, fmt.Errorf("user data exceeds 256 KiB")
 	}
 	for field, path := range map[string]string{
 		"storage_path":          config.StoragePath,
@@ -457,8 +450,6 @@ func configuredPoolController(config types.WorkerPoolConfig) types.WorkerPoolCon
 		return types.WorkerPoolControllerLocal
 	case config.AgentHosted():
 		return types.WorkerPoolControllerAgent
-	case config.Mode == types.PoolModeExternal && config.Provider != nil:
-		return types.WorkerPoolControllerProvider
 	default:
 		return ""
 	}

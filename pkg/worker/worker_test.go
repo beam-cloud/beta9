@@ -192,9 +192,8 @@ func TestHydrateManagedWorkerMetering(t *testing.T) {
 		ContainerCostHookConfig: types.ContainerCostHookConfig{Endpoint: "https://billing.example.com/quote", Token: "quote-key"},
 	}
 	meteringJSON, _ := json.Marshal(metering)
-	provider := types.ProviderAgent
 	err := hydrateManagedWorkerMetering(context.Background(), "worker-1", &config, types.WorkerPoolConfig{
-		Mode: types.PoolModeExternal, Provider: &provider,
+		Mode: types.PoolModeExternal,
 	}, &fakeWorkerRepoClient{metering: &pb.GetWorkerMeteringConfigResponse{Ok: true, MeteringJson: string(meteringJSON)}})
 
 	require.NoError(t, err)

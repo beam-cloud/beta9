@@ -1229,7 +1229,8 @@ message AgentBootstrapConfig {
   string transport = 7;
   string executor = 8;
   string fallback = 9;
-  repeated string disabled_services = 10;
+  reserved 10;
+  reserved "disabled_services";
   string image_registry_store = 11;
   uint32 image_clip_version = 12;
   bool image_local_cache_enabled = 13;
@@ -1470,15 +1471,12 @@ message Machine {
   uint32 gpu_count = 5;
   string status = 6;
   string pool_name = 7;
-  string provider_name = 8;
-  string registration_token = 9;
-  string tailscale_url = 10;
-  string tailscale_auth = 11;
+  reserved 8, 9, 10, 11, 16;
+  reserved "provider_name", "registration_token", "tailscale_url", "tailscale_auth", "user_data";
   string last_keepalive = 12;
   string created = 13;
   string agent_version = 14;
   MachineMetrics machine_metrics = 15;
-  string user_data = 16;
   MachineSSHAccess ssh = 17;
   string public_ip = 18;
   string tailnet_hostname = 19;
@@ -1542,9 +1540,8 @@ message CreateMachineResponse {
   bool ok = 1;
   string err_msg = 2;
   Machine machine = 3;
-  string agent_upstream_url = 4;
-  string agent_upstream_branch = 5;
-  string agent_upstream_token = 6;
+  reserved 4, 5, 6;
+  reserved "agent_upstream_url", "agent_upstream_branch", "agent_upstream_token";
   // Agent-backed managed pools return the systemd installer here. The join
   // token embedded in the command is short-lived and machine-bound.
   string install_command = 7;

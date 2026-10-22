@@ -598,9 +598,6 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 		if oldWorker.PoolName != "" && oldWorker.PoolName != worker.PoolName {
 			pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerPoolIndex(oldWorker.PoolName), stateKey)
 		}
-		if oldWorker.MachineId != "" && oldWorker.MachineId != worker.MachineId {
-			pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldWorker.MachineId), stateKey)
-		}
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to add worker state and indexes <%s>: %w", stateKey, err)
@@ -970,9 +967,6 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 		pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
 	}
 	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
-	if oldMachineID != "" && oldMachineID != worker.MachineId {
-		pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldMachineID), stateKey)
-	}
 	for _, indexKey := range r.workerIndexKeys(worker) {
 		pipe.SAdd(ctx, indexKey, stateKey)
 	}
@@ -1138,9 +1132,6 @@ func (r *WorkerRedisRepository) workerIndexKeys(worker *types.Worker) []string {
 	}
 	if worker.PoolName != "" {
 		keys = append(keys, common.RedisKeys.SchedulerWorkerPoolIndex(worker.PoolName))
-	}
-	if worker.MachineId != "" {
-		keys = append(keys, common.RedisKeys.SchedulerWorkerMachineIndex(worker.MachineId))
 	}
 	return keys
 }
@@ -1472,22 +1463,6 @@ func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.W
 	}
 	return r.filterIndexedWorkers(context.TODO(), workers, indexKey, func(worker *types.Worker) bool {
 		return worker.PoolName == poolName
-	}), nil
-}
-
-func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error) {
-	indexKey := common.RedisKeys.SchedulerWorkerMachineIndex(machineId)
-	keys, err := r.rdb.SMembers(context.TODO(), indexKey).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve worker machine index <%s>: %w", indexKey, err)
-	}
-
-	workers, err := r.getWorkersFromKeys(keys, indexKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve worker state keys from machine index <%s>: %w", indexKey, err)
-	}
-	return r.filterIndexedWorkers(context.TODO(), workers, indexKey, func(worker *types.Worker) bool {
-		return worker.MachineId == machineId
 	}), nil
 }
 
