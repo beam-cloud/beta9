@@ -431,33 +431,35 @@ func (c *StorageClient) ListDirectory(ctx context.Context, dir string, bucket st
 		dir += "/"
 	}
 
-	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	paginator := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
 		Bucket:    aws.String(bucket),
 		Prefix:    aws.String(dir),
 		Delimiter: aws.String("/"),
 	})
-	if err != nil {
-		return nil, err
-	}
-
 	var allObjects []s3types.Object
-
-	// Add regular files
-	for _, obj := range resp.Contents {
-		if *obj.Key != dir {
-			allObjects = append(allObjects, obj)
-		}
-	}
-
-	// Add directories
-	for _, cp := range resp.CommonPrefixes {
-		dirObject := s3types.Object{
-			Key:          cp.Prefix,
-			Size:         aws.Int64(0),
-			LastModified: aws.Time(time.Now()),
+	for paginator.HasMorePages() {
+		resp, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
 		}
 
-		allObjects = append(allObjects, dirObject)
+		// Add regular files
+		for _, obj := range resp.Contents {
+			if *obj.Key != dir {
+				allObjects = append(allObjects, obj)
+			}
+		}
+
+		// Add directories
+		for _, cp := range resp.CommonPrefixes {
+			dirObject := s3types.Object{
+				Key:          cp.Prefix,
+				Size:         aws.Int64(0),
+				LastModified: aws.Time(time.Now()),
+			}
+
+			allObjects = append(allObjects, dirObject)
+		}
 	}
 
 	return allObjects, nil
@@ -520,15 +522,20 @@ func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []str
 }
 
 func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string, bucket string) ([]s3types.Object, error) {
-	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	paginator := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),
 	})
-	if err != nil {
-		return nil, err
+	var allObjects []s3types.Object
+	for paginator.HasMorePages() {
+		resp, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		allObjects = append(allObjects, resp.Contents...)
 	}
 
-	return resp.Contents, nil
+	return allObjects, nil
 }
 
 func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, bucket string) ([]string, error) {
