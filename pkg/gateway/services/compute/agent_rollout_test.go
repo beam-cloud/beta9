@@ -3,10 +3,12 @@ package compute
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -86,9 +88,10 @@ func TestAgentWorkerImageFollowsDeploymentRevisionAcrossGateways(t *testing.T) {
 	require.NoError(t, err)
 	workerRepo := repository.NewWorkerRedisRepositoryForTest(rdb)
 	computeRepo := repository.NewComputeRedisRepository(rdb)
-	agent := &model.AgentTokenState{WorkspaceID: "admin", MachineID: "machine", PoolName: "pool", Mode: string(types.PoolModeExternal)}
+	agent := &model.AgentTokenState{WorkspaceID: "admin", MachineID: "machine", PoolName: "pool", Mode: string(types.PoolModeExternal), Schedulable: true, LastHeartbeatAt: time.Now()}
 	worker := &types.Worker{Id: model.AgentMachineWorkerID(agent.MachineID), WorkspaceId: agent.WorkspaceID, MachineId: agent.MachineID, PoolName: agent.PoolName, Status: types.WorkerStatusAvailable, BuildVersion: "A"}
 	require.NoError(t, workerRepo.AddWorker(worker))
+	require.NoError(t, computeRepo.SaveAgentTokenState(ctx, agent, time.Hour))
 	service := func(revision int64, image string) *Service {
 		return &Service{workerRepo: workerRepo, computeRepo: computeRepo, backendRepo: &rolloutTokenBackend{}, redisClient: rdb,
 			appConfig: types.AppConfig{GatewayService: types.GatewayServiceConfig{DeploymentRevision: revision}, Worker: types.WorkerConfig{ImageTag: image}}}
@@ -122,6 +125,7 @@ func TestAgentWorkerImageFollowsDeploymentRevisionAcrossGateways(t *testing.T) {
 	worker, err = workerRepo.GetWorkerById(worker.Id)
 	require.NoError(t, err)
 	require.Equal(t, "B", worker.BuildVersion)
+	require.Equal(t, types.WorkerStatusAvailable, worker.Status)
 
 	// An intentional rollback has a newer deployment revision and wins even
 	// while the previous release's gateway continues serving agent snapshots.
@@ -134,4 +138,56 @@ func TestAgentWorkerImageFollowsDeploymentRevisionAcrossGateways(t *testing.T) {
 	worker, err = workerRepo.GetWorkerById(worker.Id)
 	require.NoError(t, err)
 	require.Equal(t, "A", worker.BuildVersion)
+	require.Equal(t, types.WorkerStatusAvailable, worker.Status)
+}
+
+func TestAgentStartupRetryWaitsForControllerRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	workerRepo := repository.NewWorkerRedisRepositoryForTest(rdb)
+	computeRepo := repository.NewComputeRedisRepository(rdb)
+	machine := &model.AgentTokenState{WorkspaceID: "admin", MachineID: "machine", PoolName: "pool", Mode: string(types.PoolModeExternal),
+		Executor: types.DefaultAgentWorkerContainerMode, Schedulable: true, LastHeartbeatAt: time.Now(), CPUCount: 4, MemoryMB: 8192}
+	worker := &types.Worker{Id: model.AgentMachineWorkerID(machine.MachineID), WorkspaceId: machine.WorkspaceID, MachineId: machine.MachineID,
+		PoolName: machine.PoolName, Status: types.WorkerStatusAvailable, TotalCpu: 4000, TotalMemory: 8192, BuildVersion: "old"}
+	require.NoError(t, workerRepo.AddWorker(worker))
+	poolConfig := types.WorkerPoolConfig{Mode: types.PoolModeExternal, ContainerRuntime: types.ContainerRuntimeRunc.String()}
+	controller, err := scheduler.NewAgentWorkerPoolController(scheduler.AgentWorkerPoolControllerOptions{
+		Context: ctx, Name: machine.PoolName, WorkspaceID: machine.WorkspaceID, WorkerRepo: workerRepo, ComputeRepo: computeRepo,
+		WorkerPool: poolConfig, PoolState: &model.PoolState{Name: machine.PoolName, Mode: string(types.PoolModeExternal),
+			ManagementSource: types.WorkerPoolManagementSourceAPI, WorkerConfig: &poolConfig},
+	})
+	require.NoError(t, err)
+	_, err = workerRepo.PrepareWorkerRollout(worker.Id, "replacement")
+	require.NoError(t, err)
+	require.NoError(t, computeRepo.SaveAgentWorkerSlotState(ctx, &model.AgentWorkerSlotState{
+		WorkspaceID: machine.WorkspaceID, PoolName: machine.PoolName, MachineID: machine.MachineID, WorkerID: worker.Id,
+		Generation: "replacement", WorkerImage: "registry/worker:actual",
+	}))
+	machine.Schedulable = false
+	require.NoError(t, computeRepo.SaveAgentTokenState(ctx, machine, time.Hour))
+	require.ErrorContains(t, workerRepo.ToggleWorkerAvailable(worker.Id, "replacement"), "awaiting controller readiness")
+	state, err := workerRepo.GetWorkerById(worker.Id)
+	require.NoError(t, err)
+	require.Equal(t, types.WorkerStatusDisabled, state.Status)
+	require.Equal(t, "actual", state.BuildVersion)
+	require.Empty(t, state.RolloutGeneration)
+	_, err = controller.AddWorker(1000, 1024, 0)
+	require.Error(t, err, "the controller cannot admit an unavailable machine")
+
+	machine.Schedulable = true
+	machine.LastHeartbeatAt = time.Now()
+	require.NoError(t, computeRepo.SaveAgentTokenState(ctx, machine, time.Hour))
+	pending, err := controller.AddWorker(1000, 1024, 0)
+	require.NoError(t, err)
+	require.Equal(t, types.WorkerStatusPending, pending.Status)
+	for i := 0; i < 2; i++ {
+		require.NoError(t, workerRepo.ToggleWorkerAvailable(worker.Id, "replacement"), "the agent retries startup after controller recovery; matching repeats remain idempotent")
+		state, err = workerRepo.GetWorkerById(worker.Id)
+		require.NoError(t, err)
+		require.Equal(t, types.WorkerStatusAvailable, state.Status)
+		require.Equal(t, "actual", state.BuildVersion)
+	}
 }

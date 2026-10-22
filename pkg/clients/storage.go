@@ -621,10 +621,9 @@ func (c *StorageClient) listWithPrefix(ctx context.Context, prefix string, bucke
 	return allObjects, nil
 }
 
-// ListWithPrefixAllRegions reconciles divergent Tigris listings. It is used to
-// recover historical output indexes, not on every registered-output lookup.
-// An incomplete scan returns its discoveries and an error so callers cannot
-// permanently record a partial view as complete.
+// ListWithPrefixAllRegions reconciles divergent Tigris listings for recovery.
+// It performs one paginated scan per view, which is expensive for task lists.
+// An incomplete scan returns discovered objects alongside its error.
 func (c *StorageClient) ListWithPrefixAllRegions(ctx context.Context, prefix, bucket string) ([]s3types.Object, error) {
 	if !common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
 		return c.ListWithPrefix(ctx, prefix, bucket)

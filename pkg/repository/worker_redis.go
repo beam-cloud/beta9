@@ -981,7 +981,9 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation string) error {
 	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
 		buildVersion := worker.BuildVersion
-		if generation != "" && worker.MachineId != "" {
+		initialStatus := worker.Status
+		agentStartup := generation != "" && worker.MachineId != ""
+		if agentStartup {
 			// A persistent worker can restart after a transient health reset has
 			// cleared rollout intent. Its published slot, not this gateway's
 			// desired tag, identifies the image the worker actually started.
@@ -994,28 +996,45 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation strin
 				return fmt.Errorf("decode worker startup slot: %w", err)
 			}
 			if slot.Generation != generation || slot.WorkerID != worker.Id {
-				return nil
+				return errors.New("worker startup does not match published slot")
 			}
 			buildVersion = types.WorkerImageVersion(slot.WorkerImage, "")
 		}
 		if worker.RolloutGeneration != "" {
-			if generation == "" || generation != worker.RolloutGeneration {
+			if generation == "" {
 				return nil
 			}
+			if generation != worker.RolloutGeneration {
+				return errors.New("worker startup does not match rollout generation")
+			}
 			worker.Status = types.WorkerStatusAvailable
-			if worker.CordonRequested {
+			if worker.CordonRequested || worker.RolloutPreviousStatus == types.WorkerStatusDisabled {
 				worker.Status = types.WorkerStatusDisabled
 			}
 			worker.RolloutGeneration = ""
-		} else {
-			if worker.Status != types.WorkerStatusPending && generation == "" {
-				return nil
-			}
+		} else if worker.Status == types.WorkerStatusPending {
 			worker.Status = types.WorkerStatusAvailable
 			if worker.CordonRequested {
 				worker.Status = types.WorkerStatusDisabled
 			}
+		} else if generation == "" {
+			return nil
 		}
+		if worker.Status == types.WorkerStatusAvailable && initialStatus != types.WorkerStatusAvailable && agentStartup {
+			machine, err := NewComputeRedisRepository(r.rdb).GetAgentMachineState(ctx, worker.WorkspaceId, worker.PoolName, worker.MachineId)
+			if err != nil {
+				return fmt.Errorf("read worker startup machine: %w", err)
+			}
+			// Availability, credit, or disconnect reconciliation may disable a
+			// machine while its replacement starts. An image acknowledgment
+			// cannot undo that independent decision.
+			if !compute.AgentMachineConnected(machine, time.Now()) || machine.Cordoned {
+				worker.Status = types.WorkerStatusDisabled
+			}
+		}
+		// A validated startup also repairs image reporting on an already
+		// available or disabled worker. Only pending/rollout transitions above
+		// may change readiness; health reconciliation owns disabled recovery.
 		worker.BuildVersion = buildVersion
 
 		if worker.Status == types.WorkerStatusAvailable {
@@ -1023,7 +1042,7 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation strin
 				return err
 			}
 		}
-		return r.saveWorkerFields(ctx, stateKey,
+		if err := r.saveWorkerFields(ctx, stateKey,
 			"status", string(worker.Status),
 			"build_version", worker.BuildVersion,
 			"rollout_generation", worker.RolloutGeneration,
@@ -1034,7 +1053,15 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation strin
 			"evictable_cpu", worker.EvictableCpu,
 			"evictable_memory", worker.EvictableMemory,
 			"evictable_gpu_count", worker.EvictableGpuCount,
-		)
+		); err != nil {
+			return err
+		}
+		if agentStartup && worker.Status == types.WorkerStatusDisabled && !worker.CordonRequested {
+			// Do not open a queue stream before controller recovery. A startup
+			// retry can acknowledge Pending once the machine is eligible again.
+			return errors.New("worker startup is disabled; awaiting controller readiness")
+		}
+		return nil
 	})
 }
 
