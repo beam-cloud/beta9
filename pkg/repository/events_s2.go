@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
 	"golang.org/x/sync/errgroup"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -53,6 +54,7 @@ type S2EventRepository struct {
 	queue              chan cloudevents.Event
 	stubCacheContentMu sync.Mutex
 	stubCacheContent   map[s2.StreamName]*stubCacheRequiredContentState
+	historySkips       historySkips
 }
 
 type ScopedS2EventRepository struct {
@@ -708,51 +710,26 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 		return r.readEventHistoryStreamFromTail(ctx, streamName, query, limit, response)
 	}
 
-	var nextSeqNum *uint64
-	if query.SeqNum != nil {
-		seq := *query.SeqNum
-		nextSeqNum = &seq
+	scan, err := r.startHistoryScan(ctx, streamName, query)
+	if err != nil {
+		return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
 	}
-	var startTimestamp *uint64
-	if query.StartTime != nil {
-		ts := uint64(query.StartTime.UTC().UnixMilli())
-		startTimestamp = &ts
-	} else if query.Timestamp != nil {
-		ts := *query.Timestamp
-		startTimestamp = &ts
-	}
-	var until *uint64
-	if query.EndTime != nil {
-		ts := uint64(query.EndTime.UTC().UnixMilli())
-		until = &ts
-	} else if query.Until != nil {
-		ts := *query.Until
-		until = &ts
-	}
+	defer scan.flush()
 
+	opts := historyReadStart(query)
 	for uint64(len(response.Events)) < limit {
-		count := s2EventHistoryReadLimit
-		if remaining := limit - uint64(len(response.Events)); remaining < count {
-			count = remaining
+		count := min(s2EventHistoryReadLimit, limit-uint64(len(response.Events)))
+		if opts.SeqNum != nil {
+			start, unchecked := scan.resume(*opts.SeqNum)
+			opts.SeqNum, count = &start, min(count, unchecked)
 		}
-		opts := &s2.ReadOptions{
-			Count: &count,
-			Until: until,
-		}
-		if nextSeqNum != nil {
-			opts.SeqNum = nextSeqNum
-		} else if startTimestamp != nil {
-			opts.Timestamp = startTimestamp
-		} else {
-			seq := uint64(0)
-			opts.SeqNum = &seq
-		}
+		opts.Count = &count
 
 		batch, err := r.basin.Stream(streamName).Read(ctx, opts)
+		if isS2ReadEmpty(err) {
+			return nil
+		}
 		if err != nil {
-			if isS2ReadEmpty(err) {
-				return nil
-			}
 			return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
 		}
 		if len(batch.Records) == 0 {
@@ -760,11 +737,9 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 		}
 
 		for _, record := range batch.Records {
-			if eventRecordHeadersSkip(record, query) {
-				continue
-			}
-			eventRecord, ok := containerEventRecordFromS2(record, query, &types.ContainerEventsResponse{})
-			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
+			eventRecord, ok := eventRecordPassingFilters(record, query)
+			scan.observe(record, ok)
+			if !ok || !eventRecordInQueryWindow(eventRecord, query) {
 				continue
 			}
 			augmentContainerEventResponse(&types.ContainerEventsResponse{}, &eventRecord)
@@ -774,12 +749,39 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 			}
 		}
 
-		last := batch.Records[len(batch.Records)-1]
-		seq := last.SeqNum + 1
-		nextSeqNum = &seq
-		startTimestamp = nil
+		next := batch.Records[len(batch.Records)-1].SeqNum + 1
+		opts.SeqNum, opts.Timestamp = &next, nil
 	}
 	return nil
+}
+
+// historyReadStart positions a forward history read at the query's start, by
+// sequence number or else by time, and ends it at the query's end.
+func historyReadStart(query types.EventQuery) *s2.ReadOptions {
+	opts := &s2.ReadOptions{Timestamp: query.Timestamp, Until: query.Until}
+	if query.StartTime != nil {
+		opts.Timestamp = ptr.To(uint64(query.StartTime.UTC().UnixMilli()))
+	}
+	if query.EndTime != nil {
+		opts.Until = ptr.To(uint64(query.EndTime.UTC().UnixMilli()))
+	}
+	switch {
+	case query.SeqNum != nil:
+		opts.SeqNum, opts.Timestamp = ptr.To(*query.SeqNum), nil
+	case opts.Timestamp == nil:
+		opts.SeqNum = ptr.To(uint64(0))
+	}
+	return opts
+}
+
+// eventRecordPassingFilters parses record if it passes the query's filters,
+// ignoring the time window.
+func eventRecordPassingFilters(record s2.SequencedRecord, query types.EventQuery) (types.ContainerEventRecord, bool) {
+	if eventRecordHeadersSkip(record, query) {
+		return types.ContainerEventRecord{}, false
+	}
+	eventRecord, ok := containerEventRecordFromS2(record, query, &types.ContainerEventsResponse{})
+	return eventRecord, ok && eventRecordMatchesFilters(eventRecord, query)
 }
 
 // eventHistoryQueryReadsFromTail reports whether a history query has no
@@ -1109,6 +1111,12 @@ func eventTypeMatchesAny(patterns []string, eventType string) bool {
 }
 
 func eventRecordMatchesQuery(record types.ContainerEventRecord, query types.EventQuery) bool {
+	return eventRecordMatchesFilters(record, query) && eventRecordInQueryWindow(record, query)
+}
+
+// eventRecordMatchesFilters checks everything but the query's time window,
+// so its answer for a record never changes.
+func eventRecordMatchesFilters(record types.ContainerEventRecord, query types.EventQuery) bool {
 	if query.WorkspaceID != "" && record.WorkspaceID != query.WorkspaceID {
 		return false
 	}
@@ -1127,6 +1135,10 @@ func eventRecordMatchesQuery(record types.ContainerEventRecord, query types.Even
 	if query.ContainerID != "" && record.ContainerID != query.ContainerID {
 		return false
 	}
+	return true
+}
+
+func eventRecordInQueryWindow(record types.ContainerEventRecord, query types.EventQuery) bool {
 	eventTime := record.Timestamp
 	if eventTime.IsZero() {
 		eventTime = record.StartTime
