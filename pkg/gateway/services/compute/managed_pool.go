@@ -80,6 +80,9 @@ func (s *Service) managedPoolWorkspace(ctx context.Context, authInfo *auth.AuthI
 }
 
 func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPoolConfig, error) {
+	if err := config.ContainerRuntimeConfig.Validate(); err != nil {
+		return types.WorkerPoolConfig{}, err
+	}
 	if config.Mode == "" {
 		config.Mode = types.PoolModeExternal
 	}

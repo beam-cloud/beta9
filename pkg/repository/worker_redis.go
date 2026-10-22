@@ -1300,6 +1300,8 @@ func workerFromHash(key string, res map[string]string) *types.Worker {
 			worker.Status = types.WorkerStatus(v)
 		case "total_cpu":
 			worker.TotalCpu = i64(v)
+		case "physical_cpu":
+			worker.PhysicalCpu = i64(v)
 		case "total_memory":
 			worker.TotalMemory = i64(v)
 		case "total_gpu_count":

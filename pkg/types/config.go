@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -865,10 +866,50 @@ func (c FailoverConfig) Validate(pools map[string]WorkerPoolConfig) error {
 }
 
 type RuntimeConfig struct {
+	// CPUShareMultiplier scales schedulable vCPU capacity, not host CPU limits.
+	// Zero/omitted means 1x; memory and per-container CPU budgets are unchanged.
+	CPUShareMultiplier float64 `key:"cpuShareMultiplier" json:"cpu_share_multiplier,omitempty"`
 	// gVisor-specific configuration
 	GVisorPlatform  string   `key:"gvisorPlatform" json:"gvisor_platform"`    // "kvm", "systrap", or "ptrace"
 	GVisorRoot      string   `key:"gvisorRoot" json:"gvisor_root"`            // Root directory for gVisor state (default: "/run/gvisor")
 	GVisorExtraArgs []string `key:"gvisorExtraArgs" json:"gvisor_extra_args"` // Additional runsc flags appended for this pool
+}
+
+func (c RuntimeConfig) Validate() error {
+	m := c.CPUShareMultiplier
+	if math.IsNaN(m) || math.IsInf(m, 0) || (m != 0 && m < 1) {
+		return fmt.Errorf("cpuShareMultiplier must be finite and at least 1 (or 0 for the default)")
+	}
+	return nil
+}
+
+func (c RuntimeConfig) cpuShareMultiplier() float64 {
+	if c.Validate() != nil || c.CPUShareMultiplier == 0 {
+		return 1
+	}
+	return c.CPUShareMultiplier
+}
+
+// CPUCapacity converts physical millicores to schedulable millicores.
+func (c RuntimeConfig) CPUCapacity(physical int64) int64 {
+	multiplier := c.cpuShareMultiplier()
+	if multiplier == 1 {
+		return physical
+	}
+	capacity := float64(physical) * multiplier
+	if capacity >= math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(capacity)
+}
+
+// PhysicalCPURequest rounds up so the shared capacity covers the request.
+func (c RuntimeConfig) PhysicalCPURequest(cpu int64) int64 {
+	multiplier := c.cpuShareMultiplier()
+	if multiplier == 1 {
+		return cpu
+	}
+	return int64(math.Ceil(float64(cpu) / multiplier))
 }
 
 func (c RuntimeConfig) WithDefaults(runtime string) RuntimeConfig {

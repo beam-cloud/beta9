@@ -39,6 +39,9 @@ type LocalKubernetesWorkerPoolController struct {
 }
 
 func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
+	if err := opts.Config.Worker.Pools[opts.Name].ContainerRuntimeConfig.Validate(); err != nil {
+		return nil, err
+	}
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -284,10 +287,11 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 
 	return job, &types.Worker{
 		Id:            workerId,
-		FreeCpu:       workerCpu,
+		PhysicalCpu:   workerCpu,
+		FreeCpu:       wpc.workerPoolConfig.ContainerRuntimeConfig.CPUCapacity(workerCpu),
 		FreeMemory:    workerMemory,
 		FreeGpuCount:  workerGpuCount,
-		TotalCpu:      workerCpu,
+		TotalCpu:      wpc.workerPoolConfig.ContainerRuntimeConfig.CPUCapacity(workerCpu),
 		TotalMemory:   workerMemory,
 		TotalGpuCount: workerGpuCount,
 		Gpu:           workerGpuType,

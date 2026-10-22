@@ -46,6 +46,7 @@ type agentMachineWorker struct {
 	workspaceID          string
 	controlPlaneManaged  bool
 	cpu                  int64
+	cpuCapacity          int64
 	memory               int64
 	gpu                  string
 	gpuCount             uint32
@@ -96,6 +97,9 @@ func (e *AgentPoolCapacityError) Error() string {
 }
 
 func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (*AgentWorkerPoolController, error) {
+	if err := opts.WorkerPool.ContainerRuntimeConfig.Validate(); err != nil {
+		return nil, err
+	}
 	if opts.WorkspaceID == "" {
 		return nil, errors.New("workspace id is required")
 	}
@@ -397,7 +401,7 @@ func (wpc *AgentWorkerPoolController) machineCanFit(machine *compute.AgentTokenS
 func (wpc *AgentWorkerPoolController) machineAvailableCapacity(machine *compute.AgentTokenState, worker *types.Worker) (int64, int64, uint32) {
 	capacity := wpc.agentMachineWorker(machine)
 	if worker == nil {
-		return capacity.cpu, capacity.memory, capacity.gpuCount
+		return wpc.workerPoolConfig.ContainerRuntimeConfig.CPUCapacity(capacity.cpu), capacity.memory, capacity.gpuCount
 	}
 	switch worker.Status {
 	case types.WorkerStatusAvailable:
@@ -410,7 +414,7 @@ func (wpc *AgentWorkerPoolController) machineAvailableCapacity(machine *compute.
 		if worker.CordonRequested || worker.RolloutGeneration != "" {
 			return 0, 0, 0
 		}
-		return capacity.cpu, capacity.memory, capacity.gpuCount
+		return wpc.workerPoolConfig.ContainerRuntimeConfig.CPUCapacity(capacity.cpu), capacity.memory, capacity.gpuCount
 	default:
 		return 0, 0, 0
 	}
@@ -483,6 +487,7 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 		workspaceID:          machine.WorkspaceID,
 		controlPlaneManaged:  machine.ManagedPoolInstanceID != "" && machine.Mode == string(types.PoolModeExternal),
 		cpu:                  cpu,
+		cpuCapacity:          wpc.workerPoolConfig.ContainerRuntimeConfig.CPUCapacity(cpu),
 		memory:               int64(machine.MemoryMB),
 		gpu:                  gpu,
 		gpuCount:             machine.GPUCount,
@@ -503,10 +508,11 @@ func (m agentMachineWorker) worker() *types.Worker {
 	worker := &types.Worker{
 		Id:                  m.id,
 		Status:              types.WorkerStatusPending,
-		TotalCpu:            m.cpu,
+		PhysicalCpu:         m.cpu,
+		TotalCpu:            m.cpuCapacity,
 		TotalMemory:         m.memory,
 		TotalGpuCount:       m.gpuCount,
-		FreeCpu:             m.cpu,
+		FreeCpu:             m.cpuCapacity,
 		FreeMemory:          m.memory,
 		FreeGpuCount:        m.gpuCount,
 		MachineId:           m.machineID,
@@ -529,8 +535,9 @@ func (m agentMachineWorker) applyToWorker(worker *types.Worker) {
 		usedGPU = worker.TotalGpuCount - worker.FreeGpuCount
 	}
 
-	worker.TotalCpu = m.cpu
-	worker.FreeCpu = max(m.cpu-usedCPU, 0)
+	worker.PhysicalCpu = m.cpu
+	worker.TotalCpu = m.cpuCapacity
+	worker.FreeCpu = max(m.cpuCapacity-usedCPU, 0)
 	worker.TotalMemory = m.memory
 	worker.FreeMemory = max(m.memory-usedMemory, 0)
 	worker.TotalGpuCount = m.gpuCount
