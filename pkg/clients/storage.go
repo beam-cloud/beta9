@@ -549,12 +549,11 @@ func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, buc
 		var objectsToDelete []s3types.ObjectIdentifier
 		for _, obj := range resp.Contents {
 			objectsToDelete = append(objectsToDelete, s3types.ObjectIdentifier{Key: obj.Key})
-			deletedObjects = append(deletedObjects, strings.TrimPrefix(*obj.Key, prefix))
 		}
 
 		// Delete the objects in batches
 		if len(objectsToDelete) > 0 {
-			_, err = c.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			deleted, err := c.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 				Bucket: aws.String(bucket),
 				Delete: &s3types.Delete{
 					Objects: objectsToDelete,
@@ -563,6 +562,13 @@ func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, buc
 			})
 			if err != nil {
 				return nil, err
+			}
+			if len(deleted.Errors) > 0 {
+				failure := deleted.Errors[0]
+				return nil, fmt.Errorf("failed to delete object %q from bucket %q: %s: %s", aws.ToString(failure.Key), bucket, aws.ToString(failure.Code), aws.ToString(failure.Message))
+			}
+			for _, obj := range resp.Contents {
+				deletedObjects = append(deletedObjects, strings.TrimPrefix(*obj.Key, prefix))
 			}
 		}
 

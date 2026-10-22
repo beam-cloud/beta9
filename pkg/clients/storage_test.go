@@ -3,10 +3,13 @@ package clients
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -18,6 +21,105 @@ import (
 	"github.com/aws/smithy-go/logging"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
+
+type storageRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f storageRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestStorageDeleteWithPrefix(t *testing.T) {
+	const quietSuccess = `<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>`
+	const objectFailure = `<Error><Key>volume/b</Key><Code>AccessDenied</Code><Message>object is locked</Message></Error>`
+	for _, test := range []struct {
+		name       string
+		failedPage int
+		status     int
+		response   string
+		wantError  []string
+	}{
+		{name: "quiet success across pages"},
+		{name: "quiet object failure", failedPage: 1, response: `<DeleteResult>` + objectFailure + `</DeleteResult>`, wantError: []string{"bucket", "volume/b", "AccessDenied", "object is locked"}},
+		{name: "mixed result", failedPage: 1, response: `<DeleteResult><Deleted><Key>volume/a</Key></Deleted>` + objectFailure + `</DeleteResult>`, wantError: []string{"volume/b", "AccessDenied"}},
+		{name: "later page failure", failedPage: 2, response: `<DeleteResult><Error><Key>volume/c</Key><Code>InternalError</Code><Message>try again</Message></Error></DeleteResult>`, wantError: []string{"volume/c", "InternalError"}},
+		{name: "request failure", failedPage: 1, status: http.StatusForbidden, response: `<Error><Code>AccessDenied</Code><Message>bucket is locked</Message></Error>`, wantError: []string{"AccessDenied", "bucket is locked"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pages := [][]string{{"volume/a", "volume/b"}, {"volume/c"}}
+			lists, deletes := 0, 0
+			transport := storageRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path != "/bucket" {
+					t.Fatalf("request path = %q, want /bucket", r.URL.Path)
+				}
+				status, body := http.StatusOK, quietSuccess
+				switch {
+				case r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2":
+					if lists >= len(pages) || r.URL.Query().Get("prefix") != "volume/" {
+						t.Fatalf("unexpected list request: %s", r.URL)
+					}
+					wantToken := ""
+					if lists > 0 {
+						wantToken = "next"
+					}
+					if got := r.URL.Query().Get("continuation-token"); got != wantToken {
+						t.Fatalf("continuation token = %q, want %q", got, wantToken)
+					}
+					body = `<ListBucketResult><IsTruncated>false</IsTruncated>`
+					if lists == 0 {
+						body = `<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>next</NextContinuationToken>`
+					}
+					for _, key := range pages[lists] {
+						body += "<Contents><Key>" + key + "</Key></Contents>"
+					}
+					body += "</ListBucketResult>"
+					lists++
+				case r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+					var request struct {
+						Quiet   bool     `xml:"Quiet"`
+						Objects []string `xml:"Object>Key"`
+					}
+					if err := xml.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Fatal(err)
+					}
+					if deletes >= len(pages) || !request.Quiet || !reflect.DeepEqual(request.Objects, pages[deletes]) {
+						t.Fatalf("delete request %d = %+v, want quiet deletion of listed keys", deletes, request)
+					}
+					deletes++
+					if deletes == test.failedPage {
+						body = test.response
+						if test.status != 0 {
+							status = test.status
+						}
+					}
+				default:
+					return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/xml"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			cfg := aws.Config{
+				Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""),
+				HTTPClient: &http.Client{Transport: transport},
+			}
+			client := &StorageClient{s3Client: newS3Client(cfg, "https://storage.invalid")}
+			deleted, err := client.DeleteWithPrefix(context.Background(), "volume/", "bucket")
+			wantBatches := 2
+			if len(test.wantError) > 0 {
+				wantBatches = test.failedPage
+				if err == nil || deleted != nil {
+					t.Errorf("DeleteWithPrefix() = %v, %v; want nil and an error", deleted, err)
+				}
+				for _, fragment := range test.wantError {
+					if err == nil || !strings.Contains(err.Error(), fragment) {
+						t.Errorf("error = %v, want %q", err, fragment)
+					}
+				}
+			} else if err != nil || !reflect.DeepEqual(deleted, []string{"a", "b", "c"}) {
+				t.Errorf("DeleteWithPrefix() = %v, %v; want [a b c], nil", deleted, err)
+			}
+			if lists != wantBatches || deletes != wantBatches {
+				t.Errorf("list/delete calls = %d/%d, want %d/%d", lists, deletes, wantBatches, wantBatches)
+			}
+		})
+	}
+}
 
 func TestStorageResponseChecksums(t *testing.T) {
 	checksums := map[string]string{"absent": "", "valid": "NhCmhg==", "corrupt": "AAAAAA=="} // CRC32 of "hello" is NhCmhg==.
