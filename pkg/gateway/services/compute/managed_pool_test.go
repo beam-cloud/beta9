@@ -491,14 +491,11 @@ func TestManagedExternalWorkerUsesItsPersistedWorkspace(t *testing.T) {
 	}
 }
 
-func TestReconcileManagedPoolsOnlyMaterializesAgentExternalPools(t *testing.T) {
-	providerBacked := types.ProviderEC2
-	agentProvider := types.ProviderAgent
+func TestReconcileManagedPoolsOnlyMaterializesExternalPools(t *testing.T) {
 	service := managedPoolTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-		"local":                {Mode: types.PoolModeLocal},
-		"provider-backed":      {Mode: types.PoolModeExternal, Provider: &providerBacked},
-		"providerless-agent":   {Mode: types.PoolModeExternal, Priority: 10},
-		"named-agent-provider": {Mode: types.PoolModeExternal, Provider: &agentProvider, Priority: 20},
+		"local":   {Mode: types.PoolModeLocal},
+		"agent-a": {Mode: types.PoolModeExternal, Priority: 10},
+		"agent-b": {Mode: types.PoolModeExternal, Priority: 20},
 	}}}, &fakeComputeRepo{})
 
 	if err := service.ReconcileManagedPools(context.Background()); err != nil {
@@ -513,12 +510,12 @@ func TestReconcileManagedPoolsOnlyMaterializesAgentExternalPools(t *testing.T) {
 	}
 	names := map[string]struct{}{}
 	for _, state := range states {
-		if state.ManagementSource != types.WorkerPoolManagementSourceConfig || state.WorkerConfig == nil || state.WorkerConfig.Provider != nil {
+		if state.ManagementSource != types.WorkerPoolManagementSourceConfig || state.WorkerConfig == nil {
 			t.Fatalf("reconciled state = %+v", state)
 		}
 		names[state.Name] = struct{}{}
 	}
-	for _, name := range []string{"providerless-agent", "named-agent-provider"} {
+	for _, name := range []string{"agent-a", "agent-b"} {
 		if _, ok := names[name]; !ok {
 			t.Fatalf("missing reconciled pool %q in %+v", name, states)
 		}
@@ -526,11 +523,9 @@ func TestReconcileManagedPoolsOnlyMaterializesAgentExternalPools(t *testing.T) {
 }
 
 func TestListManagedPoolsReportsConfiguredControllerType(t *testing.T) {
-	provider := types.ProviderEC2
 	service := managedPoolTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-		"local":           {Mode: types.PoolModeLocal},
-		"managed-agent":   {Mode: types.PoolModeExternal},
-		"provider-backed": {Mode: types.PoolModeExternal, Provider: &provider},
+		"local":         {Mode: types.PoolModeLocal},
+		"managed-agent": {Mode: types.PoolModeExternal},
 	}}}, &fakeComputeRepo{})
 
 	pools, err := service.ListManagedPools(context.Background(), clusterAdminAuth())
@@ -542,8 +537,7 @@ func TestListManagedPoolsReportsConfiguredControllerType(t *testing.T) {
 		controllers[pool.Name] = pool.Controller
 	}
 	if controllers["local"] != types.WorkerPoolControllerLocal ||
-		controllers["managed-agent"] != types.WorkerPoolControllerAgent ||
-		controllers["provider-backed"] != types.WorkerPoolControllerProvider {
+		controllers["managed-agent"] != types.WorkerPoolControllerAgent {
 		t.Fatalf("configured pool controllers = %+v", controllers)
 	}
 }

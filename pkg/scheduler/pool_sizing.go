@@ -12,19 +12,14 @@ import (
 
 type WorkerPoolSizer struct {
 	controller             WorkerPoolController
-	workerRepo             repository.WorkerRepository
-	providerRepo           repository.ProviderRepository
 	workerPoolRepo         repository.WorkerPoolRepository
-	workerPoolConfig       *types.WorkerPoolConfig
 	workerPoolSizingConfig *types.WorkerPoolSizingConfig
 }
 
 func NewWorkerPoolSizer(controller WorkerPoolController,
 	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
-	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
-	providerRepo repository.ProviderRepository) (*WorkerPoolSizer, error) {
+	workerPoolRepo repository.WorkerPoolRepository) (*WorkerPoolSizer, error) {
 	poolSizingConfig, err := parsePoolSizingConfig(workerPoolConfig.PoolSizing)
 	if err != nil {
 		return nil, err
@@ -33,11 +28,8 @@ func NewWorkerPoolSizer(controller WorkerPoolController,
 
 	return &WorkerPoolSizer{
 		controller:             controller,
-		workerPoolConfig:       workerPoolConfig,
 		workerPoolSizingConfig: poolSizingConfig,
-		workerRepo:             workerRepo,
 		workerPoolRepo:         workerPoolRepo,
-		providerRepo:           providerRepo,
 	}, nil
 }
 
@@ -76,68 +68,13 @@ func (s *WorkerPoolSizer) Start() {
 			} else if newWorker != nil {
 				workerLog(log.Info(), newWorker).Msg("added new worker to maintain pool size")
 			}
-
-			// Handle case where we want to make sure all available manually provisioned nodes have available workers
-			if s.workerPoolConfig.Mode == types.PoolModeExternal {
-				err := s.occupyAvailableMachinesLocked()
-				if err != nil {
-					log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to list machines in external pool")
-				}
-			}
 		}()
 	}
-}
-
-// occupyAvailableMachines ensures that all manually provisioned machines always have workers occupying them
-// This only adds one worker per machine, so if a machine has more capacity, it will not be fully utilized unless
-// this is called multiple times.
-func (s *WorkerPoolSizer) occupyAvailableMachines() error {
-	if err := s.workerPoolRepo.SetWorkerPoolSizerLock(s.controller.Name()); err != nil {
-		return err
-	}
-	defer s.workerPoolRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
-
-	return s.occupyAvailableMachinesLocked()
-}
-
-func (s *WorkerPoolSizer) occupyAvailableMachinesLocked() error {
-	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name(), true)
-	if err != nil {
-		return err
-	}
-
-	for _, m := range machines {
-		if m.State.AutoConsolidate {
-			continue
-		}
-
-		cpu := s.workerPoolSizingConfig.DefaultWorkerCpu
-		memory := s.workerPoolSizingConfig.DefaultWorkerMemory
-		gpuType := s.workerPoolSizingConfig.DefaultWorkerGpuType
-		gpuCount := s.workerPoolSizingConfig.DefaultWorkerGpuCount
-
-		worker, err := s.controller.AddWorkerToMachine(cpu, memory, gpuType, gpuCount, m.State.MachineId)
-		if err != nil {
-			log.Error().Str("pool_name", s.controller.Name()).Str("machine_id", m.State.MachineId).Err(err).Msg("failed to add worker to machine")
-			continue
-		}
-		// When there is no capacity of the machine is not ready the worker will be nil with no error
-		if worker == nil {
-			continue
-		}
-
-		workerLog(log.Info(), worker).Msg("added new worker to occupy existing machine")
-	}
-
-	return nil
 }
 
 func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*types.Worker, error) {
 	// Check if the free capacity is below the configured minimum and add a worker if needed
 	if !shouldAddWorker(freeCapacity, s.workerPoolSizingConfig) {
-		return nil, nil
-	}
-	if !s.poolSupportsProvisioning() {
 		return nil, nil
 	}
 
@@ -146,22 +83,6 @@ func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*
 		s.workerPoolSizingConfig.DefaultWorkerMemory,
 		s.workerPoolSizingConfig.DefaultWorkerGpuCount,
 	)
-}
-
-func (s *WorkerPoolSizer) poolSupportsProvisioning() bool {
-	if s == nil || s.workerPoolConfig == nil {
-		return true
-	}
-	return workerPoolSupportsProvisioning(*s.workerPoolConfig)
-}
-
-func workerPoolSupportsProvisioning(config types.WorkerPoolConfig) bool {
-	if config.Mode == types.PoolModeExternal &&
-		config.Provider != nil &&
-		*config.Provider == types.ProviderGeneric {
-		return false
-	}
-	return true
 }
 
 // shouldAddWorker checks if the conditions are met for a new worker to be added

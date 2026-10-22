@@ -20,7 +20,6 @@ type PoolHealthMonitorOptions struct {
 	FailoverHealth   types.FailoverHealthConfig
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
-	ProviderRepo     repository.ProviderRepository
 	ContainerRepo    repository.ContainerRepository
 	PushMetrics      func(types.EventComputeSchema)
 }
@@ -33,7 +32,6 @@ type PoolHealthMonitor struct {
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
 	containerRepo    repository.ContainerRepository
-	providerRepo     repository.ProviderRepository
 	pushMetrics      func(types.EventComputeSchema)
 }
 
@@ -45,7 +43,6 @@ func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 		health:           opts.FailoverHealth,
 		workerRepo:       opts.WorkerRepo,
 		containerRepo:    opts.ContainerRepo,
-		providerRepo:     opts.ProviderRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
 		pushMetrics:      opts.PushMetrics,
 	}
@@ -117,35 +114,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Wor
 		return nil, nil, err
 	}
 
-	switch p.wpc.Mode() {
-	case types.PoolModeExternal:
-		if p.workerPoolConfig.Provider == nil {
-			poolState, err := p.wpc.State()
-			if err != nil {
-				return nil, nil, err
-			}
-			registeredMachines = int(poolState.RegisteredMachines)
-			pendingMachines = int(poolState.PendingMachines)
-			readyMachines = int(poolState.ReadyMachines)
-		} else {
-			providerName := string(*p.workerPoolConfig.Provider)
-			machines, err := p.providerRepo.ListAllMachines(providerName, p.wpc.Name(), false)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			for _, machine := range machines {
-				switch machine.State.Status {
-				case types.MachineStatusPending:
-					pendingMachines++
-				case types.MachineStatusRegistered:
-					registeredMachines++
-				case types.MachineStatusReady:
-					readyMachines++
-				}
-			}
-		}
-	case types.PoolModePrivate:
+	if p.workerPoolConfig.AgentHosted() {
 		poolState, err := p.wpc.State()
 		if err != nil {
 			return nil, nil, err
@@ -301,12 +270,8 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 		return float64(total-min(free, total)) / float64(total) * 100
 	}
 	machineCount := int64(len(machines))
-	switch {
-	case (config.Mode == types.PoolModeExternal || config.Mode == types.PoolModePrivate) && config.Provider == nil:
+	if config.AgentHosted() {
 		machineCount = max(machineCount, state.RegisteredMachines)
-	case config.Mode == types.PoolModeExternal && config.Provider != nil:
-		tracked := state.RegisteredMachines + state.PendingMachines + state.ReadyMachines
-		machineCount = max(machineCount, tracked)
 	}
 	hourlyCostCents := config.HourlyCostCents * machineCount
 	return types.EventComputeSchema{

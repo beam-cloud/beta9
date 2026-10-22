@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -27,7 +26,6 @@ const (
 	PrometheusScrapeKey         string  = "prometheus.io/scrape"
 	tmpVolumeName               string  = "beta9-tmp"
 	imagesVolumeName            string  = "beta9-images"
-	storageVolumeName           string  = "beta9-storage"
 	cacheVolumeName             string  = "beta9-cache"
 	durableDiskVolumeName       string  = "beta9-durable-disks"
 	kernelModulesVolumeName     string  = "host-kernel-modules"
@@ -37,7 +35,6 @@ const (
 	defaultWorkerInit           string  = "/usr/bin/tini"
 	defaultWorkerEntrypoint     string  = "/usr/local/bin/worker"
 	defaultImagesPath           string  = "/images"
-	defaultStoragePath          string  = "/storage"
 	defaultCachePath            string  = "/var/lib/beta9/cache"
 	defaultSharedMemoryPct      float32 = 0.5
 	defaultWorkerStopGraceS     int64   = 30
@@ -85,11 +82,8 @@ type WorkerPoolControllerOptions struct {
 	WorkerRepo      repository.WorkerRepository
 	WorkerPoolRepo  repository.WorkerPoolRepository
 	ContainerRepo   repository.ContainerRepository
-	ProviderName    *types.MachineProvider
-	ProviderRepo    repository.ProviderRepository
 	EventRepo       repository.EventRepository
 	PushPoolMetrics func(types.EventComputeSchema)
-	Tailscale       *network.Tailscale
 }
 
 func GenerateWorkerId() string {
@@ -166,10 +160,8 @@ func workerPodTerminationGracePeriod(workerStopGraceS int64) int64 {
 func MonitorPoolSize(wpc WorkerPoolController,
 	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
-	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
-	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
+	workerPoolRepo repository.WorkerPoolRepository) error {
+	poolSizer, err := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerPoolRepo)
 	if err != nil {
 		return err
 	}

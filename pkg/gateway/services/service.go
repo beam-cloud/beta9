@@ -22,7 +22,6 @@ type GatewayService struct {
 	backendRepo      repository.BackendRepository
 	workspaceRepo    repository.WorkspaceRepository
 	containerRepo    repository.ContainerRepository
-	providerRepo     repository.ProviderRepository
 	scheduler        *scheduler.Scheduler
 	taskDispatcher   *task.Dispatcher
 	redisClient      *common.RedisClient
@@ -47,7 +46,6 @@ type GatewayServiceOpts struct {
 	BackendRepo      repository.BackendRepository
 	WorkspaceRepo    repository.WorkspaceRepository
 	ContainerRepo    repository.ContainerRepository
-	ProviderRepo     repository.ProviderRepository
 	Scheduler        *scheduler.Scheduler
 	TaskDispatcher   *task.Dispatcher
 	RedisClient      *common.RedisClient
@@ -108,7 +106,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		backendRepo:      opts.BackendRepo,
 		workspaceRepo:    opts.WorkspaceRepo,
 		containerRepo:    opts.ContainerRepo,
-		providerRepo:     opts.ProviderRepo,
 		scheduler:        opts.Scheduler,
 		taskDispatcher:   opts.TaskDispatcher,
 		redisClient:      opts.RedisClient,
