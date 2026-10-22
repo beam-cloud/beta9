@@ -492,7 +492,7 @@ type WorkspaceStorageConfig struct {
 	DefaultPresignedEndpointUrl string `key:"defaultPresignedEndpointUrl" json:"default_presigned_endpoint_url"`
 	DefaultRegion               string `key:"defaultRegion" json:"default_region"`
 
-	// Tigris metadata replica for output LISTs; empty uses automatic routing.
+	// Optional Tigris LIST routing override during a provider incident; empty uses automatic routing.
 	TigrisListRegion string `key:"tigrisListRegion" json:"tigris_list_region"`
 
 	// Storage mode configs
