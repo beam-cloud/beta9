@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,7 +19,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
-	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -41,13 +39,15 @@ type seekableReaderAt interface {
 }
 
 type StorageClient struct {
-	s3Client      *s3.Client
-	presignClient *s3.PresignClient
+	s3Client       *s3.Client
+	presignClient  *s3.PresignClient
+	bucketLocation string
 }
 
 type storageClientConfig struct {
 	region, accessKey, secretKey    string
 	endpointURL, presignEndpointURL string
+	bucketLocation                  string
 }
 
 func (c storageClientConfig) newClient(ctx context.Context) (*StorageClient, error) {
@@ -60,10 +60,9 @@ func (c storageClientConfig) newClient(ctx context.Context) (*StorageClient, err
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 	return &StorageClient{
-		s3Client: newS3Client(cfg, c.endpointURL),
-		// URL-only APIs cannot require clients to supply an additional signed
-		// header. Header-aware uploads opt into consistency when presigning.
-		presignClient: s3.NewPresignClient(newStorageS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL), false)),
+		s3Client:       newS3Client(cfg, c.endpointURL),
+		presignClient:  s3.NewPresignClient(newS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL))),
+		bucketLocation: c.bucketLocation,
 	}, nil
 }
 
@@ -115,25 +114,17 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 		secretKey:          storage.DefaultSecretKey,
 		endpointURL:        storage.DefaultEndpointUrl,
 		presignEndpointURL: storage.DefaultPresignedEndpointUrl,
+		bucketLocation:     storage.DefaultBucketLocation,
 	}).newClient(ctx)
 }
 
 func newS3Client(cfg aws.Config, endpointUrl string) *s3.Client {
-	return newStorageS3Client(cfg, endpointUrl, true)
-}
-
-func newStorageS3Client(cfg aws.Config, endpointUrl string, consistent bool) *s3.Client {
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.Retryer = storageDNSRetryer{o.Retryer}
 		o.DisableLogOutputChecksumValidationSkipped = true
 		if endpointUrl != "" {
 			o.BaseEndpoint = aws.String(endpointUrl)
 			o.UsePathStyle = true
-		}
-		if consistent && common.IsTigrisEndpoint(endpointUrl) {
-			// Preserve consistency for publication and mutable metadata. Immutable
-			// reads and explicitly routed listings override it before signing.
-			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"))
 		}
 	})
 }
@@ -292,9 +283,11 @@ func endpointHostname(endpoint string) string {
 }
 
 func (c *StorageClient) CreateBucket(ctx context.Context, bucket string) error {
-	_, err := c.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	})
+	input := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
+	if c.bucketLocation != "" {
+		input.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{LocationConstraint: s3types.BucketLocationConstraint(c.bucketLocation)}
+	}
+	_, err := c.s3Client.CreateBucket(ctx, input)
 	return err
 }
 
@@ -311,9 +304,7 @@ func (c *StorageClient) EnsureBucket(ctx context.Context, bucket string) error {
 		return nil
 	}
 
-	_, err = c.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	})
+	err = c.CreateBucket(ctx, bucket)
 	if err == nil || isBucketAlreadyCreatedError(err) {
 		return nil
 	}
@@ -392,11 +383,7 @@ func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bo
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	}
-	var options []func(*s3.Options)
-	if c.ordinaryArtifactRead(key) {
-		options = append(options, ordinaryTigrisRead)
-	}
-	output, err := c.s3Client.HeadObject(ctx, input, options...)
+	output, err := c.s3Client.HeadObject(ctx, input)
 	if err != nil {
 		if storageObjectNotFound(err) {
 			return false, nil, nil
@@ -413,7 +400,7 @@ func (c *StorageClient) Exists(ctx context.Context, key string, bucket string) (
 }
 
 func (c *StorageClient) Download(ctx context.Context, key string, bucket string) ([]byte, error) {
-	resp, err := c.getObject(ctx, &s3.GetObjectInput{
+	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -426,7 +413,7 @@ func (c *StorageClient) Download(ctx context.Context, key string, bucket string)
 }
 
 func (c *StorageClient) DownloadWithReader(ctx context.Context, key string, bucket string) (io.ReadCloser, error) {
-	resp, err := c.getObject(ctx, &s3.GetObjectInput{
+	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -450,33 +437,6 @@ func storageObjectNotFound(err error) bool {
 		}
 	}
 	return false
-}
-
-func (c *StorageClient) ordinaryArtifactRead(key string) bool {
-	return common.IsImmutableStorageArtifact(key) && common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint))
-}
-
-// Ordinary Tigris reads locate immutable objects across regions. Its consistency
-// view can return false 404s while metadata replication is behind.
-func (c *StorageClient) getObject(ctx context.Context, input *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
-	var options []func(*s3.Options)
-	if c.ordinaryArtifactRead(aws.ToString(input.Key)) {
-		options = append(options, ordinaryTigrisRead)
-	}
-	return c.s3Client.GetObject(ctx, input, options...)
-}
-
-func ordinaryTigrisRead(options *s3.Options) {
-	options.APIOptions = append(options.APIOptions, func(stack *middleware.Stack) error {
-		return stack.Build.Add(middleware.BuildMiddlewareFunc("TigrisOrdinaryRead", func(ctx context.Context, input middleware.BuildInput, next middleware.BuildHandler) (middleware.BuildOutput, middleware.Metadata, error) {
-			request, ok := input.Request.(*smithyhttp.Request)
-			if !ok {
-				return middleware.BuildOutput{}, middleware.Metadata{}, fmt.Errorf("unexpected S3 transport %T", input.Request)
-			}
-			request.Header.Del(common.TigrisConsistencyHeader)
-			return next.HandleBuild(ctx, input)
-		}), middleware.After)
-	})
 }
 
 func (c *StorageClient) Delete(ctx context.Context, key string, bucket string) error {
@@ -527,15 +487,15 @@ func (c *StorageClient) ListDirectory(ctx context.Context, dir string, bucket st
 }
 
 func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64, bucket string) (string, error) {
-	result, _, err := c.presignPut(ctx, key, expiresInSeconds, bucket, nil, false)
+	result, _, err := c.presignPut(ctx, key, expiresInSeconds, bucket, nil)
 	return result, err
 }
 
 func (c *StorageClient) GeneratePresignedPutURLWithMetadata(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string) (string, map[string]string, error) {
-	return c.presignPut(ctx, key, expiresInSeconds, bucket, metadata, true)
+	return c.presignPut(ctx, key, expiresInSeconds, bucket, metadata)
 }
 
-func (c *StorageClient) presignPut(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string, consistent bool) (string, map[string]string, error) {
+func (c *StorageClient) presignPut(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string) (string, map[string]string, error) {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -545,11 +505,6 @@ func (c *StorageClient) presignPut(ctx context.Context, key string, expiresInSec
 	}
 
 	options := []func(*s3.PresignOptions){s3.WithPresignExpires(time.Duration(expiresInSeconds) * time.Second)}
-	if consistent && common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
-		options = append(options, s3.WithPresignClientFromClientOptions(func(o *s3.Options) {
-			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"))
-		}))
-	}
 	result, err := c.presignClient.PresignPutObject(ctx, input, options...)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to generate presigned URL: %w", err)
@@ -611,65 +566,6 @@ func (c *StorageClient) listWithPrefix(ctx context.Context, prefix string, bucke
 	}
 
 	return allObjects, nil
-}
-
-// ListWithPrefixInRegion uses one Tigris metadata replica, avoiding a lagging
-// auto-routed index. An empty region restores ordinary automatic routing.
-// Other S3 providers ignore this Tigris-specific setting.
-func (c *StorageClient) ListWithPrefixInRegion(ctx context.Context, prefix, bucket, region string) ([]s3types.Object, error) {
-	if !common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
-		return c.ListWithPrefix(ctx, prefix, bucket)
-	}
-	options := func(o *s3.Options) {
-		ordinaryTigrisRead(o)
-		if region != "" {
-			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisRegionsHeader, region))
-		}
-	}
-	return c.listWithPrefix(ctx, prefix, bucket, options)
-}
-
-// ListWithPrefixWithRecovery retains the normal consistency leader and optionally
-// unions one regional Tigris index during a provider replication incident. A
-// regional index alone can omit newly acknowledged writes from the leader.
-func (c *StorageClient) ListWithPrefixWithRecovery(ctx context.Context, prefix, bucket, recoveryRegion string) ([]s3types.Object, error) {
-	if recoveryRegion == "" || !common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
-		return c.ListWithPrefix(ctx, prefix, bucket)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	type result struct {
-		objects []s3types.Object
-		err     error
-	}
-	var normal, regional result
-	var group sync.WaitGroup
-	group.Add(1)
-	go func() {
-		defer group.Done()
-		normal.objects, normal.err = c.ListWithPrefix(ctx, prefix, bucket)
-	}()
-	regional.objects, regional.err = c.ListWithPrefixInRegion(ctx, prefix, bucket, recoveryRegion)
-	group.Wait()
-
-	var objects []s3types.Object
-	seen := make(map[string]bool)
-	for _, scan := range []result{normal, regional} {
-		for _, object := range scan.objects {
-			if object.Key != nil && !seen[*object.Key] {
-				seen[*object.Key] = true
-				objects = append(objects, object)
-			}
-		}
-	}
-	var scanError error
-	if normal.err != nil {
-		scanError = fmt.Errorf("default listing: %w", normal.err)
-	}
-	if regional.err != nil {
-		scanError = errors.Join(scanError, fmt.Errorf("recovery listing region %q: %w", recoveryRegion, regional.err))
-	}
-	return objects, scanError
 }
 
 func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, bucket string) ([]string, error) {
@@ -834,8 +730,6 @@ func (c *WorkspaceStorageClient) Download(ctx context.Context, key string) ([]by
 // ReadVersion returns one object's contents and the ETag used for conditional
 // replacement. A missing object has an empty version; other failures propagate.
 func (c *WorkspaceStorageClient) ReadVersion(ctx context.Context, key string) ([]byte, string, error) {
-	// Conditional mutable metadata must stay on the consistent view; ordinary
-	// lookup recovery could return an obsolete lease or checkpoint version.
 	result, err := c.StorageClient.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: c.WorkspaceStorage.BucketName,
 		Key:    aws.String(key),
@@ -880,6 +774,22 @@ func (c *WorkspaceStorageClient) WriteVersion(ctx context.Context, key string, d
 		return "", fmt.Errorf("object store returned no version for %s", key)
 	}
 	return aws.ToString(result.ETag), nil
+}
+
+// VerifyStrongConsistency checks the bucket policy required for cross-region
+// journal fencing. A successful same-region CAS probe cannot establish it.
+func (c *WorkspaceStorageClient) VerifyStrongConsistency(ctx context.Context) error {
+	if !common.IsTigrisEndpoint(aws.ToString(c.WorkspaceStorage.EndpointUrl)) {
+		return nil
+	}
+	location, err := c.StorageClient.s3Client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: c.WorkspaceStorage.BucketName})
+	if err != nil {
+		return fmt.Errorf("read Tigris bucket location for journal fencing: %w", err)
+	}
+	if !common.IsStrongTigrisBucketLocation(string(location.LocationConstraint)) {
+		return fmt.Errorf("Tigris bucket %q location %q does not provide global strong consistency; object-store flush durability requires a Single-region or Multi-region bucket", c.BucketName(), location.LocationConstraint)
+	}
+	return nil
 }
 
 // VerifyConditionalWrites rejects S3-compatible stores that silently ignore
@@ -944,14 +854,6 @@ func (c *WorkspaceStorageClient) GeneratePresignedPutURLs(ctx context.Context, k
 
 func (c *WorkspaceStorageClient) ListWithPrefix(ctx context.Context, prefix string) ([]s3types.Object, error) {
 	return c.StorageClient.ListWithPrefix(ctx, prefix, *c.WorkspaceStorage.BucketName)
-}
-
-func (c *WorkspaceStorageClient) ListWithPrefixInRegion(ctx context.Context, prefix, region string) ([]s3types.Object, error) {
-	return c.StorageClient.ListWithPrefixInRegion(ctx, prefix, *c.WorkspaceStorage.BucketName, region)
-}
-
-func (c *WorkspaceStorageClient) ListWithPrefixWithRecovery(ctx context.Context, prefix, recoveryRegion string) ([]s3types.Object, error) {
-	return c.StorageClient.ListWithPrefixWithRecovery(ctx, prefix, *c.WorkspaceStorage.BucketName, recoveryRegion)
 }
 
 func (c *WorkspaceStorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]string, error) {

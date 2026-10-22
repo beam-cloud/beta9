@@ -11,11 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/beam-cloud/beta9/pkg/cache"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 	core "github.com/yandex-cloud/geesefs/core"
@@ -278,10 +274,11 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	}
 
 	// Backend config
-	s3Config, err := geeseS3Config(s.config)
-	if err != nil {
-		return err
-	}
+	s3Config := (&cfg.S3Config{}).Init()
+	s3Config.MetadataSDKMaxRetries = cfg.DefaultMetadataSDKMaxRetries
+	s3Config.AccessKey = s.config.AccessKey
+	s3Config.SecretKey = s.config.SecretKey
+	s3Config.Region = s.config.Region
 
 	// Set mount flags
 	flags.Backend = s3Config
@@ -423,42 +420,6 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	s.mu.Unlock()
 
 	return nil
-}
-
-func geeseS3Config(config types.GeeseConfig) (*cfg.S3Config, error) {
-	s3Config := (&cfg.S3Config{}).Init()
-	s3Config.MetadataSDKMaxRetries = cfg.DefaultMetadataSDKMaxRetries
-	s3Config.AccessKey = config.AccessKey
-	s3Config.SecretKey = config.SecretKey
-	s3Config.Region = config.Region
-	if common.IsTigrisEndpoint(config.EndpointUrl) {
-		// Tigris's consistent lookup can hide an existing immutable object.
-		// Read artifacts through its ordinary lookup; mutable files and writes
-		// retain consistency semantics. Build runs before the SDK signs headers.
-		sess, err := session.NewSession()
-		if err != nil {
-			return nil, err
-		}
-		sess.Handlers.Build.PushBackNamed(request.NamedHandler{
-			Name: "beam.TigrisConsistency",
-			Fn: func(r *request.Request) {
-				var key *string
-				switch input := r.Params.(type) {
-				case *s3.GetObjectInput:
-					key = input.Key
-				case *s3.HeadObjectInput:
-					key = input.Key
-				}
-				if key != nil && common.IsImmutableStorageArtifact(*key) {
-					r.HTTPRequest.Header.Del(common.TigrisConsistencyHeader)
-					return
-				}
-				r.HTTPRequest.Header.Set(common.TigrisConsistencyHeader, "true")
-			},
-		})
-		s3Config.Session = sess
-	}
-	return s3Config, nil
 }
 
 func effectiveGeeseMemoryLimitMB(configuredLimitMB int64, workerLimitText string) int64 {

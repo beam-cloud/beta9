@@ -3,6 +3,7 @@ package clients
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -483,16 +483,13 @@ func TestStorageListPagination(t *testing.T) {
 	}
 }
 
-func TestStorageTigrisConsistency(t *testing.T) {
+func TestStorageDoesNotUseDeprecatedTigrisHeaders(t *testing.T) {
 	for _, endpoint := range []string{"https://t3.storage.dev", "https://fly.storage.tigris.dev", "https://s3.amazonaws.com"} {
 		t.Run(endpoint, func(t *testing.T) {
 			requests := 0
 			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 				requests++
 				want := ""
-				if endpoint != "https://s3.amazonaws.com" {
-					want = "true"
-				}
 				if got := r.Header.Get(common.TigrisConsistencyHeader); got != want {
 					t.Errorf("%s %s consistency = %q, want %q", r.Method, r.URL.Path, got, want)
 				}
@@ -565,18 +562,20 @@ func TestTigrisPublishedOutputVisibility(t *testing.T) {
 	requests := 0
 	transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		requests++
-		consistent := r.Header.Get(common.TigrisConsistencyHeader) == "true"
+		if r.Header.Get(common.TigrisConsistencyHeader) != "" {
+			t.Error("deprecated consistency header was sent")
+		}
 		body := ""
 		switch r.Method {
 		case http.MethodPut:
-			// A successful regional write can be absent from another region's LIST.
-			published = consistent
+			// A strongly consistent bucket publishes without request-level hints.
+			published = true
 		case http.MethodGet:
 			if r.URL.Query().Get("prefix") != prefix {
 				t.Fatalf("unexpected prefix: %s", r.URL)
 			}
 			body = "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"
-			if published && consistent {
+			if published {
 				if r.URL.Query().Get("continuation-token") == "" {
 					body = "<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>next</NextContinuationToken><Contents><Key>" + prefix + "</Key></Contents></ListBucketResult>"
 				} else {
@@ -633,15 +632,15 @@ func TestTigrisPresignedHeaders(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if headers[common.TigrisConsistencyHeader] != "true" {
+			if headers[common.TigrisConsistencyHeader] != "" {
 				t.Fatalf("upload headers = %v", headers)
 			}
 			u, err := url.Parse(location)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "x-tigris-consistent") {
-				t.Fatal("consistency header is not signed")
+			if strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "x-tigris-consistent") {
+				t.Fatal("deprecated consistency header is signed")
 			}
 		})
 	}
@@ -650,15 +649,14 @@ func TestTigrisPresignedHeaders(t *testing.T) {
 func TestStorageArtifactReads(t *testing.T) {
 	for _, tc := range []struct {
 		name, key string
-		ordinary  bool
 	}{
-		{"output", "outputs/stub/task/output/file", true},
-		{"chunk", "durable-disks/disk/chunks/hash", true},
-		{"snapshot", "durable-disks/disk/snapshots/1/uuid/manifest.json", true},
-		{"object", "objects/uuid", true},
-		{"checkpoint", "checkpoints/uuid.tar", true},
-		{"volume", "volumes/id/file", false},
-		{"journal", "durable-disks/disk/journal/head.json", false},
+		{"output", "outputs/stub/task/output/file"},
+		{"chunk", "durable-disks/disk/chunks/hash"},
+		{"snapshot", "durable-disks/disk/snapshots/1/uuid/manifest.json"},
+		{"object", "objects/uuid"},
+		{"checkpoint", "checkpoints/uuid.tar"},
+		{"volume", "volumes/id/file"},
+		{"journal", "durable-disks/disk/journal/head.json"},
 	} {
 		for _, status := range []int{200, 404, 403} {
 			for _, operation := range []string{"head", "download", "stream"} {
@@ -666,8 +664,10 @@ func TestStorageArtifactReads(t *testing.T) {
 					requests := 0
 					transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 						requests++
-						consistent := r.Header.Get(common.TigrisConsistencyHeader) == "true"
-						if consistent == tc.ordinary || strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") != consistent {
+						if r.Header.Get(common.TigrisConsistencyHeader) != "" {
+							t.Error("deprecated consistency header was sent")
+						}
+						if strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") {
 							t.Error("unexpected consistency header or signature")
 						}
 						body := "verified bytes"
@@ -714,118 +714,12 @@ func TestStorageArtifactReads(t *testing.T) {
 	}
 }
 
-func TestStorageRegionalDiscovery(t *testing.T) {
-	for _, tc := range []struct {
-		name, endpoint, region string
-		pages, status          int
-	}{
-		{"pinned", "https://t3.storage.dev", "sjc", 2, 200},
-		{"alternate", "https://t3.storage.dev", "fra", 1, 200},
-		{"auto", "https://t3.storage.dev", "", 1, 200},
-		{"other provider", "https://s3.amazonaws.com", "sjc", 1, 200},
-		{"permission denied", "https://t3.storage.dev", "sjc", 1, 403},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			requests := 0
-			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-				requests++
-				wantRegion := tc.region
-				if tc.endpoint == "https://s3.amazonaws.com" {
-					wantRegion = ""
-				}
-				if r.Header.Get(common.TigrisRegionsHeader) != wantRegion || r.Header.Get(common.TigrisConsistencyHeader) != "" || strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") {
-					t.Errorf("unexpected listing headers or signature: region=%q", r.Header.Get(common.TigrisRegionsHeader))
-				}
-				if wantRegion != "" && !strings.Contains(r.Header.Get("Authorization"), "x-tigris-regions") {
-					t.Error("region header is not signed")
-				}
-				if tc.status != 200 {
-					return &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`<Error><Code>AccessDenied</Code></Error>`)), Request: r}, nil
-				}
-				token := ""
-				if requests < tc.pages {
-					token = "page2"
-				} else if tc.pages == 2 && r.URL.Query().Get("continuation-token") != "page2" {
-					t.Error("pagination token was not passed through")
-				}
-				body := fmt.Sprintf("<ListBucketResult><Contents><Key>outputs/%d</Key></Contents><IsTruncated>%t</IsTruncated><NextContinuationToken>%s</NextContinuationToken></ListBucketResult>", requests, token != "", token)
-				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
-			})
-			client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, tc.endpoint)}
-			objects, err := client.ListWithPrefixInRegion(context.Background(), "outputs/", "bucket", tc.region)
-			if (err != nil) != (tc.status != 200) || requests != tc.pages || (err == nil && len(objects) != tc.pages) {
-				t.Fatalf("listing = %v, %v after %d requests", objects, err, requests)
-			}
-		})
-	}
-}
-
-func TestStorageOutputRecovery(t *testing.T) {
-	for _, tc := range []struct {
-		name, endpoint, region, normalKeys, recoveryKeys string
-		prefixes, requests                               int
-		normalStatus, recoveryStatus                     int
-		want                                             []string
-	}{
-		{"unset", "https://t3.storage.dev", "", "", "", 100, 100, 200, 200, nil},
-		{"incident override", "https://t3.storage.dev", "fra", "", "", 100, 200, 200, 200, nil},
-		{"other provider", "https://s3.amazonaws.com", "fra", "", "", 100, 100, 200, 200, nil},
-		{"partial normal view", "https://t3.storage.dev", "fra", "a", "a,b", 1, 2, 200, 200, []string{"outputs/a", "outputs/b"}},
-		{"failed normal view", "https://t3.storage.dev", "fra", "", "b", 1, 2, 403, 200, []string{"outputs/b"}},
-		{"failed recovery view", "https://t3.storage.dev", "fra", "a", "", 1, 2, 200, 403, []string{"outputs/a"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var requests atomic.Int32
-			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-				requests.Add(1)
-				status, keys := tc.normalStatus, tc.normalKeys
-				region := r.Header.Get(common.TigrisRegionsHeader)
-				consistent := r.Header.Get(common.TigrisConsistencyHeader) == "true"
-				if region != "" {
-					if region != tc.region || consistent {
-						t.Error("recovery did not use the one configured ordinary replica")
-					}
-					status, keys = tc.recoveryStatus, tc.recoveryKeys
-				} else if consistent != (tc.endpoint == "https://t3.storage.dev") {
-					t.Error("normal view changed its consistency policy")
-				}
-				body := `<ListBucketResult><IsTruncated>false</IsTruncated>`
-				if keys != "" {
-					for _, key := range strings.Split(keys, ",") {
-						body += "<Contents><Key>outputs/" + key + "</Key></Contents>"
-					}
-				}
-				body += "</ListBucketResult>"
-				if status != 200 {
-					body = `<Error><Code>AccessDenied</Code></Error>`
-				}
-				return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
-			})
-			client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, tc.endpoint)}
-			for prefix := 0; prefix < tc.prefixes; prefix++ {
-				objects, err := client.ListWithPrefixWithRecovery(context.Background(), fmt.Sprintf("outputs/task-%d/", prefix), "bucket", tc.region)
-				var keys []string
-				for _, object := range objects {
-					keys = append(keys, aws.ToString(object.Key))
-				}
-				wantError := tc.normalStatus != 200 || tc.recoveryStatus != 200
-				if (err != nil) != wantError || !reflect.DeepEqual(keys, tc.want) {
-					t.Fatalf("output discovery = %v, %v; want %v, error=%t", keys, err, tc.want, wantError)
-				}
-			}
-			if int(requests.Load()) != tc.requests {
-				t.Fatalf("%d prefixes issued %d LISTs; want %d", tc.prefixes, requests.Load(), tc.requests)
-			}
-		})
-	}
-}
-
-func TestStorageVersionReadDoesNotRecoverStaleMetadata(t *testing.T) {
+func TestStorageVersionReadUsesBucketConsistency(t *testing.T) {
 	requests := 0
 	transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		requests++
-		if r.Header.Get(common.TigrisConsistencyHeader) != "true" {
-			t.Fatal("versioned read used an ordinary, potentially stale lookup")
+		if r.Header.Get(common.TigrisConsistencyHeader) != "" {
+			t.Fatal("versioned read sent a deprecated consistency header")
 		}
 		return &http.Response{StatusCode: 404, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`<Error><Code>NoSuchKey</Code></Error>`)), Request: r}, nil
 	})
@@ -836,5 +730,109 @@ func TestStorageVersionReadDoesNotRecoverStaleMetadata(t *testing.T) {
 	data, version, err := client.ReadVersion(context.Background(), "lease")
 	if err != nil || len(data) != 0 || version != "" || requests != 1 {
 		t.Fatalf("missing version = %q, %q, %v after %d requests", data, version, err, requests)
+	}
+}
+
+func TestStorageBucketCreationLocation(t *testing.T) {
+	for _, tc := range []struct {
+		name, location string
+		ensure, exists bool
+	}{
+		{"provider default", "", false, false},
+		{"multi-region", "usa", false, false},
+		{"ensure multi-region", "eur", true, false},
+		{"existing bucket unchanged", "fra", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			created := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodHead {
+					if !tc.exists {
+						w.WriteHeader(http.StatusNotFound)
+					}
+					return
+				}
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+				}
+				var configuration struct {
+					Location string `xml:"LocationConstraint"`
+				}
+				if len(body) > 0 {
+					if err := xml.Unmarshal(body, &configuration); err != nil {
+						t.Error(err)
+					}
+				}
+				created <- configuration.Location
+			}))
+			defer server.Close()
+			var cfg types.AppConfig
+			cfg.Storage.WorkspaceStorage = types.WorkspaceStorageConfig{DefaultEndpointUrl: server.URL, DefaultRegion: "auto", DefaultAccessKey: "access", DefaultSecretKey: "secret", DefaultBucketLocation: tc.location}
+			client, err := NewDefaultStorageClient(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.ensure {
+				err = client.EnsureBucket(context.Background(), "bucket")
+			} else {
+				err = client.CreateBucket(context.Background(), "bucket")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case location := <-created:
+				if tc.exists || location != tc.location {
+					t.Fatalf("created location %q", location)
+				}
+			default:
+				if !tc.exists {
+					t.Fatal("bucket was not created")
+				}
+			}
+		})
+	}
+}
+
+func TestStorageJournalBucketConsistency(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint, location string
+		status                   int
+		wantError                bool
+	}{
+		{"USA multi", "https://t3.storage.dev", "usa", 200, false},
+		{"EUR multi", "https://t3.storage.dev", "eur", 200, false},
+		{"single", "https://t3.storage.dev", "fra", 200, false},
+		{"global", "https://t3.storage.dev", "global", 200, true},
+		{"dual", "https://t3.storage.dev", "iad,sjc", 200, true},
+		{"unknown", "https://t3.storage.dev", "future-location", 200, true},
+		{"empty", "https://t3.storage.dev", "", 200, true},
+		{"denied", "https://t3.storage.dev", "", 403, true},
+		{"AWS", "https://s3.amazonaws.com", "", 200, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := 0
+			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests++
+				if r.Method != http.MethodGet || !r.URL.Query().Has("location") || r.Header.Get(common.TigrisConsistencyHeader) != "" {
+					t.Fatalf("policy verification must only read bucket location: %s %s", r.Method, r.URL.Path)
+				}
+				body := "<LocationConstraint>" + tc.location + "</LocationConstraint>"
+				if tc.status != 200 {
+					body = "<Error><Code>AccessDenied</Code></Error>"
+				}
+				return &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			client := &WorkspaceStorageClient{WorkspaceStorage: &types.WorkspaceStorage{EndpointUrl: &tc.endpoint, BucketName: aws.String("bucket")}, StorageClient: &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, tc.endpoint)}}
+			err := client.VerifyStrongConsistency(context.Background())
+			wantRequests := 1
+			if tc.name == "AWS" {
+				wantRequests = 0
+			}
+			if (err != nil) != tc.wantError || requests != wantRequests {
+				t.Fatalf("verification = %v after %d requests", err, requests)
+			}
+		})
 	}
 }

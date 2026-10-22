@@ -3,27 +3,22 @@ package common
 import (
 	"net/url"
 	"strings"
-
-	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const (
-	TigrisConsistencyHeader = "X-Tigris-Consistent"
-	TigrisRegionsHeader     = "X-Tigris-Regions"
-)
+const TigrisConsistencyHeader = "X-Tigris-Consistent"
 
-// IsImmutableStorageArtifact identifies uniquely named publications safe for ordinary reads.
-// Mutable volume files and coordination metadata must retain consistent reads,
-// even when an ordinary lookup still has a cached copy after deletion.
-func IsImmutableStorageArtifact(key string) bool {
-	for _, prefix := range []string{types.DefaultOutputsPrefix, types.DefaultObjectPrefix, types.DefaultCheckpointsPrefix} {
-		if strings.HasPrefix(key, prefix+"/") {
-			return true
-		}
+// IsStrongTigrisBucketLocation accepts documented single-region locations and
+// multi-region geographies, which guarantee globally consistent conditionals.
+// Global, dual-region, and unknown locations cannot safely fence journal writers.
+// https://www.tigrisdata.com/docs/buckets/locations/
+// https://www.tigrisdata.com/docs/concepts/regions/
+func IsStrongTigrisBucketLocation(location string) bool {
+	switch strings.ToLower(strings.TrimSpace(location)) {
+	case "usa", "eur", "sjc", "ord", "iad", "ams", "fra", "lhr", "sin", "nrt", "syd", "gru", "jnb":
+		return true
+	default:
+		return false
 	}
-	parts := strings.Split(key, "/")
-	return len(parts) > 3 && parts[0] == types.DefaultDurableDisksPrefix &&
-		(parts[2] == types.DurableDiskChunksPrefix || parts[2] == types.DurableDiskSnapshotsPrefix)
 }
 
 // IsTigrisEndpoint recognizes Tigris's S3 endpoints, including virtual-hosted buckets.

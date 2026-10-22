@@ -492,8 +492,8 @@ type WorkspaceStorageConfig struct {
 	DefaultPresignedEndpointUrl string `key:"defaultPresignedEndpointUrl" json:"default_presigned_endpoint_url"`
 	DefaultRegion               string `key:"defaultRegion" json:"default_region"`
 
-	// Optional extra Tigris LIST replica during a provider incident; empty queries only the normal leader.
-	TigrisListRecoveryRegion string `key:"tigrisListRecoveryRegion" json:"tigris_list_recovery_region"`
+	// Bucket creation policy, separate from the SDK signing region. Existing buckets are unchanged.
+	DefaultBucketLocation string `key:"defaultBucketLocation" json:"default_bucket_location"`
 
 	// Storage mode configs
 	Geese GeeseConfig `key:"geese" json:"geese"`
