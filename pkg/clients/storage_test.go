@@ -637,46 +637,48 @@ func TestTigrisPresignedHeaders(t *testing.T) {
 	}
 }
 
-func TestStorageReadRecovery(t *testing.T) {
+func TestStorageArtifactReads(t *testing.T) {
 	for _, tc := range []struct {
-		name, endpoint, key string
-		status, attempts    int
+		name, key string
+		ordinary  bool
 	}{
-		{"regional miss", "https://t3.storage.dev", "outputs/stub/task/output/file", 404, 2},
-		{"durable chunk", "https://t3.storage.dev", "durable-disks/disk/chunks/hash", 404, 2},
-		{"snapshot manifest", "https://t3.storage.dev", "durable-disks/disk/snapshots/1/uuid/manifest.json", 404, 2},
-		{"object", "https://t3.storage.dev", "objects/uuid", 404, 2},
-		{"checkpoint", "https://t3.storage.dev", "checkpoints/uuid.tar", 404, 2},
-		{"deleted volume", "https://t3.storage.dev", "volumes/id/file", 404, 1},
-		{"mutable journal head", "https://t3.storage.dev", "durable-disks/disk/journal/head.json", 404, 1},
-		{"permission denied", "https://t3.storage.dev", "outputs/file", 403, 1},
-		{"AWS miss", "https://s3.amazonaws.com", "outputs/file", 404, 1},
+		{"output", "outputs/stub/task/output/file", true},
+		{"chunk", "durable-disks/disk/chunks/hash", true},
+		{"snapshot", "durable-disks/disk/snapshots/1/uuid/manifest.json", true},
+		{"object", "objects/uuid", true},
+		{"checkpoint", "checkpoints/uuid.tar", true},
+		{"volume", "volumes/id/file", false},
+		{"journal", "durable-disks/disk/journal/head.json", false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		for _, status := range []int{200, 404, 403} {
 			for _, operation := range []string{"head", "download", "stream"} {
-				t.Run(operation, func(t *testing.T) {
+				t.Run(fmt.Sprintf("%s/%d/%s", tc.name, status, operation), func(t *testing.T) {
 					requests := 0
 					transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 						requests++
-						status, body := tc.status, `<Error><Code>NoSuchKey</Code></Error>`
-						if requests == 2 {
-							if r.Header.Get(common.TigrisConsistencyHeader) != "" || strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") {
-								t.Error("ordinary recovery request still signs consistency header")
+						consistent := r.Header.Get(common.TigrisConsistencyHeader) == "true"
+						if consistent == tc.ordinary || strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") != consistent {
+							t.Error("unexpected consistency header or signature")
+						}
+						body := "verified bytes"
+						if status != 200 {
+							code := "NoSuchKey"
+							if status == 403 {
+								code = "AccessDenied"
 							}
-							status, body = 200, "verified bytes"
+							body = "<Error><Code>" + code + "</Code></Error>"
 						}
 						return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 					})
-					client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, tc.endpoint)}
+					client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, "https://t3.storage.dev")}
 					var err error
-					switch operation {
-					case "head":
+					if operation == "head" {
 						var exists bool
 						exists, _, err = client.Head(context.Background(), tc.key, "bucket")
-						if exists != (tc.attempts == 2) {
+						if exists != (status == 200) {
 							t.Errorf("exists = %t", exists)
 						}
-					case "download", "stream":
+					} else {
 						var data []byte
 						if operation == "download" {
 							data, err = client.Download(context.Background(), tc.key, "bucket")
@@ -688,61 +690,84 @@ func TestStorageReadRecovery(t *testing.T) {
 								_ = reader.Close()
 							}
 						}
-						if tc.attempts == 2 && string(data) != "verified bytes" {
+						if status == 200 && string(data) != "verified bytes" {
 							t.Errorf("download = %q", data)
 						}
 					}
-					if tc.attempts == 2 && err != nil {
-						t.Fatal(err)
-					}
-					if tc.status == 403 && err == nil {
-						t.Error("permission error was suppressed")
-					}
-					if requests != tc.attempts {
-						t.Errorf("requests = %d, want %d", requests, tc.attempts)
+					wantError := status != 200 && !(operation == "head" && status == 404)
+					if (err != nil) != wantError || requests != 1 {
+						t.Fatalf("error = %v after %d requests; want error=%t, one request", err, requests, wantError)
 					}
 				})
+			}
+		}
+	}
+}
+
+func TestStorageRegionalDiscovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint, region string
+		pages, status          int
+	}{
+		{"pinned", "https://t3.storage.dev", "sjc", 2, 200},
+		{"alternate", "https://t3.storage.dev", "fra", 1, 200},
+		{"auto", "https://t3.storage.dev", "", 1, 200},
+		{"other provider", "https://s3.amazonaws.com", "sjc", 1, 200},
+		{"permission denied", "https://t3.storage.dev", "sjc", 1, 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := 0
+			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests++
+				wantRegion := tc.region
+				if tc.endpoint == "https://s3.amazonaws.com" {
+					wantRegion = ""
+				}
+				if r.Header.Get(common.TigrisRegionsHeader) != wantRegion || r.Header.Get(common.TigrisConsistencyHeader) != "" || strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") {
+					t.Errorf("unexpected listing headers or signature: region=%q", r.Header.Get(common.TigrisRegionsHeader))
+				}
+				if wantRegion != "" && !strings.Contains(r.Header.Get("Authorization"), "x-tigris-regions") {
+					t.Error("region header is not signed")
+				}
+				if tc.status != 200 {
+					return &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`<Error><Code>AccessDenied</Code></Error>`)), Request: r}, nil
+				}
+				token := ""
+				if requests < tc.pages {
+					token = "page2"
+				} else if tc.pages == 2 && r.URL.Query().Get("continuation-token") != "page2" {
+					t.Error("pagination token was not passed through")
+				}
+				body := fmt.Sprintf("<ListBucketResult><Contents><Key>outputs/%d</Key></Contents><IsTruncated>%t</IsTruncated><NextContinuationToken>%s</NextContinuationToken></ListBucketResult>", requests, token != "", token)
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, tc.endpoint)}
+			objects, err := client.ListWithPrefixInRegion(context.Background(), "outputs/", "bucket", tc.region)
+			if (err != nil) != (tc.status != 200) || requests != tc.pages || (err == nil && len(objects) != tc.pages) {
+				t.Fatalf("listing = %v, %v after %d requests", objects, err, requests)
 			}
 		})
 	}
 }
 
-func TestStorageRegionalDiscovery(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		t.Run(fmt.Sprint("region error=", fail), func(t *testing.T) {
-			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-				region := r.Header.Get(common.TigrisRegionsHeader)
-				if region == "lhr" && fail {
-					return nil, errors.New("regional outage")
-				}
-				contents, token := "", ""
-				if region == "sjc" || region == "fra" {
-					key := "outputs/a"
-					if region == "sjc" {
-						if r.URL.Query().Get("continuation-token") == "page2" {
-							key = "outputs/b"
-						} else {
-							token = "page2"
-						}
-					}
-					contents = "<Contents><Key>" + key + "</Key></Contents>"
-				}
-				body := fmt.Sprintf("<ListBucketResult>%s<IsTruncated>%t</IsTruncated><NextContinuationToken>%s</NextContinuationToken></ListBucketResult>", contents, token != "", token)
-				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
-			})
-			client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}, Retryer: func() aws.Retryer { return aws.NopRetryer{} }}, "https://t3.storage.dev")}
-			objects, err := client.ListWithPrefixAllRegions(context.Background(), "outputs/", "bucket")
-			if (err != nil) != fail {
-				t.Fatalf("discovery error = %v", err)
-			}
-			var keys []string
-			for _, object := range objects {
-				keys = append(keys, aws.ToString(object.Key))
-			}
-			if !reflect.DeepEqual(keys, []string{"outputs/a", "outputs/b"}) {
-				t.Fatalf("regional union = %v", keys)
-			}
-		})
+func TestStorageEmptyOutputListingsDoNotFanOut(t *testing.T) {
+	requests := 0
+	transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if r.Header.Get(common.TigrisRegionsHeader) != "sjc" || r.Header.Get(common.TigrisConsistencyHeader) != "" {
+			t.Error("empty output lookup did not use the single configured replica")
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`)), Request: r}, nil
+	})
+	client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, "https://t3.storage.dev")}
+	for task := 0; task < 100; task++ {
+		objects, err := client.ListWithPrefixInRegion(context.Background(), fmt.Sprintf("outputs/stub/task-%d/", task), "bucket", "sjc")
+		if err != nil || len(objects) != 0 {
+			t.Fatalf("empty output lookup = %v, %v", objects, err)
+		}
+	}
+	if requests != 100 {
+		t.Fatalf("100 empty tasks issued %d LISTs; want 100", requests)
 	}
 }
 

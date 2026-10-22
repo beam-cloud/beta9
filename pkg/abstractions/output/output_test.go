@@ -118,7 +118,7 @@ func TestOutputDiscoveryFindsLateMountedFiles(t *testing.T) {
 	task := &types.TaskWithRelated{Task: types.Task{ExternalId: "task", Status: types.TaskStatusComplete}, Stub: types.Stub{ExternalId: "stub"}}
 	for count := 0; count <= 2; count++ {
 		published.Store(int32(count))
-		files, err := GetTaskOutputFiles(context.Background(), &auth.AuthInfo{Workspace: workspace}, task)
+		files, err := GetTaskOutputFiles(context.Background(), &auth.AuthInfo{Workspace: workspace}, task, types.WorkspaceStorageConfig{TigrisListRegion: "sjc"})
 		require.NoError(t, err)
 		require.Len(t, files, count, "an earlier COMPLETE response must not hide a later mounted publication")
 	}

@@ -12,7 +12,7 @@ const (
 	TigrisRegionsHeader     = "X-Tigris-Regions"
 )
 
-// IsImmutableStorageArtifact bounds recovery to uniquely named publications.
+// IsImmutableStorageArtifact identifies uniquely named publications safe for ordinary reads.
 // Mutable volume files and coordination metadata must retain consistent reads,
 // even when an ordinary lookup still has a cached copy after deletion.
 func IsImmutableStorageArtifact(key string) bool {

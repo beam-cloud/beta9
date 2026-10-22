@@ -19,16 +19,19 @@ type geeseReadRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f geeseReadRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestGeeseReadRecovery(t *testing.T) {
+func TestGeeseTigrisObjectReads(t *testing.T) {
 	for _, tc := range []struct {
-		name, key        string
-		status, attempts int
-		recovered        bool
+		name, key  string
+		status     int
+		consistent bool
 	}{
-		{"regional miss", "outputs/stub/task/id/file", 404, 2, true},
-		{"missing object", "outputs/stub/task/id/file", 404, 2, false},
-		{"deleted volume", "volumes/id/file", 404, 1, false},
-		{"permission denied", "outputs/stub/task/id/file", 403, 1, false},
+		{"output", "outputs/stub/task/id/file", 200, false},
+		{"disk chunk", "durable-disks/disk/chunks/digest", 200, false},
+		{"volume", "volumes/id/file", 200, true},
+		{"disk lease", "durable-disks/disk/lease.json", 200, true},
+		{"missing output", "outputs/stub/task/id/file", 404, false},
+		{"deleted volume", "volumes/id/file", 404, true},
+		{"permission denied", "outputs/stub/task/id/file", 403, false},
 	} {
 		for _, method := range []string{"GET", "HEAD"} {
 			t.Run(tc.name+"/"+method, func(t *testing.T) {
@@ -39,16 +42,19 @@ func TestGeeseReadRecovery(t *testing.T) {
 				requests := 0
 				config.Session.Config.HTTPClient = &http.Client{Transport: geeseReadRoundTripper(func(r *http.Request) (*http.Response, error) {
 					requests++
-					status, body := tc.status, `<Error><Code>NoSuchKey</Code></Error>`
-					if requests == 2 {
-						if r.Header.Get(common.TigrisConsistencyHeader) != "" || strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") {
-							t.Error("recovery request still signs consistency header")
-						}
-						if tc.recovered {
-							status, body = 200, "old"
-						}
+					if got := r.Header.Get(common.TigrisConsistencyHeader) == "true"; got != tc.consistent {
+						t.Errorf("consistent request = %t, want %t", got, tc.consistent)
 					}
-					return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+					if got := strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent"); got != tc.consistent {
+						t.Errorf("signed consistency header = %t, want %t", got, tc.consistent)
+					}
+					body := "artifact"
+					if tc.status == 404 {
+						body = `<Error><Code>NoSuchKey</Code></Error>`
+					} else if tc.status == 403 {
+						body = `<Error><Code>AccessDenied</Code></Error>`
+					}
+					return &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 				})}
 				flags := cfg.DefaultFlags()
 				flags.Endpoint = "https://t3.storage.dev"
@@ -65,16 +71,16 @@ func TestGeeseReadRecovery(t *testing.T) {
 					if err == nil {
 						data, readErr := io.ReadAll(result.Body)
 						_ = result.Body.Close()
-						if readErr != nil || string(data) != "old" {
+						if readErr != nil || string(data) != "artifact" {
 							t.Fatalf("read = %q, %v", data, readErr)
 						}
 					}
 				}
-				if (err == nil) != tc.recovered {
-					t.Fatalf("recovery error = %v", err)
+				if (err == nil) != (tc.status == http.StatusOK) {
+					t.Fatalf("read error = %v", err)
 				}
-				if requests != tc.attempts {
-					t.Fatalf("requests = %d, want %d", requests, tc.attempts)
+				if requests != 1 {
+					t.Fatalf("requests = %d, want 1", requests)
 				}
 			})
 		}
@@ -162,7 +168,7 @@ func TestGeeseTigrisConsistency(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			bucket, key := aws.String("bucket"), aws.String("output.json")
+			bucket, key := aws.String("bucket"), aws.String("outputs/stub/task/id/output.json")
 			put, _ := backend.PutObjectRequest(&s3.PutObjectInput{Bucket: bucket, Key: key, Body: strings.NewReader("output")})
 			head, _ := backend.HeadObjectRequest(&s3.HeadObjectInput{Bucket: bucket, Key: key})
 			get, _ := backend.GetObjectRequest(&s3.GetObjectInput{Bucket: bucket, Key: key})
@@ -174,11 +180,15 @@ func TestGeeseTigrisConsistency(t *testing.T) {
 			copy, _ := backend.CopyObjectRequest(&s3.CopyObjectInput{Bucket: bucket, Key: key, CopySource: aws.String("bucket/source")})
 			remove, _ := backend.DeleteObjectRequest(&s3.DeleteObjectInput{Bucket: bucket, Key: key})
 			for _, r := range []*request.Request{put, head, get, list, listV2, start, part, commit, copy, remove} {
+				// Existing defaults must be removed before signing artifact reads.
+				if endpoint != "https://s3.amazonaws.com" {
+					r.HTTPRequest.Header.Set(common.TigrisConsistencyHeader, "true")
+				}
 				if err := r.Sign(); err != nil {
 					t.Fatalf("%s: %v", r.Operation.Name, err)
 				}
 				want := ""
-				if endpoint != "https://s3.amazonaws.com" {
+				if endpoint != "https://s3.amazonaws.com" && r.Operation.Name != "GetObject" && r.Operation.Name != "HeadObject" {
 					want = "true"
 				}
 				if got := r.HTTPRequest.Header.Get(common.TigrisConsistencyHeader); got != want {

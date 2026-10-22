@@ -8,12 +8,9 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/VictoriaMetrics/metrics"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -133,8 +130,8 @@ func newStorageS3Client(cfg aws.Config, endpointUrl string, consistent bool) *s3
 			o.UsePathStyle = true
 		}
 		if consistent && common.IsTigrisEndpoint(endpointUrl) {
-			// Prefer the consistent view for publication and metadata. Immutable
-			// object reads recover regional misses separately in getObject/Head.
+			// Preserve consistency for publication and mutable metadata. Immutable
+			// reads and explicitly routed listings override it before signing.
 			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"))
 		}
 	})
@@ -394,13 +391,11 @@ func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bo
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	}
-	output, err := c.s3Client.HeadObject(ctx, input)
-	if common.IsImmutableStorageArtifact(key) && c.tigrisObjectMiss(err) && ctx.Err() == nil {
-		output, err = c.s3Client.HeadObject(ctx, input, ordinaryTigrisRead)
-		if err == nil {
-			metrics.GetOrCreateCounter(`beta9_tigris_read_recovery_total{operation="HeadObject"}`).Inc()
-		}
+	var options []func(*s3.Options)
+	if c.ordinaryArtifactRead(key) {
+		options = append(options, ordinaryTigrisRead)
 	}
+	output, err := c.s3Client.HeadObject(ctx, input, options...)
 	if err != nil {
 		if storageObjectNotFound(err) {
 			return false, nil, nil
@@ -456,22 +451,18 @@ func storageObjectNotFound(err error) bool {
 	return false
 }
 
-func (c *StorageClient) tigrisObjectMiss(err error) bool {
-	return storageObjectNotFound(err) && common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint))
+func (c *StorageClient) ordinaryArtifactRead(key string) bool {
+	return common.IsImmutableStorageArtifact(key) && common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint))
 }
 
-// Tigris can return a persistent 404 from its consistency view while the object
-// remains readable through its ordinary lookup. Recover that specific failure;
-// authorization, transport and checksum failures must still propagate.
+// Ordinary Tigris reads locate immutable objects across regions. Its consistency
+// view can return false 404s while metadata replication is behind.
 func (c *StorageClient) getObject(ctx context.Context, input *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
-	result, err := c.s3Client.GetObject(ctx, input)
-	if common.IsImmutableStorageArtifact(aws.ToString(input.Key)) && c.tigrisObjectMiss(err) && ctx.Err() == nil {
-		result, err = c.s3Client.GetObject(ctx, input, ordinaryTigrisRead)
-		if err == nil {
-			metrics.GetOrCreateCounter(`beta9_tigris_read_recovery_total{operation="GetObject"}`).Inc()
-		}
+	var options []func(*s3.Options)
+	if c.ordinaryArtifactRead(aws.ToString(input.Key)) {
+		options = append(options, ordinaryTigrisRead)
 	}
-	return result, err
+	return c.s3Client.GetObject(ctx, input, options...)
 }
 
 func ordinaryTigrisRead(options *s3.Options) {
@@ -621,67 +612,20 @@ func (c *StorageClient) listWithPrefix(ctx context.Context, prefix string, bucke
 	return allObjects, nil
 }
 
-// ListWithPrefixAllRegions reconciles divergent Tigris listings for recovery.
-// It performs one paginated scan per view, which is expensive for task lists.
-// An incomplete scan returns discovered objects alongside its error.
-func (c *StorageClient) ListWithPrefixAllRegions(ctx context.Context, prefix, bucket string) ([]s3types.Object, error) {
+// ListWithPrefixInRegion uses one Tigris metadata replica, avoiding a lagging
+// auto-routed index. An empty region restores ordinary automatic routing.
+// Other S3 providers ignore this Tigris-specific setting.
+func (c *StorageClient) ListWithPrefixInRegion(ctx context.Context, prefix, bucket, region string) ([]s3types.Object, error) {
 	if !common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
 		return c.ListWithPrefix(ctx, prefix, bucket)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	// Tigris's documented storage regions. The ordinary view is also queried
-	// because it can expose cached objects absent from a regional index.
-	regions := []string{"", "iad", "ord", "sjc", "fra", "lhr", "mad", "gru", "hkg", "nrt", "sin", "syd", "jnb"}
-	type result struct {
-		objects []s3types.Object
-		err     error
-	}
-	results := make([]result, len(regions))
-	var group sync.WaitGroup
-	limit := make(chan struct{}, 4)
-	for i, region := range regions {
-		group.Add(1)
-		go func(i int, region string) {
-			defer group.Done()
-			select {
-			case limit <- struct{}{}:
-				defer func() { <-limit }()
-			case <-ctx.Done():
-				results[i].err = ctx.Err()
-				return
-			}
-			options := ordinaryTigrisRead
-			if region != "" {
-				options = func(o *s3.Options) {
-					o.APIOptions = append(o.APIOptions,
-						smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"),
-						smithyhttp.SetHeaderValue(common.TigrisRegionsHeader, region))
-				}
-			}
-			results[i].objects, results[i].err = c.listWithPrefix(ctx, prefix, bucket, options)
-		}(i, region)
-	}
-	group.Wait()
-	objects := map[string]s3types.Object{}
-	var scanError error
-	for i, result := range results {
-		if result.err != nil {
-			scanError = errors.Join(scanError, fmt.Errorf("Tigris listing region %q: %w", regions[i], result.err))
-		}
-		for _, object := range result.objects {
-			key := aws.ToString(object.Key)
-			if previous, found := objects[key]; !found || aws.ToTime(object.LastModified).After(aws.ToTime(previous.LastModified)) {
-				objects[key] = object
-			}
+	options := func(o *s3.Options) {
+		ordinaryTigrisRead(o)
+		if region != "" {
+			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisRegionsHeader, region))
 		}
 	}
-	union := make([]s3types.Object, 0, len(objects))
-	for _, object := range objects {
-		union = append(union, object)
-	}
-	sort.Slice(union, func(i, j int) bool { return aws.ToString(union[i].Key) < aws.ToString(union[j].Key) })
-	return union, scanError
+	return c.listWithPrefix(ctx, prefix, bucket, options)
 }
 
 func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, bucket string) ([]string, error) {
@@ -958,8 +902,8 @@ func (c *WorkspaceStorageClient) ListWithPrefix(ctx context.Context, prefix stri
 	return c.StorageClient.ListWithPrefix(ctx, prefix, *c.WorkspaceStorage.BucketName)
 }
 
-func (c *WorkspaceStorageClient) ListWithPrefixAllRegions(ctx context.Context, prefix string) ([]s3types.Object, error) {
-	return c.StorageClient.ListWithPrefixAllRegions(ctx, prefix, *c.WorkspaceStorage.BucketName)
+func (c *WorkspaceStorageClient) ListWithPrefixInRegion(ctx context.Context, prefix, region string) ([]s3types.Object, error) {
+	return c.StorageClient.ListWithPrefixInRegion(ctx, prefix, *c.WorkspaceStorage.BucketName, region)
 }
 
 func (c *WorkspaceStorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]string, error) {

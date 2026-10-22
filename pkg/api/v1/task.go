@@ -299,7 +299,7 @@ func (g *TaskGroup) taskDetails(ctx context.Context, authInfo *auth.AuthInfo, ta
 
 func (g *TaskGroup) addOutputsToTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
 	task.Outputs = []types.TaskOutput{}
-	outputFiles, discoveryErr := output.GetTaskOutputFiles(ctx, authInfo, task)
+	outputFiles, discoveryErr := output.GetTaskOutputFiles(ctx, authInfo, task, g.config.Storage.WorkspaceStorage)
 
 	for outputId, fileName := range outputFiles {
 		url, err := output.SetPublicURL(ctx, g.config, g.backendRepo, authInfo, task.ExternalId, outputId, fileName, DefaultTaskOutputExpirationS)

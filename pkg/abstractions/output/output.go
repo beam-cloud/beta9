@@ -175,13 +175,13 @@ func taskOutputKey(task *types.TaskWithRelated, outputID, filename string) strin
 	return path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId, outputID, filepath.Base(filename))
 }
 
-func GetTaskOutputFiles(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) (map[string]string, error) {
+func GetTaskOutputFiles(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated, storageConfig types.WorkspaceStorageConfig) (map[string]string, error) {
 	client, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 	if err != nil {
 		return nil, err
 	}
 	prefix := path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId) + "/"
-	objects, discoveryErr := client.ListWithPrefixAllRegions(ctx, prefix)
+	objects, discoveryErr := client.ListWithPrefixInRegion(ctx, prefix, storageConfig.TigrisListRegion)
 	files := map[string]string{}
 	for _, object := range objects {
 		if object.Key == nil || !strings.HasPrefix(*object.Key, prefix) || strings.HasSuffix(*object.Key, "/") {
