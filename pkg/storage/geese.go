@@ -11,7 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws/request"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 	core "github.com/yandex-cloud/geesefs/core"
@@ -274,12 +277,10 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	}
 
 	// Backend config
-	s3Config := &cfg.S3Config{}
-	s3Config.Init()
-	s3Config.MetadataSDKMaxRetries = cfg.DefaultMetadataSDKMaxRetries
-	s3Config.AccessKey = s.config.AccessKey
-	s3Config.SecretKey = s.config.SecretKey
-	s3Config.Region = s.config.Region
+	s3Config, err := geeseS3Config(s.config)
+	if err != nil {
+		return err
+	}
 
 	// Set mount flags
 	flags.Backend = s3Config
@@ -421,6 +422,30 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	s.mu.Unlock()
 
 	return nil
+}
+
+func geeseS3Config(config types.GeeseConfig) (*cfg.S3Config, error) {
+	s3Config := (&cfg.S3Config{}).Init()
+	s3Config.MetadataSDKMaxRetries = cfg.DefaultMetadataSDKMaxRetries
+	s3Config.AccessKey = config.AccessKey
+	s3Config.SecretKey = config.SecretKey
+	s3Config.Region = config.Region
+	if common.IsTigrisEndpoint(config.EndpointUrl) {
+		// Apply the same consistency policy to mounted writes and API reads.
+		// Adding it only to LIST cannot make earlier regional writes visible.
+		sess, err := session.NewSession()
+		if err != nil {
+			return nil, err
+		}
+		sess.Handlers.Build.PushBackNamed(request.NamedHandler{
+			Name: "beam.TigrisConsistency",
+			Fn: func(r *request.Request) {
+				r.HTTPRequest.Header.Set(common.TigrisConsistencyHeader, "true")
+			},
+		})
+		s3Config.Session = sess
+	}
+	return s3Config, nil
 }
 
 func effectiveGeeseMemoryLimitMB(configuredLimitMB int64, workerLimitText string) int64 {

@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -57,8 +58,10 @@ func (c storageClientConfig) newClient(ctx context.Context) (*StorageClient, err
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 	return &StorageClient{
-		s3Client:      newS3Client(cfg, c.endpointURL),
-		presignClient: s3.NewPresignClient(newS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL))),
+		s3Client: newS3Client(cfg, c.endpointURL),
+		// URL-only APIs cannot require clients to supply an additional signed
+		// header. Header-aware uploads opt into consistency when presigning.
+		presignClient: s3.NewPresignClient(newStorageS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL), false)),
 	}, nil
 }
 
@@ -114,12 +117,21 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 }
 
 func newS3Client(cfg aws.Config, endpointUrl string) *s3.Client {
+	return newStorageS3Client(cfg, endpointUrl, true)
+}
+
+func newStorageS3Client(cfg aws.Config, endpointUrl string, consistent bool) *s3.Client {
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.Retryer = storageDNSRetryer{o.Retryer}
 		o.DisableLogOutputChecksumValidationSkipped = true
 		if endpointUrl != "" {
 			o.BaseEndpoint = aws.String(endpointUrl)
 			o.UsePathStyle = true
+		}
+		if consistent && common.IsTigrisEndpoint(endpointUrl) {
+			// Readers and writers must both use the bucket's consistency leader;
+			// a regional LIST can omit a successfully fsynced worker upload.
+			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"))
 		}
 	})
 }
@@ -431,44 +443,50 @@ func (c *StorageClient) ListDirectory(ctx context.Context, dir string, bucket st
 		dir += "/"
 	}
 
-	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	paginator := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
 		Bucket:    aws.String(bucket),
 		Prefix:    aws.String(dir),
 		Delimiter: aws.String("/"),
 	})
-	if err != nil {
-		return nil, err
-	}
-
 	var allObjects []s3types.Object
-
-	// Add regular files
-	for _, obj := range resp.Contents {
-		if *obj.Key != dir {
-			allObjects = append(allObjects, obj)
-		}
-	}
-
-	// Add directories
-	for _, cp := range resp.CommonPrefixes {
-		dirObject := s3types.Object{
-			Key:          cp.Prefix,
-			Size:         aws.Int64(0),
-			LastModified: aws.Time(time.Now()),
+	for paginator.HasMorePages() {
+		resp, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
 		}
 
-		allObjects = append(allObjects, dirObject)
+		// Add regular files
+		for _, obj := range resp.Contents {
+			if *obj.Key != dir {
+				allObjects = append(allObjects, obj)
+			}
+		}
+
+		// Add directories
+		for _, cp := range resp.CommonPrefixes {
+			dirObject := s3types.Object{
+				Key:          cp.Prefix,
+				Size:         aws.Int64(0),
+				LastModified: aws.Time(time.Now()),
+			}
+
+			allObjects = append(allObjects, dirObject)
+		}
 	}
 
 	return allObjects, nil
 }
 
 func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64, bucket string) (string, error) {
-	result, _, err := c.GeneratePresignedPutURLWithMetadata(ctx, key, expiresInSeconds, bucket, nil)
+	result, _, err := c.presignPut(ctx, key, expiresInSeconds, bucket, nil, false)
 	return result, err
 }
 
 func (c *StorageClient) GeneratePresignedPutURLWithMetadata(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string) (string, map[string]string, error) {
+	return c.presignPut(ctx, key, expiresInSeconds, bucket, metadata, true)
+}
+
+func (c *StorageClient) presignPut(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string, consistent bool) (string, map[string]string, error) {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -477,7 +495,13 @@ func (c *StorageClient) GeneratePresignedPutURLWithMetadata(ctx context.Context,
 		input.Metadata = metadata
 	}
 
-	result, err := c.presignClient.PresignPutObject(ctx, input, s3.WithPresignExpires(time.Duration(expiresInSeconds)*time.Second))
+	options := []func(*s3.PresignOptions){s3.WithPresignExpires(time.Duration(expiresInSeconds) * time.Second)}
+	if consistent && common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
+		options = append(options, s3.WithPresignClientFromClientOptions(func(o *s3.Options) {
+			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"))
+		}))
+	}
+	result, err := c.presignClient.PresignPutObject(ctx, input, options...)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to generate presigned URL: %w", err)
 	}
@@ -520,15 +544,20 @@ func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []str
 }
 
 func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string, bucket string) ([]s3types.Object, error) {
-	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	paginator := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),
 	})
-	if err != nil {
-		return nil, err
+	var allObjects []s3types.Object
+	for paginator.HasMorePages() {
+		resp, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		allObjects = append(allObjects, resp.Contents...)
 	}
 
-	return resp.Contents, nil
+	return allObjects, nil
 }
 
 func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, bucket string) ([]string, error) {
