@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -434,8 +435,17 @@ func TestStorageListPagination(t *testing.T) {
 			}
 			objects, err := list(ctx, prefix, "bucket")
 			if test.fail || test.cancel {
-				if err == nil || objects != nil {
-					t.Fatalf("listing = %v, %v; want nil objects and error", objects, err)
+				if err == nil {
+					t.Fatalf("listing = %v; want an error", objects)
+				}
+				if test.fail {
+					wantPartial := 0
+					if !test.directory {
+						wantPartial = 1
+					}
+					if len(objects) != wantPartial {
+						t.Fatalf("listing retained %d objects; want %d before the failed page", len(objects), wantPartial)
+					}
 				}
 				if test.cancel && !errors.Is(err, context.Canceled) {
 					t.Fatalf("error = %v, want context cancellation", err)
@@ -750,24 +760,63 @@ func TestStorageRegionalDiscovery(t *testing.T) {
 	}
 }
 
-func TestStorageEmptyOutputListingsDoNotFanOut(t *testing.T) {
-	requests := 0
-	transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		requests++
-		if r.Header.Get(common.TigrisRegionsHeader) != "sjc" || r.Header.Get(common.TigrisConsistencyHeader) != "" {
-			t.Error("empty output lookup did not use the single configured replica")
-		}
-		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`)), Request: r}, nil
-	})
-	client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, "https://t3.storage.dev")}
-	for task := 0; task < 100; task++ {
-		objects, err := client.ListWithPrefixInRegion(context.Background(), fmt.Sprintf("outputs/stub/task-%d/", task), "bucket", "sjc")
-		if err != nil || len(objects) != 0 {
-			t.Fatalf("empty output lookup = %v, %v", objects, err)
-		}
-	}
-	if requests != 100 {
-		t.Fatalf("100 empty tasks issued %d LISTs; want 100", requests)
+func TestStorageOutputRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint, region, normalKeys, recoveryKeys string
+		prefixes, requests                               int
+		normalStatus, recoveryStatus                     int
+		want                                             []string
+	}{
+		{"unset", "https://t3.storage.dev", "", "", "", 100, 100, 200, 200, nil},
+		{"incident override", "https://t3.storage.dev", "fra", "", "", 100, 200, 200, 200, nil},
+		{"other provider", "https://s3.amazonaws.com", "fra", "", "", 100, 100, 200, 200, nil},
+		{"partial normal view", "https://t3.storage.dev", "fra", "a", "a,b", 1, 2, 200, 200, []string{"outputs/a", "outputs/b"}},
+		{"failed normal view", "https://t3.storage.dev", "fra", "", "b", 1, 2, 403, 200, []string{"outputs/b"}},
+		{"failed recovery view", "https://t3.storage.dev", "fra", "a", "", 1, 2, 200, 403, []string{"outputs/a"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests.Add(1)
+				status, keys := tc.normalStatus, tc.normalKeys
+				region := r.Header.Get(common.TigrisRegionsHeader)
+				consistent := r.Header.Get(common.TigrisConsistencyHeader) == "true"
+				if region != "" {
+					if region != tc.region || consistent {
+						t.Error("recovery did not use the one configured ordinary replica")
+					}
+					status, keys = tc.recoveryStatus, tc.recoveryKeys
+				} else if consistent != (tc.endpoint == "https://t3.storage.dev") {
+					t.Error("normal view changed its consistency policy")
+				}
+				body := `<ListBucketResult><IsTruncated>false</IsTruncated>`
+				if keys != "" {
+					for _, key := range strings.Split(keys, ",") {
+						body += "<Contents><Key>outputs/" + key + "</Key></Contents>"
+					}
+				}
+				body += "</ListBucketResult>"
+				if status != 200 {
+					body = `<Error><Code>AccessDenied</Code></Error>`
+				}
+				return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, tc.endpoint)}
+			for prefix := 0; prefix < tc.prefixes; prefix++ {
+				objects, err := client.ListWithPrefixWithRecovery(context.Background(), fmt.Sprintf("outputs/task-%d/", prefix), "bucket", tc.region)
+				var keys []string
+				for _, object := range objects {
+					keys = append(keys, aws.ToString(object.Key))
+				}
+				wantError := tc.normalStatus != 200 || tc.recoveryStatus != 200
+				if (err != nil) != wantError || !reflect.DeepEqual(keys, tc.want) {
+					t.Fatalf("output discovery = %v, %v; want %v, error=%t", keys, err, tc.want, wantError)
+				}
+			}
+			if int(requests.Load()) != tc.requests {
+				t.Fatalf("%d prefixes issued %d LISTs; want %d", tc.prefixes, requests.Load(), tc.requests)
+			}
+		})
 	}
 }
 

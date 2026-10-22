@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -604,7 +605,7 @@ func (c *StorageClient) listWithPrefix(ctx context.Context, prefix string, bucke
 	for paginator.HasMorePages() {
 		resp, err := paginator.NextPage(ctx, options...)
 		if err != nil {
-			return nil, err
+			return allObjects, err
 		}
 		allObjects = append(allObjects, resp.Contents...)
 	}
@@ -626,6 +627,49 @@ func (c *StorageClient) ListWithPrefixInRegion(ctx context.Context, prefix, buck
 		}
 	}
 	return c.listWithPrefix(ctx, prefix, bucket, options)
+}
+
+// ListWithPrefixWithRecovery retains the normal consistency leader and optionally
+// unions one regional Tigris index during a provider replication incident. A
+// regional index alone can omit newly acknowledged writes from the leader.
+func (c *StorageClient) ListWithPrefixWithRecovery(ctx context.Context, prefix, bucket, recoveryRegion string) ([]s3types.Object, error) {
+	if recoveryRegion == "" || !common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
+		return c.ListWithPrefix(ctx, prefix, bucket)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	type result struct {
+		objects []s3types.Object
+		err     error
+	}
+	var normal, regional result
+	var group sync.WaitGroup
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		normal.objects, normal.err = c.ListWithPrefix(ctx, prefix, bucket)
+	}()
+	regional.objects, regional.err = c.ListWithPrefixInRegion(ctx, prefix, bucket, recoveryRegion)
+	group.Wait()
+
+	var objects []s3types.Object
+	seen := make(map[string]bool)
+	for _, scan := range []result{normal, regional} {
+		for _, object := range scan.objects {
+			if object.Key != nil && !seen[*object.Key] {
+				seen[*object.Key] = true
+				objects = append(objects, object)
+			}
+		}
+	}
+	var scanError error
+	if normal.err != nil {
+		scanError = fmt.Errorf("default listing: %w", normal.err)
+	}
+	if regional.err != nil {
+		scanError = errors.Join(scanError, fmt.Errorf("recovery listing region %q: %w", recoveryRegion, regional.err))
+	}
+	return objects, scanError
 }
 
 func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, bucket string) ([]string, error) {
@@ -904,6 +948,10 @@ func (c *WorkspaceStorageClient) ListWithPrefix(ctx context.Context, prefix stri
 
 func (c *WorkspaceStorageClient) ListWithPrefixInRegion(ctx context.Context, prefix, region string) ([]s3types.Object, error) {
 	return c.StorageClient.ListWithPrefixInRegion(ctx, prefix, *c.WorkspaceStorage.BucketName, region)
+}
+
+func (c *WorkspaceStorageClient) ListWithPrefixWithRecovery(ctx context.Context, prefix, recoveryRegion string) ([]s3types.Object, error) {
+	return c.StorageClient.ListWithPrefixWithRecovery(ctx, prefix, *c.WorkspaceStorage.BucketName, recoveryRegion)
 }
 
 func (c *WorkspaceStorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]string, error) {

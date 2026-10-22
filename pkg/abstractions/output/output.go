@@ -181,7 +181,7 @@ func GetTaskOutputFiles(ctx context.Context, authInfo *auth.AuthInfo, task *type
 		return nil, err
 	}
 	prefix := path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId) + "/"
-	objects, discoveryErr := client.ListWithPrefixInRegion(ctx, prefix, storageConfig.TigrisListRegion)
+	objects, discoveryErr := client.ListWithPrefixWithRecovery(ctx, prefix, storageConfig.TigrisListRecoveryRegion)
 	files := map[string]string{}
 	for _, object := range objects {
 		if object.Key == nil || !strings.HasPrefix(*object.Key, prefix) || strings.HasSuffix(*object.Key, "/") {

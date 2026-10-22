@@ -492,8 +492,8 @@ type WorkspaceStorageConfig struct {
 	DefaultPresignedEndpointUrl string `key:"defaultPresignedEndpointUrl" json:"default_presigned_endpoint_url"`
 	DefaultRegion               string `key:"defaultRegion" json:"default_region"`
 
-	// Optional Tigris LIST routing override during a provider incident; empty uses automatic routing.
-	TigrisListRegion string `key:"tigrisListRegion" json:"tigris_list_region"`
+	// Optional extra Tigris LIST replica during a provider incident; empty queries only the normal leader.
+	TigrisListRecoveryRegion string `key:"tigrisListRecoveryRegion" json:"tigris_list_recovery_region"`
 
 	// Storage mode configs
 	Geese GeeseConfig `key:"geese" json:"geese"`
