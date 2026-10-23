@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -60,6 +61,7 @@ type ContainerRuntimeServer struct {
 	pb.UnimplementedContainerServiceServer
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	completedLogs           sync.Map // container ID -> *common.LogBuffer
+	terminalCheckpoints     sync.Map // container ID -> *terminalCheckpointResult
 	killedSandboxProcesses  sync.Map
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	containerNetworkManager ContainerNetwork
@@ -350,8 +352,21 @@ func (s *ContainerRuntimeServer) retainCompletedLogs(containerID string, logs *c
 
 // ContainerCheckpoint creates a checkpoint of a running container
 func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb.ContainerCheckpointRequest) (*pb.ContainerCheckpointResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if in.TerminateAfterCheckpoint {
+		if saved, ok := s.terminalCheckpoints.Load(in.ContainerId); ok {
+			return saved.(*terminalCheckpointResult).wait(ctx)
+		}
+	}
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
+		if in.TerminateAfterCheckpoint {
+			if saved, ok := s.terminalCheckpoints.Load(in.ContainerId); ok {
+				return saved.(*terminalCheckpointResult).wait(ctx)
+			}
+		}
 		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
@@ -368,29 +383,67 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 		}, nil
 	}
 
+	if !in.TerminateAfterCheckpoint {
+		return s.captureContainerCheckpoint(ctx, in.ContainerId, instance, false), nil
+	}
+	result := &terminalCheckpointResult{done: make(chan struct{})}
+	saved, loaded := s.terminalCheckpoints.LoadOrStore(in.ContainerId, result)
+	if loaded {
+		return saved.(*terminalCheckpointResult).wait(ctx)
+	}
+	containerID := in.ContainerId
+	operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultCheckpointOperationTTL)
+	go func() {
+		// A terminal checkpoint outlives the connection and container instance
+		// that requested it. Keep its exact RAM/disk pairing for reconnects.
+		defer cancel()
+		result.response = s.captureContainerCheckpoint(operationCtx, containerID, instance, true)
+		close(result.done)
+		time.AfterFunc(defaultCheckpointOperationTTL, func() {
+			s.terminalCheckpoints.CompareAndDelete(containerID, result)
+		})
+	}()
+	return result.wait(ctx)
+}
+
+type terminalCheckpointResult struct {
+	done     chan struct{}
+	response *pb.ContainerCheckpointResponse
+}
+
+func (r *terminalCheckpointResult) wait(ctx context.Context) (*pb.ContainerCheckpointResponse, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.done:
+		return proto.Clone(r.response).(*pb.ContainerCheckpointResponse), nil
+	}
+}
+
+func (s *ContainerRuntimeServer) captureContainerCheckpoint(ctx context.Context, containerID string, instance *ContainerInstance, terminal bool) *pb.ContainerCheckpointResponse {
 	checkpointId := uuid.New().String()
 	checkpointOpts := &CreateCheckpointOpts{
 		Request:                  instance.Request,
 		CheckpointId:             checkpointId,
 		ContainerIp:              instance.ContainerIp,
-		TerminateAfterCheckpoint: in.TerminateAfterCheckpoint,
+		TerminateAfterCheckpoint: terminal,
 	}
 	err := s.createCheckpoint(ctx, checkpointOpts)
 	if err != nil {
-		log.Error().Str("container_id", in.ContainerId).Msgf("failed to create checkpoint: %v", err)
-		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		log.Error().Str("container_id", containerID).Msgf("failed to create checkpoint: %v", err)
+		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: err.Error()}
 	}
 
 	checkpointRuntime := checkpointOpts.CheckpointRuntime
 	if checkpointRuntime == "" {
-		checkpointRuntime = rt.Name()
+		checkpointRuntime = instance.Runtime.Name()
 	}
 	return &pb.ContainerCheckpointResponse{
 		Ok:            true,
 		CheckpointId:  checkpointId,
 		Runtime:       checkpointRuntime,
 		DiskSnapshots: containerDiskSnapshotsToProto(checkpointOpts.DiskSnapshots),
-	}, nil
+	}
 }
 
 func containerDiskSnapshotsToProto(snapshots []*types.DiskSnapshot) []*pb.ContainerDiskSnapshot {

@@ -451,10 +451,17 @@ type ContainerCheckpointOptions struct {
 }
 
 func (c *ContainerClient) Checkpoint(ctx context.Context, containerId string, opts ContainerCheckpointOptions) (*pb.ContainerCheckpointResponse, error) {
+	var callOptions []grpc.CallOption
+	if opts.TerminateAfterCheckpoint {
+		// The worker retains the accepted terminal result across reconnects.
+		// Wait within the caller's deadline instead of exhausting retries while
+		// its channel is briefly unavailable.
+		callOptions = append(callOptions, grpc.WaitForReady(true))
+	}
 	resp, err := c.client.ContainerCheckpoint(ctx, &pb.ContainerCheckpointRequest{
 		ContainerId:              containerId,
 		TerminateAfterCheckpoint: opts.TerminateAfterCheckpoint,
-	})
+	}, callOptions...)
 	if err != nil {
 		return resp, err
 	}

@@ -13,8 +13,10 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestContainerClientWithDialerDoesNotBlockSharedCacheFill(t *testing.T) {
@@ -28,6 +30,49 @@ func TestContainerClientWithDialerDoesNotBlockSharedCacheFill(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
 	require.Less(t, time.Since(started), 100*time.Millisecond)
+}
+
+type checkpointCallOptionsClient struct {
+	pb.ContainerServiceClient
+	ctx       context.Context
+	waitReady bool
+}
+
+func (c *checkpointCallOptionsClient) ContainerCheckpoint(ctx context.Context, _ *pb.ContainerCheckpointRequest, options ...grpc.CallOption) (*pb.ContainerCheckpointResponse, error) {
+	c.ctx, c.waitReady = ctx, false
+	for _, option := range options {
+		if wait, ok := option.(grpc.FailFastCallOption); ok {
+			c.waitReady = !wait.FailFast
+		}
+	}
+	return &pb.ContainerCheckpointResponse{Ok: true}, nil
+}
+
+func TestContainerCheckpointWaitsForReadyOnlyForTerminalCalls(t *testing.T) {
+	rpc := &checkpointCallOptionsClient{}
+	client := &ContainerClient{client: rpc}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for _, terminal := range []bool{false, true, false} {
+		_, err := client.Checkpoint(ctx, "container", ContainerCheckpointOptions{TerminateAfterCheckpoint: terminal})
+		require.NoError(t, err)
+		require.Equal(t, terminal, rpc.waitReady)
+		require.Same(t, ctx, rpc.ctx, "checkpoint must preserve the caller's original deadline")
+	}
+}
+
+func TestTerminalCheckpointWaitForReadyHonorsCallerDeadline(t *testing.T) {
+	client, err := NewContainerClientWithDialer(context.Background(), "route://unavailable-worker", "token", func(ctx context.Context, _ string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = client.Checkpoint(ctx, "container", ContainerCheckpointOptions{TerminateAfterCheckpoint: true})
+	require.Equal(t, codes.DeadlineExceeded, status.Code(err))
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
 }
 
 type statusServer struct {
