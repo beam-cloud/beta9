@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -1849,6 +1850,42 @@ func TestClearContainerRetriesExitPublication(t *testing.T) {
 	require.Equal(t, 3, repoClient.containerExitCodeCalls())
 	require.Equal(t, int32(11), repoClient.lastSetExitCode.ExitCode)
 	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+}
+
+func TestVMFinalizationRetriesPublicationBeforeReleasingCapacity(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "vm-publication-retry"}
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	repoClient := &fakeContainerRepoClient{
+		setExitCodeErrors:  []error{context.Canceled},
+		setExitCodeStarted: started,
+		setExitCodeRelease: release,
+	}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.clearContainer(request.ContainerId, request, int(types.ContainerExitCodeUser), false)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("VM receipt publication was not retried")
+	}
+	require.Zero(t, repoClient.deleteContainerStateCalls())
+	require.Empty(t, worker.completedRequests)
+	_, exists := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, exists)
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("VM shutdown did not finish after publication recovered")
+	}
+	require.Equal(t, 2, repoClient.containerExitCodeCalls())
+	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+	require.Len(t, worker.completedRequests, 1)
 }
 
 func TestSetContainerExitCodeTreatsMissingStateAsComplete(t *testing.T) {

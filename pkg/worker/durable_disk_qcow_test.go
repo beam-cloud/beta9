@@ -1,16 +1,62 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"testing"
+	"testing/iotest"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestQcowChunkReadRetriesFreshBodyAndHonorsCancellation(t *testing.T) {
+	for _, failure := range []error{io.ErrUnexpectedEOF, context.Canceled} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			store := &faultingQcowChunkStore{open: func(attempt int) io.Reader {
+				if attempt == 1 {
+					return io.MultiReader(bytes.NewBufferString("bad"), iotest.ErrReader(failure))
+				}
+				return bytes.NewBufferString("complete chunk")
+			}}
+			dest := make([]byte, len("complete chunk"))
+			source := &qcowChunkSource{stores: []durableDiskSnapshotStore{store}}
+			err := source.ReadChunk(context.Background(), types.DiskSnapshotChunk{}, dest)
+			if failure == context.Canceled {
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, 1, store.attempts)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "complete chunk", string(dest), "retry must overwrite the partial body")
+				require.Equal(t, 2, store.attempts)
+			}
+			require.Equal(t, store.attempts, store.closed)
+		})
+	}
+}
+
+type faultingQcowChunkStore struct {
+	fakeDurableDiskSnapshotStore
+	open             func(int) io.Reader
+	attempts, closed int
+}
+
+func (s *faultingQcowChunkStore) DownloadWithReader(context.Context, string) (io.ReadCloser, error) {
+	s.attempts++
+	return &qcowTrackedReader{Reader: s.open(s.attempts), close: func() { s.closed++ }}, nil
+}
+
+type qcowTrackedReader struct {
+	io.Reader
+	close func()
+}
+
+func (r *qcowTrackedReader) Close() error { r.close(); return nil }
 
 func TestConcurrentQcowRestoresGoStraightToOriginOnLocalCacheMiss(t *testing.T) {
 	content := []byte("durable qcow layer")

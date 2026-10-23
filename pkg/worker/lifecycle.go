@@ -417,11 +417,11 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		exitCode, exitReported = s.finalizeDurableDiskMounts(containerId, request, exitCode, exitReported)
 		phases.Mark("disks")
 	}
-	if containerId != "" {
+	if containerId != "" && !strings.HasPrefix(containerId, types.StubTypeVM+"-") {
 		_ = os.RemoveAll(filepath.Join(baseConfigPath, containerId))
 	}
 	if !exitReported {
-		s.setContainerExitCode(containerId, exitCode)
+		exitReported = s.setContainerExitCode(containerId, exitCode)
 	}
 
 	phases.Mark("exit_code")
@@ -452,10 +452,45 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Clean up upload directory
 	os.RemoveAll(filepath.Join(types.WorkerContainerUploadsHostPath, containerId))
 
+	if strings.HasPrefix(containerId, types.StubTypeVM+"-") && !exitReported {
+		if !s.publishFinalizedVMExitCode(containerId, exitCode) {
+			// Network/GPU cleanup completed, but losing the only runtime
+			// identity would turn an unacknowledged final sync into absent compute.
+			// A worker crash here remains unknown and requires explicit recovery.
+			return
+		}
+	}
+	if strings.HasPrefix(containerId, types.StubTypeVM+"-") {
+		_ = os.RemoveAll(filepath.Join(baseConfigPath, containerId))
+	}
+
 	s.markContainerStopping(containerId, types.ContainerStateTtlS)
 
 	s.finishContainerShutdown(containerId, request, phases)
 	phases.Fields(log.Info().Str("container_id", containerId)).Msg("finalized container shutdown")
+}
+
+// Publication outlives the container's canceled execution context. Keep the
+// finalized result and STOPPING lease until the gateway acknowledges it. Worker
+// shutdown still gets one bounded publication attempt, then retains the identity
+// rather than claiming finalization succeeded.
+func (s *Worker) publishFinalizedVMExitCode(containerID string, exitCode int) bool {
+	if s.containerRepoClient == nil {
+		return false
+	}
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		s.markContainerStopping(containerID, types.ContainerStateTtlSWhileStopping)
+		if s.setContainerExitCode(containerID, exitCode) {
+			return true
+		}
+		if err := waitForRetry(ctx, containerRepositoryRetryInterval); err != nil {
+			return false
+		}
+	}
 }
 
 func (s *Worker) finishContainerShutdown(containerId string, request *types.ContainerRequest, phases *common.PhaseTimer) {
@@ -535,7 +570,7 @@ func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
 			ContainerId: containerId,
 			ExitCode:    int32(exitCode),
 		}))
-		if (&types.ErrContainerStateNotFound{}).From(err) {
+		if (&types.ErrContainerStateNotFound{}).From(err) && !strings.HasPrefix(containerId, types.StubTypeVM+"-") {
 			return nil
 		}
 		return err

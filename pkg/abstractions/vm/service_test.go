@@ -29,13 +29,21 @@ type vmStore struct {
 	rows          map[string]*types.VM
 	artifacts     []types.VMArtifact
 	artifactError bool
+	saveError     error
+	onSave        func(*types.VM)
 }
 
 func (r *vmStore) CreateVM(ctx context.Context, v *types.VM) error { return r.SaveVM(ctx, v) }
 func (r *vmStore) SaveVM(_ context.Context, v *types.VM) error {
+	if r.saveError != nil {
+		return r.saveError
+	}
 	copy := *v
 	copy.UpdatedAt = time.Now()
 	r.rows[v.ID] = &copy
+	if r.onSave != nil {
+		r.onSave(v)
+	}
 	return nil
 }
 func (r *vmStore) GetVM(_ context.Context, ws uint, id string) (*types.VM, error) {
@@ -234,6 +242,8 @@ type vmContainers struct {
 	readError     error
 	exitError     error
 	requestStatus types.ContainerRequestStatus
+	acknowledged  []string
+	acknowledge   func(string, int) error
 }
 
 func (r *vmContainers) GetContainerState(id string) (*types.ContainerState, error) {
@@ -247,6 +257,13 @@ func (r *vmContainers) GetContainerState(id string) (*types.ContainerState, erro
 	return state, nil
 }
 func (r *vmContainers) GetContainerExitCode(string) (int, error) { return r.exitCode, r.exitError }
+func (r *vmContainers) AcknowledgeContainerExitCode(id string, code int) error {
+	r.acknowledged = append(r.acknowledged, id)
+	if r.acknowledge != nil {
+		return r.acknowledge(id, code)
+	}
+	return nil
+}
 func (r *vmContainers) GetContainerRequestStatus(string) (types.ContainerRequestStatus, error) {
 	return r.requestStatus, nil
 }
@@ -279,6 +296,37 @@ func TestStartupFailureAllowsVMRetry(t *testing.T) {
 	require.NoError(t, s.start(auth.ContextWithAuthInfo(context.Background(), info), info, v))
 	require.NotEqual(t, original, v.ContainerID)
 	require.Len(t, runtime.requests, 1)
+}
+
+func TestVMProofAcknowledgementFollowsDurableAttemptRetirement(t *testing.T) {
+	for _, failSave := range []bool{false, true} {
+		t.Run(fmt.Sprint(failSave), func(t *testing.T) {
+			s, v, info, _, _ := fixture()
+			containers, store := s.containers.(*vmContainers), s.repo.(*vmStore)
+			oldID := v.ContainerID
+			require.NoError(t, store.SaveVM(context.Background(), v))
+			delete(containers.states, oldID)
+			if failSave {
+				store.saveError = errors.New("retirement persistence unavailable")
+			}
+			store.onSave = func(*types.VM) { containers.exitCode = int(types.ContainerExitCodeUnknownError) }
+			containers.acknowledge = func(id string, code int) error {
+				require.Equal(t, oldID, id)
+				require.Equal(t, int(types.ContainerExitCodeUser), code, "acknowledge only the observed outcome")
+				require.Empty(t, store.rows[v.ID].ContainerID, "proof cannot expire before durable retirement")
+				return errors.New("ack unavailable")
+			}
+			v.DesiredState = "stopped"
+			err := s.stop(auth.ContextWithAuthInfo(context.Background(), info), v, false)
+			require.ErrorIs(t, err, store.saveError)
+			require.Equal(t, failSave, store.rows[v.ID].ContainerID == oldID)
+			if failSave {
+				require.Empty(t, containers.acknowledged)
+			} else {
+				require.Equal(t, []string{oldID}, containers.acknowledged)
+			}
+		})
+	}
 }
 
 func TestFinalizationErrorPreservesRuntimeForRecovery(t *testing.T) {

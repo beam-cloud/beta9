@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -220,26 +223,133 @@ func TestContainerCheckpointAllowsForcedTerminalFilesystemCapture(t *testing.T) 
 
 func TestContainerCheckpointReturnsNoIDWhenPersistenceFails(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-id"}
+	var calls atomic.Int32
 	server := &ContainerRuntimeServer{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		createCheckpoint: func(context.Context, *CreateCheckpointOpts) error {
+			calls.Add(1)
 			return errors.New("checkpoint persistence failed")
 		},
 	}
 	server.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id:      request.ContainerId,
-		Request: request,
+		Id: request.ContainerId, Request: request,
 		Runtime: NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true}),
 	})
+	for _, call := range []struct {
+		terminal bool
+		captures int32
+	}{{true, 1}, {true, 1}, {false, 2}, {false, 3}} {
+		response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{
+			ContainerId: request.ContainerId, TerminateAfterCheckpoint: call.terminal,
+		})
+		require.NoError(t, err)
+		require.False(t, response.Ok)
+		require.Empty(t, response.CheckpointId)
+		require.Equal(t, "checkpoint persistence failed", response.ErrorMsg)
+		require.Equal(t, call.captures, calls.Load(), "only terminal calls may replay their failed result")
+	}
+}
 
-	response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{
-		ContainerId:              request.ContainerId,
-		TerminateAfterCheckpoint: true,
+func TestTerminalCheckpointJoinsAcrossLostResponseAndContainerRemoval(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{ContainerId: "terminal-transport"}
+	server.containerInstances.Set(request.ContainerId, &ContainerInstance{Request: request,
+		Runtime: NewMockRuntime(types.ContainerRuntimeMicroVM.String(), betaruntime.Capabilities{CheckpointRestore: true})})
+	var calls atomic.Int32
+	started, finish := make(chan string, 1), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(finish) })
+	t.Cleanup(unblock)
+	server.createCheckpoint = func(ctx context.Context, opts *CreateCheckpointOpts) error {
+		calls.Add(1)
+		started <- opts.CheckpointId
+		<-finish
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		opts.DiskSnapshots = []*types.DiskSnapshot{{ExternalId: "exact-root", DiskName: "root"}, {ExternalId: "exact-extra", DiskName: "extra"}}
+		server.containerInstances.Delete(request.ContainerId)
+		return nil
+	}
+	rpcContexts := make(chan context.Context, 200)
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		rpcContexts <- ctx
+		return handler(ctx, req)
+	}))
+	pb.RegisterContainerServiceServer(grpcServer, server)
+	go func() { _ = grpcServer.Serve(listener) }()
+	t.Cleanup(grpcServer.Stop)
+	var offline atomic.Bool
+	connections := make(chan net.Conn, 16)
+	client, err := common.NewContainerClientWithDialer(context.Background(), "route://worker", "token", func(ctx context.Context, _ string) (net.Conn, error) {
+		for offline.Load() {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+		if err == nil {
+			connections <- conn
+		}
+		return conn, err
 	})
 	require.NoError(t, err)
-	require.False(t, response.Ok)
-	require.Empty(t, response.CheckpointId)
-	require.Equal(t, "checkpoint persistence failed", response.ErrorMsg)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	responses, failures := make(chan *pb.ContainerCheckpointResponse, 100), make(chan error, 100)
+	call := func() {
+		response, err := client.Checkpoint(ctx, request.ContainerId, common.ContainerCheckpointOptions{TerminateAfterCheckpoint: true})
+		responses <- response
+		failures <- err
+	}
+	go call()
+	var originalID string
+	select {
+	case originalID = <-started:
+	case err := <-failures:
+		t.Fatalf("checkpoint was not accepted: %v", err)
+	}
+	acceptedRPC := <-rpcContexts
+	for range 99 {
+		go call()
+	}
+	for range 99 {
+		select {
+		case <-rpcContexts:
+		case <-ctx.Done():
+			t.Fatal("not all100 callers reached the accepted operation")
+		}
+	}
+	offline.Store(true)
+	require.NoError(t, (<-connections).Close())
+	select {
+	case <-acceptedRPC.Done():
+	case <-ctx.Done():
+		t.Fatal("dropped transport did not cancel the original RPC")
+	}
+	unblock()
+	select {
+	case err := <-failures:
+		t.Fatalf("checkpoint failed during a temporary outage: %v", err)
+	case <-time.After(3 * time.Second):
+	}
+	offline.Store(false)
+	for range 100 {
+		require.NoError(t, <-failures)
+		response := <-responses
+		require.True(t, response.Ok)
+		require.Equal(t, originalID, response.CheckpointId)
+		require.Equal(t, "exact-root", response.DiskSnapshots[0].SnapshotId)
+		require.Equal(t, "exact-extra", response.DiskSnapshots[1].SnapshotId)
+	}
+	require.Equal(t, int32(1), calls.Load())
+	response, err := server.ContainerCheckpoint(ctx, &pb.ContainerCheckpointRequest{ContainerId: "new-runtime", TerminateAfterCheckpoint: true})
+	require.NoError(t, err)
+	require.False(t, response.Ok, "another runtime identity must not replay a terminal result")
 }
 
 func TestContainerSnapshotDisksPropagatesRequestContext(t *testing.T) {

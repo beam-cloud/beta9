@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -273,6 +274,8 @@ type blockingChunkStore struct {
 	mu       sync.Mutex
 	inflight int
 	peak     int
+	entered  chan struct{}
+	release  <-chan struct{}
 }
 
 func (s *blockingChunkStore) ReadChunk(ctx context.Context, chunk types.DiskSnapshotChunk, dest []byte) error {
@@ -287,58 +290,63 @@ func (s *blockingChunkStore) ReadChunk(ctx context.Context, chunk types.DiskSnap
 		s.inflight--
 		s.mu.Unlock()
 	}()
+	if s.entered != nil {
+		s.entered <- struct{}{}
+	}
+	if s.release != nil {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return s.memoryChunkStore.ReadChunk(ctx, chunk, dest)
 }
 
-func TestFetchLayerSharesChunkGateAcrossLayers(t *testing.T) {
+func TestFetchLayerSharesChunkGateAcrossIndependentRestores(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var workers sync.WaitGroup
 	dir := t.TempDir()
-	sourcePath := filepath.Join(dir, "layer.qcow2")
-	data := make([]byte, 40*LayerChunkSize)
-	rand.Read(data)
-	if err := os.WriteFile(sourcePath, data, 0o600); err != nil {
+	t.Cleanup(func() { cancel(); unblock(); workers.Wait() })
+	source := filepath.Join(dir, "source")
+	if err := os.WriteFile(source, []byte("chunk"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	layer, err := ScanLayer(context.Background(), sourcePath, chunkKey)
+	layer, err := ScanLayer(ctx, source, chunkKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(layer.Chunks) < 20 {
-		t.Fatalf("expected a multi-chunk layer, got %d", len(layer.Chunks))
-	}
-
-	store := &blockingChunkStore{memoryChunkStore: newMemoryChunkStore()}
-	if err := UploadLayer(context.Background(), store, sourcePath, layer); err != nil {
+	store := &blockingChunkStore{memoryChunkStore: newMemoryChunkStore(), entered: make(chan struct{}, 33), release: release}
+	if err := UploadLayer(ctx, store, source, layer); err != nil {
 		t.Fatal(err)
 	}
-
-	// A single layer must saturate the whole shared budget, not a per-layer slice.
-	gate := newChunkGate(chunkFetchConcurrency)
-	if err := fetchLayer(context.Background(), store, layer, filepath.Join(dir, "a.qcow2"), gate); err != nil {
-		t.Fatal(err)
-	}
-	if store.peak > chunkFetchConcurrency {
-		t.Fatalf("peak concurrency %d exceeded budget %d", store.peak, chunkFetchConcurrency)
-	}
-
-	// Two layers sharing one gate stay within the same budget.
-	store.peak = 0
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i := range errs {
-		wg.Add(1)
+	errors := make(chan error, 33)
+	for i := range 33 {
+		workers.Add(1)
 		go func() {
-			defer wg.Done()
-			errs[i] = fetchLayer(context.Background(), store, layer, filepath.Join(dir, fmt.Sprintf("b%d.qcow2", i)), gate)
+			defer workers.Done()
+			errors <- fetchLayer(ctx, store, layer, filepath.Join(dir, fmt.Sprint(i)), nil)
 		}()
 	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			t.Fatal(err)
+	for range 32 {
+		select {
+		case <-store.entered:
+		case <-ctx.Done():
+			t.Fatal("restores did not fill the 32-chunk budget")
 		}
 	}
-	if store.peak > chunkFetchConcurrency {
-		t.Fatalf("shared gate exceeded budget: peak %d", store.peak)
+	select {
+	case <-store.entered:
+		t.Fatal("independent restore exceeded the shared 32-chunk budget")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unblock()
+	for range 33 {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

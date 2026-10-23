@@ -62,7 +62,17 @@ const (
 	restoreReadinessTimeout         = 15 * time.Second
 	restoreReadinessInterval        = 100 * time.Millisecond
 	restoreReadinessStableFor       = 250 * time.Millisecond
+	checkpointOriginConcurrency     = 64
+	checkpointOriginReadAttempts    = 3
+	checkpointCacheConcurrency      = 8
+	microVMCheckpointConcurrency    = 8
+	checkpointOriginIdleTimeout     = time.Minute
 )
+
+var checkpointOriginSlots = make(chan struct{}, checkpointOriginConcurrency)
+var microVMCheckpointSlots = make(chan struct{}, microVMCheckpointConcurrency)
+var checkpointArchiveCacheSlots = make(chan struct{}, checkpointCacheConcurrency)
+var errCheckpointOriginInactive = errors.New("memory checkpoint download made no progress before the inactivity deadline")
 
 var checkpointRuntimeEnvOverrides = []string{
 	"UV_USE_IO_URING=0",
@@ -1297,6 +1307,13 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 		defer release()
 	}
+	if runtimeName == types.ContainerRuntimeMicroVM.String() {
+		release, err := acquireMicroVMCheckpointSlot(checkpointCtx)
+		if err != nil {
+			return fmt.Errorf("wait for microvm checkpoint admission: %w", err)
+		}
+		defer release()
+	}
 	resumeOOMWatcher := func() {}
 	if terminateRuntime {
 		resumeOOMWatcher = instance.suspendOOMWatcher()
@@ -1453,6 +1470,25 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	return nil
 }
 
+// Bound native capture and archive writes together through origin publication:
+// a burst of checkpoints must leave the disk backend room to seal and fsync.
+func acquireMicroVMCheckpointSlot(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case microVMCheckpointSlots <- struct{}{}:
+		release := sync.OnceFunc(func() { <-microVMCheckpointSlots })
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		return release, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (s *Worker) markCheckpointFailed(ctx context.Context, opts *CreateCheckpointOpts, runtimeName string, metadata *checkpointCacheMetadata) {
 	if s == nil || s.backendRepoClient == nil || opts == nil || opts.Request == nil {
 		return
@@ -1568,26 +1604,58 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 		locality:    s.cacheManager.locality,
 		accelerator: checkpointAccelerator(request),
 	}
-	s.cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash)
+	s.cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash, nil)
 
 	return metadata, nil
 }
 
-// cacheCheckpointArchiveAsync takes ownership of archivePath and removes it
-// after the cache store completes or when no cache client is available.
-func (s *Worker) cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash string) {
+// Optional archive staging and CAS fills share one nonblocking budget. The
+// origin object and native checkpoint payload do not depend on this cache copy.
+func tryCheckpointArchiveCacheSlot(ctx context.Context) func() {
+	if ctx.Err() != nil {
+		return nil
+	}
+	select {
+	case checkpointArchiveCacheSlots <- struct{}{}:
+		return sync.OnceFunc(func() { <-checkpointArchiveCacheSlots })
+	default:
+		return nil
+	}
+}
+
+func fillCheckpointArchiveCache(ctx context.Context, archivePath string, release func(), store func() error) error {
+	defer release()
+	defer os.Remove(archivePath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return store()
+}
+
+// cacheCheckpointArchiveAsync takes the archive and, when supplied, its staging
+// reservation. Admission never delays the already durable origin acknowledgement.
+func (s *Worker) cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash string, release func()) {
 	if s.cacheManager == nil || s.cacheManager.client == nil {
+		_ = os.Remove(archivePath)
+		if release != nil {
+			release()
+		}
+		return
+	}
+	manager := s.cacheManager
+	if release == nil {
+		release = tryCheckpointArchiveCacheSlot(manager.ctx)
+	}
+	if release == nil {
 		_ = os.Remove(archivePath)
 		return
 	}
-	client := s.cacheManager.client
-
 	go func() {
-		defer os.Remove(archivePath)
-		if _, err := client.StoreContentFromLocalFile(cache.LocalContentSource{
-			Path:      archivePath,
-			CachePath: originKey,
-		}, cache.StoreContentOptions{RoutingKey: hash, Lock: true}); err != nil {
+		err := fillCheckpointArchiveCache(manager.ctx, archivePath, release, func() error {
+			_, err := manager.client.StoreContentFromLocalFile(cache.LocalContentSource{Path: archivePath, CachePath: originKey}, cache.StoreContentOptions{RoutingKey: hash, Lock: true})
+			return err
+		})
+		if err != nil {
 			log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
 		}
 	}()
@@ -1657,7 +1725,7 @@ func (s *Worker) ensureCheckpointMaterializedWithLogger(ctx context.Context, req
 	if outputLogger != nil {
 		outputLogger.Info(fmt.Sprintf("Checkpoint cache miss; downloading from workspace storage (%s)...\n", formatImageBytes(checkpoint.CacheSizeBytes)))
 	}
-	if err := s.materializeCheckpointFromOrigin(ctx, request, checkpointPath, checkpoint); err != nil {
+	if err := s.materializeCheckpointFromOrigin(ctx, request, checkpointPath, checkpoint, outputLogger); err != nil {
 		return "", err
 	}
 	if err := validateCheckpointKind(checkpointPath, checkpoint.IsFilesystemOnly()); err != nil {
@@ -1690,7 +1758,7 @@ func (s *Worker) materializeCheckpointFromCache(ctx context.Context, checkpointP
 	return materializeCheckpointReader(ctx, reader, checkpoint.CacheHash, checkpoint.CacheSizeBytes, checkpointPath, checkpoint.CheckpointId, nil)
 }
 
-func (s *Worker) materializeCheckpointFromOrigin(ctx context.Context, request *types.ContainerRequest, checkpointPath string, checkpoint *types.Checkpoint) error {
+func (s *Worker) materializeCheckpointFromOrigin(ctx context.Context, request *types.ContainerRequest, checkpointPath string, checkpoint *types.Checkpoint, outputLogger *slog.Logger) error {
 	if request == nil || !request.StorageAvailable() {
 		return fmt.Errorf("workspace storage is required for checkpoint restore")
 	}
@@ -1698,19 +1766,84 @@ func (s *Worker) materializeCheckpointFromOrigin(ctx context.Context, request *t
 	if err != nil {
 		return err
 	}
-	reader, err := storageClient.DownloadWithReader(ctx, checkpoint.OriginKey)
-	if err != nil {
+	return s.materializeCheckpointOrigin(ctx, checkpointPath, checkpoint, storageClient.DownloadWithReader, outputLogger, checkpointOriginIdleTimeout)
+}
+
+// Memory archives are much larger than disk chunks. Queue them separately so
+// burst restores do not multiply large streams and temporary archive files.
+func (s *Worker) materializeCheckpointOrigin(ctx context.Context, checkpointPath string, checkpoint *types.Checkpoint, open func(context.Context, string) (io.ReadCloser, error), outputLogger *slog.Logger, idleTimeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	queued := time.Now()
+	select {
+	case checkpointOriginSlots <- struct{}{}:
+		defer func() { <-checkpointOriginSlots }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	log.Info().Str("checkpoint_id", checkpoint.CheckpointId).Dur("queue_wait", time.Since(queued)).Msg("checkpoint origin download admitted")
+	var lastErr error
+	for attempt := 1; attempt <= checkpointOriginReadAttempts; attempt++ {
+		var retry bool
+		lastErr, retry = s.materializeCheckpointOriginAttempt(ctx, checkpointPath, checkpoint, open, outputLogger, idleTimeout)
+		if lastErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !retry || attempt == checkpointOriginReadAttempts {
+			break
+		}
+		log.Warn().Err(lastErr).Str("checkpoint_id", checkpoint.CheckpointId).Int("attempt", attempt).Msg("retrying incomplete checkpoint download")
+		if err := waitForRetry(ctx, time.Duration(attempt)*250*time.Millisecond); err != nil {
+			return err
+		}
+	}
+	return lastErr
+}
+
+func (s *Worker) materializeCheckpointOriginAttempt(ctx context.Context, checkpointPath string, checkpoint *types.Checkpoint, open func(context.Context, string) (io.ReadCloser, error), outputLogger *slog.Logger, idleTimeout time.Duration) (error, bool) {
+	transfer, stop := withStorageInactivityWatchdog(ctx, idleTimeout, errCheckpointOriginInactive)
+	defer stop()
+	reader, err := open(transfer, checkpoint.OriginKey)
+	if err != nil {
+		if errors.Is(context.Cause(transfer), errCheckpointOriginInactive) {
+			return errCheckpointOriginInactive, true
+		}
+		return err, false // Opening already uses the client's request retry policy.
+	}
 	defer reader.Close()
+	closeOnCancel := context.AfterFunc(transfer, func() { reader.Close() })
+	defer closeOnCancel()
+	progress := newCheckpointPersistenceProgress(outputLogger, "Checkpoint download", checkpoint.CacheSizeBytes)
+	stream := &checkpointOriginReader{Reader: reader, progress: func(completed int64) {
+		progress.update(completed)
+		reportDurableDiskProgress(transfer, durableDiskProgressEvent{})
+	}}
 
 	var archive *os.File
+	var cacheRelease func()
+	defer func() {
+		if cacheRelease != nil {
+			cacheRelease()
+		}
+	}()
 	if s.cacheManager != nil && s.cacheManager.client != nil {
+		cacheRelease = tryCheckpointArchiveCacheSlot(s.cacheManager.ctx)
+	}
+	if cacheRelease != nil {
 		if err := os.MkdirAll(filepath.Dir(checkpointPath), 0755); err != nil {
-			return err
+			return err, false
 		}
 		archive, err = os.CreateTemp(filepath.Dir(checkpointPath), "."+checkpoint.CheckpointId+".origin-*.tar")
 		if err != nil {
+			cacheRelease()
+			cacheRelease = nil
 			log.Warn().Err(err).Str("checkpoint_id", checkpoint.CheckpointId).Msg("failed to create checkpoint cache staging file")
 		}
 	}
@@ -1721,23 +1854,55 @@ func (s *Worker) materializeCheckpointFromOrigin(ctx context.Context, request *t
 		cacheWriter = &bestEffortCheckpointCacheWriter{writer: archive}
 		archiveWriter = cacheWriter
 	}
-	err = materializeCheckpointReader(ctx, reader, checkpoint.CacheHash, checkpoint.CacheSizeBytes, checkpointPath, checkpoint.CheckpointId, archiveWriter)
+	err = materializeCheckpointReader(transfer, stream, checkpoint.CacheHash, checkpoint.CacheSizeBytes, checkpointPath, checkpoint.CheckpointId, archiveWriter)
+	if errors.Is(context.Cause(transfer), errCheckpointOriginInactive) {
+		err = errCheckpointOriginInactive
+	}
+	if err != nil {
+		if archive != nil {
+			archive.Close()
+			os.Remove(archive.Name())
+		}
+		readErr := stream.err
+		if stream.bytes >= checkpoint.CacheSizeBytes {
+			readErr = nil // A complete corrupt archive must fail its integrity check.
+		}
+		retry := errors.Is(err, errCheckpointOriginInactive) || retryableStorageBodyRead(readErr)
+		return fmt.Errorf("checkpoint %s download read %d/%d bytes: %w", checkpoint.CheckpointId, stream.bytes, checkpoint.CacheSizeBytes, errors.Join(err, stream.err)), retry
+	}
+	progress.finish(stream.bytes)
 	if archive == nil {
-		return err
+		return nil, false
 	}
 	archivePath := archive.Name()
 	closeErr := archive.Close()
-	if err != nil {
-		_ = os.Remove(archivePath)
-		return err
-	}
 	if cacheWriter.err != nil || closeErr != nil {
 		_ = os.Remove(archivePath)
 		log.Warn().Err(errors.Join(cacheWriter.err, closeErr)).Str("checkpoint_id", checkpoint.CheckpointId).Msg("failed to stage restored checkpoint archive for cache")
-		return nil
+		return nil, false
 	}
-	s.cacheCheckpointArchiveAsync(checkpoint.CheckpointId, archivePath, checkpoint.OriginKey, checkpoint.CacheHash)
-	return nil
+	s.cacheCheckpointArchiveAsync(checkpoint.CheckpointId, archivePath, checkpoint.OriginKey, checkpoint.CacheHash, cacheRelease)
+	cacheRelease = nil // The background fill now owns cleanup and the reservation.
+	return nil, false
+}
+
+type checkpointOriginReader struct {
+	io.Reader
+	bytes    int64
+	err      error
+	progress func(int64)
+}
+
+func (r *checkpointOriginReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.bytes += int64(n)
+	if n > 0 && r.progress != nil {
+		r.progress(r.bytes)
+	}
+	if err != nil {
+		r.err = err
+	}
+	return n, err
 }
 
 func materializeCheckpointArchive(archivePath, checkpointPath, checkpointID string) error {

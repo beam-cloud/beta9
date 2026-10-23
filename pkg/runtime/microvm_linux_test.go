@@ -6,10 +6,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +22,207 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 )
+
+func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Request)) *microVMInstance {
+	t.Helper()
+	inst := &microVMInstance{id: "snapshot-test", stateDir: t.TempDir()}
+	listener, err := net.Listen("unix", filepath.Join(inst.stateDir, microVMAPISocket))
+	require.NoError(t, err)
+	server := &http.Server{Handler: http.HandlerFunc(serve)}
+	go server.Serve(listener)
+	t.Cleanup(func() { _ = server.Close() })
+	return inst
+}
+
+func TestMicroVMSnapshotSealsDisksBeforeCapture(t *testing.T) {
+	var mu sync.Mutex
+	var actions []string
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		actions = append(actions, r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error {
+		mu.Lock()
+		defer mu.Unlock()
+		actions = append(actions, "seal")
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, mustStop)
+	require.True(t, inst.isPaused())
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot"}, actions)
+}
+
+func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
+	var mu sync.Mutex
+	var snapshots, resumes int
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/api/v1/vm.snapshot":
+			snapshots++
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		case "/api/v1/vm.resume":
+			resumes++
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	captured, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Error(t, err)
+	require.True(t, captured)
+	require.True(t, inst.isPaused())
+	require.Equal(t, 1, snapshots)
+	require.Zero(t, resumes)
+}
+
+func TestMicroVMSnapshotSealFailureResumesBeforeAnyCapture(t *testing.T) {
+	var mu sync.Mutex
+	var actions []string
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		actions = append(actions, r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	sealErr := errors.New("disk publication failed")
+	captured, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error { return sealErr })
+	mu.Lock()
+	defer mu.Unlock()
+	require.ErrorIs(t, err, sealErr)
+	require.False(t, captured)
+	require.False(t, inst.isPaused())
+	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.resume"}, actions)
+}
+
+func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var actions []string
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		actions = append(actions, r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/api/v1/vm.pause":
+			cancel() // CH paused, but the client never receives the response.
+			// Returning now could race cancellation with an implicit HTTP200.
+			// Wait for the client transport to close before finishing the handler.
+			<-r.Context().Done()
+		case "/api/v1/vm.info":
+			_ = json.NewEncoder(w).Encode(struct {
+				State microVMState `json:"state"`
+			}{State: microVMPaused})
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	mustStop, err := snapshotMicroVM(ctx, inst, t.TempDir(), nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, mustStop)
+	require.False(t, inst.isPaused(), "resolve and resume the actual paused VM despite caller cancellation")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.info", "/api/v1/vm.resume"}, actions)
+}
+
+func TestMicroVMRestoreCannotUsePreviousConnectionAcknowledgement(t *testing.T) {
+	host, guest := net.Pipe()
+	t.Cleanup(func() { _ = host.Close(); _ = guest.Close() })
+	require.NoError(t, guest.SetDeadline(time.Now().Add(5*time.Second)))
+	ctrl := &microVMControl{
+		ready: make(chan struct{}), pending: map[uint64]chan microvm.Message{},
+		network: &microvm.Network{}, networkApplied: make(chan error, 1),
+	}
+	go ctrl.serve(host)
+	encoder, decoder := microvm.NewEncoder(guest), microvm.NewDecoder(guest)
+	require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgStarted}))
+	msg, err := decoder.Decode()
+	require.NoError(t, err)
+	previous := ctrl.networkApplied
+	current := ctrl.configureRestore(&microvm.Network{}, []string{microvm.DiskMount})
+	require.NoError(t, encoder.Encode(microvm.Message{Type: microvm.MsgAck, ID: msg.ID, OK: true}))
+	select {
+	case err := <-previous:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("previous connection did not finish")
+	}
+	// Even a delayed duplicate Started from that connection cannot initialize
+	// the next restore or satisfy its readiness channel.
+	ctrl.pushNetwork(host, 1)
+	select {
+	case <-current:
+		t.Fatal("a previous guest connection satisfied the new restore")
+	default:
+	}
+}
+
+func TestMicroVMRestoredGuestThawsBeforeNetworkWrites(t *testing.T) {
+	for _, failThaw := range []bool{false, true} {
+		t.Run(fmt.Sprint(failThaw), func(t *testing.T) {
+			host, guest := net.Pipe()
+			t.Cleanup(func() { _ = host.Close(); _ = guest.Close() })
+			ctrl := &microVMControl{ready: make(chan struct{}), networkApplied: make(chan error, 1), pending: map[uint64]chan microvm.Message{}}
+			ctrl.networkApplied <- errors.New("stale restore result")
+			ctrl.configureRestore(&microvm.Network{}, []string{microvm.DiskMount, "/data"})
+			go ctrl.serve(host)
+			result := make(chan []microvm.Message, 1)
+			go func() {
+				enc, dec := microvm.NewEncoder(guest), microvm.NewDecoder(guest)
+				if err := enc.Encode(microvm.Message{Type: microvm.MsgStarted}); err != nil {
+					return
+				}
+				var messages []microvm.Message
+				count := 3
+				if failThaw {
+					count = 2
+				}
+				for range count {
+					msg, err := dec.Decode()
+					if err != nil {
+						return
+					}
+					messages = append(messages, msg)
+					ack := microvm.Message{Type: microvm.MsgAck, ID: msg.ID, OK: !(failThaw && len(messages) == 1)}
+					if !ack.OK {
+						ack.Error = "thaw rejected"
+					}
+					if err := enc.Encode(ack); err != nil {
+						return
+					}
+				}
+				result <- messages
+			}()
+			select {
+			case err := <-ctrl.networkApplied:
+				if failThaw {
+					require.ErrorContains(t, err, "thaw rejected")
+				} else {
+					require.NoError(t, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("restore control did not complete")
+			}
+			messages := <-result
+			require.Equal(t, microvm.MsgThaw, messages[0].Type)
+			require.Equal(t, microvm.DiskMount, messages[0].Text)
+			require.Equal(t, microvm.MsgThaw, messages[1].Type)
+			require.Equal(t, "/data", messages[1].Text)
+			if !failThaw {
+				require.Equal(t, microvm.MsgNetwork, messages[2].Type)
+			}
+		})
+	}
+}
 
 func TestMicroVMPreparationFailureIsRetryableStartupFailure(t *testing.T) {
 	bundle := t.TempDir()

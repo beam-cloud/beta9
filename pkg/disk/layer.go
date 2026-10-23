@@ -37,10 +37,8 @@ const (
 	// Share the upload budget across volumes so a VM burst cannot multiply
 	// chunk buffers and object-store connections by the fleet size.
 	chunkUploadConcurrency = 256
-	// chunkFetchConcurrency bounds in-flight chunk fetches across every layer
-	// of a chain, shared so one large layer gets full parallelism and a deep
-	// chain does not multiply into hundreds of requests. Each in-flight chunk
-	// buffers up to chunkMaxSize, capping restore memory (32 * 8 MiB = 256 MiB).
+	// Bound downloads across the worker, including independent VM restores.
+	// Each admitted chunk buffers at most chunkMaxSize (256 MiB in total).
 	chunkFetchConcurrency = 32
 	layerFetchConcurrency = 4
 )
@@ -50,6 +48,7 @@ const (
 var layerBuffers = mem.NewTieredBufferPool(64<<10, 256<<10, 1<<20, LayerChunkSize, chunkMaxSize)
 
 var chunkUploads = newChunkGate(chunkUploadConcurrency)
+var chunkFetches = newChunkGate(chunkFetchConcurrency)
 
 // gearTable drives the boundary rolling hash. Changing it (or the size
 // constants) re-cuts every future publish, costing each disk one full
@@ -264,11 +263,18 @@ func newChunkGate(limit int) chunkGate {
 }
 
 func (g chunkGate) acquire(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if g == nil {
 		return nil
 	}
 	select {
 	case g <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			g.release()
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -283,8 +289,8 @@ func (g chunkGate) release() {
 
 // fetchLayer reassembles a layer file from its chunks. The result is written
 // to a temporary file and atomically renamed, so a crashed fetch never leaves
-// a truncated layer behind. Chunk parallelism is bounded by gate, which the
-// caller shares across all layers of a chain.
+// a truncated layer behind. The chain gate and worker-wide budget both apply
+// before allocating a chunk buffer or opening an origin request.
 func fetchLayer(ctx context.Context, source ChunkSource, layer *types.DiskSnapshotFile, destPath string, gate chunkGate) error {
 	tmpPath := destPath + ".tmp"
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -303,12 +309,17 @@ func fetchLayer(ctx context.Context, source ChunkSource, layer *types.DiskSnapsh
 		gate = newChunkGate(chunkFetchConcurrency)
 	}
 	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(chunkFetchConcurrency)
 	for _, chunk := range layer.Chunks {
 		group.Go(func() error {
 			if err := gate.acquire(groupCtx); err != nil {
 				return err
 			}
 			defer gate.release()
+			if err := chunkFetches.acquire(groupCtx); err != nil {
+				return err
+			}
+			defer chunkFetches.release()
 
 			data := make([]byte, chunk.SizeBytes)
 			if err := source.ReadChunk(groupCtx, chunk, data); err != nil {

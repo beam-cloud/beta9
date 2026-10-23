@@ -997,6 +997,33 @@ func TestStopRecoversInterruptedUnassignedCancellation(t *testing.T) {
 	assertUnassignedStopRemoved(t, wb, id)
 }
 
+func TestSchedulingFailureCannotFinalizeAnAssignedVM(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	for _, assigned := range []bool{false, true} {
+		id := "vm-scheduling-failure-unassigned"
+		state := &types.ContainerState{ContainerId: id, Status: types.ContainerStatusPending, WorkspaceId: "workspace-1"}
+		if assigned {
+			id = "vm-scheduling-failure-assigned"
+			state.ContainerId, state.WorkerId = id, "worker-1"
+		}
+		require.NoError(t, scheduler.containerRepo.SetContainerState(id, state))
+		newSchedulingAttempt(scheduler, &types.ContainerRequest{ContainerId: id, Timestamp: time.Now()}, nil).fail(types.ContainerSchedulingFailureNoController)
+		_, stateErr := scheduler.containerRepo.GetContainerState(id)
+		code, codeErr := scheduler.containerRepo.GetContainerExitCode(id)
+		if assigned {
+			require.NoError(t, stateErr)
+			require.Error(t, codeErr, "assigned VM was falsely certified as having no worker writes")
+		} else {
+			require.Error(t, stateErr)
+			require.NoError(t, codeErr)
+			require.Equal(t, int(types.ContainerExitCodeScheduler), code)
+			ttl := scheduler.requestBacklog.rdb.PTTL(context.Background(), common.RedisKeys.SchedulerContainerExitCode(id)).Val()
+			require.Equal(t, time.Duration(-1), ttl)
+		}
+	}
+}
+
 func assertUnassignedStopRemoved(t *testing.T, wb *Scheduler, id string) {
 	t.Helper()
 	_, err := wb.containerRepo.GetContainerState(id)

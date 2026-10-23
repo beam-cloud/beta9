@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/require"
 )
 
 type redisKeyCommandBarrier struct {
@@ -278,6 +279,31 @@ func TestContainerFailureRetentionAndCooldown(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTTL("container-failure", types.ContainerFailureCooldown)
+}
+
+func TestVMFinalizationProofRequiresExactAcknowledgement(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { rdb.Close() })
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx, id, code := context.Background(), "vm-proof", int(types.ContainerExitCodeUser)
+	key := common.RedisKeys.SchedulerContainerExitCode(id)
+	require.NoError(t, repo.SetContainerExitCode(id, code))
+	server.FastForward(2 * types.ContainerFailureHistoryTTL)
+	require.NoError(t, repo.SetContainerFailureCooldown([]string{id}))
+	got, err := repo.GetContainerExitCode(id)
+	require.NoError(t, err)
+	require.Equal(t, code, got)
+	require.Equal(t, time.Duration(-1), rdb.PTTL(ctx, key).Val())
+	require.NoError(t, repo.AcknowledgeContainerExitCode(id, code+1))
+	require.Equal(t, time.Duration(-1), rdb.PTTL(ctx, key).Val())
+	require.NoError(t, repo.AcknowledgeContainerExitCode(id, code))
+	server.FastForward(time.Second)
+	ttl := rdb.PTTL(ctx, key).Val()
+	require.Positive(t, ttl)
+	require.NoError(t, repo.SetContainerExitCode(id, code))
+	require.Equal(t, ttl, rdb.PTTL(ctx, key).Val(), "duplicate publication must not renew acknowledged history")
 }
 
 func TestCreateContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *testing.T) {
@@ -558,6 +584,7 @@ func TestStoppingWinsConcurrentHeartbeatUpdates(t *testing.T) {
 					marked, err := repo.MarkPendingContainerStoppingIfUnassigned(
 						request.ContainerId,
 						types.ContainerStateTtlSWhileStopping,
+						int(types.ContainerExitCodeUser),
 					)
 					if err == nil && !marked {
 						err = repo.UpdateContainerStatus(
@@ -856,12 +883,19 @@ func TestMarkPendingContainerStoppingIfUnassigned(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			marked, err := repo.MarkPendingContainerStoppingIfUnassigned(test.state.ContainerId, types.ContainerStateTtlSWhileStopping)
+			marked, err := repo.MarkPendingContainerStoppingIfUnassigned(test.state.ContainerId, types.ContainerStateTtlSWhileStopping, int(types.ContainerExitCodeUser))
 			if err != nil {
 				t.Fatal(err)
 			}
 			if marked != test.expected {
 				t.Fatalf("expected marked=%t, got %t", test.expected, marked)
+			}
+			code, codeErr := repo.GetContainerExitCode(test.state.ContainerId)
+			if marked && (codeErr != nil || code != int(types.ContainerExitCodeUser)) {
+				t.Fatalf("unassigned fence lacked terminal proof: code=%d err=%v", code, codeErr)
+			}
+			if !marked && codeErr == nil {
+				t.Fatal("assigned/started attempt received a false terminal proof")
 			}
 
 			state, err := repo.GetContainerState(test.state.ContainerId)

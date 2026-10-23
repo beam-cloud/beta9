@@ -59,6 +59,7 @@ type ContainerRepository interface {
 	SetContainerExitCode(string, int) error
 	SetContainerFailureCooldown([]string) error
 	GetContainerExitCode(string) (int, error)
+	AcknowledgeContainerExitCode(string, int) error
 	SetContainerAddress(containerId string, addr string) error
 	GetContainerAddress(containerId string) (string, error)
 	SetBackendRoute(ctx context.Context, route types.BackendRoute) error
@@ -69,7 +70,7 @@ type ContainerRepository interface {
 	DeleteBackendRoutesByContainerID(ctx context.Context, containerID string) error
 	DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
-	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error)
+	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64, exitCode int) (bool, error)
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
 	GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error)

@@ -51,6 +51,10 @@ var durableDiskRestoreChunkSlots = make(chan struct{}, durableDiskRestoreConcurr
 var errDurableDiskSnapshotInactive = errors.New("durable disk snapshot made no progress before the inactivity deadline")
 
 func withDurableDiskInactivityWatchdog(ctx context.Context, timeout time.Duration) (context.Context, func()) {
+	return withStorageInactivityWatchdog(ctx, timeout, errDurableDiskSnapshotInactive)
+}
+
+func withStorageInactivityWatchdog(ctx context.Context, timeout time.Duration, cause error) (context.Context, func()) {
 	if timeout <= 0 {
 		return ctx, func() {}
 	}
@@ -96,7 +100,7 @@ func withDurableDiskInactivityWatchdog(ctx context.Context, timeout time.Duratio
 					continue
 				default:
 				}
-				cancel(errDurableDiskSnapshotInactive)
+				cancel(cause)
 				return
 			case <-watchCtx.Done():
 				return
