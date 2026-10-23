@@ -250,8 +250,8 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 
 // Checkpoint pauses the VM and writes its memory, device state and scratch
 // root disk under ImagePath. Snapshotting stops virtiofsd's queues for good,
-// so LeaveRunning restores in place. Only a pre-capture busy response permits
-// resuming the original VM; uncertain capture failures end it.
+// so LeaveRunning restores in place. Errors after capture starts end the VM;
+// before capture, the original guest can be resumed and thawed.
 func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
 	if opts == nil || opts.ImagePath == "" {
 		return fmt.Errorf("checkpoint requires an image path")
@@ -309,66 +309,43 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	return err
 }
 
-var errMicroVMSnapshotBlockIOBusy = errors.New("microvm snapshot has pending block I/O")
-
-// A snapshot-busy response is returned before Cloud Hypervisor captures any
-// device state. Only that response permits resuming the original VM to finish
-// an outstanding request; other snapshot errors may have stopped virtio-fs.
+// Only failures before vm.snapshot can safely resume the original VM: snapshot
+// captures device state destructively, even when its response is an error.
 func snapshotMicroVM(ctx context.Context, inst *microVMInstance, snapshotDir string, seal func(context.Context) error) (mustStop bool, err error) {
 	api := inst.api()
-	resume := func() error {
+	if err := api.put(ctx, "vm.pause", nil); err != nil {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), microVMControlRequestTimeout)
 		defer cancel()
-		if err := api.put(cleanup, "vm.resume", nil); err != nil {
-			return fmt.Errorf("resume uncaptured vm: %w", err)
-		}
-		inst.setPaused(false)
-		return nil
-	}
-	for attempt := range 3 {
-		if err := api.put(ctx, "vm.pause", nil); err != nil {
-			// The caller may lose the response after CH has paused the VM.
-			// Resolve that ambiguity before returning a still-frozen guest.
-			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), microVMControlRequestTimeout)
-			state, stateErr := api.state(cleanup)
-			cancel()
-			if stateErr == nil && state == microVMRunning {
-				inst.setPaused(false)
-				return false, fmt.Errorf("pause vm: %w", err)
-			}
-			if stateErr == nil && state == microVMPaused {
-				resumeErr := resume()
-				return resumeErr != nil, errors.Join(err, resumeErr)
-			}
+		state, stateErr := api.state(cleanup)
+		switch {
+		case stateErr == nil && state == microVMRunning:
+			inst.setPaused(false)
+			return false, fmt.Errorf("pause vm: %w", err)
+		case stateErr == nil && state == microVMPaused:
+			resumeErr := inst.resumeUncapturedSnapshot(cleanup)
+			return resumeErr != nil, errors.Join(err, resumeErr)
+		default:
 			return true, fmt.Errorf("pause vm state is uncertain: %w", errors.Join(err, stateErr))
 		}
-		inst.setPaused(true)
-		if seal != nil {
-			if err := seal(ctx); err != nil {
-				resumeErr := resume()
-				return resumeErr != nil, errors.Join(err, resumeErr)
-			}
-		}
-		err := api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir})
-		if !errors.Is(err, errMicroVMSnapshotBlockIOBusy) {
-			return true, err
-		}
-		if resumeErr := resume(); resumeErr != nil {
-			return true, errors.Join(err, resumeErr)
-		}
-		if attempt == 2 {
-			return false, err
-		}
-		log.Info().Str("container_id", inst.id).Int("attempt", attempt+1).Msg("waiting for microvm block queues to drain")
-		timer := time.NewTimer(100 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false, ctx.Err()
-		case <-timer.C:
+	}
+	inst.setPaused(true)
+	if seal != nil {
+		if err := seal(ctx); err != nil {
+			resumeErr := inst.resumeUncapturedSnapshot(ctx)
+			return resumeErr != nil, errors.Join(err, resumeErr)
 		}
 	}
-	panic("unreachable microvm snapshot attempt")
+	return true, api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir})
+}
+
+func (inst *microVMInstance) resumeUncapturedSnapshot(ctx context.Context) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), microVMControlRequestTimeout)
+	defer cancel()
+	if err := inst.api().put(cleanup, "vm.resume", nil); err != nil {
+		return fmt.Errorf("resume uncaptured vm: %w", err)
+	}
+	inst.setPaused(false)
+	return nil
 }
 
 func (m *MicroVM) freezeCheckpointDisks(ctx context.Context, inst *microVMInstance) (func(), error) {
@@ -2296,9 +2273,6 @@ func (a *hypervisorAPI) put(ctx context.Context, action string, body any) error 
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		if action == "vm.snapshot" && resp.StatusCode == http.StatusTooManyRequests {
-			return fmt.Errorf("%w: %s", errMicroVMSnapshotBlockIOBusy, strings.TrimSpace(string(msg)))
-		}
 		return fmt.Errorf("%s: %s: %s", action, resp.Status, strings.TrimSpace(string(msg)))
 	}
 	return nil

@@ -34,64 +34,27 @@ func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Re
 	return inst
 }
 
-func TestMicroVMSnapshotBusyRetriesWithoutCapturingTheVM(t *testing.T) {
+func TestMicroVMSnapshotSealsDisksBeforeCapture(t *testing.T) {
 	var mu sync.Mutex
 	var actions []string
-	var attempts int
 	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		actions = append(actions, r.URL.Path)
-		if r.URL.Path == "/api/v1/vm.snapshot" {
-			attempts++
-			if attempts == 1 {
-				w.WriteHeader(http.StatusTooManyRequests)
-				return
-			}
-		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	sealed := 0
-	captured, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error {
+	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error {
 		mu.Lock()
 		defer mu.Unlock()
-		sealed++
 		actions = append(actions, "seal")
 		return nil
 	})
-	mu.Lock()
-	defer mu.Unlock()
 	require.NoError(t, err)
-	require.True(t, captured)
+	require.True(t, mustStop)
 	require.True(t, inst.isPaused())
-	require.Equal(t, 2, sealed)
-	require.Equal(t, []string{"/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot", "/api/v1/vm.resume", "/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot"}, actions)
-}
-
-func TestMicroVMSnapshotExhaustedBusyLeavesOriginalRunning(t *testing.T) {
-	var mu sync.Mutex
-	var snapshots, resumes int
-	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		switch r.URL.Path {
-		case "/api/v1/vm.snapshot":
-			snapshots++
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		case "/api/v1/vm.resume":
-			resumes++
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	captured, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
 	mu.Lock()
 	defer mu.Unlock()
-	require.ErrorIs(t, err, errMicroVMSnapshotBlockIOBusy)
-	require.False(t, captured)
-	require.False(t, inst.isPaused())
-	require.Equal(t, 3, snapshots)
-	require.Equal(t, 3, resumes)
+	require.Equal(t, []string{"/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot"}, actions)
 }
 
 func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
@@ -114,7 +77,6 @@ func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	require.Error(t, err)
-	require.NotErrorIs(t, err, errMicroVMSnapshotBlockIOBusy)
 	require.True(t, captured)
 	require.True(t, inst.isPaused())
 	require.Equal(t, 1, snapshots)
@@ -138,25 +100,6 @@ func TestMicroVMSnapshotSealFailureResumesBeforeAnyCapture(t *testing.T) {
 	require.False(t, captured)
 	require.False(t, inst.isPaused())
 	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.resume"}, actions)
-}
-
-func TestMicroVMSnapshotCanceledRetryStillResumes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/vm.snapshot":
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		case "/api/v1/vm.resume":
-			cancel()
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	captured, err := snapshotMicroVM(ctx, inst, t.TempDir(), nil)
-	require.ErrorIs(t, err, context.Canceled)
-	require.False(t, captured)
-	require.False(t, inst.isPaused())
 }
 
 func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {

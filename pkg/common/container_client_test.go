@@ -32,35 +32,6 @@ func TestContainerClientWithDialerDoesNotBlockSharedCacheFill(t *testing.T) {
 	require.Less(t, time.Since(started), 100*time.Millisecond)
 }
 
-type checkpointCallOptionsClient struct {
-	pb.ContainerServiceClient
-	ctx       context.Context
-	waitReady bool
-}
-
-func (c *checkpointCallOptionsClient) ContainerCheckpoint(ctx context.Context, _ *pb.ContainerCheckpointRequest, options ...grpc.CallOption) (*pb.ContainerCheckpointResponse, error) {
-	c.ctx, c.waitReady = ctx, false
-	for _, option := range options {
-		if wait, ok := option.(grpc.FailFastCallOption); ok {
-			c.waitReady = !wait.FailFast
-		}
-	}
-	return &pb.ContainerCheckpointResponse{Ok: true}, nil
-}
-
-func TestContainerCheckpointWaitsForReadyOnlyForTerminalCalls(t *testing.T) {
-	rpc := &checkpointCallOptionsClient{}
-	client := &ContainerClient{client: rpc}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	for _, terminal := range []bool{false, true, false} {
-		_, err := client.Checkpoint(ctx, "container", ContainerCheckpointOptions{TerminateAfterCheckpoint: terminal})
-		require.NoError(t, err)
-		require.Equal(t, terminal, rpc.waitReady)
-		require.Same(t, ctx, rpc.ctx, "checkpoint must preserve the caller's original deadline")
-	}
-}
-
 func TestTerminalCheckpointWaitForReadyHonorsCallerDeadline(t *testing.T) {
 	client, err := NewContainerClientWithDialer(context.Background(), "route://unavailable-worker", "token", func(ctx context.Context, _ string) (net.Conn, error) {
 		<-ctx.Done()

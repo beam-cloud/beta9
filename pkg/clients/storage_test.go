@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"testing/iotest"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -24,58 +23,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
-
-func TestStorageStreamResponseMetadata(t *testing.T) {
-	for _, truncated := range []bool{false, true} {
-		t.Run(fmt.Sprintf("truncated=%t", truncated), func(t *testing.T) {
-			body := &storageMetadataTestBody{Reader: strings.NewReader("chunk")}
-			expectedLength := int64(5)
-			if truncated {
-				expectedLength = 20
-				body.Reader = io.MultiReader(body.Reader, iotest.ErrReader(io.ErrUnexpectedEOF))
-			}
-			requests := 0
-			cfg := aws.Config{
-				Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""),
-				HTTPClient: &http.Client{Transport: storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-					requests++
-					if r.Header.Get(common.TigrisConsistencyHeader) != "" {
-						t.Error("stream metadata must not change ordinary read routing")
-					}
-					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{
-						"Content-Length": {fmt.Sprint(expectedLength)}, "X-Amz-Request-Id": {"request-123"},
-					}, ContentLength: expectedLength, Body: body, Request: r}, nil
-				})},
-			}
-			client := &StorageClient{s3Client: newS3Client(cfg, "https://t3.storage.dev")}
-			reader, err := client.DownloadWithReader(context.Background(), "chunk", "bucket")
-			if err != nil {
-				t.Fatal(err)
-			}
-			metadata, ok := GetStorageReadMetadata(reader)
-			if !ok || metadata.RequestID != "request-123" || metadata.ContentLength != expectedLength {
-				t.Fatalf("stream response metadata = %+v, available=%t", metadata, ok)
-			}
-			data, err := io.ReadAll(reader)
-			if string(data) != "chunk" || (truncated && !errors.Is(err, io.ErrUnexpectedEOF)) || (!truncated && err != nil) {
-				t.Fatalf("stream changed body or error: %q, %v", data, err)
-			}
-			if err := reader.Close(); err != nil || body.closed != 1 || requests != 1 {
-				t.Fatalf("stream close=%v, closes=%d, requests=%d", err, body.closed, requests)
-			}
-		})
-	}
-	if metadata, ok := GetStorageReadMetadata(strings.NewReader("plain")); ok || metadata.ContentLength != -1 {
-		t.Fatalf("plain reader metadata = %+v, available=%t", metadata, ok)
-	}
-}
-
-type storageMetadataTestBody struct {
-	io.Reader
-	closed int
-}
-
-func (r *storageMetadataTestBody) Close() error { r.closed++; return nil }
 
 func TestStorageResponseChecksums(t *testing.T) {
 	checksums := map[string]string{"absent": "", "valid": "NhCmhg==", "corrupt": "AAAAAA=="} // CRC32 of "hello" is NhCmhg==.

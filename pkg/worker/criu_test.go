@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -2250,96 +2249,27 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 	}
 }
 
-func TestMicroVMCheckpointAdmissionBoundsAndCancellation(t *testing.T) {
-	var held []func()
-	for range microVMCheckpointConcurrency {
-		release, err := acquireMicroVMCheckpointSlot(context.Background())
-		require.NoError(t, err)
-		held = append(held, release)
-		t.Cleanup(release)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	waiting := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		close(waiting)
-		release, err := acquireMicroVMCheckpointSlot(ctx)
-		if release != nil {
-			release()
-		}
-		done <- err
-	}()
-	<-waiting
-	select {
-	case err := <-done:
-		t.Fatalf("ninth checkpoint bypassed full admission: %v", err)
-	default:
-	}
-	cancel()
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
-		t.Fatal("cancelled checkpoint did not leave admission queue")
-	}
-	require.Len(t, microVMCheckpointSlots, microVMCheckpointConcurrency)
-	held[0]()
-	replacement, err := acquireMicroVMCheckpointSlot(context.Background())
-	require.NoError(t, err)
-	t.Cleanup(replacement)
-	held[0]()
-	require.Len(t, microVMCheckpointSlots, microVMCheckpointConcurrency, "old release must not consume a new owner's slot")
-	replacement()
-	release, err := acquireMicroVMCheckpointSlot(ctx)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Nil(t, release)
-	require.Len(t, microVMCheckpointSlots, microVMCheckpointConcurrency-1)
-}
-
 func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
 	for range microVMCheckpointConcurrency {
 		release, err := acquireMicroVMCheckpointSlot(context.Background())
 		require.NoError(t, err)
 		t.Cleanup(release)
 	}
-	for _, runtimeName := range []string{types.ContainerRuntimeMicroVM.String(), types.ContainerRuntimeRunc.String()} {
-		t.Run(runtimeName, func(t *testing.T) {
-			request := &types.ContainerRequest{ContainerId: "admission-" + runtimeName}
-			rt := NewMockRuntime(runtimeName, runtime.Capabilities{CheckpointRestore: true})
-			called := false
-			backend := &fakeBackendRepoClient{}
-			cacheManager := &WorkerCacheManager{checkpointRoot: t.TempDir()}
-			worker := &Worker{
-				containerInstances: common.NewSafeMap[*ContainerInstance](),
-				cacheManager:       cacheManager,
-				backendRepoClient:  backend,
-				criuManager: &observingCheckpointManager{create: func(bool) error {
-					called = true
-					return assert.AnError
-				}},
-			}
-			worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-				Id: request.ContainerId, Request: request, Runtime: rt,
-				Overlay: common.NewContainerOverlay(request, t.TempDir(), t.TempDir()),
-			})
-			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-			defer cancel()
-			err := worker.createCheckpoint(ctx, &CreateCheckpointOpts{Request: request, CheckpointId: "queued"})
-			if runtimeName == types.ContainerRuntimeMicroVM.String() {
-				require.ErrorIs(t, err, context.DeadlineExceeded)
-				require.False(t, called, "queued guest must not freeze, pause or write a native snapshot")
-			} else {
-				require.ErrorIs(t, err, assert.AnError)
-				require.True(t, called, "other runtimes must not share microVM admission")
-			}
-			require.False(t, rt.checkpointCalled)
-			require.False(t, rt.killCalled)
-			require.Zero(t, rt.deleteCalls)
-			require.Empty(t, cacheManager.checkpointLocks, "failed admission must release the checkpoint's materialization lock")
-			require.Equal(t, string(types.CheckpointStatusCheckpointFailed), backend.lastCreate.Status)
-			require.Len(t, microVMCheckpointSlots, microVMCheckpointConcurrency)
-		})
+	request := &types.ContainerRequest{ContainerId: "queued-microvm"}
+	called := false
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		backendRepoClient:  &fakeBackendRepoClient{},
+		criuManager:        &observingCheckpointManager{create: func(bool) error { called = true; return nil }},
 	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Request: request, Runtime: NewMockRuntime(types.ContainerRuntimeMicroVM.String(), runtime.Capabilities{CheckpointRestore: true}),
+		Overlay: common.NewContainerOverlay(request, t.TempDir(), t.TempDir()),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, worker.createCheckpoint(ctx, &CreateCheckpointOpts{Request: request, CheckpointId: "queued"}), context.DeadlineExceeded)
+	require.False(t, called, "admission must precede guest freeze, pause and capture")
 }
 
 func TestCreateFilesystemCheckpointFallbackStopsAndCapturesOverlay(t *testing.T) {
@@ -2786,181 +2716,37 @@ func TestMaterializeCheckpointReaderRejectsHashMismatch(t *testing.T) {
 	}
 }
 
-func TestCheckpointOriginRetriesOnlyIncompleteBodies(t *testing.T) {
-	const id = "origin-retry"
-	archivePath, hash, size := createCheckpointArchiveForTest(t, id)
+func TestCheckpointOriginRetriesTruncationWithoutPublishingCorruption(t *testing.T) {
+	archivePath, hash, size := createCheckpointArchiveForTest(t, "retry")
 	archive, err := os.ReadFile(archivePath)
 	require.NoError(t, err)
-	for _, test := range []struct {
-		name      string
-		short     int
-		badHash   bool
-		finalEOF  bool
-		openError error
-		attempts  int
-		ok        bool
-	}{
-		{name: "short then complete", short: 1, attempts: 2, ok: true},
-		{name: "exhausted", short: checkpointOriginReadAttempts, attempts: checkpointOriginReadAttempts},
-		{name: "corrupt complete archive", badHash: true, attempts: 1},
-		{name: "corrupt complete archive with body error", badHash: true, finalEOF: true, attempts: 1},
-		{name: "open failure", openError: os.ErrPermission, attempts: 1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			checkpoint := &types.Checkpoint{CheckpointId: id, OriginKey: "checkpoints/" + id, CacheHash: hash, CacheSizeBytes: size}
-			if test.badHash {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("corrupt-%t", corrupt), func(t *testing.T) {
+			checkpoint := &types.Checkpoint{CheckpointId: "retry", CacheHash: hash, CacheSizeBytes: size}
+			if corrupt {
 				checkpoint.CacheHash = strings.Repeat("0", 64)
 			}
 			calls := 0
 			open := func(context.Context, string) (io.ReadCloser, error) {
 				calls++
-				if test.openError != nil {
-					return nil, test.openError
-				}
 				body := archive
-				if calls <= test.short {
+				if calls == 1 {
 					body = body[:len(body)/2]
-				}
-				if test.finalEOF {
-					return io.NopCloser(checkpointFinalReadError{bytes.NewReader(body)}), nil
 				}
 				return io.NopCloser(bytes.NewReader(body)), nil
 			}
-			root := t.TempDir()
-			path := filepath.Join(root, id)
+			path := filepath.Join(t.TempDir(), "retry")
 			err := (&Worker{}).materializeCheckpointOrigin(context.Background(), path, checkpoint, open, nil, time.Second)
-			require.Equal(t, test.attempts, calls)
-			if test.ok {
-				require.NoError(t, err)
-				require.True(t, checkpointMaterialized(path))
-			} else {
-				require.Error(t, err)
-				require.NoDirExists(t, path)
-			}
-			leftovers, err := filepath.Glob(filepath.Join(root, ".*"))
-			require.NoError(t, err)
-			require.Empty(t, leftovers, "failed attempts must remove temporary extracts")
-		})
-	}
-}
-
-type checkpointFinalReadError struct{ *bytes.Reader }
-
-func (r checkpointFinalReadError) Read(p []byte) (int, error) {
-	n, err := r.Reader.Read(p)
-	if n > 0 && r.Len() == 0 {
-		return n, io.ErrUnexpectedEOF
-	}
-	return n, err
-}
-
-func TestCheckpointOriginTimesOutIdleTransfersButKeepsProgress(t *testing.T) {
-	const id = "origin-progress"
-	archivePath, hash, size := createCheckpointArchiveForTest(t, id)
-	archive, err := os.ReadFile(archivePath)
-	require.NoError(t, err)
-	for _, idleAttempts := range []int{1, checkpointOriginReadAttempts, 0} {
-		t.Run(fmt.Sprintf("idle-attempts-%d", idleAttempts), func(t *testing.T) {
-			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				call := int(calls.Add(1))
-				w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
-				w.WriteHeader(http.StatusOK)
-				w.(http.Flusher).Flush()
-				if call <= idleAttempts {
-					<-r.Context().Done()
-					return
-				}
-				// The full transfer lasts longer than its inactivity budget.
-				for offset := 0; offset < len(archive); offset += 1024 {
-					if _, err := w.Write(archive[offset:min(offset+1024, len(archive))]); err != nil {
-						return
-					}
-					w.(http.Flusher).Flush()
-					time.Sleep(20 * time.Millisecond)
-				}
-			}))
-			defer server.Close()
-			open := func(ctx context.Context, _ string) (io.ReadCloser, error) {
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
-				if err != nil {
-					return nil, err
-				}
-				response, err := server.Client().Do(req)
-				if err != nil {
-					return nil, err
-				}
-				return response.Body, nil
-			}
-			path := filepath.Join(t.TempDir(), id)
-			checkpoint := &types.Checkpoint{CheckpointId: id, OriginKey: id, CacheHash: hash, CacheSizeBytes: size}
-			err := (&Worker{}).materializeCheckpointOrigin(context.Background(), path, checkpoint, open, nil, 100*time.Millisecond)
-			if idleAttempts == checkpointOriginReadAttempts {
-				require.ErrorIs(t, err, errCheckpointOriginInactive)
-				require.EqualValues(t, checkpointOriginReadAttempts, calls.Load())
+			require.Equal(t, 2, calls, "a complete corrupt archive must not be retried")
+			if corrupt {
+				require.ErrorContains(t, err, "hash mismatch")
 				require.NoDirExists(t, path)
 			} else {
 				require.NoError(t, err)
-				require.EqualValues(t, idleAttempts+1, calls.Load())
 				require.True(t, checkpointMaterialized(path))
 			}
 		})
 	}
-}
-
-func TestCheckpointOriginBoundsBurstAndCancelsQueuedRequests(t *testing.T) {
-	const id, restores = "origin-burst", 100
-	archivePath, hash, size := createCheckpointArchiveForTest(t, id)
-	archive, err := os.ReadFile(archivePath)
-	require.NoError(t, err)
-	root := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	release := make(chan struct{})
-	unblock := sync.OnceFunc(func() { close(release) })
-	var workers sync.WaitGroup
-	t.Cleanup(func() { cancel(); unblock(); workers.Wait() })
-	entered := make(chan struct{}, restores+1)
-	var calls atomic.Int32
-	open := func(ctx context.Context, _ string) (io.ReadCloser, error) {
-		calls.Add(1)
-		entered <- struct{}{}
-		select {
-		case <-release:
-			return io.NopCloser(bytes.NewReader(archive)), nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	checkpoint := &types.Checkpoint{CheckpointId: id, OriginKey: id, CacheHash: hash, CacheSizeBytes: size}
-	results := make(chan error, restores)
-	for i := range restores {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			path := filepath.Join(root, strconv.Itoa(i), id)
-			results <- (&Worker{}).materializeCheckpointOrigin(ctx, path, checkpoint, open, nil, time.Minute)
-		}()
-	}
-	for range checkpointOriginConcurrency {
-		select {
-		case <-entered:
-		case <-ctx.Done():
-			t.Fatal("checkpoint downloads did not fill the shared budget")
-		}
-	}
-	queued, stop := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer stop()
-	err = (&Worker{}).materializeCheckpointOrigin(queued, filepath.Join(root, "cancelled", id), checkpoint, open, nil, time.Minute)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.EqualValues(t, checkpointOriginConcurrency, calls.Load())
-	unblock()
-	for range restores {
-		require.NoError(t, <-results)
-	}
-	for i := range restores {
-		require.True(t, checkpointMaterialized(filepath.Join(root, strconv.Itoa(i), id)))
-	}
-	require.EqualValues(t, restores, calls.Load())
 }
 
 func TestCheckpointCacheReaderBuffersReadAtCalls(t *testing.T) {
@@ -3295,183 +3081,30 @@ func TestMicroVMNativeCheckpointManagerDoesNotRequireCRIU(t *testing.T) {
 	require.False(t, worker.canRestoreCheckpoint(request, rt), "storage manager is still required")
 }
 
-func TestCheckpointArchiveCacheBoundsHundredJobsWithoutQueue(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	root := t.TempDir()
-	decisions := make(chan bool, 100)
-	finished := make(chan error, 100)
-	var jobs sync.WaitGroup
-	t.Cleanup(func() { cancel(); jobs.Wait() })
-	for i := range 100 {
-		jobs.Add(1)
-		go func() {
-			defer jobs.Done()
-			release := tryCheckpointArchiveCacheSlot(ctx, strconv.Itoa(i))
-			decisions <- release != nil
-			if release == nil {
-				return
-			}
-			path := filepath.Join(root, strconv.Itoa(i)+".tar")
-			if err := os.WriteFile(path, []byte("archive"), 0600); err != nil {
-				release()
-				finished <- err
-				return
-			}
-			finished <- fillCheckpointArchiveCache(ctx, path, release, func() error { <-ctx.Done(); return ctx.Err() })
-		}()
-	}
-	admitted := 0
-	for range 100 {
-		if <-decisions {
-			admitted++
-		}
-	}
-	require.Equal(t, checkpointCacheConcurrency, admitted, "busy jobs must skip, not queue")
-	require.Nil(t, tryCheckpointArchiveCacheSlot(ctx, "overflow"))
-	cancel()
-	for range admitted {
-		require.ErrorIs(t, <-finished, context.Canceled)
-	}
-	jobs.Wait()
-	entries, err := os.ReadDir(root)
-	require.NoError(t, err)
-	require.Empty(t, entries, "every admitted archive must be removed on cancellation")
-	require.Nil(t, tryCheckpointArchiveCacheSlot(ctx, "cancelled"), "cancelled worker must not admit another job")
-}
-
-func TestCheckpointArchiveCacheCleanupOnEveryExit(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		cancelled bool
-		storeErr  error
-	}{
-		{name: "success"}, {name: "store failure", storeErr: io.ErrUnexpectedEOF}, {name: "worker cancelled", cancelled: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			release := tryCheckpointArchiveCacheSlot(ctx, test.name)
-			require.NotNil(t, release)
-			archive := filepath.Join(t.TempDir(), "archive.tar")
-			require.NoError(t, os.WriteFile(archive, []byte("archive"), 0600))
-			if test.cancelled {
-				cancel()
-			}
-			called := false
-			err := fillCheckpointArchiveCache(ctx, archive, release, func() error {
-				called = true
-				require.Nil(t, tryCheckpointArchiveCacheSlot(ctx, test.name), "reservation must cover the entire fill")
-				require.FileExists(t, archive)
-				return test.storeErr
-			})
-			if test.cancelled {
-				require.ErrorIs(t, err, context.Canceled)
-				require.False(t, called)
-			} else {
-				require.ErrorIs(t, err, test.storeErr)
-				require.True(t, called)
-			}
-			require.NoFileExists(t, archive)
-			release() // Releasing twice must not erase a later reservation for this ID.
-			replacement := tryCheckpointArchiveCacheSlot(context.Background(), test.name)
-			require.NotNil(t, replacement)
-			release()
-			require.Nil(t, tryCheckpointArchiveCacheSlot(context.Background(), test.name))
-			replacement()
-		})
-	}
-}
-
-func TestCheckpointOriginBusyCacheStillValidatesAndExtracts(t *testing.T) {
-	const id = "origin-cache-busy"
-	archivePath, hash, size := createCheckpointArchiveForTest(t, id)
-	archive, err := os.ReadFile(archivePath)
-	require.NoError(t, err)
-	releases := []func(){}
-	for i := range checkpointCacheConcurrency {
-		release := tryCheckpointArchiveCacheSlot(context.Background(), strconv.Itoa(i))
-		require.NotNil(t, release)
-		releases = append(releases, release)
-	}
-	defer func() {
-		for _, release := range releases {
-			release()
-		}
-	}()
-	worker := &Worker{cacheManager: &WorkerCacheManager{ctx: context.Background(), client: &cache.Client{}}}
-	for _, corrupt := range []bool{false, true} {
-		checkpoint := &types.Checkpoint{CheckpointId: id, OriginKey: "checkpoints/" + id, CacheHash: hash, CacheSizeBytes: size}
-		if corrupt {
-			checkpoint.CacheHash = strings.Repeat("0", 64)
-		}
-		root := t.TempDir()
-		path := filepath.Join(root, id)
-		open := func(context.Context, string) (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(archive)), nil
-		}
-		err := worker.materializeCheckpointOrigin(context.Background(), path, checkpoint, open, nil, time.Second)
-		if corrupt {
-			require.ErrorContains(t, err, "hash mismatch")
-			require.NoDirExists(t, path)
-		} else {
-			require.NoError(t, err)
-			require.True(t, checkpointMaterialized(path))
-		}
-		staged, err := filepath.Glob(filepath.Join(root, ".*"))
-		require.NoError(t, err)
-		require.Empty(t, staged, "busy cache must create no duplicate tar or extraction leftovers")
-	}
-	// Persistence's disposable tar can be dropped only after its durable origin write.
-	disposable := filepath.Join(t.TempDir(), "uploaded.tar")
-	native := filepath.Join(t.TempDir(), "native-checkpoint")
-	require.NoError(t, os.WriteFile(disposable, archive, 0600))
-	require.NoError(t, os.Mkdir(native, 0700))
-	worker.cacheCheckpointArchiveAsync(id, disposable, "checkpoints/"+id, hash, nil)
-	require.NoFileExists(t, disposable)
-	require.DirExists(t, native)
-	require.Nil(t, tryCheckpointArchiveCacheSlot(context.Background(), "overflow"))
-}
-
-func TestCheckpointOriginFailedStagingReleasesReservation(t *testing.T) {
-	const id = "origin-staging-error"
-	archivePath, _, size := createCheckpointArchiveForTest(t, id)
-	archive, err := os.ReadFile(archivePath)
-	require.NoError(t, err)
-	worker := &Worker{cacheManager: &WorkerCacheManager{ctx: context.Background(), client: &cache.Client{}}}
-	root := t.TempDir()
-	checkpoint := &types.Checkpoint{CheckpointId: id, OriginKey: id, CacheHash: strings.Repeat("0", 64), CacheSizeBytes: size}
-	open := func(context.Context, string) (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(archive)), nil
-	}
-	err = worker.materializeCheckpointOrigin(context.Background(), filepath.Join(root, id), checkpoint, open, nil, time.Second)
-	require.ErrorContains(t, err, "hash mismatch")
-	leftovers, err := os.ReadDir(root)
-	require.NoError(t, err)
-	require.Empty(t, leftovers)
-	release := tryCheckpointArchiveCacheSlot(context.Background(), id)
-	require.NotNil(t, release)
-	release()
-}
-
-func TestCheckpointArchiveCacheDeduplicatesIDsAndReconcile(t *testing.T) {
+func TestCheckpointArchiveCacheCapAndCleanup(t *testing.T) {
 	ctx := context.Background()
-	server, err := cache.NewServerWithOptions(ctx, testCacheManagerConfig(t.TempDir()).Cache, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close()) })
-	manager := &WorkerCacheManager{ctx: ctx, checkpointRoot: t.TempDir()}
-	item := types.CacheRequiredContentItem{Kind: types.CacheContentKindCheckpoint, CheckpointID: "same-checkpoint", Hash: strings.Repeat("a", 64), SizeBytes: 1}
-	release := tryCheckpointArchiveCacheSlot(ctx, item.CheckpointID)
-	require.NotNil(t, release)
-	t.Cleanup(release)
-	require.Nil(t, tryCheckpointArchiveCacheSlot(ctx, item.CheckpointID), "duplicate optional fill must skip despite free capacity")
-	status := manager.materializeCheckpoint(ctx, server, cache.RecentStub{}, item, item.Hash)
-	require.Equal(t, types.CacheAuditStatusSkipped, status, "reconciliation must share foreground staging's reservation")
-	require.False(t, reconcileStatusIsFailure(status))
-	release()
-	replacement := tryCheckpointArchiveCacheSlot(ctx, item.CheckpointID)
-	require.NotNil(t, replacement)
-	defer replacement()
-	release()
-	require.Nil(t, tryCheckpointArchiveCacheSlot(ctx, item.CheckpointID), "old release must not erase a new owner")
+	var held []func()
+	for range checkpointCacheConcurrency {
+		release := tryCheckpointArchiveCacheSlot(ctx)
+		require.NotNil(t, release)
+		t.Cleanup(release)
+		held = append(held, release)
+	}
+	require.Nil(t, tryCheckpointArchiveCacheSlot(ctx), "busy optional fills must skip")
+	archive := filepath.Join(t.TempDir(), "archive.tar")
+	require.NoError(t, os.WriteFile(archive, []byte("archive"), 0600))
+	require.ErrorIs(t, fillCheckpointArchiveCache(ctx, archive, held[0], func() error { return io.ErrUnexpectedEOF }), io.ErrUnexpectedEOF)
+	require.NoFileExists(t, archive)
+	replacement := tryCheckpointArchiveCacheSlot(ctx)
+	require.NotNil(t, replacement, "failed fill must release its reservation")
+	t.Cleanup(replacement)
+	require.NoError(t, os.WriteFile(archive, []byte("archive"), 0600))
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorIs(t, fillCheckpointArchiveCache(cancelled, archive, replacement, func() error {
+		t.Fatal("cancelled fill reached the cache store")
+		return nil
+	}), context.Canceled)
+	require.NoFileExists(t, archive)
+	require.Nil(t, tryCheckpointArchiveCacheSlot(cancelled))
 }

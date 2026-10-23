@@ -123,128 +123,158 @@ const (
 	checkpointInitFile = "guest-init" // executable backing the captured guest agent
 )
 
-// validateMicroVMSnapshotBlockQueues rejects snapshots with disk requests that
-// would be lost when a fresh vhost-user backend restores the guest. The native
-// RAM file concatenates memory_ranges in metadata order; only the two ring
-// indices (four bytes per queue) are read, never the guest's payload.
-func validateMicroVMSnapshotBlockQueues(snapshotDir string) error {
-	readMetadata := func(name string, target any) error {
-		f, err := os.Open(filepath.Join(snapshotDir, name))
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		const limit = 16 << 20
-		data, err := io.ReadAll(io.LimitReader(f, limit+1))
-		if err != nil {
-			return err
-		}
-		if len(data) > limit {
-			return fmt.Errorf("%s exceeds snapshot metadata limit", name)
-		}
-		return json.Unmarshal(data, target)
+type microVMSnapshotDisk struct {
+	ID        string `json:"id"`
+	VhostUser *bool  `json:"vhost_user"`
+	NumQueues uint64 `json:"num_queues"`
+	QueueSize uint64 `json:"queue_size"`
+}
+
+type microVMSnapshotConfig struct {
+	Disks []microVMSnapshotDisk `json:"disks"`
+}
+
+func (c microVMSnapshotConfig) blockDisks() ([]microVMSnapshotDisk, error) {
+	if len(c.Disks) == 0 {
+		return nil, fmt.Errorf("snapshot has no disks")
 	}
-	var config struct {
-		Disks []struct {
-			ID        string  `json:"id"`
-			VhostUser *bool   `json:"vhost_user"`
-			NumQueues *uint64 `json:"num_queues"`
-			QueueSize *uint64 `json:"queue_size"`
-		} `json:"disks"`
-	}
-	if err := readMetadata("config.json", &config); err != nil {
-		return fmt.Errorf("validate snapshot block config: %w", err)
-	}
-	if len(config.Disks) == 0 {
-		return fmt.Errorf("snapshot block config has no disks")
-	}
-	type diskQueues struct{ count, size uint64 }
-	disks := make(map[string]diskQueues)
-	for _, disk := range config.Disks {
+	var disks []microVMSnapshotDisk
+	seen := make(map[string]bool)
+	for _, disk := range c.Disks {
 		if disk.VhostUser == nil {
-			return fmt.Errorf("snapshot disk %q is missing vhost_user", disk.ID)
+			return nil, fmt.Errorf("snapshot disk %q is missing vhost_user", disk.ID)
 		}
 		if !*disk.VhostUser {
 			continue
 		}
-		if disk.ID == "" || disk.NumQueues == nil || *disk.NumQueues == 0 || disk.QueueSize == nil || *disk.QueueSize == 0 || *disk.QueueSize > 32768 || *disk.QueueSize&(*disk.QueueSize-1) != 0 {
-			return fmt.Errorf("snapshot vhost-user disk %q has invalid queue config", disk.ID)
+		if disk.ID == "" || seen[disk.ID] || disk.NumQueues == 0 || !validMicroVMQueueSize(disk.QueueSize) {
+			return nil, fmt.Errorf("invalid snapshot disk %q queue config", disk.ID)
 		}
-		if _, duplicate := disks[disk.ID]; duplicate {
-			return fmt.Errorf("duplicate snapshot vhost-user disk %q", disk.ID)
+		seen[disk.ID] = true
+		disks = append(disks, disk)
+	}
+	return disks, nil
+}
+
+type microVMSnapshotQueue struct {
+	Ready bool    `json:"ready"`
+	Size  uint64  `json:"size"`
+	Avail *uint64 `json:"avail_ring"`
+	Used  *uint64 `json:"used_ring"`
+}
+
+type microVMSnapshotTransport struct {
+	Queues []microVMSnapshotQueue `json:"queues"`
+}
+
+type microVMSnapshotSection struct {
+	Snapshots    map[string]*microVMSnapshotSection `json:"snapshots"`
+	SnapshotData microVMSnapshotData                `json:"snapshot_data"`
+}
+
+type microVMSnapshotData struct {
+	State string `json:"state"`
+}
+
+func (s *microVMSnapshotSection) decode(name string, target any) error {
+	if s == nil || s.Snapshots[name] == nil {
+		return fmt.Errorf("snapshot is missing %q", name)
+	}
+	return json.Unmarshal([]byte(s.Snapshots[name].SnapshotData.State), target)
+}
+
+type microVMSnapshotMemoryRange struct {
+	GPA    *uint64 `json:"gpa"`
+	Length uint64  `json:"length"`
+	offset uint64
+}
+
+type microVMSnapshotMemoryRanges struct {
+	Data []microVMSnapshotMemoryRange `json:"data"`
+}
+
+type microVMSnapshotMemory struct {
+	MemoryRanges microVMSnapshotMemoryRanges `json:"memory_ranges"`
+	file         *os.File
+}
+
+func readMicroVMSnapshotJSON(dir, name string, target any) error {
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, target)
+}
+
+func validMicroVMQueueSize(size uint64) bool {
+	return size > 0 && size <= 32768 && size&(size-1) == 0
+}
+
+// Only the configured vhost-user block queues need this check. Their pending
+// requests cannot be recovered by a fresh backend. Read four bytes per queue,
+// using the native RAM file's metadata order rather than guest-address order.
+func validateMicroVMSnapshotBlockQueues(dir string) error {
+	var config microVMSnapshotConfig
+	if err := readMicroVMSnapshotJSON(dir, "config.json", &config); err != nil {
+		return err
+	}
+	disks, err := config.blockDisks()
+	if err != nil || len(disks) == 0 {
+		return err
+	}
+	var state microVMSnapshotSection
+	if err := readMicroVMSnapshotJSON(dir, "state.json", &state); err != nil {
+		return err
+	}
+	var memory microVMSnapshotMemory
+	if err := state.decode("memory-manager", &memory); err != nil {
+		return err
+	}
+	file, err := os.Open(filepath.Join(dir, "memory-ranges"))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := memory.bind(file); err != nil {
+		return err
+	}
+	for _, disk := range disks {
+		var transport microVMSnapshotTransport
+		if err := state.Snapshots["device-manager"].decode("_virtio-pci-"+disk.ID, &transport); err != nil {
+			return err
 		}
-		disks[disk.ID] = diskQueues{*disk.NumQueues, *disk.QueueSize}
-	}
-	if len(disks) == 0 {
-		return nil
-	}
-	var snapshot microVMSnapshotSection
-	if err := readMetadata("state.json", &snapshot); err != nil {
-		return fmt.Errorf("validate snapshot block state: %w", err)
-	}
-	sections := make(map[string][]*microVMSnapshotSection)
-	var walk func(string, *microVMSnapshotSection, int) error
-	walk = func(name string, section *microVMSnapshotSection, depth int) error {
-		if section == nil || depth > 64 {
-			return fmt.Errorf("invalid snapshot section %q", name)
+		if uint64(len(transport.Queues)) != disk.NumQueues {
+			return fmt.Errorf("snapshot disk %q queue count differs from config", disk.ID)
 		}
-		sections[name] = append(sections[name], section)
-		for child, value := range section.Snapshots {
-			if err := walk(child, value, depth+1); err != nil {
-				return err
+		for i, queue := range transport.Queues {
+			if err := queue.validate(&memory, disk.QueueSize); err != nil {
+				return fmt.Errorf("snapshot disk %q queue %d: %w", disk.ID, i, err)
 			}
 		}
-		return nil
 	}
-	if err := walk("", &snapshot, 0); err != nil {
-		return err
-	}
-	decodeSection := func(name string, target any) error {
-		found := sections[name]
-		if len(found) != 1 || found[0].SnapshotData == nil || found[0].SnapshotData.State == nil {
-			return fmt.Errorf("snapshot requires exactly one saved %q section", name)
-		}
-		if err := json.Unmarshal([]byte(*found[0].SnapshotData.State), target); err != nil {
-			return fmt.Errorf("decode snapshot section %q: %w", name, err)
-		}
-		return nil
-	}
-	var memory struct {
-		Ranges struct {
-			Data []struct {
-				GPA    *uint64 `json:"gpa"`
-				Length *uint64 `json:"length"`
-			} `json:"data"`
-		} `json:"memory_ranges"`
-	}
-	if err := decodeSection("memory-manager", &memory); err != nil {
-		return err
-	}
-	type memoryRange struct{ start, end, offset uint64 }
-	ranges := make([]memoryRange, 0, len(memory.Ranges.Data))
+	return nil
+}
+
+func (m *microVMSnapshotMemory) bind(file *os.File) error {
+	regions := m.MemoryRanges.Data
 	var total uint64
-	for _, region := range memory.Ranges.Data {
-		if region.GPA == nil || region.Length == nil || *region.Length == 0 || *region.GPA > math.MaxUint64-*region.Length || *region.Length > math.MaxInt64-total {
+	for i := range regions {
+		r := &regions[i]
+		if r.GPA == nil || r.Length == 0 || *r.GPA > math.MaxUint64-r.Length || r.Length > math.MaxInt64-total {
 			return fmt.Errorf("invalid snapshot memory range")
 		}
-		ranges = append(ranges, memoryRange{*region.GPA, *region.GPA + *region.Length, total})
-		total += *region.Length
+		r.offset = total
+		total += r.Length
 	}
-	if len(ranges) == 0 {
+	if len(regions) == 0 {
 		return fmt.Errorf("snapshot has no saved memory ranges")
 	}
-	ordered := slices.Clone(ranges)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].start < ordered[j].start })
-	for i := 1; i < len(ordered); i++ {
-		if ordered[i].start < ordered[i-1].end {
+	sort.Slice(regions, func(i, j int) bool { return *regions[i].GPA < *regions[j].GPA })
+	for i := 1; i < len(regions); i++ {
+		if *regions[i].GPA < *regions[i-1].GPA+regions[i-1].Length {
 			return fmt.Errorf("snapshot memory ranges overlap")
 		}
 	}
-	file, err := os.Open(filepath.Join(snapshotDir, "memory-ranges"))
-	if err != nil {
-		return fmt.Errorf("open snapshot memory: %w", err)
-	}
-	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
 		return err
@@ -252,61 +282,42 @@ func validateMicroVMSnapshotBlockQueues(snapshotDir string) error {
 	if !info.Mode().IsRegular() || info.Size() != int64(total) {
 		return fmt.Errorf("snapshot memory file length does not match saved ranges")
 	}
-	readIndex := func(ring uint64) (uint16, error) {
-		if ring > math.MaxUint64-4 {
-			return 0, fmt.Errorf("snapshot disk ring address overflows")
-		}
-		for _, region := range ranges {
-			if ring >= region.start && ring+4 <= region.end {
-				var value [2]byte
-				if _, err := file.ReadAt(value[:], int64(region.offset+(ring-region.start)+2)); err != nil {
-					return 0, fmt.Errorf("read snapshot disk index: %w", err)
-				}
-				return binary.LittleEndian.Uint16(value[:]), nil
-			}
-		}
-		return 0, fmt.Errorf("snapshot disk index is outside saved memory")
-	}
-	for id, expected := range disks {
-		var transport struct {
-			Queues []struct {
-				Ready *bool   `json:"ready"`
-				Size  *uint64 `json:"size"`
-				Avail *uint64 `json:"avail_ring"`
-				Used  *uint64 `json:"used_ring"`
-			} `json:"queues"`
-		}
-		if err := decodeSection("_virtio-pci-"+id, &transport); err != nil {
-			return err
-		}
-		if uint64(len(transport.Queues)) != expected.count {
-			return fmt.Errorf("snapshot disk %q queue count differs from config", id)
-		}
-		for i, queue := range transport.Queues {
-			if queue.Ready == nil || !*queue.Ready || queue.Size == nil || *queue.Size == 0 || *queue.Size > expected.size || *queue.Size&(*queue.Size-1) != 0 || queue.Avail == nil || queue.Used == nil || *queue.Avail%2 != 0 || *queue.Used%4 != 0 || *queue.Avail == *queue.Used {
-				return fmt.Errorf("snapshot disk %q queue %d is missing or not ready", id, i)
-			}
-			available, err := readIndex(*queue.Avail)
-			if err != nil {
-				return fmt.Errorf("snapshot disk %q queue %d: %w", id, i, err)
-			}
-			used, err := readIndex(*queue.Used)
-			if err != nil {
-				return fmt.Errorf("snapshot disk %q queue %d: %w", id, i, err)
-			}
-			if pending := uint16(available - used); pending != 0 {
-				return fmt.Errorf("snapshot disk %q queue %d has %d outstanding requests (available=%d used=%d)", id, i, pending, available, used)
-			}
-		}
-	}
+	m.file = file
 	return nil
 }
 
-type microVMSnapshotSection struct {
-	Snapshots    map[string]*microVMSnapshotSection `json:"snapshots"`
-	SnapshotData *struct {
-		State *string `json:"state"`
-	} `json:"snapshot_data"`
+func (m *microVMSnapshotMemory) readIndex(ring uint64) (uint16, error) {
+	if ring <= math.MaxUint64-4 {
+		for _, r := range m.MemoryRanges.Data {
+			if ring >= *r.GPA && ring+4 <= *r.GPA+r.Length {
+				var value [2]byte
+				_, err := m.file.ReadAt(value[:], int64(r.offset+(ring-*r.GPA)+2))
+				return binary.LittleEndian.Uint16(value[:]), err
+			}
+		}
+	}
+	return 0, fmt.Errorf("snapshot disk index is outside saved memory")
+}
+
+func (q microVMSnapshotQueue) validate(m *microVMSnapshotMemory, capacity uint64) error {
+	if !q.Ready || !validMicroVMQueueSize(q.Size) || q.Size > capacity {
+		return fmt.Errorf("block queue is not ready or has invalid size")
+	}
+	if q.Avail == nil || q.Used == nil || *q.Avail%2 != 0 || *q.Used%4 != 0 || *q.Avail == *q.Used {
+		return fmt.Errorf("missing or invalid block queue rings")
+	}
+	available, err := m.readIndex(*q.Avail)
+	if err != nil {
+		return err
+	}
+	used, err := m.readIndex(*q.Used)
+	if err != nil {
+		return err
+	}
+	if pending := uint16(available - used); pending != 0 {
+		return fmt.Errorf("%d outstanding requests (available=%d used=%d)", pending, available, used)
+	}
+	return nil
 }
 
 // --- bundle -----------------------------------------------------------------

@@ -2053,7 +2053,7 @@ func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *
 	if m.requiredContentComplete(server, item, routingKey) {
 		return types.CacheAuditStatusMaterialized
 	}
-	releaseCache := tryCheckpointArchiveCacheSlot(m.ctx, item.CheckpointID)
+	releaseCache := tryCheckpointArchiveCacheSlot(m.ctx)
 	if releaseCache == nil {
 		return types.CacheAuditStatusSkipped
 	}

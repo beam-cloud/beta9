@@ -71,8 +71,7 @@ const (
 
 var checkpointOriginSlots = make(chan struct{}, checkpointOriginConcurrency)
 var microVMCheckpointSlots = make(chan struct{}, microVMCheckpointConcurrency)
-var checkpointArchiveCacheMu sync.Mutex
-var checkpointArchiveCacheInFlight = make(map[string]struct{})
+var checkpointArchiveCacheSlots = make(chan struct{}, checkpointCacheConcurrency)
 var errCheckpointOriginInactive = errors.New("memory checkpoint download made no progress before the inactivity deadline")
 
 var checkpointRuntimeEnvOverrides = []string{
@@ -1612,28 +1611,16 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 
 // Optional archive staging and CAS fills share one nonblocking budget. The
 // origin object and native checkpoint payload do not depend on this cache copy.
-func tryCheckpointArchiveCacheSlot(ctx context.Context, checkpointID string) func() {
+func tryCheckpointArchiveCacheSlot(ctx context.Context) func() {
 	if ctx.Err() != nil {
 		return nil
 	}
-	checkpointArchiveCacheMu.Lock()
-	_, exists := checkpointArchiveCacheInFlight[checkpointID]
-	if exists || len(checkpointArchiveCacheInFlight) >= checkpointCacheConcurrency {
-		checkpointArchiveCacheMu.Unlock()
+	select {
+	case checkpointArchiveCacheSlots <- struct{}{}:
+		return sync.OnceFunc(func() { <-checkpointArchiveCacheSlots })
+	default:
 		return nil
 	}
-	checkpointArchiveCacheInFlight[checkpointID] = struct{}{}
-	checkpointArchiveCacheMu.Unlock()
-	release := sync.OnceFunc(func() {
-		checkpointArchiveCacheMu.Lock()
-		delete(checkpointArchiveCacheInFlight, checkpointID)
-		checkpointArchiveCacheMu.Unlock()
-	})
-	if ctx.Err() != nil {
-		release()
-		return nil
-	}
-	return release
 }
 
 func fillCheckpointArchiveCache(ctx context.Context, archivePath string, release func(), store func() error) error {
@@ -1657,7 +1644,7 @@ func (s *Worker) cacheCheckpointArchiveAsync(checkpointId, archivePath, originKe
 	}
 	manager := s.cacheManager
 	if release == nil {
-		release = tryCheckpointArchiveCacheSlot(manager.ctx, checkpointId)
+		release = tryCheckpointArchiveCacheSlot(manager.ctx)
 	}
 	if release == nil {
 		_ = os.Remove(archivePath)
@@ -1847,7 +1834,7 @@ func (s *Worker) materializeCheckpointOriginAttempt(ctx context.Context, checkpo
 		}
 	}()
 	if s.cacheManager != nil && s.cacheManager.client != nil {
-		cacheRelease = tryCheckpointArchiveCacheSlot(s.cacheManager.ctx, checkpoint.CheckpointId)
+		cacheRelease = tryCheckpointArchiveCacheSlot(s.cacheManager.ctx)
 	}
 	if cacheRelease != nil {
 		if err := os.MkdirAll(filepath.Dir(checkpointPath), 0755); err != nil {
@@ -1881,8 +1868,7 @@ func (s *Worker) materializeCheckpointOriginAttempt(ctx context.Context, checkpo
 			readErr = nil // A complete corrupt archive must fail its integrity check.
 		}
 		retry := errors.Is(err, errCheckpointOriginInactive) || retryableStorageBodyRead(readErr)
-		metadata, _ := clients.GetStorageReadMetadata(reader)
-		return fmt.Errorf("checkpoint %s download read %d/%d bytes (request %s, content length %d): %w", checkpoint.CheckpointId, stream.bytes, checkpoint.CacheSizeBytes, metadata.RequestID, metadata.ContentLength, errors.Join(err, stream.err)), retry
+		return fmt.Errorf("checkpoint %s download read %d/%d bytes: %w", checkpoint.CheckpointId, stream.bytes, checkpoint.CacheSizeBytes, errors.Join(err, stream.err)), retry
 	}
 	progress.finish(stream.bytes)
 	if archive == nil {

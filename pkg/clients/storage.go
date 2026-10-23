@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -448,37 +447,7 @@ func (c *StorageClient) DownloadWithReader(ctx context.Context, key string, buck
 		return nil, err
 	}
 
-	requestID, _ := awsmiddleware.GetRequestIDMetadata(resp.ResultMetadata)
-	length := int64(-1)
-	if resp.ContentLength != nil {
-		length = *resp.ContentLength
-	}
-	return WithStorageReadMetadata(resp.Body, StorageReadMetadata{RequestID: requestID, ContentLength: length}), nil
-}
-
-// StorageReadMetadata identifies a streamed response without retaining its URL
-// or credentials. ContentLength is -1 when the response did not supply one.
-type StorageReadMetadata struct {
-	RequestID     string
-	ContentLength int64
-}
-
-type storageReadCloser struct {
-	io.ReadCloser
-	metadata StorageReadMetadata
-}
-
-// WithStorageReadMetadata preserves a response body's Read and Close behavior.
-func WithStorageReadMetadata(reader io.ReadCloser, metadata StorageReadMetadata) io.ReadCloser {
-	return &storageReadCloser{ReadCloser: reader, metadata: metadata}
-}
-
-// GetStorageReadMetadata reports the original streamed response, when available.
-func GetStorageReadMetadata(reader io.Reader) (StorageReadMetadata, bool) {
-	if response, ok := reader.(*storageReadCloser); ok {
-		return response.metadata, true
-	}
-	return StorageReadMetadata{ContentLength: -1}, false
+	return resp.Body, nil
 }
 
 func storageObjectNotFound(err error) bool {

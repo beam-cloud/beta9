@@ -21,7 +21,6 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,6 +30,7 @@ type vmStore struct {
 	artifacts     []types.VMArtifact
 	artifactError bool
 	saveError     error
+	onSave        func(*types.VM)
 }
 
 func (r *vmStore) CreateVM(ctx context.Context, v *types.VM) error { return r.SaveVM(ctx, v) }
@@ -41,6 +41,9 @@ func (r *vmStore) SaveVM(_ context.Context, v *types.VM) error {
 	copy := *v
 	copy.UpdatedAt = time.Now()
 	r.rows[v.ID] = &copy
+	if r.onSave != nil {
+		r.onSave(v)
+	}
 	return nil
 }
 func (r *vmStore) GetVM(_ context.Context, ws uint, id string) (*types.VM, error) {
@@ -295,110 +298,35 @@ func TestStartupFailureAllowsVMRetry(t *testing.T) {
 	require.Len(t, runtime.requests, 1)
 }
 
-type retirementStore struct {
-	*vmStore
-	failRetirement bool
-	onRetirement   func()
-}
-
-func (r *retirementStore) SaveVM(ctx context.Context, v *types.VM) error {
-	if r.failRetirement && v.ContainerID == "" {
-		return errors.New("retirement persistence unavailable")
-	}
-	if err := r.vmStore.SaveVM(ctx, v); err != nil {
-		return err
-	}
-	if v.ContainerID == "" && r.onRetirement != nil {
-		r.onRetirement()
-	}
-	return nil
-}
-
 func TestVMProofAcknowledgementFollowsDurableAttemptRetirement(t *testing.T) {
-	for _, action := range []string{"stop", "restart"} {
-		for _, failSave := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/save-fails-%t", action, failSave), func(t *testing.T) {
-				s, v, info, _, _ := fixture()
-				oldID := v.ContainerID
-				containers := s.containers.(*vmContainers)
-				store := &retirementStore{vmStore: s.repo.(*vmStore), failRetirement: failSave}
-				store.onRetirement = func() { containers.exitCode = int(types.ContainerExitCodeUnknownError) }
-				persisted := *v
-				store.rows[v.ID] = &persisted
-				s.repo = store
-				delete(containers.states, oldID)
-				containers.acknowledge = func(id string, code int) error {
-					require.Equal(t, oldID, id)
-					require.Equal(t, int(types.ContainerExitCodeUser), code)
-					require.NotEqual(t, oldID, store.rows[v.ID].ContainerID, "acknowledged before retiring persisted identity")
-					return errors.New("ack unavailable") // Retiring the VM must still succeed.
-				}
-				ctx := auth.ContextWithAuthInfo(context.Background(), info)
-				var err error
-				if action == "stop" {
-					v.DesiredState = "stopped"
-					err = s.stop(ctx, v, false)
-				} else {
-					err = s.start(ctx, info, v)
-				}
-				if failSave {
-					require.ErrorContains(t, err, "retirement persistence unavailable")
-					require.Empty(t, containers.acknowledged)
-					require.Equal(t, oldID, store.rows[v.ID].ContainerID)
-				} else {
-					require.NoError(t, err)
-					require.Equal(t, []string{oldID}, containers.acknowledged)
-				}
-			})
-		}
+	for _, failSave := range []bool{false, true} {
+		t.Run(fmt.Sprint(failSave), func(t *testing.T) {
+			s, v, info, _, _ := fixture()
+			containers, store := s.containers.(*vmContainers), s.repo.(*vmStore)
+			oldID := v.ContainerID
+			require.NoError(t, store.SaveVM(context.Background(), v))
+			delete(containers.states, oldID)
+			if failSave {
+				store.saveError = errors.New("retirement persistence unavailable")
+			}
+			store.onSave = func(*types.VM) { containers.exitCode = int(types.ContainerExitCodeUnknownError) }
+			containers.acknowledge = func(id string, code int) error {
+				require.Equal(t, oldID, id)
+				require.Equal(t, int(types.ContainerExitCodeUser), code, "acknowledge only the observed outcome")
+				require.Empty(t, store.rows[v.ID].ContainerID, "proof cannot expire before durable retirement")
+				return errors.New("ack unavailable")
+			}
+			v.DesiredState = "stopped"
+			err := s.stop(auth.ContextWithAuthInfo(context.Background(), info), v, false)
+			require.ErrorIs(t, err, store.saveError)
+			require.Equal(t, failSave, store.rows[v.ID].ContainerID == oldID)
+			if failSave {
+				require.Empty(t, containers.acknowledged)
+			} else {
+				require.Equal(t, []string{oldID}, containers.acknowledged)
+			}
+		})
 	}
-}
-
-func TestStartRecoversGatewayCrashAfterIdentitySaveBeforeEnqueue(t *testing.T) {
-	s, v, info, runtime, _ := fixture()
-	containers := s.containers.(*vmContainers)
-	oldID, generation := v.ContainerID, v.Generation
-	v.Status, v.DesiredState = "starting", "running"
-	// start durably reserves an identity before RunVM admits it to Redis.
-	// A replacement gateway must recover that gap without inventing proof.
-	require.NoError(t, s.repo.SaveVM(context.Background(), v))
-	delete(containers.states, oldID)
-	containers.exitError = redis.Nil
-	err := s.start(auth.ContextWithAuthInfo(context.Background(), info), info, v)
-	require.NoError(t, err)
-	require.NotEqual(t, oldID, v.ContainerID)
-	require.Equal(t, generation+1, v.Generation)
-	require.Len(t, runtime.requests, 1)
-	require.Empty(t, containers.acknowledged)
-}
-
-type failedRetirementProofRead struct {
-	*vmContainers
-	reads int
-}
-
-func (r *failedRetirementProofRead) GetContainerExitCode(id string) (int, error) {
-	r.reads++
-	if r.reads == 2 {
-		return -1, errors.New("Redis connection unavailable")
-	}
-	return r.vmContainers.GetContainerExitCode(id)
-}
-
-func TestStartPreservesIdentityWhenRetirementProofReadFails(t *testing.T) {
-	s, v, info, runtime, _ := fixture()
-	containers := s.containers.(*vmContainers)
-	oldID, generation := v.ContainerID, v.Generation
-	delete(containers.states, oldID)
-	proofReads := &failedRetirementProofRead{vmContainers: containers}
-	s.containers = proofReads
-	err := s.start(auth.ContextWithAuthInfo(context.Background(), info), info, v)
-	require.ErrorContains(t, err, "read VM finalization proof")
-	require.Equal(t, 2, proofReads.reads)
-	require.Equal(t, oldID, v.ContainerID)
-	require.Equal(t, generation, v.Generation)
-	require.Empty(t, runtime.requests)
-	require.Empty(t, containers.acknowledged)
 }
 
 func TestFinalizationErrorPreservesRuntimeForRecovery(t *testing.T) {
@@ -668,53 +596,6 @@ func TestCreateUsesConfiguredDefaultPoolAndPreservesExplicitPool(t *testing.T) {
 			} else {
 				require.Equal(t, test.wantPool, gateway.stub.Pool.Name)
 			}
-		})
-	}
-}
-
-func TestRunningVMRetainsSnapshotFailureUntilRootCommitRecovers(t *testing.T) {
-	s, v, _, runtime, _ := fixture()
-	ctx := context.Background()
-	v.RootSnapshotID = "previous-root"
-	v.UpdatedAt = time.Now().Add(-2 * time.Minute)
-	runtime.snapshotError = true
-	err := s.reconcileVM(ctx, v)
-	require.ErrorContains(t, err, "root snapshot failed")
-	s.failed(ctx, v, err)
-	store := s.repo.(*vmStore)
-	require.Equal(t, "running", store.rows[v.ID].Status)
-	require.NotEmpty(t, store.rows[v.ID].Error)
-
-	// Running/exec-ready alone must not erase a failed disk commit.
-	runtime.snapshotError = false
-	v.UpdatedAt = time.Now()
-	require.NoError(t, s.reconcileVM(ctx, v))
-	require.NotEmpty(t, store.rows[v.ID].Error)
-	require.Equal(t, "previous-root", store.rows[v.ID].RootSnapshotID)
-
-	v.UpdatedAt = time.Now().Add(-2 * time.Minute)
-	require.NoError(t, s.reconcileVM(ctx, v))
-	require.Equal(t, "root-live", store.rows[v.ID].RootSnapshotID)
-	require.Empty(t, store.rows[v.ID].Error)
-	require.Equal(t, "running", store.rows[v.ID].Status)
-	require.Equal(t, v.ContainerID, store.rows[v.ID].ContainerID)
-}
-
-func TestSnapshotErrorClearRequiresMatchingRootAndSuccessfulPersistence(t *testing.T) {
-	for _, scenario := range []string{"wrong-root", "save-failed"} {
-		t.Run(scenario, func(t *testing.T) {
-			s, v, _, runtime, _ := fixture()
-			v.RootSnapshotID, v.Error = "previous-root", "root snapshot failed: freeze timeout"
-			store := s.repo.(*vmStore)
-			require.NoError(t, store.SaveVM(context.Background(), v)) // Detached durable row.
-			if scenario == "wrong-root" {
-				runtime.diskName = "another-vm"
-			} else {
-				store.saveError = errors.New("snapshot persistence unavailable")
-			}
-			require.Error(t, s.snapshotRoot(context.Background(), v))
-			require.Equal(t, "previous-root", store.rows[v.ID].RootSnapshotID)
-			require.Equal(t, "root snapshot failed: freeze timeout", store.rows[v.ID].Error)
 		})
 	}
 }

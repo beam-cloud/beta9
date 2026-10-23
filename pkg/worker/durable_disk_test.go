@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
-	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -30,8 +29,6 @@ import (
 
 func TestPublicDiskSnapshotStoreDownloadsPresignedObject(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("X-Amz-Request-Id", "public-request-123")
-		w.Header().Set("Content-Length", "5")
 		_, _ = w.Write([]byte("chunk"))
 	}))
 	defer server.Close()
@@ -47,10 +44,6 @@ func TestPublicDiskSnapshotStoreDownloadsPresignedObject(t *testing.T) {
 	reader, err := store.DownloadWithReader(context.Background(), "chunk-key")
 	require.NoError(t, err)
 	defer reader.Close()
-	metadata, ok := clients.GetStorageReadMetadata(reader)
-	require.True(t, ok)
-	require.Equal(t, "public-request-123", metadata.RequestID)
-	require.EqualValues(t, 5, metadata.ContentLength)
 	data, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	require.Equal(t, "chunk", string(data))

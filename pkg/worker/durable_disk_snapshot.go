@@ -229,10 +229,7 @@ func (s *durableDiskSnapshotURLStore) DownloadWithReader(ctx context.Context, ke
 		httpResp.Body.Close()
 		return nil, fmt.Errorf("download public disk snapshot object: status %d", httpResp.StatusCode)
 	}
-	return clients.WithStorageReadMetadata(httpResp.Body, clients.StorageReadMetadata{
-		RequestID:     httpResp.Header.Get("X-Amz-Request-Id"),
-		ContentLength: httpResp.ContentLength,
-	}), nil
+	return httpResp.Body, nil
 }
 
 func uploadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnapshotStore, manifestKey string, manifest *types.DiskSnapshotManifest) (string, int64, error) {

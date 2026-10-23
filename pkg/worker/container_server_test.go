@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -222,119 +223,34 @@ func TestContainerCheckpointAllowsForcedTerminalFilesystemCapture(t *testing.T) 
 
 func TestContainerCheckpointReturnsNoIDWhenPersistenceFails(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-id"}
+	var calls atomic.Int32
 	server := &ContainerRuntimeServer{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		createCheckpoint: func(context.Context, *CreateCheckpointOpts) error {
+			calls.Add(1)
 			return errors.New("checkpoint persistence failed")
 		},
 	}
 	server.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id:      request.ContainerId,
-		Request: request,
+		Id: request.ContainerId, Request: request,
 		Runtime: NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true}),
 	})
-
-	response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{
-		ContainerId:              request.ContainerId,
-		TerminateAfterCheckpoint: true,
-	})
-	require.NoError(t, err)
-	require.False(t, response.Ok)
-	require.Empty(t, response.CheckpointId)
-	require.Equal(t, "checkpoint persistence failed", response.ErrorMsg)
-}
-
-func TestTerminalCheckpointJoinsAfterCallerCancellationAndContainerRemoval(t *testing.T) {
-	var calls atomic.Int32
-	started, finish := make(chan context.Context, 1), make(chan struct{})
-	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
-	request := &types.ContainerRequest{ContainerId: "terminal-one"}
-	server.containerInstances.Set(request.ContainerId, &ContainerInstance{Request: request,
-		Runtime: NewMockRuntime(types.ContainerRuntimeMicroVM.String(), betaruntime.Capabilities{CheckpointRestore: true})})
-	server.createCheckpoint = func(ctx context.Context, opts *CreateCheckpointOpts) error {
-		calls.Add(1)
-		started <- ctx
-		<-finish
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		opts.DiskSnapshots = []*types.DiskSnapshot{{ExternalId: "root-pair", DiskName: "root"}, {ExternalId: "extra-pair", DiskName: "extra"}}
-		server.containerInstances.Delete(request.ContainerId)
-		return nil
-	}
-	in := &pb.ContainerCheckpointRequest{ContainerId: request.ContainerId, TerminateAfterCheckpoint: true}
-	ctx, cancel := context.WithCancel(context.Background())
-	first := make(chan error, 1)
-	go func() { _, err := server.ContainerCheckpoint(ctx, in); first <- err }()
-	operationCtx := <-started
-	deadline, bounded := operationCtx.Deadline()
-	require.True(t, bounded)
-	require.InDelta(t, defaultCheckpointOperationTTL.Seconds(), time.Until(deadline).Seconds(), 1)
-	cancel()
-	require.ErrorIs(t, <-first, context.Canceled)
-	require.NoError(t, operationCtx.Err(), "accepted terminal work must outlive the caller")
-	responses := make(chan *pb.ContainerCheckpointResponse, 100)
-	errors := make(chan error, 100)
-	for range 100 {
-		go func() {
-			response, err := server.ContainerCheckpoint(context.Background(), in)
-			responses <- response
-			errors <- err
-		}()
-	}
-	close(finish)
-	var originalID string
-	for range 100 {
-		response := <-responses
-		require.NoError(t, <-errors)
-		require.True(t, response.Ok)
-		if originalID == "" {
-			originalID = response.CheckpointId
-		}
-		require.Equal(t, originalID, response.CheckpointId)
-		require.Equal(t, types.ContainerRuntimeMicroVM.String(), response.Runtime)
-		require.Equal(t, "root-pair", response.DiskSnapshots[0].SnapshotId)
-		require.Equal(t, "extra-pair", response.DiskSnapshots[1].SnapshotId)
-		response.DiskSnapshots[0].SnapshotId = "caller-mutated"
-	}
-	require.Equal(t, int32(1), calls.Load())
-	replayed, err := server.ContainerCheckpoint(context.Background(), in)
-	require.NoError(t, err)
-	require.Equal(t, "root-pair", replayed.DiskSnapshots[0].SnapshotId)
-	for _, in := range []*pb.ContainerCheckpointRequest{{ContainerId: request.ContainerId}, {ContainerId: "new-runtime-generation", TerminateAfterCheckpoint: true}} {
-		response, err := server.ContainerCheckpoint(context.Background(), in)
+	for _, call := range []struct {
+		terminal bool
+		captures int32
+	}{{true, 1}, {true, 1}, {false, 2}, {false, 3}} {
+		response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{
+			ContainerId: request.ContainerId, TerminateAfterCheckpoint: call.terminal,
+		})
 		require.NoError(t, err)
-		require.False(t, response.Ok, "nonterminal or another CID must not replay the old terminal result")
+		require.False(t, response.Ok)
+		require.Empty(t, response.CheckpointId)
+		require.Equal(t, "checkpoint persistence failed", response.ErrorMsg)
+		require.Equal(t, call.captures, calls.Load(), "only terminal calls may replay their failed result")
 	}
 }
 
-func TestTerminalCheckpointRetainsFailureWithoutRetryingCapture(t *testing.T) {
-	var calls atomic.Int32
-	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance](),
-		createCheckpoint: func(context.Context, *CreateCheckpointOpts) error {
-			calls.Add(1)
-			return fmt.Errorf("origin publication failed")
-		}}
-	for _, cid := range []string{"first", "second"} {
-		server.containerInstances.Set(cid, &ContainerInstance{Request: &types.ContainerRequest{ContainerId: cid},
-			Runtime: NewMockRuntime(types.ContainerRuntimeMicroVM.String(), betaruntime.Capabilities{CheckpointRestore: true})})
-		for range 2 {
-			response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{ContainerId: cid, TerminateAfterCheckpoint: true})
-			require.NoError(t, err)
-			require.False(t, response.Ok)
-			require.Empty(t, response.CheckpointId)
-			require.Equal(t, "origin publication failed", response.ErrorMsg)
-		}
-	}
-	require.Equal(t, int32(2), calls.Load(), "each exact CID owns one result, including failures")
-	for range 2 {
-		_, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{ContainerId: "first"})
-		require.NoError(t, err)
-	}
-	require.Equal(t, int32(4), calls.Load(), "nonterminal captures must not replay terminal results")
-}
-
-func TestTerminalCheckpointReconnectsAfterAcceptedRPCAndThreeSecondOutage(t *testing.T) {
+func TestTerminalCheckpointJoinsAcrossLostResponseAndContainerRemoval(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
@@ -343,15 +259,24 @@ func TestTerminalCheckpointReconnectsAfterAcceptedRPCAndThreeSecondOutage(t *tes
 		Runtime: NewMockRuntime(types.ContainerRuntimeMicroVM.String(), betaruntime.Capabilities{CheckpointRestore: true})})
 	var calls atomic.Int32
 	started, finish := make(chan string, 1), make(chan struct{})
-	server.createCheckpoint = func(_ context.Context, opts *CreateCheckpointOpts) error {
+	unblock := sync.OnceFunc(func() { close(finish) })
+	t.Cleanup(unblock)
+	server.createCheckpoint = func(ctx context.Context, opts *CreateCheckpointOpts) error {
 		calls.Add(1)
 		started <- opts.CheckpointId
 		<-finish
-		opts.DiskSnapshots = []*types.DiskSnapshot{{ExternalId: "exact-root", DiskName: "root"}}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		opts.DiskSnapshots = []*types.DiskSnapshot{{ExternalId: "exact-root", DiskName: "root"}, {ExternalId: "exact-extra", DiskName: "extra"}}
 		server.containerInstances.Delete(request.ContainerId)
 		return nil
 	}
-	grpcServer := grpc.NewServer()
+	rpcContexts := make(chan context.Context, 200)
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		rpcContexts <- ctx
+		return handler(ctx, req)
+	}))
 	pb.RegisterContainerServiceServer(grpcServer, server)
 	go func() { _ = grpcServer.Serve(listener) }()
 	t.Cleanup(grpcServer.Stop)
@@ -375,29 +300,56 @@ func TestTerminalCheckpointReconnectsAfterAcceptedRPCAndThreeSecondOutage(t *tes
 	t.Cleanup(func() { _ = client.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	responses := make(chan *pb.ContainerCheckpointResponse, 1)
-	errors := make(chan error, 1)
-	go func() {
+	responses, failures := make(chan *pb.ContainerCheckpointResponse, 100), make(chan error, 100)
+	call := func() {
 		response, err := client.Checkpoint(ctx, request.ContainerId, common.ContainerCheckpointOptions{TerminateAfterCheckpoint: true})
 		responses <- response
-		errors <- err
-	}()
-	originalID := <-started
+		failures <- err
+	}
+	go call()
+	var originalID string
+	select {
+	case originalID = <-started:
+	case err := <-failures:
+		t.Fatalf("checkpoint was not accepted: %v", err)
+	}
+	acceptedRPC := <-rpcContexts
+	for range 99 {
+		go call()
+	}
+	for range 99 {
+		select {
+		case <-rpcContexts:
+		case <-ctx.Done():
+			t.Fatal("not all100 callers reached the accepted operation")
+		}
+	}
 	offline.Store(true)
 	require.NoError(t, (<-connections).Close())
-	close(finish)
 	select {
-	case err := <-errors:
-		t.Fatalf("accepted checkpoint failed during a temporary outage: %v", err)
+	case <-acceptedRPC.Done():
+	case <-ctx.Done():
+		t.Fatal("dropped transport did not cancel the original RPC")
+	}
+	unblock()
+	select {
+	case err := <-failures:
+		t.Fatalf("checkpoint failed during a temporary outage: %v", err)
 	case <-time.After(3 * time.Second):
 	}
 	offline.Store(false)
-	require.NoError(t, <-errors)
-	response := <-responses
-	require.True(t, response.Ok)
-	require.Equal(t, originalID, response.CheckpointId)
-	require.Equal(t, "exact-root", response.DiskSnapshots[0].SnapshotId)
+	for range 100 {
+		require.NoError(t, <-failures)
+		response := <-responses
+		require.True(t, response.Ok)
+		require.Equal(t, originalID, response.CheckpointId)
+		require.Equal(t, "exact-root", response.DiskSnapshots[0].SnapshotId)
+		require.Equal(t, "exact-extra", response.DiskSnapshots[1].SnapshotId)
+	}
 	require.Equal(t, int32(1), calls.Load())
+	response, err := server.ContainerCheckpoint(ctx, &pb.ContainerCheckpointRequest{ContainerId: "new-runtime", TerminateAfterCheckpoint: true})
+	require.NoError(t, err)
+	require.False(t, response.Ok, "another runtime identity must not replay a terminal result")
 }
 
 func TestContainerSnapshotDisksPropagatesRequestContext(t *testing.T) {

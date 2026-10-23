@@ -7,48 +7,20 @@
 
 # Cloud Hypervisor + virtiofsd
 # ========================
-# The amd64 hypervisor carries a checkpoint queue-drain preflight. Build it
-# from the pinned upstream source with the same features as the static release.
-# The arm64 asset remains upstream: without virtiofsd NewMicroVM reports the
-# runtime unavailable ("virtiofsd not found in PATH").
-FROM rust:1.89.0-bookworm AS hypervisor
-ARG TARGETARCH
-ARG CLOUD_HYPERVISOR_COMMIT=9ed824d6d08df3e96f7d5f50795d9449ac99f431
-ARG CLOUD_HYPERVISOR_SOURCE_SHA256=03c2c4d80bb68567835020b2be42dd23177f14d32660a1ce15dd175e2dfdcbbf
-COPY docker/patches/cloud-hypervisor/ /patches/
-
-RUN <<EOT
-set -eux
-mkdir -p /out
-if [ "$TARGETARCH" != "amd64" ]; then exit 0; fi
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl musl-tools patch pkg-config
-rustup target add x86_64-unknown-linux-musl
-curl -fsSL "https://codeload.github.com/cloud-hypervisor/cloud-hypervisor/tar.gz/${CLOUD_HYPERVISOR_COMMIT}" -o /tmp/cloud-hypervisor.tar.gz
-echo "${CLOUD_HYPERVISOR_SOURCE_SHA256}  /tmp/cloud-hypervisor.tar.gz" | sha256sum -c -
-mkdir /build
-tar -xzf /tmp/cloud-hypervisor.tar.gz -C /build --strip-components=1
-cd /build
-for p in /patches/*.patch; do patch --fuzz=0 -p1 < "$p"; done
-cargo test --locked -p virtio-devices --features kvm snapshot_block_queues
-cargo test --locked -p vmm --features kvm only_pre_snapshot_block_queue_busy_is_retryable
-cargo build --locked --release --target x86_64-unknown-linux-musl --features mshv -p cloud-hypervisor
-install -m 0755 target/x86_64-unknown-linux-musl/release/cloud-hypervisor /out/cloud-hypervisor
-EOT
-
-# virtiofsd publishes x86_64 only. Its release and the arm64 hypervisor are
-# pinned and checksummed independently of the patched amd64 build above.
+# Static release binaries, pinned and checksummed. virtiofsd publishes x86_64
+# only; on arm64 the hypervisor ships but NewMicroVM reports the runtime
+# unavailable ("virtiofsd not found in PATH") rather than failing the build.
 FROM debian:bookworm AS tools
 
 ARG TARGETARCH
 ARG CLOUD_HYPERVISOR_VERSION=v53.0
+ARG CLOUD_HYPERVISOR_AMD64_SHA256=448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc
 ARG CLOUD_HYPERVISOR_ARM64_SHA256=f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850
 ARG VIRTIOFSD_VERSION=v1.14.0
 ARG VIRTIOFSD_AMD64_URL=https://gitlab.com/-/project/21523468/uploads/f505704014ae7a816e515f2a05a93d8b/virtiofsd-v1.14.0.zip
 ARG VIRTIOFSD_AMD64_SHA256=2e4fe9571f492b00baa34bc4e708e950039c5da05b830b31a8d179cb6ac8978e
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
-COPY --from=hypervisor /out/ /out/
 
 RUN <<EOT
 set -eux
@@ -56,6 +28,8 @@ mkdir -p /out
 base="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}"
 case "$TARGETARCH" in
     amd64)
+        curl -fsSL "${base}/cloud-hypervisor-static" -o /out/cloud-hypervisor
+        echo "${CLOUD_HYPERVISOR_AMD64_SHA256}  /out/cloud-hypervisor" | sha256sum -c -
         curl -fsSL "${VIRTIOFSD_AMD64_URL}" -o /tmp/virtiofsd.zip
         echo "${VIRTIOFSD_AMD64_SHA256}  /tmp/virtiofsd.zip" | sha256sum -c -
         unzip -j -q /tmp/virtiofsd.zip -d /tmp/virtiofsd

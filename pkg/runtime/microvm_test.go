@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -252,228 +251,86 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	assert.ErrorContains(t, err, "not a vhost-user export", "a scratch-root snapshot cannot be restored onto a durable root")
 }
 
-// This shape matches Cloud Hypervisor's native config/state metadata; guest
-// memory ranges are concatenated in listed order, not sorted by GPA.
-func microVMSnapshotQueueFixture(t *testing.T) (string, map[string]any, map[string]any, []byte) {
-	t.Helper()
-	config := map[string]any{"disks": []any{map[string]any{"id": "_disk0", "vhost_user": true, "num_queues": 1, "queue_size": 128}}}
-	section := func(state any) map[string]any {
-		data, err := json.Marshal(state)
+// This is the queue and sparse RAM layout captured from the failed burst.
+func TestMicroVMSnapshotBlockQueueIntegrity(t *testing.T) {
+	dir := t.TempDir()
+	vhost, gpa := true, uint64(0)
+	avail, used := uint64(73537536), uint64(73537856)
+	const memorySize = int64(1476395008)
+	section := func(value any) *microVMSnapshotSection {
+		data, err := json.Marshal(value)
 		require.NoError(t, err)
-		return map[string]any{"snapshots": map[string]any{}, "snapshot_data": map[string]any{"state": string(data)}}
+		return &microVMSnapshotSection{SnapshotData: microVMSnapshotData{State: string(data)}}
 	}
-	state := map[string]any{"snapshots": map[string]any{
-		"memory-manager": section(map[string]any{"memory_ranges": map[string]any{"data": []any{
-			map[string]any{"gpa": 8192, "length": 2048}, map[string]any{"gpa": 4096, "length": 2048},
-		}}}),
-		"device-manager": map[string]any{"snapshots": map[string]any{
-			"_disk0": section(map[string]any{"acked_protocol_features": 33291}),
-			"_virtio-pci-_disk0": section(map[string]any{"queues": []any{map[string]any{
-				"ready": true, "size": 128, "avail_ring": 8198, "used_ring": 4108,
-			}}}),
-			// A virtio-fs queue is unrelated to the configured block disk.
-			"_virtio-pci-_fs2": section(map[string]any{"queues": []any{map[string]any{"ready": false}}}),
+	config := microVMSnapshotConfig{Disks: []microVMSnapshotDisk{{ID: "_disk0", VhostUser: &vhost, NumQueues: 1, QueueSize: 128}}}
+	state := microVMSnapshotSection{Snapshots: map[string]*microVMSnapshotSection{
+		"memory-manager": section(microVMSnapshotMemory{MemoryRanges: microVMSnapshotMemoryRanges{
+			Data: []microVMSnapshotMemoryRange{{GPA: &gpa, Length: uint64(memorySize)}},
+		}}),
+		"device-manager": {Snapshots: map[string]*microVMSnapshotSection{
+			"_virtio-pci-_disk0": section(microVMSnapshotTransport{Queues: []microVMSnapshotQueue{
+				{Ready: true, Size: 128, Avail: &avail, Used: &used},
+			}}),
 		}},
 	}}
-	memory := make([]byte, 4096)
-	binary.LittleEndian.PutUint16(memory[8:], 65535)
-	binary.LittleEndian.PutUint16(memory[2062:], 65535)
-	return t.TempDir(), config, state, memory
-}
-
-func writeMicroVMSnapshotQueueFixture(t *testing.T, dir string, config, state map[string]any, memory []byte) {
-	t.Helper()
 	for name, value := range map[string]any{"config.json": config, "state.json": state} {
 		data, err := json.Marshal(value)
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0600))
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory-ranges"), memory, 0600))
-}
-
-func mutateMicroVMSnapshotSection(t *testing.T, state map[string]any, name string, change func(map[string]any)) {
-	t.Helper()
-	var visit func(map[string]any)
-	visit = func(parent map[string]any) {
-		children, _ := parent["snapshots"].(map[string]any)
-		for key, raw := range children {
-			child := raw.(map[string]any)
-			if key == name {
-				data := child["snapshot_data"].(map[string]any)
-				var decoded map[string]any
-				require.NoError(t, json.Unmarshal([]byte(data["state"].(string)), &decoded))
-				change(decoded)
-				encoded, err := json.Marshal(decoded)
-				require.NoError(t, err)
-				data["state"] = string(encoded)
-				return
-			}
-			visit(child)
-		}
-	}
-	visit(state)
-}
-
-func TestValidateMicroVMSnapshotBlockQueues(t *testing.T) {
-	t.Run("drained_discontiguous_ranges_in_file_order", func(t *testing.T) {
-		dir, config, state, memory := microVMSnapshotQueueFixture(t)
-		writeMicroVMSnapshotQueueFixture(t, dir, config, state, memory)
-		require.NoError(t, validateMicroVMSnapshotBlockQueues(dir))
-	})
-	t.Run("high_guest_address_maps_to_small_native_file_offset", func(t *testing.T) {
-		dir, config, state, memory := microVMSnapshotQueueFixture(t)
-		const base = uint64(math.MaxUint64 - 4095)
-		mutateMicroVMSnapshotSection(t, state, "memory-manager", func(v map[string]any) {
-			v["memory_ranges"] = map[string]any{"data": []any{map[string]any{"gpa": base, "length": 2048}, map[string]any{"gpa": 4096, "length": 2048}}}
-		})
-		mutateMicroVMSnapshotSection(t, state, "_virtio-pci-_disk0", func(v map[string]any) {
-			v["queues"].([]any)[0].(map[string]any)["avail_ring"] = base + 6
-		})
-		writeMicroVMSnapshotQueueFixture(t, dir, config, state, memory)
-		require.NoError(t, validateMicroVMSnapshotBlockQueues(dir))
-	})
-	t.Run("observed_13_outstanding_requests_with_uint16_wrap", func(t *testing.T) {
-		dir, config, state, memory := microVMSnapshotQueueFixture(t)
-		binary.LittleEndian.PutUint16(memory[8:], 3)
-		binary.LittleEndian.PutUint16(memory[2062:], 65526)
-		writeMicroVMSnapshotQueueFixture(t, dir, config, state, memory)
-		require.ErrorContains(t, validateMicroVMSnapshotBlockQueues(dir), "13 outstanding requests")
-	})
-	t.Run("every_configured_disk_and_queue_is_checked", func(t *testing.T) {
-		dir, config, state, memory := microVMSnapshotQueueFixture(t)
-		config["disks"] = append(config["disks"].([]any), map[string]any{"id": "data", "vhost_user": true, "num_queues": 2, "queue_size": 128})
-		transport := map[string]any{"queues": []any{
-			map[string]any{"ready": true, "size": 128, "avail_ring": 8198, "used_ring": 4108},
-			map[string]any{"ready": true, "size": 128, "avail_ring": 8222, "used_ring": 4132},
-		}}
-		encoded, err := json.Marshal(transport)
-		require.NoError(t, err)
-		children := state["snapshots"].(map[string]any)["device-manager"].(map[string]any)["snapshots"].(map[string]any)
-		children["_virtio-pci-data"] = map[string]any{"snapshot_data": map[string]any{"state": string(encoded)}}
-		writeMicroVMSnapshotQueueFixture(t, dir, config, state, memory)
-		require.NoError(t, validateMicroVMSnapshotBlockQueues(dir))
-		memory[32] = 1
-		writeMicroVMSnapshotQueueFixture(t, dir, config, state, memory)
-		require.ErrorContains(t, validateMicroVMSnapshotBlockQueues(dir), `disk "data" queue 1`)
-	})
-	t.Run("captured_native_queue_733_available_720_used", func(t *testing.T) {
-		dir, config, state, _ := microVMSnapshotQueueFixture(t)
-		mutateMicroVMSnapshotSection(t, state, "memory-manager", func(v map[string]any) {
-			v["memory_ranges"] = map[string]any{"data": []any{map[string]any{"gpa": 0, "length": 1476395008}}}
-		})
-		mutateMicroVMSnapshotSection(t, state, "_virtio-pci-_disk0", func(v map[string]any) {
-			v["queues"] = []any{map[string]any{"ready": true, "size": 128, "avail_ring": 73537536, "used_ring": 73537856}}
-		})
-		writeMicroVMSnapshotQueueFixture(t, dir, config, state, nil)
-		file, err := os.OpenFile(filepath.Join(dir, "memory-ranges"), os.O_RDWR, 0600)
-		require.NoError(t, err)
-		defer file.Close()
-		require.NoError(t, file.Truncate(1476395008)) // Sparse fixture: only four bytes are written/read.
-		var index [2]byte
-		binary.LittleEndian.PutUint16(index[:], 733)
-		_, err = file.WriteAt(index[:], 73537538)
-		require.NoError(t, err)
-		binary.LittleEndian.PutUint16(index[:], 720)
-		_, err = file.WriteAt(index[:], 73537858)
-		require.NoError(t, err)
-		require.ErrorContains(t, validateMicroVMSnapshotBlockQueues(dir), "13 outstanding requests")
-		binary.LittleEndian.PutUint16(index[:], 733)
-		_, err = file.WriteAt(index[:], 73537858)
-		require.NoError(t, err)
-		require.NoError(t, validateMicroVMSnapshotBlockQueues(dir))
-	})
-	t.Run("non_vhost_disks_need_no_backend_drain", func(t *testing.T) {
-		dir, config, _, _ := microVMSnapshotQueueFixture(t)
-		config["disks"].([]any)[0].(map[string]any)["vhost_user"] = false
-		encoded, err := json.Marshal(config)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), encoded, 0600))
-		require.NoError(t, validateMicroVMSnapshotBlockQueues(dir))
-	})
-}
-
-func TestValidateMicroVMSnapshotBlockQueuesRejectsInvalidState(t *testing.T) {
+	file, err := os.Create(filepath.Join(dir, "memory-ranges"))
+	require.NoError(t, err)
+	defer file.Close()
 	for _, test := range []struct {
-		name   string
-		change func(map[string]any, map[string]any)
+		name            string
+		available, used uint16
+		size            int64
+		wantError       string
 	}{
-		{"missing_disks", func(c, s map[string]any) { delete(c, "disks") }},
-		{"missing_vhost_flag", func(c, s map[string]any) { delete(c["disks"].([]any)[0].(map[string]any), "vhost_user") }},
-		{"duplicate_disk", func(c, s map[string]any) { c["disks"] = append(c["disks"].([]any), c["disks"].([]any)[0]) }},
-		{"missing_id", func(c, s map[string]any) { delete(c["disks"].([]any)[0].(map[string]any), "id") }},
-		{"missing_queue_count", func(c, s map[string]any) { delete(c["disks"].([]any)[0].(map[string]any), "num_queues") }},
-		{"wrong_queue_count", func(c, s map[string]any) { c["disks"].([]any)[0].(map[string]any)["num_queues"] = 2 }},
-		{"invalid_config_capacity", func(c, s map[string]any) { c["disks"].([]any)[0].(map[string]any)["queue_size"] = 129 }},
-		{"missing_transport", func(c, s map[string]any) {
-			delete(s["snapshots"].(map[string]any)["device-manager"].(map[string]any)["snapshots"].(map[string]any), "_virtio-pci-_disk0")
-		}},
-		{"missing_memory_metadata", func(c, s map[string]any) { delete(s["snapshots"].(map[string]any), "memory-manager") }},
-		{"duplicate_transport", func(c, s map[string]any) {
-			s["snapshots"].(map[string]any)["_virtio-pci-_disk0"] = s["snapshots"].(map[string]any)["device-manager"].(map[string]any)["snapshots"].(map[string]any)["_virtio-pci-_disk0"]
-		}},
-		{"empty_queues", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "_virtio-pci-_disk0", func(v map[string]any) { v["queues"] = []any{} })
-		}},
-		{"inactive_queue", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "_virtio-pci-_disk0", func(v map[string]any) { v["queues"].([]any)[0].(map[string]any)["ready"] = false })
-		}},
-		{"missing_ring", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "_virtio-pci-_disk0", func(v map[string]any) { delete(v["queues"].([]any)[0].(map[string]any), "avail_ring") })
-		}},
-		{"zero_size", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "_virtio-pci-_disk0", func(v map[string]any) { v["queues"].([]any)[0].(map[string]any)["size"] = 0 })
-		}},
-		{"ring_outside_memory", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "_virtio-pci-_disk0", func(v map[string]any) { v["queues"].([]any)[0].(map[string]any)["avail_ring"] = 11000 })
-		}},
-		{"ring_index_crosses_range", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "_virtio-pci-_disk0", func(v map[string]any) { v["queues"].([]any)[0].(map[string]any)["avail_ring"] = 10238 })
-		}},
-		{"ring_overflow", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "_virtio-pci-_disk0", func(v map[string]any) { v["queues"].([]any)[0].(map[string]any)["avail_ring"] = uint64(math.MaxUint64) })
-		}},
-		{"overlapping_ranges", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "memory-manager", func(v map[string]any) {
-				v["memory_ranges"] = map[string]any{"data": []any{map[string]any{"gpa": 0, "length": 128}, map[string]any{"gpa": 64, "length": 128}}}
-			})
-		}},
-		{"range_overflow", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "memory-manager", func(v map[string]any) {
-				v["memory_ranges"] = map[string]any{"data": []any{map[string]any{"gpa": uint64(math.MaxUint64), "length": 1}}}
-			})
-		}},
-		{"empty_ranges", func(c, s map[string]any) {
-			mutateMicroVMSnapshotSection(t, s, "memory-manager", func(v map[string]any) { v["memory_ranges"] = map[string]any{"data": []any{}} })
-		}},
+		{"observed_pending", 733, 720, memorySize, "13 outstanding requests"},
+		{"drained", 733, 733, memorySize, ""},
+		{"wrapped_pending", 3, 65526, memorySize, "13 outstanding requests"},
+		{"truncated_ram", 733, 733, memorySize - 1, "length"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			dir, config, state, memory := microVMSnapshotQueueFixture(t)
-			test.change(config, state)
-			writeMicroVMSnapshotQueueFixture(t, dir, config, state, memory)
-			require.Error(t, validateMicroVMSnapshotBlockQueues(dir))
+			require.NoError(t, file.Truncate(test.size))
+			var index [2]byte
+			for address, value := range map[uint64]uint16{avail: test.available, used: test.used} {
+				binary.LittleEndian.PutUint16(index[:], value)
+				_, err := file.WriteAt(index[:], int64(address+2))
+				require.NoError(t, err)
+			}
+			err := validateMicroVMSnapshotBlockQueues(dir)
+			if test.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, test.wantError)
+			}
 		})
 	}
-	for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
-		t.Run("missing_"+name, func(t *testing.T) {
-			dir, config, state, memory := microVMSnapshotQueueFixture(t)
-			writeMicroVMSnapshotQueueFixture(t, dir, config, state, memory)
-			require.NoError(t, os.Remove(filepath.Join(dir, name)))
-			require.Error(t, validateMicroVMSnapshotBlockQueues(dir))
-		})
-		if name != "memory-ranges" {
-			t.Run("malformed_"+name, func(t *testing.T) {
-				dir, config, state, memory := microVMSnapshotQueueFixture(t)
-				writeMicroVMSnapshotQueueFixture(t, dir, config, state, memory)
-				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("{"), 0600))
-				require.Error(t, validateMicroVMSnapshotBlockQueues(dir))
-			})
+}
+
+func TestMicroVMSnapshotMemoryUsesMetadataOffsets(t *testing.T) {
+	for _, first := range []uint64{8192, math.MaxUint64 - 4095} {
+		second := uint64(4096)
+		memory := microVMSnapshotMemory{MemoryRanges: microVMSnapshotMemoryRanges{Data: []microVMSnapshotMemoryRange{
+			{GPA: &first, Length: 2048}, {GPA: &second, Length: 2048},
+		}}}
+		file, err := os.CreateTemp(t.TempDir(), "ram")
+		require.NoError(t, err)
+		t.Cleanup(func() { file.Close() })
+		require.NoError(t, file.Truncate(4096))
+		_, err = file.WriteAt([]byte{0x34, 0x12}, 8)
+		require.NoError(t, err)
+		_, err = file.WriteAt([]byte{0x78, 0x56}, 2062)
+		require.NoError(t, err)
+		require.NoError(t, memory.bind(file))
+		for address, want := range map[uint64]uint16{first + 6: 0x1234, second + 12: 0x5678} {
+			got, err := memory.readIndex(address)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
 		}
-	}
-	for _, size := range []int{4095, 4097} {
-		t.Run(fmt.Sprintf("memory_length_%d", size), func(t *testing.T) {
-			dir, config, state, _ := microVMSnapshotQueueFixture(t)
-			writeMicroVMSnapshotQueueFixture(t, dir, config, state, make([]byte, size))
-			require.ErrorContains(t, validateMicroVMSnapshotBlockQueues(dir), "memory file length")
-		})
+		_, err = memory.readIndex(100)
+		require.Error(t, err)
 	}
 }

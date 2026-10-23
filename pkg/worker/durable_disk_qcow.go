@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"os"
 	"path"
@@ -1094,21 +1093,15 @@ func (s *qcowChunkSource) ReadChunk(ctx context.Context, chunk types.DiskSnapsho
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			started := time.Now()
 			reader, err := store.DownloadWithReader(ctx, chunk.ObjectKey)
 			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return err
 				}
 				lastErr = err
-				break // Preserve the source's existing open/fallback policy.
+				break
 			}
-			// Every attempt overwrites the complete destination. Partial bodies
-			// never escape as success; fetchLayer verifies its SHA before publish.
-			metadata, _ := clients.GetStorageReadMetadata(reader)
+			// Restart into the whole destination; fetchLayer verifies its SHA.
 			read, err := io.ReadFull(reader, dest)
 			reader.Close()
 			if ctx.Err() != nil {
@@ -1120,23 +1113,17 @@ func (s *qcowChunkSource) ReadChunk(ctx context.Context, chunk types.DiskSnapsho
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
-			source := qcowChunkStoreSource(store)
-			lastErr = fmt.Errorf("read %d/%d chunk bytes from %s on attempt %d: %w", read, len(dest), source, attempt, err)
-			retrying := attempt < qcowChunkReadAttempts && retryableStorageBodyRead(err)
-			log.Warn().Err(err).Str("object_key", chunk.ObjectKey).Str("chunk", chunk.Digest).
-				Str("source", source).Int("attempt", attempt).Int("bytes_read", read).
-				Int("expected_bytes", len(dest)).Bool("retrying", retrying).
-				Str("request_id", metadata.RequestID).Int64("content_length", metadata.ContentLength).
-				Dur("duration", time.Since(started)).Msg("qcow chunk body read failed")
-			if !retrying {
+			lastErr = fmt.Errorf("read chunk attempt %d: %d/%d bytes: %w", attempt, read, len(dest), err)
+			if attempt == qcowChunkReadAttempts || !retryableStorageBodyRead(err) {
 				break
 			}
-			delay := time.Duration(1<<(attempt-1)) * 100 * time.Millisecond
-			delay += time.Duration(rand.Int63n(int64(delay)))
-			if err := waitForRetry(ctx, delay); err != nil {
+			if err := waitForRetry(ctx, time.Duration(attempt)*100*time.Millisecond); err != nil {
 				return err
 			}
 		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	return lastErr
 }
@@ -1152,15 +1139,4 @@ func retryableStorageBodyRead(err error) bool {
 	}
 	var networkError net.Error
 	return errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary())
-}
-
-func qcowChunkStoreSource(store durableDiskSnapshotStore) string {
-	switch store := store.(type) {
-	case *durableDiskSnapshotBucketStore:
-		return "bucket " + store.bucket
-	case *durableDiskSnapshotURLStore:
-		return "public snapshot " + store.snapshotID
-	default:
-		return fmt.Sprintf("%T", store)
-	}
 }
