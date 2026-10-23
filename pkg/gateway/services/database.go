@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path"
 	"regexp"
@@ -72,7 +73,10 @@ type databaseProduct struct {
 	Entrypoint        string
 }
 
-func (p databaseProduct) probe(ctx context.Context, connection url.URL, verifyTLS bool) error {
+// probe connects as a client would, naming the database's host for TLS. With a
+// listener address it dials that instead of the host.
+func (p databaseProduct) probe(ctx context.Context, connection url.URL, verifyTLS bool, listener string) error {
+	dialer := probeDialer{address: listener}
 	switch p.Kind {
 	case types.DatabaseKindPostgres:
 		mode := "require"
@@ -88,32 +92,63 @@ func (p databaseProduct) probe(ctx context.Context, connection url.URL, verifyTL
 		if err != nil {
 			return errors.New("invalid Postgres connection configuration")
 		}
+		connector.Dialer(dialer)
 		client := sql.OpenDB(connector)
 		defer client.Close()
 		var result int
 		return client.QueryRowContext(ctx, "SELECT 1").Scan(&result)
 	case types.DatabaseKindRedis:
 		password, _ := connection.User.Password()
+		tlsConfig := &tls.Config{
+			ServerName:         connection.Hostname(),
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: !verifyTLS, // Only development gateways use self-signed certificates.
+		}
 		client := redis.NewClient(&redis.Options{
-			Addr:                  connection.Host,
-			Username:              connection.User.Username(),
-			Password:              password,
+			Addr:     connection.Host,
+			Username: connection.User.Username(),
+			Password: password,
+			// go-redis applies TLSConfig only in its own dialer.
+			Dialer: func(ctx context.Context, network, address string) (net.Conn, error) {
+				conn, err := dialer.DialContext(ctx, network, address)
+				if err != nil {
+					return nil, err
+				}
+				return tls.Client(conn, tlsConfig), nil
+			},
 			DialTimeout:           databaseProbeTimeout,
 			ReadTimeout:           databaseProbeTimeout,
 			WriteTimeout:          databaseProbeTimeout,
 			ContextTimeoutEnabled: true,
 			MaxRetries:            -1,
-			TLSConfig: &tls.Config{
-				ServerName:         connection.Hostname(),
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: !verifyTLS, // Only development gateways use self-signed certificates.
-			},
 		})
 		defer client.Close()
 		return client.Ping(ctx).Err()
 	default:
 		return errors.New("readiness supports Postgres and Redis")
 	}
+}
+
+// probeDialer dials address in place of the one a client asks for, when set.
+type probeDialer struct{ address string }
+
+func (d probeDialer) target(address string) string {
+	if d.address != "" {
+		return d.address
+	}
+	return address
+}
+
+func (d probeDialer) Dial(network, address string) (net.Conn, error) {
+	return net.DialTimeout(network, d.target(address), databaseProbeTimeout)
+}
+
+func (d probeDialer) DialTimeout(network, address string, timeout time.Duration) (net.Conn, error) {
+	return net.DialTimeout(network, d.target(address), timeout)
+}
+
+func (d probeDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return (&net.Dialer{Timeout: databaseProbeTimeout}).DialContext(ctx, network, d.target(address))
 }
 
 // CheckDatabaseReadiness authenticates through the public endpoint without creating a task.
@@ -157,8 +192,15 @@ func (gws *GatewayService) CheckDatabaseReadiness(ctx context.Context, authInfo 
 		return nil, errors.New("stored database URL does not match the deployment endpoint")
 	}
 	connection.Host = pinnedHost
-	verifyTLS := gws.appConfig.Abstractions.Pod.TCP.CertFile != ""
-	if err := product.probe(ctx, *connection, verifyTLS); err != nil {
+	tcp := gws.appConfig.Abstractions.Pod.TCP
+	verifyTLS := tcp.CertFile != ""
+	// The public host routes to this gateway's TCP listener; dialing it directly
+	// takes the same path without needing the host to resolve in the cluster.
+	listener := ""
+	if tcp.Enabled && tcp.Port > 0 {
+		listener = net.JoinHostPort("127.0.0.1", strconv.Itoa(tcp.Port))
+	}
+	if err := product.probe(ctx, *connection, verifyTLS, listener); err != nil {
 		result.Error = err.Error()
 		if password, _ := connection.User.Password(); password != "" {
 			result.Error = strings.ReplaceAll(result.Error, password, "[redacted]")
