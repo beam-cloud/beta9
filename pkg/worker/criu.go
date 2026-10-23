@@ -64,10 +64,13 @@ const (
 	restoreReadinessStableFor       = 250 * time.Millisecond
 	checkpointOriginConcurrency     = 64
 	checkpointOriginReadAttempts    = 3
+	checkpointCacheConcurrency      = 8
 	checkpointOriginIdleTimeout     = time.Minute
 )
 
 var checkpointOriginSlots = make(chan struct{}, checkpointOriginConcurrency)
+var checkpointArchiveCacheMu sync.Mutex
+var checkpointArchiveCacheInFlight = make(map[string]struct{})
 var errCheckpointOriginInactive = errors.New("memory checkpoint download made no progress before the inactivity deadline")
 
 var checkpointRuntimeEnvOverrides = []string{
@@ -1574,26 +1577,70 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 		locality:    s.cacheManager.locality,
 		accelerator: checkpointAccelerator(request),
 	}
-	s.cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash)
+	s.cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash, nil)
 
 	return metadata, nil
 }
 
-// cacheCheckpointArchiveAsync takes ownership of archivePath and removes it
-// after the cache store completes or when no cache client is available.
-func (s *Worker) cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash string) {
+// Optional archive staging and CAS fills share one nonblocking budget. The
+// origin object and native checkpoint payload do not depend on this cache copy.
+func tryCheckpointArchiveCacheSlot(ctx context.Context, checkpointID string) func() {
+	if ctx.Err() != nil {
+		return nil
+	}
+	checkpointArchiveCacheMu.Lock()
+	_, exists := checkpointArchiveCacheInFlight[checkpointID]
+	if exists || len(checkpointArchiveCacheInFlight) >= checkpointCacheConcurrency {
+		checkpointArchiveCacheMu.Unlock()
+		return nil
+	}
+	checkpointArchiveCacheInFlight[checkpointID] = struct{}{}
+	checkpointArchiveCacheMu.Unlock()
+	release := sync.OnceFunc(func() {
+		checkpointArchiveCacheMu.Lock()
+		delete(checkpointArchiveCacheInFlight, checkpointID)
+		checkpointArchiveCacheMu.Unlock()
+	})
+	if ctx.Err() != nil {
+		release()
+		return nil
+	}
+	return release
+}
+
+func fillCheckpointArchiveCache(ctx context.Context, archivePath string, release func(), store func() error) error {
+	defer release()
+	defer os.Remove(archivePath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return store()
+}
+
+// cacheCheckpointArchiveAsync takes the archive and, when supplied, its staging
+// reservation. Admission never delays the already durable origin acknowledgement.
+func (s *Worker) cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash string, release func()) {
 	if s.cacheManager == nil || s.cacheManager.client == nil {
+		_ = os.Remove(archivePath)
+		if release != nil {
+			release()
+		}
+		return
+	}
+	manager := s.cacheManager
+	if release == nil {
+		release = tryCheckpointArchiveCacheSlot(manager.ctx, checkpointId)
+	}
+	if release == nil {
 		_ = os.Remove(archivePath)
 		return
 	}
-	client := s.cacheManager.client
-
 	go func() {
-		defer os.Remove(archivePath)
-		if _, err := client.StoreContentFromLocalFile(cache.LocalContentSource{
-			Path:      archivePath,
-			CachePath: originKey,
-		}, cache.StoreContentOptions{RoutingKey: hash, Lock: true}); err != nil {
+		err := fillCheckpointArchiveCache(manager.ctx, archivePath, release, func() error {
+			_, err := manager.client.StoreContentFromLocalFile(cache.LocalContentSource{Path: archivePath, CachePath: originKey}, cache.StoreContentOptions{RoutingKey: hash, Lock: true})
+			return err
+		})
+		if err != nil {
 			log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
 		}
 	}()
@@ -1765,12 +1812,23 @@ func (s *Worker) materializeCheckpointOriginAttempt(ctx context.Context, checkpo
 	}}
 
 	var archive *os.File
+	var cacheRelease func()
+	defer func() {
+		if cacheRelease != nil {
+			cacheRelease()
+		}
+	}()
 	if s.cacheManager != nil && s.cacheManager.client != nil {
+		cacheRelease = tryCheckpointArchiveCacheSlot(s.cacheManager.ctx, checkpoint.CheckpointId)
+	}
+	if cacheRelease != nil {
 		if err := os.MkdirAll(filepath.Dir(checkpointPath), 0755); err != nil {
 			return err, false
 		}
 		archive, err = os.CreateTemp(filepath.Dir(checkpointPath), "."+checkpoint.CheckpointId+".origin-*.tar")
 		if err != nil {
+			cacheRelease()
+			cacheRelease = nil
 			log.Warn().Err(err).Str("checkpoint_id", checkpoint.CheckpointId).Msg("failed to create checkpoint cache staging file")
 		}
 	}
@@ -1809,7 +1867,8 @@ func (s *Worker) materializeCheckpointOriginAttempt(ctx context.Context, checkpo
 		log.Warn().Err(errors.Join(cacheWriter.err, closeErr)).Str("checkpoint_id", checkpoint.CheckpointId).Msg("failed to stage restored checkpoint archive for cache")
 		return nil, false
 	}
-	s.cacheCheckpointArchiveAsync(checkpoint.CheckpointId, archivePath, checkpoint.OriginKey, checkpoint.CacheHash)
+	s.cacheCheckpointArchiveAsync(checkpoint.CheckpointId, archivePath, checkpoint.OriginKey, checkpoint.CacheHash, cacheRelease)
+	cacheRelease = nil // The background fill now owns cleanup and the reservation.
 	return nil, false
 }
 

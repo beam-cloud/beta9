@@ -2053,6 +2053,11 @@ func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *
 	if m.requiredContentComplete(server, item, routingKey) {
 		return types.CacheAuditStatusMaterialized
 	}
+	releaseCache := tryCheckpointArchiveCacheSlot(m.ctx, item.CheckpointID)
+	if releaseCache == nil {
+		return types.CacheAuditStatusSkipped
+	}
+	defer releaseCache()
 	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation checkpoint replica copy failed")
 	} else if !ok {
