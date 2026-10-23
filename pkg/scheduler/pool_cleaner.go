@@ -18,7 +18,6 @@ import (
 
 type WorkerResourceCleaner struct {
 	PoolName   string
-	MachineId  string
 	Config     types.WorkerConfig
 	KubeClient kubernetes.Interface
 	EventRepo  repository.EventRepository
@@ -129,7 +128,7 @@ func (c *WorkerResourceCleaner) deletePendingJob(ctx context.Context, pod corev1
 }
 
 func (c *WorkerResourceCleaner) deleteWorkerStatesWithoutJobs(ctx context.Context, workerJobIds map[string]struct{}) {
-	workers, err := c.workerStateCandidates()
+	workers, err := c.WorkerRepo.GetAllWorkersInPool(c.PoolName)
 	if err != nil {
 		return
 	}
@@ -155,14 +154,6 @@ func (c *WorkerResourceCleaner) deleteWorkerStatesWithoutJobs(ctx context.Contex
 
 		c.pushWorkerDeletedEvent(worker.Id, worker.MachineId, types.DeletedWorkerReasonWorkerStateWithoutJob)
 	}
-}
-
-func (c *WorkerResourceCleaner) workerStateCandidates() ([]*types.Worker, error) {
-	if c.MachineId != "" {
-		return c.WorkerRepo.GetAllWorkersOnMachine(c.MachineId)
-	}
-
-	return c.WorkerRepo.GetAllWorkersInPool(c.PoolName)
 }
 
 func (c *WorkerResourceCleaner) deleteWorkerResources(ctx context.Context, workerId string, job batchv1.Job) error {

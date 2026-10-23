@@ -5,10 +5,17 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 	redis "github.com/redis/go-redis/v9"
 )
 
 var acquireEndpointRequestTokenScript = redis.NewScript(`
+if redis.call("HGET", KEYS[2], "status") == ARGV[4] then return -1 end
+local worker_id = redis.call("HGET", KEYS[2], "worker_id")
+if worker_id and worker_id ~= "" then
+  local generation = redis.call("HGET", ARGV[3] .. worker_id, "rollout_generation")
+  if generation and generation ~= "" then return -1 end
+end
 local max_tokens = tonumber(ARGV[1])
 local ttl_seconds = tonumber(ARGV[2])
 local current = redis.call("GET", KEYS[1])
@@ -113,9 +120,11 @@ func (c *ContainerRedisRepository) AcquireEndpointRequestToken(ctx context.Conte
 	result, err := acquireEndpointRequestTokenScript.Run(
 		ctx,
 		c.rdb,
-		[]string{key},
+		[]string{key, common.RedisKeys.SchedulerContainerState(containerId)},
 		normalizeEndpointRequestMaxTokens(maxTokens),
 		endpointRequestTokenTTLSeconds(ttl),
+		common.RedisKeys.SchedulerWorkerState(""),
+		string(types.ContainerStatusStopping),
 	).Int64()
 	if err != nil {
 		return false, err

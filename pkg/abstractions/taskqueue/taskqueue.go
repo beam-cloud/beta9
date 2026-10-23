@@ -333,19 +333,21 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}
 	}
 
-	err = tq.rdb.SRem(ctx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), in.TaskId).Err()
-	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
-	}
-
-	err = tq.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
-	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
-	}
+	// Keep the task's admission lease until result persistence and the final
+	// task update finish. A worker rollout may stop this container as soon as
+	// its last lease disappears.
+	finalized := false
+	defer func() {
+		if !finalized {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		pipe := tq.rdb.TxPipeline()
+		pipe.SRem(cleanupCtx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), in.TaskId)
+		pipe.Del(cleanupCtx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId))
+		_, _ = pipe.Exec(cleanupCtx)
+	}()
 
 	err = tq.rdb.RPush(ctx, Keys.taskQueueTaskDuration(authInfo.Workspace.Name, in.StubId), in.TaskDuration).Err()
 	if err != nil {
@@ -358,7 +360,9 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	task.Status = types.TaskStatus(in.TaskStatus)
 
 	if task.Status == types.TaskStatusRetry {
-		return tq.retryTask(ctx, authInfo, in), nil
+		response := tq.retryTask(ctx, authInfo, in)
+		finalized = response.Ok
+		return response, nil
 	}
 
 	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
@@ -378,6 +382,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	finalized = err == nil
 	return &pb.TaskQueueCompleteResponse{
 		Ok: err == nil,
 	}, nil

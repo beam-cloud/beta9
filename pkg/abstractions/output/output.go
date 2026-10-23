@@ -180,15 +180,17 @@ func GetTaskOutputFiles(ctx context.Context, authInfo *auth.AuthInfo, task *type
 	if err != nil {
 		return nil, err
 	}
-	objects, err := client.ListWithPrefix(ctx, path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId)+"/")
-	if err != nil {
-		return nil, err
-	}
+	prefix := path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId) + "/"
+	objects, discoveryErr := client.ListWithPrefix(ctx, prefix)
 	files := map[string]string{}
 	for _, object := range objects {
-		if object.Key != nil && !strings.HasSuffix(*object.Key, "/") {
-			files[filepath.Base(filepath.Dir(*object.Key))] = filepath.Base(*object.Key)
+		if object.Key == nil || !strings.HasPrefix(*object.Key, prefix) || strings.HasSuffix(*object.Key, "/") {
+			continue
+		}
+		parts := strings.Split(strings.TrimPrefix(*object.Key, prefix), "/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			files[parts[0]] = parts[1]
 		}
 	}
-	return files, nil
+	return files, discoveryErr
 }

@@ -80,7 +80,6 @@ type Gateway struct {
 	BackendRepo          repository.BackendRepository
 	ComputeRepo          repository.ComputeRepository
 	ComputeService       *computesvc.Service
-	ProviderRepo         repository.ProviderRepository
 	WorkerPoolRepo       repository.WorkerPoolRepository
 	EventRepo            repository.EventRepository
 	UsageMetricsRepo     repository.UsageMetricsRepository
@@ -144,13 +143,12 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
-	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config), tailscaleRepo)
+	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config))
 
 	computeRepo := repository.NewComputeRedisRepository(redisClient)
 	managedPoolRepo := repository.NewManagedPoolRedisRepository(redisClient)
 
-	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, usageMetricsRepo, backendRepo, workspaceRepo, tailscale)
+	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, usageMetricsRepo, backendRepo, workspaceRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +159,6 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
 	workerPoolRepo := repository.NewWorkerPoolRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
@@ -175,7 +172,6 @@ func NewGateway() (*Gateway, error) {
 	gateway.TaskRepo = taskRepo
 	gateway.WorkspaceRepo = workspaceRepo
 	gateway.ContainerRepo = containerRepo
-	gateway.ProviderRepo = providerRepo
 	gateway.WorkerPoolRepo = workerPoolRepo
 	gateway.BackendRepo = backendRepo
 	gateway.ComputeRepo = computeRepo
@@ -309,14 +305,15 @@ func (g *Gateway) initHttp() error {
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo, g.isReady)
-	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config, g.workerRepo)
+	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.workerRepo)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.DefaultStorageClient, g.Config)
 	apiv1.NewWebhookGroup(g.baseRouteGroup.Group("/webhook", authMiddleware), g.WorkspaceRepo)
 	apiv1.NewStackGroup(g.baseRouteGroup.Group("/stack", authMiddleware), g.BackendRepo)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
-	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.EventRepo, g.BackendRepo, g.TaskDispatcher, g.Scheduler, g.Config)
-	apiv1.NewEventGroup(g.baseRouteGroup.Group("/events", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo)
-	apiv1.NewLogGroup(g.baseRouteGroup.Group("/logs", authMiddleware), g.BackendRepo, g.ContainerRepo, repository.NewComputeRedisRepository(g.RedisClient), g.EventRepo)
+	streamDrain := apiv1.DrainOnShutdown(g.drainCtx)
+	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.EventRepo, g.BackendRepo, g.TaskDispatcher, g.Scheduler, g.Config, streamDrain)
+	apiv1.NewEventGroup(g.baseRouteGroup.Group("/events", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo, streamDrain)
+	apiv1.NewLogGroup(g.baseRouteGroup.Group("/logs", authMiddleware), g.BackendRepo, g.ContainerRepo, repository.NewComputeRedisRepository(g.RedisClient), g.EventRepo, streamDrain)
 	apiv1.NewMetricsGroup(g.baseRouteGroup.Group("/metrics", authMiddleware), g.BackendRepo, g.EventRepo)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)
 	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo, g.RedisClient, g.Config)
@@ -671,7 +668,6 @@ func (g *Gateway) registerServices() error {
 		BackendRepo:      g.BackendRepo,
 		WorkspaceRepo:    g.WorkspaceRepo,
 		ContainerRepo:    g.ContainerRepo,
-		ProviderRepo:     g.ProviderRepo,
 		Scheduler:        g.Scheduler,
 		TaskDispatcher:   g.TaskDispatcher,
 		RedisClient:      g.RedisClient,
@@ -885,7 +881,13 @@ func (g *Gateway) shutdown() {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
-		return g.httpServer.Shutdown(ctx)
+		if err := g.httpServer.Shutdown(ctx); err != nil {
+			// Shutdown leaves active connections open when its deadline expires.
+			// Close them before the gateway exits so clients reconnect promptly.
+			_ = g.httpServer.Close()
+			return err
+		}
+		return nil
 	})
 
 	eg.Go(func() error {

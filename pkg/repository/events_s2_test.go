@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	cloudevents "github.com/cloudevents/sdk-go/v2"
 	s2pb "github.com/s2-streamstore/s2-sdk-go/generated"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
 	"github.com/stretchr/testify/require"
@@ -65,7 +67,7 @@ func TestS2EventAppendsAreConcurrentAndBounded(t *testing.T) {
 }
 
 func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	stream := repo.streamNameForEvent(types.EventContainerLifecycle, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -79,7 +81,7 @@ func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
 }
 
 func TestEndpointControlAuditIsReachableThroughHistoryAPI(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	for _, eventType := range []string{types.EventEndpointConfig, types.EventEndpointHarness, types.EventEndpointReplica, types.EventEndpointGitOps} {
 		t.Run(eventType, func(t *testing.T) {
 			metadata := eventMetadata{WorkspaceID: "admin-ws", StubID: "stub-1", ContainerID: "managed-stub-1-abc", WorkerID: "worker-1"}
@@ -92,17 +94,14 @@ func TestEndpointControlAuditIsReachableThroughHistoryAPI(t *testing.T) {
 				queries = append(queries, types.EventQuery{WorkspaceID: metadata.WorkspaceID, StubID: metadata.StubID, ContainerID: metadata.ContainerID, EventTypes: []string{eventType}})
 			}
 			for _, query := range queries {
-				read, err := repo.resolveEventHistoryStreams(context.Background(), query)
-				require.NoError(t, err)
-				require.Len(t, read, 1)
-				require.Contains(t, written, read[0], "authenticated history must read a stream containing the audit event")
+				require.Contains(t, written, repo.eventHistoryStream(query), "authenticated history must read a stream containing the audit event")
 			}
 		})
 	}
 }
 
 func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLifecycle, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -128,7 +127,7 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 }
 
 func TestS2AppNamespaceContainerEventsUseAppNamespaceStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLifecycle, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -154,53 +153,28 @@ func TestS2AppNamespaceContainerEventsUseAppNamespaceStream(t *testing.T) {
 	}
 }
 
-func TestResolveContainerStreamsUsesExactStreamWithoutExistenceList(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+func TestContainerEventStreamUsesExactStreamWithoutExistenceList(t *testing.T) {
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
-	streams, err := repo.resolveContainerStreams(context.Background(), "container-789", types.EventQuery{
-		WorkspaceID: "workspace-123",
-		StubID:      "stub-456",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/stub-456/containers/container-789"}
-	if len(streams) != len(want) {
-		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
-	}
-	for i := range want {
-		if streams[i] != want[i] {
-			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
-		}
+	stream := repo.containerEventStream("workspace-123", "stub-456", "container-789")
+	if got, want := string(stream), "events/workspaces/workspace-123/stubs/stub-456/containers/container-789"; got != want {
+		t.Fatalf("unexpected stream: got %q want %q", got, want)
 	}
 }
 
-func TestResolveContainerStreamsParsesStubScopedContainerIDWithoutPrefixList(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+func TestContainerEventStreamParsesStubScopedContainerIDWithoutPrefixList(t *testing.T) {
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
 	containerID := "endpoint-" + stubID + "-1717f4fc"
 
-	streams, err := repo.resolveContainerStreams(context.Background(), containerID, types.EventQuery{
-		WorkspaceID: "workspace-123",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/endpoint-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc"}
-	if len(streams) != len(want) {
-		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
-	}
-	for i := range want {
-		if streams[i] != want[i] {
-			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
-		}
+	stream := repo.containerEventStream("workspace-123", "", containerID)
+	if got, want := string(stream), "events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/endpoint-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc"; got != want {
+		t.Fatalf("unexpected stream: got %q want %q", got, want)
 	}
 }
 
 func TestS2StubScopedContainerEventsSkipAliasStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
 	containerID := "sandbox-" + stubID + "-1717f4fc"
 
@@ -225,29 +199,20 @@ func TestS2StubScopedContainerEventsSkipAliasStream(t *testing.T) {
 	}
 }
 
-func TestResolveContainerStreamsUsesAliasForUnscopedContainerIDWithoutPrefixList(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+func TestContainerEventStreamUsesAliasForUnscopedContainerIDWithoutPrefixList(t *testing.T) {
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
-	streams, err := repo.resolveContainerStreams(context.Background(), "container-789", types.EventQuery{
-		WorkspaceID: "workspace-123",
-	})
-	if err != nil {
-		t.Fatal(err)
+	stream := repo.containerEventStream("workspace-123", "", "container-789")
+	if got, want := string(stream), "events/workspaces/workspace-123/containers/container-789"; got != want {
+		t.Fatalf("unexpected stream: got %q want %q", got, want)
 	}
-
-	want := []s2.StreamName{"events/workspaces/workspace-123/containers/container-789"}
-	if len(streams) != len(want) {
-		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
-	}
-	for i := range want {
-		if streams[i] != want[i] {
-			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
-		}
+	if stream := repo.containerEventStream("", "", "container-789"); stream != "" {
+		t.Fatalf("expected no stream without a workspace, got %q", stream)
 	}
 }
 
 func TestS2StubCacheRequiredContentUsesDedicatedStreamOnly(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventStubCacheRequiredContent, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -263,7 +228,7 @@ func TestS2StubCacheRequiredContentUsesDedicatedStreamOnly(t *testing.T) {
 }
 
 func TestS2StubCacheRequiredContentRequiresWorkspaceAndStub(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	cases := []struct {
 		name     string
@@ -316,7 +281,7 @@ func TestReadStubCacheRequiredContentCapResumesWithoutPartialSnapshot(t *testing
 	items, err := repo.ReadStubCacheRequiredContent(context.Background(), "workspace", "stub")
 	require.ErrorContains(t, err, "snapshot incomplete")
 	require.Nil(t, items)
-	require.EqualValues(t, maxStubCacheReadRecords, repo.stubCacheRequiredContentState(repo.stubCacheStreamName("workspace", "stub")).nextSeqNum)
+	require.EqualValues(t, maxStubCacheReadRecords, repo.stubCache.get(repo.stubCacheStreamName("workspace", "stub")).nextSeqNum)
 
 	items, err = repo.ReadStubCacheRequiredContent(context.Background(), "workspace", "stub")
 	require.NoError(t, err)
@@ -473,7 +438,7 @@ func TestMergeStubCacheRequiredContentRecordKeepsLatestDiskSnapshotGeneration(t 
 }
 
 func TestS2PlatformCacheUsesPlatformStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventPlatformCache, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -489,7 +454,7 @@ func TestS2PlatformCacheUsesPlatformStream(t *testing.T) {
 }
 
 func TestS2PlatformCacheMachineEventsFanOutToWorkspaceMachineStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventPlatformCache, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -508,7 +473,7 @@ func TestS2PlatformCacheMachineEventsFanOutToWorkspaceMachineStream(t *testing.T
 }
 
 func TestS2ContainerMetricsAlsoUseWorkspaceAggregateStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventContainerMetrics, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -533,7 +498,7 @@ func TestS2ContainerMetricsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 }
 
 func TestS2ContainerMetricsFanOutToWorkspaceMachineStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventContainerMetrics, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -554,7 +519,7 @@ func TestS2ContainerMetricsFanOutToWorkspaceMachineStream(t *testing.T) {
 }
 
 func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent("stub.state.degraded", eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -577,7 +542,7 @@ func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 }
 
 func TestStubStateHistoryReadsSparseStubStateStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	metadata := eventMetadata{WorkspaceID: "workspace-1", StubID: "stub-1"}
 	sparse := s2.StreamName("events/workspaces/workspace-1/stub-states")
 
@@ -591,9 +556,7 @@ func TestStubStateHistoryReadsSparseStubStateStream(t *testing.T) {
 		{WorkspaceID: "workspace-1", EventTypes: []string{"stub.state.*"}},
 		{WorkspaceID: "workspace-1", StubID: "stub-1", EventTypes: []string{"stub.state.degraded"}},
 	} {
-		read, err := repo.resolveEventHistoryStreams(context.Background(), query)
-		require.NoError(t, err)
-		require.Equal(t, []s2.StreamName{sparse}, read, "query %#v", query)
+		require.Equal(t, []s2.StreamName{sparse}, repo.eventHistoryStreams(query), "query %#v", query)
 	}
 
 	for _, query := range []types.EventQuery{
@@ -601,14 +564,12 @@ func TestStubStateHistoryReadsSparseStubStateStream(t *testing.T) {
 		{WorkspaceID: "workspace-1", EventTypes: []string{"stub.state.degraded", types.EventContainerEvent}},
 		{WorkspaceID: "workspace-1", EventTypes: []string{"stub.*"}},
 	} {
-		read, err := repo.resolveEventHistoryStreams(context.Background(), query)
-		require.NoError(t, err)
-		require.NotContains(t, read, sparse, "query %#v must keep reading the workspace stream", query)
+		require.NotContains(t, repo.eventHistoryStreams(query), sparse, "query %#v must keep reading the workspace stream", query)
 	}
 }
 
 func TestS2ContainerLogsUseContainerStubLookupBeforeAppNamespaceIndex(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLog, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -637,7 +598,7 @@ func TestS2ContainerLogsUseContainerStubLookupBeforeAppNamespaceIndex(t *testing
 }
 
 func TestS2ContainerLogsFanOutToWorkspaceMachineLogStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLog, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -658,7 +619,7 @@ func TestS2ContainerLogsFanOutToWorkspaceMachineLogStream(t *testing.T) {
 }
 
 func TestS2StubScopedContainerLogsSkipAliasStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
 	containerID := "endpoint-" + stubID + "-1717f4fc"
 
@@ -688,7 +649,7 @@ func TestS2StubScopedContainerLogsSkipAliasStream(t *testing.T) {
 }
 
 func TestResolveLogStreamsUsesMultiplexedStubTaskStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams, err := repo.resolveLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
@@ -706,7 +667,7 @@ func TestResolveLogStreamsUsesMultiplexedStubTaskStream(t *testing.T) {
 }
 
 func TestResolveLogStreamsHonorsExplicitTaskAndContainerScopes(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	tests := []struct {
 		name  string
 		query types.LogQuery
@@ -737,7 +698,7 @@ func TestResolveLogStreamsHonorsExplicitTaskAndContainerScopes(t *testing.T) {
 }
 
 func TestResolveLogStreamsFallsBackToLegacyTaskStreamWithoutStub(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams, err := repo.resolveLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
@@ -754,7 +715,7 @@ func TestResolveLogStreamsFallsBackToLegacyTaskStreamWithoutStub(t *testing.T) {
 }
 
 func TestResolveMachineLogStreamsUsesAgentAndWorkerStreams(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams, err := repo.resolveLogStreams(types.LogQuery{
 		MachineID: "machine-123",
@@ -774,7 +735,7 @@ func TestResolveMachineLogStreamsUsesAgentAndWorkerStreams(t *testing.T) {
 }
 
 func TestResolveWorkspaceMachineLogHistoryUsesMachineStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams, err := repo.resolveLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
@@ -792,7 +753,7 @@ func TestResolveWorkspaceMachineLogHistoryUsesMachineStream(t *testing.T) {
 }
 
 func TestStreamMachineLogsUsesMachineStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.machineLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
@@ -807,7 +768,7 @@ func TestStreamMachineLogsUsesMachineStream(t *testing.T) {
 }
 
 func TestResolveLogStreamsParsesStubScopedContainerIDWithoutPrefixList(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
 	containerID := "sandbox-" + stubID + "-1717f4fc"
 
@@ -831,7 +792,7 @@ func TestResolveLogStreamsParsesStubScopedContainerIDWithoutPrefixList(t *testin
 }
 
 func TestResolveLogStreamsUsesAliasForUnscopedContainerIDWithoutPrefixList(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams, err := repo.resolveLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
@@ -1113,7 +1074,7 @@ func TestS2ContainerLogRecordUsesLogTimestamp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	record, streams, err := repo.appendRecordForEvent(event)
 	if err != nil {
 		t.Fatal(err)
@@ -1215,7 +1176,7 @@ func TestTaskLogQueryRequiresTaskTaggedLogs(t *testing.T) {
 }
 
 func TestS2TaskEventsUseWorkspaceAndAppNamespaceStreams(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventTaskCreated, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -1241,7 +1202,7 @@ func TestS2TaskEventsUseWorkspaceAndAppNamespaceStreams(t *testing.T) {
 }
 
 func TestS2TaskUpdateEventsUseTaskStreamWhenContainerScoped(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventTaskUpdated, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -1270,7 +1231,7 @@ func TestS2TaskUpdateEventsUseTaskStreamWhenContainerScoped(t *testing.T) {
 }
 
 func TestS2TaskUpdateEventsSkipAliasForStubScopedContainer(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
 	containerID := "pod-" + stubID + "-1717f4fc"
 
@@ -1300,7 +1261,7 @@ func TestS2TaskUpdateEventsSkipAliasForStubScopedContainer(t *testing.T) {
 }
 
 func TestS2TaskEventsWithoutStubFallBackToWorkspaceStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventTaskCreated, eventMetadata{
 		WorkspaceID: "workspace-123",
@@ -1313,28 +1274,22 @@ func TestS2TaskEventsWithoutStubFallBackToWorkspaceStream(t *testing.T) {
 	}
 }
 
-func TestResolveEventHistoryStreamsUsesStubTaskStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+func TestEventHistoryStreamsUseStubTaskStreamThenLegacyTaskStream(t *testing.T) {
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
-	streams, err := repo.resolveEventHistoryStreams(context.Background(), types.EventQuery{
+	streams := repo.eventHistoryStreams(types.EventQuery{
 		WorkspaceID: "workspace-123",
 		StubID:      "stub-456",
 		TaskID:      "task-123",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/stub-456/tasks"}
+	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/stub-456/tasks", "events/tasks/task-123"}
 	if !reflect.DeepEqual(streams, want) {
 		t.Fatalf("unexpected task history streams: got %q want %q", streams, want)
 	}
 
-	legacyStreams, err := repo.resolveEventHistoryStreams(context.Background(), types.EventQuery{
+	legacyStreams := repo.eventHistoryStreams(types.EventQuery{
 		TaskID: "task-123",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	wantLegacy := []s2.StreamName{"events/tasks/task-123"}
 	if !reflect.DeepEqual(legacyStreams, wantLegacy) {
 		t.Fatalf("unexpected legacy task history streams: got %q want %q", legacyStreams, wantLegacy)
@@ -1348,7 +1303,7 @@ func sequencedRecordForEvent(t *testing.T, eventType string, schemaVersion strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 	record, _, err := repo.appendRecordForEvent(event)
 	if err != nil {
 		t.Fatal(err)
@@ -1511,7 +1466,7 @@ func TestTaskEventSchemaIncludesStubTypeAndDeploymentContext(t *testing.T) {
 }
 
 func TestS2PlatformLogsUseInternalPlatformStreams(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	streams := repo.streamNamesForEvent(types.EventPlatformLog, eventMetadata{
 		WorkerID: "worker-123",
@@ -1547,7 +1502,6 @@ func TestS2PlatformLogsUseInternalPlatformStreams(t *testing.T) {
 
 func TestScopedS2EventRepositoryRoutesOnlyWorkspacePrefixes(t *testing.T) {
 	repo := &ScopedS2EventRepository{
-		streamPrefix: "events",
 		targets: []scopedS2EventTarget{
 			{name: "logs", prefix: "events/logs/workspaces/workspace-123"},
 			{name: "events", prefix: "events/workspaces/workspace-123"},
@@ -1613,7 +1567,7 @@ func TestS2PlatformLogRecordsDecodeForWorkspaceLogs(t *testing.T) {
 }
 
 func TestS2ContainerScopedEventsDoNotFallbackToNonCanonicalStreams(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	stream := repo.streamNameForEvent(types.EventContainerLifecycle, eventMetadata{
 		ContainerID: "container-789",
@@ -1627,7 +1581,7 @@ func TestS2ContainerScopedEventsDoNotFallbackToNonCanonicalStreams(t *testing.T)
 }
 
 func TestS2PlatformEventStreamsUseEntityMetadata(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
 
 	tests := []struct {
 		name      string
@@ -1731,26 +1685,31 @@ func TestComputeEventMetadataExtensionsRoundTrip(t *testing.T) {
 }
 
 func TestComputeHeartbeatUsesDedicatedPoolMetricsStream(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
+	repo := &S2EventRepository{s2StreamLayout: newS2StreamLayout("events")}
+	metrics := s2.StreamName("events/workspaces/workspace-1/compute/metrics")
+	history := s2.StreamName("events/workspaces/workspace-1/compute")
 	tests := []struct {
 		eventType, action string
+		want, not         s2.StreamName
 	}{
-		{types.EventComputeMachine, types.EventComputeActionMachineHeartbeat},
-		{types.EventComputePool, types.EventComputeActionPoolHeartbeat},
+		{types.EventComputeMachine, types.EventComputeActionMachineHeartbeat, metrics, history},
+		{types.EventComputePool, types.EventComputeActionPoolHeartbeat, metrics, history},
+		{types.EventComputePool, types.EventComputeActionPoolCreated, history, metrics},
 	}
 	for _, test := range tests {
-		streams := repo.streamNamesForEvent(test.eventType, eventMetadata{
+		// Build the event as producers do: the action is only in its payload.
+		event, err := (&EventClientRepo{}).createEventObject(test.eventType, types.EventComputeSchemaVersion, types.EventComputeSchema{
 			WorkspaceID: "workspace-1",
 			MachineID:   "machine-1",
+			PoolName:    "pool-1",
 			Action:      test.action,
 		})
+		require.NoError(t, err)
 
-		if !slices.Contains(streams, s2.StreamName("events/workspaces/workspace-1/compute/metrics")) {
-			t.Fatalf("pool metrics stream missing for %q from %#v", test.action, streams)
-		}
-		if slices.Contains(streams, s2.StreamName("events/workspaces/workspace-1/compute")) {
-			t.Fatalf("heartbeat %q leaked into lifecycle history: %#v", test.action, streams)
-		}
+		_, streams, err := repo.appendRecordForEvent(event)
+		require.NoError(t, err)
+		require.Contains(t, streams, test.want, "action %q", test.action)
+		require.NotContains(t, streams, test.not, "action %q", test.action)
 	}
 }
 
@@ -1915,7 +1874,7 @@ func TestEventQueryAllowsType(t *testing.T) {
 	}
 }
 
-func TestEventRecordMatchesQueryFiltersByScopeAndTime(t *testing.T) {
+func TestEventRecordFiltersByScopeAndTime(t *testing.T) {
 	start := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	query := types.EventQuery{
@@ -1932,18 +1891,18 @@ func TestEventRecordMatchesQueryFiltersByScopeAndTime(t *testing.T) {
 		TaskID:      "task-1",
 		Timestamp:   start.Add(time.Minute),
 	}
-	if !eventRecordMatchesQuery(record, query) {
+	if !eventRecordMatchesFilters(record, query) || !eventRecordInQueryWindow(record, query) {
 		t.Fatal("expected scoped record inside time range to match")
 	}
 
 	record.WorkspaceID = ""
-	if eventRecordMatchesQuery(record, query) {
+	if eventRecordMatchesFilters(record, query) {
 		t.Fatal("expected missing workspace metadata to be rejected")
 	}
 
 	record.WorkspaceID = "workspace-1"
 	record.Timestamp = end
-	if eventRecordMatchesQuery(record, query) {
+	if eventRecordInQueryWindow(record, query) {
 		t.Fatal("expected end time to be exclusive")
 	}
 }
@@ -2389,4 +2348,366 @@ func TestSummaryIncludesLogTimingCheckpoints(t *testing.T) {
 	if got, want := summary["runner_main_to_start_task_ms"], int64(500); got != want {
 		t.Fatalf("unexpected main to start task summary: got %d want %d", got, want)
 	}
+}
+
+func writerTestRecord(event cloudevents.Event) (s2.AppendRecord, []s2.StreamName, error) {
+	return s2.AppendRecord{Body: []byte(event.ID())}, []s2.StreamName{s2.StreamName(event.Subject())}, nil
+}
+
+func writerTestEvent(stream string, number int) cloudevents.Event {
+	event := cloudevents.NewEvent()
+	event.SetSubject(stream)
+	event.SetID(strconv.Itoa(number))
+	return event
+}
+
+func TestS2WriterSlowStreamDoesNotBlockUnrelatedMetrics(t *testing.T) {
+	queue := make(chan cloudevents.Event, 32)
+	blocked, release, fast := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		writeS2Events(queue, writerTestRecord, func(stream s2.StreamName, _ []s2.AppendRecord) error {
+			if stream == "slow" {
+				close(blocked)
+				<-release
+			} else {
+				close(fast)
+			}
+			return nil
+		}, func(err error, _ int) { t.Errorf("append failed: %v", err) })
+	}()
+	queue <- writerTestEvent("slow", 0)
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("slow append never started")
+	}
+	queue <- writerTestEvent("metrics", 1)
+	close(queue)
+	select {
+	case <-fast:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a previous batch's slow stream blocked new VM metrics")
+	}
+	select {
+	case <-done:
+		t.Fatal("writer returned with an append still in flight")
+	default:
+	}
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closed writer did not drain")
+	}
+}
+
+func TestS2WriterBoundsPendingWorkAndPreservesStreamOrder(t *testing.T) {
+	const streams, count = s2EventAppendConcurrency, 50000
+	queue := make(chan cloudevents.Event)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var consumed, active, peak atomic.Int32
+	started := make(chan struct{}, streams)
+	var mu sync.Mutex
+	next := make(map[s2.StreamName]int)
+	inFlight := make(map[s2.StreamName]bool)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		writeS2Events(queue, func(event cloudevents.Event) (s2.AppendRecord, []s2.StreamName, error) {
+			consumed.Add(1)
+			return writerTestRecord(event)
+		}, func(stream s2.StreamName, records []s2.AppendRecord) error {
+			mu.Lock()
+			if inFlight[stream] {
+				t.Errorf("overlapping appends for %s", stream)
+			}
+			inFlight[stream] = true
+			mu.Unlock()
+			current := active.Add(1)
+			for previous := peak.Load(); current > previous; previous = peak.Load() {
+				if peak.CompareAndSwap(previous, current) {
+					break
+				}
+			}
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			mu.Lock()
+			for _, record := range records {
+				number, err := strconv.Atoi(string(record.Body))
+				if err != nil || number != next[stream] {
+					t.Errorf("%s: got %s, expected %d", stream, record.Body, next[stream])
+				}
+				next[stream]++
+			}
+			inFlight[stream] = false
+			mu.Unlock()
+			active.Add(-1)
+			return nil
+		}, func(err error, _ int) { t.Errorf("append failed: %v", err) })
+	}()
+	go func() {
+		defer close(queue)
+		for i := 0; i < count; i++ {
+			queue <- writerTestEvent(fmt.Sprintf("vm-%d", i%streams), i/streams)
+		}
+	}()
+	for i := 0; i < streams; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("writer did not schedule independent streams")
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	require.LessOrEqual(t, consumed.Load(), int32(s2EventQueueSize+s2EventAppendConcurrency*s2EventBatchSize))
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("writer failed to drain the launch burst")
+	}
+	require.LessOrEqual(t, peak.Load(), int32(s2EventAppendConcurrency))
+	total := 0
+	for _, number := range next {
+		total += number
+	}
+	require.Equal(t, count, total)
+}
+
+const historySkipTestEpochMs = 1_700_000_000_000
+
+// historySkipTestStream serves one stream over S2's unary read API, like S2:
+// a read at the tail returns no records and a read past it returns 416. It
+// counts the records it serves.
+type historySkipTestStream struct {
+	mu      sync.Mutex
+	records []*s2pb.SequencedRecord
+	served  int
+	// recreated counts resets; each starts timestamps a day later.
+	recreated int64
+}
+
+func (s *historySkipTestStream) append(t *testing.T, eventType string, n int) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for range n {
+		seq := uint64(len(s.records))
+		eventTime := time.UnixMilli(historySkipTestEpochMs + s.recreated*24*time.Hour.Milliseconds() + int64(seq)).UTC()
+		body, err := json.Marshal(map[string]any{
+			"type":        eventType,
+			"time":        eventTime,
+			"workspaceid": "workspace",
+			"stubid":      "stub",
+			"data":        map[string]any{},
+		})
+		require.NoError(t, err)
+		s.records = append(s.records, &s2pb.SequencedRecord{
+			SeqNum:    seq,
+			Timestamp: uint64(eventTime.UnixMilli()),
+			Headers:   []*s2pb.Header{{Name: []byte("type"), Value: []byte(eventType)}},
+			Body:      body,
+		})
+	}
+}
+
+func (s *historySkipTestStream) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = nil
+	s.recreated++
+}
+
+func (s *historySkipTestStream) takeServed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	served := s.served
+	s.served = 0
+	return served
+}
+
+func (s *historySkipTestStream) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	params := request.URL.Query()
+	start := 0
+	if value := params.Get("seq_num"); value != "" {
+		seq, _ := strconv.Atoi(value)
+		if seq > len(s.records) {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		start = seq
+	} else if value := params.Get("timestamp"); value != "" {
+		timestamp, _ := strconv.ParseUint(value, 10, 64)
+		start = sort.Search(len(s.records), func(i int) bool { return s.records[i].Timestamp >= timestamp })
+	}
+	count, _ := strconv.Atoi(params.Get("count"))
+	end := min(len(s.records), start+count)
+	s.served += end - start
+
+	body, err := proto.Marshal(&s2pb.ReadBatch{
+		Records: s.records[start:end],
+		Tail:    &s2pb.StreamPosition{SeqNum: uint64(len(s.records))},
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_, _ = w.Write(body)
+}
+
+func newHistorySkipTestRepository(t *testing.T) (*S2EventRepository, *historySkipTestStream) {
+	t.Helper()
+	stream := &historySkipTestStream{}
+	server := httptest.NewServer(stream)
+	t.Cleanup(server.Close)
+	repo := &S2EventRepository{basin: s2.New("test", &s2.ClientOptions{
+		HTTPClient:       server.Client(),
+		MakeBasinBaseURL: func(string) string { return server.URL },
+	}).Basin("test")}
+	return repo, stream
+}
+
+func pollHistorySkipTestStream(t *testing.T, repo *S2EventRepository, query types.EventQuery) []types.ContainerEventRecord {
+	t.Helper()
+	response := &types.EventHistoryResponse{}
+	require.NoError(t, repo.readEventHistoryStream(context.Background(), "stream", query, query.Limit, response))
+	return response.Events
+}
+
+// The service status panel polls an app's recent container metrics every
+// five seconds with limit 100. For an app that never runs a container, each
+// poll used to read every record from its start position to the tail.
+func TestEventHistoryPollsReadOnlyRecordsNotAlreadyChecked(t *testing.T) {
+	repo, stream := newHistorySkipTestRepository(t)
+	stream.append(t, types.EventContainerLifecycle, 5000)
+
+	start := time.UnixMilli(historySkipTestEpochMs).UTC()
+	metrics := types.EventQuery{
+		WorkspaceID: "workspace",
+		StubID:      "stub",
+		EventTypes:  []string{types.EventContainerMetrics},
+		StartTime:   &start,
+		Limit:       100,
+	}
+
+	require.Empty(t, pollHistorySkipTestStream(t, repo, metrics))
+	require.Equal(t, 5000, stream.takeServed())
+
+	// Later polls check that one record read before is still there, read the
+	// batch their start position seeks to, then only the records appended
+	// since.
+	stream.append(t, types.EventContainerLifecycle, 50)
+	later := start.Add(time.Millisecond)
+	metrics.StartTime = &later
+	require.Empty(t, pollHistorySkipTestStream(t, repo, metrics))
+	require.Equal(t, 1+100+50, stream.takeServed())
+
+	stream.append(t, types.EventContainerMetrics, 1)
+	stream.append(t, types.EventContainerLifecycle, 10)
+	events := pollHistorySkipTestStream(t, repo, metrics)
+	require.Len(t, events, 1)
+	require.EqualValues(t, 5050, events[0].SeqNum)
+	require.Equal(t, 1+100+11, stream.takeServed())
+
+	// A match splits the skipped records into two ranges; both are kept.
+	require.Len(t, pollHistorySkipTestStream(t, repo, metrics), 1)
+	require.Equal(t, 1+100+1, stream.takeServed())
+
+	// Other filters are unaffected.
+	lifecycle := metrics
+	lifecycle.EventTypes = []string{types.EventContainerLifecycle}
+	require.Len(t, pollHistorySkipTestStream(t, repo, lifecycle), 100)
+}
+
+// A stream deleted and recreated under the same name reuses sequence numbers,
+// so ranges found before must not apply to it, however long it grows.
+func TestEventHistorySkipIsDroppedWhenTheStreamIsRecreated(t *testing.T) {
+	zero := uint64(0)
+	start := time.UnixMilli(historySkipTestEpochMs).UTC()
+	metrics := types.EventQuery{StubID: "stub", EventTypes: []string{types.EventContainerMetrics}, Limit: 100}
+	fromSeq, fromTime := metrics, metrics
+	fromSeq.SeqNum, fromTime.StartTime = &zero, &start
+
+	for _, tc := range []struct {
+		name  string
+		query types.EventQuery
+		// after is how many records follow the metric in the new stream.
+		after int
+	}{
+		{name: "shorter, sequence start", query: fromSeq},
+		{name: "shorter, time start", query: fromTime},
+		{name: "longer, sequence start", query: fromSeq, after: 4000},
+		{name: "longer, time start", query: fromTime, after: 4000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, stream := newHistorySkipTestRepository(t)
+			stream.append(t, types.EventContainerLifecycle, 3000)
+			require.Empty(t, pollHistorySkipTestStream(t, repo, tc.query))
+
+			stream.reset()
+			stream.append(t, types.EventContainerLifecycle, 500)
+			stream.append(t, types.EventContainerMetrics, 1)
+			stream.append(t, types.EventContainerLifecycle, tc.after)
+			events := pollHistorySkipTestStream(t, repo, tc.query)
+			require.Len(t, events, 1)
+			require.EqualValues(t, 500, events[0].SeqNum)
+		})
+	}
+}
+
+func TestSeqRangesMergeAndKeepTheLongest(t *testing.T) {
+	var ranges seqRanges
+	for _, r := range []seqRange{{10, 20}, {20, 30}, {40, 50}, {45, 60}} {
+		ranges = ranges.with(r)
+	}
+	require.Equal(t, seqRanges{{10, 30}, {40, 60}}, ranges)
+
+	for _, tc := range []struct{ seq, start, count uint64 }{
+		{seq: 0, start: 0, count: 10},
+		{seq: 15, start: 30, count: 10},
+		{seq: 30, start: 30, count: 10},
+		{seq: 55, start: 60, count: math.MaxUint64 - 60},
+		{seq: 70, start: 70, count: math.MaxUint64 - 70},
+	} {
+		start, count := ranges.next(tc.seq)
+		require.Equal(t, []uint64{tc.start, tc.count}, []uint64{start, count}, "next(%d)", tc.seq)
+	}
+
+	for i := range uint64(historySkipMaxRanges) {
+		ranges = ranges.with(seqRange{1000 + 100*i, 1000 + 100*i + 1 + i})
+	}
+	require.Len(t, ranges, historySkipMaxRanges)
+	require.NotContains(t, ranges, seqRange{1000, 1001}, "the shortest range is dropped first")
+	require.Contains(t, ranges, seqRange{10, 30})
+}
+
+func TestHistorySkipKeyIgnoresOnlyPositionAndWindow(t *testing.T) {
+	start, end := time.Now(), time.Now().Add(time.Minute)
+	seq := uint64(7)
+	base := types.EventQuery{StubID: "stub", EventTypes: []string{types.EventContainerMetrics}}
+	positioned := base
+	positioned.StartTime, positioned.EndTime, positioned.SeqNum, positioned.Limit = &start, &end, &seq, 100
+	require.Equal(t, historySkipKey("stream", base), historySkipKey("stream", positioned))
+
+	otherStub := base
+	otherStub.StubID = "other"
+	require.NotEqual(t, historySkipKey("stream", base), historySkipKey("stream", otherStub))
+	excluded := base
+	excluded.ExcludeActions = []string{"heartbeat"}
+	require.NotEqual(t, historySkipKey("stream", base), historySkipKey("stream", excluded))
+	require.NotEqual(t, historySkipKey("stream", base), historySkipKey("other", base))
 }

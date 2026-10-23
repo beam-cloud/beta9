@@ -265,9 +265,7 @@ worker:
     #     minFreeGpu:
     #     minFreeMemory:
     #     sharedMemoryLimitPct: 100%
-    # Agent-backed public/serverless pool. Omitting provider is intentional:
-    # external + provider uses the provider-backed remote Kubernetes controller;
-    # external without provider uses the agent controller and `machine create`.
+    # Public/serverless agent pool, joined with `machine create`.
     # public-cpu:
     #   mode: external
     #   containerRuntime: runc
@@ -418,13 +416,6 @@ cache:
     originFallbackEnabled: true
 
 providers:
-  ec2:
-    awsAccessKey:
-    awsSecretKey:
-    awsRegion: us-east-1
-    # If you want workers nodes to land in your default vpc, you can omit subnetId
-    subnetId:
-    ami: ami-052c704a7f82c38b1
   hetzner:
     apiToken:
     baseURL: https://api.hetzner.cloud/v1
@@ -446,7 +437,6 @@ providers:
     - hil
 tailscale:
   controlUrl:
-  user: beta9
   # Gateway tsnet auth key. Use an environment-scoped gateway tag, for example tag:beam-staging-gateway.
   authKey:
   # Private pool agent tsnet auth key. Use a separate environment-scoped agent tag, for example tag:beam-staging-agent.

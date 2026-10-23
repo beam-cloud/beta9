@@ -234,7 +234,6 @@ const (
 	// workspace and marks the worker as untrusted customer compute, so the
 	// gateway scopes its cache namespace and credential access by workspace.
 	TokenTypeWorkerPrivate       string = "worker_private"
-	TokenTypeMachine             string = "machine"
 	TokenTypeWorkspaceRestricted string = "workspace_restricted"
 )
 

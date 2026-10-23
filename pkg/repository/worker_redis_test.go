@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/require"
 	"github.com/tj/assert"
 )
 
@@ -260,6 +262,178 @@ func TestToggleWorkerAvailablePreservesDisabledWorker(t *testing.T) {
 	worker, err = repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, types.WorkerStatusDisabled, worker.Status)
+}
+
+func TestWorkerStartupAcknowledgesPublishedImage(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		status   types.WorkerStatus
+		cordoned bool
+	}{
+		{name: "pending", status: types.WorkerStatusPending},
+		{name: "available", status: types.WorkerStatusAvailable},
+		{name: "disabled", status: types.WorkerStatusDisabled},
+		{name: "cordoned", status: types.WorkerStatusDisabled, cordoned: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			initialStatus := test.status
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			repo := NewWorkerRedisRepository(rdb, types.WorkerConfig{ImageTag: "gateway-desired", CleanupPendingWorkerAgeLimit: time.Minute})
+			worker := &types.Worker{Id: "agent-worker", WorkspaceId: "admin", PoolName: "pool", MachineId: "machine", Status: initialStatus, BuildVersion: "old", CordonRequested: test.cordoned}
+			require.NoError(t, repo.AddWorker(worker))
+			require.NoError(t, NewComputeRedisRepository(rdb).SaveAgentTokenState(context.Background(), &compute.AgentTokenState{
+				WorkspaceID: worker.WorkspaceId, PoolName: worker.PoolName, MachineID: worker.MachineId,
+				Schedulable: true, LastHeartbeatAt: time.Now(),
+			}, time.Hour))
+			slotKey := common.RedisKeys.ComputeAgentSlot(worker.WorkspaceId, worker.PoolName, worker.MachineId, worker.Id)
+			require.NoError(t, rdb.Set(context.Background(), slotKey, `{"worker_id":"agent-worker","generation":"running-generation","worker_image":"registry/worker:running-image"}`, 0).Err())
+
+			// Startup from an obsolete slot cannot acknowledge a different image.
+			require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "obsolete-generation"), "does not match published slot")
+			state, err := repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, "old", state.BuildVersion)
+			require.Equal(t, initialStatus, state.Status)
+
+			if initialStatus == types.WorkerStatusDisabled && !test.cordoned {
+				require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "running-generation"), "awaiting controller readiness")
+			} else {
+				require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, "running-generation"))
+			}
+			state, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, "running-image", state.BuildVersion)
+			if initialStatus == types.WorkerStatusDisabled {
+				require.Equal(t, types.WorkerStatusDisabled, state.Status)
+			} else {
+				require.Equal(t, types.WorkerStatusAvailable, state.Status)
+			}
+
+			// A stale controller snapshot must not overwrite the acknowledged image.
+			require.NoError(t, repo.AddWorker(worker))
+			state, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, "running-image", state.BuildVersion)
+
+			_, err = repo.PrepareWorkerRollout(worker.Id, "next-generation")
+			require.NoError(t, err)
+			require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, ""))
+			require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "running-generation"), "does not match rollout generation")
+			state, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, "next-generation", state.RolloutGeneration)
+			require.Equal(t, types.WorkerStatusDisabled, state.Status)
+			require.Equal(t, "running-image", state.BuildVersion)
+
+			require.NoError(t, rdb.Set(context.Background(), slotKey, `{"worker_id":"agent-worker","generation":"next-generation","worker_image":"registry/worker:next-image"}`, 0).Err())
+			if initialStatus == types.WorkerStatusDisabled && !test.cordoned {
+				require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "next-generation"), "awaiting controller readiness")
+			} else {
+				require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, "next-generation"))
+			}
+			state, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Empty(t, state.RolloutGeneration)
+			require.Equal(t, "next-image", state.BuildVersion)
+			require.Equal(t, initialStatus == types.WorkerStatusDisabled, state.Status == types.WorkerStatusDisabled)
+		})
+	}
+}
+
+func TestWorkerStartupRequiresPublishedSlot(t *testing.T) {
+	for _, status := range []types.WorkerStatus{types.WorkerStatusPending, types.WorkerStatusAvailable, types.WorkerStatusDisabled} {
+		t.Run(string(status), func(t *testing.T) {
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			repo := NewWorkerRedisRepositoryForTest(rdb)
+			worker := &types.Worker{Id: "worker", WorkspaceId: "workspace", PoolName: "pool", MachineId: "machine", Status: status, BuildVersion: "old"}
+			if status == types.WorkerStatusDisabled {
+				worker.RolloutGeneration = "generation"
+			}
+			require.NoError(t, repo.AddWorker(worker))
+			before, err := repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "generation"), "read worker startup slot", "startup cannot succeed without its published generation")
+			after, err := repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			slotKey := common.RedisKeys.ComputeAgentSlot(worker.WorkspaceId, worker.PoolName, worker.MachineId, worker.Id)
+			require.NoError(t, rdb.Set(context.Background(), slotKey, "invalid-json", 0).Err())
+			require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "generation"), "decode worker startup slot")
+			for _, value := range []string{
+				`{"worker_id":"worker","generation":"obsolete","worker_image":"worker:new"}`,
+				`{"worker_id":"other-worker","generation":"generation","worker_image":"worker:new"}`,
+			} {
+				require.NoError(t, rdb.Set(context.Background(), slotKey, value, 0).Err())
+				require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "generation"), "does not match published slot")
+			}
+			require.NoError(t, rdb.Del(context.Background(), slotKey).Err())
+			require.NoError(t, rdb.HSet(context.Background(), slotKey, "invalid", "type").Err())
+			require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "generation"), "read worker startup slot")
+			after, err = repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "rejected startup must not alter readiness, rollout intent, or image reporting")
+		})
+	}
+}
+
+func TestWorkerRolloutAcknowledgmentPreservesMachineEligibility(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		modify             func(*compute.AgentTokenState)
+		missing            bool
+		previouslyDisabled bool
+		pending            bool
+		available          bool
+	}{
+		{name: "healthy", available: true},
+		{name: "pending machine unavailable", pending: true, modify: func(m *compute.AgentTokenState) { m.Schedulable = false }},
+		{name: "availability withdrawn", modify: func(m *compute.AgentTokenState) { m.Schedulable = false }},
+		{name: "machine cordoned", modify: func(m *compute.AgentTokenState) { m.Cordoned = true }},
+		{name: "agent disconnected", modify: func(m *compute.AgentTokenState) { m.LastDisconnectAt = time.Now().Add(time.Second) }},
+		{name: "heartbeat expired", modify: func(m *compute.AgentTokenState) {
+			m.LastHeartbeatAt = time.Now().Add(-2 * compute.AgentHeartbeatTimeout)
+		}},
+		{name: "machine removed", missing: true},
+		{name: "disabled before rollout", previouslyDisabled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			repo := NewWorkerRedisRepositoryForTest(rdb)
+			worker := &types.Worker{Id: "worker", WorkspaceId: "workspace", PoolName: "pool", MachineId: "machine", Status: types.WorkerStatusAvailable, BuildVersion: "old"}
+			if test.previouslyDisabled {
+				worker.Status = types.WorkerStatusDisabled
+			} else if test.pending {
+				worker.Status = types.WorkerStatusPending
+			}
+			require.NoError(t, repo.AddWorker(worker))
+			if !test.pending {
+				_, err = repo.PrepareWorkerRollout(worker.Id, "replacement")
+				require.NoError(t, err)
+			}
+			require.NoError(t, rdb.Set(ctx, common.RedisKeys.ComputeAgentSlot(worker.WorkspaceId, worker.PoolName, worker.MachineId, worker.Id), `{"worker_id":"worker","generation":"replacement","worker_image":"worker:new"}`, 0).Err())
+			machine := &compute.AgentTokenState{WorkspaceID: worker.WorkspaceId, PoolName: worker.PoolName, MachineID: worker.MachineId, Schedulable: true, LastHeartbeatAt: time.Now()}
+			if test.modify != nil {
+				test.modify(machine)
+			}
+			if !test.missing {
+				require.NoError(t, NewComputeRedisRepository(rdb).SaveAgentTokenState(ctx, machine, time.Hour))
+			}
+			if test.available {
+				require.NoError(t, repo.ToggleWorkerAvailable(worker.Id, "replacement"))
+			} else {
+				require.ErrorContains(t, repo.ToggleWorkerAvailable(worker.Id, "replacement"), "awaiting controller readiness")
+			}
+			state, err := repo.GetWorkerById(worker.Id)
+			require.NoError(t, err)
+			require.Equal(t, test.available, state.Status == types.WorkerStatusAvailable)
+			require.Equal(t, "new", state.BuildVersion, "the actual image is acknowledged even while the machine remains disabled")
+			require.Empty(t, state.RolloutGeneration)
+		})
+	}
 }
 
 func TestToggleWorkerAvailableReconcilesCapacityFromQueueAndContainerIndex(t *testing.T) {
@@ -725,22 +899,7 @@ func TestGetAllWorkersInPoolUsesPoolIndex(t *testing.T) {
 	assert.Equal(t, "worker-pool-a", workers[0].Id)
 }
 
-func TestGetAllWorkersOnMachineUsesMachineIndex(t *testing.T) {
-	rdb, err := NewRedisClientForTest()
-	assert.NotNil(t, rdb)
-	assert.Nil(t, err)
-
-	repo := NewWorkerRedisRepositoryForTest(rdb)
-	assert.Nil(t, repo.AddWorker(&types.Worker{Id: "worker-machine-a", PoolName: "pool-a", MachineId: "machine-a"}))
-	assert.Nil(t, repo.AddWorker(&types.Worker{Id: "worker-machine-b", PoolName: "pool-a", MachineId: "machine-b"}))
-
-	workers, err := repo.GetAllWorkersOnMachine("machine-a")
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(workers))
-	assert.Equal(t, "worker-machine-a", workers[0].Id)
-}
-
-func TestSetWorkerKeepAliveUpdatesMachineIndex(t *testing.T) {
+func TestSetWorkerKeepAliveUpdatesMachineID(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
 	assert.Nil(t, err)
@@ -754,15 +913,6 @@ func TestSetWorkerKeepAliveUpdatesMachineIndex(t *testing.T) {
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, "machine-b", updatedWorker.MachineId)
-
-	oldWorkers, err := repo.GetAllWorkersOnMachine("machine-a")
-	assert.Nil(t, err)
-	assert.Equal(t, 0, len(oldWorkers))
-
-	newWorkers, err := repo.GetAllWorkersOnMachine("machine-b")
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(newWorkers))
-	assert.Equal(t, worker.Id, newWorkers[0].Id)
 }
 
 func TestWorkerCheckpointCompatibilityKey(t *testing.T) {
@@ -839,28 +989,6 @@ func TestWorkerSecondaryIndexesIgnoreWrongPoolMembers(t *testing.T) {
 	assert.False(t, inWrongPool)
 }
 
-func TestWorkerSecondaryIndexesIgnoreWrongMachineMembers(t *testing.T) {
-	rdb, err := NewRedisClientForTest()
-	assert.NotNil(t, rdb)
-	assert.Nil(t, err)
-
-	repo := NewWorkerRedisRepositoryForTest(rdb)
-	worker := &types.Worker{Id: "worker-wrong-machine", MachineId: "machine-a"}
-	assert.Nil(t, repo.AddWorker(worker))
-
-	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
-	wrongMachineIndex := common.RedisKeys.SchedulerWorkerMachineIndex("machine-b")
-	assert.Nil(t, rdb.SAdd(context.TODO(), wrongMachineIndex, stateKey).Err())
-
-	workers, err := repo.GetAllWorkersOnMachine("machine-b")
-	assert.Nil(t, err)
-	assert.Equal(t, 0, len(workers))
-
-	inWrongMachine, err := rdb.SIsMember(context.TODO(), wrongMachineIndex, stateKey).Result()
-	assert.Nil(t, err)
-	assert.False(t, inWrongMachine)
-}
-
 func TestWorkerSecondaryIndexesUpdateAndRemove(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
@@ -881,18 +1009,11 @@ func TestWorkerSecondaryIndexesUpdateAndRemove(t *testing.T) {
 	inNewPool, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerWorkerPoolIndex("pool-b"), stateKey).Result()
 	assert.Nil(t, err)
 	assert.True(t, inNewPool)
-	inOldMachine, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerWorkerMachineIndex("machine-a"), stateKey).Result()
-	assert.Nil(t, err)
-	assert.False(t, inOldMachine)
-	inNewMachine, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerWorkerMachineIndex("machine-b"), stateKey).Result()
-	assert.Nil(t, err)
-	assert.True(t, inNewMachine)
 
 	assert.Nil(t, repo.RemoveWorker(worker.Id))
 	for _, indexKey := range []string{
 		common.RedisKeys.SchedulerWorkerIndex(),
 		common.RedisKeys.SchedulerWorkerPoolIndex("pool-b"),
-		common.RedisKeys.SchedulerWorkerMachineIndex("machine-b"),
 	} {
 		exists, err := rdb.SIsMember(context.TODO(), indexKey, stateKey).Result()
 		assert.Nil(t, err)

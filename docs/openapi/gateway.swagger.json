@@ -2014,12 +2014,6 @@
         "fallback": {
           "type": "string"
         },
-        "disabledServices": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
         "imageRegistryStore": {
           "type": "string"
         },
@@ -2723,15 +2717,6 @@
         },
         "machine": {
           "$ref": "#/definitions/gatewayMachine"
-        },
-        "agentUpstreamUrl": {
-          "type": "string"
-        },
-        "agentUpstreamBranch": {
-          "type": "string"
-        },
-        "agentUpstreamToken": {
-          "type": "string"
         },
         "installCommand": {
           "type": "string",
@@ -4104,18 +4089,6 @@
         "poolName": {
           "type": "string"
         },
-        "providerName": {
-          "type": "string"
-        },
-        "registrationToken": {
-          "type": "string"
-        },
-        "tailscaleUrl": {
-          "type": "string"
-        },
-        "tailscaleAuth": {
-          "type": "string"
-        },
         "lastKeepalive": {
           "type": "string"
         },
@@ -4127,9 +4100,6 @@
         },
         "machineMetrics": {
           "$ref": "#/definitions/gatewayMachineMetrics"
-        },
-        "userData": {
-          "type": "string"
         },
         "ssh": {
           "$ref": "#/definitions/gatewayMachineSSHAccess"

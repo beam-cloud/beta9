@@ -44,7 +44,7 @@ type TaskGroup struct {
 	storageClientCache sync.Map
 }
 
-func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig) *TaskGroup {
+func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig, streamMiddleware echo.MiddlewareFunc) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
 		backendRepo:        backendRepo,
 		taskRepo:           taskRepo,
@@ -62,7 +62,7 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.GET("/:workspaceId/aggregate-by-time-window", auth.WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
-	g.GET("/:workspaceId/:taskId/subscribe", auth.WithWorkspaceAuth(group.SubscribeTask))
+	g.GET("/:workspaceId/:taskId/subscribe", auth.WithWorkspaceAuth(group.SubscribeTask), streamMiddleware)
 	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
 
 	return group
@@ -117,13 +117,27 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	} else {
 
 		retrievalErrors := map[string]map[string]string{}
+		details := make([]map[string]string, len(tasks.Data))
+		limit := make(chan struct{}, 8)
+		var group sync.WaitGroup
+		requestCtx := ctx.Request().Context()
 		for i := range tasks.Data {
 			tasks.Data[i].Workspace = tasks.Data[i].Workspace.WithoutPrivateCredentials()
 			tasks.Data[i].Stub.SanitizeConfig()
 			if !skipDetails {
-				if details := g.taskDetails(ctx.Request().Context(), &info, &tasks.Data[i], false); len(details) > 0 {
-					retrievalErrors[tasks.Data[i].ExternalId] = details
-				}
+				limit <- struct{}{}
+				group.Add(1)
+				go func(i int) {
+					defer group.Done()
+					defer func() { <-limit }()
+					details[i] = g.taskDetails(requestCtx, &info, &tasks.Data[i], false)
+				}(i)
+			}
+		}
+		group.Wait()
+		for i, failures := range details {
+			if len(failures) > 0 {
+				retrievalErrors[tasks.Data[i].ExternalId] = failures
 			}
 		}
 
@@ -285,10 +299,7 @@ func (g *TaskGroup) taskDetails(ctx context.Context, authInfo *auth.AuthInfo, ta
 
 func (g *TaskGroup) addOutputsToTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
 	task.Outputs = []types.TaskOutput{}
-	outputFiles, err := output.GetTaskOutputFiles(ctx, authInfo, task)
-	if err != nil {
-		return err
-	}
+	outputFiles, discoveryErr := output.GetTaskOutputFiles(ctx, authInfo, task)
 
 	for outputId, fileName := range outputFiles {
 		url, err := output.SetPublicURL(ctx, g.config, g.backendRepo, authInfo, task.ExternalId, outputId, fileName, DefaultTaskOutputExpirationS)
@@ -298,7 +309,7 @@ func (g *TaskGroup) addOutputsToTask(ctx context.Context, authInfo *auth.AuthInf
 		task.Outputs = append(task.Outputs, types.TaskOutput{Name: fileName, URL: url, ExpiresIn: DefaultTaskOutputExpirationS})
 	}
 
-	return nil
+	return discoveryErr
 }
 
 func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, task *types.TaskWithRelated) error {

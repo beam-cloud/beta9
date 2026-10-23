@@ -65,7 +65,7 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, opts.Config, &workerPoolConfig, wpc.workerRepo, wpc.workerPoolRepo, opts.ProviderRepo)
+	err = MonitorPoolSize(wpc, opts.Config, &workerPoolConfig, wpc.workerPoolRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
 	}
@@ -76,7 +76,6 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 		WorkerPoolConfig: workerPoolConfig,
 		FailoverHealth:   wpc.config.Scheduling.Failover.Health,
 		WorkerRepo:       wpc.workerRepo,
-		ProviderRepo:     opts.ProviderRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,
 		ContainerRepo:    wpc.containerRepo,
 		PushMetrics:      opts.PushPoolMetrics,

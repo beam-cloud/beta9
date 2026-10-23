@@ -40,27 +40,34 @@ func (qc *taskQueueClient) Push(ctx context.Context, taskMessage *types.TaskMess
 	return nil
 }
 
+// Admission and worker cordoning are serialized by Redis. Once a rollout
+// starts, existing tasks finish while warm containers stop claiming new work.
+var taskQueuePopScript = redis.NewScript(`
+if redis.call("HGET", KEYS[3], "status") == ARGV[2] then return false end
+local worker_id = redis.call("HGET", KEYS[3], "worker_id")
+if worker_id and worker_id ~= "" then
+  local generation = redis.call("HGET", ARGV[1] .. worker_id, "rollout_generation")
+  if generation and generation ~= "" then return false end
+end
+local task = redis.call("LPOP", KEYS[1])
+if task then
+  redis.call("INCR", KEYS[2])
+  redis.call("EXPIRE", KEYS[2], ARGV[3])
+end
+return task
+`)
+
+var taskQueuePopCompleteScript = redis.NewScript(`
+local remaining = redis.call("DECR", KEYS[1])
+if remaining <= 0 then redis.call("DEL", KEYS[1]) end
+return remaining
+`)
+
 func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, containerId string) ([]byte, error) {
-	queueLength, err := qc.rdb.LLen(ctx, Keys.taskQueueList(workspaceName, stubId)).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	if queueLength == 0 {
-		return nil, nil
-	}
-
-	// Set a lock to prevent container from spinning down while processing this item in the queue
-	err = qc.rdb.Set(ctx, Keys.taskQueueProcessingLock(workspaceName, stubId, containerId), 1, 0).Err()
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		qc.rdb.Del(ctx, Keys.taskQueueProcessingLock(workspaceName, stubId, containerId))
-	}()
-
-	// Now actually pop the task from the queue
-	task, err := qc.rdb.LPop(ctx, Keys.taskQueueList(workspaceName, stubId)).Bytes()
+	processingKey := Keys.taskQueueProcessingLock(workspaceName, stubId, containerId)
+	task, err := taskQueuePopScript.Run(ctx, qc.rdb, []string{
+		Keys.taskQueueList(workspaceName, stubId), processingKey, common.RedisKeys.SchedulerContainerState(containerId),
+	}, common.RedisKeys.SchedulerWorkerState(""), string(types.ContainerStatusStopping), defaultTaskRunningExpiration).Text()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
@@ -68,9 +75,14 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 
 		return nil, err
 	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		_ = taskQueuePopCompleteScript.Run(cleanupCtx, qc.rdb, []string{processingKey}).Err()
+	}()
 
 	var tm types.TaskMessage
-	err = tm.Decode(task)
+	err = tm.Decode([]byte(task))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +104,7 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 		return nil, err
 	}
 
-	return task, nil
+	return []byte(task), nil
 }
 
 // Get queue length

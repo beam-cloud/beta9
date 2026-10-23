@@ -64,12 +64,12 @@ func (gws *GatewayService) CreateObjectDelta(ctx context.Context, in *pb.CreateO
 		}
 	}
 
-	presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, objectDeltaKey(object.ExternalId, in.BaseObjectId), defaultObjectPutExpirationS)
+	presignedURL, putHeaders, err := storageClient.GeneratePresignedPutURLWithMetadata(ctx, objectDeltaKey(object.ExternalId, in.BaseObjectId), defaultObjectPutExpirationS, nil)
 	if err != nil {
 		return &pb.CreateObjectDeltaResponse{Ok: false, ErrorMsg: "Unable to generate presigned URL"}, nil
 	}
 
-	return &pb.CreateObjectDeltaResponse{Ok: true, ObjectId: object.ExternalId, PresignedUrl: presignedURL}, nil
+	return &pb.CreateObjectDeltaResponse{Ok: true, ObjectId: object.ExternalId, PresignedUrl: presignedURL, PutHeaders: putHeaders}, nil
 }
 
 // CommitObjectDelta merges the uploaded delta archive into the base archive

@@ -171,7 +171,6 @@ func TestAuthorizeDiskSnapshotWorkspace(t *testing.T) {
 		{name: "restricted cross tenant", tokenType: types.TokenTypeWorkspaceRestricted, authWorkspace: "own", requested: "other"},
 		{name: "private worker", tokenType: types.TokenTypeWorkerPrivate, authWorkspace: "own", requested: "own", allowed: true},
 		{name: "private worker cross tenant", tokenType: types.TokenTypeWorkerPrivate, authWorkspace: "own", requested: "other"},
-		{name: "machine cross tenant", tokenType: types.TokenTypeMachine, authWorkspace: "own", requested: "other"},
 		{name: "trusted worker cross tenant", tokenType: types.TokenTypeWorker, authWorkspace: "own", requested: "other", allowed: true},
 		{name: "admin cross tenant", tokenType: types.TokenTypeClusterAdmin, authWorkspace: "own", requested: "other", allowed: true},
 	} {

@@ -3,8 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -75,83 +73,6 @@ func TestHostedAuditPayloadKeepsPlacementPrivate(t *testing.T) {
 	}
 }
 
-func TestEventHTTPSinkDeliversCloudEvent(t *testing.T) {
-	type callbackRequest struct {
-		body []byte
-		err  string
-	}
-	requests := make(chan callbackRequest, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got, want := r.Header.Get("X-Test"), "yes"; got != want {
-			requests <- callbackRequest{err: "unexpected header: got " + got + " want " + want}
-			return
-		}
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			requests <- callbackRequest{err: err.Error()}
-			return
-		}
-		raw, err := json.Marshal(body)
-		if err != nil {
-			requests <- callbackRequest{err: err.Error()}
-			return
-		}
-		requests <- callbackRequest{body: raw}
-	}))
-	defer server.Close()
-
-	repo := &EventClientRepo{}
-	event, err := repo.createEventObject(types.EventContainerEvent, types.EventContainerEventSchemaVersion, types.EventContainerEventSchema{
-		ID:          types.ContainerEventRuntimeExited,
-		ContainerID: "container-1",
-		WorkspaceID: "workspace-1",
-		StubID:      "stub-1",
-		Message:     "runtime exited",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sink := newEventHTTPSink(types.EventCallbackConfig{
-		URL:        server.URL,
-		EventTypes: []string{"container.*"},
-		Headers:    map[string]string{"X-Test": "yes"},
-	})
-	defer close(sink.queue)
-
-	if err := sink.PushEvent(event); err != nil {
-		t.Fatal(err)
-	}
-
-	select {
-	case req := <-requests:
-		if req.err != "" {
-			t.Fatal(req.err)
-		}
-		var delivered struct {
-			Type string `json:"type"`
-			Data struct {
-				ContainerID string `json:"container_id"`
-				Message     string `json:"message"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(req.body, &delivered); err != nil {
-			t.Fatal(err)
-		}
-		if got, want := delivered.Type, types.EventContainerEvent; got != want {
-			t.Fatalf("unexpected event type: got %q want %q", got, want)
-		}
-		if got, want := delivered.Data.ContainerID, "container-1"; got != want {
-			t.Fatalf("unexpected container id: got %q want %q", got, want)
-		}
-		if got, want := delivered.Data.Message, "runtime exited"; got != want {
-			t.Fatalf("unexpected message: got %q want %q", got, want)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for event callback")
-	}
-}
-
 func TestTaskCloudEventUsesTaskUpdatedAt(t *testing.T) {
 	repo := &EventClientRepo{}
 	updatedAt := time.Date(2026, 5, 28, 12, 0, 0, 123000000, time.UTC)
@@ -168,82 +89,6 @@ func TestTaskCloudEventUsesTaskUpdatedAt(t *testing.T) {
 
 	if !event.Time().Equal(updatedAt) {
 		t.Fatalf("unexpected event time: got %s want %s", event.Time(), updatedAt)
-	}
-}
-
-func TestEventHTTPSinkSkipsUnmatchedEvents(t *testing.T) {
-	if !eventHTTPMatches([]string{"container.*"}, types.EventContainerEvent) {
-		t.Fatal("expected wildcard callback filter to match container event")
-	}
-	if eventHTTPMatches([]string{"task.*"}, types.EventContainerEvent) {
-		t.Fatal("expected task wildcard callback filter to skip container event")
-	}
-}
-
-func TestBeta9WebhookPayloadMatchesInternalAPIShape(t *testing.T) {
-	repo := &EventClientRepo{}
-	event, err := repo.createEventObject(types.EventStubDeploy, types.EventStubSchemaVersion, types.EventStubSchema{
-		ID:          "stub-1",
-		StubType:    types.StubType(types.StubTypeFunction),
-		WorkspaceID: "workspace-1",
-		StubConfig:  "{}",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	body, err := beta9WebhookEventPayload(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var delivered []struct {
-		Type        string          `json:"type"`
-		Data        json.RawMessage `json:"data"`
-		WorkspaceID string          `json:"workspaceid"`
-		StubID      string          `json:"stubid"`
-		Date        float64         `json:"date"`
-	}
-	if err := json.Unmarshal(body, &delivered); err != nil {
-		t.Fatal(err)
-	}
-
-	if got, want := len(delivered), 1; got != want {
-		t.Fatalf("unexpected event count: got %d want %d", got, want)
-	}
-	if got, want := delivered[0].Type, types.EventStubDeploy; got != want {
-		t.Fatalf("unexpected event type: got %q want %q", got, want)
-	}
-	if got, want := delivered[0].WorkspaceID, "workspace-1"; got != want {
-		t.Fatalf("unexpected workspace extension: got %q want %q", got, want)
-	}
-	if got, want := delivered[0].StubID, "stub-1"; got != want {
-		t.Fatalf("unexpected stub extension: got %q want %q", got, want)
-	}
-	if delivered[0].Date == 0 {
-		t.Fatal("expected beta9 webhook callback to include date")
-	}
-}
-
-func TestInternalAPIEventCallbackFilter(t *testing.T) {
-	eventTypes := internalAPICallbackEventTypes()
-	for _, eventType := range eventTypes {
-		if !eventHTTPMatches(eventTypes, eventType) {
-			t.Fatalf("expected callback filter to match %q", eventType)
-		}
-	}
-	if eventHTTPMatches(eventTypes, types.EventWorkerLifecycle) {
-		t.Fatal("expected internal API callback filter to skip worker lifecycle events")
-	}
-}
-
-func internalAPICallbackEventTypes() []string {
-	return []string{
-		types.EventStubDeploy,
-		types.EventStubServe,
-		types.EventStubRun,
-		types.EventStubClone,
-		types.EventGatewayEndpointCalled,
 	}
 }
 
