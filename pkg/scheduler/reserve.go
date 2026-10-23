@@ -3,6 +3,7 @@ package scheduler
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -242,6 +243,21 @@ func (a *schedulingAttempt) fail(reason types.ContainerSchedulingFailureReason) 
 		Msg("giving up on request")
 
 	a.recordBacklogWait(false, string(reason))
+	// Fence assignment and publish the no-worker terminal result together.
+	// A delayed scheduler attempt must never erase an assigned worker's state
+	// or manufacture proof that its disks were finalized.
+	if strings.HasPrefix(a.request.ContainerId, types.StubTypeVM+"-") {
+		marked, err := a.scheduler.containerRepo.MarkPendingContainerStoppingIfUnassigned(
+			a.request.ContainerId, types.ContainerStateTtlSWhileStopping, int(types.ContainerExitCodeScheduler),
+		)
+		if err != nil {
+			requestLog(log.Error(), a.request).Err(err).Msg("failed to commit scheduling failure")
+			return
+		}
+		if !marked {
+			return
+		}
+	}
 
 	if err := a.scheduler.containerRepo.DeleteContainerState(a.request.ContainerId); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to delete container state after scheduling failure")

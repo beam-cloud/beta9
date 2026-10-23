@@ -51,6 +51,10 @@ var durableDiskRestoreChunkSlots = make(chan struct{}, durableDiskRestoreConcurr
 var errDurableDiskSnapshotInactive = errors.New("durable disk snapshot made no progress before the inactivity deadline")
 
 func withDurableDiskInactivityWatchdog(ctx context.Context, timeout time.Duration) (context.Context, func()) {
+	return withStorageInactivityWatchdog(ctx, timeout, errDurableDiskSnapshotInactive)
+}
+
+func withStorageInactivityWatchdog(ctx context.Context, timeout time.Duration, cause error) (context.Context, func()) {
 	if timeout <= 0 {
 		return ctx, func() {}
 	}
@@ -96,7 +100,7 @@ func withDurableDiskInactivityWatchdog(ctx context.Context, timeout time.Duratio
 					continue
 				default:
 				}
-				cancel(errDurableDiskSnapshotInactive)
+				cancel(cause)
 				return
 			case <-watchCtx.Done():
 				return
@@ -225,7 +229,10 @@ func (s *durableDiskSnapshotURLStore) DownloadWithReader(ctx context.Context, ke
 		httpResp.Body.Close()
 		return nil, fmt.Errorf("download public disk snapshot object: status %d", httpResp.StatusCode)
 	}
-	return httpResp.Body, nil
+	return clients.WithStorageReadMetadata(httpResp.Body, clients.StorageReadMetadata{
+		RequestID:     httpResp.Header.Get("X-Amz-Request-Id"),
+		ContentLength: httpResp.ContentLength,
+	}), nil
 }
 
 func uploadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnapshotStore, manifestKey string, manifest *types.DiskSnapshotManifest) (string, int64, error) {

@@ -280,6 +280,163 @@ func TestContainerFailureRetentionAndCooldown(t *testing.T) {
 	assertTTL("container-failure", types.ContainerFailureCooldown)
 }
 
+func TestVMFinalizationProofOutlivesHistoryUntilAcknowledged(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rdb.Close() })
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	for _, code := range []types.ContainerExitCode{types.ContainerExitCodeSuccess, types.ContainerExitCodeUser, types.ContainerExitCodeUnknownError, types.ContainerExitCodeOomKill} {
+		id := fmt.Sprintf("vm-proof-%d", code)
+		if err := repo.SetContainerExitCode(id, int(code)); err != nil {
+			t.Fatal(err)
+		}
+		server.FastForward(2 * types.ContainerFailureHistoryTTL)
+		if err := repo.SetContainerFailureCooldown([]string{id}); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := repo.GetContainerExitCode(id); err != nil || got != int(code) {
+			t.Fatalf("unconsumed proof lost: code=%d got=%d err=%v", code, got, err)
+		}
+		key := common.RedisKeys.SchedulerContainerExitCode(id)
+		if got := rdb.PTTL(ctx, key).Val(); got != -1 {
+			t.Fatalf("unconsumed proof TTL = %s", got)
+		}
+		if err := repo.AcknowledgeContainerExitCode(id, int(code)+1); err != nil {
+			t.Fatal(err)
+		}
+		if got := rdb.PTTL(ctx, key).Val(); got != -1 {
+			t.Fatalf("mismatched acknowledgement expired proof: %s", got)
+		}
+		if err := repo.AcknowledgeContainerExitCode(id, int(code)); err != nil {
+			t.Fatal(err)
+		}
+		server.FastForward(time.Second)
+		before := rdb.PTTL(ctx, key).Val()
+		if before <= 0 {
+			t.Fatalf("acknowledgement did not restore bounded history: %s", before)
+		}
+		if err := repo.SetContainerExitCode(id, int(code)); err != nil {
+			t.Fatal(err)
+		}
+		if got := rdb.PTTL(ctx, key).Val(); got != before {
+			t.Fatalf("duplicate publication changed acknowledged TTL: %s -> %s", before, got)
+		}
+	}
+	oldID, newID := "vm-same-stub-old-attempt", "vm-same-stub-new-attempt"
+	for _, id := range []string{oldID, newID} {
+		if err := repo.SetContainerExitCode(id, int(types.ContainerExitCodeUser)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.AcknowledgeContainerExitCode(oldID, int(types.ContainerExitCodeUser)); err != nil {
+		t.Fatal(err)
+	}
+	if ttl := rdb.PTTL(ctx, common.RedisKeys.SchedulerContainerExitCode(newID)).Val(); ttl != -1 {
+		t.Fatalf("old-attempt acknowledgement released new-attempt proof: %s", ttl)
+	}
+}
+
+func TestVMStateDeletionRequiresFinalizationProof(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	id := "vm-unpublished-finalization"
+	if err := repo.SetContainerState(id, &types.ContainerState{ContainerId: id, Status: types.ContainerStatusStopping}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteContainerState(id); err == nil {
+		t.Fatal("state erased without finalization proof")
+	}
+	if _, err := repo.GetContainerState(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetContainerExitCode(id, int(types.ContainerExitCodeUnknownError)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteContainerState(id); err != nil {
+		t.Fatal(err)
+	}
+	if code, err := repo.GetContainerExitCode(id); err != nil || code != int(types.ContainerExitCodeUnknownError) {
+		t.Fatalf("failed terminal outcome lost during cleanup: %d %v", code, err)
+	}
+}
+
+func TestConflictingVMFinalizationCannotBeAcknowledgedAsSuccess(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	id := "vm-conflicting-finalization"
+	if err := repo.SetContainerExitCode(id, int(types.ContainerExitCodeUser)); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := repo.SetContainerExitCode(id, int(types.ContainerExitCodeStartupFailed)); err != nil {
+			t.Fatalf("persisted failure was not acknowledged: %v", err)
+		}
+	}
+	if err := repo.AcknowledgeContainerExitCode(id, int(types.ContainerExitCodeUser)); err != nil {
+		t.Fatal(err)
+	}
+	code, err := repo.GetContainerExitCode(id)
+	if err != nil || code != int(types.ContainerExitCodeUnknownError) {
+		t.Fatalf("contradictory result did not fail closed: %d %v", code, err)
+	}
+	if ttl := rdb.PTTL(context.Background(), common.RedisKeys.SchedulerContainerExitCode(id)).Val(); ttl != -1 {
+		t.Fatalf("old success acknowledgement expired unobserved failure: %s", ttl)
+	}
+}
+
+func TestVMNoWorkerProofRacesAssignment(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	containers, workers := NewContainerRedisRepositoryForTest(rdb), NewWorkerRedisRepositoryForTest(rdb)
+	for i := range 16 {
+		worker := &types.Worker{Id: fmt.Sprintf("worker-proof-race-%d", i), Status: types.WorkerStatusAvailable, FreeCpu: 100, FreeMemory: 125}
+		request := &types.ContainerRequest{ContainerId: fmt.Sprintf("vm-proof-race-%d", i), Cpu: 100, Memory: 100}
+		if err := workers.AddWorker(worker); err != nil {
+			t.Fatal(err)
+		}
+		setPendingContainerRequests(t, rdb, request)
+		start, assigned, stopped := make(chan struct{}), make(chan error, 1), make(chan error, 1)
+		go func() {
+			<-start
+			assigned <- workers.ScheduleContainerRequest(worker, request)
+		}()
+		go func() {
+			<-start
+			_, err := containers.MarkPendingContainerStoppingIfUnassigned(request.ContainerId, types.ContainerStateTtlSWhileStopping, int(types.ContainerExitCodeUser))
+			stopped <- err
+		}()
+		close(start)
+		assignErr := <-assigned
+		if err := <-stopped; err != nil {
+			t.Fatal(err)
+		}
+		state, err := containers.GetContainerState(request.ContainerId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, proofErr := containers.GetContainerExitCode(request.ContainerId)
+		if assignErr == nil {
+			if state.WorkerId != worker.Id || proofErr == nil {
+				t.Fatal("assigned VM received false no-worker proof")
+			}
+		} else if state.Status != types.ContainerStatusStopping || state.WorkerId != "" || proofErr != nil {
+			t.Fatalf("canceled VM was not atomically fenced with proof: state=%+v proof=%v", state, proofErr)
+		}
+	}
+}
+
 func TestCreateContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
@@ -558,6 +715,7 @@ func TestStoppingWinsConcurrentHeartbeatUpdates(t *testing.T) {
 					marked, err := repo.MarkPendingContainerStoppingIfUnassigned(
 						request.ContainerId,
 						types.ContainerStateTtlSWhileStopping,
+						int(types.ContainerExitCodeUser),
 					)
 					if err == nil && !marked {
 						err = repo.UpdateContainerStatus(
@@ -850,18 +1008,38 @@ func TestMarkPendingContainerStoppingIfUnassigned(t *testing.T) {
 				Status:      types.ContainerStatusRunning,
 			},
 		},
+		{
+			name: "previously started container without worker route",
+			state: &types.ContainerState{
+				ContainerId: "pending-started",
+				Status:      types.ContainerStatusPending,
+				StartedAt:   1,
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := repo.SetContainerState(test.state.ContainerId, test.state); err != nil {
 				t.Fatal(err)
 			}
+			if test.state.StartedAt != 0 {
+				if err := rdb.HSet(context.Background(), common.RedisKeys.SchedulerContainerState(test.state.ContainerId), "started_at", test.state.StartedAt).Err(); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-			marked, err := repo.MarkPendingContainerStoppingIfUnassigned(test.state.ContainerId, types.ContainerStateTtlSWhileStopping)
+			marked, err := repo.MarkPendingContainerStoppingIfUnassigned(test.state.ContainerId, types.ContainerStateTtlSWhileStopping, int(types.ContainerExitCodeUser))
 			if err != nil {
 				t.Fatal(err)
 			}
 			if marked != test.expected {
 				t.Fatalf("expected marked=%t, got %t", test.expected, marked)
+			}
+			code, codeErr := repo.GetContainerExitCode(test.state.ContainerId)
+			if marked && (codeErr != nil || code != int(types.ContainerExitCodeUser)) {
+				t.Fatalf("unassigned fence lacked terminal proof: code=%d err=%v", code, codeErr)
+			}
+			if !marked && codeErr == nil {
+				t.Fatal("assigned/started attempt received a false terminal proof")
 			}
 
 			state, err := repo.GetContainerState(test.state.ContainerId)

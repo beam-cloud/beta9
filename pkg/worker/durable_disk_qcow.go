@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
+	"net"
 	"os"
 	"path"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -1072,28 +1075,92 @@ type qcowChunkSource struct {
 	stores      []durableDiskSnapshotStore
 }
 
+const qcowChunkReadAttempts = 3
+
 func (s *qcowChunkSource) ReadChunk(ctx context.Context, chunk types.DiskSnapshotChunk, dest []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	hash := strings.TrimPrefix(chunk.Digest, "sha256:")
 	if s.cacheReader != nil && hash != "" {
 		read, err := s.cacheReader.ReadContentInto(ctx, hash, 0, dest, cache.ClientOptions{})
 		if err == nil && read == int64(len(dest)) {
-			return nil
+			return ctx.Err()
 		}
 	}
 	var lastErr error = fmt.Errorf("no stores available for chunk %s", chunk.ObjectKey)
 	for _, store := range s.stores {
-		reader, err := store.DownloadWithReader(ctx, chunk.ObjectKey)
-		if err != nil {
-			lastErr = err
-			continue
+		for attempt := 1; attempt <= qcowChunkReadAttempts; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			started := time.Now()
+			reader, err := store.DownloadWithReader(ctx, chunk.ObjectKey)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err
+				}
+				lastErr = err
+				break // Preserve the source's existing open/fallback policy.
+			}
+			// Every attempt overwrites the complete destination. Partial bodies
+			// never escape as success; fetchLayer verifies its SHA before publish.
+			metadata, _ := clients.GetStorageReadMetadata(reader)
+			read, err := io.ReadFull(reader, dest)
+			reader.Close()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err == nil {
+				return nil
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			source := qcowChunkStoreSource(store)
+			lastErr = fmt.Errorf("read %d/%d chunk bytes from %s on attempt %d: %w", read, len(dest), source, attempt, err)
+			retrying := attempt < qcowChunkReadAttempts && retryableStorageBodyRead(err)
+			log.Warn().Err(err).Str("object_key", chunk.ObjectKey).Str("chunk", chunk.Digest).
+				Str("source", source).Int("attempt", attempt).Int("bytes_read", read).
+				Int("expected_bytes", len(dest)).Bool("retrying", retrying).
+				Str("request_id", metadata.RequestID).Int64("content_length", metadata.ContentLength).
+				Dur("duration", time.Since(started)).Msg("qcow chunk body read failed")
+			if !retrying {
+				break
+			}
+			delay := time.Duration(1<<(attempt-1)) * 100 * time.Millisecond
+			delay += time.Duration(rand.Int63n(int64(delay)))
+			if err := waitForRetry(ctx, delay); err != nil {
+				return err
+			}
 		}
-		_, err = io.ReadFull(reader, dest)
-		reader.Close()
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return nil
 	}
 	return lastErr
+}
+
+func retryableStorageBodyRead(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, io.ErrClosedPipe) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary())
+}
+
+func qcowChunkStoreSource(store durableDiskSnapshotStore) string {
+	switch store := store.(type) {
+	case *durableDiskSnapshotBucketStore:
+		return "bucket " + store.bucket
+	case *durableDiskSnapshotURLStore:
+		return "public snapshot " + store.snapshotID
+	default:
+		return fmt.Sprintf("%T", store)
+	}
 }

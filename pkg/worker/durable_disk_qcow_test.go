@@ -1,16 +1,180 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"os"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestQcowChunkReadRestartsInterruptedBodies(t *testing.T) {
+	content := []byte("complete chunk")
+	for name, fault := range map[string]error{
+		"empty body":       io.EOF,
+		"short body":       io.ErrUnexpectedEOF,
+		"connection reset": &net.OpError{Op: "read", Err: syscall.ECONNRESET},
+		"read timeout":     &net.OpError{Op: "read", Err: os.ErrDeadlineExceeded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &faultingQcowChunkStore{open: func(_ context.Context, attempt int) (io.ReadCloser, error) {
+				if attempt == 1 {
+					partial := []byte("wrong prefix")
+					if fault == io.EOF {
+						partial = nil
+					}
+					return io.NopCloser(&qcowFaultReader{data: partial, err: fault}), nil
+				}
+				return io.NopCloser(bytes.NewReader(content)), nil
+			}}
+			dest := make([]byte, len(content))
+			err := (&qcowChunkSource{stores: []durableDiskSnapshotStore{store}}).ReadChunk(context.Background(), types.DiskSnapshotChunk{ObjectKey: "chunk"}, dest)
+			require.NoError(t, err)
+			require.Equal(t, content, dest, "the second body must overwrite, not append to, the first")
+			require.Equal(t, 2, store.attempts)
+			require.Equal(t, 2, store.closed)
+		})
+	}
+}
+
+func TestQcowChunkReadBoundsRetriesAndPreservesStoreFallback(t *testing.T) {
+	short := &faultingQcowChunkStore{open: func(context.Context, int) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("x"))), nil
+	}}
+	source := &qcowChunkSource{stores: []durableDiskSnapshotStore{short}}
+	dest := make([]byte, 4)
+	err := source.ReadChunk(context.Background(), types.DiskSnapshotChunk{ObjectKey: "chunk"}, dest)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.ErrorContains(t, err, "read 1/4 chunk bytes")
+	require.ErrorContains(t, err, "attempt 3")
+	require.Equal(t, 3, short.attempts)
+	require.Equal(t, 3, short.closed)
+
+	complete := &fakeDurableDiskSnapshotStore{objects: map[string][]byte{"chunk": []byte("good")}}
+	source.stores = append(source.stores, complete)
+	require.NoError(t, source.ReadChunk(context.Background(), types.DiskSnapshotChunk{ObjectKey: "chunk"}, dest))
+	require.Equal(t, []byte("good"), dest)
+	require.Equal(t, 6, short.attempts)
+	require.Equal(t, 6, short.closed)
+}
+
+func TestQcowChunkReadDoesNotRetryPermanentOrCanceledFailures(t *testing.T) {
+	for _, code := range []string{"AccessDenied", "NoSuchKey"} {
+		t.Run(code, func(t *testing.T) {
+			failure := &smithy.GenericAPIError{Code: code}
+			store := &faultingQcowChunkStore{open: func(context.Context, int) (io.ReadCloser, error) { return nil, failure }}
+			err := (&qcowChunkSource{stores: []durableDiskSnapshotStore{store}}).ReadChunk(context.Background(), types.DiskSnapshotChunk{}, make([]byte, 4))
+			require.ErrorIs(t, err, failure)
+			require.Equal(t, 1, store.attempts)
+			require.Zero(t, store.closed)
+		})
+	}
+	t.Run("permanent body failure", func(t *testing.T) {
+		failure := errors.New("permanent body failure")
+		store := &faultingQcowChunkStore{open: func(context.Context, int) (io.ReadCloser, error) {
+			return io.NopCloser(&qcowFaultReader{err: failure}), nil
+		}}
+		err := (&qcowChunkSource{stores: []durableDiskSnapshotStore{store}}).ReadChunk(context.Background(), types.DiskSnapshotChunk{}, make([]byte, 4))
+		require.ErrorIs(t, err, failure)
+		require.Equal(t, 1, store.attempts)
+		require.Equal(t, 1, store.closed)
+	})
+	t.Run("already canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		store := &faultingQcowChunkStore{}
+		err := (&qcowChunkSource{stores: []durableDiskSnapshotStore{store}}).ReadChunk(ctx, types.DiskSnapshotChunk{}, make([]byte, 4))
+		require.ErrorIs(t, err, context.Canceled)
+		require.Zero(t, store.attempts)
+	})
+	for _, phase := range []string{"open", "body"} {
+		t.Run("canceled "+phase, func(t *testing.T) {
+			store := &faultingQcowChunkStore{open: func(context.Context, int) (io.ReadCloser, error) {
+				if phase == "open" {
+					return nil, context.Canceled
+				}
+				return io.NopCloser(&qcowFaultReader{err: context.Canceled}), nil
+			}}
+			fallback := &fakeDurableDiskSnapshotStore{objects: map[string][]byte{"chunk": []byte("good")}}
+			err := (&qcowChunkSource{stores: []durableDiskSnapshotStore{store, fallback}}).ReadChunk(context.Background(), types.DiskSnapshotChunk{ObjectKey: "chunk"}, make([]byte, 4))
+			require.ErrorIs(t, err, context.Canceled, "cancellation must not fall through to another origin")
+			require.Equal(t, 1, store.attempts)
+			if phase == "body" {
+				require.Equal(t, 1, store.closed)
+			}
+		})
+	}
+	t.Run("canceled during retry backoff", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store := &faultingQcowChunkStore{
+			open:       func(context.Context, int) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(nil)), nil },
+			afterClose: func() { time.AfterFunc(10*time.Millisecond, cancel) },
+		}
+		err := (&qcowChunkSource{stores: []durableDiskSnapshotStore{store}}).ReadChunk(ctx, types.DiskSnapshotChunk{}, make([]byte, 4))
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 1, store.attempts)
+		require.Equal(t, 1, store.closed)
+	})
+}
+
+type faultingQcowChunkStore struct {
+	fakeDurableDiskSnapshotStore
+	open       func(context.Context, int) (io.ReadCloser, error)
+	afterClose func()
+	attempts   int
+	closed     int
+}
+
+func (s *faultingQcowChunkStore) DownloadWithReader(ctx context.Context, _ string) (io.ReadCloser, error) {
+	s.attempts++
+	reader, err := s.open(ctx, s.attempts)
+	if err != nil {
+		return nil, err
+	}
+	return &qcowTrackedReader{ReadCloser: reader, close: func() {
+		s.closed++
+		if s.afterClose != nil {
+			s.afterClose()
+		}
+	}}, nil
+}
+
+type qcowTrackedReader struct {
+	io.ReadCloser
+	close func()
+}
+
+func (r *qcowTrackedReader) Close() error {
+	err := r.ReadCloser.Close()
+	r.close()
+	return err
+}
+
+type qcowFaultReader struct {
+	data []byte
+	err  error
+}
+
+func (r *qcowFaultReader) Read(dest []byte) (int, error) {
+	n := copy(dest, r.data)
+	r.data = r.data[n:]
+	if len(r.data) == 0 {
+		return n, r.err
+	}
+	return n, nil
+}
 
 func TestConcurrentQcowRestoresGoStraightToOriginOnLocalCacheMiss(t *testing.T) {
 	content := []byte("durable qcow layer")

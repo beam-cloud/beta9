@@ -1497,6 +1497,8 @@ type fakeContainerRepoClient struct {
 	setExitCodeCalls           int
 	lastSetExitCode            *pb.SetContainerExitCodeRequest
 	setExitCodeErrors          []error
+	setExitCodeStarted         chan struct{}
+	setExitCodeRelease         <-chan struct{}
 	deleteStateCalls           int
 	deleteStateErrors          []error
 	deleteStateDone            chan struct{}
@@ -1614,8 +1616,12 @@ func (f *fakeContainerRepoClient) SetContainerExitCode(ctx context.Context, in *
 	if call < len(f.setExitCodeErrors) {
 		err = f.setExitCodeErrors[call]
 	}
+	started, release := f.setExitCodeStarted, f.setExitCodeRelease
 	f.mu.Unlock()
 	if err != nil {
+		return nil, err
+	}
+	if err := gateFakeCall(ctx, started, release); err != nil {
 		return nil, err
 	}
 	return &pb.SetContainerExitCodeResponse{Ok: true}, nil

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -1849,6 +1850,103 @@ func TestClearContainerRetriesExitPublication(t *testing.T) {
 	require.Equal(t, 3, repoClient.containerExitCodeCalls())
 	require.Equal(t, int32(11), repoClient.lastSetExitCode.ExitCode)
 	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+}
+
+func TestVMFinalizationRetriesPublicationBeforeDeletingState(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "vm-publication-retry"}
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	repoClient := &fakeContainerRepoClient{
+		setExitCodeErrors:  []error{context.Canceled},
+		setExitCodeStarted: started,
+		setExitCodeRelease: release,
+	}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.clearContainer(request.ContainerId, request, int(types.ContainerExitCodeUser), false)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("VM final publication was not retried")
+	}
+	require.Zero(t, repoClient.deleteContainerStateCalls())
+	_, exists := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, exists)
+	updates := repoClient.containerStatusUpdates()
+	require.NotEmpty(t, updates)
+	require.Equal(t, types.ContainerStateTtlSWhileStopping, updates[len(updates)-1].ExpirySeconds)
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("VM shutdown did not finish after publication recovered")
+	}
+	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+	require.Equal(t, int32(types.ContainerExitCodeUser), repoClient.lastSetExitCode.ExitCode)
+}
+
+func TestVMShutdownCannotEraseUnpublishedFinalization(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "vm-unpublished-shutdown"}
+	repoClient := &fakeContainerRepoClient{setExitCodeErrors: []error{context.Canceled, context.Canceled}}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	worker.ctx = ctx
+	worker.clearContainer(request.ContainerId, request, int(types.ContainerExitCodeUnknownError), false)
+	require.Zero(t, repoClient.deleteContainerStateCalls())
+	_, exists := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, exists, "unacknowledged identity was discarded")
+	select {
+	case <-worker.completedRequests:
+		t.Fatal("unpublished finalization released worker capacity")
+	default:
+	}
+}
+
+type finalizationRepositoryClient struct {
+	pb.ContainerRepositoryServiceClient
+	containers repository.ContainerRepository
+}
+
+func (c finalizationRepositoryClient) SetContainerExitCode(_ context.Context, req *pb.SetContainerExitCodeRequest, _ ...grpc.CallOption) (*pb.SetContainerExitCodeResponse, error) {
+	return &pb.SetContainerExitCodeResponse{Ok: true}, c.containers.SetContainerExitCode(req.ContainerId, int(req.ExitCode))
+}
+func (c finalizationRepositoryClient) DeleteContainerState(_ context.Context, req *pb.DeleteContainerStateRequest, _ ...grpc.CallOption) (*pb.DeleteContainerStateResponse, error) {
+	return &pb.DeleteContainerStateResponse{Ok: true}, c.containers.DeleteContainerState(req.ContainerId)
+}
+func (c finalizationRepositoryClient) UpdateContainerStatus(_ context.Context, req *pb.UpdateContainerStatusRequest, _ ...grpc.CallOption) (*pb.UpdateContainerStatusResponse, error) {
+	return &pb.UpdateContainerStatusResponse{Ok: true, Status: req.Status}, c.containers.UpdateContainerStatus(req.ContainerId, types.ContainerStatus(req.Status), req.ExpirySeconds)
+}
+
+func TestConflictingVMProofFailsClosedWithoutBlockingComputeCleanup(t *testing.T) {
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { rdb.Close() })
+	containers := repository.NewContainerRedisRepositoryForTest(rdb)
+	request := &types.ContainerRequest{ContainerId: "vm-conflicting-proof-cleanup"}
+	require.NoError(t, containers.SetContainerState(request.ContainerId, &types.ContainerState{ContainerId: request.ContainerId, Status: types.ContainerStatusRunning}))
+	require.NoError(t, containers.SetContainerExitCode(request.ContainerId, int(types.ContainerExitCodeUser)))
+	for range 3 {
+		require.NoError(t, containers.SetContainerExitCode(request.ContainerId, int(types.ContainerExitCodeStartupFailed)))
+	}
+	worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, nil)
+	worker.containerRepoClient = finalizationRepositoryClient{containers: containers}
+	worker.clearContainer(request.ContainerId, request, int(types.ContainerExitCodeStartupFailed), false)
+	_, stateErr := containers.GetContainerState(request.ContainerId)
+	require.Error(t, stateErr)
+	code, err := containers.GetContainerExitCode(request.ContainerId)
+	require.NoError(t, err)
+	require.Equal(t, int(types.ContainerExitCodeUnknownError), code)
+	require.Equal(t, time.Duration(-1), rdb.PTTL(context.Background(), common.RedisKeys.SchedulerContainerExitCode(request.ContainerId)).Val())
+	_, exists := worker.containerInstances.Get(request.ContainerId)
+	require.False(t, exists)
+	select {
+	case <-worker.completedRequests:
+	default:
+		t.Fatal("persisted unsafe outcome blocked compute cleanup")
+	}
 }
 
 func TestSetContainerExitCodeTreatsMissingStateAsComplete(t *testing.T) {

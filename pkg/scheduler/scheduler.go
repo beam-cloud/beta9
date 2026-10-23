@@ -587,21 +587,19 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	}
 	s.eventRepo.PushContainerEvent(event)
 
+	code, _ := stopArgs.Reason.ExitCode()
 	stoppedBeforeAssignment, err := s.containerRepo.MarkPendingContainerStoppingIfUnassigned(
 		stopArgs.ContainerId,
 		types.ContainerStateTtlSWhileStopping,
+		int(code),
 	)
 	if err != nil {
 		return err
 	}
-	if stoppedBeforeAssignment || (state != nil && state.Status == types.ContainerStatusStopping && state.WorkerId == "" && state.StartedAt == 0) {
+	if stoppedBeforeAssignment {
 		// No worker can assign a STOPPING request. Record a terminal result
 		// before removing state, just as worker finalization does, so durable
 		// resources can distinguish cancellation from a missing Redis record.
-		code, _ := stopArgs.Reason.ExitCode()
-		if err := s.containerRepo.SetContainerExitCode(stopArgs.ContainerId, int(code)); err != nil {
-			return err
-		}
 		if err := s.containerRepo.DeleteContainerState(stopArgs.ContainerId); err != nil {
 			return err
 		}

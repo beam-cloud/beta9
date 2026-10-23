@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
 	redis "github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -274,6 +275,33 @@ func (cr *ContainerRedisRepository) setContainerState(containerId string, state 
 
 func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exitCode int) error {
 	exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
+	if strings.HasPrefix(containerId, types.StubTypeVM+"-") {
+		// A VM's final result is a disk-finalization receipt, not merely log
+		// history. Keep it until its controller durably retires this attempt.
+		// Repeated publication must not undo a controller acknowledgement.
+		// Contradictory results must never turn an observed success into proof
+		// that silently authorizes a later, unobserved outcome.
+		const publish = `
+local existing = redis.call("GET", KEYS[1])
+if existing == ARGV[1] then return tonumber(existing) end
+if existing then
+	redis.call("SET", KEYS[1], ARGV[2])
+	return tonumber(ARGV[2])
+end
+redis.call("SET", KEYS[1], ARGV[1])
+return tonumber(ARGV[1])`
+		// A contradictory result is acknowledged as a persisted failure, so
+		// compute cleanup can finish while the VM controller fails closed.
+		storedCode, err := cr.rdb.Eval(context.TODO(), publish, []string{exitCodeKey}, exitCode, int(types.ContainerExitCodeUnknownError)).Int()
+		if err != nil {
+			return fmt.Errorf("failed to publish VM exit code for <%s>: %w", containerId, err)
+		}
+		if storedCode != exitCode {
+			log.Error().Str("container_id", containerId).Int("requested_exit_code", exitCode).Int("stored_exit_code", storedCode).
+				Msg("conflicting VM finalization results; retaining finalization failure")
+		}
+		return nil
+	}
 	ttl := types.ContainerExitCodeTTL
 	if types.ContainerExitCode(exitCode).IsFailed() {
 		ttl = types.ContainerFailureHistoryTTL
@@ -283,6 +311,27 @@ func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exi
 		return fmt.Errorf("failed to set exit code <%v> for container <%v>: %w", exitCodeKey, containerId, err)
 	}
 
+	return nil
+}
+
+// AcknowledgeContainerExitCode releases retained VM proof only after the VM
+// controller has saved a state that no longer owns this exact container. A
+// crash before acknowledgement leaves harmless retained metadata; expiring
+// unconsumed proof would instead make final disk sync impossible to confirm.
+func (cr *ContainerRedisRepository) AcknowledgeContainerExitCode(containerId string, exitCode int) error {
+	if !strings.HasPrefix(containerId, types.StubTypeVM+"-") {
+		return nil
+	}
+	ttl := types.ContainerExitCodeTTL
+	if types.ContainerExitCode(exitCode).IsFailed() {
+		ttl = types.ContainerFailureHistoryTTL
+	}
+	const acknowledge = `
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then return 0 end
+return redis.call("PEXPIRE", KEYS[1], ARGV[2])`
+	if err := cr.rdb.Eval(context.TODO(), acknowledge, []string{common.RedisKeys.SchedulerContainerExitCode(containerId)}, exitCode, ttl.Milliseconds()).Err(); err != nil {
+		return fmt.Errorf("failed to acknowledge VM exit code for <%s>: %w", containerId, err)
+	}
 	return nil
 }
 
@@ -444,20 +493,28 @@ func containerStatusTransitionAllowed(storedStatus, requestedStatus types.Contai
 }
 
 var markPendingContainerStoppingIfUnassignedScript = redis.NewScript(`
-if redis.call("HGET", KEYS[1], "status") ~= ARGV[1] then
+local status = redis.call("HGET", KEYS[1], "status")
+if status ~= ARGV[1] and status ~= ARGV[2] then
 	return 0
 end
 local worker_id = redis.call("HGET", KEYS[1], "worker_id")
 if worker_id and worker_id ~= "" then
 	return 0
 end
+local started_at = tonumber(redis.call("HGET", KEYS[1], "started_at") or "0")
+if started_at > 0 then return 0 end
 redis.call("HSET", KEYS[1], "status", ARGV[2])
 redis.call("EXPIRE", KEYS[1], ARGV[3])
 redis.call("ZADD", KEYS[2], ARGV[4], KEYS[1])
+if tonumber(ARGV[6]) > 0 then
+	redis.call("SET", KEYS[3], ARGV[5], "PX", ARGV[6], "NX")
+else
+	redis.call("SET", KEYS[3], ARGV[5], "NX")
+end
 return 1
 `)
 
-func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error) {
+func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64, exitCode int) (bool, error) {
 	lockKey := common.RedisKeys.SchedulerContainerLock(containerId)
 	if err := cr.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
 		return false, err
@@ -465,12 +522,21 @@ func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(con
 	defer cr.lock.Release(lockKey)
 
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
+	proofTTL := types.ContainerExitCodeTTL
+	if types.ContainerExitCode(exitCode).IsFailed() {
+		proofTTL = types.ContainerFailureHistoryTTL
+	}
+	if strings.HasPrefix(containerId, types.StubTypeVM+"-") {
+		proofTTL = 0
+	}
 	marked, err := markPendingContainerStoppingIfUnassignedScript.Run(context.TODO(), cr.rdb, []string{
 		stateKey,
 		common.RedisKeys.SchedulerContainerStateIndex(),
+		common.RedisKeys.SchedulerContainerExitCode(containerId),
 	},
 		string(types.ContainerStatusPending), string(types.ContainerStatusStopping), expirySeconds,
 		time.Now().Add(time.Duration(expirySeconds)*time.Second).Unix(),
+		exitCode, proofTTL.Milliseconds(),
 	).Bool()
 	if err != nil {
 		return false, fmt.Errorf("failed to stop unassigned pending container <%s>: %w", containerId, err)
@@ -487,6 +553,15 @@ func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) err
 
 	ctx := context.TODO()
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
+	if strings.HasPrefix(containerId, types.StubTypeVM+"-") {
+		if exists, err := cr.rdb.Exists(ctx, stateKey).Result(); err != nil {
+			return err
+		} else if exists > 0 {
+			if _, err := cr.GetContainerExitCode(containerId); err != nil {
+				return fmt.Errorf("refusing to remove VM state without finalization proof: %w", err)
+			}
+		}
+	}
 	state, err := cr.rdb.HMGet(ctx, stateKey, "workspace_id", "stub_id", "worker_id").Result()
 	if err != nil {
 		return fmt.Errorf("failed to get container indexes <%v>: %w", stateKey, err)

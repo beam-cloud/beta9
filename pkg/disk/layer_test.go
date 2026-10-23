@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -273,11 +275,15 @@ type blockingChunkStore struct {
 	mu       sync.Mutex
 	inflight int
 	peak     int
+	reads    int
+	entered  chan struct{}
+	release  <-chan struct{}
 }
 
 func (s *blockingChunkStore) ReadChunk(ctx context.Context, chunk types.DiskSnapshotChunk, dest []byte) error {
 	s.mu.Lock()
 	s.inflight++
+	s.reads++
 	if s.inflight > s.peak {
 		s.peak = s.inflight
 	}
@@ -287,7 +293,84 @@ func (s *blockingChunkStore) ReadChunk(ctx context.Context, chunk types.DiskSnap
 		s.inflight--
 		s.mu.Unlock()
 	}()
+	if s.entered != nil {
+		s.entered <- struct{}{}
+	}
+	if s.release != nil {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return s.memoryChunkStore.ReadChunk(ctx, chunk, dest)
+}
+
+func TestFetchLayerBoundsBurstAcrossIndependentRestores(t *testing.T) {
+	const volumes = 100
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var workers sync.WaitGroup
+
+	data := bytes.Repeat([]byte{42}, 4096)
+	store := &blockingChunkStore{
+		memoryChunkStore: newMemoryChunkStore(),
+		entered:          make(chan struct{}, volumes+1),
+		release:          release,
+	}
+	store.objects["burst"] = data
+	layer := &types.DiskSnapshotFile{SizeBytes: int64(len(data)), Chunks: []types.DiskSnapshotChunk{{
+		ObjectKey: "burst", SizeBytes: int64(len(data)), Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(data)),
+	}}}
+	dir := t.TempDir()
+	t.Cleanup(func() { cancel(); unblock(); workers.Wait() })
+	results := make(chan error, volumes)
+	for i := range volumes {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			results <- fetchLayer(ctx, store, layer, filepath.Join(dir, fmt.Sprintf("%d.qcow2", i)), nil)
+		}()
+	}
+	for range chunkFetchConcurrency {
+		select {
+		case <-store.entered:
+		case <-ctx.Done():
+			t.Fatal("independent restores did not fill the download budget")
+		}
+	}
+
+	// An admitted fleet must not let another restore allocate/read a chunk
+	// while all worker slots are held. Cancellation must release its wait.
+	wait, stop := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer stop()
+	if err := fetchLayer(wait, store, layer, filepath.Join(dir, "cancelled.qcow2"), nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued cancellation: %v", err)
+	}
+	store.mu.Lock()
+	reads := store.reads
+	store.mu.Unlock()
+	if reads != chunkFetchConcurrency {
+		t.Fatalf("burst opened %d chunk reads while %d were held", reads, chunkFetchConcurrency)
+	}
+	unblock()
+	for range volumes {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range volumes {
+		got, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("%d.qcow2", i)))
+		if err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("restore %d: data mismatch or error: %v", i, err)
+		}
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.peak > chunkFetchConcurrency || store.reads != volumes {
+		t.Fatalf("burst peak=%d reads=%d, want <=%d and %d", store.peak, store.reads, chunkFetchConcurrency, volumes)
+	}
 }
 
 func TestFetchLayerSharesChunkGateAcrossLayers(t *testing.T) {

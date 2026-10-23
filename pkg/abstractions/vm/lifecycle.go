@@ -14,6 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/proto"
 )
@@ -141,6 +142,19 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		return s.repo.SaveVM(ctx, v)
 	}
 
+	retiredContainerID := v.ContainerID
+	retiredCode := 0
+	retiredProofObserved := false
+	if retiredContainerID != "" {
+		retiredCode, err = s.containers.GetContainerExitCode(retiredContainerID)
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return fmt.Errorf("read VM finalization proof before retiring runtime %s: %w", retiredContainerID, err)
+		}
+		retiredProofObserved = err == nil
+		if retiredProofObserved && retiredCode == int(types.ContainerExitCodeUnknownError) {
+			return fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", retiredContainerID)
+		}
+	}
 	v.ContainerID = ""
 	if err := s.validateMemoryDisks(ctx, v); err != nil {
 		return err
@@ -149,6 +163,9 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	v.LaunchAttempts++
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
+	}
+	if retiredProofObserved {
+		s.acknowledgeExitCode(retiredContainerID, retiredCode)
 	}
 
 	if err := s.prepare(ctx, v); err != nil {
@@ -346,9 +363,14 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 				v.RootSnapshotID = latest.ExternalId
 			}
 
+			retiredContainerID := v.ContainerID
 			v.ContainerID = ""
 			v.Error = ""
-			return s.finishStop(ctx, v)
+			if err := s.finishStop(ctx, v); err != nil {
+				return err
+			}
+			s.acknowledgeExitCode(retiredContainerID, code)
+			return nil
 		}
 
 		if err != nil {
@@ -360,6 +382,15 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 			return ctx.Err()
 		case <-tick.C:
 		}
+	}
+}
+
+func (s *Service) acknowledgeExitCode(containerID string, code int) {
+	if containerID == "" {
+		return
+	}
+	if err := s.containers.AcknowledgeContainerExitCode(containerID, code); err != nil {
+		log.Warn().Err(err).Str("container_id", containerID).Msg("retain VM finalization proof after acknowledgement failure")
 	}
 }
 

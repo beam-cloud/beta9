@@ -2693,6 +2693,183 @@ func TestMaterializeCheckpointReaderRejectsHashMismatch(t *testing.T) {
 	}
 }
 
+func TestCheckpointOriginRetriesOnlyIncompleteBodies(t *testing.T) {
+	const id = "origin-retry"
+	archivePath, hash, size := createCheckpointArchiveForTest(t, id)
+	archive, err := os.ReadFile(archivePath)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name      string
+		short     int
+		badHash   bool
+		finalEOF  bool
+		openError error
+		attempts  int
+		ok        bool
+	}{
+		{name: "short then complete", short: 1, attempts: 2, ok: true},
+		{name: "exhausted", short: checkpointOriginReadAttempts, attempts: checkpointOriginReadAttempts},
+		{name: "corrupt complete archive", badHash: true, attempts: 1},
+		{name: "corrupt complete archive with body error", badHash: true, finalEOF: true, attempts: 1},
+		{name: "open failure", openError: os.ErrPermission, attempts: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			checkpoint := &types.Checkpoint{CheckpointId: id, OriginKey: "checkpoints/" + id, CacheHash: hash, CacheSizeBytes: size}
+			if test.badHash {
+				checkpoint.CacheHash = strings.Repeat("0", 64)
+			}
+			calls := 0
+			open := func(context.Context, string) (io.ReadCloser, error) {
+				calls++
+				if test.openError != nil {
+					return nil, test.openError
+				}
+				body := archive
+				if calls <= test.short {
+					body = body[:len(body)/2]
+				}
+				if test.finalEOF {
+					return io.NopCloser(checkpointFinalReadError{bytes.NewReader(body)}), nil
+				}
+				return io.NopCloser(bytes.NewReader(body)), nil
+			}
+			root := t.TempDir()
+			path := filepath.Join(root, id)
+			err := (&Worker{}).materializeCheckpointOrigin(context.Background(), path, checkpoint, open, nil, time.Second)
+			require.Equal(t, test.attempts, calls)
+			if test.ok {
+				require.NoError(t, err)
+				require.True(t, checkpointMaterialized(path))
+			} else {
+				require.Error(t, err)
+				require.NoDirExists(t, path)
+			}
+			leftovers, err := filepath.Glob(filepath.Join(root, ".*"))
+			require.NoError(t, err)
+			require.Empty(t, leftovers, "failed attempts must remove temporary extracts")
+		})
+	}
+}
+
+type checkpointFinalReadError struct{ *bytes.Reader }
+
+func (r checkpointFinalReadError) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 && r.Len() == 0 {
+		return n, io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
+func TestCheckpointOriginTimesOutIdleTransfersButKeepsProgress(t *testing.T) {
+	const id = "origin-progress"
+	archivePath, hash, size := createCheckpointArchiveForTest(t, id)
+	archive, err := os.ReadFile(archivePath)
+	require.NoError(t, err)
+	for _, idleAttempts := range []int{1, checkpointOriginReadAttempts, 0} {
+		t.Run(fmt.Sprintf("idle-attempts-%d", idleAttempts), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				call := int(calls.Add(1))
+				w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				if call <= idleAttempts {
+					<-r.Context().Done()
+					return
+				}
+				// The full transfer lasts longer than its inactivity budget.
+				for offset := 0; offset < len(archive); offset += 1024 {
+					if _, err := w.Write(archive[offset:min(offset+1024, len(archive))]); err != nil {
+						return
+					}
+					w.(http.Flusher).Flush()
+					time.Sleep(20 * time.Millisecond)
+				}
+			}))
+			defer server.Close()
+			open := func(ctx context.Context, _ string) (io.ReadCloser, error) {
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+				if err != nil {
+					return nil, err
+				}
+				response, err := server.Client().Do(req)
+				if err != nil {
+					return nil, err
+				}
+				return response.Body, nil
+			}
+			path := filepath.Join(t.TempDir(), id)
+			checkpoint := &types.Checkpoint{CheckpointId: id, OriginKey: id, CacheHash: hash, CacheSizeBytes: size}
+			err := (&Worker{}).materializeCheckpointOrigin(context.Background(), path, checkpoint, open, nil, 100*time.Millisecond)
+			if idleAttempts == checkpointOriginReadAttempts {
+				require.ErrorIs(t, err, errCheckpointOriginInactive)
+				require.EqualValues(t, checkpointOriginReadAttempts, calls.Load())
+				require.NoDirExists(t, path)
+			} else {
+				require.NoError(t, err)
+				require.EqualValues(t, idleAttempts+1, calls.Load())
+				require.True(t, checkpointMaterialized(path))
+			}
+		})
+	}
+}
+
+func TestCheckpointOriginBoundsBurstAndCancelsQueuedRequests(t *testing.T) {
+	const id, restores = "origin-burst", 100
+	archivePath, hash, size := createCheckpointArchiveForTest(t, id)
+	archive, err := os.ReadFile(archivePath)
+	require.NoError(t, err)
+	root := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var workers sync.WaitGroup
+	t.Cleanup(func() { cancel(); unblock(); workers.Wait() })
+	entered := make(chan struct{}, restores+1)
+	var calls atomic.Int32
+	open := func(ctx context.Context, _ string) (io.ReadCloser, error) {
+		calls.Add(1)
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return io.NopCloser(bytes.NewReader(archive)), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	checkpoint := &types.Checkpoint{CheckpointId: id, OriginKey: id, CacheHash: hash, CacheSizeBytes: size}
+	results := make(chan error, restores)
+	for i := range restores {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			path := filepath.Join(root, strconv.Itoa(i), id)
+			results <- (&Worker{}).materializeCheckpointOrigin(ctx, path, checkpoint, open, nil, time.Minute)
+		}()
+	}
+	for range checkpointOriginConcurrency {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("checkpoint downloads did not fill the shared budget")
+		}
+	}
+	queued, stop := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer stop()
+	err = (&Worker{}).materializeCheckpointOrigin(queued, filepath.Join(root, "cancelled", id), checkpoint, open, nil, time.Minute)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.EqualValues(t, checkpointOriginConcurrency, calls.Load())
+	unblock()
+	for range restores {
+		require.NoError(t, <-results)
+	}
+	for i := range restores {
+		require.True(t, checkpointMaterialized(filepath.Join(root, strconv.Itoa(i), id)))
+	}
+	require.EqualValues(t, restores, calls.Load())
+}
+
 func TestCheckpointCacheReaderBuffersReadAtCalls(t *testing.T) {
 	content := make([]byte, 2*checkpointCacheReadBufferSize+37)
 	for i := range content {
