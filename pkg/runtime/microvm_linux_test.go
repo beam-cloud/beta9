@@ -162,10 +162,18 @@ func TestMicroVMSnapshotCanceledRetryStillResumes(t *testing.T) {
 func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var mu sync.Mutex
+	var actions []string
 	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		actions = append(actions, r.URL.Path)
+		mu.Unlock()
 		switch r.URL.Path {
 		case "/api/v1/vm.pause":
 			cancel() // CH paused, but the client never receives the response.
+			// Returning now could race cancellation with an implicit HTTP200.
+			// Wait for the client transport to close before finishing the handler.
+			<-r.Context().Done()
 		case "/api/v1/vm.info":
 			_ = json.NewEncoder(w).Encode(struct {
 				State microVMState `json:"state"`
@@ -178,6 +186,9 @@ func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, mustStop)
 	require.False(t, inst.isPaused(), "resolve and resume the actual paused VM despite caller cancellation")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.info", "/api/v1/vm.resume"}, actions)
 }
 
 func TestMicroVMRestoreCannotUsePreviousConnectionAcknowledgement(t *testing.T) {
