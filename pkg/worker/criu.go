@@ -62,7 +62,7 @@ const (
 	restoreReadinessTimeout         = 15 * time.Second
 	restoreReadinessInterval        = 100 * time.Millisecond
 	restoreReadinessStableFor       = 250 * time.Millisecond
-	checkpointOriginConcurrency     = 4
+	checkpointOriginConcurrency     = 32
 	checkpointOriginReadAttempts    = 3
 	checkpointOriginIdleTimeout     = time.Minute
 )
