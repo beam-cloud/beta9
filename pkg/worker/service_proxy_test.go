@@ -2,13 +2,22 @@ package worker
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"io"
+	"math/big"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -223,11 +232,191 @@ func TestServiceProxyNodeSNI(t *testing.T) {
 }
 
 func TestHostsFile(t *testing.T) {
-	got := hostsFile([]string{"192.168.0.1", "fd00:abcd::1"}, "web", []string{"a.localhost", "b.localhost"})
-	want := "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n127.0.0.1\tweb\n192.168.0.1\ta.localhost b.localhost\nfd00:abcd::1\ta.localhost b.localhost\n"
+	got := hostsFile("web", map[string][]string{
+		"fd00:abcd::1": {"c.localhost"},
+		"198.18.0.7":   {"a.localhost"},
+		"192.168.0.1":  {"c.localhost"},
+	})
+	want := "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n127.0.0.1\tweb\n192.168.0.1\tc.localhost\n198.18.0.7\ta.localhost\nfd00:abcd::1\tc.localhost\n"
 	if got != want {
 		t.Fatalf("hosts file = %q, want %q", got, want)
 	}
+}
+
+func TestServiceIP(t *testing.T) {
+	_, network, _ := net.ParseCIDR(serviceAddressRange)
+	used := map[string]bool{}
+	first := serviceIP(network, "db-1.tcp.beam.cloud", used)
+	require.True(t, network.Contains(first))
+	require.Equal(t, first, serviceIP(network, "db-1.tcp.beam.cloud", map[string]bool{}))
+
+	used[first.String()] = true
+	require.NotEqual(t, first, serviceIP(network, "db-1.tcp.beam.cloud", used))
+
+	_, small, _ := net.ParseCIDR("10.0.0.0/31")
+	full := map[string]bool{}
+	for range 2 {
+		ip := serviceIP(small, "x", full)
+		require.NotNil(t, ip)
+		full[ip.String()] = true
+	}
+	require.Nil(t, serviceIP(small, "x", full))
+}
+
+// A client connecting to a service's own address without TLS, as it would on a
+// private network, reaches the service: the proxy speaks TLS to the gateway and
+// names the service. Clients that speak TLS, or ask for it the way PostgreSQL
+// does, pass through untouched, and protocols where the server speaks first work.
+func TestServiceProxyServiceAddress(t *testing.T) {
+	const service = "cache-abc1234-latest-6379.localhost"
+	gateway := newTestTLSGateway(t)
+
+	p := newTestServiceProxy(t, gateway.address)
+	require.Equal(t, map[string][]string{"127.0.0.1": {service}}, p.pin([]string{service}))
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(p.port))
+
+	t.Run("plaintext", func(t *testing.T) {
+		conn := dialTest(t, address)
+		_, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
+		require.NoError(t, err)
+		require.Equal(t, "+PONG\r\n", readTest(t, conn, 7))
+		require.Equal(t, service, <-gateway.serverNames)
+		require.Equal(t, "*1\r\n$4\r\nPING\r\n", <-gateway.received)
+	})
+
+	t.Run("server speaks first", func(t *testing.T) {
+		gateway.greeting <- "220 ready\r\n"
+		conn := dialTest(t, address)
+		require.Equal(t, "220 ready\r\n", readTest(t, conn, 11))
+		require.Equal(t, service, <-gateway.serverNames)
+	})
+
+	t.Run("tls", func(t *testing.T) {
+		conn := tls.Client(dialTest(t, address), &tls.Config{ServerName: service, InsecureSkipVerify: true})
+		_, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
+		require.NoError(t, err)
+		require.Equal(t, "+PONG\r\n", readTest(t, conn, 7))
+		require.Equal(t, service, <-gateway.serverNames)
+	})
+
+	t.Run("postgres ssl request", func(t *testing.T) {
+		raw, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		t.Cleanup(func() { raw.Close() })
+		p := newTestServiceProxy(t, raw.Addr().String())
+		p.pin([]string{service})
+
+		conn := dialTest(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(p.port)))
+		_, err = conn.Write(postgresSSLRequest)
+		require.NoError(t, err)
+		upstream, err := raw.Accept()
+		require.NoError(t, err)
+		defer upstream.Close()
+		require.Equal(t, string(postgresSSLRequest), readTest(t, upstream, len(postgresSSLRequest)))
+	})
+}
+
+func TestServiceProxySharesBridgeAddressWithoutServiceAddresses(t *testing.T) {
+	p := &ServiceProxy{
+		addresses:    []string{"192.168.0.1", "fd00:abcd::1"},
+		services:     map[string]string{},
+		serviceRange: &net.IPNet{IP: net.IPv4(198, 18, 0, 0).To4(), Mask: net.CIDRMask(15, 32)},
+		addAddress:   func(net.IP) error { return errors.New("operation not permitted") },
+	}
+	want := map[string][]string{"192.168.0.1": {"a.localhost", "b.localhost"}, "fd00:abcd::1": {"a.localhost", "b.localhost"}}
+	require.Equal(t, want, p.pin([]string{"a.localhost", "b.localhost"}))
+	require.ErrorContains(t, p.serviceErr, "operation not permitted")
+}
+
+func newTestServiceProxy(t *testing.T, target string) *ServiceProxy {
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := free.Addr().(*net.TCPAddr).Port
+	free.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &ServiceProxy{
+		ctx:          ctx,
+		target:       target,
+		port:         port,
+		suffix:       ".localhost",
+		services:     map[string]string{},
+		serviceRange: &net.IPNet{IP: net.IPv4(127, 0, 0, 1).To4(), Mask: net.CIDRMask(32, 32)},
+		addAddress:   func(net.IP) error { return nil },
+	}
+	t.Cleanup(func() {
+		p.Stop()
+		cancel()
+	})
+	return p
+}
+
+type testTLSGateway struct {
+	address     string
+	serverNames chan string
+	received    chan string
+	greeting    chan string
+}
+
+// newTestTLSGateway answers PING with PONG, as the TCP gateway would relay a
+// service, recording the server name each connection asked for.
+func newTestTLSGateway(t *testing.T) *testTLSGateway {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour), DNSNames: []string{"*.localhost"}}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	gateway := &testTLSGateway{serverNames: make(chan string, 8), received: make(chan string, 8), greeting: make(chan string, 1)}
+	config := &tls.Config{
+		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			gateway.serverNames <- hello.ServerName
+			return nil, nil
+		},
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", config)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	gateway.address = ln.Addr().String()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				select {
+				case greeting := <-gateway.greeting:
+					conn.Write([]byte(greeting))
+					return
+				default:
+				}
+				buf := make([]byte, 14)
+				if _, err := io.ReadFull(conn, buf); err != nil {
+					return
+				}
+				gateway.received <- string(buf)
+				conn.Write([]byte("+PONG\r\n"))
+			}()
+		}
+	}()
+	return gateway
+}
+
+func dialTest(t *testing.T, address string) net.Conn {
+	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+func readTest(t *testing.T, conn net.Conn, n int) string {
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	buf := make([]byte, n)
+	_, err := io.ReadFull(conn, buf)
+	require.NoError(t, err)
+	return string(buf)
 }
 
 func TestServiceProxyForwardsBytesBothWays(t *testing.T) {
@@ -255,7 +444,7 @@ func TestServiceProxyForwardsBytesBothWays(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.listeners = append(p.listeners, front)
-	go p.serve(front)
+	go p.serve(front, "")
 	defer p.Stop()
 
 	client, err := net.Dial("tcp", front.Addr().String())
