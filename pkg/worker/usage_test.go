@@ -847,6 +847,90 @@ func TestUsageBacklogIsBoundedAndDropsOldestFirst(t *testing.T) {
 	}
 }
 
+func TestUsageBacklogDrainDuringConcurrentEnqueue(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		queued     int
+		added      int
+		firstError bool
+	}{
+		{name: "append without overflow", queued: 2, added: 1},
+		{name: "overflow during successful send", queued: usageBacklogLimit, added: 1},
+		{name: "multiple overflows during successful send", queued: usageBacklogLimit, added: 3},
+		{name: "overflow during refused send", queued: usageBacklogLimit, added: 1, firstError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &blockedUsageMetricsRecorder{entered: make(chan struct{}), resume: make(chan struct{}), firstError: test.firstError}
+			metrics := &WorkerUsageMetrics{metricsRepo: repository}
+			for i := 0; i < test.queued; i++ {
+				metrics.enqueueUsage(pendingUsageEvent{value: float64(i)})
+			}
+			done := make(chan struct{})
+			release := sync.OnceFunc(func() { close(repository.resume) })
+			go func() { metrics.drainBacklog(); close(done) }()
+			t.Cleanup(func() {
+				release()
+				waitForUsageMetrics(t, done, 1)
+			})
+			waitForUsageMetrics(t, repository.entered, 1)
+			metrics.drainBacklog() // A second drain must not resend the in-flight event.
+			for i := test.queued; i < test.queued+test.added; i++ {
+				metrics.emitUsage("counter", nil, float64(i))
+			}
+			if len(metrics.backlog) != min(test.queued+test.added, usageBacklogLimit) {
+				t.Fatalf("backlog size = %d, want bounded pending events", len(metrics.backlog))
+			}
+			release()
+			waitForUsageMetrics(t, done, 1)
+
+			dropped := max(0, test.queued+test.added-usageBacklogLimit)
+			var want []float64
+			if test.firstError {
+				if len(repository.accepted) != 0 || metrics.backlog[0].value != float64(dropped) {
+					t.Fatal("refused send changed the retained queue head")
+				}
+				metrics.drainBacklog()
+			} else {
+				want = append(want, 0) // The in-flight event succeeded, even if overflow evicted it.
+				dropped = max(1, dropped)
+			}
+			for i := dropped; i < test.queued+test.added; i++ {
+				want = append(want, float64(i))
+			}
+			for i, value := range want {
+				if i >= len(repository.accepted) || repository.accepted[i] != value {
+					t.Fatalf("accepted values lost FIFO entry %d (want %v); accepted %d events, want %d", i, value, len(repository.accepted), len(want))
+				}
+			}
+			if len(repository.accepted) != len(want) || len(metrics.backlog) != 0 {
+				t.Fatalf("accepted/backlog = %d/%d, want %d/0", len(repository.accepted), len(metrics.backlog), len(want))
+			}
+		})
+	}
+}
+
+type blockedUsageMetricsRecorder struct {
+	flakyUsageMetricsRecorder
+	entered, resume chan struct{}
+	firstError      bool
+	once            sync.Once
+}
+
+func (r *blockedUsageMetricsRecorder) IncrementCounter(name string, labels map[string]interface{}, value float64) error {
+	var err error
+	r.once.Do(func() {
+		close(r.entered)
+		<-r.resume
+		if r.firstError {
+			err = context.DeadlineExceeded
+		}
+	})
+	if err != nil {
+		return err
+	}
+	return r.flakyUsageMetricsRecorder.IncrementCounter(name, labels, value)
+}
+
 func TestEmitContainerUsageDrainsBacklogOnEveryTickAndAtExit(t *testing.T) {
 	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
 	firstEnd := start.Add(5 * time.Second)
