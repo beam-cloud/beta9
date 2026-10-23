@@ -14,6 +14,7 @@ on:
     branches: [main]
     paths:
       - docker/Dockerfile.microvm
+      - docker/patches/cloud-hypervisor/**
       - docker/microvm/**
 
 permissions:

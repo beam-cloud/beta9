@@ -3,9 +3,11 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path"
@@ -120,6 +122,192 @@ const (
 	checkpointRootDisk = "root.img"   // the scratch root disk, when the VM has one
 	checkpointInitFile = "guest-init" // executable backing the captured guest agent
 )
+
+// validateMicroVMSnapshotBlockQueues rejects snapshots with disk requests that
+// would be lost when a fresh vhost-user backend restores the guest. The native
+// RAM file concatenates memory_ranges in metadata order; only the two ring
+// indices (four bytes per queue) are read, never the guest's payload.
+func validateMicroVMSnapshotBlockQueues(snapshotDir string) error {
+	readMetadata := func(name string, target any) error {
+		f, err := os.Open(filepath.Join(snapshotDir, name))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		const limit = 16 << 20
+		data, err := io.ReadAll(io.LimitReader(f, limit+1))
+		if err != nil {
+			return err
+		}
+		if len(data) > limit {
+			return fmt.Errorf("%s exceeds snapshot metadata limit", name)
+		}
+		return json.Unmarshal(data, target)
+	}
+	var config struct {
+		Disks []struct {
+			ID        string  `json:"id"`
+			VhostUser *bool   `json:"vhost_user"`
+			NumQueues *uint64 `json:"num_queues"`
+			QueueSize *uint64 `json:"queue_size"`
+		} `json:"disks"`
+	}
+	if err := readMetadata("config.json", &config); err != nil {
+		return fmt.Errorf("validate snapshot block config: %w", err)
+	}
+	if len(config.Disks) == 0 {
+		return fmt.Errorf("snapshot block config has no disks")
+	}
+	type diskQueues struct{ count, size uint64 }
+	disks := make(map[string]diskQueues)
+	for _, disk := range config.Disks {
+		if disk.VhostUser == nil {
+			return fmt.Errorf("snapshot disk %q is missing vhost_user", disk.ID)
+		}
+		if !*disk.VhostUser {
+			continue
+		}
+		if disk.ID == "" || disk.NumQueues == nil || *disk.NumQueues == 0 || disk.QueueSize == nil || *disk.QueueSize == 0 || *disk.QueueSize > 32768 || *disk.QueueSize&(*disk.QueueSize-1) != 0 {
+			return fmt.Errorf("snapshot vhost-user disk %q has invalid queue config", disk.ID)
+		}
+		if _, duplicate := disks[disk.ID]; duplicate {
+			return fmt.Errorf("duplicate snapshot vhost-user disk %q", disk.ID)
+		}
+		disks[disk.ID] = diskQueues{*disk.NumQueues, *disk.QueueSize}
+	}
+	if len(disks) == 0 {
+		return nil
+	}
+	var snapshot microVMSnapshotSection
+	if err := readMetadata("state.json", &snapshot); err != nil {
+		return fmt.Errorf("validate snapshot block state: %w", err)
+	}
+	sections := make(map[string][]*microVMSnapshotSection)
+	var walk func(string, *microVMSnapshotSection, int) error
+	walk = func(name string, section *microVMSnapshotSection, depth int) error {
+		if section == nil || depth > 64 {
+			return fmt.Errorf("invalid snapshot section %q", name)
+		}
+		sections[name] = append(sections[name], section)
+		for child, value := range section.Snapshots {
+			if err := walk(child, value, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk("", &snapshot, 0); err != nil {
+		return err
+	}
+	decodeSection := func(name string, target any) error {
+		found := sections[name]
+		if len(found) != 1 || found[0].SnapshotData == nil || found[0].SnapshotData.State == nil {
+			return fmt.Errorf("snapshot requires exactly one saved %q section", name)
+		}
+		if err := json.Unmarshal([]byte(*found[0].SnapshotData.State), target); err != nil {
+			return fmt.Errorf("decode snapshot section %q: %w", name, err)
+		}
+		return nil
+	}
+	var memory struct {
+		Ranges struct {
+			Data []struct {
+				GPA    *uint64 `json:"gpa"`
+				Length *uint64 `json:"length"`
+			} `json:"data"`
+		} `json:"memory_ranges"`
+	}
+	if err := decodeSection("memory-manager", &memory); err != nil {
+		return err
+	}
+	type memoryRange struct{ start, end, offset uint64 }
+	ranges := make([]memoryRange, 0, len(memory.Ranges.Data))
+	var total uint64
+	for _, region := range memory.Ranges.Data {
+		if region.GPA == nil || region.Length == nil || *region.Length == 0 || *region.GPA > math.MaxUint64-*region.Length || *region.Length > math.MaxInt64-total {
+			return fmt.Errorf("invalid snapshot memory range")
+		}
+		ranges = append(ranges, memoryRange{*region.GPA, *region.GPA + *region.Length, total})
+		total += *region.Length
+	}
+	if len(ranges) == 0 {
+		return fmt.Errorf("snapshot has no saved memory ranges")
+	}
+	ordered := slices.Clone(ranges)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].start < ordered[j].start })
+	for i := 1; i < len(ordered); i++ {
+		if ordered[i].start < ordered[i-1].end {
+			return fmt.Errorf("snapshot memory ranges overlap")
+		}
+	}
+	file, err := os.Open(filepath.Join(snapshotDir, "memory-ranges"))
+	if err != nil {
+		return fmt.Errorf("open snapshot memory: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != int64(total) {
+		return fmt.Errorf("snapshot memory file length does not match saved ranges")
+	}
+	readIndex := func(ring uint64) (uint16, error) {
+		if ring > math.MaxUint64-4 {
+			return 0, fmt.Errorf("snapshot disk ring address overflows")
+		}
+		for _, region := range ranges {
+			if ring >= region.start && ring+4 <= region.end {
+				var value [2]byte
+				if _, err := file.ReadAt(value[:], int64(region.offset+(ring-region.start)+2)); err != nil {
+					return 0, fmt.Errorf("read snapshot disk index: %w", err)
+				}
+				return binary.LittleEndian.Uint16(value[:]), nil
+			}
+		}
+		return 0, fmt.Errorf("snapshot disk index is outside saved memory")
+	}
+	for id, expected := range disks {
+		var transport struct {
+			Queues []struct {
+				Ready *bool   `json:"ready"`
+				Size  *uint64 `json:"size"`
+				Avail *uint64 `json:"avail_ring"`
+				Used  *uint64 `json:"used_ring"`
+			} `json:"queues"`
+		}
+		if err := decodeSection("_virtio-pci-"+id, &transport); err != nil {
+			return err
+		}
+		if uint64(len(transport.Queues)) != expected.count {
+			return fmt.Errorf("snapshot disk %q queue count differs from config", id)
+		}
+		for i, queue := range transport.Queues {
+			if queue.Ready == nil || !*queue.Ready || queue.Size == nil || *queue.Size == 0 || *queue.Size > expected.size || *queue.Size&(*queue.Size-1) != 0 || queue.Avail == nil || queue.Used == nil || *queue.Avail%2 != 0 || *queue.Used%4 != 0 || *queue.Avail == *queue.Used {
+				return fmt.Errorf("snapshot disk %q queue %d is missing or not ready", id, i)
+			}
+			available, err := readIndex(*queue.Avail)
+			if err != nil {
+				return fmt.Errorf("snapshot disk %q queue %d: %w", id, i, err)
+			}
+			used, err := readIndex(*queue.Used)
+			if err != nil {
+				return fmt.Errorf("snapshot disk %q queue %d: %w", id, i, err)
+			}
+			if pending := uint16(available - used); pending != 0 {
+				return fmt.Errorf("snapshot disk %q queue %d has %d outstanding requests (available=%d used=%d)", id, i, pending, available, used)
+			}
+		}
+	}
+	return nil
+}
+
+type microVMSnapshotSection struct {
+	Snapshots    map[string]*microVMSnapshotSection `json:"snapshots"`
+	SnapshotData *struct {
+		State *string `json:"state"`
+	} `json:"snapshot_data"`
+}
 
 // --- bundle -----------------------------------------------------------------
 

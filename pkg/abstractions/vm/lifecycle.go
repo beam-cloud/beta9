@@ -257,6 +257,7 @@ func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
 	for _, disk := range resp.Snapshots {
 		if disk.DiskName == rootDisk(v) && disk.SnapshotId != "" {
 			v.RootSnapshotID = disk.SnapshotId
+			v.Error = ""
 			return s.repo.SaveVM(ctx, v)
 		}
 	}

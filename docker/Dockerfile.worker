@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 ARG BASE_STAGE=dev
 # Built from docker/Dockerfile.microvm; CI checks this matches hack/microvm-image-tag.sh.
-ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:722a1a53e500
+ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:9f8e3a998848
 
 FROM golang:1.25-bookworm AS golang
 

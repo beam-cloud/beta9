@@ -30,10 +30,14 @@ type vmStore struct {
 	rows          map[string]*types.VM
 	artifacts     []types.VMArtifact
 	artifactError bool
+	saveError     error
 }
 
 func (r *vmStore) CreateVM(ctx context.Context, v *types.VM) error { return r.SaveVM(ctx, v) }
 func (r *vmStore) SaveVM(_ context.Context, v *types.VM) error {
+	if r.saveError != nil {
+		return r.saveError
+	}
 	copy := *v
 	copy.UpdatedAt = time.Now()
 	r.rows[v.ID] = &copy
@@ -664,6 +668,53 @@ func TestCreateUsesConfiguredDefaultPoolAndPreservesExplicitPool(t *testing.T) {
 			} else {
 				require.Equal(t, test.wantPool, gateway.stub.Pool.Name)
 			}
+		})
+	}
+}
+
+func TestRunningVMRetainsSnapshotFailureUntilRootCommitRecovers(t *testing.T) {
+	s, v, _, runtime, _ := fixture()
+	ctx := context.Background()
+	v.RootSnapshotID = "previous-root"
+	v.UpdatedAt = time.Now().Add(-2 * time.Minute)
+	runtime.snapshotError = true
+	err := s.reconcileVM(ctx, v)
+	require.ErrorContains(t, err, "root snapshot failed")
+	s.failed(ctx, v, err)
+	store := s.repo.(*vmStore)
+	require.Equal(t, "running", store.rows[v.ID].Status)
+	require.NotEmpty(t, store.rows[v.ID].Error)
+
+	// Running/exec-ready alone must not erase a failed disk commit.
+	runtime.snapshotError = false
+	v.UpdatedAt = time.Now()
+	require.NoError(t, s.reconcileVM(ctx, v))
+	require.NotEmpty(t, store.rows[v.ID].Error)
+	require.Equal(t, "previous-root", store.rows[v.ID].RootSnapshotID)
+
+	v.UpdatedAt = time.Now().Add(-2 * time.Minute)
+	require.NoError(t, s.reconcileVM(ctx, v))
+	require.Equal(t, "root-live", store.rows[v.ID].RootSnapshotID)
+	require.Empty(t, store.rows[v.ID].Error)
+	require.Equal(t, "running", store.rows[v.ID].Status)
+	require.Equal(t, v.ContainerID, store.rows[v.ID].ContainerID)
+}
+
+func TestSnapshotErrorClearRequiresMatchingRootAndSuccessfulPersistence(t *testing.T) {
+	for _, scenario := range []string{"wrong-root", "save-failed"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, v, _, runtime, _ := fixture()
+			v.RootSnapshotID, v.Error = "previous-root", "root snapshot failed: freeze timeout"
+			store := s.repo.(*vmStore)
+			require.NoError(t, store.SaveVM(context.Background(), v)) // Detached durable row.
+			if scenario == "wrong-root" {
+				runtime.diskName = "another-vm"
+			} else {
+				store.saveError = errors.New("snapshot persistence unavailable")
+			}
+			require.Error(t, s.snapshotRoot(context.Background(), v))
+			require.Equal(t, "previous-root", store.rows[v.ID].RootSnapshotID)
+			require.Equal(t, "root snapshot failed: freeze timeout", store.rows[v.ID].Error)
 		})
 	}
 }
