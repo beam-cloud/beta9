@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -352,13 +353,25 @@ func createTarWithSHA256Progress(ctx context.Context, srcDir, destTar string, pr
 
 		hasher := sha256.New()
 		counter := &countingWriter{progress: progress}
+		// RAM checkpoints compress well. Two encoder workers overlap compression
+		// with tar reads while checkpoint admission bounds total CPU use.
+		encoder, err := zstd.NewWriter(io.MultiWriter(out, hasher, counter),
+			zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderConcurrency(2))
+		if err != nil {
+			_ = out.Close()
+			_ = os.Remove(destTar)
+			return "", 0, err
+		}
 		tarArgs := append(tarSparseArgs(), "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
 		cmd := exec.CommandContext(ctx, "tar", tarArgs...)
 		var stderr bytes.Buffer
-		cmd.Stdout = io.MultiWriter(out, hasher, counter)
+		cmd.Stdout = encoder
 		cmd.Stderr = &stderr
 
 		runErr := cmd.Run()
+		if err := encoder.Close(); runErr == nil {
+			runErr = err
+		}
 		closeErr := out.Close()
 		if runErr != nil {
 			_ = os.Remove(destTar)
@@ -427,9 +440,12 @@ func tarSparseArgs() []string {
 }
 
 func untarTar(srcTar, destDir string) error {
-	cmd := exec.Command("tar", append(tarXattrArgs(), "-xf", srcTar, "-C", destDir)...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	archive, err := os.Open(srcTar)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	return untarCheckpointReader(context.Background(), archive, destDir)
 }
 
 type FileLock struct {

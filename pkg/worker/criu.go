@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -32,6 +33,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
+	"github.com/klauspost/compress/zstd"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -1994,6 +1996,22 @@ func untarCheckpointReader(ctx context.Context, reader io.Reader, destDir string
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Streaming tar cannot detect compression itself. Inspect the standard
+	// frame magic; plain TAR is also used by filesystem checkpoint payloads.
+	buffered := bufio.NewReader(reader)
+	header, err := buffered.Peek(4)
+	if err != nil {
+		return err
+	}
+	reader = buffered
+	if bytes.Equal(header, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
+		decoder, err := zstd.NewReader(buffered, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return err
+		}
+		defer decoder.Close()
+		reader = decoder
+	}
 	cmd := exec.CommandContext(ctx, "tar", append(tarXattrArgs(), "-xf", "-", "-C", destDir)...)
 	var stderr bytes.Buffer
 	cmd.Stdin = reader
@@ -2001,7 +2019,9 @@ func untarCheckpointReader(ctx context.Context, reader io.Reader, destDir string
 	if err := cmd.Run(); err != nil {
 		return tarCommandError(fmt.Sprintf("extract checkpoint to %s", destDir), err, stderr)
 	}
-	return nil
+	// Tar may stop at its end marker before the compressed frame's checksum.
+	_, err = io.Copy(io.Discard, reader)
+	return err
 }
 
 const checkpointCacheReadBufferSize = 4 * 1024 * 1024
