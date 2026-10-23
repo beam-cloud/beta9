@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -229,6 +231,20 @@ func TestCreateTarWithSHA256KeepsSparseFilesSparse(t *testing.T) {
 	_, size, err := createTarWithSHA256(src, filepath.Join(root, "checkpoint.tar"))
 	require.NoError(t, err)
 	require.Less(t, size, int64(1<<20), "a 1 GiB image holding 4 bytes archives to a few KiB")
+	destination := filepath.Join(root, "restored")
+	require.NoError(t, os.Mkdir(destination, 0755))
+	require.NoError(t, untarTar(filepath.Join(root, "checkpoint.tar"), destination))
+	restored, err := os.Open(filepath.Join(destination, "checkpoint", "root.img"))
+	require.NoError(t, err)
+	defer restored.Close()
+	info, err := restored.Stat()
+	require.NoError(t, err)
+	require.Equal(t, int64(1<<30), info.Size())
+	require.Less(t, info.Sys().(*syscall.Stat_t).Blocks*512, int64(1<<20))
+	content := make([]byte, 4)
+	_, err = restored.ReadAt(content, 1<<29)
+	require.NoError(t, err)
+	require.Equal(t, "data", string(content))
 }
 
 func TestCreateTarWithSHA256ReturnsArchiveHashAndSize(t *testing.T) {
@@ -274,6 +290,87 @@ func TestCreateTarWithSHA256HonorsCancellation(t *testing.T) {
 	_, _, err := createTarWithSHA256Progress(ctx, t.TempDir(), archivePath, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.NoFileExists(t, archivePath)
+}
+
+func TestCheckpointArchiveCompressionRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "checkpoint")
+	require.NoError(t, os.MkdirAll(source, 0755))
+	payload := bytes.Repeat([]byte("memory checkpoint payload\n"), 1<<16)
+	require.NoError(t, os.WriteFile(filepath.Join(source, "memory"), payload, 0600))
+	require.NoError(t, os.Symlink("memory", filepath.Join(source, "memory-link")))
+	if runtime.GOOS == "linux" {
+		require.NoError(t, unix.Setxattr(filepath.Join(source, "memory"), "user.checkpoint", []byte("metadata"), 0))
+	}
+	archive := filepath.Join(root, "checkpoint.tar")
+	hash, size, err := createTarWithSHA256(source, archive)
+	require.NoError(t, err)
+	require.Less(t, size, int64(len(payload)/10), "compress allocated memory, not just sparse holes")
+	actualHash, actualSize, err := fileSHA256(archive)
+	require.NoError(t, err)
+	require.Equal(t, hash, actualHash)
+	require.Equal(t, size, actualSize, "the published size includes the compression footer")
+	destination := filepath.Join(root, "restored")
+	require.NoError(t, os.Mkdir(destination, 0755))
+	require.NoError(t, untarTar(archive, destination))
+	restored := filepath.Join(destination, "checkpoint", "memory")
+	content, err := os.ReadFile(restored)
+	require.NoError(t, err)
+	require.Equal(t, sha256.Sum256(payload), sha256.Sum256(content))
+	info, err := os.Stat(restored)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	target, err := os.Readlink(filepath.Join(destination, "checkpoint", "memory-link"))
+	require.NoError(t, err)
+	require.Equal(t, "memory", target)
+	if runtime.GOOS == "linux" {
+		value := make([]byte, 32)
+		n, err := unix.Getxattr(restored, "user.checkpoint", value)
+		require.NoError(t, err)
+		require.Equal(t, "metadata", string(value[:n]))
+	}
+}
+
+func TestCheckpointArchiveRejectsDamagedCompressionFooter(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "checkpoint")
+	require.NoError(t, os.Mkdir(source, 0755))
+	require.NoError(t, os.Mkdir(filepath.Join(source, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "inventory.img"), []byte("state"), 0600))
+	archive := filepath.Join(root, "checkpoint.tar")
+	_, _, err := createTarWithSHA256(source, archive)
+	require.NoError(t, err)
+	valid, err := os.ReadFile(archive)
+	require.NoError(t, err)
+	for _, damage := range []string{"truncated", "checksum"} {
+		t.Run(damage, func(t *testing.T) {
+			body := bytes.Clone(valid)
+			if damage == "truncated" {
+				body = body[:len(body)-1]
+			} else {
+				body[len(body)-1] ^= 1
+			}
+			require.Error(t, untarCheckpointReader(context.Background(), bytes.NewReader(body), t.TempDir()))
+			checkpointPath := filepath.Join(t.TempDir(), "checkpoint")
+			hash := fmt.Sprintf("%x", sha256.Sum256(body))
+			require.Error(t, materializeCheckpointReader(context.Background(), bytes.NewReader(body), hash, int64(len(body)), checkpointPath, "checkpoint", nil))
+			require.NoDirExists(t, checkpointPath, "even a matching object SHA must not publish a damaged compressed frame")
+		})
+	}
+}
+
+func TestCheckpointArchiveReaderAcceptsPlainTar(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "state"), []byte("state"), 0600))
+	// Filesystem archives are also produced directly by tar, without compression.
+	cmd := exec.Command("tar", "-cf", "-", "-C", source, "state")
+	body, err := cmd.Output()
+	require.NoError(t, err)
+	destination := t.TempDir()
+	require.NoError(t, untarCheckpointReader(context.Background(), bytes.NewReader(body), destination))
+	content, err := os.ReadFile(filepath.Join(destination, "state"))
+	require.NoError(t, err)
+	require.Equal(t, "state", string(content))
 }
 
 // Spec files are copied into trees the container controls: a symlink it
