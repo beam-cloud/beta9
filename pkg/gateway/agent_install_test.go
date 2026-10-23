@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -177,6 +178,78 @@ ensure_linux_nvidia_container_runtime
 	}
 	if data, err := os.ReadFile(restartMarker); err != nil || string(data) != "restart docker\n" {
 		t.Fatalf("restart marker = %q, %v", data, err)
+	}
+}
+
+func TestAgentInstallScriptManagedIngressMatchesAgent(t *testing.T) {
+	for _, want := range []string{
+		"/etc/systemd/system/" + types.AgentSystemdIngressService,
+		"export " + types.AgentManagedIngressEnv + "=true",
+	} {
+		if !strings.Contains(agentInstallScript, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestManagedIngressRulesAllowOnlyListedPorts(t *testing.T) {
+	binDir := t.TempDir()
+	rulesDir := t.TempDir()
+	fakes := map[string]string{
+		"iptables":          "#!/bin/sh\n",
+		"ip6tables":         "#!/bin/sh\n",
+		"iptables-restore":  "#!/bin/sh\ncat > \"$RULES_DIR/iptables\"\n",
+		"ip6tables-restore": "#!/bin/sh\ncat > \"$RULES_DIR/ip6tables\"\n",
+	}
+	for name, contents := range fakes {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(contents), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := exec.Command("sh", "-eu")
+	cmd.Stdin = strings.NewReader("INTERFACES=eth0\nTCP_PORTS='22 8443'\n" + managedIngressRulesScript)
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"RULES_DIR="+rulesDir,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("managed ingress rules failed: %v\n%s", err, out)
+	}
+
+	for family, want := range map[string]string{
+		"iptables": `*mangle
+:BEAM-INGRESS - [0:0]
+-F BEAM-INGRESS
+-A BEAM-INGRESS -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j RETURN
+-A BEAM-INGRESS -p icmp -j RETURN
+-A BEAM-INGRESS -p udp --sport 67 --dport 68 -j RETURN
+-A BEAM-INGRESS -p tcp --dport 22 -j RETURN
+-A BEAM-INGRESS -p tcp --dport 8443 -j RETURN
+-A BEAM-INGRESS -p udp --dport %d -j RETURN
+-A BEAM-INGRESS -j DROP
+COMMIT
+`,
+		"ip6tables": `*mangle
+:BEAM-INGRESS - [0:0]
+-F BEAM-INGRESS
+-A BEAM-INGRESS -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j RETURN
+-A BEAM-INGRESS -p ipv6-icmp -j RETURN
+-A BEAM-INGRESS -p udp --sport 547 --dport 546 -j RETURN
+-A BEAM-INGRESS -p tcp --dport 22 -j RETURN
+-A BEAM-INGRESS -p tcp --dport 8443 -j RETURN
+-A BEAM-INGRESS -p udp --dport %d -j RETURN
+-A BEAM-INGRESS -j DROP
+COMMIT
+`,
+	} {
+		rules, err := os.ReadFile(filepath.Join(rulesDir, family))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want = fmt.Sprintf(want, types.AgentTSNetPort); string(rules) != want {
+			t.Fatalf("%s rules:\n%s\nwant:\n%s", family, rules, want)
+		}
 	}
 }
 

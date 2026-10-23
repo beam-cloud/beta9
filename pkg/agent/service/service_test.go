@@ -126,6 +126,24 @@ func TestSystemdUnitEscapesSpecifierInWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestSystemdUnitRequiresManagedIngress(t *testing.T) {
+	spec := Spec{BinaryPath: types.DefaultAgentBinaryPath}
+	if unit := SystemdUnit(spec); strings.Contains(unit, types.AgentSystemdIngressService) {
+		t.Fatalf("unit should not depend on managed ingress by default:\n%s", unit)
+	}
+
+	spec.Env = map[string]string{types.AgentManagedIngressEnv: "true"}
+	unit := SystemdUnit(spec)
+	for _, want := range []string{
+		"Requires=" + types.AgentSystemdIngressService + "\n",
+		"After=" + types.AgentSystemdIngressService + "\n",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("unit missing %q:\n%s", want, unit)
+		}
+	}
+}
+
 func TestLaunchdPlistRendersAgentProgram(t *testing.T) {
 	spec := Spec{
 		Name:       "private pool",

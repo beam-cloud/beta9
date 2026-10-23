@@ -96,6 +96,14 @@ func SystemdUnit(spec Spec) string {
 		"Description="+spec.Description,
 		"Wants="+types.AgentSystemdNetworkOnlineTarget+" "+types.AgentSystemdDockerService,
 		"After="+types.AgentSystemdNetworkOnlineTarget+" "+types.AgentSystemdDockerService,
+	)
+	if spec.Env[types.AgentManagedIngressEnv] == "true" {
+		writeLines(&b,
+			"Requires="+types.AgentSystemdIngressService,
+			"After="+types.AgentSystemdIngressService,
+		)
+	}
+	writeLines(&b,
 		"RequiresMountsFor="+systemdPath(spec.StateDir),
 		"StartLimitIntervalSec=0",
 		"",
