@@ -1,13 +1,92 @@
 package gatewayservices
 
 import (
+	"bufio"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"math/big"
+	"net"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
+
+// The probe reaches the database through the gateway's own TCP listener, so a
+// host that resolves only outside the cluster can still be checked, by name.
+func TestRedisProbeDialsTheListener(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour), DNSNames: []string{"*.localhost"}}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	serverNames := make(chan string, 4)
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			serverNames <- hello.ServerName
+			return nil, nil
+		},
+	})
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveFakeRedis(conn)
+		}
+	}()
+
+	connection := url.URL{Scheme: "rediss", User: url.UserPassword("default", "pw"), Host: "cache-abc-latest-6379.localhost:1995"}
+	product := databaseProducts[types.DatabaseKindRedis]
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.NoError(t, product.probe(ctx, connection, false, ln.Addr().String()))
+	require.Equal(t, "cache-abc-latest-6379.localhost", <-serverNames)
+}
+
+// serveFakeRedis answers PING, accepts AUTH and CLIENT, and refuses HELLO so
+// clients fall back to RESP2.
+func serveFakeRedis(conn net.Conn) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	line := func() string {
+		text, _ := reader.ReadString('\n')
+		return strings.TrimRight(text, "\r\n")
+	}
+	for {
+		var count int
+		if _, err := fmt.Sscanf(line(), "*%d", &count); err != nil || count == 0 {
+			return
+		}
+		var args []string
+		for range count {
+			line()
+			args = append(args, strings.ToUpper(line()))
+		}
+		reply := "+OK\r\n"
+		switch args[0] {
+		case "HELLO":
+			reply = "-ERR unknown command 'HELLO'\r\n"
+		case "PING":
+			reply = "+PONG\r\n"
+		}
+		conn.Write([]byte(reply))
+	}
+}
 
 // Object-backed volumes are no place for a database's files, backups included.
 func TestPostgresStubStoresOnlyOnItsDurableDisk(t *testing.T) {

@@ -40,7 +40,6 @@ type skopeoClient struct {
 type ImageMetadata struct {
 	Name          string         `json:"Name"`
 	Digest        string         `json:"Digest"`
-	RepoTags      []string       `json:"RepoTags"`
 	Created       time.Time      `json:"Created"`
 	DockerVersion string         `json:"DockerVersion"`
 	Labels        map[string]any `json:"Labels"`
@@ -150,6 +149,10 @@ func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 }
 
 func (p *skopeoClient) inspectArgs(creds string) (out []string) {
+	// Without it skopeo pages through every tag in the repository, which takes
+	// minutes for images published per commit (ghcr.io/immich-app/* has 200k+).
+	out = append(out, "--no-tags")
+
 	if creds != "" {
 		out = append(out, "--creds", creds)
 	} else if p.creds != "" {
