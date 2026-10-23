@@ -12,7 +12,9 @@ includeCRDs: true
 skipTests: true
 valuesInline:
   image:
-    tag: "3.8.1"
+    # The last release that runs without a LocalStack account; later releases
+    # need an auth token. Durable disks need S3 If-Match, added in 4.0.3.
+    tag: "4.14.0"
   extraEnvVars:
   - name: SERVICES
     value: s3
