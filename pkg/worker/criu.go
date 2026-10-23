@@ -65,10 +65,12 @@ const (
 	checkpointOriginConcurrency     = 64
 	checkpointOriginReadAttempts    = 3
 	checkpointCacheConcurrency      = 8
+	microVMCheckpointConcurrency    = 8
 	checkpointOriginIdleTimeout     = time.Minute
 )
 
 var checkpointOriginSlots = make(chan struct{}, checkpointOriginConcurrency)
+var microVMCheckpointSlots = make(chan struct{}, microVMCheckpointConcurrency)
 var checkpointArchiveCacheMu sync.Mutex
 var checkpointArchiveCacheInFlight = make(map[string]struct{})
 var errCheckpointOriginInactive = errors.New("memory checkpoint download made no progress before the inactivity deadline")
@@ -1306,6 +1308,13 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 		defer release()
 	}
+	if runtimeName == types.ContainerRuntimeMicroVM.String() {
+		release, err := acquireMicroVMCheckpointSlot(checkpointCtx)
+		if err != nil {
+			return fmt.Errorf("wait for microvm checkpoint admission: %w", err)
+		}
+		defer release()
+	}
 	resumeOOMWatcher := func() {}
 	if terminateRuntime {
 		resumeOOMWatcher = instance.suspendOOMWatcher()
@@ -1460,6 +1469,25 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint created successfully")
 	}
 	return nil
+}
+
+// Bound native capture and archive writes together through origin publication:
+// a burst of checkpoints must leave the disk backend room to seal and fsync.
+func acquireMicroVMCheckpointSlot(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case microVMCheckpointSlots <- struct{}{}:
+		release := sync.OnceFunc(func() { <-microVMCheckpointSlots })
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		return release, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (s *Worker) markCheckpointFailed(ctx context.Context, opts *CreateCheckpointOpts, runtimeName string, metadata *checkpointCacheMetadata) {

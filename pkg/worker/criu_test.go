@@ -2250,6 +2250,98 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 	}
 }
 
+func TestMicroVMCheckpointAdmissionBoundsAndCancellation(t *testing.T) {
+	var held []func()
+	for range microVMCheckpointConcurrency {
+		release, err := acquireMicroVMCheckpointSlot(context.Background())
+		require.NoError(t, err)
+		held = append(held, release)
+		t.Cleanup(release)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	waiting := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(waiting)
+		release, err := acquireMicroVMCheckpointSlot(ctx)
+		if release != nil {
+			release()
+		}
+		done <- err
+	}()
+	<-waiting
+	select {
+	case err := <-done:
+		t.Fatalf("ninth checkpoint bypassed full admission: %v", err)
+	default:
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled checkpoint did not leave admission queue")
+	}
+	require.Len(t, microVMCheckpointSlots, microVMCheckpointConcurrency)
+	held[0]()
+	replacement, err := acquireMicroVMCheckpointSlot(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(replacement)
+	held[0]()
+	require.Len(t, microVMCheckpointSlots, microVMCheckpointConcurrency, "old release must not consume a new owner's slot")
+	replacement()
+	release, err := acquireMicroVMCheckpointSlot(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, release)
+	require.Len(t, microVMCheckpointSlots, microVMCheckpointConcurrency-1)
+}
+
+func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
+	for range microVMCheckpointConcurrency {
+		release, err := acquireMicroVMCheckpointSlot(context.Background())
+		require.NoError(t, err)
+		t.Cleanup(release)
+	}
+	for _, runtimeName := range []string{types.ContainerRuntimeMicroVM.String(), types.ContainerRuntimeRunc.String()} {
+		t.Run(runtimeName, func(t *testing.T) {
+			request := &types.ContainerRequest{ContainerId: "admission-" + runtimeName}
+			rt := NewMockRuntime(runtimeName, runtime.Capabilities{CheckpointRestore: true})
+			called := false
+			backend := &fakeBackendRepoClient{}
+			cacheManager := &WorkerCacheManager{checkpointRoot: t.TempDir()}
+			worker := &Worker{
+				containerInstances: common.NewSafeMap[*ContainerInstance](),
+				cacheManager:       cacheManager,
+				backendRepoClient:  backend,
+				criuManager: &observingCheckpointManager{create: func(bool) error {
+					called = true
+					return assert.AnError
+				}},
+			}
+			worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+				Id: request.ContainerId, Request: request, Runtime: rt,
+				Overlay: common.NewContainerOverlay(request, t.TempDir(), t.TempDir()),
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			defer cancel()
+			err := worker.createCheckpoint(ctx, &CreateCheckpointOpts{Request: request, CheckpointId: "queued"})
+			if runtimeName == types.ContainerRuntimeMicroVM.String() {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.False(t, called, "queued guest must not freeze, pause or write a native snapshot")
+			} else {
+				require.ErrorIs(t, err, assert.AnError)
+				require.True(t, called, "other runtimes must not share microVM admission")
+			}
+			require.False(t, rt.checkpointCalled)
+			require.False(t, rt.killCalled)
+			require.Zero(t, rt.deleteCalls)
+			require.Empty(t, cacheManager.checkpointLocks, "failed admission must release the checkpoint's materialization lock")
+			require.Equal(t, string(types.CheckpointStatusCheckpointFailed), backend.lastCreate.Status)
+			require.Len(t, microVMCheckpointSlots, microVMCheckpointConcurrency)
+		})
+	}
+}
+
 func TestCreateFilesystemCheckpointFallbackStopsAndCapturesOverlay(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
