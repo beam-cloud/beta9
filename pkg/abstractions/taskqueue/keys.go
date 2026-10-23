@@ -1,18 +1,19 @@
 package taskqueue
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/beam-cloud/beta9/pkg/common"
+)
 
 // Redis keys
 var (
-	taskQueueList                 string = "taskqueue:%s:%s"
-	taskQueueInstanceLock         string = "taskqueue:%s:%s:instance_lock"
-	taskQueueTaskDuration         string = "taskqueue:%s:%s:task_duration"
-	taskQueueAverageTaskDuration  string = "taskqueue:%s:%s:avg_task_duration"
-	taskQueueTaskHeartbeat        string = "taskqueue:%s:%s:task:heartbeat:%s"
-	taskQueueProcessingLock       string = "taskqueue:%s:%s:processing_lock:%s"
-	taskQueueKeepWarmLock         string = "taskqueue:%s:%s:keep_warm_lock:%s"
-	taskQueueTaskRunningLockIndex string = "taskqueue:%s:%s:task_running:%s:index"
-	taskQueueTaskRunningLock      string = "taskqueue:%s:%s:task_running:%s:%s"
+	taskQueueList                string = "taskqueue:%s:%s"
+	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
+	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
+	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
+	taskQueueTaskHeartbeat       string = "taskqueue:%s:%s:task:heartbeat:%s"
+	taskQueueKeepWarmLock        string = "taskqueue:%s:%s:keep_warm_lock:%s"
 )
 
 var Keys = &keys{}
@@ -40,15 +41,15 @@ func (k *keys) taskQueueAverageTaskDuration(workspaceName, stubId string) string
 }
 
 func (k *keys) taskQueueTaskRunningLockIndex(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(taskQueueTaskRunningLockIndex, workspaceName, stubId, containerId)
+	return common.RedisKeys.TaskQueueTaskRunningLockIndex(workspaceName, stubId, containerId)
 }
 
 func (k *keys) taskQueueTaskRunningLock(workspaceName, stubId, containerId, taskId string) string {
-	return fmt.Sprintf(taskQueueTaskRunningLock, workspaceName, stubId, containerId, taskId)
+	return common.RedisKeys.TaskQueueTaskRunningLock(workspaceName, stubId, containerId, taskId)
 }
 
 func (k *keys) taskQueueProcessingLock(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(taskQueueProcessingLock, workspaceName, stubId, containerId)
+	return common.RedisKeys.TaskQueueProcessingLock(workspaceName, stubId, containerId)
 }
 
 func (k *keys) taskQueueKeepWarmLock(workspaceName, stubId, containerId string) string {

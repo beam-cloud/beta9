@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,4 +97,29 @@ func TestOutputUsesWorkspaceStorage(t *testing.T) {
 	location, err := service.setPublicURL(context.Background(), authInfo, "task", id, "file.txt", 60)
 	require.NoError(t, err)
 	require.Contains(t, location, "/bucket/outputs/stub/task/"+id+"/file.txt?")
+}
+
+func TestOutputDiscoveryFindsLateMountedFiles(t *testing.T) {
+	var published atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "outputs/stub/task/", r.URL.Query().Get("prefix"))
+		w.Header().Set("Content-Type", "application/xml")
+		contents := ""
+		if published.Load() >= 1 {
+			contents += `<Contents><Key>outputs/stub/task/first/first.json</Key></Contents>`
+		}
+		if published.Load() >= 2 {
+			contents += `<Contents><Key>outputs/stub/task/late/late.json</Key></Contents>`
+		}
+		io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated>`+contents+`</ListBucketResult>`)
+	}))
+	defer server.Close()
+	workspace := &types.Workspace{Name: "workspace", Storage: &types.WorkspaceStorage{EndpointUrl: &server.URL, BucketName: aws.String("bucket"), Region: aws.String("us-east-1"), AccessKey: aws.String("access"), SecretKey: aws.String("secret")}}
+	task := &types.TaskWithRelated{Task: types.Task{ExternalId: "task", Status: types.TaskStatusComplete}, Stub: types.Stub{ExternalId: "stub"}}
+	for count := 0; count <= 2; count++ {
+		published.Store(int32(count))
+		files, err := GetTaskOutputFiles(context.Background(), &auth.AuthInfo{Workspace: workspace}, task)
+		require.NoError(t, err)
+		require.Len(t, files, count, "an earlier COMPLETE response must not hide a later mounted publication")
+	}
 }

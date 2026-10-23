@@ -48,7 +48,7 @@ const (
 	checkpointFsArchive             = "filesystem.tar"
 	checkpointProcessManagerFile    = "goproc"
 	checkpointArchiveExtension      = ".tar"
-	checkpointOriginPrefix          = "checkpoints"
+	checkpointOriginPrefix          = types.DefaultCheckpointsPrefix
 	checkpointTriggerHTTP           = "http"
 	checkpointProgressInterval      = 10 * time.Second
 	terminalCheckpointStopWait      = 5 * time.Second

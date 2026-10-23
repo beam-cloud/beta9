@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -385,13 +386,32 @@ func storageMultipartConcurrency(body io.Reader) int {
 	return storageStreamingUploadWorkers
 }
 
+// Known-object reads use Tigris's source-region fallback. Remove the routing
+// hint only for this request; writes, listings and versioned journal heads retain
+// their existing policy.
+func ordinaryObjectReadOptions(o *s3.Options) {
+	if !common.IsTigrisEndpoint(aws.ToString(o.BaseEndpoint)) {
+		return
+	}
+	o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+		return stack.Build.Add(middleware.BuildMiddlewareFunc("TigrisSourceRegionRead", func(ctx context.Context, in middleware.BuildInput, next middleware.BuildHandler) (middleware.BuildOutput, middleware.Metadata, error) {
+			request, ok := in.Request.(*smithyhttp.Request)
+			if !ok {
+				return middleware.BuildOutput{}, middleware.Metadata{}, fmt.Errorf("unexpected storage transport %T", in.Request)
+			}
+			request.Header.Del(common.TigrisConsistencyHeader)
+			return next.HandleBuild(ctx, in)
+		}), middleware.After)
+	})
+}
+
 func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bool, *s3.HeadObjectOutput, error) {
 	output, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	})
+	}, ordinaryObjectReadOptions)
 	if err != nil {
-		if errors.As(err, new(*s3types.NoSuchKey)) || errors.As(err, new(*s3types.NotFound)) {
+		if storageObjectNotFound(err) {
 			return false, nil, nil
 		}
 		return false, nil, err
@@ -409,7 +429,7 @@ func (c *StorageClient) Download(ctx context.Context, key string, bucket string)
 	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	})
+	}, ordinaryObjectReadOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -422,12 +442,27 @@ func (c *StorageClient) DownloadWithReader(ctx context.Context, key string, buck
 	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	})
+	}, ordinaryObjectReadOptions)
 	if err != nil {
 		return nil, err
 	}
 
 	return resp.Body, nil
+}
+
+func storageObjectNotFound(err error) bool {
+	var responseError *smithyhttp.ResponseError
+	if errors.As(err, &responseError) {
+		return responseError.HTTPStatusCode() == 404
+	}
+	var apiError smithy.APIError
+	if errors.As(err, &apiError) {
+		switch apiError.ErrorCode() {
+		case "NoSuchKey", "NotFound", "404":
+			return true
+		}
+	}
+	return false
 }
 
 func (c *StorageClient) Delete(ctx context.Context, key string, bucket string) error {
@@ -552,7 +587,7 @@ func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string, bucke
 	for paginator.HasMorePages() {
 		resp, err := paginator.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return allObjects, err
 		}
 		allObjects = append(allObjects, resp.Contents...)
 	}

@@ -6,6 +6,10 @@ const (
 	DefaultObjectPrefix                string = "objects"
 	DefaultVolumesPrefix               string = "volumes"
 	DefaultOutputsPrefix               string = "outputs"
+	DefaultCheckpointsPrefix           string = "checkpoints"
+	DefaultDurableDisksPrefix          string = "durable-disks"
+	DurableDiskChunksPrefix            string = "chunks"
+	DurableDiskSnapshotsPrefix         string = "snapshots"
 	FailedDeploymentContainerThreshold int    = 3
 	FailedContainerThreshold           int    = 1
 )

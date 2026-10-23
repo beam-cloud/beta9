@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -433,8 +434,17 @@ func TestStorageListPagination(t *testing.T) {
 			}
 			objects, err := list(ctx, prefix, "bucket")
 			if test.fail || test.cancel {
-				if err == nil || objects != nil {
-					t.Fatalf("listing = %v, %v; want nil objects and error", objects, err)
+				if err == nil {
+					t.Fatalf("listing = %v; want an error", objects)
+				}
+				if test.fail {
+					wantPartial := 0
+					if !test.directory {
+						wantPartial = 1
+					}
+					if len(objects) != wantPartial {
+						t.Fatalf("listing retained %d objects; want %d before the failed page", len(objects), wantPartial)
+					}
 				}
 				if test.cancel && !errors.Is(err, context.Canceled) {
 					t.Fatalf("error = %v, want context cancellation", err)
@@ -631,6 +641,147 @@ func TestTigrisPresignedHeaders(t *testing.T) {
 			}
 			if !strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "x-tigris-consistent") {
 				t.Fatal("consistency header is not signed")
+			}
+		})
+	}
+}
+
+func TestStorageArtifactReads(t *testing.T) {
+	for _, tc := range []struct {
+		name, key string
+	}{
+		{"output", "outputs/stub/task/output/file"},
+		{"chunk", "durable-disks/disk/chunks/hash"},
+		{"snapshot", "durable-disks/disk/snapshots/1/uuid/manifest.json"},
+		{"object", "objects/uuid"},
+		{"checkpoint", "checkpoints/uuid.tar"},
+		{"volume", "volumes/id/file"},
+		{"journal", "durable-disks/disk/journal/head.json"},
+	} {
+		for _, status := range []int{200, 404, 403} {
+			for _, operation := range []string{"head", "download", "stream"} {
+				t.Run(fmt.Sprintf("%s/%d/%s", tc.name, status, operation), func(t *testing.T) {
+					requests := 0
+					transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+						requests++
+						if r.Header.Get(common.TigrisConsistencyHeader) != "" {
+							t.Error("deprecated consistency header was sent")
+						}
+						if strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent") {
+							t.Error("unexpected consistency header or signature")
+						}
+						body := "verified bytes"
+						if status != 200 {
+							code := "NoSuchKey"
+							if status == 403 {
+								code = "AccessDenied"
+							}
+							body = "<Error><Code>" + code + "</Code></Error>"
+						}
+						return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+					})
+					client := &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, "https://t3.storage.dev")}
+					var err error
+					if operation == "head" {
+						var exists bool
+						exists, _, err = client.Head(context.Background(), tc.key, "bucket")
+						if exists != (status == 200) {
+							t.Errorf("exists = %t", exists)
+						}
+					} else {
+						var data []byte
+						if operation == "download" {
+							data, err = client.Download(context.Background(), tc.key, "bucket")
+						} else {
+							var reader io.ReadCloser
+							reader, err = client.DownloadWithReader(context.Background(), tc.key, "bucket")
+							if err == nil {
+								data, err = io.ReadAll(reader)
+								_ = reader.Close()
+							}
+						}
+						if status == 200 && string(data) != "verified bytes" {
+							t.Errorf("download = %q", data)
+						}
+					}
+					wantError := status != 200 && !(operation == "head" && status == 404)
+					if (err != nil) != wantError || requests != 1 {
+						t.Fatalf("error = %v after %d requests; want error=%t, one request", err, requests, wantError)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestStorageVersionedRoutingAndConditions(t *testing.T) {
+	for _, endpoint := range []string{"https://t3.storage.dev", "https://fly.storage.tigris.dev", "https://s3.amazonaws.com"} {
+		t.Run(endpoint, func(t *testing.T) {
+			requests := 0
+			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests++
+				wantHeader := ""
+				if common.IsTigrisEndpoint(endpoint) && requests != 6 {
+					wantHeader = "true"
+				}
+				if got := r.Header.Get(common.TigrisConsistencyHeader); got != wantHeader {
+					t.Errorf("request %d routing = %q, want %q", requests, got, wantHeader)
+				}
+				if got := strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent"); got != (wantHeader != "") {
+					t.Errorf("request %d signed routing = %t", requests, got)
+				}
+				status, body := http.StatusOK, "first"
+				header := http.Header{"Etag": []string{"one"}}
+				switch requests {
+				case 1:
+					if r.Method != http.MethodPut || r.Header.Get("If-None-Match") != "*" {
+						t.Error("initial write must remain create-only")
+					}
+				case 2, 6, 7:
+					if r.Method != http.MethodGet {
+						t.Error("expected a read")
+					}
+				case 3, 4:
+					if r.Method != http.MethodPut || r.Header.Get("If-Match") != "one" {
+						t.Error("replacement must retain its ETag condition")
+					}
+					if requests == 4 {
+						status, body = http.StatusPreconditionFailed, "<Error><Code>PreconditionFailed</Code></Error>"
+					}
+				case 5:
+					status, body = http.StatusNotFound, "<Error><Code>NoSuchKey</Code></Error>"
+				default:
+					t.Fatalf("unexpected retry or request %d", requests)
+				}
+				return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			client := &WorkspaceStorageClient{
+				WorkspaceStorage: &types.WorkspaceStorage{BucketName: aws.String("bucket")},
+				StorageClient:    &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, endpoint)},
+			}
+			ctx := context.Background()
+			if version, err := client.WriteVersion(ctx, "head", []byte("first"), ""); err != nil || version != "one" {
+				t.Fatalf("create = %q, %v", version, err)
+			}
+			if data, version, err := client.ReadVersion(ctx, "head"); err != nil || string(data) != "first" || version != "one" {
+				t.Fatalf("read = %q, %q, %v", data, version, err)
+			}
+			if _, err := client.WriteVersion(ctx, "head", []byte("second"), "one"); err != nil {
+				t.Fatal(err)
+			}
+			var apiErr smithy.APIError
+			if _, err := client.WriteVersion(ctx, "head", []byte("stale"), "one"); !errors.As(err, &apiErr) || apiErr.ErrorCode() != "PreconditionFailed" || requests != 4 {
+				t.Fatalf("failed condition = %v after %d requests", err, requests)
+			}
+			if data, version, err := client.ReadVersion(ctx, "missing"); err != nil || len(data) != 0 || version != "" {
+				t.Fatalf("missing = %q, %q, %v", data, version, err)
+			}
+			// Per-operation routing must not leak into subsequent plain reads.
+			if data, err := client.Download(ctx, "head"); err != nil || string(data) != "first" || requests != 6 {
+				t.Fatalf("ordinary read = %q, %v after %d requests", data, err, requests)
+			}
+			if _, version, err := client.ReadVersion(ctx, "head"); err != nil || version != "one" || requests != 7 {
+				t.Fatalf("subsequent journal read = %q, %v after %d requests", version, err, requests)
 			}
 		})
 	}

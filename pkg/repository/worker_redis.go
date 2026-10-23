@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -979,29 +980,69 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 
 func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation string) error {
 	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		buildVersion := worker.BuildVersion
+		initialStatus := worker.Status
+		agentStartup := generation != "" && worker.MachineId != ""
+		if agentStartup {
+			// A persistent worker can restart after a transient health reset has
+			// cleared rollout intent. Its published slot, not this gateway's
+			// desired tag, identifies the image the worker actually started.
+			data, err := r.rdb.Get(ctx, common.RedisKeys.ComputeAgentSlot(worker.WorkspaceId, worker.PoolName, worker.MachineId, worker.Id)).Bytes()
+			if err != nil {
+				return fmt.Errorf("read worker startup slot: %w", err)
+			}
+			var slot compute.AgentWorkerSlotState
+			if err := json.Unmarshal(data, &slot); err != nil {
+				return fmt.Errorf("decode worker startup slot: %w", err)
+			}
+			if slot.Generation != generation || slot.WorkerID != worker.Id {
+				return errors.New("worker startup does not match published slot")
+			}
+			buildVersion = types.WorkerImageVersion(slot.WorkerImage, "")
+		}
 		if worker.RolloutGeneration != "" {
-			if generation == "" || generation != worker.RolloutGeneration {
+			if generation == "" {
 				return nil
 			}
+			if generation != worker.RolloutGeneration {
+				return errors.New("worker startup does not match rollout generation")
+			}
+			worker.Status = types.WorkerStatusAvailable
+			if worker.CordonRequested || worker.RolloutPreviousStatus == types.WorkerStatusDisabled {
+				worker.Status = types.WorkerStatusDisabled
+			}
+			worker.RolloutGeneration = ""
+		} else if worker.Status == types.WorkerStatusPending {
 			worker.Status = types.WorkerStatusAvailable
 			if worker.CordonRequested {
 				worker.Status = types.WorkerStatusDisabled
 			}
-			worker.BuildVersion = types.WorkerImageVersion(worker.WorkerImageOverride, r.config.ImageTag)
-			worker.RolloutGeneration = ""
-		} else {
-			if worker.Status != types.WorkerStatusPending {
-				return nil
-			}
-			worker.Status = types.WorkerStatusAvailable
+		} else if generation == "" {
+			return nil
 		}
+		if worker.Status == types.WorkerStatusAvailable && initialStatus != types.WorkerStatusAvailable && agentStartup {
+			machine, err := NewComputeRedisRepository(r.rdb).GetAgentMachineState(ctx, worker.WorkspaceId, worker.PoolName, worker.MachineId)
+			if err != nil {
+				return fmt.Errorf("read worker startup machine: %w", err)
+			}
+			// Availability, credit, or disconnect reconciliation may disable a
+			// machine while its replacement starts. An image acknowledgment
+			// cannot undo that independent decision.
+			if !compute.AgentMachineConnected(machine, time.Now()) || machine.Cordoned {
+				worker.Status = types.WorkerStatusDisabled
+			}
+		}
+		// A validated startup also repairs image reporting on an already
+		// available or disabled worker. Only pending/rollout transitions above
+		// may change readiness; health reconciliation owns disabled recovery.
+		worker.BuildVersion = buildVersion
 
 		if worker.Status == types.WorkerStatusAvailable {
 			if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
 				return err
 			}
 		}
-		return r.saveWorkerFields(ctx, stateKey,
+		if err := r.saveWorkerFields(ctx, stateKey,
 			"status", string(worker.Status),
 			"build_version", worker.BuildVersion,
 			"rollout_generation", worker.RolloutGeneration,
@@ -1012,7 +1053,15 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation strin
 			"evictable_cpu", worker.EvictableCpu,
 			"evictable_memory", worker.EvictableMemory,
 			"evictable_gpu_count", worker.EvictableGpuCount,
-		)
+		); err != nil {
+			return err
+		}
+		if agentStartup && worker.Status == types.WorkerStatusDisabled && !worker.CordonRequested {
+			// Do not open a queue stream before controller recovery. A startup
+			// retry can acknowledge Pending once the machine is eligible again.
+			return errors.New("worker startup is disabled; awaiting controller readiness")
+		}
+		return nil
 	})
 }
 
@@ -1102,6 +1151,55 @@ func (r *WorkerRedisRepository) workerHasOutstandingWork(ctx context.Context, wo
 		return false, err
 	}
 	return len(states) > 0, nil
+}
+
+var stopIdleWorkerRolloutContainerScript = redis.NewScript(`
+if redis.call("HGET", KEYS[1], "rollout_generation") ~= ARGV[1] then return 0 end
+if redis.call("HGET", KEYS[2], "worker_id") ~= ARGV[2] then return 0 end
+local status = redis.call("HGET", KEYS[2], "status")
+if status == ARGV[5] then return 1 end
+if status ~= ARGV[4] then return 0 end
+if ARGV[3] == "taskqueue" then
+  if redis.call("EXISTS", KEYS[5]) == 1 then return 0 end
+  for _, task_id in ipairs(redis.call("SMEMBERS", KEYS[6])) do
+    if redis.call("EXISTS", ARGV[9] .. task_id) == 1 then return 0 end
+    redis.call("SREM", KEYS[6], task_id)
+  end
+else
+  local tokens = tonumber(redis.call("GET", KEYS[4])) or tonumber(ARGV[8])
+  if tokens < tonumber(ARGV[8]) then return 0 end
+end
+redis.call("HSET", KEYS[2], "status", ARGV[5])
+redis.call("EXPIRE", KEYS[2], ARGV[6])
+redis.call("ZADD", KEYS[3], ARGV[7], KEYS[2])
+return 1
+`)
+
+// PrepareIdleWorkerRolloutContainer fences request admission before marking
+// an idle serverless container STOPPING. Persistent VMs, pods, and active jobs
+// keep running; Scheduler.Stop performs the ordinary idempotent finalization.
+func PrepareIdleWorkerRolloutContainer(ctx context.Context, rdb *common.RedisClient, workerID, generation string, container types.ContainerState, stub *types.StubWithRelated) (bool, error) {
+	kind := stub.Type.Kind()
+	if generation == "" || (kind != types.StubTypeTaskQueue && kind != types.StubTypeEndpoint && kind != types.StubTypeASGI) {
+		return false, nil
+	}
+	var config types.StubConfigV1
+	if err := json.Unmarshal([]byte(stub.Config), &config); err != nil {
+		return false, err
+	}
+	maxTokens := max(1, int(config.Workers))
+	if kind == types.StubTypeASGI {
+		maxTokens = max(maxTokens, int(config.ConcurrentRequests))
+	}
+	workspace, stubID, containerID := stub.Workspace.Name, stub.ExternalId, container.ContainerId
+	result, err := stopIdleWorkerRolloutContainerScript.Run(ctx, rdb, []string{
+		common.RedisKeys.SchedulerWorkerState(workerID), common.RedisKeys.SchedulerContainerState(containerID),
+		common.RedisKeys.SchedulerContainerStateIndex(), common.RedisKeys.EndpointRequestTokens(workspace, stubID, containerID),
+		common.RedisKeys.TaskQueueProcessingLock(workspace, stubID, containerID), common.RedisKeys.TaskQueueTaskRunningLockIndex(workspace, stubID, containerID),
+	}, generation, workerID, kind, string(types.ContainerStatusRunning), string(types.ContainerStatusStopping),
+		types.ContainerStateTtlSWhileStopping, time.Now().Add(time.Duration(types.ContainerStateTtlSWhileStopping)*time.Second).Unix(), maxTokens,
+		common.RedisKeys.TaskQueueTaskRunningLock(workspace, stubID, containerID, "")).Int()
+	return result == 1, err
 }
 
 func (r *WorkerRedisRepository) saveWorkerFields(ctx context.Context, stateKey string, fields ...any) error {

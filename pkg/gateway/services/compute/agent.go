@@ -12,9 +12,11 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -759,6 +761,12 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	}
 
 	slot := agentWorkerSlotState(s.appConfig, agentState, worker, poolConfig, tokenID, tokenHash)
+	if agentState.WorkerImageOverride == "" {
+		slot.WorkerImage, err = s.currentAgentWorkerImage(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+	}
 	if existing != nil {
 		slot.RestartNonce = existing.RestartNonce
 	}
@@ -782,6 +790,9 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 			return nil, "", err
 		}
 		if !prepared {
+			if err := s.drainAgentWorkerContainers(ctx, worker, slot.Generation); err != nil {
+				return nil, "", err
+			}
 			return existing, token, nil
 		}
 	}
@@ -807,6 +818,59 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 		})
 	}
 	return slot, token, nil
+}
+
+func (s *Service) drainAgentWorkerContainers(ctx context.Context, worker *types.Worker, generation string) error {
+	if s.containerRepo == nil || s.scheduler == nil || s.redisClient == nil {
+		return nil
+	}
+	containers, err := s.containerRepo.GetActiveContainersByWorkerId(worker.Id)
+	if err != nil {
+		return err
+	}
+	stubs := map[string]*types.StubWithRelated{}
+	for _, container := range containers {
+		stub := stubs[container.StubId]
+		if stub == nil {
+			stub, err = s.backendRepo.GetStubByExternalId(ctx, container.StubId)
+			if err != nil {
+				return err
+			}
+			if stub == nil {
+				continue
+			}
+			stubs[container.StubId] = stub
+		}
+		ready, err := repository.PrepareIdleWorkerRolloutContainer(ctx, s.redisClient, worker.Id, generation, container, stub)
+		if err != nil {
+			return err
+		}
+		if ready {
+			if err := s.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Reason: types.StopContainerReasonScheduler}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+var publishAgentWorkerImageScript = redis.NewScript(`
+local revision = tonumber(redis.call("HGET", KEYS[1], "revision")) or 0
+if tonumber(ARGV[1]) >= revision then
+  redis.call("HSET", KEYS[1], "revision", ARGV[1], "image", ARGV[2])
+end
+return redis.call("HGET", KEYS[1], "image")
+`)
+
+// All gateway replicas follow the newest deployment's desired worker image.
+// A replica still draining an older release cannot roll workers back. An
+// intentional Helm rollback advances the revision and publishes its image.
+func (s *Service) currentAgentWorkerImage(ctx context.Context) (string, error) {
+	image := agentWorkerImage(s.appConfig)
+	if s.redisClient == nil || s.appConfig.GatewayService.DeploymentRevision == 0 {
+		return image, nil
+	}
+	return publishAgentWorkerImageScript.Run(ctx, s.redisClient, []string{"compute:agent:worker_image"}, s.appConfig.GatewayService.DeploymentRevision, image).Text()
 }
 
 func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *model.AgentTokenState) (*types.Workspace, string, error) {

@@ -175,7 +175,7 @@ type containerStageDefinition struct {
 	Description string
 }
 
-func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository) *EventGroup {
+func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository, streamMiddleware echo.MiddlewareFunc) *EventGroup {
 	group := &EventGroup{
 		routerGroup:   g,
 		backendRepo:   backendRepo,
@@ -184,16 +184,16 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	}
 
 	g.GET("/:workspaceId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
-	g.GET("/:workspaceId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
+	g.GET("/:workspaceId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents), streamMiddleware)
 	g.GET("/:workspaceId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
-	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
+	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents), streamMiddleware)
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
-	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubEvents))
-	g.GET("/:workspaceId/tasks/:taskId/stream", auth.WithWorkspaceAuth(group.StreamTaskEvents))
-	g.GET("/:workspaceId/apps/:appId/stream", auth.WithWorkspaceAuth(group.StreamAppNamespaceEvents))
+	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubEvents), streamMiddleware)
+	g.GET("/:workspaceId/tasks/:taskId/stream", auth.WithWorkspaceAuth(group.StreamTaskEvents), streamMiddleware)
+	g.GET("/:workspaceId/apps/:appId/stream", auth.WithWorkspaceAuth(group.StreamAppNamespaceEvents), streamMiddleware)
 	g.GET("/:workspaceId/history", auth.WithWorkspaceAuth(group.GetEventHistory))
-	g.GET("/:workspaceId/stream", auth.WithWorkspaceAuth(group.StreamWorkspaceEvents))
+	g.GET("/:workspaceId/stream", auth.WithWorkspaceAuth(group.StreamWorkspaceEvents), streamMiddleware)
 	g.POST("/:workspaceId/containers/batch", auth.WithWorkspaceAuth(group.GetContainerEventsBatch))
 	g.GET("/:workspaceId/tasks/:taskId", auth.WithWorkspaceAuth(group.GetTaskEvents))
 

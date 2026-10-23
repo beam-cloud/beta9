@@ -531,6 +531,18 @@ func (rk *redisKeys) EndpointRequestTokens(workspaceName, stubId, containerId st
 	return fmt.Sprintf(endpointRequestTokens, workspaceName, stubId, containerId)
 }
 
+func (rk *redisKeys) TaskQueueProcessingLock(workspaceName, stubID, containerID string) string {
+	return fmt.Sprintf("taskqueue:%s:%s:processing_lock:%s", workspaceName, stubID, containerID)
+}
+
+func (rk *redisKeys) TaskQueueTaskRunningLockIndex(workspaceName, stubID, containerID string) string {
+	return fmt.Sprintf("taskqueue:%s:%s:task_running:%s:index", workspaceName, stubID, containerID)
+}
+
+func (rk *redisKeys) TaskQueueTaskRunningLock(workspaceName, stubID, containerID, taskID string) string {
+	return fmt.Sprintf("taskqueue:%s:%s:task_running:%s:%s", workspaceName, stubID, containerID, taskID)
+}
+
 func (rk *redisKeys) EndpointRequestHeartbeat(workspaceName, stubId, taskId, containerId string) string {
 	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId, containerId)
 }
