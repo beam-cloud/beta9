@@ -463,7 +463,7 @@ func TestServiceProxyForwardsBytesBothWays(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.listeners = append(p.listeners, front)
-	go p.serve(front, "")
+	go p.serve(proxyListener{Listener: front})
 	defer p.Stop()
 
 	client, err := net.Dial("tcp", front.Addr().String())

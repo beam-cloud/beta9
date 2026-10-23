@@ -79,6 +79,15 @@ type ServiceProxy struct {
 	serviceErr       error              // why services share the bridge addresses instead
 }
 
+// proxyListener is where the proxy accepts clients. On a service's own address
+// it knows the service, so it can open TLS for clients that don't. On an
+// address services share, service is empty and clients must name the service
+// themselves over TLS.
+type proxyListener struct {
+	net.Listener
+	service string // hostname of the service the address belongs to
+}
+
 func NewServiceProxy(ctx context.Context, config types.AppConfig) *ServiceProxy {
 	tcp := config.Abstractions.Pod.TCP
 	if !tcp.Enabled || tcp.ExternalHost == "" || net.ParseIP(tcp.ExternalHost) != nil {
@@ -361,11 +370,11 @@ func (p *ServiceProxy) serviceAddress(hostname string) (string, error) {
 			return "", err
 		}
 		p.serviceListeners = append(p.serviceListeners, httpLn)
-		go p.httpProxy.serve(httpLn, "")
+		go p.httpProxy.serve(proxyListener{Listener: httpLn})
 	}
 	p.serviceListeners = append(p.serviceListeners, ln)
 	p.services[hostname] = address
-	go p.serve(ln, hostname)
+	go p.serve(proxyListener{Listener: ln, service: hostname})
 	return address, nil
 }
 
@@ -453,15 +462,13 @@ func (p *ServiceProxy) startLocked() error {
 		}
 		p.listeners = append(p.listeners, ln)
 		p.addresses = append(p.addresses, address)
-		go p.serve(ln, "")
+		go p.serve(proxyListener{Listener: ln})
 	}
 	log.Info().Strs("addresses", p.addresses).Int("port", p.port).Str("target", p.target).Msg("service proxy listening")
 	return nil
 }
 
-// serve forwards every connection on ln; serverName is the service ln belongs
-// to, or empty for a listener services share.
-func (p *ServiceProxy) serve(ln net.Listener, serverName string) {
+func (p *ServiceProxy) serve(ln proxyListener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -470,17 +477,17 @@ func (p *ServiceProxy) serve(ln net.Listener, serverName string) {
 			}
 			return
 		}
-		go p.forward(conn, serverName)
+		go p.forward(conn, ln.service)
 	}
 }
 
-// forward relays a client to the gateway. Given the service's name, it speaks
-// TLS for a client that does not, naming the service for the gateway.
-func (p *ServiceProxy) forward(client net.Conn, serverName string) {
+// forward relays a client to the gateway. Given the service, it speaks TLS for
+// a client that does not, naming the service for the gateway.
+func (p *ServiceProxy) forward(client net.Conn, service string) {
 	defer client.Close()
 
 	var start []byte
-	if serverName != "" {
+	if service != "" {
 		start = clientStart(client)
 	}
 
@@ -492,15 +499,15 @@ func (p *ServiceProxy) forward(client net.Conn, serverName string) {
 		return
 	}
 	defer upstream.Close()
-	if serverName != "" && !encryptsItself(start) {
+	if service != "" && !encryptsItself(start) {
 		secure := tls.Client(upstream, &tls.Config{
-			ServerName: serverName,
+			ServerName: service,
 			MinVersion: tls.VersionTLS12,
 			// Without a certificate file the gateway serves a self-signed one.
 			InsecureSkipVerify: !p.verify,
 		})
 		if err := secure.HandshakeContext(ctx); err != nil {
-			log.Warn().Err(err).Str("service", serverName).Msg("service proxy could not open TLS to the gateway")
+			log.Warn().Err(err).Str("service", service).Msg("service proxy could not open TLS to the gateway")
 			return
 		}
 		upstream = secure
