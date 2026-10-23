@@ -291,7 +291,7 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 		}
 		return err
 	}
-	if err = validateMicroVMSnapshotBlockQueues(snapshotDir); err != nil {
+	if err = microvm.ValidateSnapshotBlockQueues(snapshotDir); err != nil {
 		inst.killHypervisor()
 		return fmt.Errorf("validate checkpoint block queues: %w", err)
 	}
@@ -487,7 +487,7 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 // VM's sockets, disks and MAC.
 func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, network microvm.Network, root microVMDisk, extra []microVMDisk) (string, error) {
 	src := filepath.Join(imagePath, checkpointVMDir)
-	if err := validateMicroVMSnapshotBlockQueues(src); err != nil {
+	if err := microvm.ValidateSnapshotBlockQueues(src); err != nil {
 		return "", fmt.Errorf("validate restore block queues: %w", err)
 	}
 	dst := filepath.Join(inst.stateDir, "restore")
