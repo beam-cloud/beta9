@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -58,8 +59,10 @@ func (c storageClientConfig) newClient(ctx context.Context) (*StorageClient, err
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 	return &StorageClient{
-		s3Client:      newS3Client(cfg, c.endpointURL),
-		presignClient: s3.NewPresignClient(newS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL))),
+		s3Client: newS3Client(cfg, c.endpointURL),
+		// URL-only APIs cannot require clients to supply an additional signed
+		// header. Header-aware uploads opt into consistency when presigning.
+		presignClient: s3.NewPresignClient(newStorageS3Client(cfg, presignEndpointForStorage(c.endpointURL, c.presignEndpointURL), false)),
 	}, nil
 }
 
@@ -115,12 +118,21 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 }
 
 func newS3Client(cfg aws.Config, endpointUrl string) *s3.Client {
+	return newStorageS3Client(cfg, endpointUrl, true)
+}
+
+func newStorageS3Client(cfg aws.Config, endpointUrl string, consistent bool) *s3.Client {
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.Retryer = storageDNSRetryer{o.Retryer}
 		o.DisableLogOutputChecksumValidationSkipped = true
 		if endpointUrl != "" {
 			o.BaseEndpoint = aws.String(endpointUrl)
 			o.UsePathStyle = true
+		}
+		if consistent && common.IsTigrisEndpoint(endpointUrl) {
+			// Readers and writers must both use the bucket's consistency leader;
+			// a regional LIST can omit a successfully fsynced worker upload.
+			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"))
 		}
 	})
 }
@@ -298,7 +310,9 @@ func (c *StorageClient) EnsureBucket(ctx context.Context, bucket string) error {
 		return nil
 	}
 
-	err = c.CreateBucket(ctx, bucket)
+	_, err = c.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
 	if err == nil || isBucketAlreadyCreatedError(err) {
 		return nil
 	}
@@ -372,12 +386,30 @@ func storageMultipartConcurrency(body io.Reader) int {
 	return storageStreamingUploadWorkers
 }
 
+// Known-object reads use Tigris's source-region fallback. Remove the routing
+// hint only for this request; writes, listings and versioned journal heads retain
+// their existing policy.
+func ordinaryObjectReadOptions(o *s3.Options) {
+	if !common.IsTigrisEndpoint(aws.ToString(o.BaseEndpoint)) {
+		return
+	}
+	o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+		return stack.Build.Add(middleware.BuildMiddlewareFunc("TigrisSourceRegionRead", func(ctx context.Context, in middleware.BuildInput, next middleware.BuildHandler) (middleware.BuildOutput, middleware.Metadata, error) {
+			request, ok := in.Request.(*smithyhttp.Request)
+			if !ok {
+				return middleware.BuildOutput{}, middleware.Metadata{}, fmt.Errorf("unexpected storage transport %T", in.Request)
+			}
+			request.Header.Del(common.TigrisConsistencyHeader)
+			return next.HandleBuild(ctx, in)
+		}), middleware.After)
+	})
+}
+
 func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bool, *s3.HeadObjectOutput, error) {
-	input := &s3.HeadObjectInput{
+	output, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	}
-	output, err := c.s3Client.HeadObject(ctx, input)
+	}, ordinaryObjectReadOptions)
 	if err != nil {
 		if storageObjectNotFound(err) {
 			return false, nil, nil
@@ -397,7 +429,7 @@ func (c *StorageClient) Download(ctx context.Context, key string, bucket string)
 	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	})
+	}, ordinaryObjectReadOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +442,7 @@ func (c *StorageClient) DownloadWithReader(ctx context.Context, key string, buck
 	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	})
+	}, ordinaryObjectReadOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -481,15 +513,15 @@ func (c *StorageClient) ListDirectory(ctx context.Context, dir string, bucket st
 }
 
 func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64, bucket string) (string, error) {
-	result, _, err := c.presignPut(ctx, key, expiresInSeconds, bucket, nil)
+	result, _, err := c.presignPut(ctx, key, expiresInSeconds, bucket, nil, false)
 	return result, err
 }
 
 func (c *StorageClient) GeneratePresignedPutURLWithMetadata(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string) (string, map[string]string, error) {
-	return c.presignPut(ctx, key, expiresInSeconds, bucket, metadata)
+	return c.presignPut(ctx, key, expiresInSeconds, bucket, metadata, true)
 }
 
-func (c *StorageClient) presignPut(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string) (string, map[string]string, error) {
+func (c *StorageClient) presignPut(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string, consistent bool) (string, map[string]string, error) {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -499,6 +531,11 @@ func (c *StorageClient) presignPut(ctx context.Context, key string, expiresInSec
 	}
 
 	options := []func(*s3.PresignOptions){s3.WithPresignExpires(time.Duration(expiresInSeconds) * time.Second)}
+	if consistent && common.IsTigrisEndpoint(aws.ToString(c.s3Client.Options().BaseEndpoint)) {
+		options = append(options, s3.WithPresignClientFromClientOptions(func(o *s3.Options) {
+			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(common.TigrisConsistencyHeader, "true"))
+		}))
+	}
 	result, err := c.presignClient.PresignPutObject(ctx, input, options...)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to generate presigned URL: %w", err)

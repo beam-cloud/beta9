@@ -482,13 +482,16 @@ func TestStorageListPagination(t *testing.T) {
 	}
 }
 
-func TestStorageDoesNotUseDeprecatedTigrisHeaders(t *testing.T) {
+func TestStorageTigrisConsistency(t *testing.T) {
 	for _, endpoint := range []string{"https://t3.storage.dev", "https://fly.storage.tigris.dev", "https://s3.amazonaws.com"} {
 		t.Run(endpoint, func(t *testing.T) {
 			requests := 0
 			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 				requests++
 				want := ""
+				if endpoint != "https://s3.amazonaws.com" {
+					want = "true"
+				}
 				if got := r.Header.Get(common.TigrisConsistencyHeader); got != want {
 					t.Errorf("%s %s consistency = %q, want %q", r.Method, r.URL.Path, got, want)
 				}
@@ -561,20 +564,18 @@ func TestTigrisPublishedOutputVisibility(t *testing.T) {
 	requests := 0
 	transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		requests++
-		if r.Header.Get(common.TigrisConsistencyHeader) != "" {
-			t.Error("deprecated consistency header was sent")
-		}
+		consistent := r.Header.Get(common.TigrisConsistencyHeader) == "true"
 		body := ""
 		switch r.Method {
 		case http.MethodPut:
-			// A strongly consistent bucket publishes without request-level hints.
-			published = true
+			// A successful regional write can be absent from another region's LIST.
+			published = consistent
 		case http.MethodGet:
 			if r.URL.Query().Get("prefix") != prefix {
 				t.Fatalf("unexpected prefix: %s", r.URL)
 			}
 			body = "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"
-			if published {
+			if published && consistent {
 				if r.URL.Query().Get("continuation-token") == "" {
 					body = "<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>next</NextContinuationToken><Contents><Key>" + prefix + "</Key></Contents></ListBucketResult>"
 				} else {
@@ -631,15 +632,15 @@ func TestTigrisPresignedHeaders(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if headers[common.TigrisConsistencyHeader] != "" {
+			if headers[common.TigrisConsistencyHeader] != "true" {
 				t.Fatalf("upload headers = %v", headers)
 			}
 			u, err := url.Parse(location)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "x-tigris-consistent") {
-				t.Fatal("deprecated consistency header is signed")
+			if !strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "x-tigris-consistent") {
+				t.Fatal("consistency header is not signed")
 			}
 		})
 	}
@@ -713,21 +714,75 @@ func TestStorageArtifactReads(t *testing.T) {
 	}
 }
 
-func TestStorageVersionReadUsesBucketConsistency(t *testing.T) {
-	requests := 0
-	transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		requests++
-		if r.Header.Get(common.TigrisConsistencyHeader) != "" {
-			t.Fatal("versioned read sent a deprecated consistency header")
-		}
-		return &http.Response{StatusCode: 404, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`<Error><Code>NoSuchKey</Code></Error>`)), Request: r}, nil
-	})
-	client := &WorkspaceStorageClient{
-		WorkspaceStorage: &types.WorkspaceStorage{BucketName: aws.String("bucket")},
-		StorageClient:    &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, "https://t3.storage.dev")},
-	}
-	data, version, err := client.ReadVersion(context.Background(), "lease")
-	if err != nil || len(data) != 0 || version != "" || requests != 1 {
-		t.Fatalf("missing version = %q, %q, %v after %d requests", data, version, err, requests)
+func TestStorageVersionedRoutingAndConditions(t *testing.T) {
+	for _, endpoint := range []string{"https://t3.storage.dev", "https://fly.storage.tigris.dev", "https://s3.amazonaws.com"} {
+		t.Run(endpoint, func(t *testing.T) {
+			requests := 0
+			transport := storageListRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests++
+				wantHeader := ""
+				if common.IsTigrisEndpoint(endpoint) && requests != 6 {
+					wantHeader = "true"
+				}
+				if got := r.Header.Get(common.TigrisConsistencyHeader); got != wantHeader {
+					t.Errorf("request %d routing = %q, want %q", requests, got, wantHeader)
+				}
+				if got := strings.Contains(r.Header.Get("Authorization"), "x-tigris-consistent"); got != (wantHeader != "") {
+					t.Errorf("request %d signed routing = %t", requests, got)
+				}
+				status, body := http.StatusOK, "first"
+				header := http.Header{"Etag": []string{"one"}}
+				switch requests {
+				case 1:
+					if r.Method != http.MethodPut || r.Header.Get("If-None-Match") != "*" {
+						t.Error("initial write must remain create-only")
+					}
+				case 2, 6, 7:
+					if r.Method != http.MethodGet {
+						t.Error("expected a read")
+					}
+				case 3, 4:
+					if r.Method != http.MethodPut || r.Header.Get("If-Match") != "one" {
+						t.Error("replacement must retain its ETag condition")
+					}
+					if requests == 4 {
+						status, body = http.StatusPreconditionFailed, "<Error><Code>PreconditionFailed</Code></Error>"
+					}
+				case 5:
+					status, body = http.StatusNotFound, "<Error><Code>NoSuchKey</Code></Error>"
+				default:
+					t.Fatalf("unexpected retry or request %d", requests)
+				}
+				return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})
+			client := &WorkspaceStorageClient{
+				WorkspaceStorage: &types.WorkspaceStorage{BucketName: aws.String("bucket")},
+				StorageClient:    &StorageClient{s3Client: newS3Client(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider("access", "secret", ""), HTTPClient: &http.Client{Transport: transport}}, endpoint)},
+			}
+			ctx := context.Background()
+			if version, err := client.WriteVersion(ctx, "head", []byte("first"), ""); err != nil || version != "one" {
+				t.Fatalf("create = %q, %v", version, err)
+			}
+			if data, version, err := client.ReadVersion(ctx, "head"); err != nil || string(data) != "first" || version != "one" {
+				t.Fatalf("read = %q, %q, %v", data, version, err)
+			}
+			if _, err := client.WriteVersion(ctx, "head", []byte("second"), "one"); err != nil {
+				t.Fatal(err)
+			}
+			var apiErr smithy.APIError
+			if _, err := client.WriteVersion(ctx, "head", []byte("stale"), "one"); !errors.As(err, &apiErr) || apiErr.ErrorCode() != "PreconditionFailed" || requests != 4 {
+				t.Fatalf("failed condition = %v after %d requests", err, requests)
+			}
+			if data, version, err := client.ReadVersion(ctx, "missing"); err != nil || len(data) != 0 || version != "" {
+				t.Fatalf("missing = %q, %q, %v", data, version, err)
+			}
+			// Per-operation routing must not leak into subsequent plain reads.
+			if data, err := client.Download(ctx, "head"); err != nil || string(data) != "first" || requests != 6 {
+				t.Fatalf("ordinary read = %q, %v after %d requests", data, err, requests)
+			}
+			if _, version, err := client.ReadVersion(ctx, "head"); err != nil || version != "one" || requests != 7 {
+				t.Fatalf("subsequent journal read = %q, %v after %d requests", version, err, requests)
+			}
+		})
 	}
 }
