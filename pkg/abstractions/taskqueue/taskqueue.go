@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,8 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type TaskQueueService interface {
@@ -316,21 +319,59 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueueCompleteRequest) (*pb.TaskQueueCompleteResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	task, err := tq.backendRepo.GetTask(ctx, in.TaskId)
-	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
+	if in == nil || authInfo == nil || authInfo.Workspace == nil || in.ContainerId == "" {
+		return nil, status.Error(codes.InvalidArgument, "task completion requires an authenticated owner")
 	}
-
-	ctx = context.WithoutCancel(ctx)
-
-	stopHeartbeat, err := taskdispatcher.KeepFinalizationAlive(ctx, in.TaskId, func(ctx context.Context) error {
-		return tq.refreshTaskLeases(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)
+	policy := tq.config.GatewayService.TaskCompletion
+	ctx, cancel, err := taskdispatcher.CompletionContext(ctx, policy)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	meta := types.TaskMetadata{WorkspaceName: authInfo.Workspace.Name, StubId: in.StubId, TaskId: in.TaskId, ContainerId: in.ContainerId}
+	related, err := tq.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = taskdispatcher.ForgetDeletedTask(ctx, tq.rdb, meta)
+		}
+		return nil, taskdispatcher.CompletionError(err)
+	}
+	if related == nil {
+		return nil, status.Error(codes.NotFound, "task no longer exists")
+	}
+	if related.Workspace.ExternalId != authInfo.Workspace.ExternalId || related.Stub.ExternalId != in.StubId {
+		return nil, status.Error(codes.PermissionDenied, "task does not belong to this workspace and stub")
+	}
+	task := &related.Task
+	if task.ContainerId != in.ContainerId {
+		return nil, status.Error(codes.FailedPrecondition, "container does not own task")
+	}
+	if task.Status.IsCompleted() {
+		if err := tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId); err != nil {
+			return nil, taskdispatcher.CompletionError(err)
+		}
+		if task.Status != types.TaskStatus(in.TaskStatus) {
+			return nil, status.Error(codes.FailedPrecondition, "task already has a terminal outcome")
+		}
+		return &pb.TaskQueueCompleteResponse{Ok: true}, nil
+	}
+	if task.Status != types.TaskStatusRunning {
+		return nil, status.Error(codes.FailedPrecondition, "task is not running")
+	}
+	requested := types.TaskStatus(in.TaskStatus)
+	if !requested.IsCompleted() && requested != types.TaskStatusRetry {
+		return nil, status.Error(codes.InvalidArgument, "invalid completion status")
+	}
+	ctx, cancelWindow, err := taskdispatcher.BeginCompletion(ctx, tq.rdb, meta, policy.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	defer cancelWindow()
+	ctx, stopHeartbeat, err := taskdispatcher.KeepFinalizationAlive(ctx, in.TaskId, func(ctx context.Context) error {
+		return tq.refreshTaskLeases(ctx, meta.WorkspaceName, meta.StubId, meta.ContainerId, meta.TaskId)
 	})
 	if err != nil {
-		return &pb.TaskQueueCompleteResponse{Ok: false}, nil
+		return nil, err
 	}
 
 	// Keep the task's admission lease until result persistence and the final
@@ -345,31 +386,21 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 			return
 		}
 		pipe := tq.rdb.TxPipeline()
-		pipe.SRem(ctx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), in.TaskId)
-		pipe.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId))
-		_, _ = pipe.Exec(ctx)
+		pipe.SRem(context.WithoutCancel(ctx), Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), in.TaskId)
+		pipe.Del(context.WithoutCancel(ctx), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId))
+		_, _ = pipe.Exec(context.WithoutCancel(ctx))
 	}()
 
 	if in.KeepWarmSeconds > 0 {
 		err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
 		if err != nil {
-			return &pb.TaskQueueCompleteResponse{Ok: false}, nil
+			return nil, taskdispatcher.CompletionError(err)
 		}
-	}
-
-	// A retry after a lost reply must finish cleanup without overwriting the
-	// already persisted outcome or uploading the result again.
-	if task.Status.IsCompleted() {
-		err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
-		finalized = err == nil
-		return &pb.TaskQueueCompleteResponse{Ok: finalized}, nil
 	}
 
 	err = tq.rdb.RPush(ctx, Keys.taskQueueTaskDuration(authInfo.Workspace.Name, in.StubId), in.TaskDuration).Err()
 	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
+		return nil, taskdispatcher.CompletionError(err)
 	}
 
 	task.EndedAt = types.NullTime{}.Now()
@@ -384,16 +415,19 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	workspace := authInfo.Workspace
 
 	if in.Result != nil && workspace.StorageAvailable() {
-		err = tq.taskDispatcher.StoreTaskResult(ctx, workspace, task.ExternalId, in.Result)
+		uploadCtx, cancelUpload := context.WithTimeout(ctx, policy.ResultUploadTimeout)
+		err = tq.taskDispatcher.StoreTaskResult(uploadCtx, workspace, task.ExternalId, in.Result)
+		cancelUpload()
 		if err != nil {
 			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
+			return nil, taskdispatcher.CompletionError(err)
 		}
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	if err != nil {
 		log.Error().Err(err).Str("task_id", in.TaskId).Str("container_id", in.ContainerId).Msg("failed to persist task queue completion; dispatcher state retained")
-		return &pb.TaskQueueCompleteResponse{Ok: false}, nil
+		return nil, taskdispatcher.CompletionError(err)
 	}
 
 	// Removing the claim tells the runner's monitor that the task is complete.
@@ -401,19 +435,18 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	// container lease cannot expire while finalization is still in progress.
 	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
 	finalized = err == nil
-	return &pb.TaskQueueCompleteResponse{
-		Ok: err == nil,
-	}, nil
+	if err != nil {
+		return nil, taskdispatcher.CompletionError(err)
+	}
+	return &pb.TaskQueueCompleteResponse{Ok: true}, nil
 }
 
 // Monitors and accepted completions renew the same task and container leases.
 func (tq *RedisTaskQueue) refreshTaskLeases(ctx context.Context, workspace, stubID, containerID, taskID string) error {
-	pipe := tq.rdb.TxPipeline()
-	pipe.SetEx(ctx, Keys.taskQueueTaskHeartbeat(workspace, stubID, taskID), 1, types.TaskHeartbeatTTL)
-	pipe.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspace, stubID, containerID, taskID), 1, types.TaskQueueRunningLeaseTTL)
-	pipe.SAdd(ctx, Keys.taskQueueTaskRunningLockIndex(workspace, stubID, containerID), taskID)
-	_, err := pipe.Exec(ctx)
-	return err
+	return taskdispatcher.RenewTaskLiveness(ctx, tq.rdb, types.TaskMetadata{WorkspaceName: workspace, StubId: stubID, ContainerId: containerID, TaskId: taskID},
+		Keys.taskQueueTaskHeartbeat(workspace, stubID, taskID),
+		Keys.taskQueueTaskRunningLock(workspace, stubID, containerID, taskID),
+		Keys.taskQueueTaskRunningLockIndex(workspace, stubID, containerID))
 }
 
 func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {
@@ -554,6 +587,10 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 			err := tq.refreshTaskLeases(ctx, authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId)
 			if err != nil {
+				claimed, checkErr := tq.taskRepo.IsClaimed(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
+				if checkErr == nil && !claimed {
+					return stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Complete: true})
+				}
 				return err
 			}
 

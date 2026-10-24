@@ -41,14 +41,14 @@ def test_completion_keeps_result_until_persistence_is_acknowledged(monkeypatch):
 
     def complete(request):
         requests.append(request)
-        now[0] += 180
-        if len(requests) == 1:
+        now[0] += 10
+        if len(requests) < 4:
             raise Unavailable()
-        return TaskQueueCompleteResponse(ok=len(requests) == 4)
+        return TaskQueueCompleteResponse(ok=True)
 
     request = completion_request()
     assert complete_task(SimpleNamespace(task_queue_complete=complete), request).ok
-    assert now[0] > 5 * 60
+    assert now[0] < 120
     assert len(requests) == 4
     assert all(attempt is request for attempt in requests)
     assert request.result == b"original serialized result"
@@ -192,3 +192,102 @@ def test_shared_monitor_reopens_a_cleanly_closed_stream(monkeypatch):
     common.monitor_task(SimpleNamespace(task_id="task"), streams, Mock(), exit_task)
     assert streams.call_count == 2
     exit_task.assert_not_called()
+
+
+def test_completion_recovery_has_a_total_budget(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr("beta9.channel.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    calls = []
+
+    def unavailable(request):
+        calls.append(request)
+        now[0] += 180
+        raise Unavailable()
+
+    with pytest.raises(Unavailable):
+        complete_task(SimpleNamespace(task_queue_complete=unavailable), completion_request())
+    assert len(calls) == 1
+
+
+def test_negative_completion_acknowledgment_is_not_retried():
+    operation = Mock(return_value=TaskQueueCompleteResponse(ok=False))
+    with pytest.raises(RuntimeError):
+        complete_task(SimpleNamespace(task_queue_complete=operation), completion_request())
+    operation.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        grpc.StatusCode.NOT_FOUND,
+        grpc.StatusCode.FAILED_PRECONDITION,
+        grpc.StatusCode.PERMISSION_DENIED,
+    ],
+)
+def test_permanent_completion_rejection_is_not_retried(code):
+    class Rejected(grpc.RpcError):
+        def code(self):
+            return code
+
+    operation = Mock(side_effect=Rejected())
+    with pytest.raises(Rejected):
+        complete_task(SimpleNamespace(task_queue_complete=operation), completion_request())
+    operation.assert_called_once()
+
+
+def test_permanent_monitor_rejection_stops_the_runner():
+    from beta9.runner import common
+
+    class Deleted(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
+    stream, exit_task = Mock(side_effect=Deleted()), Mock()
+    with pytest.raises(Deleted):
+        common.monitor_task(SimpleNamespace(task_id="task"), stream, Mock(), exit_task)
+    stream.assert_called_once()
+    exit_task.assert_called_once_with(TaskExitCode.Error)
+
+
+def test_hung_completion_rpc_consumes_the_total_recovery_budget(monkeypatch):
+    from beta9.runner import common
+
+    monkeypatch.setattr(common, "RECOVERY_TIMEOUT", 0.1)
+    disconnected = Event()
+    attempts = []
+
+    def complete(request, context):
+        attempts.append(request)
+        context.add_callback(disconnected.set)
+        disconnected.wait(5)
+        return TaskQueueCompleteResponse(ok=True)
+
+    server = grpc.server(ThreadPoolExecutor(max_workers=2))
+    server.add_generic_rpc_handlers(
+        (
+            grpc.method_handlers_generic_handler(
+                "taskqueue.TaskQueueService",
+                {
+                    "TaskQueueComplete": grpc.unary_unary_rpc_method_handler(
+                        complete,
+                        request_deserializer=TaskQueueCompleteRequest().parse,
+                        response_serializer=bytes,
+                    )
+                },
+            ),
+        )
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    channel = Channel(f"127.0.0.1:{port}", retry=(lambda _: None, False))
+    try:
+        with pytest.raises(grpc.RpcError) as error:
+            complete_task(TaskQueueServiceStub(channel), completion_request())
+        assert error.value.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+        assert disconnected.wait(2)
+        assert len(attempts) == 1
+    finally:
+        disconnected.set()
+        channel.close()
+        server.stop(0).wait()

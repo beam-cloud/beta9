@@ -2,6 +2,7 @@ package common
 
 import (
 	_ "embed"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -82,6 +83,19 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	// Attempt to load configuration from string in CONFIG_JSON
 	configJson := os.Getenv("CONFIG_JSON")
 	if configJson != "" {
+		// CONFIG_JSON uses JSON field names, while the defaults and file
+		// overlays use key tags. Preserve those values before switching tags.
+		var merged T
+		if err := cm.kf.UnmarshalWithConf("", &merged, koanf.UnmarshalConf{Tag: cm.tag}); err != nil {
+			return nil, err
+		}
+		baseline, err := stdjson.Marshal(merged)
+		if err != nil {
+			return nil, err
+		}
+		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider(baseline)); err != nil {
+			return nil, err
+		}
 		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(configJson))); err != nil {
 			log.Error().Err(err).Msg("failed to load config from CONFIG_JSON")
 		} else {

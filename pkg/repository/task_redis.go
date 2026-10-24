@@ -38,6 +38,8 @@ func (r *TaskRedisRepository) ClaimTask(ctx context.Context, workspaceName, stub
 	}
 	pipe := r.rdb.TxPipeline()
 	pipe.Set(ctx, claimKey, containerId, ttl)
+	pipe.Del(ctx, common.RedisKeys.TaskCompletionDeadline(workspaceName, stubId, taskId))
+	pipe.SRem(ctx, common.RedisKeys.TaskCompletionIndex(workspaceName, stubId), taskId)
 	pipe.SAdd(ctx, claimIndexKey, taskId)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
@@ -52,6 +54,7 @@ func (r *TaskRedisRepository) RemoveTaskClaim(ctx context.Context, workspaceName
 	pipe := r.rdb.TxPipeline()
 	pipe.Del(ctx, claimKey)
 	pipe.SRem(ctx, claimIndexKey, taskId)
+	pipe.SRem(ctx, common.RedisKeys.TaskCompletionIndex(workspaceName, stubId), taskId)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to remove task claim <%v>: %w", claimKey, err)
 	}
@@ -145,8 +148,10 @@ func (r *TaskRedisRepository) DeleteTaskState(ctx context.Context, workspaceName
 		pipe.SRem(ctx, indexKey, entryKey)
 		pipe.SRem(ctx, claimIndexKey, taskId)
 		pipe.SRem(ctx, stubIndexKey, taskId)
+		pipe.SRem(ctx, common.RedisKeys.TaskCompletionIndex(workspaceName, stubId), taskId)
 		pipe.Del(ctx, entryKey)
 		pipe.Del(ctx, claimKey)
+		pipe.Del(ctx, common.RedisKeys.TaskCompletionDeadline(workspaceName, stubId, taskId))
 		return nil
 	})
 

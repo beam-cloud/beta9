@@ -1162,10 +1162,11 @@ if status ~= ARGV[4] then return 0 end
 if ARGV[3] == ARGV[13] then
   if redis.call("EXISTS", KEYS[5]) == 1 then return 0 end
   for _, task_id in ipairs(redis.call("SMEMBERS", KEYS[6])) do
-    if redis.call("EXISTS", ARGV[9] .. task_id) == 1 then return 0 end
-    -- A gateway restart can expire the monitor lease while the task still owns
-    -- this container. Wait for completion/recovery to release the claim.
-    if redis.call("GET", ARGV[10] .. task_id .. ARGV[11]) == ARGV[12] then return 0 end
+    local deadline = redis.call("GET", ARGV[10] .. task_id .. ARGV[14])
+    if not deadline or tonumber(deadline) > tonumber(ARGV[15]) then
+      if redis.call("EXISTS", ARGV[9] .. task_id) == 1 then return 0 end
+      if redis.call("GET", ARGV[10] .. task_id .. ARGV[11]) == ARGV[12] then return 0 end
+    end
     redis.call("SREM", KEYS[6], task_id)
   end
 else
@@ -1204,7 +1205,8 @@ func PrepareIdleWorkerRolloutContainer(ctx context.Context, rdb *common.RedisCli
 	}, generation, workerID, kind, string(types.ContainerStatusRunning), string(types.ContainerStatusStopping),
 		types.ContainerStateTtlSWhileStopping, time.Now().Add(time.Duration(types.ContainerStateTtlSWhileStopping)*time.Second).Unix(), maxTokens,
 		common.RedisKeys.TaskQueueTaskRunningLock(workspace, stubID, containerID, ""),
-		claimPrefix, claimSuffix, containerID, types.StubTypeTaskQueue).Int()
+		claimPrefix, claimSuffix, containerID, types.StubTypeTaskQueue,
+		strings.TrimPrefix(common.RedisKeys.TaskCompletionDeadline(workspace, stubID, ""), claimPrefix), time.Now().UnixMilli()).Int()
 	return result == 1, err
 }
 

@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"net"
@@ -52,12 +53,16 @@ func TestTaskQueueCompletionKeepsDispatcherStateUntilPersisted(t *testing.T) {
 				}
 				return nil
 			}}
-			queue := &RedisTaskQueue{rdb: rdb, backendRepo: backend, taskDispatcher: dispatcher}
+			queue := &RedisTaskQueue{config: completionTestConfig(), rdb: rdb, backendRepo: backend, taskDispatcher: dispatcher}
 			response, err := queue.TaskQueueComplete(ctx, &pb.TaskQueueCompleteRequest{
 				TaskId: "task", StubId: "stub", ContainerId: "container", TaskStatus: string(types.TaskStatusComplete),
 			})
-			require.NoError(t, err)
-			require.Equal(t, !failUpdate, response.Ok)
+			if failUpdate {
+				require.Equal(t, codes.Unavailable, status.Code(err))
+			} else {
+				require.NoError(t, err)
+				require.True(t, response.GetOk())
+			}
 			claimed, err := tasks.IsClaimed(ctx, "workspace", "stub", "task")
 			require.NoError(t, err)
 			require.Equal(t, failUpdate, claimed)
@@ -83,11 +88,11 @@ func TestTaskQueueCompletionRecoversFailedCleanupWithoutReexecuting(t *testing.T
 			dispatcher, err := task.NewDispatcher(ctx, tasks)
 			require.NoError(t, err)
 			backend := &completionLifecycleBackend{current: types.Task{ExternalId: "task", Status: types.TaskStatusRunning}, updates: make(chan error, 2)}
-			queue := &RedisTaskQueue{rdb: rdb, backendRepo: backend, taskDispatcher: dispatcher}
+			queue := &RedisTaskQueue{config: completionTestConfig(), rdb: rdb, backendRepo: backend, taskDispatcher: dispatcher}
 			request := &pb.TaskQueueCompleteRequest{TaskId: "task", StubId: "stub", ContainerId: "container", TaskStatus: string(types.TaskStatusComplete), TaskDuration: 1}
 			response, err := queue.TaskQueueComplete(ctx, request)
-			require.NoError(t, err)
-			require.False(t, response.Ok)
+			require.Equal(t, codes.Unavailable, status.Code(err))
+			require.Nil(t, response)
 			persisted, err := backend.GetTask(ctx, "task")
 			require.NoError(t, err)
 			require.Equal(t, types.TaskStatusComplete, persisted.Status)
@@ -98,7 +103,7 @@ func TestTaskQueueCompletionRecoversFailedCleanupWithoutReexecuting(t *testing.T
 			tasks.err = nil
 			if recovery == "completion_replay" {
 				// A replay must not change the recorded outcome or duration.
-				request.TaskStatus = string(types.TaskStatusError)
+				request.TaskStatus = string(types.TaskStatusComplete)
 				request.TaskDuration = 99
 				response, err = queue.TaskQueueComplete(ctx, request)
 				require.NoError(t, err)
@@ -208,7 +213,7 @@ func TestTaskQueueCompletionPersistsBeforeMonitorAllowsScaleDown(t *testing.T) {
 			}
 			configs := common.NewSafeMap[*types.StubConfigV1]()
 			configs.Set("stub", &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 480}})
-			queue := &RedisTaskQueue{ctx: ctx, rdb: rdb, taskRepo: tasks, backendRepo: backend, taskDispatcher: dispatcher, stubConfigCache: configs}
+			queue := &RedisTaskQueue{config: completionTestConfig(), ctx: ctx, rdb: rdb, taskRepo: tasks, backendRepo: backend, taskDispatcher: dispatcher, stubConfigCache: configs}
 			rpcStarted := make(chan context.Context, 1)
 			completionReturned := make(chan struct{})
 			monitorReturned := make(chan struct{})
@@ -339,18 +344,27 @@ func (s completionAuthStream) Context() context.Context { return s.ctx }
 
 type completionContainerRepository struct{ repository.ContainerRepository }
 
+func (completionContainerRepository) GetFailedContainersByStubId(string) ([]string, error) {
+	return nil, nil
+}
+
 func (completionContainerRepository) GetActiveContainersByStubId(string) ([]types.ContainerState, error) {
 	return []types.ContainerState{{ContainerId: "container", Status: types.ContainerStatusRunning}}, nil
 }
 
 type completionLifecycleBackend struct {
 	repository.BackendRepository
-	mu      sync.Mutex
-	current types.Task
-	updates chan error
+	mu          sync.Mutex
+	current     types.Task
+	updates     chan error
+	getErr      error
+	blockUpdate bool
 }
 
 func (b *completionLifecycleBackend) GetTask(ctx context.Context, _ string) (*types.Task, error) {
+	if b.getErr != nil {
+		return nil, b.getErr
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -360,7 +374,25 @@ func (b *completionLifecycleBackend) GetTask(ctx context.Context, _ string) (*ty
 	return &current, nil
 }
 
+func (b *completionLifecycleBackend) GetTaskWithRelated(ctx context.Context, id string) (*types.TaskWithRelated, error) {
+	task, err := b.GetTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if task.ContainerId == "" {
+		task.ContainerId = "container"
+	}
+	return &types.TaskWithRelated{Task: *task, Workspace: types.Workspace{Name: "workspace"}, Stub: types.Stub{ExternalId: "stub"}}, nil
+}
+
+func completionTestConfig() types.AppConfig {
+	return types.AppConfig{GatewayService: types.GatewayServiceConfig{TaskCompletion: types.TaskCompletionConfig{Timeout: time.Minute, ResultUploadTimeout: time.Minute / 2}}}
+}
+
 func (b *completionLifecycleBackend) UpdateTask(ctx context.Context, _ string, updated types.Task) (*types.Task, error) {
+	if b.blockUpdate {
+		<-ctx.Done()
+	}
 	err := ctx.Err()
 	if err == nil {
 		b.mu.Lock()
@@ -371,7 +403,183 @@ func (b *completionLifecycleBackend) UpdateTask(ctx context.Context, _ string, u
 	return &updated, err
 }
 
-// Bound coordination failures in the test; production completion has no deadline.
+func newBoundedCompletionFixture(t *testing.T) (context.Context, *RedisTaskQueue, *completionLifecycleBackend, *miniredis.Miniredis) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = auth.ContextWithAuthInfo(ctx, &auth.AuthInfo{Workspace: &types.Workspace{Name: "workspace"}})
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	tasks := repository.NewTaskRedisRepository(rdb)
+	require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub", "task", []byte(`{"task_id":"task"}`)))
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub", "task", "container"))
+	dispatcher, err := task.NewDispatcher(ctx, tasks)
+	require.NoError(t, err)
+	backend := &completionLifecycleBackend{current: types.Task{ExternalId: "task", Status: types.TaskStatusRunning, ContainerId: "container"}, updates: make(chan error, 4)}
+	queue := &RedisTaskQueue{config: completionTestConfig(), rdb: rdb, taskRepo: tasks, taskDispatcher: dispatcher, backendRepo: backend}
+	return ctx, queue, backend, server
+}
+
+func boundedCompletionRequest() *pb.TaskQueueCompleteRequest {
+	return &pb.TaskQueueCompleteRequest{TaskId: "task", StubId: "stub", ContainerId: "container", TaskStatus: string(types.TaskStatusComplete)}
+}
+
+func TestCompletionRejectsPermanentFailuresBeforeRenewingAnyLease(t *testing.T) {
+	for _, failure := range []string{"deleted", "expired", "wrong_container", "wrong_claim", "wrong_stub", "wrong_workspace", "missing_state"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx, queue, backend, _ := newBoundedCompletionFixture(t)
+			request := boundedCompletionRequest()
+			request.KeepWarmSeconds = 30
+			expected := codes.FailedPrecondition
+			switch failure {
+			case "deleted":
+				backend.getErr = sql.ErrNoRows
+				expected = codes.NotFound
+			case "expired":
+				backend.current.Status = types.TaskStatusExpired
+			case "wrong_container":
+				request.ContainerId = "intruder"
+			case "wrong_claim":
+				require.NoError(t, queue.taskRepo.ClaimTask(ctx, "workspace", "stub", "task", "replacement"))
+			case "wrong_stub":
+				request.StubId = "another-stub"
+				expected = codes.PermissionDenied
+			case "wrong_workspace":
+				ctx = auth.ContextWithAuthInfo(ctx, &auth.AuthInfo{Workspace: &types.Workspace{Name: "intruder", ExternalId: "other"}})
+				expected = codes.PermissionDenied
+			case "missing_state":
+				require.NoError(t, queue.rdb.Del(ctx, common.RedisKeys.TaskEntry("workspace", "stub", "task")).Err())
+				expected = codes.NotFound
+			}
+			response, err := queue.TaskQueueComplete(ctx, request)
+			require.Nil(t, response)
+			require.Equal(t, expected, status.Code(err))
+			require.Zero(t, queue.rdb.Exists(context.Background(),
+				Keys.taskQueueTaskHeartbeat("workspace", "stub", "task"),
+				Keys.taskQueueTaskRunningLock("workspace", "stub", request.ContainerId, "task"),
+				Keys.taskQueueKeepWarmLock("workspace", "stub", request.ContainerId),
+				common.RedisKeys.TaskCompletionDeadline("workspace", "stub", "task")).Val())
+			require.Empty(t, backend.updates)
+		})
+	}
+}
+
+func TestHungDatabaseCannotRenewCompletionForeverOrResetItsDeadline(t *testing.T) {
+	ctx, queue, backend, redisServer := newBoundedCompletionFixture(t)
+	queue.config.GatewayService.TaskCompletion = types.TaskCompletionConfig{Timeout: 100 * time.Millisecond, ResultUploadTimeout: 50 * time.Millisecond}
+	backend.blockUpdate = true
+	_, err := queue.TaskQueueComplete(ctx, boundedCompletionRequest())
+	require.Equal(t, codes.DeadlineExceeded, status.Code(err))
+	key := common.RedisKeys.TaskCompletionDeadline("workspace", "stub", "task")
+	deadline := queue.rdb.Get(ctx, key).Val()
+	require.NotEmpty(t, deadline)
+	_, err = queue.TaskQueueComplete(ctx, boundedCompletionRequest())
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, deadline, queue.rdb.Get(ctx, key).Val(), "a retry must not extend the completion window")
+	require.Len(t, backend.updates, 1)
+	claimed, err := queue.taskRepo.IsClaimed(ctx, "workspace", "stub", "task")
+	require.NoError(t, err)
+	require.True(t, claimed, "recovery state must survive the failed write")
+	redisServer.FastForward(time.Second)
+	require.Zero(t, queue.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat("workspace", "stub", "task"), Keys.taskQueueTaskRunningLock("workspace", "stub", "container", "task")).Val())
+	alive, err := (&TaskQueueTask{tq: queue, msg: &types.TaskMessage{WorkspaceName: "workspace", StubId: "stub", TaskId: "task"}}).HeartBeat(ctx)
+	require.NoError(t, err)
+	require.False(t, alive, "a live container must not hide an expired completion from recovery")
+	instance := &taskQueueInstance{client: newRedisTaskQueueClient(queue.rdb, queue.taskRepo), AutoscaledInstance: &abstractions.AutoscaledInstance{Ctx: ctx, Rdb: queue.rdb, Workspace: &types.Workspace{Name: "workspace"}, IsActive: true, ContainerRepo: completionContainerRepository{}, Stub: &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub", Type: types.StubType(types.StubTypeTaskQueueDeployment)}}}}
+	stoppable, err := instance.stoppableContainers()
+	require.NoError(t, err)
+	require.Equal(t, []string{"container"}, stoppable, "retained recovery state must not pin the container")
+	sample, err := taskQueueAutoscalerSampleFunc(instance)
+	require.NoError(t, err)
+	require.Zero(t, sample.QueueLength, "recovery state must not create demand for a replacement container")
+	require.Zero(t, taskQueueScaleFunc(instance, sample).DesiredContainers)
+	backend.getErr = errors.New("database remains unavailable")
+	require.Error(t, queue.taskDispatcher.RetryTask(ctx, &TaskQueueTask{tq: queue, msg: &types.TaskMessage{WorkspaceName: "workspace", StubId: "stub", TaskId: "task", Policy: types.TaskPolicy{MaxRetries: 1}}}))
+	sample, err = taskQueueAutoscalerSampleFunc(instance)
+	require.NoError(t, err)
+	require.Zero(t, sample.QueueLength, "failed recovery must not create demand before work is queued")
+}
+
+func TestCompletionDemandReturnsWhenTaskIsRetriedOrReclaimed(t *testing.T) {
+	for _, reset := range []string{"retry", "claim"} {
+		t.Run(reset, func(t *testing.T) {
+			ctx, queue, _, _ := newBoundedCompletionFixture(t)
+			client := newRedisTaskQueueClient(queue.rdb, queue.taskRepo)
+			meta := types.TaskMetadata{WorkspaceName: "workspace", StubId: "stub", TaskId: "task", ContainerId: "container"}
+			_, cancel, err := task.BeginCompletion(ctx, queue.rdb, meta, time.Minute)
+			require.NoError(t, err)
+			cancel()
+			demand, err := client.ExecutionDemand(ctx, "workspace", "stub")
+			require.NoError(t, err)
+			require.Zero(t, demand)
+			if reset == "retry" {
+				require.NoError(t, queue.taskRepo.RemoveTaskClaim(ctx, "workspace", "stub", "task"))
+				demand, err = client.ExecutionDemand(ctx, "workspace", "stub")
+				require.NoError(t, err)
+				require.Zero(t, demand, "recovery creates execution demand only once work is requeued")
+				require.NoError(t, client.Push(ctx, &types.TaskMessage{WorkspaceName: "workspace", StubId: "stub", TaskId: "task"}))
+			} else {
+				require.NoError(t, queue.taskRepo.ClaimTask(ctx, "workspace", "stub", "task", "container"))
+			}
+			demand, err = client.ExecutionDemand(ctx, "workspace", "stub")
+			require.NoError(t, err)
+			require.Equal(t, 1, demand)
+			require.NoError(t, queue.taskRepo.DeleteTaskState(ctx, "workspace", "stub", "task"))
+			require.Zero(t, queue.rdb.SCard(ctx, common.RedisKeys.TaskCompletionIndex("workspace", "stub")).Val())
+		})
+	}
+}
+
+func TestHungResultUploadIsCancelledWithoutAcknowledgingCompletion(t *testing.T) {
+	ctx, queue, backend, _ := newBoundedCompletionFixture(t)
+	queue.config.GatewayService.TaskCompletion = types.TaskCompletionConfig{Timeout: time.Second, ResultUploadTimeout: 50 * time.Millisecond}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	id := uint(1)
+	region, bucket, credential, endpoint := "us-east-1", "bucket", "test-key", server.URL
+	workspace := &types.Workspace{Name: "workspace", Storage: &types.WorkspaceStorage{Id: &id, Region: &region, BucketName: &bucket, AccessKey: &credential, SecretKey: &credential, EndpointUrl: &endpoint}}
+	ctx = auth.ContextWithAuthInfo(ctx, &auth.AuthInfo{Workspace: workspace})
+	request := boundedCompletionRequest()
+	request.Result = []byte("result")
+	_, err := queue.TaskQueueComplete(ctx, request)
+	require.Equal(t, codes.DeadlineExceeded, status.Code(err))
+	require.Empty(t, backend.updates)
+	require.Equal(t, types.TaskStatusRunning, backend.current.Status)
+	inFlight, err := queue.taskRepo.TasksInFlight(ctx, "workspace", "stub")
+	require.NoError(t, err)
+	require.Equal(t, 1, inFlight)
+}
+
+func TestCompletionLosingOwnershipCancelsItsUpload(t *testing.T) {
+	ctx, queue, backend, _ := newBoundedCompletionFixture(t)
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(started)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	id := uint(1)
+	region, bucket, credential, endpoint := "us-east-1", "bucket", "test-key", server.URL
+	workspace := &types.Workspace{Name: "workspace", Storage: &types.WorkspaceStorage{Id: &id, Region: &region, BucketName: &bucket, AccessKey: &credential, SecretKey: &credential, EndpointUrl: &endpoint}}
+	ctx = auth.ContextWithAuthInfo(ctx, &auth.AuthInfo{Workspace: workspace})
+	request := boundedCompletionRequest()
+	request.Result = []byte("result")
+	finished := make(chan error, 1)
+	go func() { _, err := queue.TaskQueueComplete(ctx, request); finished <- err }()
+	awaitCompletion(t, started, "upload did not start")
+	require.NoError(t, queue.taskRepo.ClaimTask(ctx, "workspace", "stub", "task", "replacement"))
+	require.Equal(t, codes.Unavailable, status.Code(awaitCompletion(t, finished, "stale owner continued its upload")))
+	require.Empty(t, backend.updates)
+	require.Equal(t, "replacement", queue.rdb.Get(ctx, common.RedisKeys.TaskClaim("workspace", "stub", "task")).Val())
+}
+
+// Bound test coordination independently of the configured completion window.
 func awaitCompletion[T any](t *testing.T, ch <-chan T, failure string) T {
 	t.Helper()
 	select {

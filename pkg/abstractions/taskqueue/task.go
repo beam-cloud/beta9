@@ -62,6 +62,10 @@ func (t *TaskQueueTask) Retry(ctx context.Context) error {
 }
 
 func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
+	expired, err := taskdispatcher.CompletionExpired(ctx, t.tq.rdb, t.Metadata())
+	if err != nil || expired {
+		return false, err
+	}
 	res, err := t.tq.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)).Result()
 	if err != nil || res > 0 {
 		return res > 0, err

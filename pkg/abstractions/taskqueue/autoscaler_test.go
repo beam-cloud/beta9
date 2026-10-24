@@ -15,6 +15,8 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type completionBackend struct {
@@ -23,7 +25,12 @@ type completionBackend struct {
 }
 
 func (b completionBackend) GetTask(context.Context, string) (*types.Task, error) {
-	return &types.Task{ExternalId: "task", Status: types.TaskStatusRunning}, nil
+	return &types.Task{ExternalId: "task", ContainerId: "container", Status: types.TaskStatusRunning}, nil
+}
+
+func (b completionBackend) GetTaskWithRelated(ctx context.Context, id string) (*types.TaskWithRelated, error) {
+	task, err := b.GetTask(ctx, id)
+	return &types.TaskWithRelated{Task: *task, Workspace: types.Workspace{Name: "workspace"}, Stub: types.Stub{ExternalId: "stub"}}, err
 }
 
 func (b completionBackend) UpdateTask(_ context.Context, _ string, updated types.Task) (*types.Task, error) {
@@ -55,6 +62,8 @@ func TestTaskQueueCompletionKeepsRolloutLeaseUntilSuccessfulFinalization(t *test
 			require.NoError(t, rdb.Set(ctx, leaseKey, 1, time.Minute).Err())
 			require.NoError(t, rdb.SAdd(ctx, indexKey, "task").Err())
 			tasks := completionTasks{TaskRepository: repository.NewTaskRedisRepository(rdb)}
+			require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub", "task", []byte(`{"task_id":"task"}`)))
+			require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub", "task", "container"))
 			if failure == "dispatcher" {
 				tasks.err = errors.New("dispatcher unavailable")
 			}
@@ -70,10 +79,14 @@ func TestTaskQueueCompletionKeepsRolloutLeaseUntilSuccessfulFinalization(t *test
 			if failure == "duration" {
 				require.NoError(t, rdb.Set(ctx, Keys.taskQueueTaskDuration("workspace", "stub"), "wrong-type", time.Minute).Err())
 			}
-			queue := &RedisTaskQueue{rdb: rdb, backendRepo: backend, taskDispatcher: dispatcher}
+			queue := &RedisTaskQueue{config: completionTestConfig(), rdb: rdb, backendRepo: backend, taskDispatcher: dispatcher}
 			response, err := queue.TaskQueueComplete(ctx, &pb.TaskQueueCompleteRequest{TaskId: "task", StubId: "stub", ContainerId: "container", TaskStatus: string(types.TaskStatusComplete)})
-			require.NoError(t, err)
-			require.Equal(t, failure == "", response.Ok)
+			if failure != "" {
+				require.Equal(t, codes.Unavailable, status.Code(err))
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, failure == "", response.GetOk())
+			}
 			require.Equal(t, failure != "", rdb.Exists(ctx, leaseKey).Val() == 1)
 			require.Equal(t, failure != "", rdb.SIsMember(ctx, indexKey, "task").Val())
 		})

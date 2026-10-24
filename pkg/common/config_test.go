@@ -77,6 +77,22 @@ func TestEmbeddedDefaultConfigLoads(t *testing.T) {
 	require.Equal(t, 0, manager.GetConfig().Database.Postgres.MaxOpenConns, "the pool stays unbounded unless configured")
 }
 
+func TestCompletionBudgetsAreLoadedForYAMLAndJSONConfig(t *testing.T) {
+	for _, overlay := range []string{"", `{"gateway_service":{"host":"test"}}`} {
+		t.Run(overlay, func(t *testing.T) {
+			t.Setenv("CONFIG_PATH", "")
+			t.Setenv("CONFIG_JSON", overlay)
+			t.Setenv(types.WorkerMinimalConfigEnv, "")
+			manager, err := NewConfigManager[types.AppConfig]()
+			require.NoError(t, err)
+			policy := manager.GetConfig().GatewayService.TaskCompletion
+			require.Positive(t, policy.Timeout)
+			require.Positive(t, policy.ResultUploadTimeout)
+			require.Less(t, policy.ResultUploadTimeout, policy.Timeout)
+		})
+	}
+}
+
 func TestMinimalConfigEnabled(t *testing.T) {
 	for _, value := range []string{"1", "true", "yes", "on", " TRUE "} {
 		t.Setenv(types.WorkerMinimalConfigEnv, value)

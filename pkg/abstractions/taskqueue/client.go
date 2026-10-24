@@ -123,6 +123,20 @@ func (qc *taskQueueClient) TasksRunning(ctx context.Context, workspaceName, stub
 	return nTasks, nil
 }
 
+// Recovery state outlives completion attempts, but must not request execution
+// capacity. An accepted completion protects its current container via leases.
+var executionDemandScript = redis.NewScript(`
+return redis.call("LLEN", KEYS[1]) + #redis.call("SDIFF", KEYS[2], KEYS[3])
+`)
+
+func (qc *taskQueueClient) ExecutionDemand(ctx context.Context, workspaceName, stubId string) (int, error) {
+	return executionDemandScript.Run(ctx, qc.rdb, []string{
+		Keys.taskQueueList(workspaceName, stubId),
+		common.RedisKeys.TaskClaimIndex(workspaceName, stubId),
+		common.RedisKeys.TaskCompletionIndex(workspaceName, stubId),
+	}).Int()
+}
+
 // Get most recent task duration
 func (qc *taskQueueClient) GetTaskDuration(ctx context.Context, workspaceName, stubId string) (float64, error) {
 	res, err := qc.rdb.LPop(ctx, Keys.taskQueueTaskDuration(workspaceName, stubId)).Result()

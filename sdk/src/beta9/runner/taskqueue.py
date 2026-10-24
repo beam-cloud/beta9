@@ -296,6 +296,7 @@ class TaskQueueWorker:
                     finally:
                         duration = time.time() - start_time
 
+                        completion_acknowledged = False
                         try:
                             complete_task_response: TaskQueueCompleteResponse = complete_task(
                                 taskqueue_stub,
@@ -313,6 +314,7 @@ class TaskQueueWorker:
                             if not complete_task_response.ok:
                                 raise RunnerException("Unable to end task")
 
+                            completion_acknowledged = True
                             if task_status == TaskStatus.Retry:
                                 print(
                                     complete_task_response.message
@@ -331,6 +333,8 @@ class TaskQueueWorker:
 
                         except BaseException:
                             print(traceback.format_exc())
+                            if not completion_acknowledged:
+                                os._exit(TaskExitCode.Error)
                         finally:
                             monitor_task.cancel()
 

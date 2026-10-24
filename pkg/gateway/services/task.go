@@ -14,6 +14,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -124,43 +126,56 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}
 
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
 	if !canUseTaskLifecycle(authInfo) {
-		return &pb.EndTaskResponse{
-			Ok: false,
-		}, nil
+		return nil, status.Error(codes.PermissionDenied, "task lifecycle access denied")
 	}
-
+	policy := gws.appConfig.GatewayService.TaskCompletion
+	ctx, cancel, err := taskmetrics.CompletionContext(ctx, policy)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
 	if err != nil {
-		return &pb.EndTaskResponse{
-			Ok: false,
-		}, nil
+		return nil, taskmetrics.CompletionError(err)
 	}
-
 	if task == nil {
-		return &pb.EndTaskResponse{Ok: false}, nil
+		return nil, status.Error(codes.NotFound, "task no longer exists")
 	}
-
 	if task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
-		return &pb.EndTaskResponse{Ok: false}, nil
+		return nil, status.Error(codes.PermissionDenied, "task belongs to another workspace")
 	}
-
-	ctx = context.WithoutCancel(ctx)
+	if task.ContainerId != in.ContainerId || in.ContainerId == "" {
+		return nil, status.Error(codes.FailedPrecondition, "container does not own task")
+	}
+	requestedStatus := types.TaskStatus(in.TaskStatus)
+	if !requestedStatus.IsCompleted() {
+		return nil, status.Error(codes.InvalidArgument, "invalid completion status")
+	}
+	if task.Status.IsCompleted() {
+		if task.Status != requestedStatus {
+			return nil, status.Error(codes.FailedPrecondition, "task already has a terminal outcome")
+		}
+		if err := gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId); err != nil {
+			return nil, taskmetrics.CompletionError(err)
+		}
+		return &pb.EndTaskResponse{Ok: true}, nil
+	}
 	if task.Stub.Type.Kind() == types.StubTypeFunction {
-		stopHeartbeat, err := taskmetrics.KeepFinalizationAlive(ctx, in.TaskId, func(ctx context.Context) error {
-			return gws.redisClient.SetEx(ctx, function.Keys.FunctionHeartbeat(task.Workspace.Name, in.TaskId), 1, types.TaskHeartbeatTTL).Err()
+		meta := types.TaskMetadata{WorkspaceName: task.Workspace.Name, StubId: task.Stub.ExternalId, TaskId: in.TaskId, ContainerId: in.ContainerId}
+		windowCtx, cancelWindow, err := taskmetrics.BeginCompletion(ctx, gws.redisClient, meta, policy.Timeout)
+		if err != nil {
+			return nil, err
+		}
+		defer cancelWindow()
+		leaseCtx, stopHeartbeat, err := taskmetrics.KeepFinalizationAlive(windowCtx, in.TaskId, func(ctx context.Context) error {
+			return taskmetrics.RenewTaskLiveness(ctx, gws.redisClient, meta, function.Keys.FunctionHeartbeat(meta.WorkspaceName, meta.TaskId), "", "")
 		})
 		if err != nil {
-			return &pb.EndTaskResponse{Ok: false}, nil
+			return nil, err
 		}
 		defer stopHeartbeat()
-	}
-
-	requestedStatus := types.TaskStatus(in.TaskStatus)
-	if task.Status.IsCompleted() && !(requestedStatus == types.TaskStatusComplete && task.Status != types.TaskStatusComplete) {
-		err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
-		return &pb.EndTaskResponse{Ok: err == nil}, nil
+		ctx = leaseCtx
 	}
 
 	endedAt := time.Now()
@@ -186,24 +201,28 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 
 	// Store task result in persistent storage
 	if in.Result != nil && workspace.StorageAvailable() {
-		err = gws.taskDispatcher.StoreTaskResult(ctx, workspace, task.ExternalId, in.Result)
+		uploadCtx, cancelUpload := context.WithTimeout(ctx, policy.ResultUploadTimeout)
+		err = gws.taskDispatcher.StoreTaskResult(uploadCtx, workspace, task.ExternalId, in.Result)
+		cancelUpload()
 		if err != nil {
 			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
+			return nil, taskmetrics.CompletionError(err)
 		}
 	}
 
 	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
 	if err != nil {
 		log.Error().Err(err).Str("task_id", in.TaskId).Msg("failed to persist task completion; dispatcher state retained")
-		return &pb.EndTaskResponse{Ok: false}, nil
+		return nil, taskmetrics.CompletionError(err)
 	}
 	if gws.eventRepo != nil {
 		gws.eventRepo.PushTaskEndPersisted(task)
 	}
 	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
-	return &pb.EndTaskResponse{
-		Ok: err == nil,
-	}, nil
+	if err != nil {
+		return nil, taskmetrics.CompletionError(err)
+	}
+	return &pb.EndTaskResponse{Ok: true}, nil
 }
 
 func canUseTaskLifecycle(authInfo *auth.AuthInfo) bool {

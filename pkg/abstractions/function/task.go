@@ -285,6 +285,10 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 }
 
 func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
+	expired, err := taskmetrics.CompletionExpired(ctx, t.fs.rdb, t.Metadata())
+	if err != nil || expired {
+		return false, err
+	}
 	task, err := t.fs.backendRepo.GetTask(ctx, t.msg.TaskId)
 	if err != nil {
 		return false, err
