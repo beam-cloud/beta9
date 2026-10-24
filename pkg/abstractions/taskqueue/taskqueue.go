@@ -365,13 +365,6 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		return response, nil
 	}
 
-	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
-	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
-	}
-
 	workspace := authInfo.Workspace
 
 	if in.Result != nil && workspace.StorageAvailable() {
@@ -382,6 +375,14 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{Ok: false}, nil
+	}
+
+	// Removing the claim tells the runner's monitor that the task is complete.
+	// Keep it alive through result storage and the database update so its
+	// container lease cannot expire while finalization is still in progress.
+	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
 	finalized = err == nil
 	return &pb.TaskQueueCompleteResponse{
 		Ok: err == nil,
