@@ -12,13 +12,12 @@ from typing import Any, List, NamedTuple, Type, Union
 
 import grpc
 
-from ..channel import Channel, retry_operation, with_runner_context
+from ..channel import Channel, with_runner_context
 from ..clients.gateway import GatewayServiceStub
 from ..clients.taskqueue import (
     TaskQueueCompleteRequest,
     TaskQueueCompleteResponse,
     TaskQueueMonitorRequest,
-    TaskQueueMonitorResponse,
     TaskQueuePopRequest,
     TaskQueuePopResponse,
     TaskQueueServiceStub,
@@ -31,6 +30,8 @@ from ..runner.common import (
     ThreadPoolExecutorOverride,
     config,
     execute_lifecycle_method,
+    monitor_task,
+    retry_task_completion,
     send_callback,
     serialize_result,
     wait_for_checkpoint,
@@ -46,19 +47,7 @@ TASK_MANAGER_INTERVAL = 0.1
 def complete_task(
     stub: TaskQueueServiceStub, request: TaskQueueCompleteRequest
 ) -> TaskQueueCompleteResponse:
-    # RETRY schedules another execution and is not safe to replay after a lost
-    # reply. Terminal completion is idempotent at the gateway by task ID.
-    if request.task_status == TaskStatus.Retry:
-        return stub.task_queue_complete(request)
-
-    def attempt():
-        response = stub.task_queue_complete(request)
-        if not response.ok:
-            raise ConnectionError("Gateway has not persisted task completion")
-        return response
-
-    # Keep the original serialized result until a gateway acknowledges it.
-    return retry_operation(attempt, owner=request.container_id, timeout=None)
+    return retry_task_completion(stub.task_queue_complete, request)
 
 
 class TaskQueueManager:
@@ -231,78 +220,12 @@ class TaskQueueWorker:
         taskqueue_stub: TaskQueueServiceStub,
         gateway_stub: GatewayServiceStub,
     ) -> None:
-        def _monitor_stream() -> bool:
-            """
-            Returns True if the stream ended with no errors (and should be restarted),
-            or False if a exit event occurred (cancellation, completion, timeout,
-            or a connection issue that caused us to kill the parent process)
-            """
-            initial_backoff = 0.2
-            backoff = initial_backoff
-
-            while True:
-                try:
-                    for response in taskqueue_stub.task_queue_monitor(
-                        TaskQueueMonitorRequest(
-                            task_id=task.id,
-                            stub_id=stub_id,
-                            container_id=container_id,
-                        )
-                    ):
-                        response: TaskQueueMonitorResponse
-                        if response.cancelled:
-                            print(f"Task cancelled: {task.id}")
-
-                            send_callback(
-                                gateway_stub=gateway_stub,
-                                context=context,
-                                payload={},
-                                task_status=TaskStatus.Cancelled,
-                            )
-                            os._exit(TaskExitCode.Cancelled)
-
-                        if response.complete:
-                            return False
-
-                        if response.timed_out:
-                            print(f"Task timed out: {task.id}")
-
-                            send_callback(
-                                gateway_stub=gateway_stub,
-                                context=context,
-                                payload={},
-                                task_status=TaskStatus.Timeout,
-                            )
-                            os._exit(TaskExitCode.Timeout)
-
-                        backoff = initial_backoff
-
-                    # Reaching here means that the stream ended with no errors,
-                    # which can occur during a rollout restart of the gateway
-                    # returning True here tells the outer loop to restart the stream
-                    return True
-
-                except (
-                    grpc.RpcError,
-                    ConnectionRefusedError,
-                ):
-                    print("Lost connection to task monitor, reconnecting...")
-                    time.sleep(backoff)
-                    backoff = min(backoff * 1.5, 2.0)
-
-                except BaseException:
-                    print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-                    os._exit(0)
-
-        # Outer loop: restart only if the stream ended with no errors
-        while True:
-            should_restart = _monitor_stream()
-            if not should_restart:
-                # Exit condition encountered; exit the monitor task completely
-                return
-
-            # If we reached here, the stream ended with no errors;
-            # so we should restart the monitoring stream
+        request = TaskQueueMonitorRequest(
+            task_id=task.id, stub_id=stub_id, container_id=container_id
+        )
+        monitor_task(
+            context, lambda: taskqueue_stub.task_queue_monitor(request), gateway_stub, os._exit
+        )
 
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:

@@ -295,7 +295,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		}, nil
 	}
 
-	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, task.ExternalId), 1, types.TaskQueueAdmissionLeaseTTL).Err()
 	if err != nil {
 		return &pb.TaskQueuePopResponse{
 			Ok: false,
@@ -324,22 +324,13 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	ctx, cancel := taskdispatcher.FinalizationContext(ctx)
-	defer cancel()
+	ctx = context.WithoutCancel(ctx)
 
-	stopHeartbeat, err := tq.keepCompletionAlive(ctx, authInfo.Workspace.Name, in)
+	stopHeartbeat, err := taskdispatcher.KeepFinalizationAlive(ctx, in.TaskId, func(ctx context.Context) error {
+		return tq.refreshTaskLeases(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)
+	})
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{Ok: false}, nil
-	}
-
-	if in.KeepWarmSeconds > 0 {
-		err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
-		if err != nil {
-			stopHeartbeat()
-			return &pb.TaskQueueCompleteResponse{
-				Ok: false,
-			}, nil
-		}
 	}
 
 	// Keep the task's admission lease until result persistence and the final
@@ -353,13 +344,18 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		if !finalized {
 			return
 		}
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-		defer cancel()
 		pipe := tq.rdb.TxPipeline()
-		pipe.SRem(cleanupCtx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), in.TaskId)
-		pipe.Del(cleanupCtx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId))
-		_, _ = pipe.Exec(cleanupCtx)
+		pipe.SRem(ctx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), in.TaskId)
+		pipe.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId))
+		_, _ = pipe.Exec(ctx)
 	}()
+
+	if in.KeepWarmSeconds > 0 {
+		err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
+		if err != nil {
+			return &pb.TaskQueueCompleteResponse{Ok: false}, nil
+		}
+	}
 
 	// A retry after a lost reply must finish cleanup without overwriting the
 	// already persisted outcome or uploading the result again.
@@ -410,19 +406,14 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}, nil
 }
 
-// Completion, rather than the observational monitor stream, owns these leases
-// until its database write finishes. A disconnected monitor must not enable
-// scale-down or dispatcher retries while the gateway is persisting the result.
-func (tq *RedisTaskQueue) keepCompletionAlive(ctx context.Context, workspace string, in *pb.TaskQueueCompleteRequest) (func(), error) {
-	refresh := func(ctx context.Context) error {
-		pipe := tq.rdb.TxPipeline()
-		pipe.SetEx(ctx, Keys.taskQueueTaskHeartbeat(workspace, in.StubId, in.TaskId), 1, time.Minute)
-		pipe.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspace, in.StubId, in.ContainerId, in.TaskId), 1, 5*time.Second)
-		pipe.SAdd(ctx, Keys.taskQueueTaskRunningLockIndex(workspace, in.StubId, in.ContainerId), in.TaskId)
-		_, err := pipe.Exec(ctx)
-		return err
-	}
-	return taskdispatcher.KeepFinalizationAlive(ctx, in.TaskId, refresh)
+// Monitors and accepted completions renew the same task and container leases.
+func (tq *RedisTaskQueue) refreshTaskLeases(ctx context.Context, workspace, stubID, containerID, taskID string) error {
+	pipe := tq.rdb.TxPipeline()
+	pipe.SetEx(ctx, Keys.taskQueueTaskHeartbeat(workspace, stubID, taskID), 1, types.TaskHeartbeatTTL)
+	pipe.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspace, stubID, containerID, taskID), 1, types.TaskQueueRunningLeaseTTL)
+	pipe.SAdd(ctx, Keys.taskQueueTaskRunningLockIndex(workspace, stubID, containerID), taskID)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {
@@ -561,12 +552,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return nil
 			}
 
-			err := tq.rdb.SetEx(ctx, Keys.taskQueueTaskHeartbeat(authInfo.Workspace.Name, req.StubId, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
-			if err != nil {
-				return err
-			}
-
-			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(5)*time.Second).Err()
+			err := tq.refreshTaskLeases(ctx, authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId)
 			if err != nil {
 				return err
 			}
@@ -581,7 +567,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			}
 
 			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: false})
-			time.Sleep(time.Second * 1)
+			time.Sleep(types.TaskHeartbeatInterval)
 		}
 	}
 }

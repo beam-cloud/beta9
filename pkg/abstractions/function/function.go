@@ -36,13 +36,12 @@ type FunctionService interface {
 const (
 	DefaultFunctionTaskTTL uint32 = 3600 * 12 // 12 hours
 
-	functionRoutePrefix              string        = "/function"
-	scheduleRoutePrefix              string        = "/schedule"
-	defaultFunctionContainerCpu      int64         = 100
-	defaultFunctionContainerMemory   int64         = 128
-	defaultFunctionHeartbeatTimeoutS int64         = 60
-	functionArgsExpirationTimeout    time.Duration = 600 * time.Second
-	functionResultExpirationTimeout  time.Duration = 600 * time.Second
+	functionRoutePrefix             string        = "/function"
+	scheduleRoutePrefix             string        = "/schedule"
+	defaultFunctionContainerCpu     int64         = 100
+	defaultFunctionContainerMemory  int64         = 128
+	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
+	functionResultExpirationTimeout time.Duration = 600 * time.Second
 )
 
 type ContainerFunctionService struct {
@@ -295,7 +294,7 @@ func (fs *ContainerFunctionService) FunctionGetArgs(ctx context.Context, in *pb.
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
 
-	err = fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, in.TaskId), 1, time.Duration(defaultFunctionHeartbeatTimeoutS)*time.Second).Err()
+	err = fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, in.TaskId), 1, types.TaskHeartbeatTTL).Err()
 	if err != nil {
 		phaseLabels["success"] = "false"
 		phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "start_task_to_get_args", task.FunctionPhaseStartTask, now, phaseLabels)
@@ -478,7 +477,7 @@ func (fs *ContainerFunctionService) FunctionMonitor(req *pb.FunctionMonitorReque
 				return nil
 			}
 
-			err := fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, task.ExternalId), 1, time.Duration(defaultFunctionHeartbeatTimeoutS)*time.Second).Err()
+			err := fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, task.ExternalId), 1, types.TaskHeartbeatTTL).Err()
 			if err != nil {
 				return err
 			}
@@ -493,7 +492,7 @@ func (fs *ContainerFunctionService) FunctionMonitor(req *pb.FunctionMonitorReque
 			}
 
 			stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: false})
-			time.Sleep(time.Second * 1)
+			time.Sleep(types.TaskHeartbeatInterval)
 		}
 	}
 }

@@ -130,10 +130,10 @@ func TestGatewayRestartDoesNotReleaseClaimedContainer(t *testing.T) {
 	lease := Keys.taskQueueTaskRunningLock("workspace", "stub", "container", "task")
 	index := Keys.taskQueueTaskRunningLockIndex("workspace", "stub", "container")
 	require.NoError(t, rdb.SAdd(ctx, index, "task").Err())
-	require.NoError(t, rdb.Set(ctx, lease, 1, 5*time.Second).Err())
-	require.NoError(t, rdb.Set(ctx, Keys.taskQueueTaskHeartbeat("workspace", "stub", "task"), 1, time.Minute).Err())
+	require.NoError(t, rdb.Set(ctx, lease, 1, types.TaskQueueRunningLeaseTTL).Err())
+	require.NoError(t, rdb.Set(ctx, Keys.taskQueueTaskHeartbeat("workspace", "stub", "task"), 1, types.TaskHeartbeatTTL).Err())
 	// No gateway remains to renew either key. Ownership must survive their TTLs.
-	redisServer.FastForward(2 * time.Minute)
+	redisServer.FastForward(types.TaskHeartbeatTTL + types.TaskQueueRunningLeaseTTL)
 	instance := &taskQueueInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
 		Rdb: rdb, Workspace: &types.Workspace{Name: "workspace"}, IsActive: true, ContainerRepo: completionContainerRepository{},
 		Stub: &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub", Type: types.StubType(types.StubTypeTaskQueueDeployment)}},
@@ -255,11 +255,7 @@ func TestTaskQueueCompletionPersistsBeforeMonitorAllowsScaleDown(t *testing.T) {
 					}
 				}
 			}()
-			select {
-			case <-monitorReady:
-			case <-time.After(5 * time.Second):
-				t.Fatal("monitor did not start")
-			}
+			awaitCompletion(t, monitorReady, "monitor did not start")
 			completeCtx, stopRunner := context.WithCancel(ctx)
 			defer stopRunner()
 			type rpcOutcome struct {
@@ -273,27 +269,15 @@ func TestTaskQueueCompletionPersistsBeforeMonitorAllowsScaleDown(t *testing.T) {
 				})
 				finished <- rpcOutcome{response, err}
 			}()
-			select {
-			case <-uploadStarted:
-			case <-time.After(5 * time.Second):
-				t.Fatal("result upload did not start")
-			}
+			awaitCompletion(t, uploadStarted, "result upload did not start")
 			rpcCtx := <-rpcStarted
 			if disconnect == "monitor" || disconnect == "both" {
 				stopMonitor()
-				select {
-				case <-monitorReturned:
-				case <-time.After(5 * time.Second):
-					t.Fatal("monitor disconnect did not close the stream")
-				}
+				awaitCompletion(t, monitorReturned, "monitor disconnect did not close the stream")
 			}
 			if disconnect == "completion" || disconnect == "both" {
 				stopRunner()
-				select {
-				case <-rpcCtx.Done():
-				case <-time.After(5 * time.Second):
-					t.Fatal("completion disconnect did not cancel the transport context")
-				}
+				awaitCompletion(t, rpcCtx.Done(), "completion disconnect did not cancel the transport context")
 			}
 			claimedDuringUpload, err := tasks.IsClaimed(ctx, "workspace", "stub", "task")
 			require.NoError(t, err)
@@ -303,16 +287,8 @@ func TestTaskQueueCompletionPersistsBeforeMonitorAllowsScaleDown(t *testing.T) {
 			if !claimedDuringUpload {
 				// The original ordering causes a premature Complete response. Wait
 				// for the stream to close before expiring its final lease renewal.
-				select {
-				case <-monitorCompleted:
-				case <-time.After(5 * time.Second):
-					t.Fatal("monitor did not observe the removed claim")
-				}
-				select {
-				case <-monitorReturned:
-				case <-time.After(5 * time.Second):
-					t.Fatal("monitor stream did not close")
-				}
+				awaitCompletion(t, monitorCompleted, "monitor did not observe the removed claim")
+				awaitCompletion(t, monitorReturned, "monitor stream did not close")
 				redisServer.FastForward(6 * time.Second)
 			} else {
 				require.Eventually(t, func() bool { return rdb.Exists(ctx, leaseKey).Val() == 1 }, 3*time.Second, 10*time.Millisecond)
@@ -328,30 +304,12 @@ func TestTaskQueueCompletionPersistsBeforeMonitorAllowsScaleDown(t *testing.T) {
 				// Exercise the original failure fully: the autoscaler can stop the
 				// runner, disconnecting its completion RPC before the upload returns.
 				stopRunner()
-				select {
-				case <-rpcCtx.Done():
-				case <-time.After(5 * time.Second):
-					t.Fatal("runner disconnect did not cancel the server RPC")
-				}
+				awaitCompletion(t, rpcCtx.Done(), "runner disconnect did not cancel the server RPC")
 			}
 			release()
-			var updateErr error
-			select {
-			case updateErr = <-backend.updates:
-			case <-time.After(5 * time.Second):
-				t.Fatal("completion never attempted its final database update")
-			}
-			var result rpcOutcome
-			select {
-			case result = <-finished:
-			case <-time.After(5 * time.Second):
-				t.Fatal("completion RPC did not finish")
-			}
-			select {
-			case <-completionReturned:
-			case <-time.After(5 * time.Second):
-				t.Fatal("accepted finalization did not finish after transport disconnection")
-			}
+			updateErr := awaitCompletion(t, backend.updates, "completion never attempted its final database update")
+			result := awaitCompletion(t, finished, "completion RPC did not finish")
+			awaitCompletion(t, completionReturned, "accepted finalization did not finish after transport disconnection")
 			current, err := backend.GetTask(ctx, "task")
 			require.NoError(t, err)
 			inFlight, err := tasks.TasksInFlight(ctx, "workspace", "stub")
@@ -411,4 +369,17 @@ func (b *completionLifecycleBackend) UpdateTask(ctx context.Context, _ string, u
 	}
 	b.updates <- err
 	return &updated, err
+}
+
+// Bound coordination failures in the test; production completion has no deadline.
+func awaitCompletion[T any](t *testing.T, ch <-chan T, failure string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatal(failure)
+		var zero T
+		return zero
+	}
 }

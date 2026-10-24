@@ -146,11 +146,10 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		return &pb.EndTaskResponse{Ok: false}, nil
 	}
 
-	ctx, cancel := taskmetrics.FinalizationContext(ctx)
-	defer cancel()
+	ctx = context.WithoutCancel(ctx)
 	if task.Stub.Type.Kind() == types.StubTypeFunction {
 		stopHeartbeat, err := taskmetrics.KeepFinalizationAlive(ctx, in.TaskId, func(ctx context.Context) error {
-			return gws.redisClient.SetEx(ctx, function.Keys.FunctionHeartbeat(task.Workspace.Name, in.TaskId), 1, time.Minute).Err()
+			return gws.redisClient.SetEx(ctx, function.Keys.FunctionHeartbeat(task.Workspace.Name, in.TaskId), 1, types.TaskHeartbeatTTL).Err()
 		})
 		if err != nil {
 			return &pb.EndTaskResponse{Ok: false}, nil

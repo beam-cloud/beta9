@@ -4,13 +4,19 @@ import (
 	"context"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
 
-// FinalizationContext gives accepted completion work its own lifetime.
-// Losing the runner's connection must not interrupt durable task finalization.
-func FinalizationContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithCancel(context.WithoutCancel(ctx))
+// ContainerIsRunning distinguishes a stopped container from a repository outage.
+// A lost gateway heartbeat alone must not cause another execution of user code.
+func ContainerIsRunning(containers repository.ContainerRepository, containerID string) (bool, error) {
+	container, err := containers.GetContainerState(containerID)
+	if (&types.ErrContainerStateNotFound{}).From(err) {
+		return false, nil
+	}
+	return container != nil && container.Status == types.ContainerStatusRunning, err
 }
 
 // KeepFinalizationAlive transfers heartbeat ownership to the accepted request.
@@ -23,7 +29,7 @@ func KeepFinalizationAlive(ctx context.Context, taskID string, refresh func(cont
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(types.TaskHeartbeatInterval)
 		defer ticker.Stop()
 		for {
 			select {

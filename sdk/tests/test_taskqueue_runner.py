@@ -14,7 +14,7 @@ from beta9.clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from beta9.runner.taskqueue import Task, TaskQueueWorker, complete_task
-from beta9.type import TaskStatus
+from beta9.type import TaskExitCode, TaskStatus
 
 
 class Unavailable(grpc.RpcError):
@@ -152,4 +152,43 @@ def test_monitor_reconnects_without_exiting_the_task(monkeypatch):
         gateway_stub=Mock(),
     )
     assert stub.task_queue_monitor.call_count == 9
+    exit_task.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "flag,task_status,exit_code",
+    [
+        ("cancelled", TaskStatus.Cancelled, TaskExitCode.Cancelled),
+        ("timed_out", TaskStatus.Timeout, TaskExitCode.Timeout),
+    ],
+)
+def test_shared_monitor_preserves_cancellation_and_timeout(
+    monkeypatch, flag, task_status, exit_code
+):
+    from beta9.runner import common
+
+    callback, exit_task = Mock(), Mock()
+    monkeypatch.setattr(common, "send_callback", callback)
+    context = SimpleNamespace(task_id="task")
+    gateway = Mock()
+    common.monitor_task(
+        context,
+        lambda: [TaskQueueMonitorResponse(**{flag: True})],
+        gateway,
+        exit_task,
+    )
+    callback.assert_called_once_with(
+        gateway_stub=gateway, context=context, payload={}, task_status=task_status
+    )
+    exit_task.assert_called_once_with(exit_code)
+
+
+def test_shared_monitor_reopens_a_cleanly_closed_stream(monkeypatch):
+    from beta9.runner import common
+
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    streams = Mock(side_effect=[[], [TaskQueueMonitorResponse(complete=True)]])
+    exit_task = Mock()
+    common.monitor_task(SimpleNamespace(task_id="task"), streams, Mock(), exit_task)
+    assert streams.call_count == 2
     exit_task.assert_not_called()

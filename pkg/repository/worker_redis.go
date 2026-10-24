@@ -1159,13 +1159,13 @@ if redis.call("HGET", KEYS[2], "worker_id") ~= ARGV[2] then return 0 end
 local status = redis.call("HGET", KEYS[2], "status")
 if status == ARGV[5] then return 1 end
 if status ~= ARGV[4] then return 0 end
-if ARGV[3] == "taskqueue" then
+if ARGV[3] == ARGV[13] then
   if redis.call("EXISTS", KEYS[5]) == 1 then return 0 end
   for _, task_id in ipairs(redis.call("SMEMBERS", KEYS[6])) do
     if redis.call("EXISTS", ARGV[9] .. task_id) == 1 then return 0 end
     -- A gateway restart can expire the monitor lease while the task still owns
     -- this container. Wait for completion/recovery to release the claim.
-    if redis.call("GET", ARGV[10] .. task_id .. ":claim") == ARGV[11] then return 0 end
+    if redis.call("GET", ARGV[10] .. task_id .. ARGV[11]) == ARGV[12] then return 0 end
     redis.call("SREM", KEYS[6], task_id)
   end
 else
@@ -1195,6 +1195,8 @@ func PrepareIdleWorkerRolloutContainer(ctx context.Context, rdb *common.RedisCli
 		maxTokens = max(maxTokens, int(config.ConcurrentRequests))
 	}
 	workspace, stubID, containerID := stub.Workspace.Name, stub.ExternalId, container.ContainerId
+	claimPrefix := common.RedisKeys.TaskEntry(workspace, stubID, "")
+	claimSuffix := strings.TrimPrefix(common.RedisKeys.TaskClaim(workspace, stubID, ""), claimPrefix)
 	result, err := stopIdleWorkerRolloutContainerScript.Run(ctx, rdb, []string{
 		common.RedisKeys.SchedulerWorkerState(workerID), common.RedisKeys.SchedulerContainerState(containerID),
 		common.RedisKeys.SchedulerContainerStateIndex(), common.RedisKeys.EndpointRequestTokens(workspace, stubID, containerID),
@@ -1202,7 +1204,7 @@ func PrepareIdleWorkerRolloutContainer(ctx context.Context, rdb *common.RedisCli
 	}, generation, workerID, kind, string(types.ContainerStatusRunning), string(types.ContainerStatusStopping),
 		types.ContainerStateTtlSWhileStopping, time.Now().Add(time.Duration(types.ContainerStateTtlSWhileStopping)*time.Second).Unix(), maxTokens,
 		common.RedisKeys.TaskQueueTaskRunningLock(workspace, stubID, containerID, ""),
-		common.RedisKeys.TaskEntry(workspace, stubID, ""), containerID).Int()
+		claimPrefix, claimSuffix, containerID, types.StubTypeTaskQueue).Int()
 	return result == 1, err
 }
 

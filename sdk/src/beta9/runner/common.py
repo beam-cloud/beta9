@@ -14,6 +14,9 @@ from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import cloudpickle
 
+from ..channel import _RecoveryWindow, retry_operation
+from ..type import TaskExitCode, TaskStatus
+
 from ..clients.gateway import (
     EndTaskRequest,
     EndTaskResponse,
@@ -29,8 +32,6 @@ USER_VOLUMES_DIR = "/volumes"
 USER_OUTPUTS_DIR = "/outputs"
 USER_CACHE_DIR = "/cache"
 LIFECYCLE_RPC_TIMEOUT_SECONDS = 5
-END_TASK_MAX_ATTEMPTS = 3
-END_TASK_RETRY_DELAY_SECONDS = 1
 CALLBACK_HTTP_CONNECT_TIMEOUT_SECONDS = 10
 CALLBACK_HTTP_READ_TIMEOUT_SECONDS = 30
 CALLBACK_MAX_ATTEMPTS = 3
@@ -396,35 +397,53 @@ def _call_gateway_unary(
     )
 
 
-def _end_task(gateway_stub: GatewayServiceStub, request: EndTaskRequest) -> EndTaskResponse:
-    last_error: Optional[Exception] = None
-    for attempt in range(END_TASK_MAX_ATTEMPTS):
-        try:
-            response = _call_gateway_unary(
-                gateway_stub,
-                "/gateway.GatewayService/EndTask",
-                EndTaskRequest,
-                EndTaskResponse,
-                request,
-                gateway_stub.end_task,
-            )
-            if response.ok:
-                return response
-            last_error = RuntimeError("Gateway rejected task completion")
-        except Exception as exc:
-            last_error = exc
+def retry_task_completion(operation, request):
+    # A request to execute user code again is not an idempotent completion.
+    if request.task_status == TaskStatus.Retry:
+        return operation(request)
 
-        if attempt < END_TASK_MAX_ATTEMPTS - 1:
-            delay = END_TASK_RETRY_DELAY_SECONDS * (2**attempt)
-            print(f"Failed to finalize task <{request.task_id}>; retrying in {delay}s")
-            time.sleep(delay)
+    def attempt():
+        response = operation(request)
+        if not response.ok:
+            raise ConnectionError("Gateway has not persisted task completion")
+        return response
 
-    assert last_error is not None
-    raise last_error
+    return retry_operation(attempt, owner=request.container_id, timeout=None)
 
 
 def end_task(gateway_stub: GatewayServiceStub, request: EndTaskRequest) -> EndTaskResponse:
-    return _end_task(gateway_stub, request)
+    return retry_task_completion(gateway_stub.end_task, request)
+
+
+def _monitor_responses(open_stream):
+    recovery = _RecoveryWindow(timeout=None, start=False)
+    while True:
+        try:
+            for response in open_stream():
+                recovery.reset()
+                yield response
+        except Exception as error:
+            print(f"Task monitor reconnecting after {error}")
+        if not recovery.wait():
+            return
+
+
+def monitor_task(context: FunctionContext, open_stream, gateway_stub, on_exit):
+    for response in _monitor_responses(open_stream):
+        if response.cancelled:
+            task_status, exit_code = TaskStatus.Cancelled, TaskExitCode.Cancelled
+        elif response.complete:
+            return
+        elif response.timed_out:
+            task_status, exit_code = TaskStatus.Timeout, TaskExitCode.Timeout
+        else:
+            continue
+        print(f"Task {task_status}: {context.task_id}")
+        send_callback(
+            gateway_stub=gateway_stub, context=context, payload={}, task_status=task_status
+        )
+        on_exit(exit_code)
+        return
 
 
 def send_task_callback(

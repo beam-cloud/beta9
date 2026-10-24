@@ -50,18 +50,21 @@ request_metadata = ContextVar("beta9_request_metadata", default=())
 _acks = OrderedDict()
 _ack_lock = threading.Lock()
 RECOVERY_TIMEOUT = 120.0
+RECOVERY_INITIAL_DELAY = 0.2
+RECOVERY_BACKOFF_MULTIPLIER = 1.5
+RECOVERY_MAX_DELAY = 2.0
 
 
 class _RecoveryWindow:
     def __init__(self, timeout=RECOVERY_TIMEOUT, *, start=True):
         self.timeout = timeout
         self.started = time.monotonic() if start else None
-        self.delay = 0.2
+        self.delay = RECOVERY_INITIAL_DELAY
 
     def reset(self, *, keep_backoff=False):
         self.started = None
         if not keep_backoff:
-            self.delay = 0.2
+            self.delay = RECOVERY_INITIAL_DELAY
 
     def wait(self):
         if self.started is None:
@@ -75,7 +78,7 @@ class _RecoveryWindow:
         if remaining is not None and remaining <= 0:
             return False
         time.sleep(min(self.delay, remaining) if remaining is not None else self.delay)
-        self.delay = min(self.delay * 1.5, 2.0)
+        self.delay = min(self.delay * RECOVERY_BACKOFF_MULTIPLIER, RECOVERY_MAX_DELAY)
         return True
 
 
@@ -91,7 +94,7 @@ def transient_error(error):
     return isinstance(error, (ConnectionError, ConnectionRefusedError, ConnectionResetError))
 
 
-def retry_operation(fn, *, owner=None, timeout=RECOVERY_TIMEOUT, delay=0.2):
+def retry_operation(fn, *, owner=None, timeout=RECOVERY_TIMEOUT, delay=RECOVERY_INITIAL_DELAY):
     if request_metadata.get():
         return fn()
     recovery = _RecoveryWindow(timeout)

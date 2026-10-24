@@ -10,6 +10,15 @@ import (
 	"github.com/gofrs/uuid"
 )
 
+// Shared task liveness policy. Admission gets a longer lease while decoding;
+// active monitors and accepted completions use the same renewal cadence.
+const (
+	TaskHeartbeatInterval      = time.Second
+	TaskHeartbeatTTL           = time.Minute
+	TaskQueueRunningLeaseTTL   = 5 * time.Second
+	TaskQueueAdmissionLeaseTTL = time.Minute
+)
+
 type TaskPayload struct {
 	Args   []interface{}          `json:"args"`
 	Kwargs map[string]interface{} `json:"kwargs"`

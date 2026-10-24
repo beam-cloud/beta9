@@ -3,6 +3,7 @@ package taskqueue
 import (
 	"context"
 
+	taskdispatcher "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -72,11 +73,7 @@ func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
 	if err != nil || task.Status != types.TaskStatusRunning {
 		return false, err
 	}
-	container, err := t.tq.containerRepo.GetContainerState(task.ContainerId)
-	if (&types.ErrContainerStateNotFound{}).From(err) {
-		return false, nil
-	}
-	return container != nil && container.Status == types.ContainerStatusRunning, err
+	return taskdispatcher.ContainerIsRunning(t.tq.containerRepo, task.ContainerId)
 }
 
 func (t *TaskQueueTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {

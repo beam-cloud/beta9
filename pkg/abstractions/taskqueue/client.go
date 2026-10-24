@@ -3,15 +3,12 @@ package taskqueue
 import (
 	"context"
 	"strconv"
-	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
 )
-
-const defaultTaskRunningExpiration int = 60
 
 type taskQueueClient struct {
 	rdb      *common.RedisClient
@@ -67,7 +64,7 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 	processingKey := Keys.taskQueueProcessingLock(workspaceName, stubId, containerId)
 	task, err := taskQueuePopScript.Run(ctx, qc.rdb, []string{
 		Keys.taskQueueList(workspaceName, stubId), processingKey, common.RedisKeys.SchedulerContainerState(containerId),
-	}, common.RedisKeys.SchedulerWorkerState(""), string(types.ContainerStatusStopping), defaultTaskRunningExpiration).Text()
+	}, common.RedisKeys.SchedulerWorkerState(""), string(types.ContainerStatusStopping), int(types.TaskQueueAdmissionLeaseTTL.Seconds())).Text()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
@@ -76,8 +73,7 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 		return nil, err
 	}
 	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-		defer cancel()
+		cleanupCtx := context.WithoutCancel(ctx)
 		_ = taskQueuePopCompleteScript.Run(cleanupCtx, qc.rdb, []string{processingKey}).Err()
 	}()
 
@@ -93,13 +89,13 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 	}
 
 	// Set a lock to prevent spin-down during decoding (decoding can take a long time for larger payloads)
-	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspaceName, stubId, containerId, tm.TaskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspaceName, stubId, containerId, tm.TaskId), 1, types.TaskQueueAdmissionLeaseTTL).Err()
 	if err != nil {
 		return nil, err
 	}
 
 	// Set a heartbeat to prevent retries before task actually starts processing
-	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskHeartbeat(workspaceName, stubId, tm.TaskId), 1, 60*time.Second).Err()
+	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskHeartbeat(workspaceName, stubId, tm.TaskId), 1, types.TaskHeartbeatTTL).Err()
 	if err != nil {
 		return nil, err
 	}

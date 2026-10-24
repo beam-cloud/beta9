@@ -290,8 +290,8 @@ func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	// Don't check heartbeats if the task has been running for less than 60 seconds
-	if task.Status == types.TaskStatusRunning && time.Since(time.Unix(task.StartedAt.Time.Unix(), 0)) < time.Duration(defaultFunctionHeartbeatTimeoutS)*time.Second {
+	// Give newly started tasks a full heartbeat window before checking the monitor.
+	if task.Status == types.TaskStatusRunning && time.Since(time.Unix(task.StartedAt.Time.Unix(), 0)) < types.TaskHeartbeatTTL {
 		return true, nil
 	}
 
@@ -302,11 +302,7 @@ func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
 	// A gateway outage can expire the monitor heartbeat while the worker
 	// continues running the invocation. Do not dispatch another copy.
 	if res == 0 && task.Status == types.TaskStatusRunning {
-		container, err := t.fs.containerRepo.GetContainerState(task.ContainerId)
-		if (&types.ErrContainerStateNotFound{}).From(err) {
-			return false, nil
-		}
-		return container != nil && container.Status == types.ContainerStatusRunning, err
+		return taskmetrics.ContainerIsRunning(t.fs.containerRepo, task.ContainerId)
 	}
 
 	return res > 0, nil
