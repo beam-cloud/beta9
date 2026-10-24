@@ -158,10 +158,12 @@ func (fs *ContainerFunctionService) resumeInvocation(stubID, taskID string, stre
 		}
 		if count > 0 {
 			err := fs.stream(stream.Context(), stream, authInfo, task)
-			// Older workers have no completed log buffer. Only that explicit
-			// response falls back to the result; transport failures retry.
+			// The completed log buffer lives on the worker, so it's gone with a
+			// worker that can't be reached, and older workers have none. Only
+			// those fall back to the result; transport failures retry.
 			var rpcErr interface{ GRPCStatus() *status.Status }
-			if !errors.As(err, &rpcErr) || rpcErr.GRPCStatus().Code() != codes.Unknown || rpcErr.GRPCStatus().Message() != "container not found" {
+			oldWorker := errors.As(err, &rpcErr) && rpcErr.GRPCStatus().Code() == codes.Unknown && rpcErr.GRPCStatus().Message() == "container not found"
+			if !oldWorker && !errors.Is(err, abstractions.ErrWorkerUnreachable) {
 				return err
 			}
 		}

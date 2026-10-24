@@ -98,6 +98,29 @@ func TestCompletedInvocationHandlesOldWorkerWithoutLogs(t *testing.T) {
 	}
 }
 
+func TestCompletedInvocationReturnsResultWhenItsWorkerIsGone(t *testing.T) {
+	redis := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { rdb.Close() })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	task := &types.TaskWithRelated{Task: types.Task{Status: types.TaskStatusComplete, ContainerId: "function-1"}, Workspace: types.Workspace{ExternalId: "workspace"}, Stub: types.Stub{ExternalId: "stub"}}
+	service := &ContainerFunctionService{ctx: context.Background(), rdb: rdb, keyEventManager: common.NewKeyEventManager(rdb), backendRepo: completedInvocationBackend{task: task}, containerRepo: testCompletedInvocationContainers{address: address}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "workspace", Name: "workspace"}, Token: &types.Token{Key: "test-token"}})
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	redis.Set(Keys.FunctionResult("workspace", "task"), "result")
+	// Function containers keep this after removal, for the worker's log retention.
+	redis.Set(common.RedisKeys.SchedulerWorkerAddress("function-1"), address)
+	stream := &resumeInvocationStream{ctx: ctx}
+	require.NoError(t, service.resumeInvocation("stub", "task", stream))
+	require.True(t, stream.response.Done)
+	require.Equal(t, []byte("result"), stream.response.Result)
+}
+
 func TestInvocationWaitsForRetryWhenAttemptLogsAreGone(t *testing.T) {
 	server := miniredis.RunT(t)
 	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
