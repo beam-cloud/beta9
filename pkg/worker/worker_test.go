@@ -128,6 +128,11 @@ type fakeWorkerRepoClient struct {
 	disables          int
 	cordons           int
 	metering          *pb.GetWorkerMeteringConfigResponse
+	// GetWorkerServiceProxyConfig answers serviceProxy, or fails with
+	// serviceProxyErr, counting its calls.
+	serviceProxy      *pb.GetWorkerServiceProxyConfigResponse
+	serviceProxyErr   error
+	serviceProxyCalls int
 }
 
 // call records one fake RPC under the lock and returns its configured error.
@@ -199,6 +204,43 @@ func TestHydrateManagedWorkerMetering(t *testing.T) {
 	require.NoError(t, err)
 	metering.ContainerMetricsInterval = 3 * time.Second
 	require.Equal(t, metering, config.Monitoring, "the vended metering joins the worker's local settings")
+}
+
+func (f *fakeWorkerRepoClient) GetWorkerServiceProxyConfig(context.Context, *pb.GetWorkerServiceProxyConfigRequest, ...grpc.CallOption) (*pb.GetWorkerServiceProxyConfigResponse, error) {
+	if err := f.call(&f.serviceProxyCalls, &f.serviceProxyErr, nil); err != nil {
+		return nil, err
+	}
+	return f.serviceProxy, nil
+}
+
+// Agent-hosted workers boot with the in-cluster TCP defaults, so they take the
+// gateway's public TCP listener as their service proxy target.
+func TestHydrateAgentWorkerServiceProxy(t *testing.T) {
+	agentPool := types.WorkerPoolConfig{Mode: types.PoolModeExternal}
+	public := &pb.GetWorkerServiceProxyConfigResponse{Ok: true, ExternalHost: "svc.beam.cloud", ExternalPort: 443, VerifyTls: true}
+
+	config := testServiceProxyConfig("localhost")
+	require.NoError(t, hydrateAgentWorkerServiceProxy(context.Background(), "worker-1", &config, agentPool, &fakeWorkerRepoClient{serviceProxy: public}))
+	proxy := NewServiceProxy(context.Background(), config)
+	require.Equal(t, "svc.beam.cloud:443", proxy.target)
+	require.Equal(t, 443, proxy.port)
+	require.Equal(t, ".svc.beam.cloud", proxy.suffix)
+	require.True(t, proxy.verify)
+
+	t.Run("in-cluster workers keep their config", func(t *testing.T) {
+		config := testServiceProxyConfig("localhost")
+		client := &fakeWorkerRepoClient{serviceProxy: public}
+		require.NoError(t, hydrateAgentWorkerServiceProxy(context.Background(), "worker-1", &config, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, client))
+		require.Zero(t, client.serviceProxyCalls)
+		require.Equal(t, testServiceProxyConfig("localhost"), config)
+	})
+
+	t.Run("a gateway without the RPC leaves the defaults", func(t *testing.T) {
+		config := testServiceProxyConfig("localhost")
+		client := &fakeWorkerRepoClient{serviceProxyErr: status.Error(codes.Unimplemented, "unknown method")}
+		require.Error(t, hydrateAgentWorkerServiceProxy(context.Background(), "worker-1", &config, agentPool, client))
+		require.Equal(t, testServiceProxyConfig("localhost"), config)
+	})
 }
 
 // idleTestWorker is a worker with no containers that asks repo for headroom

@@ -99,7 +99,7 @@ func NewServiceProxy(ctx context.Context, config types.AppConfig) *ServiceProxy 
 		target:       tcp.ServiceProxyTarget,
 		port:         tcp.ExternalPort,
 		suffix:       "." + strings.ToLower(tcp.ExternalHost),
-		verify:       tcp.CertFile != "",
+		verify:       tcp.CertFile != "" || tcp.ServiceProxyVerify,
 		serviceRange: serviceRange,
 		services:     map[string]string{},
 		addAddress:   addBridgeAddress,

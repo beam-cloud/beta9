@@ -1256,7 +1256,11 @@ type PodTCPConfig struct {
 	KeyFile      string `key:"keyFile" json:"key_file"`
 	// ServiceProxyTarget is host:port of this listener as workers reach it.
 	// When set, containers that reference *.ExternalHost are pinned to a
-	// worker-side proxy to it instead of resolving ExternalHost over DNS.
-	// Leave empty where ExternalHost resolves publicly.
+	// worker-side proxy to it, which opens TLS for clients that don't, instead
+	// of resolving ExternalHost over DNS. Agent-hosted workers ask the gateway
+	// for its public listener instead.
 	ServiceProxyTarget string `key:"serviceProxyTarget" json:"service_proxy_target"`
+	// ServiceProxyVerify makes the proxy verify the target's certificate, as it
+	// does whenever CertFile is set.
+	ServiceProxyVerify bool `key:"serviceProxyVerify" json:"service_proxy_verify"`
 }

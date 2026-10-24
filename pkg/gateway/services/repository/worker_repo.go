@@ -3,6 +3,7 @@ package repository_services
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"slices"
 	"strings"
 	"time"
@@ -373,6 +374,22 @@ func (s *WorkerRepositoryService) GetWorkerMeteringConfig(ctx context.Context, r
 		return fail(err.Error())
 	}
 	return &pb.GetWorkerMeteringConfigResponse{Ok: true, MeteringJson: string(data)}, nil
+}
+
+// GetWorkerServiceProxyConfig tells an agent-hosted worker where the TCP
+// gateway listens publicly. Such workers boot with the in-cluster default
+// target, which they can't reach, so their service proxy dials this instead.
+func (s *WorkerRepositoryService) GetWorkerServiceProxyConfig(ctx context.Context, req *pb.GetWorkerServiceProxyConfigRequest) (*pb.GetWorkerServiceProxyConfigResponse, error) {
+	tcp := s.appConfig.Abstractions.Pod.TCP
+	if !tcp.Enabled || tcp.ExternalHost == "" || tcp.ExternalPort <= 0 || net.ParseIP(tcp.ExternalHost) != nil {
+		return &pb.GetWorkerServiceProxyConfigResponse{ErrorMsg: "the TCP gateway has no public hostname"}, nil
+	}
+	return &pb.GetWorkerServiceProxyConfigResponse{
+		Ok:           true,
+		ExternalHost: tcp.ExternalHost,
+		ExternalPort: int32(tcp.ExternalPort),
+		VerifyTls:    tcp.CertFile != "",
+	}, nil
 }
 
 func (s *WorkerRepositoryService) ToggleWorkerAvailable(ctx context.Context, req *pb.ToggleWorkerAvailableRequest) (*pb.ToggleWorkerAvailableResponse, error) {

@@ -506,3 +506,4 @@ abstractions:
       certFile: ""
       keyFile: ""
       serviceProxyTarget: beta9-gateway:1995
+      serviceProxyVerify: false
