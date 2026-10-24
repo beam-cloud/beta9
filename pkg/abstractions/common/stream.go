@@ -153,6 +153,18 @@ _stream:
 				return err
 			}
 			logsFinished = true
+			// EOF is durable evidence that this log buffer closed. A lost exit
+			// notification must not leave an invocation waiting forever.
+			for len(outputChan) > 0 {
+				if err := l.sendCallback(<-outputChan); err != nil {
+					return err
+				}
+			}
+			exitCode, err := l.containerRepo.GetContainerExitCode(containerId)
+			if err != nil {
+				return status.Error(codes.Unavailable, "container exit status is not yet available")
+			}
+			return l.exitCallback(int32(exitCode))
 		case <-logStreamReady:
 			logStreamReady = nil
 			exitEvents = keyEventChan

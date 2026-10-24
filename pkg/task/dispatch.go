@@ -117,7 +117,7 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 	return task, nil
 }
 
-func (d *Dispatcher) StoreTaskResult(workspace *types.Workspace, taskId string, result []byte) error {
+func (d *Dispatcher) StoreTaskResult(ctx context.Context, workspace *types.Workspace, taskId string, result []byte) error {
 	var err error
 	var storageClient *clients.WorkspaceStorageClient
 
@@ -125,7 +125,7 @@ func (d *Dispatcher) StoreTaskResult(workspace *types.Workspace, taskId string, 
 		if cachedStorageClient, ok := d.storageClientCache.Load(workspace.Name); ok {
 			storageClient = cachedStorageClient.(*clients.WorkspaceStorageClient)
 		} else {
-			storageClient, err = clients.NewWorkspaceStorageClient(d.ctx, workspace.Name, workspace.Storage)
+			storageClient, err = clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 			if err != nil {
 				return err
 			}
@@ -134,7 +134,7 @@ func (d *Dispatcher) StoreTaskResult(workspace *types.Workspace, taskId string, 
 		}
 
 		fullPath := GetTaskResultPath(taskId)
-		err = storageClient.Upload(context.Background(), fullPath, result)
+		err = storageClient.Upload(ctx, fullPath, result)
 		if err != nil {
 			return err
 		}
@@ -203,6 +203,10 @@ func (d *Dispatcher) monitorTasks(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
+		if taskMessage.RetryPending {
+			_ = d.RetryTask(ctx, task)
+			continue
+		}
 		claimed, err := d.taskRepo.IsClaimed(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 		if err != nil {
 			continue
@@ -225,13 +229,31 @@ func (d *Dispatcher) monitorTasks(ctx context.Context) error {
 }
 
 func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) error {
-	taskMessage := task.Message()
+	meta := task.Metadata()
+	return d.taskRepo.WithTaskRetryLease(ctx, meta.WorkspaceName, meta.StubId, meta.TaskId, func(ctx context.Context) error {
+		return d.retryTask(ctx, task)
+	})
+}
 
-	err := d.taskRepo.SetTaskRetryLock(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+func (d *Dispatcher) retryTask(ctx context.Context, task types.TaskInterface) error {
+	taskMessage := task.Message()
+	latest, err := d.taskRepo.GetTaskState(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 	if err != nil {
 		return err
 	}
-	defer d.taskRepo.RemoveTaskRetryLock(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+	if latest.Retries != taskMessage.Retries || latest.RetryID != taskMessage.RetryID || (taskMessage.RetryPending && !latest.RetryPending) {
+		return nil // Another dispatcher has already advanced this attempt.
+	}
+	*taskMessage = *latest
+	if taskMessage.RetryPending {
+		if !taskMessage.Policy.Expires.IsZero() && time.Now().After(taskMessage.Policy.Expires) {
+			if err := task.Cancel(ctx, types.TaskExpired); err != nil {
+				return err
+			}
+			return d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+		}
+		return task.Retry(ctx)
+	}
 
 	// Hit retry limit, cancel task and resolve
 	if taskMessage.Retries >= taskMessage.Policy.MaxRetries {
@@ -248,18 +270,18 @@ func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) er
 		return d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 	}
 
-	// Remove task claim so other replicas of Dispatcher don't try to retry the same task
-	err = d.Release(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-	if err != nil {
-		log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher failed to remove task claim")
-		return err
-	}
-
 	// Retry task
 	log.Info().Str("workspace_name", taskMessage.WorkspaceName).Str("task_id", taskMessage.TaskId).Str("stub_id", taskMessage.StubId).Msg("dispatcher missing heartbeat, reinserting task")
 
 	taskMessage.Retries += 1
 	taskMessage.Timestamp = time.Now().Unix()
+	recoverable := taskMessage.Executor == string(types.ExecutorFunction) || taskMessage.Executor == string(types.ExecutorTaskQueue)
+	if recoverable {
+		taskMessage.RetryPending = true
+		taskMessage.RetryID = uuid.Must(uuid.NewV4()).String()
+	} else if err := d.Release(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId); err != nil {
+		return err
+	}
 
 	msg, err := taskMessage.Encode()
 	if err != nil {

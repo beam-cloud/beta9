@@ -26,7 +26,7 @@ func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSa
 		taskDuration = -1
 	}
 
-	queueLength, err := i.TaskRepo.TasksInFlight(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
+	queueLength, err := i.client.ExecutionDemand(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		queueLength = -1
 	}

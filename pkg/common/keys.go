@@ -71,17 +71,19 @@ var (
 )
 
 var (
-	taskPrefix      string = "task"
-	taskIndex       string = "task:index"
-	taskIndexByStub string = "task:%s:%s:stub_index"
-	taskClaimIndex  string = "task:%s:%s:claim_index"
-	taskEntry       string = "task:%s:%s:%s"
-	taskClaim       string = "task:%s:%s:%s:claim"
-	taskCancel      string = "task:%s:%s:%s:cancel"
-	taskRetryLock   string = "task:%s:%s:%s:retry_lock"
-	taskMonitorLock string = "task:monitor_lock"
-	taskPhase       string = "task:%s:%s:phase:%s"
-	taskPhaseLabels string = "task:%s:%s:phase_labels"
+	taskPrefix             string = "task"
+	taskIndex              string = "task:index"
+	taskIndexByStub        string = "task:%s:%s:stub_index"
+	taskClaimIndex         string = "task:%s:%s:claim_index"
+	taskEntry              string = "task:%s:%s:%s"
+	taskClaim              string = "task:%s:%s:%s:claim"
+	taskCompletionDeadline string = "task:%s:%s:%s:completion_deadline"
+	taskCompletionIndex    string = "task:%s:%s:completion_index"
+	taskCancel             string = "task:%s:%s:%s:cancel"
+	taskRetryLock          string = "task:%s:%s:%s:retry_lock"
+	taskMonitorLock        string = "task:monitor_lock"
+	taskPhase              string = "task:%s:%s:phase:%s"
+	taskPhaseLabels        string = "task:%s:%s:phase_labels"
 )
 
 var (
@@ -500,6 +502,14 @@ func (rk *redisKeys) TaskMonitorLock() string {
 
 func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskClaim, workspaceName, stubId, taskId)
+}
+
+func (rk *redisKeys) TaskCompletionDeadline(workspaceName, stubID, taskID string) string {
+	return fmt.Sprintf(taskCompletionDeadline, workspaceName, stubID, taskID)
+}
+
+func (rk *redisKeys) TaskCompletionIndex(workspaceName, stubID string) string {
+	return fmt.Sprintf(taskCompletionIndex, workspaceName, stubID)
 }
 
 func (rk *redisKeys) TaskRetryLock(workspaceName, stubId, taskId string) string {

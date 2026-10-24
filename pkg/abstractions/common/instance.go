@@ -310,6 +310,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
+	waitingForWork := desiredContainers > 0 && i.Stub != nil && i.Stub.Type.Kind() == types.StubTypeTaskQueue
 	failing := i.FailedContainerThreshold > 0 && len(state.FailedContainers) >= i.FailedContainerThreshold
 	if failing {
 		desiredContainers = 0
@@ -322,9 +323,9 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		desiredContainers = 0
 	}
 
-	// Only traffic or a deploy recreates a cancelled instance, so an always-on
-	// deployment waits out its failure cooldown and then starts again.
-	retryAfterCooldown := failing && i.IsActive && i.minContainers() > 0
+	// Keep controllers with queued work or a minimum alive through cooldown;
+	// neither receives fresh traffic to recreate a cancelled instance.
+	retryAfterCooldown := failing && i.IsActive && (waitingForWork || i.minContainers() > 0)
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)
 	if desiredContainers == 0 && noContainersRunning && !retryAfterCooldown {
 		i.CancelFunc()

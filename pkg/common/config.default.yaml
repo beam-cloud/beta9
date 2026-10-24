@@ -78,6 +78,9 @@ gateway:
       allowHeaders: "*"
       allowMethods: "*"
   shutdownTimeout: 180s
+  taskCompletion:
+    timeout: 5m
+    resultUploadTimeout: 2m
   stubLimits:
     cpu: 128000
     memory: 32768

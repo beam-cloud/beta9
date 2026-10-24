@@ -11,6 +11,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	taskmetrics "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -73,11 +74,6 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 }
 
 func (t *FunctionTask) Retry(ctx context.Context) error {
-	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
-	if err != nil {
-		return err
-	}
-
 	taskId := t.msg.TaskId
 
 	task, err := t.fs.backendRepo.GetTaskWithRelated(ctx, taskId)
@@ -85,18 +81,38 @@ func (t *FunctionTask) Retry(ctx context.Context) error {
 		return err
 	}
 
-	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
-	t.containerId = containerId
+	if task.Status.IsCompleted() {
+		return t.fs.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, taskId)
+	}
 
-	task.Status = types.TaskStatusRetry
-	task.ContainerId = containerId
-	task.FailureReason = ""
-	updatedTask, err := t.fs.backendRepo.UpdateTask(ctx, taskId, task.Task)
+	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
 	if err != nil {
 		return err
 	}
 
-	return t.run(ctx, stub, updatedTask)
+	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
+	if t.msg.RetryID != "" {
+		attempt, err := uuid.Parse(t.msg.RetryID)
+		if err != nil {
+			return err
+		}
+		containerId = functionContainerID(taskId, stub.Type.Kind(), attempt)
+	}
+	t.containerId = containerId
+	if task.ContainerId != containerId {
+		task.Status = types.TaskStatusRetry
+		task.ContainerId = containerId
+		task.FailureReason = ""
+		updated, err := t.fs.backendRepo.UpdateTask(ctx, taskId, task.Task)
+		if err != nil {
+			return err
+		}
+		task.Task = *updated
+	}
+	if err := t.run(ctx, stub, &task.Task); err != nil {
+		return err
+	}
+	return t.fs.taskDispatcher.Claim(ctx, t.msg.WorkspaceName, t.msg.StubId, taskId, containerId)
 }
 
 var cloudPickleHeader []byte = []byte{0x80, 0x05, 0x95}
@@ -221,6 +237,10 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 	}
 
 	err = t.fs.scheduler.Run(runRequest)
+	var alreadyScheduled *types.ContainerAlreadyScheduledError
+	if errors.As(err, &alreadyScheduled) {
+		return nil
+	}
 	if err != nil {
 		if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 			log.Info().Str("task_id", task.ExternalId).Str("reason", err.Error()).Msg("task cancelled due to concurrency limit")
@@ -281,13 +301,27 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 }
 
 func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
+	expired, err := taskmetrics.CompletionExpired(ctx, t.fs.rdb, t.Metadata())
+	if err != nil || expired {
+		return false, err
+	}
 	task, err := t.fs.backendRepo.GetTask(ctx, t.msg.TaskId)
 	if err != nil {
 		return false, err
 	}
 
-	// Don't check heartbeats if the task has been running for less than 60 seconds
-	if task.Status == types.TaskStatusRunning && time.Since(time.Unix(task.StartedAt.Time.Unix(), 0)) < time.Duration(defaultFunctionHeartbeatTimeoutS)*time.Second {
+	// Scheduled retries own recovery before StartTask; pending containers
+	// must not consume another retry while waiting for placement.
+	if task.Status == types.TaskStatusRetry {
+		container, err := t.fs.containerRepo.GetContainerState(task.ContainerId)
+		if (&types.ErrContainerStateNotFound{}).From(err) {
+			return false, nil
+		}
+		return container != nil && (container.Status == types.ContainerStatusPending || container.Status == types.ContainerStatusRunning), err
+	}
+
+	// Give newly started tasks a full heartbeat window before checking the monitor.
+	if task.Status == types.TaskStatusRunning && time.Since(time.Unix(task.StartedAt.Time.Unix(), 0)) < types.TaskHeartbeatTTL {
 		return true, nil
 	}
 
@@ -298,11 +332,7 @@ func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
 	// A gateway outage can expire the monitor heartbeat while the worker
 	// continues running the invocation. Do not dispatch another copy.
 	if res == 0 && task.Status == types.TaskStatusRunning {
-		container, err := t.fs.containerRepo.GetContainerState(task.ContainerId)
-		if (&types.ErrContainerStateNotFound{}).From(err) {
-			return false, nil
-		}
-		return container != nil && container.Status == types.ContainerStatusRunning, err
+		return taskmetrics.ContainerIsRunning(t.fs.containerRepo, task.ContainerId)
 	}
 
 	return res > 0, nil

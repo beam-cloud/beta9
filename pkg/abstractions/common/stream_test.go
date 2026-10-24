@@ -163,3 +163,29 @@ func TestContainerStreamDrainsBacklogThroughEOF(t *testing.T) {
 	require.NoError(t, stream.handleStreams(ctx, "container-1", make(chan common.OutputMsg, 1000), events, clients))
 	require.True(t, exited)
 }
+
+func TestContainerStreamEOFRecoversLostExitNotification(t *testing.T) {
+	attach := make(chan struct{})
+	close(attach)
+	clients := make(chan containerClientResult, 1)
+	clients <- containerClientResult{client: &testContainerStreamClient{
+		started: make(chan struct{}), attach: attach, log: common.OutputMsg{Msg: "first"},
+		trailing: []common.OutputMsg{{Msg: "last"}},
+	}}
+	var output []string
+	exited := false
+	stream := &ContainerStream{
+		containerRepo: testStreamContainerRepo{exitCode: int(types.ContainerExitCodeUnknownError)},
+		sendCallback:  func(message common.OutputMsg) error { output = append(output, message.Msg); return nil },
+		exitCallback: func(code int32) error {
+			exited = true
+			require.EqualValues(t, types.ContainerExitCodeUnknownError, code)
+			require.Equal(t, []string{"first", "last"}, output)
+			return nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, stream.handleStreams(ctx, "container", make(chan common.OutputMsg, 1000), make(chan common.KeyEvent), clients))
+	require.True(t, exited)
+}

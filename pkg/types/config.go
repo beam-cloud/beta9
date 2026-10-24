@@ -259,6 +259,7 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
+	TaskCompletion TaskCompletionConfig `key:"taskCompletion" json:"task_completion"`
 	// DeploymentRevision orders configuration publications across rolling
 	// gateway replicas. Helm rollbacks receive a new revision as well.
 	DeploymentRevision int64          `key:"deploymentRevision" json:"deployment_revision"`
@@ -277,6 +278,11 @@ type GatewayServiceConfig struct {
 	// serverless workloads. Independent of the concurrency limit, which is a
 	// capacity cap, not a paywall.
 	CreditGate CreditGateConfig `key:"creditGate" json:"credit_gate"`
+}
+
+type TaskCompletionConfig struct {
+	Timeout             time.Duration `key:"timeout" json:"timeout"`
+	ResultUploadTimeout time.Duration `key:"resultUploadTimeout" json:"result_upload_timeout"`
 }
 
 // OAuth is opt-in. The public issuer/resource are canonical identifiers; the

@@ -135,6 +135,44 @@ type fakeWorkerRepoClient struct {
 	serviceProxyCalls int
 }
 
+type expiredCapacityRepo struct {
+	pb.WorkerRepositoryServiceClient
+	calls chan struct{}
+}
+
+func (r expiredCapacityRepo) UpdateWorkerCapacity(context.Context, *pb.UpdateWorkerCapacityRequest, ...grpc.CallOption) (*pb.UpdateWorkerCapacityResponse, error) {
+	r.calls <- struct{}{}
+	return &pb.UpdateWorkerCapacityResponse{Ok: false, ErrorMsg: (&types.ErrWorkerNotFound{WorkerId: "worker"}).Error()}, nil
+}
+
+func TestExpiredWorkerRegistrationDrainsSiblingContainersBeforeExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repo := expiredCapacityRepo{calls: make(chan struct{}, 1)}
+	worker := &Worker{ctx: ctx, cancel: cancel, workerRepoClient: repo, completedRequests: make(chan *types.ContainerRequest, 1), containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set("sibling", &ContainerInstance{})
+	done := make(chan struct{})
+	go func() { defer close(done); worker.manageWorkerCapacity() }()
+	defer func() { close(worker.completedRequests); <-done }()
+	for range 2 {
+		worker.completedRequests <- &types.ContainerRequest{ContainerId: "finished"}
+		select {
+		case <-repo.calls:
+		case <-ctx.Done():
+			t.Fatal("expired registration stopped an active sibling container")
+		case <-time.After(time.Second):
+			t.Fatal("worker stopped processing completed containers")
+		}
+	}
+	worker.containerInstances.Delete("sibling")
+	worker.completedRequests <- &types.ContainerRequest{ContainerId: "sibling"}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("worker did not retire after its last container finished")
+	}
+}
+
 // call records one fake RPC under the lock and returns its configured error.
 func (f *fakeWorkerRepoClient) call(calls *int, err *error, record func()) error {
 	f.mu.Lock()

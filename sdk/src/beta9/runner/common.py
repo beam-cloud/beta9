@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import cloudpickle
+
+from ..channel import (
+    RECOVERY_TIMEOUT,
+    _RecoveryWindow,
+    retry_operation,
+    rpc_timeout,
+    transient_error,
+)
+from ..type import TaskExitCode, TaskStatus
 
 from ..clients.gateway import (
     EndTaskRequest,
@@ -29,8 +39,6 @@ USER_VOLUMES_DIR = "/volumes"
 USER_OUTPUTS_DIR = "/outputs"
 USER_CACHE_DIR = "/cache"
 LIFECYCLE_RPC_TIMEOUT_SECONDS = 5
-END_TASK_MAX_ATTEMPTS = 3
-END_TASK_RETRY_DELAY_SECONDS = 1
 CALLBACK_HTTP_CONNECT_TIMEOUT_SECONDS = 10
 CALLBACK_HTTP_READ_TIMEOUT_SECONDS = 30
 CALLBACK_MAX_ATTEMPTS = 3
@@ -396,35 +404,98 @@ def _call_gateway_unary(
     )
 
 
-def _end_task(gateway_stub: GatewayServiceStub, request: EndTaskRequest) -> EndTaskResponse:
-    last_error: Optional[Exception] = None
-    for attempt in range(END_TASK_MAX_ATTEMPTS):
-        try:
-            response = _call_gateway_unary(
-                gateway_stub,
-                "/gateway.GatewayService/EndTask",
-                EndTaskRequest,
-                EndTaskResponse,
-                request,
-                gateway_stub.end_task,
-            )
-            if response.ok:
-                return response
-            last_error = RuntimeError("Gateway rejected task completion")
-        except Exception as exc:
-            last_error = exc
+def retry_task_completion(operation, request):
+    # A request to execute user code again is not an idempotent completion.
+    if request.task_status == TaskStatus.Retry:
+        return operation(request)
 
-        if attempt < END_TASK_MAX_ATTEMPTS - 1:
-            delay = END_TASK_RETRY_DELAY_SECONDS * (2**attempt)
-            print(f"Failed to finalize task <{request.task_id}>; retrying in {delay}s")
-            time.sleep(delay)
+    def attempt():
+        response = operation(request)
+        if not response.ok:
+            raise RuntimeError("Gateway rejected task completion")
+        return response
 
-    assert last_error is not None
-    raise last_error
+    with rpc_timeout(RECOVERY_TIMEOUT):
+        return retry_operation(attempt, owner=request.container_id)
 
 
 def end_task(gateway_stub: GatewayServiceStub, request: EndTaskRequest) -> EndTaskResponse:
-    return _end_task(gateway_stub, request)
+    return retry_task_completion(gateway_stub.end_task, request)
+
+
+class TaskMonitor:
+    def __init__(self):
+        self.stopped = threading.Event()
+        self._lock = threading.Lock()
+        self._call = None
+
+    def open(self, open_stream):
+        call = open_stream()
+        with self._lock:
+            if not self.stopped.is_set():
+                self._call = call
+                return call
+        if callable(cancel := getattr(call, "cancel", None)):
+            cancel()
+        return ()
+
+    def stop(self):
+        with self._lock:
+            self.stopped.set()
+            call, self._call = self._call, None
+        if callable(cancel := getattr(call, "cancel", None)):
+            cancel()
+
+
+def _monitor_responses(open_stream, monitor):
+    recovery = _RecoveryWindow(start=False)
+    while True:
+        if monitor.stopped.is_set():
+            return
+        try:
+            for response in monitor.open(open_stream):
+                if monitor.stopped.is_set():
+                    return
+                recovery.reset()
+                yield response
+        except Exception as error:
+            if monitor.stopped.is_set():
+                return
+            if not transient_error(error):
+                raise
+            print(f"Task monitor reconnecting after {error}")
+            if not recovery.wait():
+                raise
+            continue
+        if not recovery.wait():
+            raise TimeoutError("Task monitor recovery window expired")
+
+
+def monitor_task(context: FunctionContext, open_stream, gateway_stub, on_exit, monitor=None):
+    monitor = monitor or TaskMonitor()
+    try:
+        for response in _monitor_responses(open_stream, monitor):
+            if response.cancelled:
+                task_status, exit_code = TaskStatus.Cancelled, TaskExitCode.Cancelled
+            elif response.complete:
+                return
+            elif response.timed_out:
+                task_status, exit_code = TaskStatus.Timeout, TaskExitCode.Timeout
+            else:
+                continue
+            print(f"Task {task_status}: {context.task_id}")
+            send_callback(
+                gateway_stub=gateway_stub, context=context, payload={}, task_status=task_status
+            )
+            on_exit(exit_code)
+            return
+    except Exception:
+        if monitor.stopped.is_set():
+            return
+        on_exit(TaskExitCode.Error)
+        raise
+    finally:
+        monitor.stop()
 
 
 def send_task_callback(
