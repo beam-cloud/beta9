@@ -28,12 +28,25 @@ func TestGitImageIDKeysOnCommitNotTokenOrEnv(t *testing.T) {
 	assert.NotEqual(t, base, id(opts("0123456789abcdef0123456789abcdef01234567", "secret-a", "gunicorn app:app")), "the start command is baked in")
 }
 
+func TestGitImageIDKeysOnASentDockerfile(t *testing.T) {
+	src := types.GitSource{RepoURL: "https://github.com/acme/app", Commit: "0123456789abcdef0123456789abcdef01234567", WorkingDir: "web", BuildCommand: "npm run build"}
+	id := func(src types.GitSource) string {
+		id, err := getImageID(&BuildOpts{ClipVersion: 2, GitSource: &src})
+		require.NoError(t, err)
+		return id
+	}
+	assert.Equal(t, "6b33384770717092", id(src), "builds without a Dockerfile keep the ids they had")
+	src.Dockerfile = "FROM node:24-slim"
+	assert.NotEqual(t, "6b33384770717092", id(src))
+}
+
 func TestGitSourceRequestHandling(t *testing.T) {
 	assert.Nil(t, gitSourceFromProto(&pb.GitBuildSource{}), "no repo, no source")
 
-	src := gitSourceFromProto(&pb.GitBuildSource{RepoUrl: " https://github.com/acme/app ", Ref: " main ", WorkingDir: "/services/api/", Token: "ghs_abc"})
+	src := gitSourceFromProto(&pb.GitBuildSource{RepoUrl: " https://github.com/acme/app ", Ref: " main ", WorkingDir: "/services/api/", Token: "ghs_abc", Dockerfile: "FROM node:24-slim"})
 	assert.Equal(t, "https://github.com/acme/app", src.RepoURL)
 	assert.Equal(t, "services/api", src.WorkingDir)
+	assert.Equal(t, "FROM node:24-slim", src.Dockerfile)
 	assert.Equal(t, "https://x-access-token:ghs_abc@github.com/acme/app", gitAuthURL(src))
 
 	err := resolveGitCommit(t.Context(), &types.GitSource{RepoURL: "git@github.com:acme/app.git"})

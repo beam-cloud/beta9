@@ -82,6 +82,7 @@ message GitBuildSource {
   string dockerfile_path = 5;
   string start_command = 6;
   string build_command = 7;
+  string dockerfile = 8; // built in the checkout ahead of dockerfile_path and the repository's own
 }
 
 message BuildImageResponse {

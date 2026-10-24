@@ -192,6 +192,7 @@ message GitSource {
   string dockerfile_path = 6;
   string start_command = 7;
   string build_command = 8;
+  string dockerfile = 9;
 }
 
 message Mount {

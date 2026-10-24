@@ -151,10 +151,15 @@ func gitRedact(s, token string) string {
 	return strings.ReplaceAll(s, token, "***")
 }
 
-// resolveGitDockerfile returns the Dockerfile to build, in the order Railway
-// resolves it: the path requested or set in railway.json, the repository's
-// own Dockerfile, else one rendered from the detected stack.
+// resolveGitDockerfile returns the Dockerfile to build: one sent with the
+// request, then in the order Railway resolves it: the path requested or set in
+// railway.json, the repository's own Dockerfile, else one rendered from the
+// detected stack.
 func resolveGitDockerfile(out *slog.Logger, contextDir string, src *types.GitSource) (string, error) {
+	if src.Dockerfile != "" {
+		out.Info("Building the Dockerfile sent with the request\n")
+		return src.Dockerfile, nil
+	}
 	cfg := readRailwayConfig(contextDir)
 
 	if path := firstNonEmpty(src.DockerfilePath, cfg.dockerfilePath); path != "" {

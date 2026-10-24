@@ -295,6 +295,7 @@ type GitSource struct {
 	DockerfilePath string `json:"dockerfile_path,omitempty"`
 	StartCommand   string `json:"start_command,omitempty"`
 	BuildCommand   string `json:"build_command,omitempty"`
+	Dockerfile     string `json:"dockerfile,omitempty"` // built in the checkout ahead of any Dockerfile in it
 }
 
 func (g *GitSource) ToProto() *pb.GitSource {
@@ -310,6 +311,7 @@ func (g *GitSource) ToProto() *pb.GitSource {
 		DockerfilePath: g.DockerfilePath,
 		StartCommand:   g.StartCommand,
 		BuildCommand:   g.BuildCommand,
+		Dockerfile:     g.Dockerfile,
 	}
 }
 
@@ -326,6 +328,7 @@ func NewGitSourceFromProto(in *pb.GitSource) *GitSource {
 		DockerfilePath: in.DockerfilePath,
 		StartCommand:   in.StartCommand,
 		BuildCommand:   in.BuildCommand,
+		Dockerfile:     in.Dockerfile,
 	}
 }
 

@@ -36,9 +36,13 @@ func TestResolveGitDockerfileFollowsRailwayOrder(t *testing.T) {
 		"Dockerfile.api":        "# api",
 		"railway.toml":          "[build]\ndockerfilePath = 'Dockerfile.api'\n\n[deploy]\nstartCommand = \"hypercorn main:app --bind \\\"[::]:$PORT\\\"\"\n",
 	})
-	text, err := resolve(dir, &types.GitSource{DockerfilePath: "docker/Dockerfile.web"})
+	text, err := resolve(dir, &types.GitSource{DockerfilePath: "docker/Dockerfile.web", Dockerfile: "# sent"})
 	require.NoError(t, err)
-	assert.Equal(t, "# web", text, "an explicit path wins")
+	assert.Equal(t, "# sent", text, "a Dockerfile sent with the request wins")
+
+	text, err = resolve(dir, &types.GitSource{DockerfilePath: "docker/Dockerfile.web"})
+	require.NoError(t, err)
+	assert.Equal(t, "# web", text, "then an explicit path")
 
 	text, err = resolve(dir, &types.GitSource{})
 	require.NoError(t, err)
@@ -111,7 +115,7 @@ func TestRenderDockerfileFromDetectedStack(t *testing.T) {
 	text, err = renderDockerfile(node, "", "")
 	require.NoError(t, err)
 	assert.Contains(t, text, "FROM node:18-slim\n")
-	assert.Contains(t, text, "RUN corepack enable && yarn install --frozen-lockfile\nRUN yarn run build\nENV NODE_ENV=production", "dev dependencies are present for the build")
+	assert.Contains(t, text, "RUN npm install -g corepack && corepack enable && yarn install --frozen-lockfile\nRUN yarn run build\nENV NODE_ENV=production", "dev dependencies are present for the build")
 	assert.Contains(t, text, `CMD ["sh", "-c", "yarn run start"]`)
 
 	goMod := writeFiles(t, map[string]string{"go.mod": "module example.com/v2\n\ngo 1.22\n", "main.go": ""})
