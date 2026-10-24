@@ -279,7 +279,6 @@ class AuthTokenInterceptor(
             "EndTask",
             "FunctionGetArgs",
             "FunctionSetResult",
-            "FunctionSetResult",
             "StopContainer",
             "StopTasks",
         )
