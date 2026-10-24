@@ -11,6 +11,8 @@ service WorkerRepositoryService {
       returns (PushContainerLifecycleEventsResponse) {}
   rpc GetWorkerMeteringConfig(GetWorkerMeteringConfigRequest)
       returns (GetWorkerMeteringConfigResponse) {}
+  rpc GetWorkerServiceProxyConfig(GetWorkerServiceProxyConfigRequest)
+      returns (GetWorkerServiceProxyConfigResponse) {}
   rpc StreamWorkerEvents(StreamWorkerEventsRequest)
       returns (stream WorkerEvent) {}
   rpc SetImagePullLock(SetImagePullLockRequest)
@@ -690,4 +692,18 @@ message GetWorkerMeteringConfigResponse {
   string error_msg = 2;
   // The control plane's metering configuration (types.MonitoringConfig.Metering) as JSON.
   string metering_json = 3;
+}
+
+message GetWorkerServiceProxyConfigRequest {
+  string worker_id = 1;
+}
+
+message GetWorkerServiceProxyConfigResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  // The gateway's TCP listener as the public reaches it.
+  string external_host = 3;
+  int32 external_port = 4;
+  // Whether its certificate is publicly trusted, so workers verify it.
+  bool verify_tls = 5;
 }

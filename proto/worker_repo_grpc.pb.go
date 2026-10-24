@@ -22,6 +22,7 @@ const (
 	WorkerRepositoryService_GetNextContainerRequest_FullMethodName          = "/WorkerRepositoryService/GetNextContainerRequest"
 	WorkerRepositoryService_PushContainerLifecycleEvents_FullMethodName     = "/WorkerRepositoryService/PushContainerLifecycleEvents"
 	WorkerRepositoryService_GetWorkerMeteringConfig_FullMethodName          = "/WorkerRepositoryService/GetWorkerMeteringConfig"
+	WorkerRepositoryService_GetWorkerServiceProxyConfig_FullMethodName      = "/WorkerRepositoryService/GetWorkerServiceProxyConfig"
 	WorkerRepositoryService_StreamWorkerEvents_FullMethodName               = "/WorkerRepositoryService/StreamWorkerEvents"
 	WorkerRepositoryService_SetImagePullLock_FullMethodName                 = "/WorkerRepositoryService/SetImagePullLock"
 	WorkerRepositoryService_RemoveImagePullLock_FullMethodName              = "/WorkerRepositoryService/RemoveImagePullLock"
@@ -73,6 +74,7 @@ type WorkerRepositoryServiceClient interface {
 	GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (WorkerRepositoryService_GetNextContainerRequestClient, error)
 	PushContainerLifecycleEvents(ctx context.Context, in *PushContainerLifecycleEventsRequest, opts ...grpc.CallOption) (*PushContainerLifecycleEventsResponse, error)
 	GetWorkerMeteringConfig(ctx context.Context, in *GetWorkerMeteringConfigRequest, opts ...grpc.CallOption) (*GetWorkerMeteringConfigResponse, error)
+	GetWorkerServiceProxyConfig(ctx context.Context, in *GetWorkerServiceProxyConfigRequest, opts ...grpc.CallOption) (*GetWorkerServiceProxyConfigResponse, error)
 	StreamWorkerEvents(ctx context.Context, in *StreamWorkerEventsRequest, opts ...grpc.CallOption) (WorkerRepositoryService_StreamWorkerEventsClient, error)
 	SetImagePullLock(ctx context.Context, in *SetImagePullLockRequest, opts ...grpc.CallOption) (*SetImagePullLockResponse, error)
 	RemoveImagePullLock(ctx context.Context, in *RemoveImagePullLockRequest, opts ...grpc.CallOption) (*RemoveImagePullLockResponse, error)
@@ -171,6 +173,15 @@ func (c *workerRepositoryServiceClient) PushContainerLifecycleEvents(ctx context
 func (c *workerRepositoryServiceClient) GetWorkerMeteringConfig(ctx context.Context, in *GetWorkerMeteringConfigRequest, opts ...grpc.CallOption) (*GetWorkerMeteringConfigResponse, error) {
 	out := new(GetWorkerMeteringConfigResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetWorkerMeteringConfig_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) GetWorkerServiceProxyConfig(ctx context.Context, in *GetWorkerServiceProxyConfigRequest, opts ...grpc.CallOption) (*GetWorkerServiceProxyConfigResponse, error) {
+	out := new(GetWorkerServiceProxyConfigResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetWorkerServiceProxyConfig_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -585,6 +596,7 @@ type WorkerRepositoryServiceServer interface {
 	GetNextContainerRequest(*GetNextContainerRequestRequest, WorkerRepositoryService_GetNextContainerRequestServer) error
 	PushContainerLifecycleEvents(context.Context, *PushContainerLifecycleEventsRequest) (*PushContainerLifecycleEventsResponse, error)
 	GetWorkerMeteringConfig(context.Context, *GetWorkerMeteringConfigRequest) (*GetWorkerMeteringConfigResponse, error)
+	GetWorkerServiceProxyConfig(context.Context, *GetWorkerServiceProxyConfigRequest) (*GetWorkerServiceProxyConfigResponse, error)
 	StreamWorkerEvents(*StreamWorkerEventsRequest, WorkerRepositoryService_StreamWorkerEventsServer) error
 	SetImagePullLock(context.Context, *SetImagePullLockRequest) (*SetImagePullLockResponse, error)
 	RemoveImagePullLock(context.Context, *RemoveImagePullLockRequest) (*RemoveImagePullLockResponse, error)
@@ -644,6 +656,9 @@ func (UnimplementedWorkerRepositoryServiceServer) PushContainerLifecycleEvents(c
 }
 func (UnimplementedWorkerRepositoryServiceServer) GetWorkerMeteringConfig(context.Context, *GetWorkerMeteringConfigRequest) (*GetWorkerMeteringConfigResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetWorkerMeteringConfig not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) GetWorkerServiceProxyConfig(context.Context, *GetWorkerServiceProxyConfigRequest) (*GetWorkerServiceProxyConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetWorkerServiceProxyConfig not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) StreamWorkerEvents(*StreamWorkerEventsRequest, WorkerRepositoryService_StreamWorkerEventsServer) error {
 	return status.Errorf(codes.Unimplemented, "method StreamWorkerEvents not implemented")
@@ -838,6 +853,24 @@ func _WorkerRepositoryService_GetWorkerMeteringConfig_Handler(srv interface{}, c
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerRepositoryServiceServer).GetWorkerMeteringConfig(ctx, req.(*GetWorkerMeteringConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_GetWorkerServiceProxyConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkerServiceProxyConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).GetWorkerServiceProxyConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_GetWorkerServiceProxyConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).GetWorkerServiceProxyConfig(ctx, req.(*GetWorkerServiceProxyConfigRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1615,6 +1648,10 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWorkerMeteringConfig",
 			Handler:    _WorkerRepositoryService_GetWorkerMeteringConfig_Handler,
+		},
+		{
+			MethodName: "GetWorkerServiceProxyConfig",
+			Handler:    _WorkerRepositoryService_GetWorkerServiceProxyConfig_Handler,
 		},
 		{
 			MethodName: "SetImagePullLock",

@@ -97,6 +97,34 @@ func TestGetWorkerMeteringConfigRequiresAssignedManagedSlot(t *testing.T) {
 	require.False(t, response.Ok)
 }
 
+func TestGetWorkerServiceProxyConfigNamesThePublicTCPListener(t *testing.T) {
+	request := &pb.GetWorkerServiceProxyConfigRequest{WorkerId: "worker-1"}
+	service := &WorkerRepositoryService{}
+	service.appConfig.Abstractions.Pod.TCP = types.PodTCPConfig{
+		Enabled: true, ExternalHost: "svc.beam.cloud", ExternalPort: 443, Port: 1995,
+		CertFile: "/etc/tls/tls.crt", ServiceProxyTarget: "beta9-gateway:1995",
+	}
+
+	response, err := service.GetWorkerServiceProxyConfig(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Equal(t, "svc.beam.cloud", response.ExternalHost)
+	require.EqualValues(t, 443, response.ExternalPort)
+	require.True(t, response.VerifyTls, "a gateway with its own certificate is verified")
+
+	service.appConfig.Abstractions.Pod.TCP.CertFile = ""
+	response, err = service.GetWorkerServiceProxyConfig(context.Background(), request)
+	require.NoError(t, err)
+	require.False(t, response.VerifyTls)
+
+	for _, host := range []string{"", "203.0.113.7"} {
+		service.appConfig.Abstractions.Pod.TCP.ExternalHost = host
+		response, err = service.GetWorkerServiceProxyConfig(context.Background(), request)
+		require.NoError(t, err)
+		require.False(t, response.Ok, "external host %q", host)
+	}
+}
+
 type claimWorkerRepo struct {
 	repository.WorkerRepository
 	claimErr error

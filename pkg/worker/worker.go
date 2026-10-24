@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // Import for side effects
 	"os"
@@ -566,6 +567,9 @@ func NewWorker() (_ *Worker, err error) {
 	if err := hydrateManagedWorkerMetering(ctx, workerId, &config, poolConfig, workerRepoClient); err != nil {
 		return nil, err
 	}
+	if err := hydrateAgentWorkerServiceProxy(ctx, workerId, &config, poolConfig, workerRepoClient); err != nil {
+		log.Warn().Err(err).Msg("service proxy keeps its default target; sibling hosts resolve over DNS")
+	}
 
 	ensureWritableSysfs()
 
@@ -833,6 +837,28 @@ func hydrateManagedWorkerMetering(ctx context.Context, workerID string, config *
 		return fmt.Errorf("load managed worker metering config: %w", err)
 	}
 	config.Monitoring.SetMetering(metering)
+	return nil
+}
+
+// hydrateAgentWorkerServiceProxy points an agent-hosted worker's service proxy
+// at the TCP gateway's public listener. Such workers boot with the in-cluster
+// default target, which they can't reach.
+func hydrateAgentWorkerServiceProxy(ctx context.Context, workerID string, config *types.AppConfig, pool types.WorkerPoolConfig, client pb.WorkerRepositoryServiceClient) error {
+	if !pool.AgentHosted() {
+		return nil
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, containerRequestAckTimeout)
+	defer cancel()
+	resp, err := handleGRPCResponse(client.GetWorkerServiceProxyConfig(requestCtx, &pb.GetWorkerServiceProxyConfigRequest{WorkerId: workerID}))
+	if err != nil {
+		return fmt.Errorf("load service proxy config: %w", err)
+	}
+	tcp := &config.Abstractions.Pod.TCP
+	tcp.Enabled = true
+	tcp.ExternalHost = resp.ExternalHost
+	tcp.ExternalPort = int(resp.ExternalPort)
+	tcp.ServiceProxyTarget = net.JoinHostPort(resp.ExternalHost, strconv.Itoa(int(resp.ExternalPort)))
+	tcp.ServiceProxyVerify = resp.VerifyTls
 	return nil
 }
 
