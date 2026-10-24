@@ -7,6 +7,7 @@ import (
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -217,6 +218,18 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 				log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting task running locks for container")
 				continue
 			} else if err == redis.Nil {
+				// Monitor leases can expire during a gateway restart. The task's
+				// claim still owns this container until completion or recovery.
+				owner, err := i.Rdb.Get(context.TODO(), common.RedisKeys.TaskClaim(i.Workspace.Name, i.Stub.ExternalId, taskId)).Result()
+				if err != nil && err != redis.Nil {
+					log.Error().Err(err).Msg("error getting task claim for container")
+					tasksRunning = true
+					break
+				}
+				if owner == container.ContainerId {
+					tasksRunning = true
+					break
+				}
 				// If the task lock key is missing (ttl'd or task completed), remove it from the index
 				// This is mostly a housekeeping step since in normal operation the task lock key will be removed
 				// when the task is completed

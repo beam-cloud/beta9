@@ -12,7 +12,7 @@ from typing import Any, List, NamedTuple, Type, Union
 
 import grpc
 
-from ..channel import Channel, with_runner_context
+from ..channel import Channel, retry_operation, with_runner_context
 from ..clients.gateway import GatewayServiceStub
 from ..clients.taskqueue import (
     TaskQueueCompleteRequest,
@@ -41,6 +41,24 @@ from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.1
 TASK_MANAGER_INTERVAL = 0.1
+
+
+def complete_task(
+    stub: TaskQueueServiceStub, request: TaskQueueCompleteRequest
+) -> TaskQueueCompleteResponse:
+    # RETRY schedules another execution and is not safe to replay after a lost
+    # reply. Terminal completion is idempotent at the gateway by task ID.
+    if request.task_status == TaskStatus.Retry:
+        return stub.task_queue_complete(request)
+
+    def attempt():
+        response = stub.task_queue_complete(request)
+        if not response.ok:
+            raise ConnectionError("Gateway has not persisted task completion")
+        return response
+
+    # Keep the original serialized result until a gateway acknowledges it.
+    return retry_operation(attempt, owner=request.container_id, timeout=None)
 
 
 class TaskQueueManager:
@@ -219,12 +237,10 @@ class TaskQueueWorker:
             or False if a exit event occurred (cancellation, completion, timeout,
             or a connection issue that caused us to kill the parent process)
             """
-            initial_backoff = 5
-            max_retries = 5
+            initial_backoff = 0.2
             backoff = initial_backoff
-            retry = 0
 
-            while retry <= max_retries:
+            while True:
                 try:
                     for response in taskqueue_stub.task_queue_monitor(
                         TaskQueueMonitorRequest(
@@ -259,7 +275,6 @@ class TaskQueueWorker:
                             )
                             os._exit(TaskExitCode.Timeout)
 
-                        retry = 0
                         backoff = initial_backoff
 
                     # Reaching here means that the stream ended with no errors,
@@ -271,14 +286,9 @@ class TaskQueueWorker:
                     grpc.RpcError,
                     ConnectionRefusedError,
                 ):
-                    if retry == max_retries:
-                        print("Lost connection to task monitor, exiting")
-                        os._exit(0)
-
-                    print(f"Lost connection to task monitor, retrying... {retry}")
+                    print("Lost connection to task monitor, reconnecting...")
                     time.sleep(backoff)
-                    backoff *= 2
-                    retry += 1
+                    backoff = min(backoff * 1.5, 2.0)
 
                 except BaseException:
                     print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
@@ -364,20 +374,18 @@ class TaskQueueWorker:
                         duration = time.time() - start_time
 
                         try:
-                            # TODO: add retries / the ability to recreate the channel dynamically if connection to gateway fails
-                            complete_task_response: TaskQueueCompleteResponse = (
-                                taskqueue_stub.task_queue_complete(
-                                    TaskQueueCompleteRequest(
-                                        task_id=task.id,
-                                        stub_id=config.stub_id,
-                                        task_duration=duration,
-                                        task_status=task_status,
-                                        container_id=config.container_id,
-                                        container_hostname=config.container_hostname,
-                                        keep_warm_seconds=config.keep_warm_seconds,
-                                        result=serialize_result(result) if result else None,
-                                    )
-                                )
+                            complete_task_response: TaskQueueCompleteResponse = complete_task(
+                                taskqueue_stub,
+                                TaskQueueCompleteRequest(
+                                    task_id=task.id,
+                                    stub_id=config.stub_id,
+                                    task_duration=duration,
+                                    task_status=task_status,
+                                    container_id=config.container_id,
+                                    container_hostname=config.container_hostname,
+                                    keep_warm_seconds=config.keep_warm_seconds,
+                                    result=serialize_result(result) if result else None,
+                                ),
                             )
                             if not complete_task_response.ok:
                                 raise RunnerException("Unable to end task")

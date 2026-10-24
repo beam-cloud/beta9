@@ -143,10 +143,11 @@ def test_retry_keeps_request_identity_and_releases_metadata(monkeypatch):
     assert request_metadata.get() == ()
 
 
-def test_retry_respects_explicit_deadline():
+@pytest.mark.parametrize("recovery_timeout", [120, None])
+def test_retry_respects_explicit_deadline(recovery_timeout):
     operation = Mock(side_effect=Unavailable())
     with rpc_timeout(0), pytest.raises(Unavailable):
-        retry_operation(operation)
+        retry_operation(operation, timeout=recovery_timeout)
     operation.assert_called_once()
 
 

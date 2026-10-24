@@ -146,3 +146,32 @@ func TestEndpointWorkerRolloutFinishesInflightRequestsAndFencesAdmission(t *test
 	require.NoError(t, err)
 	require.False(t, acquired, "STOPPING remains fenced after worker rollout cancellation")
 }
+
+func TestWorkerRolloutWaitsForClaimAfterGatewayLeaseExpires(t *testing.T) {
+	ctx := context.Background()
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	workers := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{Id: "worker", Status: types.WorkerStatusAvailable}
+	require.NoError(t, workers.AddWorker(worker))
+	container := &types.ContainerState{ContainerId: "container", WorkerId: worker.Id, StubId: "stub", Status: types.ContainerStatusRunning}
+	seedRunningContainer(t, rdb, worker.Id, container)
+	stub := &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub", Type: types.StubType(types.StubTypeTaskQueue), Config: `{"workers":1}`}, Workspace: types.Workspace{Name: "workspace"}}
+	_, err = workers.PrepareWorkerRollout(worker.Id, "next")
+	require.NoError(t, err)
+	tasks := NewTaskRedisRepository(rdb)
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub", "task", container.ContainerId))
+	index := common.RedisKeys.TaskQueueTaskRunningLockIndex("workspace", "stub", container.ContainerId)
+	require.NoError(t, rdb.SAdd(ctx, index, "task").Err())
+	// The ephemeral monitor lease is absent after a gateway restart.
+	ready, err := PrepareIdleWorkerRolloutContainer(ctx, rdb, worker.Id, "next", *container, stub)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.True(t, rdb.SIsMember(ctx, index, "task").Val())
+	// A claim owned by a different container must not block draining this one.
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub", "task", "replacement"))
+	ready, err = PrepareIdleWorkerRolloutContainer(ctx, rdb, worker.Id, "next", *container, stub)
+	require.NoError(t, err)
+	require.True(t, ready)
+}

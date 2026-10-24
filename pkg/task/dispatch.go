@@ -118,9 +118,6 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 }
 
 func (d *Dispatcher) StoreTaskResult(ctx context.Context, workspace *types.Workspace, taskId string, result []byte) error {
-	// Reserve time for the database update even if object storage stalls.
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
 	var err error
 	var storageClient *clients.WorkspaceStorageClient
 

@@ -62,11 +62,21 @@ func (t *TaskQueueTask) Retry(ctx context.Context) error {
 
 func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
 	res, err := t.tq.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)).Result()
-	if err != nil {
-		return false, err
+	if err != nil || res > 0 {
+		return res > 0, err
 	}
 
-	return res > 0, nil
+	// A missing gateway monitor is not evidence that user code stopped. Match
+	// function recovery: only retry a running task after its container is gone.
+	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
+	if err != nil || task.Status != types.TaskStatusRunning {
+		return false, err
+	}
+	container, err := t.tq.containerRepo.GetContainerState(task.ContainerId)
+	if (&types.ErrContainerStateNotFound{}).From(err) {
+		return false, nil
+	}
+	return container != nil && container.Status == types.ContainerStatusRunning, err
 }
 
 func (t *TaskQueueTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {

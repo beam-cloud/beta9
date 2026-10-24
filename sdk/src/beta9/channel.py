@@ -66,12 +66,15 @@ class _RecoveryWindow:
     def wait(self):
         if self.started is None:
             self.started = time.monotonic()
-        remaining = self.timeout - (time.monotonic() - self.started)
+        remaining = (
+            self.timeout - (time.monotonic() - self.started) if self.timeout is not None else None
+        )
         if (deadline := _deadline.get()) is not None:
-            remaining = min(remaining, deadline - time.monotonic())
-        if remaining <= 0:
+            until_deadline = deadline - time.monotonic()
+            remaining = min(remaining, until_deadline) if remaining is not None else until_deadline
+        if remaining is not None and remaining <= 0:
             return False
-        time.sleep(min(self.delay, remaining))
+        time.sleep(min(self.delay, remaining) if remaining is not None else self.delay)
         self.delay = min(self.delay * 1.5, 2.0)
         return True
 

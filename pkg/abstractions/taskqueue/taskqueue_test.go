@@ -119,6 +119,56 @@ func TestTaskQueueCompletionRecoversFailedCleanupWithoutReexecuting(t *testing.T
 	}
 }
 
+func TestGatewayRestartDoesNotReleaseClaimedContainer(t *testing.T) {
+	ctx := context.Background()
+	redisServer := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{redisServer.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	tasks := repository.NewTaskRedisRepository(rdb)
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub", "task", "container"))
+	lease := Keys.taskQueueTaskRunningLock("workspace", "stub", "container", "task")
+	index := Keys.taskQueueTaskRunningLockIndex("workspace", "stub", "container")
+	require.NoError(t, rdb.SAdd(ctx, index, "task").Err())
+	require.NoError(t, rdb.Set(ctx, lease, 1, 5*time.Second).Err())
+	require.NoError(t, rdb.Set(ctx, Keys.taskQueueTaskHeartbeat("workspace", "stub", "task"), 1, time.Minute).Err())
+	// No gateway remains to renew either key. Ownership must survive their TTLs.
+	redisServer.FastForward(2 * time.Minute)
+	instance := &taskQueueInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Rdb: rdb, Workspace: &types.Workspace{Name: "workspace"}, IsActive: true, ContainerRepo: completionContainerRepository{},
+		Stub: &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub", Type: types.StubType(types.StubTypeTaskQueueDeployment)}},
+	}}
+	stoppable, err := instance.stoppableContainers()
+	require.NoError(t, err)
+	require.Empty(t, stoppable)
+	require.True(t, rdb.SIsMember(ctx, index, "task").Val(), "the task must stay indexed across a gateway restart")
+
+	for _, state := range []types.ContainerStatus{types.ContainerStatusRunning, types.ContainerStatusStopping} {
+		job := &TaskQueueTask{msg: &types.TaskMessage{WorkspaceName: "workspace", StubId: "stub", TaskId: "task"}, tq: &RedisTaskQueue{
+			rdb: rdb, backendRepo: &completionLifecycleBackend{current: types.Task{Status: types.TaskStatusRunning, ContainerId: "container"}},
+			containerRepo: completionHeartbeatContainer{status: state},
+		}}
+		alive, err := job.HeartBeat(ctx)
+		require.NoError(t, err)
+		require.Equal(t, state == types.ContainerStatusRunning, alive, "a live runner must not be retried because its gateway restarted")
+	}
+	// Ownership moved to another container (or was released). The old container
+	// must not stay pinned by the stale task index.
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub", "task", "replacement"))
+	stoppable, err = instance.stoppableContainers()
+	require.NoError(t, err)
+	require.Equal(t, []string{"container"}, stoppable)
+}
+
+type completionHeartbeatContainer struct {
+	repository.ContainerRepository
+	status types.ContainerStatus
+}
+
+func (c completionHeartbeatContainer) GetContainerState(string) (*types.ContainerState, error) {
+	return &types.ContainerState{ContainerId: "container", Status: c.status}, nil
+}
+
 func TestTaskQueueCompletionPersistsBeforeMonitorAllowsScaleDown(t *testing.T) {
 	for _, disconnect := range []string{"connected", "monitor", "completion", "both"} {
 		t.Run(disconnect, func(t *testing.T) {

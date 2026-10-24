@@ -7,10 +7,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// FinalizationContext gives accepted completion work its own bounded lifetime.
+// FinalizationContext gives accepted completion work its own lifetime.
 // Losing the runner's connection must not interrupt durable task finalization.
 func FinalizationContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	return context.WithCancel(context.WithoutCancel(ctx))
 }
 
 // KeepFinalizationAlive transfers heartbeat ownership to the accepted request.
