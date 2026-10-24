@@ -30,7 +30,7 @@ from ...channel import (
 from ...clients.image import ImageServiceStub
 from ...clients.pod import PodSandboxConnectRequest, PodServiceStub
 from ...clients.volume import VolumeServiceStub
-from ...config import ConfigContext, get_config_context, get_settings
+from ...config import DEFAULT_CONTEXT_NAME, ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
 from ...terminal import cli_name
 from ...type import DurableDisk
@@ -204,7 +204,9 @@ class VM:
         context: Optional[Union[ConfigContext, str]] = None,
         _service: Optional[ServiceClient] = None,
     ):
-        config = get_config_context(context) if isinstance(context, str) else context
+        config = context
+        if _service is None and (context is None or isinstance(context, str)):
+            config = get_config_context(context or DEFAULT_CONTEXT_NAME)
         self._owns_service = _service is None
         self._service = _service or ServiceClient(config)
         self.name = name
