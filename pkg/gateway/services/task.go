@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -145,11 +146,22 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		return &pb.EndTaskResponse{Ok: false}, nil
 	}
 
+	ctx, cancel := taskmetrics.FinalizationContext(ctx)
+	defer cancel()
+	if task.Stub.Type.Kind() == types.StubTypeFunction {
+		stopHeartbeat, err := taskmetrics.KeepFinalizationAlive(ctx, in.TaskId, func(ctx context.Context) error {
+			return gws.redisClient.SetEx(ctx, function.Keys.FunctionHeartbeat(task.Workspace.Name, in.TaskId), 1, time.Minute).Err()
+		})
+		if err != nil {
+			return &pb.EndTaskResponse{Ok: false}, nil
+		}
+		defer stopHeartbeat()
+	}
+
 	requestedStatus := types.TaskStatus(in.TaskStatus)
 	if task.Status.IsCompleted() && !(requestedStatus == types.TaskStatusComplete && task.Status != types.TaskStatusComplete) {
-		return &pb.EndTaskResponse{
-			Ok: true,
-		}, nil
+		err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
+		return &pb.EndTaskResponse{Ok: err == nil}, nil
 	}
 
 	endedAt := time.Now()
@@ -175,23 +187,21 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 
 	// Store task result in persistent storage
 	if in.Result != nil && workspace.StorageAvailable() {
-		err = gws.taskDispatcher.StoreTaskResult(workspace, task.ExternalId, in.Result)
+		err = gws.taskDispatcher.StoreTaskResult(ctx, workspace, task.ExternalId, in.Result)
 		if err != nil {
 			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
 		}
 	}
 
-	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
-	if err != nil {
-		return &pb.EndTaskResponse{
-			Ok: false,
-		}, nil
-	}
-
 	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
-	if err == nil && gws.eventRepo != nil {
+	if err != nil {
+		log.Error().Err(err).Str("task_id", in.TaskId).Msg("failed to persist task completion; dispatcher state retained")
+		return &pb.EndTaskResponse{Ok: false}, nil
+	}
+	if gws.eventRepo != nil {
 		gws.eventRepo.PushTaskEndPersisted(task)
 	}
+	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
 	return &pb.EndTaskResponse{
 		Ok: err == nil,
 	}, nil

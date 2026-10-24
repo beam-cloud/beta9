@@ -9,9 +9,38 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	taskdispatcher "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+type completedRetryBackend struct{ repository.BackendRepository }
+
+func (completedRetryBackend) GetTaskWithRelated(context.Context, string) (*types.TaskWithRelated, error) {
+	return &types.TaskWithRelated{Task: types.Task{ExternalId: "task", Status: types.TaskStatusComplete}}, nil
+}
+
+func TestRetryCleansUpCompletedFunctionWithoutReexecuting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	tasks := repository.NewTaskRedisRepository(rdb)
+	require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub", "task", []byte(`{"task_id":"task"}`)))
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub", "task", "container"))
+	dispatcher, err := taskdispatcher.NewDispatcher(ctx, tasks)
+	require.NoError(t, err)
+	function := &FunctionTask{
+		msg: &types.TaskMessage{TaskId: "task", WorkspaceName: "workspace", StubId: "stub"},
+		fs:  &ContainerFunctionService{backendRepo: completedRetryBackend{}, taskDispatcher: dispatcher},
+	}
+	// No scheduler or stub lookup is configured: user code must never run again.
+	require.NoError(t, function.Retry(ctx))
+	inFlight, err := tasks.TasksInFlight(ctx, "workspace", "stub")
+	require.NoError(t, err)
+	require.Zero(t, inFlight)
+}
 
 type heartbeatBackend struct {
 	repository.BackendRepository

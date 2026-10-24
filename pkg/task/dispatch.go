@@ -117,7 +117,10 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 	return task, nil
 }
 
-func (d *Dispatcher) StoreTaskResult(workspace *types.Workspace, taskId string, result []byte) error {
+func (d *Dispatcher) StoreTaskResult(ctx context.Context, workspace *types.Workspace, taskId string, result []byte) error {
+	// Reserve time for the database update even if object storage stalls.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	var err error
 	var storageClient *clients.WorkspaceStorageClient
 
@@ -125,7 +128,7 @@ func (d *Dispatcher) StoreTaskResult(workspace *types.Workspace, taskId string, 
 		if cachedStorageClient, ok := d.storageClientCache.Load(workspace.Name); ok {
 			storageClient = cachedStorageClient.(*clients.WorkspaceStorageClient)
 		} else {
-			storageClient, err = clients.NewWorkspaceStorageClient(d.ctx, workspace.Name, workspace.Storage)
+			storageClient, err = clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 			if err != nil {
 				return err
 			}
@@ -134,7 +137,7 @@ func (d *Dispatcher) StoreTaskResult(workspace *types.Workspace, taskId string, 
 		}
 
 		fullPath := GetTaskResultPath(taskId)
-		err = storageClient.Upload(context.Background(), fullPath, result)
+		err = storageClient.Upload(ctx, fullPath, result)
 		if err != nil {
 			return err
 		}

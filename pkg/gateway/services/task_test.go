@@ -27,12 +27,16 @@ func (r *taskLifecycleBackendRepo) GetTaskWithRelated(ctx context.Context, exter
 	if r.task == nil || r.task.ExternalId != externalID {
 		return nil, nil
 	}
-	return r.task, nil
+	task := *r.task
+	return &task, nil
 }
 
 func (r *taskLifecycleBackendRepo) UpdateTask(ctx context.Context, externalID string, updatedTask types.Task) (*types.Task, error) {
 	if r.update != nil {
 		r.update()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if r.err != nil {
 		return nil, r.err
@@ -163,6 +167,95 @@ func TestEndTaskAllowsRestrictedRuntimeToken(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, claimed)
 	require.Equal(t, types.TaskStatusComplete, task.Status)
+}
+
+func TestEndTaskPersistsAfterClientDisconnect(t *testing.T) {
+	gws, tasks := newTaskLifecycleGateway(t, "workspace-id")
+	ctx, cancel := context.WithCancel(restrictedTaskLifecycleContext("workspace-id"))
+	defer cancel()
+	backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+	backend.task.Status = types.TaskStatusRunning
+	backend.task.Stub.Type = types.StubType(types.StubTypeFunction)
+	require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub-id", "task-id", []byte(`{"task_id":"task-id"}`)))
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub-id", "task-id", "container-id"))
+	backend.update = func() {
+		cancel()
+		claimed, err := tasks.IsClaimed(context.Background(), "workspace", "stub-id", "task-id")
+		require.NoError(t, err)
+		require.True(t, claimed, "the final database write must still own the claim")
+	}
+	response, err := gws.EndTask(ctx, &pb.EndTaskRequest{TaskId: "task-id", TaskStatus: string(types.TaskStatusComplete)})
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Equal(t, types.TaskStatusComplete, backend.task.Status)
+	inFlight, err := tasks.TasksInFlight(context.Background(), "workspace", "stub-id")
+	require.NoError(t, err)
+	require.Zero(t, inFlight)
+}
+
+func TestEndTaskRetainsRecoveryStateOnDatabaseFailure(t *testing.T) {
+	gws, tasks := newTaskLifecycleGateway(t, "workspace-id")
+	ctx := restrictedTaskLifecycleContext("workspace-id")
+	backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+	backend.task.Status = types.TaskStatusRunning
+	backend.err = errors.New("database unavailable")
+	require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub-id", "task-id", []byte(`{"task_id":"task-id"}`)))
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub-id", "task-id", "container-id"))
+	response, err := gws.EndTask(ctx, &pb.EndTaskRequest{TaskId: "task-id", TaskStatus: string(types.TaskStatusComplete)})
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Equal(t, types.TaskStatusRunning, backend.task.Status)
+	claimed, err := tasks.IsClaimed(ctx, "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	inFlight, err := tasks.TasksInFlight(ctx, "workspace", "stub-id")
+	require.NoError(t, err)
+	require.Equal(t, 1, inFlight)
+}
+
+type completionCleanupRepository struct {
+	repository.TaskRepository
+	err error
+}
+
+func (r *completionCleanupRepository) DeleteTaskState(ctx context.Context, workspace, stub, taskID string) error {
+	if r.err != nil {
+		return r.err
+	}
+	return r.TaskRepository.DeleteTaskState(ctx, workspace, stub, taskID)
+}
+
+func TestEndTaskReplayRecoversFailedCleanup(t *testing.T) {
+	gws, tasks := newTaskLifecycleGateway(t, "workspace-id")
+	ctx, cancel := context.WithCancel(restrictedTaskLifecycleContext("workspace-id"))
+	defer cancel()
+	cleanup := &completionCleanupRepository{TaskRepository: tasks, err: errors.New("Redis cleanup unavailable")}
+	dispatcher, err := taskdispatcher.NewDispatcher(ctx, cleanup)
+	require.NoError(t, err)
+	gws.taskDispatcher = dispatcher
+	backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+	backend.task.Status = types.TaskStatusRunning
+	require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub-id", "task-id", []byte(`{"task_id":"task-id"}`)))
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub-id", "task-id", "container-id"))
+	request := &pb.EndTaskRequest{TaskId: "task-id", TaskStatus: string(types.TaskStatusComplete)}
+	response, err := gws.EndTask(ctx, request)
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Equal(t, types.TaskStatusComplete, backend.task.Status)
+	persisted := backend.task.Task
+	claimed, err := tasks.IsClaimed(ctx, "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	cleanup.err = nil
+	response, err = gws.EndTask(ctx, request)
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Equal(t, persisted, backend.task.Task)
+	require.Len(t, backend.updates, 1)
+	inFlight, err := tasks.TasksInFlight(ctx, "workspace", "stub-id")
+	require.NoError(t, err)
+	require.Zero(t, inFlight)
 }
 
 func newTaskLifecycleGateway(t *testing.T, workspaceID string) (*GatewayService, repository.TaskRepository) {

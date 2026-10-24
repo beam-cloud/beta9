@@ -73,14 +73,18 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 }
 
 func (t *FunctionTask) Retry(ctx context.Context) error {
-	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
+	taskId := t.msg.TaskId
+
+	task, err := t.fs.backendRepo.GetTaskWithRelated(ctx, taskId)
 	if err != nil {
 		return err
 	}
 
-	taskId := t.msg.TaskId
+	if task.Status.IsCompleted() {
+		return t.fs.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, taskId)
+	}
 
-	task, err := t.fs.backendRepo.GetTaskWithRelated(ctx, taskId)
+	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
 	if err != nil {
 		return err
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
-	"github.com/beam-cloud/beta9/pkg/task"
+	taskdispatcher "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
@@ -41,7 +41,7 @@ type TaskQueueServiceOpts struct {
 	Scheduler        *scheduler.Scheduler
 	Tailscale        *network.Tailscale
 	RouteGroup       *echo.Group
-	TaskDispatcher   *task.Dispatcher
+	TaskDispatcher   *taskdispatcher.Dispatcher
 	EventRepo        repository.EventRepository
 	UsageMetricsRepo repository.UsageMetricsRepository
 }
@@ -59,7 +59,7 @@ type RedisTaskQueue struct {
 	config          types.AppConfig
 	rdb             *common.RedisClient
 	stubConfigCache *common.SafeMap[*types.StubConfigV1]
-	taskDispatcher  *task.Dispatcher
+	taskDispatcher  *taskdispatcher.Dispatcher
 	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
 	workspaceRepo   repository.WorkspaceRepository
@@ -324,9 +324,18 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
+	ctx, cancel := taskdispatcher.FinalizationContext(ctx)
+	defer cancel()
+
+	stopHeartbeat, err := tq.keepCompletionAlive(ctx, authInfo.Workspace.Name, in)
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{Ok: false}, nil
+	}
+
 	if in.KeepWarmSeconds > 0 {
 		err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
 		if err != nil {
+			stopHeartbeat()
 			return &pb.TaskQueueCompleteResponse{
 				Ok: false,
 			}, nil
@@ -338,6 +347,9 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	// its last lease disappears.
 	finalized := false
 	defer func() {
+		// Stop and join the renewer before deleting leases, so it cannot
+		// recreate a lease after successful finalization.
+		stopHeartbeat()
 		if !finalized {
 			return
 		}
@@ -348,6 +360,14 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		pipe.Del(cleanupCtx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId))
 		_, _ = pipe.Exec(cleanupCtx)
 	}()
+
+	// A retry after a lost reply must finish cleanup without overwriting the
+	// already persisted outcome or uploading the result again.
+	if task.Status.IsCompleted() {
+		err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
+		finalized = err == nil
+		return &pb.TaskQueueCompleteResponse{Ok: finalized}, nil
+	}
 
 	err = tq.rdb.RPush(ctx, Keys.taskQueueTaskDuration(authInfo.Workspace.Name, in.StubId), in.TaskDuration).Err()
 	if err != nil {
@@ -368,7 +388,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	workspace := authInfo.Workspace
 
 	if in.Result != nil && workspace.StorageAvailable() {
-		err = tq.taskDispatcher.StoreTaskResult(workspace, task.ExternalId, in.Result)
+		err = tq.taskDispatcher.StoreTaskResult(ctx, workspace, task.ExternalId, in.Result)
 		if err != nil {
 			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
 		}
@@ -376,6 +396,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	if err != nil {
+		log.Error().Err(err).Str("task_id", in.TaskId).Str("container_id", in.ContainerId).Msg("failed to persist task queue completion; dispatcher state retained")
 		return &pb.TaskQueueCompleteResponse{Ok: false}, nil
 	}
 
@@ -387,6 +408,21 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	return &pb.TaskQueueCompleteResponse{
 		Ok: err == nil,
 	}, nil
+}
+
+// Completion, rather than the observational monitor stream, owns these leases
+// until its database write finishes. A disconnected monitor must not enable
+// scale-down or dispatcher retries while the gateway is persisting the result.
+func (tq *RedisTaskQueue) keepCompletionAlive(ctx context.Context, workspace string, in *pb.TaskQueueCompleteRequest) (func(), error) {
+	refresh := func(ctx context.Context) error {
+		pipe := tq.rdb.TxPipeline()
+		pipe.SetEx(ctx, Keys.taskQueueTaskHeartbeat(workspace, in.StubId, in.TaskId), 1, time.Minute)
+		pipe.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspace, in.StubId, in.ContainerId, in.TaskId), 1, 5*time.Second)
+		pipe.SAdd(ctx, Keys.taskQueueTaskRunningLockIndex(workspace, in.StubId, in.ContainerId), in.TaskId)
+		_, err := pipe.Exec(ctx)
+		return err
+	}
+	return taskdispatcher.KeepFinalizationAlive(ctx, in.TaskId, refresh)
 }
 
 func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {

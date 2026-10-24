@@ -36,12 +36,17 @@ func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) err
 }
 
 func (t *TaskQueueTask) Retry(ctx context.Context) error {
-	_, err := t.tq.getOrCreateQueueInstance(t.msg.StubId)
+	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
 	if err != nil {
 		return err
 	}
 
-	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
+	// A completion whose Redis cleanup failed must not execute user code again.
+	if task.Status.IsCompleted() {
+		return t.tq.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
+	}
+
+	_, err = t.tq.getOrCreateQueueInstance(t.msg.StubId)
 	if err != nil {
 		return err
 	}
