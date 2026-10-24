@@ -93,6 +93,7 @@ class GitBuildSource(betterproto.Message):
     dockerfile_path: str = betterproto.string_field(5)
     start_command: str = betterproto.string_field(6)
     build_command: str = betterproto.string_field(7)
+    dockerfile: str = betterproto.string_field(8)
 
 
 @dataclass(eq=False, repr=False)

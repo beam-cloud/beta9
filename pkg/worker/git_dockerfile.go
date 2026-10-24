@@ -133,10 +133,11 @@ func nodeDockerfile(dir, start, build string) (string, error) {
 	}
 	pm, install := "npm", "npm install"
 	switch {
+	// Node 25 and later no longer ship corepack.
 	case fileExists(filepath.Join(dir, "pnpm-lock.yaml")):
-		pm, install = "pnpm", "corepack enable && pnpm install --frozen-lockfile"
+		pm, install = "pnpm", "npm install -g corepack && corepack enable && pnpm install --frozen-lockfile"
 	case fileExists(filepath.Join(dir, "yarn.lock")):
-		pm, install = "yarn", "corepack enable && yarn install --frozen-lockfile"
+		pm, install = "yarn", "npm install -g corepack && corepack enable && yarn install --frozen-lockfile"
 	case fileExists(filepath.Join(dir, "package-lock.json")):
 		install = "npm ci"
 	}

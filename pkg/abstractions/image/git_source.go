@@ -30,6 +30,7 @@ func gitSourceFromProto(in *pb.GitBuildSource) *types.GitSource {
 		DockerfilePath: strings.TrimSpace(in.DockerfilePath),
 		StartCommand:   in.StartCommand,
 		BuildCommand:   in.BuildCommand,
+		Dockerfile:     in.Dockerfile,
 	}
 }
 
@@ -110,6 +111,16 @@ func gitImageID(opts *BuildOpts) (string, error) {
 	}, hashstructure.FormatV2, nil)
 	if err != nil {
 		return "", err
+	}
+	if opts.GitSource.Dockerfile != "" {
+		// Hashed on top, so builds without one keep the ids they had.
+		hash, err = hashstructure.Hash(struct {
+			Build      uint64
+			Dockerfile string
+		}{hash, opts.GitSource.Dockerfile}, hashstructure.FormatV2, nil)
+		if err != nil {
+			return "", err
+		}
 	}
 	return fmt.Sprintf("%016x", hash), nil
 }

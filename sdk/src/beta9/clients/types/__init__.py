@@ -210,6 +210,7 @@ class GitSource(betterproto.Message):
     dockerfile_path: str = betterproto.string_field(6)
     start_command: str = betterproto.string_field(7)
     build_command: str = betterproto.string_field(8)
+    dockerfile: str = betterproto.string_field(9)
 
 
 @dataclass(eq=False, repr=False)
