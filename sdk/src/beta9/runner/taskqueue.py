@@ -8,7 +8,7 @@ import traceback
 from concurrent import futures
 from multiprocessing import Event, Process, Value, set_start_method
 from multiprocessing.synchronize import Event as TEvent
-from typing import Any, List, NamedTuple, Type, Union
+from typing import Any, List, NamedTuple, Optional, Type, Union
 
 import grpc
 
@@ -221,13 +221,14 @@ class TaskQueueWorker:
         task: Task,
         taskqueue_stub: TaskQueueServiceStub,
         gateway_stub: GatewayServiceStub,
-        monitor=None,
+        monitor: Optional[TaskMonitor] = None,
     ) -> None:
         request = TaskQueueMonitorRequest(
             task_id=task.id, stub_id=stub_id, container_id=container_id
         )
 
         def open_stream():
+            # The generated iterator hides the RPC's cancel method.
             unary_stream = getattr(taskqueue_stub, "_unary_stream", None)
             if callable(unary_stream):
                 return unary_stream(
@@ -308,9 +309,7 @@ class TaskQueueWorker:
                             task_status = TaskStatus.Retry
 
                     finally:
-                        # Future.cancel() cannot stop a running thread. Cancel
-                        # the RPC before retrying so its old timeout cannot
-                        # terminate the next execution in this container.
+                        # Cancel this attempt's RPC before a retry gets a new timeout.
                         monitor.stop()
                         duration = time.time() - start_time
 

@@ -71,9 +71,10 @@ type TaskMessage struct {
 	Kwargs        map[string]interface{} `json:"kwargs" redis:"kwargs"`
 	Policy        TaskPolicy             `json:"policy" redis:"policy"`
 	Retries       uint                   `json:"retries" redis:"retries"`
-	RetryPending  bool                   `json:"retry_pending,omitempty" redis:"retry_pending"`
-	RetryID       string                 `json:"retry_id,omitempty" redis:"retry_id"`
-	Timestamp     int64                  `json:"timestamp" redis:"timestamp"`
+	// RetryPending and RetryID persist a dispatch intent across gateway restarts.
+	RetryPending bool   `json:"retry_pending,omitempty" redis:"retry_pending"`
+	RetryID      string `json:"retry_id,omitempty" redis:"retry_id"`
+	Timestamp    int64  `json:"timestamp" redis:"timestamp"`
 }
 
 func (tm *TaskMessage) Reset() {

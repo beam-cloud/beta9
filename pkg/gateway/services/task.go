@@ -182,10 +182,6 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	task.EndedAt = types.NullTime{Time: endedAt, Valid: true}
 	task.Status = requestedStatus
 
-	if in.ContainerId != "" {
-		task.ContainerId = in.ContainerId
-	}
-
 	phaseMetrics := taskmetrics.NewPhaseMetrics(gws.redisClient)
 	phaseLabels := taskmetrics.FunctionPhaseLabelsFromTask(task)
 	if task.Status != types.TaskStatusComplete {

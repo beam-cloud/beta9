@@ -15,8 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Completion failures use explicit status codes: permanent rejection must never
-// enter the SDK's transport recovery loop.
+// CompletionError distinguishes permanent rejection from retryable persistence errors.
 func CompletionError(err error) error {
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, redis.Nil) {
 		return status.Error(codes.NotFound, "task no longer exists")
@@ -30,6 +29,7 @@ func CompletionError(err error) error {
 	return status.Error(codes.Unavailable, "task persistence is unavailable")
 }
 
+// CompletionContext lets an accepted completion outlive its client, within policy.
 func CompletionContext(ctx context.Context, policy types.TaskCompletionConfig) (context.Context, context.CancelFunc, error) {
 	if policy.Timeout <= 0 || policy.ResultUploadTimeout <= 0 || policy.ResultUploadTimeout >= policy.Timeout {
 		return nil, nil, status.Error(codes.Internal, "invalid task completion configuration")
@@ -51,8 +51,7 @@ redis.call("SADD", KEYS[4], ARGV[3])
 return tonumber(deadline)
 `)
 
-// The first accepted completion fixes the deadline for this execution. Replays
-// and replacement gateways cannot extend it; a new task claim resets it.
+// BeginCompletion fixes the execution's deadline across replays and gateway restarts.
 func BeginCompletion(ctx context.Context, rdb *common.RedisClient, meta types.TaskMetadata, budget time.Duration) (context.Context, context.CancelFunc, error) {
 	finishBy := time.Now().Add(budget)
 	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(finishBy) {
@@ -90,8 +89,7 @@ redis.call("DEL", KEYS[1], KEYS[2], KEYS[3])
 return 1
 `)
 
-// A deleted database row has no outcome left to recover. Only its current
-// owner may clear the orphaned dispatcher entry, without renewing any lease.
+// ForgetDeletedTask clears orphaned recovery state only for its current owner.
 func ForgetDeletedTask(ctx context.Context, rdb *common.RedisClient, meta types.TaskMetadata) error {
 	return forgetDeletedTaskScript.Run(ctx, rdb, []string{
 		common.RedisKeys.TaskClaim(meta.WorkspaceName, meta.StubId, meta.TaskId),
@@ -108,7 +106,10 @@ func CompletionExpired(ctx context.Context, rdb *common.RedisClient, meta types.
 	if err == redis.Nil {
 		return false, nil
 	}
-	return deadline <= time.Now().UnixMilli(), err
+	if err != nil {
+		return false, err
+	}
+	return deadline <= time.Now().UnixMilli(), nil
 }
 
 var renewTaskLivenessScript = redis.NewScript(`
@@ -130,8 +131,7 @@ end
 return 1
 `)
 
-// Ownership verification and renewal are atomic. Expired finalization cannot
-// keep either a task heartbeat or a container lease alive.
+// RenewTaskLiveness atomically verifies ownership and caps leases at the completion deadline.
 func RenewTaskLiveness(ctx context.Context, rdb *common.RedisClient, meta types.TaskMetadata, heartbeat, running, index string) error {
 	result, err := renewTaskLivenessScript.Run(ctx, rdb, []string{
 		common.RedisKeys.TaskClaim(meta.WorkspaceName, meta.StubId, meta.TaskId),
@@ -158,11 +158,13 @@ func ContainerIsRunning(containers repository.ContainerRepository, containerID s
 	if (&types.ErrContainerStateNotFound{}).From(err) {
 		return false, nil
 	}
-	return container != nil && container.Status == types.ContainerStatusRunning, err
+	if err != nil {
+		return false, err
+	}
+	return container != nil && container.Status == types.ContainerStatusRunning, nil
 }
 
-// KeepFinalizationAlive transfers heartbeat ownership to the accepted request.
-// The returned stop function joins the renewer so cleanup cannot race a refresh.
+// KeepFinalizationAlive renews leases until stopped. Its stop function joins the renewer.
 func KeepFinalizationAlive(ctx context.Context, taskID string, refresh func(context.Context) error) (context.Context, func(), error) {
 	if err := refresh(ctx); err != nil {
 		return nil, nil, err

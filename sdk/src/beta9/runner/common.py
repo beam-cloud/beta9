@@ -424,6 +424,8 @@ def end_task(gateway_stub: GatewayServiceStub, request: EndTaskRequest) -> EndTa
 
 
 class TaskMonitor:
+    """Cancel the active monitor RPC when its task attempt ends."""
+
     def __init__(self):
         self.stopped = threading.Event()
         self._lock = threading.Lock()
@@ -529,9 +531,7 @@ def end_task_and_send_callback(
     try:
         resp = end_task(gateway_stub, end_task_request)
     except Exception as exc:
-        # Callback delivery is independent of gateway task finalization. User
-        # code has already completed, so an ambiguous or transient EndTask
-        # failure must not silently suppress its callback.
+        # A completion failure must not suppress the user's callback.
         end_task_error = exc
         resp = None
 

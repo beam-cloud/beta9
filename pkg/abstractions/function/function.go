@@ -244,11 +244,7 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	}
 
 	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg}); err != nil {
-			return err
-		}
-
-		return nil
+		return stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg})
 	}
 
 	exitCallback := func(exitCode int32) error {
@@ -264,7 +260,7 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 		if fs.eventRepo != nil {
 			fs.eventRepo.PushFunctionResultLoaded(authInfo.Workspace.ExternalId, task, exitCode, len(result))
 		}
-		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
+		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: exitCode}); err != nil {
 			return err
 		}
 		if fs.eventRepo != nil {

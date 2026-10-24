@@ -62,13 +62,14 @@ func (r *TaskRedisRepository) ClaimTask(ctx context.Context, workspaceName, stub
 	}
 
 	ttl := time.Duration(types.MaxTaskTTL) * time.Second
-	if entryTTL := r.rdb.TTL(ctx, common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)).Val(); entryTTL > 0 {
+	if entryTTL := r.rdb.TTL(ctx, entryKey).Val(); entryTTL > 0 {
 		ttl = entryTTL
 	}
-	if err := claimTaskScript.Run(ctx, r.rdb, []string{claimKey, claimIndexKey,
+	if err := claimTaskScript.Run(ctx, r.rdb, []string{
+		claimKey, claimIndexKey,
 		common.RedisKeys.TaskCompletionDeadline(workspaceName, stubId, taskId),
 		common.RedisKeys.TaskCompletionIndex(workspaceName, stubId),
-		common.RedisKeys.TaskEntry(workspaceName, stubId, taskId),
+		entryKey,
 	}, containerId, ttl.Milliseconds(), taskId, string(previous), string(committed)).Err(); err != nil {
 		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
 	}
@@ -225,8 +226,7 @@ func (r *TaskRedisRepository) GetTasksInFlight(ctx context.Context) ([]*types.Ta
 }
 
 func (r *TaskRedisRepository) WithTaskRetryLease(ctx context.Context, workspaceName, stubId, taskId string, fn func(context.Context) error) error {
-	// Dispatch attempts must yield within a heartbeat window. A dead gateway
-	// relinquishes the renewable lease without delaying recovery for minutes.
+	// Bound each dispatch attempt while renewing its lease through slow calls.
 	ctx, cancel := context.WithTimeout(ctx, types.TaskHeartbeatTTL)
 	defer cancel()
 	return r.lock.WithLease(ctx, common.RedisKeys.TaskRetryLock(workspaceName, stubId, taskId), common.RedisLockOptions{

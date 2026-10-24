@@ -368,27 +368,24 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 	defer cancelWindow()
 	ctx, stopHeartbeat, err := taskdispatcher.KeepFinalizationAlive(ctx, in.TaskId, func(ctx context.Context) error {
-		return tq.refreshTaskLeases(ctx, meta.WorkspaceName, meta.StubId, meta.ContainerId, meta.TaskId)
+		return tq.refreshTaskLeases(ctx, meta)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Keep the task's admission lease until result persistence and the final
-	// task update finish. A worker rollout may stop this container as soon as
-	// its last lease disappears.
 	finalized := false
 	defer func() {
-		// Stop and join the renewer before deleting leases, so it cannot
-		// recreate a lease after successful finalization.
+		// Join the renewer before cleanup so it cannot recreate deleted leases.
 		stopHeartbeat()
 		if !finalized {
 			return
 		}
+		cleanupCtx := context.WithoutCancel(ctx)
 		pipe := tq.rdb.TxPipeline()
-		pipe.SRem(context.WithoutCancel(ctx), Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), in.TaskId)
-		pipe.Del(context.WithoutCancel(ctx), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId))
-		_, _ = pipe.Exec(context.WithoutCancel(ctx))
+		pipe.SRem(cleanupCtx, Keys.taskQueueTaskRunningLockIndex(meta.WorkspaceName, meta.StubId, meta.ContainerId), meta.TaskId)
+		pipe.Del(cleanupCtx, Keys.taskQueueTaskRunningLock(meta.WorkspaceName, meta.StubId, meta.ContainerId, meta.TaskId))
+		_, _ = pipe.Exec(cleanupCtx)
 	}()
 
 	if in.KeepWarmSeconds > 0 {
@@ -404,7 +401,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 
 	task.EndedAt = types.NullTime{}.Now()
-	task.Status = types.TaskStatus(in.TaskStatus)
+	task.Status = requested
 
 	if task.Status == types.TaskStatusRetry {
 		response := tq.retryTask(ctx, authInfo, in)
@@ -430,9 +427,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		return nil, taskdispatcher.CompletionError(err)
 	}
 
-	// Removing the claim tells the runner's monitor that the task is complete.
-	// Keep it alive through result storage and the database update so its
-	// container lease cannot expire while finalization is still in progress.
+	// Persist the outcome before releasing the claim and its container leases.
 	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
 	finalized = err == nil
 	if err != nil {
@@ -442,11 +437,11 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 }
 
 // Monitors and accepted completions renew the same task and container leases.
-func (tq *RedisTaskQueue) refreshTaskLeases(ctx context.Context, workspace, stubID, containerID, taskID string) error {
-	return taskdispatcher.RenewTaskLiveness(ctx, tq.rdb, types.TaskMetadata{WorkspaceName: workspace, StubId: stubID, ContainerId: containerID, TaskId: taskID},
-		Keys.taskQueueTaskHeartbeat(workspace, stubID, taskID),
-		Keys.taskQueueTaskRunningLock(workspace, stubID, containerID, taskID),
-		Keys.taskQueueTaskRunningLockIndex(workspace, stubID, containerID))
+func (tq *RedisTaskQueue) refreshTaskLeases(ctx context.Context, meta types.TaskMetadata) error {
+	return taskdispatcher.RenewTaskLiveness(ctx, tq.rdb, meta,
+		Keys.taskQueueTaskHeartbeat(meta.WorkspaceName, meta.StubId, meta.TaskId),
+		Keys.taskQueueTaskRunningLock(meta.WorkspaceName, meta.StubId, meta.ContainerId, meta.TaskId),
+		Keys.taskQueueTaskRunningLockIndex(meta.WorkspaceName, meta.StubId, meta.ContainerId))
 }
 
 func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {
@@ -585,7 +580,9 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return nil
 			}
 
-			err := tq.refreshTaskLeases(ctx, authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId)
+			err := tq.refreshTaskLeases(ctx, types.TaskMetadata{
+				WorkspaceName: authInfo.Workspace.Name, StubId: req.StubId, ContainerId: req.ContainerId, TaskId: task.ExternalId,
+			})
 			if err != nil {
 				claimed, checkErr := tq.taskRepo.IsClaimed(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 				if checkErr == nil && !claimed {
