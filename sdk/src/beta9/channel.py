@@ -172,6 +172,11 @@ class Channel(InterceptorChannel):
                 ("grpc.max_receive_message_length", GRPC_MAX_MESSAGE_SIZE),
                 ("grpc.max_send_message_length", GRPC_MAX_MESSAGE_SIZE),
             ]
+        options = list(options) + [
+            ("grpc.initial_reconnect_backoff_ms", int(RECOVERY_INITIAL_DELAY * 1000)),
+            ("grpc.min_reconnect_backoff_ms", int(RECOVERY_INITIAL_DELAY * 1000)),
+            ("grpc.max_reconnect_backoff_ms", int(RECOVERY_MAX_DELAY * 1000)),
+        ]
 
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials, options=options)
@@ -273,6 +278,7 @@ class AuthTokenInterceptor(
             "StartTask",
             "EndTask",
             "FunctionGetArgs",
+            "FunctionSetResult",
             "FunctionSetResult",
             "StopContainer",
             "StopTasks",

@@ -117,7 +117,9 @@ def test_direct_vm_transport_requires_api_for_another_gateway():
     with ServiceClient(ConfigContext(token="test-token", gateway_host="custom.example")) as service:
         assert service.vm_http is None
     with ServiceClient(
-        ConfigContext(token="test-token", gateway_host="custom.example", api_url="https://custom.example/")
+        ConfigContext(
+            token="test-token", gateway_host="custom.example", api_url="https://custom.example/"
+        )
     ) as service:
         assert service.vm_http.base_url == "https://custom.example"
         assert service.vm_http.workspace_id == "self"
@@ -419,3 +421,75 @@ def test_preparation_reads_reconnect_after_gateway_restart(monkeypatch, method):
     result = AuthTokenInterceptor().intercept_unary_unary(continuation, details, Mock())
     assert result is completed
     assert continuation.call_count == 2
+
+
+def test_function_retry_changes_container_and_resets_log_cursor(monkeypatch):
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    headers = []
+
+    def invoke(_request):
+        headers.append(dict(request_metadata.get()))
+        attempt = len(headers)
+        if attempt == 3:
+            yield FunctionInvokeResponse(task_id="task", done=True, result=b"result")
+            return
+        yield FunctionInvokeResponse(task_id="task", container_id=f"container-{attempt}")
+        yield FunctionInvokeResponse(task_id="task", output="first" if attempt == 1 else "second")
+        raise ConnectionError("gateway restarted")
+
+    responses = list(_Invocation(SimpleNamespace(function_invoke=invoke), FunctionInvokeRequest()))
+    assert headers[1]["x-beta9-container-id"] == "container-1"
+    assert headers[1]["x-beta9-log-offset"] == "5"
+    assert headers[2]["x-beta9-container-id"] == "container-2"
+    assert headers[2]["x-beta9-log-offset"] == "6"
+    assert "".join(response.output for response in responses) == "firstsecond"
+    assert responses[-1].result == b"result"
+
+
+def test_function_result_cache_replays_identical_payload_with_deadline(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from beta9.clients.function import (
+        FunctionServiceStub,
+        FunctionSetResultRequest,
+        FunctionSetResultResponse,
+    )
+
+    monkeypatch.setattr("beta9.channel.time.sleep", lambda _: None)
+    calls = []
+
+    def set_result(request, context):
+        calls.append((bytes(request), context.time_remaining()))
+        if len(calls) == 1:
+            context.abort(grpc.StatusCode.UNAVAILABLE, "gateway restarting")
+        return FunctionSetResultResponse(ok=True)
+
+    server = grpc.server(ThreadPoolExecutor(max_workers=2))
+    server.add_generic_rpc_handlers(
+        (
+            grpc.method_handlers_generic_handler(
+                "function.FunctionService",
+                {
+                    "FunctionSetResult": grpc.unary_unary_rpc_method_handler(
+                        set_result,
+                        request_deserializer=FunctionSetResultRequest().parse,
+                        response_serializer=bytes,
+                    )
+                },
+            ),
+        )
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    channel = Channel(f"127.0.0.1:{port}")
+    try:
+        request = FunctionSetResultRequest(
+            task_id="task", container_id="container", result=b"result"
+        )
+        with rpc_timeout(10):
+            assert FunctionServiceStub(channel).function_set_result(request).ok
+        assert len(calls) == 2
+        assert calls[0][0] == calls[1][0] == bytes(request)
+        assert all(0 < remaining <= 11 for _, remaining in calls)
+    finally:
+        channel.close()
+        server.stop(0).wait()

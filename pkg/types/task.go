@@ -71,6 +71,8 @@ type TaskMessage struct {
 	Kwargs        map[string]interface{} `json:"kwargs" redis:"kwargs"`
 	Policy        TaskPolicy             `json:"policy" redis:"policy"`
 	Retries       uint                   `json:"retries" redis:"retries"`
+	RetryPending  bool                   `json:"retry_pending,omitempty" redis:"retry_pending"`
+	RetryID       string                 `json:"retry_id,omitempty" redis:"retry_id"`
 	Timestamp     int64                  `json:"timestamp" redis:"timestamp"`
 }
 
@@ -83,6 +85,8 @@ func (tm *TaskMessage) Reset() {
 	tm.Timestamp = time.Now().Unix()
 	tm.Policy = DefaultTaskPolicy
 	tm.Retries = 0
+	tm.RetryPending = false
+	tm.RetryID = ""
 }
 
 // Encode returns a binary representation of the TaskMessage

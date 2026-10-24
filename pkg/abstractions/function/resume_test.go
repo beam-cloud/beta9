@@ -28,6 +28,10 @@ func (r completedInvocationBackend) GetTaskWithRelated(context.Context, string) 
 	return r.task, nil
 }
 
+func (r completedInvocationBackend) GetTask(context.Context, string) (*types.Task, error) {
+	return &r.task.Task, nil
+}
+
 type resumeInvocationStream struct {
 	pb.FunctionService_FunctionInvokeServer
 	ctx      context.Context
@@ -92,6 +96,51 @@ func TestCompletedInvocationHandlesOldWorkerWithoutLogs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInvocationWaitsForRetryWhenAttemptLogsAreGone(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { rdb.Close() })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	worker := grpc.NewServer()
+	pb.RegisterContainerServiceServer(worker, legacyCompletedWorker{code: codes.Unknown})
+	go worker.Serve(listener)
+	t.Cleanup(worker.Stop)
+	current := &types.TaskWithRelated{Task: types.Task{ExternalId: "task", Status: types.TaskStatusRunning, ContainerId: "old-attempt"}}
+	service := &ContainerFunctionService{ctx: context.Background(), rdb: rdb, keyEventManager: common.NewKeyEventManager(rdb), backendRepo: completedInvocationBackend{task: current}, containerRepo: testCompletedInvocationContainers{address: listener.Addr().String()}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	authInfo := &auth.AuthInfo{Workspace: &types.Workspace{Name: "workspace"}, Token: &types.Token{Key: "token"}}
+	stream := &resumeInvocationStream{ctx: ctx}
+	task := &FunctionTask{containerId: "old-attempt", msg: &types.TaskMessage{TaskId: "task"}}
+	require.Equal(t, codes.Unavailable, status.Code(service.stream(ctx, stream, authInfo, task)))
+	require.Nil(t, stream.response, "an intermediate attempt's exit cannot finish the invocation")
+}
+
+func TestFunctionResultReplayRequiresCurrentExecutionOwner(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { rdb.Close() })
+	current := &types.TaskWithRelated{Task: types.Task{ExternalId: "task", Status: types.TaskStatusRunning, ContainerId: "container"}, Workspace: types.Workspace{ExternalId: "workspace"}, Stub: types.Stub{ExternalId: "stub"}}
+	service := &ContainerFunctionService{rdb: rdb, backendRepo: completedInvocationBackend{task: current}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{Name: "workspace", ExternalId: "workspace"}})
+	claim := common.RedisKeys.TaskClaim("workspace", "stub", "task")
+	server.Set(claim, "container")
+	request := &pb.FunctionSetResultRequest{TaskId: "task", ContainerId: "container", Result: []byte("result")}
+	for range 2 {
+		response, err := service.FunctionSetResult(ctx, request)
+		require.NoError(t, err)
+		require.True(t, response.Ok)
+	}
+	server.Set(claim, "replacement")
+	request.Result = []byte("stale result")
+	_, err = service.FunctionSetResult(ctx, request)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Equal(t, "result", rdb.Get(ctx, Keys.FunctionResult("workspace", "task")).Val())
 }
 
 type legacyCompletedWorker struct {

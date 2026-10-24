@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 import cloudpickle
 
-from ..channel import Channel, get_channel, handle_error
+from ..channel import RECOVERY_TIMEOUT, Channel, get_channel, handle_error, rpc_timeout
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionMonitorRequest,
@@ -195,9 +195,12 @@ async def invoke_function(
                 **kwargs,
             )
         pickled_result = cloudpickle.dumps(result)
-        set_result_resp = function_stub.function_set_result(
-            FunctionSetResultRequest(task_id=task_id, result=pickled_result)
-        )
+        with rpc_timeout(RECOVERY_TIMEOUT):
+            set_result_resp = function_stub.function_set_result(
+                FunctionSetResultRequest(
+                    task_id=task_id, result=pickled_result, container_id=context.container_id
+                )
+            )
         if not set_result_resp.ok:
             raise FunctionSetResultError
 

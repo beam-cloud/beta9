@@ -21,6 +21,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -127,7 +128,7 @@ func (fs *ContainerFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest,
 		return err
 	}
 	// Publish the task identity before waiting for its container to start.
-	if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: task.Metadata().TaskId}); err != nil {
+	if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: task.Metadata().TaskId, ContainerId: task.Metadata().ContainerId}); err != nil {
 		return err
 	}
 
@@ -176,6 +177,9 @@ func (fs *ContainerFunctionService) resumeInvocation(stubID, taskID string, stre
 			}
 		}
 		return stream.Send(&pb.FunctionInvokeResponse{TaskId: taskID, Done: true, ExitCode: int32(exitCode), Result: result})
+	}
+	if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskID, ContainerId: current.ContainerId}); err != nil {
+		return err
 	}
 	return fs.stream(stream.Context(), stream, authInfo, task)
 }
@@ -231,9 +235,16 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	}
 	taskId := task.Metadata().TaskId
 	containerId := task.Metadata().ContainerId
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if containers := md.Get(invocationContainerHeader); len(containers) > 0 && containers[0] != "" && containers[0] != containerId {
+			md = md.Copy()
+			md.Set(common.LogOffsetHeader, "0")
+			ctx = metadata.NewIncomingContext(ctx, md)
+		}
+	}
 
 	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done}); err != nil {
+		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg}); err != nil {
 			return err
 		}
 
@@ -241,6 +252,13 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	}
 
 	exitCallback := func(exitCode int32) error {
+		current, err := fs.backendRepo.GetTask(stream.Context(), taskId)
+		if err != nil {
+			return err
+		}
+		if !current.Status.IsCompleted() || current.ContainerId != containerId {
+			return status.Error(codes.Unavailable, "function attempt ended; waiting for task recovery")
+		}
 		resultLoadStart := time.Now()
 		result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskId)).Bytes()
 		if fs.eventRepo != nil {
@@ -275,6 +293,12 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	err = containerStream.Stream(ctx, authInfo, containerId)
 	if fs.ctx.Err() != nil {
 		return status.Error(codes.Unavailable, "gateway is restarting")
+	}
+	if err != nil && ctx.Err() == nil {
+		current, lookupErr := fs.backendRepo.GetTask(ctx, taskId)
+		if lookupErr == nil && (!current.Status.IsCompleted() || current.ContainerId != containerId) {
+			return status.Error(codes.Unavailable, "function attempt is recovering")
+		}
 	}
 	return err
 }
@@ -317,20 +341,47 @@ func (fs *ContainerFunctionService) FunctionGetArgs(ctx context.Context, in *pb.
 	}, nil
 }
 
+const invocationContainerHeader = "x-beta9-container-id"
+
+var storeFunctionResultScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call("SET", KEYS[2], ARGV[2], "PX", ARGV[3])
+return 1
+`)
+
 func (fs *ContainerFunctionService) FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	current, err := fs.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
+	if err != nil {
+		return nil, task.CompletionError(err)
+	}
+	if current == nil {
+		return nil, status.Error(codes.NotFound, "task no longer exists")
+	}
+	if current.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return nil, status.Error(codes.PermissionDenied, "task does not belong to this workspace")
+	}
+	if current.Status != types.TaskStatusRunning || (in.ContainerId != "" && current.ContainerId != in.ContainerId) {
+		return nil, status.Error(codes.FailedPrecondition, "container does not own a running task")
+	}
 	now := time.Now()
 	phaseMetrics := task.NewPhaseMetrics(fs.rdb)
 	phaseLabels := phaseMetrics.Labels(ctx, authInfo.Workspace.Name, in.TaskId, map[string]string{
 		"workspace_id": authInfo.Workspace.ExternalId,
 	})
 
-	err := fs.rdb.Set(ctx, Keys.FunctionResult(authInfo.Workspace.Name, in.TaskId), in.Result, functionResultExpirationTimeout).Err()
+	stored, err := storeFunctionResultScript.Run(ctx, fs.rdb, []string{
+		common.RedisKeys.TaskClaim(authInfo.Workspace.Name, current.Stub.ExternalId, in.TaskId),
+		Keys.FunctionResult(authInfo.Workspace.Name, in.TaskId),
+	}, current.ContainerId, in.Result, functionResultExpirationTimeout.Milliseconds()).Int()
 	if err != nil {
 		phaseLabels["success"] = "false"
 		phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "get_args_to_set_result", task.FunctionPhaseGetArgs, now, phaseLabels)
 		phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "start_task_to_set_result", task.FunctionPhaseStartTask, now, phaseLabels)
-		return &pb.FunctionSetResultResponse{Ok: false}, nil
+		return nil, task.CompletionError(err)
+	}
+	if stored == 0 {
+		return nil, status.Error(codes.FailedPrecondition, "container no longer owns task")
 	}
 
 	phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "get_args_to_set_result", task.FunctionPhaseGetArgs, now, phaseLabels)
@@ -498,7 +549,11 @@ func (fs *ContainerFunctionService) FunctionMonitor(req *pb.FunctionMonitorReque
 }
 
 func (fs *ContainerFunctionService) genContainerId(taskId, stubType string) string {
-	return fmt.Sprintf("%s-%s-%s", stubType, taskId, uuid.New().String()[:8])
+	return functionContainerID(taskId, stubType, uuid.New())
+}
+
+func functionContainerID(taskID, stubType string, attempt uuid.UUID) string {
+	return fmt.Sprintf("%s-%s-%s", stubType, taskID, attempt.String()[:8])
 }
 
 func (fs *ContainerFunctionService) FunctionSchedule(ctx context.Context, req *pb.FunctionScheduleRequest) (*pb.FunctionScheduleResponse, error) {

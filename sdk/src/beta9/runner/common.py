@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -422,14 +423,44 @@ def end_task(gateway_stub: GatewayServiceStub, request: EndTaskRequest) -> EndTa
     return retry_task_completion(gateway_stub.end_task, request)
 
 
-def _monitor_responses(open_stream):
+class TaskMonitor:
+    def __init__(self):
+        self.stopped = threading.Event()
+        self._lock = threading.Lock()
+        self._call = None
+
+    def open(self, open_stream):
+        call = open_stream()
+        with self._lock:
+            if not self.stopped.is_set():
+                self._call = call
+                return call
+        if callable(cancel := getattr(call, "cancel", None)):
+            cancel()
+        return ()
+
+    def stop(self):
+        with self._lock:
+            self.stopped.set()
+            call, self._call = self._call, None
+        if callable(cancel := getattr(call, "cancel", None)):
+            cancel()
+
+
+def _monitor_responses(open_stream, monitor):
     recovery = _RecoveryWindow(start=False)
     while True:
+        if monitor.stopped.is_set():
+            return
         try:
-            for response in open_stream():
+            for response in monitor.open(open_stream):
+                if monitor.stopped.is_set():
+                    return
                 recovery.reset()
                 yield response
         except Exception as error:
+            if monitor.stopped.is_set():
+                return
             if not transient_error(error):
                 raise
             print(f"Task monitor reconnecting after {error}")
@@ -440,9 +471,10 @@ def _monitor_responses(open_stream):
             raise TimeoutError("Task monitor recovery window expired")
 
 
-def monitor_task(context: FunctionContext, open_stream, gateway_stub, on_exit):
+def monitor_task(context: FunctionContext, open_stream, gateway_stub, on_exit, monitor=None):
+    monitor = monitor or TaskMonitor()
     try:
-        for response in _monitor_responses(open_stream):
+        for response in _monitor_responses(open_stream, monitor):
             if response.cancelled:
                 task_status, exit_code = TaskStatus.Cancelled, TaskExitCode.Cancelled
             elif response.complete:
@@ -458,8 +490,12 @@ def monitor_task(context: FunctionContext, open_stream, gateway_stub, on_exit):
             on_exit(exit_code)
             return
     except Exception:
+        if monitor.stopped.is_set():
+            return
         on_exit(TaskExitCode.Error)
         raise
+    finally:
+        monitor.stop()
 
 
 def send_task_callback(

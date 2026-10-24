@@ -94,3 +94,22 @@ func TestMissingGatewayHeartbeatDoesNotRetryRunningContainer(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduledRetryDoesNotConsumeAnotherAttemptBeforeStartTask(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { rdb.Close() })
+	for _, state := range []types.ContainerStatus{types.ContainerStatusPending, types.ContainerStatusRunning, types.ContainerStatusStopping} {
+		t.Run(string(state), func(t *testing.T) {
+			task := &FunctionTask{msg: &types.TaskMessage{TaskId: "task"}, fs: &ContainerFunctionService{
+				rdb:           rdb,
+				backendRepo:   heartbeatBackend{task: &types.Task{Status: types.TaskStatusRetry, ContainerId: "retry-container"}},
+				containerRepo: heartbeatContainers{state: &types.ContainerState{Status: state}},
+			}}
+			alive, err := task.HeartBeat(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, state != types.ContainerStatusStopping, alive)
+		})
+	}
+}

@@ -24,11 +24,26 @@ func newRedisTaskQueueClient(rdb *common.RedisClient, taskRepo repository.TaskRe
 
 // Add a new task to the queue
 func (qc *taskQueueClient) Push(ctx context.Context, taskMessage *types.TaskMessage) error {
-	encodedMessage, err := taskMessage.Encode()
+	queued := *taskMessage
+	queued.RetryPending = false
+	encodedMessage, err := queued.Encode()
 	if err != nil {
 		return err
 	}
 
+	if taskMessage.RetryPending {
+		// Enqueue and transfer ownership together. Replays cannot enqueue the
+		// same retry again after a gateway loses its Redis acknowledgment.
+		return requeueTaskScript.Run(ctx, qc.rdb, []string{
+			common.RedisKeys.TaskEntry(taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId),
+			Keys.taskQueueList(taskMessage.WorkspaceName, taskMessage.StubId),
+			common.RedisKeys.TaskClaim(taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId),
+			common.RedisKeys.TaskClaimIndex(taskMessage.WorkspaceName, taskMessage.StubId),
+			common.RedisKeys.TaskCompletionDeadline(taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId),
+			common.RedisKeys.TaskCompletionIndex(taskMessage.WorkspaceName, taskMessage.StubId),
+			Keys.taskQueueTaskHeartbeat(taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId),
+		}, taskMessage.RetryID, encodedMessage, taskMessage.TaskId).Err()
+	}
 	err = qc.rdb.RPush(ctx, Keys.taskQueueList(taskMessage.WorkspaceName, taskMessage.StubId), encodedMessage).Err()
 	if err != nil {
 		return err
@@ -36,6 +51,19 @@ func (qc *taskQueueClient) Push(ctx context.Context, taskMessage *types.TaskMess
 
 	return nil
 }
+
+var requeueTaskScript = redis.NewScript(`
+local entry = redis.call("GET", KEYS[1])
+if not entry then return 0 end
+local state = cjson.decode(entry)
+if not state.retry_pending or state.retry_id ~= ARGV[1] then return 0 end
+redis.call("SET", KEYS[1], ARGV[2], "KEEPTTL")
+redis.call("RPUSH", KEYS[2], ARGV[2])
+redis.call("DEL", KEYS[3], KEYS[5], KEYS[7])
+redis.call("SREM", KEYS[4], ARGV[3])
+redis.call("SREM", KEYS[6], ARGV[3])
+return 1
+`)
 
 // Admission and worker cordoning are serialized by Redis. Once a rollout
 // starts, existing tasks finish while warm containers stop claiming new work.

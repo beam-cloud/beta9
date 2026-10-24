@@ -304,6 +304,22 @@ func TestHandleScalingEventStopsFailingInstanceWithoutMinimum(t *testing.T) {
 	}
 }
 
+func TestQueuedRetrySurvivesFailureCooldownWithoutMinimumContainers(t *testing.T) {
+	instance, containers, server := newTestAutoscaledInstance(t, true, nil)
+	instance.Stub.Type = types.StubType(types.StubTypeTaskQueue)
+	instance.StubConfig.Autoscaler.MinContainers = 0
+	instance.FailedContainerThreshold = 1
+	instance.EventRepo = &stubStateEvents{states: make(chan string, 4)}
+	seedFailedContainers(t, containers, 1)
+	started := countStarts(t, instance)
+	require.NoError(t, instance.HandleScalingEvent(1))
+	require.NoError(t, instance.Ctx.Err(), "queued work must retain its controller during cooldown")
+	require.Zero(t, *started)
+	server.FastForward(types.ContainerFailureCooldown)
+	require.NoError(t, instance.HandleScalingEvent(1))
+	require.Equal(t, 1, *started)
+}
+
 func TestSyncMirrorsDeploymentActiveState(t *testing.T) {
 	stubConfig, err := json.Marshal(&types.StubConfigV1{
 		Autoscaler: &types.Autoscaler{MaxContainers: 1, TasksPerContainer: 1},

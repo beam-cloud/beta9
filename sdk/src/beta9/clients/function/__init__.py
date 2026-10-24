@@ -38,6 +38,7 @@ class FunctionInvokeResponse(betterproto.Message):
     done: bool = betterproto.bool_field(3)
     exit_code: int = betterproto.int32_field(4)
     result: bytes = betterproto.bytes_field(5)
+    container_id: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -55,6 +56,7 @@ class FunctionGetArgsResponse(betterproto.Message):
 class FunctionSetResultRequest(betterproto.Message):
     task_id: str = betterproto.string_field(1)
     result: bytes = betterproto.bytes_field(2)
+    container_id: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)

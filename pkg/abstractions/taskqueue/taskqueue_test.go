@@ -521,6 +521,7 @@ func TestCompletionDemandReturnsWhenTaskIsRetriedOrReclaimed(t *testing.T) {
 				require.Zero(t, demand, "recovery creates execution demand only once work is requeued")
 				require.NoError(t, client.Push(ctx, &types.TaskMessage{WorkspaceName: "workspace", StubId: "stub", TaskId: "task"}))
 			} else {
+				require.NoError(t, queue.taskRepo.RemoveTaskClaim(ctx, "workspace", "stub", "task"))
 				require.NoError(t, queue.taskRepo.ClaimTask(ctx, "workspace", "stub", "task", "container"))
 			}
 			demand, err = client.ExecutionDemand(ctx, "workspace", "stub")
@@ -530,6 +531,39 @@ func TestCompletionDemandReturnsWhenTaskIsRetriedOrReclaimed(t *testing.T) {
 			require.Zero(t, queue.rdb.SCard(ctx, common.RedisKeys.TaskCompletionIndex("workspace", "stub")).Val())
 		})
 	}
+}
+
+func TestRetryDeliveryIsAtomicAndReplayDoesNotDuplicateQueuedWork(t *testing.T) {
+	ctx, queue, _, _ := newBoundedCompletionFixture(t)
+	client := newRedisTaskQueueClient(queue.rdb, queue.taskRepo)
+	msg := &types.TaskMessage{WorkspaceName: "workspace", StubId: "stub", TaskId: "task", RetryPending: true, RetryID: "attempt", Retries: 1, Args: []interface{}{}}
+	encoded, err := msg.Encode()
+	require.NoError(t, err)
+	require.NoError(t, queue.taskRepo.SetTaskState(ctx, "workspace", "stub", "task", encoded))
+	for range 2 {
+		require.NoError(t, client.Push(ctx, msg))
+	}
+	require.EqualValues(t, 1, queue.rdb.LLen(ctx, Keys.taskQueueList("workspace", "stub")).Val())
+	claimed, err := queue.taskRepo.IsClaimed(ctx, "workspace", "stub", "task")
+	require.NoError(t, err)
+	require.False(t, claimed)
+	committed, err := queue.taskRepo.GetTaskState(ctx, "workspace", "stub", "task")
+	require.NoError(t, err)
+	require.False(t, committed.RetryPending)
+	require.Empty(t, committed.Args)
+	// After the next runner claims it, a late acknowledgment replay must not
+	// enqueue it again, release its claim, or reset its completion deadline.
+	require.NoError(t, queue.taskRepo.ClaimTask(ctx, "workspace", "stub", "task", "replacement"))
+	meta := types.TaskMetadata{WorkspaceName: "workspace", StubId: "stub", TaskId: "task", ContainerId: "replacement"}
+	_, cancel, err := task.BeginCompletion(ctx, queue.rdb, meta, time.Minute)
+	require.NoError(t, err)
+	defer cancel()
+	deadline := queue.rdb.Get(ctx, common.RedisKeys.TaskCompletionDeadline("workspace", "stub", "task")).Val()
+	require.NoError(t, client.Push(ctx, msg))
+	require.EqualValues(t, 1, queue.rdb.LLen(ctx, Keys.taskQueueList("workspace", "stub")).Val())
+	require.NoError(t, queue.taskRepo.ClaimTask(ctx, "workspace", "stub", "task", "replacement"))
+	require.Equal(t, deadline, queue.rdb.Get(ctx, common.RedisKeys.TaskCompletionDeadline("workspace", "stub", "task")).Val())
+	require.Equal(t, "replacement", queue.rdb.Get(ctx, common.RedisKeys.TaskClaim("workspace", "stub", "task")).Val())
 }
 
 func TestHungResultUploadIsCancelledWithoutAcknowledgingCompletion(t *testing.T) {

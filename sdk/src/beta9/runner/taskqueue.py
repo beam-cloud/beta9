@@ -18,6 +18,7 @@ from ..clients.taskqueue import (
     TaskQueueCompleteRequest,
     TaskQueueCompleteResponse,
     TaskQueueMonitorRequest,
+    TaskQueueMonitorResponse,
     TaskQueuePopRequest,
     TaskQueuePopResponse,
     TaskQueueServiceStub,
@@ -28,6 +29,7 @@ from ..runner.common import (
     FunctionContext,
     FunctionHandler,
     ThreadPoolExecutorOverride,
+    TaskMonitor,
     config,
     execute_lifecycle_method,
     monitor_task,
@@ -219,13 +221,23 @@ class TaskQueueWorker:
         task: Task,
         taskqueue_stub: TaskQueueServiceStub,
         gateway_stub: GatewayServiceStub,
+        monitor=None,
     ) -> None:
         request = TaskQueueMonitorRequest(
             task_id=task.id, stub_id=stub_id, container_id=container_id
         )
-        monitor_task(
-            context, lambda: taskqueue_stub.task_queue_monitor(request), gateway_stub, os._exit
-        )
+
+        def open_stream():
+            unary_stream = getattr(taskqueue_stub, "_unary_stream", None)
+            if callable(unary_stream):
+                return unary_stream(
+                    "/taskqueue.TaskQueueService/TaskQueueMonitor",
+                    TaskQueueMonitorRequest,
+                    TaskQueueMonitorResponse,
+                )(request)
+            return taskqueue_stub.task_queue_monitor(request)
+
+        monitor_task(context, open_stream, gateway_stub, os._exit, monitor)
 
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
@@ -262,7 +274,8 @@ class TaskQueueWorker:
                         on_start_value=on_start_value,
                     )
 
-                    monitor_task = thread_pool.submit(
+                    monitor = TaskMonitor()
+                    monitor_future = thread_pool.submit(
                         self._monitor_task,
                         context=context,
                         stub_id=config.stub_id,
@@ -270,6 +283,7 @@ class TaskQueueWorker:
                         task=task,
                         taskqueue_stub=taskqueue_stub,
                         gateway_stub=gateway_stub,
+                        monitor=monitor,
                     )
                     futures.thread._threads_queues.clear()
 
@@ -294,6 +308,10 @@ class TaskQueueWorker:
                             task_status = TaskStatus.Retry
 
                     finally:
+                        # Future.cancel() cannot stop a running thread. Cancel
+                        # the RPC before retrying so its old timeout cannot
+                        # terminate the next execution in this container.
+                        monitor.stop()
                         duration = time.time() - start_time
 
                         completion_acknowledged = False
@@ -336,7 +354,7 @@ class TaskQueueWorker:
                             if not completion_acknowledged:
                                 os._exit(TaskExitCode.Error)
                         finally:
-                            monitor_task.cancel()
+                            monitor_future.cancel()
 
 
 def retry_on_errors(errors: List[Type[Exception]], e: BaseException) -> bool:

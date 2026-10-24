@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import grpc
 import pytest
@@ -291,3 +291,65 @@ def test_hung_completion_rpc_consumes_the_total_recovery_budget(monkeypatch):
         disconnected.set()
         channel.close()
         server.stop(0).wait()
+
+
+def test_completed_attempt_cancels_actual_monitor_rpc_without_exiting_container():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from beta9.channel import Channel
+    from beta9.clients.taskqueue import TaskQueueMonitorRequest, TaskQueueServiceStub
+    from beta9.runner.common import TaskMonitor
+
+    entered, cancelled = Event(), Event()
+
+    def server_monitor(request, context):
+        context.add_callback(cancelled.set)
+        entered.set()
+        while context.is_active():
+            yield TaskQueueMonitorResponse(ok=True)
+            cancelled.wait(0.01)
+
+    executor = ThreadPoolExecutor(max_workers=2)
+    server = grpc.server(executor)
+    server.add_generic_rpc_handlers(
+        (
+            grpc.method_handlers_generic_handler(
+                "taskqueue.TaskQueueService",
+                {
+                    "TaskQueueMonitor": grpc.unary_stream_rpc_method_handler(
+                        server_monitor,
+                        request_deserializer=TaskQueueMonitorRequest().parse,
+                        response_serializer=bytes,
+                    )
+                },
+            ),
+        )
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    channel = Channel(f"127.0.0.1:{port}")
+    monitor = TaskMonitor()
+    exit_task = Mock()
+    worker = TaskQueueWorker.__new__(TaskQueueWorker)
+    try:
+        with patch("beta9.runner.taskqueue.os._exit", exit_task):
+            future = executor.submit(
+                worker._monitor_task,
+                context=SimpleNamespace(),
+                stub_id="stub",
+                container_id="container",
+                task=Task(id="task"),
+                taskqueue_stub=TaskQueueServiceStub(channel),
+                gateway_stub=Mock(),
+                monitor=monitor,
+            )
+            assert entered.wait(5)
+            monitor.stop()
+            future.result(timeout=5)
+            assert cancelled.wait(5)
+            exit_task.assert_not_called()
+    finally:
+        monitor.stop()
+        channel.close()
+        server.stop(0).wait()
+        executor.shutdown(wait=True)
