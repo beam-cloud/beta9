@@ -130,7 +130,12 @@ def run(channel: Channel):
 
     # Start the task
     start_time = time.time()
-    start_task_response = start_task(gateway_stub, task_id, container_id)
+    try:
+        start_task_response = start_task(gateway_stub, task_id, container_id)
+    except grpc.RpcError as error:
+        if error.code() == grpc.StatusCode.CANCELLED:
+            return
+        raise
     if not start_task_response.ok:
         raise TaskStartError
 

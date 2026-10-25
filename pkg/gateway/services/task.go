@@ -56,6 +56,9 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 		return &pb.StartTaskResponse{Ok: false}, nil
 	}
 
+	if task.Status == types.TaskStatusCancelled && task.ContainerId == in.ContainerId {
+		return nil, status.Error(codes.Canceled, "task was cancelled")
+	}
 	if task.Status.IsCompleted() {
 		log.Warn().Str("task_id", in.TaskId).Str("container_id", in.ContainerId).Str("status", string(task.Status)).Msg("start task rejected because task is completed")
 		return &pb.StartTaskResponse{Ok: false}, nil

@@ -284,3 +284,25 @@ def test_cancelled_completion_does_not_send_success_callback():
     callback.assert_called_once()
     assert callback.call_args.kwargs["end_task_request"].task_status == "CANCELLED"
     assert callback.call_args.kwargs["payload"] == {}
+
+
+@pytest.mark.parametrize("code", [grpc.StatusCode.CANCELLED, grpc.StatusCode.FAILED_PRECONDITION])
+def test_start_cancellation_does_not_execute_handler(monkeypatch, code):
+    monkeypatch.setattr(
+        function_runner,
+        "config",
+        SimpleNamespace(
+            task_id="task",
+            container_id="container",
+            container_hostname="host",
+        ),
+    )
+    monkeypatch.setattr(function_runner, "start_task", MagicMock(side_effect=RpcFailure(code)))
+    invoke = MagicMock()
+    monkeypatch.setattr(function_runner, "invoke_function", invoke)
+    if code == grpc.StatusCode.CANCELLED:
+        function_runner.run(MagicMock())
+    else:
+        with pytest.raises(RpcFailure):
+            function_runner.run(MagicMock())
+    invoke.assert_not_called()
