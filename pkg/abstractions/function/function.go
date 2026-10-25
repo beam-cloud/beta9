@@ -359,7 +359,13 @@ func (fs *ContainerFunctionService) FunctionSetResult(ctx context.Context, in *p
 	if current.Workspace.ExternalId != authInfo.Workspace.ExternalId {
 		return nil, status.Error(codes.PermissionDenied, "task does not belong to this workspace")
 	}
-	if current.Status != types.TaskStatusRunning || (in.ContainerId != "" && current.ContainerId != in.ContainerId) {
+	if in.ContainerId != "" && current.ContainerId != in.ContainerId {
+		return nil, status.Error(codes.FailedPrecondition, "container does not own a running task")
+	}
+	if current.Status == types.TaskStatusCancelled {
+		return nil, status.Error(codes.Canceled, "task was cancelled")
+	}
+	if current.Status != types.TaskStatusRunning {
 		return nil, status.Error(codes.FailedPrecondition, "container does not own a running task")
 	}
 	now := time.Now()
@@ -537,10 +543,22 @@ func (fs *ContainerFunctionService) FunctionMonitor(req *pb.FunctionMonitorReque
 			}
 
 			if !claimed {
-				stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: false, Complete: true, TimedOut: false})
+				current, err := fs.backendRepo.GetTask(ctx, task.ExternalId)
+				if err != nil {
+					return err
+				}
+				if current.Status.IsCompleted() {
+					return stream.Send(&pb.FunctionMonitorResponse{
+						Ok: true, Cancelled: current.Status == types.TaskStatusCancelled,
+						TimedOut: current.Status == types.TaskStatusTimeout,
+						Complete: current.Status != types.TaskStatusCancelled && current.Status != types.TaskStatusTimeout,
+					})
+				}
 			}
 
-			stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: false})
+			if err := stream.Send(&pb.FunctionMonitorResponse{Ok: true}); err != nil {
+				return err
+			}
 			time.Sleep(types.TaskHeartbeatInterval)
 		}
 	}

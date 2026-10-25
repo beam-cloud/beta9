@@ -9,11 +9,13 @@ from threading import Thread
 from typing import Any, Optional
 
 import cloudpickle
+import grpc
 
 from ..channel import RECOVERY_TIMEOUT, Channel, get_channel, handle_error, rpc_timeout
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionMonitorRequest,
+    FunctionMonitorResponse,
     FunctionServiceStub,
     FunctionSetResultRequest,
 )
@@ -36,8 +38,10 @@ from ..runner.common import (
     monitor_task,
     FunctionContext,
     FunctionHandler,
+    TaskMonitor,
     config,
     end_task_and_send_callback,
+    send_callback,
     serialize_result,
 )
 from ..type import TaskExitCode, TaskStatus
@@ -49,6 +53,7 @@ class InvokeResult:
     pickled_result: Optional[bytes] = None
     callback_url: Optional[str] = None
     exception: Optional[BaseException] = None
+    cancelled: bool = False
 
 
 def _load_args(args: bytes) -> dict:
@@ -66,6 +71,7 @@ def _monitor_task(
     *,
     function_context: FunctionContext,
     runner_pid: int,
+    monitor: Optional[TaskMonitor] = None,
 ) -> None:
     with get_channel(get_config_context()) as channel:
         function_stub = FunctionServiceStub(channel)
@@ -75,11 +81,24 @@ def _monitor_task(
             stub_id=function_context.stub_id,
             container_id=function_context.container_id,
         )
+
+        def open_stream():
+            # The generated iterator hides the RPC's cancel method.
+            unary_stream = getattr(function_stub, "_unary_stream", None)
+            if callable(unary_stream):
+                return unary_stream(
+                    "/function.FunctionService/FunctionMonitor",
+                    FunctionMonitorRequest,
+                    FunctionMonitorResponse,
+                )(request)
+            return function_stub.function_monitor(request)
+
         monitor_task(
             function_context,
-            lambda: function_stub.function_monitor(request),
+            open_stream,
             gateway_stub,
             lambda _: os.kill(runner_pid, signal.SIGTERM),
+            monitor,
         )
 
 
@@ -111,7 +130,12 @@ def run(channel: Channel):
 
     # Start the task
     start_time = time.time()
-    start_task_response = start_task(gateway_stub, task_id, container_id)
+    try:
+        start_task_response = start_task(gateway_stub, task_id, container_id)
+    except grpc.RpcError as error:
+        if error.code() == grpc.StatusCode.CANCELLED:
+            return
+        raise
     if not start_task_response.ok:
         raise TaskStartError
 
@@ -120,31 +144,47 @@ def run(channel: Channel):
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGABRT, _handle_sigabort)
 
+    monitor = TaskMonitor()
     monitor_thread = Thread(
         target=_monitor_task,
         kwargs={
             "function_context": context,
             "runner_pid": os.getpid(),
+            "monitor": monitor,
         },
         daemon=True,
     )
     monitor_thread.start()
 
     # Invoke the function and handle its result
-    result = asyncio.run(invoke_function(function_stub, context, task_id))
+    try:
+        result = asyncio.run(invoke_function(function_stub, context, task_id))
+    finally:
+        # Finalization owns liveness once execution ends.
+        monitor.stop()
+        monitor_thread.join()
+    if result.cancelled:
+        send_callback(
+            gateway_stub=gateway_stub,
+            context=context,
+            payload={},
+            task_status=TaskStatus.Cancelled,
+            override_callback_url=result.callback_url,
+        )
+        return
+    try:
+        if result.exception:
+            handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
+        else:
+            complete_task(
+                gateway_stub, result, task_id, container_id, container_hostname, start_time
+            )
+    except grpc.RpcError as error:
+        if error.code() == grpc.StatusCode.CANCELLED:
+            return
+        raise
     if result.exception:
-        handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
         raise result.exception
-
-    # End the task and send callback
-    complete_task(
-        gateway_stub,
-        result,
-        task_id,
-        container_id,
-        container_hostname,
-        start_time,
-    )
 
 
 def start_task(
@@ -195,12 +235,17 @@ async def invoke_function(
                 **kwargs,
             )
         pickled_result = cloudpickle.dumps(result)
-        with rpc_timeout(RECOVERY_TIMEOUT):
-            set_result_resp = function_stub.function_set_result(
-                FunctionSetResultRequest(
-                    task_id=task_id, result=pickled_result, container_id=context.container_id
+        try:
+            with rpc_timeout(RECOVERY_TIMEOUT):
+                set_result_resp = function_stub.function_set_result(
+                    FunctionSetResultRequest(
+                        task_id=task_id, result=pickled_result, container_id=context.container_id
+                    )
                 )
-            )
+        except grpc.RpcError as error:
+            if error.code() == grpc.StatusCode.CANCELLED:
+                return InvokeResult(cancelled=True, callback_url=callback_url)
+            raise
         if not set_result_resp.ok:
             raise FunctionSetResultError
 
