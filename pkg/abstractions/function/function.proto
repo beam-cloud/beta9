@@ -29,6 +29,7 @@ message FunctionInvokeResponse {
   bool done = 3;
   int32 exit_code = 4;
   bytes result = 5;
+  string container_id = 6;
 }
 
 message FunctionGetArgsRequest { string task_id = 1; }
@@ -40,6 +41,7 @@ message FunctionGetArgsResponse {
 message FunctionSetResultRequest {
   string task_id = 1;
   bytes result = 2;
+  string container_id = 3;
 }
 
 message FunctionSetResultResponse { bool ok = 1; }

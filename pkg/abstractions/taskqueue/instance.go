@@ -7,6 +7,8 @@ import (
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/common"
+	taskdispatcher "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -209,23 +211,38 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 
 		tasksRunning := false
 
-		// Check if any tasks are currently running on this container
-		// We do this by checking for the presence of "taskQueueTaskRunningLock" keys
+		// Claims protect active tasks when gateway restarts expire monitor leases.
 		for _, taskId := range containerTasks {
+			meta := types.TaskMetadata{WorkspaceName: i.Workspace.Name, StubId: i.Stub.ExternalId, TaskId: taskId}
+			expired, err := taskdispatcher.CompletionExpired(context.TODO(), i.Rdb, meta)
+			if err != nil {
+				tasksRunning = true
+				break
+			}
+			if expired {
+				continue
+			}
 			_, err = i.Rdb.Get(context.TODO(), Keys.taskQueueTaskRunningLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId, taskId)).Result()
 			if err != nil && err != redis.Nil {
 				log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting task running locks for container")
 				continue
-			} else if err == redis.Nil {
-				// If the task lock key is missing (ttl'd or task completed), remove it from the index
-				// This is mostly a housekeeping step since in normal operation the task lock key will be removed
-				// when the task is completed
-				i.Rdb.SRem(context.TODO(), Keys.taskQueueTaskRunningLockIndex(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId), taskId)
-				continue
 			}
-
-			tasksRunning = true
-			break
+			if err == nil {
+				tasksRunning = true
+				break
+			}
+			owner, err := i.Rdb.Get(context.TODO(), common.RedisKeys.TaskClaim(meta.WorkspaceName, meta.StubId, meta.TaskId)).Result()
+			if err != nil && err != redis.Nil {
+				log.Error().Err(err).Msg("error getting task claim for container")
+				tasksRunning = true
+				break
+			}
+			if owner == container.ContainerId {
+				tasksRunning = true
+				break
+			}
+			// Remove stale index entries left by expired or completed tasks.
+			i.Rdb.SRem(context.TODO(), Keys.taskQueueTaskRunningLockIndex(meta.WorkspaceName, meta.StubId, container.ContainerId), meta.TaskId)
 		}
 
 		// If any tasks are currently running, skip this container

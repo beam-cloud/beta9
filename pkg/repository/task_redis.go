@@ -28,18 +28,49 @@ func NewTaskRedisRepository(r *common.RedisClient) TaskRepository {
 	return &TaskRedisRepository{rdb: r, lock: lock}
 }
 
+var claimTaskScript = redis.NewScript(`
+local same_owner = redis.call("GET", KEYS[1]) == ARGV[1]
+redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
+redis.call("SADD", KEYS[2], ARGV[3])
+if not same_owner then
+  redis.call("DEL", KEYS[3])
+  redis.call("SREM", KEYS[4], ARGV[3])
+end
+if ARGV[4] ~= "" and redis.call("GET", KEYS[5]) == ARGV[4] then
+  redis.call("SET", KEYS[5], ARGV[5], "KEEPTTL")
+end
+return 1
+`)
+
 func (r *TaskRedisRepository) ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error {
 	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	claimIndexKey := common.RedisKeys.TaskClaimIndex(workspaceName, stubId)
+	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
+	var previous, committed []byte
+	entry, err := r.rdb.Get(ctx, entryKey).Bytes()
+	if err != nil && err != redis.Nil {
+		return err
+	}
+	var state types.TaskMessage
+	if json.Unmarshal(entry, &state) == nil && state.RetryPending {
+		previous = entry
+		state.RetryPending = false
+		committed, err = state.Encode()
+		if err != nil {
+			return err
+		}
+	}
 
 	ttl := time.Duration(types.MaxTaskTTL) * time.Second
-	if entryTTL := r.rdb.TTL(ctx, common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)).Val(); entryTTL > 0 {
+	if entryTTL := r.rdb.TTL(ctx, entryKey).Val(); entryTTL > 0 {
 		ttl = entryTTL
 	}
-	pipe := r.rdb.TxPipeline()
-	pipe.Set(ctx, claimKey, containerId, ttl)
-	pipe.SAdd(ctx, claimIndexKey, taskId)
-	if _, err := pipe.Exec(ctx); err != nil {
+	if err := claimTaskScript.Run(ctx, r.rdb, []string{
+		claimKey, claimIndexKey,
+		common.RedisKeys.TaskCompletionDeadline(workspaceName, stubId, taskId),
+		common.RedisKeys.TaskCompletionIndex(workspaceName, stubId),
+		entryKey,
+	}, containerId, ttl.Milliseconds(), taskId, string(previous), string(committed)).Err(); err != nil {
 		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
 	}
 	return nil
@@ -52,6 +83,7 @@ func (r *TaskRedisRepository) RemoveTaskClaim(ctx context.Context, workspaceName
 	pipe := r.rdb.TxPipeline()
 	pipe.Del(ctx, claimKey)
 	pipe.SRem(ctx, claimIndexKey, taskId)
+	pipe.SRem(ctx, common.RedisKeys.TaskCompletionIndex(workspaceName, stubId), taskId)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to remove task claim <%v>: %w", claimKey, err)
 	}
@@ -145,8 +177,10 @@ func (r *TaskRedisRepository) DeleteTaskState(ctx context.Context, workspaceName
 		pipe.SRem(ctx, indexKey, entryKey)
 		pipe.SRem(ctx, claimIndexKey, taskId)
 		pipe.SRem(ctx, stubIndexKey, taskId)
+		pipe.SRem(ctx, common.RedisKeys.TaskCompletionIndex(workspaceName, stubId), taskId)
 		pipe.Del(ctx, entryKey)
 		pipe.Del(ctx, claimKey)
+		pipe.Del(ctx, common.RedisKeys.TaskCompletionDeadline(workspaceName, stubId, taskId))
 		return nil
 	})
 
@@ -191,15 +225,11 @@ func (r *TaskRedisRepository) GetTasksInFlight(ctx context.Context) ([]*types.Ta
 	return taskMessages, nil
 }
 
-func (r *TaskRedisRepository) SetTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error {
-	err := r.lock.Acquire(ctx, common.RedisKeys.TaskRetryLock(workspaceName, stubId, taskId), common.RedisLockOptions{TtlS: 300, Retries: 0})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (r *TaskRedisRepository) RemoveTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error {
-	return r.lock.Release(common.RedisKeys.TaskRetryLock(workspaceName, stubId, taskId))
+func (r *TaskRedisRepository) WithTaskRetryLease(ctx context.Context, workspaceName, stubId, taskId string, fn func(context.Context) error) error {
+	// Bound each dispatch attempt while renewing its lease through slow calls.
+	ctx, cancel := context.WithTimeout(ctx, types.TaskHeartbeatTTL)
+	defer cancel()
+	return r.lock.WithLease(ctx, common.RedisKeys.TaskRetryLock(workspaceName, stubId, taskId), common.RedisLockOptions{
+		TtlS: int(taskMonitorLease.Seconds()),
+	}, fn)
 }

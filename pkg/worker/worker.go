@@ -1633,6 +1633,12 @@ func (s *Worker) manageWorkerCapacity() {
 		notFoundErr := &types.ErrWorkerNotFound{}
 		if err != nil {
 			if notFoundErr.From(err) {
+				// A control-plane outage can expire this worker's registration.
+				// It no longer receives work, but existing containers must finish
+				// before the last completion retires the worker.
+				if s.containerInstances != nil && s.containerInstances.Len() > 0 {
+					continue
+				}
 				s.cancel()
 				return
 			}

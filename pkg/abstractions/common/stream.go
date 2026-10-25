@@ -21,6 +21,9 @@ const (
 	workerAddressPollInterval = time.Second
 )
 
+// ErrWorkerUnreachable wraps a failure to connect to the worker running a container.
+var ErrWorkerUnreachable = errors.New("worker unreachable")
+
 type ContainerStreamOpts struct {
 	SendCallback    func(o common.OutputMsg) error
 	ExitCallback    func(exitCode int32) error
@@ -82,7 +85,7 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 
 		conn, err := network.ConnectToBackend(ctx, hostname, 30*time.Second, l.tailscale, l.config.Tailscale, l.containerRepo)
 		if err != nil {
-			clientResult <- containerClientResult{err: err}
+			clientResult <- containerClientResult{err: fmt.Errorf("%w: %w", ErrWorkerUnreachable, err)}
 			return
 		}
 
@@ -153,6 +156,18 @@ _stream:
 				return err
 			}
 			logsFinished = true
+			// EOF is durable evidence that this log buffer closed. A lost exit
+			// notification must not leave an invocation waiting forever.
+			for len(outputChan) > 0 {
+				if err := l.sendCallback(<-outputChan); err != nil {
+					return err
+				}
+			}
+			exitCode, err := l.containerRepo.GetContainerExitCode(containerId)
+			if err != nil {
+				return status.Error(codes.Unavailable, "container exit status is not yet available")
+			}
+			return l.exitCallback(int32(exitCode))
 		case <-logStreamReady:
 			logStreamReady = nil
 			exitEvents = keyEventChan

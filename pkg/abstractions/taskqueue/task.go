@@ -3,6 +3,7 @@ package taskqueue
 import (
 	"context"
 
+	taskdispatcher "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -36,12 +37,17 @@ func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) err
 }
 
 func (t *TaskQueueTask) Retry(ctx context.Context) error {
-	_, err := t.tq.getOrCreateQueueInstance(t.msg.StubId)
+	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
 	if err != nil {
 		return err
 	}
 
-	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
+	// A completion whose Redis cleanup failed must not execute user code again.
+	if task.Status.IsCompleted() {
+		return t.tq.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
+	}
+
+	_, err = t.tq.getOrCreateQueueInstance(t.msg.StubId)
 	if err != nil {
 		return err
 	}
@@ -56,12 +62,22 @@ func (t *TaskQueueTask) Retry(ctx context.Context) error {
 }
 
 func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
-	res, err := t.tq.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)).Result()
-	if err != nil {
+	expired, err := taskdispatcher.CompletionExpired(ctx, t.tq.rdb, t.Metadata())
+	if err != nil || expired {
 		return false, err
 	}
+	res, err := t.tq.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)).Result()
+	if err != nil || res > 0 {
+		return res > 0, err
+	}
 
-	return res > 0, nil
+	// A missing gateway monitor is not evidence that user code stopped. Match
+	// function recovery: only retry a running task after its container is gone.
+	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
+	if err != nil || task.Status != types.TaskStatusRunning {
+		return false, err
+	}
+	return taskdispatcher.ContainerIsRunning(t.tq.containerRepo, task.ContainerId)
 }
 
 func (t *TaskQueueTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {

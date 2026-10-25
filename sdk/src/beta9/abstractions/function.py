@@ -51,6 +51,7 @@ class _Invocation:
         self.request = request
         self.task_id = ""
         self.output_offset = 0
+        self.container_id = ""
         self.resumable = False
 
     def __iter__(self):
@@ -63,6 +64,7 @@ class _Invocation:
                         (
                             ("x-beta9-task-id", self.task_id),
                             ("x-beta9-log-offset", str(self.output_offset)),
+                            ("x-beta9-container-id", self.container_id),
                         )
                     )
                     try:
@@ -75,6 +77,9 @@ class _Invocation:
                     if response.task_id and not response.output and not response.done:
                         self.resumable = True
                     self.task_id = response.task_id or self.task_id
+                    if response.container_id and response.container_id != self.container_id:
+                        self.container_id = response.container_id
+                        self.output_offset = 0
                     if response.output:
                         self.output_offset += len(response.output.encode("utf-8"))
                     recovery.reset()

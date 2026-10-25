@@ -3,7 +3,10 @@ package gatewayservices
 import (
 	"context"
 	"errors"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -27,12 +30,16 @@ func (r *taskLifecycleBackendRepo) GetTaskWithRelated(ctx context.Context, exter
 	if r.task == nil || r.task.ExternalId != externalID {
 		return nil, nil
 	}
-	return r.task, nil
+	task := *r.task
+	return &task, nil
 }
 
 func (r *taskLifecycleBackendRepo) UpdateTask(ctx context.Context, externalID string, updatedTask types.Task) (*types.Task, error) {
 	if r.update != nil {
 		r.update()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if r.err != nil {
 		return nil, r.err
@@ -165,6 +172,121 @@ func TestEndTaskAllowsRestrictedRuntimeToken(t *testing.T) {
 	require.Equal(t, types.TaskStatusComplete, task.Status)
 }
 
+func TestEndTaskPersistsAfterClientDisconnect(t *testing.T) {
+	gws, tasks := newTaskLifecycleGateway(t, "workspace-id")
+	ctx, cancel := context.WithCancel(restrictedTaskLifecycleContext("workspace-id"))
+	defer cancel()
+	backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+	backend.task.Status = types.TaskStatusRunning
+	backend.task.Stub.Type = types.StubType(types.StubTypeFunction)
+	require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub-id", "task-id", []byte(`{"task_id":"task-id"}`)))
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub-id", "task-id", "container-id"))
+	backend.update = func() {
+		cancel()
+		claimed, err := tasks.IsClaimed(context.Background(), "workspace", "stub-id", "task-id")
+		require.NoError(t, err)
+		require.True(t, claimed, "the final database write must still own the claim")
+	}
+	response, err := gws.EndTask(ctx, &pb.EndTaskRequest{ContainerId: "container-id", TaskId: "task-id", TaskStatus: string(types.TaskStatusComplete)})
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Equal(t, types.TaskStatusComplete, backend.task.Status)
+	inFlight, err := tasks.TasksInFlight(context.Background(), "workspace", "stub-id")
+	require.NoError(t, err)
+	require.Zero(t, inFlight)
+}
+
+func TestEndTaskRetainsRecoveryStateOnDatabaseFailure(t *testing.T) {
+	gws, tasks := newTaskLifecycleGateway(t, "workspace-id")
+	ctx := restrictedTaskLifecycleContext("workspace-id")
+	backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+	backend.task.Status = types.TaskStatusRunning
+	backend.err = errors.New("database unavailable")
+	require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub-id", "task-id", []byte(`{"task_id":"task-id"}`)))
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub-id", "task-id", "container-id"))
+	response, err := gws.EndTask(ctx, &pb.EndTaskRequest{ContainerId: "container-id", TaskId: "task-id", TaskStatus: string(types.TaskStatusComplete)})
+	require.Equal(t, codes.Unavailable, status.Code(err))
+	require.Nil(t, response)
+	require.Equal(t, types.TaskStatusRunning, backend.task.Status)
+	claimed, err := tasks.IsClaimed(ctx, "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	inFlight, err := tasks.TasksInFlight(ctx, "workspace", "stub-id")
+	require.NoError(t, err)
+	require.Equal(t, 1, inFlight)
+}
+
+type completionCleanupRepository struct {
+	repository.TaskRepository
+	err error
+}
+
+func (r *completionCleanupRepository) DeleteTaskState(ctx context.Context, workspace, stub, taskID string) error {
+	if r.err != nil {
+		return r.err
+	}
+	return r.TaskRepository.DeleteTaskState(ctx, workspace, stub, taskID)
+}
+
+func TestEndTaskReplayRecoversFailedCleanup(t *testing.T) {
+	gws, tasks := newTaskLifecycleGateway(t, "workspace-id")
+	ctx, cancel := context.WithCancel(restrictedTaskLifecycleContext("workspace-id"))
+	defer cancel()
+	cleanup := &completionCleanupRepository{TaskRepository: tasks, err: errors.New("Redis cleanup unavailable")}
+	dispatcher, err := taskdispatcher.NewDispatcher(ctx, cleanup)
+	require.NoError(t, err)
+	gws.taskDispatcher = dispatcher
+	backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+	backend.task.Status = types.TaskStatusRunning
+	require.NoError(t, tasks.SetTaskState(ctx, "workspace", "stub-id", "task-id", []byte(`{"task_id":"task-id"}`)))
+	require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub-id", "task-id", "container-id"))
+	request := &pb.EndTaskRequest{ContainerId: "container-id", TaskId: "task-id", TaskStatus: string(types.TaskStatusComplete)}
+	response, err := gws.EndTask(ctx, request)
+	require.Equal(t, codes.Unavailable, status.Code(err))
+	require.Nil(t, response)
+	require.Equal(t, types.TaskStatusComplete, backend.task.Status)
+	persisted := backend.task.Task
+	claimed, err := tasks.IsClaimed(ctx, "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	cleanup.err = nil
+	response, err = gws.EndTask(ctx, request)
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Equal(t, persisted, backend.task.Task)
+	require.Len(t, backend.updates, 1)
+	inFlight, err := tasks.TasksInFlight(ctx, "workspace", "stub-id")
+	require.NoError(t, err)
+	require.Zero(t, inFlight)
+}
+
+func TestEndTaskRejectsUnownedAndTerminalTasksWithoutRenewing(t *testing.T) {
+	for _, failure := range []string{"wrong_owner", "expired", "deleted"} {
+		t.Run(failure, func(t *testing.T) {
+			gws, _ := newTaskLifecycleGateway(t, "workspace-id")
+			backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+			backend.task.Status = types.TaskStatusRunning
+			backend.task.Stub.Type = types.StubType(types.StubTypeFunction)
+			request := &pb.EndTaskRequest{TaskId: "task-id", ContainerId: "container-id", TaskStatus: string(types.TaskStatusComplete)}
+			expected := codes.FailedPrecondition
+			switch failure {
+			case "wrong_owner":
+				request.ContainerId = "intruder"
+			case "expired":
+				backend.task.Status = types.TaskStatusExpired
+			case "deleted":
+				request.TaskId = "deleted"
+				expected = codes.NotFound
+			}
+			response, err := gws.EndTask(restrictedTaskLifecycleContext("workspace-id"), request)
+			require.Nil(t, response)
+			require.Equal(t, expected, status.Code(err))
+			require.Empty(t, backend.updates)
+		})
+	}
+}
+
 func newTaskLifecycleGateway(t *testing.T, workspaceID string) (*GatewayService, repository.TaskRepository) {
 	t.Helper()
 
@@ -187,6 +309,7 @@ func newTaskLifecycleGateway(t *testing.T, workspaceID string) (*GatewayService,
 		task: &types.TaskWithRelated{
 			Task: types.Task{
 				ExternalId:  "task-id",
+				ContainerId: "container-id",
 				Status:      types.TaskStatusPending,
 				WorkspaceId: 1,
 				StubId:      2,
@@ -206,6 +329,7 @@ func newTaskLifecycleGateway(t *testing.T, workspaceID string) (*GatewayService,
 	}
 
 	return &GatewayService{
+		appConfig:      types.AppConfig{GatewayService: types.GatewayServiceConfig{TaskCompletion: types.TaskCompletionConfig{Timeout: time.Minute, ResultUploadTimeout: time.Minute / 2}}},
 		backendRepo:    backendRepo,
 		redisClient:    rdb,
 		taskDispatcher: dispatcher,

@@ -12,6 +12,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -82,6 +83,10 @@ func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(creds),
+		grpc.WithConnectParams(grpc.ConnectParams{Backoff: backoff.Config{
+			BaseDelay: defaultGRPCRetryDelay, Multiplier: backoff.DefaultConfig.Multiplier,
+			Jitter: backoff.DefaultConfig.Jitter, MaxDelay: types.WorkerKeepAliveInterval,
+		}, MinConnectTimeout: grpcClientKeepaliveTimeout}),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                grpcClientKeepaliveTime,
 			Timeout:             grpcClientKeepaliveTimeout,

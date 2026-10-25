@@ -3,15 +3,12 @@ package taskqueue
 import (
 	"context"
 	"strconv"
-	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
 )
-
-const defaultTaskRunningExpiration int = 60
 
 type taskQueueClient struct {
 	rdb      *common.RedisClient
@@ -27,11 +24,26 @@ func newRedisTaskQueueClient(rdb *common.RedisClient, taskRepo repository.TaskRe
 
 // Add a new task to the queue
 func (qc *taskQueueClient) Push(ctx context.Context, taskMessage *types.TaskMessage) error {
-	encodedMessage, err := taskMessage.Encode()
+	queued := *taskMessage
+	queued.RetryPending = false
+	encodedMessage, err := queued.Encode()
 	if err != nil {
 		return err
 	}
 
+	if taskMessage.RetryPending {
+		// Enqueue and transfer ownership together. Replays cannot enqueue the
+		// same retry again after a gateway loses its Redis acknowledgment.
+		return requeueTaskScript.Run(ctx, qc.rdb, []string{
+			common.RedisKeys.TaskEntry(taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId),
+			Keys.taskQueueList(taskMessage.WorkspaceName, taskMessage.StubId),
+			common.RedisKeys.TaskClaim(taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId),
+			common.RedisKeys.TaskClaimIndex(taskMessage.WorkspaceName, taskMessage.StubId),
+			common.RedisKeys.TaskCompletionDeadline(taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId),
+			common.RedisKeys.TaskCompletionIndex(taskMessage.WorkspaceName, taskMessage.StubId),
+			Keys.taskQueueTaskHeartbeat(taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId),
+		}, taskMessage.RetryID, encodedMessage, taskMessage.TaskId).Err()
+	}
 	err = qc.rdb.RPush(ctx, Keys.taskQueueList(taskMessage.WorkspaceName, taskMessage.StubId), encodedMessage).Err()
 	if err != nil {
 		return err
@@ -39,6 +51,19 @@ func (qc *taskQueueClient) Push(ctx context.Context, taskMessage *types.TaskMess
 
 	return nil
 }
+
+var requeueTaskScript = redis.NewScript(`
+local entry = redis.call("GET", KEYS[1])
+if not entry then return 0 end
+local state = cjson.decode(entry)
+if not state.retry_pending or state.retry_id ~= ARGV[1] then return 0 end
+redis.call("SET", KEYS[1], ARGV[2], "KEEPTTL")
+redis.call("RPUSH", KEYS[2], ARGV[2])
+redis.call("DEL", KEYS[3], KEYS[5], KEYS[7])
+redis.call("SREM", KEYS[4], ARGV[3])
+redis.call("SREM", KEYS[6], ARGV[3])
+return 1
+`)
 
 // Admission and worker cordoning are serialized by Redis. Once a rollout
 // starts, existing tasks finish while warm containers stop claiming new work.
@@ -67,7 +92,7 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 	processingKey := Keys.taskQueueProcessingLock(workspaceName, stubId, containerId)
 	task, err := taskQueuePopScript.Run(ctx, qc.rdb, []string{
 		Keys.taskQueueList(workspaceName, stubId), processingKey, common.RedisKeys.SchedulerContainerState(containerId),
-	}, common.RedisKeys.SchedulerWorkerState(""), string(types.ContainerStatusStopping), defaultTaskRunningExpiration).Text()
+	}, common.RedisKeys.SchedulerWorkerState(""), string(types.ContainerStatusStopping), int(types.TaskQueueAdmissionLeaseTTL.Seconds())).Text()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
@@ -76,8 +101,7 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 		return nil, err
 	}
 	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-		defer cancel()
+		cleanupCtx := context.WithoutCancel(ctx)
 		_ = taskQueuePopCompleteScript.Run(cleanupCtx, qc.rdb, []string{processingKey}).Err()
 	}()
 
@@ -93,13 +117,13 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 	}
 
 	// Set a lock to prevent spin-down during decoding (decoding can take a long time for larger payloads)
-	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspaceName, stubId, containerId, tm.TaskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspaceName, stubId, containerId, tm.TaskId), 1, types.TaskQueueAdmissionLeaseTTL).Err()
 	if err != nil {
 		return nil, err
 	}
 
 	// Set a heartbeat to prevent retries before task actually starts processing
-	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskHeartbeat(workspaceName, stubId, tm.TaskId), 1, 60*time.Second).Err()
+	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskHeartbeat(workspaceName, stubId, tm.TaskId), 1, types.TaskHeartbeatTTL).Err()
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +149,20 @@ func (qc *taskQueueClient) TasksRunning(ctx context.Context, workspaceName, stub
 	}
 
 	return nTasks, nil
+}
+
+// Recovery state outlives completion attempts, but must not request execution
+// capacity. An accepted completion protects its current container via leases.
+var executionDemandScript = redis.NewScript(`
+return redis.call("LLEN", KEYS[1]) + #redis.call("SDIFF", KEYS[2], KEYS[3])
+`)
+
+func (qc *taskQueueClient) ExecutionDemand(ctx context.Context, workspaceName, stubId string) (int, error) {
+	return executionDemandScript.Run(ctx, qc.rdb, []string{
+		Keys.taskQueueList(workspaceName, stubId),
+		common.RedisKeys.TaskClaimIndex(workspaceName, stubId),
+		common.RedisKeys.TaskCompletionIndex(workspaceName, stubId),
+	}).Int()
 }
 
 // Get most recent task duration
