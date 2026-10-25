@@ -9,11 +9,12 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import cloudpickle
+import grpc
 
 from ..channel import (
     RECOVERY_TIMEOUT,
@@ -531,6 +532,14 @@ def end_task_and_send_callback(
     try:
         resp = end_task(gateway_stub, end_task_request)
     except Exception as exc:
+        if isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.CANCELLED:
+            send_task_callback(
+                gateway_stub=gateway_stub,
+                payload={},
+                end_task_request=replace(end_task_request, task_status=TaskStatus.Cancelled),
+                override_callback_url=override_callback_url,
+            )
+            raise
         # A completion failure must not suppress the user's callback.
         end_task_error = exc
         resp = None

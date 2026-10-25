@@ -3,12 +3,18 @@ import importlib
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import cloudpickle
+import grpc
+import pytest
 
 from beta9.runner import common
+from beta9.channel import Channel
+from beta9.clients.function import FunctionMonitorRequest
 
 original_config = common.config
 common.config = SimpleNamespace(task_id="task-id")
@@ -111,10 +117,12 @@ def test_monitor_reconnects_without_killing_running_function(monkeypatch):
 
     channel = MagicMock()
     channel.__enter__.return_value = channel
-    stub = MagicMock()
-    stub.function_monitor.side_effect = [Unavailable()] * 7 + [
-        [SimpleNamespace(cancelled=False, complete=True, timed_out=False)]
-    ]
+    stub = SimpleNamespace(
+        function_monitor=MagicMock(
+            side_effect=[Unavailable()] * 7
+            + [[SimpleNamespace(cancelled=False, complete=True, timed_out=False)]]
+        )
+    )
     monkeypatch.setattr(function_runner, "get_channel", lambda _: channel)
     monkeypatch.setattr(function_runner, "FunctionServiceStub", lambda _: stub)
     monkeypatch.setattr(function_runner.time, "sleep", lambda _: None)
@@ -127,3 +135,152 @@ def test_monitor_reconnects_without_killing_running_function(monkeypatch):
     )
     assert stub.function_monitor.call_count == 8
     kill.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "completion_code", [None, grpc.StatusCode.CANCELLED, grpc.StatusCode.FAILED_PRECONDITION]
+)
+def test_function_stops_monitor_before_finalization(monkeypatch, completion_code):
+    entered, cancelled = Event(), Event()
+    errors = []
+
+    def stream(request, context):
+        context.add_callback(cancelled.set)
+        entered.set()
+        cancelled.wait(10)
+        return iter(())
+
+    server = grpc.server(ThreadPoolExecutor(max_workers=1))
+    server.add_generic_rpc_handlers(
+        (
+            grpc.method_handlers_generic_handler(
+                "function.FunctionService",
+                {
+                    "FunctionMonitor": grpc.unary_stream_rpc_method_handler(
+                        stream,
+                        request_deserializer=FunctionMonitorRequest().parse,
+                        response_serializer=bytes,
+                    )
+                },
+            ),
+        )
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    channel = Channel(f"127.0.0.1:{port}")
+    context = SimpleNamespace(
+        task_id="task", stub_id="stub", container_id="container", callback_url=None
+    )
+    monkeypatch.setattr(
+        function_runner,
+        "config",
+        SimpleNamespace(
+            task_id="task",
+            container_id="container",
+            container_hostname="host",
+        ),
+    )
+    monkeypatch.setattr(function_runner.FunctionContext, "new", lambda **_: context)
+    monkeypatch.setattr(function_runner, "get_channel", lambda _: channel)
+    monkeypatch.setattr(function_runner.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(function_runner.os, "kill", MagicMock())
+    monkeypatch.setattr(function_runner, "start_task", lambda *_: SimpleNamespace(ok=True))
+
+    async def invoke(*_):
+        assert entered.wait(5)
+        return function_runner.InvokeResult(result="ok")
+
+    def complete(*_):
+        assert cancelled.wait(5), "the monitor RPC must end before finalization"
+        if completion_code is not None:
+            raise RpcFailure(completion_code)
+
+    original_monitor = function_runner._monitor_task
+
+    def monitor(**kwargs):
+        try:
+            original_monitor(**kwargs)
+        except Exception as error:
+            errors.append(error)
+
+    monkeypatch.setattr(function_runner, "_monitor_task", monitor)
+    monkeypatch.setattr(function_runner, "invoke_function", invoke)
+    monkeypatch.setattr(function_runner, "complete_task", complete)
+    try:
+        if completion_code == grpc.StatusCode.FAILED_PRECONDITION:
+            with pytest.raises(RpcFailure):
+                function_runner.run(channel)
+        else:
+            function_runner.run(channel)
+        assert not errors
+    finally:
+        channel.close()
+        server.stop(0).wait()
+
+
+class RpcFailure(grpc.RpcError):
+    def __init__(self, code=grpc.StatusCode.CANCELLED):
+        self._code = code
+
+    def code(self):
+        return self._code
+
+
+def test_result_upload_cancellation_is_not_reported_as_handler_failure():
+    stub = MagicMock()
+    stub.function_get_args.return_value = SimpleNamespace(
+        ok=True,
+        args=cloudpickle.dumps(
+            {"args": [], "kwargs": {"callback_url": "https://example.com/cancel"}}
+        ),
+    )
+    stub.function_set_result.side_effect = RpcFailure()
+    result = asyncio.run(
+        function_runner.invoke_function(
+            stub,
+            SimpleNamespace(container_id="container"),
+            "task",
+            handler=MagicMock(is_async=False, return_value="ok"),
+        )
+    )
+    assert result.cancelled
+    assert result.exception is None
+    assert result.callback_url == "https://example.com/cancel"
+
+
+def test_handler_cancellation_error_is_still_a_handler_failure():
+    stub = MagicMock()
+    stub.function_get_args.return_value = SimpleNamespace(
+        ok=True, args=cloudpickle.dumps({"args": [], "kwargs": {}})
+    )
+    error = RpcFailure()
+    result = asyncio.run(
+        function_runner.invoke_function(
+            stub,
+            SimpleNamespace(container_id="container"),
+            "task",
+            handler=MagicMock(is_async=False, side_effect=error),
+        )
+    )
+    assert not result.cancelled
+    assert result.exception is error
+    stub.function_set_result.assert_not_called()
+
+
+def test_cancelled_completion_does_not_send_success_callback():
+    gateway = MagicMock()
+    gateway.end_task.side_effect = RpcFailure()
+    with patch.object(common, "send_task_callback") as callback:
+        with pytest.raises(RpcFailure):
+            common.end_task_and_send_callback(
+                gateway_stub=gateway,
+                payload="result",
+                end_task_request=function_runner.EndTaskRequest(
+                    task_id="task",
+                    container_id="container",
+                    task_status="COMPLETE",
+                ),
+            )
+    callback.assert_called_once()
+    assert callback.call_args.kwargs["end_task_request"].task_status == "CANCELLED"
+    assert callback.call_args.kwargs["payload"] == {}

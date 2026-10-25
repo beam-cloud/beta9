@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"errors"
+	"fmt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"testing"
@@ -262,7 +263,7 @@ func TestEndTaskReplayRecoversFailedCleanup(t *testing.T) {
 }
 
 func TestEndTaskRejectsUnownedAndTerminalTasksWithoutRenewing(t *testing.T) {
-	for _, failure := range []string{"wrong_owner", "expired", "deleted"} {
+	for _, failure := range []string{"wrong_owner", "expired", "deleted", "cancelled"} {
 		t.Run(failure, func(t *testing.T) {
 			gws, _ := newTaskLifecycleGateway(t, "workspace-id")
 			backend := gws.backendRepo.(*taskLifecycleBackendRepo)
@@ -278,11 +279,47 @@ func TestEndTaskRejectsUnownedAndTerminalTasksWithoutRenewing(t *testing.T) {
 			case "deleted":
 				request.TaskId = "deleted"
 				expected = codes.NotFound
+			case "cancelled":
+				backend.task.Status = types.TaskStatusCancelled
+				expected = codes.Canceled
 			}
 			response, err := gws.EndTask(restrictedTaskLifecycleContext("workspace-id"), request)
 			require.Nil(t, response)
 			require.Equal(t, expected, status.Code(err))
 			require.Empty(t, backend.updates)
+		})
+	}
+}
+
+func TestStopTaskPersistsCancellationBeforeReleasingClaim(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		t.Run(fmt.Sprint(fails), func(t *testing.T) {
+			gws, tasks := newTaskLifecycleGateway(t, "workspace-id")
+			backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+			backend.task.Status = types.TaskStatusRunning
+			ctx := restrictedTaskLifecycleContext("workspace-id")
+			require.NoError(t, tasks.ClaimTask(ctx, "workspace", "stub-id", "task-id", "container-id"))
+			backend.update = func() {
+				claimed, err := tasks.IsClaimed(ctx, "workspace", "stub-id", "task-id")
+				require.NoError(t, err)
+				require.True(t, claimed, "cancellation must persist before the claim disappears")
+			}
+			if fails {
+				backend.err = errors.New("database unavailable")
+			}
+			authInfo, _ := auth.AuthInfoFromContext(ctx)
+			current := *backend.task
+			err := gws.stopTask(ctx, authInfo, &current)
+			claimed, claimErr := tasks.IsClaimed(ctx, "workspace", "stub-id", "task-id")
+			require.NoError(t, claimErr)
+			require.Equal(t, fails, claimed)
+			if fails {
+				require.Error(t, err)
+				require.Equal(t, types.TaskStatusRunning, backend.task.Status)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, types.TaskStatusCancelled, backend.task.Status)
+			}
 		})
 	}
 }

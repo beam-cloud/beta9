@@ -164,6 +164,66 @@ func TestFunctionResultReplayRequiresCurrentExecutionOwner(t *testing.T) {
 	_, err = service.FunctionSetResult(ctx, request)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Equal(t, "result", rdb.Get(ctx, Keys.FunctionResult("workspace", "task")).Val())
+	current.Status = types.TaskStatusCancelled
+	request.ContainerId = "container"
+	_, err = service.FunctionSetResult(ctx, request)
+	require.Equal(t, codes.Canceled, status.Code(err))
+	request.ContainerId = "intruder"
+	_, err = service.FunctionSetResult(ctx, request)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+type monitorBackend struct {
+	repository.BackendRepository
+	snapshot *types.TaskWithRelated
+	current  types.Task
+}
+
+func (b monitorBackend) GetTaskWithRelated(context.Context, string) (*types.TaskWithRelated, error) {
+	return b.snapshot, nil
+}
+
+func (b monitorBackend) GetTask(context.Context, string) (*types.Task, error) {
+	return &b.current, nil
+}
+
+type monitorStream struct {
+	pb.FunctionService_FunctionMonitorServer
+	ctx       context.Context
+	cancel    context.CancelFunc
+	responses []*pb.FunctionMonitorResponse
+}
+
+func (s *monitorStream) Context() context.Context { return s.ctx }
+func (s *monitorStream) Send(response *pb.FunctionMonitorResponse) error {
+	s.responses = append(s.responses, response)
+	s.cancel()
+	return nil
+}
+
+func TestMonitorReadsOutcomeAfterClaimRemoval(t *testing.T) {
+	for _, outcome := range []types.TaskStatus{types.TaskStatusCancelled, types.TaskStatusTimeout, types.TaskStatusComplete, types.TaskStatusRunning} {
+		t.Run(string(outcome), func(t *testing.T) {
+			server := miniredis.RunT(t)
+			rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+			require.NoError(t, err)
+			t.Cleanup(func() { rdb.Close() })
+			backend := monitorBackend{
+				snapshot: &types.TaskWithRelated{Task: types.Task{ExternalId: "task", Status: types.TaskStatusRunning}, Stub: types.Stub{Config: "{}"}},
+				current:  types.Task{ExternalId: "task", Status: outcome},
+			}
+			service := &ContainerFunctionService{ctx: context.Background(), rdb: rdb, backendRepo: backend, taskRepo: repository.NewTaskRedisRepository(rdb)}
+			ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{Name: "workspace"}})
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			stream := &monitorStream{ctx: ctx, cancel: cancel}
+			require.NoError(t, service.FunctionMonitor(&pb.FunctionMonitorRequest{TaskId: "task", StubId: "stub", ContainerId: "container"}, stream))
+			require.Len(t, stream.responses, 1)
+			require.Equal(t, outcome == types.TaskStatusCancelled, stream.responses[0].Cancelled)
+			require.Equal(t, outcome == types.TaskStatusTimeout, stream.responses[0].TimedOut)
+			require.Equal(t, outcome == types.TaskStatusComplete, stream.responses[0].Complete)
+		})
+	}
 }
 
 type legacyCompletedWorker struct {

@@ -154,6 +154,9 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}
 	if task.Status.IsCompleted() {
 		if task.Status != requestedStatus {
+			if task.Status == types.TaskStatusCancelled {
+				return nil, status.Error(codes.Canceled, "task was cancelled")
+			}
 			return nil, status.Error(codes.FailedPrecondition, "task already has a terminal outcome")
 		}
 		if err := gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId); err != nil {
@@ -370,6 +373,12 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 	if gws.eventRepo != nil {
 		gws.eventRepo.PushTaskCancelRequested(task, types.EventSourceGatewayStopTask, types.EventMessageGatewayTaskStopRequested)
 	}
+	// Persist cancellation before removing the claim that monitors observe.
+	task.Status = types.TaskStatusCancelled
+	task.EndedAt = types.NullTime{}.Now()
+	if _, err := gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
+		return errors.New("failed to update task")
+	}
 	err := gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
 	if err != nil {
 		return errors.New("failed to complete task")
@@ -393,11 +402,6 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 		}
 	}
 
-	task.Status = types.TaskStatusCancelled
-	task.EndedAt = types.NullTime{}.Now()
-	if _, err := gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
-		return errors.New("failed to update task")
-	}
 	if gws.eventRepo != nil {
 		gws.eventRepo.PushTaskCancelApplied(task, types.EventSourceGatewayStopTask, types.EventMessageGatewayTaskCancellationApplied)
 	}
