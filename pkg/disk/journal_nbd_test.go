@@ -129,7 +129,7 @@ func (c *testNBDClient) request(t *testing.T, command uint16, offset uint64, len
 
 // startTestJournalNBD serves a journal on store through the NBD proxy in front
 // of a size-byte export, and connects to it as the kernel would.
-func startTestJournalNBD(t *testing.T, store *memoryJournalStore, size int) (*testNBDClient, *Journal) {
+func startTestJournalNBD(t *testing.T, store *memoryJournalStore, size int, lag time.Duration) (*testNBDClient, *Journal, *journalNBD) {
 	t.Helper()
 	ctx := context.Background()
 	// Unix socket paths are limited to ~104 bytes on macOS; t.TempDir names
@@ -143,10 +143,10 @@ func startTestJournalNBD(t *testing.T, store *memoryJournalStore, size int) (*te
 	journal, err := OpenJournal(ctx, store, "disk", "owner", "", int64(size))
 	require.NoError(t, err)
 	t.Cleanup(func() { journal.Close() })
-	proxy, err := startJournalNBD(ctx, socket, upstream, journal)
+	proxy, err := startJournalNBD(ctx, socket, upstream, journal, lag)
 	require.NoError(t, err)
 	t.Cleanup(func() { proxy.Close() })
-	return dialTestNBDClient(t, socket), journal
+	return dialTestNBDClient(t, socket), journal, proxy
 }
 
 // The kernel sizes a discard up to the whole disk. It carries no payload, so
@@ -155,7 +155,7 @@ func startTestJournalNBD(t *testing.T, store *memoryJournalStore, size int) (*te
 // offered.
 func TestJournalNBDAnswersDiskSizedDiscard(t *testing.T) {
 	const size = 2 * nbdMaxRequest
-	client, _ := startTestJournalNBD(t, newMemoryJournalStore(), size)
+	client, _, _ := startTestJournalNBD(t, newMemoryJournalStore(), size, 0)
 	require.Equal(t, uint16(32), client.flags&(32|64), "trim must be offered and write-zeroes not")
 
 	require.Zero(t, client.request(t, nbdCommandTrim, 0, size, nil))
@@ -176,7 +176,7 @@ func TestJournalNBDFlushSurvivesRejectedHeadWrite(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newMemoryJournalStore()
-			client, journal := startTestJournalNBD(t, store, 1<<20)
+			client, journal, _ := startTestJournalNBD(t, store, 1<<20, 0)
 
 			block := bytes.Repeat([]byte{7}, 4096)
 			require.Zero(t, client.do(t, nbdCommandWrite, 0, block))
@@ -313,7 +313,7 @@ func (p *pipelinedNBDClient) answered(handle uint64) bool {
 // and a flush, including one with no new writes of its own, waits for it.
 func TestJournalNBDServesRequestsDuringACommit(t *testing.T) {
 	store := newMemoryJournalStore()
-	client, journal := startTestJournalNBD(t, store, 1<<20)
+	client, journal, _ := startTestJournalNBD(t, store, 1<<20, 0)
 	disk := pipelineNBDClient(t, client)
 	block := bytes.Repeat([]byte{7}, 4096)
 
@@ -340,9 +340,8 @@ func TestJournalNBDServesRequestsDuringACommit(t *testing.T) {
 // Flushes that arrive while a commit waits on the store share the next one,
 // and every write answered before a flush is recovered once it is answered.
 func TestJournalNBDFlushesDuringACommitShareTheNext(t *testing.T) {
-	ctx := context.Background()
 	store := newMemoryJournalStore()
-	client, journal := startTestJournalNBD(t, store, 1<<20)
+	client, journal, _ := startTestJournalNBD(t, store, 1<<20, 0)
 	disk := pipelineNBDClient(t, client)
 
 	release := store.holdHeadWrites()
@@ -363,14 +362,7 @@ func TestJournalNBDFlushesDuringACommitShareTheNext(t *testing.T) {
 
 	journal.Fail(errors.New("worker lost"))
 	require.Error(t, journal.Close())
-	recovered, err := OpenJournal(ctx, store, "disk", "recovered", "", 1<<20)
-	require.NoError(t, err)
-	defer recovered.Close()
-	image := make([]byte, 5*4096)
-	require.NoError(t, recovered.Replay(ctx, func(offset uint64, data []byte) error {
-		copy(image[offset:], data)
-		return nil
-	}))
+	image := replayedImage(t, store, 5*4096)
 	for i := 0; i < 5; i++ {
 		require.Equal(t, bytes.Repeat([]byte{byte(i + 1)}, 4096), image[i*4096:(i+1)*4096])
 	}
@@ -380,7 +372,7 @@ func TestJournalNBDFlushesDuringACommitShareTheNext(t *testing.T) {
 // and the device stops answering, as after any failed request.
 func TestJournalNBDFailedCommitFailsEveryWaitingFlush(t *testing.T) {
 	store := newMemoryJournalStore()
-	client, journal := startTestJournalNBD(t, store, 1<<20)
+	client, journal, _ := startTestJournalNBD(t, store, 1<<20, 0)
 	disk := pipelineNBDClient(t, client)
 
 	release := store.holdHeadWrites()
@@ -406,4 +398,129 @@ func TestJournalNBDFailedCommitFailsEveryWaitingFlush(t *testing.T) {
 	require.Equal(t, uint32(5), disk.await(t, first).errno)
 	require.Equal(t, uint32(5), disk.await(t, second).errno)
 	require.ErrorIs(t, journal.Check(), errFenced)
+}
+
+// replayedImage opens the journal store as the next owner would and returns
+// the first size bytes of the disk its replay rebuilds.
+func replayedImage(t *testing.T, store *memoryJournalStore, size int) []byte {
+	t.Helper()
+	ctx := context.Background()
+	recovered, err := OpenJournal(ctx, store, "disk", "recovered", "", 1<<20)
+	require.NoError(t, err)
+	defer recovered.Close()
+	image := make([]byte, size)
+	require.NoError(t, recovered.Replay(ctx, func(offset uint64, data []byte) error {
+		copy(image[offset:], data)
+		return nil
+	}))
+	return image
+}
+
+// Within the lag a flush is answered while its commit still waits on the
+// store, and what it covered is committed all the same.
+func TestJournalNBDLagAnswersFlushesBeforeTheirCommit(t *testing.T) {
+	store := newMemoryJournalStore()
+	client, journal, proxy := startTestJournalNBD(t, store, 1<<20, time.Hour)
+	disk := pipelineNBDClient(t, client)
+
+	release := store.holdHeadWrites()
+	defer release()
+	writes := store.headWrites()
+	require.Zero(t, disk.await(t, disk.write(t, 0, bytes.Repeat([]byte{1}, 4096))).errno)
+	require.Zero(t, disk.await(t, disk.flush(t)).errno, "a flush must not wait for its commit")
+	require.Zero(t, disk.await(t, disk.write(t, 4096, bytes.Repeat([]byte{2}, 4096))).errno)
+	require.Zero(t, disk.await(t, disk.flush(t)).errno, "a flush behind a commit must not wait for it")
+	require.Equal(t, writes, store.headWrites(), "nothing may commit while head writes are held")
+
+	release()
+	require.NoError(t, proxy.CommitAnswered())
+	require.NoError(t, journal.Check())
+	journal.Fail(errors.New("worker lost"))
+	require.Error(t, journal.Close())
+	image := replayedImage(t, store, 2*4096)
+	require.Equal(t, bytes.Repeat([]byte{1}, 4096), image[:4096])
+	require.Equal(t, bytes.Repeat([]byte{2}, 4096), image[4096:])
+}
+
+// Once a flush answered early has waited the lag for its commit, later
+// flushes wait for theirs, so a stalled store bounds what a lost worker loses.
+func TestJournalNBDLagBoundsUncommittedFlushes(t *testing.T) {
+	const lag = 200 * time.Millisecond
+	store := newMemoryJournalStore()
+	client, journal, _ := startTestJournalNBD(t, store, 1<<20, lag)
+	disk := pipelineNBDClient(t, client)
+	block := bytes.Repeat([]byte{7}, 4096)
+
+	release := store.holdHeadWrites()
+	defer release()
+	require.Zero(t, disk.await(t, disk.write(t, 0, block)).errno)
+	require.Zero(t, disk.await(t, disk.flush(t)).errno)
+	time.Sleep(lag)
+	require.Zero(t, disk.await(t, disk.write(t, 4096, block)).errno, "writes must still be answered")
+	late := disk.flush(t)
+	again := disk.flush(t)
+	time.Sleep(100 * time.Millisecond)
+	require.False(t, disk.answered(late), "a flush past the lag must wait for its commit")
+	require.False(t, disk.answered(again), "a flush with no writes of its own must wait for earlier ones")
+
+	release()
+	require.Zero(t, disk.await(t, late).errno)
+	require.Zero(t, disk.await(t, again).errno)
+	require.Zero(t, disk.await(t, disk.write(t, 8192, block)).errno)
+	require.Zero(t, disk.await(t, disk.flush(t)).errno, "flushes must be answered early again once the store catches up")
+	require.NoError(t, journal.Check())
+}
+
+// A commit that fails after its flush was answered fails the disk: nothing
+// else is answered, and the journal reports why.
+func TestJournalNBDLagFailsTheDiskWhenAnAnsweredCommitFails(t *testing.T) {
+	store := newMemoryJournalStore()
+	client, journal, proxy := startTestJournalNBD(t, store, 1<<20, time.Hour)
+	disk := pipelineNBDClient(t, client)
+
+	release := store.holdHeadWrites()
+	defer release()
+	require.Zero(t, disk.await(t, disk.write(t, 0, bytes.Repeat([]byte{1}, 4096))).errno)
+	require.Zero(t, disk.await(t, disk.flush(t)).errno)
+
+	store.mu.Lock()
+	var head journalHead
+	require.NoError(t, json.Unmarshal(store.current["disk/head.json"].data, &head))
+	head.Owner, head.Expires = "replacement-owner", time.Now().Add(2*journalLease)
+	data, err := json.Marshal(head)
+	require.NoError(t, err)
+	store.previous["disk/head.json"] = store.current["disk/head.json"]
+	store.current["disk/head.json"] = memoryHead{data: data, version: "replaced"}
+	store.mu.Unlock()
+	release()
+
+	require.Error(t, proxy.CommitAnswered())
+	require.ErrorIs(t, journal.Check(), errFenced)
+	disk.mu.Lock()
+	for !disk.closed {
+		disk.arrived.Wait()
+	}
+	disk.mu.Unlock()
+}
+
+// Detaching closes the proxy before the journal, so closing it must commit
+// every flush it answered early.
+func TestJournalNBDCloseCommitsAnsweredFlushes(t *testing.T) {
+	store := newMemoryJournalStore()
+	client, journal, proxy := startTestJournalNBD(t, store, 1<<20, time.Hour)
+	disk := pipelineNBDClient(t, client)
+
+	release := store.holdHeadWrites()
+	defer release()
+	require.Zero(t, disk.await(t, disk.write(t, 0, bytes.Repeat([]byte{3}, 4096))).errno)
+	require.Zero(t, disk.await(t, disk.flush(t)).errno)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		release()
+	}()
+	start := time.Now()
+	proxy.Close()
+	require.GreaterOrEqual(t, time.Since(start), 100*time.Millisecond, "closing must wait for the commit")
+	require.NoError(t, journal.Close())
+	require.Equal(t, bytes.Repeat([]byte{3}, 4096), replayedImage(t, store, 4096))
 }

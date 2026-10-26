@@ -220,6 +220,9 @@ func (g *Group) catalog() []mcpTool {
 				"snapshot_id": str("Restore an available qcow snapshot into a new database; the source is retained"),
 				"username":    str("Original Postgres role when restoring a snapshot"),
 				"database":    str("Original Postgres database name when restoring a snapshot"),
+				"zero_loss": map[string]any{"type": "boolean", "description": "Postgres and Redis: return each commit only " +
+					"once object storage has it, which adds about 100 ms to every commit. By default commits return at " +
+					"once, and losing the machine loses at most the last second of them."},
 			}, "kind", "name"),
 			Destructive: true,
 			Run:         g.createDatabase,

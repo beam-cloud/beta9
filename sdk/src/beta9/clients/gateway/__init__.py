@@ -385,6 +385,11 @@ class DatabaseServingConfig(betterproto.Message):
     password_secret_name: str = betterproto.string_field(8)
     database_secret_name: str = betterproto.string_field(9)
     connection_url_secret_name: str = betterproto.string_field(10)
+    commit_lag_ms: int = betterproto.uint32_field(11)
+    """
+    How long an object-store-flush disk may answer flushes before their
+     commits; zero answers each only once it is committed.
+    """
 
 
 @dataclass(eq=False, repr=False)

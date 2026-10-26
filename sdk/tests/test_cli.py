@@ -154,7 +154,11 @@ def test_database_kinds_share_one_command_set():
     assert "connect" in db.commands["redis"].commands
 
 
-def test_database_create_sends_gateway_request(monkeypatch):
+@pytest.mark.parametrize(
+    "extra_args, extra_fields",
+    [([], {}), (["--zero-loss"], {"zero_loss": True})],
+)
+def test_database_create_sends_gateway_request(monkeypatch, extra_args, extra_fields):
     calls = []
     monkeypatch.setattr(
         database_cli,
@@ -191,6 +195,7 @@ def test_database_create_sends_gateway_request(monkeypatch):
             "0.5",
             "--min-replicas",
             "1",
+            *extra_args,
         ],
     )
 
@@ -207,6 +212,7 @@ def test_database_create_sends_gateway_request(monkeypatch):
         "always_on": True,
         "cpu": 500,
         "memory": 2048,
+        **extra_fields,
     }
     assert "h:443" in result.output
 

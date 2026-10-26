@@ -114,6 +114,14 @@ DATABASE_JOB_DEFINITION: Dict[str, Any] = {
                 **STRING,
                 "description": "Original Postgres database when restoring a snapshot.",
             },
+            "zero_loss": {
+                "type": "boolean",
+                "description": (
+                    "Postgres and Redis: return each commit only once object storage has it, "
+                    "which adds about 100 ms to every commit. By default commits return at once, "
+                    "and losing the machine loses at most the last second of them."
+                ),
+            },
         },
         "additionalProperties": False,
     },

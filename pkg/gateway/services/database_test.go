@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"net"
@@ -99,6 +100,34 @@ func TestPostgresStubStoresOnlyOnItsDurableDisk(t *testing.T) {
 	require.Equal(t, types.PostgresDataMountPath, request.Disks[0].MountPath)
 	require.NotContains(t, managedPostgresScript, "/volumes")
 	require.NotContains(t, managedPostgresScript, "pgbackrest")
+}
+
+// New Postgres and Redis databases answer commits up to a second before object
+// storage has them unless created with zero loss, and say which they do.
+func TestDatabaseStubCommitLag(t *testing.T) {
+	info := func(request *pb.GetOrCreateStubRequest) types.DatabaseServiceInfo {
+		config, err := json.Marshal(types.StubConfigV1{Serving: servingConfigFromProto(request.Serving)})
+		require.NoError(t, err)
+		product := databaseProducts[request.Serving.Database.Kind]
+		return databaseInfo(product, databaseSecrets(product, "app-db"), &types.DeploymentWithRelated{Stub: types.Stub{Config: string(config)}})
+	}
+	for _, tc := range []struct {
+		kind     string
+		zeroLoss bool
+		lag      uint32
+	}{
+		{kind: types.DatabaseKindPostgres, lag: databaseCommitLagMs},
+		{kind: types.DatabaseKindPostgres, zeroLoss: true},
+		{kind: types.DatabaseKindRedis, lag: databaseCommitLagMs},
+		{kind: types.DatabaseKindRedis, zeroLoss: true},
+		{kind: "mysql"},
+	} {
+		product := databaseProducts[tc.kind]
+		params := types.CreateDatabaseParams{Name: "app-db", ZeroLoss: tc.zeroLoss}
+		request := databaseStubRequest(product, databaseSecrets(product, "app-db"), params, "image", "app-db-data-abc")
+		require.Equal(t, tc.lag, request.Serving.Database.CommitLagMs, tc.kind)
+		require.Equal(t, tc.zeroLoss, info(request).ZeroLoss, tc.kind)
+	}
 }
 
 func TestRefreshManagedPostgresDropsLegacyBackupVolumes(t *testing.T) {

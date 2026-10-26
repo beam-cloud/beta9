@@ -72,11 +72,18 @@ type nbdExport struct {
 // runs at a time while reads and writes go on, and the flushes that arrive
 // meanwhile share the next. Reads never bypass a failed ownership fence.
 // Structured replies and multiple connections are deliberately not advertised.
+//
+// With a lag, a flush is answered before its commit as long as no flush
+// answered that way has waited longer than the lag for its own; later ones
+// wait as above. Losing the worker then loses at most the flushes answered
+// within one lag, and always a prefix of the writes, which replay keeps
+// crash-consistent. A failed commit fails the disk as before.
 type journalNBD struct {
 	journal  *Journal
 	upstream net.Conn
 	listener net.Listener
 	size     uint64
+	lag      time.Duration
 	done     chan struct{}
 
 	mu     sync.Mutex
@@ -92,6 +99,7 @@ type journalNBD struct {
 	wanted   uint64     // the newest batch a flush or a held writer needs durable
 	durable  uint64     // the newest batch committed
 	waiters  []flushWaiter
+	owed     []owedFlush // the oldest flush answered early for each uncommitted batch
 	stopping bool
 	failure  error
 }
@@ -102,12 +110,18 @@ type flushWaiter struct {
 	batch  uint64
 }
 
-func startJournalNBD(ctx context.Context, socket, upstreamSocket string, journal *Journal) (*journalNBD, error) {
+// owedFlush is a flush answered before batch was durable.
+type owedFlush struct {
+	batch    uint64
+	answered time.Time
+}
+
+func startJournalNBD(ctx context.Context, socket, upstreamSocket string, journal *Journal, lag time.Duration) (*journalNBD, error) {
 	upstream, size, err := openBlockExport(ctx, upstreamSocket)
 	if err != nil {
 		return nil, err
 	}
-	proxy := &journalNBD{journal: journal, upstream: upstream, size: size, done: make(chan struct{}), batch: 1}
+	proxy := &journalNBD{journal: journal, upstream: upstream, size: size, lag: lag, done: make(chan struct{}), batch: 1}
 	proxy.commits = sync.NewCond(&proxy.commitMu)
 	if err := journal.Replay(ctx, func(offset uint64, data []byte) error {
 		_, err := proxy.exchange(blockRequest{Command: nbdCommandWrite, Offset: offset, Length: uint32(len(data))}, data)
@@ -283,7 +297,8 @@ func (p *journalNBD) request(request blockRequest, data []byte) (result []byte, 
 
 // awaitCommit queues a flush for the committer when writes answered before it
 // are uncommitted: those in the batch writes are joining, or, if it has none,
-// in the batch committing now. Otherwise the flush is answered at once.
+// in the batch committing now. Otherwise, or if the lag allows, the flush is
+// answered at once.
 func (p *journalNBD) awaitCommit(handle uint64) (queued bool, err error) {
 	p.commitMu.Lock()
 	if p.failure != nil {
@@ -295,17 +310,51 @@ func (p *journalNBD) awaitCommit(handle uint64) (queued bool, err error) {
 		batch--
 	}
 	if batch > p.durable {
-		p.waiters = append(p.waiters, flushWaiter{handle: handle, batch: batch})
 		p.wanted = max(p.wanted, batch)
 		p.commits.Broadcast()
+		if p.owe(batch) {
+			p.commitMu.Unlock()
+			return false, nil
+		}
+		p.waiters = append(p.waiters, flushWaiter{handle: handle, batch: batch})
 		p.commitMu.Unlock()
 		return true, nil
 	}
 	p.commitMu.Unlock()
+	if p.lag > 0 {
+		// A journaled disk never reuses its local state, so a local flush
+		// would make nothing more durable.
+		return false, nil
+	}
 	// Everything answered so far is committed, and request already checked
 	// the lease: nothing to send.
 	_, err = p.exchange(blockRequest{Command: nbdCommandFlush}, nil)
 	return false, err
+}
+
+// owe reports whether a flush that needs batch may be answered before batch
+// commits, and records it if so: only while no flush answered that way has
+// waited for its commit as long as the lag.
+func (p *journalNBD) owe(batch uint64) bool {
+	now := time.Now()
+	if p.lag <= 0 || len(p.owed) > 0 && now.Sub(p.owed[0].answered) >= p.lag {
+		return false
+	}
+	if n := len(p.owed); n == 0 || p.owed[n-1].batch < batch {
+		p.owed = append(p.owed, owedFlush{batch: batch, answered: now})
+	}
+	return true
+}
+
+// CommitAnswered returns once every flush answered so far is committed, or
+// the disk has failed.
+func (p *journalNBD) CommitAnswered() error {
+	p.commitMu.Lock()
+	defer p.commitMu.Unlock()
+	for p.failure == nil && len(p.owed) > 0 {
+		p.commits.Wait()
+	}
+	return p.failure
 }
 
 func (p *journalNBD) waitDurable(batch uint64) error {
@@ -343,8 +392,16 @@ func (p *journalNBD) commit(client net.Conn) {
 		if err != nil {
 			p.failure = err
 			answered, p.waiters = p.waiters, nil
+			if len(p.owed) > 0 {
+				log.Error().Err(err).Dur("unpersisted", time.Since(p.owed[0].answered)).
+					Msg("durable disk lost flushes it had answered")
+				p.owed = nil
+			}
 		} else {
 			p.durable = batch
+			for len(p.owed) > 0 && p.owed[0].batch <= batch {
+				p.owed = p.owed[1:]
+			}
 			kept := p.waiters[:0]
 			for _, waiter := range p.waiters {
 				if waiter.batch <= batch {
@@ -524,6 +581,8 @@ func nbdOptionReply(client net.Conn, option, kind uint32, data []byte) error {
 	return err
 }
 
+// Close disconnects the kernel and returns once every flush it sent has been
+// committed or has failed, which upstream must stay open for.
 func (p *journalNBD) Close() {
 	p.listener.Close()
 	p.mu.Lock()
@@ -531,6 +590,5 @@ func (p *journalNBD) Close() {
 		p.client.Close()
 	}
 	p.mu.Unlock()
-	p.upstream.Close()
 	<-p.done
 }

@@ -102,6 +102,7 @@ func (g *Group) createDatabase(ctx context.Context, a *auth.AuthInfo, args toolA
 		SnapshotID: args.str("snapshot_id"),
 		Username:   args.str("username"),
 		Database:   args.str("database"),
+		ZeroLoss:   args.boolean("zero_loss"),
 	})
 	if err != nil {
 		return nil, err

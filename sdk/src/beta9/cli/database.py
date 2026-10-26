@@ -115,6 +115,7 @@ RESULT_KEYS = (
     "username_secret",
     "password_secret",
     "database_secret",
+    "zero_loss",
 )
 
 
@@ -304,12 +305,22 @@ def _database_group(kind: str, label: str) -> click.Group:
     @group.command(name="create", help=f"Create a serverless {label} service.")
     @click.argument("name")
     @click.option("--database", default="", help="Initial database name.", hidden=kind == "redis")
+    @click.option(
+        "--zero-loss",
+        is_flag=True,
+        hidden=kind not in ("postgres", "redis"),
+        help=(
+            "Return each commit only once object storage has it, about 100 ms later. By default "
+            "commits return at once, and losing the machine loses at most the last second of them."
+        ),
+    )
     @_create_options
     @extraclick.pass_service_client
     def create(
         service: ServiceClient,
         name: str,
         database: str,
+        zero_loss: bool,
         username: str,
         password: str,
         password_from_env: str,
@@ -333,6 +344,7 @@ def _database_group(kind: str, label: str) -> click.Group:
                 "always_on": min_replicas > 0,
                 "cpu": int(cpu * 1000) if cpu else 0,
                 "memory": _memory_mb(memory),
+                **({"zero_loss": True} if zero_loss else {}),
             },
         )
         _print_result(format, _result(info))

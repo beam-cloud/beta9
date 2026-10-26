@@ -349,3 +349,17 @@ func databaseRequest(t *testing.T, durability string, mounts ...types.Mount) *ty
 	request.Stub.Config = string(config)
 	return request
 }
+
+// A database disk answers flushes early only as long as its stub allows; one
+// created before the setting existed waits for every commit.
+func TestJournalCommitLagFollowsTheStub(t *testing.T) {
+	request := databaseRequest(t, "object-store-flush")
+	require.Zero(t, journalCommitLag(request))
+
+	config, err := json.Marshal(types.StubConfigV1{Serving: &types.ServingConfig{
+		Database: &types.DatabaseServingConfig{DurabilityMode: "object-store-flush", CommitLagMs: 1000},
+	}})
+	require.NoError(t, err)
+	request.Stub.Config = string(config)
+	require.Equal(t, time.Second, journalCommitLag(request))
+}

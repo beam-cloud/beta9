@@ -655,17 +655,21 @@ type ServingConfig struct {
 }
 
 type DatabaseServingConfig struct {
-	Kind                    string   `json:"kind,omitempty" serializer:"kind,omitempty"`
-	Port                    uint32   `json:"port,omitempty" serializer:"port,omitempty"`
-	ReadinessProbe          string   `json:"readiness_probe,omitempty" serializer:"readiness_probe,omitempty"`
-	ConnectionEnvName       string   `json:"connection_env_name,omitempty" serializer:"connection_env_name,omitempty"`
-	ConnectionURL           string   `json:"connection_url,omitempty" serializer:"connection_url,omitempty"`
-	CredentialSecretNames   []string `json:"credential_secret_names,omitempty" serializer:"credential_secret_names,omitempty"`
-	DurabilityMode          string   `json:"durability_mode,omitempty" serializer:"durability_mode,omitempty"`
-	UsernameSecretName      string   `json:"username_secret_name,omitempty" serializer:"username_secret_name,omitempty"`
-	PasswordSecretName      string   `json:"password_secret_name,omitempty" serializer:"password_secret_name,omitempty"`
-	DatabaseSecretName      string   `json:"database_secret_name,omitempty" serializer:"database_secret_name,omitempty"`
-	ConnectionURLSecretName string   `json:"connection_url_secret_name,omitempty" serializer:"connection_url_secret_name,omitempty"`
+	Kind                  string   `json:"kind,omitempty" serializer:"kind,omitempty"`
+	Port                  uint32   `json:"port,omitempty" serializer:"port,omitempty"`
+	ReadinessProbe        string   `json:"readiness_probe,omitempty" serializer:"readiness_probe,omitempty"`
+	ConnectionEnvName     string   `json:"connection_env_name,omitempty" serializer:"connection_env_name,omitempty"`
+	ConnectionURL         string   `json:"connection_url,omitempty" serializer:"connection_url,omitempty"`
+	CredentialSecretNames []string `json:"credential_secret_names,omitempty" serializer:"credential_secret_names,omitempty"`
+	DurabilityMode        string   `json:"durability_mode,omitempty" serializer:"durability_mode,omitempty"`
+	// CommitLagMs is how long an object-store-flush disk may answer flushes
+	// before their commits, which a lost worker loses; zero answers each only
+	// once it is committed. Workers that predate it always wait.
+	CommitLagMs             uint32 `json:"commit_lag_ms,omitempty" serializer:"commit_lag_ms,omitempty"`
+	UsernameSecretName      string `json:"username_secret_name,omitempty" serializer:"username_secret_name,omitempty"`
+	PasswordSecretName      string `json:"password_secret_name,omitempty" serializer:"password_secret_name,omitempty"`
+	DatabaseSecretName      string `json:"database_secret_name,omitempty" serializer:"database_secret_name,omitempty"`
+	ConnectionURLSecretName string `json:"connection_url_secret_name,omitempty" serializer:"connection_url_secret_name,omitempty"`
 }
 
 func (d *DatabaseServingConfig) ClearSecretNames() {

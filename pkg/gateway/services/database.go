@@ -43,6 +43,9 @@ const (
 	databaseDefaultMemory   = 512  // MB
 	databasePythonVersion   = "python3.10"
 	databaseDiskFilesystem  = "ext4"
+	// A journaled database's commits return up to this long before object
+	// storage has them, unless it was created with zero loss.
+	databaseCommitLagMs = 1000
 
 	postgresScriptPath   = "/tmp/beam-postgres"
 	databaseProbeTimeout = 5 * time.Second
@@ -366,6 +369,9 @@ func (gws *GatewayService) CreateDatabaseService(ctx context.Context, authInfo *
 	if err := validateDatabaseName(p.Name); err != nil {
 		return nil, err
 	}
+	if p.ZeroLoss && product.DurabilityMode != "object-store-flush" {
+		return nil, errors.New("zero loss is available for Postgres and Redis")
+	}
 	if err := gws.scheduler.CreditGate().Check(ctx, authInfo.Workspace.ExternalId); err != nil {
 		return nil, err
 	}
@@ -481,6 +487,10 @@ func databaseStubRequest(product databaseProduct, names databaseSecretNames, p t
 	if p.Pool != "" {
 		pool = &pb.PoolConfig{Name: p.Pool}
 	}
+	var commitLagMs uint32
+	if product.DurabilityMode == "object-store-flush" && !p.ZeroLoss {
+		commitLagMs = databaseCommitLagMs
+	}
 	return &pb.GetOrCreateStubRequest{
 		ImageId:            imageId,
 		StubType:           types.StubTypePodDeployment,
@@ -513,6 +523,7 @@ func databaseStubRequest(product databaseProduct, names databaseSecretNames, p t
 				ConnectionEnvName:       product.ConnectionEnvName,
 				CredentialSecretNames:   names.all(),
 				DurabilityMode:          product.DurabilityMode,
+				CommitLagMs:             commitLagMs,
 				UsernameSecretName:      names.Username,
 				PasswordSecretName:      names.Password,
 				DatabaseSecretName:      names.Database,
@@ -784,8 +795,13 @@ func databaseInfo(product databaseProduct, names databaseSecretNames, d *types.D
 		PasswordSecret:         names.Password,
 		DatabaseSecret:         names.Database,
 	}
-	if config, err := d.Stub.UnmarshalConfig(); err == nil && slices.Contains(config.Ports, product.PoolPort) {
-		info.PooledConnectionStringSecret = names.PooledURL
+	if config, err := d.Stub.UnmarshalConfig(); err == nil {
+		if slices.Contains(config.Ports, product.PoolPort) {
+			info.PooledConnectionStringSecret = names.PooledURL
+		}
+		if database := config.EffectiveDatabaseConfig(); database != nil {
+			info.ZeroLoss = database.DurabilityMode == "object-store-flush" && database.CommitLagMs == 0
+		}
 	}
 	return info
 }

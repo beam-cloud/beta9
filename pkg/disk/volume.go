@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -30,6 +31,7 @@ type Volume struct {
 	nbd        *nbdDevice
 	fmtNode    string
 	journal    *Journal
+	journalLag time.Duration
 	journalNBD *journalNBD
 
 	// freeze quiesces the filesystem before a pivot when the host has not
@@ -82,6 +84,10 @@ type AttachSpec struct {
 	Owner string
 	// Journal makes flush completion conditional on remote persistence.
 	Journal *Journal
+	// JournalLag lets a flush complete before its remote commit as long as
+	// no flush completed that way has waited this long for its own. Zero
+	// completes every flush only once it is committed.
+	JournalLag time.Duration
 }
 
 // ChainLayer is one published generation of a volume.
@@ -227,7 +233,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 		state.Mountpoint = ""
 	}
 
-	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead, freeze: spec.Freeze, owner: spec.Owner, journal: spec.Journal}
+	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead, freeze: spec.Freeze, owner: spec.Owner, journal: spec.Journal, journalLag: spec.JournalLag}
 	if err := volume.start(ctx); err != nil {
 		return nil, err
 	}
@@ -400,7 +406,7 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	nbdSocket := qsd.nbdSocket
 	if v.journal != nil {
 		nbdSocket = filepath.Join(m.runtimeDir(state.Key), "durable.sock")
-		v.journalNBD, err = startJournalNBD(ctx, nbdSocket, qsd.nbdSocket, v.journal)
+		v.journalNBD, err = startJournalNBD(ctx, nbdSocket, qsd.nbdSocket, v.journal, v.journalLag)
 		if err != nil {
 			return err
 		}
@@ -647,13 +653,20 @@ func (v *Volume) sealedLayers() []SealedLayer {
 // limits until the returned thaw has run. The freeze flushes every dirty page
 // through the journal and the thaw rewrites the superblock before writers
 // resume; the seal waits for both, so neither can wait for the room the seal
-// is about to make. Writes after the thaw wait like any other.
+// is about to make. Writes after the thaw wait like any other. Flushes the
+// proxy answered early are committed before it returns, so the journal
+// position the seal records covers everything in the frozen head.
 func (v *Volume) quiesceFlushing(ctx context.Context) (func(), error) {
 	if v.journal == nil {
 		return v.quiesce(ctx)
 	}
 	v.journal.Flushing(true)
 	thaw, err := v.quiesce(ctx)
+	if err == nil && v.journalNBD != nil {
+		if err = v.journalNBD.CommitAnswered(); err != nil {
+			thaw()
+		}
+	}
 	if err != nil {
 		v.journal.Flushing(false)
 		return nil, err
