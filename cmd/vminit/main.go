@@ -245,8 +245,49 @@ func clearOverlayOrigins(upper string) error {
 	})
 }
 
+var sysBlockDir = "/sys/block"
+
+// enableWriteCache makes the guest send flushes to device. qemu-storage-daemon
+// reports its vhost-user exports as write-through yet keeps qcow2 metadata in
+// memory until a flush, so without flushes the writes ext4 has committed are
+// lost when the daemon dies. A device whose cache mode is fixed is left alone.
+// Switch only before the disk carries I/O: the same config write issued just
+// after a memory restore can leave requests that never complete.
+func enableWriteCache(device string) error {
+	dir := filepath.Join(sysBlockDir, filepath.Base(device))
+	mode, err := os.ReadFile(filepath.Join(dir, "queue", "write_cache"))
+	if err != nil {
+		return fmt.Errorf("read %s cache mode: %w", device, err)
+	}
+	if strings.TrimSpace(string(mode)) == "write back" {
+		return nil
+	}
+	cacheType := filepath.Join(dir, "cache_type")
+	info, err := os.Stat(cacheType)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && info.Mode().Perm()&0o200 == 0) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(cacheType, []byte("write back"), 0); err != nil {
+		return fmt.Errorf("enable %s write cache: %w", device, err)
+	}
+	mode, err = os.ReadFile(filepath.Join(dir, "queue", "write_cache"))
+	if err != nil {
+		return fmt.Errorf("read %s cache mode: %w", device, err)
+	}
+	if got := strings.TrimSpace(string(mode)); got != "write back" {
+		return fmt.Errorf("%s still reports a %s cache", device, got)
+	}
+	return nil
+}
+
 func assembleRoot(vm *microvm.Spec) error {
 	if err := waitForDevice(vm.RootDisk); err != nil {
+		return err
+	}
+	if err := enableWriteCache(vm.RootDisk); err != nil {
 		return err
 	}
 	if err := unix.Mount(vm.RootDisk, microvm.DiskMount, "ext4", 0, ""); err != nil {
@@ -331,6 +372,8 @@ func assembleRoot(vm *microvm.Spec) error {
 		var flags uintptr
 		if disk.ReadOnly {
 			flags = unix.MS_RDONLY
+		} else if err := enableWriteCache(disk.Device); err != nil {
+			return err
 		}
 		if err := unix.Mount(disk.Device, target, "ext4", flags, ""); err != nil {
 			return fmt.Errorf("mount %s on %s: %w", disk.Device, disk.MountPath, err)
