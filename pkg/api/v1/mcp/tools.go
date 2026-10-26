@@ -184,6 +184,7 @@ func (g *Group) capabilities(ctx context.Context, a *auth.AuthInfo, _ toolArgs) 
 	// Available recovery workflows and durability qualification are separate capabilities.
 	out["database_recovery"] = map[string]any{
 		"mode":                        "object-store-flush for new Postgres/Redis; snapshots for legacy disks",
+		"commit_lag":                  "new Postgres/Redis return commits up to 1s before object storage has them; zero_loss waits for it",
 		"conditional_writes_required": true,
 		"single_machine_failure_rpo_zero_qualified": false,
 	}

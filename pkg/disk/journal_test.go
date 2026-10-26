@@ -3,6 +3,7 @@ package disk
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -173,7 +174,9 @@ type memoryJournalStore struct {
 	freshReads    int // reads served normally before the stale ones
 	staleReads    int // reads served one write behind
 	downUntil     time.Time
-	failedCalls   int // calls refused during an outage
+	failedCalls   int           // calls refused during an outage
+	uploadGate    chan struct{} // uploads wait for it to close
+	writeGate     chan struct{} // head writes wait for it to close
 }
 
 type memoryHead struct {
@@ -225,7 +228,10 @@ func (s *memoryJournalStore) ReadVersion(_ context.Context, key string) ([]byte,
 	return append([]byte(nil), head.data...), head.version, nil
 }
 
-func (s *memoryJournalStore) WriteVersion(_ context.Context, key string, data []byte, version string) (string, error) {
+func (s *memoryJournalStore) WriteVersion(ctx context.Context, key string, data []byte, version string) (string, error) {
+	if err := s.pass(ctx, &s.writeGate); err != nil {
+		return "", err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.down() {
@@ -254,7 +260,10 @@ func (s *memoryJournalStore) WriteVersion(_ context.Context, key string, data []
 	return next.version, nil
 }
 
-func (s *memoryJournalStore) Upload(_ context.Context, key string, data []byte) error {
+func (s *memoryJournalStore) Upload(ctx context.Context, key string, data []byte) error {
+	if err := s.pass(ctx, &s.uploadGate); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.down() {
@@ -275,6 +284,47 @@ func (s *memoryJournalStore) Download(_ context.Context, key string) ([]byte, er
 		return nil, fmt.Errorf("no such key %s", key)
 	}
 	return append([]byte(nil), data...), nil
+}
+
+func (s *memoryJournalStore) holdUploads() (release func())    { return s.hold(&s.uploadGate) }
+func (s *memoryJournalStore) holdHeadWrites() (release func()) { return s.hold(&s.writeGate) }
+
+// hold makes the calls that pass gate wait until release.
+func (s *memoryJournalStore) hold(gate *chan struct{}) (release func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	held := make(chan struct{})
+	*gate = held
+	return sync.OnceFunc(func() { close(held) })
+}
+
+// pass waits for a held gate to be released.
+func (s *memoryJournalStore) pass(ctx context.Context, gate *chan struct{}) error {
+	s.mu.Lock()
+	held := *gate
+	s.mu.Unlock()
+	if held == nil {
+		return nil
+	}
+	select {
+	case <-held:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *memoryJournalStore) headWrites() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writes
+}
+
+func (s *memoryJournalStore) stored(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.objects[key]
+	return ok
 }
 
 func (s *memoryJournalStore) pendingFaults() int {
@@ -402,6 +452,7 @@ func TestJournalCheckFailureReleasesHeldWrites(t *testing.T) {
 	waited := holdWrite(t, journal, 1)
 	journal.mu.Lock()
 	journal.head.Expires = time.Now().Add(-time.Second)
+	journal.lease.Store(journal.head.Expires.UnixNano())
 	journal.mu.Unlock()
 	require.Error(t, journal.Check())
 	select {
@@ -769,4 +820,118 @@ func TestJournalReplayPreservesCommitOrder(t *testing.T) {
 		require.Equal(t, fmt.Sprintf("segment-%02d", i), payload)
 	}
 	require.Equal(t, "segment-39", image[7*512], "the last write to an offset must win")
+}
+
+func randomPayload(t *testing.T, n int) string {
+	t.Helper()
+	data := make([]byte, n)
+	_, err := rand.Read(data)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func inlineBytes(head journalHead) (n int) {
+	for _, segment := range head.Segments {
+		n += len(segment.Data)
+	}
+	return n
+}
+
+// A small flush commits in one head write: the head carries the segment, so
+// it is recovered even if its own object was never uploaded.
+func TestJournalSmallSegmentCommitsInItsHead(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	release := store.holdUploads()
+	defer release()
+	first, err := OpenJournal(ctx, store, "disk", "first-owner", "", 4096)
+	require.NoError(t, err)
+	require.NoError(t, first.Commit(ctx, journalRecord(t, 0, "saved")), "a small commit must not wait for an upload")
+
+	head, _ := store.head(t, "disk/head.json")
+	require.Len(t, head.Segments, 1)
+	require.NotEmpty(t, head.Segments[0].Data)
+	require.False(t, store.stored("disk/segments/"+head.Segments[0].Digest))
+
+	first.Fail(errors.New("worker lost"))
+	require.Error(t, first.Close())
+	second, err := OpenJournal(ctx, store, "disk", "second-owner", "", 4096)
+	require.NoError(t, err)
+	defer second.Close()
+	require.Equal(t, "saved", replaySaved(t, second))
+}
+
+// Once a segment's own object is stored, the heads after it refer to it
+// instead of carrying it, and a closed journal leaves no segment inline.
+func TestJournalUploadedSegmentsLeaveTheHead(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	journal, err := OpenJournal(ctx, store, "disk", "owner", "", 4096)
+	require.NoError(t, err)
+	require.NoError(t, journal.Commit(ctx, journalRecord(t, 0, "first")))
+	head, _ := store.head(t, "disk/head.json")
+	digest := head.Segments[0].Digest
+	require.Eventually(t, func() bool {
+		journal.mu.Lock()
+		defer journal.mu.Unlock()
+		return journal.head.Segments[0].Data == nil
+	}, 5*time.Second, 10*time.Millisecond, "the committed segment must be uploaded")
+	require.True(t, store.stored("disk/segments/"+digest))
+
+	require.NoError(t, journal.Commit(ctx, journalRecord(t, 0, "second")))
+	head, _ = store.head(t, "disk/head.json")
+	require.Nil(t, head.Segments[0].Data, "the next head must refer to the uploaded segment")
+
+	require.NoError(t, journal.Close())
+	head, _ = store.head(t, "disk/head.json")
+	require.Zero(t, inlineBytes(head), "a released head must carry no inline segments")
+	recovered, err := OpenJournal(ctx, store, "disk", "recovered", "", 4096)
+	require.NoError(t, err)
+	defer recovered.Close()
+	require.Equal(t, "firstsecond", replaySaved(t, recovered))
+}
+
+// A segment too large to ride in its head is uploaded before the head that
+// commits it, as every segment was before inline commits.
+func TestJournalLargeSegmentUploadsBeforeItsHead(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	journal, err := OpenJournal(ctx, store, "disk", "owner", "", 1<<30)
+	require.NoError(t, err)
+	defer journal.Close()
+	require.NoError(t, journal.Commit(ctx, journalRecord(t, 0, randomPayload(t, journalInlineSegmentBytes+4096))))
+	head, _ := store.head(t, "disk/head.json")
+	require.Nil(t, head.Segments[0].Data)
+	require.True(t, store.stored("disk/segments/"+head.Segments[0].Digest))
+}
+
+// While uploads lag, inline segments fill the head only up to its budget;
+// the commit past it waits for its own upload instead of growing the head.
+func TestJournalInlineSegmentsStayWithinTheHeadBudget(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryJournalStore()
+	release := store.holdUploads()
+	defer release()
+	journal, err := OpenJournal(ctx, store, "disk", "owner", "", 1<<30)
+	require.NoError(t, err)
+	defer journal.Close()
+
+	const segment = 200 << 10
+	for i := 0; i < journalInlineBytes/segment; i++ {
+		require.NoError(t, journal.Commit(ctx, journalRecord(t, 0, randomPayload(t, segment))))
+	}
+	committed := make(chan error, 1)
+	go func() { committed <- journal.Commit(ctx, journalRecord(t, 0, randomPayload(t, segment))) }()
+	select {
+	case err := <-committed:
+		t.Fatalf("a commit past the inline budget must wait for its upload, got %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	head, _ := store.head(t, "disk/head.json")
+	require.LessOrEqual(t, inlineBytes(head), journalInlineBytes)
+
+	release()
+	require.NoError(t, <-committed)
+	head, _ = store.head(t, "disk/head.json")
+	require.Nil(t, head.Segments[len(head.Segments)-1].Data)
 }

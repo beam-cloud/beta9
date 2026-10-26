@@ -13,6 +13,7 @@ import (
 	"io"
 	"path"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -42,6 +43,13 @@ const (
 	journalMaxSegments        = 16384
 	journalCheckpointSegments = 4096
 	journalReplayConcurrency  = 16
+	// A compressed segment this small rides in the head that commits it, so
+	// its flush costs one store round trip, and is uploaded on its own once
+	// committed. Inline segments in one head stay under journalInlineBytes;
+	// past either limit a segment is uploaded before its head.
+	journalInlineSegmentBytes = 256 << 10
+	journalInlineBytes        = 1 << 20
+	journalUploadConcurrency  = 4
 )
 
 // errFenced ends retries early: another owner holds a newer lease on the disk.
@@ -98,6 +106,8 @@ type journalSegment struct {
 	Sequence uint64 `json:"sequence"`
 	Digest   string `json:"digest"`
 	Bytes    int    `json:"bytes"`
+	// Data is the compressed segment while the head is its only copy.
+	Data []byte `json:"data,omitempty"`
 }
 
 type journalHead struct {
@@ -129,7 +139,13 @@ type Journal struct {
 	room       *sync.Cond // wakes writers waiting for the backlog to shrink
 	cancel     context.CancelFunc
 	done       chan struct{}
+	uploaded   chan struct{} // closed when the inline uploader stops
+	inline     chan struct{} // wakes the inline uploader
 	checkpoint chan struct{}
+	// Mirrors of failed and of the lease the store last committed, so Check
+	// need not wait out a commit holding mu.
+	failure atomic.Pointer[error]
+	lease   atomic.Int64 // unix nanoseconds
 }
 
 func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapshot string, size int64) (*Journal, error) {
@@ -138,6 +154,7 @@ func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapsho
 	}
 	j := &Journal{
 		store: store, prefix: prefix, done: make(chan struct{}), checkpoint: make(chan struct{}, 1),
+		uploaded: make(chan struct{}), inline: make(chan struct{}, 1),
 		head:       journalHead{Version: 1, Size: size, Snapshot: snapshot, Formatted: snapshot != ""},
 		recovering: true,
 	}
@@ -152,12 +169,15 @@ func OpenJournal(ctx context.Context, store JournalStore, prefix, owner, snapsho
 	if err := j.persist(ctx); err != nil {
 		return nil, fmt.Errorf("acquire disk ownership: %w", err)
 	}
-	// A recovered journal can already exceed the checkpoint threshold.
+	// A recovered journal can already exceed the checkpoint threshold, and
+	// its head can still carry inline segments.
 	j.requestCheckpoint()
+	j.requestUpload()
 
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	j.cancel = cancel
 	go j.renew(leaseCtx)
+	go j.uploadInline(leaseCtx)
 	return j, nil
 }
 
@@ -243,6 +263,7 @@ func (j *Journal) persist(ctx context.Context) error {
 	if err := j.writeHead(ctx, false); err != nil {
 		return j.fail(fmt.Errorf("disk ownership or persistence lost: %w", err))
 	}
+	j.lease.Store(j.head.Expires.UnixNano())
 	return nil
 }
 
@@ -251,6 +272,7 @@ func (j *Journal) persist(ctx context.Context) error {
 func (j *Journal) fail(err error) error {
 	if j.failed == nil {
 		j.failed = err
+		j.failure.Store(&err)
 	}
 	j.room.Broadcast()
 	return j.failed
@@ -331,7 +353,15 @@ func (j *Journal) leaseEnd() time.Time {
 	return j.head.Expires
 }
 
+// Check reports the journal's failure, failing it first if the lease the
+// store last committed has lapsed. A commit in flight does not delay it.
 func (j *Journal) Check() error {
+	if failed := j.failure.Load(); failed != nil {
+		return *failed
+	}
+	if time.Now().UnixNano() < j.lease.Load() {
+		return nil
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.failed == nil && time.Now().After(j.head.Expires) {
@@ -521,11 +551,9 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 	}
 	digest := sha256.Sum256(compressed.Bytes())
 	segment := journalSegment{Sequence: j.head.Sequence + 1, Digest: hex.EncodeToString(digest[:]), Bytes: len(records)}
-	// Segments are content-addressed, so a repeated upload is harmless.
-	err = retry(ctx, retryUntil(j.head.Expires), func(ctx context.Context, _ int) error {
-		return j.store.Upload(ctx, j.segmentKey(segment.Digest), compressed.Bytes())
-	})
-	if err != nil {
+	if compressed.Len() <= journalInlineSegmentBytes && j.inlineBytes()+compressed.Len() <= journalInlineBytes {
+		segment.Data = compressed.Bytes()
+	} else if err := j.upload(ctx, j.head.Expires, segment.Digest, compressed.Bytes()); err != nil {
 		return j.fail(fmt.Errorf("persist disk writes: %w", err))
 	}
 	j.head.Sequence = segment.Sequence
@@ -533,8 +561,90 @@ func (j *Journal) Commit(ctx context.Context, records []byte) error {
 	if err := j.persist(ctx); err != nil {
 		return err
 	}
+	if segment.Data != nil {
+		j.requestUpload()
+	}
 	j.requestCheckpoint()
 	return nil
+}
+
+// upload stores a segment's object, retrying until the given lease end.
+// Segments are content-addressed, so a repeated upload is harmless.
+func (j *Journal) upload(ctx context.Context, until time.Time, digest string, data []byte) error {
+	return retry(ctx, retryUntil(until), func(ctx context.Context, _ int) error {
+		return j.store.Upload(ctx, j.segmentKey(digest), data)
+	})
+}
+
+func (j *Journal) inlineBytes() (n int) {
+	for _, segment := range j.head.Segments {
+		n += len(segment.Data)
+	}
+	return n
+}
+
+func (j *Journal) requestUpload() {
+	select {
+	case j.inline <- struct{}{}:
+	default:
+	}
+}
+
+// uploadInline stores committed inline segments as their own objects, so the
+// heads after them carry only references. Segments a checkpoint dropped
+// first are never uploaded.
+func (j *Journal) uploadInline(ctx context.Context) {
+	defer close(j.uploaded)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-j.inline:
+		}
+		if err := j.storeInline(ctx); err != nil {
+			if ctx.Err() == nil {
+				j.Fail(fmt.Errorf("persist disk writes: %w", err))
+			}
+			return
+		}
+	}
+}
+
+// storeInline uploads the inline segments in the head and drops their inline
+// copies, which the next head write then omits. The head that committed a
+// segment holds it until then, so a failed upload loses nothing.
+func (j *Journal) storeInline(ctx context.Context) error {
+	j.mu.Lock()
+	if j.failed != nil {
+		j.mu.Unlock()
+		return nil
+	}
+	var pending []journalSegment
+	for _, segment := range j.head.Segments {
+		if segment.Data != nil {
+			pending = append(pending, segment)
+		}
+	}
+	j.mu.Unlock()
+
+	uploads, uploadCtx := errgroup.WithContext(ctx)
+	uploads.SetLimit(journalUploadConcurrency)
+	for _, segment := range pending {
+		uploads.Go(func() error {
+			if err := j.upload(uploadCtx, j.leaseEnd(), segment.Digest, segment.Data); err != nil {
+				return err
+			}
+			j.mu.Lock()
+			defer j.mu.Unlock()
+			for i := range j.head.Segments {
+				if j.head.Segments[i].Digest == segment.Digest {
+					j.head.Segments[i].Data = nil
+				}
+			}
+			return nil
+		})
+	}
+	return uploads.Wait()
 }
 
 // Replay applies every committed segment in order. Segments are small and
@@ -571,14 +681,16 @@ func (j *Journal) Replay(ctx context.Context, write func(uint64, []byte) error) 
 }
 
 func (j *Journal) fetchSegment(ctx context.Context, segment journalSegment) ([]byte, error) {
-	var data []byte
-	err := retry(ctx, retryUntil(j.leaseEnd()), func(ctx context.Context, _ int) error {
-		var err error
-		data, err = j.store.Download(ctx, j.segmentKey(segment.Digest))
-		return err
-	})
-	if err != nil {
-		return nil, err
+	data := segment.Data
+	if data == nil {
+		err := retry(ctx, retryUntil(j.leaseEnd()), func(ctx context.Context, _ int) error {
+			var err error
+			data, err = j.store.Download(ctx, j.segmentKey(segment.Digest))
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	digest := sha256.Sum256(data)
 	if hex.EncodeToString(digest[:]) != segment.Digest {
@@ -632,19 +744,22 @@ func (j *Journal) Checkpoint(ctx context.Context, sequence uint64, snapshot stri
 func (j *Journal) Close() error {
 	j.cancel()
 	<-j.done
-	j.mu.Lock()
-	defer j.mu.Unlock()
+	<-j.uploaded
 	// Releasing the lease lets the next owner start without waiting it out,
 	// so the release gets the same retries as any other head write.
 	ctx, cancel := context.WithTimeout(context.Background(), journalLease)
 	defer cancel()
+	// A released head without inline segments is the format every worker
+	// reads. One that keeps them after a failed upload is still complete.
+	_ = j.storeInline(ctx)
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	if j.failed != nil {
 		j.releaseCommitted(ctx)
 		return j.failed
 	}
 	err := j.writeHead(ctx, true)
-	j.failed = errors.New("disk journal is closed")
-	j.room.Broadcast()
+	j.fail(errors.New("disk journal is closed"))
 	return err
 }
 
