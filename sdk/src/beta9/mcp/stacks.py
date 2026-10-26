@@ -69,6 +69,7 @@ DATABASE_OPTIONS = {
     "snapshot_id",
     "username",
     "database",
+    "zero_loss",
 }
 # Application memory units in MiB.
 MEMORY_UNITS = {
@@ -254,9 +255,9 @@ def definitions(tools: LocalTools) -> List[Tool]:
                                                     "the service key). ports: [] is a worker. "
                                                     "tcp: true only for a server with no HTTP "
                                                     "port. Databases take kind (postgres or "
-                                                    "redis), size (e.g. 10Gi), always_on, and "
-                                                    "cpu and memory in application units "
-                                                    '(cpu: 0.5, memory: "2Gi").'
+                                                    "redis), size (e.g. 10Gi), always_on, "
+                                                    "zero_loss, and cpu and memory in "
+                                                    'application units (cpu: 0.5, memory: "2Gi").'
                                                 ),
                                             },
                                             "depends_on": {

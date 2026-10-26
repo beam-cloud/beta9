@@ -21,6 +21,9 @@ type CreateDatabaseParams struct {
 	Pool       string `json:"pool"`
 	AlwaysOn   bool   `json:"always_on"`
 	SnapshotID string `json:"snapshot_id,omitempty"`
+	// ZeroLoss answers each Postgres or Redis commit only once object storage
+	// has it, instead of up to a second before.
+	ZeroLoss bool `json:"zero_loss,omitempty"`
 	// Millicores and megabytes; zero means the product default.
 	Cpu    int64 `json:"cpu"`
 	Memory int64 `json:"memory"`
@@ -34,6 +37,7 @@ type DatabaseServiceInfo struct {
 	AppID                        string `json:"app_id,omitempty"`
 	Version                      uint   `json:"version"`
 	Active                       bool   `json:"active"`
+	ZeroLoss                     bool   `json:"zero_loss"`
 	Host                         string `json:"host"`
 	Username                     string `json:"username"`
 	Database                     string `json:"database,omitempty"`

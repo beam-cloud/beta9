@@ -160,6 +160,7 @@ func (s *Worker) prepareQcowDurableDiskMountAfterHead(ctx context.Context, reque
 		Chain:            chain,
 		Owner:            request.ContainerId,
 		Journal:          journal,
+		JournalLag:       requestStubConfig(request).EffectiveDatabaseConfig().CommitLag(),
 	}
 	if s.runtimeOwnsBlockRoot() {
 		// The guest consumes the volume as a block device; nothing is mounted
@@ -216,9 +217,7 @@ func journaledDiskMount(request *types.ContainerRequest, mount *types.Mount) boo
 	if !isQcowDurableDiskMount(mount) || mount.ReadOnly {
 		return false
 	}
-	config := requestStubConfig(request)
-	return config != nil && config.EffectiveDatabaseConfig() != nil &&
-		config.EffectiveDatabaseConfig().DurabilityMode == "object-store-flush"
+	return requestStubConfig(request).EffectiveDatabaseConfig().IsJournaled()
 }
 
 // openDatabaseDiskJournal resolves the authoritative head before consulting

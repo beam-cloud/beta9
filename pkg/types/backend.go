@@ -662,6 +662,7 @@ type DatabaseServingConfig struct {
 	ConnectionURL           string   `json:"connection_url,omitempty" serializer:"connection_url,omitempty"`
 	CredentialSecretNames   []string `json:"credential_secret_names,omitempty" serializer:"credential_secret_names,omitempty"`
 	DurabilityMode          string   `json:"durability_mode,omitempty" serializer:"durability_mode,omitempty"`
+	CommitLagMs             uint32   `json:"commit_lag_ms,omitempty" serializer:"commit_lag_ms,omitempty"`
 	UsernameSecretName      string   `json:"username_secret_name,omitempty" serializer:"username_secret_name,omitempty"`
 	PasswordSecretName      string   `json:"password_secret_name,omitempty" serializer:"password_secret_name,omitempty"`
 	DatabaseSecretName      string   `json:"database_secret_name,omitempty" serializer:"database_secret_name,omitempty"`
@@ -684,6 +685,9 @@ const (
 	DatabaseKindPostgresAlias = "postgresql"
 	DatabaseKindRedis         = "redis"
 	DatabaseKindValkey        = "valkey"
+
+	// A journaled disk commits every flush to object storage.
+	DatabaseDurabilityObjectStoreFlush = "object-store-flush"
 
 	PostgresDataMountPath = "/var/lib/postgresql/data"
 )
@@ -716,6 +720,19 @@ func (c *DatabaseServingConfig) IsRedisCompatible() bool {
 	default:
 		return false
 	}
+}
+
+func (c *DatabaseServingConfig) IsJournaled() bool {
+	return c != nil && c.DurabilityMode == DatabaseDurabilityObjectStoreFlush
+}
+
+// CommitLag is how long a journaled disk may answer flushes before their
+// commits; zero answers each only once it is committed.
+func (c *DatabaseServingConfig) CommitLag() time.Duration {
+	if c == nil {
+		return 0
+	}
+	return time.Duration(c.CommitLagMs) * time.Millisecond
 }
 
 func (c *StubConfigV1) EffectiveServingConfig() *ServingConfig {

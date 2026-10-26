@@ -665,6 +665,9 @@ message DatabaseServingConfig {
   string password_secret_name = 8;
   string database_secret_name = 9;
   string connection_url_secret_name = 10;
+  // How long an object-store-flush disk may answer flushes before their
+  // commits; zero answers each only once it is committed.
+  uint32 commit_lag_ms = 11;
 }
 
 message ServingConfig {

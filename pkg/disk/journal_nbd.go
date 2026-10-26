@@ -66,27 +66,63 @@ type nbdExport struct {
 	Flags uint16
 }
 
-// journalNBD serializes one kernel connection through the existing QSD export.
-// Writes reach QSD first; FLUSH/FUA replies wait for the object-store commit.
-// Reads never bypass a failed ownership fence. Structured replies and multiple
-// connections are deliberately not advertised.
+// journalNBD serves one kernel connection through the existing QSD export.
+// Writes reach QSD first and are answered at once; a FLUSH/FUA reply waits
+// for the object-store commit of every write answered before it. One commit
+// runs at a time while reads and writes go on, and the flushes that arrive
+// meanwhile share the next. Reads never bypass a failed ownership fence.
+// Structured replies and multiple connections are deliberately not advertised.
+//
+// With a lag, a flush is answered before its commit as long as no flush
+// answered that way has waited longer than the lag for its own; later ones
+// wait as above. Losing the worker then loses at most the flushes answered
+// within one lag, and always a prefix of the writes, which replay keeps
+// crash-consistent. A failed commit fails the disk as before.
 type journalNBD struct {
 	journal  *Journal
 	upstream net.Conn
 	listener net.Listener
-	mu       sync.Mutex
-	client   net.Conn
-	pending  bytes.Buffer
 	size     uint64
+	lag      time.Duration
 	done     chan struct{}
+
+	mu     sync.Mutex
+	client net.Conn
+
+	exchangeMu sync.Mutex // one QSD request at a time
+	replyMu    sync.Mutex // one reply at a time
+
+	commitMu sync.Mutex
+	commits  *sync.Cond // wakes the committer and writers held for a commit
+	pending  []byte     // records of the writes in batch
+	batch    uint64     // the batch writes join; earlier ones are committing or durable
+	wanted   uint64     // the newest batch a flush or a held writer needs durable
+	durable  uint64     // the newest batch committed
+	waiters  []flushWaiter
+	owed     []owedFlush // the oldest flush answered early for each uncommitted batch
+	stopping bool
+	failure  error
 }
 
-func startJournalNBD(ctx context.Context, socket, upstreamSocket string, journal *Journal) (*journalNBD, error) {
+// flushWaiter is a flush answered once batch is durable.
+type flushWaiter struct {
+	handle uint64
+	batch  uint64
+}
+
+// owedFlush is a flush answered before batch was durable.
+type owedFlush struct {
+	batch    uint64
+	answered time.Time
+}
+
+func startJournalNBD(ctx context.Context, socket, upstreamSocket string, journal *Journal, lag time.Duration) (*journalNBD, error) {
 	upstream, size, err := openBlockExport(ctx, upstreamSocket)
 	if err != nil {
 		return nil, err
 	}
-	proxy := &journalNBD{journal: journal, upstream: upstream, size: size, done: make(chan struct{})}
+	proxy := &journalNBD{journal: journal, upstream: upstream, size: size, lag: lag, done: make(chan struct{}), batch: 1}
+	proxy.commits = sync.NewCond(&proxy.commitMu)
 	if err := journal.Replay(ctx, func(offset uint64, data []byte) error {
 		_, err := proxy.exchange(blockRequest{Command: nbdCommandWrite, Offset: offset, Length: uint32(len(data))}, data)
 		return err
@@ -166,6 +202,21 @@ func (p *journalNBD) serve() {
 		return
 	}
 	client.SetDeadline(time.Time{})
+
+	committed := make(chan struct{})
+	go func() {
+		defer close(committed)
+		p.commit(client)
+	}()
+	defer func() {
+		// Flushes the kernel sent before it hung up are still committed.
+		p.commitMu.Lock()
+		p.stopping = true
+		p.commits.Broadcast()
+		p.commitMu.Unlock()
+		<-committed
+	}()
+
 	for {
 		var request blockRequest
 		if err := binary.Read(client, binary.BigEndian, &request); err != nil {
@@ -185,41 +236,35 @@ func (p *journalNBD) serve() {
 		if request.Command == nbdCommandDisconnect {
 			return
 		}
-		result, err := p.request(request, data)
-		reply := blockReply{Magic: nbdReplyMagic, Handle: request.Handle}
-		if err != nil {
-			p.journal.Fail(err)
-			reply.Error = 5 // EIO: callers must never interpret a failed remote commit as durable.
-			log.Error().Err(err).Msg("durable disk I/O failed")
+		result, durable, err := p.request(request, data)
+		if err == nil && durable {
+			var queued bool
+			if queued, err = p.awaitCommit(request.Handle); queued {
+				continue
+			}
 		}
-		if binary.Write(client, binary.BigEndian, reply) != nil {
-			return
-		}
-		if err != nil {
-			return
-		}
-		if _, err := io.Copy(client, bytes.NewReader(result)); err != nil {
+		if p.reply(client, request.Handle, result, err) != nil || err != nil {
 			return
 		}
 	}
 }
 
-func (p *journalNBD) request(request blockRequest, data []byte) ([]byte, error) {
+// request performs one request. A durable result is answered only once every
+// write answered before it is committed.
+func (p *journalNBD) request(request blockRequest, data []byte) (result []byte, durable bool, err error) {
 	if err := p.journal.Check(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if request.Offset > p.size || uint64(request.Length) > p.size-request.Offset {
-		return nil, fmt.Errorf("request exceeds durable disk capacity")
+		return nil, false, fmt.Errorf("request exceeds durable disk capacity")
 	}
 	switch request.Command {
 	case nbdCommandRead:
-		return p.exchange(request, nil)
+		result, err = p.exchange(request, nil)
+		return result, false, err
 	case nbdCommandTrim:
 		// Discard is a hint. Keeping bytes avoids logging large zero ranges.
-		if request.Flags&1 != 0 {
-			return nil, p.flush()
-		}
-		return nil, nil
+		return nil, request.Flags&1 != 0, nil
 	case nbdCommandWrite, nbdCommandZero:
 		if request.Command == nbdCommandZero {
 			data = make([]byte, request.Length)
@@ -227,46 +272,199 @@ func (p *journalNBD) request(request blockRequest, data []byte) ([]byte, error) 
 		write := request
 		write.Command, write.Flags = nbdCommandWrite, 0
 		if _, err := p.exchange(write, data); err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		binary.Write(&p.pending, binary.BigEndian, request.Offset)
-		binary.Write(&p.pending, binary.BigEndian, request.Length)
-		p.pending.Write(data)
-		if request.Flags&1 != 0 || p.pending.Len() >= journalBatchBytes {
-			return nil, p.flush()
+		p.commitMu.Lock()
+		p.pending = binary.BigEndian.AppendUint64(p.pending, request.Offset)
+		p.pending = binary.BigEndian.AppendUint32(p.pending, request.Length)
+		p.pending = append(p.pending, data...)
+		full, batch := len(p.pending) >= journalBatchBytes, p.batch
+		p.commitMu.Unlock()
+		// A full batch holds further requests until it commits, which bounds
+		// what the proxy buffers.
+		if full {
+			if err := p.waitDurable(batch); err != nil {
+				return nil, false, err
+			}
 		}
-		return nil, nil
+		return nil, request.Flags&1 != 0, nil
 	case nbdCommandFlush:
-		return nil, p.flush()
+		return nil, true, nil
 	default:
-		return nil, fmt.Errorf("unsupported durable disk command %d", request.Command)
+		return nil, false, fmt.Errorf("unsupported durable disk command %d", request.Command)
 	}
 }
 
-func (p *journalNBD) flush() error {
+// awaitCommit queues a flush for the committer when writes answered before it
+// are uncommitted: those in the batch writes are joining, or, if it has none,
+// in the batch committing now. Otherwise, or if the lag allows, the flush is
+// answered at once.
+func (p *journalNBD) awaitCommit(handle uint64) (queued bool, err error) {
+	p.commitMu.Lock()
+	if p.failure != nil {
+		p.commitMu.Unlock()
+		return false, p.failure
+	}
+	batch := p.batch
+	if len(p.pending) == 0 {
+		batch--
+	}
+	if batch > p.durable {
+		p.want(batch)
+		if p.owe(batch) {
+			p.commitMu.Unlock()
+			return false, nil
+		}
+		p.waiters = append(p.waiters, flushWaiter{handle: handle, batch: batch})
+		p.commitMu.Unlock()
+		return true, nil
+	}
+	p.commitMu.Unlock()
+	if p.lag > 0 {
+		// A journaled disk never reuses its local state, so a local flush
+		// would make nothing more durable.
+		return false, nil
+	}
+	// Everything answered so far is committed, and request already checked
+	// the lease: nothing to send.
+	_, err = p.exchange(blockRequest{Command: nbdCommandFlush}, nil)
+	return false, err
+}
+
+// owe reports whether a flush that needs batch may be answered before batch
+// commits, and records it if so: only while no flush answered that way has
+// waited for its commit as long as the lag.
+func (p *journalNBD) owe(batch uint64) bool {
+	now := time.Now()
+	if p.lag <= 0 || len(p.owed) > 0 && now.Sub(p.owed[0].answered) >= p.lag {
+		return false
+	}
+	if n := len(p.owed); n == 0 || p.owed[n-1].batch < batch {
+		p.owed = append(p.owed, owedFlush{batch: batch, answered: now})
+	}
+	return true
+}
+
+// CommitAnswered returns once every flush answered so far is committed, or
+// the disk has failed.
+func (p *journalNBD) CommitAnswered() error {
+	p.commitMu.Lock()
+	defer p.commitMu.Unlock()
+	for p.failure == nil && len(p.owed) > 0 {
+		p.commits.Wait()
+	}
+	return p.failure
+}
+
+func (p *journalNBD) waitDurable(batch uint64) error {
+	p.commitMu.Lock()
+	defer p.commitMu.Unlock()
+	p.want(batch)
+	for p.failure == nil && p.durable < batch {
+		p.commits.Wait()
+	}
+	return p.failure
+}
+
+// want asks the committer to make batch durable. commitMu must be held.
+func (p *journalNBD) want(batch uint64) {
+	p.wanted = max(p.wanted, batch)
+	p.commits.Broadcast()
+}
+
+// commit commits the pending batch whenever a flush or a held writer needs
+// it, one batch at a time, and answers the flushes each commit covers. After
+// a failure every waiting flush gets EIO and the connection is closed, as
+// after any failed request.
+func (p *journalNBD) commit(client net.Conn) {
+	p.commitMu.Lock()
+	defer p.commitMu.Unlock()
+	for {
+		for p.failure == nil && p.wanted <= p.durable && !p.stopping {
+			p.commits.Wait()
+		}
+		if p.failure != nil || p.wanted <= p.durable {
+			return
+		}
+		records, batch := p.pending, p.batch
+		p.pending, p.batch = nil, p.batch+1
+		p.commitMu.Unlock()
+		err := p.commitBatch(records)
+		p.commitMu.Lock()
+
+		var answered []flushWaiter
+		if err != nil {
+			p.failure = err
+			answered, p.waiters = p.waiters, nil
+			if len(p.owed) > 0 {
+				log.Error().Err(err).Dur("unpersisted", time.Since(p.owed[0].answered)).
+					Msg("durable disk lost flushes it had answered")
+				p.owed = nil
+			}
+		} else {
+			p.durable = batch
+			for len(p.owed) > 0 && p.owed[0].batch <= batch {
+				p.owed = p.owed[1:]
+			}
+			kept := p.waiters[:0]
+			for _, waiter := range p.waiters {
+				if waiter.batch <= batch {
+					answered = append(answered, waiter)
+				} else {
+					kept = append(kept, waiter)
+				}
+			}
+			p.waiters = kept
+		}
+		p.commits.Broadcast()
+		p.commitMu.Unlock()
+		for _, waiter := range answered {
+			_ = p.reply(client, waiter.handle, nil, err)
+		}
+		if err != nil {
+			client.Close()
+		}
+		p.commitMu.Lock()
+	}
+}
+
+func (p *journalNBD) commitBatch(records []byte) error {
 	if _, err := p.exchange(blockRequest{Command: nbdCommandFlush}, nil); err != nil {
 		return err
 	}
-	// Everything acknowledged so far was committed by the flush that drained
-	// it, and request already checked the lease: nothing to send.
-	if p.pending.Len() == 0 {
+	if len(records) == 0 {
 		return nil
 	}
-	if err := p.journal.WaitForRoom(p.pending.Len()); err != nil {
+	if err := p.journal.WaitForRoom(len(records)); err != nil {
 		return err
 	}
 	// The commit retries until the lease lapses; the kernel's request timeout
 	// is longer still, so a slow store stalls this flush rather than failing it.
 	ctx, cancel := context.WithTimeout(context.Background(), journalLease)
 	defer cancel()
-	if err := p.journal.Commit(ctx, p.pending.Bytes()); err != nil {
+	return p.journal.Commit(ctx, records)
+}
+
+func (p *journalNBD) reply(client net.Conn, handle uint64, result []byte, err error) error {
+	reply := blockReply{Magic: nbdReplyMagic, Handle: handle}
+	if err != nil {
+		p.journal.Fail(err)
+		reply.Error = 5 // EIO: callers must never interpret a failed remote commit as durable.
+		log.Error().Err(err).Msg("durable disk I/O failed")
+		result = nil
+	}
+	p.replyMu.Lock()
+	defer p.replyMu.Unlock()
+	if err := binary.Write(client, binary.BigEndian, reply); err != nil {
 		return err
 	}
-	p.pending.Reset()
-	return nil
+	_, err = client.Write(result)
+	return err
 }
 
 func (p *journalNBD) exchange(request blockRequest, data []byte) ([]byte, error) {
+	p.exchangeMu.Lock()
+	defer p.exchangeMu.Unlock()
 	request.Magic = nbdRequestMagic
 	p.upstream.SetDeadline(time.Now().Add(journalTimeout))
 	if err := binary.Write(p.upstream, binary.BigEndian, request); err != nil {
@@ -387,6 +585,8 @@ func nbdOptionReply(client net.Conn, option, kind uint32, data []byte) error {
 	return err
 }
 
+// Close disconnects the kernel and returns once every flush it sent has been
+// committed or has failed, which upstream must stay open for.
 func (p *journalNBD) Close() {
 	p.listener.Close()
 	p.mu.Lock()
@@ -394,6 +594,5 @@ func (p *journalNBD) Close() {
 		p.client.Close()
 	}
 	p.mu.Unlock()
-	p.upstream.Close()
 	<-p.done
 }

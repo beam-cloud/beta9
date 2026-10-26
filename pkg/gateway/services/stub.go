@@ -640,6 +640,7 @@ func databaseConfigFromProto(in *pb.DatabaseServingConfig) *types.DatabaseServin
 		ConnectionEnvName:       in.ConnectionEnvName,
 		CredentialSecretNames:   append([]string(nil), in.CredentialSecretNames...),
 		DurabilityMode:          in.DurabilityMode,
+		CommitLagMs:             in.CommitLagMs,
 		UsernameSecretName:      in.UsernameSecretName,
 		PasswordSecretName:      in.PasswordSecretName,
 		DatabaseSecretName:      in.DatabaseSecretName,
