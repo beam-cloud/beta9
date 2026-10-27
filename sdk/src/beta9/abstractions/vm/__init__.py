@@ -349,7 +349,7 @@ class VM:
                 image,
                 self._service,
                 spec.get("desktop", False),
-                **({"kiosk": True} if spec.get("kiosk") is not None else {}),
+                kiosk=spec.get("kiosk") is not None,
             )
             self._creation_body = copy.deepcopy(
                 {
@@ -435,7 +435,7 @@ class VM:
                 image,
                 self._service,
                 spec.get("desktop", False),
-                **({"kiosk": True} if spec.get("kiosk") is not None else {}),
+                kiosk=spec.get("kiosk") is not None,
             ).build()
             if not result.success:
                 raise ImageBuildError(result.error or "VM image build failed")

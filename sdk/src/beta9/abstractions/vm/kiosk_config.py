@@ -35,12 +35,7 @@ class Kiosk:
         return cls(**value)
 
     def to_dict(self):
-        value = asdict(self)
-        if value["mcp"] is None:
-            del value["mcp"]
-        if value["transport"] is None:
-            del value["transport"]
-        return value
+        return {key: value for key, value in asdict(self).items() if value is not None}
 
 
 @dataclass(frozen=True)

@@ -95,13 +95,6 @@ require (
 )
 
 require (
-	github.com/pion/dtls/v3 v3.1.5 // indirect
-	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/transport/v4 v4.1.0 // indirect
-	github.com/wlynxg/anet v0.0.5 // indirect
-)
-
-require (
 	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f // indirect
 	cel.dev/expr v0.25.1 // indirect
 	cloud.google.com/go v0.120.0 // indirect
@@ -163,6 +156,9 @@ require (
 	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/opencontainers/runc v1.2.8 // indirect
 	github.com/opencontainers/selinux v1.13.0 // indirect
+	github.com/pion/dtls/v3 v3.1.5 // indirect
+	github.com/pion/logging v0.2.4 // indirect
+	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/pkg/sftp v1.13.6 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
@@ -172,6 +168,7 @@ require (
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/u-root/u-root v0.14.0 // indirect
 	github.com/winfsp/cgofuse v1.5.0 // indirect
+	github.com/wlynxg/anet v0.0.5 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.43.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.64.0 // indirect

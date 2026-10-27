@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -102,11 +103,29 @@ func TestKioskArtifactsReopenWithIndependentIdentity(t *testing.T) {
 }
 
 func TestKioskInternalAndMCPPortsCannotBePublishedWithoutProtection(t *testing.T) {
-	s, v, _, _, _ := fixture()
-	v.Spec.Kiosk = &types.VMKioskSpec{Command: []string{"application"}, MCP: &types.VMKioskMCP{Port: 8000}}
-	public := false
-	require.ErrorContains(t, s.configurePort(context.Background(), v, "expose", types.VMKioskStatusPort, &public), "reserved")
-	require.ErrorContains(t, s.configurePort(context.Background(), v, "expose", 8000, &public), "protected")
+	for _, test := range []struct {
+		port uint32
+		want string
+	}{
+		{types.VMDesktopPort, "protected"},
+		{types.VMKioskStatusPort, "reserved"},
+		{types.VMKioskMediaPort, "reserved"},
+		{8000, "protected"},
+	} {
+		t.Run(strconv.FormatUint(uint64(test.port), 10), func(t *testing.T) {
+			s, v, _, _, _ := fixture()
+			v.Spec.Kiosk = &types.VMKioskSpec{
+				Command:   []string{"application"},
+				Transport: types.VMKioskTransportWebRTC,
+				MCP:       &types.VMKioskMCP{Command: []string{"adapter"}, Port: 8000},
+			}
+			public := false
+			require.ErrorContains(t, s.configurePort(context.Background(), v, "expose", test.port, &public), test.want)
+			v.Spec.Ports = append(v.Spec.Ports, test.port)
+			v.Spec.PublicPorts = []uint32{test.port}
+			require.ErrorContains(t, validate(&v.Spec), test.want)
+		})
+	}
 }
 
 func TestKioskGatewayRoutingAndAuthorization(t *testing.T) {

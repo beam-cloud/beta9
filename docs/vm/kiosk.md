@@ -147,59 +147,39 @@ authorized agents retain ordinary file and process capabilities.
 
 ## Display density and window behavior
 
-The experimental Linux session starts at a stable 2× render density before
-applications initialize. One application logical pixel corresponds to one
-browser CSS pixel; the browser receives the full-resolution image. GTK widget
-scale, font DPI, X11 screen DPI, and Qt high-DPI defaults agree. Reconnecting
-from a 1× or fractional-density screen keeps the application's logical layout.
-Saved display geometry includes its render density so older geometry can be
-converted without halving the logical workspace. Applications can override the
-Qt defaults through the ordinary kiosk environment.
+The Linux session establishes 2× render density before applications initialize:
+one application logical pixel corresponds to one browser CSS pixel. GTK widget
+scale, font DPI, X11 screen DPI, and Qt high-DPI defaults agree. Saved geometry
+includes density, preserving the logical workspace across reconnects and screens.
+Applications can override Qt defaults through the kiosk environment.
 
 The application window manager maximizes ordinary editor/document windows
 before their first map, allowing initial canvas fitting to use the correct
 workspace. Dialogs, utility windows, and explicit X11 transient windows keep
-native dimensions. The image builder compiles the installed distribution's
-signed Openbox source with a small transient-classification patch; the matching
-source archives, patch, version, and license are included under
-`/opt/beam-vm/openbox/share/source`. Window geometry is owned by the window manager; the supervisor does not
-rewrite individual window properties after mapping.
+native dimensions. The image builder compiles the distribution's signed Openbox
+source with a transient-classification patch. Its source, patch, version, and
+license are included under `/opt/beam-vm/openbox/share/source`.
 
 The viewer waits for the correct initial framebuffer dimensions and preserves
-the live image during subsequent resizing. After an external resize or reconnect,
-it uses the native client resize command to negotiate the attached viewport.
-The pinned backend also verifies the realized X11 root before accepting a cached
-resize as already applied, so agent-side changes cannot leave reconnects stuck. Density and window rules use toolkit
-and X11 conventions and apply independently of the application command.
+the live image during subsequent resizing. The native client negotiates the
+viewport after reconnects and external resizing. Density and window rules use
+toolkit and X11 conventions independently of the application command.
 
 Wheel input uses browser CSS units independently of render density. Fractional
-trackpad deltas accumulate without classifying integer Mac deltas as wheel
-detents; pixel, line, and page events have stable units. Chromium pinch and
-Safari gesture events target the guest's conventional Control+wheel zoom at
-the current pointer location. The guest application retains its keyboard
-shortcuts and zoom behavior; X11 applications receive whole wheel steps.
+trackpad deltas accumulate into X11 wheel steps. Browser pinch gestures target
+the guest's conventional Control+wheel zoom at the current pointer location.
+Applications retain their keyboard shortcuts and zoom behavior.
 
 Pointer hover, press, drag, and release share the ordered control channel.
-This prevents a newer hover sequence on a separate channel from discarding a
-click or release while a native menu owns the pointer grab. Popup placement
-and dismissal remain native toolkit behavior.
-
-The pinned X11 backend also avoids synthesizing a held-button movement for a
-stationary release. That extra event made GTK/wx treat ordinary clicks as drag
-selection and dismiss dropdowns. Real drags retain their final movement, and
-presses still target the browser pointer after an application moves the guest
-cursor.
+Popup placement, pointer grabs, and dismissal remain native toolkit behavior.
 
 ## Performance qualification
 
-The initial implementation remains experimental until the application-family
-matrix passes through the production forwarding path. Configuration requesting
-60 FPS is not evidence of delivered frame rate. The initial gate requires near
+The implementation remains experimental until the application-family and
+network-recovery matrix passes through production forwarding. The gate requires near
 60 FPS, p95 frame intervals ≤25 ms, and p95 input response ≤80 ms with ≤20 ms RTT,
-across the application-family and network-recovery matrix. The current VM
-placement contract is CPU-only; hardware acceleration requires runtime work rather than silently
-changing a kiosk VM into a container.
-
+at 1080p and a 1440×900 viewport at 2× density. Current VM placement is CPU-only;
+hardware acceleration requires additional runtime support.
 
 ## Operational policy
 
@@ -212,18 +192,14 @@ active connection leases after 30 seconds, and ownership is rechecked every
 Invalid or unsafe timing relationships fail at startup. Expired leases close
 active media rather than recreating their authority during renewal.
 
-Guest launch configuration uses the same `Kiosk`/`KioskMCP` data classes as the
-SDK. `KioskRuntime` owns image policy for render density, encoder quality,
+The SDK and guest share the `Kiosk`/`KioskMCP` configuration models.
+`KioskRuntime` owns image policy for render density, encoder quality,
 geometry limits, and supervisor timing; the installed client receives its render
 density from this policy at image preparation. Changing image policy requires
 rebuilding and qualifying the image. SDK and MCP resizing use one guest operation
-that restores physical DPI together with the framebuffer dimensions. The guest
-requires the patched application window manager; it fails explicitly if an
-incompatible image is used.
+that restores physical DPI together with the framebuffer dimensions.
 
-Process groups are retained by role rather than accumulated across restarts.
-Application and adapter groups are stopped before replacement, and closed groups
-are discarded. Launchers may hand off to child windows within the application
-startup deadline. MCP has an independent startup deadline; an adapter failure
-leaves the application available. Readiness probes bound response size and wall
-time, including servers that continuously send keepalive bytes.
+The supervisor owns process groups by role and stops each before replacement.
+Launchers may hand off to child windows within the application startup deadline.
+MCP has an independent deadline; adapter failures leave the application available.
+Readiness probes bound response size and wall time.

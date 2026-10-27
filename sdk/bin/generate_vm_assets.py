@@ -6,30 +6,13 @@ import tarfile
 from pathlib import Path
 
 directory = Path(__file__).resolve().parents[1] / "src/beta9/abstractions/vm"
+sources = sorted(path for path in (directory / "assets").iterdir() if path.is_file())
+sources.append(directory / "kiosk_config.py")
 buffer = io.BytesIO()
 with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
-    for name in (
-        "beam-desktop.service",
-        "beam-terminal.service",
-        "boot",
-        "desktop",
-        "kiosk",
-        "kiosk-openbox.xml",
-        "kiosk-openbox-build",
-        "kiosk-selkies-patch",
-        "kiosk_config.py",
-        "browser.desktop",
-        "browser-trust",
-        "browser-trust-update",
-        "browser",
-        "terminal.desktop",
-        "terminal.svg",
-        "install",
-        "xstartup",
-    ):
-        path = directory / name if name == "kiosk_config.py" else directory / "assets" / name
+    for path in sources:
         contents = path.read_bytes()
-        entry = tarfile.TarInfo(name)
+        entry = tarfile.TarInfo(path.name)
         entry.size = len(contents)
         entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml") else 0o755
         archive.addfile(entry, io.BytesIO(contents))

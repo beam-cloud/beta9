@@ -385,13 +385,6 @@ func (s *Service) create(c echo.Context) error {
 		spec.ImageID = "pending-image-lookup"
 	}
 
-	if err := s.configureKioskTransport(&spec); err != nil {
-		return apiError(err)
-	}
-	if err := validate(&spec); err != nil {
-		return apiError(err)
-	}
-
 	v, err := s.createVMWithImage(ctx, info, req.Name, spec, req.Metadata, req.RequestID, image)
 	if err != nil {
 		return apiError(err)
@@ -412,10 +405,8 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 	if err := s.configureKioskTransport(&spec); err != nil {
 		return nil, err
 	}
-	if spec.Kiosk != nil {
-		if err := validate(&spec); err != nil {
-			return nil, err
-		}
+	if err := validate(&spec); err != nil {
+		return nil, err
 	}
 	if len(spec.Secrets) > 0 {
 		secrets, err := s.backend.GetSecretsByName(ctx, info.Workspace, spec.Secrets)
@@ -672,10 +663,6 @@ func (s *Service) action(c echo.Context) error {
 		spec := v.Spec
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey
-		if err := validate(&spec); err != nil {
-			return apiError(err)
-		}
-
 		child, err := s.createVM(ctx, info, req.Name, spec)
 		if err != nil {
 			return apiError(err)

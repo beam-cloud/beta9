@@ -402,7 +402,7 @@ def new(
         memory=memory,
         disk_size=disk_size,
         desktop=True if desktop is None and not (template or image_id) else desktop,
-        **({"kiosk": kiosk} if kiosk is not None else {}),
+        kiosk=kiosk,
         docker_enabled=docker_enabled,
         env=env_map if env else None,
         secrets=list(secret) if secret else None,
@@ -461,13 +461,12 @@ def image_group():
 def image_build(service, build_context, dockerfile, build_secret, desktop, as_json, kiosk=False):
     """Build a VM image from a local Dockerfile."""
     as_json = as_json or terminal.json_output()
+    desktop = desktop or kiosk
     dockerfile = dockerfile or str(Path(build_context) / "Dockerfile")
     image = _image(dockerfile, build_context, secrets=build_secret)
     with StoredStdoutInterceptor(capture_logs=as_json):
         with _progress("Preparing image", "Image ready", as_json):
-            result = prepare_image(
-                image, service, desktop or kiosk, **({"kiosk": True} if kiosk else {})
-            ).build()
+            result = prepare_image(image, service, desktop, kiosk=kiosk).build()
             if not result.success:
                 raise click.ClickException(result.error or "VM image build failed")
     if as_json:

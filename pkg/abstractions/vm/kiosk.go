@@ -1,11 +1,37 @@
 package vm
 
 import (
+	_ "embed"
+	"fmt"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
+
+//go:embed kiosk.html
+var kioskPage string
+
+//go:embed kiosk-webrtc.js
+var kioskWebRTC []byte
+
+// Creation and port updates enforce the same private and protected endpoints.
+func validateKioskPort(k *types.VMKioskSpec, port uint32, public bool) error {
+	if k == nil {
+		return nil
+	}
+	switch {
+	case port == types.VMKioskStatusPort:
+		return fmt.Errorf("port %d is reserved for kiosk readiness", port)
+	case port == types.VMKioskMediaPort && k.Transport == types.VMKioskTransportWebRTC:
+		return fmt.Errorf("port %d is reserved for private kiosk media", port)
+	case public && port == types.VMDesktopPort:
+		return fmt.Errorf("kiosk browser sessions must be protected")
+	case public && k.MCP != nil && port == k.MCP.Port:
+		return fmt.Errorf("kiosk MCP ports must be protected")
+	}
+	return nil
+}
 
 type kioskContext struct {
 	echo.Context

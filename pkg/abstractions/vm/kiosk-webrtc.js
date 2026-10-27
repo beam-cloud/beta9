@@ -135,7 +135,6 @@
     constructor() {
       const ratio = typeof document !== 'undefined' && Number(document.currentScript?.dataset.pixelRatio);
       this.pixelRatio = Number.isInteger(ratio) && ratio > 0 && ratio <= policy.maxPixelRatio ? ratio : policy.pixelRatio;
-      this.devicePixelRatio = window.devicePixelRatio || 1;
       this.status = null;
       this.displayState = 'starting';
       this.displayError = '';
@@ -216,8 +215,12 @@
           Math.abs(height - window.innerHeight * this.pixelRatio) < policy.alignment);
     }
 
+    playing(video = this.video) {
+      return video && !video.paused && video.readyState >= 2;
+    }
+
     get webSocketLive() {
-      return this.video?.id === 'videoStream' && !this.video.paused && this.video.readyState >= 2;
+      return this.video?.id === 'videoStream' && this.playing();
     }
 
     async poll() {
@@ -244,7 +247,7 @@
         if (this.status.transport === 'websockets') {
           const video = document.querySelector('video#videoStream');
           const canvas = document.querySelector('canvas#videoCanvas');
-          if ((video?.videoWidth > 0 && !video.paused && video.readyState >= 2 && this.viewportMatches(video)) ||
+          if ((video?.videoWidth > 0 && this.playing(video) && this.viewportMatches(video)) ||
               (canvas?.width > 0 && canvas.getBoundingClientRect().width > 0 && this.viewportMatches(canvas))) {
             this.displayState = 'ready';
           }
@@ -266,7 +269,7 @@
     fitted() {
       const video = this.video;
       return (this.webSocketLive || !this.activePeer || this.activePeer.connectionState === 'connected') &&
-        video && !video.paused && video.readyState >= 2 && video.videoWidth > 0 && this.viewportMatches(video) &&
+        this.playing(video) && video.videoWidth > 0 && this.viewportMatches(video) &&
         (window.streamResolutionDiverged || video.id === 'videoStream' ||
           video.videoWidth === video.width && video.videoHeight === video.height);
     }
@@ -279,7 +282,7 @@
           this.video.videoHeight !== this.video.height;
       }
       if (this.video) document.documentElement.toggleAttribute('data-beam-kiosk-playing',
-        !this.video.paused && this.video.readyState >= 2);
+        this.playing());
       // Another tab can own the shared framebuffer size. Selkies maps input
       // against the realized stream; preserve its aspect ratio in this tab.
       if (this.video && window.streamResolutionDiverged) this.video.style.objectFit = 'contain';
@@ -375,7 +378,7 @@
       const remote = proto.setRemoteDescription, candidate = proto.addIceCandidate;
       proto.setRemoteDescription = async function(description) {
         if (!description?.sdp) return remote.call(this, description);
-        if (!routed.has(this) && this.addEventListener) viewer.trackPeer(this);
+        if (!routed.has(this)) viewer.trackPeer(this);
         routed.add(this);
         try {
           const response = await fetch(viewer.endpoint('webrtc/session'), {

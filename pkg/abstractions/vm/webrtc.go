@@ -58,7 +58,13 @@ func (s *Service) startWebRTC(config types.PodTCPConfig, policy types.VMWebRTCCo
 	if config.ExternalPort == 0 {
 		config.ExternalPort = 443
 	}
-	s.webrtc = &vmWebRTC{Service: s, config: config, policy: policy, dialer: dialer, slots: make(chan struct{}, policy.MaxConnections)}
+	s.webrtc = &vmWebRTC{
+		Service: s,
+		config:  config,
+		policy:  policy,
+		dialer:  dialer,
+		slots:   make(chan struct{}, policy.MaxConnections),
+	}
 	runtime.SetVMICEHandler(s.webrtc.serve)
 	return nil
 }
@@ -149,7 +155,7 @@ func sessionSDP(sdp string, addresses []net.IP, port int) (string, map[string]st
 	if err := flush(); err != nil {
 		return "", nil, err
 	}
-	if len(credentials) == 0 || len(credentials) > maxSessionMediaSections {
+	if len(credentials) == 0 {
 		return "", nil, fmt.Errorf("unsupported ICE session")
 	}
 	return strings.Join(output, "\r\n") + "\r\n", credentials, nil
@@ -176,7 +182,11 @@ func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 	defer cancel()
 	// Bound registrations per VM, including failed offers. One key works on
 	// Redis Cluster and expires even if the requesting gateway crashes.
-	count, err := w.rdb.Eval(ctx, `local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; return n`, []string{"vm:ice-rate:" + v.ID}, time.Minute.Milliseconds()).Int()
+	count, err := w.rdb.Eval(ctx, `
+		local count = redis.call('INCR', KEYS[1])
+		if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+		return count
+	`, []string{"vm:ice-rate:" + v.ID}, time.Minute.Milliseconds()).Int()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC registry unavailable")
 	}
@@ -199,11 +209,23 @@ func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	for ufrag, password := range credentials {
-		route := iceRoute{VMID: v.ID, WorkspaceID: v.WorkspaceID, ContainerID: v.ContainerID, Generation: v.Generation, TokenHash: trafficHash(v), Password: password}
+		route := iceRoute{
+			VMID:        v.ID,
+			WorkspaceID: v.WorkspaceID,
+			ContainerID: v.ContainerID,
+			Generation:  v.Generation,
+			TokenHash:   trafficHash(v),
+			Password:    password,
+		}
 		encoded, _ := json.Marshal(route)
 		// Never replace another VM's colliding fragment. Retries can renew the
 		// exact same session; a stopped/forked/rotated VM cannot inherit it.
-		ok, err := w.rdb.Eval(ctx, `local old=redis.call('GET',KEYS[1]); if not old or old==ARGV[1] then redis.call('SET',KEYS[1],ARGV[1],'PX',ARGV[2]); return 1 end; return 0`, []string{"vm:ice:" + ufrag}, string(encoded), w.policy.SessionTTL.Milliseconds()).Int()
+		ok, err := w.rdb.Eval(ctx, `
+			local old = redis.call('GET', KEYS[1])
+			if old and old ~= ARGV[1] then return 0 end
+			redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+			return 1
+		`, []string{"vm:ice:" + ufrag}, string(encoded), w.policy.SessionTTL.Milliseconds()).Int()
 		if err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC registry unavailable")
 		}
@@ -252,7 +274,10 @@ func (w *vmWebRTC) activeVM(ctx context.Context, route iceRoute) (*types.VM, err
 	if err != nil {
 		return nil, err
 	}
-	if v.ContainerID != route.ContainerID || v.Generation != route.Generation || v.DesiredState != types.VMStateRunning || v.TrafficAccessToken == "" || trafficHash(v) != route.TokenHash || v.Spec.Kiosk == nil || v.Spec.Kiosk.Transport != types.VMKioskTransportWebRTC {
+	if v.ContainerID != route.ContainerID || v.Generation != route.Generation ||
+		v.DesiredState != types.VMStateRunning || v.TrafficAccessToken == "" ||
+		trafficHash(v) != route.TokenHash || v.Spec.Kiosk == nil ||
+		v.Spec.Kiosk.Transport != types.VMKioskTransportWebRTC {
 		return nil, fmt.Errorf("WebRTC session is no longer active")
 	}
 	if _, err := w.accessOwner(ctx, v); err != nil {
@@ -295,12 +320,16 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 	if err != nil {
 		return
 	}
-	// Limit each live ICE session on each gateway, too; possessing a session
-	// credential must not permit unbounded connections to a guest.
+	// Bound each ICE session across gateways with expiring connection leases.
 	key := "vm:ice-open:" + ufrag
 	lease := uuid.NewString()
 	now := time.Now().UnixMilli()
-	n, err := w.rdb.Eval(authCtx, `redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',ARGV[1]); redis.call('ZADD',KEYS[1],ARGV[2],ARGV[3]); redis.call('PEXPIRE',KEYS[1],ARGV[4]); return redis.call('ZCARD',KEYS[1])`, []string{key}, now, now+w.policy.LeaseTTL.Milliseconds(), lease, w.policy.LeaseTTL.Milliseconds()).Int()
+	n, err := w.rdb.Eval(authCtx, `
+		redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+		redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+		redis.call('PEXPIRE', KEYS[1], ARGV[4])
+		return redis.call('ZCARD', KEYS[1])
+	`, []string{key}, now, now+w.policy.LeaseTTL.Milliseconds(), lease, w.policy.LeaseTTL.Milliseconds()).Int()
 	if err != nil {
 		return
 	}
@@ -349,7 +378,12 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 				_, err := w.activeVM(check, route)
 				if err == nil {
 					var renewed int
-					renewed, err = w.rdb.Eval(check, `if not redis.call('ZSCORE',KEYS[1],ARGV[2]) then return 0 end; redis.call('ZADD',KEYS[1],ARGV[1],ARGV[2]); redis.call('PEXPIRE',KEYS[1],ARGV[3]); return 1`, []string{key}, time.Now().UnixMilli()+w.policy.LeaseTTL.Milliseconds(), lease, w.policy.LeaseTTL.Milliseconds()).Int()
+					renewed, err = w.rdb.Eval(check, `
+						if not redis.call('ZSCORE', KEYS[1], ARGV[2]) then return 0 end
+						redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
+						redis.call('PEXPIRE', KEYS[1], ARGV[3])
+						return 1
+					`, []string{key}, time.Now().UnixMilli()+w.policy.LeaseTTL.Milliseconds(), lease, w.policy.LeaseTTL.Milliseconds()).Int()
 					if err == nil && renewed != 1 {
 						err = fmt.Errorf("ICE lease expired")
 					}
@@ -363,7 +397,11 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 		}
 	}()
 	done := make(chan struct{}, 2)
-	copyStream := func(dst, src net.Conn) { io.Copy(dst, src); cancel(); done <- struct{}{} }
+	copyStream := func(dst, src net.Conn) {
+		io.Copy(dst, src)
+		cancel()
+		done <- struct{}{}
+	}
 	go copyStream(backend, conn)
 	go copyStream(conn, backend)
 	<-done

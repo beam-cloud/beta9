@@ -1674,7 +1674,8 @@ def test_new_vm_includes_desktop_and_preserves_prebuilt_settings(
 
 
 @pytest.mark.parametrize("mode", ["command", "global", "env"])
-def test_image_build_json_is_clean(cli_service, monkeypatch, tmp_path, mode):
+@pytest.mark.parametrize("kiosk", [False, True])
+def test_image_build_json_is_clean(cli_service, monkeypatch, tmp_path, mode, kiosk):
     (tmp_path / "Dockerfile").write_text("FROM ubuntu:24.04\n")
     image = MagicMock()
 
@@ -1683,16 +1684,18 @@ def test_image_build_json_is_clean(cli_service, monkeypatch, tmp_path, mode):
         return SimpleNamespace(success=True, image_id="image-test")
 
     image.build.side_effect = build
-    monkeypatch.setattr(vm_cli, "prepare_image", lambda *_: image)
+    monkeypatch.setattr(vm_cli, "prepare_image", lambda *_, **__: image)
     cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
     args = (["--json"] if mode == "global" else []) + ["vm", "image", "build", str(tmp_path)]
     if mode == "command":
         args.append("--json")
+    if kiosk:
+        args.append("--kiosk")
     result = CliRunner(mix_stderr=False).invoke(
         cli.common_group, args, env={"BETA9_JSON": "1" if mode == "env" else "0"}
     )
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout) == {"image_id": "image-test", "desktop": False}
+    assert json.loads(result.stdout) == {"image_id": "image-test", "desktop": kiosk}
     assert "Image build output belongs in diagnostics" in result.stderr
 
 

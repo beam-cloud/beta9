@@ -27,7 +27,6 @@ from kiosk_config import Kiosk, KioskRuntime
 
 
 POLICY = KioskRuntime()
-STATUS_PORT = POLICY.status_port
 ASSETS = Path("/opt/beam-vm")
 RUNTIME = Path("/run/beam-desktop")
 
@@ -115,15 +114,25 @@ def mcp_ready(port, path):
         return False
 
 
-def visible_windows(env):
+def root_property(name, env):
     result = subprocess.run(
-        ["xprop", "-root", "_NET_CLIENT_LIST"],
+        ["xprop", "-root", name],
         env=env,
         capture_output=True,
         text=True,
         timeout=POLICY.command_timeout,
     )
-    return re.findall(r"0x[0-9a-fA-F]+", result.stdout) if result.returncode == 0 else []
+    return result.stdout if result.returncode == 0 else ""
+
+
+def visible_windows(env):
+    return re.findall(r"0x[0-9a-fA-F]+", root_property("_NET_CLIENT_LIST", env))
+
+
+def visible_wm(env):
+    return bool(
+        re.search(r"0x[1-9a-fA-F][0-9a-fA-F]*", root_property("_NET_SUPPORTING_WM_CHECK", env))
+    )
 
 
 def toolkit_settings(source, dpi=None):
@@ -193,14 +202,7 @@ def resize_display(size, env):
 
 
 def display_size(env):
-    result = subprocess.run(
-        ["xprop", "-root", "_NET_DESKTOP_GEOMETRY"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=POLICY.command_timeout,
-    )
-    match = re.search(r"=\s*(\d+),\s*(\d+)", result.stdout)
+    match = re.search(r"=\s*(\d+),\s*(\d+)", root_property("_NET_DESKTOP_GEOMETRY", env))
     return (int(match[1]), int(match[2])) if match else None
 
 
@@ -257,7 +259,6 @@ class Session:
         self.env = dict(
             os.environ,
             HOME="/root",
-            DISPLAY=":1",
             XDG_CONFIG_HOME="/root/.config",
             QT_ENABLE_HIGHDPI_SCALING="1",
             QT_SCALE_FACTOR_ROUNDING_POLICY="PassThrough",
@@ -297,6 +298,10 @@ class Session:
         self.update(state=state, application=state, error=error)
         self.stop("mcp", "application")
 
+    def fail_mcp(self, error):
+        self.update(state="error", mcp="error", error=error)
+        self.stop("mcp")
+
     def launch(self):
         self.stop("mcp", "application")
         self.update(
@@ -316,11 +321,7 @@ class Session:
         try:
             self.spawn(self.config.mcp.command, role="mcp", cwd=self.config.cwd)
         except OSError:
-            self.update(
-                state="error",
-                mcp="error",
-                error="Application MCP server failed to start; inspect its logs",
-            )
+            self.fail_mcp("Application MCP server failed to start; inspect its logs")
             return
         self.mcp_started = time.monotonic()
         self.update(mcp="starting")
@@ -356,7 +357,7 @@ class Session:
 
         # Published and private VM routes reach the guest interface. Port 8081
         # is bound as tunnel-only by VMSpec and never has a public route.
-        server = ThreadingHTTPServer(("0.0.0.0", STATUS_PORT), Handler)
+        server = ThreadingHTTPServer(("0.0.0.0", POLICY.status_port), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
@@ -461,7 +462,7 @@ class Session:
         )
 
     def start_stream(self):
-        transport = self.config.transport or "websockets"
+        transport = self.state.transport
         rtc_options = []
         if transport == "webrtc":
             # No public TURN service or shared relay credentials. The Beam
@@ -576,22 +577,12 @@ class Session:
             if self.retry_allowed("mcp"):
                 self.launch_mcp()
             else:
-                self.update(
-                    state="error",
-                    mcp="error",
-                    error="Application MCP server exited repeatedly; inspect its logs",
-                )
-                self.stop("mcp")
+                self.fail_mcp("Application MCP server exited repeatedly; inspect its logs")
         elif self.state.mcp != "ready":
             if mcp_ready(self.config.mcp.port, self.config.mcp.path):
                 self.update(mcp="ready", error="")
             elif time.monotonic() - self.mcp_started > POLICY.application_timeout:
-                self.update(
-                    state="error",
-                    mcp="error",
-                    error="Application MCP server did not complete initialization",
-                )
-                self.stop("mcp")
+                self.fail_mcp("Application MCP server did not complete initialization")
 
     def run(self):
         server = self.control_server()
@@ -636,17 +627,6 @@ class Session:
             server.server_close()
 
 
-def visible_wm(env):
-    result = subprocess.run(
-        ["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=POLICY.command_timeout,
-    )
-    return bool(re.search(r"0x[1-9a-fA-F][0-9a-fA-F]*", result.stdout))
-
-
 def main():
     if sys.argv[1:2] == ["--resize"]:
         try:
@@ -661,7 +641,7 @@ def main():
     if "--status" in sys.argv or "--check" in sys.argv:
         try:
             with urlopen(
-                f"http://127.0.0.1:{STATUS_PORT}/status", timeout=POLICY.process_timeout
+                f"http://127.0.0.1:{POLICY.status_port}/status", timeout=POLICY.process_timeout
             ) as response:
                 status = json.load(response)
             print(json.dumps(status))
