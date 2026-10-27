@@ -31,6 +31,21 @@ def supervisor():
     return module
 
 
+def test_openbox_policy_rejects_changed_source_without_partial_writes(tmp_path, monkeypatch):
+    script = (Path(vm_file).parent / "assets/kiosk-openbox-build").read_text()
+    marker = "python3 - \"$kiosk_build_root/source/openbox/client.c\" <<'PY'\n"
+    patcher = script.split(marker, 1)[1].split("\nPY\n", 1)[0]
+    source = "    /* then, based on our type, we can update our transientness.. */\n"
+    target = tmp_path / "openbox" / "client.c"
+    target.parent.mkdir()
+    target.write_text(source)
+    monkeypatch.setattr("sys.argv", ["patch", str(target)])
+    with pytest.raises(SystemExit, match="review kiosk window policy"):
+        exec(compile(patcher, "kiosk-openbox-build", "exec"), {})
+    assert target.read_text() == source
+    assert not (tmp_path / "kiosk.patch").exists()
+
+
 def test_kiosk_configuration_is_frozen_and_builds_a_distinct_image():
     from beta9.abstractions.image import Image
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the distro's Openbox source with the kiosk transient-window rule.
+# Build the distro's Openbox source with the kiosk window policy.
 set -euo pipefail
 
 kiosk_build_root=$(mktemp -d)
@@ -55,9 +55,19 @@ addition = '''    /* A transient NORMAL window is an application-owned dialog, n
         self->type = OB_CLIENT_TYPE_DIALOG;
 
 '''
-if source.count(needle) != 1:
-    raise SystemExit('Openbox source changed; review kiosk window classification')
-patched = source.replace(needle, addition + needle)
+maximize = "    if (!(self->functions & OB_CLIENT_FUNC_MAXIMIZE) && max) return;/* can't */\n"
+policy = '''
+    /* Kiosk normal windows fill the viewport even when an application restores
+       its saved unmaximized state. Dialogs and fixed-size windows keep theirs. */
+    if (self->type == OB_CLIENT_TYPE_NORMAL &&
+        (self->functions & OB_CLIENT_FUNC_MAXIMIZE))
+        max = TRUE;
+'''
+patched = source
+for before, after in ((needle, addition + needle), (maximize, maximize + policy)):
+    if patched.count(before) != 1:
+        raise SystemExit('Openbox source changed; review kiosk window policy')
+    patched = patched.replace(before, after, 1)
 path.write_text(patched)
 diff = difflib.unified_diff(
     source.splitlines(True), patched.splitlines(True),
