@@ -273,6 +273,11 @@
 
     checkDisplay() {
       clearTimeout(this.settle);
+      // Video can arrive before the client's first resolution bookkeeping.
+      if (this.video?.id === 'stream' && this.video.videoWidth > 0 && this.video.width > 0) {
+        window.streamResolutionDiverged = this.video.videoWidth !== this.video.width ||
+          this.video.videoHeight !== this.video.height;
+      }
       if (this.video) document.documentElement.toggleAttribute('data-beam-kiosk-playing',
         !this.video.paused && this.video.readyState >= 2);
       // Another tab can own the shared framebuffer size. Selkies maps input

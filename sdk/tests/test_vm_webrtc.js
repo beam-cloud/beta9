@@ -94,7 +94,8 @@ async function checkDisplay() {
   assert(!attributes.has('data-beam-kiosk-playing'),'a genuine playback failure retains its recovery control');
   video.paused=false;videoEvents.playing();
   video.width=2560;videoEvents.dimensions();assert.equal(messages.at(-1).state,'ready','resize keeps the last picture visible');
-  displayWindow.streamResolutionDiverged=true;videoEvents.resize();timers.get(1)();
+  delete displayWindow.streamResolutionDiverged;videoEvents.resize();timers.get(1)();
+  assert.equal(displayWindow.streamResolutionDiverged,true,'frame dimensions reconcile a viewer even before upstream bookkeeping arrives');
   assert.equal(displayWindow.beamKiosk.fitted(),true,'a second tab can display the owner\'s framebuffer');
   assert.equal(video.style.objectFit,'contain','shared frames keep their aspect ratio and native input mapping');
   displayWindow.innerWidth=0;assert.equal(displayWindow.beamKiosk.fitted(),false,'hidden shared viewers still wait');
