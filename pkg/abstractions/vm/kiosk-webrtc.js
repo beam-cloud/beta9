@@ -1,192 +1,290 @@
-/* Platform transport bootstrap. The application and Selkies client are unchanged. */
+/* Browser shell and authenticated transport bootstrap for an ordinary GUI app. */
 (() => {
-  // The remote desktop has a stable 2x render density. The native client's
-  // framebuffer and pointer transforms must use that density too, even on a
-  // 1x monitor. Browser CSS still uses its real viewport; the final image is
-  // sampled by the browser at the physical display's density. This document
-  // is isolated from the embedding page.
-  const nativePixelRatio=window.devicePixelRatio||1;
-  Object.defineProperty(window,'devicePixelRatio',{configurable:true,get:()=>2});
-  let displayState = 'starting', displayError = '', application, overlay, message, retry, restart;
-  let activePeer, recoveryTimer, refreshDisplay = () => {};
-  const statusEndpoint = new URL('../_beam/kiosk/status', location.href);
-  window.beamKiosk = {status:null,stats:null,peers:[],pixelRatio:2,devicePixelRatio:nativePixelRatio};
-  function viewportMatches(surface) {
-    if(!window.innerWidth)return true;
-    const width=surface.videoWidth||surface.width,height=surface.videoHeight||surface.height;
-    return Math.abs(width-window.innerWidth*2)<8 && Math.abs(height-window.innerHeight*2)<8;
-  }
-  const render = () => {
-    if (!overlay) return;
-    const appReady = application?.application === 'ready';
-    overlay.hidden = displayState === 'ready' && appReady && !displayError;
-    overlay.style.display = overlay.hidden ? 'none' : 'grid';
-    const closed = ['closed','error'].includes(application?.application);
-    message.textContent = displayError || (closed ? application.error || 'Application closed.' :
-      displayState === 'disconnected' ? 'Reconnecting to application…' : 'Opening application…');
-    retry.hidden = !displayError && displayState !== 'disconnected';
-    restart.hidden = !closed;
-  };
-  const notify = (state, error = '') => {
-    displayState = state; displayError = error; render();
-    parent.postMessage({type:'beam-kiosk-stream-state',state},location.origin);
-  };
-  if (typeof document !== 'undefined') {
-    const mount = () => {
-      overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111113;color:#ededee;display:grid;place-content:center;justify-items:center;gap:18px;font:14px system-ui,sans-serif';
-      overlay.setAttribute('data-beam-kiosk','');
-      message = document.createElement('p'); message.setAttribute('role','status');
-      retry = document.createElement('button'); retry.textContent='Reconnect';
-      retry.onclick = () => location.reload();
-      restart = document.createElement('button'); restart.textContent='Reopen application';
-      restart.onclick = async () => {
-        restart.disabled=true;
-        try {
-          const response=await fetch(new URL('../_beam/kiosk/restart',location.href),{method:'POST',headers:{'X-Beam-Kiosk-Action':'restart'},signal:AbortSignal.timeout(5000)});
-          if (!response.ok) throw new Error('Unable to reopen application.');
-          location.reload();
-        } catch(error) {notify('error',error.message);}
-        finally {restart.disabled=false;}
-      };
-      for (const button of [retry,restart]) button.style.cssText='font:inherit;padding:8px 16px;color:inherit;background:#242428;border:1px solid #3a3a40;border-radius:6px;cursor:pointer';
-      overlay.append(message,retry,restart); document.body.append(overlay);
-      render();
-      const poll = async () => {
-        try {
-          const response=await fetch(statusEndpoint,{cache:'no-store',signal:AbortSignal.timeout(5000)});
-          if ([401,403,404].includes(response.status)) {notify('error','Application access expired. Reopen its link.');return;}
-          if (!response.ok) throw new Error('Unavailable');
-          application=await response.json(); window.beamKiosk.status=application;
-          if (application.transport === 'websockets') {
-            const video=document.querySelector('video#videoStream');
-            const canvas=document.querySelector('canvas#videoCanvas');
-            if (video?.videoWidth > 0 && !video.paused && video.readyState>=2 && viewportMatches(video) ||
-                canvas?.width > 0 && canvas.getBoundingClientRect().width > 0 && viewportMatches(canvas)) displayState='ready';
-          }
-          render();
-        } catch (_) {
-          // A status request may fail while media and input remain healthy.
-          // Do not cover the live application with a stale recovery overlay.
-          if (activePeer?.connectionState !== 'connected') notify('disconnected');
-        }
-        setTimeout(poll,1000);
-      };
-      poll();
-    };
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',mount,{once:true});
-    else mount();
-    window.addEventListener('message',event=>{
-      if (event.origin !== location.origin || event.source !== window) return;
-      if (event.data?.type === 'stats') window.beamKiosk.stats=event.data.data;
-    });
-  }
-  // Browsers permit muted autoplay. Start the picture immediately and enable
-  // sound on the first real interaction, instead of exposing a black player.
-  if (typeof document !== 'undefined' && window.HTMLMediaElement) {
-    let activated = false, video, ready = false, settle;
-    const play = HTMLMediaElement.prototype.play;
-    HTMLMediaElement.prototype.play = function(...args) {
-      if (['stream','videoStream'].includes(this.id) && !activated) this.muted = true;
-      return play.apply(this, args);
-    };
-    const activate = event => {
-      if (!event.isTrusted) return;
-      activated = true;
-      if (video) {
-        video.muted = false;
-        video.play().catch(() => {});
+  const policy = Object.freeze({
+    pixelRatio: 2,
+    maxPixelRatio: 4,
+    statusFailures: 3,
+    alignment: 8,
+    pollMs: 1000,
+    requestMs: 5000,
+    registrationMs: 10000,
+    startupMs: 180000,
+    recoveryMs: 8000,
+    settleMs: 150,
+  });
+
+  class KioskViewer {
+    constructor() {
+      const ratio = typeof document !== 'undefined' && Number(document.currentScript?.dataset.pixelRatio);
+      this.pixelRatio = Number.isInteger(ratio) && ratio > 0 && ratio <= policy.maxPixelRatio ? ratio : policy.pixelRatio;
+      this.devicePixelRatio = window.devicePixelRatio || 1;
+      this.status = null;
+      this.stats = null;
+      this.peers = [];
+      this.displayState = 'starting';
+      this.displayError = '';
+      this.deadline = Date.now() + policy.startupMs;
+      this.failures = 0;
+      this.entry = typeof document !== 'undefined' &&
+        document.documentElement?.hasAttribute('data-beam-kiosk-entry');
+      // The isolated client document uses the guest's stable render density.
+      // CSS retains the browser viewport, including when embedded by a parent.
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true, get: () => this.pixelRatio,
+      });
+    }
+
+    endpoint(path) {
+      return new URL(`${this.entry ? '' : '../'}_beam/kiosk/${path}`, location.href);
+    }
+
+    notify(state, error = '') {
+      this.displayState = state;
+      this.displayError = error;
+      this.render();
+      parent.postMessage({type: 'beam-kiosk-stream-state', state}, location.origin);
+    }
+
+    render() {
+      if (!this.overlay) return;
+      const ready = this.displayState === 'ready' && this.status?.application === 'ready';
+      this.overlay.hidden = !this.entry && ready && !this.displayError;
+      if (!this.entry) this.overlay.style.display = this.overlay.hidden ? 'none' : 'grid';
+      const closed = ['closed', 'error'].includes(this.status?.application);
+      this.message.textContent = this.displayError || (closed ? this.status.error || 'Application closed.' :
+        this.displayState === 'disconnected' ? 'Reconnecting to application…' : 'Opening application…');
+      this.retry.hidden = !this.displayError && this.displayState !== 'disconnected';
+      this.restart.hidden = !closed;
+    }
+
+    async reopen() {
+      this.restart.disabled = true;
+      try {
+        const response = await fetch(this.endpoint('restart'), {
+          method: 'POST', headers: {'X-Beam-Kiosk-Action': 'restart'},
+          signal: AbortSignal.timeout(policy.requestMs),
+        });
+        if (!response.ok) throw new Error('Unable to reopen application. Check your access or VM logs.');
+        location.reload();
+      } catch (error) {
+        this.notify('error', error.message);
+      } finally {
+        this.restart.disabled = false;
       }
-      document.removeEventListener('pointerdown', activate, true);
-      document.removeEventListener('keydown', activate, true);
-    };
-    document.addEventListener('pointerdown', activate, true);
-    document.addEventListener('keydown', activate, true);
-    const fitted = () => (!activePeer || activePeer.connectionState === 'connected') &&
-      video && !video.paused && video.readyState >= 2 && video.videoWidth > 0 && viewportMatches(video) &&
-      (video.id==='videoStream' || video.videoWidth === video.width && video.videoHeight === video.height);
-    const check = () => {
-      clearTimeout(settle);
-      if (!fitted()) {
-        ready = false;
+    }
+
+    mount() {
+      if (this.entry) {
+        this.overlay = document.body;
+        this.message = document.querySelector('#status');
+        this.retry = document.querySelector('#retry');
+        this.restart = document.querySelector('#restart');
+      } else {
+        this.overlay = document.createElement('div');
+        this.overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111113;color:#ededee;display:grid;place-content:center;justify-items:center;gap:18px;font:14px system-ui,sans-serif';
+        this.overlay.setAttribute('data-beam-kiosk', '');
+        this.message = document.createElement('p');
+        this.message.setAttribute('role', 'status');
+        this.retry = document.createElement('button');
+        this.retry.textContent = 'Reconnect';
+        this.restart = document.createElement('button');
+        this.restart.textContent = 'Reopen application';
+        for (const button of [this.retry, this.restart]) {
+          button.style.cssText = 'font:inherit;padding:8px 16px;color:inherit;background:#242428;border:1px solid #3a3a40;border-radius:6px;cursor:pointer';
+        }
+        this.overlay.append(this.message, this.retry, this.restart);
+        document.body.append(this.overlay);
+      }
+      this.retry.onclick = () => location.reload();
+      this.restart.onclick = () => this.reopen();
+      this.render();
+      this.poll();
+    }
+
+    viewportMatches(surface) {
+      if (!window.innerWidth) return true;
+      const width = surface.videoWidth || surface.width;
+      const height = surface.videoHeight || surface.height;
+      return Math.abs(width - window.innerWidth * this.pixelRatio) < policy.alignment &&
+        Math.abs(height - window.innerHeight * this.pixelRatio) < policy.alignment;
+    }
+
+    get webSocketLive() {
+      return this.video?.id === 'videoStream' && !this.video.paused && this.video.readyState >= 2;
+    }
+
+    async poll() {
+      try {
+        const response = await fetch(this.endpoint('status'), {
+          cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
+        });
+        if ([401, 403, 404].includes(response.status)) {
+          this.notify('error', 'Application access is unavailable. Reopen its link to check your access.');
+          return;
+        }
+        if (!response.ok) throw new Error('Unavailable');
+        this.status = await response.json();
+        this.failures = 0;
+        if (this.entry && this.status.application === 'ready') {
+          const client = new URL('stream/', location.href);
+          const health = await fetch(new URL('api/health', client), {
+            cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
+          });
+          if (!health.ok) throw new Error('Unavailable');
+          location.replace(client.href);
+          return;
+        }
+        if (this.status.transport === 'websockets') {
+          const video = document.querySelector('video#videoStream');
+          const canvas = document.querySelector('canvas#videoCanvas');
+          if ((video?.videoWidth > 0 && !video.paused && video.readyState >= 2 && this.viewportMatches(video)) ||
+              (canvas?.width > 0 && canvas.getBoundingClientRect().width > 0 && this.viewportMatches(canvas))) {
+            this.displayState = 'ready';
+          }
+        }
+        this.render();
+      } catch (_) {
+        // Status polling must not cover a healthy, connected application.
+        if (++this.failures >= policy.statusFailures && this.activePeer?.connectionState !== 'connected' && !this.webSocketLive) {
+          this.notify('disconnected');
+        }
+      }
+      if (this.entry && Date.now() > this.deadline && !['closed', 'error'].includes(this.status?.application)) {
+        this.notify('error', 'The application is taking longer to start. Inspect its VM logs or reconnect.');
         return;
       }
-      // A resize can deliver an old frame before the new capture is ready.
-      // Reveal only after the decoded dimensions match the requested display.
-      settle = setTimeout(() => {
-        if (fitted() && !ready) { ready = true; notify('ready'); }
-      }, 150);
-    };
-    const observe = () => {
+      setTimeout(() => this.poll(), policy.pollMs);
+    }
+
+    fitted() {
+      const video = this.video;
+      return (this.webSocketLive || !this.activePeer || this.activePeer.connectionState === 'connected') &&
+        video && !video.paused && video.readyState >= 2 && video.videoWidth > 0 && this.viewportMatches(video) &&
+        (video.id === 'videoStream' || video.videoWidth === video.width && video.videoHeight === video.height);
+    }
+
+    checkDisplay() {
+      clearTimeout(this.settle);
+      if (!this.fitted()) {
+        this.ready = false;
+        return; // Resizing keeps the last live image visible.
+      }
+      this.settle = setTimeout(() => {
+        if (this.fitted() && !this.ready) {
+          this.ready = true;
+          this.notify('ready');
+        }
+      }, policy.settleMs);
+    }
+
+    refreshDisplay() {
+      this.ready = false;
+      clearTimeout(this.settle);
+      if (this.video?.requestVideoFrameCallback) this.video.requestVideoFrameCallback(() => this.checkDisplay());
+      else this.checkDisplay();
+    }
+
+    observeVideo() {
       const current = document.querySelector('video#stream,video#videoStream');
-      if (!current || current === video) return;
-      video = current;
-      notify('starting');
-      for (const event of ['playing', 'loadeddata', 'resize']) video.addEventListener(event, check);
-      const dimensions = new MutationObserver(check);
-      dimensions.observe(video, {attributes: true, attributeFilter: ['width', 'height']});
-      check();
-    };
-    refreshDisplay = () => {
-      ready = false;
-      clearTimeout(settle);
-      if (video?.requestVideoFrameCallback) video.requestVideoFrameCallback(check);
-      else check();
-    };
-    new MutationObserver(observe).observe(document, {childList: true, subtree: true});
-    observe();
-  }
-  const proto = window.RTCPeerConnection && RTCPeerConnection.prototype;
-  if (!proto) return;
-  const remote = proto.setRemoteDescription;
-  const candidate = proto.addIceCandidate;
-  const routed = new WeakSet();
-  const endpoint = new URL('../_beam/kiosk/webrtc/session', location.href);
-  proto.setRemoteDescription = async function(description) {
-    if (!description || !description.sdp) return remote.call(this, description);
-    if (!routed.has(this) && this.addEventListener) {
-      activePeer = this;
-      window.beamKiosk.peers.push(this);
-      this.addEventListener('track', ({receiver}) => {
-        // Prefer fresh desktop frames to a playback buffer on browsers that
-        // expose these receive-side latency controls.
+      if (!current || current === this.video) return;
+      this.video = current;
+      this.ready = false;
+      this.notify('starting');
+      for (const event of ['playing', 'loadeddata', 'resize']) {
+        current.addEventListener(event, () => this.checkDisplay());
+      }
+      new MutationObserver(() => this.checkDisplay()).observe(current, {
+        attributes: true, attributeFilter: ['width', 'height'],
+      });
+      this.checkDisplay();
+    }
+
+    installDisplay() {
+      const viewer = this;
+      const play = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function(...args) {
+        if (['stream', 'videoStream'].includes(this.id) && !viewer.activated) this.muted = true;
+        return play.apply(this, args);
+      };
+      const activate = event => {
+        if (!event.isTrusted) return;
+        this.activated = true;
+        if (this.video) {
+          this.video.muted = false;
+          this.video.play().catch(() => {});
+        }
+        document.removeEventListener('pointerdown', activate, true);
+        document.removeEventListener('keydown', activate, true);
+      };
+      document.addEventListener('pointerdown', activate, true);
+      document.addEventListener('keydown', activate, true);
+      new MutationObserver(() => this.observeVideo()).observe(document, {childList: true, subtree: true});
+      this.observeVideo();
+    }
+
+    trackPeer(peer) {
+      this.activePeer = peer;
+      this.peers = [peer];
+      peer.addEventListener('track', ({receiver}) => {
+        // Receive-side hints favor fresh desktop frames over playback buffering.
         try { if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0; } catch (_) {}
         try { if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0; } catch (_) {}
       });
-      this.addEventListener('connectionstatechange', () => {
-        if (this !== activePeer) return;
-        clearTimeout(recoveryTimer);
-        if (this.connectionState === 'connected') {
-          refreshDisplay();
-          return;
-        }
-        if (['disconnected', 'failed', 'closed'].includes(this.connectionState)) {
-          notify('disconnected');
-          refreshDisplay();
-          recoveryTimer = setTimeout(() => location.reload(), 8000);
+      peer.addEventListener('connectionstatechange', () => {
+        if (peer !== this.activePeer) return;
+        clearTimeout(this.recoveryTimer);
+        if (this.webSocketLive) return;
+        if (peer.connectionState === 'connected') this.refreshDisplay();
+        else if (['disconnected', 'failed', 'closed'].includes(peer.connectionState)) {
+          this.notify('disconnected');
+          this.refreshDisplay();
+          this.recoveryTimer = setTimeout(() => location.reload(), policy.recoveryMs);
         }
       });
     }
-    routed.add(this);
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST', credentials: 'same-origin', cache: 'no-store',
-        headers: {'Content-Type': 'application/json', 'X-Beam-Kiosk-Action': 'webrtc'},
-        body: JSON.stringify({sdp: description.sdp}), signal: AbortSignal.timeout(10000)
-      });
-      if (!response.ok) throw new Error(`WebRTC gateway registration failed (${response.status}); reconnect or check the VM gateway`);
-      const result = await response.json();
-      await remote.call(this, {type: description.type, sdp: result.sdp});
-    } catch (error) {
-      notify('error',error.message);
-      parent.postMessage({type: 'beam-kiosk-transport-error', error: error.message}, location.origin);
-      throw error;
+
+    installTransport() {
+      const proto = window.RTCPeerConnection && RTCPeerConnection.prototype;
+      if (!proto) return;
+      const viewer = this, routed = new WeakSet();
+      const remote = proto.setRemoteDescription, candidate = proto.addIceCandidate;
+      proto.setRemoteDescription = async function(description) {
+        if (!description?.sdp) return remote.call(this, description);
+        if (!routed.has(this) && this.addEventListener) viewer.trackPeer(this);
+        routed.add(this);
+        try {
+          const response = await fetch(viewer.endpoint('webrtc/session'), {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: {'Content-Type': 'application/json', 'X-Beam-Kiosk-Action': 'webrtc'},
+            body: JSON.stringify({sdp: description.sdp}), signal: AbortSignal.timeout(policy.registrationMs),
+          });
+          if (!response.ok) throw new Error(`WebRTC gateway registration failed (${response.status}); reconnect or check the VM gateway`);
+          const result = await response.json();
+          await remote.call(this, {type: description.type, sdp: result.sdp});
+        } catch (error) {
+          viewer.notify('error', error.message);
+          parent.postMessage({type: 'beam-kiosk-transport-error', error: error.message}, location.origin);
+          throw error;
+        }
+      };
+      proto.addIceCandidate = function(value) {
+        // Registration replaces private guest candidates with the routable set.
+        if (routed.has(this) && value?.candidate) return Promise.resolve();
+        return candidate.call(this, value);
+      };
     }
-  };
-  proto.addIceCandidate = function(value) {
-    // Registration supplies the complete, routable candidate set. Original
-    // guest addresses must not escape as later trickled candidates.
-    if (routed.has(this) && value && value.candidate) return Promise.resolve();
-    return candidate.call(this, value);
-  };
+  }
+
+  const viewer = window.beamKiosk = new KioskViewer();
+  viewer.installTransport();
+  if (typeof document === 'undefined') return;
+  const mount = () => viewer.mount();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, {once: true});
+  else mount();
+  window.addEventListener('message', event => {
+    if (event.origin === location.origin && event.source === window && event.data?.type === 'stats') {
+      viewer.stats = event.data.data;
+    }
+  });
+  if (window.HTMLMediaElement) viewer.installDisplay();
 })();

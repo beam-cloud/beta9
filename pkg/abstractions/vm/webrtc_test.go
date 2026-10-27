@@ -49,7 +49,9 @@ func iceTestFixture(t *testing.T) (*Service, *types.VM) {
 	t.Cleanup(func() { s.rdb.Close() })
 	v.TrafficAccessToken = "vm-traffic-secret"
 	v.Spec.Kiosk = &types.VMKioskSpec{Command: []string{"application"}, Transport: "webrtc"}
-	s.webrtc = &vmWebRTC{config: types.PodTCPConfig{ExternalHost: "127.0.0.1", ExternalPort: 443}, slots: make(chan struct{}, 256)}
+	policy := types.VMWebRTCConfig{}
+	require.NoError(t, policy.ApplyDefaults())
+	s.webrtc = &vmWebRTC{Service: s, policy: policy, config: types.PodTCPConfig{ExternalHost: "127.0.0.1", ExternalPort: 443}, slots: make(chan struct{}, policy.MaxConnections)}
 	return s, v
 }
 
@@ -60,7 +62,7 @@ func registerTestICE(t *testing.T, s *Service, v *types.VM, description string) 
 	r.Header.Set("X-Beam-Kiosk-Action", "webrtc")
 	rec := httptest.NewRecorder()
 	c := echo.New().NewContext(r, rec)
-	if err := s.registerICE(c, v); err != nil {
+	if err := s.webrtc.register(c, v); err != nil {
 		c.Echo().HTTPErrorHandler(err, c)
 	}
 	return rec
@@ -79,7 +81,7 @@ func TestWebRTCRegistrationIsAuthenticatedBoundedAndCollisionSafe(t *testing.T) 
 	require.NoError(t, s.rdb.Set(s.ctx, "vm:ice-rate:"+v.ID, 64, time.Minute).Err())
 	require.Equal(t, http.StatusTooManyRequests, registerTestICE(t, s, v, testSDP).Code)
 	c := echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/", nil), httptest.NewRecorder())
-	require.Error(t, s.registerICE(c, v))
+	require.Error(t, s.webrtc.register(c, v))
 }
 
 func iceFrame(t *testing.T, password string) []byte {
@@ -93,7 +95,7 @@ func iceFrame(t *testing.T, password string) []byte {
 }
 
 func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
-	for _, scenario := range []string{"valid", "wrong password", "rotated token", "old boot", "stopped", "revoked"} {
+	for _, scenario := range []string{"valid", "expired lease", "wrong password", "rotated token", "old boot", "stopped", "revoked"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v := iceTestFixture(t)
 			require.Equal(t, http.StatusOK, registerTestICE(t, s, v, testSDP).Code)
@@ -104,6 +106,9 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 			s.containers = containers
 			s.webrtc.dialer = network.NewBackendDialer(nil, types.TailscaleConfig{}, containers, time.Second)
 			password := testICEPassword
+			if scenario == "expired lease" {
+				s.webrtc.policy.CheckInterval = 10 * time.Millisecond
+			}
 			switch scenario {
 			case "wrong password":
 				password = "wrongPasswordLongEnoughForICE"
@@ -120,13 +125,13 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 			server, client := net.Pipe()
 			defer client.Close()
 			done := make(chan struct{})
-			go func() { s.serveICE(server); close(done) }()
+			go func() { s.webrtc.serve(server); close(done) }()
 			_ = client.SetDeadline(time.Now().Add(2 * time.Second))
 			_, err = client.Write(frame)
 			require.NoError(t, err)
 			_ = listener.(*net.TCPListener).SetDeadline(time.Now().Add(300 * time.Millisecond))
 			backend, err := listener.Accept()
-			if scenario != "valid" {
+			if scenario != "valid" && scenario != "expired lease" {
 				require.Error(t, err, "unauthorized ICE must never reach the private VM")
 				<-done
 				return
@@ -143,8 +148,18 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 			_, err = io.ReadFull(client, media)
 			require.NoError(t, err)
 			require.Equal(t, "encrypted-media", string(media))
-			client.Close()
-			<-done
+			if scenario == "expired lease" {
+				require.NoError(t, s.rdb.Del(s.ctx, "vm:ice-open:fragment").Err())
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("expired lease must close active media")
+				}
+				require.Zero(t, s.rdb.ZCard(s.ctx, "vm:ice-open:fragment").Val(), "renewal must not resurrect an expired lease")
+			} else {
+				client.Close()
+				<-done
+			}
 		})
 	}
 }
@@ -157,4 +172,16 @@ func TestWebRTCRequiresPrivateMediaAndConfiguredGateway(t *testing.T) {
 	require.Contains(t, spec.PrivatePorts, types.VMKioskMediaPort)
 	spec.Ports = append(spec.Ports, types.VMKioskMediaPort)
 	require.Error(t, validate(&spec))
+}
+
+func TestWebRTCClosesConnectionsWhenGatewayCapacityIsFull(t *testing.T) {
+	s, _ := iceTestFixture(t)
+	s.webrtc.slots = make(chan struct{}, 1)
+	s.webrtc.slots <- struct{}{}
+	server, client := net.Pipe()
+	defer client.Close()
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(time.Second)))
+	s.webrtc.serve(server)
+	_, err := client.Read(make([]byte, 1))
+	require.ErrorIs(t, err, io.EOF)
 }

@@ -8,6 +8,7 @@ authenticates browser requests before forwarding them here.
 
 import base64
 import collections
+from dataclasses import asdict, dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -22,8 +23,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from kiosk_config import Kiosk, KioskRuntime
 
-STATUS_PORT = 8081
+
+POLICY = KioskRuntime()
+STATUS_PORT = POLICY.status_port
 ASSETS = Path("/opt/beam-vm")
 RUNTIME = Path("/run/beam-desktop")
 
@@ -37,23 +41,28 @@ def mcp_ready(port, path):
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-06-18",
+                "protocolVersion": POLICY.mcp_protocol_version,
                 "capabilities": {},
                 "clientInfo": {"name": "beam-kiosk-readiness", "version": "1"},
             },
         }
     ).encode()
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    deadline = time.monotonic() + POLICY.command_timeout
     try:
-        with urlopen(Request(endpoint, data=body, headers=headers), timeout=2) as response:
+        with urlopen(
+            Request(endpoint, data=body, headers=headers), timeout=POLICY.command_timeout
+        ) as response:
             session = response.headers.get("Mcp-Session-Id")
             if "text/event-stream" in response.headers.get("Content-Type", ""):
                 message = None
                 data_lines, size = [], 0
-                for _ in range(128):
-                    line = response.readline(65537)
+                for _ in range(POLICY.mcp_max_event_lines):
+                    if time.monotonic() >= deadline:
+                        break
+                    line = response.readline(POLICY.mcp_max_response_bytes + 1)
                     size += len(line)
-                    if not line or size > 65536:
+                    if not line or size > POLICY.mcp_max_response_bytes:
                         break
                     if not line.strip() and data_lines:
                         candidate = json.loads(b"\n".join(data_lines))
@@ -64,7 +73,16 @@ def mcp_ready(port, path):
                     elif line.startswith(b"data:"):
                         data_lines.append(line[5:].lstrip(b" ").rstrip(b"\r\n"))
             else:
-                message = json.loads(response.read(65537))
+                chunks, size = [], 0
+                while time.monotonic() < deadline and size <= POLICY.mcp_max_response_bytes:
+                    chunk = response.read1(POLICY.mcp_max_response_bytes + 1 - size)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                message = (
+                    json.loads(b"".join(chunks)) if size <= POLICY.mcp_max_response_bytes else None
+                )
         if (
             not isinstance(message, dict)
             or message.get("id") != 1
@@ -78,11 +96,16 @@ def mcp_ready(port, path):
         if session:
             headers["Mcp-Session-Id"] = session
         initialized = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
-        with urlopen(Request(endpoint, data=initialized, headers=headers), timeout=2):
+        with urlopen(
+            Request(endpoint, data=initialized, headers=headers), timeout=POLICY.command_timeout
+        ):
             pass
         if session:
             try:
-                with urlopen(Request(endpoint, method="DELETE", headers=headers), timeout=2):
+                with urlopen(
+                    Request(endpoint, method="DELETE", headers=headers),
+                    timeout=POLICY.command_timeout,
+                ):
                     pass
             except HTTPError as error:
                 if error.code != 405:
@@ -98,30 +121,9 @@ def visible_windows(env):
         env=env,
         capture_output=True,
         text=True,
-        timeout=2,
+        timeout=POLICY.command_timeout,
     )
     return re.findall(r"0x[0-9a-fA-F]+", result.stdout) if result.returncode == 0 else []
-
-
-def primary_window(windows, env):
-    # First-run wizards, splash screens, and transient dialogs can map before
-    # the editor. They must not become the fullscreen application window.
-    for window in windows:
-        result = subprocess.run(
-            ["xprop", "-id", window, "_NET_WM_WINDOW_TYPE", "WM_TRANSIENT_FOR"],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        if result.returncode != 0:
-            continue
-        if re.search(r"WM_TRANSIENT_FOR.*0x[1-9a-fA-F]", result.stdout):
-            continue
-        kind = result.stdout.splitlines()[0] if result.stdout else ""
-        if "_NET_WM_WINDOW_TYPE_NORMAL" in kind or "not found" in kind:
-            return window
-    return None
 
 
 def toolkit_settings(source):
@@ -131,9 +133,12 @@ def toolkit_settings(source):
     at half size on Retina. GTK needs the matching unscaled font DPI too.
     """
     match = re.search(r"^Xft/DPI\s+(\d+)", source, re.MULTILINE)
-    dpi = int(match[1]) if match else 96 * 1024
-    dpi = min(384 * 1024, max(96 * 1024, dpi))
-    scale = max(1, round(dpi / (96 * 1024)))
+    dpi = int(match[1]) if match else POLICY.base_dpi * POLICY.xsettings_unit
+    dpi = min(
+        POLICY.max_pixel_ratio * POLICY.base_dpi * POLICY.xsettings_unit,
+        max(POLICY.base_dpi * POLICY.xsettings_unit, dpi),
+    )
+    scale = max(1, round(dpi / (POLICY.base_dpi * POLICY.xsettings_unit)))
     source = re.sub(
         r"^(?:Xft/(?:DPI|RGBA)|Gdk/(?:WindowScalingFactor|UnscaledDPI))\s+.*\n?",
         "",
@@ -146,19 +151,41 @@ def toolkit_settings(source):
     )
 
 
-def saved_display(path, legacy_scale=2):
+def saved_display(path, legacy_scale=POLICY.pixel_ratio):
     try:
         value = json.loads(path.read_text())
         width, height = value["width"], value["height"]
         scale = value.get("pixel_ratio", legacy_scale)
-        if type(width) is int and type(height) is int and type(scale) is int and 1 <= scale <= 4:
-            width, height = round(width * 2 / scale), round(height * 2 / scale)
-            if 320 <= width <= 8192 and 200 <= height <= 8192:
+        if (
+            type(width) is int
+            and type(height) is int
+            and type(scale) is int
+            and 1 <= scale <= POLICY.max_pixel_ratio
+        ):
+            width, height = (
+                round(width * POLICY.pixel_ratio / scale),
+                round(height * POLICY.pixel_ratio / scale),
+            )
+            if POLICY.valid_size((width, height)):
                 return width, height
     except (OSError, ValueError, TypeError, KeyError):
         pass
     # A 1920x1080 logical desktop, rendered at the session's 2x density.
-    return 3840, 2160
+    return POLICY.default_size
+
+
+def resize_display(size, env):
+    subprocess.run(
+        ["selkies", "resize", f"{size[0]}x{size[1]}"],
+        env=env,
+        check=True,
+        timeout=POLICY.resize_timeout,
+    )
+    # Selkies' standalone resize CLI initializes the physical display at 96 DPI.
+    # Apply the fixed density in the same guest operation, before GUI startup.
+    subprocess.run(
+        ["xrandr", "--dpi", str(POLICY.dpi)], env=env, check=True, timeout=POLICY.command_timeout
+    )
 
 
 def display_size(env):
@@ -167,61 +194,10 @@ def display_size(env):
         env=env,
         capture_output=True,
         text=True,
-        timeout=2,
+        timeout=POLICY.command_timeout,
     )
     match = re.search(r"=\s*(\d+),\s*(\d+)", result.stdout)
     return (int(match[1]), int(match[2])) if match else None
-
-
-def undecorate(window, env, decorated=False):
-    # Openbox requires the property's type to be _MOTIF_WM_HINTS itself.
-    # xprop's 32c setter creates CARDINAL, which Openbox correctly ignores.
-    # Isolate Xlib in a helper so a window closing during this operation cannot
-    # invoke Xlib's fatal error handler in the supervisor process.
-    subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            """
-import ctypes as c, sys
-x = c.CDLL('libX11.so.6')
-x.XOpenDisplay.argtypes = [c.c_char_p]; x.XOpenDisplay.restype = c.c_void_p
-x.XInternAtom.argtypes = [c.c_void_p, c.c_char_p, c.c_int]; x.XInternAtom.restype = c.c_ulong
-x.XChangeProperty.argtypes = [c.c_void_p,c.c_ulong,c.c_ulong,c.c_ulong,c.c_int,c.c_int,c.c_void_p,c.c_int]
-x.XSync.argtypes = [c.c_void_p,c.c_int]; x.XCloseDisplay.argtypes = [c.c_void_p]
-x.XDefaultRootWindow.argtypes = [c.c_void_p]; x.XDefaultRootWindow.restype = c.c_ulong
-d = x.XOpenDisplay(None)
-if not d: raise SystemExit('Private application display unavailable')
-atom = x.XInternAtom(d, b'_MOTIF_WM_HINTS', 0)
-data = (c.c_ulong * 5)(2,0,int(sys.argv[2]),0,0)
-x.XChangeProperty(d, int(sys.argv[1],16), atom, atom, 32, 0, data, 5)
-if int(sys.argv[2]):
-    # Openbox's application rule also sets its own undecorated state.
-    class Payload(c.Union):
-        _fields_ = [("b",c.c_char*20),("s",c.c_short*10),("l",c.c_long*5)]
-    class Message(c.Structure):
-        _fields_ = [("type",c.c_int),("serial",c.c_ulong),("send_event",c.c_int),
-                    ("display",c.c_void_p),("window",c.c_ulong),("message_type",c.c_ulong),
-                    ("format",c.c_int),("data",Payload)]
-    class Event(c.Union):
-        _fields_ = [("message",Message),("pad",c.c_long*24)]
-    event=Event(); event.message.type=33; event.message.display=d
-    event.message.window=int(sys.argv[1],16); event.message.format=32
-    event.message.message_type=x.XInternAtom(d,b'_NET_WM_STATE',0)
-    event.message.data.l[0]=0
-    event.message.data.l[1]=x.XInternAtom(d,b'_OB_WM_STATE_UNDECORATED',0)
-    event.message.data.l[3]=2
-    x.XSendEvent.argtypes=[c.c_void_p,c.c_ulong,c.c_int,c.c_long,c.POINTER(Event)]
-    x.XSendEvent(d,x.XDefaultRootWindow(d),0,(1<<19)|(1<<20),c.byref(event))
-x.XSync(d, 0); x.XCloseDisplay(d)
-""",
-            window,
-            "1" if decorated else "0",
-        ],
-        env=env,
-        check=True,
-        timeout=2,
-    )
 
 
 def stop_process(process):
@@ -232,70 +208,42 @@ def stop_process(process):
     except ProcessLookupError:
         pass
     try:
-        process.wait(timeout=3)
+        process.wait(timeout=POLICY.process_timeout)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        process.wait(timeout=3)
+        process.wait(timeout=POLICY.process_timeout)
 
 
-def restore_transient_window(window, env):
-    # A few applications mark custom transient dialogs as NORMAL. Undo the
-    # normal-window rule; Openbox retains their pre-maximized geometry.
-    info = subprocess.run(
-        ["xprop", "-id", window, "_NET_WM_WINDOW_TYPE", "WM_TRANSIENT_FOR", "_NET_WM_STATE"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=2,
-    )
-    if (
-        info.returncode == 0
-        and "_NET_WM_WINDOW_TYPE_NORMAL" in info.stdout
-        and re.search(r"WM_TRANSIENT_FOR.*0x[1-9a-fA-F]", info.stdout)
-    ):
-        if (
-            "_NET_WM_STATE_MAXIMIZED" not in info.stdout
-            and "_OB_WM_STATE_UNDECORATED" not in info.stdout
-        ):
-            return True
-        subprocess.run(
-            ["wmctrl", "-ir", window, "-b", "remove,maximized_vert,maximized_horz"],
-            env=env,
-            check=True,
-            timeout=2,
-        )
-        undecorate(window, env, decorated=True)
-        return True
-    return False
+@dataclass(frozen=True)
+class SessionStatus:
+    state: str = "starting"
+    application: str = "starting"
+    mcp: str = "disabled"
+    windows: int = 0
+    error: str = ""
+    backend: str = "selkies"
+    experimental: bool = True
+    transport: str = "websockets"
 
 
 class Session:
     def __init__(self, config):
-        self.config = config
+        self.config = Kiosk.from_dict(config)
         self.lock = threading.Lock()
         self.restart = threading.Event()
         self.stopping = threading.Event()
-        self.processes = []
+        self.processes = {}
         self.application = None
-        self.primary = None
-        self.managed_windows = set()
-        self.floating_windows = set()
         self.mcp = None
         self.failures = collections.deque()
         self.mcp_failures = collections.deque()
-        self.state = {
-            "state": "starting",
-            "application": "starting",
-            "mcp": "starting" if config.get("mcp") else "disabled",
-            "windows": 0,
-            "error": "",
-            "backend": "selkies",
-            "experimental": True,
-            "transport": config.get("transport", "websockets"),
-        }
+        self.state = SessionStatus(
+            mcp="starting" if self.config.mcp else "disabled",
+            transport=self.config.transport or "websockets",
+        )
         self.env = dict(
             os.environ,
             HOME="/root",
@@ -305,96 +253,58 @@ class Session:
             QT_SCALE_FACTOR_ROUNDING_POLICY="PassThrough",
         )
         self.env.pop("BEAM_VM_KIOSK", None)
-        self.env.update(config.get("env", {}))
+        self.env.update(self.config.env)
         # These identify this exact display and cannot be redirected by app env.
         self.env.update(DISPLAY=":1", XAUTHORITY=str(RUNTIME / ".Xauthority"))
         manager = ASSETS / "openbox/bin/openbox"
-        self.window_manager = str(manager) if manager.exists() else "openbox"
+        self.window_manager = str(manager)
 
     def update(self, **fields):
         with self.lock:
-            self.state.update(fields)
+            self.state = replace(self.state, **fields)
 
     def status(self):
         with self.lock:
-            return dict(self.state)
+            return asdict(self.state)
 
-    def spawn(self, command, **options):
+    def spawn(self, command, *, role, **options):
         process = subprocess.Popen(command, env=self.env, start_new_session=True, **options)
-        self.processes.append(process)
+        self.processes[role] = process
         return process
 
     def retry_allowed(self, failures):
         now = time.monotonic()
-        while failures and now - failures[0] > 60:
+        while failures and now - failures[0] > POLICY.retry_window:
             failures.popleft()
         failures.append(now)
-        return len(failures) <= 3
+        return len(failures) <= POLICY.max_retries
 
-    def launch(self):
+    def stop_application(self):
         stop_process(self.mcp)
         stop_process(self.application)
+        self.mcp = self.application = None
+        self.processes.pop("mcp", None)
+        self.processes.pop("application", None)
+
+    def launch(self):
+        self.stop_application()
         self.update(
             state="starting",
             application="starting",
             windows=0,
             error="",
-            mcp="starting" if self.config.get("mcp") else "disabled",
+            mcp="starting" if self.config.mcp else "disabled",
         )
-        self.application = self.spawn(
-            self.config["command"], cwd=self.config.get("cwd", "/workspace")
-        )
+        self.application = self.spawn(self.config.command, role="application", cwd=self.config.cwd)
         self.mcp = None
         self.started = time.monotonic()
         self.was_visible = False
-        self.primary = None
-        self.managed_windows = set()
-        self.floating_windows = set()
         self.mcp_failures.clear()
 
-    def fit_application_windows(self, windows):
-        # A new editor/document is another top-level application surface.
-        # Dialogs, utility windows and transient normal windows stay native.
-        self.managed_windows.intersection_update(windows)
-        self.floating_windows.intersection_update(windows)
-        for window in windows:
-            try:
-                if not primary_window([window], self.env):
-                    self.managed_windows.discard(window)
-                    if restore_transient_window(window, self.env):
-                        self.floating_windows.add(window)
-                    continue
-                self.floating_windows.discard(window)
-                if window in self.managed_windows:
-                    continue
-                # Openbox applies decoration and maximization rules before
-                # mapping. This also repairs applications that undo the state.
-                subprocess.run(
-                    [
-                        "wmctrl",
-                        "-ir",
-                        window,
-                        "-b",
-                        "add,maximized_vert,maximized_horz",
-                    ],
-                    env=self.env,
-                    check=True,
-                    timeout=2,
-                )
-                self.managed_windows.add(window)
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                # Window IDs are observations, not leases: a menu, popup or
-                # editor can disappear between discovery and the X11 request.
-                # Retry surviving windows without failing the application.
-                continue
-        if self.primary not in windows:
-            self.primary = next((w for w in windows if w in self.managed_windows), None)
-
     def launch_mcp(self):
-        if self.config.get("mcp"):
-            self.mcp = self.spawn(
-                self.config["mcp"]["command"], cwd=self.config.get("cwd", "/workspace")
-            )
+        stop_process(self.mcp)
+        if self.config.mcp:
+            self.mcp = self.spawn(self.config.mcp.command, role="mcp", cwd=self.config.cwd)
             self.update(mcp="starting")
 
     def control_server(self):
@@ -435,31 +345,51 @@ class Session:
     def run(self):
         server = self.control_server()
         try:
+            if not Path(self.window_manager).is_file():
+                raise RuntimeError(
+                    "Kiosk image requires the application window manager; rebuild with --kiosk"
+                )
             RUNTIME.mkdir(parents=True, exist_ok=True)
             settings_file = Path(self.env["HOME"]) / ".xsettingsd"
             if not settings_file.exists():
-                settings_file.write_text("Xft/Antialias 1\nXft/DPI 98304\n")
+                settings_file.write_text(
+                    f"Xft/Antialias 1\nXft/DPI {POLICY.base_dpi * POLICY.xsettings_unit}\n"
+                )
             # Keep one logical desktop density for the lifetime of the app.
             # Changing it after toolkit initialization leaves cached window,
             # font and icon metrics inconsistent in many ordinary X11 apps.
             previous_settings = settings_file.read_text()
             previous_dpi = re.search(r"^Xft/DPI\s+(\d+)", previous_settings, re.MULTILINE)
-            legacy_scale = max(1, round(int(previous_dpi[1]) / (96 * 1024))) if previous_dpi else 1
+            legacy_scale = (
+                max(1, round(int(previous_dpi[1]) / (POLICY.base_dpi * POLICY.xsettings_unit)))
+                if previous_dpi
+                else 1
+            )
             settings_source = re.sub(
-                r"^Xft/DPI\s+.*$", "Xft/DPI 196608", previous_settings, flags=re.MULTILINE
+                r"^Xft/DPI\s+.*$",
+                f"Xft/DPI {POLICY.dpi * POLICY.xsettings_unit}",
+                previous_settings,
+                flags=re.MULTILINE,
             )
             if not re.search(r"^Xft/DPI ", settings_source, re.MULTILINE):
-                settings_source += "\nXft/DPI 196608\n"
+                settings_source += f"\nXft/DPI {POLICY.dpi * POLICY.xsettings_unit}\n"
             settings_file.write_text(settings_source)
             initial_settings = toolkit_settings(settings_source)
             initial_dpi = (
-                int(re.search(r"^Xft/DPI (\d+)", initial_settings, re.MULTILINE)[1]) // 1024
+                int(re.search(r"^Xft/DPI (\d+)", initial_settings, re.MULTILINE)[1])
+                // POLICY.xsettings_unit
             )
             display_file = Path(self.env["HOME"]) / ".config/beam-vm/kiosk-display.json"
             display_file.parent.mkdir(parents=True, exist_ok=True)
             saved_size = saved_display(display_file, legacy_scale=legacy_scale)
             display_file.write_text(
-                json.dumps({"width": saved_size[0], "height": saved_size[1], "pixel_ratio": 2})
+                json.dumps(
+                    {
+                        "width": saved_size[0],
+                        "height": saved_size[1],
+                        "pixel_ratio": POLICY.pixel_ratio,
+                    }
+                )
             )
             geometry_check = 0
             subprocess.run(
@@ -473,7 +403,7 @@ class Session:
                     ":1",
                     "-screen",
                     "0",
-                    "8192x8192x24",
+                    f"{POLICY.max_dimension}x{POLICY.max_dimension}x24",
                     "-nolisten",
                     "tcp",
                     "-dpi",
@@ -491,9 +421,10 @@ class Session:
                     "DAMAGE",
                     "+extension",
                     "XFIXES",
-                ]
+                ],
+                role="display",
             )
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + POLICY.display_timeout
             while subprocess.run(
                 ["xdpyinfo"], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             ).returncode:
@@ -503,36 +434,37 @@ class Session:
                     )
                 if self.stopping.wait(0.1):
                     return
+            resize_display(saved_size, self.env)
             subprocess.run(
-                ["selkies", "resize", f"{saved_size[0]}x{saved_size[1]}"],
+                ["xsetroot", "-solid", "#111113"],
                 env=self.env,
                 check=True,
-                timeout=10,
+                timeout=POLICY.command_timeout,
             )
-            # The resize CLI starts with a 96-DPI physical screen. Set it
-            # before any toolkit initializes; font DPI alone is insufficient.
-            subprocess.run(
-                ["xrandr", "--dpi", str(initial_dpi)], env=self.env, check=True, timeout=2
-            )
-            subprocess.run(["xsetroot", "-solid", "#111113"], env=self.env, check=True, timeout=2)
             subprocess.run(
                 ["xrdb", "-merge"],
                 input=f"Xft.dpi: {initial_dpi}\n",
                 text=True,
                 env=self.env,
                 check=True,
-                timeout=2,
+                timeout=POLICY.command_timeout,
             )
             # Selkies updates ~/.xsettingsd when the browser's DPI changes.
             # GTK/wx clients need an XSETTINGS owner to receive those updates.
             toolkit_file = RUNTIME / "xsettingsd.conf"
             toolkit_file.write_text(initial_settings)
-            settings_daemon = self.spawn(["xsettingsd", "--config", str(toolkit_file)])
-            wm = self.spawn(
-                [self.window_manager, "--config-file", str(ASSETS / "kiosk-openbox.xml")]
+            settings_daemon = self.spawn(
+                ["xsettingsd", "--config", str(toolkit_file)], role="settings"
             )
-            self.spawn(["pulseaudio", "--daemonize=no", "--exit-idle-time=-1", "--disallow-exit"])
-            transport = self.config.get("transport", "websockets")
+            wm = self.spawn(
+                [self.window_manager, "--config-file", str(ASSETS / "kiosk-openbox.xml")],
+                role="window-manager",
+            )
+            self.spawn(
+                ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1", "--disallow-exit"],
+                role="audio",
+            )
+            transport = self.config.transport or "websockets"
             rtc_options = []
             if transport == "webrtc":
                 # No public TURN service or shared relay credentials. The Beam
@@ -540,7 +472,7 @@ class Session:
                 rtc_config = RUNTIME / "rtc.json"
                 rtc_config.write_text('{"iceServers":[]}')
                 rtc_options = [
-                    "--webrtc-tcp-mux-port=8443",
+                    f"--webrtc-tcp-mux-port={POLICY.media_port}",
                     "--webrtc-ice-lite=true",
                     f"--rtc-config-json={rtc_config}",
                 ]
@@ -548,26 +480,26 @@ class Session:
                 [
                     "selkies",
                     "--addr=0.0.0.0",
-                    "--port=8080",
+                    f"--port={POLICY.display_port}",
                     "--enable-basic-auth=false",
                     f"--mode={transport}",
                     "--encoder=h264enc",
-                    "--framerate=60-60",
+                    f"--framerate={POLICY.framerate}-{POLICY.framerate}",
                     # Encode the first changed frame clearly. CBR cleanup can take
                     # seconds to refine a high-density desktop; late paint-over
                     # keyframes also create bursts after the user stops moving.
                     # Keep a steady RTP cadence so idle gaps do not grow the
                     # receiver's jitter buffer before the next interaction.
-                    "--video-bitrate=24000,3000-24000",
+                    f"--video-bitrate={POLICY.max_bitrate},{POLICY.min_bitrate}-{POLICY.max_bitrate}",
                     "--rate-control-mode=crf",
-                    "--video-crf=18-18",
+                    f"--video-crf={POLICY.crf}-{POLICY.crf}",
                     "--video-fullcolor=true",
                     "--video-streaming-mode=true|locked",
                     "--use-paint-over-quality=false|locked",
-                    "--backpressure-queue-size=2",
+                    f"--backpressure-queue-size={POLICY.frame_queue}",
                     "--enable-resize=true|locked",
                     "--use-css-scaling=false|locked",
-                    "--scaling-dpi=192",
+                    f"--scaling-dpi={POLICY.dpi}",
                     "--use-browser-cursors=true",
                     "--ui-title=Application",
                     "--ui-show-sidebar=false",
@@ -581,18 +513,19 @@ class Session:
                     "--webcam-enabled=false",
                     "--gamepad-enabled=false",
                 ]
-                + rtc_options
+                + rtc_options,
+                role="stream",
             )
             # Wait for the window manager, otherwise a fast application can map
             # before its maximize/no-decoration rules have been installed.
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + POLICY.manager_timeout
             while not visible_wm(self.env):
                 if wm.poll() is not None or time.monotonic() > deadline:
                     raise RuntimeError("Application window manager failed to start")
                 if self.stopping.wait(0.1):
                     return
             self.launch()
-            while not self.stopping.wait(0.25):
+            while not self.stopping.wait(POLICY.poll_interval):
                 # Selkies publishes new font DPI and signals this daemon when
                 # a browser connects or changes density. Complete that update
                 # with GTK's widget-scale settings without modifying Selkies.
@@ -606,25 +539,29 @@ class Session:
                     temporary.replace(toolkit_file)
                     os.kill(settings_daemon.pid, signal.SIGHUP)
                     subprocess.run(
-                        [self.window_manager, "--reconfigure"], env=self.env, check=True, timeout=2
+                        [self.window_manager, "--reconfigure"],
+                        env=self.env,
+                        check=True,
+                        timeout=POLICY.command_timeout,
                     )
                     settings_source = latest_settings
                 if any(p.poll() is not None for p in (display, wm, stream, settings_daemon)):
                     raise RuntimeError(
                         "Application streaming service exited; inspect beam-desktop.service logs"
                     )
-                if time.monotonic() - geometry_check > 1:
+                if time.monotonic() - geometry_check > POLICY.geometry_interval:
                     geometry_check = time.monotonic()
                     size = display_size(self.env)
-                    if (
-                        size
-                        and size != saved_size
-                        and 320 <= size[0] <= 8192
-                        and 200 <= size[1] <= 8192
-                    ):
+                    if size and size != saved_size and POLICY.valid_size(size):
                         temporary = display_file.with_suffix(".tmp")
                         temporary.write_text(
-                            json.dumps({"width": size[0], "height": size[1], "pixel_ratio": 2})
+                            json.dumps(
+                                {
+                                    "width": size[0],
+                                    "height": size[1],
+                                    "pixel_ratio": POLICY.pixel_ratio,
+                                }
+                            )
                         )
                         temporary.replace(display_file)
                         saved_size = size
@@ -646,16 +583,15 @@ class Session:
                         application="error",
                         error=f"Application exited with status {code}; restart it or inspect its logs",
                     )
-                    stop_process(self.mcp)
+                    self.stop_application()
                     continue
                 if windows:
                     self.was_visible = True
-                    self.fit_application_windows(windows)
                     self.update(application="ready")
-                    if self.mcp is None:
+                    if self.mcp is None and self.status()["mcp"] != "error":
                         self.launch_mcp()
                 elif code is not None and (
-                    self.was_visible or time.monotonic() - self.started > 45
+                    self.was_visible or time.monotonic() - self.started > POLICY.launcher_grace
                 ):
                     self.update(
                         state="closed",
@@ -664,9 +600,12 @@ class Session:
                         if self.was_visible
                         else "Application exited without opening a window",
                     )
-                    stop_process(self.mcp)
+                    self.stop_application()
                     continue
-                elif not self.was_visible and time.monotonic() - self.started > 120:
+                elif (
+                    not self.was_visible
+                    and time.monotonic() - self.started > POLICY.application_timeout
+                ):
                     self.update(
                         state="error",
                         application="error",
@@ -685,11 +624,14 @@ class Session:
                                 mcp="error",
                                 error="Application MCP server exited repeatedly; inspect its logs",
                             )
+                            stop_process(self.mcp)
+                            self.mcp = None
+                            self.processes.pop("mcp", None)
                     elif self.status()["mcp"] != "ready":
-                        mcp = self.config["mcp"]
-                        if mcp_ready(mcp["port"], mcp.get("path", "/mcp")):
+                        mcp = self.config.mcp
+                        if mcp_ready(mcp.port, mcp.path):
                             self.update(mcp="ready", error="")
-                        elif time.monotonic() - self.started > 120:
+                        elif time.monotonic() - self.started > POLICY.application_timeout:
                             self.update(
                                 state="error",
                                 mcp="error",
@@ -705,22 +647,18 @@ class Session:
                 error = RuntimeError(
                     f"Kiosk service command failed: {error.cmd[0]}; inspect its logs"
                 )
-            if (
-                self.config.get("mcp")
-                and self.mcp is None
-                and self.status()["application"] == "ready"
-            ):
+            if self.config.mcp and self.mcp is None and self.status()["application"] == "ready":
                 self.update(state="error", mcp="error", error=str(error))
             else:
                 self.update(state="error", application="error", error=str(error))
             print(f"Kiosk startup failed: {error}", file=sys.stderr, flush=True)
             # Keep the error readable by the browser rather than crashing into
             # a blank screen or repeatedly relaunching a broken application.
-            while not self.stopping.wait(0.25):
+            while not self.stopping.wait(POLICY.poll_interval):
                 if self.restart.is_set():
                     return 1
         finally:
-            for process in reversed(self.processes):
+            for process in reversed(list(self.processes.values())):
                 stop_process(process)
             server.shutdown()
             server.server_close()
@@ -732,15 +670,27 @@ def visible_wm(env):
         env=env,
         capture_output=True,
         text=True,
-        timeout=2,
+        timeout=POLICY.command_timeout,
     )
     return bool(re.search(r"0x[1-9a-fA-F][0-9a-fA-F]*", result.stdout))
 
 
 def main():
+    if sys.argv[1:2] == ["--resize"]:
+        try:
+            size = tuple(map(int, sys.argv[2:]))
+            if not POLICY.valid_size(size):
+                raise ValueError("invalid kiosk display size")
+            resize_display(size, os.environ)
+            return 0
+        except (ValueError, subprocess.SubprocessError) as error:
+            print(f"Unable to resize kiosk display: {error}", file=sys.stderr)
+            return 1
     if "--status" in sys.argv or "--check" in sys.argv:
         try:
-            with urlopen(f"http://127.0.0.1:{STATUS_PORT}/status", timeout=3) as response:
+            with urlopen(
+                f"http://127.0.0.1:{STATUS_PORT}/status", timeout=POLICY.process_timeout
+            ) as response:
                 status = json.load(response)
             print(json.dumps(status))
             return 0 if "--status" in sys.argv or status["state"] == "ready" else 1

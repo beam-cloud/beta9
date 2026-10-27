@@ -221,7 +221,7 @@ func prepareICEOrTLSConn(conn net.Conn) (net.Conn, bool, error) {
 			return nil, false, err
 		}
 		size := binary.BigEndian.Uint16(header[:2])
-		ice = size >= 20 && size <= 8192 && binary.BigEndian.Uint16(header[2:]) == 1
+		ice = size >= 20 && size <= types.VMKioskMaxICEFrameBytes && binary.BigEndian.Uint16(header[2:]) == 1
 	}
 	return &bufferedReadConn{Conn: conn, reader: reader}, ice, nil
 }

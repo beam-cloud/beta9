@@ -35,6 +35,7 @@ def main():
     )
     fixture = Path(__file__).with_name("toolkit_density.py").read_bytes()
     launcher = b"""import runpy,subprocess,sys
+sys.path.insert(0,'/opt/beam-vm')
 m=runpy.run_path('/opt/beam-vm/kiosk')
 e=m['Session']({'command':['density-fixture']}).env
 r=subprocess.run(['/usr/bin/python3','/tmp/beam-toolkit-density.py',*sys.argv[1:]],env=e,capture_output=True,text=True,timeout=10)

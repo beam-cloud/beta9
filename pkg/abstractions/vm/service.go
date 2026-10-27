@@ -88,7 +88,9 @@ func New(ctx context.Context, opts ServiceOpts) error {
 	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {
 		return err
 	}
-	s.startWebRTC(opts.TCPConfig, opts.BackendDialer)
+	if err := s.startWebRTC(opts.TCPConfig, opts.Config.WebRTC, opts.BackendDialer); err != nil {
+		return err
+	}
 
 	registerVMRoutes(opts.RouteGroup, s)
 	opts.Server.Any("/vm/:handle/:port", s.proxy)

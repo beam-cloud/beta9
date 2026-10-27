@@ -140,7 +140,7 @@ def test_vm_image_bundle_matches_guest_files():
         for path in directory.iterdir()
         if path.is_file()
         and not path.name.startswith(".")
-        and path.suffix not in (".py", ".pyc", ".gz")
+        and (path.name == "kiosk_config.py" or path.suffix not in (".py", ".pyc", ".gz"))
     }
     with tarfile.open(directory / "assets.tar.gz") as archive:
         assert set(archive.getnames()) == set(sources), "Run python bin/generate_vm_assets.py"

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...exceptions import SandboxProcessError
+from .kiosk_config import KioskRuntime
 
 
 class VMDesktop:
@@ -57,6 +58,11 @@ class VMDesktop:
         return int(width), int(height)
 
     def resize(self, width: int, height: int):
+        if self.vm.info["spec"].get("kiosk") is not None:
+            if not KioskRuntime().valid_size((width, height)):
+                raise ValueError("Invalid kiosk resolution")
+            self._run("/opt/beam-vm/kiosk", "--resize", str(width), str(height))
+            return
         if (
             not isinstance(width, int)
             or not isinstance(height, int)
@@ -64,9 +70,6 @@ class VMDesktop:
         ):
             raise ValueError("Desktop resolution must be 320–4096 by 200–2160")
         mode = f"{width}x{height}"
-        if self.vm.info["spec"].get("kiosk") is not None:
-            self._run("selkies", "resize", mode)
-            return
         if mode not in self._run("xrandr", "--query").split():
             # Xvnc accepts arbitrary virtual modes; use its own 60 Hz timing
             # formula so sizes absent from the default list work exactly.

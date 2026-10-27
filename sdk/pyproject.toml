@@ -52,6 +52,7 @@ beta9 = [
     "abstractions/vm/kiosk",
     "abstractions/vm/kiosk-openbox.xml",
     "abstractions/vm/kiosk-openbox-build",
+    "abstractions/vm/kiosk-selkies-patch",
 ]
 
 [dependency-groups]

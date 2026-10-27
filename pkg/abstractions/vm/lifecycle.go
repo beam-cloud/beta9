@@ -126,7 +126,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
-	if v.Spec.Kiosk != nil && v.Spec.Kiosk.Transport == "webrtc" && s.webrtc == nil {
+	if v.Spec.Kiosk != nil && v.Spec.Kiosk.Transport == types.VMKioskTransportWebRTC && s.webrtc == nil {
 		return fmt.Errorf("kiosk WebRTC requires the shared TCP gateway")
 	}
 	if err := s.ensurePublicIPv6(ctx, v); err != nil {

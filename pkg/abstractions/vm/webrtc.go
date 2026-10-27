@@ -25,7 +25,9 @@ import (
 // DTLS/SRTP and shares the raw TCP load balancer with the existing TLS proxy.
 // The first ICE check authenticates routing; no guest media port is public.
 type vmWebRTC struct {
+	*Service
 	config types.PodTCPConfig
+	policy types.VMWebRTCConfig
 	dialer *network.BackendDialer
 	slots  chan struct{}
 }
@@ -36,18 +38,29 @@ type iceRoute struct {
 	Generation                             int64
 }
 
+const (
+	maxSessionDescriptionBytes = 64 << 10
+	maxSessionMediaSections    = 8
+	maxGatewayAddresses        = 8
+	iceCandidatePriority       = 1518280447
+)
+
 var iceCredential = regexp.MustCompile(`^[a-zA-Z0-9+/]{4,256}$`)
 
-func (s *Service) startWebRTC(config types.PodTCPConfig, dialer *network.BackendDialer) {
+func (s *Service) startWebRTC(config types.PodTCPConfig, policy types.VMWebRTCConfig, dialer *network.BackendDialer) error {
+	if err := policy.ApplyDefaults(); err != nil {
+		return err
+	}
 	runtime, ok := s.runtime.(interface{ SetVMICEHandler(func(net.Conn)) })
 	if !ok || !config.Enabled || config.ExternalHost == "" || s.rdb == nil || dialer == nil {
-		return
+		return nil
 	}
 	if config.ExternalPort == 0 {
 		config.ExternalPort = 443
 	}
-	s.webrtc = &vmWebRTC{config: config, dialer: dialer, slots: make(chan struct{}, 256)}
-	runtime.SetVMICEHandler(s.serveICE)
+	s.webrtc = &vmWebRTC{Service: s, config: config, policy: policy, dialer: dialer, slots: make(chan struct{}, policy.MaxConnections)}
+	runtime.SetVMICEHandler(s.webrtc.serve)
+	return nil
 }
 
 func (s *Service) configureKioskTransport(spec *types.VMSpec) error {
@@ -55,15 +68,15 @@ func (s *Service) configureKioskTransport(spec *types.VMSpec) error {
 		return nil
 	}
 	// Clone before normalizing a template/fork's shared pointer.
-	kiosk := *spec.Kiosk
-	spec.Kiosk = &kiosk
+	kiosk := spec.Kiosk.Clone()
+	spec.Kiosk = kiosk
 	if kiosk.Transport == "" {
-		kiosk.Transport = "websockets"
+		kiosk.Transport = types.VMKioskTransportWebSockets
 		if s.webrtc != nil {
-			kiosk.Transport = "webrtc"
+			kiosk.Transport = types.VMKioskTransportWebRTC
 		}
 	}
-	if kiosk.Transport == "webrtc" && s.webrtc == nil {
+	if kiosk.Transport == types.VMKioskTransportWebRTC && s.webrtc == nil {
 		return fmt.Errorf("kiosk WebRTC requires the shared TCP gateway; use transport=websockets on this installation")
 	}
 	return nil
@@ -77,7 +90,7 @@ func trafficHash(v *types.VM) string {
 // sessionSDP rewrites only server ICE candidates. The original ICE credentials,
 // DTLS fingerprint, codec negotiation and BUNDLE topology reach the browser.
 func sessionSDP(sdp string, addresses []net.IP, port int) (string, map[string]string, error) {
-	if len(sdp) > 65536 || !strings.HasPrefix(sdp, "v=0") || len(addresses) == 0 {
+	if len(sdp) > maxSessionDescriptionBytes || !strings.HasPrefix(sdp, "v=0") || len(addresses) == 0 {
 		return "", nil, fmt.Errorf("invalid WebRTC session description")
 	}
 	lines := strings.Split(strings.ReplaceAll(sdp, "\r\n", "\n"), "\n")
@@ -96,18 +109,23 @@ func sessionSDP(sdp string, addresses []net.IP, port int) (string, map[string]st
 		}
 		credentials[ufrag] = password
 		for i, ip := range addresses {
-			output = append(output, fmt.Sprintf("a=candidate:beam%d 1 TCP %d %s %d typ host tcptype passive", i, 1518280447-i, ip.String(), port))
+			output = append(output, fmt.Sprintf("a=candidate:beam%d 1 TCP %d %s %d typ host tcptype passive", i, iceCandidatePriority-i, ip.String(), port))
 		}
 		output = append(output, "a=end-of-candidates")
 		return nil
 	}
 	// Session-level credentials are inherited, media-level credentials override.
 	sessionUfrag, sessionPassword := "", ""
+	sections := 0
 	for _, line := range lines {
 		if line == "" || strings.HasPrefix(line, "a=candidate:") || line == "a=end-of-candidates" || strings.HasPrefix(line, "a=remote-candidates:") {
 			continue
 		}
 		if strings.HasPrefix(line, "m=") {
+			sections++
+			if sections > maxSessionMediaSections {
+				return "", nil, fmt.Errorf("unsupported ICE media sections")
+			}
 			if err := flush(); err != nil {
 				return "", nil, err
 			}
@@ -131,48 +149,52 @@ func sessionSDP(sdp string, addresses []net.IP, port int) (string, map[string]st
 	if err := flush(); err != nil {
 		return "", nil, err
 	}
-	if len(credentials) == 0 || len(credentials) > 8 {
+	if len(credentials) == 0 || len(credentials) > maxSessionMediaSections {
 		return "", nil, fmt.Errorf("unsupported ICE session")
 	}
 	return strings.Join(output, "\r\n") + "\r\n", credentials, nil
 }
 
-func (s *Service) registerICE(c echo.Context, v *types.VM) error {
+func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 	if c.Request().Method != http.MethodPost || c.Request().Header.Get("X-Beam-Kiosk-Action") != "webrtc" {
 		return echo.NewHTTPError(http.StatusForbidden, "explicit WebRTC registration required")
 	}
-	if s.webrtc == nil || v.Spec.Kiosk.Transport != "webrtc" {
+	if w == nil || v.Spec.Kiosk == nil || v.Spec.Kiosk.Transport != types.VMKioskTransportWebRTC {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC is unavailable for this session")
 	}
+	controller := http.NewResponseController(c.Response().Writer)
+	_ = controller.SetReadDeadline(time.Now().Add(w.policy.HandshakeTimeout))
+	defer controller.SetReadDeadline(time.Time{})
 	var request struct {
 		SDP string `json:"sdp"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(c.Response(), c.Request().Body, 128*1024)).Decode(&request); err != nil {
+	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, 2*maxSessionDescriptionBytes)
+	if err := decode(c, &request); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid WebRTC registration")
 	}
-	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request().Context(), w.policy.HandshakeTimeout)
 	defer cancel()
 	// Bound registrations per VM, including failed offers. One key works on
 	// Redis Cluster and expires even if the requesting gateway crashes.
-	count, err := s.rdb.Eval(ctx, `local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],60) end; return n`, []string{"vm:ice-rate:" + v.ID}).Int()
+	count, err := w.rdb.Eval(ctx, `local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; return n`, []string{"vm:ice-rate:" + v.ID}, time.Minute.Milliseconds()).Int()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC registry unavailable")
 	}
-	if count > 64 {
+	if count > w.policy.RegistrationsPerMinute {
 		return echo.NewHTTPError(http.StatusTooManyRequests, "too many WebRTC sessions; retry shortly")
 	}
-	addresses, err := net.DefaultResolver.LookupIP(ctx, "ip", s.webrtc.config.ExternalHost)
+	addresses, err := net.DefaultResolver.LookupIP(ctx, "ip", w.config.ExternalHost)
 	if err != nil || len(addresses) == 0 {
 		// Some installations publish only the wildcard service record.
-		addresses, err = net.DefaultResolver.LookupIP(ctx, "ip", "webrtc."+s.webrtc.config.ExternalHost)
+		addresses, err = net.DefaultResolver.LookupIP(ctx, "ip", "webrtc."+w.config.ExternalHost)
 	}
 	if err != nil || len(addresses) == 0 {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC TCP gateway DNS unavailable")
 	}
-	if len(addresses) > 8 {
-		addresses = addresses[:8]
+	if len(addresses) > maxGatewayAddresses {
+		addresses = addresses[:maxGatewayAddresses]
 	}
-	sdp, credentials, err := sessionSDP(request.SDP, addresses, s.webrtc.config.ExternalPort)
+	sdp, credentials, err := sessionSDP(request.SDP, addresses, w.config.ExternalPort)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
@@ -181,7 +203,7 @@ func (s *Service) registerICE(c echo.Context, v *types.VM) error {
 		encoded, _ := json.Marshal(route)
 		// Never replace another VM's colliding fragment. Retries can renew the
 		// exact same session; a stopped/forked/rotated VM cannot inherit it.
-		ok, err := s.rdb.Eval(ctx, `local old=redis.call('GET',KEYS[1]); if not old or old==ARGV[1] then redis.call('SET',KEYS[1],ARGV[1],'EX',600); return 1 end; return 0`, []string{"vm:ice:" + ufrag}, string(encoded)).Int()
+		ok, err := w.rdb.Eval(ctx, `local old=redis.call('GET',KEYS[1]); if not old or old==ARGV[1] then redis.call('SET',KEYS[1],ARGV[1],'PX',ARGV[2]); return 1 end; return 0`, []string{"vm:ice:" + ufrag}, string(encoded), w.policy.SessionTTL.Milliseconds()).Int()
 		if err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC registry unavailable")
 		}
@@ -199,7 +221,7 @@ func readICECheck(conn net.Conn) ([]byte, *stun.Message, string, error) {
 		return nil, nil, "", err
 	}
 	size := int(binary.BigEndian.Uint16(header[:]))
-	if size < 20 || size > 8192 {
+	if size < 20 || size > types.VMKioskMaxICEFrameBytes {
 		return nil, nil, "", fmt.Errorf("invalid ICE frame")
 	}
 	frame := make([]byte, size+2)
@@ -225,40 +247,40 @@ func readICECheck(conn net.Conn) ([]byte, *stun.Message, string, error) {
 	return frame, message, ufrag, nil
 }
 
-func (s *Service) iceVM(ctx context.Context, route iceRoute) (*types.VM, error) {
-	v, err := s.repo.GetVM(ctx, route.WorkspaceID, route.VMID)
+func (w *vmWebRTC) activeVM(ctx context.Context, route iceRoute) (*types.VM, error) {
+	v, err := w.repo.GetVM(ctx, route.WorkspaceID, route.VMID)
 	if err != nil {
 		return nil, err
 	}
-	if v.ContainerID != route.ContainerID || v.Generation != route.Generation || v.DesiredState != types.VMStateRunning || v.TrafficAccessToken == "" || trafficHash(v) != route.TokenHash || v.Spec.Kiosk == nil || v.Spec.Kiosk.Transport != "webrtc" {
+	if v.ContainerID != route.ContainerID || v.Generation != route.Generation || v.DesiredState != types.VMStateRunning || v.TrafficAccessToken == "" || trafficHash(v) != route.TokenHash || v.Spec.Kiosk == nil || v.Spec.Kiosk.Transport != types.VMKioskTransportWebRTC {
 		return nil, fmt.Errorf("WebRTC session is no longer active")
 	}
-	if _, err := s.accessOwner(ctx, v); err != nil {
+	if _, err := w.accessOwner(ctx, v); err != nil {
 		return nil, err
 	}
 	return v, nil
 }
 
-func (s *Service) serveICE(conn net.Conn) {
+func (w *vmWebRTC) serve(conn net.Conn) {
+	defer conn.Close()
 	select {
-	case s.webrtc.slots <- struct{}{}:
+	case w.slots <- struct{}{}:
 	default:
 		return
 	}
-	defer func() { <-s.webrtc.slots }()
-	defer conn.Close()
-	ctx, cancel := context.WithCancel(s.ctx)
+	defer func() { <-w.slots }()
+	ctx, cancel := context.WithCancel(w.ctx)
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(w.policy.HandshakeTimeout))
 	frame, message, ufrag, err := readICECheck(conn)
 	if err != nil {
 		return
 	}
-	authCtx, authCancel := context.WithTimeout(ctx, 5*time.Second)
+	authCtx, authCancel := context.WithTimeout(ctx, w.policy.HandshakeTimeout)
 	defer authCancel()
-	encoded, err := s.rdb.Get(authCtx, "vm:ice:"+ufrag).Bytes()
+	encoded, err := w.rdb.Get(authCtx, "vm:ice:"+ufrag).Bytes()
 	if err != nil {
 		return
 	}
@@ -269,7 +291,7 @@ func (s *Service) serveICE(conn net.Conn) {
 	if message.Contains(stun.AttrFingerprint) && stun.Fingerprint.Check(message) != nil {
 		return
 	}
-	v, err := s.iceVM(authCtx, route)
+	v, err := w.activeVM(authCtx, route)
 	if err != nil {
 		return
 	}
@@ -278,36 +300,36 @@ func (s *Service) serveICE(conn net.Conn) {
 	key := "vm:ice-open:" + ufrag
 	lease := uuid.NewString()
 	now := time.Now().UnixMilli()
-	n, err := s.rdb.Eval(authCtx, `redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',ARGV[1]); redis.call('ZADD',KEYS[1],ARGV[2],ARGV[3]); redis.call('EXPIRE',KEYS[1],30); return redis.call('ZCARD',KEYS[1])`, []string{key}, now, now+30000, lease).Int()
+	n, err := w.rdb.Eval(authCtx, `redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',ARGV[1]); redis.call('ZADD',KEYS[1],ARGV[2],ARGV[3]); redis.call('PEXPIRE',KEYS[1],ARGV[4]); return redis.call('ZCARD',KEYS[1])`, []string{key}, now, now+w.policy.LeaseTTL.Milliseconds(), lease, w.policy.LeaseTTL.Milliseconds()).Int()
 	if err != nil {
 		return
 	}
 	defer func() {
 		cleanup, done := context.WithTimeout(context.Background(), time.Second)
 		defer done()
-		s.rdb.ZRem(cleanup, key, lease)
+		w.rdb.ZRem(cleanup, key, lease)
 	}()
-	if n > 8 {
+	if n > w.policy.MaxConnectionsPerSession {
 		return
 	}
-	addresses, err := s.containers.GetContainerAddressMap(v.ContainerID)
+	addresses, err := w.containers.GetContainerAddressMap(v.ContainerID)
 	if err != nil || addresses[int32(types.VMKioskMediaPort)] == "" {
 		return
 	}
-	backend, err := s.webrtc.dialer.Dial(authCtx, addresses[int32(types.VMKioskMediaPort)])
+	backend, err := w.dialer.Dial(authCtx, addresses[int32(types.VMKioskMediaPort)])
 	if err != nil {
 		return
 	}
 	defer backend.Close()
-	if _, err := s.iceVM(authCtx, route); err != nil {
+	if _, err := w.activeVM(authCtx, route); err != nil {
 		return
 	}
-	release, err := s.keepActive(ctx, v.ID, v.Spec.IdleTimeout)
+	release, err := w.keepActive(ctx, v.ID, v.Spec.IdleTimeout)
 	if err != nil {
 		return
 	}
 	defer release()
-	_ = backend.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = backend.SetWriteDeadline(time.Now().Add(w.policy.HandshakeTimeout))
 	if _, err := backend.Write(frame); err != nil {
 		return
 	}
@@ -316,17 +338,21 @@ func (s *Service) serveICE(conn net.Conn) {
 	stopBackend := context.AfterFunc(ctx, func() { backend.Close() })
 	defer stopBackend()
 	go func() {
-		tick := time.NewTicker(10 * time.Second)
+		tick := time.NewTicker(w.policy.CheckInterval)
 		defer tick.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				check, done := context.WithTimeout(ctx, 5*time.Second)
-				_, err := s.iceVM(check, route)
+				check, done := context.WithTimeout(ctx, w.policy.HandshakeTimeout)
+				_, err := w.activeVM(check, route)
 				if err == nil {
-					err = s.rdb.Eval(check, `redis.call('ZADD',KEYS[1],ARGV[1],ARGV[2]); redis.call('EXPIRE',KEYS[1],30); return 1`, []string{key}, time.Now().UnixMilli()+30000, lease).Err()
+					var renewed int
+					renewed, err = w.rdb.Eval(check, `if not redis.call('ZSCORE',KEYS[1],ARGV[2]) then return 0 end; redis.call('ZADD',KEYS[1],ARGV[1],ARGV[2]); redis.call('PEXPIRE',KEYS[1],ARGV[3]); return 1`, []string{key}, time.Now().UnixMilli()+w.policy.LeaseTTL.Milliseconds(), lease, w.policy.LeaseTTL.Milliseconds()).Int()
+					if err == nil && renewed != 1 {
+						err = fmt.Errorf("ICE lease expired")
+					}
 				}
 				done()
 				if err != nil {

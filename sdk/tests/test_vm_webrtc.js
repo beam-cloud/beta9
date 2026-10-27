@@ -67,8 +67,9 @@ function checkDisplay() {
   const video=new Media();
   class Observer { constructor(callback) { this.callback=callback; } observe(target,options) { if(options.attributes) videoEvents.dimensions=this.callback; } }
   const document={readyState:'loading',querySelector:()=>video,addEventListener:(name,fn)=>{events[name]=fn;},removeEventListener:(name)=>{delete events[name];}};
+  const displayWindow={HTMLMediaElement:Media,innerWidth:960,innerHeight:540,addEventListener(){}};
   vm.runInNewContext(source,{
-    window:{HTMLMediaElement:Media,innerWidth:960,innerHeight:540,addEventListener(){}}, HTMLMediaElement:Media, document, MutationObserver:Observer,URL,
+    window:displayWindow, HTMLMediaElement:Media, document, MutationObserver:Observer,URL,
     parent:{postMessage:value=>messages.push(value)},location:{origin:'https://application.example',href:'https://application.example/stream/'},
     setTimeout:callback=>{timers.set(1,callback);return 1;}, clearTimeout:id=>timers.delete(id),
   });
@@ -78,6 +79,9 @@ function checkDisplay() {
   video.width=1920;video.height=1080;video.videoWidth=1920;video.videoHeight=1080;videoEvents.resize();timers.get(1)();
   assert.equal(messages.at(-1).state,'ready');
   video.width=2560;videoEvents.dimensions();assert.equal(messages.at(-1).state,'ready','resize keeps the last picture visible');
+  video.id='videoStream';video.width=1920;
+  displayWindow.beamKiosk.activePeer={connectionState:'failed'};
+  assert.equal(displayWindow.beamKiosk.fitted(),true,'a healthy WebCodecs fallback is independent of the failed peer');
   events.pointerdown({isTrusted:false});assert.equal(video.muted,true);
   events.pointerdown({isTrusted:true});assert.equal(video.muted,false,'a real gesture enables application audio');
 }

@@ -221,7 +221,7 @@ func (s *Service) proxy(c echo.Context) error {
 	}
 
 	port, err := strconv.Atoi(c.Param("port"))
-	if err != nil || port == 2222 {
+	if err != nil || port == types.VMSSHPort {
 		return echo.NewHTTPError(http.StatusNotFound)
 	}
 
@@ -285,10 +285,10 @@ func (s *Service) proxy(c echo.Context) error {
 	// Hold activity while a desktop/terminal websocket is open, even when the
 	// user is watching without sending input.
 	subPath := c.Param("*")
-	if v.Spec.Kiosk != nil && port == 8080 {
+	if v.Spec.Kiosk != nil && port == types.VMDesktopPort {
 		switch {
 		case subPath == "_beam/kiosk/webrtc/session":
-			return s.registerICE(c, v)
+			return s.webrtc.register(c, v)
 		case subPath == "_beam/kiosk/webrtc.js":
 			c.Response().Header().Set("Cache-Control", "no-store")
 			return c.Blob(http.StatusOK, "text/javascript; charset=utf-8", kioskWebRTC)
@@ -323,7 +323,7 @@ func (s *Service) tunnel(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid port")
 	}
 
-	if port == 2222 && !v.Spec.SSH {
+	if port == types.VMSSHPort && !v.Spec.SSH {
 		return echo.NewHTTPError(http.StatusBadRequest, "SSH is disabled")
 	}
 
@@ -408,7 +408,7 @@ func (s *Service) urls(v *types.VM) {
 	v.BrowserAuth = s.domain != "" && s.browserAuthURL != ""
 	v.URLs = map[uint32]string{}
 	for _, port := range v.Spec.Ports {
-		if port == 2222 {
+		if port == types.VMSSHPort {
 			continue
 		}
 
@@ -424,9 +424,9 @@ func (s *Service) urls(v *types.VM) {
 		}
 	}
 
-	v.TerminalURL = v.URLs[7681]
+	v.TerminalURL = v.URLs[types.VMTerminalPort]
 	if v.Spec.Desktop {
-		v.DesktopURL = v.URLs[8080]
+		v.DesktopURL = v.URLs[types.VMDesktopPort]
 	}
 	if v.Spec.Kiosk != nil {
 		v.KioskURL = v.DesktopURL

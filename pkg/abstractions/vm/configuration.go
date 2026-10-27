@@ -149,19 +149,19 @@ func validate(spec *types.VMSpec) error {
 	}
 
 	seen := map[uint32]bool{}
-	ports := []uint32{7681}
+	ports := []uint32{types.VMTerminalPort}
 	if spec.Desktop {
-		ports = append(ports, 8080)
+		ports = append(ports, types.VMDesktopPort)
 	}
 
 	if spec.SSH {
-		ports = append(ports, 2222)
+		ports = append(ports, types.VMSSHPort)
 	}
 
 	ports = append(ports, spec.Ports...)
 	spec.Ports = nil
 	for _, port := range ports {
-		if port == 0 || port > 65535 || port == uint32(types.WorkerSandboxProcessManagerPort) || (port == 2222 && !spec.SSH) {
+		if port == 0 || port > 65535 || port == uint32(types.WorkerSandboxProcessManagerPort) || (port == types.VMSSHPort && !spec.SSH) {
 			return fmt.Errorf("invalid port %d", port)
 		}
 
@@ -172,23 +172,23 @@ func validate(spec *types.VMSpec) error {
 	}
 
 	for _, port := range spec.PrivatePorts {
-		if port == 0 || port > 65535 || port == 2222 || port == uint32(types.WorkerSandboxProcessManagerPort) {
+		if port == 0 || port > 65535 || port == types.VMSSHPort || port == uint32(types.WorkerSandboxProcessManagerPort) {
 			return fmt.Errorf("invalid private port %d", port)
 		}
 	}
 
 	for _, port := range spec.ProtectedPorts {
-		if port == 2222 || !slices.Contains(spec.Ports, port) {
+		if port == types.VMSSHPort || !slices.Contains(spec.Ports, port) {
 			return fmt.Errorf("protected port %d must be published", port)
 		}
 	}
 	for _, port := range spec.PublicPorts {
-		if port == 2222 || !slices.Contains(spec.Ports, port) || slices.Contains(spec.ProtectedPorts, port) {
+		if port == types.VMSSHPort || !slices.Contains(spec.Ports, port) || slices.Contains(spec.ProtectedPorts, port) {
 			return fmt.Errorf("public port %d must be published and cannot be protected", port)
 		}
 	}
-	for _, port := range []uint32{7681, 8080} {
-		if (port == 7681 || spec.Desktop) && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
+	for _, port := range []uint32{types.VMTerminalPort, types.VMDesktopPort} {
+		if (port == types.VMTerminalPort || spec.Desktop) && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
 			spec.ProtectedPorts = append(spec.ProtectedPorts, port)
 		}
 	}
@@ -201,13 +201,13 @@ func validateKiosk(spec *types.VMSpec) error {
 	if k == nil {
 		return nil
 	}
-	if slices.Contains(spec.PublicPorts, uint32(8080)) {
+	if slices.Contains(spec.PublicPorts, uint32(types.VMDesktopPort)) {
 		return fmt.Errorf("kiosk browser sessions must be protected")
 	}
-	if k.Transport != "" && k.Transport != "webrtc" && k.Transport != "websockets" {
+	if k.Transport != "" && k.Transport != types.VMKioskTransportWebRTC && k.Transport != types.VMKioskTransportWebSockets {
 		return fmt.Errorf("kiosk transport must be webrtc or websockets")
 	}
-	if k.Transport == "webrtc" {
+	if k.Transport == types.VMKioskTransportWebRTC {
 		if slices.Contains(spec.Ports, types.VMKioskMediaPort) || slices.Contains(spec.PublicPorts, types.VMKioskMediaPort) {
 			return fmt.Errorf("port 8443 is reserved for private kiosk media")
 		}
@@ -216,8 +216,8 @@ func validateKiosk(spec *types.VMSpec) error {
 		}
 	}
 	checkCommand := func(command []string) error {
-		if len(command) == 0 || len(command) > 128 || command[0] == "" {
-			return fmt.Errorf("kiosk commands require an argv array with 1–128 entries")
+		if len(command) == 0 || len(command) > types.VMKioskMaxCommandArgs || command[0] == "" {
+			return fmt.Errorf("kiosk commands require an argv array with 1–%d entries", types.VMKioskMaxCommandArgs)
 		}
 		size := 0
 		for _, arg := range command {
@@ -226,8 +226,8 @@ func validateKiosk(spec *types.VMSpec) error {
 				return fmt.Errorf("kiosk command arguments cannot contain NUL")
 			}
 		}
-		if size > 32768 {
-			return fmt.Errorf("kiosk commands must fit in 32 KiB")
+		if size > types.VMKioskMaxCommandBytes {
+			return fmt.Errorf("kiosk commands must fit in %d KiB", types.VMKioskMaxCommandBytes>>10)
 		}
 		return nil
 	}
@@ -247,8 +247,8 @@ func validateKiosk(spec *types.VMSpec) error {
 			return fmt.Errorf("invalid or reserved kiosk environment key %q", key)
 		}
 	}
-	if size > 16384 {
-		return fmt.Errorf("kiosk environment must fit in 16 KiB")
+	if size > types.VMKioskMaxEnvBytes {
+		return fmt.Errorf("kiosk environment must fit in %d KiB", types.VMKioskMaxEnvBytes>>10)
 	}
 	if slices.Contains(spec.Ports, types.VMKioskStatusPort) || slices.Contains(spec.PublicPorts, types.VMKioskStatusPort) {
 		return fmt.Errorf("port 8081 is reserved for kiosk readiness")
@@ -258,7 +258,7 @@ func validateKiosk(spec *types.VMSpec) error {
 			return err
 		}
 		p := k.MCP.Port
-		if p == 0 || p > 65535 || p == 2222 || p == 7681 || p == 8080 || p == types.VMKioskStatusPort || (k.Transport == "webrtc" && p == types.VMKioskMediaPort) || p == uint32(types.WorkerSandboxProcessManagerPort) {
+		if p == 0 || p > 65535 || p == types.VMSSHPort || p == types.VMTerminalPort || p == types.VMDesktopPort || p == types.VMKioskStatusPort || (k.Transport == types.VMKioskTransportWebRTC && p == types.VMKioskMediaPort) || p == uint32(types.WorkerSandboxProcessManagerPort) {
 			return fmt.Errorf("kiosk MCP requires a non-reserved port between 1 and 65535")
 		}
 		if k.MCP.Path == "" {
@@ -282,8 +282,8 @@ func validateKiosk(spec *types.VMSpec) error {
 		spec.PrivatePorts = append(spec.PrivatePorts, types.VMKioskStatusPort)
 	}
 	encoded, err := json.Marshal(k)
-	if err != nil || len(encoded) > 65536 {
-		return fmt.Errorf("kiosk configuration must fit in 64 KiB of JSON")
+	if err != nil || len(encoded) > types.VMKioskMaxConfigBytes {
+		return fmt.Errorf("kiosk configuration must fit in %d KiB of JSON", types.VMKioskMaxConfigBytes>>10)
 	}
 	return nil
 }
@@ -571,15 +571,15 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 		if port == types.VMKioskStatusPort {
 			return echo.NewHTTPError(http.StatusBadRequest, "port 8081 is reserved for kiosk readiness")
 		}
-		if v.Spec.Kiosk.Transport == "webrtc" && port == types.VMKioskMediaPort {
+		if v.Spec.Kiosk.Transport == types.VMKioskTransportWebRTC && port == types.VMKioskMediaPort {
 			return echo.NewHTTPError(http.StatusBadRequest, "port 8443 is reserved for private kiosk media")
 		}
 		if v.Spec.Kiosk.MCP != nil && port == v.Spec.Kiosk.MCP.Port && action == "expose" && (protected == nil || !*protected) {
 			return echo.NewHTTPError(http.StatusBadRequest, "kiosk MCP ports must be protected")
 		}
 	}
-	systemPort := port == 7681 || (port == 8080 && v.Spec.Desktop)
-	if port == 0 || port > 65535 || port == 2222 || port == uint32(types.WorkerSandboxProcessManagerPort) || (systemPort && (action != "expose" || protected == nil)) {
+	systemPort := port == types.VMTerminalPort || (port == types.VMDesktopPort && v.Spec.Desktop)
+	if port == 0 || port > 65535 || port == types.VMSSHPort || port == uint32(types.WorkerSandboxProcessManagerPort) || (systemPort && (action != "expose" || protected == nil)) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid or reserved port")
 	}
 

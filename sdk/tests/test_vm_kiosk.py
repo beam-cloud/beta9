@@ -7,7 +7,7 @@ import threading
 import shutil
 import subprocess
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -23,7 +23,11 @@ def supervisor():
     loader = importlib.machinery.SourceFileLoader("beam_kiosk_guest", path)
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
+    # The standalone guest imports this adjacent shipped module without the SDK.
+    import beta9.abstractions.vm.kiosk_config as config
+
+    with patch.dict("sys.modules", {"kiosk_config": config}):
+        loader.exec_module(module)
     return module
 
 
@@ -195,23 +199,6 @@ def test_webrtc_browser_registration_and_private_candidate_filtering():
     )
 
 
-def test_startup_dialogs_do_not_become_the_primary_window(monkeypatch):
-    module = supervisor()
-    replies = {
-        "0x1": "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_DIALOG\nWM_TRANSIENT_FOR: not found.",
-        "0x2": "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL\nWM_TRANSIENT_FOR(WINDOW): window id # 0x4",
-        "0x3": "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_SPLASH\nWM_TRANSIENT_FOR: not found.",
-        "0x4": "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL\nWM_TRANSIENT_FOR: not found.",
-    }
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda args, **_: SimpleNamespace(returncode=0, stdout=replies[args[2]]),
-    )
-    assert module.primary_window(["0x1", "0x2", "0x3"], {}) is None
-    assert module.primary_window(list(replies), {}) == "0x4"
-
-
 def test_retina_scales_widgets_and_fonts_together():
     module = supervisor()
     retina = module.toolkit_settings('Xft/Antialias 1\nXft/DPI 196608\nXft/RGBA "rgb"\n')
@@ -241,46 +228,6 @@ def test_project_reopens_at_saved_browser_geometry(tmp_path):
         assert module.saved_display(path) == (3840, 2160)
 
 
-def test_secondary_editors_fill_the_session_and_dialogs_remain_floating(monkeypatch):
-    module = supervisor()
-    session = module.Session({"command": ["editor"]})
-    kinds = {"main": True, "second": True, "modal": False, "utility": False}
-    monkeypatch.setattr(
-        module, "primary_window", lambda windows, env: windows[0] if kinds[windows[0]] else None
-    )
-    fitted = []
-    monkeypatch.setattr(module, "undecorate", lambda window, env: fitted.append(window))
-    commands = []
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda argv, **kw: (commands.append(argv) or SimpleNamespace(returncode=0, stdout="")),
-    )
-    session.fit_application_windows(["main", "modal", "utility"])
-    session.fit_application_windows(["main", "second", "modal", "utility"])
-    assert fitted == []
-    assert [cmd[2] for cmd in commands if cmd[0] == "wmctrl"] == ["main", "second"]
-    session.fit_application_windows(["second", "modal"])
-    assert session.primary == "second"
-    assert fitted == []
-
-
-def test_a_vanishing_window_does_not_interrupt_healthy_editors(monkeypatch):
-    module = supervisor()
-    session = module.Session({"command": ["editor"]})
-    monkeypatch.setattr(module, "primary_window", lambda windows, env: windows[0])
-
-    def fit(argv, **kwargs):
-        if argv[2] == "gone":
-            raise module.subprocess.CalledProcessError(1, argv)
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(module.subprocess, "run", fit)
-    session.fit_application_windows(["gone", "live"])
-    assert session.managed_windows == {"live"}
-    assert session.primary == "live"
-
-
 def test_existing_display_geometry_preserves_logical_size_when_density_changes(tmp_path):
     module = supervisor()
     path = tmp_path / "display.json"
@@ -290,3 +237,82 @@ def test_existing_display_geometry_preserves_logical_size_when_density_changes(t
     assert module.saved_display(path, legacy_scale=1) == (3840, 2160)
     path.write_text('{"width":3456,"height":1892,"pixel_ratio":2}')
     assert module.saved_display(path) == (3456, 1892)
+
+
+def test_repeated_restarts_keep_only_current_owned_process_groups(monkeypatch):
+    module = supervisor()
+    started = []
+    stopped = []
+
+    def start(*args, **kwargs):
+        p = SimpleNamespace(pid=len(started) + 1)
+        started.append(p)
+        return p
+
+    monkeypatch.setattr(module.subprocess, "Popen", start)
+    monkeypatch.setattr(module, "stop_process", lambda p: stopped.append(p.pid) if p else None)
+    session = module.Session({"command": ["editor"], "mcp": {"command": ["adapter"], "port": 8000}})
+    for _ in range(10):
+        session.launch()
+        session.launch_mcp()
+    assert len(session.processes) == 2
+    assert set(stopped) == set(range(1, 19))
+    session.stop_application()
+    assert session.processes == {}
+    assert session.application is session.mcp is None
+    assert set(stopped) == set(range(1, 21))
+
+
+def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatch):
+    module = supervisor()
+    commands = []
+    monkeypatch.setattr(module.subprocess, "run", lambda argv, **kwargs: commands.append(argv))
+    monkeypatch.setattr(module.sys, "argv", ["kiosk", "--resize", "2880", "1800"])
+    assert module.main() == 0
+    assert commands == [["selkies", "resize", "2880x1800"], ["xrandr", "--dpi", "192"]]
+    commands.clear()
+    for args in (
+        ["kiosk", "--resize", "1", "900"],
+        ["kiosk", "--resize", "900"],
+        ["kiosk", "--resize", "x", "900"],
+    ):
+        monkeypatch.setattr(module.sys, "argv", args)
+        assert module.main() == 1
+    assert commands == []
+
+
+@pytest.mark.parametrize("sse", [True, False])
+def test_mcp_readiness_cannot_be_held_open_by_continuous_keepalives(monkeypatch, sse):
+    from dataclasses import replace
+    import time
+
+    module = supervisor()
+    monkeypatch.setattr(module, "POLICY", replace(module.POLICY, command_timeout=0.08))
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream" if sse else "application/json")
+            self.end_headers()
+            try:
+                for _ in range(100):
+                    self.wfile.write(b": keepalive\n\n" if sse else b" ")
+                    self.wfile.flush()
+                    time.sleep(0.02)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        started = time.monotonic()
+        assert module.mcp_ready(server.server_port, "/mcp") is False
+        assert time.monotonic() - started < 0.5
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

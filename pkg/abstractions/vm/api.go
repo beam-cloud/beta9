@@ -114,9 +114,8 @@ func artifactResponse(a types.VMArtifact) types.VMArtifact {
 func redactedSpec(spec types.VMSpec) types.VMSpec {
 	spec.Env = nil
 	if spec.Kiosk != nil {
-		kiosk := *spec.Kiosk
-		kiosk.Env = nil
-		spec.Kiosk = &kiosk
+		spec.Kiosk = spec.Kiosk.Clone()
+		spec.Kiosk.Env = nil
 	}
 	volumes := spec.Volumes
 	spec.Volumes = make([]*pb.Volume, len(volumes))

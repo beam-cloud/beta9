@@ -157,11 +157,14 @@ workspace. Dialogs, utility windows, and explicit X11 transient windows keep
 native dimensions. The image builder compiles the installed distribution's
 signed Openbox source with a small transient-classification patch; the matching
 source archives, patch, version, and license are included under
-`/opt/beam-vm/openbox/share/source`. A disappearing popup is retried without
-failing the application session.
+`/opt/beam-vm/openbox/share/source`. Window geometry is owned by the window manager; the supervisor does not
+rewrite individual window properties after mapping.
 
 The viewer waits for the correct initial framebuffer dimensions and preserves
-the live image during subsequent resizing. Density and window rules use toolkit
+the live image during subsequent resizing. After an external resize or reconnect,
+it uses the native client resize command to negotiate the attached viewport.
+The pinned backend also verifies the realized X11 root before accepting a cached
+resize as already applied, so agent-side changes cannot leave reconnects stuck. Density and window rules use toolkit
 and X11 conventions and apply independently of the application command.
 
 ## Performance qualification
@@ -173,3 +176,29 @@ matrix passes through the production forwarding path. Configuration requesting
 probe, comparison procedure, and release gate. The current VM placement contract
 is CPU-only; hardware acceleration requires runtime work rather than silently
 changing a kiosk VM into a container.
+
+
+## Operational policy
+
+Gateway media limits live in `types.VMWebRTCConfig` under
+`abstractions.vm.webrtc`. Defaults allow 256 concurrent media connections per
+gateway, 8 per ICE session across gateways, and 64 registrations per VM per
+minute. Handshakes have a 5-second timeout; registration expires after 10 minutes,
+active connection leases after 30 seconds, and ownership is rechecked every
+10 seconds. Deployments may tune these fields through normal configuration.
+Invalid or unsafe timing relationships fail at startup. Expired leases close
+active media rather than recreating their authority during renewal.
+
+Guest launch configuration uses the same `Kiosk`/`KioskMCP` data classes as the
+SDK. `KioskRuntime` owns image policy for render density, encoder quality,
+geometry limits, and supervisor timing; the installed client receives its render
+density from this policy at image preparation. Changing image policy requires
+rebuilding and qualifying the image. SDK and MCP resizing use one guest operation
+that restores physical DPI together with the framebuffer dimensions. The guest
+requires the patched application window manager; it fails explicitly if an
+incompatible image is used.
+
+Process groups are retained by role rather than accumulated across restarts.
+Application and adapter groups are stopped before replacement, and closed groups
+are discarded. MCP readiness bounds both response size and wall time, including
+servers that continuously send keepalive bytes.

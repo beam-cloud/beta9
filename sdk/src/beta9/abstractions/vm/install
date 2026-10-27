@@ -34,8 +34,8 @@ docker-compose version >/dev/null
 npm install -g --no-fund --no-audit @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.226
 npm cache clean --force
 install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
-install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" "$assets/kiosk" "$assets/kiosk-openbox-build" /opt/beam-vm/
-install -m 0644 "$assets/kiosk-openbox.xml" /opt/beam-vm/
+install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" "$assets/kiosk" "$assets/kiosk-openbox-build" "$assets/kiosk-selkies-patch" /opt/beam-vm/
+install -m 0644 "$assets/kiosk-openbox.xml" "$assets/kiosk_config.py" /opt/beam-vm/
 install -m 0644 "$assets"/*.service /etc/systemd/system/
 # These are managed by Beam at boot, not by image build-time enablement.
 # A missing unit aborts a batch disable on Noble. Disable each independently.
@@ -89,6 +89,7 @@ if [ "$kiosk" = true ]; then
   apt-get install -y --no-install-recommends xvfb xauth openbox wmctrl xsettingsd dbus-x11 pulseaudio libegl1 libgbm1 libgl1-mesa-dri libnss3-tools xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base adwaita-icon-theme
   install -d /etc/ca-certificates/update.d
   /opt/beam-vm/kiosk-openbox-build
+  /opt/beam-vm/kiosk-selkies-patch
   install -m 0755 "$assets/browser-trust" /opt/beam-vm/browser-trust
   install -m 0755 "$assets/browser-trust-update" /etc/ca-certificates/update.d/beam-browser
   /opt/beam-vm/browser-trust --initialize
@@ -97,12 +98,16 @@ if [ "$kiosk" = true ]; then
   # Media/input remain upstream Selkies; this only adapts gateway routing.
   python3 - <<'PY'
 from pathlib import Path
+import sys
+sys.path.insert(0, '/opt/beam-vm')
+from kiosk_config import KioskRuntime
+
 pages = list(Path('/opt/selkies').rglob('selkies_web/index.html'))
 if not pages:
     raise SystemExit('Selkies web client not found; cannot install Beam transport bootstrap')
 for page in pages:
     source = page.read_text()
-    script = '<script src="../_beam/kiosk/webrtc.js"></script>'
+    script = f'<script src="../_beam/kiosk/webrtc.js" data-pixel-ratio="{KioskRuntime().pixel_ratio}"></script>'
     if script not in source:
         page.write_text(source.replace('<head>', '<head>' + script, 1))
 PY

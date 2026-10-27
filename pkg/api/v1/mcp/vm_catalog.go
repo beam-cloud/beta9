@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 func vmTool(name, description string, input map[string]any, readOnly, idempotent bool, scope string, run toolFn) mcpTool {
@@ -45,6 +46,7 @@ func vmBlockNetworkSchema() map[string]any {
 }
 
 func vmSpecSchema() map[string]any {
+	command := map[string]any{"type": "array", "items": str("Argument"), "minItems": 1, "maxItems": types.VMKioskMaxCommandArgs}
 	spec := schema(props{
 		"image_id":        str("VM image built with beam vm image build or the local vm_build_image tool"),
 		"cpu":             map[string]any{"type": "integer", "minimum": 100, "maximum": 64000, "default": 4000, "description": "CPU millicores (1000 = 1 CPU); fresh VM default is 4000."},
@@ -59,12 +61,12 @@ func vmSpecSchema() map[string]any {
 		"public_ports":    map[string]any{"type": "array", "items": boundedInt(1, 65535, 7681), "description": "Publish without a traffic token; terminal and desktop ports are protected by default."},
 		"desktop":         map[string]any{"type": "boolean", "description": "Enable a desktop already installed in image_id (Ubuntu 24.04 or 22.04); opt-in for fresh MCP specs, at least 1024 MiB RAM."},
 		"kiosk": schema(props{
-			"transport": enum("webrtc", "websockets"),
-			"command":   map[string]any{"type": "array", "items": str("Argument"), "minItems": 1, "maxItems": 128},
+			"transport": enum(string(types.VMKioskTransportWebRTC), string(types.VMKioskTransportWebSockets)),
+			"command":   command,
 			"cwd":       str("Absolute guest working directory; defaults to /workspace"),
 			"env":       stringMapSchema(),
 			"mcp": schema(props{
-				"command": map[string]any{"type": "array", "items": str("Argument"), "minItems": 1, "maxItems": 128},
+				"command": command,
 				"port":    boundedInt(1, 65535, 8000),
 				"path":    str("Streamable HTTP endpoint path; defaults to /mcp"),
 			}, "command", "port"),

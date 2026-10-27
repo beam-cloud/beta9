@@ -33,7 +33,7 @@ func (s *Service) serveDesktop(c echo.Context, v *types.VM, status string) error
 		if !v.Spec.AutoResume {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "VM is not running; start it to use this URL")
 		}
-		if _, err := s.wakeForAccess(c.Request().Context(), v, 8080); err != nil {
+		if _, err := s.wakeForAccess(c.Request().Context(), v, types.VMDesktopPort); err != nil {
 			return err
 		}
 	}

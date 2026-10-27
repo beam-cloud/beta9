@@ -16,6 +16,8 @@ with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as arch
         "kiosk",
         "kiosk-openbox.xml",
         "kiosk-openbox-build",
+        "kiosk-selkies-patch",
+        "kiosk_config.py",
         "browser.desktop",
         "browser-trust",
         "browser-trust-update",

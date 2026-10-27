@@ -1,6 +1,7 @@
 package types
 
 import (
+	"maps"
 	"slices"
 	"time"
 
@@ -82,7 +83,7 @@ type VMSpec struct {
 // VMKioskSpec launches an ordinary application on an isolated graphical session.
 // Commands are argv, never shell source. Env values follow the VM's redaction rules.
 type VMKioskSpec struct {
-	Transport string            `json:"transport,omitempty"`
+	Transport VMKioskTransport  `json:"transport,omitempty"`
 	Command   []string          `json:"command"`
 	Cwd       string            `json:"cwd,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`
@@ -95,9 +96,42 @@ type VMKioskMCP struct {
 	Path    string   `json:"path,omitempty"`
 }
 
-const VMKioskStatusPort uint32 = 8081
+// VM service ports are shared by validation, routing and the guest protocol.
+const (
+	VMSSHPort                      = 2222
+	VMTerminalPort                 = 7681
+	VMDesktopPort                  = 8080
+	VMKioskStatusPort       uint32 = 8081
+	VMKioskMediaPort        uint32 = 8443
+	VMKioskMaxICEFrameBytes        = 8192
+	VMKioskMaxCommandArgs          = 128
+	VMKioskMaxCommandBytes         = 32 << 10
+	VMKioskMaxEnvBytes             = 16 << 10
+	VMKioskMaxConfigBytes          = 64 << 10
+)
 
-const VMKioskMediaPort uint32 = 8443
+type VMKioskTransport string
+
+const (
+	VMKioskTransportWebRTC     VMKioskTransport = "webrtc"
+	VMKioskTransportWebSockets VMKioskTransport = "websockets"
+)
+
+// Clone isolates normalization and redaction from snapshots and their parent VM.
+func (k *VMKioskSpec) Clone() *VMKioskSpec {
+	if k == nil {
+		return nil
+	}
+	copy := *k
+	copy.Command = slices.Clone(k.Command)
+	copy.Env = maps.Clone(k.Env)
+	if k.MCP != nil {
+		mcp := *k.MCP
+		mcp.Command = slices.Clone(k.MCP.Command)
+		copy.MCP = &mcp
+	}
+	return &copy
+}
 
 func (s VMSpec) RuntimePorts() []uint32 {
 	ports := append([]uint32{}, s.Ports...)
