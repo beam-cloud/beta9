@@ -121,7 +121,7 @@ input. Never enable diagnostic guest patches in a delivered image.
 
 ### CPU KiCad diagnostic, 2026-10-26
 
-The [numeric report](results/2026-10-26-cpu-kicad.json) records an 8-CPU/8-GiB
+The [numeric report](results/2026-10-26-summary.json) records an 8-CPU/8-GiB
 staging microVM with unmodified KiCad 10.0.7, Cairo rendering, Selkies 2.1.0,
 H.264 CRF 18, steady 60 FPS capture and paint-over disabled. The protected
 browser path used the actual TCP 443 gateway; media RTT was about 59 ms.
@@ -177,7 +177,7 @@ With Okteto, use `--gateway-host 127.0.0.1 --gateway-port 11993
 --api-url http://127.0.0.1:11994` for the existing management forwards. Browser
 media and signaling continue through the protected public staging URL.
 
-The [recorded density/window result](results/2026-10-26-density-windows.json)
+The [recorded density/window result](results/2026-10-26-summary.json)
 includes the matched KiCad schematic comparison and resize/reconnect checks.
 The full run checks 21 cases: both toolkits' normal, utility, and dialog windows,
 plus GTK's explicit NORMAL + WM_TRANSIENT_FOR window, at all three densities.
@@ -201,7 +201,7 @@ missed transition. Headless diagnostics avoid interference with an active user,
 but release qualification still needs a controlled headed-browser run.
 
 
-The [CPU follow-up report](results/2026-10-26-cpu-followup.json) retains the
+The [CPU follow-up report](results/2026-10-26-summary.json) retains the
 rejected 120 FPS and explicit Xrender compositor trials. Select-all p95 rose
 from 200 ms at 60 FPS to 245 ms at 120 FPS; sampled CPU use rose from 15% to 29%
 of the eight-vCPU guest. Composition reached 310 ms p95. The final 60 FPS

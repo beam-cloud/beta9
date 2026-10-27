@@ -152,6 +152,8 @@ func NewPodService(
 
 	// If TCP is enabled and we have TLS configured, start the raw TCP proxy server
 	if opts.Config.Abstractions.Pod.TCP.Enabled {
+		// Construction only assigns fields, allowing the ICE handler to attach
+		// synchronously. Certificate loading and listening remain in Start.
 		server := NewPodTCPServer(ctx, ps, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
 		ps.tcpServer = server
 		go func() {

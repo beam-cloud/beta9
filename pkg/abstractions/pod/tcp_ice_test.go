@@ -22,6 +22,9 @@ func TestTCPDispatchPreservesICEPostgresAndTLS(t *testing.T) {
 		{"TLS", []byte{0x16}, false},
 		{"PostgreSQL", postgres, false},
 		{"ICE", []byte{0, 64, 0, 1}, true},
+		// Classification only reserves this prefix; the ICE handler must still
+		// reject a non-STUN payload before dialing any private backend.
+		{"non-STUN lookalike", append([]byte{0, 20, 0, 1}, make([]byte, 18)...), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server, client := net.Pipe()

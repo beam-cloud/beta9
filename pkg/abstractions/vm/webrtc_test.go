@@ -95,7 +95,7 @@ func iceFrame(t *testing.T, password string) []byte {
 }
 
 func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
-	for _, scenario := range []string{"valid", "expired lease", "wrong password", "rotated token", "old boot", "stopped", "revoked"} {
+	for _, scenario := range []string{"valid", "expired lease", "wrong password", "rotated token", "old boot", "stopped", "revoked", "non-STUN lookalike"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v := iceTestFixture(t)
 			require.Equal(t, http.StatusOK, registerTestICE(t, s, v, testSDP).Code)
@@ -122,6 +122,9 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 				s.backend.(*vmBackend).token = &types.Token{Active: false}
 			}
 			frame := iceFrame(t, password)
+			if scenario == "non-STUN lookalike" {
+				frame = append([]byte{0, 20, 0, 1}, make([]byte, 18)...)
+			}
 			server, client := net.Pipe()
 			defer client.Close()
 			done := make(chan struct{})
