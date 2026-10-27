@@ -7,18 +7,20 @@ assert.match(html, /data-beam-kiosk-entry/);
 assert.match(html, /src="_beam\/kiosk\/webrtc.js"/);
 const source = fs.readFileSync(path.join(path.dirname(process.argv[2]), 'kiosk-webrtc.js'), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
-async function check(prefix) {
+async function check(prefix, entry) {
   let application = 'starting', responseStatus = 200, health = true, reloads = 0;
   const requests = [], navigations = [], timers = new Map();
   const elements = {'#status': {}, '#retry': {}, '#restart': {}};
+  const overlay = {setAttribute() {}, querySelectorAll: () => Object.values(elements)};
   const origin = 'https://application.example';
   const window = {addEventListener() {}};
   vm.runInNewContext(source, {
     window, URL, AbortSignal, Date, parent: {postMessage() {}},
-    location: {href: origin + prefix, origin, replace: url => navigations.push(url), reload: () => reloads++},
+    location: {href: origin + prefix + (entry ? '' : 'stream/'), origin, replace: url => navigations.push(url), reload: () => reloads++},
     document: {
-      documentElement: {hasAttribute: () => true}, body: {}, readyState: 'complete',
-      querySelector: selector => elements[selector],
+      documentElement: {hasAttribute: () => entry}, body: {append() {}}, readyState: 'complete',
+      createElement: () => overlay,
+      querySelector: () => null,
     },
     setTimeout: fn => {timers.set(1, fn); return 1;}, clearTimeout: id => timers.delete(id),
     fetch: async (url, options = {}) => {
@@ -32,6 +34,7 @@ async function check(prefix) {
   });
   const advance = async () => {const fn = timers.get(1); timers.delete(1); fn(); await flush();};
   await flush();
+  assert.match(elements['#status'].textContent, /Opening application/);
   assert.equal(navigations.length, 0);
   assert.equal(requests[0].path, prefix + '_beam/kiosk/status');
   application = 'closed'; await advance();
@@ -47,8 +50,16 @@ async function check(prefix) {
   await window.beamKiosk.poll();
   assert.equal(navigations.length, 0, 'wait for native stream health');
   health = true; await advance();
-  assert.equal(navigations.at(-1), origin + prefix + 'stream/');
-  assert.equal(requests.at(-1).path, prefix + 'stream/api/health');
+  if (entry) {
+    assert.equal(navigations.at(-1), origin + prefix + 'stream/');
+    assert.equal(requests.at(-1).path, prefix + 'stream/api/health');
+  } else {
+    window.beamKiosk.notify('ready');
+    assert.equal(overlay.hidden, true, 'the shared shell must reveal the application');
+    window.beamKiosk.notify('error', 'Connection unavailable');
+    assert.equal(overlay.hidden, false);
+    assert.equal(elements['#status'].textContent, 'Connection unavailable');
+  }
 }
-(async () => {for (const prefix of ['/', '/vm/app/8080/']) await check(prefix);})()
+(async () => {for (const prefix of ['/', '/vm/app/8080/']) for (const entry of [true, false]) await check(prefix, entry);})()
   .catch(error => {console.error(error); process.exitCode = 1;});

@@ -153,7 +153,8 @@ func TestKioskGatewayRoutingAndAuthorization(t *testing.T) {
 	rec := httptest.NewRecorder()
 	proxyAPI(s).ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "Opening application")
+	require.Contains(t, rec.Body.String(), "data-beam-kiosk-entry")
+	require.Contains(t, rec.Body.String(), `_beam/kiosk/webrtc.js`)
 	require.NotContains(t, rec.Body.String(), "vnc.html")
 	require.NotContains(t, rec.Body.String(), "scale(0.5)")
 }

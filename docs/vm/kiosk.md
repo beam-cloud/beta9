@@ -218,5 +218,7 @@ incompatible image is used.
 
 Process groups are retained by role rather than accumulated across restarts.
 Application and adapter groups are stopped before replacement, and closed groups
-are discarded. MCP readiness bounds both response size and wall time, including
-servers that continuously send keepalive bytes.
+are discarded. Launchers may hand off to child windows within the application
+startup deadline. MCP has an independent startup deadline; an adapter failure
+leaves the application available. Readiness probes bound response size and wall
+time, including servers that continuously send keepalive bytes.

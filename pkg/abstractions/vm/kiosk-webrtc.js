@@ -24,7 +24,7 @@
   class KioskInput {
     constructor(input) {
       this.input = input;
-      this.carry = {x: 0, y: 0};
+      this.carry = {x: 0, y: 0, zoom: 0};
       this.events = new AbortController();
       const methods = ['send', '_isStreamLocked', '_calculateTouchCoordinates',
         '_sendMouseState', '_flushCoalescedMouseMove', '_keysymHeld',
@@ -62,23 +62,19 @@
       }
     }
 
-    notches(axis, pixels) {
-      if (!Number.isFinite(pixels)) return 0;
-      if (pixels * this.carry[axis] < 0) this.carry[axis] = 0;
-      const limit = policy.maxWheelNotches * policy.wheelPixels;
-      this.carry[axis] += Math.max(-limit, Math.min(limit, pixels));
-      const count = Math.floor((Math.abs(this.carry[axis]) + policy.wheelEpsilon) / policy.wheelPixels);
+    notches(axis, delta, unit = policy.wheelPixels) {
+      if (!Number.isFinite(delta)) return 0;
+      if (delta * this.carry[axis] < 0) this.carry[axis] = 0;
+      const limit = policy.maxWheelNotches * unit;
+      this.carry[axis] += Math.max(-limit, Math.min(limit, delta));
+      const count = Math.floor((Math.abs(this.carry[axis]) + policy.wheelEpsilon) / unit);
       const sign = Math.sign(this.carry[axis]);
-      this.carry[axis] = sign * Math.max(0, Math.abs(this.carry[axis]) - count * policy.wheelPixels);
+      this.carry[axis] = sign * Math.max(0, Math.abs(this.carry[axis]) - count * unit);
       return count ? sign * count : 0;
     }
 
     zoom(delta, event) {
-      if (!Number.isFinite(delta)) return;
-      const steps = delta / Math.log(policy.pinchScale);
-      this.zoomCarry = (this.zoomCarry || 0) + Math.max(-policy.maxWheelNotches, Math.min(policy.maxWheelNotches, steps));
-      const count = Math.trunc(this.zoomCarry);
-      this.zoomCarry -= count;
+      const count = this.notches('zoom', delta, Math.log(policy.pinchScale));
       if (count) {
         this.position(event, true);
         this.input._sendZoomNotches(count);
@@ -93,8 +89,7 @@
       const pinch = event.ctrlKey && !input._keysymHeld(policy.controlLeft, policy.controlRight);
       if (event.timeStamp - this.lastWheel > policy.wheelIdleMs || pinch !== this.pinch) {
         input._resetWheelLearning();
-        this.carry = {x: 0, y: 0};
-        this.zoomCarry = 0;
+        this.carry = {x: 0, y: 0, zoom: 0};
       }
       this.lastWheel = event.timeStamp;
       this.pinch = pinch;
@@ -125,7 +120,7 @@
       event.stopImmediatePropagation();
       if (event.type === 'gesturestart') {
         this.gestureScale = 1;
-        this.zoomCarry = 0;
+        this.carry.zoom = 0;
         this.position(event);
       } else if (event.type === 'gesturechange' && event.scale > 0 && this.gestureScale) {
         this.zoom(Math.log(event.scale / this.gestureScale), event);
@@ -142,8 +137,6 @@
       this.pixelRatio = Number.isInteger(ratio) && ratio > 0 && ratio <= policy.maxPixelRatio ? ratio : policy.pixelRatio;
       this.devicePixelRatio = window.devicePixelRatio || 1;
       this.status = null;
-      this.stats = null;
-      this.peers = [];
       this.displayState = 'starting';
       this.displayError = '';
       this.deadline = Date.now() + policy.startupMs;
@@ -171,8 +164,7 @@
     render() {
       if (!this.overlay) return;
       const ready = this.displayState === 'ready' && this.status?.application === 'ready';
-      this.overlay.hidden = !this.entry && ready && !this.displayError;
-      if (!this.entry) this.overlay.style.display = this.overlay.hidden ? 'none' : 'grid';
+      this.overlay.hidden = ready && !this.displayError;
       const closed = ['closed', 'error'].includes(this.status?.application);
       this.message.textContent = this.displayError || (closed ? this.status.error || 'Application closed.' :
         this.displayState === 'disconnected' ? 'Reconnecting to application…' : 'Opening application…');
@@ -197,27 +189,18 @@
     }
 
     mount() {
-      if (this.entry) {
-        this.overlay = document.body;
-        this.message = document.querySelector('#status');
-        this.retry = document.querySelector('#retry');
-        this.restart = document.querySelector('#restart');
-      } else {
-        this.overlay = document.createElement('div');
-        this.overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111113;color:#ededee;display:grid;place-content:center;justify-items:center;gap:18px;font:14px system-ui,sans-serif';
-        this.overlay.setAttribute('data-beam-kiosk', '');
-        this.message = document.createElement('p');
-        this.message.setAttribute('role', 'status');
-        this.retry = document.createElement('button');
-        this.retry.textContent = 'Reconnect';
-        this.restart = document.createElement('button');
-        this.restart.textContent = 'Reopen application';
-        for (const button of [this.retry, this.restart]) {
-          button.style.cssText = 'font:inherit;padding:8px 16px;color:inherit;background:#242428;border:1px solid #3a3a40;border-radius:6px;cursor:pointer';
-        }
-        this.overlay.append(this.message, this.retry, this.restart);
-        document.body.append(this.overlay);
-      }
+      this.overlay = document.createElement('div');
+      this.overlay.setAttribute('data-beam-kiosk', '');
+      this.overlay.innerHTML = `<style>
+        [data-beam-kiosk] { position:fixed;inset:0;z-index:2147483647;background:#111113;color:#ededee;display:grid;place-content:center;justify-items:center;gap:18px;font:14px system-ui,sans-serif;color-scheme:dark; }
+        [data-beam-kiosk][hidden], [data-beam-kiosk] [hidden] { display:none !important; }
+        [data-beam-kiosk] p { max-width:38em;padding:0 24px;text-align:center; }
+        [data-beam-kiosk] button { font:inherit;padding:8px 16px;color:inherit;background:#242428;border:1px solid #3a3a40;border-radius:6px;cursor:pointer; }
+      </style>
+      <p role="status" aria-live="polite"></p>
+      <button>Reconnect</button><button>Reopen application</button>`;
+      [this.message, this.retry, this.restart] = this.overlay.querySelectorAll('p,button');
+      document.body.append(this.overlay);
       this.retry.onclick = () => location.reload();
       this.restart.onclick = () => this.reopen();
       this.render();
@@ -225,7 +208,6 @@
     }
 
     viewportMatches(surface) {
-      if (!window.innerWidth) return true;
       const width = surface.videoWidth || surface.width;
       const height = surface.videoHeight || surface.height;
       return Math.abs(width - window.innerWidth * this.pixelRatio) < policy.alignment &&
@@ -347,7 +329,6 @@
 
     trackPeer(peer) {
       this.activePeer = peer;
-      this.peers = [peer];
       peer.addEventListener('track', ({receiver}) => {
         // Receive-side hints favor fresh desktop frames over playback buffering.
         try { if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0; } catch (_) {}
@@ -419,10 +400,5 @@
   const mount = () => viewer.mount();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, {once: true});
   else mount();
-  window.addEventListener('message', event => {
-    if (event.origin === location.origin && event.source === window && event.data?.type === 'stats') {
-      viewer.stats = event.data.data;
-    }
-  });
   if (window.HTMLMediaElement) viewer.installDisplay();
 })();

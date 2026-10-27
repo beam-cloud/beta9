@@ -4,15 +4,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#111113">
 <title>Application</title>
-<style>
-  html, body { height: 100%; margin: 0; color-scheme: dark; }
-  body { display: grid; place-content: center; justify-items: center; gap: 18px; background: #111113; color: #ededee; font: 14px system-ui, sans-serif; }
-  #status { max-width: 38em; padding: 0 24px; text-align: center; }
-  button { font: inherit; padding: 8px 16px; color: inherit; background: #242428; border: 1px solid #3a3a40; border-radius: 6px; cursor: pointer; }
-  [hidden] { display: none !important; }
-</style>
-<p id="status" role="status" aria-live="polite">Opening application…</p>
-<button id="retry" hidden>Reconnect</button>
-<button id="restart" hidden>Reopen application</button>
+<body style="margin:0;background:#111113">
 <script src="_beam/kiosk/webrtc.js"></script>
 </html>

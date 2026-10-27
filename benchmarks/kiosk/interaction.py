@@ -36,10 +36,15 @@ def main():
     parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--keys", nargs="+", default=["Control+a", "Escape"])
     parser.add_argument(
-        "--click", nargs=2, type=float, help="Alternate a normalized canvas click and Escape"
+        "--click",
+        nargs=2,
+        type=float,
+        help="Alternate a normalized canvas click and Escape",
     )
     parser.add_argument(
-        "--wheel", type=int, help="Alternate this wheel delta and its inverse over the canvas"
+        "--wheel",
+        type=int,
+        help="Alternate this wheel delta and its inverse over the canvas",
     )
     parser.add_argument(
         "--repeat-click",
@@ -65,11 +70,6 @@ def main():
         "--recovery-check",
         action="store_true",
         help="Verify transient status failures and a page reconnect",
-    )
-    parser.add_argument(
-        "--trace-transport",
-        action="store_true",
-        help="Requires the isolated guest diagnostic echo patch",
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -105,7 +105,8 @@ def main():
             context.route(
                 "**/_beam/kiosk/webrtc.js",
                 lambda route: route.fulfill(
-                    content_type="text/javascript", body=args.bootstrap_script.read_bytes()
+                    content_type="text/javascript",
+                    body=args.bootstrap_script.read_bytes(),
                 ),
             )
         page = context.new_page()
@@ -127,7 +128,9 @@ def main():
         except Exception:
             # Browser errors can include the credential-bearing entry URL.
             browser.close()
-            raise RuntimeError("Protected application stream did not become ready") from None
+            raise RuntimeError(
+                "Protected application stream did not become ready"
+            ) from None
         first_frame_seconds = time.monotonic() - started
         recovery = None
         if args.recovery_check:
@@ -135,7 +138,9 @@ def main():
             page.route(status_route, lambda route: route.abort())
             page.wait_for_timeout(2400)
             if not page.evaluate("document.querySelector('[data-beam-kiosk]').hidden"):
-                raise RuntimeError("Transient status failure covered a healthy application")
+                raise RuntimeError(
+                    "Transient status failure covered a healthy application"
+                )
             page.unroute(status_route)
             page.reload(wait_until="commit")
             page.wait_for_function(
@@ -160,7 +165,9 @@ def main():
         page.keyboard.press("Escape")
         if args.click:
             page.mouse.move(args.width * args.click[0], args.height * args.click[1])
-        page.evaluate("region => window.beamInteractionProbe.setRegion(region)", args.region)
+        page.evaluate(
+            "region => window.beamInteractionProbe.setRegion(region)", args.region
+        )
         for name, *rect in args.compare_region:
             page.evaluate(
                 "([name,rect]) => window.beamInteractionProbe.addRegion(name,rect)",
@@ -168,11 +175,6 @@ def main():
             )
         page.wait_for_function("window.beamInteractionProbe.settledForMs>350")
         page.evaluate("window.beamInteractionProbe.reset()")
-        if args.trace_transport:
-            for _ in range(10):
-                page.evaluate("window.beamInteractionTransport.ping()")
-                page.wait_for_timeout(120)
-            page.evaluate("window.beamInteractionTransport.trace=true")
         failures = []
         for index in range(args.samples):
             key = args.keys[index % len(args.keys)]
@@ -184,13 +186,17 @@ def main():
                 key = "wheel"
             elif args.click and (args.repeat_click or index % 2 == 0):
                 page.evaluate("window.beamInteractionProbe.arm('mousedown')")
-                page.mouse.click(args.width * args.click[0], args.height * args.click[1])
+                page.mouse.click(
+                    args.width * args.click[0], args.height * args.click[1]
+                )
                 key = "click"
             else:
                 expected_key = "Escape" if args.click else key.split("+")[-1]
                 if expected_key == "Space":
                     expected_key = " "
-                page.evaluate("key=>window.beamInteractionProbe.arm('keydown',key)", expected_key)
+                page.evaluate(
+                    "key=>window.beamInteractionProbe.arm('keydown',key)", expected_key
+                )
                 page.keyboard.press("Escape" if args.click else key)
             try:
                 page.wait_for_function(
@@ -202,13 +208,14 @@ def main():
                 failures.append({"index": index, "key": key})
                 page.evaluate("window.beamInteractionProbe.expire()")
                 if len(failures) <= 3:
-                    page.screenshot(path=str(args.output.with_suffix(f".failure-{index}.png")))
+                    page.screenshot(
+                        path=str(args.output.with_suffix(f".failure-{index}.png"))
+                    )
             page.wait_for_function("window.beamInteractionProbe.settledForMs>150")
         result = page.evaluate("""() => ({
           samples:window.beamInteractionProbe.samples,unanswered:window.beamInteractionProbe.unanswered,
           events:window.beamInteractionProbe.events,
           unexpected_inputs:window.beamInteractionProbe.unexpectedInputs,
-          transport:window.beamInteractionTransport.samples,input_timings:window.beamInteractionTransport.inputs,
           comparisons:Object.fromEntries(Object.entries(window.beamInteractionProbe.comparisons).map(([name,r])=>[name,r.samples])),
           frames:window.beamInteractionProbe.frames,
           probe_costs_ms:window.beamInteractionProbe.probeCosts,
@@ -216,15 +223,6 @@ def main():
           render_pixel_ratio:window.beamKiosk?.pixelRatio||devicePixelRatio,
           video:(()=>{const s=[...document.querySelectorAll('video#stream,video#videoStream,canvas#videoCanvas')].find(s=>s.getBoundingClientRect().width>0);return [s.videoWidth||s.width,s.videoHeight||s.height]})()
         })""")
-        if args.trace_transport:
-            count = page.evaluate("window.beamInteractionTransport.samples.length")
-            page.evaluate("window.beamInteractionTransport.ping()")
-            page.wait_for_function(
-                "count=>window.beamInteractionTransport.samples.length>count",
-                arg=count,
-                timeout=3000,
-            )
-            result["transport"] = page.evaluate("window.beamInteractionTransport.samples")
         result["http_rtt_ms"] = page.evaluate("""async()=>{
           const result=[];
           for(let i=0;i<5;i++) {
@@ -235,7 +233,7 @@ def main():
         }""")
         result["webrtc"] = page.evaluate("""async () => {
           const result=[];
-          for(const p of window.beamKiosk.peers){
+          for(const p of [window.beamKiosk.activePeer].filter(Boolean)){
             if(p.connectionState!=='connected')continue;
             const stats=await p.getStats(), reports=[];
             stats.forEach(s=>{
@@ -267,13 +265,14 @@ def main():
             browser=browser.version,
             headless=not args.headed,
             measurement_method="optical-serial-v3",
-            trace_transport=args.trace_transport,
             first_frame_seconds=first_frame_seconds,
             failures=failures,
             recovery=recovery,
             planned_samples=args.samples,
             controlled_inputs=not result["unexpected_inputs"],
-            vm_spec={k: vm.info["spec"].get(k) for k in ("cpu", "memory", "pool", "image_id")},
+            vm_spec={
+                k: vm.info["spec"].get(k) for k in ("cpu", "memory", "pool", "image_id")
+            },
             metrics_before=before,
             metrics_after=vm.metrics(),
             release_qualified=False,
@@ -303,7 +302,11 @@ def main():
         args.output.write_text(json.dumps(result, indent=2))
         print(
             json.dumps(
-                {k: result[k] for k in ("measurements", "first_frame_seconds", "video")}, indent=2
+                {
+                    k: result[k]
+                    for k in ("measurements", "first_frame_seconds", "video")
+                },
+                indent=2,
             )
         )
 

@@ -75,7 +75,6 @@ class KioskRuntime:
     manager_timeout: float = 10
     resize_timeout: float = 10
     application_timeout: float = 120
-    launcher_grace: float = 45
     retry_window: float = 60
     max_retries: int = 3
     poll_interval: float = 0.25

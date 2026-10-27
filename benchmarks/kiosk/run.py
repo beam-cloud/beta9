@@ -55,14 +55,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vm", required=True)
     parser.add_argument("--context", default="default")
-    parser.add_argument("--gateway-host", help="Override gRPC host, e.g. Okteto's local forward")
+    parser.add_argument(
+        "--gateway-host", help="Override gRPC host, e.g. Okteto's local forward"
+    )
     parser.add_argument("--gateway-port", type=int)
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(
         "--backend", choices=("selkies-ws", "selkies-webrtc", "xpra"), required=True
     )
     parser.add_argument(
-        "--family", choices=("gtk", "qt", "electron", "canvas", "opengl", "media"), required=True
+        "--family",
+        choices=("gtk", "qt", "electron", "canvas", "opengl", "media"),
+        required=True,
     )
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
@@ -70,11 +74,6 @@ def main():
     parser.add_argument("--seconds", type=int, default=30)
     parser.add_argument("--channel", default="chrome")
     parser.add_argument("--headless", action="store_true")
-    parser.add_argument(
-        "--private-ice-tcp-port",
-        type=int,
-        help="Diagnostic: use an authenticated VM tunnel on localhost; does not qualify the public gateway",
-    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -88,37 +87,22 @@ def main():
     vm = VM.get(args.vm, context=config)
     before = vm.metrics()
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel=args.channel, headless=args.headless)
+        browser = playwright.chromium.launch(
+            channel=args.channel, headless=args.headless
+        )
         context = browser.new_context(
-            viewport={"width": args.width, "height": args.height}, device_scale_factor=args.dpr
+            viewport={"width": args.width, "height": args.height},
+            device_scale_factor=args.dpr,
         )
         context.add_init_script(path=Path(__file__).with_name("probe.js"))
-        if args.private_ice_tcp_port:
-            if not 1 <= args.private_ice_tcp_port <= 65535:
-                parser.error("private ICE-TCP port must be between 1 and 65535")
-            context.add_init_script(
-                script="""(() => {
-              const proto = RTCPeerConnection.prototype;
-              const remote = proto.setRemoteDescription;
-              const candidate = proto.addIceCandidate;
-              proto.setRemoteDescription = function(value) {
-                // Each candidate belongs to the preceding media section.
-                const sections = value.sdp.split(/(?=^m=)/m);
-                const rewritten = sections.map((section, index) => {
-                  const clean = section.split(/\\r?\\n/).filter(line => line && !line.startsWith('a=candidate:') && line !== 'a=end-of-candidates').join('\\r\\n');
-                  return clean + (index ? '\\r\\na=candidate:tunnel 1 TCP 1518280447 127.0.0.1 PORT typ host tcptype passive\\r\\na=end-of-candidates' : '') + '\\r\\n';
-                }).join('');
-                return remote.call(this, {type:value.type,sdp:rewritten});
-              };
-              proto.addIceCandidate = function(value) { return value?.candidate ? Promise.resolve() : candidate.call(this,value); };
-            })();""".replace("PORT", str(args.private_ice_tcp_port))
-            )
         page = context.new_page()
         try:
             page.goto(vm.access_url(args.port), wait_until="commit", timeout=60000)
         except Exception:
             # Browser exceptions echo navigation URLs, including entry credentials.
-            raise RuntimeError("Browser could not reach the protected application stream") from None
+            raise RuntimeError(
+                "Browser could not reach the protected application stream"
+            ) from None
         page.bring_to_front()
         deadline = time.monotonic() + 90
         frame = None
@@ -161,7 +145,9 @@ def main():
             page.wait_for_timeout(250)
         page.wait_for_timeout(1000)
         samples = frame.evaluate("window.beamStreamProbe")
-        measurements = summarize(samples["frames"], samples["inputs"], len(samples["pending"]))
+        measurements = summarize(
+            samples["frames"], samples["inputs"], len(samples["pending"])
+        )
         rtc = frame.evaluate("""async () => {
           const reports = [];
           for (const peer of window.beamProbePeers || []) {
@@ -195,17 +181,15 @@ def main():
             "raw_samples": samples,
             "browser": browser.version,
             "headless": args.headless,
-            "network_path": "authenticated-private-tunnel"
-            if args.private_ice_tcp_port
-            else "public-gateway",
+            "network_path": "public-gateway",
             "webrtc": rtc,
             "vm_spec": {
-                key: vm.info["spec"].get(key) for key in ("cpu", "memory", "image_id", "pool")
+                key: vm.info["spec"].get(key)
+                for key in ("cpu", "memory", "image_id", "pool")
             },
             "metrics_before": before,
             "metrics_after": vm.metrics(),
-            "performance_gate_passed": not args.private_ice_tcp_port
-            and gate(measurements, statistics.median(rtts)),
+            "performance_gate_passed": gate(measurements, statistics.median(rtts)),
             "release_qualified": False,
         }
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -214,7 +198,12 @@ def main():
             json.dumps(
                 {
                     key: result[key]
-                    for key in ("backend", "family", "measurements", "performance_gate_passed")
+                    for key in (
+                        "backend",
+                        "family",
+                        "measurements",
+                        "performance_gate_passed",
+                    )
                 },
                 indent=2,
             )

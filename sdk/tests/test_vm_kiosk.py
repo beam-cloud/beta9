@@ -149,7 +149,8 @@ def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
     assert session.env["DISPLAY"] == ":1"
     assert session.env["APP_SETTING"] == "custom"
     assert "BEAM_VM_KIOSK" not in session.env
-    assert [session.retry_allowed(session.failures) for _ in range(4)] == [True, True, True, False]
+    assert [session.retry_allowed("application") for _ in range(4)] == [True, True, True, False]
+    assert session.retry_allowed("mcp")
 
 
 def test_kiosk_sdk_waits_for_application_and_mcp_not_just_the_stream_port():
@@ -258,10 +259,67 @@ def test_repeated_restarts_keep_only_current_owned_process_groups(monkeypatch):
         session.launch_mcp()
     assert len(session.processes) == 2
     assert set(stopped) == set(range(1, 19))
-    session.stop_application()
+    session.stop("mcp", "application")
     assert session.processes == {}
-    assert session.application is session.mcp is None
     assert set(stopped) == set(range(1, 21))
+
+
+def test_launcher_handoff_uses_owned_windows_and_closes_children(monkeypatch):
+    module = supervisor()
+    clock = [0]
+    windows = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module, "visible_windows", lambda _: windows)
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **kw: MagicMock(poll=lambda: 0))
+    stop = MagicMock()
+    monkeypatch.setattr(module, "stop_process", stop)
+    session = module.Session({"command": ["launcher"]})
+    session.launch()
+    session.poll_application()
+    assert session.state.application == "starting"
+    windows.append("0x123")
+    session.poll_application()
+    assert session.state.application == "ready"
+    windows.clear()
+    session.poll_application()
+    assert session.state.application == "closed"
+    assert session.processes == {}
+    # The launcher's process group still owns its children after it exits.
+    assert stop.call_args.args[0].poll() == 0
+
+
+def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monkeypatch):
+    module = supervisor()
+    clock = [0]
+    windows = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module, "visible_windows", lambda _: windows)
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **kw: MagicMock(poll=lambda: None))
+    monkeypatch.setattr(module, "stop_process", MagicMock())
+    monkeypatch.setattr(module, "mcp_ready", lambda *a: False)
+    session = module.Session({"command": ["editor"], "mcp": {"command": ["adapter"], "port": 8000}})
+    session.launch()
+    clock[0] = module.POLICY.application_timeout - 1
+    windows.append("0x123")
+    session.poll_application()
+    clock[0] += 2
+    session.poll_mcp()
+    assert session.state.mcp == "starting", "MCP initialization gets its own full deadline"
+    clock[0] += module.POLICY.application_timeout
+    session.poll_mcp()
+    assert session.state.mcp == "error"
+    assert "mcp" not in session.processes
+    monkeypatch.setattr(module.subprocess, "Popen", MagicMock(side_effect=FileNotFoundError))
+    session.launch_mcp()
+    assert session.state.application == "ready", "a missing optional adapter must not close the app"
+    assert session.state.mcp == "error"
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **kw: MagicMock(poll=lambda: None))
+    session.launch()
+    windows.clear()
+    clock[0] += module.POLICY.application_timeout + 1
+    session.poll_application()
+    assert session.state.application == "error"
+    assert session.processes == {}
 
 
 def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatch):

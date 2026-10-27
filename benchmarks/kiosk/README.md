@@ -35,8 +35,6 @@ selects a different saved context. `--headless` is useful for diagnostics; relea
 qualification requires the normal headed browser.
 For Okteto, `--gateway-host 127.0.0.1 --gateway-port 11993` overrides only the
 management transport; browser signaling and media still use public Beam URLs.
-`--private-ice-tcp-port PORT` is a separate tunnel diagnostic. It rewrites ICE
-to an authenticated localhost forward and always fails public-path qualification.
 
 Repeat with `--width 1440 --height 900 --dpr 2`. Keep the same VM CPU/memory,
 client machine/browser, network, application, and physical viewport when
@@ -90,7 +88,6 @@ reopening preserves files and settings while the fork can change independently.
 Stop the dedicated benchmark VM when done. Do not modify an unrelated user's
 active desktop to obtain comparison results.
 
-
 ## Unmodified application measurements
 
 `interaction.py` measures visible transitions in an installed application without
@@ -113,54 +110,6 @@ browser exposes it, WebRTC receiver statistics, and VM resource samples. The
 probe expires an unanswered input before sending another action so a later
 response cannot accidentally answer both. These reports remain diagnostic;
 headless runs and a single application do not meet release qualification.
-
-`--trace-transport` is only for an isolated guest with the temporary diagnostic
-echo handler installed. It sends synthetic nonces, not project contents or user
-input. Never enable diagnostic guest patches in a delivered image.
-
-
-### CPU KiCad diagnostic, 2026-10-26
-
-The [numeric report](results/2026-10-26-summary.json) records an 8-CPU/8-GiB
-staging microVM with unmodified KiCad 10.0.7, Cairo rendering, Selkies 2.1.0,
-H.264 CRF 18, steady 60 FPS capture and paint-over disabled. The protected
-browser path used the actual TCP 443 gateway; media RTT was about 59 ms.
-At 1728 × 789 CSS pixels and DPR 2, the received image was 3456 × 1578.
-
-Thirty single-object selection/deselection actions in visible Chrome measured
-132 ms median and 158 ms p95, with no unanswered actions; the first usable frame
-arrived in 2.7 seconds. This trial used the bounded 60 Mbps packet-pacing ceiling,
-not a measured 60 Mbps sustained stream. At a 30 Mbps pacing ceiling, the
-headless run measured 133 ms median and 182 ms p95. These sequential diagnostic
-runs are not a statistical performance guarantee.
-
-Anonymous guest instrumentation measured input injection below 0.2 ms p95,
-software encoding around 7 ms p95, and about 38 ms p95 from a deselection input
-to the first substantial changed capture. The steady cadence reduced observed
-receiver buffering compared with damage-gated capture. Static text/image checks
-matched guest pixel dimensions; visual checks must still cover motion and
-recovery, not only still-frame similarity.
-
-The target is still unmet. A separate zoom sample reached 255 ms p95 and the
-observed frame-interval p95 exceeded 25 ms. Network impairment qualification and
-the remaining application families are outstanding. These numbers must not be
-presented as native parity or a passing release gate. Diagnostic guest patches
-were removed before creating the clean CPU trial.
-
-
-A subsequent clean-fork recovery check passed transient status failure,
-page reconnect and application close/reopen, but its immediate interaction run
-missed one of six optical transitions and reached 315 ms p95. KiCad was still
-loading footprint libraries, and a media RTT sample rose to 308 ms. This cold
-reopen result remains an unresolved limitation; it must be included alongside
-the steady-state measurements rather than calling the trial fully stable.
-
-
-After initialization, the clean trial's next 12-action visible-Chrome run
-completed every transition, measuring 128 ms median and 213 ms p95. All three
-temporary server timing hooks were verified absent. The variance between runs
-is another reason the passing release gate remains mandatory.
-
 
 ## Native density and window roles
 
@@ -204,7 +153,6 @@ normal editors must fill the requested browser viewport at 2× density. Reports
 record font metrics and framebuffer dimensions as well as screenshots. These
 functional checks do not establish streaming latency or qualify release.
 
-
 The interaction runner now arms one expected input at a time and records
 unplanned browser input separately (`optical-serial-v3`). A run with unexpected
 input is unsuitable for causal comparison, even if its optical transitions
@@ -216,21 +164,10 @@ verify the application's state and the selected action before interpreting a
 missed transition. Headless diagnostics avoid interference with an active user,
 but release qualification still needs a controlled headed-browser run.
 
-
-The [CPU follow-up report](results/2026-10-26-summary.json) retains the
-rejected 120 FPS and explicit Xrender compositor trials. Select-all p95 rose
-from 200 ms at 60 FPS to 245 ms at 120 FPS; sampled CPU use rose from 15% to 29%
-of the eight-vCPU guest. Composition reached 310 ms p95. The final 60 FPS
-single-pad selection run completed all 30 transitions at 126 ms median and
-176 ms p95, without unexpected browser input, at 3456 × 1578 pixels. It is a
-headless diagnostic and still exceeds the target. Different workloads and
-measurement versions must not be presented as an optimization win. The
-contaminated run and the initial select-all Escape without an optical change
-remain in the report with their limitations.
-
-
-A cold restart of the isolated test VM preserved saved project files and the
-recorded 2× display geometry. The application reopened through the browser at
-the expected resolution; its native file chooser stayed within the viewport,
-and closing it left the session ready. This check exercised disk state rather
-than relying on saved RAM.
+The [diagnostic summary](results/2026-10-26-summary.json) records CPU,
+density, input, reconnect, and cold-restore checks, with historical reports
+linked separately. The latest CPU diagnostic observed 30/30 single-object
+selection transitions at 126 ms median and 176 ms p95 at 3456 × 1578 pixels.
+It exceeds the latency target; the full family/network qualification remains
+outstanding. Different workloads and measurement versions are not evidence
+of an optimization win.

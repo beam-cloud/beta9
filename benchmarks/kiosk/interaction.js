@@ -4,52 +4,6 @@
 (() => {
   const samples = [], pending = [], events=[], unexpectedInputs=[];
   let armedAction=null;
-  const transport={samples:[],channel:null,pending:new Map(),inputs:[],inputPending:new Map(),trace:false,seq:0};
-  if(window.RTCPeerConnection) {
-    const remote=RTCPeerConnection.prototype.setRemoteDescription, seen=new WeakSet();
-    RTCPeerConnection.prototype.setRemoteDescription=function(...args){
-      if(!seen.has(this)) {
-        seen.add(this);
-        this.addEventListener('datachannel',({channel})=>{
-          if(channel.label!=='input')return;
-          transport.channel=channel;
-          channel.addEventListener('message',event=>{
-            if(typeof event.data!=='string')return;
-            try {
-              const m=JSON.parse(event.data);
-              if(m.type==='beam_cpu_input') {
-                const item=transport.inputPending.get(m.data.seq);
-                if(item)transport.inputs.push({...item,...m.data,ack_ms:performance.now()});
-                transport.inputPending.delete(m.data.seq);return;
-              }
-              const start=transport.pending.get(m.data?.nonce);
-              if(m.type!=='beam_cpu_bench'||start===undefined)return;
-              const end=performance.now();
-              transport.samples.push({start_ms:start,end_ms:end,rtt_ms:end-start,server_ms:m.data.server_ms,wire:m.data.wire});
-              transport.pending.delete(m.data.nonce);
-            } catch(_) {}
-          });
-        });
-      }
-      return remote.apply(this,args);
-    };
-  }
-  if(window.RTCDataChannel) {
-    const send=RTCDataChannel.prototype.send;
-    RTCDataChannel.prototype.send=function(data){
-      if(transport.trace && this.label==='input' && typeof data==='string' && /^(kd|ku|m),/.test(data)) {
-        const seq=String(++transport.seq);
-        transport.inputPending.set(seq,{sent_ms:performance.now(),kind:data.split(',',1)[0]});
-        send.call(this,'BEAM_CPU_MARK,'+seq);
-      }
-      return send.call(this,data);
-    };
-  }
-  transport.ping=()=>{
-    const nonce=String(performance.now());transport.pending.set(nonce,performance.now());
-    transport.channel.send('BEAM_CPU_BENCH,'+nonce);
-  };
-  window.beamInteractionTransport=transport;
   let video, callback, observer, lastChange=0, expired=0;
   const frames=[], comparisons={}, probeCosts=[];
   const primary={rect:[0,0,1,1],previous:null,pending,samples};
