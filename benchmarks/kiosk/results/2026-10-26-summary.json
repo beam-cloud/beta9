@@ -186,7 +186,6 @@
       "cpu_used_percent": 14.196762141967621
     }
   ],
-  "detailed_reports": "https://github.com/beam-cloud/beta9/tree/5378017e61277d8a77609eca6aa0a770527b7bff/benchmarks/kiosk/results",
   "input_controls": {
     "passed": true,
     "cases": [
@@ -210,6 +209,8 @@
         "outside_and_escape_dismissal": true,
         "pinch_modifier": true
       }
-    ]
-  }
+    ],
+    "source_revision": "40ee67046c5d59e6aa7a2bd68277c45a76bfa6fd"
+  },
+  "historical_cpu_and_density_reports": "https://github.com/beam-cloud/beta9/tree/5378017e61277d8a77609eca6aa0a770527b7bff/benchmarks/kiosk/results"
 }

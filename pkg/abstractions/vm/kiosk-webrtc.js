@@ -26,6 +26,16 @@
       this.input = input;
       this.carry = {x: 0, y: 0};
       this.events = new AbortController();
+      const methods = ['send', '_isStreamLocked', '_calculateTouchCoordinates',
+        '_sendMouseState', '_flushCoalescedMouseMove', '_keysymHeld',
+        '_resetWheelLearning', '_isFingerScroll', '_fingerScroll',
+        'getWindowResolution', '_addWheelNotches', '_sendZoomNotches'];
+      const missing = methods.filter(name => typeof input[name] !== 'function');
+      if (!input.element?.addEventListener || missing.length) {
+        this.error = `Unsupported Selkies input client: ${missing.join(', ') || 'missing input surface'}. Rebuild the kiosk image with its pinned client.`;
+        console.warn(this.error);
+        return; // Keep the client's native input handlers and channel intact.
+      }
       // Desktop hover, press and release must share one ordered channel. An
       // unordered hover carrying a newer sequence can otherwise erase a click.
       this.motion = input.sendMotion;
@@ -95,8 +105,8 @@
       } else if (input._isFingerScroll(event)) {
         input._fingerScroll(event);
       } else {
-        // Pixel deltas include fractional trackpad motion. Integer deltas do
-        // not identify a detent wheel on macOS. Never learn a changing scale
+        // Pixel deltas include fractional trackpad motion. Their numeric
+        // precision cannot identify a detent wheel. Never learn a changing scale
         // from the smallest event in a gesture.
         const unit = event.deltaMode === 1 ? policy.wheelPixels / policy.wheelLines : 1;
         const page = event.deltaMode === 2 ? input.getWindowResolution() : [1, 1];

@@ -17,6 +17,7 @@ const input = {
   _keysymHeld: () => false,
   _resetWheelLearning: () => packets.push('reset'),
   _isFingerScroll: () => false,
+  _fingerScroll: () => {},
   _addWheelNotches: (y, x) => normalized.push([y, x]),
   _sendZoomNotches: n => zoom.push(['gesture', n]),
   getWindowResolution: () => [1440, 900],
@@ -67,3 +68,12 @@ window.webrtcInput = input;
 window.webrtcInput = input;
 event('wheel', {deltaY: -100});
 assert.deepEqual(normalized.at(-1), [-1, 0]);
+
+window.webrtcInput = null;
+const unsupported = {...input, _sendZoomNotches: undefined};
+window.webrtcInput = unsupported;
+assert.match(window.beamKiosk.input.error, /_sendZoomNotches/);
+const fallback = new Event('wheel', {cancelable: true});
+element.dispatchEvent(fallback);
+assert.equal(fallback.defaultPrevented, false, 'an incompatible client must retain native scrolling');
+assert.equal(unsupported.sendMotion, input.sendMotion, 'unsupported clients keep their native channel');
