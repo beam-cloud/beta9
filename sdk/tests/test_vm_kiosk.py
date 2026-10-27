@@ -1,11 +1,13 @@
 import importlib.machinery
 import importlib.util
 import json
+import runpy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
 import shutil
 import subprocess
+import textwrap
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -422,9 +424,6 @@ def test_mcp_readiness_cannot_be_held_open_by_continuous_keepalives(monkeypatch,
 
 
 def test_pinned_backend_pointer_fix_preserves_clicks_and_real_drags(tmp_path):
-    import runpy
-    import textwrap
-
     patcher = runpy.run_path(str(Path(vm_file).parent / "assets/kiosk-selkies-patch"))
     # Compact excerpt of Selkies 2.1.0's X11 dispatch. Test the generated event
     # stream without importing a Linux X11 backend into the SDK test process.
@@ -452,11 +451,11 @@ def test_pinned_backend_pointer_fix_preserves_clicks_and_real_drags(tmp_path):
                 self.button_mask = button_mask
         """)
     path = tmp_path / "input_handler.py"
-    edit = next(p[1:] for p in patcher["PATCHES"] if p[0] == path.name)
+    patches = patcher["PATCHES"][path.name]
     path.write_text(original)
-    patcher["patch_file"](path, *edit)
+    patcher["patch_file"](path, patches)
     patched = path.read_text()
-    patcher["patch_file"](path, *edit)
+    patcher["patch_file"](path, patches)
     assert path.read_text() == patched, "repeated image preparation must be idempotent"
     namespace = {"MOUSE_POSITION": "move"}
     exec(compile(patched, str(path), "exec"), namespace)
@@ -480,13 +479,10 @@ def test_pinned_backend_pointer_fix_preserves_clicks_and_real_drags(tmp_path):
         ]
     path.write_text(original.replace("button_mask != self.button_mask", "upstream_changed"))
     with pytest.raises(SystemExit, match="Selkies source changed"):
-        patcher["patch_file"](path, *edit)
+        patcher["patch_file"](path, patches)
 
 
 def test_focused_viewport_requires_controller_authority(tmp_path):
-    import runpy
-    import textwrap
-
     patcher = runpy.run_path(str(Path(vm_file).parent / "assets/kiosk-selkies-patch"))
     path = tmp_path / "webrtc_mode.py"
     path.write_text(
@@ -498,12 +494,10 @@ def test_focused_viewport_requires_controller_authority(tmp_path):
                 return "ordinary input"
         """)
     )
-    edits = [p[1:] for p in patcher["PATCHES"] if "viewport" in p[1]]
-    for edit in edits:
-        patcher["patch_file"](path, *edit)
+    patches = {k: v for k, v in patcher["PATCHES"][path.name].items() if "viewport" in k}
+    patcher["patch_file"](path, patches)
     patched = path.read_text()
-    for edit in edits:
-        patcher["patch_file"](path, *edit)
+    patcher["patch_file"](path, patches)
     assert path.read_text() == patched
     namespace = {"parse_resize_dims": lambda size: (3456, 1692) if size == "3456x1692" else None}
     exec(compile(patched, str(path), "exec"), namespace)
@@ -525,3 +519,32 @@ def test_focused_viewport_requires_controller_authority(tmp_path):
         "r,3456x1692", "primary", conn_id="allowed"
     )
     assert session.message("ordinary") == "ordinary input"
+
+
+def test_backend_patches_validate_a_whole_file_before_writing(tmp_path):
+    patcher = runpy.run_path(str(Path(vm_file).parent / "assets/kiosk-selkies-patch"))
+    path = tmp_path / "backend.py"
+    original = "first = 1\nsecond = 2\n"
+    path.write_text(original)
+    patches = {
+        "# first": {"first = 1": "first = 3  # first"},
+        "# second": {"upstream changed": "second = 4  # second"},
+    }
+    with pytest.raises(SystemExit, match="Selkies source changed"):
+        patcher["patch_file"](path, patches)
+    assert path.read_text() == original
+    patches["# second"] = {"second = 2": "second = 4  # second"}
+    patcher["patch_file"](path, patches)
+    patched = path.read_text()
+    patcher["patch_file"](path, patches)
+    assert path.read_text() == patched == "first = 3  # first\nsecond = 4  # second\n"
+
+
+def test_client_bootstrap_rejects_changed_html_without_writing(tmp_path):
+    patcher = runpy.run_path(str(Path(vm_file).parent / "assets/kiosk-selkies-patch"))
+    page = tmp_path / "selkies_web/index.html"
+    page.parent.mkdir()
+    page.write_text("<html><body></body></html>")
+    with pytest.raises(SystemExit, match="Selkies web client changed"):
+        patcher["patch_client"](tmp_path, 2)
+    assert page.read_text() == "<html><body></body></html>"

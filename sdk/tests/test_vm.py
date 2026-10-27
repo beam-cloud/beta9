@@ -452,6 +452,35 @@ def test_wait_checks_every_service_and_tcp_readiness(sandbox_vm):
     assert "[7681, 2222, 8080]" in calls[3][2]
 
 
+@pytest.mark.parametrize("window", [None, "0x0", "0x400001"])
+def test_desktop_readiness_waits_for_window_manager(sandbox_vm, monkeypatch, window):
+    vm, sandbox = sandbox_vm
+    vm.info["spec"].update(desktop=True)
+    connections = MagicMock()
+    monkeypatch.setattr("socket.create_connection", connections)
+    property_value = (
+        f"_NET_SUPPORTING_WM_CHECK(WINDOW): window id # {window}"
+        if window
+        else "_NET_SUPPORTING_WM_CHECK: no such atom on any window."
+    )
+    monkeypatch.setattr(subprocess, "check_output", lambda *_: property_value.encode())
+
+    def execute(command, *args):
+        process = MagicMock()
+        code = 0
+        if command == "python3":
+            try:
+                exec(compile(args[1], "<readiness>", "exec", optimize=2), {})
+            except SystemExit as error:
+                code = error.code
+        process.wait.return_value = code
+        return process
+
+    sandbox.process.exec.side_effect = execute
+    assert vm._services_ready(sandbox, vm_module.time.monotonic() + 10) == (window == "0x400001")
+    assert connections.called, "Listening ports alone do not make a desktop usable"
+
+
 def test_wait_for_exec_uses_live_connection_without_status_ticker(sandbox_vm, monkeypatch):
     vm, sandbox = sandbox_vm
     vm.info["status"] = "starting"

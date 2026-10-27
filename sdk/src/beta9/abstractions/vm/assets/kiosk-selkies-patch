@@ -3,11 +3,9 @@
 
 from pathlib import Path
 
-PATCHES = (
-    (
-        "webrtc_mode.py",
-        "# Beam: verify the realized root before trusting the resize cache.",
-        {
+PATCHES = {
+    "webrtc_mode.py": {
+        "# Beam: verify the realized root before trusting the resize cache.": {
             "from .display_utils import (resize_display,": "from .display_utils import (read_realized_root, resize_display,",
             "        self._last_resize_request: Optional[Tuple[int, int]] = None": (
                 "        self._last_resize_request: Optional[Tuple[int, int]] = None\n"
@@ -27,11 +25,7 @@ PATCHES = (
                 "                self._last_resize_root = (realized_w, realized_h)"
             ),
         },
-    ),
-    (
-        "webrtc_mode.py",
-        "# Beam: the focused kiosk controller owns the viewport.",
-        {
+        "# Beam: the focused kiosk controller owns the viewport.": {
             '        if msg == "REQUEST_KEYFRAME" and self.rtc_app is not None': (
                 "        # Beam: the focused kiosk controller owns the viewport.\n"
                 '        if isinstance(msg, str) and msg.startswith("KIOSK_VIEWPORT,"):\n'
@@ -45,22 +39,16 @@ PATCHES = (
                 '        if msg == "REQUEST_KEYFRAME" and self.rtc_app is not None'
             ),
         },
-    ),
-    (
-        "webrtc_mode.py",
-        "# Beam: retain the viewport for owner succession.",
-        {
+        "# Beam: retain the viewport for owner succession.": {
             '            self._display_owner_tabs[display_id or "primary"] = tab': (
                 "            # Beam: retain the viewport for owner succession.\n"
                 '            peer.setdefault("held_owner_messages", {})["r"] = "r," + size\n'
                 '            self._display_owner_tabs[display_id or "primary"] = tab'
             ),
         },
-    ),
-    (
-        "input_handler.py",
-        "# Beam: do not turn a stationary release into held-button motion.",
-        {
+    },
+    "input_handler.py": {
+        "# Beam: do not turn a stationary release into held-button motion.": {
             (
                 "        elif position_changed or button_mask != self.button_mask:\n"
                 "            # Button transitions warp unconditionally: an application may have\n"
@@ -74,29 +62,31 @@ PATCHES = (
                 "            self.send_mouse(MOUSE_POSITION, (final_x, final_y))"
             ),
         },
-    ),
-)
+    },
+}
 
 
-def patch_file(path, marker, edits):
-    source = path.read_text()
-    if marker in source:
-        return
-    for before, after in edits.items():
-        if source.count(before) != 1:
-            raise SystemExit(f"Selkies source changed; review kiosk fixes for {path.name}")
-        source = source.replace(before, after, 1)
+def patch_file(path, patches):
+    original = source = path.read_text()
+    for marker, edits in patches.items():
+        if marker in source:
+            continue
+        for before, after in edits.items():
+            if source.count(before) != 1:
+                raise SystemExit(f"Selkies source changed; review kiosk fixes for {path.name}")
+            source = source.replace(before, after, 1)
     compile(source, str(path), "exec")
-    path.write_text(source)
+    if source != original:
+        path.write_text(source)
 
 
 def patch(root):
-    for name, marker, edits in PATCHES:
+    for name, patches in PATCHES.items():
         paths = {p.resolve() for p in root.rglob(name)}
         if not paths:
             raise SystemExit(f"Selkies backend missing {name}; cannot install kiosk fixes")
         for path in paths:
-            patch_file(path, marker, edits)
+            patch_file(path, patches)
 
 
 def patch_client(root, pixel_ratio):
@@ -108,6 +98,8 @@ def patch_client(root, pixel_ratio):
     for page in pages:
         source = page.read_text()
         if script not in source:
+            if source.count("<head>") != 1:
+                raise SystemExit("Selkies web client changed; review kiosk bootstrap")
             page.write_text(source.replace("<head>", "<head>" + script, 1))
 
 

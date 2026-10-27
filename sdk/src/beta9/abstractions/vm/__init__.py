@@ -474,7 +474,7 @@ class VM:
         return self._set(self._api("GET", self._path()))
 
     def wait(self, timeout: float = 180, *, services: bool = False) -> "VM":
-        """Wait for exec readiness; services=True also waits for SSH and UI ports."""
+        """Wait for exec; services=True also waits for SSH, terminal and desktop readiness."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self.info:
@@ -505,12 +505,14 @@ class VM:
         raise TimeoutError("VM did not become ready; inspect vm get/logs")
 
     def _services_ready(self, sandbox, deadline):
+        spec = self.info["spec"]
+        kiosk = spec.get("kiosk") is not None
         services = [("beam-terminal.service", 7681)]
         for feature, unit, port in (
             ("ssh", "ssh.service", 2222),
             ("desktop", "beam-desktop.service", 8080),
         ):
-            if self.info["spec"].get(feature):
+            if spec.get(feature):
                 services.append((unit, port))
         try:
             # is-active with several units succeeds if any is active.
@@ -521,7 +523,7 @@ class VM:
                 check = sandbox.process.exec("systemctl", "is-active", "--quiet", unit)
                 if check.wait(min(10, remaining)) != 0:
                     return False
-            if self.info["spec"].get("kiosk") is not None:
+            if kiosk:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
@@ -541,6 +543,14 @@ class VM:
                 "import socket; "
                 f"[socket.create_connection(('127.0.0.1', p), 1).close() for p in {ports!r}]"
             )
+            if spec.get("desktop") and not kiosk:
+                # Xvnc accepts connections before xstartup publishes font
+                # resources and starts the window manager.
+                probe += (
+                    "; import re, subprocess; "
+                    "raise SystemExit(not re.search(rb'window id # 0x[1-9a-fA-F][0-9a-fA-F]*', "
+                    "subprocess.check_output(['xprop', '-root', '_NET_SUPPORTING_WM_CHECK'])))"
+                )
             remaining = deadline - time.monotonic()
             return (
                 remaining > 0
