@@ -317,3 +317,64 @@ def test_mcp_readiness_cannot_be_held_open_by_continuous_keepalives(monkeypatch,
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_pinned_backend_pointer_fix_preserves_clicks_and_real_drags(tmp_path):
+    import runpy
+    import textwrap
+
+    patcher = runpy.run_path(str(Path(vm_file).with_name("kiosk-selkies-patch")))
+    # Compact excerpt of Selkies 2.1.0's X11 dispatch. Test the generated event
+    # stream without importing a Linux X11 backend into the SDK test process.
+    original = textwrap.dedent("""\
+        class Pointer:
+            def __init__(self):
+                self.last_x = self.last_y = -1
+                self.button_mask = 0
+                self.events = []
+            def send_mouse(self, action, value):
+                self.events.append((action, value))
+            def dispatch(self, x, y, button_mask):
+                relative = False
+                position_changed = x != self.last_x or y != self.last_y
+                final_x, final_y = self.last_x, self.last_y = x, y
+                if relative:
+                    pass
+                elif position_changed or button_mask != self.button_mask:
+                    # Button transitions warp unconditionally: an application may have
+                    # moved the pointer, and a press must land where the client aims.
+                    self.send_mouse(MOUSE_POSITION, (final_x, final_y))
+                for bit in (1, 2, 4):
+                    if (button_mask ^ self.button_mask) & bit:
+                        self.send_mouse("press" if button_mask & bit else "release", bit)
+                self.button_mask = button_mask
+        """)
+    path = tmp_path / "input_handler.py"
+    path.write_text(original)
+    patcher["patch_file"](path, *patcher["PATCHES"][path.name])
+    patched = path.read_text()
+    patcher["patch_file"](path, *patcher["PATCHES"][path.name])
+    assert path.read_text() == patched, "repeated image preparation must be idempotent"
+    namespace = {"MOUSE_POSITION": "move"}
+    exec(compile(patched, str(path), "exec"), namespace)
+    for button in (1, 2, 4):
+        pointer = namespace["Pointer"]()
+        pointer.dispatch(50, 60, 0)
+        pointer.events.clear()
+        pointer.dispatch(50, 60, button)
+        pointer.dispatch(50, 60, 0)
+        assert pointer.events == [("move", (50, 60)), ("press", button), ("release", button)]
+        pointer.events.clear()
+        pointer.dispatch(50, 60, button)
+        pointer.dispatch(80, 90, button)
+        pointer.dispatch(100, 110, 0)
+        assert pointer.events == [
+            ("move", (50, 60)),
+            ("press", button),
+            ("move", (80, 90)),
+            ("move", (100, 110)),
+            ("release", button),
+        ]
+    path.write_text(original.replace("button_mask != self.button_mask", "upstream_changed"))
+    with pytest.raises(SystemExit, match="Selkies source changed"):
+        patcher["patch_file"](path, *patcher["PATCHES"][path.name])

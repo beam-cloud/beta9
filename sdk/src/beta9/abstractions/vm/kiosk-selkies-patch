@@ -1,47 +1,86 @@
 #!/usr/bin/python3
-"""Keep the pinned backend's resize cache consistent with external X11 resizes."""
+"""Guarded fixes for the pinned Selkies resize cache and X11 pointer transitions."""
 
 from pathlib import Path
 
-
-def patch(root):
-    paths = {p.resolve() for p in root.rglob("webrtc_mode.py")}
-    if not paths:
-        raise SystemExit("Selkies WebRTC backend missing; cannot install kiosk resize fix")
-    for path in paths:
-        source = path.read_text()
-        if "# Beam: verify the realized root before trusting the resize cache." in source:
-            continue
-        edits = (
+PATCHES = {
+    "webrtc_mode.py": (
+        "# Beam: verify the realized root before trusting the resize cache.",
+        (
             (
                 "from .display_utils import (resize_display,",
                 "from .display_utils import (read_realized_root, resize_display,",
             ),
             (
                 "        self._last_resize_request: Optional[Tuple[int, int]] = None",
-                "        self._last_resize_request: Optional[Tuple[int, int]] = None\n"
-                "        self._last_resize_root: Optional[Tuple[int, int]] = None",
+                (
+                    "        self._last_resize_request: Optional[Tuple[int, int]] = None\n"
+                    "        self._last_resize_root: Optional[Tuple[int, int]] = None"
+                ),
             ),
             (
-                '                logger.debug(f"Redundant resize request for primary to {target_w}x{target_h}. No action.")\n'
-                "                return",
-                "                # Beam: verify the realized root before trusting the resize cache.\n"
-                "                # SDK/agent X11 changes can bypass the running service.\n"
-                "                if IS_WAYLAND or self._last_resize_root == await read_realized_root((-1, -1)):\n"
-                "                    return",
+                (
+                    '                logger.debug(f"Redundant resize request for primary to {target_w}x{target_h}. No action.")\n'
+                    "                return"
+                ),
+                (
+                    "                # Beam: verify the realized root before trusting the resize cache.\n"
+                    "                # SDK/agent X11 changes can bypass the running service.\n"
+                    "                if IS_WAYLAND or self._last_resize_root == await read_realized_root((-1, -1)):\n"
+                    "                    return"
+                ),
             ),
             (
                 "                realized_w, realized_h = realized",
-                "                realized_w, realized_h = realized\n"
-                "                self._last_resize_root = (realized_w, realized_h)",
+                (
+                    "                realized_w, realized_h = realized\n"
+                    "                self._last_resize_root = (realized_w, realized_h)"
+                ),
             ),
-        )
-        for before, after in edits:
-            if source.count(before) != 1:
-                raise SystemExit("Selkies source changed; review the kiosk resize cache fix")
-            source = source.replace(before, after, 1)
-        compile(source, str(path), "exec")
-        path.write_text(source)
+        ),
+    ),
+    "input_handler.py": (
+        "# Beam: do not turn a stationary release into held-button motion.",
+        (
+            (
+                (
+                    "        elif position_changed or button_mask != self.button_mask:\n"
+                    "            # Button transitions warp unconditionally: an application may have\n"
+                    "            # moved the pointer, and a press must land where the client aims.\n"
+                    "            self.send_mouse(MOUSE_POSITION, (final_x, final_y))"
+                ),
+                (
+                    "        elif position_changed or (button_mask & ~self.button_mask):\n"
+                    "            # Beam: do not turn a stationary release into held-button motion.\n"
+                    "            # GTK/wx interpret that motion as drag selection, dismissing menus.\n"
+                    "            # Presses still re-anchor a pointer warped by the application.\n"
+                    "            self.send_mouse(MOUSE_POSITION, (final_x, final_y))"
+                ),
+            ),
+        ),
+    ),
+}
+
+
+def patch_file(path, marker, edits):
+    source = path.read_text()
+    if marker in source:
+        return
+    for before, after in edits:
+        if source.count(before) != 1:
+            raise SystemExit(f"Selkies source changed; review kiosk fixes for {path.name}")
+        source = source.replace(before, after, 1)
+    compile(source, str(path), "exec")
+    path.write_text(source)
+
+
+def patch(root):
+    for name, (marker, edits) in PATCHES.items():
+        paths = {p.resolve() for p in root.rglob(name)}
+        if not paths:
+            raise SystemExit(f"Selkies backend missing {name}; cannot install kiosk fixes")
+        for path in paths:
+            patch_file(path, marker, edits)
 
 
 if __name__ == "__main__":

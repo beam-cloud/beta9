@@ -210,7 +210,49 @@
         "pinch_modifier": true
       }
     ],
-    "source_revision": "40ee67046c5d59e6aa7a2bd68277c45a76bfa6fd"
+    "validation_date": "2026-10-27",
+    "frontend_source_revision": "69f5f322fc5139ab0c3a880f500968151858fbc2",
+    "backend_patch_sha256": "80d91406f96433ed92a61153ea85c4d4df928acf6df217bfaa63bfe69dc25e19"
   },
-  "historical_cpu_and_density_reports": "https://github.com/beam-cloud/beta9/tree/5378017e61277d8a77609eca6aa0a770527b7bff/benchmarks/kiosk/results"
+  "historical_cpu_and_density_reports": "https://github.com/beam-cloud/beta9/tree/5378017e61277d8a77609eca6aa0a770527b7bff/benchmarks/kiosk/results",
+  "kicad_input_controls": {
+    "passed": true,
+    "application": "KiCad 10 PCB Editor",
+    "dropdown_mouse_selection": 1.0,
+    "keyboard_zoom_in": 1.5,
+    "wheel_zoom_in": 1.2,
+    "wheel_reverse": 1.0,
+    "browser_wheel_css_pixels": [
+      -100,
+      100
+    ],
+    "reload_preserves_zoom": true,
+    "viewport_css": [
+      1728,
+      789
+    ],
+    "pixels": [
+      3456,
+      1578
+    ],
+    "reloaded_zoom": 1.0,
+    "mouse_popup_cycles": 10,
+    "alternating_mouse_selections": [
+      1.5,
+      1.0,
+      1.5,
+      1.0,
+      1.5,
+      1.0,
+      1.5,
+      1.0,
+      1.5,
+      1.0
+    ],
+    "native_parity_qualified": false,
+    "validation_date": "2026-10-27",
+    "popup_activation": "mouse only; no keyboard fallback",
+    "backend_patch_sha256": "80d91406f96433ed92a61153ea85c4d4df928acf6df217bfaa63bfe69dc25e19",
+    "frontend_source_revision": "69f5f322fc5139ab0c3a880f500968151858fbc2"
+  }
 }

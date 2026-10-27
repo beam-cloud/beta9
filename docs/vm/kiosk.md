@@ -179,6 +179,12 @@ This prevents a newer hover sequence on a separate channel from discarding a
 click or release while a native menu owns the pointer grab. Popup placement
 and dismissal remain native toolkit behavior.
 
+The pinned X11 backend also avoids synthesizing a held-button movement for a
+stationary release. That extra event made GTK/wx treat ordinary clicks as drag
+selection and dismiss dropdowns. Real drags retain their final movement, and
+presses still target the browser pointer after an application moves the guest
+cursor.
+
 ## Performance qualification
 
 The initial implementation remains experimental until the application-family
