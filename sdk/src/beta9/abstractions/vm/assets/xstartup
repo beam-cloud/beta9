@@ -11,7 +11,13 @@ Xft.dpi: 192
 Xft.antialias: 1
 Xft.hintstyle: hintslight
 Xft.rgba: none
+XTerm*faceName: Ubuntu Mono
+XTerm*faceSize: 12
+XTerm*renderFont: true
+XTerm*background: #17171c
+XTerm*foreground: #ededee
 EOF
+[ ! -f "$HOME/.Xresources" ] || xrdb -merge "$HOME/.Xresources"
 
 xsetroot -solid '#17171c'
 exec dbus-run-session -- openbox-session
