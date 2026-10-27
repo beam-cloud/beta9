@@ -1,19 +1,16 @@
 package pod
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/binary"
 	"encoding/pem"
 	"fmt"
 	"math/big"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -44,7 +41,7 @@ type PodTCPServer struct {
 	tailscale     *network.Tailscale
 	listener      net.Listener
 	tls           *tcpTLSHandler
-	vmICEHandler  atomic.Pointer[func(net.Conn)]
+	ice           *network.TCPICEHandler
 }
 
 func NewPodTCPServer(
@@ -64,6 +61,7 @@ func NewPodTCPServer(
 		containerRepo: containerRepo,
 		redisClient:   redisClient,
 		tailscale:     tailscale,
+		ice:           network.NewTCPICEHandler(tcpTLSReadTimeout, types.VMKioskMaxICEFrameBytes),
 	}
 }
 
@@ -168,16 +166,12 @@ func (pts *PodTCPServer) acceptConnections() {
 }
 
 func (pts *PodTCPServer) handleConnection(conn net.Conn) {
-	prepared, ice, err := prepareICEOrTLSConn(conn)
+	prepared, handled, err := pts.ice.Accept(conn)
 	if err != nil {
 		conn.Close()
 		return
 	}
-	if ice {
-		defer conn.Close()
-		if handler := pts.vmICEHandler.Load(); handler != nil {
-			(*handler)(prepared)
-		}
+	if handled {
 		return
 	}
 	conn = prepared
@@ -203,33 +197,10 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	}
 }
 
-// ICE-TCP (RFC 6544/4571) starts with a length-prefixed STUN Binding
-// request. Peek only four bytes: PostgreSQL clients send eight bytes then
-// wait for the SSL response, and direct TLS must reach its existing handler.
-func prepareICEOrTLSConn(conn net.Conn) (net.Conn, bool, error) {
-	reader := bufio.NewReader(conn)
-	_ = conn.SetReadDeadline(time.Now().Add(tcpTLSReadTimeout))
-	defer conn.SetReadDeadline(time.Time{})
-	first, err := reader.Peek(1)
-	if err != nil {
-		return nil, false, err
-	}
-	ice := false
-	if first[0] != 0x16 {
-		header, err := reader.Peek(4)
-		if err != nil {
-			return nil, false, err
-		}
-		size := binary.BigEndian.Uint16(header[:2])
-		ice = size >= 20 && size <= types.VMKioskMaxICEFrameBytes && binary.BigEndian.Uint16(header[2:]) == 1
-	}
-	return &bufferedReadConn{Conn: conn, reader: reader}, ice, nil
-}
-
 // SetVMICEHandler adds authenticated VM ICE routing to the existing L4 port.
 func (ps *GenericPodService) SetVMICEHandler(handler func(net.Conn)) {
 	if ps.tcpServer != nil {
-		ps.tcpServer.vmICEHandler.Store(&handler)
+		ps.tcpServer.ice.SetHandler(handler)
 	}
 }
 

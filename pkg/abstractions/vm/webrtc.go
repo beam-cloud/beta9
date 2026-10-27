@@ -156,7 +156,7 @@ func sessionSDP(sdp string, addresses []net.IP, port int) (string, map[string]st
 }
 
 func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
-	if c.Request().Method != http.MethodPost || c.Request().Header.Get("X-Beam-Kiosk-Action") != "webrtc" {
+	if c.Request().Method != http.MethodPost || c.Request().Header.Get(types.VMKioskActionHeader) != "webrtc" {
 		return echo.NewHTTPError(http.StatusForbidden, "explicit WebRTC registration required")
 	}
 	if w == nil || v.Spec.Kiosk == nil || v.Spec.Kiosk.Transport != types.VMKioskTransportWebRTC {

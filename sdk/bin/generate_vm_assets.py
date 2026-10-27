@@ -27,12 +27,14 @@ with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as arch
         "install",
         "xstartup",
     ):
-        path = directory / name
+        path = directory / name if name == "kiosk_config.py" else directory / "assets" / name
         contents = path.read_bytes()
         entry = tarfile.TarInfo(name)
         entry.size = len(contents)
         entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml") else 0o755
         archive.addfile(entry, io.BytesIO(contents))
 with (directory / "assets.tar.gz").open("wb") as output:
-    with gzip.GzipFile(filename="", fileobj=output, mode="wb", mtime=0, compresslevel=9) as compressed:
+    with gzip.GzipFile(
+        filename="", fileobj=output, mode="wb", mtime=0, compresslevel=9
+    ) as compressed:
         compressed.write(buffer.getvalue())

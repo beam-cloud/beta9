@@ -135,13 +135,8 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
 
 def test_vm_image_bundle_matches_guest_files():
     directory = Path(vm_module.__file__).parent
-    sources = {
-        path.name: path
-        for path in directory.iterdir()
-        if path.is_file()
-        and not path.name.startswith(".")
-        and (path.name == "kiosk_config.py" or path.suffix not in (".py", ".pyc", ".gz"))
-    }
+    sources = {path.name: path for path in (directory / "assets").iterdir() if path.is_file()}
+    sources["kiosk_config.py"] = directory / "kiosk_config.py"
     with tarfile.open(directory / "assets.tar.gz") as archive:
         assert set(archive.getnames()) == set(sources), "Run python bin/generate_vm_assets.py"
         for name, path in sources.items():
@@ -167,7 +162,7 @@ def test_vm_image_does_not_depend_on_client_archive_libraries(monkeypatch):
 
 
 def test_desktop_clipboard_patch_is_idempotent_and_checks_upstream(tmp_path):
-    installer = Path(vm_module.__file__).with_name("install").read_text()
+    installer = (Path(vm_module.__file__).parent / "assets/install").read_text()
     patch = installer.rsplit("  python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
     patch = patch.replace(
         "Path('/usr/share/kasmvnc/www/assets')", "Path(" + repr(str(tmp_path)) + ")"

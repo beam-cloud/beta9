@@ -284,30 +284,15 @@ func (s *Service) proxy(c echo.Context) error {
 
 	// Hold activity while a desktop/terminal websocket is open, even when the
 	// user is watching without sending input.
-	subPath := c.Param("*")
 	if v.Spec.Kiosk != nil && port == types.VMDesktopPort {
-		switch {
-		case subPath == "_beam/kiosk/webrtc/session":
-			return s.webrtc.register(c, v)
-		case subPath == "_beam/kiosk/webrtc.js":
-			c.Response().Header().Set("Cache-Control", "no-store")
-			return c.Blob(http.StatusOK, "text/javascript; charset=utf-8", kioskWebRTC)
-		case strings.HasPrefix(subPath, "stream/"):
-			subPath = strings.TrimPrefix(subPath, "stream/")
-		case subPath == "_beam/kiosk/status":
-			if c.Request().Method != http.MethodGet {
-				return echo.NewHTTPError(http.StatusMethodNotAllowed)
-			}
-			port, subPath = int(types.VMKioskStatusPort), "status"
-		case subPath == "_beam/kiosk/restart":
-			if c.Request().Method != http.MethodPost || c.Request().Header.Get("X-Beam-Kiosk-Action") != "restart" {
-				return echo.NewHTTPError(http.StatusForbidden, "explicit kiosk restart required")
-			}
-			port, subPath = int(types.VMKioskStatusPort), "restart"
-		}
+		return s.proxyKiosk(c, v)
 	}
+	return s.forwardVM(c, v, uint32(port), c.Param("*"))
+}
+
+func (s *Service) forwardVM(c echo.Context, v *types.VM, port uint32, subPath string) error {
 	c.SetParamNames("port", "subPath")
-	c.SetParamValues(strconv.Itoa(port), subPath)
+	c.SetParamValues(strconv.FormatUint(uint64(port), 10), subPath)
 	return s.runtime.ForwardVM(c, v.StubID, v.ContainerID)
 }
 

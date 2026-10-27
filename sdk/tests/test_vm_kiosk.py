@@ -19,7 +19,7 @@ from beta9.cli import vm as cli
 
 
 def supervisor():
-    path = str(Path(vm_file).with_name("kiosk"))
+    path = str(Path(vm_file).parent / "assets/kiosk")
     loader = importlib.machinery.SourceFileLoader("beam_kiosk_guest", path)
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
@@ -410,7 +410,7 @@ def test_pinned_backend_pointer_fix_preserves_clicks_and_real_drags(tmp_path):
     import runpy
     import textwrap
 
-    patcher = runpy.run_path(str(Path(vm_file).with_name("kiosk-selkies-patch")))
+    patcher = runpy.run_path(str(Path(vm_file).parent / "assets/kiosk-selkies-patch"))
     # Compact excerpt of Selkies 2.1.0's X11 dispatch. Test the generated event
     # stream without importing a Linux X11 backend into the SDK test process.
     original = textwrap.dedent("""\

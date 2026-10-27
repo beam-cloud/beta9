@@ -6,6 +6,11 @@ windows, and keeps the operating system shell out of the interface. Applications
 need no streaming integration. Dialogs, secondary windows, and file choosers
 remain part of the session.
 
+Authenticated tabs share the same application and each has full keyboard and
+pointer control. The first connected tab owns the framebuffer size; other tabs
+fit that stream, and ownership passes when it leaves. Connections remain subject
+to the gateway's configured WebRTC limits.
+
 Kiosk images use a pinned, checksum-verified Selkies 2.1.0 distribution and an
 application-only X11 window manager. They do not install or launch KasmVNC.
 With the shared TCP gateway enabled, kiosk sessions default to WebRTC over
@@ -189,10 +194,10 @@ cursor.
 
 The initial implementation remains experimental until the application-family
 matrix passes through the production forwarding path. Configuration requesting
-60 FPS is not evidence of delivered frame rate. See
-[`benchmarks/kiosk`](../../benchmarks/kiosk/README.md) for the optical frame/input
-probe, comparison procedure, and release gate. The current VM placement contract
-is CPU-only; hardware acceleration requires runtime work rather than silently
+60 FPS is not evidence of delivered frame rate. The initial gate requires near
+60 FPS, p95 frame intervals ≤25 ms, and p95 input response ≤80 ms with ≤20 ms RTT,
+across the application-family and network-recovery matrix. The current VM
+placement contract is CPU-only; hardware acceleration requires runtime work rather than silently
 changing a kiosk VM into a container.
 
 

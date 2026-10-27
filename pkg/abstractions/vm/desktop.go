@@ -24,7 +24,7 @@ var kioskWebRTC []byte
 
 func desktopEntry(c echo.Context, v *types.VM, port int) bool {
 	r := c.Request()
-	return v.Spec.Desktop && port == 8080 && c.Param("*") == "" &&
+	return v.Spec.Desktop && port == types.VMDesktopPort && c.Param("*") == "" &&
 		r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 

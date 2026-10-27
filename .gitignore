@@ -36,6 +36,7 @@ pyrightconfig.json
 docs/*.md
 .beta9ignore
 /benchmarks/runs/
+/benchmarks/kiosk/
 /artifacts/
 /metrics.jsonl
 /summary.json

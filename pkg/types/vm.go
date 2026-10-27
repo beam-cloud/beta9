@@ -110,6 +110,13 @@ const (
 	VMKioskMaxConfigBytes          = 64 << 10
 )
 
+// Kiosk browser protocol, routed only after VM traffic authentication.
+const (
+	VMKioskControlPath  = "/_beam/kiosk"
+	VMKioskStreamPath   = "/stream"
+	VMKioskActionHeader = "X-Beam-Kiosk-Action"
+)
+
 type VMKioskTransport string
 
 const (
