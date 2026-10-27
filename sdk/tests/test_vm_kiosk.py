@@ -340,6 +340,35 @@ def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatc
     assert commands == []
 
 
+def test_transient_settings_removal_keeps_display_live_and_accepts_replacement(
+    tmp_path, monkeypatch
+):
+    module = supervisor()
+    session = module.Session({"command": ["editor"]})
+    session.settings_file = tmp_path / ".xsettingsd"
+    session.settings_source = module.toolkit_settings("Xft/DPI 196608\n")
+    session.toolkit_file = tmp_path / "toolkit.conf"
+    session.toolkit_file.write_text(session.settings_source)
+    session.display_file = tmp_path / "display.json"
+    session.saved_size = (2880, 1800)
+    session.geometry_check = 0
+    session.processes["settings"] = SimpleNamespace(pid=123)
+    monkeypatch.setattr(module, "display_size", lambda _: (2048, 1536))
+    reload_settings = MagicMock()
+    monkeypatch.setattr(module.os, "kill", reload_settings)
+    reconfigure = MagicMock()
+    monkeypatch.setattr(module.subprocess, "run", reconfigure)
+    session.sync_display()
+    assert session.saved_size == (2048, 1536), "geometry persistence continues during replacement"
+    assert session.toolkit_file.read_text() == session.settings_source
+    reload_settings.assert_not_called()
+    session.settings_file.write_text("Xft/DPI 98304\n")
+    session.sync_display()
+    assert "Gdk/WindowScalingFactor 1\n" in session.toolkit_file.read_text()
+    reload_settings.assert_called_once_with(123, module.signal.SIGHUP)
+    reconfigure.assert_called_once()
+
+
 @pytest.mark.parametrize("sse", [True, False])
 def test_mcp_readiness_cannot_be_held_open_by_continuous_keepalives(monkeypatch, sse):
     from dataclasses import replace

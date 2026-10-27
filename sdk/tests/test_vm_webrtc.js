@@ -76,7 +76,10 @@ function checkDisplay() {
   video.play(); assert.equal(video.muted,true,'picture autoplays without requesting audio');
   video.width=1280;video.height=720;video.videoWidth=1280;video.videoHeight=720;video.readyState=2;videoEvents.playing();
   assert.equal(timers.size,0,'old-sized frames cannot reveal the application');
-  video.width=1920;video.height=1080;video.videoWidth=1920;video.videoHeight=1080;videoEvents.resize();timers.get(1)();
+  video.width=1920;video.height=1080;video.videoWidth=1920;video.videoHeight=1080;
+  displayWindow.innerWidth=displayWindow.innerHeight=0;videoEvents.resize();
+  assert.equal(timers.size,0,'a zero-sized embedded viewer must wait for its viewport');
+  displayWindow.innerWidth=960;displayWindow.innerHeight=540;videoEvents.resize();timers.get(1)();
   assert.equal(messages.at(-1).state,'ready');
   video.width=2560;videoEvents.dimensions();assert.equal(messages.at(-1).state,'ready','resize keeps the last picture visible');
   video.id='videoStream';video.width=1920;

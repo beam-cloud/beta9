@@ -511,7 +511,10 @@ class Session:
         )
 
     def sync_display(self):
-        source = self.settings_file.read_text()
+        try:
+            source = self.settings_file.read_text()
+        except FileNotFoundError:
+            source = self.settings_source
         if source != self.settings_source:
             temporary = self.toolkit_file.with_suffix(".tmp")
             temporary.write_text(toolkit_settings(source))
