@@ -498,15 +498,17 @@ def test_focused_viewport_requires_controller_authority(tmp_path):
                 return "ordinary input"
         """)
     )
-    edit = next(p for p in patcher["PATCHES"] if "focused kiosk controller" in p[1])
-    patcher["patch_file"](path, *edit[1:])
+    edits = [p[1:] for p in patcher["PATCHES"] if "viewport" in p[1]]
+    for edit in edits:
+        patcher["patch_file"](path, *edit)
     patched = path.read_text()
-    patcher["patch_file"](path, *edit[1:])
+    for edit in edits:
+        patcher["patch_file"](path, *edit)
     assert path.read_text() == patched
     namespace = {"parse_resize_dims": lambda size: (3456, 1692) if size == "3456x1692" else None}
     exec(compile(patched, str(path), "exec"), namespace)
     session = namespace["Session"]()
-    controller = object()
+    controller = {}
     session.rtc_app = SimpleNamespace(peer_connections={"allowed": controller, "viewer": object()})
     session._peer_tabs = {"allowed": "wide", "viewer": "read-only"}
     session._display_owner_tabs = {"primary": "narrow"}
@@ -518,6 +520,7 @@ def test_focused_viewport_requires_controller_authority(tmp_path):
         session.input_handler.on_message.assert_not_called()
     session.message("KIOSK_VIEWPORT,3456x1692", conn_id="allowed")
     assert session._display_owner_tabs == {"primary": "wide"}
+    assert controller["held_owner_messages"]["r"] == "r,3456x1692"
     session.input_handler.on_message.assert_called_once_with(
         "r,3456x1692", "primary", conn_id="allowed"
     )

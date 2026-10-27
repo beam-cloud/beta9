@@ -47,6 +47,17 @@ PATCHES = (
         },
     ),
     (
+        "webrtc_mode.py",
+        "# Beam: retain the viewport for owner succession.",
+        {
+            '            self._display_owner_tabs[display_id or "primary"] = tab': (
+                "            # Beam: retain the viewport for owner succession.\n"
+                '            peer.setdefault("held_owner_messages", {})["r"] = "r," + size\n'
+                '            self._display_owner_tabs[display_id or "primary"] = tab'
+            ),
+        },
+    ),
+    (
         "input_handler.py",
         "# Beam: do not turn a stationary release into held-button motion.",
         {

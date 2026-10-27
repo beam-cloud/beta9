@@ -78,6 +78,7 @@ async function check(path) {
 async function checkDisplay() {
   const messages=[],events={},videoEvents={},windowEvents={},timers=new Map();
   let focused=true;
+  const listeners={};
   class Media {
     constructor() { Object.assign(this,{style:{objectFit:'fill'},id:'stream',width:1920,height:1080,videoWidth:0,videoHeight:0,paused:true,readyState:0,muted:false}); }
     play() {
@@ -90,7 +91,7 @@ async function checkDisplay() {
   const video=new Media();
   class Observer { constructor(callback) { this.callback=callback; } observe(target,options) { if(options.attributes) videoEvents.dimensions=this.callback; } }
   const attributes=new Set();
-  const document={documentElement:{hasAttribute:()=>false,toggleAttribute:(name,on)=>on?attributes.add(name):attributes.delete(name)},hasFocus:()=>focused,hidden:false,readyState:'loading',querySelector:()=>video,addEventListener:(name,fn)=>{events[name]=fn;},removeEventListener:(name)=>{delete events[name];}};
+  const document={documentElement:{hasAttribute:()=>false,toggleAttribute:(name,on)=>on?attributes.add(name):attributes.delete(name)},hasFocus:()=>focused,hidden:false,readyState:'loading',querySelector:()=>video,addEventListener:(name,fn)=>{(listeners[name]||=new Set()).add(fn);events[name]=event=>[...listeners[name]].forEach(fn=>fn(event));},removeEventListener:(name,fn)=>{listeners[name]?.delete(fn);}};
   const displayWindow={HTMLMediaElement:Media,innerWidth:960,innerHeight:540,addEventListener(name,fn){windowEvents[name]=fn;}};
   vm.runInNewContext(source,{
     window:displayWindow, HTMLMediaElement:Media, document, MutationObserver:Observer,URL,
@@ -145,6 +146,13 @@ async function checkDisplay() {
   displayWindow.innerWidth=0;viewer.syncViewport();assert.equal(sent.length,3);
   displayWindow.innerWidth=5000;displayWindow.innerHeight=10000;viewer.syncViewport();
   assert.equal(sent.at(-1),'KIOSK_VIEWPORT,4080x4080','viewport requests retain the pinned encoder limit');
+  const requests=sent.length;
+  events.pointerdown({isTrusted:false});assert.equal(sent.length,requests);
+  events.pointerdown({isTrusted:true});
+  assert.equal(sent.length,requests+1,'real input can reclaim a viewport when embedded-browser focus is retained');
+  video.videoWidth=video.videoHeight=4080;
+  events.pointerdown({isTrusted:true});
+  assert.equal(sent.length,requests+1,'input on a fitted viewer does not send redundant resizes');
 }
 (async()=>{for(const path of ['/', '/vm/app/8080/']) await check(path);await checkDisplay();})()
  .catch(error=>{console.error(error);process.exitCode=1;});

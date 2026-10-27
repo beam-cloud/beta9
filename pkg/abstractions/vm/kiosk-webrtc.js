@@ -360,19 +360,23 @@
         if (document.hidden) release();
         else resize();
       });
+      for (const type of ['pointerdown', 'keydown']) document.addEventListener(type, event => {
+        if (event.isTrusted) this.syncViewport(true);
+      }, true);
       if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(document.documentElement);
       new MutationObserver(() => this.observeVideo()).observe(document, {childList: true, subtree: true});
       this.observeVideo();
     }
 
-    syncViewport() {
+    syncViewport(activate = false) {
       const input = this.input?.input;
       if (!input?.inputAttached || !document.hasFocus() || document.hidden ||
           !(window.innerWidth > 0 && window.innerHeight > 0) ||
           this.activePeer?.connectionState !== 'connected') return;
       const size = [window.innerWidth, window.innerHeight].map(value =>
         Math.min(policy.maxDimension, Math.floor(value * this.pixelRatio / 2) * 2)).join('x');
-      if (size === this.viewport) return;
+      const realized = `${this.video?.videoWidth}x${this.video?.videoHeight}`;
+      if (size === this.viewport && (!activate || size === realized)) return;
       input.send(`KIOSK_VIEWPORT,${size}`);
       this.viewport = size;
     }
@@ -386,8 +390,7 @@
       if (state === 'connected') {
         this.viewport = null;
         this.refreshDisplay();
-      }
-      else if (['disconnected', 'failed', 'closed'].includes(state)) {
+      } else if (['disconnected', 'failed', 'closed'].includes(state)) {
         this.notify('disconnected');
         this.refreshDisplay();
         this.recoveryTimer = setTimeout(() => location.reload(), policy.recoveryMs);
