@@ -164,6 +164,22 @@ is another reason the passing release gate remains mandatory.
 
 ## Native density and window roles
 
+`input.py` exercises real GTK 3 and Qt 5 controls through the protected browser
+URL: combo keyboard/mouse selection, nested menu hover, Escape/outside-click
+dismissal, repeated single-click activation, fractional and horizontal wheels,
+and pinch modifiers. Run only in an isolated VM with both native bindings:
+
+```sh
+CONFIG_PATH=~/.beam/config.ini uv run --with playwright python \
+  ../benchmarks/kiosk/input.py --vm application-test --context staging \
+  --output /tmp/kiosk/input.json
+```
+
+The management-forward flags below also work here. `--bootstrap-script` tests
+an exact local browser script while retaining the real gateway/media path.
+Single-click cycles honor each toolkit's configured double-click interval;
+these are functional checks, separate from the optical latency benchmark.
+
 `density.py` checks real GTK 3 and Qt 5 windows at browser DPR 1, 1.5, and 2.
 Run it on an isolated kiosk with the native bindings installed:
 

@@ -167,6 +167,18 @@ The pinned backend also verifies the realized X11 root before accepting a cached
 resize as already applied, so agent-side changes cannot leave reconnects stuck. Density and window rules use toolkit
 and X11 conventions and apply independently of the application command.
 
+Wheel input uses browser CSS units independently of render density. Fractional
+trackpad deltas accumulate without classifying integer Mac deltas as wheel
+detents; pixel, line, and page events have stable units. Chromium pinch and
+Safari gesture events target the guest's conventional Control+wheel zoom at
+the current pointer location. The guest application retains its keyboard
+shortcuts and zoom behavior; X11 applications receive whole wheel steps.
+
+Pointer hover, press, drag, and release share the ordered control channel.
+This prevents a newer hover sequence on a separate channel from discarding a
+click or release while a native menu owns the pointer grab. Popup placement
+and dismissal remain native toolkit behavior.
+
 ## Performance qualification
 
 The initial implementation remains experimental until the application-family

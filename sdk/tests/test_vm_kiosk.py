@@ -184,14 +184,15 @@ def test_kiosk_browser_readiness_routing_recovery_and_message_origins():
     )
 
 
-def test_webrtc_browser_registration_and_private_candidate_filtering():
+@pytest.mark.parametrize("script", ["test_vm_webrtc.js", "test_vm_kiosk_input.js"])
+def test_webrtc_browser_transport_and_input(script):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is required for the embedded browser client tests")
     subprocess.run(
         [
             node,
-            str(Path(__file__).with_name("test_vm_webrtc.js")),
+            str(Path(__file__).with_name(script)),
             str(Path(__file__).parents[2] / "pkg/abstractions/vm/kiosk-webrtc.js"),
         ],
         check=True,

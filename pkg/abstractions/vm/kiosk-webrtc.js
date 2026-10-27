@@ -11,7 +11,120 @@
     startupMs: 180000,
     recoveryMs: 8000,
     settleMs: 150,
+    wheelPixels: 100,
+    wheelLines: 3,
+    wheelIdleMs: 1000,
+    maxWheelNotches: 10,
+    wheelEpsilon: 1e-6,
+    pinchScale: 1.14,
+    controlLeft: 0xffe3,
+    controlRight: 0xffe4,
   });
+
+  class KioskInput {
+    constructor(input) {
+      this.input = input;
+      this.carry = {x: 0, y: 0};
+      this.events = new AbortController();
+      // Desktop hover, press and release must share one ordered channel. An
+      // unordered hover carrying a newer sequence can otherwise erase a click.
+      this.motion = input.sendMotion;
+      this.sendMotion = message => input.send(message);
+      input.sendMotion = this.sendMotion;
+      const options = {capture: true, passive: false, signal: this.events.signal};
+      input.element.addEventListener('wheel', event => this.wheel(event), options);
+      for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+        input.element.addEventListener(type, event => this.gesture(event), options);
+      }
+    }
+
+    close() {
+      this.events.abort();
+      if (this.input.sendMotion === this.sendMotion) this.input.sendMotion = this.motion;
+    }
+
+    position(event, force = false) {
+      if (!this.input._trackpadMode && !this.input._isStreamLocked()) {
+        const {x, y} = this.input;
+        this.input._calculateTouchCoordinates(event);
+        if (force || x !== this.input.x || y !== this.input.y) this.input._sendMouseState();
+        else this.input._flushCoalescedMouseMove();
+      }
+    }
+
+    notches(axis, pixels) {
+      if (!Number.isFinite(pixels)) return 0;
+      if (pixels * this.carry[axis] < 0) this.carry[axis] = 0;
+      const limit = policy.maxWheelNotches * policy.wheelPixels;
+      this.carry[axis] += Math.max(-limit, Math.min(limit, pixels));
+      const count = Math.floor((Math.abs(this.carry[axis]) + policy.wheelEpsilon) / policy.wheelPixels);
+      const sign = Math.sign(this.carry[axis]);
+      this.carry[axis] = sign * Math.max(0, Math.abs(this.carry[axis]) - count * policy.wheelPixels);
+      return count ? sign * count : 0;
+    }
+
+    zoom(delta, event) {
+      if (!Number.isFinite(delta)) return;
+      const steps = delta / Math.log(policy.pinchScale);
+      this.zoomCarry = (this.zoomCarry || 0) + Math.max(-policy.maxWheelNotches, Math.min(policy.maxWheelNotches, steps));
+      const count = Math.trunc(this.zoomCarry);
+      this.zoomCarry -= count;
+      if (count) {
+        this.position(event, true);
+        this.input._sendZoomNotches(count);
+      }
+    }
+
+    wheel(event) {
+      if (!this.input.inputAttached) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const input = this.input;
+      const pinch = event.ctrlKey && !input._keysymHeld(policy.controlLeft, policy.controlRight);
+      if (event.timeStamp - this.lastWheel > policy.wheelIdleMs || pinch !== this.pinch) {
+        input._resetWheelLearning();
+        this.carry = {x: 0, y: 0};
+        this.zoomCarry = 0;
+      }
+      this.lastWheel = event.timeStamp;
+      this.pinch = pinch;
+      this.position(event);
+      if (pinch) {
+        this.zoom(event.deltaMode === 0 ? -event.deltaY / policy.wheelPixels :
+          -event.deltaY * Math.log(policy.pinchScale) / policy.wheelLines, event);
+      } else if (input._isFingerScroll(event)) {
+        input._fingerScroll(event);
+      } else {
+        // Pixel deltas include fractional trackpad motion. Integer deltas do
+        // not identify a detent wheel on macOS. Never learn a changing scale
+        // from the smallest event in a gesture.
+        const unit = event.deltaMode === 1 ? policy.wheelPixels / policy.wheelLines : 1;
+        const page = event.deltaMode === 2 ? input.getWindowResolution() : [1, 1];
+        const y = this.notches('y', event.deltaY * page[1] * unit);
+        const x = this.notches('x', event.deltaX * page[0] * unit);
+        // Applications may warp the guest cursor while zooming. Re-anchor
+        // every emitted wheel event, even if the browser pointer did not move.
+        if (x || y) this.position(event, true);
+        input._addWheelNotches(y, x);
+      }
+    }
+
+    gesture(event) {
+      if (!this.input.inputAttached) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type === 'gesturestart') {
+        this.gestureScale = 1;
+        this.zoomCarry = 0;
+        this.position(event);
+      } else if (event.type === 'gesturechange' && event.scale > 0 && this.gestureScale) {
+        this.zoom(Math.log(event.scale / this.gestureScale), event);
+        this.gestureScale = event.scale;
+      } else if (event.type === 'gestureend') {
+        this.gestureScale = null;
+      }
+    }
+  }
 
   class KioskViewer {
     constructor() {
@@ -273,11 +386,26 @@
         return candidate.call(this, value);
       };
     }
+
+    installInput() {
+      let input;
+      Object.defineProperty(window, 'webrtcInput', {
+        configurable: true,
+        get: () => input,
+        set: value => {
+          if (input === value) return;
+          this.input?.close();
+          input = value;
+          this.input = value ? new KioskInput(value) : null;
+        },
+      });
+    }
   }
 
   const viewer = window.beamKiosk = new KioskViewer();
   viewer.installTransport();
   if (typeof document === 'undefined') return;
+  viewer.installInput();
   const mount = () => viewer.mount();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, {once: true});
   else mount();

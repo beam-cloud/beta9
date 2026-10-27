@@ -186,5 +186,30 @@
       "cpu_used_percent": 14.196762141967621
     }
   ],
-  "detailed_reports": "https://github.com/beam-cloud/beta9/tree/5378017e61277d8a77609eca6aa0a770527b7bff/benchmarks/kiosk/results"
+  "detailed_reports": "https://github.com/beam-cloud/beta9/tree/5378017e61277d8a77609eca6aa0a770527b7bff/benchmarks/kiosk/results",
+  "input_controls": {
+    "passed": true,
+    "cases": [
+      {
+        "toolkit": "gtk",
+        "passed": true,
+        "popup_cycles": 10,
+        "button_clicks": 21,
+        "fractional_wheel_steps": 1,
+        "nested_menu": true,
+        "outside_and_escape_dismissal": true,
+        "pinch_modifier": true
+      },
+      {
+        "toolkit": "qt",
+        "passed": true,
+        "popup_cycles": 10,
+        "button_clicks": 21,
+        "fractional_wheel_steps": 1,
+        "nested_menu": true,
+        "outside_and_escape_dismissal": true,
+        "pinch_modifier": true
+      }
+    ]
+  }
 }
