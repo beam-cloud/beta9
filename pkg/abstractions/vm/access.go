@@ -285,6 +285,27 @@ func (s *Service) proxy(c echo.Context) error {
 	// Hold activity while a desktop/terminal websocket is open, even when the
 	// user is watching without sending input.
 	subPath := c.Param("*")
+	if v.Spec.Kiosk != nil && port == 8080 {
+		switch {
+		case subPath == "_beam/kiosk/webrtc/session":
+			return s.registerICE(c, v)
+		case subPath == "_beam/kiosk/webrtc.js":
+			c.Response().Header().Set("Cache-Control", "no-store")
+			return c.Blob(http.StatusOK, "text/javascript; charset=utf-8", kioskWebRTC)
+		case strings.HasPrefix(subPath, "stream/"):
+			subPath = strings.TrimPrefix(subPath, "stream/")
+		case subPath == "_beam/kiosk/status":
+			if c.Request().Method != http.MethodGet {
+				return echo.NewHTTPError(http.StatusMethodNotAllowed)
+			}
+			port, subPath = int(types.VMKioskStatusPort), "status"
+		case subPath == "_beam/kiosk/restart":
+			if c.Request().Method != http.MethodPost || c.Request().Header.Get("X-Beam-Kiosk-Action") != "restart" {
+				return echo.NewHTTPError(http.StatusForbidden, "explicit kiosk restart required")
+			}
+			port, subPath = int(types.VMKioskStatusPort), "restart"
+		}
+	}
 	c.SetParamNames("port", "subPath")
 	c.SetParamValues(strconv.Itoa(port), subPath)
 	return s.runtime.ForwardVM(c, v.StubID, v.ContainerID)
@@ -406,6 +427,12 @@ func (s *Service) urls(v *types.VM) {
 	v.TerminalURL = v.URLs[7681]
 	if v.Spec.Desktop {
 		v.DesktopURL = v.URLs[8080]
+	}
+	if v.Spec.Kiosk != nil {
+		v.KioskURL = v.DesktopURL
+		if v.Spec.Kiosk.MCP != nil && v.URLs[v.Spec.Kiosk.MCP.Port] != "" {
+			v.MCPURL = strings.TrimRight(v.URLs[v.Spec.Kiosk.MCP.Port], "/") + v.Spec.Kiosk.MCP.Path
+		}
 	}
 }
 

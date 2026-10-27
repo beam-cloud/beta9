@@ -1,0 +1,763 @@
+#!/usr/bin/python3
+"""Supervise an application-only X11 session and its browser stream.
+
+The display is private to this application, including all of its dialogs and
+secondary windows. The HTTP control listener is tunnel-only; Beam's gateway
+authenticates browser requests before forwarding them here.
+"""
+
+import base64
+import collections
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import signal
+import subprocess
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+STATUS_PORT = 8081
+ASSETS = Path("/opt/beam-vm")
+RUNTIME = Path("/run/beam-desktop")
+
+
+def mcp_ready(port, path):
+    """Probe initialization, including servers that answer using SSE."""
+    endpoint = f"http://127.0.0.1:{port}{path}"
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "beam-kiosk-readiness", "version": "1"},
+            },
+        }
+    ).encode()
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    try:
+        with urlopen(Request(endpoint, data=body, headers=headers), timeout=2) as response:
+            session = response.headers.get("Mcp-Session-Id")
+            if "text/event-stream" in response.headers.get("Content-Type", ""):
+                message = None
+                data_lines, size = [], 0
+                for _ in range(128):
+                    line = response.readline(65537)
+                    size += len(line)
+                    if not line or size > 65536:
+                        break
+                    if not line.strip() and data_lines:
+                        candidate = json.loads(b"\n".join(data_lines))
+                        data_lines = []
+                        if candidate.get("id") == 1:
+                            message = candidate
+                            break
+                    elif line.startswith(b"data:"):
+                        data_lines.append(line[5:].lstrip(b" ").rstrip(b"\r\n"))
+            else:
+                message = json.loads(response.read(65537))
+        if (
+            not isinstance(message, dict)
+            or message.get("id") != 1
+            or not isinstance(message.get("result"), dict)
+        ):
+            return False
+        version = message["result"].get("protocolVersion")
+        if not version:
+            return False
+        headers["MCP-Protocol-Version"] = version
+        if session:
+            headers["Mcp-Session-Id"] = session
+        initialized = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
+        with urlopen(Request(endpoint, data=initialized, headers=headers), timeout=2):
+            pass
+        if session:
+            try:
+                with urlopen(Request(endpoint, method="DELETE", headers=headers), timeout=2):
+                    pass
+            except HTTPError as error:
+                if error.code != 405:
+                    return False
+        return True
+    except (OSError, ValueError, TypeError, AttributeError, URLError):
+        return False
+
+
+def visible_windows(env):
+    result = subprocess.run(
+        ["xprop", "-root", "_NET_CLIENT_LIST"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    return re.findall(r"0x[0-9a-fA-F]+", result.stdout) if result.returncode == 0 else []
+
+
+def primary_window(windows, env):
+    # First-run wizards, splash screens, and transient dialogs can map before
+    # the editor. They must not become the fullscreen application window.
+    for window in windows:
+        result = subprocess.run(
+            ["xprop", "-id", window, "_NET_WM_WINDOW_TYPE", "WM_TRANSIENT_FOR"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode != 0:
+            continue
+        if re.search(r"WM_TRANSIENT_FOR.*0x[1-9a-fA-F]", result.stdout):
+            continue
+        kind = result.stdout.splitlines()[0] if result.stdout else ""
+        if "_NET_WM_WINDOW_TYPE_NORMAL" in kind or "not found" in kind:
+            return window
+    return None
+
+
+def toolkit_settings(source):
+    """Publish both font DPI and GTK widget scale for a browser density.
+
+    Xft/DPI alone doubles text while leaving toolbar icons and pane minimums
+    at half size on Retina. GTK needs the matching unscaled font DPI too.
+    """
+    match = re.search(r"^Xft/DPI\s+(\d+)", source, re.MULTILINE)
+    dpi = int(match[1]) if match else 96 * 1024
+    dpi = min(384 * 1024, max(96 * 1024, dpi))
+    scale = max(1, round(dpi / (96 * 1024)))
+    source = re.sub(
+        r"^(?:Xft/(?:DPI|RGBA)|Gdk/(?:WindowScalingFactor|UnscaledDPI))\s+.*\n?",
+        "",
+        source,
+        flags=re.MULTILINE,
+    )
+    return source.rstrip() + (
+        f'\nXft/DPI {dpi}\nXft/RGBA "none"\n'
+        f"Gdk/WindowScalingFactor {scale}\nGdk/UnscaledDPI {round(dpi / scale)}\n"
+    )
+
+
+def saved_display(path, legacy_scale=2):
+    try:
+        value = json.loads(path.read_text())
+        width, height = value["width"], value["height"]
+        scale = value.get("pixel_ratio", legacy_scale)
+        if type(width) is int and type(height) is int and type(scale) is int and 1 <= scale <= 4:
+            width, height = round(width * 2 / scale), round(height * 2 / scale)
+            if 320 <= width <= 8192 and 200 <= height <= 8192:
+                return width, height
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    # A 1920x1080 logical desktop, rendered at the session's 2x density.
+    return 3840, 2160
+
+
+def display_size(env):
+    result = subprocess.run(
+        ["xprop", "-root", "_NET_DESKTOP_GEOMETRY"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    match = re.search(r"=\s*(\d+),\s*(\d+)", result.stdout)
+    return (int(match[1]), int(match[2])) if match else None
+
+
+def undecorate(window, env, decorated=False):
+    # Openbox requires the property's type to be _MOTIF_WM_HINTS itself.
+    # xprop's 32c setter creates CARDINAL, which Openbox correctly ignores.
+    # Isolate Xlib in a helper so a window closing during this operation cannot
+    # invoke Xlib's fatal error handler in the supervisor process.
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import ctypes as c, sys
+x = c.CDLL('libX11.so.6')
+x.XOpenDisplay.argtypes = [c.c_char_p]; x.XOpenDisplay.restype = c.c_void_p
+x.XInternAtom.argtypes = [c.c_void_p, c.c_char_p, c.c_int]; x.XInternAtom.restype = c.c_ulong
+x.XChangeProperty.argtypes = [c.c_void_p,c.c_ulong,c.c_ulong,c.c_ulong,c.c_int,c.c_int,c.c_void_p,c.c_int]
+x.XSync.argtypes = [c.c_void_p,c.c_int]; x.XCloseDisplay.argtypes = [c.c_void_p]
+x.XDefaultRootWindow.argtypes = [c.c_void_p]; x.XDefaultRootWindow.restype = c.c_ulong
+d = x.XOpenDisplay(None)
+if not d: raise SystemExit('Private application display unavailable')
+atom = x.XInternAtom(d, b'_MOTIF_WM_HINTS', 0)
+data = (c.c_ulong * 5)(2,0,int(sys.argv[2]),0,0)
+x.XChangeProperty(d, int(sys.argv[1],16), atom, atom, 32, 0, data, 5)
+if int(sys.argv[2]):
+    # Openbox's application rule also sets its own undecorated state.
+    class Payload(c.Union):
+        _fields_ = [("b",c.c_char*20),("s",c.c_short*10),("l",c.c_long*5)]
+    class Message(c.Structure):
+        _fields_ = [("type",c.c_int),("serial",c.c_ulong),("send_event",c.c_int),
+                    ("display",c.c_void_p),("window",c.c_ulong),("message_type",c.c_ulong),
+                    ("format",c.c_int),("data",Payload)]
+    class Event(c.Union):
+        _fields_ = [("message",Message),("pad",c.c_long*24)]
+    event=Event(); event.message.type=33; event.message.display=d
+    event.message.window=int(sys.argv[1],16); event.message.format=32
+    event.message.message_type=x.XInternAtom(d,b'_NET_WM_STATE',0)
+    event.message.data.l[0]=0
+    event.message.data.l[1]=x.XInternAtom(d,b'_OB_WM_STATE_UNDECORATED',0)
+    event.message.data.l[3]=2
+    x.XSendEvent.argtypes=[c.c_void_p,c.c_ulong,c.c_int,c.c_long,c.POINTER(Event)]
+    x.XSendEvent(d,x.XDefaultRootWindow(d),0,(1<<19)|(1<<20),c.byref(event))
+x.XSync(d, 0); x.XCloseDisplay(d)
+""",
+            window,
+            "1" if decorated else "0",
+        ],
+        env=env,
+        check=True,
+        timeout=2,
+    )
+
+
+def stop_process(process):
+    if process is None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=3)
+
+
+def restore_transient_window(window, env):
+    # A few applications mark custom transient dialogs as NORMAL. Undo the
+    # normal-window rule; Openbox retains their pre-maximized geometry.
+    info = subprocess.run(
+        ["xprop", "-id", window, "_NET_WM_WINDOW_TYPE", "WM_TRANSIENT_FOR", "_NET_WM_STATE"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    if (
+        info.returncode == 0
+        and "_NET_WM_WINDOW_TYPE_NORMAL" in info.stdout
+        and re.search(r"WM_TRANSIENT_FOR.*0x[1-9a-fA-F]", info.stdout)
+    ):
+        if (
+            "_NET_WM_STATE_MAXIMIZED" not in info.stdout
+            and "_OB_WM_STATE_UNDECORATED" not in info.stdout
+        ):
+            return True
+        subprocess.run(
+            ["wmctrl", "-ir", window, "-b", "remove,maximized_vert,maximized_horz"],
+            env=env,
+            check=True,
+            timeout=2,
+        )
+        undecorate(window, env, decorated=True)
+        return True
+    return False
+
+
+class Session:
+    def __init__(self, config):
+        self.config = config
+        self.lock = threading.Lock()
+        self.restart = threading.Event()
+        self.stopping = threading.Event()
+        self.processes = []
+        self.application = None
+        self.primary = None
+        self.managed_windows = set()
+        self.floating_windows = set()
+        self.mcp = None
+        self.failures = collections.deque()
+        self.mcp_failures = collections.deque()
+        self.state = {
+            "state": "starting",
+            "application": "starting",
+            "mcp": "starting" if config.get("mcp") else "disabled",
+            "windows": 0,
+            "error": "",
+            "backend": "selkies",
+            "experimental": True,
+            "transport": config.get("transport", "websockets"),
+        }
+        self.env = dict(
+            os.environ,
+            HOME="/root",
+            DISPLAY=":1",
+            XDG_CONFIG_HOME="/root/.config",
+            QT_ENABLE_HIGHDPI_SCALING="1",
+            QT_SCALE_FACTOR_ROUNDING_POLICY="PassThrough",
+        )
+        self.env.pop("BEAM_VM_KIOSK", None)
+        self.env.update(config.get("env", {}))
+        # These identify this exact display and cannot be redirected by app env.
+        self.env.update(DISPLAY=":1", XAUTHORITY=str(RUNTIME / ".Xauthority"))
+        manager = ASSETS / "openbox/bin/openbox"
+        self.window_manager = str(manager) if manager.exists() else "openbox"
+
+    def update(self, **fields):
+        with self.lock:
+            self.state.update(fields)
+
+    def status(self):
+        with self.lock:
+            return dict(self.state)
+
+    def spawn(self, command, **options):
+        process = subprocess.Popen(command, env=self.env, start_new_session=True, **options)
+        self.processes.append(process)
+        return process
+
+    def retry_allowed(self, failures):
+        now = time.monotonic()
+        while failures and now - failures[0] > 60:
+            failures.popleft()
+        failures.append(now)
+        return len(failures) <= 3
+
+    def launch(self):
+        stop_process(self.mcp)
+        stop_process(self.application)
+        self.update(
+            state="starting",
+            application="starting",
+            windows=0,
+            error="",
+            mcp="starting" if self.config.get("mcp") else "disabled",
+        )
+        self.application = self.spawn(
+            self.config["command"], cwd=self.config.get("cwd", "/workspace")
+        )
+        self.mcp = None
+        self.started = time.monotonic()
+        self.was_visible = False
+        self.primary = None
+        self.managed_windows = set()
+        self.floating_windows = set()
+        self.mcp_failures.clear()
+
+    def fit_application_windows(self, windows):
+        # A new editor/document is another top-level application surface.
+        # Dialogs, utility windows and transient normal windows stay native.
+        self.managed_windows.intersection_update(windows)
+        self.floating_windows.intersection_update(windows)
+        for window in windows:
+            try:
+                if not primary_window([window], self.env):
+                    self.managed_windows.discard(window)
+                    if restore_transient_window(window, self.env):
+                        self.floating_windows.add(window)
+                    continue
+                self.floating_windows.discard(window)
+                if window in self.managed_windows:
+                    continue
+                # Openbox applies decoration and maximization rules before
+                # mapping. This also repairs applications that undo the state.
+                subprocess.run(
+                    [
+                        "wmctrl",
+                        "-ir",
+                        window,
+                        "-b",
+                        "add,maximized_vert,maximized_horz",
+                    ],
+                    env=self.env,
+                    check=True,
+                    timeout=2,
+                )
+                self.managed_windows.add(window)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                # Window IDs are observations, not leases: a menu, popup or
+                # editor can disappear between discovery and the X11 request.
+                # Retry surviving windows without failing the application.
+                continue
+        if self.primary not in windows:
+            self.primary = next((w for w in windows if w in self.managed_windows), None)
+
+    def launch_mcp(self):
+        if self.config.get("mcp"):
+            self.mcp = self.spawn(
+                self.config["mcp"]["command"], cwd=self.config.get("cwd", "/workspace")
+            )
+            self.update(mcp="starting")
+
+    def control_server(self):
+        session = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def reply(self, code, value):
+                body = json.dumps(value).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path != "/status":
+                    self.reply(404, {"error": "not found"})
+                    return
+                self.reply(200, session.status())
+
+            def do_POST(self):
+                if self.path != "/restart" or self.headers.get("X-Beam-Kiosk-Action") != "restart":
+                    self.reply(403, {"error": "explicit restart required"})
+                    return
+                session.restart.set()
+                self.reply(202, {"state": "restarting"})
+
+        # Published and private VM routes reach the guest interface. Port 8081
+        # is bound as tunnel-only by VMSpec and never has a public route.
+        server = ThreadingHTTPServer(("0.0.0.0", STATUS_PORT), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server
+
+    def run(self):
+        server = self.control_server()
+        try:
+            RUNTIME.mkdir(parents=True, exist_ok=True)
+            settings_file = Path(self.env["HOME"]) / ".xsettingsd"
+            if not settings_file.exists():
+                settings_file.write_text("Xft/Antialias 1\nXft/DPI 98304\n")
+            # Keep one logical desktop density for the lifetime of the app.
+            # Changing it after toolkit initialization leaves cached window,
+            # font and icon metrics inconsistent in many ordinary X11 apps.
+            previous_settings = settings_file.read_text()
+            previous_dpi = re.search(r"^Xft/DPI\s+(\d+)", previous_settings, re.MULTILINE)
+            legacy_scale = max(1, round(int(previous_dpi[1]) / (96 * 1024))) if previous_dpi else 1
+            settings_source = re.sub(
+                r"^Xft/DPI\s+.*$", "Xft/DPI 196608", previous_settings, flags=re.MULTILINE
+            )
+            if not re.search(r"^Xft/DPI ", settings_source, re.MULTILINE):
+                settings_source += "\nXft/DPI 196608\n"
+            settings_file.write_text(settings_source)
+            initial_settings = toolkit_settings(settings_source)
+            initial_dpi = (
+                int(re.search(r"^Xft/DPI (\d+)", initial_settings, re.MULTILINE)[1]) // 1024
+            )
+            display_file = Path(self.env["HOME"]) / ".config/beam-vm/kiosk-display.json"
+            display_file.parent.mkdir(parents=True, exist_ok=True)
+            saved_size = saved_display(display_file, legacy_scale=legacy_scale)
+            display_file.write_text(
+                json.dumps({"width": saved_size[0], "height": saved_size[1], "pixel_ratio": 2})
+            )
+            geometry_check = 0
+            subprocess.run(
+                ["xauth", "-f", self.env["XAUTHORITY"], "add", ":1", ".", secrets.token_hex(16)],
+                check=True,
+                timeout=5,
+            )
+            display = self.spawn(
+                [
+                    "Xvfb",
+                    ":1",
+                    "-screen",
+                    "0",
+                    "8192x8192x24",
+                    "-nolisten",
+                    "tcp",
+                    "-dpi",
+                    str(initial_dpi),
+                    "-auth",
+                    self.env["XAUTHORITY"],
+                    "-noreset",
+                    "-shmem",
+                    "-s",
+                    "0",
+                    "-dpms",
+                    "+extension",
+                    "RANDR",
+                    "+extension",
+                    "DAMAGE",
+                    "+extension",
+                    "XFIXES",
+                ]
+            )
+            deadline = time.monotonic() + 30
+            while subprocess.run(
+                ["xdpyinfo"], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            ).returncode:
+                if display.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError(
+                        "Application display failed to start; inspect beam-desktop.service logs"
+                    )
+                if self.stopping.wait(0.1):
+                    return
+            subprocess.run(
+                ["selkies", "resize", f"{saved_size[0]}x{saved_size[1]}"],
+                env=self.env,
+                check=True,
+                timeout=10,
+            )
+            # The resize CLI starts with a 96-DPI physical screen. Set it
+            # before any toolkit initializes; font DPI alone is insufficient.
+            subprocess.run(
+                ["xrandr", "--dpi", str(initial_dpi)], env=self.env, check=True, timeout=2
+            )
+            subprocess.run(["xsetroot", "-solid", "#111113"], env=self.env, check=True, timeout=2)
+            subprocess.run(
+                ["xrdb", "-merge"],
+                input=f"Xft.dpi: {initial_dpi}\n",
+                text=True,
+                env=self.env,
+                check=True,
+                timeout=2,
+            )
+            # Selkies updates ~/.xsettingsd when the browser's DPI changes.
+            # GTK/wx clients need an XSETTINGS owner to receive those updates.
+            toolkit_file = RUNTIME / "xsettingsd.conf"
+            toolkit_file.write_text(initial_settings)
+            settings_daemon = self.spawn(["xsettingsd", "--config", str(toolkit_file)])
+            wm = self.spawn(
+                [self.window_manager, "--config-file", str(ASSETS / "kiosk-openbox.xml")]
+            )
+            self.spawn(["pulseaudio", "--daemonize=no", "--exit-idle-time=-1", "--disallow-exit"])
+            transport = self.config.get("transport", "websockets")
+            rtc_options = []
+            if transport == "webrtc":
+                # No public TURN service or shared relay credentials. The Beam
+                # TCP gateway routes authenticated ICE to this private port.
+                rtc_config = RUNTIME / "rtc.json"
+                rtc_config.write_text('{"iceServers":[]}')
+                rtc_options = [
+                    "--webrtc-tcp-mux-port=8443",
+                    "--webrtc-ice-lite=true",
+                    f"--rtc-config-json={rtc_config}",
+                ]
+            stream = self.spawn(
+                [
+                    "selkies",
+                    "--addr=0.0.0.0",
+                    "--port=8080",
+                    "--enable-basic-auth=false",
+                    f"--mode={transport}",
+                    "--encoder=h264enc",
+                    "--framerate=60-60",
+                    # Encode the first changed frame clearly. CBR cleanup can take
+                    # seconds to refine a high-density desktop; late paint-over
+                    # keyframes also create bursts after the user stops moving.
+                    # Keep a steady RTP cadence so idle gaps do not grow the
+                    # receiver's jitter buffer before the next interaction.
+                    "--video-bitrate=24000,3000-24000",
+                    "--rate-control-mode=crf",
+                    "--video-crf=18-18",
+                    "--video-fullcolor=true",
+                    "--video-streaming-mode=true|locked",
+                    "--use-paint-over-quality=false|locked",
+                    "--backpressure-queue-size=2",
+                    "--enable-resize=true|locked",
+                    "--use-css-scaling=false|locked",
+                    "--scaling-dpi=192",
+                    "--use-browser-cursors=true",
+                    "--ui-title=Application",
+                    "--ui-show-sidebar=false",
+                    "--ui-show-logo=false",
+                    "--ui-show-core-buttons=false",
+                    "--ui-show-connection-indicator=false",
+                    "--keyboard-shortcuts=false",
+                    "--second-screen=false",
+                    "--enable-sharing=false",
+                    "--microphone-enabled=false",
+                    "--webcam-enabled=false",
+                    "--gamepad-enabled=false",
+                ]
+                + rtc_options
+            )
+            # Wait for the window manager, otherwise a fast application can map
+            # before its maximize/no-decoration rules have been installed.
+            deadline = time.monotonic() + 10
+            while not visible_wm(self.env):
+                if wm.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Application window manager failed to start")
+                if self.stopping.wait(0.1):
+                    return
+            self.launch()
+            while not self.stopping.wait(0.25):
+                # Selkies publishes new font DPI and signals this daemon when
+                # a browser connects or changes density. Complete that update
+                # with GTK's widget-scale settings without modifying Selkies.
+                try:
+                    latest_settings = settings_file.read_text()
+                except FileNotFoundError:
+                    latest_settings = settings_source
+                if latest_settings != settings_source:
+                    temporary = toolkit_file.with_suffix(".tmp")
+                    temporary.write_text(toolkit_settings(latest_settings))
+                    temporary.replace(toolkit_file)
+                    os.kill(settings_daemon.pid, signal.SIGHUP)
+                    subprocess.run(
+                        [self.window_manager, "--reconfigure"], env=self.env, check=True, timeout=2
+                    )
+                    settings_source = latest_settings
+                if any(p.poll() is not None for p in (display, wm, stream, settings_daemon)):
+                    raise RuntimeError(
+                        "Application streaming service exited; inspect beam-desktop.service logs"
+                    )
+                if time.monotonic() - geometry_check > 1:
+                    geometry_check = time.monotonic()
+                    size = display_size(self.env)
+                    if (
+                        size
+                        and size != saved_size
+                        and 320 <= size[0] <= 8192
+                        and 200 <= size[1] <= 8192
+                    ):
+                        temporary = display_file.with_suffix(".tmp")
+                        temporary.write_text(
+                            json.dumps({"width": size[0], "height": size[1], "pixel_ratio": 2})
+                        )
+                        temporary.replace(display_file)
+                        saved_size = size
+                if self.restart.is_set():
+                    self.restart.clear()
+                    self.failures.clear()
+                    self.launch()
+                if self.status()["application"] in ("error", "closed"):
+                    continue
+                windows = visible_windows(self.env)
+                self.update(windows=len(windows))
+                code = self.application.poll()
+                if code is not None and code != 0 and self.status()["application"] != "error":
+                    if self.retry_allowed(self.failures):
+                        self.launch()
+                        continue
+                    self.update(
+                        state="error",
+                        application="error",
+                        error=f"Application exited with status {code}; restart it or inspect its logs",
+                    )
+                    stop_process(self.mcp)
+                    continue
+                if windows:
+                    self.was_visible = True
+                    self.fit_application_windows(windows)
+                    self.update(application="ready")
+                    if self.mcp is None:
+                        self.launch_mcp()
+                elif code is not None and (
+                    self.was_visible or time.monotonic() - self.started > 45
+                ):
+                    self.update(
+                        state="closed",
+                        application="closed",
+                        error="Application closed"
+                        if self.was_visible
+                        else "Application exited without opening a window",
+                    )
+                    stop_process(self.mcp)
+                    continue
+                elif not self.was_visible and time.monotonic() - self.started > 120:
+                    self.update(
+                        state="error",
+                        application="error",
+                        error="Application has not opened a window; inspect its logs",
+                    )
+                    continue
+                if self.mcp is not None:
+                    if self.mcp.poll() is not None:
+                        if self.status()["mcp"] == "error":
+                            continue
+                        if self.retry_allowed(self.mcp_failures):
+                            self.launch_mcp()
+                        else:
+                            self.update(
+                                state="error",
+                                mcp="error",
+                                error="Application MCP server exited repeatedly; inspect its logs",
+                            )
+                    elif self.status()["mcp"] != "ready":
+                        mcp = self.config["mcp"]
+                        if mcp_ready(mcp["port"], mcp.get("path", "/mcp")):
+                            self.update(mcp="ready", error="")
+                        elif time.monotonic() - self.started > 120:
+                            self.update(
+                                state="error",
+                                mcp="error",
+                                error="Application MCP server did not complete initialization",
+                            )
+                current = self.status()
+                if current["application"] == "ready" and current["mcp"] in ("ready", "disabled"):
+                    self.update(state="ready", error="")
+        except Exception as error:
+            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
+                # xauth's argv contains a display credential. Never return
+                # subprocess reprs (including argv) in browser diagnostics.
+                error = RuntimeError(
+                    f"Kiosk service command failed: {error.cmd[0]}; inspect its logs"
+                )
+            if (
+                self.config.get("mcp")
+                and self.mcp is None
+                and self.status()["application"] == "ready"
+            ):
+                self.update(state="error", mcp="error", error=str(error))
+            else:
+                self.update(state="error", application="error", error=str(error))
+            print(f"Kiosk startup failed: {error}", file=sys.stderr, flush=True)
+            # Keep the error readable by the browser rather than crashing into
+            # a blank screen or repeatedly relaunching a broken application.
+            while not self.stopping.wait(0.25):
+                if self.restart.is_set():
+                    return 1
+        finally:
+            for process in reversed(self.processes):
+                stop_process(process)
+            server.shutdown()
+            server.server_close()
+
+
+def visible_wm(env):
+    result = subprocess.run(
+        ["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    return bool(re.search(r"0x[1-9a-fA-F][0-9a-fA-F]*", result.stdout))
+
+
+def main():
+    if "--status" in sys.argv or "--check" in sys.argv:
+        try:
+            with urlopen(f"http://127.0.0.1:{STATUS_PORT}/status", timeout=3) as response:
+                status = json.load(response)
+            print(json.dumps(status))
+            return 0 if "--status" in sys.argv or status["state"] == "ready" else 1
+        except (OSError, ValueError) as error:
+            print(f"Kiosk is unavailable: {error}", file=sys.stderr)
+            return 1
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        os.execvp(
+            "dbus-run-session",
+            ["dbus-run-session", "--", str(Path(__file__).resolve()), "--session"],
+        )
+    config = json.loads(base64.b64decode(os.environ["BEAM_VM_KIOSK"], validate=True))
+    session = Session(config)
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, lambda *_: session.stopping.set())
+    return session.run() or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

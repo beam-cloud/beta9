@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+  <rect width="1200" height="760" fill="#f8fafc"/>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172554">
+    <text x="72" y="106" font-size="40" font-weight="bold">A native application in your browser</text>
+    <text x="72" y="150" font-size="20">Edit this drawing in Inkscape. Move shapes, type, zoom, and open dialogs.</text>
+  </g>
+  <g stroke="#1e293b" stroke-width="2">
+    <rect x="72" y="208" width="290" height="220" rx="28" fill="#bfdbfe"/>
+    <circle cx="580" cy="318" r="110" fill="#fdba74"/>
+    <path d="M 845 428 L 980 208 L 1115 428 Z" fill="#a7f3d0"/>
+  </g>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172554" font-size="18">
+    <text x="72" y="506">Saved project: /workspace/editor.svg</text>
+    <text x="72" y="544">Fine lines and small text should stay sharp when you stop moving.</text>
+    <text x="72" y="582">Native menus, file dialogs, keyboard shortcuts, and independent windows.</text>
+  </g>
+  <g stroke="#334155">
+    <path d="M72 646H1128" stroke-width="0.5"/>
+    <path d="M72 656H1128" stroke-width="1"/>
+    <path d="M72 668H1128" stroke-width="2"/>
+  </g>
+</svg>

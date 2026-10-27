@@ -49,6 +49,9 @@ beta9 = [
     "abstractions/vm/desktop",
     "abstractions/vm/install",
     "abstractions/vm/xstartup",
+    "abstractions/vm/kiosk",
+    "abstractions/vm/kiosk-openbox.xml",
+    "abstractions/vm/kiosk-openbox-build",
 ]
 
 [dependency-groups]

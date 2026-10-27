@@ -148,7 +148,7 @@ def test_vm_image_bundle_matches_guest_files():
             assert archive.extractfile(name).read() == path.read_bytes(), (
                 f"Stale VM bundle: run python bin/generate_vm_assets.py after updating {name}"
             )
-            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg") else 0o755
+            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml") else 0o755
             assert archive.getmember(name).mode == mode
 
 
@@ -168,7 +168,7 @@ def test_vm_image_does_not_depend_on_client_archive_libraries(monkeypatch):
 
 def test_desktop_clipboard_patch_is_idempotent_and_checks_upstream(tmp_path):
     installer = Path(vm_module.__file__).with_name("install").read_text()
-    patch = installer.split("  python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    patch = installer.rsplit("  python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
     patch = patch.replace(
         "Path('/usr/share/kasmvnc/www/assets')", "Path(" + repr(str(tmp_path)) + ")"
     )

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111113">
+<title>Application</title>
+<style>
+  html, body { height: 100%; margin: 0; color-scheme: dark; }
+  body { display: grid; place-content: center; justify-items: center; gap: 18px; background: #111113; color: #ededee; font: 14px system-ui, sans-serif; }
+  #status { max-width: 38em; padding: 0 24px; text-align: center; }
+  button { font: inherit; padding: 8px 16px; color: inherit; background: #242428; border: 1px solid #3a3a40; border-radius: 6px; cursor: pointer; }
+  [hidden] { display: none !important; }
+</style>
+<p id="status" role="status" aria-live="polite">Opening application…</p>
+<button id="retry" hidden>Reconnect</button>
+<button id="restart" hidden>Reopen application</button>
+<script>
+(() => {
+  const status = document.querySelector('#status');
+  const retry = document.querySelector('#retry');
+  const restart = document.querySelector('#restart');
+  const endpoint = new URL('_beam/kiosk/status', location.href);
+  let timer, failures = 0, deadline = Date.now() + 180000;
+  async function poll() {
+    clearTimeout(timer);
+    try {
+      const response = await fetch(endpoint, {cache:'no-store', signal:AbortSignal.timeout(5000)});
+      if ([401,403,404].includes(response.status)) {
+        status.textContent = 'Application access is unavailable. Reopen its link to check your access.';
+        retry.hidden = false;
+        return;
+      }
+      if (!response.ok) throw new Error('Starting');
+      const current = await response.json();
+      failures = 0;
+      if (current.application === 'ready') {
+        const client = new URL('stream/', location.href);
+        const health = await fetch(new URL('api/health', client), {cache:'no-store',signal:AbortSignal.timeout(5000)});
+        if (!health.ok) throw new Error('Starting');
+        // One document owns video, focus, input and clipboard. The application
+        // can itself be embedded without another nested viewer frame.
+        location.replace(client.href);
+        return;
+      }
+      restart.hidden = !['closed','error'].includes(current.state);
+      status.textContent = restart.hidden ? 'Opening application…' : current.error || 'Application closed.';
+    } catch (_) {
+      if (++failures >= 3) status.textContent = 'Reconnecting to application…';
+    }
+    if (Date.now() > deadline) {
+      status.textContent = 'The application is taking longer to start. Inspect its VM logs or reconnect.';
+      retry.hidden = false;
+      return;
+    }
+    timer = setTimeout(poll,1000);
+  }
+  retry.addEventListener('click', () => {deadline=Date.now()+180000;retry.hidden=true;poll();});
+  restart.addEventListener('click', async () => {
+    restart.disabled=true;
+    try {
+      const response=await fetch(new URL('_beam/kiosk/restart',location.href),{method:'POST',headers:{'X-Beam-Kiosk-Action':'restart'},signal:AbortSignal.timeout(5000)});
+      if (!response.ok) throw new Error('Restart failed');
+      deadline=Date.now()+180000;restart.hidden=true;poll();
+    } catch (_) {status.textContent='Unable to reopen the application. Check your access or inspect its VM logs.';retry.hidden=false;}
+    finally {restart.disabled=false;}
+  });
+  poll();
+})();
+</script>
+</html>

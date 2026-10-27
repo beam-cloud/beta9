@@ -47,6 +47,7 @@ type Service struct {
 	browserAuthURL string
 	defaultPool    string
 	publicNetwork  *publicVMNetwork
+	webrtc         *vmWebRTC
 }
 
 type ServiceOpts struct {
@@ -60,6 +61,7 @@ type ServiceOpts struct {
 	RouteGroup    *echo.Group
 	Server        *echo.Echo
 	BackendDialer *network.BackendDialer
+	TCPConfig     types.PodTCPConfig // Shared raw TCP listener used by ICE-TCP media.
 }
 
 func New(ctx context.Context, opts ServiceOpts) error {
@@ -86,6 +88,7 @@ func New(ctx context.Context, opts ServiceOpts) error {
 	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {
 		return err
 	}
+	s.startWebRTC(opts.TCPConfig, opts.BackendDialer)
 
 	registerVMRoutes(opts.RouteGroup, s)
 	opts.Server.Any("/vm/:handle/:port", s.proxy)

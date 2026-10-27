@@ -3,6 +3,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 assets=/tmp/beam-vm-assets
 desktop=${1:-false}
+kiosk=${2:-false}
 command -v apt-get >/dev/null || { echo 'Beam VM images require Debian/Ubuntu and systemd' >&2; exit 1; }
 apt-get update
 # Runtime libraries required by native coding-agent binaries.
@@ -33,7 +34,8 @@ docker-compose version >/dev/null
 npm install -g --no-fund --no-audit @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.226
 npm cache clean --force
 install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
-install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" /opt/beam-vm/
+install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" "$assets/kiosk" "$assets/kiosk-openbox-build" /opt/beam-vm/
+install -m 0644 "$assets/kiosk-openbox.xml" /opt/beam-vm/
 install -m 0644 "$assets"/*.service /etc/systemd/system/
 # These are managed by Beam at boot, not by image build-time enablement.
 # A missing unit aborts a batch disable on Noble. Disable each independently.
@@ -52,7 +54,59 @@ KbdInteractiveAuthentication no
 AuthorizedKeysFile /run/beam-vm/authorized_keys
 PidFile /run/sshd/sshd.pid
 EOF
-if [ "$desktop" = true ]; then
+if [ "$kiosk" = true ]; then
+  case "${ID}:${VERSION_CODENAME:-}" in
+    ubuntu:jammy|ubuntu:noble) ;;
+    *) echo 'Kiosk requires Ubuntu 22.04 (jammy) or 24.04 (noble)' >&2; exit 1 ;;
+  esac
+  # Native packages bundle the web client and encoding extensions. Keep both
+  # the version and digest pinned: image identity must not depend on "latest".
+  version=2.1.0
+  if [ "$VERSION_CODENAME" = noble ]; then
+    package="selkies-${version}-ubuntu24.04-${arch}.deb"
+    case "$arch" in
+      amd64) checksum=cedba7a9d8bb4d07fd2b2139a518dc2c03452e0f0254c5bb088426623e2027f3 ;;
+      arm64) checksum=7ed77ef1ddbb17e265adb01e4190a086df93f3af2bccbe326b9dcdb268279868 ;;
+    esac
+    curl -fsSL "https://github.com/selkies-project/selkies/releases/download/${version}/${package}" -o /tmp/selkies.deb
+    printf '%s  %s\n' "$checksum" /tmp/selkies.deb | sha256sum --check -
+    apt-get install -y --no-install-recommends /tmp/selkies.deb
+    rm /tmp/selkies.deb
+  else
+    # Jammy has no native release package. Extract the portable distribution
+    # at build time so starting a VM never requires FUSE or a download.
+    case "$arch" in
+      amd64) portable_arch=x86_64; checksum=a0147192e9d20e98c7b899411d62194a4fb4e5f19447a4e08868d61cde09c43b ;;
+      arm64) portable_arch=aarch64; checksum=5573a85c1a538168d6cf04f7cc21c27ac5c9e40dab496b737d911ecf4fda8629 ;;
+    esac
+    curl -fsSL "https://github.com/selkies-project/selkies/releases/download/${version}/selkies-${version}-${portable_arch}.AppImage" -o /tmp/selkies.AppImage
+    printf '%s  %s\n' "$checksum" /tmp/selkies.AppImage | sha256sum --check -
+    chmod 0755 /tmp/selkies.AppImage
+    (cd /opt && /tmp/selkies.AppImage --appimage-extract >/dev/null && mv squashfs-root selkies)
+    ln -s /opt/selkies/AppRun /usr/local/bin/selkies
+    rm /tmp/selkies.AppImage
+  fi
+  apt-get install -y --no-install-recommends xvfb xauth openbox wmctrl xsettingsd dbus-x11 pulseaudio libegl1 libgbm1 libgl1-mesa-dri libnss3-tools xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base adwaita-icon-theme
+  install -d /etc/ca-certificates/update.d
+  /opt/beam-vm/kiosk-openbox-build
+  install -m 0755 "$assets/browser-trust" /opt/beam-vm/browser-trust
+  install -m 0755 "$assets/browser-trust-update" /etc/ca-certificates/update.d/beam-browser
+  /opt/beam-vm/browser-trust --initialize
+  printf 'selkies-%s\n' "$version" > /opt/beam-vm/kiosk-backend
+  # Load the platform ICE broker before the upstream client creates peers.
+  # Media/input remain upstream Selkies; this only adapts gateway routing.
+  python3 - <<'PY'
+from pathlib import Path
+pages = list(Path('/opt/selkies').rglob('selkies_web/index.html'))
+if not pages:
+    raise SystemExit('Selkies web client not found; cannot install Beam transport bootstrap')
+for page in pages:
+    source = page.read_text()
+    script = '<script src="../_beam/kiosk/webrtc.js"></script>'
+    if script not in source:
+        page.write_text(source.replace('<head>', '<head>' + script, 1))
+PY
+elif [ "$desktop" = true ]; then
   case "${ID}:${VERSION_CODENAME:-}" in
     ubuntu:jammy|ubuntu:noble) ;;
     *) echo 'Desktop requires Ubuntu 22.04 (jammy) or 24.04 (noble)' >&2; exit 1 ;;

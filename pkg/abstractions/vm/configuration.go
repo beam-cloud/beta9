@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path"
@@ -119,6 +120,9 @@ func validate(spec *types.VMSpec) error {
 	if spec.ImageID == "" {
 		return fmt.Errorf("image_id is required; the image must contain systemd and the Beam VM services")
 	}
+	if err := validateKiosk(spec); err != nil {
+		return err
+	}
 
 	if spec.Desktop && spec.Memory < 1024 {
 		return fmt.Errorf("desktop requires at least 1024 MiB")
@@ -189,6 +193,98 @@ func validate(spec *types.VMSpec) error {
 		}
 	}
 
+	return nil
+}
+
+func validateKiosk(spec *types.VMSpec) error {
+	k := spec.Kiosk
+	if k == nil {
+		return nil
+	}
+	if slices.Contains(spec.PublicPorts, uint32(8080)) {
+		return fmt.Errorf("kiosk browser sessions must be protected")
+	}
+	if k.Transport != "" && k.Transport != "webrtc" && k.Transport != "websockets" {
+		return fmt.Errorf("kiosk transport must be webrtc or websockets")
+	}
+	if k.Transport == "webrtc" {
+		if slices.Contains(spec.Ports, types.VMKioskMediaPort) || slices.Contains(spec.PublicPorts, types.VMKioskMediaPort) {
+			return fmt.Errorf("port 8443 is reserved for private kiosk media")
+		}
+		if !slices.Contains(spec.PrivatePorts, types.VMKioskMediaPort) {
+			spec.PrivatePorts = append(spec.PrivatePorts, types.VMKioskMediaPort)
+		}
+	}
+	checkCommand := func(command []string) error {
+		if len(command) == 0 || len(command) > 128 || command[0] == "" {
+			return fmt.Errorf("kiosk commands require an argv array with 1–128 entries")
+		}
+		size := 0
+		for _, arg := range command {
+			size += len(arg)
+			if strings.ContainsRune(arg, 0) {
+				return fmt.Errorf("kiosk command arguments cannot contain NUL")
+			}
+		}
+		if size > 32768 {
+			return fmt.Errorf("kiosk commands must fit in 32 KiB")
+		}
+		return nil
+	}
+	if err := checkCommand(k.Command); err != nil {
+		return err
+	}
+	if k.Cwd == "" {
+		k.Cwd = "/workspace"
+	}
+	if !path.IsAbs(k.Cwd) || path.Clean(k.Cwd) != k.Cwd || strings.ContainsRune(k.Cwd, 0) {
+		return fmt.Errorf("kiosk cwd must be a clean absolute guest path")
+	}
+	size := 0
+	for key, value := range k.Env {
+		size += len(key) + len(value)
+		if !validEnvKey.MatchString(key) || strings.HasPrefix(key, "BEAM_VM_") || strings.HasPrefix(key, "BETA9_") || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("invalid or reserved kiosk environment key %q", key)
+		}
+	}
+	if size > 16384 {
+		return fmt.Errorf("kiosk environment must fit in 16 KiB")
+	}
+	if slices.Contains(spec.Ports, types.VMKioskStatusPort) || slices.Contains(spec.PublicPorts, types.VMKioskStatusPort) {
+		return fmt.Errorf("port 8081 is reserved for kiosk readiness")
+	}
+	if k.MCP != nil {
+		if err := checkCommand(k.MCP.Command); err != nil {
+			return err
+		}
+		p := k.MCP.Port
+		if p == 0 || p > 65535 || p == 2222 || p == 7681 || p == 8080 || p == types.VMKioskStatusPort || (k.Transport == "webrtc" && p == types.VMKioskMediaPort) || p == uint32(types.WorkerSandboxProcessManagerPort) {
+			return fmt.Errorf("kiosk MCP requires a non-reserved port between 1 and 65535")
+		}
+		if k.MCP.Path == "" {
+			k.MCP.Path = "/mcp"
+		}
+		if !strings.HasPrefix(k.MCP.Path, "/") || path.Clean(k.MCP.Path) != k.MCP.Path || strings.ContainsAny(k.MCP.Path, "?#\\\x00\r\n") {
+			return fmt.Errorf("kiosk MCP path must be an absolute URL path without a query or fragment")
+		}
+		if slices.Contains(spec.PublicPorts, p) {
+			return fmt.Errorf("kiosk MCP ports must be protected")
+		}
+		if !slices.Contains(spec.Ports, p) {
+			spec.Ports = append(spec.Ports, p)
+		}
+		if !slices.Contains(spec.ProtectedPorts, p) {
+			spec.ProtectedPorts = append(spec.ProtectedPorts, p)
+		}
+	}
+	spec.Desktop = true
+	if !slices.Contains(spec.PrivatePorts, types.VMKioskStatusPort) {
+		spec.PrivatePorts = append(spec.PrivatePorts, types.VMKioskStatusPort)
+	}
+	encoded, err := json.Marshal(k)
+	if err != nil || len(encoded) > 65536 {
+		return fmt.Errorf("kiosk configuration must fit in 64 KiB of JSON")
+	}
 	return nil
 }
 
@@ -468,6 +564,20 @@ func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port u
 }
 
 func (s *Service) configurePort(ctx context.Context, v *types.VM, action string, port uint32, protected *bool) error {
+	if v.Spec.Kiosk != nil {
+		if port == 8080 && action == "expose" && (protected == nil || !*protected) {
+			return echo.NewHTTPError(http.StatusBadRequest, "kiosk browser sessions must be protected")
+		}
+		if port == types.VMKioskStatusPort {
+			return echo.NewHTTPError(http.StatusBadRequest, "port 8081 is reserved for kiosk readiness")
+		}
+		if v.Spec.Kiosk.Transport == "webrtc" && port == types.VMKioskMediaPort {
+			return echo.NewHTTPError(http.StatusBadRequest, "port 8443 is reserved for private kiosk media")
+		}
+		if v.Spec.Kiosk.MCP != nil && port == v.Spec.Kiosk.MCP.Port && action == "expose" && (protected == nil || !*protected) {
+			return echo.NewHTTPError(http.StatusBadRequest, "kiosk MCP ports must be protected")
+		}
+	}
 	systemPort := port == 7681 || (port == 8080 && v.Spec.Desktop)
 	if port == 0 || port > 65535 || port == 2222 || port == uint32(types.WorkerSandboxProcessManagerPort) || (systemPort && (action != "expose" || protected == nil)) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid or reserved port")

@@ -63,6 +63,7 @@ type VMSpec struct {
 	Ports            []uint32          `json:"ports,omitempty"`
 	PrivatePorts     []uint32          `json:"private_ports,omitempty"`
 	Desktop          bool              `json:"desktop"`
+	Kiosk            *VMKioskSpec      `json:"kiosk,omitempty"`
 	DockerEnabled    bool              `json:"docker_enabled"`
 	SSH              bool              `json:"ssh"`
 	SSHPublicKey     string            `json:"ssh_public_key,omitempty"`
@@ -77,6 +78,26 @@ type VMSpec struct {
 	Volumes          []*pb.Volume      `json:"volumes,omitempty"`
 	SourceSnapshotID string            `json:"source_snapshot_id,omitempty"`
 }
+
+// VMKioskSpec launches an ordinary application on an isolated graphical session.
+// Commands are argv, never shell source. Env values follow the VM's redaction rules.
+type VMKioskSpec struct {
+	Transport string            `json:"transport,omitempty"`
+	Command   []string          `json:"command"`
+	Cwd       string            `json:"cwd,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	MCP       *VMKioskMCP       `json:"mcp,omitempty"`
+}
+
+type VMKioskMCP struct {
+	Command []string `json:"command"`
+	Port    uint32   `json:"port"`
+	Path    string   `json:"path,omitempty"`
+}
+
+const VMKioskStatusPort uint32 = 8081
+
+const VMKioskMediaPort uint32 = 8443
 
 func (s VMSpec) RuntimePorts() []uint32 {
 	ports := append([]uint32{}, s.Ports...)
@@ -117,6 +138,8 @@ type VM struct {
 	LastActiveAt        time.Time         `json:"last_active_at"`
 	TerminalURL         string            `json:"terminal_url,omitempty"`
 	DesktopURL          string            `json:"desktop_url,omitempty"`
+	KioskURL            string            `json:"kiosk_url,omitempty"`
+	MCPURL              string            `json:"mcp_url,omitempty"`
 	BrowserAuth         bool              `json:"browser_auth,omitempty"`
 	URLs                map[uint32]string `json:"urls"`
 }

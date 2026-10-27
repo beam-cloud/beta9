@@ -12,6 +12,16 @@ import (
 //go:embed desktop.html
 var desktopPage string
 
+//go:embed kiosk.html
+var kioskPage string
+
+// Kiosk playback bootstraps authenticated ICE and reveals fitted video frames
+// in the same document that owns input, focus and clipboard. Recovery follows
+// the active peer so a replaced connection cannot obscure a healthy stream.
+//
+//go:embed kiosk-webrtc.js
+var kioskWebRTC []byte
+
 func desktopEntry(c echo.Context, v *types.VM, port int) bool {
 	r := c.Request()
 	return v.Spec.Desktop && port == 8080 && c.Param("*") == "" &&
@@ -29,5 +39,8 @@ func (s *Service) serveDesktop(c echo.Context, v *types.VM, status string) error
 	}
 
 	c.Response().Header().Set("Cache-Control", "no-store")
+	if v.Spec.Kiosk != nil {
+		return c.HTML(http.StatusOK, kioskPage)
+	}
 	return c.HTML(http.StatusOK, desktopPage)
 }

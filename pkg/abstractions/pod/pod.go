@@ -152,9 +152,9 @@ func NewPodService(
 
 	// If TCP is enabled and we have TLS configured, start the raw TCP proxy server
 	if opts.Config.Abstractions.Pod.TCP.Enabled {
+		server := NewPodTCPServer(ctx, ps, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
+		ps.tcpServer = server
 		go func() {
-			server := NewPodTCPServer(ctx, ps, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
-			ps.tcpServer = server
 			err := server.Start()
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to start pod tcp server")

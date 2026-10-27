@@ -1,5 +1,8 @@
 #!/bin/bash
 set -euo pipefail
+if [ -n "${BEAM_VM_KIOSK:-}" ]; then
+  exec /opt/beam-vm/kiosk
+fi
 # The server and all of its credentials, locks and config are transient. User
 # files and application configuration retain their normal durable locations.
 mkdir -p "$HOME/.vnc"

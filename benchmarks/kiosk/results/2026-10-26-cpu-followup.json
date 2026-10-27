@@ -1,0 +1,298 @@
+{
+  "date": "2026-10-26",
+  "release_qualified": false,
+  "profile": "KiCad 10 Cairo, 8 vCPU/8 GiB, CRF18 H264 4:4:4, fixed 2x density, actual public staging gateway",
+  "conclusions": [
+    "Keep 60 FPS: 120 FPS capture worsened select-all p95 latency and approximately doubled CPU use.",
+    "Explicit Xrender composition with VSync, fading, and shadows disabled worsened select-all response and was removed.",
+    "The final single-object selection run observed every planned transition, with no unexpected browser input.",
+    "One initial select-all Escape produced no optical transition in the controlled run; this alone does not establish input loss.",
+    "Measurements include optical probe overhead. Changed measurement methods and workloads are not direct performance improvements.",
+    "The target remains unmet; these are prototype diagnostics, not native parity or a release qualification."
+  ],
+  "runs": [
+    {
+      "measurement_method": "optical-serial-v2",
+      "headless": false,
+      "measurements": {
+        "input_samples": 30,
+        "input_p50_ms": 162.89999961853027,
+        "input_p95_ms": 200,
+        "input_max_ms": 226.90000009536743,
+        "unanswered": 0,
+        "timeouts": 0
+      },
+      "probe_overhead_ms": null,
+      "first_frame_seconds": 3.011218999978155,
+      "webrtc": [
+        [
+          {
+            "rtt_seconds": 0.055
+          },
+          {
+            "kind": "video",
+            "frames": 792,
+            "dropped": 3,
+            "jitter": 0.001,
+            "codec": "video/H264",
+            "fmtp": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=f4001f;sps-pps-idr-in-keyframe=1",
+            "decoder": null,
+            "decode_seconds": 1.752722,
+            "buffer_seconds": 3.5729089999999997,
+            "target_buffer_seconds": 66.823161,
+            "minimum_buffer_seconds": 66.823161,
+            "processing_seconds": 5.125236,
+            "power_efficient": null,
+            "buffer_count": 795,
+            "bytes": 18719627,
+            "loss": 0
+          }
+        ]
+      ],
+      "name": "cpu-cadence-60",
+      "workload": "select all / Escape",
+      "events_observed": 30,
+      "cpu_used_percent": 14.731585518102372,
+      "memory_used_bytes": 4375236608
+    },
+    {
+      "measurement_method": "optical-serial-v2",
+      "headless": false,
+      "measurements": {
+        "input_samples": 30,
+        "input_p50_ms": 167.69999980926514,
+        "input_p95_ms": 244.90000009536743,
+        "input_max_ms": 353.09999990463257,
+        "unanswered": 0,
+        "timeouts": 0
+      },
+      "probe_overhead_ms": null,
+      "first_frame_seconds": 2.7133795828558505,
+      "webrtc": [
+        [
+          {
+            "rtt_seconds": 0.057
+          },
+          {
+            "kind": "video",
+            "frames": 1274,
+            "dropped": 2,
+            "jitter": 0.004,
+            "codec": "video/H264",
+            "fmtp": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=f4001f;sps-pps-idr-in-keyframe=1",
+            "decoder": null,
+            "decode_seconds": 2.555888,
+            "buffer_seconds": 5.963964,
+            "target_buffer_seconds": 96.32431,
+            "minimum_buffer_seconds": 96.32431,
+            "processing_seconds": 8.33719,
+            "power_efficient": null,
+            "buffer_count": 1276,
+            "bytes": 18611976,
+            "loss": 0
+          }
+        ]
+      ],
+      "name": "cpu-cadence-120",
+      "workload": "select all / Escape",
+      "events_observed": 30,
+      "cpu_used_percent": 28.88888888888889,
+      "memory_used_bytes": 4597170176
+    },
+    {
+      "measurement_method": "optical-serial-v2",
+      "headless": false,
+      "measurements": {
+        "input_samples": 30,
+        "input_p50_ms": 172.30000019073486,
+        "input_p95_ms": 198.40000009536743,
+        "input_max_ms": 214.59999990463257,
+        "unanswered": 1,
+        "timeouts": 1
+      },
+      "probe_overhead_ms": {
+        "p50": 4.400000095367432,
+        "p95": 4.900000095367432,
+        "max": 10.200000286102295
+      },
+      "first_frame_seconds": 2.6761550842784345,
+      "webrtc": [
+        [
+          {
+            "rtt_seconds": 0.053
+          },
+          {
+            "kind": "video",
+            "frames": 769,
+            "dropped": 6,
+            "jitter": 0.001,
+            "codec": "video/H264",
+            "fmtp": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=f4001f;sps-pps-idr-in-keyframe=1",
+            "decoder": null,
+            "decode_seconds": 1.7604419999999998,
+            "buffer_seconds": 3.463149,
+            "target_buffer_seconds": 61.670946,
+            "minimum_buffer_seconds": 61.670946,
+            "processing_seconds": 5.024289,
+            "power_efficient": null,
+            "buffer_count": 775,
+            "bytes": 18690725,
+            "loss": 0
+          }
+        ]
+      ],
+      "name": "cpu-cadence-60-probe-cost",
+      "workload": "select all / Escape",
+      "events_observed": 31,
+      "cpu_used_percent": 19.774718397997496,
+      "memory_used_bytes": 4902416384,
+      "notes": "Unplanned mouse input occurred; this run is unsuitable for causal comparison"
+    },
+    {
+      "measurement_method": "optical-serial-v2",
+      "headless": false,
+      "measurements": {
+        "input_samples": 30,
+        "input_p50_ms": 243.7000002861023,
+        "input_p95_ms": 310,
+        "input_max_ms": 343.8999996185303,
+        "unanswered": 0,
+        "timeouts": 0
+      },
+      "probe_overhead_ms": {
+        "p50": 4.799999713897705,
+        "p95": 5.699999809265137,
+        "max": 19.09999990463257
+      },
+      "first_frame_seconds": 5.333587749861181,
+      "webrtc": [
+        [
+          {
+            "rtt_seconds": 0.06
+          },
+          {
+            "kind": "video",
+            "frames": 946,
+            "dropped": 2,
+            "jitter": 0.002,
+            "codec": "video/H264",
+            "fmtp": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=f4001f;sps-pps-idr-in-keyframe=1",
+            "decoder": null,
+            "decode_seconds": 2.1395969999999997,
+            "buffer_seconds": 7.2828479999999995,
+            "target_buffer_seconds": 109.51726699999999,
+            "minimum_buffer_seconds": 109.51726699999999,
+            "processing_seconds": 9.219971,
+            "power_efficient": null,
+            "buffer_count": 948,
+            "bytes": 19202904,
+            "loss": 0
+          }
+        ]
+      ],
+      "name": "cpu-cadence-compositor-explicit",
+      "workload": "select all / Escape",
+      "events_observed": 30,
+      "cpu_used_percent": 19.33085501858736,
+      "memory_used_bytes": 4929642496
+    },
+    {
+      "measurement_method": "optical-serial-v3",
+      "headless": true,
+      "measurements": {
+        "input_samples": 29,
+        "input_p50_ms": 160.19999980926514,
+        "input_p95_ms": 194.40000009536743,
+        "input_max_ms": 210.80000019073486,
+        "unanswered": 1,
+        "timeouts": 1,
+        "unexpected_inputs": 0
+      },
+      "probe_overhead_ms": {
+        "p50": 4.599999904632568,
+        "p95": 5.099999904632568,
+        "max": 6.200000286102295
+      },
+      "first_frame_seconds": 2.990974916610867,
+      "webrtc": [
+        [
+          {
+            "rtt_seconds": 0.06
+          },
+          {
+            "kind": "video",
+            "frames": 781,
+            "dropped": 4,
+            "jitter": 0.001,
+            "codec": "video/H264",
+            "fmtp": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=f4001f;sps-pps-idr-in-keyframe=1",
+            "decoder": null,
+            "decode_seconds": 1.801385,
+            "buffer_seconds": 4.232966,
+            "target_buffer_seconds": 136.562355,
+            "minimum_buffer_seconds": 136.562355,
+            "processing_seconds": 5.834427,
+            "power_efficient": null,
+            "buffer_count": 785,
+            "bytes": 18413292,
+            "loss": 0
+          }
+        ]
+      ],
+      "name": "cpu-cadence-60-controlled",
+      "workload": "select all / Escape",
+      "events_observed": 30,
+      "cpu_used_percent": 14.409937888198758,
+      "memory_used_bytes": 4975661056
+    },
+    {
+      "measurement_method": "optical-serial-v3",
+      "headless": true,
+      "measurements": {
+        "input_samples": 30,
+        "input_p50_ms": 126,
+        "input_p95_ms": 176.19999980926514,
+        "input_max_ms": 191.09999990463257,
+        "unanswered": 0,
+        "timeouts": 0,
+        "unexpected_inputs": 0
+      },
+      "probe_overhead_ms": {
+        "p50": 4.799999713897705,
+        "p95": 5.400000095367432,
+        "max": 6
+      },
+      "first_frame_seconds": 2.776004666928202,
+      "webrtc": [
+        [
+          {
+            "rtt_seconds": 0.056
+          },
+          {
+            "kind": "video",
+            "frames": 599,
+            "dropped": 6,
+            "jitter": 0.001,
+            "codec": "video/H264",
+            "fmtp": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=f4001f;sps-pps-idr-in-keyframe=1",
+            "decoder": null,
+            "decode_seconds": 1.095442,
+            "buffer_seconds": 1.658031,
+            "target_buffer_seconds": 57.560756999999995,
+            "minimum_buffer_seconds": 57.560756999999995,
+            "processing_seconds": 2.5537929999999998,
+            "power_efficient": null,
+            "buffer_count": 605,
+            "bytes": 6937807,
+            "loss": 0
+          }
+        ]
+      ],
+      "name": "cpu-final-single-selection",
+      "workload": "single pad selection / Escape",
+      "events_observed": 30,
+      "cpu_used_percent": 14.196762141967621,
+      "memory_used_bytes": 4935610368
+    }
+  ]
+}

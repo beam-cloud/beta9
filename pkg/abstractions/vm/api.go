@@ -113,6 +113,11 @@ func artifactResponse(a types.VMArtifact) types.VMArtifact {
 
 func redactedSpec(spec types.VMSpec) types.VMSpec {
 	spec.Env = nil
+	if spec.Kiosk != nil {
+		kiosk := *spec.Kiosk
+		kiosk.Env = nil
+		spec.Kiosk = &kiosk
+	}
 	volumes := spec.Volumes
 	spec.Volumes = make([]*pb.Volume, len(volumes))
 	for i, volume := range volumes {
@@ -381,6 +386,9 @@ func (s *Service) create(c echo.Context) error {
 		spec.ImageID = "pending-image-lookup"
 	}
 
+	if err := s.configureKioskTransport(&spec); err != nil {
+		return apiError(err)
+	}
 	if err := validate(&spec); err != nil {
 		return apiError(err)
 	}
@@ -402,6 +410,14 @@ func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, 
 }
 
 func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string, image *pb.VerifyImageBuildRequest) (*types.VM, error) {
+	if err := s.configureKioskTransport(&spec); err != nil {
+		return nil, err
+	}
+	if spec.Kiosk != nil {
+		if err := validate(&spec); err != nil {
+			return nil, err
+		}
+	}
 	if len(spec.Secrets) > 0 {
 		secrets, err := s.backend.GetSecretsByName(ctx, info.Workspace, spec.Secrets)
 		if err != nil {

@@ -64,6 +64,9 @@ class VMDesktop:
         ):
             raise ValueError("Desktop resolution must be 320–4096 by 200–2160")
         mode = f"{width}x{height}"
+        if self.vm.info["spec"].get("kiosk") is not None:
+            self._run("selkies", "resize", mode)
+            return
         if mode not in self._run("xrandr", "--query").split():
             # Xvnc accepts arbitrary virtual modes; use its own 60 Hz timing
             # formula so sizes absent from the default list work exactly.

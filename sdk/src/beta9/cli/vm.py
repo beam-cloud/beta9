@@ -1,6 +1,7 @@
 """Persistent CPU VMs. File/exec operations share the sandbox transport."""
 
 import os
+import json
 import shlex
 import shutil
 import signal
@@ -168,7 +169,12 @@ def _show(info, as_json):
                 ("error", "Error"),
                 ("public_ipv6", "IPv6"),
                 ("terminal_url", "Terminal" if 7681 in protected else "Terminal (public)"),
-                ("desktop_url", "Desktop" if 8080 in protected else "Desktop (public)"),
+                (
+                    "desktop_url",
+                    ("Application" if info.get("kiosk_url") else "Desktop")
+                    + ("" if 8080 in protected else " (public)"),
+                ),
+                ("mcp_url", "Application MCP (protected)"),
             )
             if info.get(key)
         }
@@ -183,6 +189,13 @@ def _show(info, as_json):
             info.get("name", "VM"),
             fields,
         )
+        kiosk_mcp = ((info.get("spec") or {}).get("kiosk") or {}).get("mcp")
+        if kiosk_mcp:
+            terminal.detail(
+                f"Connect a local MCP client: {extraclick.command_hint()} vm port-forward "
+                f"{shlex.quote(info['name'])} {kiosk_mcp['port']} "
+                f"(endpoint http://127.0.0.1:{kiosk_mcp['port']}{kiosk_mcp.get('path', '/mcp')})"
+            )
         private = [int(port) for port in urls if int(port) in protected]
         if private:
             port = 7681 if 7681 in private else private[0]
@@ -232,6 +245,11 @@ def _show(info, as_json):
     help="Secret available during image build; repeatable.",
 )
 @click.option("--template", metavar="NAME", help="Create from a saved template.")
+@click.option(
+    "--kiosk-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="JSON application configuration: command, cwd, env and optional MCP server.",
+)
 @click.option(
     "--desktop/--no-desktop",
     default=None,
@@ -348,6 +366,7 @@ def new(
     disk=(),
     volume=(),
     idle_action=None,
+    kiosk_config=None,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     as_json = as_json or terminal.json_output()
@@ -357,6 +376,16 @@ def new(
         raise click.UsageError("--build-context requires --dockerfile")
     if no_ssh and sync_dir:
         raise click.UsageError("--sync requires SSH; remove --no-ssh")
+    kiosk = None
+    if kiosk_config is not None:
+        try:
+            kiosk = json.loads(kiosk_config.read_text())
+        except (OSError, ValueError) as exc:
+            raise click.UsageError(f"Invalid kiosk configuration: {exc}") from exc
+        if not isinstance(kiosk, dict):
+            raise click.UsageError("Kiosk configuration must be a JSON object")
+        if desktop is False:
+            raise click.UsageError("--kiosk-config cannot be combined with --no-desktop")
     try:
         env_map = extraclick.env_vars_to_dict(env)
     except ValueError as exc:
@@ -373,6 +402,7 @@ def new(
         memory=memory,
         disk_size=disk_size,
         desktop=True if desktop is None and not (template or image_id) else desktop,
+        **({"kiosk": kiosk} if kiosk is not None else {}),
         docker_enabled=docker_enabled,
         env=env_map if env else None,
         secrets=list(secret) if secret else None,
@@ -423,16 +453,21 @@ def image_group():
 @click.option("-f", "--file", "dockerfile", type=click.Path(exists=True, dir_okay=False))
 @click.option("--secret", "--build-secret", "build_secret", multiple=True)
 @click.option("--desktop", is_flag=True)
+@click.option(
+    "--kiosk", is_flag=True, help="Install the application streaming backend instead of KasmVNC."
+)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def image_build(service, build_context, dockerfile, build_secret, desktop, as_json):
+def image_build(service, build_context, dockerfile, build_secret, desktop, as_json, kiosk=False):
     """Build a VM image from a local Dockerfile."""
     as_json = as_json or terminal.json_output()
     dockerfile = dockerfile or str(Path(build_context) / "Dockerfile")
     image = _image(dockerfile, build_context, secrets=build_secret)
     with StoredStdoutInterceptor(capture_logs=as_json):
         with _progress("Preparing image", "Image ready", as_json):
-            result = prepare_image(image, service, desktop).build()
+            result = prepare_image(
+                image, service, desktop or kiosk, **({"kiosk": True} if kiosk else {})
+            ).build()
             if not result.success:
                 raise click.ClickException(result.error or "VM image build failed")
     if as_json:
@@ -917,7 +952,7 @@ def metrics_vm(service, name):
 def _url(service, name, field, open_url):
     vm = _vm(service, name)
     url = vm.info.get(field)
-    port = 8080 if field == "desktop_url" else 7681
+    port = 8080 if field in ("desktop_url", "kiosk_url") else 7681
     if not url:
         raise click.ClickException(f"VM does not have {field.replace('_url', '')} enabled")
     url = _port_url(vm, port)
@@ -944,7 +979,16 @@ def _url_command(feature):
 
 
 desktop_vm = _url_command("desktop")
+kiosk_vm = _url_command("kiosk")
 terminal_vm = _url_command("terminal")
+
+
+@management.command("kiosk-status")
+@click.argument("name")
+@extraclick.pass_service_client
+def kiosk_status_vm(service, name):
+    """Read application/MCP readiness and startup failures."""
+    terminal.print_json(_vm(service, name).kiosk_status())
 
 
 @management.command("open")

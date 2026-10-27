@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Build the distro's Openbox source with the kiosk transient-window rule.
+set -euo pipefail
+kiosk_build_root=$(mktemp -d)
+trap 'rm -rf "$kiosk_build_root"' EXIT
+export DEBIAN_FRONTEND=noninteractive
+python3 - "$kiosk_build_root" <<'PY'
+from pathlib import Path
+import re,sys
+root=Path(sys.argv[1])
+modern=Path('/etc/apt/sources.list.d/ubuntu.sources')
+if modern.exists():
+    text=re.sub(r'^Types:.*$', 'Types: deb-src',modern.read_text(),flags=re.MULTILINE)
+    (root/'ubuntu.sources').write_text(text)
+else:
+    text=Path('/etc/apt/sources.list').read_text()
+    lines=[re.sub(r'^deb\s','deb-src ',line)for line in text.splitlines()if line.startswith('deb ')]
+    if not lines:raise SystemExit('Ubuntu source repositories unavailable')
+    (root/'ubuntu.list').write_text('\n'.join(lines)+'\n')
+PY
+kiosk_source_list=$(find "$kiosk_build_root" -maxdepth 1 -name 'ubuntu.*' -print -quit)
+apt-get -qq -o Dir::Etc::sourcelist="$kiosk_source_list" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
+apt-get install -y --no-install-recommends build-essential pkg-config dpkg-dev autoconf automake libtool gettext autopoint libglib2.0-dev libpango1.0-dev libxml2-dev libx11-dev libxi-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libxft-dev
+kiosk_source_version=$(dpkg-query -W -f='${source:Version}' openbox)
+cd "$kiosk_build_root"
+apt-get -o Dir::Etc::sourcelist="$kiosk_source_list" -o Dir::Etc::sourceparts=- source --download-only "openbox=$kiosk_source_version"
+kiosk_dsc=$(find . -maxdepth 1 -name 'openbox*.dsc' -print -quit)
+dpkg-source -x "$kiosk_dsc" source
+python3 - "$kiosk_build_root/source/openbox/client.c" <<'PY'
+from pathlib import Path
+import difflib,sys
+p=Path(sys.argv[1]);old=p.read_text()
+needle='''    /* then, based on our type, we can update our transientness.. */'''
+addition='''    /* A transient NORMAL window is an application-owned dialog, not
+       another full-viewport editor in a kiosk session. */
+    if (self->transient && self->type == OB_CLIENT_TYPE_NORMAL)
+        self->type = OB_CLIENT_TYPE_DIALOG;
+
+'''
+if old.count(needle)!=1:raise SystemExit('Openbox source changed; review kiosk window classification')
+new=old.replace(needle,addition+needle)
+p.write_text(new)
+(p.parents[1]/'kiosk.patch').write_text(''.join(difflib.unified_diff(old.splitlines(True),new.splitlines(True),fromfile='a/openbox/client.c',tofile='b/openbox/client.c')))
+PY
+cd source
+autoreconf -fiv
+LIBS="-lXi" ./configure --prefix=/opt/beam-vm/openbox --disable-shared --enable-static --disable-session-management --disable-startup-notification --disable-imlib2 --disable-svg
+make -j2
+make install
+mkdir -p /opt/beam-vm/openbox/share/source
+cp COPYING kiosk.patch /opt/beam-vm/openbox/share/source/
+find "$kiosk_build_root" -maxdepth 1 -type f \( -name '*.dsc' -o -name '*.tar.*' \) -exec cp '{}' /opt/beam-vm/openbox/share/source/ \;
+printf '%s\n' "$kiosk_source_version" > /opt/beam-vm/openbox/share/source/version

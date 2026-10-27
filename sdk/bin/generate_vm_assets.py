@@ -13,6 +13,9 @@ with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as arch
         "beam-terminal.service",
         "boot",
         "desktop",
+        "kiosk",
+        "kiosk-openbox.xml",
+        "kiosk-openbox-build",
         "browser.desktop",
         "browser-trust",
         "browser-trust-update",
@@ -26,7 +29,7 @@ with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as arch
         contents = path.read_bytes()
         entry = tarfile.TarInfo(name)
         entry.size = len(contents)
-        entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg") else 0o755
+        entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml") else 0o755
         archive.addfile(entry, io.BytesIO(contents))
 with (directory / "assets.tar.gz").open("wb") as output:
     with gzip.GzipFile(filename="", fileobj=output, mode="wb", mtime=0, compresslevel=9) as compressed:
