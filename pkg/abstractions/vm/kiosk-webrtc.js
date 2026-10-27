@@ -224,6 +224,8 @@
     }
 
     async poll() {
+      // Native close() changes peer state without emitting a connection event.
+      this.syncConnection();
       try {
         const response = await fetch(this.endpoint('status'), {
           cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
@@ -348,23 +350,31 @@
       this.observeVideo();
     }
 
+    syncConnection() {
+      const state = this.webSocketLive ? 'connected' : this.activePeer?.connectionState;
+      if (state === this.peerState) return;
+      this.peerState = state;
+      clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
+      if (state === 'connected') this.refreshDisplay();
+      else if (['disconnected', 'failed', 'closed'].includes(state)) {
+        this.notify('disconnected');
+        this.refreshDisplay();
+        this.recoveryTimer = setTimeout(() => location.reload(), policy.recoveryMs);
+      }
+    }
+
     trackPeer(peer) {
       this.activePeer = peer;
+      this.peerState = undefined;
+      this.syncConnection();
       peer.addEventListener('track', ({receiver}) => {
         // Receive-side hints favor fresh desktop frames over playback buffering.
         try { if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0; } catch (_) {}
         try { if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0; } catch (_) {}
       });
       peer.addEventListener('connectionstatechange', () => {
-        if (peer !== this.activePeer) return;
-        clearTimeout(this.recoveryTimer);
-        if (this.webSocketLive) return;
-        if (peer.connectionState === 'connected') this.refreshDisplay();
-        else if (['disconnected', 'failed', 'closed'].includes(peer.connectionState)) {
-          this.notify('disconnected');
-          this.refreshDisplay();
-          this.recoveryTimer = setTimeout(() => location.reload(), policy.recoveryMs);
-        }
+        if (peer === this.activePeer) this.syncConnection();
       });
     }
 

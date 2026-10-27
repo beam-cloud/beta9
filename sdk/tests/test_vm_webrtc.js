@@ -6,17 +6,20 @@ async function check(path) {
   const calls = [], messages = [];
   const storage = new Map([['selkies_tab_id', 'copied-from-another-tab']]);
   class Peer {
-    constructor() { this.events = {}; }
+    constructor() { this.events = {}; this.connectionState = 'new'; }
     addEventListener(name, callback) { this.events[name] = callback; }
     async setRemoteDescription(value) { calls.push(['remote', value]); }
     async addIceCandidate(value) { calls.push(['candidate', value]); }
+    close() { this.connectionState = 'closed'; }
   }
   const origin = 'https://application.example';
   let status = 200;
   const timers=new Map();
+  const window = {RTCPeerConnection: Peer, devicePixelRatio: 1.5,
+    sessionStorage: {setItem: (key, value) => storage.set(key, value)},
+    crypto: {randomUUID: () => `page-${path}`}};
   vm.runInNewContext(source, {
-    window: { RTCPeerConnection: Peer,devicePixelRatio:1.5,
-      sessionStorage:{setItem:(key,value)=>storage.set(key,value)},crypto:{randomUUID:()=>`page-${path}`} }, RTCPeerConnection: Peer,
+    window, RTCPeerConnection: Peer,
     URL, AbortSignal, WeakSet,
     location: { href: origin + path + 'stream/', origin },
     parent: { postMessage(value, target) { messages.push([value, target]); } },
@@ -59,6 +62,15 @@ async function check(path) {
   assert.equal(timers.size,1);
   second.connectionState='connected';second.events.connectionstatechange();
   assert.equal(timers.size,0,'a recovered connection cancels the document reload');
+  // Native close() does not dispatch connectionstatechange. Polling must catch it.
+  second.close();window.beamKiosk.syncConnection();
+  assert.equal(timers.size,1,'a silently closed peer must schedule recovery');
+  const recovery=timers.get(1);
+  window.beamKiosk.syncConnection();
+  assert.equal(timers.get(1),recovery,'polling cannot postpone recovery');
+  status=200;
+  await new Peer().setRemoteDescription({type:'offer',sdp:'guest-description'});
+  assert.equal(timers.size,0,'a replacement peer cancels the previous recovery timer');
 }
 async function checkDisplay() {
   const messages=[],events={},videoEvents={},timers=new Map();
