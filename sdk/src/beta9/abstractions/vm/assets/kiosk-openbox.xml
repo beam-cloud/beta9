@@ -1,28 +1,66 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_config xmlns="http://openbox.org/3.4/rc">
-  <focus><focusNew>yes</focusNew><followMouse>no</followMouse></focus>
-  <placement><policy>Smart</policy><center>yes</center></placement>
-  <desktops><number>1</number><popupTime>0</popupTime></desktops>
-  <theme><name>Clearlooks</name><titleLayout>LC</titleLayout></theme>
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+  </focus>
+  <placement>
+    <policy>Smart</policy>
+    <center>yes</center>
+  </placement>
+  <desktops>
+    <number>1</number>
+    <popupTime>0</popupTime>
+  </desktops>
+  <theme>
+    <name>Clearlooks</name>
+    <titleLayout>LC</titleLayout>
+  </theme>
+
   <keyboard>
-    <keybind key="A-F4"><action name="Close"/></keybind>
+    <keybind key="A-F4">
+      <action name="Close"/>
+    </keybind>
   </keyboard>
+
   <mouse>
     <context name="Titlebar">
-      <mousebind button="Left" action="Drag"><action name="Move"/></mousebind>
-      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Drag">
+        <action name="Move"/>
+      </mousebind>
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
     </context>
     <context name="Client">
-      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
     </context>
     <context name="Close">
-      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
-      <mousebind button="Left" action="Click"><action name="Close"/></mousebind>
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Left" action="Click">
+        <action name="Close"/>
+      </mousebind>
     </context>
   </mouse>
+
   <applications>
-    <application type="normal"><decor>no</decor><maximized>yes</maximized></application>
-    <application type="dialog"><maximized>no</maximized><focus>yes</focus></application>
-    <application type="utility"><maximized>no</maximized></application>
+    <application type="normal">
+      <decor>no</decor>
+      <maximized>yes</maximized>
+    </application>
+    <application type="dialog">
+      <maximized>no</maximized>
+      <focus>yes</focus>
+    </application>
+    <application type="utility">
+      <maximized>no</maximized>
+    </application>
   </applications>
 </openbox_config>

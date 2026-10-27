@@ -1,45 +1,75 @@
 #!/bin/bash
 set -euo pipefail
+
 export DEBIAN_FRONTEND=noninteractive
 assets=/tmp/beam-vm-assets
 desktop=${1:-false}
 kiosk=${2:-false}
-command -v apt-get >/dev/null || { echo 'Beam VM images require Debian/Ubuntu and systemd' >&2; exit 1; }
-apt-get update
-# Runtime libraries required by native coding-agent binaries.
-apt-get install -y --no-install-recommends systemd systemd-sysv dbus ca-certificates curl openssh-server rsync git sudo procps python3 python3-pip libatomic1 libstdc++6 libgcc-s1
-arch=$(dpkg --print-architecture)
-case "$arch" in amd64) ttyd_arch=x86_64 ;; arm64) ttyd_arch=aarch64 ;; *) echo "unsupported VM architecture: $arch" >&2; exit 1 ;; esac
-curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.$ttyd_arch" -o /usr/local/bin/ttyd
-chmod 0755 /usr/local/bin/ttyd
-install -d -m 0755 /etc/apt/keyrings
-. /etc/os-release
-case "$ID" in ubuntu|debian) ;; *) echo 'Beam VM images require Debian/Ubuntu' >&2; exit 1 ;; esac
+
+apt_install() {
+  apt-get install -y --no-install-recommends "$@"
+}
+
 apt_repository() {
   local name=$1 key_url=$2 repository=$3 suite=$4 component=$5
   curl -fsSL "$key_url" -o "/etc/apt/keyrings/$name.asc"
-  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/%s.asc] %s %s %s\n' "$arch" "$name" "$repository" "$suite" "$component" > "/etc/apt/sources.list.d/$name.list"
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/%s.asc] %s %s %s\n' \
+    "$arch" "$name" "$repository" "$suite" "$component" \
+    > "/etc/apt/sources.list.d/$name.list"
 }
-apt_repository nodesource https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key https://deb.nodesource.com/node_22.x nodistro main
-apt_repository docker "https://download.docker.com/linux/$ID/gpg" "https://download.docker.com/linux/$ID" "$VERSION_CODENAME" stable
+
+if ! command -v apt-get >/dev/null; then
+  echo 'Beam VM images require Debian/Ubuntu and systemd' >&2
+  exit 1
+fi
 apt-get update
-apt-get install -y --no-install-recommends nodejs
-if ! command -v dockerd >/dev/null || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1 || ! docker buildx version >/dev/null 2>&1; then
-  apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+# Runtime libraries required by native coding-agent binaries.
+apt_install systemd systemd-sysv dbus ca-certificates curl openssh-server rsync git \
+  sudo procps python3 python3-pip libatomic1 libstdc++6 libgcc-s1
+
+arch=$(dpkg --print-architecture)
+case "$arch" in
+  amd64) ttyd_arch=x86_64 ;;
+  arm64) ttyd_arch=aarch64 ;;
+  *) echo "unsupported VM architecture: $arch" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.$ttyd_arch" -o /usr/local/bin/ttyd
+chmod 0755 /usr/local/bin/ttyd
+
+install -d -m 0755 /etc/apt/keyrings
+. /etc/os-release
+case "$ID" in
+  ubuntu|debian) ;;
+  *) echo 'Beam VM images require Debian/Ubuntu' >&2; exit 1 ;;
+esac
+apt_repository nodesource https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+  https://deb.nodesource.com/node_22.x nodistro main
+apt_repository docker "https://download.docker.com/linux/$ID/gpg" \
+  "https://download.docker.com/linux/$ID" "$VERSION_CODENAME" stable
+apt-get update
+apt_install nodejs
+if ! { command -v dockerd && command -v docker && docker compose version && docker buildx version; } >/dev/null 2>&1; then
+  apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 rm -f /usr/local/bin/docker-compose
 printf '#!/bin/sh\nexec docker compose "$@"\n' > /usr/local/bin/docker-compose
 chmod 0755 /usr/local/bin/docker-compose
 docker-compose version >/dev/null
+
 npm install -g --no-fund --no-audit @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.226
 npm cache clean --force
+
 install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
-install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" "$assets/kiosk" "$assets/kiosk-openbox-build" "$assets/kiosk-selkies-patch" /opt/beam-vm/
+install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" "$assets/kiosk" \
+  "$assets/kiosk-openbox-build" "$assets/kiosk-selkies-patch" /opt/beam-vm/
 install -m 0644 "$assets/kiosk-openbox.xml" "$assets/kiosk_config.py" /opt/beam-vm/
 install -m 0644 "$assets"/*.service /etc/systemd/system/
+
 # These are managed by Beam at boot, not by image build-time enablement.
 # A missing unit aborts a batch disable on Noble. Disable each independently.
-for unit in ssh.service ssh.socket getty@tty1.service serial-getty@hvc0.service docker.service docker.socket containerd.service systemd-resolved.service systemd-networkd.service systemd-networkd.socket; do
+for unit in ssh.service ssh.socket getty@tty1.service serial-getty@hvc0.service \
+  docker.service docker.socket containerd.service systemd-resolved.service \
+  systemd-networkd.service systemd-networkd.socket; do
   systemctl disable "$unit" 2>/dev/null || true
 done
 rm -f /etc/ssh/ssh_host_* /etc/machine-id /var/lib/dbus/machine-id
@@ -54,11 +84,19 @@ KbdInteractiveAuthentication no
 AuthorizedKeysFile /run/beam-vm/authorized_keys
 PidFile /run/sshd/sshd.pid
 EOF
-if [ "$kiosk" = true ]; then
+
+if [ "$desktop" = true ] || [ "$kiosk" = true ]; then
   case "${ID}:${VERSION_CODENAME:-}" in
     ubuntu:jammy|ubuntu:noble) ;;
-    *) echo 'Kiosk requires Ubuntu 22.04 (jammy) or 24.04 (noble)' >&2; exit 1 ;;
+    *) echo 'Graphical VMs require Ubuntu 22.04 (jammy) or 24.04 (noble)' >&2; exit 1 ;;
   esac
+  display_packages=(
+    openbox libnss3-tools dbus-x11 xterm x11-utils x11-xserver-utils
+    xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base adwaita-icon-theme
+  )
+fi
+
+if [ "$kiosk" = true ]; then
   # Native packages bundle the web client and encoding extensions. Keep both
   # the version and digest pinned: image identity must not depend on "latest".
   version=2.1.0
@@ -68,72 +106,75 @@ if [ "$kiosk" = true ]; then
       amd64) checksum=cedba7a9d8bb4d07fd2b2139a518dc2c03452e0f0254c5bb088426623e2027f3 ;;
       arm64) checksum=7ed77ef1ddbb17e265adb01e4190a086df93f3af2bccbe326b9dcdb268279868 ;;
     esac
-    curl -fsSL "https://github.com/selkies-project/selkies/releases/download/${version}/${package}" -o /tmp/selkies.deb
+    curl -fsSL "https://github.com/selkies-project/selkies/releases/download/${version}/${package}" \
+      -o /tmp/selkies.deb
     printf '%s  %s\n' "$checksum" /tmp/selkies.deb | sha256sum --check -
-    apt-get install -y --no-install-recommends /tmp/selkies.deb
+    apt_install /tmp/selkies.deb
     rm /tmp/selkies.deb
   else
     # Jammy has no native release package. Extract the portable distribution
     # at build time so starting a VM never requires FUSE or a download.
     case "$arch" in
-      amd64) portable_arch=x86_64; checksum=a0147192e9d20e98c7b899411d62194a4fb4e5f19447a4e08868d61cde09c43b ;;
-      arm64) portable_arch=aarch64; checksum=5573a85c1a538168d6cf04f7cc21c27ac5c9e40dab496b737d911ecf4fda8629 ;;
+      amd64)
+        portable_arch=x86_64
+        checksum=a0147192e9d20e98c7b899411d62194a4fb4e5f19447a4e08868d61cde09c43b
+        ;;
+      arm64)
+        portable_arch=aarch64
+        checksum=5573a85c1a538168d6cf04f7cc21c27ac5c9e40dab496b737d911ecf4fda8629
+        ;;
     esac
-    curl -fsSL "https://github.com/selkies-project/selkies/releases/download/${version}/selkies-${version}-${portable_arch}.AppImage" -o /tmp/selkies.AppImage
+    curl -fsSL "https://github.com/selkies-project/selkies/releases/download/${version}/selkies-${version}-${portable_arch}.AppImage" \
+      -o /tmp/selkies.AppImage
     printf '%s  %s\n' "$checksum" /tmp/selkies.AppImage | sha256sum --check -
     chmod 0755 /tmp/selkies.AppImage
-    (cd /opt && /tmp/selkies.AppImage --appimage-extract >/dev/null && mv squashfs-root selkies)
+    (
+      cd /opt
+      /tmp/selkies.AppImage --appimage-extract >/dev/null
+      mv squashfs-root selkies
+    )
     ln -s /opt/selkies/AppRun /usr/local/bin/selkies
     rm /tmp/selkies.AppImage
   fi
-  apt-get install -y --no-install-recommends xvfb xauth openbox wmctrl xsettingsd dbus-x11 pulseaudio libegl1 libgbm1 libgl1-mesa-dri libnss3-tools xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base adwaita-icon-theme
-  install -d /etc/ca-certificates/update.d
+  apt_install "${display_packages[@]}" xvfb xauth wmctrl xsettingsd pulseaudio \
+    libegl1 libgbm1 libgl1-mesa-dri
   /opt/beam-vm/kiosk-openbox-build
   /opt/beam-vm/kiosk-selkies-patch
-  install -m 0755 "$assets/browser-trust" /opt/beam-vm/browser-trust
-  install -m 0755 "$assets/browser-trust-update" /etc/ca-certificates/update.d/beam-browser
-  /opt/beam-vm/browser-trust --initialize
   printf 'selkies-%s\n' "$version" > /opt/beam-vm/kiosk-backend
-  # Load the platform ICE broker before the upstream client creates peers.
-  # Media/input remain upstream Selkies; this only adapts gateway routing.
-  python3 - <<'PY'
-from pathlib import Path
-import sys
-sys.path.insert(0, '/opt/beam-vm')
-from kiosk_config import KioskRuntime
-
-pages = list(Path('/opt/selkies').rglob('selkies_web/index.html'))
-if not pages:
-    raise SystemExit('Selkies web client not found; cannot install Beam transport bootstrap')
-for page in pages:
-    source = page.read_text()
-    script = f'<script src="../_beam/kiosk/webrtc.js" data-pixel-ratio="{KioskRuntime().pixel_ratio}"></script>'
-    if script not in source:
-        page.write_text(source.replace('<head>', '<head>' + script, 1))
-PY
 elif [ "$desktop" = true ]; then
-  case "${ID}:${VERSION_CODENAME:-}" in
-    ubuntu:jammy|ubuntu:noble) ;;
-    *) echo 'Desktop requires Ubuntu 22.04 (jammy) or 24.04 (noble)' >&2; exit 1 ;;
-  esac
   version=1.5.0
-  curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_${VERSION_CODENAME}_${version}_${arch}.deb" -o /tmp/kasmvnc.deb
+  curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_${VERSION_CODENAME}_${version}_${arch}.deb" \
+    -o /tmp/kasmvnc.deb
   if [ "$arch" = amd64 ]; then
-    apt_repository google-chrome https://dl.google.com/linux/linux_signing_key.pub https://dl.google.com/linux/chrome/deb/ stable main
+    apt_repository google-chrome https://dl.google.com/linux/linux_signing_key.pub \
+      https://dl.google.com/linux/chrome/deb/ stable main
     browser=google-chrome-stable
   else
     # Google Chrome has no Linux arm64 package; retain Firefox on that architecture.
-    apt_repository mozilla https://packages.mozilla.org/apt/repo-signing-key.gpg https://packages.mozilla.org/apt mozilla main
+    apt_repository mozilla https://packages.mozilla.org/apt/repo-signing-key.gpg \
+      https://packages.mozilla.org/apt mozilla main
     printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
     browser=firefox
   fi
   apt-get update
-  apt-get install -y --no-install-recommends /tmp/kasmvnc.deb "$browser" libnss3-tools openbox pcmanfm libfm-modules librsvg2-common xdg-user-dirs adwaita-icon-theme dbus-x11 xterm x11-utils x11-xserver-utils xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base
+  apt_install "${display_packages[@]}" /tmp/kasmvnc.deb "$browser" pcmanfm \
+    libfm-modules librsvg2-common xdg-user-dirs
   # Kasm 1.5 leaves getType() rejections unhandled when the host clipboard
   # changes mid-read. Discard that partial transfer and retry on the next input.
   python3 - <<'PY'
 import re
 from pathlib import Path
+
+replacement = '''async clipboardPasteDataFrom(...args) {
+    try {
+        return await this.beamClipboardPasteDataFrom(...args);
+    } catch (error) {
+        if (error.name !== "InvalidStateError") throw error;
+        this._clipHash = 0;
+        this._resendClipboardNextUserDrivenEvent = true;
+    }
+}
+async beamClipboardPasteDataFrom('''
 
 count = 0
 for path in Path('/usr/share/kasmvnc/www/assets').glob('*.js'):
@@ -143,10 +184,7 @@ for path in Path('/usr/share/kasmvnc/www/assets').glob('*.js'):
         continue
     source, matches = re.subn(
         r'async clipboardPasteDataFrom\(',
-        'async clipboardPasteDataFrom(...args){try{return await this.beamClipboardPasteDataFrom(...args)}'
-        'catch(error){if(error.name!=="InvalidStateError")throw error;'
-        'this._clipHash=0;this._resendClipboardNextUserDrivenEvent=true}}'
-        'async beamClipboardPasteDataFrom(',
+        replacement,
         source,
     )
     if matches:
@@ -154,10 +192,6 @@ for path in Path('/usr/share/kasmvnc/www/assets').glob('*.js'):
         count += matches
 assert count == 1, 'KasmVNC clipboard patch no longer matches the installed client'
 PY
-  install -d /etc/ca-certificates/update.d
-  install -m 0755 "$assets/browser-trust" /opt/beam-vm/browser-trust
-  install -m 0755 "$assets/browser-trust-update" /etc/ca-certificates/update.d/beam-browser
-  /opt/beam-vm/browser-trust --initialize
   if [ "$arch" = amd64 ]; then
     install -m 0755 "$assets/browser" /usr/local/bin/google-chrome-stable
     ln -sf google-chrome-stable /usr/local/bin/google-chrome
@@ -169,7 +203,8 @@ PY
   sed -i '/^\[config\]/a quick_exec=1' /etc/xdg/libfm/libfm.conf
   sed -i 's/^big_icon_size=.*/big_icon_size=96/' /etc/xdg/libfm/libfm.conf
   # Use the installed flat window theme and readable title bars at 192 DPI.
-  sed -i 's/<name>Clearlooks<\//<name>Breeze-ob<\//; /<font /,/<\/font>/s/<size>.*<\/size>/<size>11<\/size>/' /etc/xdg/openbox/rc.xml
+  sed -i 's/<name>Clearlooks<\//<name>Breeze-ob<\//; /<font /,/<\/font>/s/<size>.*<\/size>/<size>11<\/size>/' \
+    /etc/xdg/openbox/rc.xml
   desktop_config=/root/.config/pcmanfm/default/desktop-items-0.conf
   if [ ! -f "$desktop_config" ]; then
     install -d "$(dirname "$desktop_config")"
@@ -191,8 +226,17 @@ EOF
     printf '\nenv GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop &\n' >> /etc/xdg/openbox/autostart
   fi
   if [ "$browser" = firefox ]; then
-    sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' /root/Desktop/browser.desktop
+    sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' \
+      /root/Desktop/browser.desktop
   fi
   rm -f /tmp/kasmvnc.deb
 fi
+
+if [ "$desktop" = true ] || [ "$kiosk" = true ]; then
+  install -d /etc/ca-certificates/update.d
+  install -m 0755 "$assets/browser-trust" /opt/beam-vm/browser-trust
+  install -m 0755 "$assets/browser-trust-update" /etc/ca-certificates/update.d/beam-browser
+  /opt/beam-vm/browser-trust --initialize
+fi
+
 rm -rf /var/lib/apt/lists/* "$assets"

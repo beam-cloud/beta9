@@ -34,23 +34,28 @@ RUNTIME = Path("/run/beam-desktop")
 def mcp_ready(port, path):
     """Probe initialization, including servers that answer using SSE."""
     endpoint = f"http://127.0.0.1:{port}{path}"
-    body = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": POLICY.mcp_protocol_version,
-                "capabilities": {},
-                "clientInfo": {"name": "beam-kiosk-readiness", "version": "1"},
-            },
-        }
-    ).encode()
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     deadline = time.monotonic() + POLICY.command_timeout
+
+    def request(value=None, method="POST"):
+        data = json.dumps(value).encode() if value is not None else None
+        return urlopen(
+            Request(endpoint, data=data, headers=headers, method=method),
+            timeout=POLICY.command_timeout,
+        )
+
     try:
-        with urlopen(
-            Request(endpoint, data=body, headers=headers), timeout=POLICY.command_timeout
+        with request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": POLICY.mcp_protocol_version,
+                    "capabilities": {},
+                    "clientInfo": {"name": "beam-kiosk-readiness", "version": "1"},
+                },
+            }
         ) as response:
             session = response.headers.get("Mcp-Session-Id")
             if "text/event-stream" in response.headers.get("Content-Type", ""):
@@ -94,17 +99,11 @@ def mcp_ready(port, path):
         headers["MCP-Protocol-Version"] = version
         if session:
             headers["Mcp-Session-Id"] = session
-        initialized = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
-        with urlopen(
-            Request(endpoint, data=initialized, headers=headers), timeout=POLICY.command_timeout
-        ):
+        with request({"jsonrpc": "2.0", "method": "notifications/initialized"}):
             pass
         if session:
             try:
-                with urlopen(
-                    Request(endpoint, method="DELETE", headers=headers),
-                    timeout=POLICY.command_timeout,
-                ):
+                with request(method="DELETE"):
                     pass
             except HTTPError as error:
                 if error.code != 405:
@@ -114,13 +113,15 @@ def mcp_ready(port, path):
         return False
 
 
+def run_command(command, *, env=None, timeout=None, check=True, **options):
+    return subprocess.run(
+        command, env=env, timeout=timeout or POLICY.command_timeout, check=check, **options
+    )
+
+
 def root_property(name, env):
-    result = subprocess.run(
-        ["xprop", "-root", name],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=POLICY.command_timeout,
+    result = run_command(
+        ["xprop", "-root", name], env=env, check=False, capture_output=True, text=True
     )
     return result.stdout if result.returncode == 0 else ""
 
@@ -188,17 +189,14 @@ def saved_display(path, legacy_scale=POLICY.pixel_ratio):
 
 
 def resize_display(size, env):
-    subprocess.run(
+    run_command(
         ["selkies", "resize", f"{size[0]}x{size[1]}"],
         env=env,
-        check=True,
         timeout=POLICY.resize_timeout,
     )
     # Selkies' standalone resize CLI initializes the physical display at 96 DPI.
     # Apply the fixed density in the same guest operation, before GUI startup.
-    subprocess.run(
-        ["xrandr", "--dpi", str(POLICY.dpi)], env=env, check=True, timeout=POLICY.command_timeout
-    )
+    run_command(["xrandr", "--dpi", str(POLICY.dpi)], env=env)
 
 
 def display_size(env):
@@ -391,10 +389,8 @@ class Session:
         self.saved_size = saved_display(self.display_file, legacy_scale=legacy_scale)
         save_display(self.display_file, self.saved_size)
         self.geometry_check = 0
-        subprocess.run(
-            ["xauth", "-f", self.env["XAUTHORITY"], "add", ":1", ".", secrets.token_hex(16)],
-            check=True,
-            timeout=POLICY.command_timeout,
+        run_command(
+            ["xauth", "-f", self.env["XAUTHORITY"], "add", ":1", ".", secrets.token_hex(16)]
         )
         self.spawn(
             [
@@ -424,31 +420,24 @@ class Session:
             role="display",
         )
         self.wait_for(
-            lambda: subprocess.run(
+            lambda: run_command(
                 ["xdpyinfo"],
                 env=self.env,
+                check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=POLICY.command_timeout,
             ).returncode
             == 0,
             "display",
             POLICY.display_timeout,
         )
         resize_display(self.saved_size, self.env)
-        subprocess.run(
-            ["xsetroot", "-solid", "#111113"],
-            env=self.env,
-            check=True,
-            timeout=POLICY.command_timeout,
-        )
-        subprocess.run(
+        run_command(["xsetroot", "-solid", "#111113"], env=self.env)
+        run_command(
             ["xrdb", "-merge"],
             input=f"Xft.dpi: {POLICY.dpi}\n",
             text=True,
             env=self.env,
-            check=True,
-            timeout=POLICY.command_timeout,
         )
         self.toolkit_file.write_text(self.settings_source)
         self.spawn(["xsettingsd", "--config", str(self.toolkit_file)], role="settings")
@@ -521,12 +510,7 @@ class Session:
             temporary.write_text(toolkit_settings(source))
             temporary.replace(self.toolkit_file)
             os.kill(self.processes["settings"].pid, signal.SIGHUP)
-            subprocess.run(
-                [self.window_manager, "--reconfigure"],
-                env=self.env,
-                check=True,
-                timeout=POLICY.command_timeout,
-            )
+            run_command([self.window_manager, "--reconfigure"], env=self.env)
             self.settings_source = source
         if time.monotonic() - self.geometry_check > POLICY.geometry_interval:
             self.geometry_check = time.monotonic()
