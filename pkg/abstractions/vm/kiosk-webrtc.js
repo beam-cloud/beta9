@@ -1,10 +1,12 @@
 /* Browser shell and authenticated transport bootstrap for an ordinary GUI app. */
 (() => {
+  if (window.beamKiosk) return;
   const policy = Object.freeze({
     pixelRatio: 2,
     maxPixelRatio: 4,
     statusFailures: 3,
     alignment: 8,
+    maxDimension: 4080, // Pinned Selkies client's encoder limit.
     pollMs: 1000,
     requestMs: 5000,
     registrationMs: 10000,
@@ -278,6 +280,7 @@
 
     checkDisplay() {
       clearTimeout(this.settle);
+      this.syncViewport();
       // Video can arrive before the client's first resolution bookkeeping.
       if (this.video?.id === 'stream' && this.video.videoWidth > 0 && this.video.width > 0) {
         window.streamResolutionDiverged = this.video.videoWidth !== this.video.width ||
@@ -346,8 +349,32 @@
       };
       document.addEventListener('pointerdown', activate, true);
       document.addEventListener('keydown', activate, true);
+      const resize = () => {
+        clearTimeout(this.viewportTimer);
+        this.viewportTimer = setTimeout(() => this.syncViewport(), policy.settleMs);
+      };
+      for (const event of ['focus', 'resize']) window.addEventListener(event, resize);
+      const release = () => { this.viewport = null; };
+      window.addEventListener('blur', release);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) release();
+        else resize();
+      });
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(document.documentElement);
       new MutationObserver(() => this.observeVideo()).observe(document, {childList: true, subtree: true});
       this.observeVideo();
+    }
+
+    syncViewport() {
+      const input = this.input?.input;
+      if (!input?.inputAttached || !document.hasFocus() || document.hidden ||
+          !(window.innerWidth > 0 && window.innerHeight > 0) ||
+          this.activePeer?.connectionState !== 'connected') return;
+      const size = [window.innerWidth, window.innerHeight].map(value =>
+        Math.min(policy.maxDimension, Math.floor(value * this.pixelRatio / 2) * 2)).join('x');
+      if (size === this.viewport) return;
+      input.send(`KIOSK_VIEWPORT,${size}`);
+      this.viewport = size;
     }
 
     syncConnection() {
@@ -356,7 +383,10 @@
       this.peerState = state;
       clearTimeout(this.recoveryTimer);
       this.recoveryTimer = null;
-      if (state === 'connected') this.refreshDisplay();
+      if (state === 'connected') {
+        this.viewport = null;
+        this.refreshDisplay();
+      }
       else if (['disconnected', 'failed', 'closed'].includes(state)) {
         this.notify('disconnected');
         this.refreshDisplay();

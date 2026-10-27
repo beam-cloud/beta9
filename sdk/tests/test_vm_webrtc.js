@@ -32,6 +32,9 @@ async function check(path) {
       return {ok: status === 200, status, json: async () => ({sdp: 'gateway-description'})};
     },
   });
+  const viewer=window.beamKiosk;
+  vm.runInNewContext(source,{window});
+  assert.equal(window.beamKiosk,viewer,'duplicate bootstrap tags must not install another client');
   assert.equal(storage.get('selkies_tab_id'), `page-${path}`, 'copied session storage cannot share a controller identity');
   const peer = new Peer();
   const applying = peer.setRemoteDescription({type: 'offer', sdp: 'guest-description'});
@@ -73,7 +76,8 @@ async function check(path) {
   assert.equal(timers.size,0,'a replacement peer cancels the previous recovery timer');
 }
 async function checkDisplay() {
-  const messages=[],events={},videoEvents={},timers=new Map();
+  const messages=[],events={},videoEvents={},windowEvents={},timers=new Map();
+  let focused=true;
   class Media {
     constructor() { Object.assign(this,{style:{objectFit:'fill'},id:'stream',width:1920,height:1080,videoWidth:0,videoHeight:0,paused:true,readyState:0,muted:false}); }
     play() {
@@ -86,8 +90,8 @@ async function checkDisplay() {
   const video=new Media();
   class Observer { constructor(callback) { this.callback=callback; } observe(target,options) { if(options.attributes) videoEvents.dimensions=this.callback; } }
   const attributes=new Set();
-  const document={documentElement:{hasAttribute:()=>false,toggleAttribute:(name,on)=>on?attributes.add(name):attributes.delete(name)},readyState:'loading',querySelector:()=>video,addEventListener:(name,fn)=>{events[name]=fn;},removeEventListener:(name)=>{delete events[name];}};
-  const displayWindow={HTMLMediaElement:Media,innerWidth:960,innerHeight:540,addEventListener(){}};
+  const document={documentElement:{hasAttribute:()=>false,toggleAttribute:(name,on)=>on?attributes.add(name):attributes.delete(name)},hasFocus:()=>focused,hidden:false,readyState:'loading',querySelector:()=>video,addEventListener:(name,fn)=>{events[name]=fn;},removeEventListener:(name)=>{delete events[name];}};
+  const displayWindow={HTMLMediaElement:Media,innerWidth:960,innerHeight:540,addEventListener(name,fn){windowEvents[name]=fn;}};
   vm.runInNewContext(source,{
     window:displayWindow, HTMLMediaElement:Media, document, MutationObserver:Observer,URL,
     parent:{postMessage:value=>messages.push(value)},location:{origin:'https://application.example',href:'https://application.example/stream/'},
@@ -122,6 +126,25 @@ async function checkDisplay() {
   assert.equal(video.muted,true,'blocked audio retries playback muted');
   assert.equal(video.attempts,attempts+2);
   video.reject='AbortError';await assert.rejects(video.play(),{name:'AbortError'});
+  const viewer=displayWindow.beamKiosk, sent=[];
+  viewer.input={input:{inputAttached:true,send:message=>sent.push(message)}};
+  viewer.activePeer.connectionState='connected';
+  viewer.syncViewport();
+  assert.equal(sent.at(-1),'KIOSK_VIEWPORT,1920x1080');
+  viewer.syncViewport();assert.equal(sent.length,1,'unchanged frames do not repeat resize requests');
+  focused=false;windowEvents.blur();
+  displayWindow.innerWidth=1728;displayWindow.innerHeight=846;
+  windowEvents.resize();timers.get(1)();
+  assert.equal(sent.length,1,'background resize cannot take over the shared desktop');
+  focused=true;windowEvents.focus();timers.get(1)();
+  assert.equal(sent.at(-1),'KIOSK_VIEWPORT,3456x1692','the newly focused wide tab must own its native framebuffer');
+  document.hidden=true;events.visibilitychange();viewer.syncViewport();
+  assert.equal(sent.length,2,'hidden documents never resize');
+  document.hidden=false;events.visibilitychange();timers.get(1)();
+  assert.equal(sent.length,3,'returning tabs reclaim their viewport even when its dimensions are unchanged');
+  displayWindow.innerWidth=0;viewer.syncViewport();assert.equal(sent.length,3);
+  displayWindow.innerWidth=5000;displayWindow.innerHeight=10000;viewer.syncViewport();
+  assert.equal(sent.at(-1),'KIOSK_VIEWPORT,4080x4080','viewport requests retain the pinned encoder limit');
 }
 (async()=>{for(const path of ['/', '/vm/app/8080/']) await check(path);await checkDisplay();})()
  .catch(error=>{console.error(error);process.exitCode=1;});

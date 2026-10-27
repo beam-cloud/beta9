@@ -452,10 +452,11 @@ def test_pinned_backend_pointer_fix_preserves_clicks_and_real_drags(tmp_path):
                 self.button_mask = button_mask
         """)
     path = tmp_path / "input_handler.py"
+    edit = next(p[1:] for p in patcher["PATCHES"] if p[0] == path.name)
     path.write_text(original)
-    patcher["patch_file"](path, *patcher["PATCHES"][path.name])
+    patcher["patch_file"](path, *edit)
     patched = path.read_text()
-    patcher["patch_file"](path, *patcher["PATCHES"][path.name])
+    patcher["patch_file"](path, *edit)
     assert path.read_text() == patched, "repeated image preparation must be idempotent"
     namespace = {"MOUSE_POSITION": "move"}
     exec(compile(patched, str(path), "exec"), namespace)
@@ -479,4 +480,45 @@ def test_pinned_backend_pointer_fix_preserves_clicks_and_real_drags(tmp_path):
         ]
     path.write_text(original.replace("button_mask != self.button_mask", "upstream_changed"))
     with pytest.raises(SystemExit, match="Selkies source changed"):
-        patcher["patch_file"](path, *patcher["PATCHES"][path.name])
+        patcher["patch_file"](path, *edit)
+
+
+def test_focused_viewport_requires_controller_authority(tmp_path):
+    import runpy
+    import textwrap
+
+    patcher = runpy.run_path(str(Path(vm_file).parent / "assets/kiosk-selkies-patch"))
+    path = tmp_path / "webrtc_mode.py"
+    path.write_text(
+        textwrap.dedent("""\
+        class Session:
+            def message(self, msg, display_id="primary", conn_id=None):
+                if msg == "REQUEST_KEYFRAME" and self.rtc_app is not None:
+                    return "keyframe"
+                return "ordinary input"
+        """)
+    )
+    edit = next(p for p in patcher["PATCHES"] if "focused kiosk controller" in p[1])
+    patcher["patch_file"](path, *edit[1:])
+    patched = path.read_text()
+    patcher["patch_file"](path, *edit[1:])
+    assert path.read_text() == patched
+    namespace = {"parse_resize_dims": lambda size: (3456, 1692) if size == "3456x1692" else None}
+    exec(compile(patched, str(path), "exec"), namespace)
+    session = namespace["Session"]()
+    controller = object()
+    session.rtc_app = SimpleNamespace(peer_connections={"allowed": controller, "viewer": object()})
+    session._peer_tabs = {"allowed": "wide", "viewer": "read-only"}
+    session._display_owner_tabs = {"primary": "narrow"}
+    session._holds_full_control = lambda peer: peer is controller
+    session.input_handler = MagicMock()
+    for connection, size in [("viewer", "3456x1692"), ("unknown", "3456x1692"), ("allowed", "bad")]:
+        session.message("KIOSK_VIEWPORT," + size, conn_id=connection)
+        assert session._display_owner_tabs == {"primary": "narrow"}
+        session.input_handler.on_message.assert_not_called()
+    session.message("KIOSK_VIEWPORT,3456x1692", conn_id="allowed")
+    assert session._display_owner_tabs == {"primary": "wide"}
+    session.input_handler.on_message.assert_called_once_with(
+        "r,3456x1692", "primary", conn_id="allowed"
+    )
+    assert session.message("ordinary") == "ordinary input"
