@@ -339,26 +339,10 @@ class VM:
             # A cached default image can be resolved by the gateway in the
             # creation request, without transport discovery or an image RPC.
             self._vm_http = self._service.vm_http
-            spec = dict(self._spec)
-            spec.setdefault("ssh", True)
-            if spec["ssh"]:
-                spec["ssh_public_key"] = public_key()
-            image = Image(base_image=DEFAULT_VM_BASE_IMAGE)
-            image.ignore_python = True
-            prepared = prepare_image(
-                image,
-                self._service,
-                spec.get("desktop", False),
-                kiosk=spec.get("kiosk") is not None,
-            )
-            self._creation_body = copy.deepcopy(
-                {
-                    "name": self.name or "",
-                    "spec": spec,
-                    "request_id": self.request_id,
-                    "image": prepared._verify_request().to_dict(casing=betterproto.Casing.SNAKE),
-                    **({"metadata": self._metadata} if self._metadata is not None else {}),
-                }
+            spec = self._prepare_spec()
+            image = self._prepare_image()._verify_request()
+            self._creation_body = self._creation_request(
+                spec, image=image.to_dict(casing=betterproto.Casing.SNAKE)
             )
             try:
                 return self._submit_creation(wait)
@@ -399,20 +383,43 @@ class VM:
             ) from exc
 
         spec = self._prepare_spec()
-        self._creation_body = copy.deepcopy(
-            {
-                "name": self.name or "",
-                "spec": spec,
-                "template": self.template or "",
-                "request_id": self.request_id,
-                **({"metadata": self._metadata} if self._metadata is not None else {}),
-                **({"snapshot": self._snapshot_source} if self._snapshot_source else {}),
-            }
+        if not (self.template or self._snapshot_source):
+            result = self._prepare_image().build()
+            if not result.success:
+                raise ImageBuildError(result.error or "VM image build failed")
+            spec["image_id"] = result.image_id
+
+        self._creation_body = self._creation_request(
+            spec,
+            template=self.template or "",
+            **({"snapshot": self._snapshot_source} if self._snapshot_source else {}),
         )
         return self
 
+    def _creation_request(self, spec, **source):
+        return copy.deepcopy(
+            {
+                "name": self.name or "",
+                "spec": spec,
+                "request_id": self.request_id,
+                **({"metadata": self._metadata} if self._metadata is not None else {}),
+                **source,
+            }
+        )
+
+    def _prepare_image(self):
+        image = self.image or Image(base_image=DEFAULT_VM_BASE_IMAGE)
+        if self.image is None:
+            image.ignore_python = True
+        return prepare_image(
+            image,
+            self._service,
+            self._spec.get("desktop", False),
+            kiosk=self._spec.get("kiosk") is not None,
+        )
+
     def _prepare_spec(self):
-        """Resolve workspace volumes, SSH identity and the immutable VM image."""
+        """Resolve workspace volumes and SSH identity before freezing the request."""
         spec = dict(self._spec)
         if self._volumes is not None:
             spec["volumes"] = []
@@ -423,23 +430,10 @@ class VM:
                     raise RuntimeError(f"Unable to prepare volume {selected.name}")
                 spec["volumes"].append(selected.export().to_dict(casing=betterproto.Casing.SNAKE))
 
-        if spec.get("ssh", True):
-            spec["ssh_public_key"] = public_key()
-
         if not (self.template or self._snapshot_source):
             spec.setdefault("ssh", True)
-            image = self.image or Image(base_image=DEFAULT_VM_BASE_IMAGE)
-            if self.image is None:
-                image.ignore_python = True
-            result = prepare_image(
-                image,
-                self._service,
-                spec.get("desktop", False),
-                kiosk=spec.get("kiosk") is not None,
-            ).build()
-            if not result.success:
-                raise ImageBuildError(result.error or "VM image build failed")
-            spec["image_id"] = result.image_id
+        if spec.get("ssh", True):
+            spec["ssh_public_key"] = public_key()
 
         return spec
 
@@ -778,25 +772,13 @@ class VM:
         CPU percent is averaged across assigned guest vCPUs. This operation
         counts as activity and may resume an enabled VM.
         """
-        code = """
-import json, os, time
-def cpu():
-    values = list(map(int, open('/proc/stat').readline().split()[1:9]))
-    return sum(values), values[3] + values[4]
-before = cpu()
-time.sleep(1)
-after = cpu()
-total, idle = after[0]-before[0], after[1]-before[1]
-memory = {k: int(v.strip().split()[0])*1024 for k,v in (line.split(':',1) for line in open('/proc/meminfo'))}
-disk = os.statvfs('/')
-print(json.dumps({'timestamp': time.time(), 'cpu_count': os.cpu_count(),
- 'cpu_used_percent': 100*(total-idle)/total if total else 0,
- 'memory_total_bytes': memory['MemTotal'], 'memory_used_bytes': memory['MemTotal']-memory['MemAvailable'],
- 'disk_total_bytes': disk.f_blocks*disk.f_frsize, 'disk_used_bytes': (disk.f_blocks-disk.f_bfree)*disk.f_frsize}))
-"""
-        process = self.process.exec("python3", "-c", code, cwd="/")
+        script = (Path(__file__).parent / "assets" / "metrics").read_text()
+        return self._guest_json("python3", "-c", script, error="Unable to sample VM metrics")
+
+    def _guest_json(self, *command, error):
+        process = self.process.exec(*command, cwd="/")
         if process.wait(10) != 0:
-            raise RuntimeError(process.stderr.read() or "Unable to sample VM metrics")
+            raise RuntimeError(process.stderr.read() or error)
         return json.loads(process.stdout.read())
 
     @property
@@ -849,10 +831,9 @@ print(json.dumps({'timestamp': time.time(), 'cpu_count': os.cpu_count(),
         """Read application readiness and errors without restarting anything."""
         if self.refresh().info["spec"].get("kiosk") is None:
             raise ValueError("VM does not have kiosk mode enabled")
-        process = self._sandbox().process.exec("/opt/beam-vm/kiosk", "--status")
-        if process.wait(10) != 0:
-            raise RuntimeError(process.stderr.read() or "Kiosk status is unavailable")
-        return json.loads(process.stdout.read())
+        return self._guest_json(
+            "/opt/beam-vm/kiosk", "--status", error="Kiosk status is unavailable"
+        )
 
     @property
     def terminal_url(self):

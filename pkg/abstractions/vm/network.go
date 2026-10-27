@@ -96,9 +96,13 @@ func parsePublicVMNetwork(cfg types.VMNetworkConfig) (*publicVMNetwork, error) {
 		return nil, fmt.Errorf("VM maxConnectionsPerVM must not exceed maxConnections")
 	}
 	p := &publicVMNetwork{
-		prefix: prefixes[0], prefixes: prefixes, maxConnections: limit, maxConnectionsPerVM: vmLimit,
-		connections: make(map[string]int), activities: make(map[string]*publicVMActivity),
-		rejectionLog: log.Sample(&zerolog.BurstSampler{Burst: 1, Period: 5 * time.Second}),
+		prefix:              prefixes[0],
+		prefixes:            prefixes,
+		maxConnections:      limit,
+		maxConnectionsPerVM: vmLimit,
+		connections:         make(map[string]int),
+		activities:          make(map[string]*publicVMActivity),
+		rejectionLog:        log.Sample(&zerolog.BurstSampler{Burst: 1, Period: 5 * time.Second}),
 	}
 	for _, value := range cfg.TrustedProxyCIDRs {
 		cidr, err := netip.ParsePrefix(value)

@@ -394,6 +394,48 @@ def sandbox_vm(monkeypatch):
     return vm, sandbox
 
 
+def test_metrics_asset_accounts_for_idle_cpu_and_available_memory(monkeypatch, capsys):
+    reads = iter(
+        [
+            "cpu 100 0 0 80 20 0 0 0\n",
+            "cpu 130 0 0 100 30 0 0 0\n",
+            "MemTotal: 1000 kB\nMemAvailable: 250 kB\nHugePages_Total: 0\n",
+        ]
+    )
+    monkeypatch.setattr("builtins.open", lambda *_: io.StringIO(next(reads)))
+    monkeypatch.setattr(vm_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(vm_module.time, "time", lambda: 123)
+    monkeypatch.setattr(vm_module.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(
+        vm_module.os,
+        "statvfs",
+        lambda _: SimpleNamespace(f_blocks=100, f_bfree=25, f_frsize=4096),
+    )
+    script = Path(vm_module.__file__).parent / "assets/metrics"
+    exec(compile(script.read_text(), str(script), "exec"), {})
+    assert json.loads(capsys.readouterr().out) == {
+        "timestamp": 123,
+        "cpu_count": 4,
+        "cpu_used_percent": 50,
+        "memory_total_bytes": 1000 * 1024,
+        "memory_used_bytes": 750 * 1024,
+        "disk_total_bytes": 100 * 4096,
+        "disk_used_bytes": 75 * 4096,
+    }
+
+
+@pytest.mark.parametrize("method", ["metrics", "kiosk_status"])
+def test_guest_json_commands_preserve_errors(sandbox_vm, method):
+    vm, sandbox = sandbox_vm
+    vm.info["spec"]["kiosk"] = {"command": ["editor"]}
+    process = sandbox.process.exec.return_value
+    process.wait.return_value = 1
+    process.stderr.read.return_value = "guest command failed"
+    with pytest.raises(RuntimeError, match="guest command failed"):
+        getattr(vm, method)()
+    process.stdout.read.assert_not_called()
+
+
 def test_wait_checks_every_service_and_tcp_readiness(sandbox_vm):
     vm, sandbox = sandbox_vm
     vm._services_container = None

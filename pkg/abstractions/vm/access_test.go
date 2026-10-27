@@ -15,7 +15,7 @@ import (
 )
 
 func TestVMHostRoutingPreservesAppPaths(t *testing.T) {
-	s := &Service{domain: "app.example.com"}
+	s := &Service{config: types.VMConfig{Domain: "app.example.com"}}
 	for _, host := range []string{
 		"sandbox-11111111-2222-3333-4444-555555555555-12345678-8080",
 		"11111111-2222-3333-4444-555555555555-8080",
@@ -23,7 +23,7 @@ func TestVMHostRoutingPreservesAppPaths(t *testing.T) {
 	} {
 		t.Run(host, func(t *testing.T) {
 			e := echo.New()
-			req := httptest.NewRequest(http.MethodGet, "https://"+host+"."+s.domain+"/files/a%20b?x=1", nil)
+			req := httptest.NewRequest(http.MethodGet, "https://"+host+"."+s.config.Domain+"/files/a%20b?x=1", nil)
 			err := s.hostRoute(func(c echo.Context) error {
 				require.Equal(t, "/files/a b", c.Request().URL.Path)
 				require.Equal(t, "/files/a%20b", c.Request().URL.EscapedPath())
@@ -35,7 +35,7 @@ func TestVMHostRoutingPreservesAppPaths(t *testing.T) {
 	}
 	_, v, _, _, _ := fixture()
 	v.Handle = "sandbox-long-friendly-name-0123456789abcdef0123456789abcdef"
-	req := httptest.NewRequest(http.MethodGet, "https://"+v.Handle+"-8080."+s.domain+"/files/a%20b", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://"+v.Handle+"-8080."+s.config.Domain+"/files/a%20b", nil)
 	err := s.hostRoute(func(c echo.Context) error {
 		require.Equal(t, "/vm/"+v.Handle+"/8080/files/a b", c.Request().URL.Path)
 		return nil
@@ -70,13 +70,13 @@ func TestDefaultSystemPortsDenyAnonymousAccess(t *testing.T) {
 
 func TestBrowserSessionExchangesAndNeverReachesGuest(t *testing.T) {
 	s, v, _, _, _ := fixture()
-	s.domain = "vm.example.com"
+	s.config.Domain = "vm.example.com"
 	v.TrafficAccessToken = "owner-secret"
 	v.Spec.ProtectedPorts = []uint32{8080}
 	e := proxyAPI(s)
 	session := accessSession(v, 8080, time.Now().Add(time.Minute).Unix())
 	path := "/vm/" + v.Handle + "/8080/desktop?existing=value&" + sessionParameter + "=" + session
-	req := httptest.NewRequest("GET", "https://"+v.Handle+"-8080."+s.domain+path, nil)
+	req := httptest.NewRequest("GET", "https://"+v.Handle+"-8080."+s.config.Domain+path, nil)
 	req.RequestURI = path
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -87,7 +87,7 @@ func TestBrowserSessionExchangesAndNeverReachesGuest(t *testing.T) {
 	require.True(t, cookies[0].Secure)
 	require.True(t, cookies[0].HttpOnly)
 	require.Equal(t, http.SameSiteLaxMode, cookies[0].SameSite)
-	req = httptest.NewRequest("GET", "https://"+v.Handle+"-8080."+s.domain+rec.Header().Get("Location"), nil)
+	req = httptest.NewRequest("GET", "https://"+v.Handle+"-8080."+s.config.Domain+rec.Header().Get("Location"), nil)
 	req.AddCookie(cookies[0])
 	req.AddCookie(&http.Cookie{Name: "application", Value: "preserved"})
 	rec = httptest.NewRecorder()
@@ -110,7 +110,7 @@ func TestSessionCookieUsesPublishedOriginBehindH2C(t *testing.T) {
 	} {
 		t.Run(test.base, func(t *testing.T) {
 			s, v, _, _, _ := fixture()
-			s.domain, s.baseURL = test.domain, test.base
+			s.config.Domain, s.config.BaseURL = test.domain, test.base
 			v.TrafficAccessToken = "owner-secret"
 			v.Spec.ProtectedPorts = []uint32{8080}
 			path := "/vm/" + v.Handle + "/8080/?" + sessionParameter + "=" + accessSession(v, 8080, time.Now().Add(time.Minute).Unix())
@@ -269,7 +269,7 @@ func TestBrowserSessionRejectsSharedHostAndOtherOrigins(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s, v, _, runtime, _ := fixture()
-			s.domain = "vm.example.com"
+			s.config.Domain = "vm.example.com"
 			v.Handle = "dev-random"
 			v.TrafficAccessToken = "owner-secret"
 			v.Spec.ProtectedPorts = []uint32{8080}
@@ -289,7 +289,7 @@ func TestBrowserSessionRejectsSharedHostAndOtherOrigins(t *testing.T) {
 
 func TestSharedHostCannotExchangeBrowserSession(t *testing.T) {
 	s, v, _, _, _ := fixture()
-	s.domain = "vm.example.com"
+	s.config.Domain = "vm.example.com"
 	v.TrafficAccessToken = "owner-secret"
 	path := "/vm/" + v.Handle + "/8080/?" + sessionParameter + "=" + accessSession(v, 8080, time.Now().Add(time.Minute).Unix())
 	req := httptest.NewRequest("GET", "https://gateway.example.com"+path, nil)
@@ -301,7 +301,7 @@ func TestSharedHostCannotExchangeBrowserSession(t *testing.T) {
 
 func TestPathModeRequiresExplicitTrafficToken(t *testing.T) {
 	s, v, info, _, _ := fixture()
-	s.domain = ""
+	s.config.Domain = ""
 	v.TrafficAccessToken = "owner-secret"
 	v.Spec.ProtectedPorts = []uint32{8080}
 	rec := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/access-session", `{"port":8080}`)

@@ -35,8 +35,8 @@ func TestDirectVMURLUsesExplicitBrowserAuthProvider(t *testing.T) {
 	for _, endpoint := range []string{"https://login.example.net/authorize-vm?tenant=example", "https://identity.example.org/sessions/new?tenant=example"} {
 		t.Run(endpoint, func(t *testing.T) {
 			s, v, info, runtime, _ := fixture()
-			s.domain = "vm.example.com"
-			s.browserAuthURL = endpoint
+			s.config.Domain = "vm.example.com"
+			s.config.BrowserAuthURL = endpoint
 			provider, err := url.Parse(endpoint)
 			require.NoError(t, err)
 			v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
@@ -72,7 +72,7 @@ func TestBrowserAuthIsDisabledWithoutExplicitConfiguration(t *testing.T) {
 	for _, domain := range []string{"vm.example.com", "app.beam.cloud", "app.stage.beam.cloud"} {
 		t.Run(domain, func(t *testing.T) {
 			s, v, info, runtime, _ := fixture()
-			s.domain = domain
+			s.config.Domain = domain
 			v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
 			v.Spec.ProtectedPorts = []uint32{7681}
 			req := browserRequest(s, v, 7681, "/")
@@ -104,7 +104,7 @@ func TestBrowserAuthIsDisabledWithoutExplicitConfiguration(t *testing.T) {
 
 func TestBrowserSessionsDoNotTakeLifecycleLock(t *testing.T) {
 	s, v, info, _, _ := fixture()
-	s.domain = "vm.example.com"
+	s.config.Domain = "vm.example.com"
 	v.TrafficAccessToken = "traffic-secret"
 	v.Spec.ProtectedPorts = []uint32{7681, 8080}
 	store := &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
@@ -128,8 +128,8 @@ func TestBrowserSessionsDoNotTakeLifecycleLock(t *testing.T) {
 
 func TestAuthorizedBrowserCookieReturnsToCleanDirectVMURL(t *testing.T) {
 	s, v, info, runtime, _ := fixture()
-	s.domain = "vm.example.com"
-	s.browserAuthURL = "https://login.example.net/authorize-vm"
+	s.config.Domain = "vm.example.com"
+	s.config.BrowserAuthURL = "https://login.example.net/authorize-vm"
 	v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
 	v.Spec.ProtectedPorts = []uint32{7681}
 	req := browserRequest(s, v, 7681, "/?theme=dark")
@@ -176,7 +176,7 @@ func TestAuthorizedBrowserCookieReturnsToCleanDirectVMURL(t *testing.T) {
 	rec = httptest.NewRecorder()
 	browserProxy(s).ServeHTTP(rec, req)
 	require.Equal(t, http.StatusSeeOther, rec.Code)
-	require.Contains(t, rec.Header().Get("Location"), s.browserAuthURL+"?")
+	require.Contains(t, rec.Header().Get("Location"), s.config.BrowserAuthURL+"?")
 }
 
 func TestBrowserLoginDoesNotReplaceAPIWebsocketOrEmbeddedAuthFailures(t *testing.T) {
@@ -193,8 +193,8 @@ func TestBrowserLoginDoesNotReplaceAPIWebsocketOrEmbeddedAuthFailures(t *testing
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, v, info, runtime, _ := fixture()
-			s.domain = "vm.example.com"
-			s.browserAuthURL = "https://login.example.net/authorize-vm"
+			s.config.Domain = "vm.example.com"
+			s.config.BrowserAuthURL = "https://login.example.net/authorize-vm"
 			v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
 			v.Spec.ProtectedPorts = []uint32{7681}
 			req := browserRequest(s, v, 7681, "/")
@@ -215,8 +215,8 @@ func TestBrowserLoginRequiresPublishedOriginAndLiveCredential(t *testing.T) {
 	for _, scenario := range []string{"shared host", "foreign origin", "revoked", "unconfigured", "invalid return", "insecure auth endpoint"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, info, runtime, _ := fixture()
-			s.domain = "vm.example.com"
-			s.browserAuthURL = "https://login.example.net/authorize-vm"
+			s.config.Domain = "vm.example.com"
+			s.config.BrowserAuthURL = "https://login.example.net/authorize-vm"
 			v.WorkspaceExternalID, v.TrafficAccessToken = info.Workspace.ExternalId, "traffic-secret"
 			v.Spec.ProtectedPorts = []uint32{7681}
 			req := browserRequest(s, v, 7681, "/")
@@ -229,12 +229,12 @@ func TestBrowserLoginRequiresPublishedOriginAndLiveCredential(t *testing.T) {
 			case "revoked":
 				s.backend.(*vmBackend).token = &types.Token{Active: false}
 			case "unconfigured":
-				s.browserAuthURL = ""
+				s.config.BrowserAuthURL = ""
 			case "invalid return":
 				req.RequestURI = "//other.example/"
 				want = http.StatusBadRequest
 			case "insecure auth endpoint":
-				s.browserAuthURL = "http://other.example/sign-in"
+				s.config.BrowserAuthURL = "http://other.example/sign-in"
 				want = http.StatusServiceUnavailable
 			}
 			// Exercise the handler directly for shared-host validation: the

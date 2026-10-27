@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -19,9 +18,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 )
 
 const sessionParameter = "beam_vm_session"
@@ -55,7 +52,7 @@ func validAccessSession(v *types.VM, port uint32, session string, now time.Time)
 // Browser credentials are confined to the VM's configured host and origin.
 // Cookie paths cannot isolate applications that share a gateway origin.
 func (s *Service) browserOrigin(c echo.Context, v *types.VM, port uint32) (*url.URL, error) {
-	if s.domain == "" {
+	if s.config.Domain == "" {
 		return nil, echo.NewHTTPError(http.StatusForbidden, "browser sessions require a VM subdomain")
 	}
 
@@ -150,13 +147,13 @@ func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32)
 		return false, nil
 	}
 
-	if s.browserAuthURL == "" {
+	if s.config.BrowserAuthURL == "" {
 		return false, nil
 	}
 	if _, err := s.browserOrigin(c, v, port); err != nil {
 		return false, err
 	}
-	login, err := url.Parse(s.browserAuthURL)
+	login, err := url.Parse(s.config.BrowserAuthURL)
 	if err != nil || login.Host == "" || login.User != nil || login.Fragment != "" ||
 		(login.Scheme != "https" && !(login.Scheme == "http" && (login.Hostname() == "localhost" || net.ParseIP(login.Hostname()).IsLoopback()))) {
 		return false, echo.NewHTTPError(http.StatusServiceUnavailable, "VM browser sign-in unavailable")
@@ -179,7 +176,7 @@ func (s *Service) redirectBrowserLogin(c echo.Context, v *types.VM, port uint32)
 func (s *Service) hostRoute(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		host := strings.ToLower(c.Request().Host)
-		domain := strings.ToLower(s.domain)
+		domain := strings.ToLower(s.config.Domain)
 		if strings.HasSuffix(host, "."+domain) {
 			label := strings.TrimSuffix(host, "."+domain)
 			handle, port, ok := splitHost(label)
@@ -334,41 +331,8 @@ func (s *Service) tunnel(c echo.Context) error {
 	return s.runtime.TunnelVM(c, v.ContainerID, uint32(port))
 }
 
-func (s *Service) keepActive(ctx context.Context, id string, idleTimeout int64) (func(), error) {
-	if err := s.repo.TouchVM(ctx, id); err != nil {
-		return nil, err
-	}
-	renew, release, err := s.activityLease(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	done := make(chan struct{})
-	go func() {
-		interval := 15 * time.Second
-		if idleTimeout > 0 {
-			interval = min(interval, time.Duration(idleTimeout)*time.Second/3)
-		}
-
-		tick := time.NewTicker(interval)
-		defer tick.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-				_ = s.repo.TouchVM(ctx, id)
-				_ = renew()
-			}
-		}
-	}()
-	return func() { close(done); release() }, nil
-}
-
 func (s *Service) createAccessSession(c echo.Context, v *types.VM, port uint32, ttl int64) error {
-	if s.domain == "" {
+	if s.config.Domain == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "browser access sessions require a VM subdomain")
 	}
 
@@ -390,22 +354,22 @@ func (s *Service) createAccessSession(c echo.Context, v *types.VM, port uint32, 
 }
 
 func (s *Service) urls(v *types.VM) {
-	v.BrowserAuth = s.domain != "" && s.browserAuthURL != ""
+	v.BrowserAuth = s.config.Domain != "" && s.config.BrowserAuthURL != ""
 	v.URLs = map[uint32]string{}
 	for _, port := range v.Spec.Ports {
 		if port == types.VMSSHPort {
 			continue
 		}
 
-		if s.domain != "" {
+		if s.config.Domain != "" {
 			scheme := "https"
-			if strings.HasSuffix(strings.Split(s.domain, ":")[0], ".localhost") || strings.Split(s.domain, ":")[0] == "localhost" {
+			if strings.HasSuffix(strings.Split(s.config.Domain, ":")[0], ".localhost") || strings.Split(s.config.Domain, ":")[0] == "localhost" {
 				scheme = "http"
 			}
 
-			v.URLs[port] = fmt.Sprintf("%s://%s-%d.%s/", scheme, v.Handle, port, s.domain)
+			v.URLs[port] = fmt.Sprintf("%s://%s-%d.%s/", scheme, v.Handle, port, s.config.Domain)
 		} else {
-			v.URLs[port] = fmt.Sprintf("%s/vm/%s/%d/", s.baseURL, v.Handle, port)
+			v.URLs[port] = fmt.Sprintf("%s/vm/%s/%d/", s.config.BaseURL, v.Handle, port)
 		}
 	}
 
@@ -419,47 +383,4 @@ func (s *Service) urls(v *types.VM) {
 			v.MCPURL = strings.TrimRight(v.URLs[v.Spec.Kiosk.MCP.Port], "/") + v.Spec.Kiosk.MCP.Path
 		}
 	}
-}
-
-const activityReconnectGrace = 150 * time.Second
-
-func activityKey(id string) string { return "vm:activity:" + id }
-
-func (s *Service) renewActivity(ctx context.Context, id, lease string) error {
-	if s.rdb == nil {
-		return nil
-	}
-	key := activityKey(id)
-	_, err := s.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(time.Now().UnixMilli(), 10))
-		pipe.ZAdd(ctx, key, redis.Z{Member: lease, Score: float64(time.Now().Add(activityReconnectGrace).UnixMilli())})
-		pipe.Expire(ctx, key, activityReconnectGrace)
-		return nil
-	})
-	return err
-}
-
-func (s *Service) hasActivity(ctx context.Context, id string) (bool, error) {
-	if s.rdb == nil {
-		return false, nil
-	}
-	count, err := s.rdb.ZCount(ctx, activityKey(id), strconv.FormatInt(time.Now().UnixMilli(), 10), "+inf").Result()
-	return count > 0, err
-}
-
-func (s *Service) activityLease(ctx context.Context, id string) (func() error, func(), error) {
-	lease := uuid.NewString()
-	renew := func() error { return s.renewActivity(ctx, id, lease) }
-	if err := renew(); err != nil {
-		return nil, nil, err
-	}
-	release := func() {
-		// Keep the lease across gateway shutdown; a replacement can reattach.
-		if s.rdb != nil && (s.ctx == nil || s.ctx.Err() == nil) {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			s.rdb.ZRem(cleanupCtx, activityKey(id), lease)
-		}
-	}
-	return renew, release, nil
 }

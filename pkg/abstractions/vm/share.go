@@ -48,7 +48,7 @@ func cleanBrowserURL(c echo.Context) (*url.URL, error) {
 
 func (s *Service) invalidShareLink(c echo.Context, cleanURL string) error {
 	data := struct{ OwnerURL string }{}
-	if s.browserAuthURL != "" {
+	if s.config.BrowserAuthURL != "" {
 		data.OwnerURL = cleanURL
 	}
 	var page bytes.Buffer

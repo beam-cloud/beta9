@@ -81,7 +81,7 @@ func (s *Service) response(v *types.VM) types.VM {
 // SandboxConnect, saving a client round trip without persisting lifecycle state.
 func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error {
 	response := s.response(v)
-	if c.QueryParam("wait") != "exec" || v.DesiredState != "running" || v.ContainerID == "" || v.Status == "error" {
+	if c.QueryParam("wait") != "exec" || v.DesiredState != types.VMStateRunning || v.ContainerID == "" || v.Status == types.VMStateError {
 		return c.JSON(status, response)
 	}
 
@@ -95,11 +95,11 @@ func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error 
 		// Start is already committed. A pending readiness probe must not turn
 		// a successful restore into a failed operation; clients can keep waiting
 		// without changing the checkpoint or bypassing authenticated readiness.
-		response.Status = "starting"
+		response.Status = types.VMStateStarting
 		return c.JSON(status, response)
 	}
 
-	response.Status = "running"
+	response.Status = types.VMStateRunning
 	return c.JSON(status, struct {
 		types.VM
 		ExecReady bool `json:"exec_ready"`
@@ -202,7 +202,7 @@ func (s *Service) list(c echo.Context) error {
 
 	result := []types.VM{}
 	for _, v := range vms {
-		if v.DesiredState == "deleted" && c.QueryParam("all") != "true" {
+		if v.DesiredState == types.VMStateDeleted && c.QueryParam("all") != "true" {
 			continue
 		}
 
@@ -242,7 +242,13 @@ func (s *Service) listPage(c echo.Context, metadata map[string]string) error {
 		return err
 	}
 
-	filter := types.VMFilter{Limit: limit, Offset: offset, Search: c.QueryParam("q"), Metadata: metadata, All: c.QueryParam("all") == "true"}
+	filter := types.VMFilter{
+		Limit:    limit,
+		Offset:   offset,
+		Search:   c.QueryParam("q"),
+		Metadata: metadata,
+		All:      c.QueryParam("all") == "true",
+	}
 	if status := c.QueryParam("status"); status != "" {
 		filter.Statuses = strings.Split(status, ",")
 	}
@@ -272,7 +278,7 @@ func (s *Service) get(c echo.Context) error {
 		return apiError(err)
 	}
 
-	if v.DesiredState == "deleted" {
+	if v.DesiredState == types.VMStateDeleted {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
@@ -422,7 +428,7 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 	}
 
 	if spec.Pool == "" {
-		spec.Pool = s.defaultPool
+		spec.Pool = s.config.DefaultPool
 	}
 
 	now := time.Now().UTC()
@@ -453,8 +459,8 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		Spec:                spec,
 		Metadata:            metadata,
 		CreationDigest:      digest,
-		DesiredState:        "running",
-		Status:              "starting",
+		DesiredState:        types.VMStateRunning,
+		Status:              types.VMStateStarting,
 		CreatedAt:           now,
 		UpdatedAt:           now,
 		LastActiveAt:        now,
@@ -475,7 +481,7 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		if err == nil {
 			// A removed request cannot be replayed, even if defaults have changed
 			// since creation. Onboarding uses Gone to prepare a fresh request.
-			if existing.DesiredState == "deleted" {
+			if existing.DesiredState == types.VMStateDeleted {
 				return nil, echo.NewHTTPError(http.StatusGone, "the VM for this request_id was removed")
 			}
 
@@ -572,7 +578,7 @@ func (s *Service) action(c echo.Context) error {
 		if err != nil {
 			return apiError(err)
 		}
-		if v.DesiredState == "running" && v.Status == "running" && v.Error == "" &&
+		if v.DesiredState == types.VMStateRunning && v.Status == types.VMStateRunning && v.Error == "" &&
 			v.TokenID == info.Token.ExternalId && v.MemoryCheckpointID == "" {
 			state, err := s.runtimeState(v)
 			if err != nil {
@@ -597,7 +603,7 @@ func (s *Service) action(c echo.Context) error {
 			unlock()
 		}
 	}()
-	if v.DesiredState == "deleted" {
+	if v.DesiredState == types.VMStateDeleted {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
@@ -605,15 +611,15 @@ func (s *Service) action(c echo.Context) error {
 	case "start", "resume":
 		if req.Cold {
 			// Finish terminal checkpoint finalization before abandoning RAM.
-			if v.DesiredState == "paused" && v.MemoryCheckpointID != "" {
+			if v.DesiredState == types.VMStatePaused && v.MemoryCheckpointID != "" {
 				if err := s.stop(ctx, v, false); err != nil {
 					return apiError(err)
 				}
 			}
 
 			v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
-			if v.DesiredState == "paused" {
-				v.DesiredState = "stopped"
+			if v.DesiredState == types.VMStatePaused {
+				v.DesiredState = types.VMStateStopped
 			}
 		}
 
@@ -626,14 +632,14 @@ func (s *Service) action(c echo.Context) error {
 		ctx = operationCtx
 		err = s.pause(ctx, v)
 	case "wake":
-		if !v.Spec.AutoResume && v.DesiredState != "running" {
+		if !v.Spec.AutoResume && v.DesiredState != types.VMStateRunning {
 			return echo.NewHTTPError(http.StatusConflict, "VM is stopped; call start() or enable auto_resume")
 		}
 
 		err = s.activate(ctx, info, v)
 	case "stop":
 		v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
-		v.DesiredState = "stopped"
+		v.DesiredState = types.VMStateStopped
 		if !req.NoSnapshot && v.StopSnapshotID == "" && v.ContainerID != "" {
 			v.StopSnapshotID = uuid.NewString()
 		}
@@ -705,7 +711,7 @@ func (s *Service) remove(c echo.Context) error {
 	}
 
 	defer unlock()
-	v.DesiredState = "deleted"
+	v.DesiredState = types.VMStateDeleted
 	v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return apiError(err)

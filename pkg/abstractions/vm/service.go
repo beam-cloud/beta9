@@ -34,20 +34,17 @@ type ImageVerifier interface {
 }
 
 type Service struct {
-	ctx            context.Context
-	rdb            *common.RedisClient
-	repo           repository.VMRepository
-	backend        repository.BackendRepository
-	containers     repository.ContainerRepository
-	runtime        Runtime
-	gateway        Gateway
-	images         ImageVerifier
-	domain         string
-	baseURL        string
-	browserAuthURL string
-	defaultPool    string
-	publicNetwork  *publicVMNetwork
-	webrtc         *vmWebRTC
+	ctx           context.Context
+	rdb           *common.RedisClient
+	repo          repository.VMRepository
+	backend       repository.BackendRepository
+	containers    repository.ContainerRepository
+	runtime       Runtime
+	gateway       Gateway
+	images        ImageVerifier
+	config        types.VMConfig
+	publicNetwork *publicVMNetwork
+	webrtc        *vmWebRTC
 }
 
 type ServiceOpts struct {
@@ -70,19 +67,17 @@ func New(ctx context.Context, opts ServiceOpts) error {
 		return fmt.Errorf("backend does not support persistent VMs")
 	}
 
+	opts.Config.BaseURL = strings.TrimSuffix(opts.Config.BaseURL, "/")
 	s := &Service{
-		ctx:            ctx,
-		rdb:            opts.RedisClient,
-		repo:           repo,
-		backend:        opts.BackendRepo,
-		containers:     opts.ContainerRepo,
-		runtime:        opts.Runtime,
-		gateway:        opts.Gateway,
-		images:         opts.Images,
-		domain:         opts.Config.Domain,
-		baseURL:        strings.TrimSuffix(opts.Config.BaseURL, "/"),
-		browserAuthURL: opts.Config.BrowserAuthURL,
-		defaultPool:    opts.Config.DefaultPool,
+		ctx:        ctx,
+		rdb:        opts.RedisClient,
+		repo:       repo,
+		backend:    opts.BackendRepo,
+		containers: opts.ContainerRepo,
+		runtime:    opts.Runtime,
+		gateway:    opts.Gateway,
+		images:     opts.Images,
+		config:     opts.Config,
 	}
 
 	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {
@@ -95,7 +90,7 @@ func New(ctx context.Context, opts ServiceOpts) error {
 	registerVMRoutes(opts.RouteGroup, s)
 	opts.Server.Any("/vm/:handle/:port", s.proxy)
 	opts.Server.Any("/vm/:handle/:port/*", s.proxy)
-	if s.domain != "" {
+	if s.config.Domain != "" {
 		opts.Server.Pre(s.hostRoute)
 	}
 

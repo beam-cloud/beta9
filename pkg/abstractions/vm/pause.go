@@ -13,7 +13,7 @@ import (
 // paused. The terminal checkpoint owns shutdown; a normal systemd shutdown
 // would change those disks underneath the saved memory image.
 func (s *Service) pause(ctx context.Context, v *types.VM) error {
-	if v.DesiredState == "paused" {
+	if v.DesiredState == types.VMStatePaused {
 		if v.MemoryCheckpointID == "" {
 			return echo.NewHTTPError(409, "memory pause did not complete; use start with cold=true to recover from disk")
 		}
@@ -30,7 +30,7 @@ func (s *Service) pause(ctx context.Context, v *types.VM) error {
 		return echo.NewHTTPError(409, "only a running VM can be paused")
 	}
 
-	v.DesiredState, v.Status = "paused", "pausing"
+	v.DesiredState, v.Status = types.VMStatePaused, types.VMStatePausing
 	v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err

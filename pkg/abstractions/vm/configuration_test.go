@@ -225,7 +225,7 @@ func TestDeletedCreationRequestReturnsGoneBeforeComparingSettings(t *testing.T) 
 				body = strings.Replace(body, `"base"`, `"updated-image"`, 1)
 			case "default-pool":
 				// The saved onboarding body can be identical across gateway updates.
-				s.defaultPool = "new-default"
+				s.config.DefaultPool = "new-default"
 			}
 			require.NoError(t, s.repo.SaveVM(context.Background(), v))
 

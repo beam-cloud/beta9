@@ -2,7 +2,6 @@ package vm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path"
@@ -196,91 +195,6 @@ func validate(spec *types.VMSpec) error {
 	return nil
 }
 
-func validateKiosk(spec *types.VMSpec) error {
-	k := spec.Kiosk
-	if k == nil {
-		return nil
-	}
-	for _, port := range slices.Concat(spec.Ports, spec.PublicPorts) {
-		if err := validateKioskPort(k, port, slices.Contains(spec.PublicPorts, port)); err != nil {
-			return err
-		}
-	}
-	if k.Transport != "" && k.Transport != types.VMKioskTransportWebRTC && k.Transport != types.VMKioskTransportWebSockets {
-		return fmt.Errorf("kiosk transport must be webrtc or websockets")
-	}
-	if k.Transport == types.VMKioskTransportWebRTC {
-		if !slices.Contains(spec.PrivatePorts, types.VMKioskMediaPort) {
-			spec.PrivatePorts = append(spec.PrivatePorts, types.VMKioskMediaPort)
-		}
-	}
-	checkCommand := func(command []string) error {
-		if len(command) == 0 || len(command) > types.VMKioskMaxCommandArgs || command[0] == "" {
-			return fmt.Errorf("kiosk commands require an argv array with 1–%d entries", types.VMKioskMaxCommandArgs)
-		}
-		size := 0
-		for _, arg := range command {
-			size += len(arg)
-			if strings.ContainsRune(arg, 0) {
-				return fmt.Errorf("kiosk command arguments cannot contain NUL")
-			}
-		}
-		if size > types.VMKioskMaxCommandBytes {
-			return fmt.Errorf("kiosk commands must fit in %d KiB", types.VMKioskMaxCommandBytes>>10)
-		}
-		return nil
-	}
-	if err := checkCommand(k.Command); err != nil {
-		return err
-	}
-	if k.Cwd == "" {
-		k.Cwd = "/workspace"
-	}
-	if !path.IsAbs(k.Cwd) || path.Clean(k.Cwd) != k.Cwd || strings.ContainsRune(k.Cwd, 0) {
-		return fmt.Errorf("kiosk cwd must be a clean absolute guest path")
-	}
-	size := 0
-	for key, value := range k.Env {
-		size += len(key) + len(value)
-		if !validEnvKey.MatchString(key) || strings.HasPrefix(key, "BEAM_VM_") || strings.HasPrefix(key, "BETA9_") || strings.ContainsRune(value, 0) {
-			return fmt.Errorf("invalid or reserved kiosk environment key %q", key)
-		}
-	}
-	if size > types.VMKioskMaxEnvBytes {
-		return fmt.Errorf("kiosk environment must fit in %d KiB", types.VMKioskMaxEnvBytes>>10)
-	}
-	if k.MCP != nil {
-		if err := checkCommand(k.MCP.Command); err != nil {
-			return err
-		}
-		p := k.MCP.Port
-		if p == 0 || p > 65535 || p == types.VMSSHPort || p == types.VMTerminalPort || p == types.VMDesktopPort || p == types.VMKioskStatusPort || (k.Transport == types.VMKioskTransportWebRTC && p == types.VMKioskMediaPort) || p == uint32(types.WorkerSandboxProcessManagerPort) {
-			return fmt.Errorf("kiosk MCP requires a non-reserved port between 1 and 65535")
-		}
-		if k.MCP.Path == "" {
-			k.MCP.Path = "/mcp"
-		}
-		if !strings.HasPrefix(k.MCP.Path, "/") || path.Clean(k.MCP.Path) != k.MCP.Path || strings.ContainsAny(k.MCP.Path, "?#\\\x00\r\n") {
-			return fmt.Errorf("kiosk MCP path must be an absolute URL path without a query or fragment")
-		}
-		if !slices.Contains(spec.Ports, p) {
-			spec.Ports = append(spec.Ports, p)
-		}
-		if !slices.Contains(spec.ProtectedPorts, p) {
-			spec.ProtectedPorts = append(spec.ProtectedPorts, p)
-		}
-	}
-	spec.Desktop = true
-	if !slices.Contains(spec.PrivatePorts, types.VMKioskStatusPort) {
-		spec.PrivatePorts = append(spec.PrivatePorts, types.VMKioskStatusPort)
-	}
-	encoded, err := json.Marshal(k)
-	if err != nil || len(encoded) > types.VMKioskMaxConfigBytes {
-		return fmt.Errorf("kiosk configuration must fit in %d KiB of JSON", types.VMKioskMaxConfigBytes>>10)
-	}
-	return nil
-}
-
 func validateMountPath(mount string, seen map[string]bool) error {
 	if !path.IsAbs(mount) || path.Clean(mount) != mount || seen[mount] {
 		return fmt.Errorf("VM mount paths must be unique absolute paths outside the root")
@@ -351,7 +265,7 @@ func (s *Service) update(c echo.Context) error {
 	}
 
 	defer unlock()
-	if v.DesiredState == "deleted" {
+	if v.DesiredState == types.VMStateDeleted {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
@@ -387,7 +301,7 @@ func (s *Service) update(c echo.Context) error {
 	// Apply through the existing worker firewall, and carry this same policy
 	// on every cold boot. Updating a stopping guest would race disk shutdown.
 	if (req.BlockNetwork != nil || req.AllowList != nil) && v.ContainerID != "" {
-		if v.Status != "running" {
+		if v.Status != types.VMStateRunning {
 			return echo.NewHTTPError(http.StatusConflict, "wait for the VM to finish starting or stopping before updating its network")
 		}
 
@@ -418,7 +332,12 @@ func (s *Service) update(c echo.Context) error {
 }
 
 func (s *Service) applyNetwork(ctx context.Context, v *types.VM, spec types.VMSpec) error {
-	resp, err := s.runtime.SandboxUpdateNetworkPermissions(ctx, &pb.PodSandboxUpdateNetworkPermissionsRequest{ContainerId: v.ContainerID, StubId: v.StubID, BlockNetwork: spec.BlockNetwork, AllowList: spec.AllowList})
+	resp, err := s.runtime.SandboxUpdateNetworkPermissions(ctx, &pb.PodSandboxUpdateNetworkPermissionsRequest{
+		ContainerId:  v.ContainerID,
+		StubId:       v.StubID,
+		BlockNetwork: spec.BlockNetwork,
+		AllowList:    spec.AllowList,
+	})
 	if err != nil {
 		return err
 	}
@@ -433,7 +352,7 @@ func (s *Service) applyNetwork(ctx context.Context, v *types.VM, spec types.VMSp
 // Shared by explicit start and access-triggered cold boots. Preserve the stop
 // barrier and reset launch retries only when a caller asks to activate the VM.
 func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
-	if v.DesiredState == "paused" && v.MemoryCheckpointID == "" {
+	if v.DesiredState == types.VMStatePaused && v.MemoryCheckpointID == "" {
 		return echo.NewHTTPError(http.StatusConflict, "memory pause did not complete; use start with cold=true to recover from disk")
 	}
 
@@ -453,7 +372,7 @@ func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM
 		ctx = auth.ContextWithAuthInfo(ctx, owner)
 	}
 
-	if (v.DesiredState == "stopped" || v.DesiredState == "paused") && (v.ContainerID != "" || v.StopSnapshotID != "") {
+	if (v.DesiredState == types.VMStateStopped || v.DesiredState == types.VMStatePaused) && (v.ContainerID != "" || v.StopSnapshotID != "") {
 		if err := s.stop(ctx, v, false); err != nil {
 			return err
 		}
@@ -463,7 +382,7 @@ func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM
 		return err
 	}
 
-	v.DesiredState, v.Error, v.TokenID = "running", "", info.Token.ExternalId
+	v.DesiredState, v.Error, v.TokenID = types.VMStateRunning, "", info.Token.ExternalId
 	v.LaunchAttempts = 0
 	if err := s.repo.TouchVM(ctx, v.ID); err != nil {
 		return err
@@ -498,7 +417,7 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 	}
 
 	defer unlock()
-	if v.DesiredState == "deleted" || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
+	if v.DesiredState == types.VMStateDeleted || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
 		return nil, false, echo.NewHTTPError(http.StatusConflict, "VM access changed while resuming")
 	}
 
@@ -508,7 +427,7 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 	}
 
 	ctx = auth.ContextWithAuthInfo(ctx, info)
-	if v.DesiredState != "running" {
+	if v.DesiredState != types.VMStateRunning {
 		if err := s.activate(ctx, info, v); err != nil {
 			return nil, false, echo.NewHTTPError(http.StatusServiceUnavailable, "unable to resume VM: "+err.Error())
 		}
@@ -523,7 +442,7 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 		return v, false, nil
 	}
 
-	v.Status = "running"
+	v.Status = types.VMStateRunning
 	// Probe the forwarding route before sending the original request once.
 	ready, err := s.runtime.VMPortReady(ctx, v.StubID, v.ContainerID, port)
 	if err != nil {
