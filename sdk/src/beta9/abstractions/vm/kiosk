@@ -501,7 +501,7 @@ class Session:
                 "--ui-show-connection-indicator=false",
                 "--keyboard-shortcuts=false",
                 "--second-screen=false",
-                "--enable-sharing=false",
+                "--enable-sharing=true",
                 "--microphone-enabled=false",
                 "--webcam-enabled=false",
                 "--gamepad-enabled=false",

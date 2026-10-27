@@ -196,6 +196,7 @@
         [data-beam-kiosk][hidden], [data-beam-kiosk] [hidden] { display:none !important; }
         [data-beam-kiosk] p { max-width:38em;padding:0 24px;text-align:center; }
         [data-beam-kiosk] button { font:inherit;padding:8px 16px;color:inherit;background:#242428;border:1px solid #3a3a40;border-radius:6px;cursor:pointer; }
+        [data-beam-kiosk-playing] #playButton { display:none !important; }
       </style>
       <p role="status" aria-live="polite"></p>
       <button>Reconnect</button><button>Reopen application</button>`;
@@ -210,8 +211,9 @@
     viewportMatches(surface) {
       const width = surface.videoWidth || surface.width;
       const height = surface.videoHeight || surface.height;
-      return Math.abs(width - window.innerWidth * this.pixelRatio) < policy.alignment &&
-        Math.abs(height - window.innerHeight * this.pixelRatio) < policy.alignment;
+      return window.innerWidth > 0 && window.innerHeight > 0 &&
+        (window.streamResolutionDiverged || Math.abs(width - window.innerWidth * this.pixelRatio) < policy.alignment &&
+          Math.abs(height - window.innerHeight * this.pixelRatio) < policy.alignment);
     }
 
     get webSocketLive() {
@@ -265,11 +267,17 @@
       const video = this.video;
       return (this.webSocketLive || !this.activePeer || this.activePeer.connectionState === 'connected') &&
         video && !video.paused && video.readyState >= 2 && video.videoWidth > 0 && this.viewportMatches(video) &&
-        (video.id === 'videoStream' || video.videoWidth === video.width && video.videoHeight === video.height);
+        (window.streamResolutionDiverged || video.id === 'videoStream' ||
+          video.videoWidth === video.width && video.videoHeight === video.height);
     }
 
     checkDisplay() {
       clearTimeout(this.settle);
+      if (this.video) document.documentElement.toggleAttribute('data-beam-kiosk-playing',
+        !this.video.paused && this.video.readyState >= 2);
+      // Another tab can own the shared framebuffer size. Selkies maps input
+      // against the realized stream; preserve its aspect ratio in this tab.
+      if (this.video && window.streamResolutionDiverged) this.video.style.objectFit = 'contain';
       if (!this.fitted()) {
         this.ready = false;
         return; // Resizing keeps the last live image visible.
@@ -295,7 +303,7 @@
       this.video = current;
       this.ready = false;
       this.notify('starting');
-      for (const event of ['playing', 'loadeddata', 'resize']) {
+      for (const event of ['playing', 'loadeddata', 'resize', 'pause', 'emptied']) {
         current.addEventListener(event, () => this.checkDisplay());
       }
       new MutationObserver(() => this.checkDisplay()).observe(current, {
@@ -308,8 +316,13 @@
       const viewer = this;
       const play = HTMLMediaElement.prototype.play;
       HTMLMediaElement.prototype.play = function(...args) {
-        if (['stream', 'videoStream'].includes(this.id) && !viewer.activated) this.muted = true;
-        return play.apply(this, args);
+        if (!['stream', 'videoStream'].includes(this.id)) return play.apply(this, args);
+        if (!viewer.activated) this.muted = true;
+        return play.apply(this, args).catch(error => {
+          if (error.name !== 'NotAllowedError' || this.muted) throw error;
+          this.muted = true;
+          return play.apply(this, args);
+        });
       };
       const activate = event => {
         if (!event.isTrusted) return;
@@ -348,6 +361,9 @@
     }
 
     installTransport() {
+      // Duplicating a browser tab copies sessionStorage; give each document its
+      // own controller identity before Selkies sends its signaling handshake.
+      try { window.sessionStorage.setItem('selkies_tab_id', window.crypto.randomUUID()); } catch (_) {}
       const proto = window.RTCPeerConnection && RTCPeerConnection.prototype;
       if (!proto) return;
       const viewer = this, routed = new WeakSet();

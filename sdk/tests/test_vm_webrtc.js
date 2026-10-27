@@ -4,6 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 async function check(path) {
   const calls = [], messages = [];
+  const storage = new Map([['selkies_tab_id', 'copied-from-another-tab']]);
   class Peer {
     constructor() { this.events = {}; }
     addEventListener(name, callback) { this.events[name] = callback; }
@@ -14,7 +15,8 @@ async function check(path) {
   let status = 200;
   const timers=new Map();
   vm.runInNewContext(source, {
-    window: { RTCPeerConnection: Peer,devicePixelRatio:1.5 }, RTCPeerConnection: Peer,
+    window: { RTCPeerConnection: Peer,devicePixelRatio:1.5,
+      sessionStorage:{setItem:(key,value)=>storage.set(key,value)},crypto:{randomUUID:()=>`page-${path}`} }, RTCPeerConnection: Peer,
     URL, AbortSignal, WeakSet,
     location: { href: origin + path + 'stream/', origin },
     parent: { postMessage(value, target) { messages.push([value, target]); } },
@@ -27,6 +29,7 @@ async function check(path) {
       return {ok: status === 200, status, json: async () => ({sdp: 'gateway-description'})};
     },
   });
+  assert.equal(storage.get('selkies_tab_id'), `page-${path}`, 'copied session storage cannot share a controller identity');
   const peer = new Peer();
   const applying = peer.setRemoteDescription({type: 'offer', sdp: 'guest-description'});
   await peer.addIceCandidate({candidate: 'private-guest-address'});
@@ -57,16 +60,21 @@ async function check(path) {
   second.connectionState='connected';second.events.connectionstatechange();
   assert.equal(timers.size,0,'a recovered connection cancels the document reload');
 }
-function checkDisplay() {
+async function checkDisplay() {
   const messages=[],events={},videoEvents={},timers=new Map();
   class Media {
-    constructor() { Object.assign(this,{id:'stream',width:1920,height:1080,videoWidth:0,videoHeight:0,paused:true,readyState:0,muted:false}); }
-    play() { this.paused=false; return Promise.resolve(); }
+    constructor() { Object.assign(this,{style:{objectFit:'fill'},id:'stream',width:1920,height:1080,videoWidth:0,videoHeight:0,paused:true,readyState:0,muted:false}); }
+    play() {
+      this.attempts=(this.attempts||0)+1;
+      if(this.reject) { const name=this.reject;this.reject=null;return Promise.reject(Object.assign(Error(name),{name})); }
+      this.paused=false;return Promise.resolve();
+    }
     addEventListener(name,callback) { videoEvents[name]=callback; }
   }
   const video=new Media();
   class Observer { constructor(callback) { this.callback=callback; } observe(target,options) { if(options.attributes) videoEvents.dimensions=this.callback; } }
-  const document={readyState:'loading',querySelector:()=>video,addEventListener:(name,fn)=>{events[name]=fn;},removeEventListener:(name)=>{delete events[name];}};
+  const attributes=new Set();
+  const document={documentElement:{hasAttribute:()=>false,toggleAttribute:(name,on)=>on?attributes.add(name):attributes.delete(name)},readyState:'loading',querySelector:()=>video,addEventListener:(name,fn)=>{events[name]=fn;},removeEventListener:(name)=>{delete events[name];}};
   const displayWindow={HTMLMediaElement:Media,innerWidth:960,innerHeight:540,addEventListener(){}};
   vm.runInNewContext(source,{
     window:displayWindow, HTMLMediaElement:Media, document, MutationObserver:Observer,URL,
@@ -81,12 +89,26 @@ function checkDisplay() {
   assert.equal(timers.size,0,'a zero-sized embedded viewer must wait for its viewport');
   displayWindow.innerWidth=960;displayWindow.innerHeight=540;videoEvents.resize();timers.get(1)();
   assert.equal(messages.at(-1).state,'ready');
+  assert(attributes.has('data-beam-kiosk-playing'),'live video suppresses the stale native play overlay');
+  video.paused=true;videoEvents.pause();
+  assert(!attributes.has('data-beam-kiosk-playing'),'a genuine playback failure retains its recovery control');
+  video.paused=false;videoEvents.playing();
   video.width=2560;videoEvents.dimensions();assert.equal(messages.at(-1).state,'ready','resize keeps the last picture visible');
+  displayWindow.streamResolutionDiverged=true;videoEvents.resize();timers.get(1)();
+  assert.equal(displayWindow.beamKiosk.fitted(),true,'a second tab can display the owner\'s framebuffer');
+  assert.equal(video.style.objectFit,'contain','shared frames keep their aspect ratio and native input mapping');
+  displayWindow.innerWidth=0;assert.equal(displayWindow.beamKiosk.fitted(),false,'hidden shared viewers still wait');
+  displayWindow.innerWidth=960;displayWindow.streamResolutionDiverged=false;
   video.id='videoStream';video.width=1920;
   displayWindow.beamKiosk.activePeer={connectionState:'failed'};
   assert.equal(displayWindow.beamKiosk.fitted(),true,'a healthy WebCodecs fallback is independent of the failed peer');
   events.pointerdown({isTrusted:false});assert.equal(video.muted,true);
   events.pointerdown({isTrusted:true});assert.equal(video.muted,false,'a real gesture enables application audio');
+  const attempts=video.attempts;
+  video.reject='NotAllowedError';await video.play();
+  assert.equal(video.muted,true,'blocked audio retries playback muted');
+  assert.equal(video.attempts,attempts+2);
+  video.reject='AbortError';await assert.rejects(video.play(),{name:'AbortError'});
 }
-(async()=>{for(const path of ['/', '/vm/app/8080/']) await check(path);checkDisplay();})()
+(async()=>{for(const path of ['/', '/vm/app/8080/']) await check(path);await checkDisplay();})()
  .catch(error=>{console.error(error);process.exitCode=1;});
