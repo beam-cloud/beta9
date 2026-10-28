@@ -977,7 +977,7 @@ func (pb *PodProxyBuffer) backendTransport(targetHost string, dialTimeout time.D
 			conn, err := network.ConnectToBackend(ctx, dialAddress, dialTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
 			metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "http", err == nil, time.Since(start))
 			if err == nil {
-				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
+				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, -1)
 			} else {
 				return nil, &backendDialError{err: err}
 			}
