@@ -721,13 +721,11 @@ func (s *Service) CreateManagedMachine(ctx context.Context, authInfo *auth.AuthI
 	if err := s.savePoolJoinToken(ctx, tokenState, defaultPrivateJoinTTL); err != nil {
 		return nil, err
 	}
-	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
-	command := agentInstallCommand(gatewayURL, token, isLocalGatewayURL(gatewayURL), agentWorkerImage(s.appConfig))
 	return &ManagedMachineBootstrap{
 		MachineID:      machineID,
 		PoolName:       state.Name,
 		Token:          token,
-		InstallCommand: command,
+		InstallCommand: s.joinCommandForToken(token, false),
 	}, nil
 }
 

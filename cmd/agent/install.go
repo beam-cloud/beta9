@@ -123,6 +123,7 @@ func serviceEnv(workerImage, stateDir, cacheDir string) map[string]string {
 }
 
 var serviceEnvKeys = []string{
+	types.AgentManagedIngressEnv,
 	types.AgentDockerHostsEnv,
 	types.AgentRegistryForwardEnv,
 	types.AgentTargetHostEnv,

@@ -2745,15 +2745,31 @@ func TestValidateAgentTransportConfig(t *testing.T) {
 }
 
 func TestAgentInstallCommandLeavesCapacityUnboundedByDefault(t *testing.T) {
-	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test")
+	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test", false)
 
 	if strings.Contains(command, "--max-cpu") || strings.Contains(command, "--max-memory") {
 		t.Fatalf("default install command should use detected host capacity, got %s", command)
 	}
 }
 
+func TestAgentInstallCommandManagedIngress(t *testing.T) {
+	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test", true)
+	for _, want := range []string{
+		`| sh -s -- --gateway 'https://app.stage.beam.cloud' --join-token 'join-token' --worker-image 'worker:test' --managed-ingress;`,
+		`| sudo sh -s -- --gateway 'https://app.stage.beam.cloud' --join-token 'join-token' --worker-image 'worker:test' --managed-ingress;`,
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("command missing %q: %s", want, command)
+		}
+	}
+
+	if command := agentInstallCommand("http://localhost:1994", "join-token", true, "worker:test", true); strings.Contains(command, "--managed-ingress") {
+		t.Fatalf("dev command should leave host ingress alone: %s", command)
+	}
+}
+
 func TestAgentInstallCommandDoesNotUseSudoOnDarwin(t *testing.T) {
-	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test")
+	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test", false)
 
 	if !strings.Contains(command, `uname -s`) || !strings.Contains(command, `Darwin`) {
 		t.Fatalf("expected command to branch on Darwin, got %s", command)
@@ -2767,7 +2783,7 @@ func TestAgentInstallCommandDoesNotUseSudoOnDarwin(t *testing.T) {
 }
 
 func TestAgentInstallCommandDevModeRunsWithoutSudo(t *testing.T) {
-	command := agentInstallCommand("http://localhost:1994", "join-token", true, "worker:test")
+	command := agentInstallCommand("http://localhost:1994", "join-token", true, "worker:test", false)
 
 	if strings.Contains(command, "sudo") {
 		t.Fatalf("dev command should not use sudo: %s", command)

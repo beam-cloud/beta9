@@ -98,7 +98,7 @@ func (s *Service) createPrivatePoolJoinCommandForWorkspace(ctx context.Context, 
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
-	return s.joinCommandForToken(token), token, expiresAt, nil
+	return s.joinCommandForToken(token, false), token, expiresAt, nil
 }
 
 // Non-expiring machine-scoped join command for provider launches: boot time is
@@ -109,16 +109,18 @@ func (s *Service) createPersistentPrivatePoolJoinCommandForWorkspace(ctx context
 	if err != nil {
 		return "", "", err
 	}
-	return s.joinCommandForToken(token), token, nil
+	return s.joinCommandForToken(token, true), token, nil
 }
 
-func (s *Service) joinCommandForToken(token string) string {
+// managedIngress firewalls the public interfaces of machines Beam provisions.
+// Machines an operator joins keep the network policy the operator chose.
+func (s *Service) joinCommandForToken(token string, managedIngress bool) string {
 	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
 	devMode := isLocalGatewayURL(gatewayURL)
-	return agentInstallCommand(gatewayURL, token, devMode, agentWorkerImage(s.appConfig))
+	return agentInstallCommand(gatewayURL, token, devMode, agentWorkerImage(s.appConfig), managedIngress)
 }
 
-func agentInstallCommand(gatewayURL, token string, devMode bool, workerImage string) string {
+func agentInstallCommand(gatewayURL, token string, devMode bool, workerImage string, managedIngress bool) string {
 	installURL := common.ShellQuote(strings.TrimRight(gatewayURL, "/") + "/install/agent")
 	args := fmt.Sprintf("--gateway %s --join-token %s", common.ShellQuote(gatewayURL), common.ShellQuote(token))
 	if workerImage = strings.TrimSpace(workerImage); workerImage != "" {
@@ -126,6 +128,9 @@ func agentInstallCommand(gatewayURL, token string, devMode bool, workerImage str
 	}
 	if devMode {
 		return fmt.Sprintf("curl -fsSL %s | sh -s -- %s --dev", installURL, args)
+	}
+	if managedIngress {
+		args += " --managed-ingress"
 	}
 	return fmt.Sprintf(`if [ "$(uname -s)" = "Darwin" ] || [ "$(id -u)" -eq 0 ]; then curl -fsSL %[1]s | sh -s -- %[2]s; else curl -fsSL %[1]s | sudo sh -s -- %[2]s; fi`, installURL, args)
 }
