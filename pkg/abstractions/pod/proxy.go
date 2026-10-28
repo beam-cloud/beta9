@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -36,17 +35,11 @@ const (
 	// Covers a dropped SYN (kernel retransmits at 1s) and relayed tunnel dials
 	// that routinely exceed 900ms under concurrency.
 	containerPinnedDialTimeout  time.Duration = time.Second * 3
-	containerPinnedWait         time.Duration = 2 * containerPinnedDialTimeout
-	containerPinnedPollInterval time.Duration = time.Millisecond * 100
 	containerAvailableTimeout   time.Duration = time.Second * 2
 	containerPrimeTimeout       time.Duration = time.Second * 3
 	connectionKeepAliveInterval time.Duration = time.Second * 1
 	connectionReadTimeout       time.Duration = time.Minute * 5
-	backendRetryLimit                         = 1
-
-	// How long readiness waits for a relay or port proxy to hang up.
-	readinessHoldMin time.Duration = time.Millisecond * 20
-	readinessHoldMax time.Duration = time.Millisecond * 250
+	backendDialRetryLimit                     = 1
 )
 
 type container struct {
@@ -57,15 +50,16 @@ type container struct {
 }
 
 type connection struct {
-	ctx         echo.Context
-	tc          *tcpConnection
-	done        chan struct{}
-	finishOnce  sync.Once
-	enqueuedAt  time.Time
-	dialTimeout time.Duration
-	pinned      bool
-	retryCount  int
-	state       atomic.Int32
+	ctx              echo.Context
+	tc               *tcpConnection
+	done             chan struct{}
+	finishOnce       sync.Once
+	enqueuedAt       time.Time
+	dialTimeout      time.Duration
+	retryBackendDial bool
+	pinned           bool
+	retryCount       int
+	state            atomic.Int32
 }
 
 const (
@@ -199,8 +193,9 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 
 	done := make(chan struct{})
 	conn := &connection{
-		ctx:  ctx,
-		done: done,
+		ctx:              ctx,
+		done:             done,
+		retryBackendDial: true,
 	}
 
 	if ctx.Request().Context().Err() != nil {
@@ -257,10 +252,11 @@ func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId 
 
 	done := make(chan struct{})
 	conn := &connection{
-		ctx:         ctx,
-		done:        done,
-		dialTimeout: containerPinnedDialTimeout,
-		pinned:      true,
+		ctx:              ctx,
+		done:             done,
+		dialTimeout:      containerPinnedDialTimeout,
+		retryBackendDial: true,
+		pinned:           true,
 	}
 	conn.claim()
 	pb.handleConnection(conn, container{
@@ -733,63 +729,22 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	request.URL.Host = podBackendHost(targetHost)
 	request.URL.Path = subPath
 
+	// If it's a websocket request, upgrade the connection
+	if websocket.IsWebSocketUpgrade(request) {
+		pb.proxyWebSocket(conn, container, port, targetHost, subPath)
+		return false
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("recover", r).Str("stubId", pb.stubId).Str("workspace", pb.workspace.Name).Msg("handled abort in pod proxy")
 		}
 	}()
 
-	pinnedUntil := time.Now().Add(containerPinnedWait)
-	for {
-		var unanswered error
-		if websocket.IsWebSocketUpgrade(request) {
-			unanswered = pb.proxyWebSocket(conn, targetHost, subPath)
-		} else {
-			unanswered = pb.proxyHTTP(conn, targetHost, routePrefix)
-		}
-		if unanswered == nil {
-			return false
-		}
-
-		pb.readiness.invalidateTarget(readinessTarget{container.id, port, targetHost})
-		if conn.retryCount >= backendRetryLimit || request.Context().Err() != nil || conn.ctx.Response().Committed {
-			break
-		}
-		conn.retryCount++
-		log.Warn().
-			Err(unanswered).
-			Str("container_id", container.id).
-			Str("stub_id", pb.stubId).
-			Bool("pinned", conn.pinned).
-			Msg("backend did not answer; retrying once it accepts connections")
-
-		// A pinned request names one container, so there is nowhere to requeue it.
-		if conn.pinned {
-			if !pb.awaitBackend(request.Context(), port, targetHost, pinnedUntil) {
-				break
-			}
-			continue
-		}
-		releaseAttempt()
-		if pb.requeueUnanswered(conn, container) {
-			return true
-		}
-		break
-	}
-
-	if !conn.ctx.Response().Committed && request.Context().Err() == nil {
-		http.Error(conn.ctx.Response(), "Backend route unavailable", http.StatusBadGateway)
-	}
-	return false
-}
-
-// proxyHTTP makes one attempt. A resendable failure is returned unanswered.
-func (pb *PodProxyBuffer) proxyHTTP(conn *connection, targetHost, routePrefix string) error {
-	request := conn.ctx.Request()
 	proxy, err := pb.backendProxy(targetHost, conn.backendDialTimeout())
 	if err != nil {
 		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
-		return nil
+		return false
 	}
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
@@ -799,84 +754,64 @@ func (pb *PodProxyBuffer) proxyHTTP(conn *connection, targetHost, routePrefix st
 		return nil
 	}
 
-	replayable := replayableRequest(request)
-	var unanswered error
+	target := newBackendTarget(targetHost)
+	var attempt backendAttempt
+	request = request.WithContext(attempt.trace(request.Context()))
+	var retryErr error
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
-		if backendNeverAnswered(req.Context(), err, replayable) {
-			unanswered = err
+		unanswered := target.unanswered(req, err, &attempt)
+		if unanswered {
+			pb.readiness.invalidateTarget(readinessTarget{container.id, port, targetHost})
+		}
+		if conn.retryBackendDial &&
+			conn.retryCount < backendDialRetryLimit &&
+			unanswered &&
+			!conn.ctx.Response().Committed {
+			retryErr = err
 			return
 		}
 		http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
 	}
 
-	// The transport closes the body even when dialing fails; keep it for a resend.
-	if body := request.Body; body != nil {
-		request.Body = preservedRequestBody{ReadCloser: body}
-		defer func() { request.Body = body }()
+	// The transport closes its outbound request body even when dialing fails.
+	// Keep the inbound body open until the one safe pre-connect retry is decided.
+	requestBody := request.Body
+	serve := func() {
+		if conn.retryBackendDial && conn.retryCount < backendDialRetryLimit && requestBody != nil {
+			request.Body = preservedRequestBody{ReadCloser: requestBody}
+			defer func() { request.Body = requestBody }()
+		}
+		proxy.ServeHTTP(conn.ctx.Response(), request)
 	}
-	proxy.ServeHTTP(conn.ctx.Response(), request)
-	return unanswered
-}
+	serve()
 
-// backendNeverAnswered reports whether a failed attempt is safe to resend: the
-// dial failed, or a relay or port proxy hung up on a bodiless idempotent request.
-func backendNeverAnswered(ctx context.Context, err error, replayable bool) bool {
-	if err == nil || ctx.Err() != nil {
+	// A pinned request names one container, so there is nowhere to requeue it: dial again.
+	if retryErr != nil && conn.pinned {
+		conn.retryCount++
+		retryErr = nil
+		serve()
+	}
+
+	if retryErr == nil {
 		return false
 	}
-	var dialErr *backendDialError
-	if errors.As(err, &dialErr) {
+	releaseAttempt()
+	if pb.retryBackendConnection(conn, container, retryErr) {
 		return true
 	}
-	return replayable && connectionClosed(err)
-}
-
-func replayableRequest(request *http.Request) bool {
-	switch request.Method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return request.ContentLength == 0 && (request.Body == nil || request.Body == http.NoBody)
+	if !conn.ctx.Response().Committed {
+		http.Error(conn.ctx.Response(), "Backend route unavailable", http.StatusBadGateway)
 	}
 	return false
 }
 
-func connectionClosed(err error) bool {
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
-		return true
+func (pb *PodProxyBuffer) retryBackendConnection(conn *connection, failed container, err error) bool {
+	if conn == nil || conn.ctx == nil || !conn.retryBackendDial || conn.retryCount >= backendDialRetryLimit || conn.ctx.Request().Context().Err() != nil {
+		return false
 	}
-	// net/http and the tsnet stack report some closes only as text.
-	message := err.Error()
-	return strings.Contains(message, "server closed idle connection") ||
-		strings.Contains(message, "connection reset by peer") ||
-		strings.Contains(message, "broken pipe")
-}
 
-// awaitBackend waits until a pinned container's port passes readiness.
-func (pb *PodProxyBuffer) awaitBackend(ctx context.Context, port int32, address string, deadline time.Time) bool {
-	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return false
-		}
-		if pb.checkContainerReady(port, address, min(containerAvailableTimeout, remaining)) {
-			return true
-		}
-
-		timer := time.NewTimer(min(containerPinnedPollInterval, time.Until(deadline)))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false
-		case <-pb.baseContext().Done():
-			timer.Stop()
-			return false
-		case <-timer.C:
-		}
-	}
-}
-
-// requeueUnanswered drops the container from rotation and requeues the request first.
-func (pb *PodProxyBuffer) requeueUnanswered(conn *connection, failed container) bool {
 	pb.removeAvailableContainer(failed.id)
+	conn.retryCount++
 	if conn.enqueuedAt.IsZero() {
 		conn.enqueuedAt = time.Now()
 	}
@@ -884,10 +819,15 @@ func (pb *PodProxyBuffer) requeueUnanswered(conn *connection, failed container) 
 		return false
 	}
 
+	log.Warn().
+		Err(err).
+		Str("container_id", failed.id).
+		Str("stub_id", pb.stubId).
+		Msg("backend unavailable before request delivery; requeueing request")
 	pb.signalDiscovery()
 	if pb.onBackendUnavailable != nil {
-		if err := pb.onBackendUnavailable(); err != nil {
-			log.Warn().Err(err).Str("stub_id", pb.stubId).Msg("failed to start replacement after backend became unavailable")
+		if scaleErr := pb.onBackendUnavailable(); scaleErr != nil {
+			log.Warn().Err(scaleErr).Str("stub_id", pb.stubId).Msg("failed to start replacement after backend became unavailable")
 		}
 	}
 	pb.signalWork()
@@ -1030,19 +970,12 @@ func (pb *PodProxyBuffer) backendTransport(targetHost string, dialTimeout time.D
 		MaxIdleConnsPerHost: 128,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  true,
-		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			dialAddress := addr
-			if _, isRoute := types.ParseBackendRouteAddress(targetHost); isRoute {
-				dialAddress = targetHost
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			conn, err := pb.dialBackend(ctx, newBackendTarget(targetHost), dialTimeout, "http")
+			if err != nil {
+				return nil, err
 			}
-			start := time.Now()
-			conn, err := network.ConnectToBackend(ctx, dialAddress, dialTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
-			metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "http", err == nil, time.Since(start))
-			if err == nil {
-				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
-			} else {
-				return nil, &backendDialError{err: err}
-			}
+			abstractions.SetConnOptions(conn.Conn, true, connectionKeepAliveInterval, connectionReadTimeout)
 			return conn, nil
 		},
 	}
@@ -1078,28 +1011,21 @@ func (pb *PodProxyBuffer) pruneBackendTransports(containers []container) {
 	})
 }
 
-// proxyWebSocket makes one attempt, like proxyHTTP.
-func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, addr string, path string) error {
-	request := conn.ctx.Request()
-	subprotocols := websocket.Subprotocols(request)
+func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, port int32, addr string, path string) error {
+	subprotocols := websocket.Subprotocols(conn.ctx.Request())
 
-	wsURL, err := url.Parse(podBackendURL("ws", addr, path, request.URL.RawQuery))
+	wsURL, err := url.Parse(podBackendURL("ws", addr, path, conn.ctx.Request().URL.RawQuery))
 	if err != nil {
-		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
-		return nil
+		return err
 	}
 	dstDialer := websocket.Dialer{
 		ReadBufferSize:   64 << 10,
 		WriteBufferSize:  64 << 10,
 		HandshakeTimeout: conn.backendDialTimeout(),
-		NetDialContext: func(ctx context.Context, _, dialAddr string) (net.Conn, error) {
-			dialAddress := dialAddr
-			if _, isRoute := types.ParseBackendRouteAddress(addr); isRoute {
-				dialAddress = addr
-			}
-			backend, err := network.ConnectToBackend(ctx, dialAddress, conn.backendDialTimeout(), pb.tailscale, pb.tsConfig, pb.containerRepo)
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			backend, err := pb.dialBackend(ctx, newBackendTarget(addr), conn.backendDialTimeout(), "http")
 			if err != nil {
-				return nil, &backendDialError{err: err}
+				return nil, err
 			}
 			return backend, nil
 		},
@@ -1110,14 +1036,23 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, addr string, path str
 	// has happened this handler can only answer a dead backend by slamming the
 	// fresh socket shut, which the browser reports as a connection that never
 	// worked. Before the upgrade a failure is still an ordinary HTTP error,
-	// and a starting backend gets the same retry the HTTP path has.
-	serverConn, _, err := dstDialer.DialContext(request.Context(), wsURL.String(), forwardedWebSocketHeaders(request))
-	if err != nil {
-		if backendNeverAnswered(request.Context(), err, true) {
-			return err
+	// and a cold route gets the same single redial the HTTP path has.
+	var serverConn *websocket.Conn
+	for attempt := 0; ; attempt++ {
+		var err error
+		serverConn, _, err = dstDialer.DialContext(conn.ctx.Request().Context(), wsURL.String(), forwardedWebSocketHeaders(conn.ctx.Request()))
+		if err == nil {
+			break
 		}
-		http.Error(conn.ctx.Response(), "Backend route unavailable", http.StatusBadGateway)
-		return nil
+		var dialErr *backendDialError
+		if errors.As(err, &dialErr) && conn.ctx.Request().Context().Err() == nil {
+			pb.readiness.invalidateTarget(readinessTarget{container.id, port, addr})
+		}
+		if attempt < backendDialRetryLimit && conn.ctx.Request().Context().Err() == nil {
+			log.Warn().Err(err).Str("container_id", container.id).Str("stub_id", pb.stubId).Msg("websocket backend dial failed; dialing again")
+			continue
+		}
+		return conn.ctx.String(http.StatusBadGateway, "Backend route unavailable")
 	}
 	defer serverConn.Close()
 
@@ -1130,10 +1065,9 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, addr string, path str
 		Subprotocols: subprotocols,
 	}
 
-	// Upgrade answers the client itself when it fails.
-	clientConn, err := upgrader.Upgrade(conn.ctx.Response().Writer, request, nil)
+	clientConn, err := upgrader.Upgrade(conn.ctx.Response().Writer, conn.ctx.Request(), nil)
 	if err != nil {
-		return nil
+		return err
 	}
 	defer clientConn.Close()
 
@@ -1374,32 +1308,14 @@ func (pb *PodProxyBuffer) checkContainerAvailableWithTimeout(containerAddress st
 	if timeout <= 0 {
 		timeout = containerAvailableTimeout
 	}
+	target := newBackendTarget(containerAddress)
 	start := time.Now()
-	conn, err := network.ConnectToBackend(pb.baseContext(), containerAddress, timeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
-	dialLatency := time.Since(start)
+	conn, err := pb.dialBackend(pb.baseContext(), target, timeout, "discovery")
 	if err != nil {
-		metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", false, dialLatency)
 		return false
 	}
 	defer conn.Close()
-	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", true, dialLatency)
-	return backendHoldsConnection(conn, dialLatency)
-}
-
-// backendHoldsConnection reports whether the far end kept the connection open or
-// spoke first; relays and port proxies accept before reaching the backend.
-func backendHoldsConnection(conn net.Conn, dialLatency time.Duration) bool {
-	hold := min(max(2*dialLatency, readinessHoldMin), readinessHoldMax)
-	if err := conn.SetReadDeadline(time.Now().Add(hold)); err != nil {
-		return true
-	}
-	var b [1]byte
-	n, err := conn.Read(b[:])
-	if n > 0 {
-		return true
-	}
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
+	return target.ready(conn, time.Since(start))
 }
 
 func (pb *PodProxyBuffer) baseContext() context.Context {

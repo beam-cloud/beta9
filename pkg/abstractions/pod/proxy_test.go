@@ -338,229 +338,24 @@ func TestForwardRequestAnswersWebSocketDialFailureBeforeUpgrade(t *testing.T) {
 
 	parentCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	dead := container{
-		id:              "container-1",
-		addressMap:      map[int32]string{8000: deadAddress},
-		readyAddressMap: map[int32]string{8000: deadAddress},
-	}
 	pb := &PodProxyBuffer{
-		ctx:                 parentCtx,
-		workspace:           &types.Workspace{Name: "workspace"},
-		stubId:              "stub",
-		stubConfig:          &types.StubConfigV1{},
-		buffer:              abstractions.NewRingBuffer[*connection](1),
-		workReady:           make(chan struct{}, 1),
-		availableContainers: []container{dead},
+		ctx:        parentCtx,
+		workspace:  &types.Workspace{Name: "workspace"},
+		stubId:     "stub",
+		stubConfig: &types.StubConfigV1{},
+		buffer:     abstractions.NewRingBuffer[*connection](1),
+		availableContainers: []container{{
+			id:              "container-1",
+			addressMap:      map[int32]string{8000: deadAddress},
+			readyAddressMap: map[int32]string{8000: deadAddress},
+		}},
 	}
-	// Discovery offering the same dead container again exhausts the retry.
-	pb.onBackendUnavailable = func() error {
-		pb.availableContainersLock.Lock()
-		pb.availableContainers = []container{dead}
-		pb.availableContainersLock.Unlock()
-		return nil
-	}
-	go pb.processBuffer()
 
 	if err := pb.ForwardRequest(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadGateway, rec.Body.String())
-	}
-}
-
-// startingBackend hangs up on connections until ready is set, like a relay in
-// front of an app that isn't listening yet.
-type startingBackend struct {
-	net.Listener
-	ready atomic.Bool
-}
-
-func (l *startingBackend) Accept() (net.Conn, error) {
-	for {
-		conn, err := l.Listener.Accept()
-		if err != nil || l.ready.Load() {
-			return conn, err
-		}
-		conn.Close()
-	}
-}
-
-func newStartingBackend(t *testing.T, handler http.Handler) *startingBackend {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	backend := &startingBackend{Listener: listener}
-	server := &http.Server{Handler: handler}
-	go server.Serve(backend)
-	t.Cleanup(func() { server.Close() })
-	return backend
-}
-
-func TestReadinessRejectsBackendThatHangsUp(t *testing.T) {
-	backend := newStartingBackend(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
-	pb := &PodProxyBuffer{ctx: context.Background(), workspace: &types.Workspace{Name: "workspace"}, stubConfig: &types.StubConfigV1{}}
-
-	if pb.checkContainerReady(8000, backend.Addr().String(), time.Second) {
-		t.Fatal("a backend that accepts and hangs up passed readiness")
-	}
-	backend.ready.Store(true)
-	if !pb.checkContainerReady(8000, backend.Addr().String(), time.Second) {
-		t.Fatal("a backend that holds the connection failed readiness")
-	}
-}
-
-func TestReadinessAcceptsBackendThatSpeaksFirst(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { listener.Close() })
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			conn.Write([]byte("220 ready\r\n"))
-			conn.Close()
-		}
-	}()
-	pb := &PodProxyBuffer{ctx: context.Background(), workspace: &types.Workspace{Name: "workspace"}, stubConfig: &types.StubConfigV1{}}
-
-	if !pb.checkContainerReady(8000, listener.Addr().String(), time.Second) {
-		t.Fatal("a backend that greets the client failed readiness")
-	}
-}
-
-func TestForwardRequestResendsGetWhenBackendHangsUp(t *testing.T) {
-	starting := newStartingBackend(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
-	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, "served")
-	}))
-	t.Cleanup(replacement.Close)
-
-	for _, tt := range []struct {
-		name       string
-		method     string
-		body       io.Reader
-		wantStatus int
-		wantResent bool
-	}{
-		{name: "get", method: http.MethodGet, wantStatus: http.StatusOK, wantResent: true},
-		{name: "post with body", method: http.MethodPost, body: bytes.NewReader([]byte("payload")), wantStatus: http.StatusBadGateway},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
-			rec := httptest.NewRecorder()
-			requestCtx := e.NewContext(httptest.NewRequest(tt.method, "/", tt.body), rec)
-			requestCtx.SetParamNames("port")
-			requestCtx.SetParamValues("8000")
-
-			address := starting.Addr().String()
-			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			pb := &PodProxyBuffer{
-				ctx:        ctx,
-				workspace:  &types.Workspace{Name: "workspace"},
-				stubId:     "stub",
-				stubConfig: &types.StubConfigV1{},
-				buffer:     abstractions.NewRingBuffer[*connection](1),
-				workReady:  make(chan struct{}, 1),
-				availableContainers: []container{{
-					id:              "starting",
-					addressMap:      map[int32]string{8000: address},
-					readyAddressMap: map[int32]string{8000: address},
-				}},
-			}
-			resent := false
-			pb.onBackendUnavailable = func() error {
-				resent = true
-				address := replacement.Listener.Addr().String()
-				pb.availableContainersLock.Lock()
-				pb.availableContainers = []container{{
-					id:              "ready",
-					addressMap:      map[int32]string{8000: address},
-					readyAddressMap: map[int32]string{8000: address},
-				}}
-				pb.availableContainersLock.Unlock()
-				return nil
-			}
-			go pb.processBuffer()
-
-			if err := pb.ForwardRequest(requestCtx); err != nil {
-				t.Fatal(err)
-			}
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d; body=%q", rec.Code, tt.wantStatus, rec.Body.String())
-			}
-			if resent != tt.wantResent {
-				t.Fatalf("resent = %v, want %v", resent, tt.wantResent)
-			}
-		})
-	}
-}
-
-func TestForwardContainerRequestWaitsForStartingBackend(t *testing.T) {
-	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	backend := newStartingBackend(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if websocket.IsWebSocketUpgrade(r) {
-			conn, err := upgrader.Upgrade(w, r, nil)
-			if err == nil {
-				conn.WriteMessage(websocket.TextMessage, []byte("hello"))
-				conn.Close()
-			}
-			return
-		}
-		io.WriteString(w, "served")
-	}))
-
-	rdb := newPodProxyTestRedis(t)
-	repo := repository.NewContainerRedisRepositoryForTest(rdb)
-	containerID := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
-	if err := repo.SetContainerAddressMap(containerID, map[int32]string{8765: backend.Addr().String()}); err != nil {
-		t.Fatal(err)
-	}
-	pb := &PodProxyBuffer{
-		ctx:           context.Background(),
-		rdb:           rdb,
-		workspace:     &types.Workspace{Name: "workspace"},
-		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
-		stubConfig:    &types.StubConfigV1{},
-		containerRepo: repo,
-	}
-	e := echo.New()
-	e.GET("/:port/:subPath", func(ctx echo.Context) error { return pb.ForwardContainerRequest(ctx, containerID) })
-	front := httptest.NewServer(e)
-	t.Cleanup(front.Close)
-
-	startLater := func() {
-		backend.ready.Store(false)
-		time.AfterFunc(300*time.Millisecond, func() { backend.ready.Store(true) })
-	}
-
-	startLater()
-	resp, err := http.Get(front.URL + "/8765/page")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || string(body) != "served" {
-		t.Fatalf("http status = %d body = %q, want the backend's answer once it started", resp.StatusCode, body)
-	}
-
-	startLater()
-	client, _, err := websocket.DefaultDialer.Dial("ws"+front.URL[len("http"):]+"/8765/socket", nil)
-	if err != nil {
-		t.Fatalf("websocket dial: %v", err)
-	}
-	defer client.Close()
-	if _, message, err := client.ReadMessage(); err != nil || string(message) != "hello" {
-		t.Fatalf("websocket message = %q (%v), want hello", message, err)
 	}
 }
 
@@ -1202,24 +997,13 @@ func TestDiscoveryReusesHealthyPortsAcrossFleet(t *testing.T) {
 	}
 	defer listener.Close()
 	accepted := make(chan struct{}, 6000)
-	var held []net.Conn
-	var heldMu sync.Mutex
-	t.Cleanup(func() {
-		heldMu.Lock()
-		defer heldMu.Unlock()
-		for _, conn := range held {
-			conn.Close()
-		}
-	})
 	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
-			heldMu.Lock()
-			held = append(held, conn)
-			heldMu.Unlock()
+			conn.Close()
 			accepted <- struct{}{}
 		}
 	}()
