@@ -1,6 +1,7 @@
 package types
 
 import (
+	"maps"
 	"slices"
 	"time"
 
@@ -63,6 +64,7 @@ type VMSpec struct {
 	Ports            []uint32          `json:"ports,omitempty"`
 	PrivatePorts     []uint32          `json:"private_ports,omitempty"`
 	Desktop          bool              `json:"desktop"`
+	Kiosk            *VMKioskSpec      `json:"kiosk,omitempty"`
 	DockerEnabled    bool              `json:"docker_enabled"`
 	SSH              bool              `json:"ssh"`
 	SSHPublicKey     string            `json:"ssh_public_key,omitempty"`
@@ -76,6 +78,120 @@ type VMSpec struct {
 	Disks            []*pb.DurableDisk `json:"disks,omitempty"`
 	Volumes          []*pb.Volume      `json:"volumes,omitempty"`
 	SourceSnapshotID string            `json:"source_snapshot_id,omitempty"`
+}
+
+// VMCreateOptions carries parsed inputs for creation and forks.
+type VMCreateOptions struct {
+	Name      string
+	Spec      VMSpec
+	Metadata  map[string]string
+	RequestID string
+	Image     *pb.VerifyImageBuildRequest
+}
+
+// VMKioskSpec launches an ordinary application on an isolated graphical session.
+// Commands are argv, never shell source. Env values follow the VM's redaction rules.
+type VMKioskSpec struct {
+	Transport VMKioskTransport            `json:"transport,omitempty"`
+	Command   []string                    `json:"command"`
+	Cwd       string                      `json:"cwd,omitempty"`
+	Env       map[string]string           `json:"env,omitempty"`
+	MCP       map[string]VMKioskMCPServer `json:"mcp,omitempty"`
+}
+
+// VMKioskMCPServer follows the standard mcpServers launch configuration.
+type VMKioskMCPServer struct {
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Cwd     string            `json:"cwd,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// VM service ports are shared by validation, routing and the guest protocol.
+const (
+	VMSSHPort                         = 2222
+	VMTerminalPort                    = 7681
+	VMDesktopPort                     = 8080
+	VMKioskStatusPort          uint32 = 8081
+	VMKioskMCPPort             uint32 = 8082
+	VMKioskMediaPort           uint32 = 8443
+	VMKioskMaxICEFrameBytes           = 8192
+	VMKioskMaxCommandArgs             = 128
+	VMKioskMaxMCPServers              = 16
+	VMKioskMaxCommandBytes            = 32 << 10
+	VMKioskMaxEnvBytes                = 16 << 10
+	VMKioskMaxConfigBytes             = 64 << 10
+	VMKioskMaxSDPBytes                = 64 << 10
+	VMKioskMaxMediaSections           = 8
+	VMKioskMaxGatewayAddresses        = 8
+)
+
+// Kiosk browser protocol, routed only after VM traffic authentication.
+const (
+	VMKioskControlPath  = "/_beam/kiosk"
+	VMKioskMCPPath      = "/mcp"
+	VMKioskStreamPath   = "/stream"
+	VMKioskActionHeader = "X-Beam-Kiosk-Action"
+)
+
+type VMKioskTransport string
+
+const (
+	VMKioskTransportWebRTC     VMKioskTransport = "webrtc"
+	VMKioskTransportWebSockets VMKioskTransport = "websockets"
+)
+
+type VMWebRTCSessionDescription struct {
+	SDP string `json:"sdp"`
+}
+
+// Clone isolates normalization and redaction from snapshots and their parent VM.
+func (k *VMKioskSpec) Clone() *VMKioskSpec {
+	if k == nil {
+		return nil
+	}
+	copy := *k
+	copy.Command = slices.Clone(k.Command)
+	copy.Env = maps.Clone(k.Env)
+	if k.MCP != nil {
+		copy.MCP = make(map[string]VMKioskMCPServer, len(k.MCP))
+		for name, server := range k.MCP {
+			server.Args = slices.Clone(server.Args)
+			server.Env = maps.Clone(server.Env)
+			server.Headers = maps.Clone(server.Headers)
+			copy.MCP[name] = server
+		}
+	}
+	return &copy
+}
+
+func (k *VMKioskSpec) WithoutCredentials() *VMKioskSpec {
+	copy := k.Clone()
+	if copy == nil {
+		return nil
+	}
+	copy.Env = nil
+	for name, server := range copy.MCP {
+		server.Args, server.Env, server.Headers = nil, nil, nil
+		if server.URL != "" {
+			server.URL = "[redacted]"
+		}
+		copy.MCP[name] = server
+	}
+	return copy
+}
+
+func (k *VMKioskSpec) PrivatePorts() []uint32 {
+	if k == nil {
+		return nil
+	}
+	var ports []uint32
+	if k.Transport == VMKioskTransportWebRTC {
+		ports = append(ports, VMKioskMediaPort)
+	}
+	return append(ports, VMKioskStatusPort, VMKioskMCPPort)
 }
 
 func (s VMSpec) RuntimePorts() []uint32 {
@@ -117,6 +233,8 @@ type VM struct {
 	LastActiveAt        time.Time         `json:"last_active_at"`
 	TerminalURL         string            `json:"terminal_url,omitempty"`
 	DesktopURL          string            `json:"desktop_url,omitempty"`
+	KioskURL            string            `json:"kiosk_url,omitempty"`
+	MCPURL              string            `json:"mcp_url,omitempty"`
 	BrowserAuth         bool              `json:"browser_auth,omitempty"`
 	URLs                map[uint32]string `json:"urls"`
 }

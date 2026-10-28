@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 func vmTool(name, description string, input map[string]any, readOnly, idempotent bool, scope string, run toolFn) mcpTool {
@@ -45,19 +46,34 @@ func vmBlockNetworkSchema() map[string]any {
 }
 
 func vmSpecSchema() map[string]any {
+	command := map[string]any{"type": "array", "items": str("Argument"), "minItems": 1, "maxItems": types.VMKioskMaxCommandArgs}
 	spec := schema(props{
-		"image_id":           str("VM image built with beam vm image build or the local vm_build_image tool"),
-		"cpu":                map[string]any{"type": "integer", "minimum": 100, "maximum": 64000, "default": 4000, "description": "CPU millicores (1000 = 1 CPU); fresh VM default is 4000."},
-		"memory":             map[string]any{"type": "integer", "minimum": 256, "maximum": 262144, "default": 8192, "description": "RAM in MiB; desktop requires at least 1024. Fresh VM default is 8192."},
-		"disk_size":          str("Writable root capacity; fresh VM default 50Gi, maximum 100Gi"),
-		"pool":               str("VM-capable worker pool"),
-		"env":                strList("KEY=value entries"),
-		"secrets":            strList("Workspace secret names with approved hosts; guest env receives placeholders for HTTPS request headers. BETA9_TOKEN/BEAM_TOKEN are explicit plaintext opt-ins."),
-		"ports":              map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000)},
-		"private_ports":      map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Tunnel-only ports; no public URL."},
-		"protected_ports":    map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Published HTTP ports requiring a VM traffic token or vm_access_url browser session."},
-		"public_ports":       map[string]any{"type": "array", "items": boundedInt(1, 65535, 7681), "description": "Publish without a traffic token; terminal and desktop ports are protected by default."},
-		"desktop":            map[string]any{"type": "boolean", "description": "Enable a desktop already installed in image_id (Ubuntu 24.04 or 22.04); opt-in for fresh MCP specs, at least 1024 MiB RAM."},
+		"image_id":        str("VM image built with beam vm image build or the local vm_build_image tool"),
+		"cpu":             map[string]any{"type": "integer", "minimum": 100, "maximum": 64000, "default": 4000, "description": "CPU millicores (1000 = 1 CPU); fresh VM default is 4000."},
+		"memory":          map[string]any{"type": "integer", "minimum": 256, "maximum": 262144, "default": 8192, "description": "RAM in MiB; desktop requires at least 1024. Fresh VM default is 8192."},
+		"disk_size":       str("Writable root capacity; fresh VM default 50Gi, maximum 100Gi"),
+		"pool":            str("VM-capable worker pool"),
+		"env":             strList("KEY=value entries"),
+		"secrets":         strList("Workspace secret names with approved hosts; guest env receives placeholders for HTTPS request headers. BETA9_TOKEN/BEAM_TOKEN are explicit plaintext opt-ins."),
+		"ports":           map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000)},
+		"private_ports":   map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Tunnel-only ports; no public URL."},
+		"protected_ports": map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Published HTTP ports requiring a VM traffic token or vm_access_url browser session."},
+		"public_ports":    map[string]any{"type": "array", "items": boundedInt(1, 65535, 7681), "description": "Publish without a traffic token; terminal and desktop ports are protected by default."},
+		"desktop":         map[string]any{"type": "boolean", "description": "Enable a desktop already installed in image_id (Ubuntu 24.04 or 22.04); opt-in for fresh MCP specs, at least 1024 MiB RAM."},
+		"kiosk": schema(props{
+			"transport": enum(string(types.VMKioskTransportWebRTC), string(types.VMKioskTransportWebSockets)),
+			"command":   command,
+			"cwd":       str("Absolute guest working directory; defaults to /workspace"),
+			"env":       stringMapSchema(),
+			"mcp": map[string]any{"type": "object", "description": "Named installed MCP servers; one authenticated /mcp endpoint. Stdio or Streamable HTTP, with namespaced tools.", "maxProperties": types.VMKioskMaxMCPServers, "propertyNames": map[string]any{"pattern": "^[a-zA-Z0-9_-]{1,64}$"}, "additionalProperties": schema(props{
+				"command": str("Executable for a stdio MCP server already installed in the image"),
+				"args":    map[string]any{"type": "array", "items": str("Literal argument")},
+				"env":     stringMapSchema(),
+				"cwd":     str("Working directory; defaults to the application's cwd"),
+				"url":     str("Existing Streamable HTTP MCP endpoint, instead of command"),
+				"headers": stringMapSchema(),
+			})},
+		}, "command"),
 		"docker_enabled":     map[string]any{"type": "boolean", "description": "Start the guest Docker daemon; disabled for fresh MCP specs. Wait for docker info before vm_docker."},
 		"ssh":                map[string]any{"type": "boolean", "description": "Enable SSH on port 2222; opt-in for fresh MCP specs and requires ssh_public_key."},
 		"ssh_public_key":     str("SSH public key; never a private key"),

@@ -122,6 +122,7 @@ LOCAL_OKTETO_NAMESPACE ?= beta9
 STAGE_OKTETO_CONTEXT ?= arn:aws:eks:us-east-1:683656326989:cluster/eks-stage-01
 STAGE_OKTETO_NAMESPACE ?= beta9
 STAGE_OKTETO_FOLDER ?= $(HOME)/.okteto-stage
+STAGE_CONFIG_PATH ?= /etc/beta9/config.yaml
 OKTETO_LOCAL_FLAGS := --context $(LOCAL_OKTETO_CONTEXT) --namespace $(LOCAL_OKTETO_NAMESPACE)
 OKTETO_STAGE_FLAGS := --context $(STAGE_OKTETO_CONTEXT) --namespace $(STAGE_OKTETO_NAMESPACE)
 OKTETO_STAGE := mkdir -p $(STAGE_OKTETO_FOLDER) && OKTETO_FOLDER=$(STAGE_OKTETO_FOLDER) okteto
@@ -143,13 +144,12 @@ stop:
 # Staging gateway on eks-stage-01 (see hack/okteto.stage.yaml). Forwards to
 # localhost:11993/11994 so it never collides with the local session.
 start-stage:
-	@test -f hack/stage/config.stage.yaml || { echo "Copy the staging config to hack/stage/config.stage.yaml first"; exit 1; }
 	@umask 077; if [ -d hack/stage/gomodcache/cache/download/github.com/beam-cloud ]; then \
 		tar -cf hack/stage/gomodcache.tar -C hack/stage/gomodcache cache/download/github.com/beam-cloud; \
 	else \
 		tar -cf hack/stage/gomodcache.tar -T /dev/null; \
 	fi
-	cd hack && export STAGE_GATEWAY_IMAGE="$${STAGE_GATEWAY_IMAGE:-$$(kubectl --context '$(STAGE_OKTETO_CONTEXT)' -n '$(STAGE_OKTETO_NAMESPACE)' get deploy beta9-gateway -o jsonpath='{.spec.template.spec.containers[0].image}')}" && $(OKTETO_STAGE) up $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml
+	cd hack && export STAGE_GATEWAY_IMAGE="$${STAGE_GATEWAY_IMAGE:-$$(kubectl --context '$(STAGE_OKTETO_CONTEXT)' -n '$(STAGE_OKTETO_NAMESPACE)' get deploy beta9-gateway -o jsonpath='{.spec.template.spec.containers[0].image}')}" && $(OKTETO_STAGE) up $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml --env CONFIG_PATH='$(STAGE_CONFIG_PATH)'
 
 stop-stage:
 	cd hack && $(OKTETO_STAGE) down $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml

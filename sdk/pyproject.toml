@@ -38,17 +38,8 @@ beta9 = "beta9.cli.main:start"
 [tool.setuptools.package-data]
 beta9 = [
     "abstractions/vm/assets.tar.gz",
+    "abstractions/vm/assets/*",
     "skills/**/*.md",
-    "abstractions/vm/*.service",
-    "abstractions/vm/*.desktop",
-    "abstractions/vm/*.svg",
-    "abstractions/vm/boot",
-    "abstractions/vm/browser-trust",
-    "abstractions/vm/browser-trust-update",
-    "abstractions/vm/browser",
-    "abstractions/vm/desktop",
-    "abstractions/vm/install",
-    "abstractions/vm/xstartup",
 ]
 
 [dependency-groups]
@@ -61,6 +52,8 @@ dev = [
     "gunicorn<23.0.0,>=22.0.0",
     "requests<3.0.0,>=2.32.3",
     "pytest-cov<6.0.0,>=5.0.0",
+    "fastmcp==4.1.4 ; python_full_version >= '3.10'",
+    "httpx2<3,>=2.14 ; python_full_version >= '3.10'",
 ]
 
 [tool.uv]

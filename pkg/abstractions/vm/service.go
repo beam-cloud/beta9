@@ -5,10 +5,10 @@ package vm
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -22,6 +22,7 @@ type Runtime interface {
 	VMPortReady(context.Context, string, string, uint32) (bool, error)
 	ForwardVM(echo.Context, string, string) error
 	TunnelVM(echo.Context, string, uint32) error
+	SetVMICEHandler(func(net.Conn))
 }
 
 type Gateway interface {
@@ -34,23 +35,21 @@ type ImageVerifier interface {
 }
 
 type Service struct {
-	ctx            context.Context
-	rdb            *common.RedisClient
-	repo           repository.VMRepository
-	backend        repository.BackendRepository
-	containers     repository.ContainerRepository
-	runtime        Runtime
-	gateway        Gateway
-	images         ImageVerifier
-	domain         string
-	baseURL        string
-	browserAuthURL string
-	defaultPool    string
-	publicNetwork  *publicVMNetwork
+	ctx           context.Context
+	stateRepo     VMRepository
+	repo          repository.VMRepository
+	backend       repository.BackendRepository
+	containers    repository.ContainerRepository
+	runtime       Runtime
+	gateway       Gateway
+	images        ImageVerifier
+	config        types.VMConfig
+	publicNetwork *publicVMNetwork
+	webrtc        *vmWebRTC
 }
 
 type ServiceOpts struct {
-	RedisClient   *common.RedisClient
+	StateRepo     VMRepository
 	Config        types.VMConfig
 	BackendRepo   repository.BackendRepository
 	ContainerRepo repository.ContainerRepository
@@ -60,6 +59,7 @@ type ServiceOpts struct {
 	RouteGroup    *echo.Group
 	Server        *echo.Echo
 	BackendDialer *network.BackendDialer
+	TCPConfig     types.PodTCPConfig // Shared raw TCP listener used by ICE-TCP media.
 }
 
 func New(ctx context.Context, opts ServiceOpts) error {
@@ -68,29 +68,30 @@ func New(ctx context.Context, opts ServiceOpts) error {
 		return fmt.Errorf("backend does not support persistent VMs")
 	}
 
+	opts.Config.BaseURL = strings.TrimSuffix(opts.Config.BaseURL, "/")
 	s := &Service{
-		ctx:            ctx,
-		rdb:            opts.RedisClient,
-		repo:           repo,
-		backend:        opts.BackendRepo,
-		containers:     opts.ContainerRepo,
-		runtime:        opts.Runtime,
-		gateway:        opts.Gateway,
-		images:         opts.Images,
-		domain:         opts.Config.Domain,
-		baseURL:        strings.TrimSuffix(opts.Config.BaseURL, "/"),
-		browserAuthURL: opts.Config.BrowserAuthURL,
-		defaultPool:    opts.Config.DefaultPool,
+		ctx:        ctx,
+		stateRepo:  opts.StateRepo,
+		repo:       repo,
+		backend:    opts.BackendRepo,
+		containers: opts.ContainerRepo,
+		runtime:    opts.Runtime,
+		gateway:    opts.Gateway,
+		images:     opts.Images,
+		config:     opts.Config,
 	}
 
 	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {
+		return err
+	}
+	if err := s.startWebRTC(opts.TCPConfig, opts.Config.WebRTC, opts.BackendDialer); err != nil {
 		return err
 	}
 
 	registerVMRoutes(opts.RouteGroup, s)
 	opts.Server.Any("/vm/:handle/:port", s.proxy)
 	opts.Server.Any("/vm/:handle/:port/*", s.proxy)
-	if s.domain != "" {
+	if s.config.Domain != "" {
 		opts.Server.Pre(s.hostRoute)
 	}
 

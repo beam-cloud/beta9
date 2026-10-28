@@ -13,9 +13,9 @@ func TestExpiredOrRevokedShareShowsAUsefulBrowserPage(t *testing.T) {
 	for _, revoked := range []bool{false, true} {
 		for _, configured := range []bool{false, true} {
 			s, v, _, runtime, _ := fixture()
-			s.domain = "vm.example.com"
+			s.config.Domain = "vm.example.com"
 			if configured {
-				s.browserAuthURL = "https://login.example.net/authorize-vm"
+				s.config.BrowserAuthURL = "https://login.example.net/authorize-vm"
 			}
 			v.TrafficAccessToken = "private-traffic-token"
 			v.Spec.ProtectedPorts = []uint32{7681}
@@ -57,8 +57,8 @@ func TestExpiredShareAPIsAndFramesKeepTheirAuthErrors(t *testing.T) {
 	for _, scenario := range []string{"API", "iframe", "websocket"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, v, _, runtime, _ := fixture()
-			s.domain = "vm.example.com"
-			s.browserAuthURL = "https://login.example.net/authorize-vm"
+			s.config.Domain = "vm.example.com"
+			s.config.BrowserAuthURL = "https://login.example.net/authorize-vm"
 			v.TrafficAccessToken = "private-token"
 			v.Spec.ProtectedPorts = []uint32{7681}
 			session := accessSession(v, 7681, time.Now().Add(-time.Minute).Unix())

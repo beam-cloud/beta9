@@ -3,6 +3,8 @@ package vm
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -27,10 +29,10 @@ const vmFailureSaveTimeout = 10 * time.Second
 
 func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 	v.Error = err.Error()
-	v.Status = "error"
+	v.Status = types.VMStateError
 	if v.ContainerID != "" {
 		if state, e := s.containers.GetContainerState(v.ContainerID); e == nil && state.Status == types.ContainerStatusRunning {
-			v.Status = "running"
+			v.Status = types.VMStateRunning
 		}
 	}
 
@@ -53,6 +55,13 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	)
 	if v.Spec.Desktop {
 		env = append(env, "DISPLAY=:1", "XAUTHORITY=/run/beam-desktop/.Xauthority")
+	}
+	if v.Spec.Kiosk != nil {
+		data, err := json.Marshal(v.Spec.Kiosk)
+		if err != nil {
+			return err
+		}
+		env = append(env, "BEAM_VM_KIOSK="+base64.StdEncoding.EncodeToString(data))
 	}
 
 	secrets := []*pb.SecretVar{}
@@ -117,6 +126,9 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
+	if v.Spec.Kiosk != nil && v.Spec.Kiosk.Transport == types.VMKioskTransportWebRTC && s.webrtc == nil {
+		return fmt.Errorf("kiosk WebRTC requires the shared TCP gateway")
+	}
 	if err := s.ensurePublicIPv6(ctx, v); err != nil {
 		return err
 	}
@@ -131,9 +143,9 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 			return fmt.Errorf("VM is still stopping")
 		}
 
-		v.Status = "starting"
+		v.Status = types.VMStateStarting
 		if state.Status == types.ContainerStatusRunning {
-			v.Status = "running"
+			v.Status = types.VMStateRunning
 			v.EverRunning = true
 			v.LaunchAttempts = 0
 			v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
@@ -178,7 +190,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		v.ContainerID = types.StubTypeVM + "-" + v.StubID + "-" + randomHexID()[:8]
 	}
 
-	v.Status = "starting"
+	v.Status = types.VMStateStarting
 	v.Error = ""
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
@@ -222,14 +234,14 @@ func (s *Service) runtimeState(v *types.VM) (*types.ContainerState, error) {
 // Launch completion is visible before the reconciler persists it. Project only
 // starting -> running; pause/stop intent and checkpoint ownership stay durable.
 func (s *Service) launchStatus(v *types.VM) (string, error) {
-	if v.DesiredState == "running" && v.Status == "starting" {
+	if v.DesiredState == types.VMStateRunning && v.Status == types.VMStateStarting {
 		state, err := s.runtimeState(v)
 		if err != nil {
 			return "", err
 		}
 
 		if state != nil && state.Status == types.ContainerStatusRunning {
-			return "running", nil
+			return types.VMStateRunning, nil
 		}
 	}
 
@@ -287,7 +299,17 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 func artifact(v *types.VM, id, kind, name, description string) *types.VMArtifact {
 	spec := v.Spec
 	spec.SSHPublicKey, spec.SourceSnapshotID = "", ""
-	return &types.VMArtifact{ID: id, Name: name, VMID: v.ID, VMName: v.Name, Kind: kind, RootSnapshotID: v.RootSnapshotID, Spec: spec, Description: description, CreatedAt: time.Now().UTC()}
+	return &types.VMArtifact{
+		ID:             id,
+		Name:           name,
+		VMID:           v.ID,
+		VMName:         v.Name,
+		Kind:           kind,
+		RootSnapshotID: v.RootSnapshotID,
+		Spec:           spec,
+		Description:    description,
+		CreatedAt:      time.Now().UTC(),
+	}
 }
 
 func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
@@ -307,7 +329,7 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 		return err
 	}
 
-	if err == nil && state.Status != types.ContainerStatusStopping && (v.DesiredState != "paused" || v.MemoryCheckpointID == "") {
+	if err == nil && state.Status != types.ContainerStatusStopping && (v.DesiredState != types.VMStatePaused || v.MemoryCheckpointID == "") {
 		// Commit the root before releasing compute. --no-snapshot skips only
 		// the named artifact, never filesystem durability.
 		if state.Status == types.ContainerStatusRunning {
@@ -316,7 +338,7 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 			}
 		}
 
-		v.Status = "stopping"
+		v.Status = types.VMStateStopping
 		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return err
 		}
@@ -398,9 +420,9 @@ func (s *Service) acknowledgeExitCode(containerID string, code int) {
 // Persist the final root before recording the optional artifact. A replacement
 // gateway retries the same artifact identity if it died between these writes.
 func (s *Service) finishStop(ctx context.Context, v *types.VM) error {
-	v.Status = "stopped"
-	if v.DesiredState == "paused" {
-		v.Status = "paused"
+	v.Status = types.VMStateStopped
+	if v.DesiredState == types.VMStatePaused {
+		v.Status = types.VMStatePaused
 	}
 
 	if err := s.repo.SaveVM(ctx, v); err != nil {
@@ -423,7 +445,7 @@ func (s *Service) stopOrDelete(ctx context.Context, v *types.VM) error {
 		return err
 	}
 
-	if v.DesiredState != "deleted" {
+	if v.DesiredState != types.VMStateDeleted {
 		return nil
 	}
 
@@ -431,7 +453,7 @@ func (s *Service) stopOrDelete(ctx context.Context, v *types.VM) error {
 		return err
 	}
 
-	v.Status = "deleted"
+	v.Status = types.VMStateDeleted
 	return s.repo.SaveVM(ctx, v)
 }
 
@@ -502,7 +524,7 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	// possible after revocation; no inactive credential authorizes a launch.
 	info := &auth.AuthInfo{Workspace: &workspace, Token: &types.Token{}}
 	ctx = auth.ContextWithAuthInfo(ctx, info)
-	if v.DesiredState != "running" {
+	if v.DesiredState != types.VMStateRunning {
 		if err := s.stopOrDelete(ctx, v); err != nil {
 			return err
 		}
@@ -516,7 +538,7 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	}
 
 	if token == nil || !token.Active || token.DisabledByClusterAdmin {
-		v.DesiredState = "stopped"
+		v.DesiredState = types.VMStateStopped
 		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return err
 		}
@@ -525,7 +547,7 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	}
 
 	info.Token = token
-	if v.Status == "error" && (v.LaunchAttempts >= 5 || time.Since(v.UpdatedAt) < 30*time.Second) {
+	if v.Status == types.VMStateError && (v.LaunchAttempts >= 5 || time.Since(v.UpdatedAt) < 30*time.Second) {
 		return nil
 	}
 
@@ -538,8 +560,8 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 		if state.Status == types.ContainerStatusRunning {
 			v.EverRunning = true
 			v.LaunchAttempts = 0
-			if v.Status != "running" || v.MemoryCheckpointID != "" {
-				v.Status = "running"
+			if v.Status != types.VMStateRunning || v.MemoryCheckpointID != "" {
+				v.Status = types.VMStateRunning
 				v.Error = ""
 				v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 				if err := s.repo.SaveVM(ctx, v); err != nil {
@@ -565,7 +587,7 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 						return s.pause(ctx, v)
 					}
 
-					v.DesiredState = "stopped"
+					v.DesiredState = types.VMStateStopped
 					if err := s.repo.SaveVM(ctx, v); err != nil {
 						return err
 					}

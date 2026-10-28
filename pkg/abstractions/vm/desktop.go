@@ -14,7 +14,7 @@ var desktopPage string
 
 func desktopEntry(c echo.Context, v *types.VM, port int) bool {
 	r := c.Request()
-	return v.Spec.Desktop && port == 8080 && c.Param("*") == "" &&
+	return v.Spec.Desktop && port == types.VMDesktopPort && c.Param("*") == "" &&
 		r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
@@ -23,11 +23,14 @@ func (s *Service) serveDesktop(c echo.Context, v *types.VM, status string) error
 		if !v.Spec.AutoResume {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "VM is not running; start it to use this URL")
 		}
-		if _, err := s.wakeForAccess(c.Request().Context(), v, 8080); err != nil {
+		if _, err := s.wakeForAccess(c.Request().Context(), v, types.VMDesktopPort); err != nil {
 			return err
 		}
 	}
 
 	c.Response().Header().Set("Cache-Control", "no-store")
+	if v.Spec.Kiosk != nil {
+		return c.HTML(http.StatusOK, kioskPage)
+	}
 	return c.HTML(http.StatusOK, desktopPage)
 }

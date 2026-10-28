@@ -150,6 +150,12 @@ func prepareSystemdTmp(root string, desktop bool) error {
 }
 
 func writeSystemdBootFiles(root string, process *specs.Process) error {
+	if processEnv(process, "BEAM_VM_KIOSK") != "" {
+		backend, err := os.ReadFile(filepath.Join(root, "opt/beam-vm/kiosk-backend"))
+		if err != nil || !strings.HasPrefix(string(backend), "selkies-") {
+			return fmt.Errorf("image does not contain the kiosk streaming backend; rebuild with beam vm image build --kiosk")
+		}
+	}
 	if err := prepareVMIdentity(root, process); err != nil {
 		return err
 	}

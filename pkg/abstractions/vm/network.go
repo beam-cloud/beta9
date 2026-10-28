@@ -31,9 +31,6 @@ import (
 const (
 	defaultPublicVMConnections      = 16384
 	defaultPublicVMConnectionsPerVM = 256
-	vmSSHPort                       = 2222
-	vmTerminalPort                  = 7681
-	vmDesktopPort                   = 8080
 )
 
 type publicVMNetwork struct {
@@ -99,9 +96,13 @@ func parsePublicVMNetwork(cfg types.VMNetworkConfig) (*publicVMNetwork, error) {
 		return nil, fmt.Errorf("VM maxConnectionsPerVM must not exceed maxConnections")
 	}
 	p := &publicVMNetwork{
-		prefix: prefixes[0], prefixes: prefixes, maxConnections: limit, maxConnectionsPerVM: vmLimit,
-		connections: make(map[string]int), activities: make(map[string]*publicVMActivity),
-		rejectionLog: log.Sample(&zerolog.BurstSampler{Burst: 1, Period: 5 * time.Second}),
+		prefix:              prefixes[0],
+		prefixes:            prefixes,
+		maxConnections:      limit,
+		maxConnectionsPerVM: vmLimit,
+		connections:         make(map[string]int),
+		activities:          make(map[string]*publicVMActivity),
+		rejectionLog:        log.Sample(&zerolog.BurstSampler{Burst: 1, Period: 5 * time.Second}),
 	}
 	for _, value := range cfg.TrustedProxyCIDRs {
 		cidr, err := netip.ParsePrefix(value)
@@ -272,11 +273,11 @@ func (p *publicVMNetwork) validateHeader(header *proxyproto.Header) error {
 
 func publicVMPort(v *types.VM, port uint32) bool {
 	return v != nil && v.DesiredState != types.VMStateDeleted && slices.Contains(v.Spec.Ports, port) &&
-		port != uint32(types.WorkerSandboxProcessManagerPort) && (port != vmSSHPort || v.Spec.SSH)
+		port != uint32(types.WorkerSandboxProcessManagerPort) && (port != types.VMSSHPort || v.Spec.SSH)
 }
 
 func managedVMWebPort(v *types.VM, port uint32) bool {
-	return port == vmTerminalPort || (port == vmDesktopPort && v.Spec.Desktop)
+	return port == types.VMTerminalPort || (port == types.VMDesktopPort && v.Spec.Desktop)
 }
 
 func publicVMHTTPPort(v *types.VM, port uint32) bool {

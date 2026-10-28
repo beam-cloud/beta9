@@ -234,6 +234,14 @@ func (g *Group) vmDesktopLaunch(ctx context.Context, a *auth.AuthInfo, args tool
 func (g *Group) vmDesktopResize(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	w, h := int(args.num("width", 1280)), int(args.num("height", 720))
 	mode := fmt.Sprintf("%dx%d", w, h)
+	info, err := g.vmGet(ctx, a, args)
+	if err != nil {
+		return nil, err
+	}
+	spec, _ := info["spec"].(map[string]any)
+	if spec["kiosk"] != nil {
+		return g.vmDesktop(ctx, a, args, []string{"/opt/beam-vm/kiosk", "--resize", strconv.Itoa(w), strconv.Itoa(h)}, true)
+	}
 	script := fmt.Sprintf("if ! xrandr --query | awk '$1 == %s {found=1} END {exit !found}'; then xrandr --newmode %s %g %d 0 0 %d %d 0 0 %d && xrandr --addmode VNC-0 %s; fi; xrandr --output VNC-0 --mode %s", strconv.Quote(mode), shellWord(mode), float64(w*h*60)/1000000, w, w, h, h, shellWord(mode), shellWord(mode))
 	return g.vmDesktop(ctx, a, args, []string{"bash", "-lc", script}, true)
 }

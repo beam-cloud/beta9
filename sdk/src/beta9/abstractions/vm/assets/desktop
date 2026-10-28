@@ -1,5 +1,10 @@
 #!/bin/bash
 set -euo pipefail
+
+if [ -n "${BEAM_VM_KIOSK:-}" ]; then
+  exec /opt/beam-vm/kiosk
+fi
+
 # The server and all of its credentials, locks and config are transient. User
 # files and application configuration retain their normal durable locations.
 mkdir -p "$HOME/.vnc"
@@ -31,10 +36,14 @@ encoding:
       time_threshold: 1
       area_threshold: 45%
 EOF
+
 # KasmVNC 1.5.0's launcher requires a writable user even with Basic Auth
 # disabled. Seed its transient database and forbid interactive startup prompts.
 secret=$(openssl rand -base64 18)
 printf '%s\n%s\n' "$secret" "$secret" | vncpasswd -u desktop -w -o
+
 # Xvnc runs in the foreground so systemd observes failure and restarts the
 # entire desktop cgroup. No pgrep guesses or persistent PID files.
-exec vncserver :1 -fg -geometry 1920x1080 -dpi 192 -depth 24 -interface 0.0.0.0 -websocketPort 8080 -disableBasicAuth -SecurityTypes None -select-de manual -prompt 0
+exec vncserver :1 -fg -geometry 1920x1080 -dpi 192 -depth 24 \
+  -interface 0.0.0.0 -websocketPort 8080 -disableBasicAuth \
+  -SecurityTypes None -select-de manual -prompt 0

@@ -119,6 +119,9 @@ func validate(spec *types.VMSpec) error {
 	if spec.ImageID == "" {
 		return fmt.Errorf("image_id is required; the image must contain systemd and the Beam VM services")
 	}
+	if err := validateKiosk(spec); err != nil {
+		return err
+	}
 
 	if spec.Desktop && spec.Memory < 1024 {
 		return fmt.Errorf("desktop requires at least 1024 MiB")
@@ -145,19 +148,19 @@ func validate(spec *types.VMSpec) error {
 	}
 
 	seen := map[uint32]bool{}
-	ports := []uint32{7681}
+	ports := []uint32{types.VMTerminalPort}
 	if spec.Desktop {
-		ports = append(ports, 8080)
+		ports = append(ports, types.VMDesktopPort)
 	}
 
 	if spec.SSH {
-		ports = append(ports, 2222)
+		ports = append(ports, types.VMSSHPort)
 	}
 
 	ports = append(ports, spec.Ports...)
 	spec.Ports = nil
 	for _, port := range ports {
-		if port == 0 || port > 65535 || port == uint32(types.WorkerSandboxProcessManagerPort) || (port == 2222 && !spec.SSH) {
+		if port == 0 || port > 65535 || port == uint32(types.WorkerSandboxProcessManagerPort) || (port == types.VMSSHPort && !spec.SSH) {
 			return fmt.Errorf("invalid port %d", port)
 		}
 
@@ -168,23 +171,23 @@ func validate(spec *types.VMSpec) error {
 	}
 
 	for _, port := range spec.PrivatePorts {
-		if port == 0 || port > 65535 || port == 2222 || port == uint32(types.WorkerSandboxProcessManagerPort) {
+		if port == 0 || port > 65535 || port == types.VMSSHPort || port == uint32(types.WorkerSandboxProcessManagerPort) {
 			return fmt.Errorf("invalid private port %d", port)
 		}
 	}
 
 	for _, port := range spec.ProtectedPorts {
-		if port == 2222 || !slices.Contains(spec.Ports, port) {
+		if port == types.VMSSHPort || !slices.Contains(spec.Ports, port) {
 			return fmt.Errorf("protected port %d must be published", port)
 		}
 	}
 	for _, port := range spec.PublicPorts {
-		if port == 2222 || !slices.Contains(spec.Ports, port) || slices.Contains(spec.ProtectedPorts, port) {
+		if port == types.VMSSHPort || !slices.Contains(spec.Ports, port) || slices.Contains(spec.ProtectedPorts, port) {
 			return fmt.Errorf("public port %d must be published and cannot be protected", port)
 		}
 	}
-	for _, port := range []uint32{7681, 8080} {
-		if (port == 7681 || spec.Desktop) && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
+	for _, port := range []uint32{types.VMTerminalPort, types.VMDesktopPort} {
+		if (port == types.VMTerminalPort || spec.Desktop) && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
 			spec.ProtectedPorts = append(spec.ProtectedPorts, port)
 		}
 	}
@@ -262,7 +265,7 @@ func (s *Service) update(c echo.Context) error {
 	}
 
 	defer unlock()
-	if v.DesiredState == "deleted" {
+	if v.DesiredState == types.VMStateDeleted {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
@@ -298,7 +301,7 @@ func (s *Service) update(c echo.Context) error {
 	// Apply through the existing worker firewall, and carry this same policy
 	// on every cold boot. Updating a stopping guest would race disk shutdown.
 	if (req.BlockNetwork != nil || req.AllowList != nil) && v.ContainerID != "" {
-		if v.Status != "running" {
+		if v.Status != types.VMStateRunning {
 			return echo.NewHTTPError(http.StatusConflict, "wait for the VM to finish starting or stopping before updating its network")
 		}
 
@@ -329,7 +332,12 @@ func (s *Service) update(c echo.Context) error {
 }
 
 func (s *Service) applyNetwork(ctx context.Context, v *types.VM, spec types.VMSpec) error {
-	resp, err := s.runtime.SandboxUpdateNetworkPermissions(ctx, &pb.PodSandboxUpdateNetworkPermissionsRequest{ContainerId: v.ContainerID, StubId: v.StubID, BlockNetwork: spec.BlockNetwork, AllowList: spec.AllowList})
+	resp, err := s.runtime.SandboxUpdateNetworkPermissions(ctx, &pb.PodSandboxUpdateNetworkPermissionsRequest{
+		ContainerId:  v.ContainerID,
+		StubId:       v.StubID,
+		BlockNetwork: spec.BlockNetwork,
+		AllowList:    spec.AllowList,
+	})
 	if err != nil {
 		return err
 	}
@@ -344,7 +352,7 @@ func (s *Service) applyNetwork(ctx context.Context, v *types.VM, spec types.VMSp
 // Shared by explicit start and access-triggered cold boots. Preserve the stop
 // barrier and reset launch retries only when a caller asks to activate the VM.
 func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
-	if v.DesiredState == "paused" && v.MemoryCheckpointID == "" {
+	if v.DesiredState == types.VMStatePaused && v.MemoryCheckpointID == "" {
 		return echo.NewHTTPError(http.StatusConflict, "memory pause did not complete; use start with cold=true to recover from disk")
 	}
 
@@ -364,7 +372,7 @@ func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM
 		ctx = auth.ContextWithAuthInfo(ctx, owner)
 	}
 
-	if (v.DesiredState == "stopped" || v.DesiredState == "paused") && (v.ContainerID != "" || v.StopSnapshotID != "") {
+	if (v.DesiredState == types.VMStateStopped || v.DesiredState == types.VMStatePaused) && (v.ContainerID != "" || v.StopSnapshotID != "") {
 		if err := s.stop(ctx, v, false); err != nil {
 			return err
 		}
@@ -374,7 +382,7 @@ func (s *Service) activate(ctx context.Context, info *auth.AuthInfo, v *types.VM
 		return err
 	}
 
-	v.DesiredState, v.Error, v.TokenID = "running", "", info.Token.ExternalId
+	v.DesiredState, v.Error, v.TokenID = types.VMStateRunning, "", info.Token.ExternalId
 	v.LaunchAttempts = 0
 	if err := s.repo.TouchVM(ctx, v.ID); err != nil {
 		return err
@@ -409,7 +417,7 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 	}
 
 	defer unlock()
-	if v.DesiredState == "deleted" || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
+	if v.DesiredState == types.VMStateDeleted || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
 		return nil, false, echo.NewHTTPError(http.StatusConflict, "VM access changed while resuming")
 	}
 
@@ -419,7 +427,7 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 	}
 
 	ctx = auth.ContextWithAuthInfo(ctx, info)
-	if v.DesiredState != "running" {
+	if v.DesiredState != types.VMStateRunning {
 		if err := s.activate(ctx, info, v); err != nil {
 			return nil, false, echo.NewHTTPError(http.StatusServiceUnavailable, "unable to resume VM: "+err.Error())
 		}
@@ -434,7 +442,7 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 		return v, false, nil
 	}
 
-	v.Status = "running"
+	v.Status = types.VMStateRunning
 	// Probe the forwarding route before sending the original request once.
 	ready, err := s.runtime.VMPortReady(ctx, v.StubID, v.ContainerID, port)
 	if err != nil {
@@ -468,8 +476,12 @@ func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port u
 }
 
 func (s *Service) configurePort(ctx context.Context, v *types.VM, action string, port uint32, protected *bool) error {
-	systemPort := port == 7681 || (port == 8080 && v.Spec.Desktop)
-	if port == 0 || port > 65535 || port == 2222 || port == uint32(types.WorkerSandboxProcessManagerPort) || (systemPort && (action != "expose" || protected == nil)) {
+	public := action == "expose" && (protected == nil || !*protected)
+	if err := validateKioskPort(v.Spec.Kiosk, port, public); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	systemPort := port == types.VMTerminalPort || (port == types.VMDesktopPort && v.Spec.Desktop)
+	if port == 0 || port > 65535 || port == types.VMSSHPort || port == uint32(types.WorkerSandboxProcessManagerPort) || (systemPort && (action != "expose" || protected == nil)) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid or reserved port")
 	}
 

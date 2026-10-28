@@ -1,0 +1,111 @@
+#!/usr/bin/python3
+"""Prepare the pinned Selkies backend and client for a Beam kiosk session."""
+
+from pathlib import Path
+
+PATCHES = {
+    "webrtc_mode.py": {
+        "# Beam: verify the realized root before trusting the resize cache.": {
+            "from .display_utils import (resize_display,": "from .display_utils import (read_realized_root, resize_display,",
+            "        self._last_resize_request: Optional[Tuple[int, int]] = None": (
+                "        self._last_resize_request: Optional[Tuple[int, int]] = None\n"
+                "        self._last_resize_root: Optional[Tuple[int, int]] = None"
+            ),
+            (
+                '                logger.debug(f"Redundant resize request for primary to {target_w}x{target_h}. No action.")\n'
+                "                return"
+            ): (
+                "                # Beam: verify the realized root before trusting the resize cache.\n"
+                "                # SDK/agent X11 changes can bypass the running service.\n"
+                "                if IS_WAYLAND or self._last_resize_root == await read_realized_root((-1, -1)):\n"
+                "                    return"
+            ),
+            "                realized_w, realized_h = realized": (
+                "                realized_w, realized_h = realized\n"
+                "                self._last_resize_root = (realized_w, realized_h)"
+            ),
+        },
+        "# Beam: the focused kiosk controller owns the viewport.": {
+            '        if msg == "REQUEST_KEYFRAME" and self.rtc_app is not None': (
+                "        # Beam: the focused kiosk controller owns the viewport.\n"
+                '        if isinstance(msg, str) and msg.startswith("KIOSK_VIEWPORT,"):\n'
+                "            peer = self.rtc_app.peer_connections.get(conn_id) if self.rtc_app else None\n"
+                "            tab = self._peer_tabs.get(conn_id)\n"
+                '            size = msg.split(",", 1)[1]\n'
+                "            if not tab or not self._holds_full_control(peer) or parse_resize_dims(size) is None:\n"
+                "                return None\n"
+                '            self._display_owner_tabs[display_id or "primary"] = tab\n'
+                '            return self.input_handler.on_message("r," + size, display_id, conn_id=conn_id)\n'
+                '        if msg == "REQUEST_KEYFRAME" and self.rtc_app is not None'
+            ),
+        },
+        "# Beam: retain the viewport for owner succession.": {
+            '            self._display_owner_tabs[display_id or "primary"] = tab': (
+                "            # Beam: retain the viewport for owner succession.\n"
+                '            peer.setdefault("held_owner_messages", {})["r"] = "r," + size\n'
+                '            self._display_owner_tabs[display_id or "primary"] = tab'
+            ),
+        },
+    },
+    "input_handler.py": {
+        "# Beam: do not turn a stationary release into held-button motion.": {
+            (
+                "        elif position_changed or button_mask != self.button_mask:\n"
+                "            # Button transitions warp unconditionally: an application may have\n"
+                "            # moved the pointer, and a press must land where the client aims.\n"
+                "            self.send_mouse(MOUSE_POSITION, (final_x, final_y))"
+            ): (
+                "        elif position_changed or (button_mask & ~self.button_mask):\n"
+                "            # Beam: do not turn a stationary release into held-button motion.\n"
+                "            # GTK/wx interpret that motion as drag selection, dismissing menus.\n"
+                "            # Presses still re-anchor a pointer warped by the application.\n"
+                "            self.send_mouse(MOUSE_POSITION, (final_x, final_y))"
+            ),
+        },
+    },
+}
+
+
+def patch_file(path, patches):
+    original = source = path.read_text()
+    for marker, edits in patches.items():
+        if marker in source:
+            continue
+        for before, after in edits.items():
+            if source.count(before) != 1:
+                raise SystemExit(f"Selkies source changed; review kiosk fixes for {path.name}")
+            source = source.replace(before, after, 1)
+    compile(source, str(path), "exec")
+    if source != original:
+        path.write_text(source)
+
+
+def patch(root):
+    for name, patches in PATCHES.items():
+        paths = {p.resolve() for p in root.rglob(name)}
+        if not paths:
+            raise SystemExit(f"Selkies backend missing {name}; cannot install kiosk fixes")
+        for path in paths:
+            patch_file(path, patches)
+
+
+def patch_client(root, pixel_ratio):
+    """Load gateway routing before the native client creates its peers."""
+    pages = list(root.rglob("selkies_web/index.html"))
+    if not pages:
+        raise SystemExit("Selkies web client not found; cannot install Beam transport bootstrap")
+    script = f'<script src="../_beam/kiosk/webrtc.js" data-pixel-ratio="{pixel_ratio}"></script>'
+    for page in pages:
+        source = page.read_text()
+        if script not in source:
+            if source.count("<head>") != 1:
+                raise SystemExit("Selkies web client changed; review kiosk bootstrap")
+            page.write_text(source.replace("<head>", "<head>" + script, 1))
+
+
+if __name__ == "__main__":
+    from kiosk_config import KioskRuntime
+
+    root = Path("/opt/selkies")
+    patch(root)
+    patch_client(root, KioskRuntime().pixel_ratio)

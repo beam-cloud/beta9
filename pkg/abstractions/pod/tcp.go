@@ -41,6 +41,7 @@ type PodTCPServer struct {
 	tailscale     *network.Tailscale
 	listener      net.Listener
 	tls           *tcpTLSHandler
+	ice           *network.TCPICEHandler
 }
 
 func NewPodTCPServer(
@@ -60,6 +61,7 @@ func NewPodTCPServer(
 		containerRepo: containerRepo,
 		redisClient:   redisClient,
 		tailscale:     tailscale,
+		ice:           network.NewTCPICEHandler(tcpTLSReadTimeout, types.VMKioskMaxICEFrameBytes),
 	}
 }
 
@@ -164,6 +166,15 @@ func (pts *PodTCPServer) acceptConnections() {
 }
 
 func (pts *PodTCPServer) handleConnection(conn net.Conn) {
+	prepared, handled, err := pts.ice.Accept(conn)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	if handled {
+		return
+	}
+	conn = prepared
 	client, err := pts.tls.accept(conn)
 	if err != nil {
 		conn.Close()
@@ -183,6 +194,13 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	sniMiddleware := pts.createSNIMiddleware(tcpHandler)
 	if err := sniMiddleware(client); err != nil {
 		log.Error().Err(err).Msg("connection handler error")
+	}
+}
+
+// SetVMICEHandler adds authenticated VM ICE routing to the existing L4 port.
+func (ps *GenericPodService) SetVMICEHandler(handler func(net.Conn)) {
+	if ps.tcpServer != nil {
+		ps.tcpServer.ice.SetHandler(handler)
 	}
 }
 
