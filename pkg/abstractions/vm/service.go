@@ -5,6 +5,7 @@ package vm
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -22,6 +23,7 @@ type Runtime interface {
 	VMPortReady(context.Context, string, string, uint32) (bool, error)
 	ForwardVM(echo.Context, string, string) error
 	TunnelVM(echo.Context, string, uint32) error
+	SetVMICEHandler(func(net.Conn))
 }
 
 type Gateway interface {

@@ -49,9 +49,9 @@ func iceTestFixture(t *testing.T) (*Service, *types.VM) {
 	t.Cleanup(func() { s.rdb.Close() })
 	v.TrafficAccessToken = "vm-traffic-secret"
 	v.Spec.Kiosk = &types.VMKioskSpec{Command: []string{"application"}, Transport: "webrtc"}
-	policy := types.VMWebRTCConfig{}
-	require.NoError(t, policy.ApplyDefaults())
-	s.webrtc = &vmWebRTC{Service: s, policy: policy, config: types.PodTCPConfig{ExternalHost: "127.0.0.1", ExternalPort: 443}, slots: make(chan struct{}, policy.MaxConnections)}
+	dialer := network.NewBackendDialer(nil, types.TailscaleConfig{}, s.containers, time.Second)
+	require.NoError(t, s.startWebRTC(types.PodTCPConfig{Enabled: true, ExternalHost: "127.0.0.1", ExternalPort: 443}, types.VMWebRTCConfig{}, dialer))
+	require.NotNil(t, s.runtime.(*vmRuntime).iceHandler)
 	return s, v
 }
 
@@ -107,7 +107,7 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 			s.webrtc.dialer = network.NewBackendDialer(nil, types.TailscaleConfig{}, containers, time.Second)
 			password := testICEPassword
 			if scenario == "expired lease" {
-				s.webrtc.policy.CheckInterval = 10 * time.Millisecond
+				s.webrtc.config.CheckInterval = 10 * time.Millisecond
 			}
 			switch scenario {
 			case "wrong password":

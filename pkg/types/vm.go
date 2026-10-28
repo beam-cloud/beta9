@@ -80,6 +80,15 @@ type VMSpec struct {
 	SourceSnapshotID string            `json:"source_snapshot_id,omitempty"`
 }
 
+// VMCreateOptions carries parsed inputs for creation and forks.
+type VMCreateOptions struct {
+	Name      string
+	Spec      VMSpec
+	Metadata  map[string]string
+	RequestID string
+	Image     *pb.VerifyImageBuildRequest
+}
+
 // VMKioskSpec launches an ordinary application on an isolated graphical session.
 // Commands are argv, never shell source. Env values follow the VM's redaction rules.
 type VMKioskSpec struct {
@@ -98,16 +107,19 @@ type VMKioskMCP struct {
 
 // VM service ports are shared by validation, routing and the guest protocol.
 const (
-	VMSSHPort                      = 2222
-	VMTerminalPort                 = 7681
-	VMDesktopPort                  = 8080
-	VMKioskStatusPort       uint32 = 8081
-	VMKioskMediaPort        uint32 = 8443
-	VMKioskMaxICEFrameBytes        = 8192
-	VMKioskMaxCommandArgs          = 128
-	VMKioskMaxCommandBytes         = 32 << 10
-	VMKioskMaxEnvBytes             = 16 << 10
-	VMKioskMaxConfigBytes          = 64 << 10
+	VMSSHPort                         = 2222
+	VMTerminalPort                    = 7681
+	VMDesktopPort                     = 8080
+	VMKioskStatusPort          uint32 = 8081
+	VMKioskMediaPort           uint32 = 8443
+	VMKioskMaxICEFrameBytes           = 8192
+	VMKioskMaxCommandArgs             = 128
+	VMKioskMaxCommandBytes            = 32 << 10
+	VMKioskMaxEnvBytes                = 16 << 10
+	VMKioskMaxConfigBytes             = 64 << 10
+	VMKioskMaxSDPBytes                = 64 << 10
+	VMKioskMaxMediaSections           = 8
+	VMKioskMaxGatewayAddresses        = 8
 )
 
 // Kiosk browser protocol, routed only after VM traffic authentication.
@@ -124,6 +136,10 @@ const (
 	VMKioskTransportWebSockets VMKioskTransport = "websockets"
 )
 
+type VMWebRTCSessionDescription struct {
+	SDP string `json:"sdp"`
+}
+
 // Clone isolates normalization and redaction from snapshots and their parent VM.
 func (k *VMKioskSpec) Clone() *VMKioskSpec {
 	if k == nil {
@@ -138,6 +154,17 @@ func (k *VMKioskSpec) Clone() *VMKioskSpec {
 		copy.MCP = &mcp
 	}
 	return &copy
+}
+
+func (k *VMKioskSpec) PrivatePorts() []uint32 {
+	if k == nil {
+		return nil
+	}
+	var ports []uint32
+	if k.Transport == VMKioskTransportWebRTC {
+		ports = append(ports, VMKioskMediaPort)
+	}
+	return append(ports, VMKioskStatusPort)
 }
 
 func (s VMSpec) RuntimePorts() []uint32 {

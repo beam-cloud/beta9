@@ -203,6 +203,19 @@ func TestCreationRequestIsWorkspaceScopedAndDoesNotLaunchTwice(t *testing.T) {
 	require.Len(t, runtime.requests, 1)
 }
 
+func TestCreationRequestDigestCompatibility(t *testing.T) {
+	s, _, info, _, _ := fixture()
+	rec := vmRequest(managementAPI(s, info), http.MethodPost, "/"+info.Workspace.ExternalId,
+		`{"name":"digest-stable","request_id":"123e4567-e89b-12d3-a456-426614174000","spec":{"image_id":"base"},"metadata":{"purpose":"compatibility"}}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var v types.VM
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &v))
+	stored, err := s.repo.GetVM(context.Background(), info.Workspace.Id, v.ID)
+	require.NoError(t, err)
+	// Creation hashes must survive gateway upgrades for existing request IDs.
+	require.Equal(t, "7dca8aaab2abc8d23e055b914f5b5bf5fd0cee8e75ca9e3730471b63c8afa1fd", stored.CreationDigest)
+}
+
 func TestDeletedCreationRequestReturnsGoneBeforeComparingSettings(t *testing.T) {
 	for _, change := range []string{"none", "settings", "default-pool", "port-defaults"} {
 		t.Run(change, func(t *testing.T) {
@@ -217,7 +230,7 @@ func TestDeletedCreationRequestReturnsGoneBeforeComparingSettings(t *testing.T) 
 				// Older gateways did not protect the terminal by default.
 				spec.ProtectedPorts = nil
 			}
-			v, err := s.createVMWithRequest(auth.ContextWithAuthInfo(context.Background(), info), info, "", spec, nil, requestID)
+			v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, types.VMCreateOptions{Spec: spec, RequestID: requestID})
 			require.NoError(t, err)
 			v.DesiredState = types.VMStateDeleted
 			switch change {

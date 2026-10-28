@@ -391,7 +391,13 @@ func (s *Service) create(c echo.Context) error {
 		spec.ImageID = "pending-image-lookup"
 	}
 
-	v, err := s.createVMWithImage(ctx, info, req.Name, spec, req.Metadata, req.RequestID, image)
+	v, err := s.createVM(ctx, info, types.VMCreateOptions{
+		Name:      req.Name,
+		Spec:      spec,
+		Metadata:  req.Metadata,
+		RequestID: req.RequestID,
+		Image:     image,
+	})
 	if err != nil {
 		return apiError(err)
 	}
@@ -399,15 +405,8 @@ func (s *Service) create(c echo.Context) error {
 	return s.launchResponse(c, http.StatusCreated, v)
 }
 
-func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec) (*types.VM, error) {
-	return s.createVMWithRequest(ctx, info, name, spec, nil, "")
-}
-
-func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string) (*types.VM, error) {
-	return s.createVMWithImage(ctx, info, name, spec, metadata, requestID, nil)
-}
-
-func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string, image *pb.VerifyImageBuildRequest) (*types.VM, error) {
+func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.VMCreateOptions) (*types.VM, error) {
+	name, spec := opts.Name, opts.Spec
 	if err := s.configureKioskTransport(&spec); err != nil {
 		return nil, err
 	}
@@ -432,21 +431,21 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 	}
 
 	now := time.Now().UTC()
-	id := vmID(info.Workspace.Id, requestID)
+	id := vmID(info.Workspace.Id, opts.RequestID)
 	if name == "" {
 		name = defaultVMName(id)
 	}
 
 	var imageSpec []byte
-	if image != nil {
-		imageSpec, _ = (proto.MarshalOptions{Deterministic: true}).Marshal(image)
+	if opts.Image != nil {
+		imageSpec, _ = (proto.MarshalOptions{Deterministic: true}).Marshal(opts.Image)
 	}
 	creation, _ := json.Marshal(struct {
 		Name     string
 		Spec     types.VMSpec
 		Metadata map[string]string
 		Image    []byte `json:",omitempty"`
-	}{name, spec, metadata, imageSpec})
+	}{name, spec, opts.Metadata, imageSpec})
 	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
 	v := &types.VM{
 		ID:                  id,
@@ -457,7 +456,7 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		TokenID:             info.Token.ExternalId,
 		TrafficAccessToken:  randomHexID(),
 		Spec:                spec,
-		Metadata:            metadata,
+		Metadata:            opts.Metadata,
 		CreationDigest:      digest,
 		DesiredState:        types.VMStateRunning,
 		Status:              types.VMStateStarting,
@@ -472,7 +471,7 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 	}
 
 	defer unlock()
-	if requestID != "" {
+	if opts.RequestID != "" {
 		existing, err := s.repo.GetVM(ctx, info.Workspace.Id, id)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
@@ -493,11 +492,11 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		}
 	}
 
-	if image != nil {
+	if opts.Image != nil {
 		if s.images == nil {
 			return nil, echo.NewHTTPError(http.StatusPreconditionRequired, "VM image needs to be built")
 		}
-		verified, err := s.images.VerifyImageBuild(ctx, image)
+		verified, err := s.images.VerifyImageBuild(ctx, opts.Image)
 		if err != nil {
 			return nil, err
 		}
@@ -669,7 +668,7 @@ func (s *Service) action(c echo.Context) error {
 		spec := v.Spec
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey
-		child, err := s.createVM(ctx, info, req.Name, spec)
+		child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: req.Name, Spec: spec})
 		if err != nil {
 			return apiError(err)
 		}

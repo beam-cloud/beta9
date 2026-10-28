@@ -29,7 +29,7 @@ func TestKioskLaunchSpecAndRedaction(t *testing.T) {
 	require.Contains(t, spec.PrivatePorts, types.VMKioskStatusPort)
 	require.NotContains(t, spec.Ports, types.VMKioskStatusPort)
 	require.NoError(t, validate(&spec), "normalization is idempotent across updates and restores")
-	v, err := s.createVM(context.Background(), info, "application", spec)
+	v, err := s.createVM(context.Background(), info, types.VMCreateOptions{Name: "application", Spec: spec})
 	require.NoError(t, err)
 	var config types.VMKioskSpec
 	for _, env := range gateway.stub.Env {
@@ -52,6 +52,7 @@ func TestKioskLaunchSpecAndRedaction(t *testing.T) {
 
 func TestInvalidKioskNeverStartsCompute(t *testing.T) {
 	for name, kiosk := range map[string]string{
+		"empty MCP command": `{"command":["editor"],"mcp":{"command":[],"port":8000}}`,
 		"empty command":     `{"command":[]}`,
 		"shell string":      `{"command":"editor project"}`,
 		"relative cwd":      `{"command":["editor"],"cwd":"project"}`,

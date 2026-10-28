@@ -32,12 +32,11 @@ func validateKiosk(spec *types.VMSpec) error {
 	if k.Transport != "" && k.Transport != types.VMKioskTransportWebRTC && k.Transport != types.VMKioskTransportWebSockets {
 		return fmt.Errorf("kiosk transport must be webrtc or websockets")
 	}
-	if k.Transport == types.VMKioskTransportWebRTC {
-		if !slices.Contains(spec.PrivatePorts, types.VMKioskMediaPort) {
-			spec.PrivatePorts = append(spec.PrivatePorts, types.VMKioskMediaPort)
-		}
+	commands := [][]string{k.Command}
+	if k.MCP != nil {
+		commands = append(commands, k.MCP.Command)
 	}
-	checkCommand := func(command []string) error {
+	for _, command := range commands {
 		if len(command) == 0 || len(command) > types.VMKioskMaxCommandArgs || command[0] == "" {
 			return fmt.Errorf("kiosk commands require an argv array with 1–%d entries", types.VMKioskMaxCommandArgs)
 		}
@@ -51,10 +50,6 @@ func validateKiosk(spec *types.VMSpec) error {
 		if size > types.VMKioskMaxCommandBytes {
 			return fmt.Errorf("kiosk commands must fit in %d KiB", types.VMKioskMaxCommandBytes>>10)
 		}
-		return nil
-	}
-	if err := checkCommand(k.Command); err != nil {
-		return err
 	}
 	if k.Cwd == "" {
 		k.Cwd = "/workspace"
@@ -73,11 +68,9 @@ func validateKiosk(spec *types.VMSpec) error {
 		return fmt.Errorf("kiosk environment must fit in %d KiB", types.VMKioskMaxEnvBytes>>10)
 	}
 	if k.MCP != nil {
-		if err := checkCommand(k.MCP.Command); err != nil {
-			return err
-		}
 		p := k.MCP.Port
-		if p == 0 || p > 65535 || p == types.VMSSHPort || p == types.VMTerminalPort || p == types.VMDesktopPort || p == types.VMKioskStatusPort || (k.Transport == types.VMKioskTransportWebRTC && p == types.VMKioskMediaPort) || p == uint32(types.WorkerSandboxProcessManagerPort) {
+		reserved := append(k.PrivatePorts(), types.VMSSHPort, types.VMTerminalPort, types.VMDesktopPort, uint32(types.WorkerSandboxProcessManagerPort))
+		if p == 0 || p > 65535 || slices.Contains(reserved, p) {
 			return fmt.Errorf("kiosk MCP requires a non-reserved port between 1 and 65535")
 		}
 		if k.MCP.Path == "" {
@@ -94,8 +87,10 @@ func validateKiosk(spec *types.VMSpec) error {
 		}
 	}
 	spec.Desktop = true
-	if !slices.Contains(spec.PrivatePorts, types.VMKioskStatusPort) {
-		spec.PrivatePorts = append(spec.PrivatePorts, types.VMKioskStatusPort)
+	for _, port := range k.PrivatePorts() {
+		if !slices.Contains(spec.PrivatePorts, port) {
+			spec.PrivatePorts = append(spec.PrivatePorts, port)
+		}
 	}
 	encoded, err := json.Marshal(k)
 	if err != nil || len(encoded) > types.VMKioskMaxConfigBytes {
@@ -110,10 +105,8 @@ func validateKioskPort(k *types.VMKioskSpec, port uint32, public bool) error {
 		return nil
 	}
 	switch {
-	case port == types.VMKioskStatusPort:
-		return fmt.Errorf("port %d is reserved for kiosk readiness", port)
-	case port == types.VMKioskMediaPort && k.Transport == types.VMKioskTransportWebRTC:
-		return fmt.Errorf("port %d is reserved for private kiosk media", port)
+	case slices.Contains(k.PrivatePorts(), port):
+		return fmt.Errorf("port %d is reserved for kiosk services", port)
 	case public && port == types.VMDesktopPort:
 		return fmt.Errorf("kiosk browser sessions must be protected")
 	case public && k.MCP != nil && port == k.MCP.Port:

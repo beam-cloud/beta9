@@ -37,3 +37,19 @@ func TestVMWebRTCPolicyDefaultsAndRejectsUnsafeTiming(t *testing.T) {
 		require.Error(t, invalid.ApplyDefaults())
 	}
 }
+
+func TestVMKioskPrivatePorts(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		kiosk *VMKioskSpec
+		ports []uint32
+	}{
+		{"desktop", nil, nil},
+		{"websockets", &VMKioskSpec{Transport: VMKioskTransportWebSockets}, []uint32{VMKioskStatusPort}},
+		{"webrtc", &VMKioskSpec{Transport: VMKioskTransportWebRTC}, []uint32{VMKioskMediaPort, VMKioskStatusPort}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.ports, test.kiosk.PrivatePorts())
+		})
+	}
+}

@@ -42,7 +42,7 @@ func TestVMIdentityIsUniqueAcrossWorkspacesAndRandomCreations(t *testing.T) {
 	require.NotEqual(t, vmID(1, request), vmID(2, request))
 	require.NotEqual(t, vmID(1, ""), vmID(1, ""))
 	s, base, info, _, _ := fixture()
-	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, "my-dev", base.Spec)
+	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, types.VMCreateOptions{Name: "my-dev", Spec: base.Spec})
 	require.NoError(t, err)
 	require.Equal(t, "my-dev", v.Name)
 	require.Regexp(t, `^vm-[0-9a-f]{16}$`, v.ID)

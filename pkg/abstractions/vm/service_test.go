@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -127,7 +128,7 @@ func TestCreatePreventsReconcilerClaimingPublishedVM(t *testing.T) {
 	s, _, info, _, _ := fixture()
 	store := &createRaceStore{vmStore: s.repo.(*vmStore)}
 	s.repo = store
-	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, "created-vm", types.VMSpec{ImageID: "image"})
+	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, types.VMCreateOptions{Name: "created-vm", Spec: types.VMSpec{ImageID: "image"}})
 	require.NoError(t, err)
 	require.NotEmpty(t, v.ContainerID)
 	require.False(t, store.locked)
@@ -396,7 +397,10 @@ type vmRuntime struct {
 	network         *pb.PodSandboxUpdateNetworkPermissionsRequest
 	connectError    error
 	forwardStatus   int
+	iceHandler      func(net.Conn)
 }
+
+func (r *vmRuntime) SetVMICEHandler(handler func(net.Conn)) { r.iceHandler = handler }
 
 func (r *vmRuntime) SandboxConnect(_ context.Context, req *pb.PodSandboxConnectRequest) (*pb.PodSandboxConnectResponse, error) {
 	if r.connectError != nil {
@@ -585,7 +589,7 @@ func TestCreateUsesConfiguredDefaultPoolAndPreservesExplicitPool(t *testing.T) {
 			spec := base.Spec
 			spec.Pool = test.requestedPool
 			ctx := auth.ContextWithAuthInfo(context.Background(), info)
-			v, err := s.createVM(ctx, info, "new-vm", spec)
+			v, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "new-vm", Spec: spec})
 			require.NoError(t, err)
 			require.Equal(t, test.wantPool, v.Spec.Pool)
 			saved, err := s.repo.GetVM(ctx, info.Workspace.Id, v.ID)
@@ -1054,7 +1058,7 @@ func TestManagementResponsesOmitEnvironmentWithoutChangingStoredSpec(t *testing.
 	}
 	childSpec := v.Spec
 	childSpec.SourceSnapshotID = "template-root"
-	child, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, "child", childSpec)
+	child, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, types.VMCreateOptions{Name: "child", Spec: childSpec})
 	require.NoError(t, err)
 	require.Contains(t, gateway.stub.Env, "CREDENTIAL=private-value")
 	require.Nil(t, s.response(child).Spec.Env)
