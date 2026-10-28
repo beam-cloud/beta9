@@ -785,11 +785,23 @@ class VM:
         script = (Path(__file__).parent / "assets" / "metrics").read_text()
         return self._guest_json("python3", "-c", script, error="Unable to sample VM metrics")
 
+    @staticmethod
+    def _guest_output(process, *, error, timeout=30):
+        try:
+            code = process.wait(timeout)
+        except SandboxProcessError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            raise
+        if code != 0:
+            raise RuntimeError(process.stderr.read() or error)
+        return process.stdout.read().strip()
+
     def _guest_json(self, *command, error, timeout=10, **options):
         process = self.process.exec(*command, cwd="/", **options)
-        if process.wait(timeout) != 0:
-            raise RuntimeError(process.stderr.read() or error)
-        return json.loads(process.stdout.read())
+        return json.loads(self._guest_output(process, error=error, timeout=timeout))
 
     @property
     def process(self):

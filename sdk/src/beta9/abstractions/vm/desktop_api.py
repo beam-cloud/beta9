@@ -4,7 +4,6 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from ...exceptions import SandboxProcessError
 from .kiosk_config import KioskRuntime
 
 
@@ -21,17 +20,7 @@ class VMDesktop:
 
     def _run(self, *args, stdin=None):
         process = self._sandbox().process.exec(*args, cwd="/", stdin=stdin)
-        try:
-            code = process.wait(30)
-        except SandboxProcessError:
-            try:
-                process.kill()
-            except Exception:
-                pass
-            raise
-        if code != 0:
-            raise RuntimeError(process.stderr.read() or f"Desktop command failed: {args[0]}")
-        return process.stdout.read().strip()
+        return self.vm._guest_output(process, error=f"Desktop command failed: {args[0]}")
 
     @property
     def url(self):

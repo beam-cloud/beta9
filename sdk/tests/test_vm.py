@@ -1718,16 +1718,25 @@ def test_activity_lease_survives_gateway_restart_and_releases_same_lease():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js unavailable")
-def test_desktop_browser_routing_and_reconnect():
-    from pathlib import Path
-
+@pytest.mark.parametrize(
+    "scenario,source",
+    [
+        ("desktop", "desktop.html"),
+        ("kiosk", "kiosk.html"),
+        ("webrtc", "kiosk-webrtc.js"),
+        ("input", "kiosk-webrtc.js"),
+    ],
+)
+def test_browser_client(scenario, source):
     subprocess.run(
         [
             "node",
-            str(Path(__file__).with_name("test_vm_desktop.js")),
-            str(Path(__file__).parents[2] / "pkg/abstractions/vm/desktop.html"),
+            str(Path(__file__).with_suffix(".js")),
+            scenario,
+            str(Path(__file__).parents[2] / "pkg/abstractions/vm" / source),
         ],
         check=True,
+        timeout=15,
     )
 
 
@@ -2881,15 +2890,14 @@ def test_sandbox_sample_refuses_existing_app_without_ownership(tmp_path, monkeyp
 # Application kiosks
 
 
-def supervisor():
-    path = str(Path(vm_module.__file__).parent / "assets/kiosk")
-    loader = importlib.machinery.SourceFileLoader("beam_kiosk_guest", path)
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    # The standalone guest imports this adjacent shipped module without the SDK.
+def guest_module(name):
     import beta9.abstractions.vm.kiosk_config as config
 
-    with patch.dict("sys.modules", {"kiosk_config": config}):
+    path = str(Path(vm_module.__file__).parent / "assets" / name)
+    loader = importlib.machinery.SourceFileLoader("beam_vm_" + name.replace("-", "_"), path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {"kiosk_config": config}):
         loader.exec_module(module)
     return module
 
@@ -2963,7 +2971,7 @@ def test_kiosk_cli_preserves_argv_and_reports_bad_json(tmp_path, monkeypatch):
 
 
 def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
-    guest = supervisor()
+    guest = guest_module("kiosk")
     session = guest.Session(
         {"command": ["editor"], "env": {"DISPLAY": ":99", "APP_SETTING": "custom"}}
     )
@@ -2991,39 +2999,8 @@ def test_kiosk_sdk_waits_for_application_not_just_the_stream_port():
     assert ("/opt/beam-vm/kiosk", "--check") in processes
 
 
-def test_kiosk_browser_readiness_routing_recovery_and_message_origins():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for the embedded browser client tests")
-    subprocess.run(
-        [
-            node,
-            str(Path(__file__).with_name("test_vm_kiosk.js")),
-            str(Path(__file__).parents[2] / "pkg/abstractions/vm/kiosk.html"),
-        ],
-        check=True,
-        timeout=15,
-    )
-
-
-@pytest.mark.parametrize("script", ["test_vm_webrtc.js", "test_vm_kiosk_input.js"])
-def test_webrtc_browser_transport_and_input(script):
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for the embedded browser client tests")
-    subprocess.run(
-        [
-            node,
-            str(Path(__file__).with_name(script)),
-            str(Path(__file__).parents[2] / "pkg/abstractions/vm/kiosk-webrtc.js"),
-        ],
-        check=True,
-        timeout=15,
-    )
-
-
 def test_retina_scales_widgets_and_fonts_together():
-    module = supervisor()
+    module = guest_module("kiosk")
     retina = module.toolkit_settings('Xft/Antialias 1\nXft/DPI 196608\nXft/RGBA "rgb"\n')
     assert "Gdk/WindowScalingFactor 2\n" in retina
     assert "Gdk/UnscaledDPI 98304\n" in retina
@@ -3036,7 +3013,7 @@ def test_retina_scales_widgets_and_fonts_together():
 
 
 def test_project_reopens_at_saved_browser_geometry(tmp_path):
-    module = supervisor()
+    module = guest_module("kiosk")
     path = tmp_path / "display.json"
     assert module.saved_display(path) == (3840, 2160)
     path.write_text('{"width":3456,"height":1578}')
@@ -3052,7 +3029,7 @@ def test_project_reopens_at_saved_browser_geometry(tmp_path):
 
 
 def test_existing_display_geometry_preserves_logical_size_when_density_changes(tmp_path):
-    module = supervisor()
+    module = guest_module("kiosk")
     path = tmp_path / "display.json"
     path.write_text('{"width":1920,"height":1080,"pixel_ratio":1}')
     assert module.saved_display(path) == (3840, 2160)
@@ -3063,7 +3040,7 @@ def test_existing_display_geometry_preserves_logical_size_when_density_changes(t
 
 
 def test_repeated_restarts_keep_only_current_owned_process_groups(monkeypatch, tmp_path):
-    module = supervisor()
+    module = guest_module("kiosk")
     from dataclasses import replace
 
     config = tmp_path / "mcp.json"
@@ -3091,7 +3068,7 @@ def test_repeated_restarts_keep_only_current_owned_process_groups(monkeypatch, t
 
 
 def test_launcher_handoff_uses_owned_windows_and_closes_children(monkeypatch):
-    module = supervisor()
+    module = guest_module("kiosk")
     clock = [0]
     windows = []
     monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
@@ -3116,7 +3093,7 @@ def test_launcher_handoff_uses_owned_windows_and_closes_children(monkeypatch):
 
 
 def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monkeypatch, tmp_path):
-    module = supervisor()
+    module = guest_module("kiosk")
     clock = [0]
     windows = []
     monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
@@ -3158,7 +3135,7 @@ def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monk
 
 
 def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatch):
-    module = supervisor()
+    module = guest_module("kiosk")
     commands = []
     monkeypatch.setattr(module.subprocess, "run", lambda argv, **kwargs: commands.append(argv))
     monkeypatch.setattr(module.sys, "argv", ["kiosk", "--resize", "2880", "1800"])
@@ -3178,7 +3155,7 @@ def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatc
 def test_transient_settings_removal_keeps_display_live_and_accepts_replacement(
     tmp_path, monkeypatch
 ):
-    module = supervisor()
+    module = guest_module("kiosk")
     session = module.Session({"command": ["editor"]})
     session.settings_file = tmp_path / ".xsettingsd"
     session.settings_source = module.toolkit_settings("Xft/DPI 196608\n")
@@ -3334,13 +3311,6 @@ def test_client_bootstrap_rejects_changed_html_without_writing(tmp_path):
 # Application MCPs
 
 
-def mcp_guest():
-    import beta9.abstractions.vm.kiosk_config as config
-
-    with patch.dict(sys.modules, {"kiosk_config": config}):
-        return runpy.run_path(str(Path(vm_module.__file__).parent / "assets/kiosk-mcp"))
-
-
 @pytest.fixture
 def backend(tmp_path):
     pytest.importorskip("fastmcp")
@@ -3380,7 +3350,7 @@ def backend(tmp_path):
 def test_registry_defaults_overrides_removal_and_atomic_validation(tmp_path, backend, capsys):
     defaults = tmp_path / "defaults.json"
     defaults.write_text(json.dumps({"original": backend.to_dict()}))
-    registry = mcp_guest()["Registry"](tmp_path / "mcp.json", defaults)
+    registry = guest_module("kiosk-mcp").Registry(tmp_path / "mcp.json", defaults)
     registry.update("second", backend.to_dict())
     registry.update("original", None)
     assert set(registry.read()) == {"second"}
@@ -3401,20 +3371,20 @@ def test_registry_defaults_overrides_removal_and_atomic_validation(tmp_path, bac
     assert set(registry.read()) == {"original", "second", "new"}
     registry.update("private", {"command": "node", "args": ["--token", "argument-secret"]})
     registry.update("http", {"url": "http://localhost/mcp?token=query-secret"})
-    module = mcp_guest()
-    with patch.dict(module["main"].__globals__, {"Registry": lambda: registry}), patch.object(
+    module = guest_module("kiosk-mcp")
+    with patch.object(module, "Registry", lambda: registry), patch.object(
         sys, "argv", ["kiosk-mcp", "--list"]
     ):
-        module["main"]()
+        module.main()
     output = capsys.readouterr().out
     assert "argument-secret" not in output and "query-secret" not in output
     assert json.loads(output)["http"]["url"] == "[redacted]"
     assert registry.read()["private"]["args"][-1] == "argument-secret"
     for action in ["--install", "--remove"]:
-        with patch.dict(module["main"].__globals__, {"Registry": lambda: registry}), patch.object(
+        with patch.object(module, "Registry", lambda: registry), patch.object(
             sys, "argv", ["kiosk-mcp", action, "cli"]
         ), patch.object(sys, "stdin", io.StringIO(json.dumps(backend.to_dict()))):
-            module["main"]()
+            module.main()
         assert json.loads(capsys.readouterr().out) is None
         assert ("cli" in registry.read()) == (action == "--install")
 
@@ -3423,8 +3393,8 @@ def test_health_distinguishes_gateway_availability_from_adapter_readiness():
     pytest.importorskip("fastmcp")
     import httpx2 as httpx
 
-    module = mcp_guest()
-    gateway = module["Gateway"]({}, "/tmp")
+    module = guest_module("kiosk-mcp")
+    gateway = module.Gateway({}, "/tmp")
 
     async def exercise():
         async with httpx.AsyncClient(
@@ -3438,9 +3408,7 @@ def test_health_distinguishes_gateway_availability_from_adapter_readiness():
                 (["error", "ready"], "degraded"),
             ]:
                 gateway.adapters = {
-                    str(i): module["Adapter"](
-                        str(i), MagicMock(), status=module["AdapterStatus"](state)
-                    )
+                    str(i): module.Adapter(str(i), MagicMock(), status=module.AdapterStatus(state))
                     for i, state in enumerate(states)
                 }
                 response = await client.get("/health")
@@ -3460,7 +3428,7 @@ def test_health_distinguishes_gateway_availability_from_adapter_readiness():
 def test_proxy_preserves_state_and_serializes_clients_across_namespaced_features(backend):
     from fastmcp import Client
 
-    gateway = mcp_guest()["Gateway"](
+    gateway = guest_module("kiosk-mcp").Gateway(
         {
             "app": backend.to_dict(),
             "other": backend.to_dict(),
@@ -3499,7 +3467,7 @@ def test_proxy_preserves_state_and_serializes_clients_across_namespaced_features
 def test_proxy_recovers_a_crashed_adapter_without_restarting_the_application(backend):
     from fastmcp import Client
 
-    gateway = mcp_guest()["Gateway"]({"app": backend.to_dict()}, "/tmp")
+    gateway = guest_module("kiosk-mcp").Gateway({"app": backend.to_dict()}, "/tmp")
 
     async def exercise():
         async with Client(gateway.server, mode="legacy") as client:
@@ -3521,6 +3489,7 @@ def test_sdk_uses_existing_vm_transport_and_standard_client_configuration():
     vm.refresh.return_value.info = {"spec": {"kiosk": {}}}
     vm.process.exec.return_value = process
     vm._guest_json = VM._guest_json.__get__(vm)
+    vm._guest_output = VM._guest_output
     mcp = VMMCP(vm)
     config = MCPServer("node", ["/opt/my-app/server.js"], env={"TOKEN": "secret"})
     assert mcp.install("app", config) is None
@@ -3538,6 +3507,11 @@ def test_sdk_uses_existing_vm_transport_and_standard_client_configuration():
     vm.refresh.return_value.info = {"spec": {}}
     with pytest.raises(ValueError, match="kiosk"):
         mcp.list()
+    vm.process.exec.reset_mock()
+    for invalid in [{"command": "node"}, "node", None]:
+        with pytest.raises(TypeError, match="MCPServer"):
+            mcp.install("app", invalid)
+    vm.process.exec.assert_not_called()
 
 
 def test_image_configuration_round_trips_both_standard_transports():
@@ -3614,7 +3588,7 @@ def test_http_backend_keeps_its_credentials_separate_from_client_headers():
 
     async def exercise():
         async with serve(backend) as url:
-            gateway = mcp_guest()["Gateway"](
+            gateway = guest_module("kiosk-mcp").Gateway(
                 {"app": {"url": url, "headers": {"Authorization": "Bearer app-credential"}}}, "/tmp"
             )
             async with serve(gateway.server) as proxy:

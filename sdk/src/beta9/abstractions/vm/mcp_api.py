@@ -47,6 +47,8 @@ class VMMCP:
         Configuration lives on the VM's disk and survives stops, snapshots and forks.
         Changing it reconnects MCP clients without restarting the application.
         """
+        if not isinstance(server, MCPServer):
+            raise TypeError("server must be an MCPServer configuration")
         self._run("--install", name, value=server.to_dict())
 
     def remove(self, name: str):
