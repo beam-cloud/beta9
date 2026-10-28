@@ -369,9 +369,8 @@ func TestForwardRequestAnswersWebSocketDialFailureBeforeUpgrade(t *testing.T) {
 	}
 }
 
-// startingBackend accepts connections and hangs up on them until ready is
-// set, then serves HTTP: what a relay or port proxy in front of an app that
-// is not listening yet looks like from the gateway.
+// startingBackend hangs up on connections until ready is set, like a relay in
+// front of an app that isn't listening yet.
 type startingBackend struct {
 	net.Listener
 	ready atomic.Bool

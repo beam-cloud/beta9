@@ -44,8 +44,7 @@ const (
 	connectionReadTimeout       time.Duration = time.Minute * 5
 	backendRetryLimit                         = 1
 
-	// A relay or port proxy that accepts for a backend that is not listening
-	// hangs up about a round trip after the connect.
+	// How long readiness waits for a relay or port proxy to hang up.
 	readinessHoldMin time.Duration = time.Millisecond * 20
 	readinessHoldMax time.Duration = time.Millisecond * 250
 )
@@ -784,8 +783,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	return false
 }
 
-// proxyHTTP sends one attempt. It returns the error, leaving the response
-// unwritten, when the backend never answered and the request can be resent.
+// proxyHTTP makes one attempt. A resendable failure is returned unanswered.
 func (pb *PodProxyBuffer) proxyHTTP(conn *connection, targetHost, routePrefix string) error {
 	request := conn.ctx.Request()
 	proxy, err := pb.backendProxy(targetHost, conn.backendDialTimeout())
@@ -811,8 +809,7 @@ func (pb *PodProxyBuffer) proxyHTTP(conn *connection, targetHost, routePrefix st
 		http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
 	}
 
-	// The transport closes its outbound request body even when dialing fails.
-	// Keep the inbound body open so a request that never left can be resent.
+	// The transport closes the body even when dialing fails; keep it for a resend.
 	if body := request.Body; body != nil {
 		request.Body = preservedRequestBody{ReadCloser: body}
 		defer func() { request.Body = body }()
@@ -821,11 +818,8 @@ func (pb *PodProxyBuffer) proxyHTTP(conn *connection, targetHost, routePrefix st
 	return unanswered
 }
 
-// backendNeverAnswered reports whether an attempt failed before the backend
-// could have acted on it: the dial failed, or the connection closed under a
-// bodiless idempotent request. Relays and port proxies accept on behalf of a
-// backend that is not listening yet and then hang up, so for routed backends
-// a starting or restarting app shows up as that close, not as a failed dial.
+// backendNeverAnswered reports whether a failed attempt is safe to resend: the
+// dial failed, or a relay or port proxy hung up on a bodiless idempotent request.
 func backendNeverAnswered(ctx context.Context, err error, replayable bool) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
@@ -880,8 +874,7 @@ func (pb *PodProxyBuffer) awaitBackend(ctx context.Context, port int32, address 
 	}
 }
 
-// requeueUnanswered takes the container out of rotation until discovery sees
-// it pass readiness again, and puts the request back at the front of the queue.
+// requeueUnanswered drops the container from rotation and requeues the request first.
 func (pb *PodProxyBuffer) requeueUnanswered(conn *connection, failed container) bool {
 	pb.removeAvailableContainer(failed.id)
 	if conn.enqueuedAt.IsZero() {
@@ -1085,8 +1078,7 @@ func (pb *PodProxyBuffer) pruneBackendTransports(containers []container) {
 	})
 }
 
-// proxyWebSocket makes one attempt. Like proxyHTTP, it returns the error
-// without answering the client when the backend never answered.
+// proxyWebSocket makes one attempt, like proxyHTTP.
 func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, addr string, path string) error {
 	request := conn.ctx.Request()
 	subprotocols := websocket.Subprotocols(request)
@@ -1394,9 +1386,8 @@ func (pb *PodProxyBuffer) checkContainerAvailableWithTimeout(containerAddress st
 	return backendHoldsConnection(conn, dialLatency)
 }
 
-// backendHoldsConnection reports whether the far end kept a new connection
-// open or spoke first. A completed connect alone proves nothing behind a
-// relay or port proxy, which accepts before it reaches the backend.
+// backendHoldsConnection reports whether the far end kept the connection open or
+// spoke first; relays and port proxies accept before reaching the backend.
 func backendHoldsConnection(conn net.Conn, dialLatency time.Duration) bool {
 	hold := min(max(2*dialLatency, readinessHoldMin), readinessHoldMax)
 	if err := conn.SetReadDeadline(time.Now().Add(hold)); err != nil {
