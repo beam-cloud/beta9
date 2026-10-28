@@ -17,7 +17,9 @@ XTerm*renderFont: true
 XTerm*background: #17171c
 XTerm*foreground: #ededee
 EOF
-[ ! -f "$HOME/.Xresources" ] || xrdb -merge "$HOME/.Xresources"
+if [ -f "$HOME/.Xresources" ]; then
+  xrdb -merge "$HOME/.Xresources" || echo 'Unable to load ~/.Xresources; continuing' >&2
+fi
 
 xsetroot -solid '#17171c'
 exec dbus-run-session -- openbox-session

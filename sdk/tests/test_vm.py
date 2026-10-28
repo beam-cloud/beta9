@@ -5,6 +5,8 @@ import base64
 import gzip
 import json
 import io
+import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -145,6 +147,47 @@ def test_vm_image_bundle_matches_guest_files():
             )
             mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml") else 0o755
             assert archive.getmember(name).mode == mode
+
+
+@pytest.mark.parametrize("resource_exit", [None, 0, 1])
+def test_xstartup_preserves_defaults_and_tolerates_failed_user_resources(
+    tmp_path, monkeypatch, resource_exit
+):
+    directory = Path(vm_module.__file__).parent
+    script = tmp_path / "xstartup"
+    script.write_text(
+        (directory / "assets/xstartup")
+        .read_text()
+        .replace("HOME=/root", f"HOME={shlex.quote(str(tmp_path))}")
+    )
+    commands = {
+        "xrdb": (
+            'if [ "$#" -eq 1 ]; then cat > "$TEST_DIR/defaults"; '
+            'else cat "$2" > "$TEST_DIR/overrides"; exit "$RESOURCE_EXIT"; fi\n'
+        ),
+        "xsetroot": "exit 0\n",
+        "dbus-run-session": 'printf "%s\\n" "$@" > "$TEST_DIR/launched"\n',
+    }
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    for name, body in commands.items():
+        executable = binaries / name
+        executable.write_text("#!/bin/sh\n" + body)
+        executable.chmod(0o755)
+    if resource_exit is not None:
+        (tmp_path / ".Xresources").write_text("XTerm*faceSize: 20\n")
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.defpath)
+    monkeypatch.setenv("TEST_DIR", str(tmp_path))
+    monkeypatch.setenv("RESOURCE_EXIT", str(resource_exit or 0))
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert "XTerm*faceSize: 12\n" in (tmp_path / "defaults").read_text()
+    assert (tmp_path / "launched").read_text() == "--\nopenbox-session\n"
+    if resource_exit is not None:
+        assert (tmp_path / "overrides").read_text() == "XTerm*faceSize: 20\n"
+    else:
+        assert not (tmp_path / "overrides").exists()
+    assert ("Unable to load ~/.Xresources" in result.stderr) == (resource_exit == 1)
 
 
 def test_vm_image_does_not_depend_on_client_archive_libraries(monkeypatch):
