@@ -144,9 +144,13 @@ func ConvertValue(targetType reflect.Type, value interface{}) (reflect.Value, er
 			default:
 				return reflect.Value{}, fmt.Errorf("cannot convert string '%s' to bool", v)
 			}
-		case int, int64:
+		case int:
 			return reflect.ValueOf(v != 0), nil
-		case uint, uint64:
+		case int64:
+			return reflect.ValueOf(v != 0), nil
+		case uint:
+			return reflect.ValueOf(v != 0), nil
+		case uint64:
 			return reflect.ValueOf(v != 0), nil
 		case float64:
 			return reflect.ValueOf(v != 0), nil
