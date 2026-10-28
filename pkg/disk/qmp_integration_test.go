@@ -1,9 +1,14 @@
 package disk
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -98,6 +103,147 @@ func TestSealRecoversExhaustedQEMUDaemon(t *testing.T) {
 	nodes, err := client.namedBlockNodes(ctx)
 	require.NoError(t, err)
 	require.Len(t, nodes, 6, "only the base, original head, new head and their file nodes remain")
+}
+
+// Volumes materialized from one published chain back onto the same layer
+// files, keep their writes apart, and merge without touching those files.
+func TestSharedQEMULayersBackSeveralVolumes(t *testing.T) {
+	qsd, err := exec.LookPath("qemu-storage-daemon")
+	if err != nil {
+		t.Skip("qemu-storage-daemon is not installed")
+	}
+	qemuImg, err := exec.LookPath("qemu-img")
+	if err != nil {
+		t.Skip("qemu-img is not installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+	dir, err := os.MkdirTemp("", "qcow")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	manager := NewManager(Config{Root: dir, Binaries: Binaries{QemuImg: qemuImg, QSD: qsd, Fsfreeze: "true"}, Runner: execRunner})
+
+	block := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 64<<10) }
+	serve := func(runtimeDir, head string) (net.Conn, *qsdProcess) {
+		proc, err := manager.startQSD(ctx, runtimeDir, head, "fmt-0", false, ExportNBD)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = manager.stopQSD(context.Background(), proc) })
+		conn, _, err := openBlockExport(ctx, filepath.Join(runtimeDir, "nbd.sock"))
+		require.NoError(t, err)
+		t.Cleanup(func() { conn.Close() })
+		return conn, proc
+	}
+
+	// Another node published a base generation and one on top of it.
+	store := &countingChunkStore{memoryChunkStore: newMemoryChunkStore()}
+	origin := filepath.Join(dir, "origin")
+	require.NoError(t, os.Mkdir(origin, 0o700))
+	var chain []ChainLayer
+	parent := ""
+	for i, id := range []string{"snap-a", "snap-b"} {
+		path := filepath.Join(origin, id+".qcow2")
+		if parent == "" {
+			require.NoError(t, manager.createQcowBase(ctx, path, 8<<20))
+		} else {
+			require.NoError(t, manager.createQcowOverlay(ctx, path, parent, 8<<20))
+		}
+		conn, proc := serve(filepath.Join(origin, "run-"+id), path)
+		nbdWrite(t, conn, uint64(i)<<16, block(i+1))
+		conn.Close()
+		require.NoError(t, manager.stopQSD(ctx, proc))
+		layer, err := ScanLayer(ctx, path, chunkKey)
+		require.NoError(t, err)
+		require.NoError(t, UploadLayer(ctx, store, path, layer))
+		chain = append(chain, ChainLayer{SnapshotID: id, Layer: layer})
+		parent = path
+	}
+	chunks := int64(len(chain[0].Layer.Chunks) + len(chain[1].Layer.Chunks))
+
+	volumes := make([]*Volume, 2)
+	conns := make([]net.Conn, 2)
+	for i, key := range []string{"vol-a", "vol-b"} {
+		volumeDir := manager.volumeDir(key)
+		layersDir := filepath.Join(volumeDir, layersSubdir)
+		require.NoError(t, os.MkdirAll(layersDir, 0o700))
+		state, err := manager.materializeChain(ctx, AttachSpec{Key: key, VirtualSizeBytes: 8 << 20, Chain: chain}, layersDir, store)
+		require.NoError(t, err)
+		conn, proc := serve(filepath.Join(volumeDir, "run"), state.HeadPath)
+		conns[i] = conn
+		state.Attached, state.Formatted, state.QMPSocket = true, true, proc.qmpSocket
+		volumes[i] = &Volume{manager: manager, dir: volumeDir, fmtNode: "fmt-0", state: state}
+		require.NoError(t, saveVolumeState(volumeDir, state))
+		nbdWrite(t, conns[i], 2<<16, block(10+i))
+	}
+	require.Equal(t, chunks, store.reads.Load(), "the second volume fetches nothing")
+	shared := []string{volumes[0].state.Chain[0].Path, volumes[0].state.Chain[1].Path}
+	require.Equal(t, shared, []string{volumes[1].state.Chain[0].Path, volumes[1].state.Chain[1].Path})
+	sums := fileDigests(t, shared)
+
+	// The first volume publishes two layers of its own and merges them.
+	a := volumes[0]
+	for g := 1; g <= 2; g++ {
+		sealed, _, err := a.Seal(ctx, true)
+		require.NoError(t, err)
+		require.NoError(t, a.MarkPublished(sealed[0].Path, fmt.Sprintf("own-%d", g)))
+		nbdWrite(t, conns[0], uint64(2+g)<<16, block(20+g))
+	}
+	require.NoError(t, a.Compact(ctx))
+	require.Len(t, a.state.Chain, 3, "the shared layers stay below the merged one")
+	require.Equal(t, sums, fileDigests(t, shared), "nothing writes a shared layer")
+
+	for i, conn := range conns {
+		require.Equal(t, block(1), nbdRead(t, conn, 0, 64<<10))
+		require.Equal(t, block(2), nbdRead(t, conn, 1<<16, 64<<10))
+		require.Equal(t, block(10+i), nbdRead(t, conn, 2<<16, 64<<10), "each volume reads its own writes")
+	}
+	require.Equal(t, block(21), nbdRead(t, conns[0], 3<<16, 64<<10))
+	require.Equal(t, block(22), nbdRead(t, conns[0], 4<<16, 64<<10))
+	require.Equal(t, make([]byte, 64<<10), nbdRead(t, conns[1], 3<<16, 64<<10))
+}
+
+var nbdHandles atomic.Uint64
+
+func nbdExchange(t *testing.T, conn net.Conn, command uint16, offset uint64, length uint32, data []byte) []byte {
+	t.Helper()
+	request := blockRequest{Magic: nbdRequestMagic, Command: command, Handle: nbdHandles.Add(1), Offset: offset, Length: length}
+	require.NoError(t, binary.Write(conn, binary.BigEndian, request))
+	_, err := conn.Write(data)
+	require.NoError(t, err)
+	var reply blockReply
+	require.NoError(t, binary.Read(conn, binary.BigEndian, &reply))
+	require.Equal(t, nbdReplyMagic, reply.Magic)
+	require.Equal(t, request.Handle, reply.Handle)
+	require.Zero(t, reply.Error)
+	if command != nbdCommandRead {
+		return nil
+	}
+	result := make([]byte, length)
+	_, err = io.ReadFull(conn, result)
+	require.NoError(t, err)
+	return result
+}
+
+func nbdWrite(t *testing.T, conn net.Conn, offset uint64, data []byte) {
+	t.Helper()
+	nbdExchange(t, conn, nbdCommandWrite, offset, uint32(len(data)), data)
+	nbdExchange(t, conn, nbdCommandFlush, 0, 0, nil)
+}
+
+func nbdRead(t *testing.T, conn net.Conn, offset uint64, length uint32) []byte {
+	t.Helper()
+	return nbdExchange(t, conn, nbdCommandRead, offset, length, nil)
+}
+
+func fileDigests(t *testing.T, paths []string) []string {
+	t.Helper()
+	digests := make([]string, len(paths))
+	for i, path := range paths {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		sum := sha256.Sum256(data)
+		digests[i] = hex.EncodeToString(sum[:])
+	}
+	return digests
 }
 
 func newQEMUVolume(t *testing.T) (context.Context, *Volume) {

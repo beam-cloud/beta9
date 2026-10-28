@@ -28,6 +28,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/utils/cpuset"
 )
 
@@ -4273,6 +4275,14 @@ type fakeBackendRepoClient struct {
 	getDiskSnapshotErr  error
 	requestedSnapshotId string
 	failedSnapshot      *pb.FailDiskSnapshotRequest
+
+	// snapshots, when set, answers GetDiskSnapshot by ID; chain enables
+	// GetDiskSnapshotChain, returning at most chainDepth rows.
+	snapshots       map[string]*pb.DiskSnapshot
+	chain           bool
+	chainDepth      int
+	getSnapshotIDs  []string
+	chainSnapshotID string
 }
 
 func (f *fakeBackendRepoClient) GetCheckpointById(ctx context.Context, in *pb.GetCheckpointByIdRequest, opts ...grpc.CallOption) (*pb.GetCheckpointByIdResponse, error) {
@@ -4317,10 +4327,29 @@ func (f *fakeBackendRepoClient) GetLatestDiskSnapshot(ctx context.Context, in *p
 
 func (f *fakeBackendRepoClient) GetDiskSnapshot(ctx context.Context, in *pb.GetDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetDiskSnapshotResponse, error) {
 	f.requestedSnapshotId = in.SnapshotId
+	f.getSnapshotIDs = append(f.getSnapshotIDs, in.SnapshotId)
 	if f.getDiskSnapshotErr != nil {
 		return nil, f.getDiskSnapshotErr
 	}
+	if f.snapshots != nil {
+		return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: f.snapshots[in.SnapshotId]}, nil
+	}
 	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: f.sourceSnapshot}, nil
+}
+
+func (f *fakeBackendRepoClient) GetDiskSnapshotChain(ctx context.Context, in *pb.GetDiskSnapshotChainRequest, opts ...grpc.CallOption) (*pb.GetDiskSnapshotChainResponse, error) {
+	if !f.chain {
+		return nil, status.Error(codes.Unimplemented, "unknown method GetDiskSnapshotChain")
+	}
+	f.chainSnapshotID = in.SnapshotId
+	var rows []*pb.DiskSnapshot
+	for id := in.SnapshotId; id != "" && f.snapshots[id] != nil; id = f.snapshots[id].ParentSnapshotId {
+		if (f.chainDepth > 0 && len(rows) == f.chainDepth) || len(rows) == int(in.MaxDepth) {
+			break
+		}
+		rows = append(rows, f.snapshots[id])
+	}
+	return &pb.GetDiskSnapshotChainResponse{Ok: true, Snapshots: rows}, nil
 }
 
 func (f *fakeBackendRepoClient) GetDiskSnapshotDownloadURL(context.Context, *pb.GetDiskSnapshotDownloadURLRequest, ...grpc.CallOption) (*pb.GetDiskSnapshotDownloadURLResponse, error) {

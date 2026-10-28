@@ -129,6 +129,9 @@ type Manager struct {
 	// spareSizesMu serializes the read-modify-write of spareSizesFile.
 	spareSizesMu sync.Mutex
 
+	// layerLocks serializes installs into the shared layer store per file.
+	layerLocks keyedLock
+
 	preflightOnce sync.Once
 	preflightErr  error
 }
@@ -344,7 +347,8 @@ func (m *Manager) DetachAll(ctx context.Context) error {
 
 // Recover sweeps volume state left behind by a previous worker process. Live
 // volumes (daemon running and filesystem mounted) are adopted; everything
-// else is torn down. Layer files always stay behind for reuse.
+// else is torn down. Layer files stay behind for reuse, except shared layers
+// no volume references any more.
 func (m *Manager) Recover(ctx context.Context) error {
 	// Spares for the sizes this node saw last time are built while the worker
 	// is still booting, so its first fresh attach adopts one.
@@ -353,6 +357,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 			m.replenishSpares(size)
 		}
 	}()
+	defer m.pruneSharedLayers()
 
 	volumesDir := filepath.Join(m.root, "volumes")
 	entries, err := os.ReadDir(volumesDir)

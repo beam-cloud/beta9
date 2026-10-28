@@ -21,6 +21,8 @@ service BackendRepositoryService {
   rpc GetLatestDiskSnapshot(GetLatestDiskSnapshotRequest)
       returns (GetLatestDiskSnapshotResponse);
   rpc GetDiskSnapshot(GetDiskSnapshotRequest) returns (GetDiskSnapshotResponse);
+  rpc GetDiskSnapshotChain(GetDiskSnapshotChainRequest)
+      returns (GetDiskSnapshotChainResponse);
   rpc GetDiskSnapshotDownloadURL(GetDiskSnapshotDownloadURLRequest)
       returns (GetDiskSnapshotDownloadURLResponse);
 }
@@ -159,6 +161,20 @@ message GetDiskSnapshotRequest {
 message GetDiskSnapshotResponse {
   bool ok = 1;
   DiskSnapshot snapshot = 2;
+  string error_msg = 3;
+}
+
+message GetDiskSnapshotChainRequest {
+  string workspace_id = 1;
+  string snapshot_id = 2;
+  int32 max_depth = 3;
+}
+
+// Snapshots run from the requested one through each parent in turn, ending at
+// a parentless snapshot, a missing parent, or max_depth.
+message GetDiskSnapshotChainResponse {
+  bool ok = 1;
+  repeated DiskSnapshot snapshots = 2;
   string error_msg = 3;
 }
 

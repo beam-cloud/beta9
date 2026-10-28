@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,6 +196,55 @@ func TestQcowSnapshotDoesNotForceAnEmptyHeadAfterFirstPublication(t *testing.T) 
 	volume := &backloggedQcowVolume{pending: []disk.SealedLayer{{Path: "first"}}, depth: 2}
 	require.NoError(t, snapshotQcowVolume(context.Background(), volume, durableDiskSyncExplicit, true, volume.publish))
 	require.Equal(t, []string{"publish first", "seal"}, volume.events)
+}
+
+func TestResolveQcowSnapshotChainInOneCall(t *testing.T) {
+	snapshots := map[string]*pb.DiskSnapshot{}
+	for i := 0; i < 5; i++ {
+		row := &pb.DiskSnapshot{ExternalId: fmt.Sprintf("s%d", i), Format: types.DiskSnapshotFormatQcowV1, ManifestKey: fmt.Sprintf("m%d", i)}
+		if i > 0 {
+			row.ParentSnapshotId = fmt.Sprintf("s%d", i-1)
+		}
+		snapshots[row.ExternalId] = row
+	}
+	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "root"}}
+	newest := durableDiskSnapshotFromProto(snapshots["s4"])
+	ids := func(rows []*types.DiskSnapshot) []string {
+		out := make([]string, len(rows))
+		for i, row := range rows {
+			out[i] = row.ExternalId
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name       string
+		chain      bool
+		chainDepth int
+		lookups    []string
+	}{
+		{name: "one call", chain: true},
+		{name: "older gateway", lookups: []string{"s3", "s2", "s1", "s0"}},
+		{name: "truncated chain", chain: true, chainDepth: 2, lookups: []string{"s1", "s0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &fakeBackendRepoClient{snapshots: snapshots, chain: tc.chain, chainDepth: tc.chainDepth}
+			worker := &Worker{backendRepoClient: backend}
+			rows, err := worker.resolveQcowSnapshotChain(context.Background(), &types.ContainerRequest{}, mount, newest)
+			require.NoError(t, err)
+			require.Equal(t, []string{"s0", "s1", "s2", "s3", "s4"}, ids(rows))
+			require.Equal(t, tc.lookups, backend.getSnapshotIDs)
+		})
+	}
+
+	broken := map[string]*pb.DiskSnapshot{}
+	for id, row := range snapshots {
+		broken[id] = row
+	}
+	broken["s2"] = &pb.DiskSnapshot{ExternalId: "s2", Format: types.DiskSnapshotFormatQcowV1}
+	worker := &Worker{backendRepoClient: &fakeBackendRepoClient{snapshots: broken, chain: true}}
+	_, err := worker.resolveQcowSnapshotChain(context.Background(), &types.ContainerRequest{}, mount, newest)
+	require.ErrorContains(t, err, "qcow snapshot parent s2 is missing")
 }
 
 func TestSnapshotQcowCannotPublishAnUnresolvedPivot(t *testing.T) {

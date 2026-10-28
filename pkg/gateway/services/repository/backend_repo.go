@@ -206,6 +206,45 @@ func (s *BackendRepositoryService) GetDiskSnapshot(ctx context.Context, req *pb.
 	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
 }
 
+// maxDiskSnapshotChainDepth bounds one chain lookup; workers refuse chains
+// deeper than their own cap, which is lower.
+const maxDiskSnapshotChainDepth = 128
+
+// GetDiskSnapshotChain walks a snapshot's parents in one call. A worker
+// resolving a chain one row per call pays a round trip per generation.
+func (s *BackendRepositoryService) GetDiskSnapshotChain(ctx context.Context, req *pb.GetDiskSnapshotChainRequest) (*pb.GetDiskSnapshotChainResponse, error) {
+	snapshots, err := s.diskSnapshotChain(ctx, req)
+	if err != nil {
+		return &pb.GetDiskSnapshotChainResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.GetDiskSnapshotChainResponse{Ok: true, Snapshots: snapshots}, nil
+}
+
+func (s *BackendRepositoryService) diskSnapshotChain(ctx context.Context, req *pb.GetDiskSnapshotChainRequest) ([]*pb.DiskSnapshot, error) {
+	maxDepth := int(req.MaxDepth)
+	if maxDepth <= 0 || maxDepth > maxDiskSnapshotChainDepth {
+		maxDepth = maxDiskSnapshotChainDepth
+	}
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	if err != nil {
+		return nil, err
+	}
+	var snapshots []*pb.DiskSnapshot
+	for id := req.SnapshotId; id != "" && len(snapshots) < maxDepth; {
+		snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, id)
+		if err != nil {
+			var notFound *types.ErrDiskSnapshotNotFound
+			if errors.As(err, &notFound) {
+				break
+			}
+			return nil, err
+		}
+		snapshots = append(snapshots, diskSnapshotToProto(snapshot))
+		id = snapshot.ParentSnapshotId
+	}
+	return snapshots, nil
+}
+
 func (s *BackendRepositoryService) GetDiskSnapshotDownloadURL(ctx context.Context, req *pb.GetDiskSnapshotDownloadURLRequest) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
 	url, err := s.diskSnapshotDownloadURL(ctx, req)
 	if err != nil {

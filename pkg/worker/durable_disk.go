@@ -639,6 +639,24 @@ func (s *Worker) diskSnapshotByID(ctx context.Context, request *types.ContainerR
 	return durableDiskSnapshotFromProto(resp.Snapshot), nil
 }
 
+// diskSnapshotChain returns a snapshot and its ancestors, nearest first, in
+// one round trip. Gateways that predate the call report it unimplemented.
+func (s *Worker) diskSnapshotChain(ctx context.Context, request *types.ContainerRequest, id string, maxDepth int) ([]*types.DiskSnapshot, error) {
+	resp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshotChain(ctx, &pb.GetDiskSnapshotChainRequest{
+		WorkspaceId: cacheRequestWorkspaceID(request),
+		SnapshotId:  id,
+		MaxDepth:    int32(maxDepth),
+	}))
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]*types.DiskSnapshot, 0, len(resp.Snapshots))
+	for _, snapshot := range resp.Snapshots {
+		rows = append(rows, durableDiskSnapshotFromProto(snapshot))
+	}
+	return rows, nil
+}
+
 func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
 	sourceID := mount.DurableDisk.SourceSnapshotId
 	if sourceID == "" {

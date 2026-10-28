@@ -25,6 +25,8 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // The qcow driver keeps the durable-disk control plane (DiskSnapshot rows,
@@ -605,6 +607,22 @@ func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.Co
 		return nil, nil
 	}
 
+	// One call fetches every ancestor; the walk below still checks each link
+	// and looks up whatever the call did not return, one row at a time.
+	ancestors := make(map[string]*types.DiskSnapshot)
+	if newest.ParentSnapshotId != "" {
+		chain, err := s.diskSnapshotChain(ctx, request, newest.ParentSnapshotId, disk.DefaultMaxChainDepth)
+		if err != nil && status.Code(err) != codes.Unimplemented && ctx.Err() == nil {
+			log.Warn().Err(err).Str("disk", mount.DurableDisk.Name).
+				Msg("could not resolve the qcow snapshot chain in one call; resolving each generation")
+		}
+		for _, row := range chain {
+			if row != nil {
+				ancestors[row.ExternalId] = row
+			}
+		}
+	}
+
 	var rows []*types.DiskSnapshot
 	row := newest
 	for {
@@ -619,9 +637,12 @@ func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.Co
 		if len(rows) > disk.DefaultMaxChainDepth {
 			return nil, fmt.Errorf("disk %q snapshot chain exceeds %d generations", mount.DurableDisk.Name, disk.DefaultMaxChainDepth)
 		}
-		parent, err := s.diskSnapshotByID(ctx, request, row.ParentSnapshotId)
-		if err != nil {
-			return nil, fmt.Errorf("resolve qcow snapshot parent %s: %w", row.ParentSnapshotId, err)
+		parent := ancestors[row.ParentSnapshotId]
+		if parent == nil {
+			var err error
+			if parent, err = s.diskSnapshotByID(ctx, request, row.ParentSnapshotId); err != nil {
+				return nil, fmt.Errorf("resolve qcow snapshot parent %s: %w", row.ParentSnapshotId, err)
+			}
 		}
 		row = parent
 		if row == nil || row.ManifestKey == "" {

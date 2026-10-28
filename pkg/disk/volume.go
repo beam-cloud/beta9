@@ -275,25 +275,41 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// materializeChain downloads every published layer and links them into a local
-// backing chain, then creates the writable head (or a fresh formatted base).
+// materializeChain links the published layers, fetching whichever the node's
+// layer store lacks, into a backing chain, then creates the writable head (or
+// a fresh formatted base).
 func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersDir string, source ChunkSource) (*volumeState, error) {
 	state := &volumeState{Key: spec.Key, VirtualSizeBytes: spec.VirtualSizeBytes, ReadOnly: spec.ReadOnly}
 
-	// Layers are independent objects; fetch them in parallel and link the
-	// chain afterwards. Chunk parallelism is a single budget shared by every
-	// layer, so restore speed does not depend on how the data is split.
-	localPaths := make([]string, len(spec.Chain))
-	gate := newChunkGate(chunkFetchConcurrency)
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(layerFetchConcurrency)
+	paths := make([]string, len(spec.Chain))
 	for i, chainLayer := range spec.Chain {
 		if chainLayer.Layer == nil || chainLayer.SnapshotID == "" {
 			return nil, fmt.Errorf("chain layer %d for volume %s is incomplete", i, spec.Key)
 		}
-		localPaths[i] = filepath.Join(layersDir, fmt.Sprintf("%03d-%s.qcow2", i, chainLayer.SnapshotID))
+		parentID := ""
+		if i > 0 {
+			parentID = spec.Chain[i-1].SnapshotID
+		}
+		path, err := m.sharedLayerPath(chainLayer.SnapshotID, parentID)
+		if err != nil {
+			return nil, fmt.Errorf("chain layer %d for volume %s: %w", i, spec.Key, err)
+		}
+		paths[i] = path
+	}
+
+	// Layers are independent objects; fetch them in parallel. Chunk
+	// parallelism is a single budget shared by every layer, so restore speed
+	// does not depend on how the data is split.
+	gate := newChunkGate(chunkFetchConcurrency)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(layerFetchConcurrency)
+	for i, chainLayer := range spec.Chain {
+		parentPath := ""
+		if i > 0 {
+			parentPath = paths[i-1]
+		}
 		group.Go(func() error {
-			if err := fetchLayer(groupCtx, source, chainLayer.Layer, localPaths[i], gate); err != nil {
+			if err := m.ensureSharedLayer(groupCtx, chainLayer, paths[i], parentPath, source, gate); err != nil {
 				return fmt.Errorf("fetch layer %s: %w", chainLayer.SnapshotID, err)
 			}
 			return nil
@@ -305,15 +321,8 @@ func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersD
 
 	previousPath := ""
 	for i, chainLayer := range spec.Chain {
-		if i > 0 {
-			// Downloaded layers carry the origin host's backing path; repoint
-			// them at the local copy of their parent.
-			if err := m.rebaseQcow(ctx, localPaths[i], previousPath); err != nil {
-				return nil, err
-			}
-		}
-		state.Chain = append(state.Chain, stateLayer{SnapshotID: chainLayer.SnapshotID, Path: localPaths[i]})
-		previousPath = localPaths[i]
+		state.Chain = append(state.Chain, stateLayer{SnapshotID: chainLayer.SnapshotID, Path: paths[i]})
+		previousPath = paths[i]
 	}
 
 	if spec.ReadOnly {
@@ -782,8 +791,9 @@ func (v *Volume) Flatten(ctx context.Context, sealedPath, destPath string) error
 	return v.manager.flattenQcow(ctx, sealedPath, destPath)
 }
 
-// Compact folds every published layer into the base image with a live
-// intermediate block-commit; the daemon keeps serving I/O. Pending layers are
+// Compact folds every published layer into the base image, or the lowest
+// layer above the shared ones, with a live intermediate block-commit; the
+// daemon keeps serving I/O. Pending layers are
 // deltas the publisher still needs byte-for-byte, so compaction waits until
 // the whole chain is published.
 func (v *Volume) Compact(ctx context.Context) error {
@@ -822,6 +832,11 @@ func (v *Volume) merge(ctx context.Context, first int, cancel bool) (PublishedLa
 	defer v.mu.Unlock()
 	state := v.state
 	last := len(state.Chain) - 1
+	// Shared layers back other volumes too, so only this volume's own layers,
+	// which sit above them, take a commit.
+	for first >= 0 && first < last && v.manager.isSharedLayer(state.Chain[first].Path) {
+		first++
+	}
 	if !state.Attached || state.ReadOnly || len(state.Pending) > 0 || first < 0 || first >= last {
 		return PublishedLayer{}, nil
 	}
@@ -844,6 +859,9 @@ func (v *Volume) merge(ctx context.Context, first int, cancel bool) (PublishedLa
 	base, top, err := state.committedRun(live)
 	if err != nil {
 		return PublishedLayer{}, fmt.Errorf("merge layers of volume %s: %w", state.Key, err)
+	}
+	if top >= 0 && v.manager.isSharedLayer(state.Chain[base].Path) {
+		return PublishedLayer{}, fmt.Errorf("merge layers of volume %s: the live chain dropped layers above shared layer %s", state.Key, state.Chain[base].Path)
 	}
 	if top < 0 {
 		base, top = first, last
@@ -871,7 +889,9 @@ func (v *Volume) merge(ctx context.Context, first int, cancel bool) (PublishedLa
 		return PublishedLayer{}, err
 	}
 	for _, old := range merged {
-		os.Remove(old.Path)
+		if !v.manager.isSharedLayer(old.Path) {
+			os.Remove(old.Path)
+		}
 	}
 	log.Info().Str("volume", state.Key).Int("base", base).Int("layers", len(merged)+1).Msg("merged qcow layers")
 	return PublishedLayer{SnapshotID: layer.SnapshotID, Path: layer.Path}, nil

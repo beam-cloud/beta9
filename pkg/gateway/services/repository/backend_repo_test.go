@@ -206,6 +206,60 @@ func TestGetDiskSnapshotDownloadURLRejectsCrossWorkspaceToken(t *testing.T) {
 	require.Zero(t, repo.workspaceLookups)
 }
 
+type diskSnapshotChainBackendRepo struct {
+	repository.BackendRepository
+	snapshots map[string]*types.DiskSnapshot
+	lookups   []string
+}
+
+func (r *diskSnapshotChainBackendRepo) GetWorkspaceByExternalId(_ context.Context, externalID string) (types.Workspace, error) {
+	return types.Workspace{Id: 1, ExternalId: externalID}, nil
+}
+
+func (r *diskSnapshotChainBackendRepo) GetDiskSnapshot(_ context.Context, workspaceID uint, id string) (*types.DiskSnapshot, error) {
+	r.lookups = append(r.lookups, id)
+	if snapshot, ok := r.snapshots[id]; ok && workspaceID == 1 {
+		return snapshot, nil
+	}
+	return nil, &types.ErrDiskSnapshotNotFound{}
+}
+
+func TestGetDiskSnapshotChainWalksParents(t *testing.T) {
+	repo := &diskSnapshotChainBackendRepo{snapshots: map[string]*types.DiskSnapshot{
+		"a":      {ExternalId: "a"},
+		"b":      {ExternalId: "b", ParentSnapshotId: "a"},
+		"c":      {ExternalId: "c", ParentSnapshotId: "b"},
+		"orphan": {ExternalId: "orphan", ParentSnapshotId: "gone"},
+	}}
+	service := &BackendRepositoryService{backendRepo: repo}
+	ids := func(snapshots []*pb.DiskSnapshot) []string {
+		out := []string{}
+		for _, snapshot := range snapshots {
+			out = append(out, snapshot.ExternalId)
+		}
+		return out
+	}
+
+	for _, tt := range []struct {
+		name     string
+		id       string
+		maxDepth int32
+		want     []string
+	}{
+		{name: "to the parentless snapshot", id: "c", want: []string{"c", "b", "a"}},
+		{name: "bounded by max depth", id: "c", maxDepth: 2, want: []string{"c", "b"}},
+		{name: "ends at a missing parent", id: "orphan", want: []string{"orphan"}},
+		{name: "missing snapshot", id: "gone", want: []string{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			response, err := service.GetDiskSnapshotChain(context.Background(), &pb.GetDiskSnapshotChainRequest{WorkspaceId: "ws", SnapshotId: tt.id, MaxDepth: tt.maxDepth})
+			require.NoError(t, err)
+			require.True(t, response.Ok, response.ErrorMsg)
+			require.Equal(t, tt.want, ids(response.Snapshots))
+		})
+	}
+}
+
 func TestGetCachedDiskSnapshotChunkKeys(t *testing.T) {
 	now := time.Now()
 	keys := map[string]struct{}{"chunk": {}}
