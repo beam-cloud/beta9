@@ -473,8 +473,17 @@ func checkLocalTargetReady(localTarget string) (time.Duration, error) {
 	return dialLatency, conn.Close()
 }
 
+// dialLocalTarget keeps dialing for routeProxyLocalDialTimeout, so a connection
+// that arrives while the app restarts waits for it instead of being dropped.
 func dialLocalTarget(localTarget string) (net.Conn, error) {
-	return dialLocalTargetWithTimeout(localTarget, routeProxyLocalDialTimeout)
+	deadline := time.Now().Add(routeProxyLocalDialTimeout)
+	for {
+		conn, err := dialLocalTargetWithTimeout(localTarget, time.Until(deadline))
+		if err == nil || time.Until(deadline) < 2*routeProxyReadyPollInterval {
+			return conn, err
+		}
+		time.Sleep(routeProxyReadyPollInterval)
+	}
 }
 
 func dialLocalTargetWithTimeout(localTarget string, timeout time.Duration) (net.Conn, error) {
