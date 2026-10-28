@@ -5,12 +5,22 @@ from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
-class KioskMCP:
-    """An image-provided Streamable HTTP MCP server sharing the app's session."""
+class MCPServer:
+    """An installed MCP server, using the usual mcpServers configuration."""
 
-    command: List[str]
-    port: int
-    path: str = "/mcp"
+    command: Optional[str] = None
+    args: List[str] = field(default_factory=list)
+    env: Dict[str, str] = field(default_factory=dict)
+    cwd: Optional[str] = None
+    url: Optional[str] = None
+    headers: Dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if bool(self.command) == bool(self.url):
+            raise ValueError("MCP servers require either command or url")
+
+    def to_dict(self):
+        return {key: value for key, value in asdict(self).items() if value}
 
 
 @dataclass
@@ -24,18 +34,21 @@ class Kiosk:
     command: List[str]
     cwd: str = "/workspace"
     env: Dict[str, str] = field(default_factory=dict)
-    mcp: Optional[KioskMCP] = None
+    mcp: Dict[str, MCPServer] = field(default_factory=dict)
     transport: Optional[str] = None
 
     @classmethod
     def from_dict(cls, value):
         value = dict(value)
-        if value.get("mcp") is not None:
-            value["mcp"] = KioskMCP(**value["mcp"])
+        value["mcp"] = {
+            name: MCPServer(**server) for name, server in (value.get("mcp") or {}).items()
+        }
         return cls(**value)
 
     def to_dict(self):
-        return {key: value for key, value in asdict(self).items() if value is not None}
+        config = {key: value for key, value in asdict(self).items() if value is not None}
+        config["mcp"] = {name: server.to_dict() for name, server in self.mcp.items()}
+        return config
 
 
 @dataclass(frozen=True)
@@ -61,9 +74,14 @@ class KioskRuntime:
     min_bitrate: int = 3000
     max_bitrate: int = 24000
     frame_queue: int = 2
-    mcp_max_response_bytes: int = 64 << 10
-    mcp_max_event_lines: int = 128
-    mcp_protocol_version: str = "2025-06-18"
+    mcp_port: int = 8082
+    mcp_path: str = "/mcp"
+    mcp_version: str = "4.1.4"
+    mcp_config: str = "/root/.config/beam-vm/mcp.json"
+    mcp_defaults: str = "/run/beam-desktop/mcp-defaults.json"
+    mcp_poll_interval: float = 5
+    mcp_max_servers: int = 16
+    mcp_max_config_bytes: int = 64 << 10
     command_timeout: float = 2
     process_timeout: float = 3
     display_timeout: float = 30

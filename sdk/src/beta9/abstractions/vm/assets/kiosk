@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.error import HTTPError, URLError
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from kiosk_config import Kiosk, KioskRuntime
@@ -29,88 +29,6 @@ from kiosk_config import Kiosk, KioskRuntime
 POLICY = KioskRuntime()
 ASSETS = Path("/opt/beam-vm")
 RUNTIME = Path("/run/beam-desktop")
-
-
-def mcp_ready(port, path):
-    """Probe initialization, including servers that answer using SSE."""
-    endpoint = f"http://127.0.0.1:{port}{path}"
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    deadline = time.monotonic() + POLICY.command_timeout
-
-    def request(value=None, method="POST"):
-        data = json.dumps(value).encode() if value is not None else None
-        return urlopen(
-            Request(endpoint, data=data, headers=headers, method=method),
-            timeout=POLICY.command_timeout,
-        )
-
-    try:
-        with request(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": POLICY.mcp_protocol_version,
-                    "capabilities": {},
-                    "clientInfo": {"name": "beam-kiosk-readiness", "version": "1"},
-                },
-            }
-        ) as response:
-            session = response.headers.get("Mcp-Session-Id")
-            if "text/event-stream" in response.headers.get("Content-Type", ""):
-                message = None
-                data_lines, size = [], 0
-                for _ in range(POLICY.mcp_max_event_lines):
-                    if time.monotonic() >= deadline:
-                        break
-                    line = response.readline(POLICY.mcp_max_response_bytes + 1)
-                    size += len(line)
-                    if not line or size > POLICY.mcp_max_response_bytes:
-                        break
-                    if not line.strip() and data_lines:
-                        candidate = json.loads(b"\n".join(data_lines))
-                        data_lines = []
-                        if candidate.get("id") == 1:
-                            message = candidate
-                            break
-                    elif line.startswith(b"data:"):
-                        data_lines.append(line[5:].lstrip(b" ").rstrip(b"\r\n"))
-            else:
-                chunks, size = [], 0
-                while time.monotonic() < deadline and size <= POLICY.mcp_max_response_bytes:
-                    chunk = response.read1(POLICY.mcp_max_response_bytes + 1 - size)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    size += len(chunk)
-                message = (
-                    json.loads(b"".join(chunks)) if size <= POLICY.mcp_max_response_bytes else None
-                )
-        if (
-            not isinstance(message, dict)
-            or message.get("id") != 1
-            or not isinstance(message.get("result"), dict)
-        ):
-            return False
-        version = message["result"].get("protocolVersion")
-        if not version:
-            return False
-        headers["MCP-Protocol-Version"] = version
-        if session:
-            headers["Mcp-Session-Id"] = session
-        with request({"jsonrpc": "2.0", "method": "notifications/initialized"}):
-            pass
-        if session:
-            try:
-                with request(method="DELETE"):
-                    pass
-            except HTTPError as error:
-                if error.code != 405:
-                    return False
-        return True
-    except (OSError, ValueError, TypeError, AttributeError, URLError):
-        return False
 
 
 def run_command(command, *, env=None, timeout=None, check=True, **options):
@@ -251,7 +169,7 @@ class Session:
         self.processes = {}
         self.failures = collections.defaultdict(collections.deque)
         self.state = SessionStatus(
-            mcp="starting" if self.config.mcp else "disabled",
+            mcp="starting",
             transport=self.config.transport or "websockets",
         )
         self.env = dict(
@@ -297,7 +215,8 @@ class Session:
         self.stop("mcp", "application")
 
     def fail_mcp(self, error):
-        self.update(state="error", mcp="error", error=error)
+        self.update(mcp="error")
+        print(error, file=sys.stderr, flush=True)
         self.stop("mcp")
 
     def launch(self):
@@ -307,7 +226,7 @@ class Session:
             application="starting",
             windows=0,
             error="",
-            mcp="starting" if self.config.mcp else "disabled",
+            mcp="starting",
         )
         self.spawn(self.config.command, role="application", cwd=self.config.cwd)
         self.started = time.monotonic()
@@ -316,8 +235,15 @@ class Session:
 
     def launch_mcp(self):
         self.stop("mcp")
+        self.mcp_revision = (
+            Path(POLICY.mcp_config).stat().st_mtime_ns if Path(POLICY.mcp_config).exists() else 0
+        )
         try:
-            self.spawn(self.config.mcp.command, role="mcp", cwd=self.config.cwd)
+            self.spawn(
+                [str(ASSETS / "kiosk-mcp"), "--cwd", self.config.cwd],
+                role="mcp",
+                cwd=self.config.cwd,
+            )
         except OSError:
             self.fail_mcp("Application MCP server failed to start; inspect its logs")
             return
@@ -537,7 +463,7 @@ class Session:
         if windows:
             self.was_visible = True
             self.update(application="ready")
-            if self.config.mcp and "mcp" not in self.processes and self.state.mcp != "error":
+            if "mcp" not in self.processes and self.state.mcp != "error":
                 self.launch_mcp()
         elif code is not None and (
             self.was_visible or time.monotonic() - self.started > POLICY.application_timeout
@@ -555,6 +481,13 @@ class Session:
 
     def poll_mcp(self):
         process = self.processes.get("mcp")
+        revision = (
+            Path(POLICY.mcp_config).stat().st_mtime_ns if Path(POLICY.mcp_config).exists() else 0
+        )
+        if revision != getattr(self, "mcp_revision", 0) and self.state.application == "ready":
+            self.failures["mcp"].clear()
+            self.launch_mcp()
+            return
         if process is None or self.state.mcp == "error":
             return
         if process.poll() is not None:
@@ -563,12 +496,27 @@ class Session:
             else:
                 self.fail_mcp("Application MCP server exited repeatedly; inspect its logs")
         elif self.state.mcp != "ready":
-            if mcp_ready(self.config.mcp.port, self.config.mcp.path):
+            if self.mcp_ready():
                 self.update(mcp="ready", error="")
             elif time.monotonic() - self.mcp_started > POLICY.application_timeout:
                 self.fail_mcp("Application MCP server did not complete initialization")
 
+    def mcp_ready(self):
+        try:
+            with urlopen(
+                f"http://127.0.0.1:{POLICY.mcp_port}/health", timeout=POLICY.command_timeout
+            ):
+                return True
+        except (OSError, URLError):
+            return False
+
     def run(self):
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        defaults = Path(POLICY.mcp_defaults)
+        defaults.touch(mode=0o600)
+        defaults.write_text(
+            json.dumps({name: server.to_dict() for name, server in self.config.mcp.items()})
+        )
         server = self.control_server()
         try:
             self.start_display()
@@ -590,7 +538,7 @@ class Session:
                     self.launch()
                 self.poll_application()
                 self.poll_mcp()
-                if self.state.application == "ready" and self.state.mcp in ("ready", "disabled"):
+                if self.state.application == "ready":
                     self.update(state="ready", error="")
         except InterruptedError:
             return 0

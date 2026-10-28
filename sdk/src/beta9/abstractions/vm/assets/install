@@ -61,7 +61,7 @@ npm cache clean --force
 
 install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
 install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" "$assets/kiosk" \
-  "$assets/kiosk-openbox-build" "$assets/kiosk-selkies-patch" /opt/beam-vm/
+  "$assets/kiosk-openbox-build" "$assets/kiosk-selkies-patch" "$assets/kiosk-mcp" /opt/beam-vm/
 install -m 0644 "$assets/kiosk-openbox.xml" "$assets/kiosk_config.py" /opt/beam-vm/
 install -m 0644 "$assets"/*.service /etc/systemd/system/
 
@@ -97,6 +97,10 @@ if [ "$desktop" = true ] || [ "$kiosk" = true ]; then
 fi
 
 if [ "$kiosk" = true ]; then
+  apt_install python3-venv
+  python3 -m venv /opt/beam-vm/mcp
+  mcp_version=$(PYTHONPATH=/opt/beam-vm python3 -c 'from kiosk_config import KioskRuntime; print(KioskRuntime().mcp_version)')
+  /opt/beam-vm/mcp/bin/pip install --no-cache-dir "fastmcp==$mcp_version"
   # Native packages bundle the web client and encoding extensions. Keep both
   # the version and digest pinned: image identity must not depend on "latest".
   version=2.1.0

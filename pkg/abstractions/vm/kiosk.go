@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/net/http/httpguts"
 )
 
 //go:embed kiosk.html
@@ -32,58 +35,42 @@ func validateKiosk(spec *types.VMSpec) error {
 	if k.Transport != "" && k.Transport != types.VMKioskTransportWebRTC && k.Transport != types.VMKioskTransportWebSockets {
 		return fmt.Errorf("kiosk transport must be webrtc or websockets")
 	}
-	commands := [][]string{k.Command}
-	if k.MCP != nil {
-		commands = append(commands, k.MCP.Command)
-	}
-	for _, command := range commands {
-		if len(command) == 0 || len(command) > types.VMKioskMaxCommandArgs || command[0] == "" {
-			return fmt.Errorf("kiosk commands require an argv array with 1–%d entries", types.VMKioskMaxCommandArgs)
-		}
-		size := 0
-		for _, arg := range command {
-			size += len(arg)
-			if strings.ContainsRune(arg, 0) {
-				return fmt.Errorf("kiosk command arguments cannot contain NUL")
-			}
-		}
-		if size > types.VMKioskMaxCommandBytes {
-			return fmt.Errorf("kiosk commands must fit in %d KiB", types.VMKioskMaxCommandBytes>>10)
-		}
+	if err := validateKioskLaunch(k.Command, k.Cwd, k.Env); err != nil {
+		return err
 	}
 	if k.Cwd == "" {
 		k.Cwd = "/workspace"
 	}
-	if !path.IsAbs(k.Cwd) || path.Clean(k.Cwd) != k.Cwd || strings.ContainsRune(k.Cwd, 0) {
-		return fmt.Errorf("kiosk cwd must be a clean absolute guest path")
+	if len(k.MCP) > types.VMKioskMaxMCPServers {
+		return fmt.Errorf("too many kiosk MCP servers")
 	}
-	size := 0
-	for key, value := range k.Env {
-		size += len(key) + len(value)
-		if !validEnvKey.MatchString(key) || strings.HasPrefix(key, "BEAM_VM_") || strings.HasPrefix(key, "BETA9_") || strings.ContainsRune(value, 0) {
-			return fmt.Errorf("invalid or reserved kiosk environment key %q", key)
+	for name, server := range k.MCP {
+		if !kioskMCPName.MatchString(name) {
+			return fmt.Errorf("invalid kiosk MCP server name %q", name)
 		}
-	}
-	if size > types.VMKioskMaxEnvBytes {
-		return fmt.Errorf("kiosk environment must fit in %d KiB", types.VMKioskMaxEnvBytes>>10)
-	}
-	if k.MCP != nil {
-		p := k.MCP.Port
-		reserved := append(k.PrivatePorts(), types.VMSSHPort, types.VMTerminalPort, types.VMDesktopPort, uint32(types.WorkerSandboxProcessManagerPort))
-		if p == 0 || p > 65535 || slices.Contains(reserved, p) {
-			return fmt.Errorf("kiosk MCP requires a non-reserved port between 1 and 65535")
+		if (server.Command == "") == (server.URL == "") {
+			return fmt.Errorf("kiosk MCP server %q requires either command or url", name)
 		}
-		if k.MCP.Path == "" {
-			k.MCP.Path = "/mcp"
-		}
-		if !strings.HasPrefix(k.MCP.Path, "/") || path.Clean(k.MCP.Path) != k.MCP.Path || strings.ContainsAny(k.MCP.Path, "?#\\\x00\r\n") {
-			return fmt.Errorf("kiosk MCP path must be an absolute URL path without a query or fragment")
-		}
-		if !slices.Contains(spec.Ports, p) {
-			spec.Ports = append(spec.Ports, p)
-		}
-		if !slices.Contains(spec.ProtectedPorts, p) {
-			spec.ProtectedPorts = append(spec.ProtectedPorts, p)
+		if server.Command != "" {
+			if len(server.Headers) > 0 {
+				return fmt.Errorf("stdio MCP servers cannot use HTTP headers")
+			}
+			if err := validateKioskLaunch(append([]string{server.Command}, server.Args...), server.Cwd, server.Env); err != nil {
+				return err
+			}
+		} else {
+			u, err := url.Parse(server.URL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+				return fmt.Errorf("kiosk MCP server URL must be an HTTP endpoint without userinfo or fragment")
+			}
+			if len(server.Args) > 0 || len(server.Env) > 0 || server.Cwd != "" {
+				return fmt.Errorf("HTTP MCP servers cannot use launch options")
+			}
+			for key, value := range server.Headers {
+				if !httpguts.ValidHeaderFieldName(key) || !httpguts.ValidHeaderFieldValue(value) {
+					return fmt.Errorf("invalid kiosk MCP header")
+				}
+			}
 		}
 	}
 	spec.Desktop = true
@@ -99,6 +86,38 @@ func validateKiosk(spec *types.VMSpec) error {
 	return nil
 }
 
+var kioskMCPName = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+func validateKioskLaunch(command []string, cwd string, env map[string]string) error {
+	if len(command) == 0 || len(command) > types.VMKioskMaxCommandArgs || command[0] == "" {
+		return fmt.Errorf("kiosk commands require an argv array with 1–%d entries", types.VMKioskMaxCommandArgs)
+	}
+	size := 0
+	for _, arg := range command {
+		size += len(arg)
+		if strings.ContainsRune(arg, 0) {
+			return fmt.Errorf("kiosk command arguments cannot contain NUL")
+		}
+	}
+	if size > types.VMKioskMaxCommandBytes {
+		return fmt.Errorf("kiosk commands must fit in %d KiB", types.VMKioskMaxCommandBytes>>10)
+	}
+	if cwd != "" && (!path.IsAbs(cwd) || path.Clean(cwd) != cwd || strings.ContainsRune(cwd, 0)) {
+		return fmt.Errorf("kiosk cwd must be a clean absolute guest path")
+	}
+	size = 0
+	for key, value := range env {
+		size += len(key) + len(value)
+		if !validEnvKey.MatchString(key) || strings.HasPrefix(key, "BEAM_VM_") || strings.HasPrefix(key, "BETA9_") || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("invalid or reserved kiosk environment key %q", key)
+		}
+	}
+	if size > types.VMKioskMaxEnvBytes {
+		return fmt.Errorf("kiosk environment must fit in %d KiB", types.VMKioskMaxEnvBytes>>10)
+	}
+	return nil
+}
+
 // Creation and port updates enforce the same private and protected endpoints.
 func validateKioskPort(k *types.VMKioskSpec, port uint32, public bool) error {
 	if k == nil {
@@ -109,8 +128,6 @@ func validateKioskPort(k *types.VMKioskSpec, port uint32, public bool) error {
 		return fmt.Errorf("port %d is reserved for kiosk services", port)
 	case public && port == types.VMDesktopPort:
 		return fmt.Errorf("kiosk browser sessions must be protected")
-	case public && k.MCP != nil && port == k.MCP.Port:
-		return fmt.Errorf("kiosk MCP ports must be protected")
 	}
 	return nil
 }
@@ -148,6 +165,9 @@ func newKioskRouter() *echo.Router {
 			return echo.NewHTTPError(http.StatusForbidden, "explicit kiosk restart required")
 		}
 		return c.(*kioskContext).forward(types.VMKioskStatusPort, "restart")
+	})
+	e.Any(types.VMKioskMCPPath, func(c echo.Context) error {
+		return c.(*kioskContext).forward(types.VMKioskMCPPort, strings.TrimPrefix(types.VMKioskMCPPath, "/"))
 	})
 	for _, path := range []string{types.VMKioskStreamPath + "/*", "/*"} {
 		e.Any(path, func(c echo.Context) error {

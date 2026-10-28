@@ -92,17 +92,21 @@ type VMCreateOptions struct {
 // VMKioskSpec launches an ordinary application on an isolated graphical session.
 // Commands are argv, never shell source. Env values follow the VM's redaction rules.
 type VMKioskSpec struct {
-	Transport VMKioskTransport  `json:"transport,omitempty"`
-	Command   []string          `json:"command"`
-	Cwd       string            `json:"cwd,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	MCP       *VMKioskMCP       `json:"mcp,omitempty"`
+	Transport VMKioskTransport            `json:"transport,omitempty"`
+	Command   []string                    `json:"command"`
+	Cwd       string                      `json:"cwd,omitempty"`
+	Env       map[string]string           `json:"env,omitempty"`
+	MCP       map[string]VMKioskMCPServer `json:"mcp,omitempty"`
 }
 
-type VMKioskMCP struct {
-	Command []string `json:"command"`
-	Port    uint32   `json:"port"`
-	Path    string   `json:"path,omitempty"`
+// VMKioskMCPServer follows the standard mcpServers launch configuration.
+type VMKioskMCPServer struct {
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Cwd     string            `json:"cwd,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // VM service ports are shared by validation, routing and the guest protocol.
@@ -111,9 +115,11 @@ const (
 	VMTerminalPort                    = 7681
 	VMDesktopPort                     = 8080
 	VMKioskStatusPort          uint32 = 8081
+	VMKioskMCPPort             uint32 = 8082
 	VMKioskMediaPort           uint32 = 8443
 	VMKioskMaxICEFrameBytes           = 8192
 	VMKioskMaxCommandArgs             = 128
+	VMKioskMaxMCPServers              = 16
 	VMKioskMaxCommandBytes            = 32 << 10
 	VMKioskMaxEnvBytes                = 16 << 10
 	VMKioskMaxConfigBytes             = 64 << 10
@@ -125,6 +131,7 @@ const (
 // Kiosk browser protocol, routed only after VM traffic authentication.
 const (
 	VMKioskControlPath  = "/_beam/kiosk"
+	VMKioskMCPPath      = "/mcp"
 	VMKioskStreamPath   = "/stream"
 	VMKioskActionHeader = "X-Beam-Kiosk-Action"
 )
@@ -149,9 +156,13 @@ func (k *VMKioskSpec) Clone() *VMKioskSpec {
 	copy.Command = slices.Clone(k.Command)
 	copy.Env = maps.Clone(k.Env)
 	if k.MCP != nil {
-		mcp := *k.MCP
-		mcp.Command = slices.Clone(k.MCP.Command)
-		copy.MCP = &mcp
+		copy.MCP = make(map[string]VMKioskMCPServer, len(k.MCP))
+		for name, server := range k.MCP {
+			server.Args = slices.Clone(server.Args)
+			server.Env = maps.Clone(server.Env)
+			server.Headers = maps.Clone(server.Headers)
+			copy.MCP[name] = server
+		}
 	}
 	return &copy
 }
@@ -164,7 +175,7 @@ func (k *VMKioskSpec) PrivatePorts() []uint32 {
 	if k.Transport == VMKioskTransportWebRTC {
 		ports = append(ports, VMKioskMediaPort)
 	}
-	return append(ports, VMKioskStatusPort)
+	return append(ports, VMKioskStatusPort, VMKioskMCPPort)
 }
 
 func (s VMSpec) RuntimePorts() []uint32 {

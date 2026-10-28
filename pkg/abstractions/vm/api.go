@@ -116,6 +116,10 @@ func redactedSpec(spec types.VMSpec) types.VMSpec {
 	if spec.Kiosk != nil {
 		spec.Kiosk = spec.Kiosk.Clone()
 		spec.Kiosk.Env = nil
+		for name, server := range spec.Kiosk.MCP {
+			server.Env, server.Headers = nil, nil
+			spec.Kiosk.MCP[name] = server
+		}
 	}
 	volumes := spec.Volumes
 	spec.Volumes = make([]*pb.Volume, len(volumes))

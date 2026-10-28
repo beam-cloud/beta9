@@ -38,7 +38,7 @@ from ...utils import local_process_kwargs
 from ..image import Image
 from ..sandbox import SandboxInstance
 from ..volume import Volume
-from .kiosk_config import Kiosk, KioskMCP as KioskMCP
+from .kiosk_config import Kiosk, MCPServer as MCPServer
 
 
 # Keep the stock guest reproducible and avoid a registry tag lookup on launch.
@@ -809,6 +809,13 @@ class VM:
         return self._sandbox().aio
 
     @property
+    def mcp(self):
+        """Install and connect application-specific MCP servers in a kiosk VM."""
+        from .mcp_api import VMMCP
+
+        return VMMCP(self)
+
+    @property
     def desktop(self):
         """Screenshot and control the desktop through authenticated SDK calls."""
         from .desktop_api import VMDesktop
@@ -834,7 +841,7 @@ class VM:
 
     @property
     def mcp_url(self):
-        """Protected application MCP URL; use the CLI's vm port-forward for a local client."""
+        """Authenticated endpoint aggregating the kiosk VM's application MCP servers."""
         return self.refresh().info.get("mcp_url")
 
     def kiosk_status(self):

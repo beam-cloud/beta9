@@ -27,6 +27,7 @@ from rich.text import Text
 from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.vm import DEFAULT_VM_BASE_IMAGE, VM, identity, prepare_image
+from ..abstractions.vm.kiosk_config import KioskRuntime
 from ..abstractions.volume import Volume
 from ..channel import GatewayHTTPError, ServiceClient, rpc_timeout
 from ..clients.gateway import ListContainersRequest
@@ -189,12 +190,12 @@ def _show(info, as_json):
             info.get("name", "VM"),
             fields,
         )
-        kiosk_mcp = ((info.get("spec") or {}).get("kiosk") or {}).get("mcp")
-        if kiosk_mcp:
+        if info.get("mcp_url"):
+            policy = KioskRuntime()
             terminal.detail(
                 f"Connect a local MCP client: {extraclick.command_hint()} vm port-forward "
-                f"{shlex.quote(info['name'])} {kiosk_mcp['port']} "
-                f"(endpoint http://127.0.0.1:{kiosk_mcp['port']}{kiosk_mcp.get('path', '/mcp')})"
+                f"{shlex.quote(info['name'])} {policy.mcp_port} "
+                f"(endpoint http://127.0.0.1:{policy.mcp_port}{policy.mcp_path})"
             )
         private = [int(port) for port in urls if int(port) in protected]
         if private:
@@ -248,7 +249,7 @@ def _show(info, as_json):
 @click.option(
     "--kiosk-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="JSON application configuration: command, cwd, env and optional MCP server.",
+    help="JSON application configuration: command, cwd, env and named MCP servers.",
 )
 @click.option(
     "--desktop/--no-desktop",

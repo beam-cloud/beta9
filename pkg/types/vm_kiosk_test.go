@@ -7,16 +7,16 @@ import (
 )
 
 func TestVMKioskCloneIsolatesApplicationAndMCPState(t *testing.T) {
-	parent := &VMKioskSpec{Command: []string{"app"}, Env: map[string]string{"KEY": "saved"}, MCP: &VMKioskMCP{Command: []string{"adapter"}}}
+	parent := &VMKioskSpec{Command: []string{"app"}, Env: map[string]string{"KEY": "saved"}, MCP: map[string]VMKioskMCPServer{"app": {Command: "adapter", Args: []string{"original"}, Env: map[string]string{"TOKEN": "saved"}}}}
 	child := parent.Clone()
 	child.Command[0] = "other"
 	child.Env["KEY"] = "changed"
-	child.MCP.Command[0] = "other-adapter"
-	child.MCP.Path = "/changed"
+	child.MCP["app"].Args[0] = "changed"
+	child.MCP["app"].Env["TOKEN"] = "changed"
 	require.Equal(t, "app", parent.Command[0])
 	require.Equal(t, "saved", parent.Env["KEY"])
-	require.Equal(t, "adapter", parent.MCP.Command[0])
-	require.Empty(t, parent.MCP.Path)
+	require.Equal(t, "original", parent.MCP["app"].Args[0])
+	require.Equal(t, "saved", parent.MCP["app"].Env["TOKEN"])
 	require.Nil(t, (*VMKioskSpec)(nil).Clone())
 }
 
@@ -45,8 +45,8 @@ func TestVMKioskPrivatePorts(t *testing.T) {
 		ports []uint32
 	}{
 		{"desktop", nil, nil},
-		{"websockets", &VMKioskSpec{Transport: VMKioskTransportWebSockets}, []uint32{VMKioskStatusPort}},
-		{"webrtc", &VMKioskSpec{Transport: VMKioskTransportWebRTC}, []uint32{VMKioskMediaPort, VMKioskStatusPort}},
+		{"websockets", &VMKioskSpec{Transport: VMKioskTransportWebSockets}, []uint32{VMKioskStatusPort, VMKioskMCPPort}},
+		{"webrtc", &VMKioskSpec{Transport: VMKioskTransportWebRTC}, []uint32{VMKioskMediaPort, VMKioskStatusPort, VMKioskMCPPort}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.ports, test.kiosk.PrivatePorts())

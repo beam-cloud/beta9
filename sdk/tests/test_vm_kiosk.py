@@ -2,9 +2,7 @@ import importlib.machinery
 import importlib.util
 import json
 import runpy
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import threading
 import shutil
 import subprocess
 import textwrap
@@ -14,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from beta9 import Kiosk, KioskMCP
+from beta9 import Kiosk, MCPServer
 from beta9.abstractions.vm import VM, prepare_image
 from beta9.abstractions.vm import __file__ as vm_file
 from beta9.cli import vm as cli
@@ -55,7 +53,7 @@ def test_kiosk_configuration_is_frozen_and_builds_a_distinct_image():
     config = Kiosk(
         ["editor", "literal; $(text)"],
         env={"APP_SETTING": "saved"},
-        mcp=KioskMCP(["python3", "mcp.py"], 8000),
+        mcp={"app": MCPServer("python3", ["mcp.py"])},
     )
     vm = VM("app", kiosk=config, ssh=False, _service=service)
     config.command.append("changed")
@@ -63,7 +61,7 @@ def test_kiosk_configuration_is_frozen_and_builds_a_distinct_image():
     assert vm._spec["desktop"] is True
     assert vm._spec["kiosk"]["command"] == ["editor", "literal; $(text)"]
     assert vm._spec["kiosk"]["env"] == {"APP_SETTING": "saved"}
-    assert vm._spec["kiosk"]["mcp"]["path"] == "/mcp"
+    assert vm._spec["kiosk"]["mcp"]["app"]["args"] == ["mcp.py"]
     base = Image(base_image="ubuntu:24.04")
     kiosk_image = prepare_image(base, service, True, kiosk=True)
     assert kiosk_image.ignore_python is True
@@ -101,63 +99,6 @@ def test_kiosk_cli_preserves_argv_and_reports_bad_json(tmp_path, monkeypatch):
     factory.assert_not_called()
 
 
-@pytest.mark.parametrize("sse", [False, True, "multiline"])
-def test_mcp_readiness_performs_real_initialization_and_closes_probe_session(sse):
-    calls = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_):
-            pass
-
-        def do_POST(self):
-            value = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            calls.append((value["method"], self.headers.get("Mcp-Session-Id")))
-            if value["method"] != "initialize":
-                self.send_response(202)
-                self.end_headers()
-                return
-            message = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {"protocolVersion": "2025-06-18", "capabilities": {}},
-            }
-            body = json.dumps(message).encode()
-            if sse:
-                if sse == "multiline":
-                    body = b"\n".join(
-                        b"data: " + line
-                        for line in json.dumps(message, indent=2).encode().splitlines()
-                    )
-                else:
-                    body = b"data: " + body
-                body = b": keepalive\n\nevent: message\n" + body + b"\n\n"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream" if sse else "application/json")
-            self.send_header("Mcp-Session-Id", "probe-session")
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_DELETE(self):
-            calls.append(("DELETE", self.headers.get("Mcp-Session-Id")))
-            self.send_response(200)
-            self.end_headers()
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        assert supervisor().mcp_ready(server.server_port, "/mcp")
-        assert calls == [
-            ("initialize", None),
-            ("notifications/initialized", "probe-session"),
-            ("DELETE", "probe-session"),
-        ]
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
-
-
 def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
     guest = supervisor()
     session = guest.Session(
@@ -170,7 +111,7 @@ def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
     assert session.retry_allowed("mcp")
 
 
-def test_kiosk_sdk_waits_for_application_and_mcp_not_just_the_stream_port():
+def test_kiosk_sdk_waits_for_application_not_just_the_stream_port():
     vm = VM("app", kiosk=Kiosk(["editor"]), ssh=False, _service=SimpleNamespace())
     vm.info = {"spec": {"desktop": True, "kiosk": {"command": ["editor"]}}}
     sandbox = MagicMock()
@@ -258,8 +199,13 @@ def test_existing_display_geometry_preserves_logical_size_when_density_changes(t
     assert module.saved_display(path) == (3456, 1892)
 
 
-def test_repeated_restarts_keep_only_current_owned_process_groups(monkeypatch):
+def test_repeated_restarts_keep_only_current_owned_process_groups(monkeypatch, tmp_path):
     module = supervisor()
+    from dataclasses import replace
+
+    config = tmp_path / "mcp.json"
+    config.write_text('{"mcpServers":{}}')
+    monkeypatch.setattr(module, "POLICY", replace(module.POLICY, mcp_config=str(config)))
     started = []
     stopped = []
 
@@ -270,7 +216,7 @@ def test_repeated_restarts_keep_only_current_owned_process_groups(monkeypatch):
 
     monkeypatch.setattr(module.subprocess, "Popen", start)
     monkeypatch.setattr(module, "stop_process", lambda p: stopped.append(p.pid) if p else None)
-    session = module.Session({"command": ["editor"], "mcp": {"command": ["adapter"], "port": 8000}})
+    session = module.Session({"command": ["editor"], "mcp": {"app": {"command": "adapter"}}})
     for _ in range(10):
         session.launch()
         session.launch_mcp()
@@ -290,6 +236,7 @@ def test_launcher_handoff_uses_owned_windows_and_closes_children(monkeypatch):
     monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **kw: MagicMock(poll=lambda: 0))
     stop = MagicMock()
     monkeypatch.setattr(module, "stop_process", stop)
+    monkeypatch.setattr(module.Session, "launch_mcp", lambda self: None)
     session = module.Session({"command": ["launcher"]})
     session.launch()
     session.poll_application()
@@ -305,7 +252,7 @@ def test_launcher_handoff_uses_owned_windows_and_closes_children(monkeypatch):
     assert stop.call_args.args[0].poll() == 0
 
 
-def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monkeypatch):
+def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monkeypatch, tmp_path):
     module = supervisor()
     clock = [0]
     windows = []
@@ -313,8 +260,13 @@ def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monk
     monkeypatch.setattr(module, "visible_windows", lambda _: windows)
     monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **kw: MagicMock(poll=lambda: None))
     monkeypatch.setattr(module, "stop_process", MagicMock())
-    monkeypatch.setattr(module, "mcp_ready", lambda *a: False)
-    session = module.Session({"command": ["editor"], "mcp": {"command": ["adapter"], "port": 8000}})
+    monkeypatch.setattr(module.Session, "mcp_ready", lambda *a: False)
+    from dataclasses import replace
+
+    config = tmp_path / "mcp.json"
+    config.write_text('{"mcpServers":{}}')
+    monkeypatch.setattr(module, "POLICY", replace(module.POLICY, mcp_config=str(config)))
+    session = module.Session({"command": ["editor"], "mcp": {"app": {"command": "adapter"}}})
     session.launch()
     clock[0] = module.POLICY.application_timeout - 1
     windows.append("0x123")
@@ -330,6 +282,9 @@ def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monk
     session.launch_mcp()
     assert session.state.application == "ready", "a missing optional adapter must not close the app"
     assert session.state.mcp == "error"
+    starts = module.subprocess.Popen.call_count
+    session.poll_mcp()
+    assert module.subprocess.Popen.call_count == starts, "failed startup waits for config repair"
     monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **kw: MagicMock(poll=lambda: None))
     session.launch()
     windows.clear()
@@ -384,43 +339,6 @@ def test_transient_settings_removal_keeps_display_live_and_accepts_replacement(
     assert "Gdk/WindowScalingFactor 1\n" in session.toolkit_file.read_text()
     reload_settings.assert_called_once_with(123, module.signal.SIGHUP)
     reconfigure.assert_called_once()
-
-
-@pytest.mark.parametrize("sse", [True, False])
-def test_mcp_readiness_cannot_be_held_open_by_continuous_keepalives(monkeypatch, sse):
-    from dataclasses import replace
-    import time
-
-    module = supervisor()
-    monkeypatch.setattr(module, "POLICY", replace(module.POLICY, command_timeout=0.08))
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_):
-            pass
-
-        def do_POST(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream" if sse else "application/json")
-            self.end_headers()
-            try:
-                for _ in range(100):
-                    self.wfile.write(b": keepalive\n\n" if sse else b" ")
-                    self.wfile.flush()
-                    time.sleep(0.02)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        started = time.monotonic()
-        assert module.mcp_ready(server.server_port, "/mcp") is False
-        assert time.monotonic() - started < 0.5
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
 
 
 def test_pinned_backend_pointer_fix_preserves_clicks_and_real_drags(tmp_path):

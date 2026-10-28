@@ -379,8 +379,6 @@ func (s *Service) urls(v *types.VM) {
 	}
 	if v.Spec.Kiosk != nil {
 		v.KioskURL = v.DesktopURL
-		if v.Spec.Kiosk.MCP != nil && v.URLs[v.Spec.Kiosk.MCP.Port] != "" {
-			v.MCPURL = strings.TrimRight(v.URLs[v.Spec.Kiosk.MCP.Port], "/") + v.Spec.Kiosk.MCP.Path
-		}
+		v.MCPURL = strings.TrimRight(v.DesktopURL, "/") + types.VMKioskMCPPath
 	}
 }

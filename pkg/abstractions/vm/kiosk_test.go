@@ -18,14 +18,17 @@ func TestKioskLaunchSpecAndRedaction(t *testing.T) {
 	s, _, info, _, gateway := fixture()
 	spec := types.VMSpec{ImageID: "kiosk-image", Kiosk: &types.VMKioskSpec{
 		Transport: "websockets", Command: []string{"editor", "/workspace/project with spaces"}, Env: map[string]string{"TOKEN": "private"},
-		MCP: &types.VMKioskMCP{Command: []string{"app-mcp"}, Port: 8000},
+		MCP: map[string]types.VMKioskMCPServer{
+			"app":  {Command: "app-mcp", Env: map[string]string{"TOKEN": "server-secret"}},
+			"http": {URL: "http://127.0.0.1:9000/mcp", Headers: map[string]string{"Authorization": "Bearer backend-secret"}},
+		},
 	}}
 	require.NoError(t, validate(&spec))
 	require.True(t, spec.Desktop)
 	require.Equal(t, "/workspace", spec.Kiosk.Cwd)
-	require.Equal(t, "/mcp", spec.Kiosk.MCP.Path)
-	require.Contains(t, spec.Ports, uint32(8000))
-	require.Contains(t, spec.ProtectedPorts, uint32(8000))
+	require.Equal(t, "app-mcp", spec.Kiosk.MCP["app"].Command)
+	require.Contains(t, spec.PrivatePorts, types.VMKioskMCPPort)
+	require.NotContains(t, spec.Ports, types.VMKioskMCPPort)
 	require.Contains(t, spec.PrivatePorts, types.VMKioskStatusPort)
 	require.NotContains(t, spec.Ports, types.VMKioskStatusPort)
 	require.NoError(t, validate(&spec), "normalization is idempotent across updates and restores")
@@ -42,9 +45,13 @@ func TestKioskLaunchSpecAndRedaction(t *testing.T) {
 	require.Equal(t, spec.Kiosk, &config)
 	response := s.response(v)
 	require.Empty(t, response.Spec.Kiosk.Env)
+	require.Empty(t, response.Spec.Kiosk.MCP["app"].Env)
+	require.Empty(t, response.Spec.Kiosk.MCP["http"].Headers)
+	require.Equal(t, "Bearer backend-secret", v.Spec.Kiosk.MCP["http"].Headers["Authorization"])
+	require.Equal(t, "server-secret", v.Spec.Kiosk.MCP["app"].Env["TOKEN"])
 	require.Equal(t, "private", v.Spec.Kiosk.Env["TOKEN"])
 	require.Equal(t, response.DesktopURL, response.KioskURL)
-	require.Equal(t, strings.TrimRight(response.URLs[8000], "/")+"/mcp", response.MCPURL)
+	require.Equal(t, strings.TrimRight(response.DesktopURL, "/")+types.VMKioskMCPPath, response.MCPURL)
 	a := artifact(v, "artifact", "snapshot", "saved", "")
 	require.Equal(t, spec.Kiosk, a.Spec.Kiosk)
 	require.Empty(t, artifactResponse(*a).Spec.Kiosk.Env)
@@ -52,14 +59,20 @@ func TestKioskLaunchSpecAndRedaction(t *testing.T) {
 
 func TestInvalidKioskNeverStartsCompute(t *testing.T) {
 	for name, kiosk := range map[string]string{
-		"empty MCP command": `{"command":["editor"],"mcp":{"command":[],"port":8000}}`,
-		"empty command":     `{"command":[]}`,
-		"shell string":      `{"command":"editor project"}`,
-		"relative cwd":      `{"command":["editor"],"cwd":"project"}`,
-		"reserved env":      `{"command":["editor"],"env":{"BEAM_VM_ID":"other"}}`,
-		"reserved MCP port": `{"command":["editor"],"mcp":{"command":["mcp"],"port":8081}}`,
-		"bad MCP path":      `{"command":["editor"],"mcp":{"command":["mcp"],"port":8000,"path":"https://elsewhere/mcp"}}`,
-		"unknown field":     `{"command":["editor"],"shell":true}`,
+		"MCP relative cwd":        `{"command":["editor"],"mcp":{"app":{"command":"node","cwd":"project"}}}`,
+		"MCP reserved env":        `{"command":["editor"],"mcp":{"app":{"command":"node","env":{"BEAM_VM_ID":"other"}}}}`,
+		"MCP header injection":    `{"command":["editor"],"mcp":{"app":{"url":"http://localhost/mcp","headers":{"Authorization":"token\r\nother:value"}}}}`,
+		"MCP invalid name":        `{"command":["editor"],"mcp":{"app/name":{"command":"node"}}}`,
+		"MCP HTTP launch options": `{"command":["editor"],"mcp":{"app":{"url":"http://localhost/mcp","args":["--flag"]}}}`,
+		"MCP stdio headers":       `{"command":["editor"],"mcp":{"app":{"command":"node","headers":{"X-Key":"secret"}}}}`,
+		"empty MCP command":       `{"command":["editor"],"mcp":{"app":{}}}`,
+		"empty command":           `{"command":[]}`,
+		"shell string":            `{"command":"editor project"}`,
+		"relative cwd":            `{"command":["editor"],"cwd":"project"}`,
+		"reserved env":            `{"command":["editor"],"env":{"BEAM_VM_ID":"other"}}`,
+		"ambiguous MCP transport": `{"command":["editor"],"mcp":{"app":{"command":"node","url":"http://localhost/mcp"}}}`,
+		"bad MCP URL":             `{"command":["editor"],"mcp":{"app":{"url":"file:///mcp"}}}`,
+		"unknown field":           `{"command":["editor"],"shell":true}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, _, info, runtime, _ := fixture()
@@ -78,7 +91,7 @@ func TestKioskArtifactsReopenWithIndependentIdentity(t *testing.T) {
 			v.Spec.Kiosk = &types.VMKioskSpec{
 				Command: []string{"application", "/workspace/saved-project"},
 				Env:     map[string]string{"APPLICATION_SETTING": "saved-setting"},
-				MCP:     &types.VMKioskMCP{Command: []string{"application-mcp"}, Port: 8000},
+				MCP:     map[string]types.VMKioskMCPServer{"app": {Command: "application-mcp"}},
 			}
 			require.NoError(t, validate(&v.Spec))
 			a, err := s.capture(context.Background(), v, kind, "saved-project", "")
@@ -111,14 +124,14 @@ func TestKioskInternalAndMCPPortsCannotBePublishedWithoutProtection(t *testing.T
 		{types.VMDesktopPort, "protected"},
 		{types.VMKioskStatusPort, "reserved"},
 		{types.VMKioskMediaPort, "reserved"},
-		{8000, "protected"},
+		{types.VMKioskMCPPort, "reserved"},
 	} {
 		t.Run(strconv.FormatUint(uint64(test.port), 10), func(t *testing.T) {
 			s, v, _, _, _ := fixture()
 			v.Spec.Kiosk = &types.VMKioskSpec{
 				Command:   []string{"application"},
 				Transport: types.VMKioskTransportWebRTC,
-				MCP:       &types.VMKioskMCP{Command: []string{"adapter"}, Port: 8000},
+				MCP:       map[string]types.VMKioskMCPServer{"app": {Command: "adapter"}},
 			}
 			public := false
 			require.ErrorContains(t, s.configurePort(context.Background(), v, "expose", test.port, &public), test.want)
@@ -139,6 +152,10 @@ func TestKioskGatewayRoutingAndAuthorization(t *testing.T) {
 		code                                   int
 	}{
 		{http.MethodGet, "", "", "", "", 403},
+		{http.MethodPost, "mcp", "", "", "", 403},
+		{http.MethodPost, "mcp", "private", "", "8082:mcp", 200},
+		{http.MethodGet, "mcp", "private", "", "8082:mcp", 200},
+		{http.MethodDelete, "mcp", "private", "", "8082:mcp", 200},
 		{http.MethodGet, "_beam/kiosk/status", "", "", "", 403},
 		{http.MethodGet, "stream/api/ws", "", "", "", 403},
 		{http.MethodGet, "_beam/kiosk/webrtc.js", "", "", "", 403},

@@ -1,0 +1,205 @@
+#!/opt/beam-vm/mcp/bin/python
+"""Install ordinary MCP server configurations and expose them through one endpoint."""
+
+import argparse
+import asyncio
+from contextlib import asynccontextmanager
+import fcntl
+import json
+import os
+import re
+from urllib.request import urlopen
+from urllib.error import URLError
+from pathlib import Path
+import sys
+import tempfile
+
+from kiosk_config import KioskRuntime, MCPServer
+
+POLICY = KioskRuntime()
+
+
+class Registry:
+    def __init__(self, path=POLICY.mcp_config, defaults=POLICY.mcp_defaults):
+        self.path, self.defaults = Path(path), Path(defaults)
+
+    def read(self, config=None):
+        servers = json.loads(self.defaults.read_text()) if self.defaults.exists() else {}
+        config = config if config is not None else self.load()
+        servers.update(config.get("mcpServers", {}))
+        return {
+            name: value for name, value in servers.items() if name not in config.get("disabled", [])
+        }
+
+    def load(self):
+        return (
+            json.loads(self.path.read_text())
+            if self.path.exists()
+            else {"mcpServers": {}, "disabled": []}
+        )
+
+    def update(self, servers):
+        from fastmcp.mcp_config import MCPConfig
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(".lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            config = self.load()
+            config.setdefault("disabled", [])
+            for name, server in servers.items():
+                if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name):
+                    raise ValueError("Invalid MCP server name")
+                config["mcpServers"].pop(name, None)
+                config["disabled"] = [key for key in config["disabled"] if key != name]
+                if server is None:
+                    config["disabled"].append(name)
+                else:
+                    config["mcpServers"][name] = MCPServer(**server).to_dict()
+            effective = self.read(config)
+            if len(effective) > POLICY.mcp_max_servers:
+                raise ValueError("Too many MCP servers")
+            MCPConfig.model_validate({"mcpServers": effective})
+            data = json.dumps(config)
+            if (
+                max(len(json.dumps(effective).encode()), len(data.encode()))
+                > POLICY.mcp_max_config_bytes
+            ):
+                raise ValueError("MCP configuration must fit in 64 KiB")
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=self.path.parent, delete=False
+            ) as output:
+                try:
+                    output.write(data)
+                    output.close()
+                    os.replace(output.name, self.path)
+                finally:
+                    Path(output.name).unlink(missing_ok=True)
+
+
+class Gateway:
+    def __init__(self, servers, cwd):
+        from fastmcp import FastMCP
+        from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
+        from fastmcp.server.middleware import Middleware
+        from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
+        from starlette.responses import JSONResponse
+
+        class Serialized(Middleware):
+            def __init__(self, lock):
+                self.lock = lock
+
+            async def on_request(self, context, call_next):
+                # One GUI session has shared state; serialize each adapter's requests.
+                async with self.lock:
+                    return await call_next(context)
+
+        self.clients = {}
+        self.status = {}
+        self.server = FastMCP("Beam application", lifespan=self.lifespan)
+        for name, value in servers.items():
+            config = MCPServer(**value)
+            if config.command:
+                transport = StdioTransport(
+                    command=config.command,
+                    args=config.args,
+                    cwd=config.cwd or cwd,
+                    env=dict(os.environ, **config.env),
+                )
+            else:
+                transport = StreamableHttpTransport(config.url, headers=config.headers)
+            client = ProxyClient(
+                transport, forward_incoming_headers=False, timeout=POLICY.application_timeout
+            )
+            lock = asyncio.Lock()
+
+            proxy = FastMCP(providers=[ProxyProvider(client_factory=client.new, cache_ttl=0)])
+            proxy.add_middleware(Serialized(lock))
+            self.server.mount(proxy, namespace=name)
+            self.clients[name] = (client, lock)
+            self.status[name] = {"state": "starting"}
+
+        @self.server.custom_route("/health", methods=["GET"])
+        async def health(request):
+            return JSONResponse({"state": "ready", "servers": self.status})
+
+    async def monitor(self, name, client, lock):
+        while True:
+            try:
+                async with lock, client.new() as probe:
+                    tools = await probe.list_tools()
+                self.status[name] = {"state": "ready", "tools": len(tools)}
+            except Exception as error:
+                if self.status[name]["state"] != "error":
+                    print(
+                        f"MCP server {name} unavailable ({type(error).__name__}); verify its command or URL and server stderr",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                self.status[name] = {
+                    "state": "error",
+                    "error": "Server unavailable; inspect beam-desktop.service logs",
+                }
+            await asyncio.sleep(POLICY.mcp_poll_interval)
+
+    @asynccontextmanager
+    async def lifespan(self, server):
+        tasks = [
+            asyncio.create_task(self.monitor(name, *entry)) for name, entry in self.clients.items()
+        ]
+        try:
+            yield
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for client, _ in self.clients.values():
+                await client.transport.close()
+
+    def run(self):
+        self.server.run(
+            transport="http",
+            host="0.0.0.0",
+            port=POLICY.mcp_port,
+            path=POLICY.mcp_path,
+            show_banner=False,
+        )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--install", metavar="NAME")
+    action.add_argument("--remove", metavar="NAME")
+    action.add_argument("--list", action="store_true")
+    action.add_argument("--status", action="store_true")
+    parser.add_argument("--cwd", default="/workspace")
+    args = parser.parse_args()
+    registry = Registry()
+    if args.install:
+        registry.update({args.install: json.load(sys.stdin)})
+    elif args.remove:
+        registry.update({args.remove: None})
+    elif args.status:
+        try:
+            with urlopen(
+                f"http://127.0.0.1:{POLICY.mcp_port}/health", timeout=POLICY.command_timeout
+            ) as response:
+                print(response.read().decode())
+        except URLError:
+            with urlopen(
+                f"http://127.0.0.1:{POLICY.status_port}/status", timeout=POLICY.command_timeout
+            ) as response:
+                state = json.load(response)["mcp"]
+            print(json.dumps({"state": state, "servers": {}}))
+    elif args.list:
+        print(
+            json.dumps(
+                {name: dict(config, env={}, headers={}) for name, config in registry.read().items()}
+            )
+        )
+    else:
+        Gateway(registry.read(), args.cwd).run()
+
+
+if __name__ == "__main__":
+    main()
