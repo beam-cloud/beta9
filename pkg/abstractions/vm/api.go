@@ -118,6 +118,10 @@ func redactedSpec(spec types.VMSpec) types.VMSpec {
 		spec.Kiosk.Env = nil
 		for name, server := range spec.Kiosk.MCP {
 			server.Env, server.Headers = nil, nil
+			server.Args = nil
+			if server.URL != "" {
+				server.URL = "[redacted]"
+			}
 			spec.Kiosk.MCP[name] = server
 		}
 	}

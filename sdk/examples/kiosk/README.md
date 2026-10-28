@@ -36,4 +36,6 @@ Use `vm.process.exec` or image build steps for package installation. Registratio
 
 A failed adapter does not close or block the application. Inspect `vm.mcp.status()` and `beta9 vm logs NAME --unit beam-desktop` for failures. The proxy uses a pinned [FastMCP](https://gofastmcp.com/servers/providers/proxy) runtime for MCP protocol handling; its dependency is confined to kiosk guests.
 
+`vm.mcp.status()` reports adapter readiness (`starting`, `ready`, `degraded` or `error`) separately from gateway availability. The kiosk supervisor's `mcp` field tracks the gateway process. Config listings and API responses omit arguments, URLs, environment and headers because any of them can contain credentials; keep the original configuration in your image recipe.
+
 For KiCad, connect tools to the board open in the GUI using `kicad_open_board`, then check `kicad_get_backend_state`: the session must say `ipc` for live edits. Some upstream tools operate on files and can lag the live GUI; check the backend reported by each operation. Blender's tools connect to its enabled addon. The hosting interface cannot turn a file-only tool into a live application API; choose or build the application harness accordingly.

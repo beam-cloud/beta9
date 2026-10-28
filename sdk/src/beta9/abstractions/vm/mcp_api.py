@@ -59,7 +59,7 @@ class VMMCP:
         self._run("--remove", name)
 
     def list(self):
-        """List installed server configurations with environment and headers redacted."""
+        """List installed servers, omitting arguments, URLs, environment and headers."""
         return self._run("--list")
 
     def status(self):

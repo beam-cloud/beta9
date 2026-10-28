@@ -19,8 +19,8 @@ func TestKioskLaunchSpecAndRedaction(t *testing.T) {
 	spec := types.VMSpec{ImageID: "kiosk-image", Kiosk: &types.VMKioskSpec{
 		Transport: "websockets", Command: []string{"editor", "/workspace/project with spaces"}, Env: map[string]string{"TOKEN": "private"},
 		MCP: map[string]types.VMKioskMCPServer{
-			"app":  {Command: "app-mcp", Env: map[string]string{"TOKEN": "server-secret"}},
-			"http": {URL: "http://127.0.0.1:9000/mcp", Headers: map[string]string{"Authorization": "Bearer backend-secret"}},
+			"app":  {Command: "app-mcp", Args: []string{"--token", "argument-secret"}, Env: map[string]string{"TOKEN": "server-secret"}},
+			"http": {URL: "http://127.0.0.1:9000/mcp?token=query-secret", Headers: map[string]string{"Authorization": "Bearer backend-secret"}},
 		},
 	}}
 	require.NoError(t, validate(&spec))
@@ -46,7 +46,11 @@ func TestKioskLaunchSpecAndRedaction(t *testing.T) {
 	response := s.response(v)
 	require.Empty(t, response.Spec.Kiosk.Env)
 	require.Empty(t, response.Spec.Kiosk.MCP["app"].Env)
+	require.Empty(t, response.Spec.Kiosk.MCP["app"].Args)
 	require.Empty(t, response.Spec.Kiosk.MCP["http"].Headers)
+	require.Equal(t, "[redacted]", response.Spec.Kiosk.MCP["http"].URL)
+	require.Equal(t, spec.Kiosk.MCP["app"].Args, v.Spec.Kiosk.MCP["app"].Args)
+	require.Equal(t, spec.Kiosk.MCP["http"].URL, v.Spec.Kiosk.MCP["http"].URL)
 	require.Equal(t, "Bearer backend-secret", v.Spec.Kiosk.MCP["http"].Headers["Authorization"])
 	require.Equal(t, "server-secret", v.Spec.Kiosk.MCP["app"].Env["TOKEN"])
 	require.Equal(t, "private", v.Spec.Kiosk.Env["TOKEN"])
@@ -55,6 +59,8 @@ func TestKioskLaunchSpecAndRedaction(t *testing.T) {
 	a := artifact(v, "artifact", "snapshot", "saved", "")
 	require.Equal(t, spec.Kiosk, a.Spec.Kiosk)
 	require.Empty(t, artifactResponse(*a).Spec.Kiosk.Env)
+	require.Empty(t, artifactResponse(*a).Spec.Kiosk.MCP["app"].Args)
+	require.Equal(t, "[redacted]", artifactResponse(*a).Spec.Kiosk.MCP["http"].URL)
 }
 
 func TestInvalidKioskNeverStartsCompute(t *testing.T) {

@@ -120,7 +120,13 @@ class Gateway:
 
         @self.server.custom_route("/health", methods=["GET"])
         async def health(request):
-            return JSONResponse({"state": "ready", "servers": self.status})
+            states = {server["state"] for server in self.status.values()}
+            state = "ready"
+            if "starting" in states:
+                state = "starting"
+            elif "error" in states:
+                state = "error" if states == {"error"} else "degraded"
+            return JSONResponse({"gateway": "ready", "state": state, "servers": self.status})
 
     async def monitor(self, name, client, lock):
         while True:
@@ -194,7 +200,12 @@ def main():
     elif args.list:
         print(
             json.dumps(
-                {name: dict(config, env={}, headers={}) for name, config in registry.read().items()}
+                {
+                    name: dict(config, args=[], env={}, headers={}, url="[redacted]")
+                    if config.get("url")
+                    else dict(config, args=[], env={}, headers={})
+                    for name, config in registry.read().items()
+                }
             )
         )
     else:

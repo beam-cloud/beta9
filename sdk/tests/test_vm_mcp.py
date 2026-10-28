@@ -59,7 +59,7 @@ def backend(tmp_path):
     return MCPServer(sys.executable, [str(script)], env={"PROJECT": "a project"}, cwd=str(tmp_path))
 
 
-def test_registry_defaults_overrides_removal_and_atomic_validation(tmp_path, backend):
+def test_registry_defaults_overrides_removal_and_atomic_validation(tmp_path, backend, capsys):
     defaults = tmp_path / "defaults.json"
     defaults.write_text(json.dumps({"original": backend.to_dict()}))
     registry = guest()["Registry"](tmp_path / "mcp.json", defaults)
@@ -81,6 +81,50 @@ def test_registry_defaults_overrides_removal_and_atomic_validation(tmp_path, bac
     assert set(registry.read()) == {"second", "new"}
     registry.update({"original": backend.to_dict()})
     assert set(registry.read()) == {"original", "second", "new"}
+    registry.update(
+        {
+            "private": {"command": "node", "args": ["--token", "argument-secret"]},
+            "http": {"url": "http://localhost/mcp?token=query-secret"},
+        }
+    )
+    module = guest()
+    with patch.dict(module["main"].__globals__, {"Registry": lambda: registry}), patch.object(
+        sys, "argv", ["kiosk-mcp", "--list"]
+    ):
+        module["main"]()
+    output = capsys.readouterr().out
+    assert "argument-secret" not in output and "query-secret" not in output
+    assert json.loads(output)["http"]["url"] == "[redacted]"
+    assert registry.read()["private"]["args"][-1] == "argument-secret"
+
+
+def test_health_distinguishes_gateway_availability_from_adapter_readiness():
+    pytest.importorskip("fastmcp")
+    import httpx2 as httpx
+
+    gateway = guest()["Gateway"]({}, "/tmp")
+
+    async def exercise():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=gateway.server.http_app()), base_url="http://guest"
+        ) as client:
+            for states, expected in [
+                ([], "ready"),
+                (["starting"], "starting"),
+                (["ready"], "ready"),
+                (["error"], "error"),
+                (["error", "ready"], "degraded"),
+            ]:
+                gateway.status = {str(i): {"state": state} for i, state in enumerate(states)}
+                response = await client.get("/health")
+                assert response.status_code == 200
+                assert response.json() == {
+                    "gateway": "ready",
+                    "state": expected,
+                    "servers": gateway.status,
+                }
+
+    asyncio.run(exercise())
 
 
 def test_proxy_preserves_state_and_serializes_clients_across_namespaced_features(backend):
