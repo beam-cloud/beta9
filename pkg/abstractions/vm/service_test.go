@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -13,9 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -127,7 +126,7 @@ func TestCreatePreventsReconcilerClaimingPublishedVM(t *testing.T) {
 	s, _, info, _, _ := fixture()
 	store := &createRaceStore{vmStore: s.repo.(*vmStore)}
 	s.repo = store
-	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, "created-vm", types.VMSpec{ImageID: "image"})
+	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, types.VMCreateOptions{Name: "created-vm", Spec: types.VMSpec{ImageID: "image"}})
 	require.NoError(t, err)
 	require.NotEmpty(t, v.ContainerID)
 	require.False(t, store.locked)
@@ -396,7 +395,10 @@ type vmRuntime struct {
 	network         *pb.PodSandboxUpdateNetworkPermissionsRequest
 	connectError    error
 	forwardStatus   int
+	iceHandler      func(net.Conn)
 }
+
+func (r *vmRuntime) SetVMICEHandler(handler func(net.Conn)) { r.iceHandler = handler }
 
 func (r *vmRuntime) SandboxConnect(_ context.Context, req *pb.PodSandboxConnectRequest) (*pb.PodSandboxConnectResponse, error) {
 	if r.connectError != nil {
@@ -462,7 +464,7 @@ func fixture() (*Service, *types.VM, *auth.AuthInfo, *vmRuntime, *vmGateway) {
 	backend := &vmBackend{latest: "root-after-shutdown"}
 	runtime := &vmRuntime{containers: containers}
 	gateway := &vmGateway{containers: containers, backend: backend}
-	s := &Service{repo: store, containers: containers, backend: backend, runtime: runtime, gateway: gateway, domain: "vm.example.com"}
+	s := &Service{repo: store, containers: containers, backend: backend, runtime: runtime, gateway: gateway, config: types.VMConfig{Domain: "vm.example.com"}}
 	v := &types.VM{ID: uuid.NewString(), WorkspaceID: 7, Name: "dev", Handle: "dev-" + uuid.NewString(), DesiredState: "running", Status: "running", EverRunning: true, StubID: uuid.NewString(), Spec: types.VMSpec{ImageID: "base", CPU: 1000, Memory: 1024, DiskSize: "50GiB", Ports: []uint32{7681, 8080}, Desktop: true}}
 	v.ContainerID = "sandbox-" + v.StubID + "-12345678"
 	runtime.diskName = rootDisk(v)
@@ -581,11 +583,11 @@ func TestCreateUsesConfiguredDefaultPoolAndPreservesExplicitPool(t *testing.T) {
 	} {
 		t.Run(test.defaultPool+"/"+test.requestedPool, func(t *testing.T) {
 			s, base, info, _, gateway := fixture()
-			s.defaultPool = test.defaultPool
+			s.config.DefaultPool = test.defaultPool
 			spec := base.Spec
 			spec.Pool = test.requestedPool
 			ctx := auth.ContextWithAuthInfo(context.Background(), info)
-			v, err := s.createVM(ctx, info, "new-vm", spec)
+			v, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "new-vm", Spec: spec})
 			require.NoError(t, err)
 			require.Equal(t, test.wantPool, v.Spec.Pool)
 			saved, err := s.repo.GetVM(ctx, info.Workspace.Id, v.ID)
@@ -987,11 +989,7 @@ func TestActivityLeasesAreIndependentAndExplicitlyReleased(t *testing.T) {
 	s, v, info, _, _ := fixture()
 	// A background snapshot owns the lifecycle lock throughout this test.
 	s.repo = &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
-	redis := miniredis.RunT(t)
-	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
-	require.NoError(t, err)
-	t.Cleanup(func() { rdb.Close() })
-	s.rdb = rdb
+	_, s.stateRepo = redisRepositoryFixture(t)
 	first, second := uuid.NewString(), uuid.NewString()
 	for _, lease := range []string{first, second} {
 		c, _ := actionContext(info, v.Name, "touch", `{}`)
@@ -1054,7 +1052,7 @@ func TestManagementResponsesOmitEnvironmentWithoutChangingStoredSpec(t *testing.
 	}
 	childSpec := v.Spec
 	childSpec.SourceSnapshotID = "template-root"
-	child, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, "child", childSpec)
+	child, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, types.VMCreateOptions{Name: "child", Spec: childSpec})
 	require.NoError(t, err)
 	require.Contains(t, gateway.stub.Env, "CREDENTIAL=private-value")
 	require.Nil(t, s.response(child).Spec.Env)

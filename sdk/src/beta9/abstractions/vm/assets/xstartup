@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+
+export HOME=/root XDG_CONFIG_HOME=/root/.config
+export DISPLAY=:1 XAUTHORITY=/run/beam-desktop/.Xauthority
+
+# Keep application sizing consistent with the viewer's 2x framebuffer.
+export GDK_SCALE=2 GDK_DPI_SCALE=0.5
+xrdb -merge <<'EOF'
+Xft.dpi: 192
+Xft.antialias: 1
+Xft.hintstyle: hintslight
+Xft.rgba: none
+XTerm*faceName: Ubuntu Mono
+XTerm*faceSize: 12
+XTerm*renderFont: true
+XTerm*background: #17171c
+XTerm*foreground: #ededee
+EOF
+if [ -f "$HOME/.Xresources" ]; then
+  xrdb -merge "$HOME/.Xresources" || echo 'Unable to load ~/.Xresources; continuing' >&2
+fi
+
+xsetroot -solid '#17171c'
+exec dbus-run-session -- openbox-session

@@ -1,0 +1,40 @@
+#!/usr/bin/python3
+"""Sample guest resource usage over one second, without extra dependencies."""
+
+import json
+import os
+import time
+
+
+def cpu():
+    with open("/proc/stat") as source:
+        values = list(map(int, source.readline().split()[1:9]))
+    return sum(values), values[3] + values[4]
+
+
+before = cpu()
+time.sleep(1)
+after = cpu()
+total, idle = after[0] - before[0], after[1] - before[1]
+
+with open("/proc/meminfo") as source:
+    memory = {
+        name: int(value.split()[0]) * 1024
+        for name, value in (line.split(":", 1) for line in source)
+        if name in ("MemTotal", "MemAvailable")
+    }
+
+disk = os.statvfs("/")
+print(
+    json.dumps(
+        {
+            "timestamp": time.time(),
+            "cpu_count": os.cpu_count(),
+            "cpu_used_percent": 100 * (total - idle) / total if total else 0,
+            "memory_total_bytes": memory["MemTotal"],
+            "memory_used_bytes": memory["MemTotal"] - memory["MemAvailable"],
+            "disk_total_bytes": disk.f_blocks * disk.f_frsize,
+            "disk_used_bytes": (disk.f_blocks - disk.f_bfree) * disk.f_frsize,
+        }
+    )
+)

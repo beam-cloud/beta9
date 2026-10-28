@@ -38,6 +38,7 @@ from ...utils import local_process_kwargs
 from ..image import Image
 from ..sandbox import SandboxInstance
 from ..volume import Volume
+from .kiosk_config import Kiosk, MCPServer as MCPServer
 
 
 # Keep the stock guest reproducible and avoid a registry tag lookup on launch.
@@ -113,12 +114,18 @@ class _VMImage(Image):
         return super().build(quiet=True)
 
 
-def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
+def prepare_image(
+    image: Image, service: ServiceClient, desktop: bool, *, kiosk: bool = False
+) -> Image:
     """Append the VM contract to registry images and the final Dockerfile stage."""
     if image.gpu:
         raise ValueError("VM images cannot be built with a GPU")
     prepared = _VMImage.__new__(_VMImage)
     prepared.__dict__ = copy.copy(image.__dict__)
+    if kiosk:
+        # GUI packages and the native streaming backend depend on the distro's
+        # Python ABI. Serverless Python injection replaces /usr/bin/python3.
+        prepared.ignore_python = True
     prepared._vm_channel = service.channel
     prepared._stub = ImageServiceStub(service.channel)
     prepared.gateway_stub = service.gateway
@@ -134,7 +141,8 @@ def prepare_image(image: Image, service: ServiceClient, desktop: bool) -> Image:
         [
             "mkdir -p /tmp/beam-vm-assets && "
             f"printf '%s' '{data}' | base64 -d | tar -xz -C /tmp/beam-vm-assets && "
-            f"bash /tmp/beam-vm-assets/install {'true' if desktop else 'false'}"
+            f"bash /tmp/beam-vm-assets/install {'true' if desktop or kiosk else 'false'}"
+            + (" true" if kiosk else "")
         ]
     )
     return prepared
@@ -182,6 +190,7 @@ class VM:
         memory: Optional[int] = None,
         disk_size: Optional[str] = None,
         desktop: Optional[bool] = None,
+        kiosk: Optional[Union[Kiosk, Dict[str, Any]]] = None,
         docker_enabled: Optional[bool] = None,
         env: Optional[Dict[str, str]] = None,
         secrets: Optional[List[str]] = None,
@@ -216,6 +225,10 @@ class VM:
         self._creation_body = None
         self._vm_http = None
         self._volumes = volumes
+        if kiosk is not None and desktop is False:
+            raise ValueError("kiosk enables the display; remove desktop=False")
+        if kiosk is not None and not isinstance(kiosk, (Kiosk, dict)):
+            raise ValueError("kiosk must be a Kiosk configuration or an object")
         if template and snapshot:
             raise ValueError("Choose a template or snapshot")
 
@@ -227,7 +240,8 @@ class VM:
             "cpu": int(cpu * 1000) if cpu is not None else None,
             "memory": memory,
             "disk_size": disk_size,
-            "desktop": desktop,
+            "desktop": True if kiosk is not None else desktop,
+            "kiosk": copy.deepcopy(kiosk.to_dict() if isinstance(kiosk, Kiosk) else kiosk),
             "docker_enabled": docker_enabled,
             "env": ([f"{key}={value}" for key, value in env.items()] if env is not None else None),
             "secrets": secrets,
@@ -325,21 +339,10 @@ class VM:
             # A cached default image can be resolved by the gateway in the
             # creation request, without transport discovery or an image RPC.
             self._vm_http = self._service.vm_http
-            spec = dict(self._spec)
-            spec.setdefault("ssh", True)
-            if spec["ssh"]:
-                spec["ssh_public_key"] = public_key()
-            image = Image(base_image=DEFAULT_VM_BASE_IMAGE)
-            image.ignore_python = True
-            prepared = prepare_image(image, self._service, spec.get("desktop", False))
-            self._creation_body = copy.deepcopy(
-                {
-                    "name": self.name or "",
-                    "spec": spec,
-                    "request_id": self.request_id,
-                    "image": prepared._verify_request().to_dict(casing=betterproto.Casing.SNAKE),
-                    **({"metadata": self._metadata} if self._metadata is not None else {}),
-                }
+            spec = self._prepare_spec()
+            image = self._prepare_image()._verify_request()
+            self._creation_body = self._creation_request(
+                spec, image=image.to_dict(casing=betterproto.Casing.SNAKE)
             )
             try:
                 return self._submit_creation(wait)
@@ -380,20 +383,43 @@ class VM:
             ) from exc
 
         spec = self._prepare_spec()
-        self._creation_body = copy.deepcopy(
-            {
-                "name": self.name or "",
-                "spec": spec,
-                "template": self.template or "",
-                "request_id": self.request_id,
-                **({"metadata": self._metadata} if self._metadata is not None else {}),
-                **({"snapshot": self._snapshot_source} if self._snapshot_source else {}),
-            }
+        if not (self.template or self._snapshot_source):
+            result = self._prepare_image().build()
+            if not result.success:
+                raise ImageBuildError(result.error or "VM image build failed")
+            spec["image_id"] = result.image_id
+
+        self._creation_body = self._creation_request(
+            spec,
+            template=self.template or "",
+            **({"snapshot": self._snapshot_source} if self._snapshot_source else {}),
         )
         return self
 
+    def _creation_request(self, spec, **source):
+        return copy.deepcopy(
+            {
+                "name": self.name or "",
+                "spec": spec,
+                "request_id": self.request_id,
+                **({"metadata": self._metadata} if self._metadata is not None else {}),
+                **source,
+            }
+        )
+
+    def _prepare_image(self):
+        image = self.image or Image(base_image=DEFAULT_VM_BASE_IMAGE)
+        if self.image is None:
+            image.ignore_python = True
+        return prepare_image(
+            image,
+            self._service,
+            self._spec.get("desktop", False),
+            kiosk=self._spec.get("kiosk") is not None,
+        )
+
     def _prepare_spec(self):
-        """Resolve workspace volumes, SSH identity and the immutable VM image."""
+        """Resolve workspace volumes and SSH identity before freezing the request."""
         spec = dict(self._spec)
         if self._volumes is not None:
             spec["volumes"] = []
@@ -404,18 +430,10 @@ class VM:
                     raise RuntimeError(f"Unable to prepare volume {selected.name}")
                 spec["volumes"].append(selected.export().to_dict(casing=betterproto.Casing.SNAKE))
 
-        if spec.get("ssh", True):
-            spec["ssh_public_key"] = public_key()
-
         if not (self.template or self._snapshot_source):
             spec.setdefault("ssh", True)
-            image = self.image or Image(base_image=DEFAULT_VM_BASE_IMAGE)
-            if self.image is None:
-                image.ignore_python = True
-            result = prepare_image(image, self._service, spec.get("desktop", False)).build()
-            if not result.success:
-                raise ImageBuildError(result.error or "VM image build failed")
-            spec["image_id"] = result.image_id
+        if spec.get("ssh", True):
+            spec["ssh_public_key"] = public_key()
 
         return spec
 
@@ -456,7 +474,7 @@ class VM:
         return self._set(self._api("GET", self._path()))
 
     def wait(self, timeout: float = 180, *, services: bool = False) -> "VM":
-        """Wait for exec readiness; services=True also waits for SSH and UI ports."""
+        """Wait for exec; services=True also waits for SSH, terminal and desktop readiness."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self.info:
@@ -487,12 +505,14 @@ class VM:
         raise TimeoutError("VM did not become ready; inspect vm get/logs")
 
     def _services_ready(self, sandbox, deadline):
+        spec = self.info["spec"]
+        kiosk = spec.get("kiosk") is not None
         services = [("beam-terminal.service", 7681)]
         for feature, unit, port in (
             ("ssh", "ssh.service", 2222),
             ("desktop", "beam-desktop.service", 8080),
         ):
-            if self.info["spec"].get(feature):
+            if spec.get(feature):
                 services.append((unit, port))
         try:
             # is-active with several units succeeds if any is active.
@@ -503,11 +523,34 @@ class VM:
                 check = sandbox.process.exec("systemctl", "is-active", "--quiet", unit)
                 if check.wait(min(10, remaining)) != 0:
                     return False
+            if kiosk:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                check = sandbox.process.exec("/opt/beam-vm/kiosk", "--check")
+                if check.wait(min(10, remaining)) != 0:
+                    try:
+                        status = json.loads(check.stdout.read())
+                    except (ValueError, TypeError):
+                        status = {}
+                    if status.get("state") in ("error", "closed"):
+                        raise RuntimeError(
+                            status.get("error") or "Kiosk application is unavailable"
+                        )
+                    return False
             ports = [port for _, port in services]
             probe = (
                 "import socket; "
                 f"[socket.create_connection(('127.0.0.1', p), 1).close() for p in {ports!r}]"
             )
+            if spec.get("desktop") and not kiosk:
+                # Xvnc accepts connections before xstartup publishes font
+                # resources and starts the window manager.
+                probe += (
+                    "; import re, subprocess; "
+                    "raise SystemExit(not re.search(rb'window id # 0x[1-9a-fA-F][0-9a-fA-F]*', "
+                    "subprocess.check_output(['xprop', '-root', '_NET_SUPPORTING_WM_CHECK'])))"
+                )
             remaining = deadline - time.monotonic()
             return (
                 remaining > 0
@@ -739,26 +782,26 @@ class VM:
         CPU percent is averaged across assigned guest vCPUs. This operation
         counts as activity and may resume an enabled VM.
         """
-        code = """
-import json, os, time
-def cpu():
-    values = list(map(int, open('/proc/stat').readline().split()[1:9]))
-    return sum(values), values[3] + values[4]
-before = cpu()
-time.sleep(1)
-after = cpu()
-total, idle = after[0]-before[0], after[1]-before[1]
-memory = {k: int(v.strip().split()[0])*1024 for k,v in (line.split(':',1) for line in open('/proc/meminfo'))}
-disk = os.statvfs('/')
-print(json.dumps({'timestamp': time.time(), 'cpu_count': os.cpu_count(),
- 'cpu_used_percent': 100*(total-idle)/total if total else 0,
- 'memory_total_bytes': memory['MemTotal'], 'memory_used_bytes': memory['MemTotal']-memory['MemAvailable'],
- 'disk_total_bytes': disk.f_blocks*disk.f_frsize, 'disk_used_bytes': (disk.f_blocks-disk.f_bfree)*disk.f_frsize}))
-"""
-        process = self.process.exec("python3", "-c", code, cwd="/")
-        if process.wait(10) != 0:
-            raise RuntimeError(process.stderr.read() or "Unable to sample VM metrics")
-        return json.loads(process.stdout.read())
+        script = (Path(__file__).parent / "assets" / "metrics").read_text()
+        return self._guest_json("python3", "-c", script, error="Unable to sample VM metrics")
+
+    @staticmethod
+    def _guest_output(process, *, error, timeout=30):
+        try:
+            code = process.wait(timeout)
+        except SandboxProcessError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            raise
+        if code != 0:
+            raise RuntimeError(process.stderr.read() or error)
+        return process.stdout.read().strip()
+
+    def _guest_json(self, *command, error, timeout=10, **options):
+        process = self.process.exec(*command, cwd="/", **options)
+        return json.loads(self._guest_output(process, error=error, timeout=timeout))
 
     @property
     def process(self):
@@ -776,6 +819,13 @@ print(json.dumps({'timestamp': time.time(), 'cpu_count': os.cpu_count(),
     def aio(self):
         """Existing async process, filesystem and Docker transports."""
         return self._sandbox().aio
+
+    @property
+    def mcp(self):
+        """Install and connect application-specific MCP servers in a kiosk VM."""
+        from .mcp_api import VMMCP
+
+        return VMMCP(self)
 
     @property
     def desktop(self):
@@ -796,6 +846,23 @@ print(json.dumps({'timestamp': time.time(), 'cpu_count': os.cpu_count(),
     @property
     def desktop_url(self):
         return self.refresh().info.get("desktop_url")
+
+    @property
+    def kiosk_url(self):
+        return self.refresh().info.get("kiosk_url")
+
+    @property
+    def mcp_url(self):
+        """Authenticated endpoint aggregating the kiosk VM's application MCP servers."""
+        return self.refresh().info.get("mcp_url")
+
+    def kiosk_status(self):
+        """Read application readiness and errors without restarting anything."""
+        if self.refresh().info["spec"].get("kiosk") is None:
+            raise ValueError("VM does not have kiosk mode enabled")
+        return self._guest_json(
+            "/opt/beam-vm/kiosk", "--status", error="Kiosk status is unavailable"
+        )
 
     @property
     def terminal_url(self):

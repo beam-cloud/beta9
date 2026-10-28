@@ -50,6 +50,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.2.0
 	github.com/opencontainers/umoci v0.4.7
 	github.com/openmeterio/openmeter v1.0.0-beta.47
+	github.com/pion/stun/v3 v3.1.7
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.21.1
 	github.com/prometheus/client_golang v1.23.2
@@ -61,7 +62,7 @@ require (
 	github.com/sashabaranov/go-openai v1.35.7
 	github.com/shirou/gopsutil/v4 v4.26.5
 	github.com/sirupsen/logrus v1.9.4
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.0
 	github.com/tj/assert v0.0.3
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
@@ -120,7 +121,7 @@ require (
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.50.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.50.0 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
-	github.com/aws/aws-sdk-go v1.55.6 // indirect
+	github.com/aws/aws-sdk-go v1.55.6
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.11 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
 	github.com/containerd/console v1.0.5 // indirect
@@ -139,7 +140,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go4org/plan9netshell v0.0.0-20250324183649-788daa080737 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
+	github.com/google/jsonschema-go v0.4.3
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
@@ -155,15 +156,19 @@ require (
 	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/opencontainers/runc v1.2.8 // indirect
 	github.com/opencontainers/selinux v1.13.0 // indirect
-	github.com/pires/go-proxyproto v0.8.1 // indirect
+	github.com/pion/dtls/v3 v3.1.5 // indirect
+	github.com/pion/logging v0.2.4 // indirect
+	github.com/pion/transport/v4 v4.1.0 // indirect
+	github.com/pires/go-proxyproto v0.8.1
 	github.com/pkg/sftp v1.13.6 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
-	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/u-root/u-root v0.14.0 // indirect
 	github.com/winfsp/cgofuse v1.5.0 // indirect
+	github.com/wlynxg/anet v0.0.5 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.43.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.64.0 // indirect
@@ -269,7 +274,6 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/opencontainers/runtime-tools v0.9.1-0.20230914150019-408c51e934dc // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.69.0 // indirect

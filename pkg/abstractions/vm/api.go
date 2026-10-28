@@ -81,7 +81,7 @@ func (s *Service) response(v *types.VM) types.VM {
 // SandboxConnect, saving a client round trip without persisting lifecycle state.
 func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error {
 	response := s.response(v)
-	if c.QueryParam("wait") != "exec" || v.DesiredState != "running" || v.ContainerID == "" || v.Status == "error" {
+	if c.QueryParam("wait") != "exec" || v.DesiredState != types.VMStateRunning || v.ContainerID == "" || v.Status == types.VMStateError {
 		return c.JSON(status, response)
 	}
 
@@ -95,11 +95,11 @@ func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error 
 		// Start is already committed. A pending readiness probe must not turn
 		// a successful restore into a failed operation; clients can keep waiting
 		// without changing the checkpoint or bypassing authenticated readiness.
-		response.Status = "starting"
+		response.Status = types.VMStateStarting
 		return c.JSON(status, response)
 	}
 
-	response.Status = "running"
+	response.Status = types.VMStateRunning
 	return c.JSON(status, struct {
 		types.VM
 		ExecReady bool `json:"exec_ready"`
@@ -113,6 +113,7 @@ func artifactResponse(a types.VMArtifact) types.VMArtifact {
 
 func redactedSpec(spec types.VMSpec) types.VMSpec {
 	spec.Env = nil
+	spec.Kiosk = spec.Kiosk.WithoutCredentials()
 	volumes := spec.Volumes
 	spec.Volumes = make([]*pb.Volume, len(volumes))
 	for i, volume := range volumes {
@@ -198,7 +199,7 @@ func (s *Service) list(c echo.Context) error {
 
 	result := []types.VM{}
 	for _, v := range vms {
-		if v.DesiredState == "deleted" && c.QueryParam("all") != "true" {
+		if v.DesiredState == types.VMStateDeleted && c.QueryParam("all") != "true" {
 			continue
 		}
 
@@ -238,7 +239,13 @@ func (s *Service) listPage(c echo.Context, metadata map[string]string) error {
 		return err
 	}
 
-	filter := types.VMFilter{Limit: limit, Offset: offset, Search: c.QueryParam("q"), Metadata: metadata, All: c.QueryParam("all") == "true"}
+	filter := types.VMFilter{
+		Limit:    limit,
+		Offset:   offset,
+		Search:   c.QueryParam("q"),
+		Metadata: metadata,
+		All:      c.QueryParam("all") == "true",
+	}
 	if status := c.QueryParam("status"); status != "" {
 		filter.Statuses = strings.Split(status, ",")
 	}
@@ -268,7 +275,7 @@ func (s *Service) get(c echo.Context) error {
 		return apiError(err)
 	}
 
-	if v.DesiredState == "deleted" {
+	if v.DesiredState == types.VMStateDeleted {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
@@ -381,11 +388,13 @@ func (s *Service) create(c echo.Context) error {
 		spec.ImageID = "pending-image-lookup"
 	}
 
-	if err := validate(&spec); err != nil {
-		return apiError(err)
-	}
-
-	v, err := s.createVMWithImage(ctx, info, req.Name, spec, req.Metadata, req.RequestID, image)
+	v, err := s.createVM(ctx, info, types.VMCreateOptions{
+		Name:      req.Name,
+		Spec:      spec,
+		Metadata:  req.Metadata,
+		RequestID: req.RequestID,
+		Image:     image,
+	})
 	if err != nil {
 		return apiError(err)
 	}
@@ -393,15 +402,14 @@ func (s *Service) create(c echo.Context) error {
 	return s.launchResponse(c, http.StatusCreated, v)
 }
 
-func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec) (*types.VM, error) {
-	return s.createVMWithRequest(ctx, info, name, spec, nil, "")
-}
-
-func (s *Service) createVMWithRequest(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string) (*types.VM, error) {
-	return s.createVMWithImage(ctx, info, name, spec, metadata, requestID, nil)
-}
-
-func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, name string, spec types.VMSpec, metadata map[string]string, requestID string, image *pb.VerifyImageBuildRequest) (*types.VM, error) {
+func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.VMCreateOptions) (*types.VM, error) {
+	name, spec := opts.Name, opts.Spec
+	if err := s.configureKioskTransport(&spec); err != nil {
+		return nil, err
+	}
+	if err := validate(&spec); err != nil {
+		return nil, err
+	}
 	if len(spec.Secrets) > 0 {
 		secrets, err := s.backend.GetSecretsByName(ctx, info.Workspace, spec.Secrets)
 		if err != nil {
@@ -416,25 +424,25 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 	}
 
 	if spec.Pool == "" {
-		spec.Pool = s.defaultPool
+		spec.Pool = s.config.DefaultPool
 	}
 
 	now := time.Now().UTC()
-	id := vmID(info.Workspace.Id, requestID)
+	id := vmID(info.Workspace.Id, opts.RequestID)
 	if name == "" {
 		name = defaultVMName(id)
 	}
 
 	var imageSpec []byte
-	if image != nil {
-		imageSpec, _ = (proto.MarshalOptions{Deterministic: true}).Marshal(image)
+	if opts.Image != nil {
+		imageSpec, _ = (proto.MarshalOptions{Deterministic: true}).Marshal(opts.Image)
 	}
 	creation, _ := json.Marshal(struct {
 		Name     string
 		Spec     types.VMSpec
 		Metadata map[string]string
 		Image    []byte `json:",omitempty"`
-	}{name, spec, metadata, imageSpec})
+	}{name, spec, opts.Metadata, imageSpec})
 	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
 	v := &types.VM{
 		ID:                  id,
@@ -445,10 +453,10 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		TokenID:             info.Token.ExternalId,
 		TrafficAccessToken:  randomHexID(),
 		Spec:                spec,
-		Metadata:            metadata,
+		Metadata:            opts.Metadata,
 		CreationDigest:      digest,
-		DesiredState:        "running",
-		Status:              "starting",
+		DesiredState:        types.VMStateRunning,
+		Status:              types.VMStateStarting,
 		CreatedAt:           now,
 		UpdatedAt:           now,
 		LastActiveAt:        now,
@@ -460,7 +468,7 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 	}
 
 	defer unlock()
-	if requestID != "" {
+	if opts.RequestID != "" {
 		existing, err := s.repo.GetVM(ctx, info.Workspace.Id, id)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
@@ -469,7 +477,7 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		if err == nil {
 			// A removed request cannot be replayed, even if defaults have changed
 			// since creation. Onboarding uses Gone to prepare a fresh request.
-			if existing.DesiredState == "deleted" {
+			if existing.DesiredState == types.VMStateDeleted {
 				return nil, echo.NewHTTPError(http.StatusGone, "the VM for this request_id was removed")
 			}
 
@@ -481,11 +489,11 @@ func (s *Service) createVMWithImage(ctx context.Context, info *auth.AuthInfo, na
 		}
 	}
 
-	if image != nil {
+	if opts.Image != nil {
 		if s.images == nil {
 			return nil, echo.NewHTTPError(http.StatusPreconditionRequired, "VM image needs to be built")
 		}
-		verified, err := s.images.VerifyImageBuild(ctx, image)
+		verified, err := s.images.VerifyImageBuild(ctx, opts.Image)
 		if err != nil {
 			return nil, err
 		}
@@ -544,8 +552,8 @@ func (s *Service) action(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusBadRequest, "invalid activity lease")
 			}
 			if c.QueryParam("release") == "1" {
-				if s.rdb != nil {
-					err = s.rdb.ZRem(ctx, activityKey(v.ID), lease).Err()
+				if s.stateRepo != nil {
+					err = s.stateRepo.ReleaseActivity(ctx, v.ID, lease)
 				}
 			} else {
 				err = s.renewActivity(ctx, v.ID, lease)
@@ -566,7 +574,7 @@ func (s *Service) action(c echo.Context) error {
 		if err != nil {
 			return apiError(err)
 		}
-		if v.DesiredState == "running" && v.Status == "running" && v.Error == "" &&
+		if v.DesiredState == types.VMStateRunning && v.Status == types.VMStateRunning && v.Error == "" &&
 			v.TokenID == info.Token.ExternalId && v.MemoryCheckpointID == "" {
 			state, err := s.runtimeState(v)
 			if err != nil {
@@ -591,7 +599,7 @@ func (s *Service) action(c echo.Context) error {
 			unlock()
 		}
 	}()
-	if v.DesiredState == "deleted" {
+	if v.DesiredState == types.VMStateDeleted {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
@@ -599,15 +607,15 @@ func (s *Service) action(c echo.Context) error {
 	case "start", "resume":
 		if req.Cold {
 			// Finish terminal checkpoint finalization before abandoning RAM.
-			if v.DesiredState == "paused" && v.MemoryCheckpointID != "" {
+			if v.DesiredState == types.VMStatePaused && v.MemoryCheckpointID != "" {
 				if err := s.stop(ctx, v, false); err != nil {
 					return apiError(err)
 				}
 			}
 
 			v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
-			if v.DesiredState == "paused" {
-				v.DesiredState = "stopped"
+			if v.DesiredState == types.VMStatePaused {
+				v.DesiredState = types.VMStateStopped
 			}
 		}
 
@@ -620,14 +628,14 @@ func (s *Service) action(c echo.Context) error {
 		ctx = operationCtx
 		err = s.pause(ctx, v)
 	case "wake":
-		if !v.Spec.AutoResume && v.DesiredState != "running" {
+		if !v.Spec.AutoResume && v.DesiredState != types.VMStateRunning {
 			return echo.NewHTTPError(http.StatusConflict, "VM is stopped; call start() or enable auto_resume")
 		}
 
 		err = s.activate(ctx, info, v)
 	case "stop":
 		v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
-		v.DesiredState = "stopped"
+		v.DesiredState = types.VMStateStopped
 		if !req.NoSnapshot && v.StopSnapshotID == "" && v.ContainerID != "" {
 			v.StopSnapshotID = uuid.NewString()
 		}
@@ -657,11 +665,7 @@ func (s *Service) action(c echo.Context) error {
 		spec := v.Spec
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey
-		if err := validate(&spec); err != nil {
-			return apiError(err)
-		}
-
-		child, err := s.createVM(ctx, info, req.Name, spec)
+		child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: req.Name, Spec: spec})
 		if err != nil {
 			return apiError(err)
 		}
@@ -703,7 +707,7 @@ func (s *Service) remove(c echo.Context) error {
 	}
 
 	defer unlock()
-	v.DesiredState = "deleted"
+	v.DesiredState = types.VMStateDeleted
 	v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return apiError(err)

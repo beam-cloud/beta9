@@ -1207,6 +1207,56 @@ type VMConfig struct {
 	// authorize the viewer and obtain a session through the management API.
 	BrowserAuthURL string          `key:"browserAuthURL" json:"browser_auth_url"`
 	Network        VMNetworkConfig `key:"network" json:"network"`
+	WebRTC         VMWebRTCConfig  `key:"webrtc" json:"webrtc"`
+}
+
+// VMWebRTCConfig bounds authenticated kiosk media on the shared TCP gateway.
+// Zero values use defaults; timing values follow the normal duration config format.
+type VMWebRTCConfig struct {
+	MaxConnections           int           `key:"maxConnections" json:"max_connections"`
+	MaxConnectionsPerSession int           `key:"maxConnectionsPerSession" json:"max_connections_per_session"`
+	RegistrationsPerMinute   int           `key:"registrationsPerMinute" json:"registrations_per_minute"`
+	HandshakeTimeout         time.Duration `key:"handshakeTimeout" json:"handshake_timeout"`
+	SessionTTL               time.Duration `key:"sessionTTL" json:"session_ttl"`
+	LeaseTTL                 time.Duration `key:"leaseTTL" json:"lease_ttl"`
+	CheckInterval            time.Duration `key:"checkInterval" json:"check_interval"`
+}
+
+func (c *VMWebRTCConfig) ApplyDefaults() error {
+	for _, item := range []struct {
+		value    *int
+		fallback int
+	}{
+		{&c.MaxConnections, 256}, {&c.MaxConnectionsPerSession, 8}, {&c.RegistrationsPerMinute, 64},
+	} {
+		if *item.value < 0 {
+			return fmt.Errorf("VM WebRTC limits must be nonnegative")
+		}
+		if *item.value == 0 {
+			*item.value = item.fallback
+		}
+	}
+	for _, item := range []struct {
+		value    *time.Duration
+		fallback time.Duration
+	}{
+		{&c.HandshakeTimeout, 5 * time.Second}, {&c.SessionTTL, 10 * time.Minute},
+		{&c.LeaseTTL, 30 * time.Second}, {&c.CheckInterval, 10 * time.Second},
+	} {
+		if *item.value < 0 {
+			return fmt.Errorf("VM WebRTC durations must be nonnegative")
+		}
+		if *item.value == 0 {
+			*item.value = item.fallback
+		}
+		if *item.value < time.Millisecond {
+			return fmt.Errorf("VM WebRTC durations must be at least one millisecond")
+		}
+	}
+	if c.LeaseTTL <= c.CheckInterval+c.HandshakeTimeout || c.SessionTTL < c.HandshakeTimeout {
+		return fmt.Errorf("VM WebRTC TTLs must cover handshake and lease renewal")
+	}
+	return nil
 }
 
 type VMNetworkConfig struct {

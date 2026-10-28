@@ -3,6 +3,8 @@ from importlib import import_module
 
 _EXPORTS = {
     "VM": (".abstractions.vm", "VM"),
+    "Kiosk": (".abstractions.vm", "Kiosk"),
+    "MCPServer": (".abstractions.vm", "MCPServer"),
     "Secret": (".clients.secret", "Secret"),
     "Map": (".abstractions.map", "Map"),
     "Image": (".abstractions.image", "Image"),

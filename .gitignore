@@ -34,8 +34,10 @@ okteto.yaml
 pyrightconfig.json
 .go-version
 docs/*.md
+/docs/vm/kiosk.md
 .beta9ignore
 /benchmarks/runs/
+/benchmarks/kiosk/
 /artifacts/
 /metrics.jsonl
 /summary.json

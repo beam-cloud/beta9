@@ -38,6 +38,8 @@ def definitions(local: LocalTools) -> List[Tool]:
                 command += ["--file", str(dockerfile)]
             if args.get("desktop"):
                 command += ["--desktop"]
+            if args.get("kiosk"):
+                command += ["--kiosk"]
             for secret in args.get("build_secrets", []):
                 command += ["--build-secret", secret]
         elif kind in ("upload", "download"):
@@ -85,6 +87,7 @@ def definitions(local: LocalTools) -> List[Tool]:
                 "directory": STRING,
                 "dockerfile": STRING,
                 "desktop": BOOLEAN,
+                "kiosk": BOOLEAN,
                 "build_secrets": {"type": "array", "items": STRING},
             },
             ["directory"],
