@@ -17,6 +17,8 @@ vm = VM(
 
 The [KiCad example](kicad/app.py) installs [KiCAD-MCP-Server](https://github.com/mixelpixx/KiCAD-MCP-Server) and enables KiCad's IPC API. The [Blender example](blender/app.py) installs [MCP for Blender](https://github.com/ahujasid/mcp-for-blender) and its native addon. Run `python app.py` from either directory with your configured SDK context. Set a project path in the launch command to reopen it at boot. The recipes include native first-run setup so the adapters can connect on a clean boot. Application-specific setup belongs in the image; the VM integration is identical.
 
+The example prints a temporary authenticated viewer link. `vm.kiosk_url` is the stable protected browser URL; `beta9 vm kiosk NAME` opens it using your local profile.
+
 Every kiosk VM exposes one authenticated `vm.mcp.url`, on the same host as its browser application. Namespaces prevent collisions: `app_edit`, `kicad_move_component`, `blender_execute_blender_code`. Tools, resources and prompts use the same MCP protocol. Stdio backends stay alive between calls; requests to a single application adapter are serialized because they share one GUI/project. Different adapters can operate independently.
 
 For a local agent, add `{"mcpServers": {"my-app": vm.mcp.client_config()}}` to its MCP configuration. This includes a VM traffic credential: keep it private. Alternatively, run `beta9 vm port-forward my-app 8082` and connect to `http://127.0.0.1:8082/mcp`. Agents inside the VM use that same loopback endpoint directly. A client disconnect does not close the application or its backend. VM idle policy still controls compute lifetime.

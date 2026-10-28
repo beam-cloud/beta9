@@ -17,5 +17,5 @@ if __name__ == "__main__":
             mcp={"blender": server},
         ),
     ).create()
-    print(vm.kiosk_url)
+    print(vm.access_url(8080))
     print(vm.mcp.url)

@@ -19,5 +19,5 @@ if __name__ == "__main__":
         image=Image.from_dockerfile("Dockerfile"),
         kiosk=Kiosk(["pcbnew", "/workspace/project.kicad_pcb"], mcp={"kicad": server}),
     ).create()
-    print(vm.kiosk_url)
+    print(vm.access_url(8080))
     print(vm.mcp.url)
