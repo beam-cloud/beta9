@@ -785,9 +785,9 @@ class VM:
         script = (Path(__file__).parent / "assets" / "metrics").read_text()
         return self._guest_json("python3", "-c", script, error="Unable to sample VM metrics")
 
-    def _guest_json(self, *command, error):
-        process = self.process.exec(*command, cwd="/")
-        if process.wait(10) != 0:
+    def _guest_json(self, *command, error, timeout=10, **options):
+        process = self.process.exec(*command, cwd="/", **options)
+        if process.wait(timeout) != 0:
             raise RuntimeError(process.stderr.read() or error)
         return json.loads(process.stdout.read())
 

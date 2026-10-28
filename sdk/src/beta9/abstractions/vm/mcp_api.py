@@ -33,16 +33,13 @@ class VMMCP:
         if self.vm.refresh().info["spec"].get("kiosk") is None:
             raise ValueError("Application MCP requires kiosk mode")
         self.vm.wait()
-        process = self.vm.process.exec(
+        return self.vm._guest_json(
             "/opt/beam-vm/kiosk-mcp",
             *args,
-            cwd="/",
             stdin=json.dumps(value).encode() if value is not None else None,
+            timeout=30,
+            error="Unable to configure application MCP",
         )
-        if process.wait(30) != 0:
-            raise RuntimeError(process.stderr.read() or "Unable to configure application MCP")
-        output = process.stdout.read()
-        return json.loads(output) if output.strip() else None
 
     def install(self, name: str, server: MCPServer):
         """Register an installed server. Use Image build steps or VM exec to install its dependencies.
@@ -50,8 +47,6 @@ class VMMCP:
         Configuration lives on the VM's disk and survives stops, snapshots and forks.
         Changing it reconnects MCP clients without restarting the application.
         """
-        if not isinstance(server, MCPServer):
-            server = MCPServer(**server)
         self._run("--install", name, value=server.to_dict())
 
     def remove(self, name: str):

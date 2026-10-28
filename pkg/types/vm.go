@@ -167,6 +167,22 @@ func (k *VMKioskSpec) Clone() *VMKioskSpec {
 	return &copy
 }
 
+func (k *VMKioskSpec) WithoutCredentials() *VMKioskSpec {
+	copy := k.Clone()
+	if copy == nil {
+		return nil
+	}
+	copy.Env = nil
+	for name, server := range copy.MCP {
+		server.Args, server.Env, server.Headers = nil, nil, nil
+		if server.URL != "" {
+			server.URL = "[redacted]"
+		}
+		copy.MCP[name] = server
+	}
+	return copy
+}
+
 func (k *VMKioskSpec) PrivatePorts() []uint32 {
 	if k == nil {
 		return nil

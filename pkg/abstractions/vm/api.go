@@ -113,18 +113,7 @@ func artifactResponse(a types.VMArtifact) types.VMArtifact {
 
 func redactedSpec(spec types.VMSpec) types.VMSpec {
 	spec.Env = nil
-	if spec.Kiosk != nil {
-		spec.Kiosk = spec.Kiosk.Clone()
-		spec.Kiosk.Env = nil
-		for name, server := range spec.Kiosk.MCP {
-			server.Env, server.Headers = nil, nil
-			server.Args = nil
-			if server.URL != "" {
-				server.URL = "[redacted]"
-			}
-			spec.Kiosk.MCP[name] = server
-		}
-	}
+	spec.Kiosk = spec.Kiosk.WithoutCredentials()
 	volumes := spec.Volumes
 	spec.Volumes = make([]*pb.Volume, len(volumes))
 	for i, volume := range volumes {

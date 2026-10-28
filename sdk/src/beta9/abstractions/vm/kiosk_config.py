@@ -1,6 +1,6 @@
 """Application-independent configuration for a browser application session."""
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
 
@@ -21,6 +21,9 @@ class MCPServer:
 
     def to_dict(self):
         return {key: value for key, value in asdict(self).items() if value}
+
+    def without_credentials(self):
+        return replace(self, args=[], env={}, headers={}, url="[redacted]" if self.url else None)
 
 
 @dataclass

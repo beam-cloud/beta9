@@ -1,6 +1,6 @@
-# Application MCPs in a kiosk VM
+# Kiosk applications
 
-Install the application and its harness with normal image build steps. Describe its MCP server using the usual `command`, `args`, `env`, and optional `cwd`. An existing Streamable HTTP server can use `url` and `headers` instead. No Beam-specific server implementation is needed.
+A kiosk combines an image, an application command and optional named MCP servers. Install the application, harness dependencies and native plugins in the image. The VM supplies the browser session and one authenticated MCP endpoint; application code uses the ordinary MCP protocol.
 
 ```python
 from beta9 import Image, Kiosk, MCPServer, VM
@@ -9,33 +9,53 @@ vm = VM(
     "my-app",
     image=Image.from_dockerfile("Dockerfile"),
     kiosk=Kiosk(
-        ["my-application", "/workspace/project"],
-        mcp={"app": MCPServer("node", ["/opt/my-app/server.js"])},
+        command=["my-application", "/workspace/project"],
+        mcp={"app": MCPServer(command="node", args=["/opt/my-app/server.js"])},
+        transport="webrtc",
     ),
 ).create()
+vm.wait(services=True)
+print(vm.access_url(8080))
 ```
 
-The [KiCad example](kicad/app.py) installs [KiCAD-MCP-Server](https://github.com/mixelpixx/KiCAD-MCP-Server) and enables KiCad's IPC API. The [Blender example](blender/app.py) installs [MCP for Blender](https://github.com/ahujasid/mcp-for-blender) and its native addon. Run `python app.py` from either directory with your configured SDK context. Set a project path in the launch command to reopen it at boot. The recipes include native first-run setup so the adapters can connect on a clean boot. Application-specific setup belongs in the image; the VM integration is identical.
+Omit `mcp` for an application without an adapter. Stdio commands inherit the application's environment, display and working directory. To connect an existing Streamable HTTP service, use `MCPServer(url="http://127.0.0.1:9000/mcp", headers={...})`; that service owns its startup. Different applications use the same configuration interface.
 
-The example prints a temporary authenticated viewer link. `vm.kiosk_url` is the stable protected browser URL; `beta9 vm kiosk NAME` opens it using your local profile.
+The printed link authenticates a browser temporarily. `vm.kiosk_url` is the stable protected URL; `beta9 vm kiosk my-app` opens it using your local profile. Closing a viewer detaches it; the VM's idle policy controls compute lifetime.
 
-Every kiosk VM exposes one authenticated `vm.mcp.url`, on the same host as its browser application. Namespaces prevent collisions: `app_edit`, `kicad_move_component`, `blender_execute_blender_code`. Tools, resources and prompts use the same MCP protocol. Stdio backends stay alive between calls; requests to a single application adapter are serialized because they share one GUI/project. Different adapters can operate independently.
+## Connect an agent
 
-For a local agent, add `{"mcpServers": {"my-app": vm.mcp.client_config()}}` to its MCP configuration. This includes a VM traffic credential: keep it private. Alternatively, run `beta9 vm port-forward my-app 8082` and connect to `http://127.0.0.1:8082/mcp`. Agents inside the VM use that same loopback endpoint directly. A client disconnect does not close the application or its backend. VM idle policy still controls compute lifetime.
-
-To add an already-installed server to a running VM:
+Add this standard configuration to a local agent:
 
 ```python
-vm.mcp.install("custom", MCPServer("/opt/custom/bin/server"))
-print(vm.mcp.list())    # credentials redacted
+config = {"mcpServers": {"my-app": vm.mcp.client_config()}}
+```
+
+The configuration includes a private VM traffic credential. Tools are namespaced by adapter (`app_edit`); resources and prompts are forwarded too. Stdio backends stay alive between clients, and requests to each adapter are serialized against the shared project.
+
+Agents inside the VM connect directly to `vm.mcp.local_url`. For local forwarding, run `beta9 vm port-forward my-app 8082` and connect to `http://127.0.0.1:8082/mcp`.
+
+## Add or remove a server
+
+Install packages with image build steps or `vm.process.exec`, then register their command:
+
+```python
+vm.mcp.install("custom", MCPServer(command="/opt/custom/bin/server"))
+print(vm.mcp.list())    # server configurations, credentials omitted
 print(vm.mcp.status())  # readiness and tool count per adapter
 vm.mcp.remove("custom")
 ```
 
-Use `vm.process.exec` or image build steps for package installation. Registration does not run package-manager commands. Config changes reconnect MCP clients without restarting the GUI. Runtime installs, overrides and removals persist on the writable disk through stops, snapshots and forks. Image defaults follow the launch configuration; runtime overrides take precedence. Forks get independent writable state and fresh VM access credentials. Store server credentials through the existing VM secret mechanism rather than image layers.
+Registration changes restart the MCP gateway without restarting the application. Runtime installs, overrides and removals take precedence over image defaults and persist through stops, snapshots and forks. Saved project files and the environment persist; forks receive independent writable state and fresh VM credentials.
 
-A failed adapter does not close or block the application. Inspect `vm.mcp.status()` and `beta9 vm logs NAME --unit beam-desktop` for failures. The proxy uses a pinned [FastMCP](https://gofastmcp.com/servers/providers/proxy) runtime for MCP protocol handling; its dependency is confined to kiosk guests.
+A broken adapter leaves the application and other adapters usable. `vm.mcp.status()` distinguishes adapter readiness from gateway availability; inspect failures with `beta9 vm logs my-app --unit beam-desktop`. Configuration listings omit arguments, URLs, environment and headers. Keep the original configuration in the image recipe and use the existing VM secret mechanism for credentials.
 
-`vm.mcp.status()` reports adapter readiness (`starting`, `ready`, `degraded` or `error`) separately from gateway availability. The kiosk supervisor's `mcp` field tracks the gateway process. Config listings and API responses omit arguments, URLs, environment and headers because any of them can contain credentials; keep the original configuration in your image recipe.
+## Runnable applications
 
-For KiCad, connect tools to the board open in the GUI using `kicad_open_board`, then check `kicad_get_backend_state`: the session must say `ipc` for live edits. Some upstream tools operate on files and can lag the live GUI; check the backend reported by each operation. Blender's tools connect to its enabled addon. The hosting interface cannot turn a file-only tool into a live application API; choose or build the application harness accordingly.
+Run either recipe from the repository root with your configured SDK context:
+
+| Application | Command | Harness setup in the image |
+| --- | --- | --- |
+| [KiCad](kicad/app.py) | `python sdk/examples/kiosk/kicad/app.py` | [KiCAD-MCP-Server](https://github.com/mixelpixx/KiCAD-MCP-Server), IPC enabled and first-run libraries configured |
+| [Blender](blender/app.py) | `python sdk/examples/kiosk/blender/app.py` | [MCP for Blender](https://github.com/ahujasid/mcp-for-blender), native addon installed and enabled |
+
+For live KiCad edits, call `kicad_open_board` with the GUI's project path and confirm `kicad_get_backend_state` reports `ipc`. Some upstream tools operate on files; check each result's backend. Blender's tools connect to its enabled addon. Application-specific setup belongs in these recipes, so a new or replacement harness needs no VM runtime changes.

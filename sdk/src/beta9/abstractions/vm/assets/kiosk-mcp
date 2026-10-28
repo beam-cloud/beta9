@@ -4,6 +4,7 @@
 import argparse
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass, field
 import fcntl
 import json
 import os
@@ -13,6 +14,13 @@ from urllib.error import URLError
 from pathlib import Path
 import sys
 import tempfile
+
+from fastmcp import FastMCP
+from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
+from fastmcp.mcp_config import MCPConfig
+from fastmcp.server.middleware import Middleware
+from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
+from starlette.responses import JSONResponse
 
 from kiosk_config import KioskRuntime, MCPServer
 
@@ -38,23 +46,20 @@ class Registry:
             else {"mcpServers": {}, "disabled": []}
         )
 
-    def update(self, servers):
-        from fastmcp.mcp_config import MCPConfig
-
+    def update(self, name, server):
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name):
+            raise ValueError("Invalid MCP server name")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.with_suffix(".lock").open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             config = self.load()
             config.setdefault("disabled", [])
-            for name, server in servers.items():
-                if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name):
-                    raise ValueError("Invalid MCP server name")
-                config["mcpServers"].pop(name, None)
-                config["disabled"] = [key for key in config["disabled"] if key != name]
-                if server is None:
-                    config["disabled"].append(name)
-                else:
-                    config["mcpServers"][name] = MCPServer(**server).to_dict()
+            config["mcpServers"].pop(name, None)
+            config["disabled"] = [key for key in config["disabled"] if key != name]
+            if server is None:
+                config["disabled"].append(name)
+            else:
+                config["mcpServers"][name] = MCPServer(**server).to_dict()
             effective = self.read(config)
             if len(effective) > POLICY.mcp_max_servers:
                 raise ValueError("Too many MCP servers")
@@ -64,7 +69,9 @@ class Registry:
                 max(len(json.dumps(effective).encode()), len(data.encode()))
                 > POLICY.mcp_max_config_bytes
             ):
-                raise ValueError("MCP configuration must fit in 64 KiB")
+                raise ValueError(
+                    f"MCP configuration must fit in {POLICY.mcp_max_config_bytes >> 10} KiB"
+                )
             with tempfile.NamedTemporaryFile(
                 mode="w", dir=self.path.parent, delete=False
             ) as output:
@@ -76,90 +83,102 @@ class Registry:
                     Path(output.name).unlink(missing_ok=True)
 
 
+@dataclass(frozen=True)
+class AdapterStatus:
+    state: str = "starting"
+    tools: int = 0
+    error: str = ""
+
+
+@dataclass
+class Adapter(Middleware):
+    name: str
+    client: ProxyClient
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    status: AdapterStatus = field(default_factory=AdapterStatus)
+
+    async def on_request(self, context, call_next):
+        # Clients share one application and must observe ordered edits.
+        async with self.lock:
+            return await call_next(context)
+
+    async def monitor(self):
+        while True:
+            try:
+                async with self.lock, self.client.new() as probe:
+                    tools = await probe.list_tools()
+                self.status = AdapterStatus("ready", tools=len(tools))
+            except Exception as error:
+                if self.status.state != "error":
+                    print(
+                        f"MCP server {self.name} unavailable ({type(error).__name__}); verify its command or URL and server stderr",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                self.status = AdapterStatus(
+                    "error", error="Server unavailable; inspect beam-desktop.service logs"
+                )
+            await asyncio.sleep(POLICY.mcp_poll_interval)
+
+
 class Gateway:
     def __init__(self, servers, cwd):
-        from fastmcp import FastMCP
-        from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
-        from fastmcp.server.middleware import Middleware
-        from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
-        from starlette.responses import JSONResponse
-
-        class Serialized(Middleware):
-            def __init__(self, lock):
-                self.lock = lock
-
-            async def on_request(self, context, call_next):
-                # One GUI session has shared state; serialize each adapter's requests.
-                async with self.lock:
-                    return await call_next(context)
-
-        self.clients = {}
-        self.status = {}
+        self.adapters = {}
         self.server = FastMCP("Beam application", lifespan=self.lifespan)
         for name, value in servers.items():
             config = MCPServer(**value)
-            if config.command:
-                transport = StdioTransport(
+            transport = (
+                StreamableHttpTransport(config.url, headers=config.headers)
+                if config.url
+                else StdioTransport(
                     command=config.command,
                     args=config.args,
                     cwd=config.cwd or cwd,
                     env=dict(os.environ, **config.env),
                 )
-            else:
-                transport = StreamableHttpTransport(config.url, headers=config.headers)
-            client = ProxyClient(
-                transport, forward_incoming_headers=False, timeout=POLICY.application_timeout
             )
-            lock = asyncio.Lock()
-
-            proxy = FastMCP(providers=[ProxyProvider(client_factory=client.new, cache_ttl=0)])
-            proxy.add_middleware(Serialized(lock))
+            adapter = Adapter(
+                name,
+                ProxyClient(
+                    transport, forward_incoming_headers=False, timeout=POLICY.application_timeout
+                ),
+            )
+            proxy = FastMCP(
+                providers=[ProxyProvider(client_factory=adapter.client.new, cache_ttl=0)],
+                middleware=[adapter],
+            )
             self.server.mount(proxy, namespace=name)
-            self.clients[name] = (client, lock)
-            self.status[name] = {"state": "starting"}
+            self.adapters[name] = adapter
+        self.server.custom_route("/health", methods=["GET"])(self.health)
 
-        @self.server.custom_route("/health", methods=["GET"])
-        async def health(request):
-            states = {server["state"] for server in self.status.values()}
-            state = "ready"
-            if "starting" in states:
-                state = "starting"
-            elif "error" in states:
-                state = "error" if states == {"error"} else "degraded"
-            return JSONResponse({"gateway": "ready", "state": state, "servers": self.status})
-
-    async def monitor(self, name, client, lock):
-        while True:
-            try:
-                async with lock, client.new() as probe:
-                    tools = await probe.list_tools()
-                self.status[name] = {"state": "ready", "tools": len(tools)}
-            except Exception as error:
-                if self.status[name]["state"] != "error":
-                    print(
-                        f"MCP server {name} unavailable ({type(error).__name__}); verify its command or URL and server stderr",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                self.status[name] = {
-                    "state": "error",
-                    "error": "Server unavailable; inspect beam-desktop.service logs",
-                }
-            await asyncio.sleep(POLICY.mcp_poll_interval)
+    async def health(self, request):
+        states = {adapter.status.state for adapter in self.adapters.values()}
+        state = "ready"
+        if "starting" in states:
+            state = "starting"
+        elif "error" in states:
+            state = "error" if states == {"error"} else "degraded"
+        return JSONResponse(
+            {
+                "gateway": "ready",
+                "state": state,
+                "servers": {
+                    name: asdict(adapter.status) for name, adapter in self.adapters.items()
+                },
+            }
+        )
 
     @asynccontextmanager
     async def lifespan(self, server):
-        tasks = [
-            asyncio.create_task(self.monitor(name, *entry)) for name, entry in self.clients.items()
-        ]
+        tasks = [asyncio.create_task(adapter.monitor()) for adapter in self.adapters.values()]
         try:
             yield
         finally:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            for client, _ in self.clients.values():
-                await client.transport.close()
+            for adapter in self.adapters.values():
+                await adapter.client.transport.close()
 
     def run(self):
         self.server.run(
@@ -181,35 +200,32 @@ def main():
     parser.add_argument("--cwd", default="/workspace")
     args = parser.parse_args()
     registry = Registry()
+    result = None
     if args.install:
-        registry.update({args.install: json.load(sys.stdin)})
+        registry.update(args.install, json.load(sys.stdin))
     elif args.remove:
-        registry.update({args.remove: None})
+        registry.update(args.remove, None)
     elif args.status:
         try:
             with urlopen(
                 f"http://127.0.0.1:{POLICY.mcp_port}/health", timeout=POLICY.command_timeout
             ) as response:
-                print(response.read().decode())
+                result = json.load(response)
         except URLError:
             with urlopen(
                 f"http://127.0.0.1:{POLICY.status_port}/status", timeout=POLICY.command_timeout
             ) as response:
                 state = json.load(response)["mcp"]
-            print(json.dumps({"state": state, "servers": {}}))
+            result = {"state": state, "servers": {}}
     elif args.list:
-        print(
-            json.dumps(
-                {
-                    name: dict(config, args=[], env={}, headers={}, url="[redacted]")
-                    if config.get("url")
-                    else dict(config, args=[], env={}, headers={})
-                    for name, config in registry.read().items()
-                }
-            )
-        )
+        result = {
+            name: MCPServer(**config).without_credentials().to_dict()
+            for name, config in registry.read().items()
+        }
     else:
         Gateway(registry.read(), args.cwd).run()
+        return
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

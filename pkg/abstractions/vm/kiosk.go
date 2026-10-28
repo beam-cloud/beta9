@@ -45,34 +45,11 @@ func validateKiosk(spec *types.VMSpec) error {
 		return fmt.Errorf("too many kiosk MCP servers")
 	}
 	for name, server := range k.MCP {
-		if !kioskMCPName.MatchString(name) {
-			return fmt.Errorf("invalid kiosk MCP server name %q", name)
-		}
-		if (server.Command == "") == (server.URL == "") {
-			return fmt.Errorf("kiosk MCP server %q requires either command or url", name)
-		}
-		if server.Command != "" {
-			if len(server.Headers) > 0 {
-				return fmt.Errorf("stdio MCP servers cannot use HTTP headers")
-			}
-			if err := validateKioskLaunch(append([]string{server.Command}, server.Args...), server.Cwd, server.Env); err != nil {
-				return err
-			}
-		} else {
-			u, err := url.Parse(server.URL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
-				return fmt.Errorf("kiosk MCP server URL must be an HTTP endpoint without userinfo or fragment")
-			}
-			if len(server.Args) > 0 || len(server.Env) > 0 || server.Cwd != "" {
-				return fmt.Errorf("HTTP MCP servers cannot use launch options")
-			}
-			for key, value := range server.Headers {
-				if !httpguts.ValidHeaderFieldName(key) || !httpguts.ValidHeaderFieldValue(value) {
-					return fmt.Errorf("invalid kiosk MCP header")
-				}
-			}
+		if err := validateKioskMCP(name, server); err != nil {
+			return err
 		}
 	}
+
 	spec.Desktop = true
 	for _, port := range k.PrivatePorts() {
 		if !slices.Contains(spec.PrivatePorts, port) {
@@ -87,6 +64,34 @@ func validateKiosk(spec *types.VMSpec) error {
 }
 
 var kioskMCPName = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+func validateKioskMCP(name string, server types.VMKioskMCPServer) error {
+	if !kioskMCPName.MatchString(name) {
+		return fmt.Errorf("invalid kiosk MCP server name %q", name)
+	}
+	if (server.Command == "") == (server.URL == "") {
+		return fmt.Errorf("kiosk MCP server %q requires either command or url", name)
+	}
+	if server.Command != "" {
+		if len(server.Headers) > 0 {
+			return fmt.Errorf("stdio MCP servers cannot use HTTP headers")
+		}
+		return validateKioskLaunch(append([]string{server.Command}, server.Args...), server.Cwd, server.Env)
+	}
+	u, err := url.Parse(server.URL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return fmt.Errorf("kiosk MCP server URL must be an HTTP endpoint without userinfo or fragment")
+	}
+	if len(server.Args) > 0 || len(server.Env) > 0 || server.Cwd != "" {
+		return fmt.Errorf("HTTP MCP servers cannot use launch options")
+	}
+	for key, value := range server.Headers {
+		if !httpguts.ValidHeaderFieldName(key) || !httpguts.ValidHeaderFieldValue(value) {
+			return fmt.Errorf("invalid kiosk MCP header")
+		}
+	}
+	return nil
+}
 
 func validateKioskLaunch(command []string, cwd string, env map[string]string) error {
 	if len(command) == 0 || len(command) > types.VMKioskMaxCommandArgs || command[0] == "" {
