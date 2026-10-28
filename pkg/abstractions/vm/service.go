@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -37,7 +36,7 @@ type ImageVerifier interface {
 
 type Service struct {
 	ctx           context.Context
-	rdb           *common.RedisClient
+	controlPlane  ControlPlaneRepository
 	repo          repository.VMRepository
 	backend       repository.BackendRepository
 	containers    repository.ContainerRepository
@@ -50,17 +49,17 @@ type Service struct {
 }
 
 type ServiceOpts struct {
-	RedisClient   *common.RedisClient
-	Config        types.VMConfig
-	BackendRepo   repository.BackendRepository
-	ContainerRepo repository.ContainerRepository
-	Runtime       Runtime
-	Gateway       Gateway
-	Images        ImageVerifier
-	RouteGroup    *echo.Group
-	Server        *echo.Echo
-	BackendDialer *network.BackendDialer
-	TCPConfig     types.PodTCPConfig // Shared raw TCP listener used by ICE-TCP media.
+	ControlPlaneRepo ControlPlaneRepository
+	Config           types.VMConfig
+	BackendRepo      repository.BackendRepository
+	ContainerRepo    repository.ContainerRepository
+	Runtime          Runtime
+	Gateway          Gateway
+	Images           ImageVerifier
+	RouteGroup       *echo.Group
+	Server           *echo.Echo
+	BackendDialer    *network.BackendDialer
+	TCPConfig        types.PodTCPConfig // Shared raw TCP listener used by ICE-TCP media.
 }
 
 func New(ctx context.Context, opts ServiceOpts) error {
@@ -71,15 +70,15 @@ func New(ctx context.Context, opts ServiceOpts) error {
 
 	opts.Config.BaseURL = strings.TrimSuffix(opts.Config.BaseURL, "/")
 	s := &Service{
-		ctx:        ctx,
-		rdb:        opts.RedisClient,
-		repo:       repo,
-		backend:    opts.BackendRepo,
-		containers: opts.ContainerRepo,
-		runtime:    opts.Runtime,
-		gateway:    opts.Gateway,
-		images:     opts.Images,
-		config:     opts.Config,
+		ctx:          ctx,
+		controlPlane: opts.ControlPlaneRepo,
+		repo:         repo,
+		backend:      opts.BackendRepo,
+		containers:   opts.ContainerRepo,
+		runtime:      opts.Runtime,
+		gateway:      opts.Gateway,
+		images:       opts.Images,
+		config:       opts.Config,
 	}
 
 	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {

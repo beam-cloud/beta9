@@ -14,9 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -991,11 +989,7 @@ func TestActivityLeasesAreIndependentAndExplicitlyReleased(t *testing.T) {
 	s, v, info, _, _ := fixture()
 	// A background snapshot owns the lifecycle lock throughout this test.
 	s.repo = &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
-	redis := miniredis.RunT(t)
-	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
-	require.NoError(t, err)
-	t.Cleanup(func() { rdb.Close() })
-	s.rdb = rdb
+	_, s.controlPlane = controlPlaneFixture(t)
 	first, second := uuid.NewString(), uuid.NewString()
 	for _, lease := range []string{first, second} {
 		c, _ := actionContext(info, v.Name, "touch", `{}`)

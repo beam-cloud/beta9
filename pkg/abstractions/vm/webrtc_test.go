@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -38,21 +38,18 @@ func TestWebRTCSDPUsesSharedGatewayAndPreservesDTLS(t *testing.T) {
 	require.Error(t, err)
 }
 
-func iceTestFixture(t *testing.T) (*Service, *types.VM) {
+func iceTestFixture(t *testing.T) (*Service, *types.VM, *miniredis.Miniredis) {
 	t.Helper()
 	s, v, _, _, _ := fixture()
 	s.ctx = context.Background()
-	redis := miniredis.RunT(t)
-	var err error
-	s.rdb, err = common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
-	require.NoError(t, err)
-	t.Cleanup(func() { s.rdb.Close() })
+	redis, controlPlane := controlPlaneFixture(t)
+	s.controlPlane = controlPlane
 	v.TrafficAccessToken = "vm-traffic-secret"
 	v.Spec.Kiosk = &types.VMKioskSpec{Command: []string{"application"}, Transport: "webrtc"}
 	dialer := network.NewBackendDialer(nil, types.TailscaleConfig{}, s.containers, time.Second)
 	require.NoError(t, s.startWebRTC(types.PodTCPConfig{Enabled: true, ExternalHost: "127.0.0.1", ExternalPort: 443}, types.VMWebRTCConfig{}, dialer))
 	require.NotNil(t, s.runtime.(*vmRuntime).iceHandler)
-	return s, v
+	return s, v, redis
 }
 
 func registerTestICE(t *testing.T, s *Service, v *types.VM, description string) *httptest.ResponseRecorder {
@@ -69,16 +66,19 @@ func registerTestICE(t *testing.T, s *Service, v *types.VM, description string) 
 }
 
 func TestWebRTCRegistrationIsAuthenticatedBoundedAndCollisionSafe(t *testing.T) {
-	s, v := iceTestFixture(t)
+	s, v, redis := iceTestFixture(t)
 	rec := registerTestICE(t, s, v, testSDP)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	first := s.rdb.Get(s.ctx, "vm:ice:fragment").Val()
+	first, err := s.controlPlane.GetICESession(s.ctx, "fragment")
+	require.NoError(t, err)
 	require.NotEmpty(t, first)
 	require.Equal(t, http.StatusOK, registerTestICE(t, s, v, testSDP).Code)
 	v.Generation++
 	require.Equal(t, http.StatusConflict, registerTestICE(t, s, v, testSDP).Code)
-	require.Equal(t, first, s.rdb.Get(s.ctx, "vm:ice:fragment").Val())
-	require.NoError(t, s.rdb.Set(s.ctx, "vm:ice-rate:"+v.ID, 64, time.Minute).Err())
+	stored, err := s.controlPlane.GetICESession(s.ctx, "fragment")
+	require.NoError(t, err)
+	require.Equal(t, first, stored)
+	require.NoError(t, redis.Set("vm:ice-rate:"+v.ID, "64"))
 	require.Equal(t, http.StatusTooManyRequests, registerTestICE(t, s, v, testSDP).Code)
 	c := echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/", nil), httptest.NewRecorder())
 	require.Error(t, s.webrtc.register(c, v))
@@ -95,9 +95,9 @@ func iceFrame(t *testing.T, password string) []byte {
 }
 
 func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
-	for _, scenario := range []string{"valid", "expired lease", "wrong password", "rotated token", "old boot", "stopped", "revoked", "non-STUN lookalike"} {
+	for _, scenario := range []string{"valid", "expired lease", "wrong password", "rotated token", "old boot", "stopped", "revoked", "non-STUN lookalike", "registry unavailable", "session capacity"} {
 		t.Run(scenario, func(t *testing.T) {
-			s, v := iceTestFixture(t)
+			s, v, redis := iceTestFixture(t)
 			require.Equal(t, http.StatusOK, registerTestICE(t, s, v, testSDP).Code)
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			require.NoError(t, err)
@@ -120,6 +120,13 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 				v.DesiredState = types.VMStateStopped
 			case "revoked":
 				s.backend.(*vmBackend).token = &types.Token{Active: false}
+			case "registry unavailable":
+				redis.SetError("registry unavailable")
+			case "session capacity":
+				for i := range s.webrtc.config.MaxConnectionsPerSession {
+					_, err := s.controlPlane.AcquireICELease(s.ctx, "fragment", fmt.Sprint(i), s.webrtc.config.LeaseTTL)
+					require.NoError(t, err)
+				}
 			}
 			frame := iceFrame(t, password)
 			if scenario == "non-STUN lookalike" {
@@ -152,13 +159,13 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "encrypted-media", string(media))
 			if scenario == "expired lease" {
-				require.NoError(t, s.rdb.Del(s.ctx, "vm:ice-open:fragment").Err())
+				redis.FastForward(s.webrtc.config.LeaseTTL)
 				select {
 				case <-done:
 				case <-time.After(time.Second):
 					t.Fatal("expired lease must close active media")
 				}
-				require.Zero(t, s.rdb.ZCard(s.ctx, "vm:ice-open:fragment").Val(), "renewal must not resurrect an expired lease")
+				require.False(t, redis.Exists("vm:ice-open:fragment"), "renewal must not resurrect an expired lease")
 			} else {
 				client.Close()
 				<-done
@@ -178,7 +185,7 @@ func TestWebRTCRequiresPrivateMediaAndConfiguredGateway(t *testing.T) {
 }
 
 func TestWebRTCClosesConnectionsWhenGatewayCapacityIsFull(t *testing.T) {
-	s, _ := iceTestFixture(t)
+	s, _, _ := iceTestFixture(t)
 	s.webrtc.slots = make(chan struct{}, 1)
 	s.webrtc.slots <- struct{}{}
 	server, client := net.Pipe()

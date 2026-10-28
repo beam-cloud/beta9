@@ -697,17 +697,17 @@ func (g *Gateway) registerServices() error {
 		vmConfig.BaseURL = g.Config.GatewayService.HTTP.GetExternalURL()
 	}
 	if err := vm.New(g.ctx, vm.ServiceOpts{
-		RedisClient:   g.RedisClient,
-		Config:        vmConfig,
-		TCPConfig:     g.Config.Abstractions.Pod.TCP,
-		BackendRepo:   g.BackendRepo,
-		ContainerRepo: g.ContainerRepo,
-		Runtime:       vmRuntime,
-		Gateway:       gws,
-		Images:        is,
-		RouteGroup:    g.baseRouteGroup.Group("/vm", g.authMiddleware),
-		Server:        g.echo,
-		BackendDialer: network.NewBackendDialer(g.Tailscale, g.Config.Tailscale, g.ContainerRepo, 10*time.Second),
+		ControlPlaneRepo: vm.NewControlPlaneRedisRepository(g.RedisClient),
+		Config:           vmConfig,
+		TCPConfig:        g.Config.Abstractions.Pod.TCP,
+		BackendRepo:      g.BackendRepo,
+		ContainerRepo:    g.ContainerRepo,
+		Runtime:          vmRuntime,
+		Gateway:          gws,
+		Images:           is,
+		RouteGroup:       g.baseRouteGroup.Group("/vm", g.authMiddleware),
+		Server:           g.echo,
+		BackendDialer:    network.NewBackendDialer(g.Tailscale, g.Config.Tailscale, g.ContainerRepo, 10*time.Second),
 	}); err != nil {
 		return err
 	}

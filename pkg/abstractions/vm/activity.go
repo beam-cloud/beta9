@@ -2,37 +2,23 @@ package vm
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 )
 
-const activityReconnectGrace = 150 * time.Second
-
-func activityKey(id string) string { return "vm:activity:" + id }
-
 func (s *Service) renewActivity(ctx context.Context, id, lease string) error {
-	if s.rdb == nil {
+	if s.controlPlane == nil {
 		return nil
 	}
-	key := activityKey(id)
-	_, err := s.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(time.Now().UnixMilli(), 10))
-		pipe.ZAdd(ctx, key, redis.Z{Member: lease, Score: float64(time.Now().Add(activityReconnectGrace).UnixMilli())})
-		pipe.Expire(ctx, key, activityReconnectGrace)
-		return nil
-	})
-	return err
+	return s.controlPlane.RenewActivity(ctx, id, lease)
 }
 
 func (s *Service) hasActivity(ctx context.Context, id string) (bool, error) {
-	if s.rdb == nil {
+	if s.controlPlane == nil {
 		return false, nil
 	}
-	count, err := s.rdb.ZCount(ctx, activityKey(id), strconv.FormatInt(time.Now().UnixMilli(), 10), "+inf").Result()
-	return count > 0, err
+	return s.controlPlane.HasActivity(ctx, id)
 }
 
 func (s *Service) keepActive(ctx context.Context, id string, idleTimeout int64) (func(), error) {
@@ -68,10 +54,10 @@ func (s *Service) keepActive(ctx context.Context, id string, idleTimeout int64) 
 	return func() {
 		close(done)
 		// Keep the lease across gateway shutdown; a replacement can reattach.
-		if s.rdb != nil && (s.ctx == nil || s.ctx.Err() == nil) {
+		if s.controlPlane != nil && (s.ctx == nil || s.ctx.Err() == nil) {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			s.rdb.ZRem(cleanupCtx, activityKey(id), lease)
+			s.controlPlane.ReleaseActivity(cleanupCtx, id, lease)
 		}
 	}, nil
 }

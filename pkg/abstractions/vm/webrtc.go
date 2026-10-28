@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -30,15 +29,6 @@ type vmWebRTC struct {
 	slots     chan struct{}
 }
 
-type iceRoute struct {
-	VMID        string
-	ContainerID string
-	TokenHash   string
-	Password    string
-	WorkspaceID uint
-	Generation  int64
-}
-
 type iceCheck struct {
 	frame    []byte
 	message  *stun.Message
@@ -53,7 +43,7 @@ func (s *Service) startWebRTC(tcpConfig types.PodTCPConfig, config types.VMWebRT
 	if err := config.ApplyDefaults(); err != nil {
 		return err
 	}
-	if !tcpConfig.Enabled || tcpConfig.ExternalHost == "" || s.rdb == nil || dialer == nil {
+	if !tcpConfig.Enabled || tcpConfig.ExternalHost == "" || s.controlPlane == nil || dialer == nil {
 		return nil
 	}
 	if tcpConfig.ExternalPort == 0 {
@@ -179,11 +169,7 @@ func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), w.config.HandshakeTimeout)
 	defer cancel()
 	// Rate-limit offers per VM, including failed registrations.
-	count, err := w.service.rdb.Eval(ctx, `
-		local count = redis.call('INCR', KEYS[1])
-		if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
-		return count
-	`, []string{"vm:ice-rate:" + v.ID}, time.Minute.Milliseconds()).Int()
+	count, err := w.service.controlPlane.IncrementICERegistrations(ctx, v.ID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC registry unavailable")
 	}
@@ -206,7 +192,7 @@ func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	for ufrag, password := range credentials {
-		route := iceRoute{
+		route := ICESession{
 			VMID:        v.ID,
 			WorkspaceID: v.WorkspaceID,
 			ContainerID: v.ContainerID,
@@ -214,18 +200,11 @@ func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 			TokenHash:   trafficHash(v),
 			Password:    password,
 		}
-		encoded, _ := json.Marshal(route)
-		// Renew identical routes without replacing colliding sessions.
-		ok, err := w.service.rdb.Eval(ctx, `
-			local old = redis.call('GET', KEYS[1])
-			if old and old ~= ARGV[1] then return 0 end
-			redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
-			return 1
-		`, []string{"vm:ice:" + ufrag}, string(encoded), w.config.SessionTTL.Milliseconds()).Int()
+		ok, err := w.service.controlPlane.RegisterICESession(ctx, ufrag, route, w.config.SessionTTL)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC registry unavailable")
 		}
-		if ok != 1 {
+		if !ok {
 			return echo.NewHTTPError(http.StatusConflict, "ICE session collision; reconnect")
 		}
 	}
@@ -265,7 +244,7 @@ func readICECheck(conn net.Conn) (*iceCheck, error) {
 	return &iceCheck{frame: frame, message: message, fragment: ufrag}, nil
 }
 
-func (w *vmWebRTC) activeVM(ctx context.Context, route iceRoute) (*types.VM, error) {
+func (w *vmWebRTC) activeVM(ctx context.Context, route *ICESession) (*types.VM, error) {
 	v, err := w.service.repo.GetVM(ctx, route.WorkspaceID, route.VMID)
 	if err != nil {
 		return nil, err
@@ -301,12 +280,8 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 	}
 	authCtx, authCancel := context.WithTimeout(ctx, w.config.HandshakeTimeout)
 	defer authCancel()
-	encoded, err := w.service.rdb.Get(authCtx, "vm:ice:"+check.fragment).Bytes()
-	if err != nil {
-		return
-	}
-	var route iceRoute
-	if json.Unmarshal(encoded, &route) != nil || stun.MessageIntegrity([]byte(route.Password)).Check(check.message) != nil {
+	route, err := w.service.controlPlane.GetICESession(authCtx, check.fragment)
+	if err != nil || route == nil || stun.MessageIntegrity([]byte(route.Password)).Check(check.message) != nil {
 		return
 	}
 	if check.message.Contains(stun.AttrFingerprint) && stun.Fingerprint.Check(check.message) != nil {
@@ -317,22 +292,15 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 		return
 	}
 	// Bound each ICE session across gateways with expiring connection leases.
-	key := "vm:ice-open:" + check.fragment
 	lease := uuid.NewString()
-	now := time.Now().UnixMilli()
-	n, err := w.service.rdb.Eval(authCtx, `
-		redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-		redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
-		redis.call('PEXPIRE', KEYS[1], ARGV[4])
-		return redis.call('ZCARD', KEYS[1])
-	`, []string{key}, now, now+w.config.LeaseTTL.Milliseconds(), lease, w.config.LeaseTTL.Milliseconds()).Int()
+	n, err := w.service.controlPlane.AcquireICELease(authCtx, check.fragment, lease, w.config.LeaseTTL)
 	if err != nil {
 		return
 	}
 	defer func() {
 		cleanup, done := context.WithTimeout(context.Background(), time.Second)
 		defer done()
-		w.service.rdb.ZRem(cleanup, key, lease)
+		w.service.controlPlane.ReleaseICELease(cleanup, check.fragment, lease)
 	}()
 	if n > w.config.MaxConnectionsPerSession {
 		return
@@ -370,19 +338,10 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				check, done := context.WithTimeout(ctx, w.config.HandshakeTimeout)
-				_, err := w.activeVM(check, route)
+				renewCtx, done := context.WithTimeout(ctx, w.config.HandshakeTimeout)
+				_, err := w.activeVM(renewCtx, route)
 				if err == nil {
-					var renewed int
-					renewed, err = w.service.rdb.Eval(check, `
-						if not redis.call('ZSCORE', KEYS[1], ARGV[2]) then return 0 end
-						redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
-						redis.call('PEXPIRE', KEYS[1], ARGV[3])
-						return 1
-					`, []string{key}, time.Now().UnixMilli()+w.config.LeaseTTL.Milliseconds(), lease, w.config.LeaseTTL.Milliseconds()).Int()
-					if err == nil && renewed != 1 {
-						err = fmt.Errorf("ICE lease expired")
-					}
+					err = w.service.controlPlane.RenewICELease(renewCtx, check.fragment, lease, w.config.LeaseTTL)
 				}
 				done()
 				if err != nil {

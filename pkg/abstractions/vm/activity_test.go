@@ -4,9 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,11 +14,7 @@ func TestConnectionActivityRetainsOtherViewersAndGatewayRecovery(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			s.ctx = ctx
-			redis := miniredis.RunT(t)
-			var err error
-			s.rdb, err = common.NewRedisClient(types.RedisConfig{Addrs: []string{redis.Addr()}, Mode: types.RedisModeSingle})
-			require.NoError(t, err)
-			defer s.rdb.Close()
+			_, s.controlPlane = controlPlaneFixture(t)
 
 			first, err := s.keepActive(ctx, v.ID, 0)
 			require.NoError(t, err)
