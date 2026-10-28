@@ -555,8 +555,8 @@ func (s *Service) action(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusBadRequest, "invalid activity lease")
 			}
 			if c.QueryParam("release") == "1" {
-				if s.controlPlane != nil {
-					err = s.controlPlane.ReleaseActivity(ctx, v.ID, lease)
+				if s.stateRepo != nil {
+					err = s.stateRepo.ReleaseActivity(ctx, v.ID, lease)
 				}
 			} else {
 				err = s.renewActivity(ctx, v.ID, lease)

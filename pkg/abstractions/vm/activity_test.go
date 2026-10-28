@@ -14,7 +14,7 @@ func TestConnectionActivityRetainsOtherViewersAndGatewayRecovery(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			s.ctx = ctx
-			_, s.controlPlane = controlPlaneFixture(t)
+			_, s.stateRepo = redisRepositoryFixture(t)
 
 			first, err := s.keepActive(ctx, v.ID, 0)
 			require.NoError(t, err)

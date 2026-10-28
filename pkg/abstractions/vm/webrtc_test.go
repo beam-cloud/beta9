@@ -42,8 +42,8 @@ func iceTestFixture(t *testing.T) (*Service, *types.VM, *miniredis.Miniredis) {
 	t.Helper()
 	s, v, _, _, _ := fixture()
 	s.ctx = context.Background()
-	redis, controlPlane := controlPlaneFixture(t)
-	s.controlPlane = controlPlane
+	redis, stateRepo := redisRepositoryFixture(t)
+	s.stateRepo = stateRepo
 	v.TrafficAccessToken = "vm-traffic-secret"
 	v.Spec.Kiosk = &types.VMKioskSpec{Command: []string{"application"}, Transport: "webrtc"}
 	dialer := network.NewBackendDialer(nil, types.TailscaleConfig{}, s.containers, time.Second)
@@ -69,13 +69,13 @@ func TestWebRTCRegistrationIsAuthenticatedBoundedAndCollisionSafe(t *testing.T) 
 	s, v, redis := iceTestFixture(t)
 	rec := registerTestICE(t, s, v, testSDP)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	first, err := s.controlPlane.GetICESession(s.ctx, "fragment")
+	first, err := s.stateRepo.GetICESession(s.ctx, "fragment")
 	require.NoError(t, err)
 	require.NotEmpty(t, first)
 	require.Equal(t, http.StatusOK, registerTestICE(t, s, v, testSDP).Code)
 	v.Generation++
 	require.Equal(t, http.StatusConflict, registerTestICE(t, s, v, testSDP).Code)
-	stored, err := s.controlPlane.GetICESession(s.ctx, "fragment")
+	stored, err := s.stateRepo.GetICESession(s.ctx, "fragment")
 	require.NoError(t, err)
 	require.Equal(t, first, stored)
 	require.NoError(t, redis.Set("vm:ice-rate:"+v.ID, "64"))
@@ -124,7 +124,7 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 				redis.SetError("registry unavailable")
 			case "session capacity":
 				for i := range s.webrtc.config.MaxConnectionsPerSession {
-					_, err := s.controlPlane.AcquireICELease(s.ctx, "fragment", fmt.Sprint(i), s.webrtc.config.LeaseTTL)
+					_, err := s.stateRepo.AcquireICELease(s.ctx, "fragment", fmt.Sprint(i), s.webrtc.config.LeaseTTL)
 					require.NoError(t, err)
 				}
 			}

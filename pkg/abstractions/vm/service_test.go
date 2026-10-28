@@ -989,7 +989,7 @@ func TestActivityLeasesAreIndependentAndExplicitlyReleased(t *testing.T) {
 	s, v, info, _, _ := fixture()
 	// A background snapshot owns the lifecycle lock throughout this test.
 	s.repo = &createRaceStore{vmStore: s.repo.(*vmStore), locked: true}
-	_, s.controlPlane = controlPlaneFixture(t)
+	_, s.stateRepo = redisRepositoryFixture(t)
 	first, second := uuid.NewString(), uuid.NewString()
 	for _, lease := range []string{first, second} {
 		c, _ := actionContext(info, v.Name, "touch", `{}`)

@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// ControlPlaneRepository owns ephemeral activity and media coordination.
-type ControlPlaneRepository interface {
+// VMRepository owns ephemeral activity and media coordination.
+type VMRepository interface {
 	RenewActivity(ctx context.Context, id, lease string) error
 	HasActivity(ctx context.Context, id string) (bool, error)
 	ReleaseActivity(ctx context.Context, id, lease string) error

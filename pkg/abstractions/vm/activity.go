@@ -8,17 +8,17 @@ import (
 )
 
 func (s *Service) renewActivity(ctx context.Context, id, lease string) error {
-	if s.controlPlane == nil {
+	if s.stateRepo == nil {
 		return nil
 	}
-	return s.controlPlane.RenewActivity(ctx, id, lease)
+	return s.stateRepo.RenewActivity(ctx, id, lease)
 }
 
 func (s *Service) hasActivity(ctx context.Context, id string) (bool, error) {
-	if s.controlPlane == nil {
+	if s.stateRepo == nil {
 		return false, nil
 	}
-	return s.controlPlane.HasActivity(ctx, id)
+	return s.stateRepo.HasActivity(ctx, id)
 }
 
 func (s *Service) keepActive(ctx context.Context, id string, idleTimeout int64) (func(), error) {
@@ -54,10 +54,10 @@ func (s *Service) keepActive(ctx context.Context, id string, idleTimeout int64) 
 	return func() {
 		close(done)
 		// Keep the lease across gateway shutdown; a replacement can reattach.
-		if s.controlPlane != nil && (s.ctx == nil || s.ctx.Err() == nil) {
+		if s.stateRepo != nil && (s.ctx == nil || s.ctx.Err() == nil) {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			s.controlPlane.ReleaseActivity(cleanupCtx, id, lease)
+			s.stateRepo.ReleaseActivity(cleanupCtx, id, lease)
 		}
 	}, nil
 }

@@ -43,7 +43,7 @@ func (s *Service) startWebRTC(tcpConfig types.PodTCPConfig, config types.VMWebRT
 	if err := config.ApplyDefaults(); err != nil {
 		return err
 	}
-	if !tcpConfig.Enabled || tcpConfig.ExternalHost == "" || s.controlPlane == nil || dialer == nil {
+	if !tcpConfig.Enabled || tcpConfig.ExternalHost == "" || s.stateRepo == nil || dialer == nil {
 		return nil
 	}
 	if tcpConfig.ExternalPort == 0 {
@@ -169,7 +169,7 @@ func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), w.config.HandshakeTimeout)
 	defer cancel()
 	// Rate-limit offers per VM, including failed registrations.
-	count, err := w.service.controlPlane.IncrementICERegistrations(ctx, v.ID)
+	count, err := w.service.stateRepo.IncrementICERegistrations(ctx, v.ID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC registry unavailable")
 	}
@@ -200,7 +200,7 @@ func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 			TokenHash:   trafficHash(v),
 			Password:    password,
 		}
-		ok, err := w.service.controlPlane.RegisterICESession(ctx, ufrag, route, w.config.SessionTTL)
+		ok, err := w.service.stateRepo.RegisterICESession(ctx, ufrag, route, w.config.SessionTTL)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC registry unavailable")
 		}
@@ -280,7 +280,7 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 	}
 	authCtx, authCancel := context.WithTimeout(ctx, w.config.HandshakeTimeout)
 	defer authCancel()
-	route, err := w.service.controlPlane.GetICESession(authCtx, check.fragment)
+	route, err := w.service.stateRepo.GetICESession(authCtx, check.fragment)
 	if err != nil || route == nil || stun.MessageIntegrity([]byte(route.Password)).Check(check.message) != nil {
 		return
 	}
@@ -293,14 +293,14 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 	}
 	// Bound each ICE session across gateways with expiring connection leases.
 	lease := uuid.NewString()
-	n, err := w.service.controlPlane.AcquireICELease(authCtx, check.fragment, lease, w.config.LeaseTTL)
+	n, err := w.service.stateRepo.AcquireICELease(authCtx, check.fragment, lease, w.config.LeaseTTL)
 	if err != nil {
 		return
 	}
 	defer func() {
 		cleanup, done := context.WithTimeout(context.Background(), time.Second)
 		defer done()
-		w.service.controlPlane.ReleaseICELease(cleanup, check.fragment, lease)
+		w.service.stateRepo.ReleaseICELease(cleanup, check.fragment, lease)
 	}()
 	if n > w.config.MaxConnectionsPerSession {
 		return
@@ -341,7 +341,7 @@ func (w *vmWebRTC) serve(conn net.Conn) {
 				renewCtx, done := context.WithTimeout(ctx, w.config.HandshakeTimeout)
 				_, err := w.activeVM(renewCtx, route)
 				if err == nil {
-					err = w.service.controlPlane.RenewICELease(renewCtx, check.fragment, lease, w.config.LeaseTTL)
+					err = w.service.stateRepo.RenewICELease(renewCtx, check.fragment, lease, w.config.LeaseTTL)
 				}
 				done()
 				if err != nil {

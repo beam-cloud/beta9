@@ -19,18 +19,18 @@ const (
 	iceLeasePrefix         = "vm:ice-open:"
 )
 
-type ControlPlaneRedisRepository struct {
+type VMRedisRepository struct {
 	rdb *common.RedisClient
 }
 
-func NewControlPlaneRedisRepository(rdb *common.RedisClient) ControlPlaneRepository {
+func NewVMRedisRepository(rdb *common.RedisClient) VMRepository {
 	if rdb == nil {
 		return nil
 	}
-	return &ControlPlaneRedisRepository{rdb: rdb}
+	return &VMRedisRepository{rdb: rdb}
 }
 
-func (r *ControlPlaneRedisRepository) RenewActivity(ctx context.Context, id, lease string) error {
+func (r *VMRedisRepository) RenewActivity(ctx context.Context, id, lease string) error {
 	key := activityKeyPrefix + id
 	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(time.Now().UnixMilli(), 10))
@@ -41,16 +41,16 @@ func (r *ControlPlaneRedisRepository) RenewActivity(ctx context.Context, id, lea
 	return err
 }
 
-func (r *ControlPlaneRedisRepository) HasActivity(ctx context.Context, id string) (bool, error) {
+func (r *VMRedisRepository) HasActivity(ctx context.Context, id string) (bool, error) {
 	count, err := r.rdb.ZCount(ctx, activityKeyPrefix+id, strconv.FormatInt(time.Now().UnixMilli(), 10), "+inf").Result()
 	return count > 0, err
 }
 
-func (r *ControlPlaneRedisRepository) ReleaseActivity(ctx context.Context, id, lease string) error {
+func (r *VMRedisRepository) ReleaseActivity(ctx context.Context, id, lease string) error {
 	return r.rdb.ZRem(ctx, activityKeyPrefix+id, lease).Err()
 }
 
-func (r *ControlPlaneRedisRepository) IncrementICERegistrations(ctx context.Context, id string) (int, error) {
+func (r *VMRedisRepository) IncrementICERegistrations(ctx context.Context, id string) (int, error) {
 	return r.rdb.Eval(ctx, `
 		local count = redis.call('INCR', KEYS[1])
 		if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
@@ -58,7 +58,7 @@ func (r *ControlPlaneRedisRepository) IncrementICERegistrations(ctx context.Cont
 	`, []string{iceRegistrationPrefix + id}, time.Minute.Milliseconds()).Int()
 }
 
-func (r *ControlPlaneRedisRepository) RegisterICESession(ctx context.Context, fragment string, session ICESession, ttl time.Duration) (bool, error) {
+func (r *VMRedisRepository) RegisterICESession(ctx context.Context, fragment string, session ICESession, ttl time.Duration) (bool, error) {
 	encoded, err := json.Marshal(session)
 	if err != nil {
 		return false, err
@@ -73,7 +73,7 @@ func (r *ControlPlaneRedisRepository) RegisterICESession(ctx context.Context, fr
 	return stored == 1, err
 }
 
-func (r *ControlPlaneRedisRepository) GetICESession(ctx context.Context, fragment string) (*ICESession, error) {
+func (r *VMRedisRepository) GetICESession(ctx context.Context, fragment string) (*ICESession, error) {
 	encoded, err := r.rdb.Get(ctx, iceSessionPrefix+fragment).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, nil
@@ -88,7 +88,7 @@ func (r *ControlPlaneRedisRepository) GetICESession(ctx context.Context, fragmen
 	return &session, nil
 }
 
-func (r *ControlPlaneRedisRepository) AcquireICELease(ctx context.Context, fragment, lease string, ttl time.Duration) (int, error) {
+func (r *VMRedisRepository) AcquireICELease(ctx context.Context, fragment, lease string, ttl time.Duration) (int, error) {
 	now := time.Now().UnixMilli()
 	return r.rdb.Eval(ctx, `
 		redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
@@ -98,7 +98,7 @@ func (r *ControlPlaneRedisRepository) AcquireICELease(ctx context.Context, fragm
 	`, []string{iceLeasePrefix + fragment}, now, now+ttl.Milliseconds(), lease, ttl.Milliseconds()).Int()
 }
 
-func (r *ControlPlaneRedisRepository) RenewICELease(ctx context.Context, fragment, lease string, ttl time.Duration) error {
+func (r *VMRedisRepository) RenewICELease(ctx context.Context, fragment, lease string, ttl time.Duration) error {
 	renewed, err := r.rdb.Eval(ctx, `
 		if not redis.call('ZSCORE', KEYS[1], ARGV[2]) then return 0 end
 		redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
@@ -111,6 +111,6 @@ func (r *ControlPlaneRedisRepository) RenewICELease(ctx context.Context, fragmen
 	return err
 }
 
-func (r *ControlPlaneRedisRepository) ReleaseICELease(ctx context.Context, fragment, lease string) error {
+func (r *VMRedisRepository) ReleaseICELease(ctx context.Context, fragment, lease string) error {
 	return r.rdb.ZRem(ctx, iceLeasePrefix+fragment, lease).Err()
 }

@@ -13,18 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func controlPlaneFixture(t *testing.T) (*miniredis.Miniredis, ControlPlaneRepository) {
+func redisRepositoryFixture(t *testing.T) (*miniredis.Miniredis, VMRepository) {
 	t.Helper()
 	server := miniredis.RunT(t)
 	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
 	require.NoError(t, err)
 	t.Cleanup(func() { rdb.Close() })
-	return server, NewControlPlaneRedisRepository(rdb)
+	return server, NewVMRedisRepository(rdb)
 }
 
-func TestControlPlaneActivityLeasesAreSharedAndExpire(t *testing.T) {
-	server, repo := controlPlaneFixture(t)
-	other := NewControlPlaneRedisRepository(repo.(*ControlPlaneRedisRepository).rdb)
+func TestVMRedisRepositoryActivityLeasesAreSharedAndExpire(t *testing.T) {
+	server, repo := redisRepositoryFixture(t)
+	other := NewVMRedisRepository(repo.(*VMRedisRepository).rdb)
 	ctx := context.Background()
 	require.NoError(t, repo.RenewActivity(ctx, "vm", "first"))
 	require.NoError(t, other.RenewActivity(ctx, "vm", "second"))
@@ -38,8 +38,8 @@ func TestControlPlaneActivityLeasesAreSharedAndExpire(t *testing.T) {
 	require.False(t, active)
 }
 
-func TestControlPlaneICERegistrationWindowDoesNotSlide(t *testing.T) {
-	server, repo := controlPlaneFixture(t)
+func TestVMRedisRepositoryICERegistrationWindowDoesNotSlide(t *testing.T) {
+	server, repo := redisRepositoryFixture(t)
 	ctx := context.Background()
 	count, err := repo.IncrementICERegistrations(ctx, "vm")
 	require.NoError(t, err)
@@ -55,8 +55,8 @@ func TestControlPlaneICERegistrationWindowDoesNotSlide(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
-func TestControlPlaneICESessionCompatibilityAndCollision(t *testing.T) {
-	server, repo := controlPlaneFixture(t)
+func TestVMRedisRepositoryICESessionCompatibilityAndCollision(t *testing.T) {
+	server, repo := redisRepositoryFixture(t)
 	ctx := context.Background()
 	const saved = `{"VMID":"vm","ContainerID":"container","TokenHash":"token","Password":"password","WorkspaceID":7,"Generation":2}`
 	require.NoError(t, server.Set("vm:ice:fragment", saved))
@@ -89,9 +89,9 @@ func TestControlPlaneICESessionCompatibilityAndCollision(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestControlPlaneICELeasesCountAcrossGatewaysAndNeverResurrect(t *testing.T) {
-	server, repo := controlPlaneFixture(t)
-	other := NewControlPlaneRedisRepository(repo.(*ControlPlaneRedisRepository).rdb)
+func TestVMRedisRepositoryICELeasesCountAcrossGatewaysAndNeverResurrect(t *testing.T) {
+	server, repo := redisRepositoryFixture(t)
+	other := NewVMRedisRepository(repo.(*VMRedisRepository).rdb)
 	ctx := context.Background()
 	const connections = 16
 	counts := make(chan int, connections)
@@ -128,8 +128,8 @@ func TestControlPlaneICELeasesCountAcrossGatewaysAndNeverResurrect(t *testing.T)
 	require.False(t, server.Exists("vm:ice-open:fragment"))
 }
 
-func TestControlPlaneRedisFailuresAreNotMissingState(t *testing.T) {
-	server, repo := controlPlaneFixture(t)
+func TestVMRedisRepositoryRedisFailuresAreNotMissingState(t *testing.T) {
+	server, repo := redisRepositoryFixture(t)
 	server.SetError("unavailable")
 	ctx := context.Background()
 	require.Error(t, repo.RenewActivity(ctx, "vm", "lease"))
