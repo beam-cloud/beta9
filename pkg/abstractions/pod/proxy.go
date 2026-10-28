@@ -754,18 +754,16 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 		return nil
 	}
 
-	target := newBackendTarget(targetHost)
-	var attempt backendAttempt
-	request = request.WithContext(attempt.trace(request.Context()))
 	var retryErr error
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
-		unanswered := target.unanswered(req, err, &attempt)
-		if unanswered {
+		var dialErr *backendDialError
+		dialFailed := errors.As(err, &dialErr) && req.Context().Err() == nil
+		if dialFailed {
 			pb.readiness.invalidateTarget(readinessTarget{container.id, port, targetHost})
 		}
 		if conn.retryBackendDial &&
 			conn.retryCount < backendDialRetryLimit &&
-			unanswered &&
+			dialFailed &&
 			!conn.ctx.Response().Committed {
 			retryErr = err
 			return
@@ -970,12 +968,19 @@ func (pb *PodProxyBuffer) backendTransport(targetHost string, dialTimeout time.D
 		MaxIdleConnsPerHost: 128,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  true,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			conn, err := pb.dialBackend(ctx, newBackendTarget(targetHost), dialTimeout, "http")
-			if err != nil {
-				return nil, err
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			dialAddress := addr
+			if _, isRoute := types.ParseBackendRouteAddress(targetHost); isRoute {
+				dialAddress = targetHost
 			}
-			abstractions.SetConnOptions(conn.Conn, true, connectionKeepAliveInterval, connectionReadTimeout)
+			start := time.Now()
+			conn, err := network.ConnectToBackend(ctx, dialAddress, dialTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
+			metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "http", err == nil, time.Since(start))
+			if err == nil {
+				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
+			} else {
+				return nil, &backendDialError{err: err}
+			}
 			return conn, nil
 		},
 	}
@@ -1022,10 +1027,14 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 		ReadBufferSize:   64 << 10,
 		WriteBufferSize:  64 << 10,
 		HandshakeTimeout: conn.backendDialTimeout(),
-		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			backend, err := pb.dialBackend(ctx, newBackendTarget(addr), conn.backendDialTimeout(), "http")
+		NetDialContext: func(ctx context.Context, _, dialAddr string) (net.Conn, error) {
+			dialAddress := dialAddr
+			if _, isRoute := types.ParseBackendRouteAddress(addr); isRoute {
+				dialAddress = addr
+			}
+			backend, err := network.ConnectToBackend(ctx, dialAddress, conn.backendDialTimeout(), pb.tailscale, pb.tsConfig, pb.containerRepo)
 			if err != nil {
-				return nil, err
+				return nil, &backendDialError{err: err}
 			}
 			return backend, nil
 		},
@@ -1308,14 +1317,15 @@ func (pb *PodProxyBuffer) checkContainerAvailableWithTimeout(containerAddress st
 	if timeout <= 0 {
 		timeout = containerAvailableTimeout
 	}
-	target := newBackendTarget(containerAddress)
 	start := time.Now()
-	conn, err := pb.dialBackend(pb.baseContext(), target, timeout, "discovery")
+	conn, err := network.ConnectToBackend(pb.baseContext(), containerAddress, timeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
 	if err != nil {
+		metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", false, time.Since(start))
 		return false
 	}
 	defer conn.Close()
-	return target.ready(conn, time.Since(start))
+	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", true, time.Since(start))
+	return conn != nil
 }
 
 func (pb *PodProxyBuffer) baseContext() context.Context {
