@@ -16,7 +16,7 @@ import (
 
 const (
 	containerPortProxyReadyPollInterval = 100 * time.Millisecond
-	containerPortProxyReadyPollCeiling  = 5 * time.Second
+	containerPortProxyReadyPollCeiling  = 1 * time.Second
 	containerPortProxyDialTimeout       = 250 * time.Millisecond
 	containerPortProxyConnectTimeout    = 2 * time.Second
 )
