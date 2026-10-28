@@ -206,58 +206,52 @@ func TestGetDiskSnapshotDownloadURLRejectsCrossWorkspaceToken(t *testing.T) {
 	require.Zero(t, repo.workspaceLookups)
 }
 
+type diskSnapshotChainCall struct {
+	workspaceID uint
+	snapshotID  string
+	maxDepth    int
+}
+
 type diskSnapshotChainBackendRepo struct {
 	repository.BackendRepository
-	snapshots map[string]*types.DiskSnapshot
-	lookups   []string
+	chain []*types.DiskSnapshot
+	calls []diskSnapshotChainCall
 }
 
 func (r *diskSnapshotChainBackendRepo) GetWorkspaceByExternalId(_ context.Context, externalID string) (types.Workspace, error) {
-	return types.Workspace{Id: 1, ExternalId: externalID}, nil
+	return types.Workspace{Id: 7, ExternalId: externalID}, nil
 }
 
-func (r *diskSnapshotChainBackendRepo) GetDiskSnapshot(_ context.Context, workspaceID uint, id string) (*types.DiskSnapshot, error) {
-	r.lookups = append(r.lookups, id)
-	if snapshot, ok := r.snapshots[id]; ok && workspaceID == 1 {
-		return snapshot, nil
-	}
-	return nil, &types.ErrDiskSnapshotNotFound{}
+func (r *diskSnapshotChainBackendRepo) GetDiskSnapshotChain(_ context.Context, workspaceID uint, snapshotID string, maxDepth int) ([]*types.DiskSnapshot, error) {
+	r.calls = append(r.calls, diskSnapshotChainCall{workspaceID, snapshotID, maxDepth})
+	return r.chain, nil
 }
 
-func TestGetDiskSnapshotChainWalksParents(t *testing.T) {
-	repo := &diskSnapshotChainBackendRepo{snapshots: map[string]*types.DiskSnapshot{
-		"a":      {ExternalId: "a"},
-		"b":      {ExternalId: "b", ParentSnapshotId: "a"},
-		"c":      {ExternalId: "c", ParentSnapshotId: "b"},
-		"orphan": {ExternalId: "orphan", ParentSnapshotId: "gone"},
+func TestGetDiskSnapshotChainLooksUpTheChainOnce(t *testing.T) {
+	repo := &diskSnapshotChainBackendRepo{chain: []*types.DiskSnapshot{
+		{ExternalId: "c", ParentSnapshotId: "b"},
+		{ExternalId: "b", ParentSnapshotId: "a"},
+		{ExternalId: "a"},
 	}}
 	service := &BackendRepositoryService{backendRepo: repo}
-	ids := func(snapshots []*pb.DiskSnapshot) []string {
-		out := []string{}
-		for _, snapshot := range snapshots {
-			out = append(out, snapshot.ExternalId)
-		}
-		return out
-	}
 
 	for _, tt := range []struct {
-		name     string
-		id       string
 		maxDepth int32
-		want     []string
-	}{
-		{name: "to the parentless snapshot", id: "c", want: []string{"c", "b", "a"}},
-		{name: "bounded by max depth", id: "c", maxDepth: 2, want: []string{"c", "b"}},
-		{name: "ends at a missing parent", id: "orphan", want: []string{"orphan"}},
-		{name: "missing snapshot", id: "gone", want: []string{}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			response, err := service.GetDiskSnapshotChain(context.Background(), &pb.GetDiskSnapshotChainRequest{WorkspaceId: "ws", SnapshotId: tt.id, MaxDepth: tt.maxDepth})
-			require.NoError(t, err)
-			require.True(t, response.Ok, response.ErrorMsg)
-			require.Equal(t, tt.want, ids(response.Snapshots))
-		})
+		want     int
+	}{{0, maxDiskSnapshotChainDepth}, {2, 2}, {1000, maxDiskSnapshotChainDepth}} {
+		response, err := service.GetDiskSnapshotChain(context.Background(), &pb.GetDiskSnapshotChainRequest{WorkspaceId: "ws", SnapshotId: "c", MaxDepth: tt.maxDepth})
+		require.NoError(t, err)
+		require.True(t, response.Ok, response.ErrorMsg)
+		require.Len(t, response.Snapshots, 3)
+		require.Equal(t, "b", response.Snapshots[0].ParentSnapshotId)
+		require.Equal(t, diskSnapshotChainCall{7, "c", tt.want}, repo.calls[len(repo.calls)-1])
 	}
+
+	response, err := service.GetDiskSnapshotChain(context.Background(), &pb.GetDiskSnapshotChainRequest{WorkspaceId: "ws"})
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Empty(t, response.Snapshots)
+	require.Len(t, repo.calls, 3, "no snapshot, no lookup")
 }
 
 func TestGetCachedDiskSnapshotChunkKeys(t *testing.T) {

@@ -595,23 +595,11 @@ func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile, buc
 // generation (or a seed snapshot for forks) back to a parentless root and
 // returns the rows base first.
 func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, newest *types.DiskSnapshot) ([]*types.DiskSnapshot, error) {
-	if (newest == nil || newest.ManifestKey == "") && mount.DurableDisk.SourceSnapshotId != "" {
-		// Fork: seed a brand new disk from another disk's snapshot chain.
-		seed, err := s.seedDurableDiskSnapshot(ctx, request, mount)
-		if err != nil {
-			return nil, err
-		}
-		newest = seed
-	}
-	if newest == nil || newest.ManifestKey == "" {
-		return nil, nil
-	}
-
 	// One call fetches every ancestor; the walk below still checks each link
 	// and looks up whatever the call did not return, one row at a time.
 	ancestors := make(map[string]*types.DiskSnapshot)
-	if newest.ParentSnapshotId != "" {
-		chain, err := s.diskSnapshotChain(ctx, request, newest.ParentSnapshotId, disk.DefaultMaxChainDepth)
+	fetchAncestors := func(id string) {
+		chain, err := s.diskSnapshotChain(ctx, request, id, disk.DefaultMaxChainDepth)
 		if err != nil && status.Code(err) != codes.Unimplemented && ctx.Err() == nil {
 			log.Warn().Err(err).Str("disk", mount.DurableDisk.Name).
 				Msg("could not resolve the qcow snapshot chain in one call; resolving each generation")
@@ -621,6 +609,28 @@ func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.Co
 				ancestors[row.ExternalId] = row
 			}
 		}
+	}
+
+	if sourceID := mount.DurableDisk.SourceSnapshotId; (newest == nil || newest.ManifestKey == "") && sourceID != "" {
+		// Fork: seed a brand new disk from another disk's snapshot chain. The
+		// chain call returns the source too; without it, look the source up
+		// on its own.
+		fetchAncestors(sourceID)
+		if seed := ancestors[sourceID]; seed != nil && seed.ManifestKey != "" {
+			logDurableDiskSeed(mount, seed)
+			newest = seed
+		} else {
+			seed, err := s.seedDurableDiskSnapshot(ctx, request, mount)
+			if err != nil {
+				return nil, err
+			}
+			newest = seed
+		}
+	} else if newest != nil && newest.ParentSnapshotId != "" {
+		fetchAncestors(newest.ParentSnapshotId)
+	}
+	if newest == nil || newest.ManifestKey == "" {
+		return nil, nil
 	}
 
 	var rows []*types.DiskSnapshot

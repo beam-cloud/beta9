@@ -692,12 +692,16 @@ func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.Con
 		return nil, fmt.Errorf("durable disk source snapshot %s is missing", sourceID)
 	}
 
+	logDurableDiskSeed(mount, seed)
+	return seed, nil
+}
+
+func logDurableDiskSeed(mount *types.Mount, seed *types.DiskSnapshot) {
 	log.Info().
 		Str("disk", mount.DurableDisk.Name).
-		Str("source_snapshot_id", sourceID).
+		Str("source_snapshot_id", seed.ExternalId).
 		Str("source_disk", seed.DiskName).
 		Msg("seeding durable disk from another disk's snapshot")
-	return seed, nil
 }
 
 func durableDiskTransferTimeout(sizeBytes int64) time.Duration {

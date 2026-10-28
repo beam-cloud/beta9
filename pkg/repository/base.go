@@ -323,6 +323,7 @@ type BackendRepository interface {
 	CreateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
 	UpdateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
 	GetDiskSnapshot(ctx context.Context, workspaceId uint, snapshotId string) (*types.DiskSnapshot, error)
+	GetDiskSnapshotChain(ctx context.Context, workspaceId uint, snapshotId string, maxDepth int) ([]*types.DiskSnapshot, error)
 	GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error)
 	ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error)
 	GetDisk(ctx context.Context, workspaceId uint, name string) (*types.Disk, error)

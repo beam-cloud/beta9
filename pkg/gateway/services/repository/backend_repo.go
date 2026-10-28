@@ -225,22 +225,20 @@ func (s *BackendRepositoryService) diskSnapshotChain(ctx context.Context, req *p
 	if maxDepth <= 0 || maxDepth > maxDiskSnapshotChainDepth {
 		maxDepth = maxDiskSnapshotChainDepth
 	}
+	if req.SnapshotId == "" {
+		return nil, nil
+	}
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
 	if err != nil {
 		return nil, err
 	}
-	var snapshots []*pb.DiskSnapshot
-	for id := req.SnapshotId; id != "" && len(snapshots) < maxDepth; {
-		snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, id)
-		if err != nil {
-			var notFound *types.ErrDiskSnapshotNotFound
-			if errors.As(err, &notFound) {
-				break
-			}
-			return nil, err
-		}
+	chain, err := s.backendRepo.GetDiskSnapshotChain(ctx, workspace.Id, req.SnapshotId, maxDepth)
+	if err != nil {
+		return nil, err
+	}
+	snapshots := make([]*pb.DiskSnapshot, 0, len(chain))
+	for _, snapshot := range chain {
 		snapshots = append(snapshots, diskSnapshotToProto(snapshot))
-		id = snapshot.ParentSnapshotId
 	}
 	return snapshots, nil
 }

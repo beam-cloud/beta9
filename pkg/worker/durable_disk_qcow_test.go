@@ -219,6 +219,7 @@ func TestResolveQcowSnapshotChainInOneCall(t *testing.T) {
 
 	for _, tc := range []struct {
 		name       string
+		fork       bool
 		chain      bool
 		chainDepth int
 		lookups    []string
@@ -226,10 +227,17 @@ func TestResolveQcowSnapshotChainInOneCall(t *testing.T) {
 		{name: "one call", chain: true},
 		{name: "older gateway", lookups: []string{"s3", "s2", "s1", "s0"}},
 		{name: "truncated chain", chain: true, chainDepth: 2, lookups: []string{"s1", "s0"}},
+		{name: "fork in one call", fork: true, chain: true},
+		{name: "fork on an older gateway", fork: true, lookups: []string{"s4", "s3", "s2", "s1", "s0"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			backend := &fakeBackendRepoClient{snapshots: snapshots, chain: tc.chain, chainDepth: tc.chainDepth}
 			worker := &Worker{backendRepoClient: backend}
+			mount, newest := mount, newest
+			if tc.fork {
+				mount = &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "root", SourceSnapshotId: "s4"}}
+				newest = nil
+			}
 			rows, err := worker.resolveQcowSnapshotChain(context.Background(), &types.ContainerRequest{}, mount, newest)
 			require.NoError(t, err)
 			require.Equal(t, []string{"s0", "s1", "s2", "s3", "s4"}, ids(rows))

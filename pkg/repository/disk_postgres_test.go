@@ -80,6 +80,23 @@ func TestGetDiskSnapshotOnlySharesAvailableSnapshots(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// Each generation of the chain is found the way GetDiskSnapshot finds one.
+func TestGetDiskSnapshotChainWalksVisibleParentsInOneQuery(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`(?s)WITH RECURSIVE chain.*public = TRUE AND status = \$3.*s\.public = TRUE AND s\.status = \$3.*chain\.depth < \$4.*ORDER BY depth`).
+		WithArgs(uint(7), "snapshot-2", types.DiskSnapshotStatusAvailable, 64).
+		WillReturnRows(sqlmock.NewRows([]string{"external_id", "parent_snapshot_id"}).
+			AddRow("snapshot-2", "snapshot-1").
+			AddRow("snapshot-1", ""))
+
+	chain, err := repo.GetDiskSnapshotChain(context.Background(), 7, "snapshot-2", 64)
+	require.NoError(t, err)
+	require.Len(t, chain, 2)
+	require.Equal(t, "snapshot-1", chain[0].ParentSnapshotId)
+	require.Equal(t, "snapshot-1", chain[1].ExternalId)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDeleteDiskOnlyUnregistersMutableDisk(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)

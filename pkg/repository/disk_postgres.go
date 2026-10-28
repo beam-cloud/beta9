@@ -380,6 +380,32 @@ func (r *PostgresBackendRepository) GetDiskSnapshot(ctx context.Context, workspa
 	return &snapshot, nil
 }
 
+// GetDiskSnapshotChain returns a snapshot and its ancestors, nearest first and
+// at most maxDepth of them, each visible as GetDiskSnapshot would find it. The
+// walk ends at a parentless snapshot or a parent that is missing.
+func (r *PostgresBackendRepository) GetDiskSnapshotChain(ctx context.Context, workspaceId uint, snapshotId string, maxDepth int) ([]*types.DiskSnapshot, error) {
+	query := fmt.Sprintf(`
+		WITH RECURSIVE chain AS (
+			SELECT %s, 1 AS depth
+			FROM disk_snapshot
+			WHERE (workspace_id = $1 OR (public = TRUE AND status = $3))
+				AND external_id = $2 AND deleted_at IS NULL
+			UNION ALL
+			SELECT %s, chain.depth + 1
+			FROM chain
+			JOIN disk_snapshot s ON s.external_id = NULLIF(chain.parent_snapshot_id, '')::uuid
+			WHERE (s.workspace_id = $1 OR (s.public = TRUE AND s.status = $3))
+				AND s.deleted_at IS NULL AND chain.depth < $4
+		)
+		SELECT %s FROM chain ORDER BY depth;`, diskSnapshotColumns(""), diskSnapshotColumns("s"), diskSnapshotColumns(""))
+
+	var snapshots []*types.DiskSnapshot
+	if err := r.client.SelectContext(ctx, &snapshots, query, workspaceId, snapshotId, types.DiskSnapshotStatusAvailable, maxDepth); err != nil {
+		return nil, err
+	}
+	return snapshots, nil
+}
+
 func (r *PostgresBackendRepository) GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error) {
 	query := fmt.Sprintf(`
 		SELECT %s
