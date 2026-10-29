@@ -236,21 +236,15 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 	}
 
 	if !instance.buffer.hasAvailableContainers() {
-		// Fail fast instead of queueing until timeout when the stub's GPU has
-		// no supporting pool or its containers keep failing; requests succeed
-		// as soon as capacity joins or the cooldown ends.
-		reason := instance.UnschedulableReason()
-		if reason == "" {
-			if err := instance.ensureReadyForRequest(); errors.Is(err, errContainersFailing) {
-				reason = err.Error()
-			} else if err != nil {
-				return err
-			}
-		}
-		if reason != "" {
+		// Fail fast instead of queueing until timeout; requests succeed as soon
+		// as capacity joins or the cooldown ends.
+		var unavailable errUnavailable
+		if err := instance.ensureReadyForRequest(); errors.As(err, &unavailable) {
 			return ctx.JSON(http.StatusServiceUnavailable, map[string]interface{}{
-				"error": reason,
+				"error": err.Error(),
 			})
+		} else if err != nil {
+			return err
 		}
 	}
 
@@ -282,11 +276,8 @@ func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string)
 	}
 
 	if !instance.buffer.hasAvailableContainers() {
-		if reason := instance.UnschedulableReason(); reason != "" {
-			tc.Conn.Close()
-			return nil
-		}
-		if err := instance.ensureReadyForRequest(); errors.Is(err, errContainersFailing) {
+		var unavailable errUnavailable
+		if err := instance.ensureReadyForRequest(); errors.As(err, &unavailable) {
 			tc.Conn.Close()
 			return nil
 		} else if err != nil {

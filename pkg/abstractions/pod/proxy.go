@@ -31,18 +31,15 @@ import (
 const (
 	containerDiscoveryInterval       time.Duration = time.Millisecond * 250
 	queuedContainerDiscoveryInterval time.Duration = time.Millisecond * 50
-	// Routed containers have passed a readiness dial, so a slow dial means the
-	// container is gone (a dead host or a torn-down port answers nothing).
+	// Long enough for a dropped SYN (retransmitted at 1s) and relayed dials
+	// queued under concurrency; any slower and the container is gone.
 	containerDialTimeoutDurationS time.Duration = time.Second * 5
 	webSocketHandshakeTimeout     time.Duration = time.Second * 30
-	// Covers a dropped SYN (kernel retransmits at 1s) and relayed tunnel dials
-	// that routinely exceed 900ms under concurrency.
-	containerPinnedDialTimeout  time.Duration = time.Second * 3
-	containerAvailableTimeout   time.Duration = time.Second * 2
-	containerPrimeTimeout       time.Duration = time.Second * 3
-	connectionKeepAliveInterval time.Duration = time.Second * 1
-	connectionReadTimeout       time.Duration = time.Minute * 5
-	backendDialRetryLimit                     = 1
+	containerAvailableTimeout     time.Duration = time.Second * 2
+	containerPrimeTimeout         time.Duration = time.Second * 3
+	connectionKeepAliveInterval   time.Duration = time.Second * 1
+	connectionReadTimeout         time.Duration = time.Minute * 5
+	backendDialRetryLimit                       = 1
 )
 
 type container struct {
@@ -59,7 +56,6 @@ type connection struct {
 	done             chan struct{}
 	finishOnce       sync.Once
 	enqueuedAt       time.Time
-	dialTimeout      time.Duration
 	retryBackendDial bool
 	pinned           bool
 	retryCount       int
@@ -71,11 +67,6 @@ const (
 	connectionActive
 	connectionFinished
 )
-
-type backendTransportKey struct {
-	targetHost  string
-	dialTimeout time.Duration
-}
 
 // backendDialError identifies failures that happened before a connection was
 // established, so the request body has not been delivered to a backend.
@@ -91,13 +82,6 @@ type preservedRequestBody struct {
 }
 
 func (preservedRequestBody) Close() error { return nil }
-
-func (c *connection) backendDialTimeout() time.Duration {
-	if c != nil && c.dialTimeout > 0 {
-		return c.dialTimeout
-	}
-	return containerDialTimeoutDurationS
-}
 
 type PodProxyBuffer struct {
 	ctx                     context.Context
@@ -258,7 +242,6 @@ func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId 
 	conn := &connection{
 		ctx:              ctx,
 		done:             done,
-		dialTimeout:      containerPinnedDialTimeout,
 		retryBackendDial: true,
 		pinned:           true,
 	}
@@ -661,7 +644,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 	}
 
 	dialStart := time.Now()
-	podConn, err := network.ConnectToBackend(pb.baseContext(), targetHost, conn.backendDialTimeout(), pb.tailscale, pb.tsConfig, pb.containerRepo)
+	podConn, err := network.ConnectToBackend(pb.baseContext(), targetHost, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig, pb.containerRepo)
 	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "tcp", err == nil, time.Since(dialStart))
 	if err == nil {
 		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, -1)
@@ -772,7 +755,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 		}
 	}()
 
-	proxy, err := pb.backendProxy(targetHost, conn.backendDialTimeout())
+	proxy, err := pb.backendProxy(targetHost)
 	if err != nil {
 		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
 		return false
@@ -970,14 +953,14 @@ func rewriteRedirect(location, prefix, backendHost string) string {
 	return prefix + location
 }
 
-func (pb *PodProxyBuffer) backendProxy(targetHost string, dialTimeout time.Duration) (*httputil.ReverseProxy, error) {
+func (pb *PodProxyBuffer) backendProxy(targetHost string) (*httputil.ReverseProxy, error) {
 	targetURL, err := url.Parse(podBackendURL("http", targetHost, "", ""))
 	if err != nil {
 		return nil, err
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	proxy.Transport = pb.backendTransport(targetHost, dialTimeout)
+	proxy.Transport = pb.backendTransport(targetHost)
 	proxy.BufferPool = abstractions.ProxyBufferPool{}
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 		http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
@@ -985,12 +968,8 @@ func (pb *PodProxyBuffer) backendProxy(targetHost string, dialTimeout time.Durat
 	return proxy, nil
 }
 
-func (pb *PodProxyBuffer) backendTransport(targetHost string, dialTimeout time.Duration) *http.Transport {
-	if dialTimeout <= 0 {
-		dialTimeout = containerDialTimeoutDurationS
-	}
-	key := backendTransportKey{targetHost: targetHost, dialTimeout: dialTimeout}
-	if transport, ok := pb.backendTransports.Load(key); ok {
+func (pb *PodProxyBuffer) backendTransport(targetHost string) *http.Transport {
+	if transport, ok := pb.backendTransports.Load(targetHost); ok {
 		return transport.(*http.Transport)
 	}
 
@@ -1005,7 +984,7 @@ func (pb *PodProxyBuffer) backendTransport(targetHost string, dialTimeout time.D
 				dialAddress = targetHost
 			}
 			start := time.Now()
-			conn, err := network.ConnectToBackend(ctx, dialAddress, dialTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
+			conn, err := network.ConnectToBackend(ctx, dialAddress, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig, pb.containerRepo)
 			metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "http", err == nil, time.Since(start))
 			if err == nil {
 				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, -1)
@@ -1016,7 +995,7 @@ func (pb *PodProxyBuffer) backendTransport(targetHost string, dialTimeout time.D
 		},
 	}
 
-	actual, loaded := pb.backendTransports.LoadOrStore(key, transport)
+	actual, loaded := pb.backendTransports.LoadOrStore(targetHost, transport)
 	if loaded {
 		transport.CloseIdleConnections()
 		return actual.(*http.Transport)
@@ -1033,16 +1012,10 @@ func (pb *PodProxyBuffer) pruneBackendTransports(containers []container) {
 	}
 
 	pb.backendTransports.Range(func(key, value any) bool {
-		cacheKey, ok := key.(backendTransportKey)
-		if !ok {
+		if _, ok := active[key.(string)]; !ok {
+			value.(*http.Transport).CloseIdleConnections()
 			pb.backendTransports.Delete(key)
-			return true
 		}
-		if _, ok := active[cacheKey.targetHost]; ok {
-			return true
-		}
-		value.(*http.Transport).CloseIdleConnections()
-		pb.backendTransports.Delete(key)
 		return true
 	})
 }
@@ -1063,7 +1036,7 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 			if _, isRoute := types.ParseBackendRouteAddress(addr); isRoute {
 				dialAddress = addr
 			}
-			backend, err := network.ConnectToBackend(ctx, dialAddress, conn.backendDialTimeout(), pb.tailscale, pb.tsConfig, pb.containerRepo)
+			backend, err := network.ConnectToBackend(ctx, dialAddress, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig, pb.containerRepo)
 			if err != nil {
 				return nil, &backendDialError{err: err}
 			}

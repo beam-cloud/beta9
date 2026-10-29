@@ -984,20 +984,13 @@ func TestPodBackendTransportReusesTransportForSameTarget(t *testing.T) {
 	pb := &PodProxyBuffer{}
 	target := types.BackendRouteAddress("machine:worker:container:container:8001")
 
-	first := pb.backendTransport(target, containerDialTimeoutDurationS)
-	second := pb.backendTransport(target, containerDialTimeoutDurationS)
-	if first != second {
+	if pb.backendTransport(target) != pb.backendTransport(target) {
 		t.Fatal("expected pod backend transport to be reused for same target")
-	}
-
-	pinned := pb.backendTransport(target, containerPinnedDialTimeout)
-	if pinned == first {
-		t.Fatal("expected pinned sandbox transport to be isolated from default pod transport")
 	}
 
 	routeA := types.BackendRouteAddress("machine:worker:container-a:container:8765")
 	routeB := types.BackendRouteAddress("machine:worker:container-b:container:8765")
-	if pb.backendTransport(routeA, containerPinnedDialTimeout) == pb.backendTransport(routeB, containerPinnedDialTimeout) {
+	if pb.backendTransport(routeA) == pb.backendTransport(routeB) {
 		t.Fatal("expected different sandbox container routes to use different backend transports")
 	}
 }
@@ -1447,60 +1440,8 @@ func TestPrimeContainerPortMissingPortDoesNotPublishContainer(t *testing.T) {
 	}
 }
 
-func TestForwardContainerRequestGivesDirectAddressesRoomToRetransmit(t *testing.T) {
-	// An address nobody answers, so the request fails without a backend to talk to.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	listener.Close()
-
-	rdb := newPodProxyTestRedis(t)
-	repo := repository.NewContainerRedisRepositoryForTest(rdb)
-	containerID := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
-	if err := repo.SetContainerAddressMap(containerID, map[int32]string{8765: address}); err != nil {
-		t.Fatal(err)
-	}
-
-	e := echo.New()
-	rec := httptest.NewRecorder()
-	ctx := e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil), rec)
-	ctx.SetParamNames("port", "subPath")
-	ctx.SetParamValues("8765", "")
-
-	pb := &PodProxyBuffer{
-		ctx:           context.Background(),
-		rdb:           rdb,
-		workspace:     &types.Workspace{Name: "workspace"},
-		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
-		stubConfig:    &types.StubConfigV1{},
-		containerRepo: repo,
-	}
-
-	if err := pb.ForwardContainerRequest(ctx, containerID); err != nil {
-		t.Fatal(err)
-	}
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
-	}
-
-	// A real connect has to outlast a dropped SYN, unanswered for a second.
-	budgets := []time.Duration{}
-	pb.backendTransports.Range(func(key, _ any) bool {
-		budgets = append(budgets, key.(backendTransportKey).dialTimeout)
-		return true
-	})
-	if len(budgets) != 1 || budgets[0] != containerPinnedDialTimeout {
-		t.Fatalf("dial budgets = %v, want one of %s", budgets, containerPinnedDialTimeout)
-	}
-	if containerPinnedDialTimeout <= time.Second {
-		t.Fatalf("pinned dial budget %s does not outlast a retransmit", containerPinnedDialTimeout)
-	}
-}
-
-// A stuck-opening route gets the full pinned dial budget plus one retry
-// before failing, since routes normally become ready within seconds.
+// A stuck-opening route gets the full dial budget plus one retry before
+// failing, since routes normally become ready within seconds.
 func TestForwardContainerRequestBoundsStuckOpeningRoute(t *testing.T) {
 	rdb := newPodProxyTestRedis(t)
 	repo := repository.NewContainerRedisRepositoryForTest(rdb)
@@ -1543,7 +1484,7 @@ func TestForwardContainerRequestBoundsStuckOpeningRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(start)
-	maxElapsed := 2*containerPinnedDialTimeout + time.Second
+	maxElapsed := 2*containerDialTimeoutDurationS + time.Second
 	if elapsed > maxElapsed {
 		t.Fatalf("forwarding opening route took %s, want bounded below %s", elapsed, maxElapsed)
 	}
@@ -2016,8 +1957,7 @@ func TestRetireContainerForStopRemovesProxyBackend(t *testing.T) {
 		}},
 		discoverReady: make(chan struct{}, 1),
 	}
-	transportKey := backendTransportKey{targetHost: address, dialTimeout: time.Second}
-	pb.backendTransports.Store(transportKey, &http.Transport{})
+	pb.backendTransports.Store(address, &http.Transport{})
 
 	instance := &podInstance{
 		AutoscaledInstance: &abstractions.AutoscaledInstance{IsActive: true},
@@ -2029,7 +1969,7 @@ func TestRetireContainerForStopRemovesProxyBackend(t *testing.T) {
 	if got := pb.availableContainerSnapshot(); len(got) != 0 {
 		t.Fatalf("available containers = %v, want none", got)
 	}
-	if _, ok := pb.backendTransports.Load(transportKey); ok {
+	if _, ok := pb.backendTransports.Load(address); ok {
 		t.Fatal("idle backend transport was not pruned")
 	}
 }
@@ -2089,7 +2029,8 @@ func TestEnsureReadyForRequestFailsFastDuringFailureCooldown(t *testing.T) {
 		},
 	}}
 
-	require.ErrorIs(t, instance.ensureReadyForRequest(), errContainersFailing)
+	var unavailable errUnavailable
+	require.ErrorAs(t, instance.ensureReadyForRequest(), &unavailable)
 	require.NoError(t, ctx.Err(), "the cooldown check cancelled the instance")
 }
 

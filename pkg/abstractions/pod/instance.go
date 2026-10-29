@@ -2,7 +2,6 @@ package pod
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"math/rand"
@@ -16,9 +15,11 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// errContainersFailing is returned while the stub's failed containers hold it in
-// cooldown; no replacement can start until the failures age out.
-var errContainersFailing = errors.New("containers failed repeatedly; a new one starts after a cooldown")
+// errUnavailable is a user-facing reason no container can start yet: the stub's
+// GPU has no supporting pool, or its failed containers hold it in cooldown.
+type errUnavailable string
+
+func (e errUnavailable) Error() string { return string(e) }
 
 type podInstance struct {
 	*abstractions.AutoscaledInstance
@@ -57,6 +58,9 @@ func (i *podInstance) ensureReadyForRequest() error {
 }
 
 func (i *podInstance) ensureReady() error {
+	if reason := i.UnschedulableReason(); reason != "" {
+		return errUnavailable(reason)
+	}
 	if i.StubConfig.IsPersistentVM() {
 		return nil
 	}
@@ -70,7 +74,7 @@ func (i *podInstance) ensureReady() error {
 	}
 	// Scaling would only cancel this instance, and the next request would rebuild it.
 	if i.FailedContainerThreshold > 0 && len(state.FailedContainers) >= i.FailedContainerThreshold {
-		return errContainersFailing
+		return errUnavailable("containers failed repeatedly; a new one starts after a cooldown")
 	}
 	if err := i.Sync(); err != nil {
 		return err
