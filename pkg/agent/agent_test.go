@@ -190,6 +190,45 @@ func TestDialLocalTargetFallsBackToLoopback(t *testing.T) {
 	defer conn.Close()
 }
 
+func TestRouteProxyHoldsConnectionWhileLocalTargetRestarts(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := reserved.Addr().String()
+	_ = reserved.Close()
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = proxyListener.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	proxy := &routeProxy{listener: proxyListener, routes: map[string]string{"route-one": target}}
+	go func() { _ = proxy.accept(ctx) }()
+
+	conn, err := net.DialTimeout("tcp", proxyListener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "%sroute-one\nping", network.BackendRoutePreface); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	startEchoListener(t, target)
+
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "ping" {
+		t.Fatalf("expected ping echo, got %q", string(buf))
+	}
+}
+
 type routeStatusClient struct {
 	pb.GatewayServiceClient
 	updates chan *pb.UpdateAgentRouteStatusRequest

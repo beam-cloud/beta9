@@ -84,6 +84,27 @@ func TestContainerPortProxyAcceptsIPv4ForIPv6Backend(t *testing.T) {
 	require.Equal(t, "ipv4-to-ipv6-ok\n", line)
 }
 
+func TestContainerPortProxyHoldsConnectionWhileBackendRestarts(t *testing.T) {
+	backend := startLineServer(t, "tcp4", "127.0.0.1:0", "first\n")
+	listener := listenForTest(t, "tcp4", "127.0.0.1:0")
+	proxy := startTestPortProxy(t, listener, []string{backend.Addr().String()})
+	defer proxy.close()
+	require.NoError(t, backend.Close())
+
+	conn, err := net.DialTimeout("tcp4", listener.Addr().String(), time.Second)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.Write([]byte("ping\n"))
+	require.NoError(t, err)
+
+	time.Sleep(300 * time.Millisecond)
+	startLineServer(t, "tcp4", backend.Addr().String(), "restarted\n")
+
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "restarted\n", line)
+}
+
 func TestReservePortsHoldsPortUntilReleased(t *testing.T) {
 	manager := &ContainerNetworkManager{podAddr: "127.0.0.1"}
 	ports, err := manager.ReservePorts("container-one", 1)
