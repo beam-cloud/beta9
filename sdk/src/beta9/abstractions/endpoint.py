@@ -52,7 +52,7 @@ class Endpoint(RunnerAbstraction):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
-            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
+            MiB, or as a string with units (e.g. "1Gi"). Default is 512 MiB.
         gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty.
@@ -132,7 +132,7 @@ class Endpoint(RunnerAbstraction):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: Union[int, str] = 128,
+        memory: Union[int, str] = 512,
         app: str = "",
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
@@ -211,7 +211,7 @@ class ASGI(Endpoint):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
-            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
+            MiB, or as a string with units (e.g. "1Gi"). Default is 512 MiB.
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
@@ -301,7 +301,7 @@ class ASGI(Endpoint):
         self,
         app: str = "",
         cpu: Union[int, float, str] = 1.0,
-        memory: Union[int, str] = 128,
+        memory: Union[int, str] = 512,
         gpu: GpuTypeAlias = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(),
@@ -366,7 +366,7 @@ class RealtimeASGI(ASGI):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
-            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
+            MiB, or as a string with units (e.g. "1Gi"). Default is 512 MiB.
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
@@ -441,7 +441,7 @@ class RealtimeASGI(ASGI):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: Union[int, str] = 128,
+        memory: Union[int, str] = 512,
         gpu: GpuTypeAlias = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(),
