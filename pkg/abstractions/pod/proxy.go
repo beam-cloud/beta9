@@ -505,9 +505,10 @@ func (pb *PodProxyBuffer) hasAvailableContainers() bool {
 	return len(pb.availableContainers) > 0
 }
 
-// reserveContainerForPort fills containers in a stable order up to the
-// autoscaler's tasks per container, then picks the least loaded. Packing light
-// traffic lets the containers the autoscaler no longer wants go idle and stop.
+// reserveContainerForPort spreads requests across the stub's minimum containers,
+// which always run, then fills the rest in a stable order up to the autoscaler's
+// tasks per container, then picks the least loaded. Packing light traffic lets
+// the containers the autoscaler no longer wants go idle and stop.
 func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, bool, bool) {
 	pb.availableContainersLock.RLock()
 	defer pb.availableContainersLock.RUnlock()
@@ -516,8 +517,12 @@ func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, 
 		return container{}, false, false, false
 	}
 
-	target := int(podAutoscalerBounds(pb.stubConfig, 0).tasksPerContainer)
+	bounds := podAutoscalerBounds(pb.stubConfig, 0)
+	target := int(bounds.tasksPerContainer)
 	hasPort := false
+	ready := 0
+	spread, spreadLoad := -1, 0
+	fill := -1
 	best, bestLoad := -1, 0
 	for i, c := range pb.availableContainers {
 		if _, ok := c.addressMap[port]; !ok {
@@ -525,17 +530,26 @@ func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, 
 		}
 
 		hasPort = true
-		if _, ready := c.readyAddressMap[port]; !ready {
+		if _, ok := c.readyAddressMap[port]; !ok {
 			continue
 		}
 		load := c.remoteConnections + int(pb.containerConnectionCount(c.id))
-		if load < target {
-			best = i
-			break
+		if ready < bounds.min {
+			if load < target && (spread < 0 || load < spreadLoad) {
+				spread, spreadLoad = i, load
+			}
+		} else if fill < 0 && load < target {
+			fill = i
 		}
 		if best < 0 || load < bestLoad {
 			best, bestLoad = i, load
 		}
+		ready++
+	}
+	if spread >= 0 {
+		best = spread
+	} else if fill >= 0 {
+		best = fill
 	}
 	if best < 0 {
 		return container{}, false, true, hasPort

@@ -948,6 +948,18 @@ func TestReserveContainerForPortPacksUpToTasksPerContainer(t *testing.T) {
 	if id := reserve(); id != "a" {
 		t.Fatalf("after a drained, reservation went to %q, want a", id)
 	}
+
+	// The minimum containers always run, so requests spread across them first.
+	pb = &PodProxyBuffer{
+		ctx:                 context.Background(),
+		stubConfig:          &types.StubConfigV1{Autoscaler: &types.Autoscaler{MinContainers: 2, MaxContainers: 3, TasksPerContainer: 2}},
+		availableContainers: []container{ready("a", 0), ready("b", 0), ready("c", 0)},
+	}
+	got = nil
+	for i := 0; i < 7; i++ {
+		got = append(got, reserve())
+	}
+	require.Equal(t, []string{"a", "b", "a", "b", "c", "c", "a"}, got)
 }
 
 func TestReserveContainerForPortSkipsWarmingPort(t *testing.T) {
