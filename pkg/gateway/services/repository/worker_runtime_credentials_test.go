@@ -3,6 +3,7 @@ package repository_services
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"testing"
@@ -52,8 +53,14 @@ func (r *workerRuntimeCredentialsBackendRepo) GetSecretsByNameDecrypted(ctx cont
 	return r.secrets, nil
 }
 
-func (r *workerRuntimeCredentialsBackendRepo) ListTokens(ctx context.Context, workspaceID uint) ([]types.Token, error) {
-	return r.tokens, nil
+func (r *workerRuntimeCredentialsBackendRepo) RetrieveActiveTokenByType(ctx context.Context, workspaceID uint, tokenType string) (*types.Token, error) {
+	for i := len(r.tokens) - 1; i >= 0; i-- {
+		token := r.tokens[i]
+		if token.TokenType == tokenType && token.Active && !token.DisabledByClusterAdmin {
+			return &token, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) CreateToken(ctx context.Context, workspaceID uint, tokenType string, reusable bool) (types.Token, error) {
@@ -345,6 +352,31 @@ func TestGetContainerRuntimeCredentialsRetriesContainerStateLockContention(t *te
 	require.True(t, resp.Ok)
 	require.Equal(t, []string{"BETA9_TOKEN=restricted-runtime-token"}, resp.Env)
 	require.Equal(t, 3, containerRepo.attempts)
+}
+
+func TestGetContainerRuntimeCredentialsCreatesRuntimeTokenOnce(t *testing.T) {
+	backendRepo := &workerRuntimeCredentialsBackendRepo{
+		workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+		tokens: []types.Token{
+			{Key: "primary-token", Active: true, TokenType: types.TokenTypeWorkspacePrimary},
+			{Key: "disabled-runtime-token", Active: true, DisabledByClusterAdmin: true, TokenType: types.TokenTypeWorkspaceRestricted},
+		},
+	}
+	service := &WorkerRepositoryService{
+		backendRepo: backendRepo,
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
+			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"},
+		},
+	}
+	req := &pb.GetContainerRuntimeCredentialsRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ContainerId: "container-id", RuntimeToken: true}
+
+	for range 2 {
+		resp, err := service.GetContainerRuntimeCredentials(cacheRepositoryWorkspaceAuthContext("workspace-id"), req)
+		require.NoError(t, err)
+		require.True(t, resp.Ok)
+		require.Equal(t, []string{"BETA9_TOKEN=created-runtime-token"}, resp.Env)
+	}
+	require.Len(t, backendRepo.tokens, 3)
 }
 
 func TestGetContainerRuntimeCredentialsDoesNotRequireSigningKeyForStorageAndRuntimeToken(t *testing.T) {

@@ -338,14 +338,12 @@ func uniqueRuntimeSecretNames(names []string) []string {
 }
 
 func (s *WorkerRepositoryService) workspaceRuntimeToken(ctx context.Context, workspaceID uint) (string, error) {
-	tokens, err := s.backendRepo.ListTokens(ctx, workspaceID)
-	if err != nil && err != sql.ErrNoRows {
-		return "", err
+	existing, err := s.backendRepo.RetrieveActiveTokenByType(ctx, workspaceID, types.TokenTypeWorkspaceRestricted)
+	if err == nil {
+		return existing.Key, nil
 	}
-	for _, token := range tokens {
-		if token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorkspaceRestricted {
-			return token.Key, nil
-		}
+	if err != sql.ErrNoRows {
+		return "", err
 	}
 
 	token, err := s.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorkspaceRestricted, true)

@@ -409,6 +409,23 @@ func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, wor
 	return &token, nil
 }
 
+func (r *PostgresBackendRepository) RetrieveActiveTokenByType(ctx context.Context, workspaceId uint, tokenType string) (*types.Token, error) {
+	query := `
+	SELECT id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id
+	FROM token
+	WHERE workspace_id = $1 AND token_type = $2 AND active = TRUE AND disabled_by_cluster_admin = FALSE
+	ORDER BY created_at DESC, id DESC
+	LIMIT 1;
+	`
+
+	var token types.Token
+	if err := r.client.GetContext(ctx, &token, query, workspaceId, tokenType); err != nil {
+		return nil, err
+	}
+
+	return &token, nil
+}
+
 func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error) {
 	query := `
     SELECT id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id
