@@ -45,8 +45,9 @@ func (pb *PodProxyBuffer) incrementContainerConnections(containerId string) erro
 
 func (pb *PodProxyBuffer) decrementContainerConnections(containerId string) error {
 	defer pb.signalWork()
-	pb.markPendingKeepWarmLock(containerId)
-	go pb.setPodKeepWarmLock(containerId)
+	if pb.markPendingKeepWarmLock(containerId) {
+		go pb.setPodKeepWarmLock(containerId)
+	}
 
 	counter, ok := pb.containerConnectionCounter(containerId)
 	if !ok {
@@ -227,11 +228,15 @@ func (pb *PodProxyBuffer) setPodKeepWarmLock(containerID string) {
 	setPodKeepWarmLock(ctx, pb.containerRepo, pb.workspace.Name, pb.stubId, containerID, pb.stubConfig.KeepWarmSeconds)
 }
 
-func (pb *PodProxyBuffer) markPendingKeepWarmLock(containerID string) {
+// markPendingKeepWarmLock reports whether the caller should write the lock.
+// Completions while a write is in flight share it, so a busy container costs
+// one Redis write at a time instead of one per request.
+func (pb *PodProxyBuffer) markPendingKeepWarmLock(containerID string) bool {
 	if containerID == "" || pb.stubConfig == nil || pb.stubConfig.KeepWarmSeconds <= 0 {
-		return
+		return false
 	}
-	pb.pendingKeepWarmLocks.Store(containerID, struct{}{})
+	_, pending := pb.pendingKeepWarmLocks.LoadOrStore(containerID, struct{}{})
+	return !pending
 }
 
 func (pb *PodProxyBuffer) clearPendingKeepWarmLock(containerID string) {

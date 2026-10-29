@@ -188,3 +188,38 @@ func TestRingBuffer_PushWithOverwriteReturnsDisplacedItem(t *testing.T) {
 		t.Fatalf("priority overwrite displaced=%d overwritten=%v, want 2 and true", displaced, overwritten)
 	}
 }
+
+func TestRingBuffer_GrowsPreservingOrderUpToCapacity(t *testing.T) {
+	rb := NewRingBuffer[int](100)
+	if len(rb.buffer) >= 100 {
+		t.Fatalf("expected lazy storage, got %d slots", len(rb.buffer))
+	}
+
+	// Wrap the storage before it grows so growth has to unwrap it.
+	for i := 0; i < 10; i++ {
+		rb.Push(-1, false)
+	}
+	for i := 0; i < 10; i++ {
+		rb.Pop()
+	}
+	for i := 1; i <= 99; i++ {
+		rb.Push(i, false)
+	}
+	rb.Push(0, true)
+	if rb.Len() != 100 {
+		t.Fatalf("expected length 100, got %d", rb.Len())
+	}
+
+	displaced, overwritten := rb.PushWithOverwrite(100, false)
+	if !overwritten || displaced != 0 {
+		t.Fatalf("expected the oldest item to be displaced at capacity, got %v %v", displaced, overwritten)
+	}
+	if len(rb.buffer) != 100 {
+		t.Fatalf("expected storage capped at 100, got %d", len(rb.buffer))
+	}
+	for want := 1; want <= 100; want++ {
+		if got, ok := rb.Pop(); !ok || got != want {
+			t.Fatalf("expected %d, got %v %v", want, got, ok)
+		}
+	}
+}

@@ -916,6 +916,40 @@ func TestReserveContainerForPortSkipsContainersWithoutPort(t *testing.T) {
 	}
 }
 
+func TestReserveContainerForPortPacksUpToTasksPerContainer(t *testing.T) {
+	ready := func(id string, remote int) container {
+		address := map[int32]string{8000: id + ":8000"}
+		return container{id: id, addressMap: address, readyAddressMap: address, remoteConnections: remote}
+	}
+	pb := &PodProxyBuffer{
+		ctx:                 context.Background(),
+		stubConfig:          &types.StubConfigV1{Autoscaler: &types.Autoscaler{TasksPerContainer: 2}},
+		availableContainers: []container{ready("a", 0), ready("b", 0), ready("c", 1)},
+	}
+	reserve := func() string {
+		t.Helper()
+		c, ok, _, _ := pb.reserveContainerForPort(8000)
+		if !ok {
+			t.Fatal("expected a container")
+		}
+		return c.id
+	}
+
+	var got []string
+	for i := 0; i < 7; i++ {
+		got = append(got, reserve())
+	}
+	// a and b fill to 2; c already has a remote connection so takes one; then least loaded.
+	require.Equal(t, []string{"a", "a", "b", "b", "c", "a", "b"}, got)
+
+	for i := 0; i < 3; i++ {
+		pb.decrementContainerConnections("a")
+	}
+	if id := reserve(); id != "a" {
+		t.Fatalf("after a drained, reservation went to %q, want a", id)
+	}
+}
+
 func TestReserveContainerForPortSkipsWarmingPort(t *testing.T) {
 	pb := &PodProxyBuffer{
 		ctx:        context.Background(),
@@ -1884,6 +1918,39 @@ func TestStoppableContainersSkipsPendingKeepWarmLock(t *testing.T) {
 	}
 }
 
+func TestKeepWarmLockWritesShareAnInFlightWrite(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "pod-stub-container-1"
+	buffer := &PodProxyBuffer{
+		containerRepo: repo,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "stub",
+		stubConfig:    &types.StubConfigV1{KeepWarmSeconds: 600},
+	}
+	locked := func() bool {
+		exists, err := repo.PodKeepWarmLockExists(context.Background(), "workspace", "stub", containerID)
+		require.NoError(t, err)
+		return exists
+	}
+
+	require.True(t, buffer.markPendingKeepWarmLock(containerID))
+	for range 100 {
+		require.NoError(t, buffer.decrementContainerConnections(containerID))
+	}
+	time.Sleep(50 * time.Millisecond)
+	require.False(t, locked(), "completions wrote the lock while a write was in flight")
+
+	buffer.setPodKeepWarmLock(containerID)
+	require.True(t, locked())
+	require.False(t, buffer.pendingKeepWarmLockExists(containerID))
+
+	require.NoError(t, rdb.FlushAll(context.Background()).Err())
+	require.NoError(t, buffer.decrementContainerConnections(containerID))
+	require.Eventually(t, locked, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return !buffer.pendingKeepWarmLockExists(containerID) }, time.Second, 10*time.Millisecond)
+}
+
 func TestStoppableContainersIncludesPendingAfterFailureThreshold(t *testing.T) {
 	rdb := newPodProxyTestRedis(t)
 	repo := repository.NewContainerRedisRepositoryForTest(rdb)
@@ -1992,6 +2059,38 @@ func TestEnsureReadyForRequestAllowsConcurrentScaling(t *testing.T) {
 	if err := instance.ensureReadyForRequest(); err != nil {
 		t.Fatalf("concurrent scaling returned an error: %v", err)
 	}
+}
+
+func TestEnsureReadyForRequestFailsFastDuringFailureCooldown(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	for _, id := range []string{"pod-stub-a", "pod-stub-b", "pod-stub-c"} {
+		require.NoError(t, rdb.SAdd(context.Background(), common.RedisKeys.SchedulerContainerIndex("stub"), common.RedisKeys.SchedulerContainerState(id)).Err())
+		require.NoError(t, rdb.Set(context.Background(), common.RedisKeys.SchedulerContainerExitCode(id), 1, time.Minute).Err())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	instance := &podInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Ctx:                      ctx,
+		CancelFunc:               cancel,
+		IsActive:                 true,
+		FailedContainerThreshold: 3,
+		Lock:                     common.NewRedisLock(rdb),
+		InstanceLockKey:          "pod:stub:instance",
+		ContainerRepo:            repository.NewContainerRedisRepositoryForTest(rdb),
+		Stub: &types.StubWithRelated{Stub: types.Stub{
+			ExternalId: "stub",
+			Type:       types.StubType(types.StubTypePod),
+		}},
+		StubConfig: &types.StubConfigV1{},
+		StartContainersFunc: func(int) error {
+			t.Fatal("started a container during the failure cooldown")
+			return nil
+		},
+	}}
+
+	require.ErrorIs(t, instance.ensureReadyForRequest(), errContainersFailing)
+	require.NoError(t, ctx.Err(), "the cooldown check cancelled the instance")
 }
 
 func TestContainerEventRetiresStoppingProxyBackend(t *testing.T) {

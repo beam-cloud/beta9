@@ -2,6 +2,7 @@ package pod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"math/rand"
@@ -12,12 +13,18 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
+
+// errContainersFailing is returned while the stub's failed containers hold it in
+// cooldown; no replacement can start until the failures age out.
+var errContainersFailing = errors.New("containers failed repeatedly; a new one starts after a cooldown")
 
 type podInstance struct {
 	*abstractions.AutoscaledInstance
 	buffer                    *PodProxyBuffer
 	durableDiskPlacementRepos abstractions.DurableDiskPlacementRepos
+	readyChecks               singleflight.Group
 }
 
 func (i *podInstance) ConsumeContainerEvent(event types.ContainerEvent) {
@@ -40,12 +47,18 @@ func (i *podInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 	}
 }
 
+// ensureReadyForRequest starts a container when none is running or pending.
+// Requests that arrive together share one check, so a cold burst costs one.
 func (i *podInstance) ensureReadyForRequest() error {
+	_, err, _ := i.readyChecks.Do("", func() (any, error) {
+		return nil, i.ensureReady()
+	})
+	return err
+}
+
+func (i *podInstance) ensureReady() error {
 	if i.StubConfig.IsPersistentVM() {
 		return nil
-	}
-	if err := i.Sync(); err != nil {
-		return err
 	}
 
 	state, err := i.State()
@@ -54,6 +67,13 @@ func (i *podInstance) ensureReadyForRequest() error {
 	}
 	if state.RunningContainers+state.PendingContainers > 0 {
 		return nil
+	}
+	// Scaling would only cancel this instance, and the next request would rebuild it.
+	if i.FailedContainerThreshold > 0 && len(state.FailedContainers) >= i.FailedContainerThreshold {
+		return errContainersFailing
+	}
+	if err := i.Sync(); err != nil {
+		return err
 	}
 
 	desiredContainers := 1

@@ -31,7 +31,10 @@ import (
 const (
 	containerDiscoveryInterval       time.Duration = time.Millisecond * 250
 	queuedContainerDiscoveryInterval time.Duration = time.Millisecond * 50
-	containerDialTimeoutDurationS    time.Duration = time.Second * 30
+	// Routed containers have passed a readiness dial, so a slow dial means the
+	// container is gone (a dead host or a torn-down port answers nothing).
+	containerDialTimeoutDurationS time.Duration = time.Second * 5
+	webSocketHandshakeTimeout     time.Duration = time.Second * 30
 	// Covers a dropped SYN (kernel retransmits at 1s) and relayed tunnel dials
 	// that routinely exceed 900ms under concurrency.
 	containerPinnedDialTimeout  time.Duration = time.Second * 3
@@ -46,7 +49,8 @@ type container struct {
 	id              string
 	addressMap      map[int32]string
 	readyAddressMap map[int32]string
-	connections     int
+	// Connections other proxies hold, as of the last discovery.
+	remoteConnections int
 }
 
 type connection struct {
@@ -518,6 +522,9 @@ func (pb *PodProxyBuffer) hasAvailableContainers() bool {
 	return len(pb.availableContainers) > 0
 }
 
+// reserveContainerForPort fills containers in a stable order up to the
+// autoscaler's tasks per container, then picks the least loaded. Packing light
+// traffic lets the containers the autoscaler no longer wants go idle and stop.
 func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, bool, bool) {
 	pb.availableContainersLock.RLock()
 	defer pb.availableContainersLock.RUnlock()
@@ -526,8 +533,10 @@ func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, 
 		return container{}, false, false, false
 	}
 
+	target := int(podAutoscalerBounds(pb.stubConfig, 0).tasksPerContainer)
 	hasPort := false
-	for _, c := range pb.availableContainers {
+	best, bestLoad := -1, 0
+	for i, c := range pb.availableContainers {
 		if _, ok := c.addressMap[port]; !ok {
 			continue
 		}
@@ -536,12 +545,39 @@ func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, 
 		if _, ready := c.readyAddressMap[port]; !ready {
 			continue
 		}
-		if err := pb.incrementContainerConnections(c.id); err == nil {
-			return c, true, true, true
+		load := c.remoteConnections + int(pb.containerConnectionCount(c.id))
+		if load < target {
+			best = i
+			break
+		}
+		if best < 0 || load < bestLoad {
+			best, bestLoad = i, load
 		}
 	}
+	if best < 0 {
+		return container{}, false, true, hasPort
+	}
 
-	return container{}, false, true, hasPort
+	c := pb.availableContainers[best]
+	if err := pb.incrementContainerConnections(c.id); err != nil {
+		return container{}, false, true, hasPort
+	}
+	return c, true, true, true
+}
+
+// remoteConnections is a container's shared connection count less this proxy's own.
+func (pb *PodProxyBuffer) remoteConnections(containerID string) (int, error) {
+	shared, err := pb.sharedContainerConnectionCount(containerID)
+	if err != nil {
+		return 0, err
+	}
+	return max(shared-int(pb.containerConnectionCount(containerID)), 0), nil
+}
+
+func sortContainersByID(containers []container) {
+	sort.Slice(containers, func(i, j int) bool {
+		return containers[i].id < containers[j].id
+	})
 }
 
 func (pb *PodProxyBuffer) primeContainerPort(containerID string, port int32, timeout time.Duration) bool {
@@ -562,10 +598,7 @@ func (pb *PodProxyBuffer) primeContainerPort(containerID string, port int32, tim
 		return false
 	}
 
-	connections := int(pb.containerConnectionCount(containerID))
-	if sharedConnections, err := pb.sharedContainerConnectionCount(containerID); err == nil && sharedConnections > connections {
-		connections = sharedConnections
-	}
+	remoteConnections, _ := pb.remoteConnections(containerID)
 
 	pb.availableContainersLock.Lock()
 	next := make([]container, 0, len(pb.availableContainers)+1)
@@ -584,21 +617,19 @@ func (pb *PodProxyBuffer) primeContainerPort(containerID string, port int32, tim
 
 		c.addressMap = addressMap
 		c.readyAddressMap = readyAddressMap
-		c.connections = connections
+		c.remoteConnections = remoteConnections
 		next = append(next, c)
 		updated = true
 	}
 	if !updated {
 		next = append(next, container{
-			id:              containerID,
-			addressMap:      addressMap,
-			readyAddressMap: map[int32]string{port: address},
-			connections:     connections,
+			id:                containerID,
+			addressMap:        addressMap,
+			readyAddressMap:   map[int32]string{port: address},
+			remoteConnections: remoteConnections,
 		})
 	}
-	sort.Slice(next, func(i, j int) bool {
-		return next[i].connections < next[j].connections
-	})
+	sortContainersByID(next)
 	pb.availableContainers = next
 	pb.availableContainersLock.Unlock()
 
@@ -1026,7 +1057,7 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	dstDialer := websocket.Dialer{
 		ReadBufferSize:   64 << 10,
 		WriteBufferSize:  64 << 10,
-		HandshakeTimeout: conn.backendDialTimeout(),
+		HandshakeTimeout: webSocketHandshakeTimeout,
 		NetDialContext: func(ctx context.Context, _, dialAddr string) (net.Conn, error) {
 			dialAddress := dialAddr
 			if _, isRoute := types.ParseBackendRouteAddress(addr); isRoute {
@@ -1190,16 +1221,16 @@ func (pb *PodProxyBuffer) discoverContainers() {
 						return
 					}
 
-					connections, err := pb.sharedContainerConnectionCount(cs.ContainerId)
+					remoteConnections, err := pb.remoteConnections(cs.ContainerId)
 					if err != nil {
 						return
 					}
 
 					availableContainersChan <- container{
-						id:              cs.ContainerId,
-						addressMap:      addressMap,
-						readyAddressMap: readyAddressMap,
-						connections:     connections,
+						id:                cs.ContainerId,
+						addressMap:        addressMap,
+						readyAddressMap:   readyAddressMap,
+						remoteConnections: remoteConnections,
 					}
 				}(containerState)
 			}
@@ -1213,10 +1244,7 @@ func (pb *PodProxyBuffer) discoverContainers() {
 				availableContainers = append(availableContainers, c)
 			}
 
-			// Sort availableContainers by # of connections (ascending)
-			sort.Slice(availableContainers, func(i, j int) bool {
-				return availableContainers[i].connections < availableContainers[j].connections
-			})
+			sortContainersByID(availableContainers)
 
 			pb.updateDiscoveredContainers(availableContainers, activeContainerIDs)
 		}
