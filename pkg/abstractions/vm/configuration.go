@@ -328,7 +328,7 @@ func (s *Service) update(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, s.response(v))
+	return c.JSON(http.StatusOK, s.liveResponse(v))
 }
 
 func (s *Service) applyNetwork(ctx context.Context, v *types.VM, spec types.VMSpec) error {
