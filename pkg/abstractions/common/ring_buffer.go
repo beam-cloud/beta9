@@ -17,8 +17,6 @@ type RingBuffer[T any] struct {
 	mu         sync.Mutex
 }
 
-// NewRingBuffer holds up to size items. Storage grows on demand, so a large
-// limit costs nothing until it is used.
 func NewRingBuffer[T any](size int) *RingBuffer[T] {
 	return &RingBuffer[T]{
 		buffer: make([]T, min(size, ringBufferInitialSize)),
