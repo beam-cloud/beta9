@@ -16,7 +16,7 @@ import (
 
 const (
 	containerPortProxyReadyPollInterval = 100 * time.Millisecond
-	containerPortProxyReadyPollCeiling  = 5 * time.Second
+	containerPortProxyReadyPollCeiling  = 1 * time.Second
 	containerPortProxyDialTimeout       = 250 * time.Millisecond
 	containerPortProxyConnectTimeout    = 2 * time.Second
 )
@@ -271,7 +271,7 @@ func (p *containerPortProxy) waitForBackend() error {
 func (p *containerPortProxy) handle(client net.Conn) {
 	defer client.Close()
 
-	backend, err := p.dialBackend(containerPortProxyConnectTimeout)
+	backend, err := p.dialBackendWithin(containerPortProxyConnectTimeout)
 	if err != nil {
 		log.Debug().
 			Err(err).
@@ -295,6 +295,23 @@ func proxyConnHalf(wg *sync.WaitGroup, dst, src net.Conn) {
 	_, _ = io.Copy(dst, src)
 	if tcp, ok := dst.(*net.TCPConn); ok {
 		_ = tcp.CloseWrite()
+	}
+}
+
+// dialBackendWithin keeps dialing until timeout, so a connection that arrives
+// while the app restarts waits for it instead of being dropped.
+func (p *containerPortProxy) dialBackendWithin(timeout time.Duration) (net.Conn, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		conn, err := p.dialBackend(time.Until(deadline))
+		if err == nil || time.Until(deadline) < 2*containerPortProxyReadyPollInterval {
+			return conn, err
+		}
+		select {
+		case <-p.ctx.Done():
+			return nil, err
+		case <-time.After(containerPortProxyReadyPollInterval):
+		}
 	}
 }
 

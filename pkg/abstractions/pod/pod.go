@@ -50,7 +50,7 @@ const (
 	podContainerPrefix string = types.StubTypePod
 	podRoutePrefix     string = "/pod"
 	sandboxRoutePrefix string = "/sandbox"
-	podProxyBufferSize        = 300
+	podProxyBufferSize        = 10000
 	podStubLoadTimeout        = 5 * time.Second
 )
 
@@ -236,14 +236,14 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 	}
 
 	if !instance.buffer.hasAvailableContainers() {
-		// Fail fast instead of queueing until timeout when the stub's GPU has
-		// no supporting pool; requests succeed as soon as capacity joins.
-		if reason := instance.UnschedulableReason(); reason != "" {
+		// Fail fast instead of queueing until timeout; requests succeed as soon
+		// as capacity joins or the cooldown ends.
+		var unavailable errUnavailable
+		if err := instance.ensureReadyForRequest(); errors.As(err, &unavailable) {
 			return ctx.JSON(http.StatusServiceUnavailable, map[string]interface{}{
-				"error": reason,
+				"error": err.Error(),
 			})
-		}
-		if err := instance.ensureReadyForRequest(); err != nil {
+		} else if err != nil {
 			return err
 		}
 	}
@@ -276,11 +276,11 @@ func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string)
 	}
 
 	if !instance.buffer.hasAvailableContainers() {
-		if reason := instance.UnschedulableReason(); reason != "" {
+		var unavailable errUnavailable
+		if err := instance.ensureReadyForRequest(); errors.As(err, &unavailable) {
 			tc.Conn.Close()
 			return nil
-		}
-		if err := instance.ensureReadyForRequest(); err != nil {
+		} else if err != nil {
 			return err
 		}
 	}
