@@ -1,4 +1,4 @@
-"""Named, persistent CPU microVMs with durable roots and stable service URLs."""
+"""Named, persistent microVMs with durable roots and stable service URLs."""
 
 import base64
 import copy
@@ -33,7 +33,7 @@ from ...clients.volume import VolumeServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
 from ...terminal import cli_name
-from ...type import DurableDisk
+from ...type import DurableDisk, GpuType, GpuTypeAlias, normalize_gpu_type
 from ...utils import local_process_kwargs
 from ..image import Image
 from ..sandbox import SandboxInstance
@@ -188,6 +188,7 @@ class VM:
         image: Optional[Image] = None,
         cpu: Optional[float] = None,
         memory: Optional[int] = None,
+        gpu: Optional[GpuTypeAlias] = None,
         disk_size: Optional[str] = None,
         desktop: Optional[bool] = None,
         kiosk: Optional[Union[Kiosk, Dict[str, Any]]] = None,
@@ -231,6 +232,8 @@ class VM:
             raise ValueError("kiosk must be a Kiosk configuration or an object")
         if template and snapshot:
             raise ValueError("Choose a template or snapshot")
+        if gpu is not None and (not isinstance(gpu, str) or "," in gpu):
+            raise ValueError("gpu must be a single GPU type")
 
         self.info: Dict[str, Any] = {}
         self._connected = None
@@ -239,6 +242,7 @@ class VM:
         self._spec = {
             "cpu": int(cpu * 1000) if cpu is not None else None,
             "memory": memory,
+            "gpu": GpuType(normalize_gpu_type(gpu)).value if gpu is not None else None,
             "disk_size": disk_size,
             "desktop": True if kiosk is not None else desktop,
             "kiosk": copy.deepcopy(kiosk.to_dict() if isinstance(kiosk, Kiosk) else kiosk),

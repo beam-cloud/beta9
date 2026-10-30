@@ -176,12 +176,25 @@ func runPreflight(devMode bool, executor string) preflightResult {
 		})
 	}
 
-	gpuDevices := detectNvidiaGPUDevices()
+	var gpuDevices []gpuDevice
+	vfio := vfioGPUConfigured()
+	if vfio {
+		var err error
+		gpuDevices, err = detectVFIOGPUDevices()
+		checks = append(checks, check{
+			Name:     "vfio-gpus",
+			Ok:       err == nil,
+			Message:  capacityCheckMessage(err == nil, fmt.Sprintf("%d GPU groups reserved for microVMs", len(gpuDevices)), err),
+			Severity: severity(err == nil),
+		})
+	} else {
+		gpuDevices = detectNvidiaGPUDevices()
+	}
 	gpus := make([]string, 0, len(gpuDevices))
 	for _, device := range gpuDevices {
 		gpus = append(gpus, device.Name)
 	}
-	if len(gpuDevices) > 0 {
+	if len(gpuDevices) > 0 && !vfio {
 		nvidiaRuntime := commandExists("nvidia-ctk") || commandExists("nvidia-container-runtime")
 		checks = append(checks, check{
 			Name:     "nvidia-runtime",

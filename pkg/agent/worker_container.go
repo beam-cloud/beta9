@@ -16,9 +16,13 @@ type workerContainerResourceLimits struct {
 	memory bool
 }
 
-func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs, limits workerContainerResourceLimits) []string {
+func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs, limits workerContainerResourceLimits) ([]string, error) {
 	localTargetHost := firstNonEmpty(os.Getenv(types.AgentTargetHostEnv), types.LoopbackHost)
 	cacheLocality := agentCacheLocality(bootstrap, slot)
+	microvm := slotContainerRuntime(slot) == types.ContainerRuntimeMicroVM.String()
+	if !microvm && slot.GpuCount > 0 && vfioGPUConfigured() {
+		return nil, fmt.Errorf("VFIO GPUs require the microvm runtime")
+	}
 	args := []string{
 		"run", "--rm", "--init",
 		"--name", name,
@@ -49,7 +53,7 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	if slot.Memory > 0 {
 		args = append(args, "--shm-size", fmt.Sprintf("%dm", max(slot.Memory/2, 64)))
 	}
-	if slot.GpuCount > 0 {
+	if slot.GpuCount > 0 && !microvm {
 		if slot.GpuAssignment != "" {
 			args = append(args, "--gpus", fmt.Sprintf("%q", "device="+slot.GpuAssignment))
 		} else {
@@ -123,7 +127,39 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	}
 	// WORKER_GPU_DEVICES is the durable copy of the assignment; the container
 	// toolkit rewrites NVIDIA_VISIBLE_DEVICES to "void" after device injection.
-	if slot.GpuCount > 0 {
+	if microvm {
+		// Override image defaults so CPU slots cannot inherit the host inventory.
+		env[types.MicroVMVFIODevicesEnv] = ""
+		env[types.MicroVMGPUTypeEnv] = ""
+		env[types.NvidiaVisibleDevicesEnv] = "void"
+		env[types.WorkerGPUDevicesEnv] = ""
+		if slot.GpuCount > 0 {
+			devices, err := detectVFIOGPUDevices()
+			if err != nil {
+				return nil, err
+			}
+			selected, _, checks := selectGPUDevices(types.AgentJoinOptions{GPUIDs: slot.GpuAssignment}, devices)
+			for _, check := range checks {
+				if !check.Ok {
+					return nil, fmt.Errorf("invalid VFIO assignment: %s", check.Message)
+				}
+			}
+			if len(selected) != int(slot.GpuCount) || slot.GetPoolConfig().GetGpuVirtualized() {
+				return nil, fmt.Errorf("VFIO worker requires %d assigned physical GPUs", slot.GpuCount)
+			}
+			model := types.NormalizeGPUType(slot.Gpu)
+			if model.String() != selected[0].Name {
+				return nil, fmt.Errorf("VFIO inventory does not match worker GPU type %q", slot.Gpu)
+			}
+			var functions []string
+			for _, device := range selected {
+				functions = append(functions, device.VFIOFunctions...)
+			}
+			env[types.MicroVMVFIODevicesEnv] = strings.Join(functions, ",")
+			env[types.MicroVMGPUTypeEnv] = model.String()
+			env[types.WorkerGPUDevicesEnv] = slot.GpuAssignment
+		}
+	} else if slot.GpuCount > 0 {
 		assignment := firstNonEmpty(slot.GpuAssignment, types.NvidiaVisibleDevicesAll)
 		env[types.NvidiaVisibleDevicesEnv] = assignment
 		env[types.WorkerGPUDevicesEnv] = assignment
@@ -139,5 +175,5 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	}
 
 	args = append(args, image, types.AgentWorkerEntrypoint)
-	return args
+	return args, nil
 }

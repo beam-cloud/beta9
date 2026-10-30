@@ -97,7 +97,7 @@ func NewMicroVM(cfg Config) (Runtime, error) {
 	if cfg.MicroVMStateRoot == "" {
 		cfg.MicroVMStateRoot = DefaultMicroVMStateRoot
 	}
-	if devices := os.Getenv(microVMVFIODevicesEnv); len(cfg.MicroVMVFIODevices) == 0 && devices != "" {
+	if devices := os.Getenv(types.MicroVMVFIODevicesEnv); len(cfg.MicroVMVFIODevices) == 0 && devices != "" {
 		cfg.MicroVMVFIODevices = strings.Split(devices, ",")
 	}
 
@@ -158,7 +158,7 @@ func (m *MicroVM) Name() string {
 }
 
 func (m *MicroVM) Capabilities() Capabilities {
-	return Capabilities{JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: len(m.cfg.MicroVMVFIODevices) == 0}
+	return Capabilities{GPU: len(m.cfg.MicroVMVFIODevices) > 0, JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: len(m.cfg.MicroVMVFIODevices) == 0}
 }
 
 // Prepare strips what only a shared-kernel runtime needs. The VM is the
@@ -443,12 +443,26 @@ func (m *MicroVM) newInstance(containerID, bundlePath string) (*microVMInstance,
 func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *specs.Spec, restoreFrom string) (microvm.Network, microVMDisk, []microVMDisk, error) {
 	var none microvm.Network
 	devices := spec.Annotations[MicroVMVFIOAnnotation]
-	if restoreFrom != "" && (devices != "" || len(m.cfg.MicroVMVFIODevices) > 0) {
-		return none, microVMDisk{}, nil, fmt.Errorf("VFIO devices require a cold boot; memory restore is unsupported")
+	count := spec.Annotations[MicroVMGPUCountAnnotation]
+	if count != "" && count != "0" && count != "1" {
+		return none, microVMDisk{}, nil, fmt.Errorf("microvm GPU requests must specify exactly one GPU")
 	}
-	vfio, err := (microVMVFIOHost{devices: m.cfg.MicroVMVFIODevices}).acquire(devices)
-	if err != nil {
-		return none, microVMDisk{}, nil, err
+	if count == "0" && devices != "" {
+		return none, microVMDisk{}, nil, fmt.Errorf("VFIO device selection requires a GPU request")
+	}
+	vfio := &microVMVFIO{}
+	if count == "1" || devices != "" {
+		if restoreFrom != "" {
+			return none, microVMDisk{}, nil, fmt.Errorf("VFIO devices require a cold boot; memory restore is unsupported")
+		}
+		if len(m.cfg.MicroVMVFIODevices) == 0 {
+			return none, microVMDisk{}, nil, fmt.Errorf("GPU request requires configured VFIO inventory")
+		}
+		var err error
+		vfio, err = (microVMVFIOHost{devices: m.cfg.MicroVMVFIODevices}).acquire(devices)
+		if err != nil {
+			return none, microVMDisk{}, nil, err
+		}
 	}
 	inst.mu.Lock()
 	inst.vfio = vfio

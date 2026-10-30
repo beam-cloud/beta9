@@ -591,7 +591,11 @@ func vfioTestHost(t *testing.T, groups map[string][]string) microVMVFIOHost {
 
 func TestMicroVMVFIOValidation(t *testing.T) {
 	require.True(t, (&MicroVM{}).Capabilities().CheckpointRestore)
-	require.False(t, (&MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}).Capabilities().CheckpointRestore)
+	require.False(t, (&MicroVM{}).Capabilities().GPU)
+	caps := (&MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}).Capabilities()
+	require.True(t, caps.GPU)
+	require.False(t, caps.CDI, "guest drivers do not use host CDI injection")
+	require.False(t, caps.CheckpointRestore)
 	for _, value := range []string{"../77", "01:00.0", "0000:01:20.0", "0000:01:00.8", "0000:01:00.0,path=/tmp/evil", "0000:01:00.0,0000:01:00.0"} {
 		_, err := (microVMVFIOHost{devices: []string{"0000:01:00.0"}}).acquire(value)
 		require.ErrorContains(t, err, "invalid or duplicate", value)
@@ -810,9 +814,10 @@ func TestMicroVMVFIODoesNotSkipPreflightFailures(t *testing.T) {
 func TestMicroVMVFIORestoreRequiresColdBoot(t *testing.T) {
 	for _, explicit := range []bool{false, true} {
 		rt := &MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}
-		spec := &specs.Spec{Annotations: map[string]string{}}
+		spec := &specs.Spec{Annotations: map[string]string{MicroVMGPUCountAnnotation: "1"}}
 		if explicit {
 			rt.cfg.MicroVMVFIODevices = nil
+			delete(spec.Annotations, MicroVMGPUCountAnnotation)
 			spec.Annotations[MicroVMVFIOAnnotation] = "0000:01:00.0"
 		}
 		inst := &microVMInstance{stateDir: filepath.Join(t.TempDir(), "state")}
@@ -820,5 +825,38 @@ func TestMicroVMVFIORestoreRequiresColdBoot(t *testing.T) {
 		require.ErrorContains(t, err, "cold boot")
 		require.Nil(t, inst.vfio, "memory restore must reject GPU assignment before claiming devices")
 		require.NoDirExists(t, inst.stateDir)
+	}
+}
+
+func TestMicroVMVFIORequestValidation(t *testing.T) {
+	for _, test := range []struct {
+		count, devices, want string
+	}{
+		{"1", "", "configured VFIO inventory"},
+		{"2", "", "exactly one GPU"},
+		{"-1", "", "exactly one GPU"},
+		{"invalid", "", "exactly one GPU"},
+		{"0", "0000:01:00.0", "requires a GPU request"},
+	} {
+		rt := &MicroVM{}
+		inst := &microVMInstance{stateDir: filepath.Join(t.TempDir(), "state")}
+		spec := &specs.Spec{Annotations: map[string]string{MicroVMGPUCountAnnotation: test.count, MicroVMVFIOAnnotation: test.devices}}
+		_, _, _, err := rt.prepare(context.Background(), inst, spec, "")
+		require.ErrorContains(t, err, test.want)
+		require.Nil(t, inst.vfio)
+		require.NoDirExists(t, inst.stateDir, "invalid requests must fail before VM preparation")
+	}
+}
+
+func TestMicroVMVFIOCPURequestSkipsInventory(t *testing.T) {
+	for _, count := range []string{"", "0"} {
+		rt := &MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}
+		inst := &microVMInstance{stateDir: filepath.Join(t.TempDir(), "state")}
+		spec := &specs.Spec{Annotations: map[string]string{MicroVMGPUCountAnnotation: count}}
+		_, _, _, err := rt.prepare(context.Background(), inst, spec, "checkpoint")
+		require.ErrorContains(t, err, "no network namespace", "CPU preparation must not inspect host GPU inventory or reject memory restore")
+		require.NotNil(t, inst.vfio)
+		require.Empty(t, inst.vfio.paths)
+		require.Empty(t, inst.vfio.locks)
 	}
 }

@@ -716,6 +716,13 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport, routeLocalTargetHost)
+	var containerGPUManager GPUManager
+	if gpuCount > 0 && !gpuVirtualized && !defaultRuntime.Capabilities().GPU {
+		return nil, fmt.Errorf("runtime %s has no GPU inventory", defaultRuntime.Name())
+	}
+	if defaultRuntime.Capabilities().CDI {
+		containerGPUManager = NewContainerNvidiaManager(uint32(gpuCount), defaultRuntime.Name())
+	}
 
 	worker := &Worker{
 		ctx:                     ctx,
@@ -739,7 +746,7 @@ func NewWorker() (_ *Worker, err error) {
 		cacheManager:            cacheManager,
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
-		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount), defaultRuntime.Name()),
+		containerGPUManager:     containerGPUManager,
 		containerThunderManager: NewContainerThunderManager(thunderClient),
 		containerNetworkManager: containerNetworkManager,
 		serviceProxy:            NewServiceProxy(ctx, config),

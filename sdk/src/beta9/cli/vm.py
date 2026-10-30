@@ -1,4 +1,4 @@
-"""Persistent CPU VMs. File/exec operations share the sandbox transport."""
+"""Persistent VMs. File/exec operations share the sandbox transport."""
 
 import os
 import json
@@ -57,7 +57,7 @@ class VMGroup(ClickManagementGroup):
             raise click.ClickException(str(exc)) from exc
 
 
-@click.group(name="vm", cls=VMGroup, help="Create and manage persistent CPU microVMs.")
+@click.group(name="vm", cls=VMGroup, help="Create and manage persistent microVMs.")
 def management():
     pass
 
@@ -225,6 +225,7 @@ def _show(info, as_json):
     metavar="MiB",
     help="RAM in MiB; defaults to 8192.",
 )
+@click.option("--gpu", metavar="TYPE", help="One GPU, for example RTX4090.")
 @click.option(
     "--disk-size",
     help="Writable disk over the base image; 1–100 GiB, default 50 GiB.",
@@ -289,7 +290,7 @@ def _show(info, as_json):
     type=click.Choice(["stop", "pause"]),
     help="Stop from disk (default), or pause with RAM.",
 )
-@click.option("--pool", metavar="NAME", help="CPU microVM worker pool.")
+@click.option("--pool", metavar="NAME", help="MicroVM worker pool.")
 @click.option(
     "--metadata", multiple=True, metavar="KEY=VALUE", help="Resource metadata; repeatable."
 )
@@ -368,6 +369,7 @@ def new(
     volume=(),
     idle_action=None,
     kiosk_config=None,
+    gpu=None,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     as_json = as_json or terminal.json_output()
@@ -401,6 +403,7 @@ def new(
         image=image,
         cpu=cpu,
         memory=memory,
+        gpu=gpu,
         disk_size=disk_size,
         desktop=True if desktop is None and not (template or image_id) else desktop,
         kiosk=kiosk,

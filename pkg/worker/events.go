@@ -31,7 +31,11 @@ func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *ty
 	ticker := time.NewTicker(w.config.Monitoring.ContainerMetricsInterval)
 	defer ticker.Stop()
 
-	monitor := NewProcessMonitor(containerPid, spec.Linux.Resources.Devices, w.gpuManagerForRequest(request).GetContainerGPUDevices(request.ContainerId))
+	var gpuDevices []int
+	if manager := w.gpuManagerForRequest(request); manager != nil {
+		gpuDevices = manager.GetContainerGPUDevices(request.ContainerId)
+	}
+	monitor := NewProcessMonitor(containerPid, spec.Linux.Resources.Devices, gpuDevices)
 	monitor.Prime()
 	lastCollectedAt := time.Now()
 

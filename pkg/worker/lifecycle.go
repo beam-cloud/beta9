@@ -439,8 +439,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.containerLock.Unlock()
 
 	// De-allocate GPU devices so they are available for new containers
-	if request != nil && request.RequiresGPU() {
-		s.gpuManagerForRequest(request).UnassignGPUDevices(context.Background(), containerId)
+	if manager := s.gpuManagerForRequest(request); request != nil && request.RequiresGPU() && manager != nil {
+		manager.UnassignGPUDevices(context.Background(), containerId)
 	}
 
 	// Tear down container network components - best effort
@@ -676,6 +676,9 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 
 	if request.RequiresGPU() && !s.gpuVirtualizedForRequest(request) && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
+	}
+	if request.UseVM && request.RequiresGPU() && request.GpuCount != 1 {
+		return errors.New("microvm GPU requests must specify exactly one GPU")
 	}
 	if request.DockerEnabled && s.runtime != nil && s.runtime.Name() == types.ContainerRuntimeRunc.String() {
 		return errors.New("runc containers do not support Docker-enabled mode")
@@ -1393,6 +1396,11 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if cpus := requestedCPUCount(request.Cpu); cpus > 0 {
 			spec.Annotations[runtime.MicroVMVCPUAnnotation] = strconv.FormatInt(cpus, 10)
 		}
+		gpuCount := uint32(0)
+		if request.RequiresGPU() {
+			gpuCount = request.GpuCount
+		}
+		spec.Annotations[runtime.MicroVMGPUCountAnnotation] = strconv.FormatUint(uint64(gpuCount), 10)
 		if err := s.annotateExportedDurableDisks(request, spec); err != nil {
 			return nil, err
 		}
@@ -1416,8 +1424,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if runnerReadySignal {
 		env = append(env, types.ContainerRunnerReadyPathEnv+"="+types.ContainerRunnerReadyPath)
 	}
-	if request.RequiresGPU() {
-		env = s.gpuManagerForRequest(request).InjectEnvVars(env)
+	if manager := s.gpuManagerForRequest(request); request.RequiresGPU() && manager != nil {
+		env = manager.InjectEnvVars(env)
 	}
 	env = s.applyRuntimeEnvironmentOverrides(env, request, spec.Process.Args)
 
@@ -1860,15 +1868,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// discovery) are independent until the spec is amended, so they overlap.
 	// Virtualized GPU requests register with Thunder but never receive physical
 	// device mounts, CDI devices, or NVIDIA_VISIBLE_DEVICES pinning.
-	assignGPU := request.RequiresGPU() && (s.gpuVirtualizedForRequest(request) || s.runtime.Capabilities().GPU)
-	var gpuManager GPUManager
+	gpuManager := s.gpuManagerForRequest(request)
+	assignGPU := request.RequiresGPU() && gpuManager != nil && (s.gpuVirtualizedForRequest(request) || s.runtime.Capabilities().GPU)
 	var assignedDevices []int
 	var deviceSetup errgroup.Group
 	if !opts.NetworkPrepared {
 		deviceSetup.Go(func() error { return s.prepareContainerNetwork(ctx, request, spec) })
 	}
 	if assignGPU {
-		gpuManager = s.gpuManagerForRequest(request)
 		deviceSetup.Go(func() error {
 			phaseStart := time.Now()
 			var err error

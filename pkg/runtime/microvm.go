@@ -47,6 +47,7 @@ const (
 	MicroVMVCPUAnnotation       = "com.beam.microvm.vcpus"       // vCPU count when the spec carries no CPU quota
 	MicroVMScratchGiBAnnotation = "com.beam.microvm.scratch-gib" // sparse scratch disk size for ephemeral sandboxes
 	MicroVMVFIOAnnotation       = "com.beam.microvm.vfio"        // comma-separated PCI functions from Config.MicroVMVFIODevices
+	MicroVMGPUCountAnnotation   = "com.beam.microvm.gpu-count"   // requested guest GPUs: 0 or 1
 
 	microVMSysfsCgroupRoot       = "/sys/fs/cgroup"
 	microVMTapName               = "b9tap0"

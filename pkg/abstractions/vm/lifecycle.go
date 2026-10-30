@@ -78,6 +78,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		StubType:        types.StubTypeVM,
 		Cpu:             v.Spec.CPU,
 		Memory:          v.Spec.Memory,
+		Gpu:             v.Spec.GPU,
 		KeepWarmSeconds: -1,
 		UseVm:           true,
 		Authorized:      true,
@@ -97,6 +98,9 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 			Driver:           "qcow",
 			SourceSnapshotId: v.Spec.SourceSnapshotID,
 		}},
+	}
+	if v.Spec.GPU != "" {
+		req.GpuCount = 1
 	}
 
 	for _, disk := range v.Spec.Disks {

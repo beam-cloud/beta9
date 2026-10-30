@@ -39,6 +39,7 @@ from beta9.config import ConfigContext, SDKSettings, get_settings
 from beta9.deployment import onboarding
 from beta9.exceptions import SandboxConnectionError, SandboxProcessError
 from beta9.mcp.vm import definitions
+from beta9.type import GpuType
 
 
 def service():
@@ -68,7 +69,7 @@ def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
             ]
         )
         metadata = {"owner": "original"}
-        vm = VM("fast", desktop=True, metadata=metadata, _service=selected)
+        vm = VM("fast", desktop=True, gpu=GpuType.RTX4090, metadata=metadata, _service=selected)
         with pytest.raises(ConnectionError):
             vm.create()
         body = json.dumps(direct.json.call_args.kwargs["json"], sort_keys=True)
@@ -83,6 +84,7 @@ def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
         assert request["image"]["existing_image_uri"] == vm_module.DEFAULT_VM_BASE_IMAGE
         assert vm_module.DEFAULT_VM_BASE_IMAGE.startswith("ubuntu:24.04@sha256:")
         assert request["image"]["ignore_python"] is True
+        assert request["spec"]["gpu"] == "RTX4090"
         assert request["spec"]["ssh_public_key"] == "ssh-ed25519 test"
         selected._gateway.export_workspace_config.assert_not_called()
 
@@ -315,6 +317,32 @@ def test_prepare_freezes_request_without_allocating_compute():
     vm.prepare()
     assert vm._creation_body == body
     assert selected.http.json.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "gpu,expected",
+    [
+        (None, None),
+        ("RTX4090", "RTX4090"),
+        ("NVIDIA GeForce RTX 4090", "RTX4090"),
+        (GpuType.RTX4090, "RTX4090"),
+        (GpuType.NoGPU, ""),
+    ],
+)
+def test_vm_gpu_serialization_preserves_template_defaults(gpu, expected):
+    selected = service()
+    selected.http.json.return_value = {"id": "resource", "name": "dev", "status": "starting"}
+    VM("dev", template="base", ssh=False, gpu=gpu, _service=selected).create(wait=False)
+    spec = selected.http.json.call_args.kwargs["json"]["spec"]
+    assert spec == ({"ssh": False} if expected is None else {"ssh": False, "gpu": expected})
+
+
+@pytest.mark.parametrize("gpu", ["unknown", "RTX4090,L4", ["RTX4090"], 0])
+def test_vm_rejects_invalid_gpu_before_creation(gpu):
+    selected = service()
+    with pytest.raises(ValueError):
+        VM("dev", gpu=gpu, _service=selected)
+    selected.http.json.assert_not_called()
 
 
 def test_advertised_vm_support_skips_list_preflight():
@@ -556,7 +584,7 @@ def cli_service(monkeypatch):
     return selected
 
 
-def test_vm_cli_registration_and_cpu_only_args():
+def test_vm_cli_registration_and_resource_args():
     cli = load_cli(check_config=False)
     command = cli.management_group.get_command(None, "vm")
     assert {
@@ -590,6 +618,7 @@ def test_vm_cli_registration_and_cpu_only_args():
     assert {
         "cpu",
         "memory",
+        "gpu",
         "disk_size",
         "template",
         "desktop",
@@ -602,7 +631,7 @@ def test_vm_cli_registration_and_cpu_only_args():
         "public_port",
         "context",
     } <= options
-    assert not {"gpu", "gpu_count"} & options
+    assert "gpu_count" not in options
 
 
 @pytest.mark.parametrize("cli_name", ["Beta9", "Beam"])
@@ -656,10 +685,47 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     assert json.loads(result.output) == fake.info
     options = factory.call_args.kwargs
     assert options["env"] == {"VALUE": "a=b c"}
-    assert options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
+    assert options["cpu"] is None and options["gpu"] is None
+    assert options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
     fake.create.assert_called_once_with()
     fake.wait.assert_not_called()
+
+
+def test_cli_forwards_gpu_with_typed_resources(cli_service):
+    cli_service.http.json.return_value = {"name": "dev", "id": "resource", "status": "starting"}
+    with patch.object(vm_cli.VM, "wait"):
+        result = CliRunner().invoke(
+            vm_cli.management,
+            [
+                "new",
+                "dev",
+                "--template",
+                "base",
+                "--no-ssh",
+                "--cpu",
+                "2.5",
+                "--memory",
+                "4096",
+                "--gpu",
+                "NVIDIA GeForce RTX 4090",
+                "--json",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    assert cli_service.http.json.call_args.kwargs["json"]["spec"] == {
+        "cpu": 2500,
+        "memory": 4096,
+        "gpu": "RTX4090",
+        "ssh": False,
+    }
+
+
+def test_cli_rejects_invalid_gpu_before_creation(cli_service):
+    result = CliRunner().invoke(vm_cli.management, ["new", "--gpu", "unknown"])
+    assert result.exit_code == 1
+    assert "not a valid GpuType" in result.output
+    cli_service.http.json.assert_not_called()
 
 
 @pytest.mark.parametrize(

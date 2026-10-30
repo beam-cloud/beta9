@@ -294,10 +294,19 @@ func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
 	assert.Empty(t, filterControllersByFlags(controllers, vm), "VMs must never fall back to a container runtime")
 	assert.Empty(t, filterWorkersByResources(workers, vm, nil))
 
-	// Things the VM runtime cannot serve stay off it even with use_vm.
+	// GPU VMs use the same model and free-device accounting as containers.
 	gpu := sandbox(true)
-	gpu.Gpu = "RTX5090"
+	gpu.Gpu = "RTX4090"
 	gpu.GpuCount = 1
+	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, gpu))
+	gpuWorker := worker("gpu-worker", types.ContainerRuntimeMicroVM.String())
+	gpuWorker.Gpu, gpuWorker.FreeGpuCount = "RTX4090", 1
+	assert.Equal(t, []*types.Worker{gpuWorker}, filterWorkersByResources(append(workers, gpuWorker), gpu, nil))
+	gpuWorker.FreeGpuCount = 0
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{gpuWorker}, gpu, nil))
+	gpuWorker.FreeGpuCount, gpuWorker.Gpu = 1, "A100"
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{gpuWorker}, gpu, nil))
+	gpu.GpuCount = 2
 	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, gpu))
 
 	checkpointing := sandbox(true)

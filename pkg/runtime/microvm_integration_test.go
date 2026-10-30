@@ -614,7 +614,7 @@ func TestMicroVMGPU(t *testing.T) {
 	rt := requireMicroVMEnv(t)
 	rt.cfg.MicroVMVFIODevices = strings.Split(devices, ",")
 	for boot := range 2 {
-		vm := newTestVM(t, rt, vmOptions{image: "gpu", goproc: true, memoryMiB: 8192, cpuCores: 4})
+		vm := newTestVM(t, rt, vmOptions{image: "gpu", goproc: true, memoryMiB: 8192, cpuCores: 4, annotations: map[string]string{MicroVMGPUCountAnnotation: "1"}})
 		vm.start()
 		client := vm.goprocClient(90 * time.Second)
 		code, output := vm.sh(client, `set -eux

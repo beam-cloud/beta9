@@ -43,6 +43,20 @@ func normalizeDiskSize(size string) (string, error) {
 }
 
 func validate(spec *types.VMSpec) error {
+	if strings.ContainsAny(spec.GPU, ",[]") {
+		return fmt.Errorf("gpu must name one GPU type")
+	}
+	gpu := types.NormalizeGPUType(spec.GPU)
+	if gpu == types.NO_GPU {
+		gpu = ""
+	}
+	if gpu != "" && !types.KnownGPUType(gpu) {
+		return fmt.Errorf("unknown GPU type %q", spec.GPU)
+	}
+	spec.GPU = string(gpu)
+	if spec.GPU != "" && spec.IdleAction == "pause" {
+		return fmt.Errorf("GPU VMs cannot pause memory; use idle_action=stop to preserve saved files")
+	}
 	if spec.CPU == 0 {
 		spec.CPU = 4000
 	}

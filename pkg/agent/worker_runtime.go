@@ -279,6 +279,13 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	if err != nil {
 		return err
 	}
+	args, err := dockerRunArgs(name, image, imageID, configPath, r.bootstrap, slot, dirs, workerContainerResourceLimits{
+		cpu:    strings.TrimSpace(r.opts.MaxCPU) != "",
+		memory: strings.TrimSpace(r.opts.MaxMemory) != "",
+	})
+	if err != nil {
+		return err
+	}
 
 	if err := removeOtherManagedWorkerContainers(name, slot); err != nil {
 		fmt.Fprintf(r.statusErr, "failed to clean stale worker containers: %v\n", err)
@@ -292,10 +299,6 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 		}
 	}()
 
-	args := dockerRunArgs(name, image, imageID, configPath, r.bootstrap, slot, dirs, workerContainerResourceLimits{
-		cpu:    strings.TrimSpace(r.opts.MaxCPU) != "",
-		memory: strings.TrimSpace(r.opts.MaxMemory) != "",
-	})
 	cmd := exec.Command("docker", args...)
 	stdoutLogs := r.telemetry.logWriter(types.AgentTelemetrySourceWorker, slot.WorkerId, types.EventLogStreamStdout)
 	stderrLogs := r.telemetry.logWriter(types.AgentTelemetrySourceWorker, slot.WorkerId, types.EventLogStreamStderr)

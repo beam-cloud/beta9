@@ -670,6 +670,47 @@ func TestSpecFromRequestEnforcesMemoryForGPUWithoutCPUQuota(t *testing.T) {
 	require.Equal(t, int64(42*1024*1024*1024), *spec.Linux.Resources.Memory.Limit)
 }
 
+func TestSpecFromRequestMicroVMGPU(t *testing.T) {
+	for _, test := range []struct {
+		gpu   string
+		count uint32
+		want  string
+	}{{"RTX4090", 1, "1"}, {"", 0, "0"}, {"", 1, "0"}} {
+		worker := &Worker{
+			runtime:            &mockRuntime{name: types.ContainerRuntimeMicroVM.String(), capabilities: runtime.Capabilities{GPU: true, BlockRoot: true}},
+			containerInstances: common.NewSafeMap[*ContainerInstance](),
+		}
+		spec, err := worker.specFromRequest(&types.ContainerRequest{
+			ContainerId: "vm-test", EntryPoint: []string{"/opt/beam-vm/boot"},
+			UseVM: true, Cpu: 2000, Memory: 4096, Gpu: test.gpu, GpuCount: test.count,
+			Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM)}},
+		}, &ContainerOptions{BindPorts: []int{8001}})
+		require.NoError(t, err)
+		require.Equal(t, test.want, spec.Annotations[runtime.MicroVMGPUCountAnnotation])
+		require.Equal(t, "4096", spec.Annotations[runtime.MicroVMMemoryMiBAnnotation])
+		require.Equal(t, "2", spec.Annotations[runtime.MicroVMVCPUAnnotation])
+		env := strings.Join(spec.Process.Env, "\n")
+		require.NotContains(t, env, "NVIDIA_VISIBLE_DEVICES=")
+		require.NotContains(t, env, "CUDA_HOME=")
+	}
+}
+
+func TestRunContainerMicroVMRejectsInvalidGPUCount(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeMicroVM.String(), capabilities: runtime.Capabilities{GPU: true}}}
+	for _, count := range []uint32{0, 2} {
+		err := worker.RunContainer(context.Background(), &types.ContainerRequest{UseVM: true, Gpu: "RTX4090", GpuCount: count})
+		require.ErrorContains(t, err, "exactly one GPU")
+	}
+}
+
+func TestMicroVMContainerMetricsWithoutHostGPUManager(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeMicroVM.String()}}
+	worker.config.Monitoring.ContainerMetricsInterval = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	worker.collectAndSendContainerMetrics(ctx, &types.ContainerRequest{Gpu: "RTX4090", GpuCount: 1}, &specs.Spec{Linux: &specs.Linux{Resources: &specs.LinuxResources{}}}, os.Getpid())
+}
+
 func TestSpecFromRequestInjectsThunderMounts(t *testing.T) {
 	worker := &Worker{
 		runtime:                 &mockRuntime{name: types.ContainerRuntimeGvisor.String()},

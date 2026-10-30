@@ -129,7 +129,7 @@ func (g *Group) selected(ctx context.Context, tool *mcpTool) bool {
 }
 
 func (g *Group) instructions() string {
-	return "Beam CPU/GPU apps, managed databases, stacks and persistent CPU VMs in one workspace. " +
+	return "Beam CPU/GPU apps, managed databases, stacks and persistent VMs in one workspace. " +
 		"Start with whoami and capabilities. Use list_apps or list_vms to inspect existing resources. " +
 		"Deploy local files through the Beam CLI or local MCP bridge; remote MCP cannot read a laptop directory. " +
 		"VM tools manage lifecycle, ports, snapshots, templates, files, commands, Docker and desktop controls. " +

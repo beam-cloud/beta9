@@ -24,7 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Bound request bodies, reject misspelled/GPU fields, and reject trailing JSON.
+// Bound request bodies, reject unknown fields, and reject trailing JSON.
 func decode(c echo.Context, dst any) error {
 	d := json.NewDecoder(io.LimitReader(c.Request().Body, 1<<20))
 	d.DisallowUnknownFields()
@@ -423,7 +423,7 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
-	if spec.Pool == "" {
+	if spec.Pool == "" && spec.GPU == "" {
 		spec.Pool = s.config.DefaultPool
 	}
 

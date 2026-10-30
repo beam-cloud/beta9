@@ -28,8 +28,14 @@ func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stub
 		return err
 	}
 
-	if !spec.IsPersistentVM() || spec.RequiresGPU() || !stub.Type.IsSandbox() {
-		return fmt.Errorf("persistent VM requires a CPU microvm stub")
+	if !spec.IsPersistentVM() || !stub.Type.IsSandbox() {
+		return fmt.Errorf("persistent VM requires a microvm stub")
+	}
+	if spec.Runtime.GpuCount > 1 || spec.RequiresGPU() && spec.Runtime.GpuCount != 1 {
+		return fmt.Errorf("microvm GPU requests must specify exactly one GPU")
+	}
+	if spec.RequiresGPU() && checkpointID != "" {
+		return fmt.Errorf("GPU VMs require a cold boot; memory restore is unsupported")
 	}
 
 	spec.Ports = vmSpec.RuntimePorts()

@@ -19,8 +19,6 @@ import (
 
 var microVMPCIAddress = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[01][0-9a-f]\.[0-7]$`)
 
-const microVMVFIODevicesEnv = "BEAM_MICROVM_VFIO_DEVICES"
-
 type microVMVFIOHost struct {
 	devices          []string
 	pciRoot, devRoot string
