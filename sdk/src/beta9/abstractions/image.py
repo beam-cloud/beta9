@@ -458,6 +458,8 @@ class Image(BaseAbstraction):
             target: The stage to build, as with `docker build --target`. Default: the last stage.
             build_args: ARG values, as with `docker build --build-arg`.
             credentials: Workspace secret names for the first external FROM registry.
+                That FROM must be a literal image reference. ARG substitutions are
+                rejected even when their values are supplied through build_args.
 
         Returns:
             Image: The Image object.
