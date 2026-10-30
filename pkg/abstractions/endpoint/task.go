@@ -3,9 +3,11 @@ package endpoint
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type EndpointTask struct {
@@ -29,6 +31,13 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		WorkspaceId: instance.Stub.WorkspaceId,
 	})
 	if err != nil {
+		// Send persisted pending state, but this request has not entered the buffer.
+		// Release it even if the client canceled while task creation was running.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if cleanupErr := t.es.taskDispatcher.Complete(cleanupCtx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId); cleanupErr != nil {
+			log.Error().Err(cleanupErr).Str("task_id", t.msg.TaskId).Msg("unable to clean up state after task creation failed")
+		}
 		return err
 	}
 
