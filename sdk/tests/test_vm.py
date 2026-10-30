@@ -1129,6 +1129,19 @@ def test_fork_connection_survives_parent_close(monkeypatch):
     assert clients.call_args_list[1].args == (config,)
 
 
+def test_vm_without_context_uses_saved_context(monkeypatch):
+    config = SimpleNamespace()
+    contexts = MagicMock(return_value=config)
+    clients = MagicMock()
+    monkeypatch.setattr(vm_module, "get_config_context", contexts)
+    monkeypatch.setattr(vm_module, "ServiceClient", clients)
+    VM("dev")
+    VM("dev", context="staging")
+    VM("dev", _service=service())
+    assert [call.args for call in contexts.call_args_list] == [("default",), ("staging",)]
+    assert [call.args for call in clients.call_args_list] == [(config,), (config,)]
+
+
 def test_exec_preserves_child_flags_that_match_cli_options(cli_service, monkeypatch):
     vm = MagicMock()
     vm.info = {"container_id": "runtime"}
