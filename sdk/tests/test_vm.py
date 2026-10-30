@@ -3221,6 +3221,65 @@ def test_launcher_handoff_uses_owned_windows_and_closes_children(monkeypatch):
     assert stop.call_args.args[0].poll() == 0
 
 
+@pytest.mark.parametrize("exit_code", [None, 0])
+def test_transient_xprop_timeout_recovers_without_restarting_application(monkeypatch, exit_code):
+    module = guest_module("kiosk")
+    start = MagicMock(return_value=MagicMock(poll=lambda: exit_code))
+    monkeypatch.setattr(module.subprocess, "Popen", start)
+    monkeypatch.setattr(module.Session, "launch_mcp", MagicMock())
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        MagicMock(
+            side_effect=[
+                subprocess.TimeoutExpired(["xprop", "-root", "_NET_CLIENT_LIST"], 2),
+                SimpleNamespace(returncode=0, stdout="_NET_CLIENT_LIST(WINDOW): window id # 0x123"),
+                subprocess.TimeoutExpired(["xprop", "-root", "_NET_CLIENT_LIST"], 2),
+                SimpleNamespace(returncode=0, stdout="_NET_CLIENT_LIST(WINDOW): window id # 0x123"),
+            ]
+        ),
+    )
+    session = module.Session({"command": ["editor"]})
+    session.launch()
+    session.poll_application()
+    assert session.state.application == "starting"
+    session.poll_application()
+    assert session.state.application == "ready"
+    assert session.state.windows == 1
+    session.poll_application()
+    assert session.state.application == "ready"
+    assert session.state.windows == 1
+    session.poll_application()
+    assert session.state.application == "ready"
+    start.assert_called_once()
+
+
+@pytest.mark.parametrize("exit_code", [None, 2])
+def test_unknown_window_probe_preserves_crash_and_startup_deadlines(monkeypatch, exit_code):
+    module = guest_module("kiosk")
+    clock = [0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    start = MagicMock(return_value=MagicMock(poll=lambda: exit_code))
+    monkeypatch.setattr(module.subprocess, "Popen", start)
+    monkeypatch.setattr(module, "stop_process", MagicMock())
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        MagicMock(side_effect=subprocess.TimeoutExpired(["xprop"], 2)),
+    )
+    session = module.Session({"command": ["editor"]})
+    session.launch()
+    clock[0] = module.POLICY.application_timeout + 1
+    session.poll_application()
+    if exit_code is None:
+        assert session.state.application == "error"
+        assert "has not opened a window" in session.state.error
+        assert session.processes == {}
+    else:
+        assert session.state.application == "starting"
+        assert start.call_count == 2
+
+
 def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monkeypatch, tmp_path):
     module = guest_module("kiosk")
     clock = [0]

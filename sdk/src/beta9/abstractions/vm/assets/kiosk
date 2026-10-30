@@ -38,19 +38,25 @@ def run_command(command, *, env=None, timeout=None, check=True, **options):
 
 
 def root_property(name, env):
-    result = run_command(
-        ["xprop", "-root", name], env=env, check=False, capture_output=True, text=True
-    )
-    return result.stdout if result.returncode == 0 else ""
+    try:
+        result = run_command(
+            ["xprop", "-root", name], env=env, check=False, capture_output=True, text=True
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    return result.stdout if result.returncode == 0 else None
 
 
 def visible_windows(env):
-    return re.findall(r"0x[0-9a-fA-F]+", root_property("_NET_CLIENT_LIST", env))
+    value = root_property("_NET_CLIENT_LIST", env)
+    return re.findall(r"0x[0-9a-fA-F]+", value) if value is not None else None
 
 
 def visible_wm(env):
     return bool(
-        re.search(r"0x[1-9a-fA-F][0-9a-fA-F]*", root_property("_NET_SUPPORTING_WM_CHECK", env))
+        re.search(
+            r"0x[1-9a-fA-F][0-9a-fA-F]*", root_property("_NET_SUPPORTING_WM_CHECK", env) or ""
+        )
     )
 
 
@@ -117,7 +123,7 @@ def resize_display(size, env):
 
 
 def display_size(env):
-    match = re.search(r"=\s*(\d+),\s*(\d+)", root_property("_NET_DESKTOP_GEOMETRY", env))
+    match = re.search(r"=\s*(\d+),\s*(\d+)", root_property("_NET_DESKTOP_GEOMETRY", env) or "")
     return (int(match[1]), int(match[2])) if match else None
 
 
@@ -455,7 +461,8 @@ class Session:
         if self.state.application in ("error", "closed"):
             return
         windows = visible_windows(self.env)
-        self.update(windows=len(windows))
+        if windows is not None:
+            self.update(windows=len(windows))
         code = self.processes["application"].poll()
         if code is not None and code != 0:
             if self.retry_allowed("application"):
@@ -471,8 +478,10 @@ class Session:
             self.update(application="ready")
             if "mcp" not in self.processes and self.state.mcp != "error":
                 self.launch_mcp()
-        elif code is not None and (
-            self.was_visible or time.monotonic() - self.started > POLICY.application_timeout
+        elif (
+            windows is not None
+            and code is not None
+            and (self.was_visible or time.monotonic() - self.started > POLICY.application_timeout)
         ):
             self.finish_application(
                 "closed",
