@@ -50,7 +50,7 @@ func (h microVMVFIOHost) acquire(value string) (_ *microVMVFIO, err error) {
 		value = strings.Join(h.devices, ",")
 	}
 	if value == "" {
-		return vfio, nil
+		return nil, fmt.Errorf("GPU request requires configured VFIO inventory")
 	}
 	if h.pciRoot == "" {
 		h.pciRoot = "/sys/bus/pci/devices"

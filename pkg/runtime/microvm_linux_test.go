@@ -601,10 +601,8 @@ func TestMicroVMVFIOValidation(t *testing.T) {
 		_, err := (microVMVFIOHost{devices: []string{"0000:01:00.0"}}).acquire(value)
 		require.ErrorContains(t, err, "invalid or duplicate", value)
 	}
-	claim, err := (microVMVFIOHost{}).acquire("")
-	require.NoError(t, err, "CPU guests do not need host VFIO support")
-	require.Empty(t, claim.paths)
-	claim.close()
+	_, err := (microVMVFIOHost{}).acquire("")
+	require.ErrorContains(t, err, "configured VFIO inventory", "GPU allocation must never fall back to a CPU guest")
 
 	for _, test := range []struct {
 		name, want string

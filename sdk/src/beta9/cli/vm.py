@@ -82,7 +82,7 @@ def _progress(message, done, as_json=False):
 
 
 def _image(
-    dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=(), gpu=None
+    dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=(), *, gpu=None
 ):
     image = (
         Image.from_dockerfile(dockerfile, build_context)
@@ -396,7 +396,7 @@ def new(
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
     image = (
-        _image(dockerfile, build_context, image_id, image_uri, build_secret, gpu)
+        _image(dockerfile, build_context, image_id, image_uri, build_secret, gpu=gpu)
         if dockerfile or image_id or image_uri or build_secret
         else None
     )

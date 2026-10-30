@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -2482,70 +2481,6 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 		"PIGZ=-p"+fmt.Sprintf("%d", runtime.NumCPU()),
 	)
 	return env
-}
-
-func (c *ImageClient) buildahAuthArgs(ctx context.Context, request *types.ContainerRequest, imageRef string) []string {
-	if creds := c.buildahCredentials(ctx, request, imageRef); creds != nil {
-		return []string{"--creds", creds.Username + ":" + creds.Password}
-	}
-	return nil
-}
-
-func (c *ImageClient) buildahAuthFileArgs(ctx context.Context, request *types.ContainerRequest, imageRef, runroot string) ([]string, error) {
-	config := struct {
-		Auths map[string]authn.AuthConfig `json:"auths"`
-	}{Auths: make(map[string]authn.AuthConfig)}
-	if registry := registryFromImageRef(imageRef); registry != "" {
-		if creds := c.buildahCredentials(ctx, request, imageRef); creds != nil {
-			config.Auths[registry] = *creds
-		}
-	}
-	data, err := json.Marshal(config)
-	if err != nil {
-		return nil, err
-	}
-	// Keep source credentials scoped to their registry and out of RUN mounts.
-	authFile := filepath.Join(runroot, "auth.json")
-	if err := os.WriteFile(authFile, data, 0600); err != nil {
-		return nil, err
-	}
-	return []string{"--authfile", authFile}, nil
-}
-
-func (c *ImageClient) buildahCredentials(ctx context.Context, request *types.ContainerRequest, imageRef string) *authn.AuthConfig {
-	if creds := c.getBuildahCredentials(imageRef, request.BuildOptions.SourceImageCreds); creds != nil {
-		return creds
-	}
-	registry := registryFromImageRef(imageRef)
-	if registry == "localhost" || strings.HasPrefix(registry, "127.0.0.1") || !strings.ContainsAny(registry, ".:") {
-		return nil
-	}
-	return c.getBuildahCredentials(imageRef, c.gatewayRegistryCredentials(ctx, registry, request))
-}
-
-func (c *ImageClient) getBuildahCredentials(imageRef string, creds string) *authn.AuthConfig {
-	if creds == "" {
-		return nil
-	}
-
-	// Parse credentials - supports both JSON and username:password formats
-	parsedCreds, err := reg.ParseCredentialsFromJSON(creds)
-	if err != nil {
-		log.Warn().Err(err).Str("image_ref", imageRef).Msg("failed to parse credentials for buildah")
-		return nil
-	}
-
-	for _, keys := range [][2]string{{"USERNAME", "PASSWORD"}, {"DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD"}} {
-		username, usernameOK := parsedCreds[keys[0]]
-		password, passwordOK := parsedCreds[keys[1]]
-		if usernameOK && passwordOK {
-			return &authn.AuthConfig{Username: username, Password: password}
-		}
-	}
-
-	// No valid username:password found
-	log.Warn().Str("image_ref", imageRef).Msg("credentials provided but no valid username:password found")
-	return nil
 }
 
 // formatImageBytes renders a byte count for user-facing build output.

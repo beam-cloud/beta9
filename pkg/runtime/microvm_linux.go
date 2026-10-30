@@ -158,7 +158,8 @@ func (m *MicroVM) Name() string {
 }
 
 func (m *MicroVM) Capabilities() Capabilities {
-	return Capabilities{GPU: len(m.cfg.MicroVMVFIODevices) > 0, JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: len(m.cfg.MicroVMVFIODevices) == 0}
+	gpu := len(m.cfg.MicroVMVFIODevices) > 0
+	return Capabilities{GPU: gpu, JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: !gpu}
 }
 
 // Prepare strips what only a shared-kernel runtime needs. The VM is the
@@ -498,9 +499,6 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 	if count == "1" || devices != "" {
 		if restoreFrom != "" {
 			return none, microVMDisk{}, nil, fmt.Errorf("VFIO devices require a cold boot; memory restore is unsupported")
-		}
-		if len(m.cfg.MicroVMVFIODevices) == 0 {
-			return none, microVMDisk{}, nil, fmt.Errorf("GPU request requires configured VFIO inventory")
 		}
 		var err error
 		vfio, err = (microVMVFIOHost{devices: m.cfg.MicroVMVFIODevices}).acquire(devices)
