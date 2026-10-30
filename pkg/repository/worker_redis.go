@@ -537,11 +537,27 @@ func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) 
 	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
 }
 
-// AddWorker adds or updates a worker
+// AddWorker adds or updates a worker.
 func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
-	ctx := context.TODO()
-	return r.lock.WithLease(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions, func(ctx context.Context) error {
-		return r.addWorker(ctx, worker)
+	return r.AddWorkerWithSetup(context.TODO(), worker, nil)
+}
+
+// AddWorkerWithSetup holds the worker lease while setup makes its resources
+// visible and until its state is saved. Orphan cleanup uses the same lease.
+func (r *WorkerRedisRepository) AddWorkerWithSetup(ctx context.Context, worker *types.Worker, setup func(context.Context) error) error {
+	return r.lock.WithLease(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions, func(leaseCtx context.Context) error {
+		if err := leaseCtx.Err(); err != nil {
+			return err
+		}
+		if setup != nil {
+			if err := setup(leaseCtx); err != nil {
+				return err
+			}
+		}
+		if err := leaseCtx.Err(); err != nil {
+			return err
+		}
+		return r.addWorker(leaseCtx, worker)
 	})
 }
 
@@ -599,6 +615,9 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 		if oldWorker.PoolName != "" && oldWorker.PoolName != worker.PoolName {
 			pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerPoolIndex(oldWorker.PoolName), stateKey)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to add worker state and indexes <%s>: %w", stateKey, err)

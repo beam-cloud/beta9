@@ -148,16 +148,14 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 	// Create a new worker job
 	job, worker := wpc.createWorkerJob(workerId, cpu, memory, gpuType, gpuCount, token.Key)
 
-	// Create the job in the cluster
-	if err := wpc.createJobInCluster(job); err != nil {
-		return nil, err
-	}
-
 	worker.PoolName = wpc.name
 	worker.RequiresPoolSelector = wpc.workerPoolConfig.RequiresPoolSelector
 
-	// Add the worker state
-	if err := wpc.workerRepo.AddWorker(worker); err != nil {
+	// Register under the same worker lease used by orphan cleanup, before
+	// creating a Job that the cleaner could otherwise see without state.
+	if err := wpc.workerRepo.AddWorkerWithSetup(wpc.ctx, worker, func(leaseCtx context.Context) error {
+		return wpc.createJobInCluster(leaseCtx, job)
+	}); err != nil {
 		workerLog(log.Error(), worker).Err(err).Msg("unable to create worker")
 		return nil, err
 	}
@@ -315,8 +313,8 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 	return config
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.Job) error {
-	_, err := wpc.kubeClient.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(context.Background(), job, metav1.CreateOptions{})
+func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(ctx context.Context, job *batchv1.Job) error {
+	_, err := wpc.kubeClient.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(ctx, job, metav1.CreateOptions{})
 	return err
 }
 
