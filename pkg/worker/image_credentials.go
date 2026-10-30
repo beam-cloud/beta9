@@ -2,6 +2,10 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +17,31 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/rs/zerolog/log"
 )
+
+func (c *ImageClient) buildahAuthFileArgs(ctx context.Context, request *types.ContainerRequest, imageRef, runroot string) ([]string, error) {
+	args := c.buildahAuthArgs(ctx, request, imageRef)
+	if len(args) == 0 {
+		return nil, nil
+	}
+	registry := reg.ParseRegistry(imageRef)
+	if registry == "" {
+		return nil, fmt.Errorf("registry credentials require a source image")
+	}
+	username, password, _ := strings.Cut(args[1], ":")
+	config := struct {
+		Auths map[string]authn.AuthConfig `json:"auths"`
+	}{Auths: map[string]authn.AuthConfig{registry: {Username: username, Password: password}}}
+	data, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	// The private runroot is outside the build context and RUN mounts.
+	path := filepath.Join(runroot, "auth.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return nil, err
+	}
+	return []string{"--authfile", path}, nil
+}
 
 // gatewayCredentialProviderForImage vends registry credentials from the
 // gateway on first use. Registry access only happens on a content cache miss,

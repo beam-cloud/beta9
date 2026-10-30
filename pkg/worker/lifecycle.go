@@ -1306,8 +1306,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if options.InitialSpec.Process.Cwd != "" {
 			spec.Process.Cwd = options.InitialSpec.Process.Cwd
 		}
-		spec.Process.User.UID = options.InitialSpec.Process.User.UID
-		spec.Process.User.GID = options.InitialSpec.Process.User.GID
+		spec.Process.User = options.InitialSpec.Process.User
+		spec.Process.User.AdditionalGids = append([]uint32(nil), options.InitialSpec.Process.User.AdditionalGids...)
 	}
 
 	if len(spec.Process.Args) == 0 {
@@ -1854,6 +1854,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
+	if err := resolveImageUser(spec.Root.Path, &spec.Process.User); err != nil {
+		exitCode = int(types.ContainerExitCodeStartupFailed)
+		outputLogger.Error(fmt.Sprintf("Failed to resolve image user: %v\n", err))
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to resolve image user")
+		return
+	}
 	spec.Mounts = pruneUnreachableSDKMounts(spec.Mounts, containerInstance.Overlay.RootPath())
 
 	// Network setup (a gateway round trip) and GPU assignment (device

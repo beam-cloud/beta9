@@ -86,7 +86,7 @@ func NewContainerImageService(
 }
 
 func (is *ContainerImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
-	result, err := is.verifyImage(ctx, in)
+	result, err := is.verifyImage(ctx, in, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +102,14 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 	// The request can contain registry credentials and secret environment
 	// values. Log only non-sensitive build metadata.
 	log.Info().Str("python_version", in.PythonVersion).Str("gpu", in.Gpu).Msg("incoming image build request")
+	credentials, err := is.registryCredentials(stream.Context(), in.ExistingImageCreds)
+	if err != nil {
+		var configErr *registryCredentialConfigError
+		if errors.As(err, &configErr) {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
+		return err
+	}
 
 	verifyReq := &pb.VerifyImageBuildRequest{
 		PythonVersion:    in.PythonVersion,
@@ -118,7 +126,7 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 		GitSource:        in.GitSource,
 	}
 
-	verifyResult, err := is.verifyImage(stream.Context(), verifyReq)
+	verifyResult, err := is.verifyImage(stream.Context(), verifyReq, credentials)
 	if err != nil {
 		return err
 	}
@@ -127,15 +135,6 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 	if buildOptions == nil {
 		return errors.New("missing image build options")
 	}
-	buildOptions.ExistingImageCreds, err = is.registryCredentials(stream.Context(), in.ExistingImageCreds)
-	if err != nil {
-		var configErr *registryCredentialConfigError
-		if errors.As(err, &configErr) {
-			return status.Error(codes.InvalidArgument, err.Error())
-		}
-		return err
-	}
-
 	if verifyResult.exists {
 		is.setImageCredentialSecretNames(verifyResult.imageID, buildOptions)
 		_ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: verifyResult.imageID})
@@ -145,16 +144,6 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 
 	clipVersion := is.config.ImageService.ClipVersion
 	buildOptions.ClipVersion = clipVersion
-
-	// Process credentials for custom base image (if provided)
-	if buildOptions.ExistingImageUri != "" && len(buildOptions.ExistingImageCreds) > 0 {
-		baseImageCreds, err := reg.GetRegistryTokenForImage(buildOptions.ExistingImageUri, buildOptions.ExistingImageCreds)
-		if err != nil {
-			log.Error().Err(err).Str("image_id", verifyResult.imageID).Msg("failed to convert credentials to skopeo format")
-			return err
-		}
-		buildOptions.BaseImageCreds = baseImageCreds
-	}
 
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
