@@ -774,18 +774,31 @@ def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, 
 
 
 @pytest.mark.parametrize("as_json", [False, True])
-def test_cli_creation_does_not_report_ready_when_services_fail(cli_service, monkeypatch, as_json):
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["new", "dev", "--template", "base"],
+        ["start", "dev"],
+        ["start", "dev", "--cold"],
+        ["resume", "dev"],
+        ["fork", "dev", "copy"],
+        ["fork", "snapshot", "copy"],
+    ],
+)
+def test_cli_does_not_report_ready_when_services_fail(cli_service, monkeypatch, as_json, args):
     vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running"})
+    for method in ("create", "start", "fork"):
+        getattr(vm, method).return_value = vm
+    vm._api.return_value = [{"id": "snapshot"}]
     vm.wait.side_effect = TimeoutError("VM did not become ready; inspect vm get/logs")
-    monkeypatch.setattr(vm_cli, "VM", lambda *args, **kwargs: vm)
-    result = CliRunner().invoke(
-        vm_cli.management, ["new", "dev", "--template", "base", *(["--json"] if as_json else [])]
-    )
+    factory = MagicMock(return_value=vm)
+    factory.get.return_value = vm
+    monkeypatch.setattr(vm_cli, "VM", factory)
+    result = CliRunner().invoke(vm_cli.management, [*args, *(["--json"] if as_json else [])])
     assert result.exit_code == 1
     assert "VM did not become ready" in result.output
     assert "✓ VM ready" not in result.output
     assert "vm-id" not in result.output
-    vm.create.assert_called_once_with()
     vm.wait.assert_called_once_with(services=True)
 
 
@@ -1085,6 +1098,10 @@ def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, ar
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == vm.info
+    if args[0] in ("new", "start", "resume", "fork"):
+        vm.wait.assert_called_once_with(services=True)
+    else:
+        vm.wait.assert_not_called()
 
 
 def test_vm_new_help_has_one_aligned_description_column():
