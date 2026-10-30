@@ -180,8 +180,10 @@ class VM:
 
     Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
-    GPU defaults pair modern NVIDIA open drivers with the image-pinned kernel
-    at /boot/beam/vmlinux. Other drivers require an explicit image.
+    GPU VMs currently require x86_64. The stock NVIDIA image pairs its guest
+    kernel, driver modules, userspace and GSP firmware. Host VFIO passthrough
+    does not require matching host NVIDIA drivers. Custom GPU images should
+    include /boot/beam/vmlinux built for their installed GPU modules.
     create() waits for exec readiness; wait(services=True) also waits for
     enabled SSH/terminal/desktop services. Docker helpers wait separately.
 

@@ -176,49 +176,11 @@ func runPreflight(devMode bool, executor string) preflightResult {
 		})
 	}
 
-	var gpuDevices []gpuDevice
-	vfio := vfioGPUConfigured()
-	if vfio {
-		var err error
-		gpuDevices, err = detectVFIOGPUDevices()
-		checks = append(checks, check{
-			Name:     "vfio-gpus",
-			Ok:       err == nil,
-			Message:  capacityCheckMessage(err == nil, fmt.Sprintf("%d GPU groups reserved for microVMs", len(gpuDevices)), err),
-			Severity: severity(err == nil),
-		})
-	} else {
-		gpuDevices = detectNvidiaGPUDevices()
-	}
+	gpuDevices, gpuChecks := gpuPreflight()
+	checks = append(checks, gpuChecks...)
 	gpus := make([]string, 0, len(gpuDevices))
 	for _, device := range gpuDevices {
 		gpus = append(gpus, device.Name)
-	}
-	if len(gpuDevices) > 0 && !vfio {
-		nvidiaRuntime := commandExists("nvidia-ctk") || commandExists("nvidia-container-runtime")
-		checks = append(checks, check{
-			Name:     "nvidia-runtime",
-			Ok:       nvidiaRuntime,
-			Message:  "required to pin GPUs into worker containers",
-			Severity: severity(nvidiaRuntime),
-		})
-
-		driverOK, driverMessage := nvidiaProcDriverStateOK(gpuDevices)
-		checks = append(checks, check{
-			Name:     "nvidia-driver-state",
-			Ok:       driverOK,
-			Message:  driverMessage,
-			Severity: severity(driverOK),
-		})
-
-		if cudaOK, cudaMessage, ran := cudaDriverInitProbe(); ran {
-			checks = append(checks, check{
-				Name:     "cuda-driver-init",
-				Ok:       cudaOK,
-				Message:  cudaMessage,
-				Severity: types.AgentPreflightSeverityInfo,
-			})
-		}
 	}
 
 	return preflightResult{
