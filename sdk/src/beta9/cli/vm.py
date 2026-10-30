@@ -434,6 +434,7 @@ def new(
     with StoredStdoutInterceptor(capture_logs=as_json):
         with _progress("Creating VM", "VM ready", as_json):
             vm.create()
+            vm.wait(services=True)
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)

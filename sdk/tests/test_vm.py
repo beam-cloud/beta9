@@ -689,12 +689,12 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     assert options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
     fake.create.assert_called_once_with()
-    fake.wait.assert_not_called()
+    fake.wait.assert_called_once_with(services=True)
 
 
 def test_cli_forwards_gpu_with_typed_resources(cli_service):
     cli_service.http.json.return_value = {"name": "dev", "id": "resource", "status": "starting"}
-    with patch.object(vm_cli.VM, "wait"):
+    with patch.object(vm_cli.VM, "wait") as wait:
         result = CliRunner().invoke(
             vm_cli.management,
             [
@@ -713,6 +713,7 @@ def test_cli_forwards_gpu_with_typed_resources(cli_service):
             ],
         )
     assert result.exit_code == 0, result.output
+    assert [call.kwargs for call in wait.call_args_list] == [{}, {"services": True}]
     assert cli_service.http.json.call_args.kwargs["json"]["spec"] == {
         "cpu": 2500,
         "memory": 4096,
@@ -747,6 +748,7 @@ def test_cli_preserves_default_image_fast_path(cli_service, monkeypatch, args, b
     image = factory.call_args.kwargs["image"]
     assert (image.base_image if image else None) == base_image
     vm.create.assert_called_once_with()
+    vm.wait.assert_called_once_with(services=True)
 
 
 def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, monkeypatch):
@@ -769,6 +771,22 @@ def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, 
     assert "Checking image cache" not in result.output
     assert "Waiting for VM" not in result.output
     assert "vm-long-internal-runtime" not in result.output
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_cli_creation_does_not_report_ready_when_services_fail(cli_service, monkeypatch, as_json):
+    vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running"})
+    vm.wait.side_effect = TimeoutError("VM did not become ready; inspect vm get/logs")
+    monkeypatch.setattr(vm_cli, "VM", lambda *args, **kwargs: vm)
+    result = CliRunner().invoke(
+        vm_cli.management, ["new", "dev", "--template", "base", *(["--json"] if as_json else [])]
+    )
+    assert result.exit_code == 1
+    assert "VM did not become ready" in result.output
+    assert "✓ VM ready" not in result.output
+    assert "vm-id" not in result.output
+    vm.create.assert_called_once_with()
+    vm.wait.assert_called_once_with(services=True)
 
 
 @pytest.mark.parametrize("as_json", [False, True])
@@ -3028,6 +3046,7 @@ def test_kiosk_cli_preserves_argv_and_reports_bad_json(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert factory.call_args.kwargs["kiosk"] == config
     fake.create.assert_called_once()
+    fake.wait.assert_called_once_with(services=True)
     factory.reset_mock()
     path.write_text("[]")
     result = CliRunner().invoke(vm_cli.management, ["new", "app", "--kiosk-config", str(path)])
