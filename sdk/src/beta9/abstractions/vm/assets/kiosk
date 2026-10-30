@@ -112,9 +112,8 @@ def resize_display(size, env):
         env=env,
         timeout=POLICY.resize_timeout,
     )
-    # Selkies' standalone resize CLI initializes the physical display at 96 DPI.
-    # Apply the fixed density in the same guest operation, before GUI startup.
-    run_command(["xrandr", "--dpi", str(POLICY.dpi)], env=env)
+    # Preserve the framebuffer when applying the fixed density to a headless display.
+    run_command(["xrandr", "--fb", f"{size[0]}x{size[1]}", "--dpi", str(POLICY.dpi)], env=env)
 
 
 def display_size(env):

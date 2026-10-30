@@ -1570,6 +1570,33 @@ def test_recording_selects_mp4_for_extensionless_paths(sandbox_vm, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("size", [(2560, 1440), (1919, 1079)])
+def test_desktop_size_reads_root_window_geometry(sandbox_vm, monkeypatch, size):
+    vm, _ = sandbox_vm
+    desktop = vm.desktop
+    run = MagicMock(
+        return_value=f"""xwininfo: Window id: 0x400 (the root window) (has no name)
+
+  Absolute upper-left X:  0
+  Absolute upper-left Y:  0
+  Width: {size[0]}
+  Height: {size[1]}
+  Depth: 24
+"""
+    )
+    monkeypatch.setattr(desktop, "_run", run)
+    assert desktop.screen_size() == size
+    run.assert_called_once_with("xwininfo", "-root")
+
+
+def test_desktop_size_reports_unreadable_geometry(sandbox_vm, monkeypatch):
+    vm, _ = sandbox_vm
+    desktop = vm.desktop
+    monkeypatch.setattr(desktop, "_run", lambda *args: "")
+    with pytest.raises(RuntimeError, match="Unable to read desktop geometry"):
+        desktop.screen_size()
+
+
 def test_desktop_timeout_cancels_command_and_preserves_wait_error(sandbox_vm):
     vm, sandbox = sandbox_vm
     vm.info["spec"]["desktop"] = True
@@ -3242,7 +3269,10 @@ def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatc
     monkeypatch.setattr(module.subprocess, "run", lambda argv, **kwargs: commands.append(argv))
     monkeypatch.setattr(module.sys, "argv", ["kiosk", "--resize", "2880", "1800"])
     assert module.main() == 0
-    assert commands == [["selkies", "resize", "2880x1800"], ["xrandr", "--dpi", "192"]]
+    assert commands == [
+        ["selkies", "resize", "2880x1800"],
+        ["xrandr", "--fb", "2880x1800", "--dpi", "192"],
+    ]
     commands.clear()
     for args in (
         ["kiosk", "--resize", "1", "900"],
