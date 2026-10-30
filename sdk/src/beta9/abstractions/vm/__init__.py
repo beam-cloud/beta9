@@ -46,7 +46,7 @@ from .kiosk_config import Kiosk, MCPServer as MCPServer
 DEFAULT_VM_BASE_IMAGE = (
     "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
 )
-DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:f54e5dd00d65-nvidia"
+DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:b8689876417c-nvidia"
 
 
 def default_base_image(gpu: Optional[GpuTypeAlias] = None) -> str:
@@ -180,8 +180,8 @@ class VM:
 
     Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
-    GPU defaults include modern NVIDIA open drivers built for the worker's
-    matching kernel. Other drivers require an explicit image.
+    GPU defaults pair modern NVIDIA open drivers with the image-pinned kernel
+    at /boot/beam/vmlinux. Other drivers require an explicit image.
     create() waits for exec readiness; wait(services=True) also waits for
     enabled SSH/terminal/desktop services. Docker helpers wait separately.
 

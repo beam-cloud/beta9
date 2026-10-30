@@ -22,6 +22,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Request)) *microVMInstance {
@@ -859,4 +860,111 @@ func TestMicroVMVFIOCPURequestSkipsInventory(t *testing.T) {
 		require.Empty(t, inst.vfio.paths)
 		require.Empty(t, inst.vfio.locks)
 	}
+}
+
+func imageKernelTestInstance(t *testing.T) (*MicroVM, *microVMInstance, string) {
+	t.Helper()
+	canvas := t.TempDir()
+	image := filepath.Join(canvas, MicroVMImageKernelPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(image), 0o755))
+	workerKernel := filepath.Join(t.TempDir(), "vmlinux")
+	require.NoError(t, os.WriteFile(workerKernel, []byte("invalid worker kernel"), 0o600))
+	return &MicroVM{cfg: Config{MicroVMKernelPath: workerKernel}},
+		&microVMInstance{canvas: canvas, stateDir: t.TempDir(), vfio: &microVMVFIO{paths: []string{"gpu"}}}, image
+}
+
+func TestMicroVMImageKernelSelection(t *testing.T) {
+	for _, mode := range []string{"GPU", "missing", "CPU"} {
+		t.Run(mode, func(t *testing.T) {
+			rt, inst, image := imageKernelTestInstance(t)
+			content := []byte("kernel paired with image drivers")
+			if mode != "missing" {
+				require.NoError(t, os.WriteFile(image, content, 0o644))
+			}
+			if mode == "CPU" {
+				inst.vfio = nil
+			}
+			kernel, err := rt.kernelPath(inst)
+			require.NoError(t, err)
+			if mode != "GPU" {
+				require.Equal(t, rt.cfg.MicroVMKernelPath, kernel)
+				files, err := os.ReadDir(inst.stateDir)
+				require.NoError(t, err)
+				require.Empty(t, files)
+				return
+			}
+			require.Equal(t, inst.stateDir, filepath.Dir(kernel))
+			require.NotEqual(t, rt.cfg.MicroVMKernelPath, kernel, "the image kernel takes precedence over an invalid worker kernel")
+			require.NoError(t, os.WriteFile(image, []byte("changed"), 0o644))
+			copied, err := os.ReadFile(kernel)
+			require.NoError(t, err)
+			require.Equal(t, content, copied, "the VMM uses a private copy, not a mutable image path")
+			info, err := os.Stat(kernel)
+			require.NoError(t, err)
+			require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+		})
+	}
+}
+
+func TestMicroVMImageKernelRejectsUnsafeFiles(t *testing.T) {
+	for _, kind := range []string{"symlink", "ancestor symlink", "directory", "FIFO", "empty", "oversized"} {
+		t.Run(kind, func(t *testing.T) {
+			rt, inst, image := imageKernelTestInstance(t)
+			switch kind {
+			case "symlink", "ancestor symlink":
+				outside := t.TempDir()
+				require.NoError(t, os.WriteFile(filepath.Join(outside, "vmlinux"), []byte("outside kernel"), 0o644))
+				if kind == "ancestor symlink" {
+					require.NoError(t, os.Remove(filepath.Dir(image)))
+					require.NoError(t, os.Symlink(outside, filepath.Dir(image)))
+				} else {
+					require.NoError(t, os.Symlink(filepath.Join(outside, "vmlinux"), image))
+				}
+			case "directory":
+				require.NoError(t, os.Mkdir(image, 0o755))
+			case "FIFO":
+				require.NoError(t, unix.Mkfifo(image, 0o600))
+			case "empty", "oversized":
+				file, err := os.Create(image)
+				require.NoError(t, err)
+				if kind == "oversized" {
+					require.NoError(t, file.Truncate(microVMMaxKernelBytes+1))
+				}
+				require.NoError(t, file.Close())
+			}
+			result := make(chan error, 1)
+			go func() { _, err := rt.kernelPath(inst); result <- err }()
+			select {
+			case err := <-result:
+				require.ErrorContains(t, err, "image kernel")
+			case <-time.After(5 * time.Second):
+				t.Fatal("image kernel probe blocked")
+			}
+			files, err := os.ReadDir(inst.stateDir)
+			require.NoError(t, err)
+			require.Empty(t, files, "unsafe kernels must be rejected before writing VM state")
+		})
+	}
+}
+
+func TestMicroVMImageKernelRelativeRoot(t *testing.T) {
+	rt, original, image := imageKernelTestInstance(t)
+	require.NoError(t, os.WriteFile(image, []byte("image kernel"), 0o644))
+	bundle := filepath.Dir(original.canvas)
+	spec := &specs.Spec{Root: &specs.Root{Path: filepath.Base(original.canvas)}, Process: &specs.Process{Args: []string{"true"}}, Linux: &specs.Linux{}}
+	data, err := json.Marshal(spec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(bundle, "config.json"), data, 0o644))
+	rt.cfg.MicroVMStateRoot, rt.vms = t.TempDir(), make(map[string]*microVMInstance)
+	inst, loaded, err := rt.newInstance("relative-root", bundle)
+	require.NoError(t, err)
+	require.Equal(t, spec.Root.Path, loaded.Root.Path, "OCI root paths remain relative to their bundle")
+	require.Equal(t, original.canvas, inst.canvas)
+	inst.vfio = original.vfio
+	require.NoError(t, os.MkdirAll(inst.stateDir, 0o700))
+	kernel, err := rt.kernelPath(inst)
+	require.NoError(t, err)
+	copied, err := os.ReadFile(kernel)
+	require.NoError(t, err)
+	require.Equal(t, "image kernel", string(copied))
 }

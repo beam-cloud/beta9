@@ -38,6 +38,7 @@ const (
 	DefaultMicroVMKernelPath = "/usr/local/share/beam/microvm/vmlinux"
 	DefaultMicroVMInitPath   = "/usr/local/bin/beam-vminit"
 	DefaultMicroVMStateRoot  = "/run/beam/microvm"
+	MicroVMImageKernelPath   = "boot/beam/vmlinux"
 
 	// Annotations the worker (or a test harness) sets on the OCI spec.
 	MicroVMDockerAnnotation     = "com.beam.microvm.docker"      // "true" binds the disk's docker dir over /var/lib/docker
@@ -67,7 +68,8 @@ const (
 	microVMConsoleTail    = 64
 	// microVMMaxGuestRead bounds a whole-file read (Length 0) the guest
 	// answers; the worker's file RPCs ask for 4 MiB chunks.
-	microVMMaxGuestRead = 64 << 20
+	microVMMaxGuestRead         = 64 << 20
+	microVMMaxKernelBytes int64 = 256 << 20
 )
 
 // DiskFreezer is implemented by runtimes that own the container's writable

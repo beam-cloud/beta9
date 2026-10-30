@@ -191,8 +191,52 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 	if err != nil {
 		return int(types.ContainerExitCodeStartupFailed), err
 	}
-	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra, inst.vfio.paths...)
+	kernel, err := m.kernelPath(inst)
+	if err != nil {
+		return int(types.ContainerExitCodeStartupFailed), err
+	}
+	args := microVMHypervisorArgs(inst.stateDir, kernel, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra, inst.vfio.paths...)
 	return m.boot(ctx, inst, spec, args, opts.OutputWriter, opts.ErrorWriter, opts.Started)
+}
+
+// GPU images can retain the kernel their drivers were built against.
+func (m *MicroVM) kernelPath(inst *microVMInstance) (string, error) {
+	if inst.vfio == nil || len(inst.vfio.paths) == 0 {
+		return m.cfg.MicroVMKernelPath, nil
+	}
+	root, err := os.OpenRoot(inst.canvas)
+	if err != nil {
+		return "", fmt.Errorf("open kernel image root: %w", err)
+	}
+	defer root.Close()
+	source, err := root.OpenFile(MicroVMImageKernelPath, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+	if os.IsNotExist(err) {
+		return m.cfg.MicroVMKernelPath, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("open image kernel: %w", err)
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat image kernel: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > microVMMaxKernelBytes {
+		return "", fmt.Errorf("image kernel must be a nonempty regular file no larger than %d MiB", microVMMaxKernelBytes>>20)
+	}
+	kernel, err := os.CreateTemp(inst.stateDir, "kernel-")
+	if err != nil {
+		return "", err
+	}
+	defer kernel.Close()
+	n, err := io.Copy(kernel, io.LimitReader(source, microVMMaxKernelBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("copy image kernel: %w", err)
+	}
+	if n != info.Size() {
+		return "", fmt.Errorf("image kernel changed while copying")
+	}
+	return kernel.Name(), nil
 }
 
 // Restore boots a VM from a Checkpoint and, like runsc's, returns once the

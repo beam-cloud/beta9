@@ -74,6 +74,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=nvidia-build /lib/modules/ /lib/modules/
 COPY --from=nvidia-build /lib/firmware/nvidia/ /lib/firmware/nvidia/
 COPY --from=nvidia-build /etc/beam-gpu-kernel /etc/beam-gpu-kernel
+COPY --from=kernel-devel /usr/src/beam-kernel/vmlinux /boot/beam/vmlinux
 COPY --from=nvidia-build /tmp/install-nvidia /tmp/install-nvidia
 RUN --mount=from=nvidia-build,source=/opt/nvidia/driver.run,target=/tmp/nvidia.run,ro \
     /tmp/install-nvidia userspace /tmp/nvidia.run && rm /tmp/install-nvidia
