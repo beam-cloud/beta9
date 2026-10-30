@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -2483,30 +2484,46 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 	return env
 }
 
-// getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
-// Expects credentials in username:password format (either directly or in JSON)
-// For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
-// buildahAuthArgs resolves --creds for pulling imageRef: the request's source
-// image credentials when given, else whatever the gateway holds for that
-// registry. The latter is how a build whose FROM is an earlier beta9 image in
-// the build registry gets to pull it.
 func (c *ImageClient) buildahAuthArgs(ctx context.Context, request *types.ContainerRequest, imageRef string) []string {
-	if args := c.getBuildahAuthArgs(ctx, imageRef, request.BuildOptions.SourceImageCreds); len(args) > 0 {
-		return args
+	if creds := c.buildahCredentials(ctx, request, imageRef); creds != nil {
+		return []string{"--creds", creds.Username + ":" + creds.Password}
 	}
-	registry := imageRef
-	if i := strings.IndexByte(registry, '/'); i > 0 {
-		registry = registry[:i]
+	return nil
+}
+
+func (c *ImageClient) buildahAuthFileArgs(ctx context.Context, request *types.ContainerRequest, imageRef, runroot string) ([]string, error) {
+	config := struct {
+		Auths map[string]authn.AuthConfig `json:"auths"`
+	}{Auths: make(map[string]authn.AuthConfig)}
+	if registry := registryFromImageRef(imageRef); registry != "" {
+		if creds := c.buildahCredentials(ctx, request, imageRef); creds != nil {
+			config.Auths[registry] = *creds
+		}
 	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	// Keep source credentials scoped to their registry and out of RUN mounts.
+	authFile := filepath.Join(runroot, "auth.json")
+	if err := os.WriteFile(authFile, data, 0600); err != nil {
+		return nil, err
+	}
+	return []string{"--authfile", authFile}, nil
+}
+
+func (c *ImageClient) buildahCredentials(ctx context.Context, request *types.ContainerRequest, imageRef string) *authn.AuthConfig {
+	if creds := c.getBuildahCredentials(imageRef, request.BuildOptions.SourceImageCreds); creds != nil {
+		return creds
+	}
+	registry := registryFromImageRef(imageRef)
 	if registry == "localhost" || strings.HasPrefix(registry, "127.0.0.1") || !strings.ContainsAny(registry, ".:") {
 		return nil
 	}
-	// Gateway credentials come as either username:password or JSON;
-	// getBuildahAuthArgs parses both.
-	return c.getBuildahAuthArgs(ctx, imageRef, c.gatewayRegistryCredentials(ctx, registry, request))
+	return c.getBuildahCredentials(imageRef, c.gatewayRegistryCredentials(ctx, registry, request))
 }
 
-func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, creds string) []string {
+func (c *ImageClient) getBuildahCredentials(imageRef string, creds string) *authn.AuthConfig {
 	if creds == "" {
 		return nil
 	}
@@ -2522,7 +2539,7 @@ func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, c
 		username, usernameOK := parsedCreds[keys[0]]
 		password, passwordOK := parsedCreds[keys[1]]
 		if usernameOK && passwordOK {
-			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
+			return &authn.AuthConfig{Username: username, Password: password}
 		}
 	}
 
@@ -2953,10 +2970,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		budArgs = append(budArgs, "--volume", buildCtxPath+":"+types.WorkerUserCodeVolume)
 	}
 
-	// Add credentials for multi-stage builds and private base images
-	if authArgs := c.buildahAuthArgs(ctx, request, sourceImage); len(authArgs) > 0 {
-		budArgs = append(budArgs, authArgs...)
+	authArgs, err := c.buildahAuthFileArgs(ctx, request, sourceImage, runroot)
+	if err != nil {
+		return err
 	}
+	budArgs = append(budArgs, authArgs...)
 
 	// Add build secrets as build arguments
 	if len(request.BuildOptions.BuildSecrets) > 0 {

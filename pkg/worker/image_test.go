@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -805,17 +807,88 @@ func TestGetBuildContextRequiresWorkspaceCredentials(t *testing.T) {
 // Credentials the gateway vends arrive as username:password or as JSON, and
 // JSON may carry surrounding whitespace; all of them have to end up as a
 // username:password --creds value buildah can use.
-func TestGetBuildahAuthArgsParsesEveryCredentialForm(t *testing.T) {
+func TestBuildahAuthArgsParsesEveryCredentialForm(t *testing.T) {
 	client := &ImageClient{}
 	for name, creds := range map[string]string{
 		"plain":           "user:pa:ss",
 		"json":            `{"USERNAME":"user","PASSWORD":"pa:ss"}`,
 		"json-whitespace": "  \n" + `{"USERNAME":"user","PASSWORD":"pa:ss"}` + "\n",
+		"dockerhub-json":  `{"registry":"docker.io","type":"basic","credentials":{"DOCKERHUB_USERNAME":"user","DOCKERHUB_PASSWORD":"pa:ss"}}`,
 	} {
-		require.Equal(t, []string{"--creds", "user:pa:ss"}, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", creds), name)
+		request := &types.ContainerRequest{BuildOptions: types.BuildOptions{SourceImageCreds: creds}}
+		require.Equal(t, []string{"--creds", "user:pa:ss"}, client.buildahAuthArgs(context.Background(), request, "registry.example.com/img"), name)
 	}
-	require.Nil(t, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", ""))
-	require.Nil(t, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", `{"AWS_ACCESS_KEY_ID":"a","AWS_SECRET_ACCESS_KEY":"b"}`))
+	require.Nil(t, client.getBuildahCredentials("registry.example.com/img", ""))
+	require.Nil(t, client.getBuildahCredentials("registry.example.com/img", `{"AWS_ACCESS_KEY_ID":"a","AWS_SECRET_ACCESS_KEY":"b"}`))
+}
+
+func TestBuildahAuthFileScopesCredentialsToSourceRegistry(t *testing.T) {
+	for _, sourceImage := range []string{"docker.io/library/node:24", "node:24", "team/node:24"} {
+		t.Run(sourceImage, func(t *testing.T) {
+			root := t.TempDir()
+			runroot := filepath.Join(root, "run")
+			buildContext := filepath.Join(root, "context")
+			require.NoError(t, os.Mkdir(runroot, 0700))
+			require.NoError(t, os.Mkdir(buildContext, 0700))
+			dockerfile := "FROM " + sourceImage + " AS node\nFROM public.ecr.aws/n4e0e1y0/beta9-microvm:gpu\nCOPY --from=node /usr/local/bin/node /usr/local/bin/node\n"
+			require.NoError(t, os.WriteFile(filepath.Join(buildContext, "Dockerfile"), []byte(dockerfile), 0600))
+			request := &types.ContainerRequest{BuildOptions: types.BuildOptions{
+				SourceImage: &sourceImage, SourceImageCreds: "user:pa:ss", Dockerfile: &dockerfile,
+			}}
+
+			args, err := (&ImageClient{}).buildahAuthFileArgs(context.Background(), request, sourceImage, runroot)
+			require.NoError(t, err)
+			require.Equal(t, []string{"--authfile", filepath.Join(runroot, "auth.json")}, args)
+			require.NotContains(t, args, "--creds")
+			contents, err := os.ReadFile(args[1])
+			require.NoError(t, err)
+			var config struct {
+				Auths map[string]struct {
+					Auth string `json:"auth"`
+				} `json:"auths"`
+			}
+			require.NoError(t, json.Unmarshal(contents, &config))
+			require.Len(t, config.Auths, 1)
+			decoded, err := base64.StdEncoding.DecodeString(config.Auths["docker.io"].Auth)
+			require.NoError(t, err)
+			require.Equal(t, "user:pa:ss", string(decoded))
+			require.NotContains(t, config.Auths, "public.ecr.aws")
+			info, err := os.Stat(args[1])
+			require.NoError(t, err)
+			require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+			entries, err := os.ReadDir(buildContext)
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+			require.Equal(t, "Dockerfile", entries[0].Name())
+		})
+	}
+}
+
+func TestBuildahAuthFileOutsideDefaultContext(t *testing.T) {
+	client := &ImageClient{}
+	request := &types.ContainerRequest{BuildOptions: types.BuildOptions{SourceImageCreds: "user:secret"}}
+	runroot := mustMkdirTempBuildahDir("buildah-test-run-")
+	defer os.RemoveAll(runroot)
+	buildContext, err := client.getBuildContext(context.Background(), t.TempDir(), request)
+	require.NoError(t, err)
+	require.Equal(t, ".", buildContext)
+	args, err := client.buildahAuthFileArgs(context.Background(), request, "node:24", runroot)
+	require.NoError(t, err)
+	contextPath, err := filepath.Abs(buildContext)
+	require.NoError(t, err)
+	relative, err := filepath.Rel(contextPath, args[1])
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(relative, ".."+string(filepath.Separator)), "authfile must be outside COPY . context: %s", relative)
+}
+
+func TestBuildahAuthFileWithoutSourceCredentials(t *testing.T) {
+	for _, sourceImage := range []string{"", "docker.io/library/node:24"} {
+		args, err := (&ImageClient{}).buildahAuthFileArgs(context.Background(), &types.ContainerRequest{}, sourceImage, t.TempDir())
+		require.NoError(t, err)
+		contents, err := os.ReadFile(args[1])
+		require.NoError(t, err)
+		require.JSONEq(t, `{"auths":{}}`, string(contents))
+	}
 }
 
 func TestDownloadedBuildContextIsPrivateToTheBuild(t *testing.T) {
