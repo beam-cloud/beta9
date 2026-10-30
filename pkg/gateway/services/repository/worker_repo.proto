@@ -424,6 +424,8 @@ message GetCacheOriginCredentialsRequest {
   // Publish a filesystem export under this stub's generated image ID.
   string image_archive_upload_id = 5;
   bool image_archive_upload_data = 6;
+  // Active build container publishing its assigned image index.
+  string container_id = 7;
 }
 
 message GetCacheOriginCredentialsResponse {

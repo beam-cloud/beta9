@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -57,6 +58,78 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 	response, err := s.GetCacheOriginCredentials(ctx, request)
 	require.NoError(t, err)
 	require.False(t, response.Ok)
+}
+
+func TestBuildImageUploadCredentialsAreScoped(t *testing.T) {
+	t.Setenv("AWS_ROLE_ARN", "")
+	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
+	for _, name := range []string{"pending", "running", "managed", "other-workspace", "other-state-workspace", "other-image", "other-upload", "other-worker", "other-token", "other-managed-token", "stopping", "missing", "legacy", "data", "path", "not-build", "not-worker"} {
+		t.Run(name, func(t *testing.T) {
+			state := &types.ContainerState{ContainerId: "build-12345678", WorkspaceId: "workspace-a", ImageId: "92b88c374d042d2c", WorkerId: "worker-1", Status: types.ContainerStatusPending}
+			slot := &compute.AgentWorkerSlotState{WorkerID: "worker-1", WorkerTokenID: "token-1"}
+			ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+				Token: &types.Token{ExternalId: "token-1", TokenType: types.TokenTypeWorkerPrivate}, Workspace: &types.Workspace{Id: 7, ExternalId: "workspace-a"},
+			})
+			request := &pb.GetCacheOriginCredentialsRequest{WorkspaceId: state.WorkspaceId, ContainerId: state.ContainerId, ImageId: state.ImageId, ImageArchiveUploadId: state.ImageId, StubId: "platform-build-stub"}
+			s := &WorkerRepositoryService{
+				containerRepo: &lifecycleContainerRepo{state: state},
+				workerRepo:    &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "private", MachineId: "machine-1", WorkspaceId: "workspace-a"}},
+				computeRepo:   &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{slot}},
+				appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{Registries: types.ImageRegistriesConfig{S3: types.S3ImageRegistryConfig{
+					BucketName: "images", Region: "us-east-1", AccessKey: "test-key", SecretKey: "test-secret",
+				}}}},
+			}
+			switch name {
+			case "running":
+				state.Status = types.ContainerStatusRunning
+			case "managed", "other-managed-token":
+				ctx = auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{ExternalId: "token-1", TokenType: types.TokenTypeWorker}, Workspace: &types.Workspace{Id: 7, ExternalId: "workspace-a"}})
+				if name == "other-managed-token" {
+					slot.WorkerTokenID = "token-2"
+				}
+			case "other-workspace":
+				request.WorkspaceId = "workspace-b"
+			case "other-state-workspace":
+				state.WorkspaceId = "workspace-b"
+			case "other-image":
+				request.ImageId, request.ImageArchiveUploadId = "another-image", "another-image"
+			case "other-upload":
+				request.ImageArchiveUploadId = "another-image"
+			case "other-worker":
+				state.WorkerId = "worker-2"
+			case "other-token":
+				slot.WorkerTokenID = "token-2"
+			case "stopping":
+				state.Status = types.ContainerStatusStopping
+			case "missing":
+				s.containerRepo = &lifecycleContainerRepo{states: map[string]*types.ContainerState{}}
+			case "legacy":
+				state.ImageId = ""
+			case "data":
+				request.ImageArchiveUploadData = true
+			case "path":
+				state.ImageId, request.ImageId, request.ImageArchiveUploadId = "../other", "../other", "../other"
+			case "not-build":
+				request.ContainerId, state.ContainerId = "sandbox-12345678", "sandbox-12345678"
+			case "not-worker":
+				ctx = cacheRepositoryAuthContext(types.TokenTypeWorkspace)
+			}
+
+			response, err := s.GetCacheOriginCredentials(ctx, request)
+			require.NoError(t, err)
+			if name != "pending" && name != "running" && name != "managed" {
+				require.False(t, response.Ok)
+				require.Empty(t, response.ImageArchiveUploadUrl)
+				return
+			}
+			require.True(t, response.Ok, response.ErrorMsg)
+			u, err := url.Parse(response.ImageArchiveUploadUrl)
+			require.NoError(t, err)
+			require.Equal(t, "/92b88c374d042d2c.rclip", u.Path)
+			require.Equal(t, "900", u.Query().Get("X-Amz-Expires"))
+			require.Nil(t, response.ImageArchiveStorage)
+		})
+	}
 }
 
 type pruneCheckpointBackendRepo struct {

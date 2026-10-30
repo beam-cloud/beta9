@@ -101,6 +101,7 @@ func containerStateToProto(state *types.ContainerState) *pb.ContainerState {
 		Evicting:     state.Evicting,
 		DrainSeconds: state.DrainSeconds,
 		EvictOrder:   state.EvictOrder,
+		ImageId:      state.ImageId,
 	}
 }
 

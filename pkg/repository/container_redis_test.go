@@ -82,6 +82,7 @@ func TestCreateContainerStateWithConcurrencyLimitSkipsConcurrencyLockWithoutQuot
 		StubId:      "test-stub",
 		WorkspaceId: "test-workspace",
 		MachineId:   "machine-1",
+		ImageId:     "image-one",
 		Cpu:         100,
 		Memory:      128,
 		Stub: types.StubWithRelated{
@@ -119,6 +120,9 @@ func TestCreateContainerStateWithConcurrencyLimitSkipsConcurrencyLockWithoutQuot
 	}
 	if state.MachineId != request.MachineId {
 		t.Fatalf("expected pending state on machine %q, got %q", request.MachineId, state.MachineId)
+	}
+	if state.ImageId != request.ImageId {
+		t.Fatalf("expected pending state for image %q, got %q", request.ImageId, state.ImageId)
 	}
 }
 

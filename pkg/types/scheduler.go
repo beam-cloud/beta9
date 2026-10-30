@@ -229,6 +229,7 @@ type ContainerState struct {
 	Evicting     bool   `redis:"evicting" json:"evicting,omitempty"`
 	DrainSeconds uint32 `redis:"drain_seconds" json:"drain_seconds,omitempty"`
 	EvictOrder   int32  `redis:"evict_order" json:"evict_order,omitempty"`
+	ImageId      string `redis:"image_id" json:"image_id,omitempty"`
 }
 
 // @go2proto

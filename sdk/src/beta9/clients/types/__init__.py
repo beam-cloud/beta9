@@ -152,6 +152,7 @@ class ContainerState(betterproto.Message):
     evicting: bool = betterproto.bool_field(14)
     drain_seconds: int = betterproto.uint32_field(15)
     evict_order: int = betterproto.int32_field(16)
+    image_id: str = betterproto.string_field(17)
 
 
 @dataclass(eq=False, repr=False)
