@@ -1,8 +1,10 @@
-FROM ubuntu:24.04
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
+ARG KICAD_VERSION=10.0.8~ubuntu24.04.1
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common ca-certificates git nodejs npm python3-venv \
     && add-apt-repository -y ppa:kicad/kicad-10.0-releases \
-    && apt-get install -y --no-install-recommends kicad=10.0.7~ubuntu24.04.1 kicad-footprints kicad-symbols
+    && apt-get install -y --no-install-recommends "kicad=${KICAD_VERSION}" kicad-footprints kicad-symbols
 ARG MCP_REVISION=1d204fe3384eb73c890bbe531538a6e735c40fe0
 RUN git init /opt/kicad-mcp && cd /opt/kicad-mcp \
     && git remote add origin https://github.com/mixelpixx/KiCAD-MCP-Server.git \

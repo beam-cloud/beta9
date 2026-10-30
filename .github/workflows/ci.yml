@@ -79,12 +79,29 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Worker Dockerfiles pin the microvm image for docker/Dockerfile.microvm
+      - name: Worker and GPU guest Dockerfiles pin matching microvm artifacts
         run: |
           want="ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:$(hack/microvm-image-tag.sh)"
           for f in docker/Dockerfile.worker docker/Dockerfile.worker-overlay; do
             grep -qxF "$want" "$f" || { echo "$f must contain: $want"; exit 1; }
           done
+          want="ARG KERNEL_DEVEL=public.ecr.aws/n4e0e1y0/beta9-microvm:$(hack/microvm-image-tag.sh)-kernel-devel"
+          grep -qxF "$want" docker/Dockerfile.vm-gpu || { echo "docker/Dockerfile.vm-gpu must contain: $want"; exit 1; }
+
+      - name: SDK default GPU image matches its kernel and guest inputs
+        run: |
+          export GPU_GUEST_IMAGE="public.ecr.aws/n4e0e1y0/beta9-microvm:$(hack/microvm-image-tag.sh nvidia)"
+          python3 - <<'PY'
+          import ast
+          import os
+          from pathlib import Path
+
+          module = ast.parse(Path("sdk/src/beta9/abstractions/vm/__init__.py").read_text())
+          value = next(ast.literal_eval(node.value) for node in module.body
+                       if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                       and target.id == "DEFAULT_VM_GPU_BASE_IMAGE" for target in node.targets))
+          assert value == os.environ["GPU_GUEST_IMAGE"], f"Update DEFAULT_VM_GPU_BASE_IMAGE to {os.environ['GPU_GUEST_IMAGE']}"
+          PY
 
   verify_protobufs:
     runs-on: ubuntu-latest

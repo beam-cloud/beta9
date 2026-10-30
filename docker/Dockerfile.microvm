@@ -53,8 +53,9 @@ EOT
 # ========================
 # Mainline longterm kernel with Cloud Hypervisor's reference config plus the
 # netfilter/bridge/IPv6 set Docker-in-VM needs (docker/microvm/). Everything
-# is built in: the guest boots straight from the virtio-fs root with no
-# initramfs or modules. amd64 only.
+# needed to boot is built in: the guest boots straight from the virtio-fs
+# root without an initramfs. Images can supply modules for passed-through GPUs.
+# amd64 only.
 FROM debian:bookworm AS kernel
 
 ARG TARGETARCH
@@ -87,15 +88,21 @@ make olddefconfig
 for opt in VIRTIO_FS VIRTIO_BLK VIRTIO_NET VIRTIO_VSOCKETS OVERLAY_FS EXT4_FS IPV6 NETFILTER NF_NAT \
            IP_NF_IPTABLES IP_NF_NAT IP_NF_TARGET_MASQUERADE NETFILTER_XT_MATCH_ADDRTYPE \
            NETFILTER_XT_MATCH_CONNTRACK BRIDGE BRIDGE_NETFILTER VETH CGROUPS MEMCG CGROUP_PIDS \
-           NAMESPACES DEVTMPFS_MOUNT SERIAL_8250_CONSOLE DEFERRED_STRUCT_PAGE_INIT; do
+           NAMESPACES DEVTMPFS_MOUNT SERIAL_8250_CONSOLE DEFERRED_STRUCT_PAGE_INIT \
+           MODULES MODULE_UNLOAD DRM DRM_KMS_HELPER DRM_FBDEV_EMULATION; do
     grep -q "^CONFIG_${opt}=y" .config || { echo "guest kernel config lost CONFIG_${opt}" >&2; exit 1; }
 done
 grep -q '^# CONFIG_NUMA is not set$' .config || { echo "guest kernel must expose a single memory node" >&2; exit 1; }
-make -j"$(nproc)" vmlinux
+make -j"$(nproc)" vmlinux modules
 cp vmlinux /out/vmlinux
 cp .config /out/vmlinux.config
 EOT
 
-FROM scratch
+# Driver image builds consume the exact sources, generated headers and symbols
+# corresponding to the runtime artifact with the same content-derived tag.
+FROM scratch AS kernel-devel
+COPY --from=kernel /build/ /usr/src/beam-kernel/
+
+FROM scratch AS runtime
 COPY --from=tools /out/ /microvm/bin/
 COPY --from=kernel /out/ /microvm/share/

@@ -48,7 +48,14 @@ def service():
     )
 
 
-def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
+@pytest.mark.parametrize(
+    "gpu,base",
+    [
+        (None, vm_module.DEFAULT_VM_BASE_IMAGE),
+        (GpuType.RTX4090, vm_module.DEFAULT_VM_GPU_BASE_IMAGE),
+    ],
+)
+def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch, gpu, base):
     from requests import ConnectionError
 
     monkeypatch.setattr(vm_module, "public_key", lambda: "ssh-ed25519 test")
@@ -69,7 +76,7 @@ def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
             ]
         )
         metadata = {"owner": "original"}
-        vm = VM("fast", desktop=True, gpu=GpuType.RTX4090, metadata=metadata, _service=selected)
+        vm = VM("fast", desktop=True, gpu=gpu, metadata=metadata, _service=selected)
         with pytest.raises(ConnectionError):
             vm.create()
         body = json.dumps(direct.json.call_args.kwargs["json"], sort_keys=True)
@@ -81,10 +88,10 @@ def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
             call.args[:2] == ("POST", "/api/v1/vm/{ws}") for call in direct.json.call_args_list
         )
         request = direct.json.call_args.kwargs["json"]
-        assert request["image"]["existing_image_uri"] == vm_module.DEFAULT_VM_BASE_IMAGE
+        assert request["image"]["existing_image_uri"] == base
         assert vm_module.DEFAULT_VM_BASE_IMAGE.startswith("ubuntu:24.04@sha256:")
         assert request["image"]["ignore_python"] is True
-        assert request["spec"]["gpu"] == "RTX4090"
+        assert request["spec"].get("gpu") == (gpu.value if gpu else None)
         assert request["spec"]["ssh_public_key"] == "ssh-ed25519 test"
         selected._gateway.export_workspace_config.assert_not_called()
 
@@ -123,6 +130,34 @@ def test_default_creation_preserves_request_after_server_error(monkeypatch, stat
         prepare.assert_not_called()
         assert vm._creation_body["request_id"] == vm.request_id
         assert vm._vm_http is selected.vm_http
+
+
+@pytest.mark.parametrize("gpu", [GpuType.Any, GpuType.V100, GpuType.V100_32, GpuType.GAUDI2])
+def test_incompatible_default_gpu_driver_fails_before_allocation(gpu):
+    with ServiceClient(ConfigContext(token="test", api_url="https://vm.example")) as selected:
+        selected.vm_http.json = MagicMock()
+        with pytest.raises(ValueError, match="provide an image with a compatible guest driver"):
+            VM("dev", gpu=gpu, ssh=False, _service=selected).create(wait=False)
+        selected.vm_http.json.assert_not_called()
+
+
+@pytest.mark.parametrize("source", ["image", "template", "snapshot"])
+def test_custom_vm_sources_keep_their_gpu_driver_contract(source, monkeypatch):
+    selected = service()
+    selected.http.json.return_value = {"name": "dev", "id": "vm-id", "status": "starting"}
+    monkeypatch.setattr(
+        vm_module,
+        "default_base_image",
+        MagicMock(side_effect=AssertionError("Custom sources do not use the default driver")),
+    )
+    monkeypatch.setattr(
+        vm_module._VMImage,
+        "build",
+        lambda self: SimpleNamespace(success=True, image_id="custom-image"),
+    )
+    options = {source: Image.from_id("custom-image") if source == "image" else "saved"}
+    VM("dev", gpu=GpuType.V100, ssh=False, _service=selected, **options).create(wait=False)
+    assert selected.http.json.call_args.kwargs["json"]["spec"]["gpu"] == "V100"
 
 
 def test_vm_image_is_deterministic_and_uses_selected_profile():
@@ -735,7 +770,13 @@ def test_cli_rejects_invalid_gpu_before_creation(cli_service):
         ([], None),
         (["--template", "base"], None),
         (["--image", "alpine:3"], "alpine:3"),
+        (["--image", "custom-driver:latest", "--gpu", "any"], "custom-driver:latest"),
+        (["--image-id", "custom-driver", "--gpu", "V100"], ""),
         (["--build-secret", "TOKEN"], vm_module.DEFAULT_VM_BASE_IMAGE),
+        (
+            ["--gpu", "RTX4090", "--build-secret", "TOKEN"],
+            vm_module.DEFAULT_VM_GPU_BASE_IMAGE,
+        ),
     ],
 )
 def test_cli_preserves_default_image_fast_path(cli_service, monkeypatch, args, base_image):

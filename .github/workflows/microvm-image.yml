@@ -1,20 +1,27 @@
 name: Build microvm image
 
-# Publishes public.ecr.aws/n4e0e1y0/beta9-microvm:<hack/microvm-image-tag.sh>
-# unless that tag already exists. Worker builds call this first, so the tag
-# their Dockerfile pins is always published before they copy from it.
+# Publishes the runtime, matching kernel-devel tree and NVIDIA guest base with
+# content-derived tags. Worker builds call this before consuming the runtime.
 on:
   workflow_call:
     outputs:
       image:
         description: microvm image for the current inputs
         value: ${{ jobs.resolve.outputs.image }}
+      kernel_devel_image:
+        description: matching amd64 kernel tree for guest GPU driver builds
+        value: ${{ jobs.resolve.outputs.kernel_devel_image }}
+      gpu_guest_image:
+        description: amd64 NVIDIA guest base for the current kernel and driver
+        value: ${{ jobs.resolve.outputs.gpu_guest_image }}
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - docker/Dockerfile.microvm
       - docker/microvm/**
+      - docker/Dockerfile.vm-gpu
+      - hack/microvm-image-tag.sh
 
 permissions:
   id-token: write
@@ -27,7 +34,11 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       image: ${{ steps.tag.outputs.image }}
+      kernel_devel_image: ${{ steps.tag.outputs.kernel_devel_image }}
+      gpu_guest_image: ${{ steps.tag.outputs.gpu_guest_image }}
       exists: ${{ steps.exists.outputs.exists }}
+      kernel_devel_exists: ${{ steps.exists.outputs.kernel_devel_exists }}
+      gpu_guest_exists: ${{ steps.exists.outputs.gpu_guest_exists }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4.1.1
@@ -36,8 +47,12 @@ jobs:
         id: tag
         run: |
           tag="$(hack/microvm-image-tag.sh)"
+          gpu_guest_tag="$(hack/microvm-image-tag.sh nvidia)"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "image=public.ecr.aws/n4e0e1y0/beta9-microvm:${tag}" >> "$GITHUB_OUTPUT"
+          echo "kernel_devel_image=public.ecr.aws/n4e0e1y0/beta9-microvm:${tag}-kernel-devel" >> "$GITHUB_OUTPUT"
+          echo "gpu_guest_tag=${gpu_guest_tag}" >> "$GITHUB_OUTPUT"
+          echo "gpu_guest_image=public.ecr.aws/n4e0e1y0/beta9-microvm:${gpu_guest_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -45,21 +60,26 @@ jobs:
           role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
           aws-region: us-east-1
 
-      - name: Check for a published image
+      - name: Check for published artifacts
         id: exists
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          GPU_GUEST_TAG: ${{ steps.tag.outputs.gpu_guest_tag }}
         run: |
-          if aws ecr-public describe-images --repository-name beta9-microvm --image-ids imageTag="${TAG}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "beta9-microvm:${TAG} is already published"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          for artifact in "exists:${TAG}" "kernel_devel_exists:${TAG}-kernel-devel" "gpu_guest_exists:${GPU_GUEST_TAG}"; do
+            name="${artifact%%:*}"
+            tag="${artifact#*:}"
+            if aws ecr-public describe-images --repository-name beta9-microvm --image-ids imageTag="${tag}" >/dev/null 2>&1; then
+              echo "${name}=true" >> "$GITHUB_OUTPUT"
+              echo "beta9-microvm:${tag} is already published"
+            else
+              echo "${name}=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
 
   build:
     needs: resolve
-    if: needs.resolve.outputs.exists != 'true'
+    if: needs.resolve.outputs.exists != 'true' || needs.resolve.outputs.kernel_devel_exists != 'true' || needs.resolve.outputs.gpu_guest_exists != 'true'
     environment: Release
     name: build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
@@ -94,6 +114,7 @@ jobs:
           mask-password: "true"
 
       - name: Build and push
+        if: needs.resolve.outputs.exists != 'true'
         uses: docker/build-push-action@v5
         with:
           file: ./docker/Dockerfile.microvm
@@ -101,8 +122,30 @@ jobs:
           tags: ${{ needs.resolve.outputs.image }}-${{ matrix.arch }}
           platforms: ${{ matrix.platform }}
 
+      - name: Build and push matching kernel-devel
+        if: matrix.arch == 'amd64' && needs.resolve.outputs.kernel_devel_exists != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          file: ./docker/Dockerfile.microvm
+          target: kernel-devel
+          push: true
+          tags: ${{ needs.resolve.outputs.kernel_devel_image }}
+          platforms: linux/amd64
+
+      - name: Build and push NVIDIA guest base
+        if: matrix.arch == 'amd64' && needs.resolve.outputs.gpu_guest_exists != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          file: ./docker/Dockerfile.vm-gpu
+          push: true
+          tags: ${{ needs.resolve.outputs.gpu_guest_image }}
+          platforms: linux/amd64
+          build-args: |
+            KERNEL_DEVEL=${{ needs.resolve.outputs.kernel_devel_image }}
+
   publish:
     needs: [resolve, build]
+    if: needs.resolve.outputs.exists != 'true'
     environment: Release
     runs-on: ubuntu-latest
     steps:

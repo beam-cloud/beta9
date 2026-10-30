@@ -46,6 +46,17 @@ from .kiosk_config import Kiosk, MCPServer as MCPServer
 DEFAULT_VM_BASE_IMAGE = (
     "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
 )
+DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:f54e5dd00d65-nvidia"
+
+
+def default_base_image(gpu: Optional[GpuTypeAlias] = None) -> str:
+    selected = GpuType(normalize_gpu_type(gpu)) if gpu is not None else GpuType.NoGPU
+    if selected in (GpuType.Any, GpuType.V100, GpuType.V100_32, GpuType.GAUDI2):
+        raise ValueError(
+            f"The default VM image does not support {selected.value}; "
+            "provide an image with a compatible guest driver"
+        )
+    return DEFAULT_VM_GPU_BASE_IMAGE if selected != GpuType.NoGPU else DEFAULT_VM_BASE_IMAGE
 
 
 def identity() -> Path:
@@ -169,6 +180,8 @@ class VM:
 
     Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
+    GPU defaults include modern NVIDIA open drivers built for the worker's
+    matching kernel. Other drivers require an explicit image.
     create() waits for exec readiness; wait(services=True) also waits for
     enabled SSH/terminal/desktop services. Docker helpers wait separately.
 
@@ -412,7 +425,7 @@ class VM:
         )
 
     def _prepare_image(self):
-        image = self.image or Image(base_image=DEFAULT_VM_BASE_IMAGE)
+        image = self.image or Image(base_image=default_base_image(self._spec.get("gpu")))
         if self.image is None:
             image.ignore_python = True
         return prepare_image(

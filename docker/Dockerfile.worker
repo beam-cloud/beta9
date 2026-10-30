@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 ARG BASE_STAGE=dev
 # Built from docker/Dockerfile.microvm; CI checks this matches hack/microvm-image-tag.sh.
-ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:722a1a53e500
+ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:d05046b2646a
 
 FROM golang:1.25-bookworm AS golang
 
@@ -193,7 +193,7 @@ COPY --exclude=sdk . .
 # gVisor's nosplit CPU probes need optimization to stay within Go's stack limit.
 RUN go build -gcflags "all=-N" -gcflags "gvisor.dev/gvisor/pkg/cpuid=" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
 RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
-RUN go build -o /usr/local/bin/agent ./cmd/agent
+RUN CGO_ENABLED=0 go build -trimpath -o /usr/local/bin/agent ./cmd/agent
 # Guest init for microvm sandboxes: static, PID 1 inside the VM.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/beam-vminit ./cmd/vminit
 

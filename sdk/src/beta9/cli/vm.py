@@ -26,7 +26,7 @@ from rich.text import Text
 
 from .. import terminal
 from ..abstractions.image import Image
-from ..abstractions.vm import DEFAULT_VM_BASE_IMAGE, VM, identity, prepare_image
+from ..abstractions.vm import VM, default_base_image, identity, prepare_image
 from ..abstractions.vm.kiosk_config import KioskRuntime
 from ..abstractions.volume import Volume
 from ..channel import GatewayHTTPError, ServiceClient, rpc_timeout
@@ -81,14 +81,16 @@ def _progress(message, done, as_json=False):
     )
 
 
-def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=()):
+def _image(
+    dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=(), gpu=None
+):
     image = (
         Image.from_dockerfile(dockerfile, build_context)
         if dockerfile
         else (
             Image.from_id(image_id)
             if image_id
-            else Image(base_image=image_uri or DEFAULT_VM_BASE_IMAGE)
+            else Image(base_image=image_uri or default_base_image(gpu))
         )
     )
     image.ignore_python = True
@@ -394,7 +396,7 @@ def new(
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
     image = (
-        _image(dockerfile, build_context, image_id, image_uri, build_secret)
+        _image(dockerfile, build_context, image_id, image_uri, build_secret, gpu)
         if dockerfile or image_id or image_uri or build_secret
         else None
     )
