@@ -3152,6 +3152,48 @@ def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
     assert session.retry_allowed("mcp")
 
 
+@pytest.mark.parametrize(
+    "configured,classes,expected",
+    [
+        (False, [], "Xvfb"),
+        (False, ["0x030000"], "Xvfb"),
+        (True, [], "Xvfb"),
+        (True, ["0x020000", "0x040300"], "Xvfb"),
+        (True, ["0x030000", "0x040300"], "Xorg"),
+        (True, ["0x030200"], "Xorg"),
+    ],
+)
+def test_kiosk_native_display_requires_attached_display_gpu(
+    tmp_path, monkeypatch, configured, classes, expected
+):
+    module = guest_module("kiosk")
+    pci = tmp_path / "pci"
+    for index, value in enumerate(classes):
+        device = pci / str(index)
+        device.mkdir(parents=True)
+        (device / "class").write_text(value + "\n")
+    monkeypatch.setattr(
+        module, "Path", lambda value: pci if value == "/sys/bus/pci/devices" else Path(value)
+    )
+    monkeypatch.setattr(module, "RUNTIME", tmp_path / "runtime")
+    monkeypatch.setattr(
+        module, "run_command", MagicMock(return_value=SimpleNamespace(returncode=0))
+    )
+    session = module.Session({"command": ["editor"]})
+    session.env["HOME"] = str(tmp_path)
+    session.env["BEAM_KIOSK_XORG_CONFIG"] = "/etc/X11/custom.conf" if configured else ""
+    session.window_manager = str(tmp_path / "openbox")
+    Path(session.window_manager).touch()
+    session.spawn = MagicMock()
+    session.wait_for = lambda ready, *_: ready()
+    session.start_display()
+    command = session.spawn.call_args_list[0]
+    assert command.kwargs["role"] == "display"
+    assert command.args[0][0] == expected
+    if expected == "Xorg":
+        assert command.args[0][:4] == ["Xorg", ":1", "-config", "/etc/X11/custom.conf"]
+
+
 def test_kiosk_sdk_waits_for_application_not_just_the_stream_port():
     vm = VM("app", kiosk=Kiosk(["editor"]), ssh=False, _service=SimpleNamespace())
     vm.info = {"spec": {"desktop": True, "kiosk": {"command": ["editor"]}}}

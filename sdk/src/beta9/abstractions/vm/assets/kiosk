@@ -323,7 +323,11 @@ class Session:
         run_command(
             ["xauth", "-f", self.env["XAUTHORITY"], "add", ":1", ".", secrets.token_hex(16)]
         )
-        if config := self.env.get("BEAM_KIOSK_XORG_CONFIG"):
+        config = self.env.get("BEAM_KIOSK_XORG_CONFIG")
+        if config and any(
+            int(path.read_text(), 16) >> 16 == 3
+            for path in Path("/sys/bus/pci/devices").glob("*/class")
+        ):
             display = ["Xorg", ":1", "-config", config]
         else:
             display = [
