@@ -802,6 +802,22 @@ func TestGetBuildContextRequiresWorkspaceCredentials(t *testing.T) {
 	require.ErrorContains(t, err, "workspace storage is unavailable")
 }
 
+// Credentials the gateway vends arrive as username:password or as JSON, and
+// JSON may carry surrounding whitespace; all of them have to end up as a
+// username:password --creds value buildah can use.
+func TestGetBuildahAuthArgsParsesEveryCredentialForm(t *testing.T) {
+	client := &ImageClient{}
+	for name, creds := range map[string]string{
+		"plain":           "user:pa:ss",
+		"json":            `{"USERNAME":"user","PASSWORD":"pa:ss"}`,
+		"json-whitespace": "  \n" + `{"USERNAME":"user","PASSWORD":"pa:ss"}` + "\n",
+	} {
+		require.Equal(t, []string{"--creds", "user:pa:ss"}, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", creds), name)
+	}
+	require.Nil(t, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", ""))
+	require.Nil(t, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", `{"AWS_ACCESS_KEY_ID":"a","AWS_SECRET_ACCESS_KEY":"b"}`))
+}
+
 func TestDownloadedBuildContextIsPrivateToTheBuild(t *testing.T) {
 	storage, _ := stubCodeStorage(t, map[string]string{"main.py": "original"})
 	request := stubCodeMountRequest("build-test", "workspace", "object")

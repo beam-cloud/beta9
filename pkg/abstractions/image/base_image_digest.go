@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
@@ -123,11 +122,7 @@ func (is *ContainerImageService) pinDockerfileBaseImages(ctx context.Context, op
 	}
 
 	dockerfile, base := pinDockerfileFromDigests(opts.Dockerfile, func(imageRef string) string {
-		creds := ""
-		if registry.ParseRegistry(imageRef) == opts.BaseImageRegistry {
-			creds = opts.BaseImageCreds
-		}
-		digest, _ := is.baseImageDigests.resolve(ctx, imageRef, creds, is.inspectBaseImageDigest)
+		digest, _ := is.baseImageDigests.resolve(ctx, imageRef, opts.BaseImageCreds, is.inspectBaseImageDigest)
 		return digest
 	})
 	opts.Dockerfile = dockerfile
@@ -135,9 +130,6 @@ func (is *ContainerImageService) pinDockerfileBaseImages(ctx context.Context, op
 		return
 	}
 
-	if base.Registry != opts.BaseImageRegistry {
-		opts.BaseImageCreds = ""
-	}
 	opts.BaseImageRegistry = base.Registry
 	opts.BaseImageName = base.Repo
 	opts.BaseImageTag = base.Tag

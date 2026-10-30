@@ -56,47 +56,6 @@ func TestFilesystemExportPublishesArchiveWithoutWorkerAWSCredentials(t *testing.
 	require.Len(t, repo.requests, calls)
 }
 
-func TestPrivateBuildPublishesIndexWithoutWorkerAWSCredentials(t *testing.T) {
-	var uploaded []byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPut, r.Method)
-		var err error
-		uploaded, err = io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.Equal(t, int64(len(uploaded)), r.ContentLength)
-	}))
-	defer server.Close()
-	file := filepath.Join(t.TempDir(), "image.rclip")
-	require.NoError(t, os.WriteFile(file, []byte("build index"), 0600))
-	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{Ok: true, ImageArchiveUploadUrl: server.URL}}
-	c := &ImageClient{workerRepoClient: repo, config: types.AppConfig{
-		ImageService: types.ImageServiceConfig{RegistryStore: reg.S3ImageRegistryStore},
-		Worker:       types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{"private": {Mode: types.PoolModePrivate}}},
-	}}
-	dockerfile := "FROM ubuntu:24.04"
-	request := &types.ContainerRequest{WorkspaceId: "workspace-id", ContainerId: "build-12345678", ImageId: "92b88c374d042d2c", PoolSelector: "private", BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}}
-	require.NoError(t, c.publishImageArchive(context.Background(), request, file, request.ImageId))
-	require.Equal(t, "build index", string(uploaded))
-	require.Equal(t, request.ContainerId, repo.requests[0].ContainerId)
-	require.Equal(t, request.ImageId, repo.requests[0].ImageId)
-	require.Equal(t, request.ImageId, repo.requests[0].ImageArchiveUploadId)
-	require.False(t, repo.requests[0].ImageArchiveUploadData)
-
-	repo.resp = &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "upload denied"}
-	require.ErrorContains(t, c.publishImageArchive(context.Background(), request, file, request.ImageId), "upload denied")
-	repo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true}
-	require.ErrorContains(t, c.publishImageArchive(context.Background(), request, file, request.ImageId), "upload URL unavailable")
-
-	// Cluster builders retain their configured object-store publication path.
-	c.config.Worker.Pools = nil
-	imageRegistry, err := reg.NewImageRegistry(types.AppConfig{}, types.S3ImageRegistryConfig{})
-	require.NoError(t, err)
-	c.registry = imageRegistry
-	calls := len(repo.requests)
-	require.ErrorIs(t, c.publishImageArchive(context.Background(), request, filepath.Join(t.TempDir(), "missing"), request.ImageId), os.ErrNotExist)
-	require.Len(t, repo.requests, calls)
-}
-
 func TestFilesystemExportRefreshesSavedPublishingRegistry(t *testing.T) {
 	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{
 		Ok: true, BuildRegistry: "build.example.com", BuildRepositoryName: "stage/images", BuildRegistryInsecure: false,

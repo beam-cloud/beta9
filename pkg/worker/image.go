@@ -2483,6 +2483,54 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 	return env
 }
 
+// getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
+// Expects credentials in username:password format (either directly or in JSON)
+// For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
+// buildahAuthArgs resolves --creds for pulling imageRef: the request's source
+// image credentials when given, else whatever the gateway holds for that
+// registry. The latter is how a build whose FROM is an earlier beta9 image in
+// the build registry gets to pull it.
+func (c *ImageClient) buildahAuthArgs(ctx context.Context, request *types.ContainerRequest, imageRef string) []string {
+	if args := c.getBuildahAuthArgs(ctx, imageRef, request.BuildOptions.SourceImageCreds); len(args) > 0 {
+		return args
+	}
+	registry := imageRef
+	if i := strings.IndexByte(registry, '/'); i > 0 {
+		registry = registry[:i]
+	}
+	if registry == "localhost" || strings.HasPrefix(registry, "127.0.0.1") || !strings.ContainsAny(registry, ".:") {
+		return nil
+	}
+	// Gateway credentials come as either username:password or JSON;
+	// getBuildahAuthArgs parses both.
+	return c.getBuildahAuthArgs(ctx, imageRef, c.gatewayRegistryCredentials(ctx, registry, request))
+}
+
+func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, creds string) []string {
+	if creds == "" {
+		return nil
+	}
+
+	// Parse credentials - supports both JSON and username:password formats
+	parsedCreds, err := reg.ParseCredentialsFromJSON(creds)
+	if err != nil {
+		log.Warn().Err(err).Str("image_ref", imageRef).Msg("failed to parse credentials for buildah")
+		return nil
+	}
+
+	for _, keys := range [][2]string{{"USERNAME", "PASSWORD"}, {"DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD"}} {
+		username, usernameOK := parsedCreds[keys[0]]
+		password, passwordOK := parsedCreds[keys[1]]
+		if usernameOK && passwordOK {
+			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
+		}
+	}
+
+	// No valid username:password found
+	log.Warn().Str("image_ref", imageRef).Msg("credentials provided but no valid username:password found")
+	return nil
+}
+
 // formatImageBytes renders a byte count for user-facing build output.
 func formatImageBytes(n int64) string {
 	switch {
@@ -2905,11 +2953,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		budArgs = append(budArgs, "--volume", buildCtxPath+":"+types.WorkerUserCodeVolume)
 	}
 
-	authArgs, err := c.buildahAuthFileArgs(ctx, request, sourceImage, runroot)
-	if err != nil {
-		return err
+	// Add credentials for multi-stage builds and private base images
+	if authArgs := c.buildahAuthArgs(ctx, request, sourceImage); len(authArgs) > 0 {
+		budArgs = append(budArgs, authArgs...)
 	}
-	budArgs = append(budArgs, authArgs...)
 
 	// Add build secrets as build arguments
 	if len(request.BuildOptions.BuildSecrets) > 0 {
@@ -3129,7 +3176,7 @@ func (c *ImageClient) indexSourceImage(ctx context.Context, outputLogger *slog.L
 	if err := c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, layoutDir, archivePath, 2); err != nil {
 		return err
 	}
-	return c.publishImageArchive(ctx, request, archivePath, request.ImageId)
+	return c.registry.Push(ctx, archivePath, request.ImageId)
 }
 
 // localOCILayoutRef converts an image digest (e.g. "sha256:abc...") into a
@@ -3365,5 +3412,5 @@ func (c *ImageClient) publishFromStorage(ctx context.Context, outputLogger *slog
 	}
 
 	// Upload the clip archive to object storage
-	return c.publishImageArchive(ctx, request, archivePath, request.ImageId)
+	return c.registry.Push(ctx, archivePath, request.ImageId)
 }

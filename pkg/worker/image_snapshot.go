@@ -191,21 +191,16 @@ func (c *ImageClient) publishImageArchive(ctx context.Context, request *types.Co
 }
 
 func (c *ImageClient) publishImageArchiveFile(ctx context.Context, request *types.ContainerRequest, archivePath, imageID string, data bool) error {
-	build := request != nil && request.IsBuildRequest() && c.brokeredImageAccessRequest(request)
-	if c.config.ImageService.RegistryStore != reg.S3ImageRegistryStore || c.workerRepoClient == nil || request == nil || (!request.Stub.Type.IsSandbox() && !build) {
+	if c.config.ImageService.RegistryStore != reg.S3ImageRegistryStore || c.workerRepoClient == nil || request == nil || !request.Stub.Type.IsSandbox() {
 		return c.registry.Push(ctx, archivePath, imageID)
 	}
-	upload := &pb.GetCacheOriginCredentialsRequest{
+	credentials, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{
 		WorkspaceId:            cacheRequestWorkspaceID(request),
 		StubId:                 cacheRequestStubID(request),
 		ImageId:                request.ImageId,
 		ImageArchiveUploadId:   imageID,
 		ImageArchiveUploadData: data,
-	}
-	if build {
-		upload.ContainerId = request.ContainerId
-	}
-	credentials, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, upload))
+	}))
 	if err != nil {
 		return err
 	}

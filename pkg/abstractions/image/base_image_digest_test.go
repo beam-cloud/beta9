@@ -64,48 +64,6 @@ func TestPinImageRefToDigestPreservesRegistryPort(t *testing.T) {
 	)
 }
 
-func TestPinDockerfileBaseImagesScopesCredentialsToSourceRegistry(t *testing.T) {
-	for _, registry := range []string{"docker.io", "registry.example.com:5000", ""} {
-		t.Run(registry, func(t *testing.T) {
-			inspected := make(map[string]string)
-			skopeo := &recordingSkopeoClient{
-				digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				onInspect: func(imageRef, creds string) {
-					inspected[imageRef] = creds
-				},
-			}
-			service := &ContainerImageService{builder: &Builder{skopeoClient: skopeo}, baseImageDigests: newBaseImageDigestCache(nil)}
-			opts := &BuildOpts{
-				BaseImageRegistry: registry, BaseImageCreds: "user:secret",
-				Dockerfile: "FROM node:24 AS node\n" +
-					"FROM docker.io/library/alpine:latest AS alpine\n" +
-					"FROM registry.example.com:5000/private/base:latest AS private\n" +
-					"FROM public.ecr.aws/n4e0e1y0/beta9-microvm:gpu\n" +
-					"FROM docker.io.evil.example/base:latest\n",
-			}
-
-			service.pinDockerfileBaseImages(context.Background(), opts)
-
-			expected := map[string]string{
-				"node:24": "", "docker.io/library/alpine:latest": "",
-				"registry.example.com:5000/private/base:latest": "",
-				"public.ecr.aws/n4e0e1y0/beta9-microvm:gpu":     "",
-				"docker.io.evil.example/base:latest":            "",
-			}
-			switch registry {
-			case "docker.io":
-				expected["node:24"], expected["docker.io/library/alpine:latest"] = "user:secret", "user:secret"
-			case "registry.example.com:5000":
-				expected["registry.example.com:5000/private/base:latest"] = "user:secret"
-			}
-			require.Equal(t, expected, inspected)
-			require.Equal(t, int32(len(expected)), skopeo.calls.Load())
-			require.Equal(t, expected["node:24"], opts.BaseImageCreds)
-			require.Equal(t, "docker.io", opts.BaseImageRegistry)
-		})
-	}
-}
-
 func TestBaseImageDigestCacheSharedAcrossInstances(t *testing.T) {
 	server := miniredis.RunT(t)
 	rdb := &common.RedisClient{UniversalClient: redis.NewClient(&redis.Options{Addr: server.Addr()})}
@@ -220,16 +178,12 @@ func TestBaseImageDigestCacheable(t *testing.T) {
 }
 
 type recordingSkopeoClient struct {
-	digest    string
-	calls     atomic.Int32
-	onInspect func(string, string)
+	digest string
+	calls  atomic.Int32
 }
 
-func (c *recordingSkopeoClient) Inspect(_ context.Context, imageRef, creds string, _ *slog.Logger) (common.ImageMetadata, error) {
+func (c *recordingSkopeoClient) Inspect(context.Context, string, string, *slog.Logger) (common.ImageMetadata, error) {
 	c.calls.Add(1)
-	if c.onInspect != nil {
-		c.onInspect(imageRef, creds)
-	}
 	return common.ImageMetadata{Digest: c.digest}, nil
 }
 
