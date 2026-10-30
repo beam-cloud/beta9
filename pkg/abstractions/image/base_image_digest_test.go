@@ -178,12 +178,18 @@ func TestBaseImageDigestCacheable(t *testing.T) {
 }
 
 type recordingSkopeoClient struct {
-	digest string
-	calls  atomic.Int32
+	digest    string
+	calls     atomic.Int32
+	onInspect func(string, string) error
 }
 
-func (c *recordingSkopeoClient) Inspect(context.Context, string, string, *slog.Logger) (common.ImageMetadata, error) {
+func (c *recordingSkopeoClient) Inspect(_ context.Context, imageRef, creds string, _ *slog.Logger) (common.ImageMetadata, error) {
 	c.calls.Add(1)
+	if c.onInspect != nil {
+		if err := c.onInspect(imageRef, creds); err != nil {
+			return common.ImageMetadata{}, err
+		}
+	}
 	return common.ImageMetadata{Digest: c.digest}, nil
 }
 

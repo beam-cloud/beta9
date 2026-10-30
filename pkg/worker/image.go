@@ -2953,10 +2953,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		budArgs = append(budArgs, "--volume", buildCtxPath+":"+types.WorkerUserCodeVolume)
 	}
 
-	// Add credentials for multi-stage builds and private base images
-	if authArgs := c.buildahAuthArgs(ctx, request, sourceImage); len(authArgs) > 0 {
-		budArgs = append(budArgs, authArgs...)
+	authArgs, err := c.buildahAuthFileArgs(ctx, request, sourceImage, runroot)
+	if err != nil {
+		return err
 	}
+	budArgs = append(budArgs, authArgs...)
 
 	// Add build secrets as build arguments
 	if len(request.BuildOptions.BuildSecrets) > 0 {

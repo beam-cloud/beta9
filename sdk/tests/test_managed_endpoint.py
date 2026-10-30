@@ -5,10 +5,10 @@ from unittest import mock
 import pytest
 
 from beta9 import Gpu, Image, ManagedEndpoint
-from beta9.abstractions.image import ImageBuildResult
 from beta9.cli import endpoints
 from beta9.clients.managedendpoint import ApplyRepoResponse
 from beta9.clients.gateway import DeployStubResponse
+from beta9.clients.image import BuildImageResponse
 
 
 def test_endpoint_spec_is_runtime_only():
@@ -96,22 +96,31 @@ def test_deploy_rejects_mismatched_name():
     assert not ok
 
 
-def test_deploy_cached_private_image_skips_build():
+def test_deploy_cached_private_image_uses_authenticated_lookup():
     image = Image.from_registry(
         "ghcr.io/acme/model:pinned", credentials=["GITHUB_USERNAME", "GITHUB_TOKEN"]
     ).add_commands(["python -c 'import engine'"])
     ep = ManagedEndpoint(id="acme/model", image=image, entrypoint=["engine", "serve"])
-    cached = ImageBuildResult(success=True, image_id="cached-model", python_version="python3.12")
+    cached = BuildImageResponse(
+        done=True, success=True, image_id="cached-model", python_version="python3.12"
+    )
     with (
         mock.patch.object(image, "_prepare_context"),
         mock.patch.object(image, "_cached_build_result", return_value=None),
-        mock.patch.object(image, "_exists", return_value=(True, cached)) as exists,
+        mock.patch.object(image, "_exists") as exists,
+        mock.patch.object(image.stub, "build_image", return_value=iter([cached])) as build,
         mock.patch.object(ep, "prepare_runtime", side_effect=lambda **_: image.build().success),
         mock.patch.object(ep.gateway_stub, "deploy_stub", return_value=DeployStubResponse(ok=True)),
     ):
         _, ok = ep.deploy()
     assert ok
-    exists.assert_called_once()
+    exists.assert_not_called()
+    build.assert_called_once()
+    assert build.call_args.args[0].existing_image_creds == {
+        "GITHUB_USERNAME": "",
+        "GITHUB_TOKEN": "",
+    }
+    assert image.image_id == "cached-model"
 
 
 def test_rollout_policy_is_explicit_and_validated():

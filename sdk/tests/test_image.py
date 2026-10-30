@@ -127,6 +127,100 @@ class TestImageLocalFiles(TestCase):
 
 
 class TestImageLookupDedup(TestCase):
+    def test_private_build_uses_authenticated_warm_lookup(self):
+        import uuid
+        from unittest.mock import patch
+
+        from beta9.clients.image import BuildImageResponse
+
+        requests = []
+
+        class Stub:
+            def verify_image_build(self, req):
+                raise AssertionError("credential names cannot travel on unauthenticated verify")
+
+            def build_image(self, req):
+                requests.append(req)
+                yield BuildImageResponse(done=True, success=True, image_id="private-pinned-id")
+
+        class Channel:
+            cache_key = uuid.uuid4().hex
+
+        image = Image.from_registry(
+            "private.example/image:tag", credentials=["USERNAME", "PASSWORD"]
+        )
+        image._stub = Stub()
+        image._channel = Channel()
+        with (
+            patch.object(Image, "stub", property(lambda self: self._stub)),
+            patch.object(Image, "channel", property(lambda self: self._channel)),
+            patch.object(Image, "_prepare_context", lambda self: None),
+            patch.object(Image, "_cached_build_result", return_value=None),
+        ):
+            results = [image.build(), image.build()]
+        self.assertEqual([r.image_id for r in results], ["private-pinned-id"] * 2)
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(
+            all(r.existing_image_creds == {"USERNAME": "", "PASSWORD": ""} for r in requests)
+        )
+
+    def test_anonymous_cache_cannot_authorize_different_credentials(self):
+        import uuid
+        from unittest.mock import patch
+
+        from beta9.clients.image import BuildImageResponse, VerifyImageBuildResponse
+
+        requests = []
+
+        class Stub:
+            def verify_image_build(self, req):
+                return VerifyImageBuildResponse(exists=True, image_id="cached-id", valid=True)
+
+            def build_image(self, req):
+                requests.append(req)
+                yield BuildImageResponse(
+                    done=True, success=False, msg="registry credential USERNAME is missing"
+                )
+
+        class Channel:
+            cache_key = uuid.uuid4().hex
+
+        public = Image.from_registry("private.example/image:tag")
+        private = Image.from_registry(
+            "private.example/image:tag", credentials=["USERNAME", "PASSWORD"]
+        )
+        for image in (public, private):
+            image._stub = Stub()
+            image._channel = Channel()
+        with (
+            patch.object(Image, "stub", property(lambda self: self._stub)),
+            patch.object(Image, "channel", property(lambda self: self._channel)),
+            patch.object(Image, "_prepare_context", lambda self: None),
+        ):
+            self.assertTrue(public.build().success)
+            result = private.build()
+        self.assertFalse(result.success)
+        self.assertIn("USERNAME is missing", result.error)
+        self.assertEqual(len(requests), 1)
+
+    def test_explicit_image_id_preserves_verify_path(self):
+        from unittest.mock import patch
+
+        from beta9.abstractions.image import ImageBuildResult
+
+        image = Image.from_id("explicit-id")
+        image.base_image_creds = ["USERNAME", "PASSWORD"]
+        with (
+            patch.object(Image, "_prepare_context", lambda self: None),
+            patch.object(Image, "_cached_build_result", return_value=None),
+            patch.object(Image, "_cache_key", return_value="explicit-private-test"),
+            patch.object(
+                Image, "_exists", return_value=(True, ImageBuildResult(True, "explicit-id"))
+            ) as exists,
+        ):
+            self.assertEqual(image.build().image_id, "explicit-id")
+        exists.assert_called_once()
+
     def test_concurrent_lookups_of_one_image_check_existence_once(self):
         # A burst of sandboxes sharing an Image must not each ask the gateway
         # whether it exists; the first lookup fills the per-process cache and
