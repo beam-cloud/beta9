@@ -157,11 +157,12 @@ type Config struct {
 
 	// MicroVM settings. Empty fields take the defaults baked into the worker
 	// image (see microvm.go).
-	MicroVMHypervisorPath string // cloud-hypervisor binary (default: "cloud-hypervisor")
-	MicroVMVirtiofsdPath  string // virtiofsd binary (default: "virtiofsd")
-	MicroVMKernelPath     string // guest vmlinux (default: DefaultMicroVMKernelPath)
-	MicroVMInitPath       string // static guest init copied into the canvas (default: DefaultMicroVMInitPath)
-	MicroVMStateRoot      string // per-VM sockets, restore staging and network slot records (default: DefaultMicroVMStateRoot)
+	MicroVMHypervisorPath string   // cloud-hypervisor binary (default: "cloud-hypervisor")
+	MicroVMVirtiofsdPath  string   // virtiofsd binary (default: "virtiofsd")
+	MicroVMKernelPath     string   // guest vmlinux (default: DefaultMicroVMKernelPath)
+	MicroVMInitPath       string   // static guest init copied into the canvas (default: DefaultMicroVMInitPath)
+	MicroVMStateRoot      string   // per-VM sockets, restore staging and network slot records (default: DefaultMicroVMStateRoot)
+	MicroVMVFIODevices    []string // reserved PCI functions; defaults to BEAM_MICROVM_VFIO_DEVICES
 }
 
 // New creates a new Runtime based on the provided configuration

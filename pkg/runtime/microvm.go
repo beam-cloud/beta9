@@ -46,6 +46,7 @@ const (
 	MicroVMMemoryMiBAnnotation  = "com.beam.microvm.memory-mib"  // application budget; excludes guest control headroom
 	MicroVMVCPUAnnotation       = "com.beam.microvm.vcpus"       // vCPU count when the spec carries no CPU quota
 	MicroVMScratchGiBAnnotation = "com.beam.microvm.scratch-gib" // sparse scratch disk size for ephemeral sandboxes
+	MicroVMVFIOAnnotation       = "com.beam.microvm.vfio"        // comma-separated PCI functions from Config.MicroVMVFIODevices
 
 	microVMSysfsCgroupRoot       = "/sys/fs/cgroup"
 	microVMTapName               = "b9tap0"
@@ -422,8 +423,7 @@ func microVMKernelCmdline() string {
 		"panic=0",
 		"loglevel=4",
 		"random.trust_cpu=on",
-		// Guest DMA uses 64-bit virtio devices, with no PCI passthrough that
-		// needs the eagerly zeroed software bounce buffer.
+		// 64-bit DMA does not need an eagerly zeroed software bounce buffer.
 		"swiotlb=noforce",
 		"i8042.noaux",
 		"i8042.nomux",
@@ -432,7 +432,7 @@ func microVMKernelCmdline() string {
 	}, " ")
 }
 
-func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory int64, mac string, root microVMDisk, extra []microVMDisk) []string {
+func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory int64, mac string, root microVMDisk, extra []microVMDisk, devices ...string) []string {
 	args := []string{
 		"--api-socket", "path=" + filepath.Join(stateDir, microVMAPISocket),
 		"--kernel", kernel,
@@ -449,12 +449,18 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		"--net", fmt.Sprintf("tap=%s,mac=%s", microVMTapName, mac),
 		"--vsock", fmt.Sprintf("cid=%d,socket=%s", microvm.GuestCID, filepath.Join(stateDir, microVMVsockSocket)),
 		"--rng", "src=/dev/urandom",
-		// Pages the guest frees are punched out of its memory on the host,
-		// so idle VMs shrink and snapshots carry only live memory.
-		"--balloon", "size=0,free_page_reporting=on",
 		"--serial", "tty",
 		"--console", "off",
 	)
+	if len(devices) > 0 {
+		args = append(args, "--device")
+		for _, device := range devices {
+			args = append(args, "path="+device)
+		}
+	} else {
+		// VFIO pins guest RAM for DMA. Only CPU guests can return free pages.
+		args = append(args, "--balloon", "size=0,free_page_reporting=on")
+	}
 	return args
 }
 
@@ -475,6 +481,9 @@ func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Netwo
 	var cfg map[string]any
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return nil, fmt.Errorf("decode snapshot config: %w", err)
+	}
+	if devices, _ := cfg["devices"].([]any); len(devices) > 0 {
+		return nil, fmt.Errorf("restoring a microvm with VFIO devices is unsupported; cold boot from its saved disks")
 	}
 	// Eager RAM restore must not synchronously compact host memory for huge
 	// pages. Cold boots retain the hypervisor's normal allocation policy.

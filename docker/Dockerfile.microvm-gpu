@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1.7
+
+# Local GPU experiment. Build the existing Dockerfile.microvm's `kernel`
+# target as KERNEL_BASE first; CPU worker artifacts and pins stay unchanged.
+ARG KERNEL_BASE=beta9-microvm-kernel:local
+ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:722a1a53e500
+FROM ${KERNEL_BASE} AS kernel
+
+RUN <<EOT
+set -eux
+scripts/config --enable MODULES --enable MODULE_UNLOAD --enable DRM --enable DRM_KMS_HELPER
+make olddefconfig
+for opt in MODULES MODULE_UNLOAD DRM DRM_KMS_HELPER; do
+    grep -q "^CONFIG_${opt}=y" .config
+done
+make -j"$(nproc)" vmlinux modules
+cp vmlinux /out/vmlinux
+cp .config /out/vmlinux.config
+EOT
+
+# A guest image can compile its GPU driver against this exact kernel tree.
+FROM scratch AS kernel-devel
+COPY --from=kernel /build/ /usr/src/beam-kernel/
+
+FROM ${MICROVM_IMAGE}
+COPY --from=kernel /out/ /microvm/share/

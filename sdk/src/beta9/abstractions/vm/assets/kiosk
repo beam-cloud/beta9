@@ -21,7 +21,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 from kiosk_config import Kiosk, KioskRuntime
 
@@ -318,13 +318,20 @@ class Session:
         run_command(
             ["xauth", "-f", self.env["XAUTHORITY"], "add", ":1", ".", secrets.token_hex(16)]
         )
-        self.spawn(
-            [
+        if config := self.env.get("BEAM_KIOSK_XORG_CONFIG"):
+            display = ["Xorg", ":1", "-config", config]
+        else:
+            display = [
                 "Xvfb",
                 ":1",
                 "-screen",
                 "0",
                 f"{POLICY.max_dimension}x{POLICY.max_dimension}x24",
+                "-shmem",
+            ]
+        self.spawn(
+            [
+                *display,
                 "-nolisten",
                 "tcp",
                 "-dpi",
@@ -332,7 +339,6 @@ class Session:
                 "-auth",
                 self.env["XAUTHORITY"],
                 "-noreset",
-                "-shmem",
                 "-s",
                 "0",
                 "-dpms",
