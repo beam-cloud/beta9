@@ -495,6 +495,39 @@ func TestGetProjectsLaunchCompletionBeforeReconciliation(t *testing.T) {
 	}
 }
 
+func TestOperationResponsesProjectLaunchCompletionBeforeReconciliation(t *testing.T) {
+	for _, tc := range []struct{ action, body string }{
+		{"touch", "{}"},
+		{"expose", `{"port":9000}`},
+		{"bind", `{"port":9000}`},
+		{"update", `{"metadata":{"team":"infra"}}`},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			s, v, info, _, _ := fixture()
+			v.Status = "starting"
+			c, rec := actionContext(info, v.Name, tc.action, tc.body)
+			if tc.action == "update" {
+				require.NoError(t, s.update(c))
+			} else {
+				require.NoError(t, s.action(c))
+			}
+			var response types.VM
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.Equal(t, "running", response.Status)
+			require.Equal(t, "starting", v.Status)
+		})
+	}
+
+	s, v, info, _, _ := fixture()
+	v.Status = "starting"
+	s.containers.(*vmContainers).readError = errors.New("redis unavailable")
+	c, rec := actionContext(info, v.Name, "touch", "{}")
+	require.NoError(t, s.action(c), "a committed operation must not fail on an unreadable runtime")
+	var response types.VM
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	require.Equal(t, "starting", response.Status)
+}
+
 func TestBlockingLaunchResponseVerifiesExecWithoutConsumingCheckpoint(t *testing.T) {
 	s, v, info, runtime, _ := fixture()
 	v.Status = "starting"

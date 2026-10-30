@@ -77,10 +77,20 @@ func (s *Service) response(v *types.VM) types.VM {
 	return copy
 }
 
+// Responses to committed operations report the same launch status as get. An
+// unreadable runtime keeps the stored status rather than failing the operation.
+func (s *Service) liveResponse(v *types.VM) types.VM {
+	response := s.response(v)
+	if status, err := s.launchStatus(v); err == nil {
+		response.Status = status
+	}
+	return response
+}
+
 // Blocking launch responses verify the same process-manager readiness as
 // SandboxConnect, saving a client round trip without persisting lifecycle state.
 func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error {
-	response := s.response(v)
+	response := s.liveResponse(v)
 	if c.QueryParam("wait") != "exec" || v.DesiredState != types.VMStateRunning || v.ContainerID == "" || v.Status == types.VMStateError {
 		return c.JSON(status, response)
 	}
