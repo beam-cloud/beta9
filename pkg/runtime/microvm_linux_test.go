@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -557,4 +558,267 @@ func TestMicroVMStateWaitsForTerminalResult(t *testing.T) {
 	require.Equal(t, "stopped", state.Status)
 	require.NotNil(t, state.ExitCode)
 	require.Zero(t, *state.ExitCode)
+}
+
+func vfioTestHost(t *testing.T, groups map[string][]string) microVMVFIOHost {
+	t.Helper()
+	root := t.TempDir()
+	host := microVMVFIOHost{pciRoot: filepath.Join(root, "pci"), devRoot: filepath.Join(root, "dev")}
+	driver := filepath.Join(root, "drivers", "vfio-pci")
+	require.NoError(t, os.MkdirAll(driver, 0o700))
+	require.NoError(t, os.MkdirAll(host.devRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(host.devRoot, "vfio"), nil, 0o600))
+	for group, devices := range groups {
+		path := filepath.Join(root, "groups", group)
+		require.NoError(t, os.MkdirAll(filepath.Join(path, "devices"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(host.devRoot, group), nil, 0o600))
+		for _, device := range devices {
+			pci := filepath.Join(host.pciRoot, device)
+			require.NoError(t, os.MkdirAll(pci, 0o700))
+			class := "0x040300\n"
+			if strings.HasSuffix(device, ".0") {
+				class = "0x030000\n"
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(pci, "class"), []byte(class), 0o600))
+			require.NoError(t, os.Symlink(driver, filepath.Join(pci, "driver")))
+			require.NoError(t, os.Symlink(path, filepath.Join(pci, "iommu_group")))
+			require.NoError(t, os.Symlink(pci, filepath.Join(path, "devices", device)))
+			host.devices = append(host.devices, device)
+		}
+	}
+	return host
+}
+
+func TestMicroVMVFIOValidation(t *testing.T) {
+	require.True(t, (&MicroVM{}).Capabilities().CheckpointRestore)
+	require.False(t, (&MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}).Capabilities().CheckpointRestore)
+	for _, value := range []string{"../77", "01:00.0", "0000:01:20.0", "0000:01:00.8", "0000:01:00.0,path=/tmp/evil", "0000:01:00.0,0000:01:00.0"} {
+		_, err := (microVMVFIOHost{devices: []string{"0000:01:00.0"}}).acquire(value)
+		require.ErrorContains(t, err, "invalid or duplicate", value)
+	}
+	claim, err := (microVMVFIOHost{}).acquire("")
+	require.NoError(t, err, "CPU guests do not need host VFIO support")
+	require.Empty(t, claim.paths)
+	claim.close()
+
+	for _, test := range []struct {
+		name, want string
+		change     func(*testing.T, *microVMVFIOHost)
+	}{
+		{"unauthorized", "not authorized", func(t *testing.T, h *microVMVFIOHost) { h.devices = nil }},
+		{"driver", "bound to vfio-pci", func(t *testing.T, h *microVMVFIOHost) {
+			require.NoError(t, os.Remove(filepath.Join(h.pciRoot, "0000:01:00.0", "driver")))
+		}},
+		{"iommu", "requires an IOMMU group", func(t *testing.T, h *microVMVFIOHost) {
+			require.NoError(t, os.Remove(filepath.Join(h.pciRoot, "0000:01:00.0", "iommu_group")))
+		}},
+		{"partial group", "complete", func(t *testing.T, h *microVMVFIOHost) {
+			group, err := filepath.EvalSymlinks(filepath.Join(h.pciRoot, "0000:01:00.0", "iommu_group"))
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(group, "devices", "0000:01:00.1"), nil, 0o600))
+		}},
+		{"vfio access", "open VFIO vfio", func(t *testing.T, h *microVMVFIOHost) {
+			require.NoError(t, os.Remove(filepath.Join(h.devRoot, "vfio")))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := vfioTestHost(t, map[string][]string{"77": {"0000:01:00.0"}})
+			test.change(t, &host)
+			_, err := host.acquire("0000:01:00.0")
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
+func TestMicroVMVFIOFailedClaimReleasesGroups(t *testing.T) {
+	host := vfioTestHost(t, map[string][]string{"77": {"0000:01:00.0", "0000:01:00.1"}})
+	devices := strings.Join(host.devices, ",")
+	require.NoError(t, os.Remove(filepath.Join(host.devRoot, "77")))
+	_, err := host.acquire(devices)
+	require.ErrorContains(t, err, "open VFIO 77")
+	require.NoError(t, os.WriteFile(filepath.Join(host.devRoot, "77"), nil, 0o600))
+	claim, err := host.acquire(devices)
+	require.NoError(t, err, "an unsuccessful launch must not strand any group reservations")
+	claim.close()
+}
+
+func TestMicroVMVFIOOwnership(t *testing.T) {
+	host := vfioTestHost(t, map[string][]string{"77": {"0000:01:00.0", "0000:01:00.1"}})
+	devices := strings.Join(host.devices, ",")
+	claim, err := host.acquire(devices)
+	require.NoError(t, err)
+	t.Cleanup(claim.close)
+	_, err = host.acquire(devices)
+	require.ErrorContains(t, err, "already in use")
+
+	cmd := exec.Command("sleep", "30")
+	cmd.ExtraFiles = claim.locks
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	claim.close()
+	_, err = host.acquire(devices)
+	require.ErrorContains(t, err, "already in use", "the VMM retains ownership after its parent closes the descriptors")
+	require.NoError(t, cmd.Process.Kill())
+	_ = cmd.Wait()
+	claim, err = host.acquire(devices)
+	require.NoError(t, err, "the GPU is reusable after the VMM exits")
+	claim.close()
+	claim.close()
+
+	base := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil)
+	args := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil, claim.paths...)
+	require.Contains(t, base, "--balloon")
+	require.NotContains(t, args, "--balloon", "DMA-pinned RAM cannot be reclaimed")
+	require.Contains(t, strings.Join(args, " "), "--device path="+claim.paths[0]+" path="+claim.paths[1])
+	_, err = rewriteSnapshotConfig([]byte(`{"devices":[{"path":"/sys/bus/pci/devices/0000:01:00.0"}]}`), "/state", microvm.Network{}, microVMDisk{}, nil)
+	require.ErrorContains(t, err, "VFIO", "a foreign snapshot cannot bypass device authorization")
+}
+
+func TestMicroVMVFIODefaultAllocation(t *testing.T) {
+	host := vfioTestHost(t, map[string][]string{
+		"77": {"0000:01:00.0", "0000:01:00.1"},
+		"78": {"0000:25:00.0", "0000:25:00.1"},
+	})
+	first, err := host.acquire("")
+	require.NoError(t, err)
+	t.Cleanup(first.close)
+	require.Equal(t, []string{filepath.Join(host.pciRoot, "0000:01:00.0"), filepath.Join(host.pciRoot, "0000:01:00.1")}, first.paths)
+	second, err := host.acquire("")
+	require.NoError(t, err)
+	t.Cleanup(second.close)
+	require.Equal(t, []string{filepath.Join(host.pciRoot, "0000:25:00.0"), filepath.Join(host.pciRoot, "0000:25:00.1")}, second.paths)
+	_, err = host.acquire("")
+	require.ErrorContains(t, err, "no available VFIO group", "exhausted GPU capacity must never become a CPU guest")
+	first.close()
+	reused, err := host.acquire("")
+	require.NoError(t, err)
+	t.Cleanup(reused.close)
+	require.Equal(t, first.paths, reused.paths)
+}
+
+func TestMicroVMVFIOConcurrentAllocation(t *testing.T) {
+	const count = 8
+	groups := make(map[string][]string, count)
+	for i := range count {
+		groups[fmt.Sprint(i+10)] = []string{fmt.Sprintf("0000:%02x:00.0", i+1), fmt.Sprintf("0000:%02x:00.1", i+1)}
+	}
+	host := vfioTestHost(t, groups)
+	type result struct {
+		claim *microVMVFIO
+		err   error
+	}
+	results := make(chan result, count)
+	start := make(chan struct{})
+	for range count {
+		go func() {
+			<-start
+			claim, err := host.acquire("")
+			results <- result{claim, err}
+		}()
+	}
+	close(start)
+	seen := map[string]bool{}
+	for range count {
+		select {
+		case result := <-results:
+			require.NoError(t, result.err)
+			t.Cleanup(result.claim.close)
+			require.Len(t, result.claim.paths, 2, "each guest receives one GPU and its companion function")
+			key := strings.Join(result.claim.paths, ",")
+			require.False(t, seen[key], "concurrent guests must not receive the same group")
+			seen[key] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("GPU allocation blocked instead of using another free group")
+		}
+	}
+	require.Len(t, seen, count)
+	_, err := host.acquire("")
+	require.ErrorContains(t, err, "no available VFIO group", "a ninth guest must not oversubscribe eight GPUs")
+}
+
+func TestMicroVMVFIOExplicitSelection(t *testing.T) {
+	host := vfioTestHost(t, map[string][]string{
+		"77": {"0000:01:00.0", "0000:01:00.1"},
+		"78": {"0000:25:00.0", "0000:25:00.1"},
+	})
+	selected := "0000:25:00.0,0000:25:00.1"
+	explicit, err := host.acquire(selected)
+	require.NoError(t, err)
+	t.Cleanup(explicit.close)
+	_, err = host.acquire(selected)
+	require.ErrorContains(t, err, "already in use", "an explicit selection must not silently change GPUs")
+	automatic, err := host.acquire("")
+	require.NoError(t, err)
+	t.Cleanup(automatic.close)
+	require.Equal(t, filepath.Join(host.pciRoot, "0000:01:00.0"), automatic.paths[0])
+}
+
+func TestMicroVMVFIOAliasesShareOwnership(t *testing.T) {
+	host := vfioTestHost(t, map[string][]string{"77": {"0000:01:00.0"}})
+	claim, err := host.acquire("")
+	require.NoError(t, err)
+	t.Cleanup(claim.close)
+	alias := filepath.Join(t.TempDir(), "pci")
+	require.NoError(t, os.Symlink(host.pciRoot, alias))
+	other := microVMVFIOHost{devices: host.devices, pciRoot: alias, devRoot: host.devRoot}
+	_, err = other.acquire("0000:01:00.0")
+	require.ErrorContains(t, err, "already in use", "separate allocators must reserve the shared group inode")
+	claim.close()
+	reused, err := other.acquire("")
+	require.NoError(t, err)
+	t.Cleanup(reused.close)
+}
+
+func TestMicroVMVFIORejectsMultipleGPUs(t *testing.T) {
+	for _, groups := range []map[string][]string{
+		{"77": {"0000:01:00.0"}, "78": {"0000:25:00.0"}},
+		{"77": {"0000:01:00.0", "0000:25:00.0"}},
+		{"77": {"0000:01:00.1"}},
+	} {
+		host := vfioTestHost(t, groups)
+		_, err := host.acquire(strings.Join(host.devices, ","))
+		require.ErrorContains(t, err, "exactly one GPU")
+	}
+}
+
+func TestMicroVMVFIOAutomaticallySelectsOnlySingleGPUGroup(t *testing.T) {
+	host := vfioTestHost(t, map[string][]string{
+		"77": {"0000:01:00.0", "0000:25:00.0"},
+		"78": {"0000:41:00.1"},
+		"79": {"0000:61:00.0", "0000:61:00.1"},
+	})
+	require.NoError(t, os.WriteFile(filepath.Join(host.pciRoot, "0000:61:00.0", "class"), []byte("0x030200\n"), 0o600))
+	claim, err := host.acquire("")
+	require.NoError(t, err)
+	t.Cleanup(claim.close)
+	require.Equal(t, []string{filepath.Join(host.pciRoot, "0000:61:00.0"), filepath.Join(host.pciRoot, "0000:61:00.1")}, claim.paths)
+	_, err = host.acquire("")
+	require.ErrorContains(t, err, "no available VFIO group", "coupled GPUs and non-GPU groups are ineligible")
+}
+
+func TestMicroVMVFIODoesNotSkipPreflightFailures(t *testing.T) {
+	host := vfioTestHost(t, map[string][]string{"77": {"0000:01:00.0"}, "78": {"0000:25:00.0"}})
+	require.NoError(t, os.Remove(filepath.Join(host.devRoot, "77")))
+	_, err := host.acquire("")
+	require.ErrorContains(t, err, "open VFIO 77", "only busy locks are skipped")
+	require.NoError(t, os.WriteFile(filepath.Join(host.devRoot, "77"), nil, 0o600))
+	claim, err := host.acquire("")
+	require.NoError(t, err, "failed preflight must release its group")
+	claim.close()
+}
+
+func TestMicroVMVFIORestoreRequiresColdBoot(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		rt := &MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}
+		spec := &specs.Spec{Annotations: map[string]string{}}
+		if explicit {
+			rt.cfg.MicroVMVFIODevices = nil
+			spec.Annotations[MicroVMVFIOAnnotation] = "0000:01:00.0"
+		}
+		inst := &microVMInstance{stateDir: filepath.Join(t.TempDir(), "state")}
+		_, _, _, err := rt.prepare(context.Background(), inst, spec, "checkpoint")
+		require.ErrorContains(t, err, "cold boot")
+		require.Nil(t, inst.vfio, "memory restore must reject GPU assignment before claiming devices")
+		require.NoDirExists(t, inst.stateDir)
+	}
 }

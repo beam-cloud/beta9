@@ -162,7 +162,7 @@ type Config struct {
 	MicroVMKernelPath     string   // guest vmlinux (default: DefaultMicroVMKernelPath)
 	MicroVMInitPath       string   // static guest init copied into the canvas (default: DefaultMicroVMInitPath)
 	MicroVMStateRoot      string   // per-VM sockets, restore staging and network slot records (default: DefaultMicroVMStateRoot)
-	MicroVMVFIODevices    []string // reserved PCI functions; defaults to BEAM_MICROVM_VFIO_DEVICES
+	MicroVMVFIODevices    []string // host GPU inventory; defaults to BEAM_MICROVM_VFIO_DEVICES
 }
 
 // New creates a new Runtime based on the provided configuration

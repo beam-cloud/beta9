@@ -355,6 +355,7 @@ class Session:
             lambda: run_command(
                 ["xdpyinfo"],
                 env=self.env,
+                timeout=POLICY.display_timeout,
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

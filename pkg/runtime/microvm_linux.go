@@ -443,10 +443,7 @@ func (m *MicroVM) newInstance(containerID, bundlePath string) (*microVMInstance,
 func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *specs.Spec, restoreFrom string) (microvm.Network, microVMDisk, []microVMDisk, error) {
 	var none microvm.Network
 	devices := spec.Annotations[MicroVMVFIOAnnotation]
-	if devices == "" {
-		devices = strings.Join(m.cfg.MicroVMVFIODevices, ",")
-	}
-	if restoreFrom != "" && devices != "" {
+	if restoreFrom != "" && (devices != "" || len(m.cfg.MicroVMVFIODevices) > 0) {
 		return none, microVMDisk{}, nil, fmt.Errorf("VFIO devices require a cold boot; memory restore is unsupported")
 	}
 	vfio, err := (microVMVFIOHost{devices: m.cfg.MicroVMVFIODevices}).acquire(devices)

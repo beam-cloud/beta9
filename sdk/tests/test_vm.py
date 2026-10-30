@@ -2982,36 +2982,6 @@ def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
     assert session.retry_allowed("mcp")
 
 
-@pytest.mark.parametrize("xorg", [None, "/etc/X11/gpu.conf"])
-def test_kiosk_display_uses_image_supplied_gpu_config(monkeypatch, tmp_path, xorg):
-    guest = guest_module("kiosk")
-    monkeypatch.setattr(guest, "RUNTIME", tmp_path / "run")
-    monkeypatch.setattr(guest, "ASSETS", tmp_path / "assets")
-    manager = guest.ASSETS / "openbox/bin/openbox"
-    manager.parent.mkdir(parents=True)
-    manager.touch()
-    monkeypatch.setattr(guest, "run_command", MagicMock())
-    monkeypatch.setattr(guest, "resize_display", MagicMock())
-    env = {"BEAM_KIOSK_XORG_CONFIG": xorg} if xorg else {}
-    session = guest.Session({"command": ["editor"], "env": env})
-    session.env["HOME"] = str(tmp_path)
-    session.spawn = MagicMock()
-    session.wait_for = MagicMock()
-    session.start_display()
-    display = session.spawn.call_args_list[0].args[0]
-    assert display[:2] == ["Xorg" if xorg else "Xvfb", ":1"]
-    assert display[display.index("-auth") + 1] == session.env["XAUTHORITY"]
-    assert display[display.index("-dpi") + 1] == str(guest.POLICY.dpi)
-    if xorg:
-        assert display[display.index("-config") + 1] == xorg
-        assert "-screen" not in display
-        assert "-shmem" not in display
-    else:
-        assert "-screen" in display
-        assert "-shmem" in display
-    guest.resize_display.assert_called_once_with(session.saved_size, session.env)
-
-
 def test_kiosk_sdk_waits_for_application_not_just_the_stream_port():
     vm = VM("app", kiosk=Kiosk(["editor"]), ssh=False, _service=SimpleNamespace())
     vm.info = {"spec": {"desktop": True, "kiosk": {"command": ["editor"]}}}

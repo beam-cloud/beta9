@@ -43,8 +43,6 @@ import (
 
 const (
 	testBridgeName = "b9test0"
-	testSubnet4    = "10.200.0.0/24"
-	testBridgeIP4  = "10.200.0.1"
 	testSubnet6    = "fd00:beef::/64"
 	testBridgeIP6  = "fd00:beef::1"
 	testComment    = "b9-microvm-test"
@@ -52,12 +50,15 @@ const (
 )
 
 var (
-	testIPCounter atomic.Int32
-	testEnvOnce   sync.Once
-	testEnvErr    error
-	testRootfsDir = envOr("MICROVM_TEST_ROOTFS_DIR", "/microvm/rootfs")
-	testGoproc    = envOr("MICROVM_TEST_GOPROC", "/usr/local/bin/goproc")
-	testWorkRoot  = envOr("MICROVM_TEST_WORK_DIR", "/tmp/microvm-test")
+	testIPCounter  atomic.Int32
+	testEnvOnce    sync.Once
+	testEnvErr     error
+	testIPv4Prefix = envOr("MICROVM_TEST_IPV4_PREFIX", "10.200.0")
+	testSubnet4    = testIPv4Prefix + ".0/24"
+	testBridgeIP4  = testIPv4Prefix + ".1"
+	testRootfsDir  = envOr("MICROVM_TEST_ROOTFS_DIR", "/microvm/rootfs")
+	testGoproc     = envOr("MICROVM_TEST_GOPROC", "/usr/local/bin/goproc")
+	testWorkRoot   = envOr("MICROVM_TEST_WORK_DIR", "/tmp/microvm-test")
 )
 
 func envOr(key, fallback string) string {
@@ -99,6 +100,14 @@ func requireMicroVMEnv(t *testing.T) *MicroVM {
 // Docker's FORWARD DROP policy on the host. Everything carries testComment
 // and is idempotent across runs.
 func setupTestBridge() error {
+	var addresses []*netlink.Addr
+	for _, cidr := range []string{testBridgeIP4 + "/24", testBridgeIP6 + "/64"} {
+		addr, err := netlink.ParseAddr(cidr)
+		if err != nil {
+			return fmt.Errorf("test bridge address %s: %w", cidr, err)
+		}
+		addresses = append(addresses, addr)
+	}
 	bridge, err := netlink.LinkByName(testBridgeName)
 	if err != nil {
 		if err := netlink.LinkAdd(&netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: testBridgeName}}); err != nil {
@@ -108,13 +117,9 @@ func setupTestBridge() error {
 			return err
 		}
 	}
-	for _, cidr := range []string{testBridgeIP4 + "/24", testBridgeIP6 + "/64"} {
-		addr, err := netlink.ParseAddr(cidr)
-		if err != nil {
-			return err
-		}
+	for _, addr := range addresses {
 		if err := netlink.AddrReplace(bridge, addr); err != nil {
-			return fmt.Errorf("address %s: %w", cidr, err)
+			return fmt.Errorf("address %s: %w", addr, err)
 		}
 	}
 	if err := netlink.LinkSetUp(bridge); err != nil {
@@ -231,7 +236,7 @@ func newTestVM(t *testing.T, rt *MicroVM, opts vmOptions) *testVM {
 		t:       t,
 		rt:      rt,
 		id:      id,
-		ip4:     net.ParseIP(fmt.Sprintf("10.200.0.%d", n)),
+		ip4:     net.ParseIP(fmt.Sprintf("%s.%d", testIPv4Prefix, n)),
 		ip6:     net.ParseIP(fmt.Sprintf("fd00:beef::%x", n)),
 		output:  &lockedBuffer{},
 		started: make(chan int, 1),
@@ -418,8 +423,10 @@ func (vm *testVM) exec(client *goproc.GoProcClient, args ...string) (int, string
 		}
 	}
 	require.NoError(vm.t, err, "wait %v", args)
-	stdout, _ := client.Stdout(pid)
-	stderr, _ := client.Stderr(pid)
+	stdout, err := client.Stdout(pid)
+	require.NoError(vm.t, err, "stdout %v", args)
+	stderr, err := client.Stderr(pid)
+	require.NoError(vm.t, err, "stderr %v", args)
 	return code, stdout + stderr
 }
 
@@ -599,115 +606,6 @@ func bridgeHTTPServer(t *testing.T) (port int) {
 
 // --- tests -------------------------------------------------------------------------------
 
-func vfioTestHost(t *testing.T, groups map[string][]string) microVMVFIOHost {
-	t.Helper()
-	root := t.TempDir()
-	host := microVMVFIOHost{pciRoot: filepath.Join(root, "pci"), devRoot: filepath.Join(root, "dev"), lockRoot: filepath.Join(root, "locks")}
-	driver := filepath.Join(root, "drivers", "vfio-pci")
-	require.NoError(t, os.MkdirAll(driver, 0o700))
-	require.NoError(t, os.MkdirAll(host.devRoot, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(host.devRoot, "vfio"), nil, 0o600))
-	for group, devices := range groups {
-		path := filepath.Join(root, "groups", group)
-		require.NoError(t, os.MkdirAll(filepath.Join(path, "devices"), 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(host.devRoot, group), nil, 0o600))
-		for _, device := range devices {
-			pci := filepath.Join(host.pciRoot, device)
-			require.NoError(t, os.MkdirAll(pci, 0o700))
-			require.NoError(t, os.Symlink(driver, filepath.Join(pci, "driver")))
-			require.NoError(t, os.Symlink(path, filepath.Join(pci, "iommu_group")))
-			require.NoError(t, os.Symlink(pci, filepath.Join(path, "devices", device)))
-			host.devices = append(host.devices, device)
-		}
-	}
-	return host
-}
-
-func TestMicroVMVFIOValidation(t *testing.T) {
-	require.True(t, (&MicroVM{}).Capabilities().CheckpointRestore)
-	require.False(t, (&MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}).Capabilities().CheckpointRestore)
-	for _, value := range []string{"../77", "01:00.0", "0000:01:20.0", "0000:01:00.8", "0000:01:00.0,path=/tmp/evil", "0000:01:00.0,0000:01:00.0"} {
-		_, err := (microVMVFIOHost{devices: []string{"0000:01:00.0"}}).acquire(value)
-		require.ErrorContains(t, err, "invalid or duplicate", value)
-	}
-	claim, err := (microVMVFIOHost{}).acquire("")
-	require.NoError(t, err, "CPU guests do not need host VFIO support")
-	require.Empty(t, claim.paths)
-	claim.close()
-
-	for _, test := range []struct {
-		name, want string
-		change     func(*testing.T, *microVMVFIOHost)
-	}{
-		{"unauthorized", "not authorized", func(t *testing.T, h *microVMVFIOHost) { h.devices = nil }},
-		{"driver", "bound to vfio-pci", func(t *testing.T, h *microVMVFIOHost) {
-			require.NoError(t, os.Remove(filepath.Join(h.pciRoot, "0000:01:00.0", "driver")))
-		}},
-		{"iommu", "requires an IOMMU group", func(t *testing.T, h *microVMVFIOHost) {
-			require.NoError(t, os.Remove(filepath.Join(h.pciRoot, "0000:01:00.0", "iommu_group")))
-		}},
-		{"partial group", "complete group", func(t *testing.T, h *microVMVFIOHost) {
-			group, err := filepath.EvalSymlinks(filepath.Join(h.pciRoot, "0000:01:00.0", "iommu_group"))
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(filepath.Join(group, "devices", "0000:01:00.1"), nil, 0o600))
-		}},
-		{"vfio access", "open VFIO vfio", func(t *testing.T, h *microVMVFIOHost) {
-			require.NoError(t, os.Remove(filepath.Join(h.devRoot, "vfio")))
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			host := vfioTestHost(t, map[string][]string{"77": {"0000:01:00.0"}})
-			test.change(t, &host)
-			_, err := host.acquire("0000:01:00.0")
-			require.ErrorContains(t, err, test.want)
-		})
-	}
-}
-
-func TestMicroVMVFIOFailedClaimReleasesGroups(t *testing.T) {
-	host := vfioTestHost(t, map[string][]string{"77": {"0000:01:00.0"}, "78": {"0000:25:00.0"}})
-	devices := strings.Join(host.devices, ",")
-	require.NoError(t, os.Remove(filepath.Join(host.devRoot, "78")))
-	_, err := host.acquire(devices)
-	require.ErrorContains(t, err, "open VFIO 78")
-	require.NoError(t, os.WriteFile(filepath.Join(host.devRoot, "78"), nil, 0o600))
-	claim, err := host.acquire(devices)
-	require.NoError(t, err, "an unsuccessful launch must not strand any group reservations")
-	claim.close()
-}
-
-func TestMicroVMVFIOOwnership(t *testing.T) {
-	host := vfioTestHost(t, map[string][]string{"77": {"0000:01:00.0", "0000:01:00.1"}})
-	devices := strings.Join(host.devices, ",")
-	claim, err := host.acquire(devices)
-	require.NoError(t, err)
-	t.Cleanup(claim.close)
-	_, err = host.acquire(devices)
-	require.ErrorContains(t, err, "already in use")
-
-	cmd := exec.Command("sleep", "30")
-	cmd.ExtraFiles = claim.locks
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	claim.close()
-	_, err = host.acquire(devices)
-	require.ErrorContains(t, err, "already in use", "the VMM retains ownership after its parent closes the descriptors")
-	require.NoError(t, cmd.Process.Kill())
-	_ = cmd.Wait()
-	claim, err = host.acquire(devices)
-	require.NoError(t, err, "the GPU is reusable after the VMM exits")
-	claim.close()
-	claim.close()
-
-	base := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil)
-	args := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil, claim.paths...)
-	require.Contains(t, base, "--balloon")
-	require.NotContains(t, args, "--balloon", "DMA-pinned RAM cannot be reclaimed")
-	require.Contains(t, strings.Join(args, " "), "--device path="+claim.paths[0]+" path="+claim.paths[1])
-	_, err = rewriteSnapshotConfig([]byte(`{"devices":[{"path":"/sys/bus/pci/devices/0000:01:00.0"}]}`), "/state", microvm.Network{}, microVMDisk{}, nil)
-	require.ErrorContains(t, err, "VFIO", "a foreign snapshot cannot bypass device authorization")
-}
-
 func TestMicroVMGPU(t *testing.T) {
 	devices := os.Getenv("MICROVM_TEST_VFIO_DEVICES")
 	if devices == "" {
@@ -719,9 +617,12 @@ func TestMicroVMGPU(t *testing.T) {
 		vm := newTestVM(t, rt, vmOptions{image: "gpu", goproc: true, memoryMiB: 8192, cpuCores: 4})
 		vm.start()
 		client := vm.goprocClient(90 * time.Second)
-		code, output := vm.sh(client, `set -eu
-modprobe nvidia
-modprobe nvidia_uvm
+		code, output := vm.sh(client, `set -eux
+exec 2>&1
+mkdir -p /dev/char
+modprobe -v nvidia
+modprobe -v nvidia_uvm
+nvidia-modprobe -c 0 -c 255
 nvidia-modprobe -u -c 0
 nvidia-smi
 python3 - <<'PY'
@@ -735,6 +636,9 @@ def call(name, types, *args):
 ptr = c.c_void_p
 context, module, function, device = ptr(), ptr(), ptr(), c.c_uint64()
 call("cuInit", [c.c_uint], 0)
+count = c.c_int()
+call("cuDeviceGetCount", [ptr], c.byref(count))
+assert count.value == 1, count.value
 call("cuDevicePrimaryCtxRetain", [ptr, c.c_int], c.byref(context), 0)
 call("cuCtxSetCurrent", [ptr], context)
 ptx = b""".version 6.0
@@ -761,7 +665,7 @@ call("cuModuleUnload", [ptr], module)
 call("cuDevicePrimaryCtxRelease_v2", [c.c_int], 0)
 print("CUDA_KERNEL_OK")
 PY`)
-		require.Zero(t, code, output)
+		require.Zero(t, code, "%s\n%s", output, vm.output.String())
 		require.Contains(t, output, "CUDA_KERNEL_OK", "a headless VM must execute GPU kernels")
 		code, output = vm.sh(client, `set -eu
 modprobe nvidia_drm modeset=1
@@ -1269,18 +1173,19 @@ func TestMicroVMNetworkParity(t *testing.T) {
 	require.NotEqual(t, 0, code, "FORWARD DROP on the guest IP must block egress")
 
 	// Anti-spoof: a frame sourced from another address never leaves the tap.
+	spoofIP := testIPv4Prefix + ".250"
 	code, out = vm.sh(client, fmt.Sprintf("nc -z -w 3 -s %s %s %d && echo own-ok", vm.ip4, testBridgeIP4, port))
 	require.Equal(t, 0, code, out)
-	code, out = vm.sh(client, fmt.Sprintf("ip addr add 10.200.0.250/24 dev eth0 && nc -z -w 3 -s 10.200.0.250 %s %d", testBridgeIP4, port))
+	code, out = vm.sh(client, fmt.Sprintf("ip addr add %s/24 dev eth0 && nc -z -w 3 -s %s %s %d", spoofIP, spoofIP, testBridgeIP4, port))
 	require.NotEqual(t, 0, code, "spoofed source must be dropped: %s", out)
 	// Nor a frame from another MAC, nor ARP claiming another address.
 	code, out = vm.sh(client, fmt.Sprintf("ip link set eth0 address 02:00:de:ad:be:ef && nc -z -w 3 %s %d; rc=$?; ip link set eth0 address %s; exit $rc", testBridgeIP4, port, vm.vethMAC))
 	require.NotEqual(t, 0, code, "spoofed MAC must be dropped: %s", out)
-	_, _ = vm.sh(client, fmt.Sprintf("arping -c 2 -w 2 -s 10.200.0.250 -I eth0 %s", testBridgeIP4))
+	_, _ = vm.sh(client, fmt.Sprintf("arping -c 2 -w 2 -s %s -I eth0 %s", spoofIP, testBridgeIP4))
 	neighbors, err = netlink.NeighList(bridge.Attrs().Index, netlink.FAMILY_V4)
 	require.NoError(t, err)
 	for _, n := range neighbors {
-		require.NotEqual(t, "10.200.0.250", n.IP.String(), "ARP naming another address must not reach the bridge")
+		require.NotEqual(t, spoofIP, n.IP.String(), "ARP naming another address must not reach the bridge")
 	}
 	code, out = vm.sh(client, fmt.Sprintf("nc -z -w 3 -s %s %s %d && echo own-ok", vm.ip4, testBridgeIP4, port))
 	require.Equal(t, 0, code, "own address still works after the spoof attempts: %s", out)
