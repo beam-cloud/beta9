@@ -3182,6 +3182,9 @@ def test_kiosk_native_display_requires_attached_display_gpu(
     session = module.Session({"command": ["editor"]})
     session.env["HOME"] = str(tmp_path)
     session.env["BEAM_KIOSK_XORG_CONFIG"] = "/etc/X11/custom.conf" if configured else ""
+    session.env.update(
+        __EGL_VENDOR_LIBRARY_FILENAMES="/image/egl.json", __GLX_VENDOR_LIBRARY_NAME="image-driver"
+    )
     session.window_manager = str(tmp_path / "openbox")
     Path(session.window_manager).touch()
     session.spawn = MagicMock()
@@ -3192,6 +3195,14 @@ def test_kiosk_native_display_requires_attached_display_gpu(
     assert command.args[0][0] == expected
     if expected == "Xorg":
         assert command.args[0][:4] == ["Xorg", ":1", "-config", "/etc/X11/custom.conf"]
+        assert session.env["__EGL_VENDOR_LIBRARY_FILENAMES"] == "/image/egl.json"
+        assert session.env["__GLX_VENDOR_LIBRARY_NAME"] == "image-driver"
+    else:
+        assert (
+            session.env["__EGL_VENDOR_LIBRARY_FILENAMES"]
+            == "/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+        )
+        assert session.env["__GLX_VENDOR_LIBRARY_NAME"] == "mesa"
 
 
 def test_kiosk_sdk_waits_for_application_not_just_the_stream_port():

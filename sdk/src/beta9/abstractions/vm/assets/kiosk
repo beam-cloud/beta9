@@ -330,6 +330,10 @@ class Session:
         ):
             display = ["Xorg", ":1", "-config", config]
         else:
+            self.env.update(
+                __EGL_VENDOR_LIBRARY_FILENAMES="/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+                __GLX_VENDOR_LIBRARY_NAME="mesa",
+            )
             display = [
                 "Xvfb",
                 ":1",
