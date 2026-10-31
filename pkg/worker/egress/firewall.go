@@ -363,16 +363,29 @@ func (f *Firewall) dialContext(ctx context.Context, network, address string, all
 		return f.deps.DialContext(ctx, network, address)
 	}
 	dialer := &net.Dialer{Timeout: peekTimeout, ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
-		return checkEgressAddress(address, allowList)
+		if f.localProxy(address) {
+			return nil
+		}
+		return checkEgressAddress(address, allowList, f.config.DeniedCIDRs)
 	}}
 	return dialer.DialContext(ctx, network, address)
 }
 
-func checkEgressAddress(address string, allowList []string) error {
+func checkEgressAddress(address string, allowList []string, extra ...[]string) error {
 	host, _, err := net.SplitHostPort(address)
 	ip := net.ParseIP(host)
 	if err != nil || ip == nil {
 		return common.ErrPrivateAddress
+	}
+	networks := common.RestrictedEgressNetworks()
+	for _, list := range extra {
+		networks = append(networks, list...)
+	}
+	for _, cidr := range networks {
+		_, network, err := net.ParseCIDR(cidr)
+		if err == nil && network.Contains(ip) {
+			return common.ErrPrivateAddress
+		}
 	}
 	if common.IsPublicIP(ip) {
 		return nil
@@ -480,4 +493,31 @@ func originalDestination(conn net.Conn) (*net.TCPAddr, error) {
 		return nil, err
 	}
 	return dst, socketErr
+}
+
+func (f *Firewall) localProxy(address string) bool {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return false
+	}
+	allowedPort := false
+	for _, candidate := range f.config.LocalProxyPorts {
+		if candidate > 0 && candidate == p {
+			allowedPort = true
+			break
+		}
+	}
+	if !allowedPort {
+		return false
+	}
+	_, services, _ := net.ParseCIDR("198.18.0.0/15")
+	return ip.Equal(net.ParseIP("192.168.0.1")) || ip.Equal(net.ParseIP("fd00:abcd::1")) || services.Contains(ip)
 }

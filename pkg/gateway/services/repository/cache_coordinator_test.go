@@ -23,13 +23,15 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 	t.Setenv("AWS_ROLE_ARN", "")
 	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
 	s := &WorkerRepositoryService{
-		backendRepo: &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
+		containerRepo: &assignedOriginContainerRepo{},
+		imageGrants:   fixtureImageGrants{},
+		backendRepo:   &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
 		appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{Registries: types.ImageRegistriesConfig{S3: types.S3ImageRegistryConfig{
 			BucketName: "images", Region: "us-east-1", AccessKey: "test-key", SecretKey: "test-secret",
 		}}}},
 	}
 	ctx := cacheRepositoryWorkspaceAuthContext("workspace-a")
-	request := &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-a", StubId: "stub-id", ImageId: "image-id", ImageArchiveUploadId: "stub-id-1780000000"}
+	request := &pb.GetCacheOriginCredentialsRequest{ContainerId: "export", WorkspaceId: "workspace-a", StubId: "stub-id", ImageId: "image-id", ImageArchiveUploadId: "stub-id-1780000000"}
 	for _, data := range []bool{false, true} {
 		request.ImageArchiveUploadData = data
 		response, err := s.GetCacheOriginCredentials(ctx, request)
@@ -315,7 +317,7 @@ func TestCacheCoordinatorClusterWorkersShareUnscopedLocalityWithDaemonSet(t *tes
 	// host even though it lists under a different pool name.
 	clusterCtx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: "admin-workspace"},
-		Token:     &types.Token{TokenType: types.TokenTypeWorker},
+		Token:     &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-id"},
 	})
 	clusterResp, err := service.ListCacheHosts(clusterCtx, &pb.ListCacheHostsRequest{PoolName: "gpu-pool", Locality: "default"})
 	require.NoError(t, err)
@@ -600,7 +602,9 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 		secret:    &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
 	}
 	service := &WorkerRepositoryService{
-		backendRepo: backendRepo,
+		containerRepo: &assignedOriginContainerRepo{},
+		imageGrants:   fixtureImageGrants{},
+		backendRepo:   backendRepo,
 		appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{
 			BuildRegistry: "build.example.com", BuildRepositoryName: "stage/images", BuildRegistryInsecure: true,
 		}},
@@ -609,6 +613,7 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	resp, err := service.GetCacheOriginCredentials(
 		cacheRepositoryWorkspaceAuthContext("workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
+			ContainerId: "container-id",
 			WorkspaceId: "workspace-id",
 			StubId:      "stub-id",
 			ImageId:     "image-id",
@@ -629,6 +634,8 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 
 func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSigningKey(t *testing.T) {
 	service := &WorkerRepositoryService{
+		containerRepo: &assignedOriginContainerRepo{},
+		imageGrants:   fixtureImageGrants{},
 		backendRepo: &originCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
 			secret:    &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
@@ -638,6 +645,7 @@ func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSignin
 	resp, err := service.GetCacheOriginCredentials(
 		cacheRepositoryWorkspaceAuthContext("workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
+			ContainerId: "container-id",
 			WorkspaceId: "workspace-id",
 			StubId:      "stub-id",
 			ImageId:     "image-id",
@@ -652,6 +660,8 @@ func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSignin
 
 func TestGetCacheOriginCredentialsVendsImageArchiveURL(t *testing.T) {
 	service := &WorkerRepositoryService{
+		containerRepo: &assignedOriginContainerRepo{},
+		imageGrants:   fixtureImageGrants{},
 		backendRepo: &originCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
 		},
@@ -675,6 +685,7 @@ func TestGetCacheOriginCredentialsVendsImageArchiveURL(t *testing.T) {
 	resp, err := service.GetCacheOriginCredentials(
 		cacheRepositoryWorkspaceAuthContext("workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
+			ContainerId: "container-id",
 			WorkspaceId: "workspace-id",
 			StubId:      "stub-id",
 			ImageId:     "image-id",
@@ -710,6 +721,7 @@ func TestGetCacheOriginCredentialsRejectsPrivateWorkerMissingStub(t *testing.T) 
 	resp, err := service.GetCacheOriginCredentials(
 		cacheRepositoryWorkspaceAuthContext("workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
+			ContainerId: "container-id",
 			WorkspaceId: "workspace-id",
 			ImageId:     "image-id",
 		},
@@ -717,11 +729,13 @@ func TestGetCacheOriginCredentialsRejectsPrivateWorkerMissingStub(t *testing.T) 
 
 	require.NoError(t, err)
 	require.False(t, resp.Ok)
-	require.Contains(t, resp.ErrorMsg, "stub")
+	require.Contains(t, resp.ErrorMsg, "assignment")
 }
 
 func TestGetCacheOriginCredentialsRejectsPrivateWorkerImageMismatch(t *testing.T) {
 	service := &WorkerRepositoryService{
+		containerRepo: &assignedOriginContainerRepo{},
+		imageGrants:   fixtureImageGrants{},
 		backendRepo: &originCredentialsBackendRepo{
 			stub: &types.StubWithRelated{
 				Stub: types.Stub{
@@ -735,6 +749,7 @@ func TestGetCacheOriginCredentialsRejectsPrivateWorkerImageMismatch(t *testing.T
 	resp, err := service.GetCacheOriginCredentials(
 		cacheRepositoryWorkspaceAuthContext("workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
+			ContainerId: "container-id",
 			WorkspaceId: "workspace-id",
 			StubId:      "stub-id",
 			ImageId:     "other-image",
@@ -759,7 +774,7 @@ func TestGetCacheOriginCredentialsRejectsNilRequest(t *testing.T) {
 
 func cacheRepositoryAuthContext(tokenType string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token: &types.Token{TokenType: tokenType},
+		Token: &types.Token{TokenType: tokenType, WorkerID: "worker-id"},
 	})
 }
 
@@ -768,6 +783,37 @@ func cacheRepositoryAuthContext(tokenType string) context.Context {
 func cacheRepositoryWorkspaceAuthContext(workspaceID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
-		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker-id"},
 	})
+}
+
+// This worker has active requests in these two fixture workspaces.
+type assignedOriginContainerRepo struct{ repository.ContainerRepository }
+
+func (*assignedOriginContainerRepo) GetActiveContainersByWorkerId(workerID string) ([]types.ContainerState, error) {
+	return []types.ContainerState{
+		{ContainerId: "container-id", WorkerId: workerID, WorkspaceId: "workspace-id", StubId: "stub-id"},
+		{ContainerId: "export", WorkerId: workerID, WorkspaceId: "workspace-a", StubId: "stub-id"},
+		{ContainerId: "snapshot", WorkerId: workerID, WorkspaceId: "own", StubId: "stub-id"},
+	}, nil
+}
+
+func (r *assignedOriginContainerRepo) GetContainerState(id string) (*types.ContainerState, error) {
+	states, _ := r.GetActiveContainersByWorkerId("worker-id")
+	for _, state := range states {
+		if state.ContainerId == id {
+			return &state, nil
+		}
+	}
+	return nil, &types.ErrContainerStateNotFound{ContainerId: id}
+}
+
+type fixtureImageGrants struct{}
+
+func (fixtureImageGrants) Get(_ context.Context, workerID, containerID string) (*repository.WorkerImageGrant, error) {
+	state, err := (&assignedOriginContainerRepo{}).GetContainerState(containerID)
+	if err != nil {
+		return nil, err
+	}
+	return &repository.WorkerImageGrant{WorkerID: workerID, ContainerID: containerID, WorkspaceID: state.WorkspaceId, StubID: state.StubId, ImageID: "image-id", Export: true}, nil
 }

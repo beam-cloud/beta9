@@ -1085,6 +1085,7 @@ class AgentBootstrapConfig(betterproto.Message):
 
     image_build_repository_name: str = betterproto.string_field(16)
     image_build_registry_insecure: bool = betterproto.bool_field(17)
+    denied_cidrs: List[str] = betterproto.string_field(18)
 
 
 @dataclass(eq=False, repr=False)
@@ -1484,6 +1485,7 @@ class Token(betterproto.Message):
     token_type: str = betterproto.string_field(6)
     created_at: datetime = betterproto.message_field(7)
     updated_at: datetime = betterproto.message_field(8)
+    expires_at: datetime = betterproto.message_field(9)
 
 
 @dataclass(eq=False, repr=False)
@@ -1501,6 +1503,20 @@ class ListTokensResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class CreateTokenRequest(betterproto.Message):
     token_type: str = betterproto.string_field(1)
+    expires_in_seconds: int = betterproto.int64_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class RenewTokenRequest(betterproto.Message):
+    token_id: str = betterproto.string_field(1)
+    expires_in_seconds: int = betterproto.int64_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class RenewTokenResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    token: "Token" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -2345,6 +2361,15 @@ class GatewayServiceStub(SyncServiceStub):
             DeleteTokenRequest,
             DeleteTokenResponse,
         )(delete_token_request)
+
+    def renew_token(
+        self, renew_token_request: "RenewTokenRequest"
+    ) -> "RenewTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/RenewToken",
+            RenewTokenRequest,
+            RenewTokenResponse,
+        )(renew_token_request)
 
     def list_workers(
         self, list_workers_request: "ListWorkersRequest"

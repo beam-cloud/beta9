@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -51,11 +52,17 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				if err := workspaceRepo.SetAuthorizationToken(token, workspace); err != nil {
 					return echo.NewHTTPError(http.StatusInternalServerError)
 				}
-			}
-
-			if !token.Active || token.DisabledByClusterAdmin {
+			} else if err := validateCachedToken(c.Request().Context(), backendRepo, token); err != nil {
 				return echo.NewHTTPError(http.StatusUnauthorized)
 			}
+
+			if !token.ValidAt(time.Now()) {
+				return echo.NewHTTPError(http.StatusUnauthorized)
+			}
+			if !httpTokenAllowed(token.TokenType, c.Path()) {
+				return echo.NewHTTPError(http.StatusForbidden)
+			}
+
 			if !workspace.StorageAvailable() {
 				if err := ensureWorkspaceStorage(c.Request().Context(), workspace); err != nil {
 					return echo.NewHTTPError(http.StatusInternalServerError)
@@ -71,8 +78,29 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				},
 			}
 
+			live, cancel, _ := guardCredential(c.Request().Context(), backendRepo, token)
+			defer cancel()
+			c.SetRequest(c.Request().WithContext(live))
 			return next(&HttpAuthContext{c, authInfo})
 		}
+	}
+}
+
+func httpTokenAllowed(kind, route string) bool {
+	switch kind {
+	case types.TokenTypeClusterAdmin, types.TokenTypeWorkspacePrimary, types.TokenTypeWorkspace:
+		return true
+	case types.TokenTypeWorkspaceRestricted:
+		if invocation, _ := serviceInvocationRoute(route); invocation != "" {
+			return true
+		}
+		parts := strings.Split(strings.TrimPrefix(route, "/"), "/")
+		if len(parts) >= 2 && (parts[0] == "function" || parts[0] == "taskqueue" || parts[0] == "schedule") {
+			return parts[1] == "id" || parts[1] == "public" || parts[1] == ":deploymentName"
+		}
+		return strings.HasPrefix(route, "/api/v1/task/")
+	default:
+		return false
 	}
 }
 
@@ -117,7 +145,7 @@ func verifyWorkspaceAuth(ctx echo.Context, workspaceId string) error {
 		return echo.NewHTTPError(http.StatusUnauthorized)
 	}
 
-	if cc.AuthInfo == nil {
+	if cc.AuthInfo == nil || cc.AuthInfo.Token == nil || cc.AuthInfo.Workspace == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized)
 	}
 
@@ -146,7 +174,7 @@ func WithStrictWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Co
 		}
 
 		cc, _ := ctx.(*HttpAuthContext)
-		if cc.AuthInfo.Token.TokenType == types.TokenTypeWorkspaceRestricted {
+		if !HasPermission(cc.AuthInfo) {
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 

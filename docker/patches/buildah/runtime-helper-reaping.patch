@@ -1,0 +1,50 @@
+diff --git a/run_common.go b/run_common.go
+index 0863ec2..4acf311 100644
+--- a/run_common.go
++++ b/run_common.go
+@@ -597,0 +598 @@ func runUsingRuntime(options RunOptions, configureNetwork bool, moreCreateArgs [
++	var containerPID int
+@@ -598,0 +600,2 @@ func runUsingRuntime(options RunOptions, configureNetwork bool, moreCreateArgs [
++		stopReaping := reapRuntimeChildren(containerPID)
++		defer stopReaping()
+@@ -1084,0 +1088,40 @@ func runAcceptTerminal(logger *logrus.Logger, consoleListener *net.UnixListener,
++// reapRuntimeChildren reaps detached runtime helpers while the runtime deletes
++// its container. The container init has a separate waiter; helpers cannot be
++// left as zombies until delete returns because some runtimes await their exit.
++func reapRuntimeChildren(excludePID int) func() {
++	children := make(map[int]struct{})
++	files, _ := filepath.Glob("/proc/self/task/*/children")
++	for _, file := range files {
++		data, err := os.ReadFile(file)
++		if err != nil {
++			continue
++		}
++		for _, value := range strings.Fields(string(data)) {
++			pid, err := strconv.Atoi(value)
++			if err == nil && pid > 0 && pid != excludePID {
++				children[pid] = struct{}{}
++			}
++		}
++	}
++	stop, done := make(chan struct{}), make(chan struct{})
++	go func() {
++		defer close(done)
++		ticker := time.NewTicker(10 * time.Millisecond)
++		defer ticker.Stop()
++		for {
++			for pid := range children {
++				waited, err := unix.Wait4(pid, nil, unix.WNOHANG, nil)
++				if waited == pid || errors.Is(err, unix.ECHILD) {
++					delete(children, pid)
++				}
++			}
++			select {
++			case <-stop:
++				return
++			case <-ticker.C:
++			}
++		}
++	}()
++	return func() { close(stop); <-done }
++}
++

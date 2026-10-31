@@ -222,7 +222,7 @@ worker:
       mode: local
       requiresPoolSelector: true
       # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod
-      containerRuntime: runc  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
+      containerRuntime: gvisor  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
@@ -299,7 +299,8 @@ worker:
   imageRegistry: registry.localhost:5000
   imagePullSecrets: []
   namespace: beta9
-  serviceAccountName: default
+  serviceAccountName: beta9-worker
+  cacheRuntimeSecretName: beta9-cache-runtime
   tmpSizeLimit: 30Gi
   # non-standard k8s job spec
   imagePVCName: beta9-images

@@ -69,6 +69,11 @@ func (s *Service) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelem
 		} else if req.AgentToken != "" && req.AgentToken != agentToken {
 			return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: false, ErrMsg: "agent token changed on telemetry stream"})
 		}
+		current, errMsg := s.requireAgentState(ctx, agentToken)
+		if errMsg != "" {
+			return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: false, ErrMsg: errMsg})
+		}
+		agentState = current
 
 		s.recordAgentLogs(agentState, req.Logs)
 		s.recordAgentEvents(agentState, req.Events)

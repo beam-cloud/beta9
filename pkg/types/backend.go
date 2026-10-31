@@ -245,6 +245,9 @@ func IsWorkerTokenType(tokenType string) bool {
 }
 
 type Token struct {
+	KeyHash                string     `db:"key_hash" json:"-" go2proto:"ignore"`
+	WorkerID               string     `db:"worker_id" json:"-" go2proto:"ignore"`
+	ExpiresAt              *time.Time `db:"expires_at" json:"expires_at,omitempty" serializer:"expires_at,omitempty" go2proto:"ignore"`
 	Id                     uint       `db:"id" json:"id" serializer:"id,source:external_id"`
 	ExternalId             string     `db:"external_id" json:"external_id" serializer:"external_id"`
 	Key                    string     `db:"key" json:"key" serializer:"key"`
@@ -1223,4 +1226,16 @@ func (p *ScheduledJobPayload) Scan(value interface{}) error {
 
 func (p ScheduledJobPayload) Value() (driver.Value, error) {
 	return json.Marshal(p)
+}
+
+// ValidAt applies equally to cached and persistent credentials.
+func (t *Token) ValidAt(now time.Time) bool {
+	return t != nil && t.Active && !t.DisabledByClusterAdmin && (t.ExpiresAt == nil || now.Before(*t.ExpiresAt))
+}
+
+func (t Token) CacheKey() string {
+	if t.Key != "" {
+		return t.Key
+	}
+	return "sha256:" + t.KeyHash
 }

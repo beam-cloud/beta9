@@ -151,10 +151,10 @@ func TestGetImageCredentialsLoadsSigningKeyWhenWorkspaceLacksIt(t *testing.T) {
 	mock.ExpectQuery(`SELECT credential_secret_names FROM image WHERE image_id = \$1`).
 		WithArgs("image-1").
 		WillReturnRows(sqlmock.NewRows([]string{"credential_secret_names"}).AddRow(pq.StringArray{"REG_USERNAME", "REG_PASSWORD"}))
-	mock.ExpectQuery(`SELECT id, name, created_at, concurrency_limit_id, signing_key, volume_cache_enabled, multi_gpu_enabled FROM workspace WHERE external_id = \$1`).
+	mock.ExpectQuery(`SELECT id, external_id, name, created_at, concurrency_limit_id, signing_key, volume_cache_enabled, multi_gpu_enabled FROM workspace WHERE external_id = \$1`).
 		WithArgs("workspace-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "created_at", "concurrency_limit_id", "signing_key", "volume_cache_enabled", "multi_gpu_enabled"}).
-			AddRow(uint(7), "Workspace", now, nil, signingKey, false, false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "name", "created_at", "concurrency_limit_id", "signing_key", "volume_cache_enabled", "multi_gpu_enabled"}).
+			AddRow(uint(7), "workspace-1", "Workspace", now, nil, signingKey, false, false))
 	mock.ExpectQuery(`SELECT hosts, placeholder, id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = ANY\(\$1\) AND workspace_id = \$2`).
 		WithArgs(pq.Array([]string{"REG_USERNAME", "REG_PASSWORD"}), uint(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "name", "value", "workspace_id", "last_updated_by", "created_at", "updated_at"}).

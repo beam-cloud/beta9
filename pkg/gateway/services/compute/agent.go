@@ -77,6 +77,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	}
 	now := time.Now()
 	agentState := &model.AgentTokenState{
+		JoinTokenHash:             tokenState.TokenHash,
 		TokenHash:                 hashComputeToken(agentToken),
 		WorkspaceID:               tokenState.WorkspaceID,
 		PoolName:                  tokenState.PoolName,
@@ -192,6 +193,9 @@ func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinT
 			return errors.New("join token was issued for a previous instance of this pool")
 		}
 		agent.Mode = firstNonEmpty(token.Mode, pool.Mode)
+		if agent.Mode == string(types.PoolModeProvider) && !s.appConfig.ManagedCompute.ProviderComputeEnabled {
+			return errors.New("provider compute is unavailable")
+		}
 		if err := s.enforcePoolGPUType(lockCtx, pool, agent); err != nil {
 			return err
 		}
@@ -305,6 +309,9 @@ func (s *Service) requireAgentState(ctx context.Context, token string) (*model.A
 	}
 	if agentState == nil {
 		return nil, "invalid agent token"
+	}
+	if agentState.Mode == string(types.PoolModeProvider) && !s.appConfig.ManagedCompute.ProviderComputeEnabled {
+		return nil, "provider compute is unavailable"
 	}
 	if agentState.ManagedPoolInstanceID != "" {
 		if err := s.requireManagedPoolRepository(); err != nil {
@@ -755,7 +762,7 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	if err != nil {
 		return nil, "", err
 	}
-	token, tokenID, tokenHash, err := s.agentWorkerToken(ctx, workspace.Id, tokenType, existing)
+	token, tokenID, tokenHash, err := s.agentWorkerToken(ctx, workspace.Id, tokenType, worker.Id, existing)
 	if err != nil {
 		return nil, "", err
 	}
@@ -897,10 +904,22 @@ func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *m
 // slot. Private-pool workers use workspace-scoped TokenTypeWorkerPrivate;
 // provider and managed external workers use trusted worker tokens from the
 // admin workspace because they serve platform workloads.
-func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
+func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType, workerID string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
 	if existing != nil && existing.WorkerTokenID != "" {
 		token, err := s.backendRepo.GetTokenByExternalId(ctx, workspaceID, existing.WorkerTokenID)
-		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == tokenType {
+		if err != nil {
+			return "", "", "", err
+		}
+		if token == nil || !token.Active || token.DisabledByClusterAdmin {
+			return "", "", "", fmt.Errorf("worker credential has been revoked")
+		}
+		if existing.WorkerTokenHash != "" && existing.WorkerTokenHash != hashComputeToken(token.Key) {
+			return "", "", "", fmt.Errorf("worker credential is no longer current")
+		}
+		if err == nil && token != nil && token.ValidAt(time.Now()) && token.TokenType == tokenType {
+			if err := repository.BindWorkerToken(ctx, s.backendRepo, token.ExternalId, workerID); err != nil {
+				return "", "", "", err
+			}
 			tokenHash := hashComputeToken(token.Key)
 			if existing.WorkerTokenHash == "" || existing.WorkerTokenHash == tokenHash {
 				return token.Key, token.ExternalId, tokenHash, nil
@@ -910,6 +929,9 @@ func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenT
 
 	createdToken, err := s.backendRepo.CreateToken(ctx, workspaceID, tokenType, true)
 	if err != nil {
+		return "", "", "", err
+	}
+	if err := repository.BindWorkerToken(ctx, s.backendRepo, createdToken.ExternalId, workerID); err != nil {
 		return "", "", "", err
 	}
 	return createdToken.Key, createdToken.ExternalId, hashComputeToken(createdToken.Key), nil
@@ -1238,6 +1260,7 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 		ImageBuildRepositoryName:   s.appConfig.ImageService.BuildRepositoryName,
 		ImageBuildRegistryInsecure: s.appConfig.ImageService.BuildRegistryInsecure,
 		Telemetry:                  telemetryConfig,
+		DeniedCidrs:                append([]string(nil), s.appConfig.Worker.Egress.DeniedCIDRs...),
 	}, nil
 }
 

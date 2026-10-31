@@ -135,7 +135,8 @@ func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {
 		Env:         []string{"BETA9_TOKEN=user-token", "SECRET=value", "SAFE=value"},
 		ImageId:     "image-1",
 		Stub: StubWithRelated{
-			Stub: Stub{Config: string(stubConfig)},
+			Stub:      Stub{Config: string(stubConfig)},
+			Workspace: Workspace{SigningKey: &signingKey, Storage: &WorkspaceStorage{SecretKey: &storageSecret}},
 		},
 		Workspace: Workspace{
 			Name:       "workspace",
@@ -160,6 +161,8 @@ func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {
 	privateRequest := request.PrivateWorkerRequest()
 
 	require.Nil(t, privateRequest.Workspace.SigningKey)
+	require.Nil(t, privateRequest.Stub.Workspace.SigningKey)
+	require.Nil(t, privateRequest.Stub.Workspace.Storage.SecretKey)
 	require.Empty(t, privateRequest.ImageCredentials)
 	require.Empty(t, privateRequest.BuildRegistryCredentials)
 	require.Empty(t, privateRequest.BuildOptions.SourceImageCreds)

@@ -508,6 +508,10 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		}
 	}
 
+	if !ipt6Supported {
+		return nil, fmt.Errorf("IPv6 packet filtering is required")
+	}
+
 	baseNetworkPrefix := os.Getenv(types.WorkerNetworkPrefixEnv)
 	if baseNetworkPrefix == "" {
 		return nil, errors.New("invalid network prefix")
@@ -554,11 +558,15 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		if m.ipt6 != nil {
 			addresses = append(addresses, containerBridgeAddressIPv6)
 		}
+		config.Worker.Egress.LocalProxyPorts = []int{config.Abstractions.Pod.TCP.ExternalPort, config.GatewayService.HTTP.ExternalPort}
 		m.egress = egress.NewFirewall(config.Worker.Egress, addresses, egress.Dependencies{RefreshBindings: m.refreshSecretBindings})
 		if err := m.egress.Start(ctx); err != nil {
 			return nil, fmt.Errorf("start egress firewall: %w", err)
 		}
 		m.config.Worker.Egress = m.egress.Config()
+	}
+	if err := m.ensureNetworkIsolation(); err != nil {
+		return nil, fmt.Errorf("configure network isolation: %w", err)
 	}
 	go m.cleanupOrphanedNamespaces()
 	if m.slotPoolSize > 0 {
@@ -1633,6 +1641,20 @@ func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, er
 		ipv6:         ipv6,
 		netnsPath:    filepath.Join(types.HostNetnsPath, namespace),
 		hostVethPath: hostLinkSysfsPath(vethHost),
+	}, nil
+}
+
+// buildNetwork gives the builder's parent process the same destination policy
+// as RUN steps, including fetches performed by ADD and image transports.
+func (m *ContainerNetworkManager) buildNetwork() (string, func(), error) {
+	slot, err := m.createNetworkSlot()
+	if err != nil {
+		return "", nil, err
+	}
+	return slot.netnsPath, func() {
+		if err := m.releaseUnusedNetworkSlot(slot); err != nil {
+			log.Error().Err(err).Msg("failed to release build network")
+		}
 	}, nil
 }
 

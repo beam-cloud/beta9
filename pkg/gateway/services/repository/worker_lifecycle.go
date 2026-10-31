@@ -80,6 +80,9 @@ func (s *WorkerRepositoryService) authorizeWorkerLifecycleWorker(ctx context.Con
 	if worker == nil || worker.Id != workerID {
 		return errWorkerLifecycleUnauthorized
 	}
+	if authInfo.Token.WorkerID == "" || authInfo.Token.WorkerID != workerID {
+		return errWorkerLifecycleUnauthorized
+	}
 	if authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
 		return nil
 	}

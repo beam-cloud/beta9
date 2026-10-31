@@ -166,9 +166,9 @@ func TestPrepareWorkerRequestCredentialsByPoolMode(t *testing.T) {
 		&types.Worker{PoolName: "serverless-pool", PoolSelector: "serverless-pool", ControlPlaneManaged: true},
 		request,
 	)
-	assert.Equal(t, request.Env, serverlessRequest.Env)
-	assert.Empty(t, serverlessRequest.RuntimeSecretNames)
-	assert.False(t, serverlessRequest.RuntimeTokenRequired)
+	assert.Equal(t, []string{"SAFE=value"}, serverlessRequest.Env)
+	assert.Equal(t, []string{"SECRET"}, serverlessRequest.RuntimeSecretNames)
+	assert.True(t, serverlessRequest.RuntimeTokenRequired)
 }
 
 func TestPrivatePoolRequestsBypassManagedQuotaLookup(t *testing.T) {

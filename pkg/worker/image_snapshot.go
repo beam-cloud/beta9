@@ -195,6 +195,7 @@ func (c *ImageClient) publishImageArchiveFile(ctx context.Context, request *type
 		return c.registry.Push(ctx, archivePath, imageID)
 	}
 	credentials, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{
+		ContainerId:            request.ContainerId,
 		WorkspaceId:            cacheRequestWorkspaceID(request),
 		StubId:                 cacheRequestStubID(request),
 		ImageId:                request.ImageId,
@@ -286,6 +287,7 @@ func (c *ImageClient) filesystemExportRegistry(ctx context.Context, request *typ
 		return config, nil
 	}
 	response, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{
+		ContainerId: request.ContainerId,
 		WorkspaceId: cacheRequestWorkspaceID(request),
 		StubId:      cacheRequestStubID(request),
 		ImageId:     request.ImageId,
@@ -332,6 +334,7 @@ func (c *ImageClient) buildRegistryAuthenticator(ctx context.Context, request *t
 // may run on an image from an external registry; that registry keeps the
 // default (TLS) transport regardless of how the build registry is reached.
 func (c *ImageClient) parseImageReference(ref string) (name.Reference, error) {
+	ref = c.brokerImageReference(ref)
 	parsed, err := name.ParseReference(ref)
 	if err != nil {
 		return nil, err

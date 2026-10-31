@@ -16,6 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/cloudformation v1.45.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.316.1
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.27.0
+	github.com/aws/aws-sdk-go-v2/service/kms v1.50.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.75.3
 	github.com/beam-cloud/clip v0.0.0-20261014192325-93ffd805f3ff
 	github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1

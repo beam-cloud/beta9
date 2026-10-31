@@ -19,6 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
+	WorkerRepositoryService_ReportWorkerUsage_FullMethodName                = "/WorkerRepositoryService/ReportWorkerUsage"
+	WorkerRepositoryService_PublishWorkerTelemetry_FullMethodName           = "/WorkerRepositoryService/PublishWorkerTelemetry"
 	WorkerRepositoryService_GetNextContainerRequest_FullMethodName          = "/WorkerRepositoryService/GetNextContainerRequest"
 	WorkerRepositoryService_PushContainerLifecycleEvents_FullMethodName     = "/WorkerRepositoryService/PushContainerLifecycleEvents"
 	WorkerRepositoryService_GetWorkerMeteringConfig_FullMethodName          = "/WorkerRepositoryService/GetWorkerMeteringConfig"
@@ -71,6 +73,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WorkerRepositoryServiceClient interface {
+	ReportWorkerUsage(ctx context.Context, in *ReportWorkerUsageRequest, opts ...grpc.CallOption) (*ReportWorkerUsageResponse, error)
+	PublishWorkerTelemetry(ctx context.Context, in *PublishWorkerTelemetryRequest, opts ...grpc.CallOption) (*PublishWorkerTelemetryResponse, error)
 	GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (WorkerRepositoryService_GetNextContainerRequestClient, error)
 	PushContainerLifecycleEvents(ctx context.Context, in *PushContainerLifecycleEventsRequest, opts ...grpc.CallOption) (*PushContainerLifecycleEventsResponse, error)
 	GetWorkerMeteringConfig(ctx context.Context, in *GetWorkerMeteringConfigRequest, opts ...grpc.CallOption) (*GetWorkerMeteringConfigResponse, error)
@@ -127,6 +131,24 @@ type workerRepositoryServiceClient struct {
 
 func NewWorkerRepositoryServiceClient(cc grpc.ClientConnInterface) WorkerRepositoryServiceClient {
 	return &workerRepositoryServiceClient{cc}
+}
+
+func (c *workerRepositoryServiceClient) ReportWorkerUsage(ctx context.Context, in *ReportWorkerUsageRequest, opts ...grpc.CallOption) (*ReportWorkerUsageResponse, error) {
+	out := new(ReportWorkerUsageResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_ReportWorkerUsage_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) PublishWorkerTelemetry(ctx context.Context, in *PublishWorkerTelemetryRequest, opts ...grpc.CallOption) (*PublishWorkerTelemetryResponse, error) {
+	out := new(PublishWorkerTelemetryResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_PublishWorkerTelemetry_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *workerRepositoryServiceClient) GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (WorkerRepositoryService_GetNextContainerRequestClient, error) {
@@ -593,6 +615,8 @@ func (c *workerRepositoryServiceClient) RemoveContainerIp(ctx context.Context, i
 // All implementations must embed UnimplementedWorkerRepositoryServiceServer
 // for forward compatibility
 type WorkerRepositoryServiceServer interface {
+	ReportWorkerUsage(context.Context, *ReportWorkerUsageRequest) (*ReportWorkerUsageResponse, error)
+	PublishWorkerTelemetry(context.Context, *PublishWorkerTelemetryRequest) (*PublishWorkerTelemetryResponse, error)
 	GetNextContainerRequest(*GetNextContainerRequestRequest, WorkerRepositoryService_GetNextContainerRequestServer) error
 	PushContainerLifecycleEvents(context.Context, *PushContainerLifecycleEventsRequest) (*PushContainerLifecycleEventsResponse, error)
 	GetWorkerMeteringConfig(context.Context, *GetWorkerMeteringConfigRequest) (*GetWorkerMeteringConfigResponse, error)
@@ -648,6 +672,12 @@ type WorkerRepositoryServiceServer interface {
 type UnimplementedWorkerRepositoryServiceServer struct {
 }
 
+func (UnimplementedWorkerRepositoryServiceServer) ReportWorkerUsage(context.Context, *ReportWorkerUsageRequest) (*ReportWorkerUsageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportWorkerUsage not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) PublishWorkerTelemetry(context.Context, *PublishWorkerTelemetryRequest) (*PublishWorkerTelemetryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PublishWorkerTelemetry not implemented")
+}
 func (UnimplementedWorkerRepositoryServiceServer) GetNextContainerRequest(*GetNextContainerRequestRequest, WorkerRepositoryService_GetNextContainerRequestServer) error {
 	return status.Errorf(codes.Unimplemented, "method GetNextContainerRequest not implemented")
 }
@@ -798,6 +828,42 @@ type UnsafeWorkerRepositoryServiceServer interface {
 
 func RegisterWorkerRepositoryServiceServer(s grpc.ServiceRegistrar, srv WorkerRepositoryServiceServer) {
 	s.RegisterService(&WorkerRepositoryService_ServiceDesc, srv)
+}
+
+func _WorkerRepositoryService_ReportWorkerUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportWorkerUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).ReportWorkerUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_ReportWorkerUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).ReportWorkerUsage(ctx, req.(*ReportWorkerUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_PublishWorkerTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishWorkerTelemetryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).PublishWorkerTelemetry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_PublishWorkerTelemetry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).PublishWorkerTelemetry(ctx, req.(*PublishWorkerTelemetryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _WorkerRepositoryService_GetNextContainerRequest_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -1641,6 +1707,14 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "WorkerRepositoryService",
 	HandlerType: (*WorkerRepositoryServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ReportWorkerUsage",
+			Handler:    _WorkerRepositoryService_ReportWorkerUsage_Handler,
+		},
+		{
+			MethodName: "PublishWorkerTelemetry",
+			Handler:    _WorkerRepositoryService_PublishWorkerTelemetry_Handler,
+		},
 		{
 			MethodName: "PushContainerLifecycleEvents",
 			Handler:    _WorkerRepositoryService_PushContainerLifecycleEvents_Handler,

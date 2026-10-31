@@ -344,6 +344,7 @@ type SecretBinding struct {
 
 // @go2proto
 type ContainerRequest struct {
+	BuildOutputImageID       string          `json:"build_output_image_id,omitempty"`
 	ContainerId              string          `json:"container_id"`
 	EntryPoint               []string        `json:"entry_point"`
 	Env                      []string        `json:"env"`
@@ -631,6 +632,12 @@ func (c *ContainerRequest) PrivateWorkerRequest() *ContainerRequest {
 	request.RuntimeSecretNames = secretNames
 	request.RuntimeTokenRequired = tokenRequired
 	request.Workspace = request.Workspace.WithoutPrivateCredentials()
+	request.Stub.Workspace = request.Stub.Workspace.WithoutPrivateCredentials()
+	if request.Stub.Config != "" {
+		if err := request.Stub.SanitizeConfig(); err != nil {
+			request.Stub.Config = ""
+		}
+	}
 	request.Env = c.privateWorkerEnv(secretNames, tokenRequired)
 	request.Mounts = request.privateWorkerMounts()
 	request.ImageCredentials = ""

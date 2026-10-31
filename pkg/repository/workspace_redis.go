@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -13,11 +14,16 @@ import (
 )
 
 type WorkspaceRedisRepository struct {
-	rdb *common.RedisClient
+	rdb           *common.RedisClient
+	encryptionKey string
 }
 
-func NewWorkspaceRedisRepository(r *common.RedisClient) WorkspaceRepository {
-	return &WorkspaceRedisRepository{rdb: r}
+func NewWorkspaceRedisRepository(r *common.RedisClient, keys ...string) WorkspaceRepository {
+	key := ""
+	if len(keys) > 0 {
+		key = keys[0]
+	}
+	return &WorkspaceRedisRepository{rdb: r, encryptionKey: key}
 }
 
 const cachedTokenTTLS = 600 // 10 minutes
@@ -90,12 +96,14 @@ func (wr *WorkspaceRedisRepository) DeleteWebhook(ctx context.Context, workspace
 }
 
 type AuthInfo struct {
+	WorkerID  string
+	KeyHash   string
 	Workspace *types.Workspace
 	Token     *types.Token
 }
 
 func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, *types.Workspace, error) {
-	tokenKey := common.RedisKeys.WorkspaceAuthorizedToken(token)
+	tokenKey := common.RedisKeys.WorkspaceAuthorizedToken(tokenCacheDigest(token))
 	res, err := wr.rdb.Get(context.Background(), tokenKey).Result()
 	if err != nil {
 		return nil, nil, err
@@ -105,6 +113,17 @@ func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, 
 		return nil, nil, errors.New("token not found")
 	}
 
+	if !strings.HasPrefix(res, "enc:") || !strings.HasPrefix(wr.encryptionKey, "sk_") {
+		return nil, nil, errors.New("authorization cache miss")
+	}
+	key, err := common.ParseSecretKey(wr.encryptionKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	res, err = common.Decrypt(key, strings.TrimPrefix(res, "enc:"))
+	if err != nil {
+		return nil, nil, err
+	}
 	info := &AuthInfo{}
 	err = json.Unmarshal([]byte(res), &info)
 	if err != nil {
@@ -115,11 +134,17 @@ func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, 
 		return nil, nil, errors.New("token not found")
 	}
 
+	if !info.Token.ValidAt(time.Now()) {
+		return nil, nil, errors.New("inactive token")
+	}
+	info.Token.Key = token
+	info.Token.WorkerID = info.WorkerID
+	info.Token.KeyHash = info.KeyHash
 	return info.Token, info.Workspace, nil
 }
 
 func (wr *WorkspaceRedisRepository) RevokeToken(tokenKey string) error {
-	err := wr.rdb.Del(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(tokenKey)).Err()
+	err := wr.rdb.Del(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(tokenCacheDigest(tokenKey))).Err()
 	if err != nil {
 		return err
 	}
@@ -128,7 +153,15 @@ func (wr *WorkspaceRedisRepository) RevokeToken(tokenKey string) error {
 }
 
 func (wr *WorkspaceRedisRepository) SetAuthorizationToken(token *types.Token, workspace *types.Workspace) error {
+	if wr.encryptionKey == "" || !token.Reusable {
+		return nil
+	}
+	cacheKey := tokenCacheDigest(token.Key)
+	copied := *token
+	copied.Key = ""
+	token = &copied
 	bytes, err := json.Marshal(AuthInfo{
+		WorkerID: token.WorkerID, KeyHash: token.KeyHash,
 		Workspace: workspace,
 		Token:     token,
 	})
@@ -136,8 +169,23 @@ func (wr *WorkspaceRedisRepository) SetAuthorizationToken(token *types.Token, wo
 		return err
 	}
 
-	if err := wr.rdb.Set(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(token.Key), bytes, time.Duration(cachedTokenTTLS)*time.Second).Err(); err != nil {
+	key, err := common.ParseSecretKey(wr.encryptionKey)
+	if err != nil {
+		return err
+	}
+	encrypted, err := common.Encrypt(key, string(bytes))
+	if err != nil {
+		return err
+	}
+	if err := wr.rdb.Set(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(cacheKey), "enc:"+encrypted, time.Duration(cachedTokenTTLS)*time.Second).Err(); err != nil {
 		return err
 	}
 	return nil
+}
+
+func tokenCacheDigest(key string) string {
+	if strings.HasPrefix(key, "sha256:") {
+		return strings.TrimPrefix(key, "sha256:")
+	}
+	return tokenDigest(key)
 }

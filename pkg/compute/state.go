@@ -101,6 +101,7 @@ type JoinTokenState struct {
 }
 
 type AgentTokenState struct {
+	JoinTokenHash             string                `json:"join_token_hash,omitempty"`
 	TokenHash                 string                `json:"token_hash"`
 	WorkspaceID               string                `json:"workspace_id"`
 	PoolName                  string                `json:"pool_name"`

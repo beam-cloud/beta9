@@ -12,7 +12,7 @@ import (
 func TestProviderJoinCommandCreatesPoolOncePerGPU(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
-	service := &Service{computeRepo: repo}
+	service := &Service{appConfig: types.AppConfig{ManagedCompute: types.ManagedComputeConfig{ProviderComputeEnabled: true}}, computeRepo: repo}
 
 	first, err := service.GetProviderJoinCommand(ctx, &pb.GetProviderJoinCommandRequest{Gpu: "h100"})
 	if err != nil || !first.Ok {
@@ -70,7 +70,7 @@ func TestProviderJoinCommandRequiresGPU(t *testing.T) {
 	repo := &fakeComputeRepo{}
 	name := model.ProviderPoolName("workspace-1", "A10G")
 	_ = repo.SavePoolState(context.Background(), "workspace-1", &model.PoolState{Name: name, Mode: string(types.PoolModePrivate)})
-	res, err := (&Service{computeRepo: repo}).GetProviderJoinCommand(testAuthContext("workspace-1", "t"), &pb.GetProviderJoinCommandRequest{Gpu: "A10G"})
+	res, err := (&Service{appConfig: types.AppConfig{ManagedCompute: types.ManagedComputeConfig{ProviderComputeEnabled: true}}, computeRepo: repo}).GetProviderJoinCommand(testAuthContext("workspace-1", "t"), &pb.GetProviderJoinCommandRequest{Gpu: "A10G"})
 	if err != nil || res.Ok {
 		t.Fatalf("GetProviderJoinCommand() on private pool = %+v, %v; want error", res, err)
 	}
@@ -83,7 +83,7 @@ func TestDeleteProviderMachineStopsReplicasFirst(t *testing.T) {
 		{ContainerId: "managed-stub-1-aaa", Status: types.ContainerStatusRunning},
 		{ContainerId: "managed-stub-1-bbb", Status: types.ContainerStatusStopping},
 	}}
-	service := &Service{computeRepo: repo, containerRepo: containerRepo, workerRepo: &fakeWorkerRepo{}}
+	service := &Service{appConfig: types.AppConfig{ManagedCompute: types.ManagedComputeConfig{ProviderComputeEnabled: true}}, computeRepo: repo, containerRepo: containerRepo, workerRepo: &fakeWorkerRepo{}}
 
 	join, err := service.GetProviderJoinCommand(ctx, &pb.GetProviderJoinCommandRequest{Gpu: "H100"})
 	if err != nil || !join.Ok {

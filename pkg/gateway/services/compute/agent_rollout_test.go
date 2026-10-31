@@ -15,6 +15,8 @@ import (
 
 type rolloutTokenBackend struct{ repository.BackendRepository }
 
+func (*rolloutTokenBackend) BindWorkerToken(context.Context, string, string) error { return nil }
+
 func (r *rolloutTokenBackend) GetWorkspaceByExternalId(_ context.Context, id string) (types.Workspace, error) {
 	return types.Workspace{Id: 1, ExternalId: id}, nil
 }

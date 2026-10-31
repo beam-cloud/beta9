@@ -51,6 +51,9 @@ func (s *Service) RevokePoolJoinToken(ctx context.Context, in *pb.RevokePoolJoin
 	if err := s.saveComputeJoinTokenState(ctx, state, joinTokenStateTTL(state)); err != nil {
 		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	if err := s.invalidateJoinedAgents(ctx, state); err != nil {
+		return &pb.RevokePoolJoinTokenResponse{ErrMsg: err.Error()}, nil
+	}
 	s.emitComputeEvent(types.EventComputeJoinToken, types.EventComputeSchema{
 		WorkspaceID: state.WorkspaceID,
 		PoolName:    state.PoolName,

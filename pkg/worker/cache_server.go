@@ -53,7 +53,7 @@ func RunCacheServer() error {
 		return err
 	}
 
-	eventRepo := repo.NewEventClientRepo(config)
+	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerID)
 	manager := NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, eventRepo, nil, workerID, poolName, podAddr)
 	client, err := manager.Start()
 	if err != nil {

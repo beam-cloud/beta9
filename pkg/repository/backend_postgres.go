@@ -93,6 +93,8 @@ func GenerateDSN(config types.PostgresConfig) string {
 }
 
 type PostgresBackendRepository struct {
+	credentialMu          sync.Mutex
+	credentialKMS         credentialKMS
 	client                *sqlx.DB
 	config                types.PostgresConfig
 	eventRepo             EventRepository
@@ -200,6 +202,10 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 	}
 	signingKey := "sk_" + base64.StdEncoding.EncodeToString(signingKeyBytes)
 
+	storedSigningKey, err := r.wrapCredential(ctx, "workspace", externalId, signingKey)
+	if err != nil {
+		return types.Workspace{}, err
+	}
 	query := `
 	INSERT INTO workspace (name, external_id, signing_key, is_cluster_admin)
 	VALUES ($1, $2, $3, NOT EXISTS (SELECT 1 FROM workspace))
@@ -207,10 +213,11 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 	`
 
 	var context types.Workspace
-	if err := r.client.GetContext(ctx, &context, query, name, externalId, signingKey); err != nil {
+	if err := r.client.GetContext(ctx, &context, query, name, externalId, storedSigningKey); err != nil {
 		return types.Workspace{}, err
 	}
 
+	context.SigningKey = &signingKey
 	return context, nil
 }
 
@@ -256,12 +263,15 @@ func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceI
 func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error) {
 	var workspace types.Workspace
 
-	query := `SELECT id, name, created_at, concurrency_limit_id, signing_key, volume_cache_enabled, multi_gpu_enabled FROM workspace WHERE external_id = $1;`
+	query := `SELECT id, external_id, name, created_at, concurrency_limit_id, signing_key, volume_cache_enabled, multi_gpu_enabled FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
 		return types.Workspace{}, err
 	}
 
+	if err := r.unwrapWorkspace(ctx, &workspace); err != nil {
+		return types.Workspace{}, err
+	}
 	return workspace, nil
 }
 
@@ -324,6 +334,23 @@ func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*typ
 const tokenLength = 64
 
 func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error) {
+	var expiry *time.Time
+	if tokenType == types.TokenTypeWorkspace {
+		value, _ := TokenExpiry(0)
+		expiry = &value
+	}
+	return r.CreateTokenWithExpiry(ctx, workspaceId, tokenType, reusable, expiry)
+}
+
+func (r *PostgresBackendRepository) CreateTokenWithExpiry(ctx context.Context, workspaceId uint, tokenType string, reusable bool, expiresAt *time.Time) (types.Token, error) {
+	return r.createStoredToken(ctx, workspaceId, tokenType, reusable, expiresAt, false)
+}
+
+func (r *PostgresBackendRepository) CreatePublicTokenWithExpiry(ctx context.Context, workspaceId uint, tokenType string, reusable bool, expiresAt *time.Time) (types.Token, error) {
+	return r.createStoredToken(ctx, workspaceId, tokenType, reusable, expiresAt, true)
+}
+
+func (r *PostgresBackendRepository) createStoredToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool, expiresAt *time.Time, public bool) (types.Token, error) {
 	externalId, err := r.generateExternalId()
 	if err != nil {
 		return types.Token{}, err
@@ -336,23 +363,32 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId
 	}
 	key := base64.URLEncoding.EncodeToString(randomBytes)
 
+	stored := "hash:" + tokenDigest(key)
+	if !public || tokenType == types.TokenTypeWorkspacePrimary {
+		stored, err = r.storedTokenKey(ctx, types.Token{ExternalId: externalId, Key: key, TokenType: tokenType, WorkspaceId: &workspaceId})
+		if err != nil {
+			return types.Token{}, err
+		}
+	}
 	query := `
-	INSERT INTO token (external_id, key, active, token_type, reusable, workspace_id)
-	VALUES ($1, $2, $3, $4, $5, $6)
-	RETURNING id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id;
+	INSERT INTO token (external_id, key, active, token_type, reusable, workspace_id,key_hash,expires_at)
+	VALUES ($1, $2, $3, $4, $5, $6,$7,$8)
+	RETURNING expires_at,id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id;
 	`
 
 	var token types.Token
-	if err := r.client.GetContext(ctx, &token, query, externalId, key, true, tokenType, reusable, workspaceId); err != nil {
+	if err := r.client.GetContext(ctx, &token, query, externalId, stored, true, tokenType, reusable, workspaceId, tokenDigest(key), expiresAt); err != nil {
 		return types.Token{}, err
 	}
 
+	token.Key = key
+	token.KeyHash = tokenDigest(key)
 	return token, nil
 }
 
 func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
 	query := `
-	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
+	SELECT t.worker_id, t.expires_at, COALESCE(t.key_hash, encode(sha256(convert_to(t.key,'UTF8')),'hex')) AS key_hash, t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
 		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id",
 		   ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", 
@@ -360,15 +396,22 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
-	WHERE t.key = $1 AND t.active = TRUE;
+	WHERE (t.key_hash = $1 OR (t.key_hash IS NULL AND encode(sha256(convert_to(t.key,'UTF8')),'hex')=$1)) AND t.active=TRUE AND t.disabled_by_cluster_admin=FALSE AND (t.expires_at IS NULL OR t.expires_at>NOW());
 	`
 
 	var token types.Token
 
-	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
+	if err := r.client.GetContext(ctx, &token, query, tokenDigest(tokenKey)); err != nil {
 		return nil, nil, err
 	}
 
+	token.Key = tokenKey
+	token.KeyHash = tokenDigest(tokenKey)
+	if types.IsWorkerTokenType(token.TokenType) {
+		token.Workspace.SigningKey = nil
+	} else if err := r.unwrapWorkspace(ctx, token.Workspace); err != nil {
+		return nil, nil, err
+	}
 	if token.Workspace.StorageAvailable() {
 		if err := r.decryptFields(token.Workspace.Storage); err != nil {
 			return nil, nil, err
@@ -394,9 +437,9 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 
 func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
 	query := `
-	SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id
+	SELECT worker_id,expires_at,COALESCE(key_hash, encode(sha256(convert_to(key,'UTF8')),'hex')) AS key_hash,id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id
 	FROM token
-	WHERE workspace_id = $1 AND active = TRUE AND token_type = 'workspace_primary' AND disabled_by_cluster_admin = FALSE
+	WHERE workspace_id = $1 AND active = TRUE AND token_type = 'workspace_primary' AND disabled_by_cluster_admin = FALSE AND (expires_at IS NULL OR expires_at>NOW())
 	LIMIT 1;
 	`
 
@@ -406,12 +449,15 @@ func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, wor
 		return nil, err
 	}
 
+	if token.Key, err = r.unwrapCredential(ctx, "token", tokenCredentialRecord(token), token.Key); err != nil {
+		return nil, err
+	}
 	return &token, nil
 }
 
 func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error) {
 	query := `
-    SELECT id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id
+    SELECT worker_id,expires_at,COALESCE(key_hash, encode(sha256(convert_to(key,'UTF8')),'hex')) AS key_hash,id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id
     FROM token
     WHERE workspace_id = $1
 	AND token_type != 'worker'
@@ -424,11 +470,16 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
 		return nil, err
 	}
 
+	for i := range tokens {
+		if tokens[i].Key, err = r.unwrapCredential(ctx, "token", tokenCredentialRecord(tokens[i]), tokens[i].Key); err != nil {
+			return nil, err
+		}
+	}
 	return tokens, nil
 }
 
 func (r *PostgresBackendRepository) GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error) {
-	query := `SELECT id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id FROM token WHERE external_id = $1 AND workspace_id = $2;`
+	query := `SELECT worker_id,expires_at,COALESCE(key_hash, encode(sha256(convert_to(key,'UTF8')),'hex')) AS key_hash,id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id FROM token WHERE external_id = $1 AND workspace_id = $2;`
 
 	var token types.Token
 	err := r.client.GetContext(ctx, &token, query, extTokenId, workspaceId)
@@ -439,6 +490,9 @@ func (r *PostgresBackendRepository) GetTokenByExternalId(ctx context.Context, wo
 		return nil, err
 	}
 
+	if token.Key, err = r.unwrapCredential(ctx, "token", tokenCredentialRecord(token), token.Key); err != nil {
+		return nil, err
+	}
 	return &token, nil
 }
 
@@ -447,7 +501,7 @@ func (r *PostgresBackendRepository) ToggleToken(ctx context.Context, workspaceId
 	UPDATE token
 	SET active = NOT active
 	WHERE external_id = $1 AND workspace_id = $2
-	RETURNING id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id;
+	RETURNING worker_id,expires_at,COALESCE(key_hash, encode(sha256(convert_to(key,'UTF8')),'hex')) AS key_hash,id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id;
 	`
 
 	var token types.Token
@@ -456,6 +510,7 @@ func (r *PostgresBackendRepository) ToggleToken(ctx context.Context, workspaceId
 		return types.Token{}, err
 	}
 
+	token.Key = ""
 	return token, nil
 }
 
@@ -1163,6 +1218,9 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 		return &types.StubWithRelated{}, err
 	}
 
+	if err := r.unwrapWorkspace(ctx, &stub.Workspace); err != nil {
+		return nil, err
+	}
 	if stub.Workspace.StorageAvailable() {
 		if err := r.decryptFields(stub.Workspace.Storage); err != nil {
 			return nil, err
@@ -1210,6 +1268,9 @@ func (r *PostgresBackendRepository) GetStubById(ctx context.Context, stubId uint
 		return &types.StubWithRelated{}, err
 	}
 
+	if err := r.unwrapWorkspace(ctx, &stub.Workspace); err != nil {
+		return nil, err
+	}
 	if stub.Workspace.StorageAvailable() {
 		if err := r.decryptFields(stub.Workspace.Storage); err != nil {
 			return nil, err

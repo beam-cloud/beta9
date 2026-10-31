@@ -82,6 +82,7 @@ const (
 	GatewayService_CreateToken_FullMethodName                     = "/gateway.GatewayService/CreateToken"
 	GatewayService_ToggleToken_FullMethodName                     = "/gateway.GatewayService/ToggleToken"
 	GatewayService_DeleteToken_FullMethodName                     = "/gateway.GatewayService/DeleteToken"
+	GatewayService_RenewToken_FullMethodName                      = "/gateway.GatewayService/RenewToken"
 	GatewayService_ListWorkers_FullMethodName                     = "/gateway.GatewayService/ListWorkers"
 	GatewayService_CordonWorker_FullMethodName                    = "/gateway.GatewayService/CordonWorker"
 	GatewayService_UncordonWorker_FullMethodName                  = "/gateway.GatewayService/UncordonWorker"
@@ -168,6 +169,7 @@ type GatewayServiceClient interface {
 	CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error)
 	ToggleToken(ctx context.Context, in *ToggleTokenRequest, opts ...grpc.CallOption) (*ToggleTokenResponse, error)
 	DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error)
+	RenewToken(ctx context.Context, in *RenewTokenRequest, opts ...grpc.CallOption) (*RenewTokenResponse, error)
 	// Workers
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
 	CordonWorker(ctx context.Context, in *CordonWorkerRequest, opts ...grpc.CallOption) (*CordonWorkerResponse, error)
@@ -847,6 +849,15 @@ func (c *gatewayServiceClient) DeleteToken(ctx context.Context, in *DeleteTokenR
 	return out, nil
 }
 
+func (c *gatewayServiceClient) RenewToken(ctx context.Context, in *RenewTokenRequest, opts ...grpc.CallOption) (*RenewTokenResponse, error) {
+	out := new(RenewTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RenewToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error) {
 	out := new(ListWorkersResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListWorkers_FullMethodName, in, out, opts...)
@@ -971,6 +982,7 @@ type GatewayServiceServer interface {
 	CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error)
 	ToggleToken(context.Context, *ToggleTokenRequest) (*ToggleTokenResponse, error)
 	DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error)
+	RenewToken(context.Context, *RenewTokenRequest) (*RenewTokenResponse, error)
 	// Workers
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
 	CordonWorker(context.Context, *CordonWorkerRequest) (*CordonWorkerResponse, error)
@@ -1173,6 +1185,9 @@ func (UnimplementedGatewayServiceServer) ToggleToken(context.Context, *ToggleTok
 }
 func (UnimplementedGatewayServiceServer) DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) RenewToken(context.Context, *RenewTokenRequest) (*RenewTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenewToken not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListWorkers not implemented")
@@ -2363,6 +2378,24 @@ func _GatewayService_DeleteToken_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_RenewToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RenewToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RenewToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RenewToken(ctx, req.(*RenewTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_ListWorkers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListWorkersRequest)
 	if err := dec(in); err != nil {
@@ -2695,6 +2728,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteToken",
 			Handler:    _GatewayService_DeleteToken_Handler,
+		},
+		{
+			MethodName: "RenewToken",
+			Handler:    _GatewayService_RenewToken_Handler,
 		},
 		{
 			MethodName: "ListWorkers",

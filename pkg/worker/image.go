@@ -164,6 +164,7 @@ type ImageClient struct {
 	workerId           string
 	workerPoolName     string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
+	buildNetwork       func() (string, func(), error)
 	logger             *ContainerLogger
 	eventRepo          repo.EventRepository
 	contentReporter    *cacheContentReporter
@@ -1369,6 +1370,13 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 		return
 	}
 
+	if c.config.ImageService.UpstreamBuildRegistry != "" && registryFromImageRef(strings.TrimPrefix(strings.TrimPrefix(ociInfo.RegistryURL, "https://"), "http://")+"/x:y") == registryFromImageRef(c.config.ImageService.UpstreamBuildRegistry+"/x:y") {
+		scheme := "https://"
+		if c.config.ImageService.BuildRegistryInsecure {
+			scheme = "http://"
+		}
+		ociInfo.RegistryURL = scheme + c.getBuildRegistry()
+	}
 	if ociInfo.RegistryURL == "" {
 		ociInfo.RegistryURL = "https://docker.io"
 	}
@@ -1711,19 +1719,7 @@ func logImageRegistryPullFailure(err error, imageId string, request *types.Conta
 }
 
 func (c *ImageClient) brokeredImageAccessRequest(request *types.ContainerRequest) bool {
-	if c == nil {
-		return false
-	}
-	if request != nil && request.PoolSelector != "" {
-		if pool, ok := c.config.Worker.Pools[request.PoolSelector]; ok {
-			return pool.AgentHosted()
-		}
-	}
-	if c.workerPoolName == "" {
-		return false
-	}
-	pool, ok := c.config.Worker.Pools[c.workerPoolName]
-	return ok && pool.AgentHosted()
+	return c != nil && c.workerRepoClient != nil
 }
 
 // pullImageArchiveFromBrokeredOrigin uses a presigned URL when available and
@@ -2466,7 +2462,9 @@ runroot = "%s"
 // nothing of the worker's may be reachable from them. Explicit flags win over
 // BUILDAH_ISOLATION and containers.conf.
 func buildahIsolationArgs() []string {
-	return []string{"--isolation=oci", "--pid=private", "--ipc=private", "--network=private"}
+	// Buildah owns the writable layer. A runtime overlay would hide RUN's
+	// filesystem changes from its following steps and image export.
+	return []string{"--isolation=oci", "--runtime=/usr/local/bin/runsc", "--runtime-flag=platform=systrap", "--runtime-flag=overlay2=none", "--pid=private", "--ipc=private", "--network=private"}
 }
 
 // buildahEnv returns environment variables for buildah
@@ -2671,8 +2669,13 @@ func newImageCommand(ctx context.Context, command string, args []string, env []s
 }
 
 func newBuildahCommand(ctx context.Context, args []string, env []string, stdout, stderr io.Writer) *exec.Cmd {
+	if namespace, ok := ctx.Value(buildNetworkContextKey{}).(string); ok && namespace != "" {
+		return newImageCommand(ctx, "nsenter", append([]string{"--net=" + namespace, "--", "buildah"}, args...), env, stdout, stderr)
+	}
 	return newImageCommand(ctx, "buildah", args, env, stdout, stderr)
 }
+
+type buildNetworkContextKey struct{}
 
 func terminateImageProcessGroup(pid int) error {
 	pgid, err := syscall.Getpgid(pid)
@@ -2802,6 +2805,16 @@ func (c *ImageClient) warmBaseImageLayersInBackground(ctx context.Context, reque
 }
 
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
+	request = c.brokerBuildRequest(ctx, request)
+	if c.buildNetwork == nil {
+		return fmt.Errorf("build network is unavailable")
+	}
+	namespace, releaseNetwork, err := c.buildNetwork()
+	if err != nil {
+		return fmt.Errorf("prepare build network: %w", err)
+	}
+	defer releaseNetwork()
+	ctx = context.WithValue(ctx, buildNetworkContextKey{}, namespace)
 	startTime := time.Now()
 
 	// Use /dev/shm (tmpfs/RAM) for buildah storage to eliminate disk I/O bottlenecks
@@ -2870,6 +2883,22 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		defer cleanupGit()
 	}
 
+	// Configure a single declared upstream in Dockerfile FROM instructions.
+	// Other registries retain their original transport and credentials.
+	lines := strings.Split(dockerfile, "\n")
+	for i, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "FROM") {
+			for j := 1; j < len(fields); j++ {
+				if !strings.HasPrefix(fields[j], "--") {
+					ref := c.brokerImageReference(fields[j])
+					lines[i] = strings.Replace(line, fields[j], ref, 1)
+					break
+				}
+			}
+		}
+	}
+	dockerfile = strings.Join(lines, "\n")
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
 	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
@@ -3086,6 +3115,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 }
 
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
+	request = c.brokerBuildRequest(ctx, request)
 	baseImage, err := image.ExtractImageNameAndTag(*request.BuildOptions.SourceImage)
 	if err != nil {
 		return err
