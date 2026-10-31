@@ -40,6 +40,12 @@ def render(text: str) -> str:
     return text
 
 
+def with_sections(skill: str) -> str:
+    """SKILL.md followed by the sections the CLI adds (`SDKSettings.skill_sections`)."""
+    sections = [section.strip("\n") for section in get_settings().skill_sections]
+    return "\n\n".join([skill.rstrip("\n"), *sections]) + "\n"
+
+
 def install_skill(skills_dir: Path) -> Path:
     """Copy the rendered skill into <skills_dir>/<skill_name>, replacing any older copy."""
     target = skills_dir / skill_name()
@@ -48,5 +54,8 @@ def install_skill(skills_dir: Path) -> Path:
     for source in SKILL_SOURCE.rglob("*.md"):
         destination = target / source.relative_to(SKILL_SOURCE)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(render(source.read_text()))
+        text = source.read_text()
+        if source == SKILL_SOURCE / "SKILL.md":
+            text = with_sections(text)
+        destination.write_text(render(text))
     return target
