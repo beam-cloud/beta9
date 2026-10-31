@@ -20,9 +20,10 @@ import (
 )
 
 type WorkerRedisRepository struct {
-	rdb    *common.RedisClient
-	lock   *common.RedisLock
-	config types.WorkerConfig
+	revokeCredentials func(context.Context, string) error
+	rdb               *common.RedisClient
+	lock              *common.RedisLock
+	config            types.WorkerConfig
 }
 
 const (
@@ -532,9 +533,17 @@ local version = redis.call("HINCRBY", KEYS[1], "resource_version", ARGV[4])
 return {1, redis.call("HGET", KEYS[1], "machine_id") or "", free_cpu, free_memory, free_gpu, version}
 `)
 
-func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
+func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig, backends ...BackendRepository) WorkerRepository {
 	lock := common.NewRedisLock(r)
-	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
+	repo := &WorkerRedisRepository{rdb: r, lock: lock, config: config}
+	if len(backends) > 0 {
+		if revoker, ok := backends[0].(interface {
+			RevokeWorkerTokens(context.Context, string) error
+		}); ok {
+			repo.revokeCredentials = revoker.RevokeWorkerTokens
+		}
+	}
+	return repo
 }
 
 // AddWorker adds or updates a worker
@@ -617,6 +626,11 @@ func workerCapacityChanged(oldWorker, worker *types.Worker) bool {
 
 func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
 	ctx := context.TODO()
+	if r.revokeCredentials != nil {
+		if err := r.revokeCredentials(ctx, workerId); err != nil {
+			return err
+		}
+	}
 	err := r.lock.WithLease(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions, func(ctx context.Context) error {
 		return r.removeWorker(ctx, workerId)
 	})

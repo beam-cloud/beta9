@@ -415,3 +415,19 @@ func requireWorkerToken(ctx context.Context, workspaceID string) error {
 	}
 	return nil
 }
+
+func (s *Service) AuthorizeRequest(ctx context.Context, req interface{}) error {
+	info, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || info == nil || info.Token == nil || info.Token.WorkerID == "" {
+		return fmt.Errorf("bound worker credential is required")
+	}
+	request, ok := req.(interface{ GetContainerId() string })
+	if !ok {
+		return fmt.Errorf("container is required")
+	}
+	state, err := s.containerRepo.GetContainerState(request.GetContainerId())
+	if err != nil || state == nil || state.WorkerId != info.Token.WorkerID {
+		return fmt.Errorf("container is not assigned to worker")
+	}
+	return nil
+}

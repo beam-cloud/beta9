@@ -410,8 +410,9 @@ type ContainerRequest struct {
 	// UseVM asks for a microvm pool: the sandbox boots in its own virtual
 	// machine. Only such requests are ever scheduled onto microvm workers, and
 	// they never fall back to a container runtime.
-	UseVM          bool            `json:"use_vm,omitempty"`
-	SecretBindings []SecretBinding `json:"secret_bindings,omitempty"`
+	UseVM              bool            `json:"use_vm,omitempty"`
+	SecretBindings     []SecretBinding `json:"secret_bindings,omitempty"`
+	BuildOutputImageID string          `json:"build_output_image_id,omitempty" go2proto:"ignore"`
 }
 
 // @go2proto
@@ -631,6 +632,12 @@ func (c *ContainerRequest) PrivateWorkerRequest() *ContainerRequest {
 	request.RuntimeSecretNames = secretNames
 	request.RuntimeTokenRequired = tokenRequired
 	request.Workspace = request.Workspace.WithoutPrivateCredentials()
+	request.Stub.Workspace = request.Stub.Workspace.WithoutPrivateCredentials()
+	if request.Stub.Config != "" {
+		if err := request.Stub.SanitizeConfig(); err != nil {
+			request.Stub.Config = ""
+		}
+	}
 	request.Env = c.privateWorkerEnv(secretNames, tokenRequired)
 	request.Mounts = request.privateWorkerMounts()
 	request.ImageCredentials = ""

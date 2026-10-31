@@ -395,6 +395,8 @@ type workerLifecycleRelay struct {
 
 func NewWorkerEventClientRepo(config types.AppConfig, client pb.WorkerRepositoryServiceClient, workerID string) EventRepository {
 	events := NewEventClientRepo(config).(*EventClientRepo)
+	events.storageSinks = []eventSink{newWorkerTelemetrySink(client, workerID)}
+	events.callbackSinks = nil
 	relay := &workerLifecycleRelay{
 		client:        client,
 		workerID:      workerID,

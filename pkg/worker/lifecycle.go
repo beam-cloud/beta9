@@ -622,6 +622,11 @@ func (s *Worker) deleteContainer(containerId string) {
 		}
 	}
 
+	if flusher, ok := s.eventRepo.(interface{ FlushWorkerEvents(context.Context) error }); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = flusher.FlushWorkerEvents(ctx)
+		cancel()
+	}
 	if err := s.deleteContainerState(containerId); err != nil {
 		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state")
 	}

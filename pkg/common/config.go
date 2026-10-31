@@ -55,6 +55,11 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 		return nil, err
 	}
 
+	var initial T
+	if err := cm.kf.UnmarshalWithConf("", &initial, koanf.UnmarshalConf{Tag: cm.tag}); err != nil {
+		return nil, err
+	}
+
 	// Attempt to load configuration from path in CONFIG_PATH
 	cp := os.Getenv("CONFIG_PATH")
 	ce := filepath.Ext(cp)
@@ -64,20 +69,34 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 		}
 	}
 
-	if minimalConfigEnabled() {
-		return cm, nil
+	if ce == ".json" && cp != "" {
+		baseline, err := stdjson.Marshal(initial)
+		if err != nil {
+			return nil, err
+		}
+		cm.kf = koanf.New(".")
+		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider(baseline)); err != nil {
+			return nil, err
+		}
+		if err := cm.LoadConfig(JSONConfigFormat, file.Provider(cp)); err != nil {
+			return nil, err
+		}
+		cm.tag = "json"
 	}
 
 	// Attempt to load configs from /etc/beta9.d/
-	for ext := range parserMap {
-		if matches, err := filepath.Glob(fmt.Sprintf("/etc/beta9.d/*%s", ext)); err == nil {
-			sort.Strings(matches)
-			for _, path := range matches {
-				if err := cm.LoadConfig(ext, file.Provider(path)); err != nil {
-					log.Error().Str("path", path).Err(err).Msg("failed to load config")
+	if !minimalConfigEnabled() {
+		for ext := range parserMap {
+			if matches, err := filepath.Glob(fmt.Sprintf("/etc/beta9.d/*%s", ext)); err == nil {
+				sort.Strings(matches)
+				for _, path := range matches {
+					if err := cm.LoadConfig(ext, file.Provider(path)); err != nil {
+						log.Error().Str("path", path).Err(err).Msg("failed to load config")
+					}
 				}
 			}
 		}
+
 	}
 
 	// Attempt to load configuration from string in CONFIG_JSON

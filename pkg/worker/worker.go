@@ -651,8 +651,7 @@ func NewWorker() (_ *Worker, err error) {
 			Debug:          config.DebugMode,
 		})
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
-			defaultRuntime = runcRuntime
+			return nil, fmt.Errorf("failed to create gvisor runtime: %w", err)
 		} else {
 			defaultRuntime = gvisorRuntime
 			log.Info().
@@ -716,6 +715,7 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport, routeLocalTargetHost)
+	imageClient.buildNetwork = baseContainerNetworkManager.buildNetwork
 	var containerGPUManager GPUManager
 	if gpuCount > 0 && !gpuVirtualized && !defaultRuntime.Capabilities().GPU {
 		return nil, fmt.Errorf("runtime %s has no GPU inventory", defaultRuntime.Name())
@@ -813,7 +813,7 @@ func NewWorker() (_ *Worker, err error) {
 
 	usageRecorder := clients.NewManagedComputeContainerUsageRecorder(config.ManagedCompute)
 
-	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config, gpuType, poolConfig.Mode, usageRecorder)
+	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config, gpuType, poolConfig.Mode, usageRecorder, workerRepoClient)
 	if err != nil {
 		cancel()
 		return nil, err

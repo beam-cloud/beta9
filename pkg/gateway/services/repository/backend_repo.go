@@ -24,6 +24,7 @@ import (
 type BackendRepositoryService struct {
 	ctx                     context.Context
 	backendRepo             repository.BackendRepository
+	containerRepo           repository.ContainerRepository
 	diskSnapshotObjectMu    sync.Mutex
 	diskSnapshotObjectCache map[string]diskSnapshotObjectCacheEntry
 	diskSnapshotObjectGroup singleflight.Group
@@ -38,8 +39,13 @@ type diskSnapshotObjectCacheEntry struct {
 	keys      map[string]struct{}
 }
 
-func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository) *BackendRepositoryService {
+func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository, containerRepos ...repository.ContainerRepository) *BackendRepositoryService {
+	var containers repository.ContainerRepository
+	if len(containerRepos) > 0 {
+		containers = containerRepos[0]
+	}
 	return &BackendRepositoryService{
+		containerRepo:           containers,
 		ctx:                     ctx,
 		backendRepo:             backendRepo,
 		diskSnapshotObjectCache: make(map[string]diskSnapshotObjectCacheEntry),
@@ -250,7 +256,7 @@ func (s *BackendRepositoryService) diskSnapshotDownloadURL(ctx context.Context, 
 // workspaceDiskSnapshot returns a workspace the caller may act for and a
 // snapshot that workspace can read: its own, or another workspace's public one.
 func (s *BackendRepositoryService) workspaceDiskSnapshot(ctx context.Context, workspaceID, snapshotID string) (types.Workspace, *types.DiskSnapshot, error) {
-	if err := authorizeDiskSnapshotWorkspace(ctx, workspaceID); err != nil {
+	if err := s.authorizeDiskSnapshotWorkspace(ctx, workspaceID); err != nil {
 		return types.Workspace{}, nil, err
 	}
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceID)
@@ -264,12 +270,20 @@ func (s *BackendRepositoryService) workspaceDiskSnapshot(ctx context.Context, wo
 	return workspace, snapshot, nil
 }
 
+func (s *BackendRepositoryService) authorizeDiskSnapshotWorkspace(ctx context.Context, workspaceID string) error {
+	info, ok := auth.AuthInfoFromContext(ctx)
+	if ok && info != nil && info.Token != nil && types.IsWorkerTokenType(info.Token.TokenType) {
+		return s.AuthorizeRequest(ctx, &pb.GetDiskSnapshotRequest{WorkspaceId: workspaceID})
+	}
+	return authorizeDiskSnapshotWorkspace(ctx, workspaceID)
+}
+
 func authorizeDiskSnapshotWorkspace(ctx context.Context, workspaceID string) error {
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
 	if !ok || authInfo == nil || authInfo.Token == nil {
 		return fmt.Errorf("authorization is required")
 	}
-	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin || authInfo.Token.TokenType == types.TokenTypeWorker {
+	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin {
 		return nil
 	}
 	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId != workspaceID {
@@ -479,4 +493,47 @@ func diskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
 		SourceStorageNodeId: in.SourceStorageNodeId,
 		Public:              in.Public,
 	}
+}
+
+func (s *BackendRepositoryService) AuthorizeRequest(ctx context.Context, req interface{}) error {
+	info, err := workerRepositoryAuth(ctx)
+	if err != nil {
+		return err
+	}
+	if info.Token.WorkerID == "" || s.containerRepo == nil {
+		return fmt.Errorf("bound worker credential is required")
+	}
+	containers, err := s.containerRepo.GetActiveContainersByWorkerId(info.Token.WorkerID)
+	if err != nil {
+		return err
+	}
+	workspaceID, stubID := "", ""
+	if r, ok := req.(interface{ GetWorkspaceId() string }); ok {
+		workspaceID = r.GetWorkspaceId()
+	}
+	if r, ok := req.(interface{ GetStubId() string }); ok {
+		stubID = r.GetStubId()
+	}
+	if r, ok := req.(*pb.GetCheckpointByIdRequest); ok {
+		checkpoint, err := s.backendRepo.GetCheckpointById(ctx, r.CheckpointId)
+		if err != nil || checkpoint == nil {
+			return fmt.Errorf("checkpoint is unavailable")
+		}
+		for _, container := range containers {
+			stub, err := s.backendRepo.GetStubByExternalId(ctx, container.StubId)
+			if err == nil && stub != nil && stub.Id == checkpoint.StubId {
+				return nil
+			}
+		}
+		return fmt.Errorf("checkpoint is not assigned to worker")
+	}
+	if r, ok := req.(*pb.UpdateCheckpointRequest); ok {
+		return s.AuthorizeRequest(ctx, &pb.GetCheckpointByIdRequest{CheckpointId: r.CheckpointId})
+	}
+	for _, container := range containers {
+		if (workspaceID != "" || stubID != "") && (workspaceID == "" || workspaceID == container.WorkspaceId) && (stubID == "" || stubID == container.StubId) {
+			return nil
+		}
+	}
+	return fmt.Errorf("resource is not assigned to worker")
 }

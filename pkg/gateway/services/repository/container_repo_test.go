@@ -42,7 +42,7 @@ func (r *authorizationContainerRepo) GetContainerState(string) (*types.Container
 func TestPrivateWorkerContainerOwnership(t *testing.T) {
 	for _, workspace := range []string{"own", "other"} {
 		t.Run(workspace, func(t *testing.T) {
-			containers := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{state: &types.ContainerState{ContainerId: "container", WorkspaceId: workspace}}}
+			containers := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{state: &types.ContainerState{ContainerId: "container", WorkerId: "worker", WorkspaceId: workspace}}}
 			client := pb.NewContainerRepositoryServiceClient(repositoryAuthClient(t, &WorkerRepositoryService{}, containers))
 			response, err := client.GetContainerState(repositoryAuthContext(types.TokenTypeWorkerPrivate), &pb.GetContainerStateRequest{ContainerId: "container"})
 			if workspace == "own" {

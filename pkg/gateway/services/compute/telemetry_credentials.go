@@ -39,28 +39,17 @@ func (s *Service) agentTelemetryConfig(ctx context.Context, workspaceID string, 
 	if streamPrefix == "" {
 		streamPrefix = "events"
 	}
-	if platformManaged {
-		return &pb.AgentTelemetryConfig{
-			Enabled:      true,
-			StreamPrefix: streamPrefix,
-			Logs: &pb.AgentTelemetrySinkConfig{
-				Destination:  config.Basin,
-				Credential:   config.ApiKey,
-				StreamPrefix: fmt.Sprintf("%s/logs/workspaces", streamPrefix),
-			},
-			Events: &pb.AgentTelemetrySinkConfig{
-				Destination:  config.Basin,
-				Credential:   config.ApiKey,
-				StreamPrefix: fmt.Sprintf("%s/workspaces", streamPrefix),
-			},
-		}, nil
-	}
 	if s.telemetryCredentials == nil {
 		return nil, nil
 	}
 
 	logPrefix := fmt.Sprintf("%s/logs/workspaces/%s", streamPrefix, eventStreamPart(workspaceID))
 	eventPrefix := fmt.Sprintf("%s/workspaces/%s", streamPrefix, eventStreamPart(workspaceID))
+
+	if platformManaged {
+		logPrefix = fmt.Sprintf("%s/logs/workspaces", streamPrefix)
+		eventPrefix = fmt.Sprintf("%s/workspaces", streamPrefix)
+	}
 
 	logToken, err := s.issueTelemetryCredential(ctx, workspaceID, "logs", config.Basin, logPrefix)
 	if err != nil {

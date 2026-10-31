@@ -1,0 +1,26 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-worker
+  namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-cache
+  namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: false
+{{- end }}
+{{- if .Values.cacheServer.enabled }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.config.worker.cacheRuntimeSecretName | default "beta9-cache-runtime" }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+{{- end }}

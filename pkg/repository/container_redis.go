@@ -414,6 +414,7 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 	if !containerStatusTransitionAllowed(storedStatus, requestedStatus) {
 		// A delayed heartbeat must never move lifecycle state backward. In
 		// particular, STOPPING is terminal until the state is deleted.
+		_ = cr.rdb.Expire(context.Background(), "worker-image-grant:"+containerId, 24*time.Hour).Err()
 		return nil
 	}
 	if requestedStatus == types.ContainerStatusRunning && strings.HasPrefix(containerId, "managed-") {
@@ -451,6 +452,7 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 		return &types.ErrContainerStateNotFound{ContainerId: containerId}
 	}
 	if updated == 0 {
+		_ = cr.rdb.Expire(context.Background(), "worker-image-grant:"+containerId, 24*time.Hour).Err()
 		return nil
 	}
 
@@ -473,6 +475,7 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 		}
 	}
 
+	_ = cr.rdb.Expire(context.Background(), "worker-image-grant:"+containerId, 24*time.Hour).Err()
 	return nil
 }
 

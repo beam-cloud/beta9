@@ -180,7 +180,7 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkerToken(t *testing.T) {
 
 func workerLifecycleContext(workspaceID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token: &types.Token{ExternalId: "token-1", TokenType: types.TokenTypeWorkerPrivate},
+		Token: &types.Token{ExternalId: "token-1", WorkerID: "worker-1", TokenType: types.TokenTypeWorkerPrivate},
 		Workspace: &types.Workspace{
 			ExternalId: workspaceID,
 		},

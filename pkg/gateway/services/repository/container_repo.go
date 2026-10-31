@@ -35,16 +35,22 @@ func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req i
 	if err != nil {
 		return err
 	}
-	if authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
-		return nil
+	if authInfo.Token.WorkerID == "" {
+		return status.Error(codes.PermissionDenied, "worker credential is not bound")
 	}
 	request, ok := req.(containerRepositoryRequest)
 	if !ok {
 		return status.Error(codes.PermissionDenied, "container is required")
 	}
-	state, err := containerStateForWorkspace(s.containerRepo, request.GetContainerId(), authInfo.Workspace.ExternalId)
+	state, err := containerStateForWorker(s.containerRepo, request.GetContainerId(), authInfo.Token.WorkerID)
+	if _, deleting := req.(*pb.DeleteContainerStateRequest); deleting && err != nil {
+		state, err = completedContainerForWorker(ctx, s.containerRepo, request.GetContainerId(), authInfo.Token.WorkerID)
+	}
 	if err != nil {
 		return err
+	}
+	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate && (authInfo.Workspace == nil || authInfo.Workspace.ExternalId != state.WorkspaceId) {
+		return status.Error(codes.PermissionDenied, "container does not belong to worker workspace")
 	}
 	var routes []*pb.BackendRoute
 	switch req := req.(type) {
@@ -105,6 +111,19 @@ func containerStateToProto(state *types.ContainerState) *pb.ContainerState {
 }
 
 func (s *ContainerRepositoryService) DeleteContainerState(ctx context.Context, req *pb.DeleteContainerStateRequest) (*pb.DeleteContainerStateResponse, error) {
+	if archive, ok := s.containerRepo.(repository.CompletedContainerRepository); ok {
+		if info, authenticated := auth.AuthInfoFromContext(ctx); authenticated && info != nil && info.Token != nil {
+			state, err := s.containerRepo.GetContainerState(req.ContainerId)
+			if err == nil && state != nil {
+				if state.WorkerId != info.Token.WorkerID {
+					return &pb.DeleteContainerStateResponse{ErrorMsg: "container is not assigned to worker"}, nil
+				}
+				if err := archive.RetainCompletedContainer(ctx, state); err != nil {
+					return &pb.DeleteContainerStateResponse{ErrorMsg: err.Error()}, nil
+				}
+			}
+		}
+	}
 	err := s.containerRepo.DeleteContainerState(req.ContainerId)
 	if err != nil {
 		return &pb.DeleteContainerStateResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -322,4 +341,46 @@ func registeredRouteContainerID(containerID string, route types.BackendRoute) st
 		return ""
 	}
 	return containerID
+}
+
+func containerStateForWorker(repo repository.ContainerRepository, containerID, workerID string) (*types.ContainerState, error) {
+	if repo == nil || containerID == "" || workerID == "" {
+		return nil, status.Error(codes.PermissionDenied, "container assignment is required")
+	}
+	state, err := repo.GetContainerState(containerID)
+	if err != nil || state == nil || state.ContainerId != containerID || state.WorkerId != workerID {
+		return nil, status.Error(codes.PermissionDenied, "container is not assigned to worker")
+	}
+	return state, nil
+}
+
+func completedContainerForWorker(ctx context.Context, repo repository.ContainerRepository, containerID, workerID string) (*types.ContainerState, error) {
+	archive, ok := repo.(repository.CompletedContainerRepository)
+	if !ok {
+		return nil, status.Error(codes.PermissionDenied, "container assignment is required")
+	}
+	state, err := archive.GetCompletedContainer(ctx, workerID, containerID)
+	if err != nil || state == nil || state.WorkerId != workerID || state.ContainerId != containerID {
+		return nil, status.Error(codes.PermissionDenied, "container is not assigned to worker")
+	}
+	return state, nil
+}
+
+func reportingContainerForWorker(ctx context.Context, repo repository.ContainerRepository, containerID, workerID string) (*types.ContainerState, error) {
+	state, err := containerStateForWorker(repo, containerID, workerID)
+	if err == nil {
+		return state, nil
+	}
+	if _, missing := err.(*types.ErrContainerStateNotFound); missing {
+		return completedContainerForWorker(ctx, repo, containerID, workerID)
+	}
+	// A retained assignment may be used only after the live record is gone.
+	if repo == nil {
+		return nil, err
+	}
+	current, lookupErr := repo.GetContainerState(containerID)
+	if lookupErr != nil && (&types.ErrContainerStateNotFound{}).From(lookupErr) || lookupErr == nil && current == nil {
+		return completedContainerForWorker(ctx, repo, containerID, workerID)
+	}
+	return nil, err
 }

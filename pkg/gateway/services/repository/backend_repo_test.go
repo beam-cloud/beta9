@@ -109,13 +109,13 @@ func TestFailDiskSnapshotWithdrawsOnlyOwnSnapshots(t *testing.T) {
 		owner     uint
 		withdrawn bool
 	}{
-		{name: "worker", token: types.Token{TokenType: types.TokenTypeWorker}, owner: 1, withdrawn: true},
-		{name: "public snapshot of another workspace", token: types.Token{TokenType: types.TokenTypeWorker}, owner: 2},
+		{name: "worker", token: types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-id"}, owner: 1, withdrawn: true},
+		{name: "public snapshot of another workspace", token: types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-id"}, owner: 2},
 		{name: "token of another workspace", token: types.Token{TokenType: types.TokenTypeWorkspace}, owner: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &failDiskSnapshotBackendRepo{snapshot: &types.DiskSnapshot{ExternalId: "snap", WorkspaceId: tt.owner, Status: types.DiskSnapshotStatusAvailable}}
-			service := &BackendRepositoryService{backendRepo: repo}
+			service := &BackendRepositoryService{backendRepo: repo, containerRepo: &assignedOriginContainerRepo{}}
 			ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 				Token:     &tt.token,
 				Workspace: &types.Workspace{ExternalId: "other"},
@@ -171,7 +171,7 @@ func TestAuthorizeDiskSnapshotWorkspace(t *testing.T) {
 		{name: "restricted cross tenant", tokenType: types.TokenTypeWorkspaceRestricted, authWorkspace: "own", requested: "other"},
 		{name: "private worker", tokenType: types.TokenTypeWorkerPrivate, authWorkspace: "own", requested: "own", allowed: true},
 		{name: "private worker cross tenant", tokenType: types.TokenTypeWorkerPrivate, authWorkspace: "own", requested: "other"},
-		{name: "trusted worker cross tenant", tokenType: types.TokenTypeWorker, authWorkspace: "own", requested: "other", allowed: true},
+		{name: "trusted worker cross tenant", tokenType: types.TokenTypeWorker, authWorkspace: "own", requested: "other"},
 		{name: "admin cross tenant", tokenType: types.TokenTypeClusterAdmin, authWorkspace: "own", requested: "other", allowed: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

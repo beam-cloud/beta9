@@ -189,7 +189,7 @@ func TestHostnameDialRejectsPrivateAddresses(t *testing.T) {
 	require.NoError(t, common.CheckPublicAddress(context.Background(), "tcp", "8.8.8.8:443", nil))
 }
 
-func TestEgressAddressAllowsExplicitPrivateCIDRs(t *testing.T) {
+func TestEgressAddressKeepsRestrictedNetworksBlocked(t *testing.T) {
 	for _, tc := range []struct {
 		address string
 		allow   []string
@@ -199,13 +199,13 @@ func TestEgressAddressAllowsExplicitPrivateCIDRs(t *testing.T) {
 		{"[2606:4700:4700::1111]:443", nil, true},
 		{"10.1.2.3:443", nil, false},
 		{"10.1.2.3:443", []string{"internal.example.com"}, false},
-		{"10.1.2.3:443", []string{"10.0.0.0/8"}, true},
-		{"172.16.0.1:443", []string{"172.16.0.0/12"}, true},
-		{"192.168.1.1:443", []string{"192.168.0.0/16"}, true},
+		{"10.1.2.3:443", []string{"10.0.0.0/8"}, false},
+		{"172.16.0.1:443", []string{"172.16.0.0/12"}, false},
+		{"192.168.1.1:443", []string{"192.168.0.0/16"}, false},
 		{"192.168.1.1:443", []string{"10.0.0.0/8"}, false},
-		{"[fd00::1]:443", []string{"fc00::/7"}, true},
+		{"[fd00::1]:443", []string{"fc00::/7"}, false},
 		{"[fd00::1]:443", nil, false},
-		{"[::ffff:10.1.2.3]:443", []string{"10.0.0.0/8"}, true},
+		{"[::ffff:10.1.2.3]:443", []string{"10.0.0.0/8"}, false},
 		{"169.254.169.254:80", []string{"169.254.169.254/32"}, false},
 		{"127.0.0.1:80", []string{"127.0.0.0/8"}, false},
 		{"[::1]:80", []string{"::1/128"}, false},

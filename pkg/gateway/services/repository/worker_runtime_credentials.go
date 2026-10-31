@@ -36,6 +36,18 @@ func (s *WorkerRepositoryService) vendRuntimeCredentials(ctx context.Context, re
 	}
 
 	resp := &pb.GetContainerRuntimeCredentialsResponse{Ok: true}
+	if req.BuildCredentials {
+		if s.imageGrants == nil {
+			return &pb.GetContainerRuntimeCredentialsResponse{ErrorMsg: "build assignment is unavailable"}
+		}
+		info, _ := auth.AuthInfoFromContext(ctx)
+		grant, err := s.imageGrants.Get(ctx, info.Token.WorkerID, req.ContainerId)
+		if err != nil || grant == nil || !grant.Build || grant.WorkspaceID != req.WorkspaceId || grant.StubID != req.StubId {
+			return &pb.GetContainerRuntimeCredentialsResponse{ErrorMsg: "build assignment does not match"}
+		}
+		resp.BuildSecrets = append([]string(nil), grant.BuildSecrets...)
+		resp.GitToken = grant.GitToken
+	}
 
 	if req.RuntimeToken || len(req.SecretNames) > 0 {
 		if err := s.authorizeRuntimeEnv(ctx, req); err != nil {
@@ -78,32 +90,32 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
 	}
-	workspaceID, err := s.workerTokenWorkspaceID(ctx, req.WorkspaceId)
-	if err != nil {
-		return nil, err
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) || authInfo.Token.WorkerID == "" {
+		return nil, fmt.Errorf("bound worker credential is required")
 	}
-
-	if s.backendRepo == nil {
-		return nil, fmt.Errorf("backend repository is unavailable")
+	if req.ContainerId == "" || req.WorkspaceId == "" {
+		return nil, fmt.Errorf("container and workspace are required")
 	}
-
-	if runtimeCredentialsWorkspaceStorageOnly(req) {
-		return s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
+	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate && (authInfo.Workspace == nil || authInfo.Workspace.ExternalId != req.WorkspaceId) {
+		return nil, fmt.Errorf("worker cannot request credentials for workspace %q", req.WorkspaceId)
 	}
-
-	// A caller-supplied state only stands in for the lookup when it belongs to
-	// the requested container; otherwise the request is authorized against the
-	// container it names.
+	if s.backendRepo == nil || s.containerRepo == nil {
+		return nil, fmt.Errorf("credential repository is unavailable")
+	}
+	var err error
 	if state == nil || state.ContainerId != req.ContainerId {
-		if s.containerRepo == nil {
-			return nil, fmt.Errorf("container repository is unavailable")
-		}
-		if state, err = s.runtimeCredentialsContainerState(ctx, req.ContainerId); err != nil {
+		state, err = s.runtimeCredentialsContainerState(ctx, req.ContainerId)
+		if err != nil {
 			return nil, err
 		}
 	}
-	if state.WorkspaceId != req.WorkspaceId || state.StubId != req.StubId {
-		return nil, fmt.Errorf("container %q is not assigned to workspace/stub", req.ContainerId)
+	if state == nil || state.ContainerId != req.ContainerId || state.WorkerId != authInfo.Token.WorkerID || state.WorkspaceId != req.WorkspaceId || state.StubId != req.StubId {
+		return nil, fmt.Errorf("container is not assigned to worker/workspace/stub")
+	}
+	workspaceID, err := s.workerTokenWorkspaceID(ctx, req.WorkspaceId)
+	if err != nil {
+		return nil, err
 	}
 
 	workspace, err := s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
@@ -343,7 +355,7 @@ func (s *WorkerRepositoryService) workspaceRuntimeToken(ctx context.Context, wor
 		return "", err
 	}
 	for _, token := range tokens {
-		if token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorkspaceRestricted {
+		if token.ValidAt(time.Now()) && token.Key != "" && token.TokenType == types.TokenTypeWorkspaceRestricted {
 			return token.Key, nil
 		}
 	}

@@ -36,6 +36,7 @@ const (
 )
 
 type Scheduler struct {
+	imageGrants           *repo.WorkerImageGrantRepository
 	ctx                   context.Context
 	config                types.AppConfig
 	backendRepo           repo.BackendRepository
@@ -78,7 +79,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}
 
 	eventBus := common.NewEventBus(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
+	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker, backendRepo)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
@@ -127,6 +128,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}
 
 	return &Scheduler{
+		imageGrants:               repo.NewWorkerImageGrantRepository(redisClient, config.Database.Postgres.EncryptionKey),
 		ctx:                       ctx,
 		config:                    config,
 		eventBus:                  eventBus,
@@ -771,12 +773,14 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 	normalizeGPURequest(workerRequest)
 	workerRequest.Gpu = worker.Gpu
 
-	s.attachImageCredentials(workerRequest)
-	s.attachBuildRegistryCredentials(workerRequest)
-
-	if s.privateWorkerRequest(worker, workerRequest) {
-		workerRequest = workerRequest.PrivateWorkerRequest()
+	// Keep reusable image credentials at the gateway; workers receive a grant
+	// for the container they were assigned.
+	if s.imageGrants != nil {
+		if err := s.imageGrants.Save(s.ctx, worker.Id, workerRequest); err != nil {
+			requestLog(log.Error(), workerRequest).Err(err).Msg("failed to store image grant")
+		}
 	}
+	workerRequest = workerRequest.PrivateWorkerRequest()
 	workerRequest.Timestamp = time.Now()
 	return workerRequest
 }

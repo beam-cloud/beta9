@@ -17,8 +17,8 @@ spec:
         app.kubernetes.io/name: beta9
         app.kubernetes.io/component: cache-server
     spec:
-      automountServiceAccountToken: true
-      serviceAccountName: beta9-control-plane
+      automountServiceAccountToken: false
+      serviceAccountName: beta9-cache
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       terminationGracePeriodSeconds: 60
@@ -35,7 +35,9 @@ spec:
           privileged: true
         env:
         - name: CONFIG_PATH
-          value: /etc/beta9/.config.yaml
+          value: /etc/beta9/config.json
+        - name: BEAM_WORKER_MINIMAL_CONFIG
+          value: "true"
         - name: CACHE_SERVER_ONLY
           value: "true"
         - name: WORKER_POOL_NAME
@@ -59,9 +61,9 @@ spec:
         - name: CACHE_HOST_NETWORK
           value: "true"
         volumeMounts:
-        - mountPath: /etc/beta9/.config.yaml
+        - mountPath: /etc/beta9/config.json
           name: config
-          subPath: .config.yaml
+          subPath: config.json
           readOnly: true
         - mountPath: /var/lib/beta9/cache
           name: cache
@@ -75,7 +77,7 @@ spec:
       volumes:
       - name: config
         secret:
-          secretName: beta9-config
+          secretName: beta9-cache-runtime
       - name: cache
         hostPath:
           path: /var/lib/beta9/cache

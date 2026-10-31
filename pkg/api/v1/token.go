@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 
@@ -30,6 +31,7 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, work
 	g.GET("/:workspaceId", auth.WithStrictWorkspaceAuth(group.ListWorkspaceTokens))
 	g.GET("/:workspaceId/signing-key", auth.WithStrictWorkspaceAuth(group.GetSigningKey))
 	g.POST("/:workspaceId/:tokenId/toggle", auth.WithStrictWorkspaceAuth(group.ToggleWorkspaceToken))
+	g.POST("/:workspaceId/:tokenId/renew", auth.WithStrictWorkspaceAuth(group.RenewWorkspaceToken))
 	g.DELETE("/:workspaceId/:tokenId", auth.WithStrictWorkspaceAuth(group.DeleteWorkspaceToken))
 
 	return group
@@ -54,7 +56,11 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid token type")
 	}
 
-	token, err := g.backendRepo.CreateToken(ctx.Request().Context(), workspace.Id, tokenType, true)
+	seconds, err := tokenExpiryQuery(ctx)
+	if err != nil {
+		return HTTPBadRequest(err.Error())
+	}
+	token, err := repository.CreateExpiringToken(ctx.Request().Context(), g.backendRepo, workspace.Id, tokenType, seconds)
 	if err != nil {
 		return HTTPInternalServerError("Unable to create token")
 	}
@@ -65,6 +71,42 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, serializedToken)
+}
+
+func tokenExpiryQuery(ctx echo.Context) (int64, error) {
+	value := ctx.QueryParam("expires_in_seconds")
+	if value == "" {
+		return 0, nil
+	}
+	seconds, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	_, err = repository.TokenExpiry(seconds)
+	return seconds, err
+}
+
+func (g *TokenGroup) RenewWorkspaceToken(ctx echo.Context) error {
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), ctx.Param("workspaceId"))
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
+	}
+	seconds, err := tokenExpiryQuery(ctx)
+	if err != nil {
+		return HTTPBadRequest(err.Error())
+	}
+	token, err := repository.RenewToken(ctx.Request().Context(), g.backendRepo, workspace.Id, ctx.Param("tokenId"), seconds)
+	if err != nil {
+		return HTTPBadRequest("Unable to renew token")
+	}
+	if err = g.workspaceRepo.RevokeToken(token.CacheKey()); err != nil {
+		return HTTPInternalServerError("Unable to refresh token")
+	}
+	value, err := serializer.Serialize(token)
+	if err != nil {
+		return HTTPInternalServerError("Unable to serialize token")
+	}
+	return ctx.JSON(http.StatusOK, value)
 }
 
 type ClusterAdminTokensRequestSerializer struct {
@@ -97,7 +139,7 @@ func (g *TokenGroup) ClusterAdminUpdateAllWorkspaceTokens(ctx echo.Context) erro
 		// Evict both enabled and disabled token state. Otherwise, re-enabling a
 		// token can leave a cached disabled authorization in place for the full
 		// cache TTL.
-		err = g.workspaceRepo.RevokeToken(token.Key)
+		err = g.workspaceRepo.RevokeToken(token.CacheKey())
 		if err != nil {
 			return HTTPInternalServerError("Failed to revoke token")
 		}
@@ -120,6 +162,9 @@ func (g *TokenGroup) ListWorkspaceTokens(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to list tokens")
 	}
 
+	for i := range tokens {
+		tokens[i].Key = ""
+	}
 	serializedTokens, err := serializer.Serialize(tokens)
 	if err != nil {
 		return HTTPInternalServerError("Failed to serialize response")
@@ -159,7 +204,7 @@ func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
 	}
 
 	if !toggledToken.Active {
-		err = g.workspaceRepo.RevokeToken(token.Key)
+		err = g.workspaceRepo.RevokeToken(token.CacheKey())
 		if err != nil {
 			return HTTPInternalServerError("Failed to revoke token")
 		}
@@ -192,7 +237,7 @@ func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to delete token")
 	}
 
-	err = g.workspaceRepo.RevokeToken(token.Key)
+	err = g.workspaceRepo.RevokeToken(token.CacheKey())
 	if err != nil {
 		return HTTPInternalServerError("Failed to revoke token")
 	}

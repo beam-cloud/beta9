@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -113,5 +114,15 @@ func TestDeleteProviderMachineStopsReplicasFirst(t *testing.T) {
 	}
 	if machines, _ := service.ListProviderMachines(ctx, &pb.ListProviderMachinesRequest{}); len(machines.Machines) != 0 {
 		t.Fatalf("ListProviderMachines() after delete = %+v, want none", machines.Machines)
+	}
+}
+
+func TestProviderEnrollmentRequiresInteractiveCredential(t *testing.T) {
+	for _, role := range []string{types.TokenTypeWorkspaceRestricted, types.TokenTypeWorker, types.TokenTypeWorkerPrivate, types.TokenTypePlatformDeployer, "unknown"} {
+		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "workspace"}, Token: &types.Token{ExternalId: "token", TokenType: role}})
+		response, err := (&Service{}).GetProviderJoinCommand(ctx, &pb.GetProviderJoinCommandRequest{Gpu: "H100"})
+		if err != nil || response.Ok || response.Token != "" {
+			t.Fatalf("%s: enrollment was accepted", role)
+		}
 	}
 }

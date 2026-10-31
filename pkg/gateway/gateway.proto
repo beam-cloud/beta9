@@ -394,6 +394,9 @@ service GatewayService {
       get : "/workspace/config"
     };
   }
+  rpc RenewToken(RenewTokenRequest) returns (RenewTokenResponse) {
+    option (google.api.http) = { post : "/tokens/{token_id}/renew" };
+  }
 }
 
 message AuthorizeRequest {}
@@ -1242,6 +1245,7 @@ message AgentBootstrapConfig {
   string image_build_registry = 15;
   string image_build_repository_name = 16;
   bool image_build_registry_insecure = 17;
+  repeated string denied_cidrs = 18;
 }
 
 message AgentTelemetryConfig {
@@ -1569,6 +1573,7 @@ message Token {
   string token_type = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  google.protobuf.Timestamp expires_at = 9;
 }
 
 message ListTokensRequest {}
@@ -1581,6 +1586,7 @@ message ListTokensResponse {
 
 message CreateTokenRequest {
   string token_type = 1;
+  int64 expires_in_seconds = 2;
 }
 
 message CreateTokenResponse {
@@ -1802,3 +1808,6 @@ message GetAgentPoolVirtualizationResponse {
   string err_msg = 2;
   bool gpu_virtualized = 3;
 }
+
+message RenewTokenRequest { string token_id = 1; int64 expires_in_seconds = 2; }
+message RenewTokenResponse { bool ok = 1; string err_msg = 2; Token token = 3; }

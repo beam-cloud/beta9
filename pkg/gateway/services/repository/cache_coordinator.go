@@ -28,7 +28,7 @@ func configuredCacheCoordinatorToken(configured string) string {
 
 func (s *WorkerRepositoryService) authorizeCacheRepositoryRequest(ctx context.Context) error {
 	if authInfo, ok := auth.AuthInfoFromContext(ctx); ok && authInfo != nil && authInfo.Token != nil {
-		if types.IsWorkerTokenType(authInfo.Token.TokenType) {
+		if types.IsWorkerTokenType(authInfo.Token.TokenType) && authInfo.Token.WorkerID != "" {
 			return nil
 		}
 		return errCacheCoordinatorUnauthorized

@@ -80,7 +80,7 @@ func TestGetWorkerMeteringConfigRequiresAssignedManagedSlot(t *testing.T) {
 		}},
 	}
 	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token:     &types.Token{ExternalId: "token-1", TokenType: types.TokenTypeWorker},
+		Token:     &types.Token{ExternalId: "token-1", TokenType: types.TokenTypeWorker, WorkerID: "worker-1"},
 		Workspace: &types.Workspace{ExternalId: "workspace-1"},
 	})
 
@@ -89,7 +89,7 @@ func TestGetWorkerMeteringConfigRequiresAssignedManagedSlot(t *testing.T) {
 	require.True(t, response.Ok)
 	var metering types.MonitoringConfig
 	require.NoError(t, json.Unmarshal([]byte(response.MeteringJson), &metering))
-	require.Equal(t, service.appConfig.Monitoring, metering)
+	require.Equal(t, types.MonitoringConfig{MetricsCollector: string(types.MetricsCollectorNone)}, metering)
 
 	service.computeRepo = &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{WorkerID: "worker-1", WorkerTokenID: "another-token"}}}
 	response, err = service.GetWorkerMeteringConfig(ctx, &pb.GetWorkerMeteringConfigRequest{WorkerId: "worker-1"})
@@ -353,13 +353,13 @@ func TestSetWorkerKeepAliveOnlyScansThePoolForIdleWorkers(t *testing.T) {
 	workerRepo := &keepAliveWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "default", Status: types.WorkerStatusAvailable, FreeCpu: 4000, FreeMemory: 8192}}
 	service := &WorkerRepositoryService{workerRepo: workerRepo, appConfig: headroomTestConfig()}
 
-	resp, err := service.SetWorkerKeepAlive(context.Background(), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1"})
+	resp, err := service.SetWorkerKeepAlive(auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-1"}}), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1"})
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.False(t, resp.PoolHeadroom, "a busy worker cannot spin down, so it is not told it holds headroom")
 	require.Equal(t, 0, workerRepo.poolScans, "busy keepalives must not scan the pool")
 
-	resp, err = service.SetWorkerKeepAlive(context.Background(), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1", Idle: true})
+	resp, err = service.SetWorkerKeepAlive(auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-1"}}), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1", Idle: true})
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.True(t, resp.PoolHeadroom, "the only ready worker holds the pool's minimum")
@@ -373,7 +373,7 @@ func TestSetWorkerKeepAliveFailsClosedWhenHeadroomCannotBeDetermined(t *testing.
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := &WorkerRepositoryService{workerRepo: repo, appConfig: headroomTestConfig()}
-			resp, err := service.SetWorkerKeepAlive(context.Background(), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1", Idle: true})
+			resp, err := service.SetWorkerKeepAlive(auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-1"}}), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1", Idle: true})
 			require.NoError(t, err)
 			require.True(t, resp.Ok)
 			require.True(t, resp.PoolHeadroom, "an idle worker must stay up until the pool can actually be read")
@@ -398,7 +398,7 @@ type repositoryAuthWorkspaceRepo struct{ repository.WorkspaceRepository }
 
 func (repositoryAuthWorkspaceRepo) AuthorizeToken(key string) (*types.Token, *types.Workspace, error) {
 	storageID := uint(1)
-	return &types.Token{TokenType: key, ExternalId: "assigned", Active: true}, &types.Workspace{
+	return &types.Token{TokenType: key, ExternalId: "assigned", WorkerID: "worker", Active: true}, &types.Workspace{
 		ExternalId: "own", Storage: &types.WorkspaceStorage{Id: &storageID},
 	}, nil
 }
@@ -558,11 +558,11 @@ func TestPrivateWorkerNetworkIsolation(t *testing.T) {
 	service := &WorkerRepositoryService{workerRepo: repository.NewWorkerRedisRepositoryForTest(rdb)}
 	// Use separate authenticated contexts to exercise the Redis namespace itself.
 	contexts := []context.Context{
-		auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorker}}),
+		auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "shared"}}),
 	}
 	for _, workspace := range []string{"one", "two"} {
 		contexts = append(contexts, auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-			Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate}, Workspace: &types.Workspace{ExternalId: workspace},
+			Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: workspace}, Workspace: &types.Workspace{ExternalId: workspace},
 		}))
 	}
 	ips := []string{"10.0.0.10", "10.0.0.11", "10.0.0.12"}
@@ -609,9 +609,10 @@ func workerNetworkRequests() map[string]interface{ GetNetworkPrefix() string } {
 func TestWorkerNetworkAuthorizationDoesNotAccessRepositories(t *testing.T) {
 	// Nil repositories ensure authorization and scoping cannot add remote lookups.
 	service := &WorkerRepositoryService{}
+	service.workerNetworkScopes.Store("worker", "cluster:beta9:node:shared")
 	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
 		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-			Token: &types.Token{TokenType: tokenType}, Workspace: &types.Workspace{ExternalId: "own"},
+			Token: &types.Token{TokenType: tokenType, WorkerID: "worker"}, Workspace: &types.Workspace{ExternalId: "own"},
 		})
 		for name, req := range workerNetworkRequests() {
 			t.Run(tokenType+"/"+name, func(t *testing.T) {
@@ -630,9 +631,10 @@ func TestWorkerNetworkAuthorizationDoesNotAccessRepositories(t *testing.T) {
 // existing Redis operations are outside the measured section.
 func BenchmarkWorkerNetworkRequestPreparation(b *testing.B) {
 	service := &WorkerRepositoryService{}
+	service.workerNetworkScopes.Store("worker", "cluster:beta9:node:shared")
 	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
 		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-			Token:     &types.Token{TokenType: tokenType},
+			Token:     &types.Token{TokenType: tokenType, WorkerID: "worker"},
 			Workspace: &types.Workspace{ExternalId: "00000000-0000-4000-8000-000000000001"},
 		})
 		for name, req := range workerNetworkRequests() {
