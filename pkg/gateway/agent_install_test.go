@@ -117,6 +117,8 @@ func TestAgentInstallScriptDefaultsMacOSWorkerPlatform(t *testing.T) {
 }
 
 func TestAgentInstallScriptConfiguresExistingNvidiaToolkit(t *testing.T) {
+	t.Setenv(types.MicroVMVFIODevicesEnv, "")
+	t.Setenv(types.MicroVMGPUTypeEnv, "")
 	tmp := t.TempDir()
 	binDir := filepath.Join(tmp, "bin")
 	if err := os.MkdirAll(binDir, 0755); err != nil {
@@ -306,4 +308,39 @@ func newAgentBinaryContext(rec *httptest.ResponseRecorder, osName, arch string) 
 	ctx.SetParamNames("os", "arch")
 	ctx.SetParamValues(osName, arch)
 	return ctx
+}
+
+func TestAgentInstallScriptVFIOInventorySkipsHostNvidia(t *testing.T) {
+	for _, tc := range []struct {
+		name, devices, model string
+		wantProbe            bool
+	}{
+		{name: "configured", devices: "0000:61:00.0,0000:61:00.1", model: "RTX4090"},
+		{name: "devices only", devices: "0000:61:00.0"},
+		{name: "model only", model: "RTX4090"},
+		{name: "unconfigured", wantProbe: true},
+		{name: "whitespace only", devices: " \t", model: "\n", wantProbe: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(types.MicroVMVFIODevicesEnv, tc.devices)
+			t.Setenv(types.MicroVMGPUTypeEnv, tc.model)
+			tmp := t.TempDir()
+			probe := filepath.Join(tmp, "nvidia-probed")
+			if err := os.WriteFile(filepath.Join(tmp, "nvidia-smi"), []byte("#!/bin/sh\nprintf probed > \"$TEST_NVIDIA_PROBE\"\nexit 1\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			script := strings.TrimSuffix(agentInstallScript, "\nmain \"$@\"\n") + "\nOS=linux\nEXECUTOR=worker-container\nensure_linux_nvidia_container_runtime\n"
+			cmd := exec.Command("sh")
+			cmd.Stdin = strings.NewReader(script)
+			cmd.Env = append(os.Environ(), "PATH="+tmp+string(os.PathListSeparator)+os.Getenv("PATH"), "TEST_NVIDIA_PROBE="+probe)
+			out, err := cmd.CombinedOutput()
+			if (err != nil) != tc.wantProbe {
+				t.Fatalf("installer error = %v, want host NVIDIA probe %v: %s", err, tc.wantProbe, out)
+			}
+			_, err = os.Stat(probe)
+			if (err == nil) != tc.wantProbe {
+				t.Fatalf("host NVIDIA probe exists = %v, want %v", err == nil, tc.wantProbe)
+			}
+		})
+	}
 }

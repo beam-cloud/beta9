@@ -60,3 +60,28 @@ func TestCommandExitCodeUsesInterruptCodeForAgentInterrupt(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d", code, agentInterruptedExitCode)
 	}
 }
+
+func TestServiceEnvPreservesVFIOInventory(t *testing.T) {
+	for _, tc := range []struct {
+		name, devices, model string
+	}{
+		{name: "configured", devices: "0000:61:00.0,0000:61:00.1", model: "RTX4090"},
+		{name: "devices only", devices: "0000:61:00.0"},
+		{name: "model only", model: "RTX4090"},
+		{name: "unconfigured"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := map[string]string{types.MicroVMVFIODevicesEnv: tc.devices, types.MicroVMGPUTypeEnv: tc.model}
+			for key, value := range values {
+				t.Setenv(key, value)
+			}
+			env := serviceEnv("worker:latest", "/var/lib/beam/agent", "/mnt/cache")
+			for key, value := range values {
+				got, exists := env[key]
+				if got != value || exists != (value != "") {
+					t.Fatalf("service env %s = %q (present=%v), want %q", key, got, exists, value)
+				}
+			}
+		})
+	}
+}

@@ -123,6 +123,8 @@ func serviceEnv(workerImage, stateDir, cacheDir string) map[string]string {
 }
 
 var serviceEnvKeys = []string{
+	types.MicroVMVFIODevicesEnv,
+	types.MicroVMGPUTypeEnv,
 	types.AgentDockerHostsEnv,
 	types.AgentRegistryForwardEnv,
 	types.AgentTargetHostEnv,

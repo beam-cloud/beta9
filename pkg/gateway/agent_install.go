@@ -326,6 +326,10 @@ ensure_linux_nvidia_container_runtime() {
   if [ "$OS" != "linux" ] || ! needs_worker_container; then
     return
   fi
+  # The agent validates VFIO inventory without a host NVIDIA driver.
+  case "${BEAM_MICROVM_VFIO_DEVICES:-}${BEAM_MICROVM_GPU_TYPE:-}" in
+    *[![:space:]]*) return ;;
+  esac
   if ! command -v nvidia-smi >/dev/null 2>&1; then
     return
   fi
