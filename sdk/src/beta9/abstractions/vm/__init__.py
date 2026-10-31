@@ -7,6 +7,7 @@ import math
 import os
 import subprocess
 import tempfile
+import textwrap
 import threading
 import time
 import uuid
@@ -533,50 +534,59 @@ class VM:
         ):
             if spec.get(feature):
                 services.append((unit, port))
-        try:
-            # is-active with several units succeeds if any is active.
-            for unit, _ in services:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                check = sandbox.process.exec("systemctl", "is-active", "--quiet", unit)
-                if check.wait(min(10, remaining)) != 0:
-                    return False
-            if kiosk:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                check = sandbox.process.exec("/opt/beam-vm/kiosk", "--check")
-                if check.wait(min(10, remaining)) != 0:
-                    try:
-                        status = json.loads(check.stdout.read())
-                    except (ValueError, TypeError):
-                        status = {}
-                    if status.get("state") in ("error", "closed"):
-                        raise RuntimeError(
-                            status.get("error") or "Kiosk application is unavailable"
-                        )
-                    return False
-            ports = [port for _, port in services]
-            probe = (
-                "import socket; "
-                f"[socket.create_connection(('127.0.0.1', p), 1).close() for p in {ports!r}]"
-            )
-            if spec.get("desktop") and not kiosk:
-                # Xvnc accepts connections before xstartup publishes font
-                # resources and starts the window manager.
-                probe += (
-                    "; import re, subprocess; "
-                    "raise SystemExit(not re.search(rb'window id # 0x[1-9a-fA-F][0-9a-fA-F]*', "
-                    "subprocess.check_output(['xprop', '-root', '_NET_SUPPORTING_WM_CHECK'])))"
-                )
-            remaining = deadline - time.monotonic()
-            return (
-                remaining > 0
-                and sandbox.process.exec("python3", "-c", probe).wait(min(10, remaining)) == 0
-            )
-        except (SandboxConnectionError, SandboxProcessError):
+        remaining = min(10, deadline - time.monotonic())
+        if remaining <= 0:
             return False
+        # Check readiness inside the guest in one RPC, including on older images.
+        probe = textwrap.dedent(f"""\
+            import re, socket, subprocess, time
+            deadline = time.monotonic() + {remaining!r}
+            def remaining():
+                return max(0.001, deadline - time.monotonic())
+            def run(*command):
+                return subprocess.run(command, capture_output=True, timeout=remaining())
+            try:
+                for unit, _ in {services!r}:
+                    # is-active with several units succeeds if any is active.
+                    if run('systemctl', 'is-active', '--quiet', unit).returncode:
+                        raise SystemExit(1)
+                if {kiosk!r}:
+                    check = run('/opt/beam-vm/kiosk', '--check')
+                    if check.returncode:
+                        print(check.stdout.decode())
+                        raise SystemExit(check.returncode)
+                for _, port in {services!r}:
+                    with socket.create_connection(('127.0.0.1', port), min(1, remaining())):
+                        pass
+                if {bool(spec.get("desktop"))!r} and not {kiosk!r}:
+                    # Xvnc listens before xstartup has started the window manager.
+                    window = run('xprop', '-root', '_NET_SUPPORTING_WM_CHECK')
+                    if window.returncode or not re.search(
+                        rb'window id # 0x[1-9a-fA-F][0-9a-fA-F]*', window.stdout
+                    ):
+                        raise SystemExit(1)
+            except (OSError, subprocess.TimeoutExpired):
+                raise SystemExit(1)
+            """)
+        try:
+            with rpc_timeout(remaining):
+                result = sandbox.process.run_code(probe)
+            if result.exit_code == 0:
+                return True
+            if kiosk:
+                try:
+                    status = json.loads(result.stdout)
+                except (ValueError, TypeError):
+                    status = {}
+                if status.get("state") in ("error", "closed"):
+                    raise RuntimeError(status.get("error") or "Kiosk application is unavailable")
+            return False
+        except Exception as error:
+            if isinstance(error, (SandboxConnectionError, SandboxProcessError)) or transient_error(
+                error
+            ):
+                return False
+            raise
 
     def _action(self, action, **body):
         return self._api("POST", self._path() + "/" + action, json=body)
