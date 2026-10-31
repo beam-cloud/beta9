@@ -155,11 +155,17 @@ func TestMCPOAuthScopeAndFilterCannotBeBypassed(t *testing.T) {
 	require.True(t, g.allowed(a, g.byName["get_vm"]))
 	ctx := context.WithValue(context.Background(), mcpSelectionKey{}, mcpSelection{Features: []string{"vm"}, ReadOnly: true})
 	result := g.dispatch(ctx, a, rpcRequest{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: "tools/list"})
+	unfiltered := []string{}
 	for _, item := range result.Result.(map[string]any)["tools"].([]map[string]any) {
 		tool := g.byName[item["name"].(string)]
+		if tool.Unfiltered {
+			unfiltered = append(unfiltered, tool.Name)
+			continue
+		}
 		require.Equal(t, "vm", tool.Category)
 		require.True(t, tool.ReadOnly)
 	}
+	require.Equal(t, []string{"send_feedback"}, unfiltered, "only feedback outlives every filter")
 	a.OAuth.Scopes = append(a.OAuth.Scopes, "beam:write", "beam:exec", "beam:credentials")
 	require.False(t, g.allowed(a, g.byName["api"]), "OAuth never grants unscoped API traversal")
 }

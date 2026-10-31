@@ -405,5 +405,6 @@ func (g *Group) catalog() []mcpTool {
 			Destructive: true,
 			Run:         g.api,
 		},
+		g.feedbackTool(),
 	}, g.vmCatalog()...))
 }

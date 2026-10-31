@@ -47,6 +47,9 @@ var (
 
 	EventStubCacheRequiredContent = "stub.cache.required_content"
 	EventPlatformCache            = "platform.cache"
+
+	// Sent to the operator's event callbacks only, never to workspace history or webhooks.
+	EventFeedbackSubmitted = "feedback.submitted"
 )
 
 var (
@@ -345,6 +348,27 @@ type WorkspaceWebhook struct {
 type EventActor struct {
 	Caller       string `json:"caller,omitempty"`
 	AgentSession string `json:"agent_session,omitempty"`
+}
+
+var EventFeedbackSchemaVersion = "1.0"
+
+// EventFeedbackSchema carries a stored Feedback report to the operator.
+type EventFeedbackSchema struct {
+	ID                   string `json:"id"`
+	WorkspaceID          string `json:"workspace_id"`
+	WorkspaceName        string `json:"workspace_name,omitempty"`
+	Kind                 string `json:"kind"`
+	Summary              string `json:"summary"`
+	Blocked              bool   `json:"blocked"`
+	Command              string `json:"command,omitempty"`
+	ErrorCode            string `json:"error_code,omitempty"`
+	ErrorMessage         string `json:"error_message,omitempty"`
+	Details              string `json:"details,omitempty"`
+	SuggestedImprovement string `json:"suggested_improvement,omitempty"`
+	Model                string `json:"model,omitempty"`
+	Environment          string `json:"environment,omitempty"`
+	EventActor
+	CreatedAt time.Time `json:"created_at"`
 }
 
 var EventTaskSchemaVersion = "1.0"

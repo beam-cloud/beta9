@@ -327,6 +327,8 @@ def handle_grpc_error(error: grpc.RpcError):
         terminal.error(f"Not found: {details}", code="NOT_FOUND")
     elif code == grpc.StatusCode.INVALID_ARGUMENT:
         terminal.error(f"Invalid request: {details}", code="INVALID_CONFIG")
+    elif code in (grpc.StatusCode.INTERNAL, grpc.StatusCode.DATA_LOSS):
+        terminal.error(f"Internal gateway error: {details}", code="INTERNAL")
     elif code == grpc.StatusCode.UNKNOWN:
         terminal.error(f"Error {details}")
     else:
@@ -623,6 +625,8 @@ def http_error_code(status: int) -> str:
         401: "NOT_AUTHENTICATED",
         404: "NOT_FOUND",
         409: "ALREADY_EXISTS",
+        429: "RATE_LIMITED",
+        500: "INTERNAL",
     }.get(status, "ERROR")
 
 

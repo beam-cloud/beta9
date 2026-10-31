@@ -10,6 +10,7 @@ from typing import Any, Optional
 import click
 import grpc
 
+from .. import feedback as feedback_reports
 from .. import terminal
 from ..channel import handle_grpc_error, prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
@@ -22,6 +23,7 @@ from . import (
     dev,
     disk,
     endpoints,
+    feedback,
     image,
     login,
     logs,
@@ -74,6 +76,7 @@ class CLI:
     def __call__(self, **kwargs) -> Any:
         # Wrapping CLIs such as `beam` call this directly; handling these here
         # gives them the same reports, JSON errors in machine mode included.
+        feedback_reports.record_errors(True)
         try:
             return self.common_group.main(prog_name=self.settings.name.lower(), **kwargs)
         except grpc.RpcError as error:
@@ -156,6 +159,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(endpoints)
     cli.register(login)
     cli.register(setup)
+    cli.register(feedback)
 
     if check_config:
         cli.check_config()

@@ -29,7 +29,7 @@ from rich.progress import (
 from rich.progress import open as _progress_open
 from rich.text import Text
 
-from . import env
+from . import env, feedback
 
 # Fixes printing carriage returns and backspaces
 # https://github.com/Textualize/rich/issues/3260
@@ -130,16 +130,20 @@ def error(
 ) -> None:
     """
     Report a failure. In JSON mode the error is a single stdout object
-    (`{"error", "code", "details", "hint"}`) so agents and scripts can branch
+    (`{"error", "code", "details", "hint", "feedback"}`) so agents and scripts can branch
     on `code` (NOT_AUTHENTICATED, NOT_FOUND, NEEDS_CONFIRMATION, ...).
     """
     title, _, details = text.partition("\n")
+    if exit:
+        feedback.record_error(title, details, code or "ERROR")
     if json_output():
         payload = {"error": title, "code": code or "ERROR"}
         if details:
             payload["details"] = details
         if hint:
             payload["hint"] = hint
+        if exit and (report := feedback.nudge(code or "ERROR")):
+            payload["feedback"] = report
         _console.print_json(data=payload)
     else:
         _error_console.print(Text(f"✗ {title}", style="bold red"))

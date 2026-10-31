@@ -118,6 +118,9 @@ func (g *Group) allowed(info *auth.AuthInfo, t *mcpTool) bool {
 }
 
 func (g *Group) selected(ctx context.Context, tool *mcpTool) bool {
+	if tool.Unfiltered {
+		return true
+	}
 	selection, _ := ctx.Value(mcpSelectionKey{}).(mcpSelection)
 	if selection.ReadOnly && !tool.ReadOnly {
 		return false
@@ -147,5 +150,7 @@ func (g *Group) instructions() string {
 		"Running status and URLs do not prove service readiness: verify vm_exec, then wait for desktop or Docker before using those tools. " +
 		"Pin container_id for process " +
 		"operations across VM restarts. " +
-		"Filter discovery with ?features=vm,apps,observe or ?tools=whoami,list_vms; ?readonly=true exposes read-only operations."
+		"Filter discovery with ?features=vm,apps,observe or ?tools=whoami,list_vms; ?readonly=true exposes read-only operations. " +
+		"send_feedback, listed under every filter, tells the Beam team about friction with Beam itself: send one report " +
+		"when Beam seems at fault or a doc or tool description misled you, then continue the task."
 }

@@ -188,6 +188,10 @@ func eventTimeForData(data interface{}) time.Time {
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
+	case types.EventFeedbackSchema:
+		if !d.CreatedAt.IsZero() {
+			return d.CreatedAt
+		}
 	}
 
 	return time.Now()
@@ -1072,6 +1076,25 @@ func (r *EventClientRepo) PushPlatformCacheEvent(schema types.EventPlatformCache
 	r.pushEvent(types.EventPlatformCache, types.EventPlatformCacheSchemaVersion, schema)
 }
 
+// PushFeedbackEvent sends a report to the callback sinks alone: the operator's callbacks take
+// it and workspace webhooks exclude it, so it never enters a workspace's event history.
+func (r *EventClientRepo) PushFeedbackEvent(schema types.EventFeedbackSchema) {
+	if len(r.callbackSinks) == 0 {
+		return
+	}
+
+	event, err := r.createEventObject(types.EventFeedbackSubmitted, types.EventFeedbackSchemaVersion, schema)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create feedback event")
+		return
+	}
+	for _, sink := range r.callbackSinks {
+		if err := sink.PushEvent(event); err != nil {
+			log.Warn().Err(err).Str("feedback_id", schema.ID).Msg("failed to push feedback event callback")
+		}
+	}
+}
+
 func taskIDFromRequestEnv(request *types.ContainerRequest) string {
 	if request == nil {
 		return ""
@@ -1184,6 +1207,8 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}
 	case types.EventPlatformCacheSchema:
 		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID, WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName}
+	case types.EventFeedbackSchema:
+		return eventMetadata{WorkspaceID: d.WorkspaceID}
 	default:
 		return eventMetadata{}
 	}

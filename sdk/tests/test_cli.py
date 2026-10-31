@@ -9,9 +9,12 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from beta9 import feedback, terminal
+from beta9.channel import GatewayHTTPError
 from beta9.cli import database as database_cli
 from beta9.cli import container as container_cli
 from beta9.cli import extraclick
+from beta9.cli import feedback as feedback_cli
 from beta9.cli import run as run_cli
 from beta9.cli.main import load_cli
 from beta9.config import SDKSettings
@@ -290,3 +293,144 @@ def test_named_vm_auth_waits_for_click_to_resolve_context(monkeypatch, args):
     monkeypatch.setattr(main, "prompt_first_auth", prompt)
     load_cli(check_config=True)
     prompt.assert_not_called()
+
+
+def fake_feedback_gateway(monkeypatch, calls, error=None):
+    class FakeHTTP:
+        def json(self, method, path, **kwargs):
+            calls.append((method, path, kwargs["json"]))
+            if error is not None:
+                raise error
+            return {"id": "fb-1", "duplicate": False, "message": "Feedback recorded."}
+
+    class FakeServiceClient:
+        def __init__(self, _config):
+            self.channel = object()
+            self.http = FakeHTTP()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(extraclick, "ServiceClient", FakeServiceClient)
+    monkeypatch.setattr(extraclick, "get_config_context", lambda _context: SimpleNamespace())
+
+
+def failing_cli(code):
+    @click.group(cls=extraclick.ClickCommonGroup)
+    def common(**_):
+        pass
+
+    @common.command()
+    @click.option("--port")
+    @click.option("--env")
+    def boom(**_):
+        terminal.error("Deploy failed\nport 8000 is not exposed", code=code)
+
+    cli = load_cli(check_config=False)
+    cli.register(SimpleNamespace(common=common))
+    return cli
+
+
+def test_feedback_sends_a_report(monkeypatch):
+    calls = []
+    fake_feedback_gateway(monkeypatch, calls)
+
+    result = CliRunner().invoke(
+        feedback_cli.common,
+        [
+            "feedback",
+            "-m",
+            "deploy ignored --port",
+            "--kind",
+            "bug",
+            "--blocked",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    method, path, body = calls[0]
+    assert (method, path) == ("POST", "/api/v1/feedback/{ws}")
+    assert body["summary"] == "deploy ignored --port"
+    assert (body["kind"], body["blocked"]) == ("bug", True)
+    assert "python" in body["environment"]
+    assert json.loads(result.output)["id"] == "fb-1"
+
+
+def test_feedback_attaches_the_last_error_without_option_values(monkeypatch, capsys):
+    cli = failing_cli("INTERNAL")
+    monkeypatch.setenv("BETA9_JSON", "1")
+    with pytest.raises(SystemExit):
+        cli(args=["boom", "--port", "8000", "--env", "API_KEY=sk-secret"], standalone_mode=False)
+    failure = json.loads(capsys.readouterr().out)
+    assert failure["code"] == "INTERNAL"
+    assert "feedback --last-error" in failure["feedback"]
+
+    calls = []
+    fake_feedback_gateway(monkeypatch, calls, error=GatewayHTTPError(429, "Feedback limit reached"))
+    with pytest.raises(SystemExit):
+        cli(args=["feedback", "--last-error", "-m", "deploy broke"], standalone_mode=False)
+    assert json.loads(capsys.readouterr().out)["code"] == "RATE_LIMITED"
+
+    body = calls[0][2]
+    assert body["command"] == f"{cli.settings.name.lower()} boom --port --env"
+    assert body["error_code"] == "INTERNAL"
+    assert body["error_message"] == "Deploy failed\nport 8000 is not exposed"
+    assert "sk-secret" not in json.dumps(body)
+    # The rejected report did not replace the error it was about.
+    assert feedback.last_error()["error"] == "Deploy failed"
+
+
+@pytest.mark.parametrize(
+    "code, nudged", [("INTERNAL", True), ("ERROR", False), ("NOT_FOUND", False)]
+)
+def test_only_internal_failures_suggest_feedback(monkeypatch, capsys, code, nudged):
+    monkeypatch.setenv("BETA9_JSON", "1")
+    with pytest.raises(SystemExit):
+        failing_cli(code)(args=["boom"], standalone_mode=False)
+    assert ("feedback" in json.loads(capsys.readouterr().out)) is nudged
+
+
+def test_feedback_turned_off(monkeypatch, capsys):
+    monkeypatch.setenv("BETA9_NO_FEEDBACK", "1")
+    monkeypatch.setenv("BETA9_JSON", "1")
+    cli = failing_cli("INTERNAL")
+    with pytest.raises(SystemExit):
+        cli(args=["boom"], standalone_mode=False)
+    assert "feedback" not in json.loads(capsys.readouterr().out)
+
+    calls = []
+    fake_feedback_gateway(monkeypatch, calls)
+    with pytest.raises(SystemExit):
+        cli(args=["feedback", "-m", "x"], standalone_mode=False)
+    assert json.loads(capsys.readouterr().out)["code"] == "FEEDBACK_DISABLED"
+    assert calls == []
+
+
+def test_feedback_rejections_name_the_argument(monkeypatch, capsys):
+    monkeypatch.setenv("BETA9_JSON", "1")
+    fake_feedback_gateway(monkeypatch, [], error=GatewayHTTPError(400, "summary is too long"))
+    with pytest.raises(SystemExit):
+        load_cli(check_config=False)(args=["feedback", "-m", "x"], standalone_mode=False)
+    assert json.loads(capsys.readouterr().out) == {
+        "error": "summary is too long",
+        "code": "INVALID_ARGS",
+    }
+
+
+def test_command_line_outside_click_keeps_subcommands_and_option_names():
+    argv = [
+        "/usr/bin/beam",
+        "deploy",
+        "app.py:handler",
+        "--env",
+        "TOKEN=abc",
+        "--name=web",
+        "-e",
+        "K=V",
+    ]
+    assert feedback.command_line(argv) == f"{terminal.cli_name()} deploy --env --name -e"

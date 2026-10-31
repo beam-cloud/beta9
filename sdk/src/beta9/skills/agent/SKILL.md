@@ -133,6 +133,23 @@ See [references/deploy.md](references/deploy.md#docker-compose-projects).
 - Roll back with `redeploy` and an older `deployment_id`; stop a bad version
   with `stop_deployment`. See [references/operate.md](references/operate.md).
 
+## Feedback
+
+When {{product}} itself gets in the way, tell its team with MCP
+`send_feedback` or `{{cli}} feedback`, mention it to the user in one line,
+then continue the task: sending does not end it.
+
+- Send one report when a tool or command fails in a way that looks like a
+  {{product}} bug, you work around a missing capability, an error, doc, this
+  skill or a tool description misled you, or something worked notably well.
+- Not for the user's own problems: credits, quotas, missing resources, bugs
+  in their code.
+- `summary` is one sentence; `details` says what you tried and expected.
+  After a failed command, `{{cli}} feedback --last-error --kind bug -m "..."`
+  attaches its error.
+- Never include secrets, env values, or the user's code or data.
+- `BETA9_NO_FEEDBACK=1` turns it off; do not send when the user declines.
+
 ## Before destructive actions
 
 Confirm with the user before deleting an app, deployment, secret, database,

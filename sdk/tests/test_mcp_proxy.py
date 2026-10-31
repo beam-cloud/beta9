@@ -173,6 +173,45 @@ def test_authenticated_proxy_merges_remote_and_local_tools(settings, monkeypatch
     assert any(m.get("method") == "notifications/initialized" for m in remote.calls)
 
 
+def test_feedback_turned_off_hides_and_refuses_send_feedback(settings, monkeypatch):
+    class FeedbackRemote(FakeRemote):
+        def call(self, message):
+            status, body = super().call(message)
+            if message.get("method") == "tools/list":
+                tool = {
+                    "name": "send_feedback",
+                    "description": "",
+                    "inputSchema": {"type": "object"},
+                }
+                body["result"]["tools"].append(tool)
+            return status, body
+
+    remote = FeedbackRemote()
+    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: ConfigContext(token="t"))
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: remote)
+
+    def list_and_send():
+        out = run_proxy(
+            mcp_server.StdioProxy(cwd=os.getcwd()),
+            rpc("tools/list", 1),
+            rpc("tools/call", 2, name="send_feedback", arguments={"summary": "x", "kind": "bug"}),
+        )
+        tools = next(m for m in out if m.get("id") == 1)["result"]["tools"]
+        return [tool["name"] for tool in tools], next(m for m in out if m.get("id") == 2)["result"]
+
+    names, sent = list_and_send()
+    assert "send_feedback" in names
+    assert sent["content"][0]["text"] == "called send_feedback"
+
+    monkeypatch.setenv("BETA9_NO_FEEDBACK", "1")
+    remote.calls.clear()
+    names, sent = list_and_send()
+    assert "send_feedback" not in names
+    assert sent["isError"] is True
+    assert sent["structuredContent"]["code"] == "FEEDBACK_DISABLED"
+    assert not any(call.get("method") == "tools/call" for call in remote.calls)
+
+
 # Clients keep the server process across CLI upgrades; the agent must learn that
 # the tools it calls are older than the installed CLI's.
 def test_results_say_when_a_newer_sdk_is_installed_than_the_server_runs(settings, monkeypatch):

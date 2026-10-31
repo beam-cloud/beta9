@@ -308,6 +308,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.workerRepo)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.DefaultStorageClient, g.Config)
 	apiv1.NewWebhookGroup(g.baseRouteGroup.Group("/webhook", authMiddleware), g.WorkspaceRepo)
+	apiv1.NewFeedbackGroup(g.baseRouteGroup.Group("/feedback", authMiddleware), g.BackendRepo, g.EventRepo)
 	apiv1.NewStackGroup(g.baseRouteGroup.Group("/stack", authMiddleware), g.BackendRepo)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
 	streamDrain := apiv1.DrainOnShutdown(g.drainCtx)

@@ -223,6 +223,7 @@ type mcpTool struct {
 	OpenWorld   bool
 	Category    string
 	Scope       string
+	Unfiltered  bool // listed whatever ?features=, ?tools= or ?readonly= a connection sets
 	validate    func(any) error
 }
 

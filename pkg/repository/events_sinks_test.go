@@ -171,7 +171,42 @@ func internalAPICallbackEventTypes() []string {
 		types.EventStubRun,
 		types.EventStubClone,
 		types.EventGatewayEndpointCalled,
+		types.EventFeedbackSubmitted,
 	}
+}
+
+func TestFeedbackReachesOperatorCallbacksOnly(t *testing.T) {
+	storage, callback := &captureEventSink{}, &captureEventSink{}
+	repo := &EventClientRepo{storageSinks: []eventSink{storage}, callbackSinks: []eventSink{callback}}
+	repo.PushFeedbackEvent(types.EventFeedbackSchema{ID: "fb-1", WorkspaceID: "ws", Kind: types.FeedbackKindBug, Summary: "x"})
+
+	require.Empty(t, storage.events, "feedback stays out of workspace event history")
+	require.Len(t, callback.events, 1)
+	require.Equal(t, types.EventFeedbackSubmitted, callback.events[0].Type())
+	require.Equal(t, "ws", eventMetadataFromCloudEvent(callback.events[0]).WorkspaceID)
+	require.True(t, webhookExcluded(types.EventFeedbackSubmitted), "workspace webhooks never receive feedback")
+}
+
+func TestSlackFeedbackTextEscapesUserInput(t *testing.T) {
+	event := cloudevents.NewEvent()
+	event.SetType(types.EventFeedbackSubmitted)
+	require.NoError(t, event.SetData(cloudevents.ApplicationJSON, types.EventFeedbackSchema{
+		ID:            "fb-1",
+		WorkspaceID:   "ws",
+		WorkspaceName: "acme",
+		Kind:          types.FeedbackKindMissingCapability,
+		Summary:       "<!channel> no way to pin a GPU type",
+		Blocked:       true,
+		Command:       "deploy",
+		Details:       "see <https://evil.test|docs> & retry",
+		EventActor:    types.EventActor{Caller: "mcp/0.1 (claude-code/2.1)"},
+	}))
+
+	text := slackEventText(event)
+	require.Contains(t, text, "Feedback `missing_capability` (blocked) | workspace `acme` | `mcp/0.1 (claude-code/2.1)` | id `fb-1`")
+	require.Contains(t, text, "> &lt;!channel&gt; no way to pin a GPU type")
+	require.Contains(t, text, "see &lt;https://evil.test|docs&gt; &amp; retry")
+	require.NotContains(t, text, "<!channel>")
 }
 
 type staticWebhookSource struct {

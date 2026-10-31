@@ -15,9 +15,11 @@ from jsonschema.exceptions import ValidationError
 
 from ..channel import ServiceClient
 from ..config import DEFAULT_CONTEXT_NAME, ConfigContext, context_defaults, get_settings
+from ..feedback import DISABLED_MESSAGE, feedback_disabled
 from .tools import LocalTools, error_result
 
 PROTOCOL_VERSION = "2025-11-25"
+FEEDBACK_TOOL = "send_feedback"
 REMOTE_TIMEOUT = 120
 # Database creation can include the gateway's ten-minute image build.
 TOOL_TIMEOUTS = {"create_database": 660}
@@ -274,6 +276,8 @@ class StdioProxy:
                 tools.extend(body.get("result", {}).get("tools", []))
         local = self.tools.definitions()
         names = {tool["name"] for tool in local}
+        if feedback_disabled():
+            names.add(FEEDBACK_TOOL)
         return [tool for tool in tools if tool.get("name") not in names] + local
 
     def _tools_call(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -300,6 +304,8 @@ class StdioProxy:
 
     def _call_tool(self, msg_id: Any, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         name = params.get("name", "")
+        if name == FEEDBACK_TOOL and feedback_disabled():
+            return _result(msg_id, error_result(DISABLED_MESSAGE, code="FEEDBACK_DISABLED"))
         handler = self.tools.handler(name)
         if handler is not None:
             definition = next(item for item in self.tools.definitions() if item["name"] == name)

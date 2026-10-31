@@ -325,6 +325,8 @@ type BackendRepository interface {
 	GetDiskSnapshot(ctx context.Context, workspaceId uint, snapshotId string) (*types.DiskSnapshot, error)
 	GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error)
 	ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error)
+	CreateFeedback(ctx context.Context, feedback types.Feedback) (types.Feedback, bool, error)
+	ListRecentFeedback(ctx context.Context, workspaceId uint, since time.Time, limit int) ([]types.Feedback, error)
 	GetDisk(ctx context.Context, workspaceId uint, name string) (*types.Disk, error)
 	GetOrCreateDisk(ctx context.Context, workspaceId uint, disk *types.Disk) (*types.Disk, error)
 	// DeleteDisk unregisters the mutable disk resource. Immutable snapshots and
@@ -410,6 +412,7 @@ type EventRepository interface {
 	PushEndpointRequestStatsEvent(schema types.EventEndpointRequestStatsSchema)
 	PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error
 	PushPlatformCacheEvent(schema types.EventPlatformCacheSchema)
+	PushFeedbackEvent(schema types.EventFeedbackSchema)
 	ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error)
 }
 

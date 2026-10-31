@@ -162,6 +162,10 @@ func eventHTTPMatches(filters []string, eventType string) bool {
 }
 
 func slackEventText(event cloudevents.Event) string {
+	if event.Type() == types.EventFeedbackSubmitted {
+		return slackFeedbackText(event)
+	}
+
 	metadata := eventMetadataFromCloudEvent(event)
 	parts := []string{fmt.Sprintf("beta9 event `%s`", event.Type())}
 	if metadata.WorkspaceID != "" {
@@ -196,6 +200,59 @@ func slackEventText(event cloudevents.Event) string {
 	return strings.Join(parts, " | ")
 }
 
+const slackFeedbackDetailsLimit = 1500
+
+// slackFeedbackText renders a report for a person to read. Its fields are user input, so they
+// are escaped to keep Slack from turning them into mentions or links.
+func slackFeedbackText(event cloudevents.Event) string {
+	var feedback types.EventFeedbackSchema
+	_ = json.Unmarshal(event.Data(), &feedback)
+
+	header := "Feedback `" + feedback.Kind + "`"
+	if feedback.Blocked {
+		header += " (blocked)"
+	}
+	parts := []string{header}
+	if workspace := firstNonEmpty(feedback.WorkspaceName, feedback.WorkspaceID); workspace != "" {
+		parts = append(parts, "workspace `"+slackEscape(workspace)+"`")
+	}
+	if feedback.Caller != "" {
+		parts = append(parts, "`"+slackEscape(feedback.Caller)+"`")
+	}
+	if feedback.Model != "" {
+		parts = append(parts, "model `"+slackEscape(feedback.Model)+"`")
+	}
+	if feedback.ID != "" {
+		parts = append(parts, "id `"+feedback.ID+"`")
+	}
+
+	lines := []string{strings.Join(parts, " | "), "> " + slackEscape(feedback.Summary)}
+	if feedback.Command != "" || feedback.ErrorCode != "" {
+		lines = append(lines, "Command `"+slackEscape(feedback.Command)+"` "+slackEscape(feedback.ErrorCode))
+	}
+	if feedback.ErrorMessage != "" {
+		lines = append(lines, "Error: "+slackEscape(truncateRunes(feedback.ErrorMessage, slackFeedbackDetailsLimit)))
+	}
+	if feedback.Details != "" {
+		lines = append(lines, slackEscape(truncateRunes(feedback.Details, slackFeedbackDetailsLimit)))
+	}
+	if feedback.SuggestedImprovement != "" {
+		lines = append(lines, "Suggested: "+slackEscape(truncateRunes(feedback.SuggestedImprovement, slackFeedbackDetailsLimit)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func slackEscape(text string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(text)
+}
+
+func truncateRunes(text string, limit int) string {
+	if runes := []rune(text); len(runes) > limit {
+		return string(runes[:limit]) + "…"
+	}
+	return text
+}
+
 const (
 	webhookQueueSize       = 2048
 	webhookWorkers         = 4 // one slow receiver must not stall every workspace's deliveries
@@ -215,6 +272,7 @@ var webhookExcludedTypes = []string{
 	"compute.",
 	"platform.",
 	"router.",
+	"feedback.",
 }
 
 // WebhookSource lists a workspace's webhooks; the sink caches results briefly.
