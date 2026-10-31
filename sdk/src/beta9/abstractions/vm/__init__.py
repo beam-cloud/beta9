@@ -1,4 +1,4 @@
-"""Named, persistent CPU microVMs with durable roots and stable service URLs."""
+"""Named, persistent microVMs with durable roots and stable service URLs."""
 
 import base64
 import copy
@@ -33,7 +33,7 @@ from ...clients.volume import VolumeServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
 from ...terminal import cli_name
-from ...type import DurableDisk
+from ...type import DurableDisk, GpuType, GpuTypeAlias, normalize_gpu_type
 from ...utils import local_process_kwargs
 from ..image import Image
 from ..sandbox import SandboxInstance
@@ -46,6 +46,17 @@ from .kiosk_config import Kiosk, MCPServer as MCPServer
 DEFAULT_VM_BASE_IMAGE = (
     "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
 )
+DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:b8689876417c-nvidia"
+
+
+def default_base_image(gpu: Optional[GpuTypeAlias] = None) -> str:
+    selected = GpuType(normalize_gpu_type(gpu)) if gpu is not None else GpuType.NoGPU
+    if selected in (GpuType.Any, GpuType.V100, GpuType.V100_32, GpuType.GAUDI2):
+        raise ValueError(
+            f"The default VM image does not support {selected.value}; "
+            "provide an image with a compatible guest driver"
+        )
+    return DEFAULT_VM_GPU_BASE_IMAGE if selected != GpuType.NoGPU else DEFAULT_VM_BASE_IMAGE
 
 
 def identity() -> Path:
@@ -169,6 +180,10 @@ class VM:
 
     Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
+    GPU VMs currently require x86_64. The stock NVIDIA image pairs its guest
+    kernel, driver modules, userspace and GSP firmware. Host VFIO passthrough
+    does not require matching host NVIDIA drivers. Custom GPU images should
+    include /boot/beam/vmlinux built for their installed GPU modules.
     create() waits for exec readiness; wait(services=True) also waits for
     enabled SSH/terminal/desktop services. Docker helpers wait separately.
 
@@ -188,6 +203,7 @@ class VM:
         image: Optional[Image] = None,
         cpu: Optional[float] = None,
         memory: Optional[int] = None,
+        gpu: Optional[GpuTypeAlias] = None,
         disk_size: Optional[str] = None,
         desktop: Optional[bool] = None,
         kiosk: Optional[Union[Kiosk, Dict[str, Any]]] = None,
@@ -231,6 +247,8 @@ class VM:
             raise ValueError("kiosk must be a Kiosk configuration or an object")
         if template and snapshot:
             raise ValueError("Choose a template or snapshot")
+        if gpu is not None and (not isinstance(gpu, str) or "," in gpu):
+            raise ValueError("gpu must be a single GPU type")
 
         self.info: Dict[str, Any] = {}
         self._connected = None
@@ -239,6 +257,7 @@ class VM:
         self._spec = {
             "cpu": int(cpu * 1000) if cpu is not None else None,
             "memory": memory,
+            "gpu": GpuType(normalize_gpu_type(gpu)).value if gpu is not None else None,
             "disk_size": disk_size,
             "desktop": True if kiosk is not None else desktop,
             "kiosk": copy.deepcopy(kiosk.to_dict() if isinstance(kiosk, Kiosk) else kiosk),
@@ -408,7 +427,7 @@ class VM:
         )
 
     def _prepare_image(self):
-        image = self.image or Image(base_image=DEFAULT_VM_BASE_IMAGE)
+        image = self.image or Image(base_image=default_base_image(self._spec.get("gpu")))
         if self.image is None:
             image.ignore_python = True
         return prepare_image(

@@ -18,7 +18,7 @@ type imageVerifyResult struct {
 	opts    *BuildOpts
 }
 
-func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest) (result *imageVerifyResult, err error) {
+func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest, credentials map[string]string) (result *imageVerifyResult, err error) {
 	recorder := is.newImageVerifyRecorder(in)
 	defer func() { recorder.total(result, err) }()
 
@@ -32,6 +32,7 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 	if err != nil {
 		return nil, err
 	}
+	opts.ExistingImageCreds = credentials
 
 	if err := recorder.measure(imageVerifyPhasePrepareOptions, func() error {
 		return is.prepareBuildOptionsForImageID(ctx, in, opts)
@@ -141,18 +142,22 @@ func (is *ContainerImageService) prepareBuildOptionsForImageID(ctx context.Conte
 	if in.ExistingImageUri != "" {
 		opts.ExistingImageUri = in.ExistingImageUri
 
-		baseImage, err := ExtractImageNameAndTag(opts.ExistingImageUri)
-		if err != nil {
+		if err := opts.setBaseImage(opts.ExistingImageUri); err != nil {
 			return err
 		}
-		opts.BaseImageRegistry = baseImage.Registry
-		opts.BaseImageName = baseImage.Repo
-		opts.BaseImageTag = baseImage.Tag
-		opts.BaseImageDigest = baseImage.Digest
 		opts.addPythonRequirements()
 	}
 
 	if in.Dockerfile != "" {
+		if len(opts.ExistingImageCreds) > 0 {
+			source, err := dockerfileCredentialSource(opts.Dockerfile)
+			if err != nil {
+				return err
+			}
+			if err := opts.setBaseImage(source); err != nil {
+				return err
+			}
+		}
 		is.pinDockerfileBaseImages(ctx, opts)
 		opts.addPythonRequirements()
 	}
@@ -221,6 +226,9 @@ func (is *ContainerImageService) imageMetadataAuthoritative() bool {
 
 func baseImageDigestCacheable(in *pb.VerifyImageBuildRequest, opts *BuildOpts) bool {
 	if in == nil || opts == nil {
+		return false
+	}
+	if len(opts.ExistingImageCreds) > 0 {
 		return false
 	}
 	if in.ExistingImageUri == "" {

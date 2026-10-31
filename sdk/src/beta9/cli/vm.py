@@ -1,4 +1,4 @@
-"""Persistent CPU VMs. File/exec operations share the sandbox transport."""
+"""Persistent VMs. File/exec operations share the sandbox transport."""
 
 import os
 import json
@@ -26,7 +26,7 @@ from rich.text import Text
 
 from .. import terminal
 from ..abstractions.image import Image
-from ..abstractions.vm import DEFAULT_VM_BASE_IMAGE, VM, identity, prepare_image
+from ..abstractions.vm import VM, default_base_image, identity, prepare_image
 from ..abstractions.vm.kiosk_config import KioskRuntime
 from ..abstractions.volume import Volume
 from ..channel import GatewayHTTPError, ServiceClient, rpc_timeout
@@ -57,7 +57,7 @@ class VMGroup(ClickManagementGroup):
             raise click.ClickException(str(exc)) from exc
 
 
-@click.group(name="vm", cls=VMGroup, help="Create and manage persistent CPU microVMs.")
+@click.group(name="vm", cls=VMGroup, help="Create and manage persistent microVMs.")
 def management():
     pass
 
@@ -81,14 +81,16 @@ def _progress(message, done, as_json=False):
     )
 
 
-def _image(dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=()):
+def _image(
+    dockerfile=None, build_context=None, image_id=None, image_uri=None, secrets=(), *, gpu=None
+):
     image = (
         Image.from_dockerfile(dockerfile, build_context)
         if dockerfile
         else (
             Image.from_id(image_id)
             if image_id
-            else Image(base_image=image_uri or DEFAULT_VM_BASE_IMAGE)
+            else Image(base_image=image_uri or default_base_image(gpu))
         )
     )
     image.ignore_python = True
@@ -225,6 +227,7 @@ def _show(info, as_json):
     metavar="MiB",
     help="RAM in MiB; defaults to 8192.",
 )
+@click.option("--gpu", metavar="TYPE", help="One GPU, for example RTX4090.")
 @click.option(
     "--disk-size",
     help="Writable disk over the base image; 1–100 GiB, default 50 GiB.",
@@ -289,7 +292,7 @@ def _show(info, as_json):
     type=click.Choice(["stop", "pause"]),
     help="Stop from disk (default), or pause with RAM.",
 )
-@click.option("--pool", metavar="NAME", help="CPU microVM worker pool.")
+@click.option("--pool", metavar="NAME", help="MicroVM worker pool.")
 @click.option(
     "--metadata", multiple=True, metavar="KEY=VALUE", help="Resource metadata; repeatable."
 )
@@ -368,6 +371,7 @@ def new(
     volume=(),
     idle_action=None,
     kiosk_config=None,
+    gpu=None,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     as_json = as_json or terminal.json_output()
@@ -392,7 +396,7 @@ def new(
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
     image = (
-        _image(dockerfile, build_context, image_id, image_uri, build_secret)
+        _image(dockerfile, build_context, image_id, image_uri, build_secret, gpu=gpu)
         if dockerfile or image_id or image_uri or build_secret
         else None
     )
@@ -401,6 +405,7 @@ def new(
         image=image,
         cpu=cpu,
         memory=memory,
+        gpu=gpu,
         disk_size=disk_size,
         desktop=True if desktop is None and not (template or image_id) else desktop,
         kiosk=kiosk,
@@ -431,6 +436,7 @@ def new(
     with StoredStdoutInterceptor(capture_logs=as_json):
         with _progress("Creating VM", "VM ready", as_json):
             vm.create()
+            vm.wait(services=True)
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
@@ -786,6 +792,7 @@ def start_vm(service, name, as_json, cold=False):
     """Start a stopped VM or resume its saved memory."""
     with _progress("Starting VM", "VM ready", as_json):
         vm = _vm(service, name).start(cold=cold)
+        vm.wait(services=True)
     _show(vm.info, as_json)
 
 
@@ -838,6 +845,7 @@ def fork_vm(service, source, name, as_json):
             vm = VM(name, snapshot=source, _service=service).create()
         else:
             vm = _vm(service, source).fork(name)
+        vm.wait(services=True)
     _show(vm.info, as_json)
 
 

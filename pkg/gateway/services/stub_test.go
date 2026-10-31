@@ -98,12 +98,18 @@ func TestStubIdentityPreparesIndependentRecordsAndCancelsFailures(t *testing.T) 
 	}
 }
 
-func TestVMStubRequiresCPUMicroVMAndAllowsPersistence(t *testing.T) {
+func TestVMStubRequiresMicroVMAndAllowsOneGPU(t *testing.T) {
 	in := &pb.GetOrCreateStubRequest{StubType: types.StubTypeVM}
 	require.Equal(t, "VMs require use_vm", validateUseVM(in, nil))
 	in.UseVm = true
 	require.Empty(t, validateUseVM(in, nil))
-	require.NotEmpty(t, validateUseVM(in, []types.GpuType{"A10G"}))
+	require.Empty(t, validateUseVM(in, []types.GpuType{types.GPU_RTX4090}))
+	in.GpuCount = 1
+	require.Empty(t, validateUseVM(in, []types.GpuType{types.GPU_RTX4090}))
+	in.GpuCount = 2
+	require.NotEmpty(t, validateUseVM(in, []types.GpuType{types.GPU_RTX4090}))
+	in.GpuCount = 1
+	require.NotEmpty(t, validateUseVM(in, []types.GpuType{types.GPU_RTX4090, types.GPU_H100}))
 	require.Equal(t, -1, normalizeKeepWarmSeconds(-1, types.StubType(types.StubTypeVM)))
 }
 

@@ -119,6 +119,10 @@ def _image_lookup_lock(cache_key: str) -> threading.Lock:
 
 
 ImageCredentialKeys = Literal[
+    "USERNAME",
+    "PASSWORD",
+    "REGISTRY_USERNAME",
+    "REGISTRY_PASSWORD",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
@@ -440,6 +444,7 @@ class Image(BaseAbstraction):
         context_dir: Optional[str] = None,
         target: Optional[str] = None,
         build_args: Optional[Dict[str, str]] = None,
+        credentials: Optional[ImageCredentials] = None,
     ) -> "Image":
         """
         Build the base image based on a Dockerfile.
@@ -452,12 +457,15 @@ class Image(BaseAbstraction):
             context_dir: The directory to sync. If not provided, the directory of the Dockerfile will be used.
             target: The stage to build, as with `docker build --target`. Default: the last stage.
             build_args: ARG values, as with `docker build --build-arg`.
+            credentials: Workspace secret names for the first external FROM registry.
+                That FROM must be a literal image reference. ARG substitutions are
+                rejected even when their values are supplied through build_args.
 
         Returns:
             Image: The Image object.
         """
 
-        image = cls()
+        image = cls(base_image_creds=credentials)
         if env.is_remote():
             return image
 
@@ -519,6 +527,7 @@ class Image(BaseAbstraction):
             "commands": self.commands,
             "build_steps": [repr(step) for step in self.build_steps],
             "base_image": self.base_image,
+            "base_image_creds": sorted(self.base_image_creds),
             "env_vars": self.env_vars,
             "dockerfile": self.dockerfile,
             "build_ctx_object": self.build_ctx_object,
@@ -665,19 +674,20 @@ class Image(BaseAbstraction):
                 self.python_version = cached_result.python_version
                 return cached_result
 
-            if not quiet:
-                terminal.detail("Checking image cache...", dim=False)
-            exists, exists_response = self._exists()
-            if exists:
+            if not self.base_image_creds or self._explicit_image_id:
                 if not quiet:
-                    terminal.header("Using cached image", exists_response.image_id)
-                result = ImageBuildResult(
-                    success=True,
-                    image_id=exists_response.image_id,
-                    python_version=exists_response.python_version,
-                )
-                self._remember_build_result(cache_key, result)
-                return result
+                    terminal.detail("Checking image cache...", dim=False)
+                exists, exists_response = self._exists()
+                if exists:
+                    if not quiet:
+                        terminal.header("Using cached image", exists_response.image_id)
+                    result = ImageBuildResult(
+                        success=True,
+                        image_id=exists_response.image_id,
+                        python_version=exists_response.python_version,
+                    )
+                    self._remember_build_result(cache_key, result)
+                    return result
 
         if self._explicit_image_id:
             return ImageBuildResult(

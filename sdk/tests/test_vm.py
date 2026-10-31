@@ -39,6 +39,7 @@ from beta9.config import ConfigContext, SDKSettings, get_settings
 from beta9.deployment import onboarding
 from beta9.exceptions import SandboxConnectionError, SandboxProcessError
 from beta9.mcp.vm import definitions
+from beta9.type import GpuType
 
 
 def service():
@@ -47,7 +48,14 @@ def service():
     )
 
 
-def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
+@pytest.mark.parametrize(
+    "gpu,base",
+    [
+        (None, vm_module.DEFAULT_VM_BASE_IMAGE),
+        (GpuType.RTX4090, vm_module.DEFAULT_VM_GPU_BASE_IMAGE),
+    ],
+)
+def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch, gpu, base):
     from requests import ConnectionError
 
     monkeypatch.setattr(vm_module, "public_key", lambda: "ssh-ed25519 test")
@@ -68,7 +76,7 @@ def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
             ]
         )
         metadata = {"owner": "original"}
-        vm = VM("fast", desktop=True, metadata=metadata, _service=selected)
+        vm = VM("fast", desktop=True, gpu=gpu, metadata=metadata, _service=selected)
         with pytest.raises(ConnectionError):
             vm.create()
         body = json.dumps(direct.json.call_args.kwargs["json"], sort_keys=True)
@@ -80,9 +88,10 @@ def test_default_creation_uses_one_http_request_and_freezes_retry(monkeypatch):
             call.args[:2] == ("POST", "/api/v1/vm/{ws}") for call in direct.json.call_args_list
         )
         request = direct.json.call_args.kwargs["json"]
-        assert request["image"]["existing_image_uri"] == vm_module.DEFAULT_VM_BASE_IMAGE
+        assert request["image"]["existing_image_uri"] == base
         assert vm_module.DEFAULT_VM_BASE_IMAGE.startswith("ubuntu:24.04@sha256:")
         assert request["image"]["ignore_python"] is True
+        assert request["spec"].get("gpu") == (gpu.value if gpu else None)
         assert request["spec"]["ssh_public_key"] == "ssh-ed25519 test"
         selected._gateway.export_workspace_config.assert_not_called()
 
@@ -121,6 +130,34 @@ def test_default_creation_preserves_request_after_server_error(monkeypatch, stat
         prepare.assert_not_called()
         assert vm._creation_body["request_id"] == vm.request_id
         assert vm._vm_http is selected.vm_http
+
+
+@pytest.mark.parametrize("gpu", [GpuType.Any, GpuType.V100, GpuType.V100_32, GpuType.GAUDI2])
+def test_incompatible_default_gpu_driver_fails_before_allocation(gpu):
+    with ServiceClient(ConfigContext(token="test", api_url="https://vm.example")) as selected:
+        selected.vm_http.json = MagicMock()
+        with pytest.raises(ValueError, match="provide an image with a compatible guest driver"):
+            VM("dev", gpu=gpu, ssh=False, _service=selected).create(wait=False)
+        selected.vm_http.json.assert_not_called()
+
+
+@pytest.mark.parametrize("source", ["image", "template", "snapshot"])
+def test_custom_vm_sources_keep_their_gpu_driver_contract(source, monkeypatch):
+    selected = service()
+    selected.http.json.return_value = {"name": "dev", "id": "vm-id", "status": "starting"}
+    monkeypatch.setattr(
+        vm_module,
+        "default_base_image",
+        MagicMock(side_effect=AssertionError("Custom sources do not use the default driver")),
+    )
+    monkeypatch.setattr(
+        vm_module._VMImage,
+        "build",
+        lambda self: SimpleNamespace(success=True, image_id="custom-image"),
+    )
+    options = {source: Image.from_id("custom-image") if source == "image" else "saved"}
+    VM("dev", gpu=GpuType.V100, ssh=False, _service=selected, **options).create(wait=False)
+    assert selected.http.json.call_args.kwargs["json"]["spec"]["gpu"] == "V100"
 
 
 def test_vm_image_is_deterministic_and_uses_selected_profile():
@@ -315,6 +352,32 @@ def test_prepare_freezes_request_without_allocating_compute():
     vm.prepare()
     assert vm._creation_body == body
     assert selected.http.json.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "gpu,expected",
+    [
+        (None, None),
+        ("RTX4090", "RTX4090"),
+        ("NVIDIA GeForce RTX 4090", "RTX4090"),
+        (GpuType.RTX4090, "RTX4090"),
+        (GpuType.NoGPU, ""),
+    ],
+)
+def test_vm_gpu_serialization_preserves_template_defaults(gpu, expected):
+    selected = service()
+    selected.http.json.return_value = {"id": "resource", "name": "dev", "status": "starting"}
+    VM("dev", template="base", ssh=False, gpu=gpu, _service=selected).create(wait=False)
+    spec = selected.http.json.call_args.kwargs["json"]["spec"]
+    assert spec == ({"ssh": False} if expected is None else {"ssh": False, "gpu": expected})
+
+
+@pytest.mark.parametrize("gpu", ["unknown", "RTX4090,L4", ["RTX4090"], 0])
+def test_vm_rejects_invalid_gpu_before_creation(gpu):
+    selected = service()
+    with pytest.raises(ValueError):
+        VM("dev", gpu=gpu, _service=selected)
+    selected.http.json.assert_not_called()
 
 
 def test_advertised_vm_support_skips_list_preflight():
@@ -556,7 +619,7 @@ def cli_service(monkeypatch):
     return selected
 
 
-def test_vm_cli_registration_and_cpu_only_args():
+def test_vm_cli_registration_and_resource_args():
     cli = load_cli(check_config=False)
     command = cli.management_group.get_command(None, "vm")
     assert {
@@ -590,6 +653,7 @@ def test_vm_cli_registration_and_cpu_only_args():
     assert {
         "cpu",
         "memory",
+        "gpu",
         "disk_size",
         "template",
         "desktop",
@@ -602,7 +666,7 @@ def test_vm_cli_registration_and_cpu_only_args():
         "public_port",
         "context",
     } <= options
-    assert not {"gpu", "gpu_count"} & options
+    assert "gpu_count" not in options
 
 
 @pytest.mark.parametrize("cli_name", ["Beta9", "Beam"])
@@ -656,10 +720,48 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     assert json.loads(result.output) == fake.info
     options = factory.call_args.kwargs
     assert options["env"] == {"VALUE": "a=b c"}
-    assert options["cpu"] is None and options["desktop"] is None and options["ssh"] is None
+    assert options["cpu"] is None and options["gpu"] is None
+    assert options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
     fake.create.assert_called_once_with()
-    fake.wait.assert_not_called()
+    fake.wait.assert_called_once_with(services=True)
+
+
+def test_cli_forwards_gpu_with_typed_resources(cli_service):
+    cli_service.http.json.return_value = {"name": "dev", "id": "resource", "status": "starting"}
+    with patch.object(vm_cli.VM, "wait") as wait:
+        result = CliRunner().invoke(
+            vm_cli.management,
+            [
+                "new",
+                "dev",
+                "--template",
+                "base",
+                "--no-ssh",
+                "--cpu",
+                "2.5",
+                "--memory",
+                "4096",
+                "--gpu",
+                "NVIDIA GeForce RTX 4090",
+                "--json",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    assert [call.kwargs for call in wait.call_args_list] == [{}, {"services": True}]
+    assert cli_service.http.json.call_args.kwargs["json"]["spec"] == {
+        "cpu": 2500,
+        "memory": 4096,
+        "gpu": "RTX4090",
+        "ssh": False,
+    }
+
+
+def test_cli_rejects_invalid_gpu_before_creation(cli_service):
+    result = CliRunner().invoke(vm_cli.management, ["new", "--gpu", "unknown"])
+    assert result.exit_code == 1
+    assert "not a valid GpuType" in result.output
+    cli_service.http.json.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -668,7 +770,13 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
         ([], None),
         (["--template", "base"], None),
         (["--image", "alpine:3"], "alpine:3"),
+        (["--image", "custom-driver:latest", "--gpu", "any"], "custom-driver:latest"),
+        (["--image-id", "custom-driver", "--gpu", "V100"], ""),
         (["--build-secret", "TOKEN"], vm_module.DEFAULT_VM_BASE_IMAGE),
+        (
+            ["--gpu", "RTX4090", "--build-secret", "TOKEN"],
+            vm_module.DEFAULT_VM_GPU_BASE_IMAGE,
+        ),
     ],
 )
 def test_cli_preserves_default_image_fast_path(cli_service, monkeypatch, args, base_image):
@@ -681,6 +789,7 @@ def test_cli_preserves_default_image_fast_path(cli_service, monkeypatch, args, b
     image = factory.call_args.kwargs["image"]
     assert (image.base_image if image else None) == base_image
     vm.create.assert_called_once_with()
+    vm.wait.assert_called_once_with(services=True)
 
 
 def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, monkeypatch):
@@ -703,6 +812,35 @@ def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, 
     assert "Checking image cache" not in result.output
     assert "Waiting for VM" not in result.output
     assert "vm-long-internal-runtime" not in result.output
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["new", "dev", "--template", "base"],
+        ["start", "dev"],
+        ["start", "dev", "--cold"],
+        ["resume", "dev"],
+        ["fork", "dev", "copy"],
+        ["fork", "snapshot", "copy"],
+    ],
+)
+def test_cli_does_not_report_ready_when_services_fail(cli_service, monkeypatch, as_json, args):
+    vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running"})
+    for method in ("create", "start", "fork"):
+        getattr(vm, method).return_value = vm
+    vm._api.return_value = [{"id": "snapshot"}]
+    vm.wait.side_effect = TimeoutError("VM did not become ready; inspect vm get/logs")
+    factory = MagicMock(return_value=vm)
+    factory.get.return_value = vm
+    monkeypatch.setattr(vm_cli, "VM", factory)
+    result = CliRunner().invoke(vm_cli.management, [*args, *(["--json"] if as_json else [])])
+    assert result.exit_code == 1
+    assert "VM did not become ready" in result.output
+    assert "✓ VM ready" not in result.output
+    assert "vm-id" not in result.output
+    vm.wait.assert_called_once_with(services=True)
 
 
 @pytest.mark.parametrize("as_json", [False, True])
@@ -1001,6 +1139,10 @@ def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, ar
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == vm.info
+    if args[0] in ("new", "start", "resume", "fork"):
+        vm.wait.assert_called_once_with(services=True)
+    else:
+        vm.wait.assert_not_called()
 
 
 def test_vm_new_help_has_one_aligned_description_column():
@@ -1467,6 +1609,33 @@ def test_recording_selects_mp4_for_extensionless_paths(sandbox_vm, monkeypatch):
         "mp4",
         "/workspace/extensionless",
     )
+
+
+@pytest.mark.parametrize("size", [(2560, 1440), (1919, 1079)])
+def test_desktop_size_reads_root_window_geometry(sandbox_vm, monkeypatch, size):
+    vm, _ = sandbox_vm
+    desktop = vm.desktop
+    run = MagicMock(
+        return_value=f"""xwininfo: Window id: 0x400 (the root window) (has no name)
+
+  Absolute upper-left X:  0
+  Absolute upper-left Y:  0
+  Width: {size[0]}
+  Height: {size[1]}
+  Depth: 24
+"""
+    )
+    monkeypatch.setattr(desktop, "_run", run)
+    assert desktop.screen_size() == size
+    run.assert_called_once_with("xwininfo", "-root")
+
+
+def test_desktop_size_reports_unreadable_geometry(sandbox_vm, monkeypatch):
+    vm, _ = sandbox_vm
+    desktop = vm.desktop
+    monkeypatch.setattr(desktop, "_run", lambda *args: "")
+    with pytest.raises(RuntimeError, match="Unable to read desktop geometry"):
+        desktop.screen_size()
 
 
 def test_desktop_timeout_cancels_command_and_preserves_wait_error(sandbox_vm):
@@ -2962,6 +3131,7 @@ def test_kiosk_cli_preserves_argv_and_reports_bad_json(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert factory.call_args.kwargs["kiosk"] == config
     fake.create.assert_called_once()
+    fake.wait.assert_called_once_with(services=True)
     factory.reset_mock()
     path.write_text("[]")
     result = CliRunner().invoke(vm_cli.management, ["new", "app", "--kiosk-config", str(path)])
@@ -2980,6 +3150,59 @@ def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
     assert "BEAM_VM_KIOSK" not in session.env
     assert [session.retry_allowed("application") for _ in range(4)] == [True, True, True, False]
     assert session.retry_allowed("mcp")
+
+
+@pytest.mark.parametrize(
+    "configured,classes,expected",
+    [
+        (False, [], "Xvfb"),
+        (False, ["0x030000"], "Xvfb"),
+        (True, [], "Xvfb"),
+        (True, ["0x020000", "0x040300"], "Xvfb"),
+        (True, ["0x030000", "0x040300"], "Xorg"),
+        (True, ["0x030200"], "Xorg"),
+    ],
+)
+def test_kiosk_native_display_requires_attached_display_gpu(
+    tmp_path, monkeypatch, configured, classes, expected
+):
+    module = guest_module("kiosk")
+    pci = tmp_path / "pci"
+    for index, value in enumerate(classes):
+        device = pci / str(index)
+        device.mkdir(parents=True)
+        (device / "class").write_text(value + "\n")
+    monkeypatch.setattr(
+        module, "Path", lambda value: pci if value == "/sys/bus/pci/devices" else Path(value)
+    )
+    monkeypatch.setattr(module, "RUNTIME", tmp_path / "runtime")
+    monkeypatch.setattr(
+        module, "run_command", MagicMock(return_value=SimpleNamespace(returncode=0))
+    )
+    session = module.Session({"command": ["editor"]})
+    session.env["HOME"] = str(tmp_path)
+    session.env["BEAM_KIOSK_XORG_CONFIG"] = "/etc/X11/custom.conf" if configured else ""
+    session.env.update(
+        __EGL_VENDOR_LIBRARY_FILENAMES="/image/egl.json", __GLX_VENDOR_LIBRARY_NAME="image-driver"
+    )
+    session.window_manager = str(tmp_path / "openbox")
+    Path(session.window_manager).touch()
+    session.spawn = MagicMock()
+    session.wait_for = lambda ready, *_: ready()
+    session.start_display()
+    command = session.spawn.call_args_list[0]
+    assert command.kwargs["role"] == "display"
+    assert command.args[0][0] == expected
+    if expected == "Xorg":
+        assert command.args[0][:4] == ["Xorg", ":1", "-config", "/etc/X11/custom.conf"]
+        assert session.env["__EGL_VENDOR_LIBRARY_FILENAMES"] == "/image/egl.json"
+        assert session.env["__GLX_VENDOR_LIBRARY_NAME"] == "image-driver"
+    else:
+        assert (
+            session.env["__EGL_VENDOR_LIBRARY_FILENAMES"]
+            == "/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+        )
+        assert session.env["__GLX_VENDOR_LIBRARY_NAME"] == "mesa"
 
 
 def test_kiosk_sdk_waits_for_application_not_just_the_stream_port():
@@ -3092,6 +3315,65 @@ def test_launcher_handoff_uses_owned_windows_and_closes_children(monkeypatch):
     assert stop.call_args.args[0].poll() == 0
 
 
+@pytest.mark.parametrize("exit_code", [None, 0])
+def test_transient_xprop_timeout_recovers_without_restarting_application(monkeypatch, exit_code):
+    module = guest_module("kiosk")
+    start = MagicMock(return_value=MagicMock(poll=lambda: exit_code))
+    monkeypatch.setattr(module.subprocess, "Popen", start)
+    monkeypatch.setattr(module.Session, "launch_mcp", MagicMock())
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        MagicMock(
+            side_effect=[
+                subprocess.TimeoutExpired(["xprop", "-root", "_NET_CLIENT_LIST"], 2),
+                SimpleNamespace(returncode=0, stdout="_NET_CLIENT_LIST(WINDOW): window id # 0x123"),
+                subprocess.TimeoutExpired(["xprop", "-root", "_NET_CLIENT_LIST"], 2),
+                SimpleNamespace(returncode=0, stdout="_NET_CLIENT_LIST(WINDOW): window id # 0x123"),
+            ]
+        ),
+    )
+    session = module.Session({"command": ["editor"]})
+    session.launch()
+    session.poll_application()
+    assert session.state.application == "starting"
+    session.poll_application()
+    assert session.state.application == "ready"
+    assert session.state.windows == 1
+    session.poll_application()
+    assert session.state.application == "ready"
+    assert session.state.windows == 1
+    session.poll_application()
+    assert session.state.application == "ready"
+    start.assert_called_once()
+
+
+@pytest.mark.parametrize("exit_code", [None, 2])
+def test_unknown_window_probe_preserves_crash_and_startup_deadlines(monkeypatch, exit_code):
+    module = guest_module("kiosk")
+    clock = [0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    start = MagicMock(return_value=MagicMock(poll=lambda: exit_code))
+    monkeypatch.setattr(module.subprocess, "Popen", start)
+    monkeypatch.setattr(module, "stop_process", MagicMock())
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        MagicMock(side_effect=subprocess.TimeoutExpired(["xprop"], 2)),
+    )
+    session = module.Session({"command": ["editor"]})
+    session.launch()
+    clock[0] = module.POLICY.application_timeout + 1
+    session.poll_application()
+    if exit_code is None:
+        assert session.state.application == "error"
+        assert "has not opened a window" in session.state.error
+        assert session.processes == {}
+    else:
+        assert session.state.application == "starting"
+        assert start.call_count == 2
+
+
 def test_application_start_timeout_and_mcp_start_have_independent_deadlines(monkeypatch, tmp_path):
     module = guest_module("kiosk")
     clock = [0]
@@ -3140,7 +3422,10 @@ def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatc
     monkeypatch.setattr(module.subprocess, "run", lambda argv, **kwargs: commands.append(argv))
     monkeypatch.setattr(module.sys, "argv", ["kiosk", "--resize", "2880", "1800"])
     assert module.main() == 0
-    assert commands == [["selkies", "resize", "2880x1800"], ["xrandr", "--dpi", "192"]]
+    assert commands == [
+        ["selkies", "resize", "2880x1800"],
+        ["xrandr", "--fb", "2880x1800", "--dpi", "192"],
+    ]
     commands.clear()
     for args in (
         ["kiosk", "--resize", "1", "900"],

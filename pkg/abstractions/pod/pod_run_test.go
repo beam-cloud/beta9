@@ -2,9 +2,12 @@ package pod
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	computemodel "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -71,4 +74,39 @@ func TestCreatePodRunOptionsPreserveResourceOverrideForColdAndCheckpointLaunches
 	}
 
 	require.False(t, createPodRunOptions(context.Background(), request, nil).forceResourceLimits)
+}
+
+func TestRunVMValidatesGPUColdBootBeforeLaunch(t *testing.T) {
+	launchError := errors.New("secret resolution failed")
+	for _, test := range []struct {
+		name, gpu, checkpoint, want string
+		count                       uint32
+	}{
+		{name: "CPU cold boot"},
+		{name: "GPU cold boot", gpu: "RTX4090", count: 1},
+		{name: "GPU without count", gpu: "RTX4090", want: "exactly one GPU"},
+		{name: "multiple GPUs", gpu: "RTX4090", count: 2, want: "exactly one GPU"},
+		{name: "GPU memory restore", gpu: "RTX4090", count: 1, checkpoint: "memory", want: "cold boot"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, err := json.Marshal(types.StubConfigV1{
+				UseVM:   true,
+				Env:     []string{"BEAM_VM_SYSTEMD=1"},
+				Runtime: types.Runtime{Gpu: types.GpuType(test.gpu), GpuCount: test.count},
+				Secrets: []types.Secret{{Name: "APP_KEY"}},
+			})
+			require.NoError(t, err)
+			service := &GenericPodService{backendRepo: &sandboxBackendRepository{
+				stub:      &types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM), Config: string(config)}},
+				secretErr: launchError,
+			}}
+			info := &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "workspace"}}
+			err = service.RunVM(context.Background(), info, "stub", "container", types.VMSpec{}, test.checkpoint, nil)
+			if test.want != "" {
+				require.ErrorContains(t, err, test.want)
+			} else {
+				require.ErrorIs(t, err, launchError)
+			}
+		})
+	}
 }

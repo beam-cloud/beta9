@@ -2,6 +2,13 @@
 # Merged with scripts/kconfig/merge_config.sh; the Dockerfile then runs
 # `make olddefconfig` and asserts the load-bearing symbols below survived.
 
+# GPU drivers are built into guest images against the published kernel-devel tree.
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+CONFIG_DRM=y
+CONFIG_DRM_KMS_HELPER=y
+CONFIG_DRM_FBDEV_EMULATION=y
+
 # IPv6: containers get an fd00:abcd::/64 address and the worker's ip6tables
 # rules key on it, so the guest must speak IPv6 too.
 CONFIG_IPV6=y

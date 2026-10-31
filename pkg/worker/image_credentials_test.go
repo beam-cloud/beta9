@@ -2,11 +2,14 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +21,66 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
+
+func TestBuildahAuthFileScopesOnlySourceRegistry(t *testing.T) {
+	client := &ImageClient{}
+	request := &types.ContainerRequest{BuildOptions: types.BuildOptions{SourceImageCreds: "user:pa:ss"}}
+	runroot := t.TempDir()
+	args, err := client.buildahAuthFileArgs(context.Background(), request, "private.example/base:tag", runroot)
+	require.NoError(t, err)
+	require.Equal(t, []string{"--authfile", filepath.Join(runroot, "auth.json")}, args)
+	require.NotContains(t, args, "--creds")
+	contents, err := os.ReadFile(args[1])
+	require.NoError(t, err)
+	var config struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}
+	require.NoError(t, json.Unmarshal(contents, &config))
+	require.Len(t, config.Auths, 1)
+	require.NotContains(t, config.Auths, "public.example")
+	decoded, err := base64.StdEncoding.DecodeString(config.Auths["private.example"].Auth)
+	require.NoError(t, err)
+	require.Equal(t, "user:pa:ss", string(decoded))
+	info, err := os.Stat(args[1])
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	require.Equal(t, []string{"--creds", "user:pa:ss"}, client.buildahAuthArgs(context.Background(), request, "private.example/base:tag"), "single-registry pre-pull is unchanged")
+}
+
+func TestBuildahWithoutCredentialsPreservesAmbientAuth(t *testing.T) {
+	ambient := filepath.Join(t.TempDir(), "ambient.json")
+	require.NoError(t, os.WriteFile(ambient, []byte("ambient-canary"), 0600))
+	t.Setenv("REGISTRY_AUTH_FILE", ambient)
+	runroot := t.TempDir()
+	args, err := (&ImageClient{}).buildahAuthFileArgs(context.Background(), &types.ContainerRequest{}, "python:3.11", runroot)
+	require.NoError(t, err)
+	require.Nil(t, args)
+	entries, err := os.ReadDir(runroot)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	contents, err := os.ReadFile(ambient)
+	require.NoError(t, err)
+	require.Equal(t, "ambient-canary", string(contents))
+}
+
+func TestBuildahAuthFileOutsideDefaultContext(t *testing.T) {
+	client := &ImageClient{}
+	request := &types.ContainerRequest{BuildOptions: types.BuildOptions{SourceImageCreds: "user:secret"}}
+	runroot := mustMkdirTempBuildahDir("buildah-test-run-")
+	defer os.RemoveAll(runroot)
+	buildContext, err := client.getBuildContext(context.Background(), t.TempDir(), request)
+	require.NoError(t, err)
+	require.Equal(t, ".", buildContext)
+	args, err := client.buildahAuthFileArgs(context.Background(), request, "private.example/base", runroot)
+	require.NoError(t, err)
+	contextPath, err := filepath.Abs(buildContext)
+	require.NoError(t, err)
+	relative, err := filepath.Rel(contextPath, args[1])
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(relative, ".."+string(filepath.Separator)), "authfile must stay outside COPY . context")
+}
 
 func TestLockImageArchiveFileRespectsContextCancellation(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "image.clip")

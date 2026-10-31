@@ -1,5 +1,6 @@
 """Desktop control over the existing authenticated process/file transports."""
 
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -43,8 +44,10 @@ class VMDesktop:
                 sandbox.fs.remove(remote)
 
     def screen_size(self):
-        width, height = self._run("xdotool", "getdisplaygeometry").split()
-        return int(width), int(height)
+        geometry = re.search(r"Width:\s+(\d+)\s+Height:\s+(\d+)", self._run("xwininfo", "-root"))
+        if geometry is None:
+            raise RuntimeError("Unable to read desktop geometry")
+        return tuple(map(int, geometry.groups()))
 
     def resize(self, width: int, height: int):
         if self.vm.info["spec"].get("kiosk") is not None:

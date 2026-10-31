@@ -51,12 +51,12 @@ func WorkerShutdownGraceSeconds(stopGrace int64) int64 {
 	return stopGrace + max(stopGrace, 120) + 60
 }
 
-// VMSpec is CPU-only. Unknown fields (including GPU options) are rejected by
-// the API rather than silently changing the isolation or placement contract.
+// VMSpec describes a persistent microVM. GPU requests assign one device.
 type VMSpec struct {
 	ImageID          string            `json:"image_id"`
 	CPU              int64             `json:"cpu"`    // millicores
 	Memory           int64             `json:"memory"` // MiB
+	GPU              string            `json:"gpu,omitempty"`
 	DiskSize         string            `json:"disk_size"`
 	Pool             string            `json:"pool,omitempty"`
 	Env              []string          `json:"env,omitempty"`

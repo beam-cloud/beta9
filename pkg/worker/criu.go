@@ -224,7 +224,7 @@ func (s *Worker) readCheckpointHostProfile() (checkpointHostProfile, error) {
 	if p.Version == "" {
 		return p, fmt.Errorf("missing %s version", executable)
 	}
-	if s.gpuCount == 0 {
+	if s.gpuCount == 0 || !s.runtime.Capabilities().CDI {
 		return p, nil
 	}
 	output, err = exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader").Output()

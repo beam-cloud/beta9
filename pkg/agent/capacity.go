@@ -11,13 +11,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type gpuDevice struct {
-	ID    string
-	UUID  string
-	Name  string
-	BusID string
-}
-
 type agentCapacity struct {
 	CPUCount                  uint32
 	CPUMillicores             int64
@@ -173,16 +166,18 @@ func selectGPUDevices(opts types.AgentJoinOptions, devices []gpuDevice) ([]gpuDe
 
 	if len(gpuIDs) > 0 {
 		selected := make([]gpuDevice, 0, len(gpuIDs))
+		seen := make(map[string]bool, len(gpuIDs))
 		for _, id := range gpuIDs {
 			device, ok := findGPUDevice(devices, id)
-			if !ok {
+			if !ok || seen[device.ID] {
 				return nil, true, []check{{
 					Name:     "capacity.gpu_ids",
 					Ok:       false,
-					Message:  fmt.Sprintf("GPU id %q was not detected", id),
+					Message:  fmt.Sprintf("GPU id %q was not detected or was selected more than once", id),
 					Severity: severity(false),
 				}}
 			}
+			seen[device.ID] = true
 			device.ID = id
 			selected = append(selected, device)
 		}

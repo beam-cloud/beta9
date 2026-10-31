@@ -1255,7 +1255,7 @@ func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName strin
 	return requiredRuntime == "" || runtimeName == requiredRuntime
 }
 
-// runtimeAcceptsRequest reserves microvm workers for use_vm CPU sandboxes and
+// runtimeAcceptsRequest reserves microvm workers for use_vm sandboxes and
 // keeps use_vm requests off every other runtime, so they fail closed.
 // Checkpoint runtimes are matched separately by runtimeMatchesCheckpoint.
 func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) bool {
@@ -1268,7 +1268,7 @@ func runtimeAcceptsRequest(request *types.ContainerRequest, runtimeName string) 
 	if runtimeName != types.ContainerRuntimeMicroVM.String() {
 		return !request.UseVM
 	}
-	return request.UseVM && request.Stub.Type.IsSandbox() && !request.RequiresGPU()
+	return request.UseVM && request.Stub.Type.IsSandbox() && (!request.RequiresGPU() || request.GpuCount == 1)
 }
 
 func checkpointAccelerator(request *types.ContainerRequest) string {

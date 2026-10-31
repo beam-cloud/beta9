@@ -729,7 +729,7 @@ func TestHostProxyPreservesWebsocketPathAndRejectsPrivatePort(t *testing.T) {
 	require.Equal(t, v.ContainerID+":8080:websockify", runtime.forwarded)
 }
 
-func TestCreateRejectsGPUFieldsAndCrossWorkspaceAccess(t *testing.T) {
+func TestCreateRejectsInvalidGPURequestsAndCrossWorkspaceAccess(t *testing.T) {
 	s, _, info, _, _ := fixture()
 	e := echo.New()
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -739,13 +739,56 @@ func TestCreateRejectsGPUFieldsAndCrossWorkspaceAccess(t *testing.T) {
 	for _, test := range []struct {
 		workspace, body string
 		status          int
-	}{{info.Workspace.ExternalId, `{"name":"bad","spec":{"image_id":"base","gpu":"A100"}}`, 400}, {"other", `{"name":"bad","spec":{"image_id":"base"}}`, 401}} {
+	}{
+		{info.Workspace.ExternalId, `{"name":"bad","spec":{"image_id":"base","gpu_count":2}}`, 400},
+		{info.Workspace.ExternalId, `{"name":"bad","spec":{"image_id":"base","gpu":["RTX4090"]}}`, 400},
+		{info.Workspace.ExternalId, `{"name":"bad","spec":{"image_id":"base","gpu":1}}`, 400},
+		{info.Workspace.ExternalId, `{"name":"bad","spec":{"image_id":"base","gpu":"unknown"}}`, 400},
+		{info.Workspace.ExternalId, `{"name":"bad","spec":{"image_id":"base","gpu":"RTX4090,H100"}}`, 400},
+		{"other", `{"name":"bad","spec":{"image_id":"base"}}`, 401},
+	} {
 		req := httptest.NewRequest("POST", "/"+test.workspace, strings.NewReader(test.body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		require.Equal(t, test.status, rec.Code)
 	}
+}
+
+func TestGPUVMUsesOneDeviceAndNormalPlacement(t *testing.T) {
+	for _, pool := range []string{"", "gpu-pool"} {
+		t.Run(pool, func(t *testing.T) {
+			s, base, info, _, gateway := fixture()
+			s.config.DefaultPool = "cpu-pool"
+			spec := base.Spec
+			spec.Pool, spec.GPU = pool, "GeForce RTX 4090"
+			ctx := auth.ContextWithAuthInfo(context.Background(), info)
+			v, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "gpu-vm", Spec: spec})
+			require.NoError(t, err)
+			require.Equal(t, string(types.GPU_RTX4090), v.Spec.GPU)
+			require.Equal(t, pool, v.Spec.Pool)
+			require.Equal(t, string(types.GPU_RTX4090), gateway.stub.Gpu)
+			require.EqualValues(t, 1, gateway.stub.GpuCount)
+			if pool == "" {
+				require.Nil(t, gateway.stub.Pool)
+			} else {
+				require.Equal(t, pool, gateway.stub.Pool.Name)
+			}
+		})
+	}
+}
+
+func TestGPUVMPausePreservesRunningState(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	v.Spec.GPU = string(types.GPU_RTX4090)
+	before := *v
+	require.ErrorContains(t, s.pause(auth.ContextWithAuthInfo(context.Background(), info), v), "GPU VMs cannot pause")
+	require.Equal(t, before, *v)
+	v.Spec.IdleAction = "pause"
+	require.ErrorContains(t, validate(&v.Spec), "idle_action=stop")
+	v.Spec.IdleAction, v.Spec.GPU = "stop", "NO_GPU"
+	require.NoError(t, validate(&v.Spec))
+	require.Empty(t, v.Spec.GPU)
 }
 
 type vmImageVerifierFunc func(context.Context, *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error)

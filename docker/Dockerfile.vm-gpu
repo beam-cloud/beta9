@@ -1,0 +1,105 @@
+# syntax=docker/dockerfile:1.7
+
+# NVIDIA guest base; the SDK adds the standard VM and kiosk services.
+ARG KERNEL_DEVEL=public.ecr.aws/n4e0e1y0/beta9-microvm:d05046b2646a-kernel-devel
+ARG NVIDIA_DRIVER_VERSION=580.126.18
+ARG NVIDIA_DRIVER_SHA256=a7781b2e1c2d65c6580914c76e79ed454d02945df84711c033070a092a9ab49d
+FROM ${KERNEL_DEVEL} AS kernel-devel
+
+# Match the kernel artifact's Debian GCC 12 toolchain.
+FROM debian:bookworm@sha256:d74df7598108a173a621eda4d58a2adbf850b2d9a9d81bc2cca1a6c21174a880 AS nvidia-build
+ARG TARGETARCH
+ARG NVIDIA_DRIVER_VERSION
+ARG NVIDIA_DRIVER_SHA256
+ENV DEBIAN_FRONTEND=noninteractive
+RUN test "$TARGETARCH" = amd64 \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl kmod libelf-dev libglvnd-dev pkg-config xserver-xorg-core \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /opt/nvidia && curl -fSL --retry 3 \
+    "https://download.nvidia.com/XFree86/Linux-x86_64/${NVIDIA_DRIVER_VERSION}/NVIDIA-Linux-x86_64-${NVIDIA_DRIVER_VERSION}.run" \
+    -o /opt/nvidia/driver.run \
+    && printf '%s  %s\n' "$NVIDIA_DRIVER_SHA256" /opt/nvidia/driver.run | sha256sum -c -
+COPY --chmod=0755 <<'EOF' /tmp/install-nvidia
+#!/bin/sh
+set -eu
+mode=$1
+package=$2
+set -- --silent --skip-module-load --no-systemd --no-dkms --no-rebuild-initramfs \
+    --no-distro-scripts --no-nouveau-check --no-disable-nouveau --no-x-check \
+    --no-install-compat32-libs --no-check-for-alternate-installs \
+    --allow-installation-with-running-driver
+case "$mode" in
+    kernel)
+        source=/usr/src/beam-kernel
+        release=$(cat "$source/include/config/kernel.release")
+        printf '%s\n' "$release" > /etc/beam-gpu-kernel
+        mkdir -p "/lib/modules/$release"
+        for metadata in modules.builtin modules.builtin.modinfo modules.order; do
+            cp "$source/$metadata" "/lib/modules/$release/$metadata"
+        done
+        set -- "$@" --kernel-module-type=open --kernel-name="$release" \
+            --kernel-source-path="$source" --kernel-output-path="$source" \
+            --concurrency-level="$(nproc)"
+        ;;
+    userspace)
+        release=$(cat /etc/beam-gpu-kernel)
+        set -- "$@" --no-kernel-modules
+        ;;
+    *) echo "expected kernel or userspace" >&2; exit 2 ;;
+esac
+if ! sh "$package" "$@"; then
+    tail -n 120 /var/log/nvidia-installer.log
+    exit 1
+fi
+for module in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
+    test "$(modinfo -k "$release" -F vermagic "$module" | cut -d ' ' -f 1)" = "$release"
+done
+rm -f "/lib/modules/$release/build" "/lib/modules/$release/source"
+depmod -a "$release"
+ldconfig
+EOF
+RUN --mount=from=kernel-devel,source=/usr/src/beam-kernel,target=/usr/src/beam-kernel,rw \
+    /tmp/install-nvidia kernel /opt/nvidia/driver.run
+
+FROM ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+ARG NVIDIA_DRIVER_VERSION
+LABEL com.beam.nvidia-driver.version="${NVIDIA_DRIVER_VERSION}"
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl ffmpeg kmod libegl1 libgbm1 libgl1 libglvnd0 libglx0 libopengl0 \
+    libvulkan1 libwayland-client0 libwayland-server0 mesa-utils pciutils procps python3 \
+    x11-utils x11-xserver-utils xauth xserver-xorg-core \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=nvidia-build /lib/modules/ /lib/modules/
+COPY --from=nvidia-build /lib/firmware/nvidia/ /lib/firmware/nvidia/
+COPY --from=nvidia-build /etc/beam-gpu-kernel /etc/beam-gpu-kernel
+COPY --from=kernel-devel /usr/src/beam-kernel/vmlinux /boot/beam/vmlinux
+COPY --from=nvidia-build /tmp/install-nvidia /tmp/install-nvidia
+RUN --mount=from=nvidia-build,source=/opt/nvidia/driver.run,target=/tmp/nvidia.run,ro \
+    /tmp/install-nvidia userspace /tmp/nvidia.run && rm /tmp/install-nvidia
+COPY <<'EOF' /etc/X11/beam-gpu.conf
+Section "ServerFlags"
+    Option "AutoAddDevices" "false"
+    Option "AutoAddGPU" "false"
+EndSection
+
+Section "Device"
+    Identifier "gpu"
+    Driver "nvidia"
+    Option "AllowEmptyInitialConfiguration" "true"
+    Option "UseDisplayDevice" "none"
+    Option "UseEDIDDpi" "false"
+EndSection
+
+Section "Screen"
+    Identifier "screen"
+    Device "gpu"
+    DefaultDepth 24
+    SubSection "Display"
+        Depth 24
+        Virtual 8192 8192
+    EndSubSection
+EndSection
+EOF
+ENV BEAM_KIOSK_XORG_CONFIG=/etc/X11/beam-gpu.conf

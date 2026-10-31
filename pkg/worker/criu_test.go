@@ -3057,6 +3057,19 @@ func TestCheckpointHostProfileIgnoresWorkerRelease(t *testing.T) {
 	}
 }
 
+func TestCheckpointHostProfileNativeGPURequiresNoHostDriver(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cloud-hypervisor"), []byte("#!/bin/sh\necho 'cloud-hypervisor v53.0'\n"), 0755))
+	t.Setenv("PATH", dir)
+	worker := &Worker{ctx: context.Background(), gpuCount: 8, runtime: &mockRuntime{
+		name: types.ContainerRuntimeMicroVM.String(), capabilities: runtime.Capabilities{GPU: true, BlockRoot: true},
+	}}
+	profile, err := worker.readCheckpointHostProfile()
+	require.NoError(t, err, "VFIO guests do not require host NVIDIA utilities")
+	require.Empty(t, profile.GPU)
+	require.Equal(t, "cloud-hypervisor v53.0", profile.Version)
+}
+
 func TestCheckpointDiscoveryFailureIsProcessSpecific(t *testing.T) {
 	t.Setenv("PATH", "")
 	first := &Worker{ctx: context.Background(), runtime: &mockRuntime{name: "gvisor"}}

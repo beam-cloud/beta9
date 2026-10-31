@@ -2,12 +2,14 @@ package image
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
@@ -15,6 +17,28 @@ import (
 const baseImageDigestCacheTTL = 5 * time.Minute
 
 var dockerfileFromLinePattern = regexp.MustCompile(`(?i)^([ \t]*FROM[ \t]+(?:--[^ \t\r\n]+[ \t]+)*)([^ \t\r\n]+)([^\r\n]*)(\r?\n)?$`)
+
+func dockerfileCredentialSource(dockerfile string) (string, error) {
+	stages := make(map[string]bool)
+	for _, line := range strings.Split(dockerfile, "\n") {
+		matches := dockerfileFromLinePattern.FindStringSubmatch(line)
+		if matches == nil {
+			continue
+		}
+		source := matches[2]
+		if strings.ContainsAny(source, "$\\") {
+			return "", fmt.Errorf("registry credentials require a literal Dockerfile FROM image; cannot resolve %q", source)
+		}
+		if !strings.EqualFold(source, "scratch") && !stages[strings.ToLower(source)] {
+			return source, nil
+		}
+		fields := strings.Fields(matches[3])
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "AS") {
+			stages[strings.ToLower(fields[1])] = true
+		}
+	}
+	return "", fmt.Errorf("registry credentials require a literal Dockerfile FROM image")
+}
 
 type baseImageDigestCacheEntry struct {
 	digest    string
@@ -121,11 +145,30 @@ func (is *ContainerImageService) pinDockerfileBaseImages(ctx context.Context, op
 		return
 	}
 
+	source := ""
+	if len(opts.ExistingImageCreds) > 0 {
+		source, _ = dockerfileCredentialSource(opts.Dockerfile)
+	}
 	dockerfile, base := pinDockerfileFromDigests(opts.Dockerfile, func(imageRef string) string {
-		digest, _ := is.baseImageDigests.resolve(ctx, imageRef, opts.BaseImageCreds, is.inspectBaseImageDigest)
+		creds := opts.BaseImageCreds
+		if source != "" && registry.ParseRegistry(imageRef) != registry.ParseRegistry(source) {
+			creds = ""
+		}
+		var digest string
+		if source != "" && creds != "" {
+			digest = is.inspectBaseImageDigest(ctx, imageRef, creds)
+		} else {
+			digest, _ = is.baseImageDigests.resolve(ctx, imageRef, creds, is.inspectBaseImageDigest)
+		}
+		if imageRef == source {
+			opts.BaseImageDigest = digest
+		}
 		return digest
 	})
 	opts.Dockerfile = dockerfile
+	if source != "" {
+		return
+	}
 	if base == nil {
 		return
 	}

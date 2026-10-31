@@ -58,6 +58,7 @@ type microVMInstance struct {
 	submounts  []string
 	network    microvm.Network
 	diskMounts []string
+	vfio       *microVMVFIO
 
 	virtiofsd      *exec.Cmd
 	hypervisor     *exec.Cmd
@@ -95,6 +96,9 @@ func NewMicroVM(cfg Config) (Runtime, error) {
 	}
 	if cfg.MicroVMStateRoot == "" {
 		cfg.MicroVMStateRoot = DefaultMicroVMStateRoot
+	}
+	if devices := os.Getenv(types.MicroVMVFIODevicesEnv); len(cfg.MicroVMVFIODevices) == 0 && devices != "" {
+		cfg.MicroVMVFIODevices = strings.Split(devices, ",")
 	}
 
 	unavailable := func(reason string) error {
@@ -154,7 +158,8 @@ func (m *MicroVM) Name() string {
 }
 
 func (m *MicroVM) Capabilities() Capabilities {
-	return Capabilities{JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: true}
+	gpu := len(m.cfg.MicroVMVFIODevices) > 0
+	return Capabilities{GPU: gpu, JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: !gpu}
 }
 
 // Prepare strips what only a shared-kernel runtime needs. The VM is the
@@ -187,8 +192,52 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 	if err != nil {
 		return int(types.ContainerExitCodeStartupFailed), err
 	}
-	args := microVMHypervisorArgs(inst.stateDir, m.cfg.MicroVMKernelPath, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra)
+	kernel, err := m.kernelPath(inst)
+	if err != nil {
+		return int(types.ContainerExitCodeStartupFailed), err
+	}
+	args := microVMHypervisorArgs(inst.stateDir, kernel, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra, inst.vfio.paths...)
 	return m.boot(ctx, inst, spec, args, opts.OutputWriter, opts.ErrorWriter, opts.Started)
+}
+
+// GPU images can retain the kernel their drivers were built against.
+func (m *MicroVM) kernelPath(inst *microVMInstance) (string, error) {
+	if inst.vfio == nil || len(inst.vfio.paths) == 0 {
+		return m.cfg.MicroVMKernelPath, nil
+	}
+	root, err := os.OpenRoot(inst.canvas)
+	if err != nil {
+		return "", fmt.Errorf("open kernel image root: %w", err)
+	}
+	defer root.Close()
+	source, err := root.OpenFile(MicroVMImageKernelPath, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+	if os.IsNotExist(err) {
+		return m.cfg.MicroVMKernelPath, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("open image kernel: %w", err)
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat image kernel: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > microVMMaxKernelBytes {
+		return "", fmt.Errorf("image kernel must be a nonempty regular file no larger than %d MiB", microVMMaxKernelBytes>>20)
+	}
+	kernel, err := os.CreateTemp(inst.stateDir, "kernel-")
+	if err != nil {
+		return "", err
+	}
+	defer kernel.Close()
+	n, err := io.Copy(kernel, io.LimitReader(source, microVMMaxKernelBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("copy image kernel: %w", err)
+	}
+	if n != info.Size() {
+		return "", fmt.Errorf("image kernel changed while copying")
+	}
+	return kernel.Name(), nil
 }
 
 // Restore boots a VM from a Checkpoint and, like runsc's, returns once the
@@ -262,6 +311,12 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	}
 	if !inst.alive() {
 		return fmt.Errorf("microvm %s is not running", containerID)
+	}
+	inst.mu.Lock()
+	passthrough := inst.vfio != nil && len(inst.vfio.paths) > 0
+	inst.mu.Unlock()
+	if passthrough {
+		return fmt.Errorf("checkpointing a microvm with VFIO devices is unsupported; save project files and cold boot instead")
 	}
 	snapshotDir := filepath.Join(opts.ImagePath, checkpointVMDir)
 	if err := os.RemoveAll(snapshotDir); err != nil {
@@ -432,6 +487,28 @@ func (m *MicroVM) newInstance(containerID, bundlePath string) (*microVMInstance,
 // a checkpoint path whose root disk replaces a fresh scratch image.
 func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *specs.Spec, restoreFrom string) (microvm.Network, microVMDisk, []microVMDisk, error) {
 	var none microvm.Network
+	devices := spec.Annotations[MicroVMVFIOAnnotation]
+	count := spec.Annotations[MicroVMGPUCountAnnotation]
+	if count != "" && count != "0" && count != "1" {
+		return none, microVMDisk{}, nil, fmt.Errorf("microvm GPU requests must specify exactly one GPU")
+	}
+	if count == "0" && devices != "" {
+		return none, microVMDisk{}, nil, fmt.Errorf("VFIO device selection requires a GPU request")
+	}
+	vfio := &microVMVFIO{}
+	if count == "1" || devices != "" {
+		if restoreFrom != "" {
+			return none, microVMDisk{}, nil, fmt.Errorf("VFIO devices require a cold boot; memory restore is unsupported")
+		}
+		var err error
+		vfio, err = (microVMVFIOHost{devices: m.cfg.MicroVMVFIODevices}).acquire(devices)
+		if err != nil {
+			return none, microVMDisk{}, nil, err
+		}
+	}
+	inst.mu.Lock()
+	inst.vfio = vfio
+	inst.mu.Unlock()
 	if err := os.RemoveAll(inst.stateDir); err != nil {
 		return none, microVMDisk{}, nil, err
 	}
@@ -518,6 +595,8 @@ func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, network
 func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.Spec, args []string, outputWriter, errorWriter io.Writer, started chan<- int) (int, error) {
 	ctrl := inst.ctrl
 	cmd := exec.Command(m.cfg.MicroVMHypervisorPath, args...)
+	// Inherited lock descriptors keep a group reserved if the worker exits first.
+	cmd.ExtraFiles = inst.vfio.locks
 	cgroupFD, err := inst.cgroupAttr(cmd)
 	if err != nil {
 		return int(types.ContainerExitCodeStartupFailed), err
@@ -2326,11 +2405,13 @@ func (inst *microVMInstance) stopProcesses() {
 	inst.mu.Lock()
 	inst.exited = true
 	virtiofsd := inst.virtiofsd
+	vfio := inst.vfio
 	inst.mu.Unlock()
 	if virtiofsd != nil && virtiofsd.Process != nil {
 		_ = virtiofsd.Process.Kill()
 	}
 	inst.ctrl.close()
+	vfio.close()
 }
 
 // teardown releases everything Run set up. Canvas submounts must be gone

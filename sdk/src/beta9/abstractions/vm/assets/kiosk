@@ -21,7 +21,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 from kiosk_config import Kiosk, KioskRuntime
 
@@ -38,19 +38,25 @@ def run_command(command, *, env=None, timeout=None, check=True, **options):
 
 
 def root_property(name, env):
-    result = run_command(
-        ["xprop", "-root", name], env=env, check=False, capture_output=True, text=True
-    )
-    return result.stdout if result.returncode == 0 else ""
+    try:
+        result = run_command(
+            ["xprop", "-root", name], env=env, check=False, capture_output=True, text=True
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    return result.stdout if result.returncode == 0 else None
 
 
 def visible_windows(env):
-    return re.findall(r"0x[0-9a-fA-F]+", root_property("_NET_CLIENT_LIST", env))
+    value = root_property("_NET_CLIENT_LIST", env)
+    return re.findall(r"0x[0-9a-fA-F]+", value) if value is not None else None
 
 
 def visible_wm(env):
     return bool(
-        re.search(r"0x[1-9a-fA-F][0-9a-fA-F]*", root_property("_NET_SUPPORTING_WM_CHECK", env))
+        re.search(
+            r"0x[1-9a-fA-F][0-9a-fA-F]*", root_property("_NET_SUPPORTING_WM_CHECK", env) or ""
+        )
     )
 
 
@@ -112,13 +118,12 @@ def resize_display(size, env):
         env=env,
         timeout=POLICY.resize_timeout,
     )
-    # Selkies' standalone resize CLI initializes the physical display at 96 DPI.
-    # Apply the fixed density in the same guest operation, before GUI startup.
-    run_command(["xrandr", "--dpi", str(POLICY.dpi)], env=env)
+    # Preserve the framebuffer when applying the fixed density to a headless display.
+    run_command(["xrandr", "--fb", f"{size[0]}x{size[1]}", "--dpi", str(POLICY.dpi)], env=env)
 
 
 def display_size(env):
-    match = re.search(r"=\s*(\d+),\s*(\d+)", root_property("_NET_DESKTOP_GEOMETRY", env))
+    match = re.search(r"=\s*(\d+),\s*(\d+)", root_property("_NET_DESKTOP_GEOMETRY", env) or "")
     return (int(match[1]), int(match[2])) if match else None
 
 
@@ -318,13 +323,28 @@ class Session:
         run_command(
             ["xauth", "-f", self.env["XAUTHORITY"], "add", ":1", ".", secrets.token_hex(16)]
         )
-        self.spawn(
-            [
+        config = self.env.get("BEAM_KIOSK_XORG_CONFIG")
+        if config and any(
+            int(path.read_text(), 16) >> 16 == 3
+            for path in Path("/sys/bus/pci/devices").glob("*/class")
+        ):
+            display = ["Xorg", ":1", "-config", config]
+        else:
+            self.env.update(
+                __EGL_VENDOR_LIBRARY_FILENAMES="/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+                __GLX_VENDOR_LIBRARY_NAME="mesa",
+            )
+            display = [
                 "Xvfb",
                 ":1",
                 "-screen",
                 "0",
                 f"{POLICY.max_dimension}x{POLICY.max_dimension}x24",
+                "-shmem",
+            ]
+        self.spawn(
+            [
+                *display,
                 "-nolisten",
                 "tcp",
                 "-dpi",
@@ -332,7 +352,6 @@ class Session:
                 "-auth",
                 self.env["XAUTHORITY"],
                 "-noreset",
-                "-shmem",
                 "-s",
                 "0",
                 "-dpms",
@@ -349,6 +368,7 @@ class Session:
             lambda: run_command(
                 ["xdpyinfo"],
                 env=self.env,
+                timeout=POLICY.display_timeout,
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -449,7 +469,8 @@ class Session:
         if self.state.application in ("error", "closed"):
             return
         windows = visible_windows(self.env)
-        self.update(windows=len(windows))
+        if windows is not None:
+            self.update(windows=len(windows))
         code = self.processes["application"].poll()
         if code is not None and code != 0:
             if self.retry_allowed("application"):
@@ -465,8 +486,10 @@ class Session:
             self.update(application="ready")
             if "mcp" not in self.processes and self.state.mcp != "error":
                 self.launch_mcp()
-        elif code is not None and (
-            self.was_visible or time.monotonic() - self.started > POLICY.application_timeout
+        elif (
+            windows is not None
+            and code is not None
+            and (self.was_visible or time.monotonic() - self.started > POLICY.application_timeout)
         ):
             self.finish_application(
                 "closed",

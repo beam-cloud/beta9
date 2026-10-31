@@ -543,8 +543,8 @@ func validateUseVM(in *pb.GetOrCreateStubRequest, gpus []types.GpuType) string {
 	if !types.StubType(in.StubType).IsSandbox() {
 		return "use_vm is only supported for sandboxes and VMs"
 	}
-	if len(gpus) > 0 || in.GpuCount > 0 {
-		return "use_vm sandboxes and VMs cannot request a GPU"
+	if len(gpus) > 1 || in.GpuCount > 1 {
+		return "use_vm sandboxes and VMs support one GPU"
 	}
 	return ""
 }

@@ -48,10 +48,8 @@ func (o *BuildOpts) String() string {
 	return b.String()
 }
 
-// setCustomImageBuildOptions extracts and sets base image details from an existing image URI
-// and handles registry credentials if provided
-func (o *BuildOpts) setCustomImageBuildOptions() error {
-	baseImage, err := ExtractImageNameAndTag(o.ExistingImageUri)
+func (o *BuildOpts) setBaseImage(source string) error {
+	baseImage, err := ExtractImageNameAndTag(source)
 	if err != nil {
 		return err
 	}
@@ -64,7 +62,7 @@ func (o *BuildOpts) setCustomImageBuildOptions() error {
 
 	// Convert credentials to skopeo format if provided
 	if len(o.ExistingImageCreds) > 0 {
-		o.BaseImageCreds, err = reg.GetRegistryTokenForImage(o.ExistingImageUri, o.ExistingImageCreds)
+		o.BaseImageCreds, err = reg.GetRegistryTokenForImage(source, o.ExistingImageCreds)
 		if err != nil {
 			return err
 		}
@@ -107,7 +105,7 @@ func (o *BuildOpts) handleCustomBaseImage(outputChan chan common.OutputMsg) erro
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", o.ExistingImageUri)}
 	}
 
-	err := o.setCustomImageBuildOptions()
+	err := o.setBaseImage(o.ExistingImageUri)
 	if err != nil {
 		if outputChan != nil {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}

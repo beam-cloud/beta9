@@ -1,4 +1,4 @@
-// Package vm owns persistent CPU VM identities and reuses sandbox scheduling
+// Package vm owns persistent VM identities and reuses sandbox scheduling
 // and durable disks for each cold boot.
 package vm
 

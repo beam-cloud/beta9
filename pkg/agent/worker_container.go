@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strconv"
@@ -16,9 +17,13 @@ type workerContainerResourceLimits struct {
 	memory bool
 }
 
-func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs, limits workerContainerResourceLimits) []string {
+func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs, limits workerContainerResourceLimits) ([]string, error) {
 	localTargetHost := firstNonEmpty(os.Getenv(types.AgentTargetHostEnv), types.LoopbackHost)
 	cacheLocality := agentCacheLocality(bootstrap, slot)
+	gpu, err := workerGPUOptions(slot)
+	if err != nil {
+		return nil, err
+	}
 	args := []string{
 		"run", "--rm", "--init",
 		"--name", name,
@@ -49,13 +54,7 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	if slot.Memory > 0 {
 		args = append(args, "--shm-size", fmt.Sprintf("%dm", max(slot.Memory/2, 64)))
 	}
-	if slot.GpuCount > 0 {
-		if slot.GpuAssignment != "" {
-			args = append(args, "--gpus", fmt.Sprintf("%q", "device="+slot.GpuAssignment))
-		} else {
-			args = append(args, "--gpus", types.NvidiaVisibleDevicesAll)
-		}
-	}
+	args = append(args, gpu.args...)
 
 	volumeArgs := []string{
 		dirs.Images + ":" + types.AgentImagesPath,
@@ -121,13 +120,8 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	for key, value := range agentGatewayEnv(bootstrap) {
 		env[key] = value
 	}
-	// WORKER_GPU_DEVICES is the durable copy of the assignment; the container
-	// toolkit rewrites NVIDIA_VISIBLE_DEVICES to "void" after device injection.
-	if slot.GpuCount > 0 {
-		assignment := firstNonEmpty(slot.GpuAssignment, types.NvidiaVisibleDevicesAll)
-		env[types.NvidiaVisibleDevicesEnv] = assignment
-		env[types.WorkerGPUDevicesEnv] = assignment
-	}
+	maps.Copy(env, gpu.env)
+
 	envKeys := make([]string, 0, len(env))
 	for key := range env {
 		envKeys = append(envKeys, key)
@@ -139,5 +133,5 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	}
 
 	args = append(args, image, types.AgentWorkerEntrypoint)
-	return args
+	return args, nil
 }

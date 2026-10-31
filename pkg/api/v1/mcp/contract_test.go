@@ -56,11 +56,14 @@ func TestMCPVMResourceContract(t *testing.T) {
 	require.Equal(t, 0, properties["idle_timeout"].(map[string]any)["default"])
 	for _, spec := range []map[string]any{
 		{"image_id": "base", "desktop": true, "cpu": 1000, "memory": 1024},
+		{"image_id": "base", "gpu": "RTX4090"},
 		{"image_id": "base", "cpu": 100, "memory": 256, "idle_timeout": 365 * 24 * 60 * 60},
 	} {
 		require.NoError(t, g.byName["create_vm"].validate(map[string]any{"spec": spec}))
 	}
 	for _, spec := range []map[string]any{
+		{"image_id": "base", "gpu": []string{"RTX4090"}},
+		{"image_id": "base", "gpu_count": 2},
 		{"image_id": "base", "desktop": true, "memory": 1023},
 		{"image_id": "base", "cpu": 99},
 		{"image_id": "base", "memory": 255},

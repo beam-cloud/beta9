@@ -51,6 +51,7 @@ func vmSpecSchema() map[string]any {
 		"image_id":        str("VM image built with beam vm image build or the local vm_build_image tool"),
 		"cpu":             map[string]any{"type": "integer", "minimum": 100, "maximum": 64000, "default": 4000, "description": "CPU millicores (1000 = 1 CPU); fresh VM default is 4000."},
 		"memory":          map[string]any{"type": "integer", "minimum": 256, "maximum": 262144, "default": 8192, "description": "RAM in MiB; desktop requires at least 1024. Fresh VM default is 8192."},
+		"gpu":             str("One GPU type, for example RTX4090; omitted for CPU-only VMs"),
 		"disk_size":       str("Writable root capacity; fresh VM default 50Gi, maximum 100Gi"),
 		"pool":            str("VM-capable worker pool"),
 		"env":             strList("KEY=value entries"),
@@ -116,7 +117,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 	tools := []mcpTool{
 		vmTool(
 			"list_vms",
-			"Persistent CPU VMs in this workspace; optional metadata/status filters. Management responses "+
+			"Persistent VMs in this workspace; optional metadata/status filters. Management responses "+
 				"redact environment and credentials.",
 			schema(props{
 				"all":      boolean(),
@@ -136,7 +137,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		),
 		vmTool(
 			"create_vm",
-			"Create a persistent CPU VM from a prepared image, template or snapshot. Use request_id (UUID) "+
+			"Create a persistent VM from a prepared image, template or snapshot. Use request_id (UUID) "+
 				"for safe retries. Omitted template/snapshot settings inherit. For lifecycle state poll get_vm; "+
 				"verify exec readiness with vm_exec command=[\"true\"], wait=true. SSH, desktop and Docker may still be starting.",
 			schema(props{

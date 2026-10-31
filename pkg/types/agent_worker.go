@@ -49,6 +49,8 @@ const (
 	CacheCoordinatorTokenEnv        = "CACHE_COORDINATOR_TOKEN"
 	NvidiaVisibleDevicesAll         = "all"
 	NvidiaVisibleDevicesEnv         = "NVIDIA_VISIBLE_DEVICES"
+	MicroVMVFIODevicesEnv           = "BEAM_MICROVM_VFIO_DEVICES"
+	MicroVMGPUTypeEnv               = "BEAM_MICROVM_GPU_TYPE"
 	AgentDockerHostsEnv             = "BEAM_AGENT_DOCKER_HOST_ALIASES"
 	AgentInContainerEnv             = "BEAM_AGENT_CONTAINER"
 	AgentHostnameEnv                = "BEAM_AGENT_HOSTNAME"

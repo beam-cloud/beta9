@@ -13,6 +13,9 @@ import (
 // paused. The terminal checkpoint owns shutdown; a normal systemd shutdown
 // would change those disks underneath the saved memory image.
 func (s *Service) pause(ctx context.Context, v *types.VM) error {
+	if v.Spec.GPU != "" {
+		return echo.NewHTTPError(409, "GPU VMs cannot pause memory; stop to preserve saved files")
+	}
 	if v.DesiredState == types.VMStatePaused {
 		if v.MemoryCheckpointID == "" {
 			return echo.NewHTTPError(409, "memory pause did not complete; use start with cold=true to recover from disk")

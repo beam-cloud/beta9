@@ -347,7 +347,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	t.Setenv(types.AgentDockerHostsEnv, "registry.localhost:127.0.0.1,localstack:host-gateway")
 	t.Setenv(types.AgentWorkerPlatformEnv, "linux/amd64")
 
-	args := dockerRunArgs("slot-one", "worker:dev", "sha256:worker-image", "/tmp/config.json", bootstrapConfig{
+	args, err := dockerRunArgs("slot-one", "worker:dev", "sha256:worker-image", "/tmp/config.json", bootstrapConfig{
 		GatewayHTTPURL:  "http://host.docker.internal:1994",
 		GatewayGRPCHost: "host.docker.internal",
 		GatewayGRPCPort: 1993,
@@ -365,6 +365,9 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		ContainerStartConcurrency: 12,
 		PoolConfig:                &pb.AgentPoolRuntimeConfig{GpuVirtualized: true},
 	}, agentWorkerDirs("/tmp/agent-state", "", "worker-one"), workerContainerResourceLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if !containsArg(args, "-e", types.WorkerRouteTargetEnv+"=host.docker.internal") {
 		t.Fatalf("expected route target host env in docker args: %#v", args)
@@ -474,7 +477,7 @@ func TestManagedPoolPathsOverrideAgentInstallerDirectories(t *testing.T) {
 		}
 	}
 
-	args := dockerRunArgs(
+	args, err := dockerRunArgs(
 		"slot-one",
 		"worker:dev",
 		"",
@@ -484,6 +487,9 @@ func TestManagedPoolPathsOverrideAgentInstallerDirectories(t *testing.T) {
 		dirs,
 		workerContainerResourceLimits{},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, volume := range []string{
 		"/mnt/raid/images:" + types.AgentImagesPath,
 		"/mnt/raid/storage/workspace-data:" + types.AgentWorkspacePath,
@@ -519,14 +525,17 @@ func TestManagedPoolCanDisableAgentDiskCacheMount(t *testing.T) {
 			t.Fatal("disabled cache directory should not be created")
 		}
 	}
-	args := dockerRunArgs("slot-one", "worker:dev", "", "/tmp/config.json", bootstrapConfig{}, slot, dirs, workerContainerResourceLimits{})
+	args, err := dockerRunArgs("slot-one", "worker:dev", "", "/tmp/config.json", bootstrapConfig{}, slot, dirs, workerContainerResourceLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if containsArg(args, "-v", "/mnt/raid/cache:"+types.AgentCachePath) {
 		t.Fatalf("disabled cache was mounted: %#v", args)
 	}
 }
 
 func TestDockerRunArgsAppliesExplicitResourceLimits(t *testing.T) {
-	args := dockerRunArgs(
+	args, err := dockerRunArgs(
 		"slot-one",
 		"worker:dev",
 		"",
@@ -536,6 +545,9 @@ func TestDockerRunArgsAppliesExplicitResourceLimits(t *testing.T) {
 		agentWorkerDirs("/tmp/agent-state", "", "worker-one"),
 		workerContainerResourceLimits{cpu: true, memory: true},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if !containsArg(args, "--cpus", "4.000") {
 		t.Fatalf("expected explicit CPU limit in Docker args: %#v", args)
@@ -1795,4 +1807,13 @@ func startEchoListener(t *testing.T, addr string) net.Listener {
 		}
 	}()
 	return listener
+}
+
+func TestGPUSelectionRejectsAliasesOfTheSameDevice(t *testing.T) {
+	_, _, ok := resolveAgentCapacity(types.AgentJoinOptions{GPUIDs: "GPU-a,0"}, preflightResult{
+		gpus: []string{"RTX4090"}, gpuDevices: []gpuDevice{{ID: "0", UUID: "GPU-a", Name: "RTX4090"}}, schedulable: true,
+	})
+	if ok {
+		t.Fatal("duplicate GPU aliases inflated advertised capacity")
+	}
 }
