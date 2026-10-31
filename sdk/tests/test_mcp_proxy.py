@@ -1141,3 +1141,17 @@ def test_skill_installs_rendered_for_cli_name(settings, tmp_path):
     # Platform reference syntax survives rendering untouched.
     assert "${{db.<name>.DATABASE_URL}}" in rendered["SKILL.md"]
     assert {"deploy.md", "databases.md", "operate.md", "setup.md"} <= set(rendered)
+
+
+def test_skill_ends_with_the_clis_own_sections(settings, tmp_path):
+    from beta9.skills import SKILL_SOURCE, install_skill, render
+
+    plain = (install_skill(tmp_path / "plain") / "SKILL.md").read_text()
+    assert plain == render((SKILL_SOURCE / "SKILL.md").read_text())
+
+    settings.skill_sections = ["## Extra\n\nRun `{{cli}} extra`.\n", "\n## More\n"]
+    target = install_skill(tmp_path / "skills")
+    skill = (target / "SKILL.md").read_text()
+
+    assert skill == plain + "\n## Extra\n\nRun `beta9 extra`.\n\n## More\n"
+    assert "## Extra" not in (target / "references" / "deploy.md").read_text()
