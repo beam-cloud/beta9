@@ -34,6 +34,7 @@ type joinResponse struct {
 }
 
 type bootstrapConfig struct {
+	DeniedCIDRs                []string        `json:"deniedCidrs"`
 	GatewayHTTPURL             string          `json:"gatewayHttpUrl"`
 	GatewayGRPCHost            string          `json:"gatewayGrpcHost"`
 	GatewayGRPCPort            int             `json:"gatewayGrpcPort"`

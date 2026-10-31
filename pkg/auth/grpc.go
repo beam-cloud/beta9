@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 
@@ -79,7 +80,8 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 		backendRepo:   backendRepo,
 		workspaceRepo: workspaceRepo,
 		unauthenticatedMethods: map[string]bool{
-			pb.GatewayService_Authorize_FullMethodName: true,
+			pb.GatewayService_Authorize_FullMethodName:                       true,
+			pb.WorkerRepositoryService_PublishWorkerTelemetry_FullMethodName: true,
 			// Replica harness calls carry no workspace token; the service
 			// authorizes them with the per-replica secret.
 			pb.EndpointHarnessService_Register_FullMethodName:                          true,
@@ -135,6 +137,8 @@ func (ai *AuthInterceptor) getToken(ctx context.Context, tokenKey string) (*type
 		if err != nil {
 			return nil, nil, err
 		}
+	} else if err := validateCachedToken(ctx, ai.backendRepo, token); err != nil {
+		return nil, nil, err
 	}
 
 	if !workspace.StorageAvailable() {
@@ -168,7 +172,7 @@ func (ai *AuthInterceptor) validateToken(ctx context.Context, md metadata.MD) (*
 	}
 
 	// For now, restricted tokens should not be allowed to access grpc calls
-	if !token.Active || token.DisabledByClusterAdmin {
+	if !token.ValidAt(time.Now()) {
 		return nil, false
 	}
 	return &AuthInfo{
@@ -182,14 +186,42 @@ type wrappedStream struct {
 	grpc.ServerStream
 	ctx       context.Context
 	authorize func(interface{}) error
+	validate  func() error
 }
 
 func (w *wrappedStream) Context() context.Context {
 	return w.ctx
 }
 
+func (w *wrappedStream) SendMsg(resp interface{}) error {
+	if w.validate != nil {
+		if err := w.validate(); err != nil {
+			return err
+		}
+	}
+	return w.ServerStream.SendMsg(resp)
+}
+
 func (w *wrappedStream) RecvMsg(req interface{}) error {
-	if err := w.ServerStream.RecvMsg(req); err != nil {
+	if w.validate != nil {
+		if err := w.validate(); err != nil {
+			return err
+		}
+	}
+	if w.validate == nil {
+		return w.ServerStream.RecvMsg(req)
+	}
+	received := make(chan error, 1)
+	go func() { received <- w.ServerStream.RecvMsg(req) }()
+	select {
+	case <-w.ctx.Done():
+		return status.Error(codes.Unauthenticated, "credential is no longer active")
+	case err := <-received:
+		if err != nil {
+			return err
+		}
+	}
+	if err := w.validate(); err != nil {
 		return err
 	}
 	if w.authorize != nil {
@@ -213,13 +245,23 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
+		if ai.isAuthRequired(info.FullMethod) {
+			if err := authorizeMethod(authInfo, info.FullMethod); err != nil {
+				return err
+			}
+		}
+
+		streamCtx, cancel, validate := ai.guardStream(stream.Context(), authInfo.Token)
+		defer cancel()
+
 		// Create a new context with the AuthInfo
-		ctxWithAuth := ai.newContextWithAuth(stream.Context(), authInfo)
+		ctxWithAuth := ai.newContextWithAuth(streamCtx, authInfo)
 
 		// Create a new wrapped stream with the new context
 		wrappedStr := &wrappedStream{
 			ServerStream: stream,
 			ctx:          ctxWithAuth,
+			validate:     validate,
 		}
 		if service, ok := srv.(RequestAuthorizer); ok && ai.isAuthRequired(info.FullMethod) {
 			wrappedStr.authorize = func(req interface{}) error {
@@ -247,6 +289,12 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
+		if ai.isAuthRequired(info.FullMethod) {
+			if err := authorizeMethod(authInfo, info.FullMethod); err != nil {
+				return nil, err
+			}
+		}
+
 		// Attach the auth info to context
 		ctx = ai.newContextWithAuth(ctx, authInfo)
 		if service, ok := info.Server.(RequestAuthorizer); ok && ai.isAuthRequired(info.FullMethod) {
@@ -267,7 +315,14 @@ func ContextWithAuthInfo(ctx context.Context, authInfo *AuthInfo) context.Contex
 }
 
 func HasPermission(authInfo *AuthInfo) bool {
-	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted
+	if authInfo == nil || authInfo.Token == nil {
+		return false
+	}
+	switch authInfo.Token.TokenType {
+	case types.TokenTypeClusterAdmin, types.TokenTypeWorkspacePrimary, types.TokenTypeWorkspace, types.TokenTypePlatformDeployer:
+		return true
+	}
+	return false
 }
 
 // HasInteractivePermission limits user-controlled interactive sessions to

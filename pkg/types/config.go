@@ -146,14 +146,15 @@ type RedisConfig struct {
 }
 
 type PostgresConfig struct {
-	Host          string `key:"host" json:"host"`
-	Port          int    `key:"port" json:"port"`
-	Name          string `key:"name" json:"name"`
-	Username      string `key:"username" json:"username"`
-	Password      string `key:"password" json:"password"`
-	TimeZone      string `key:"timezone" json:"timezone"`
-	EnableTLS     bool   `key:"enableTLS" json:"enable_tls"`
-	EncryptionKey string `key:"encryptionKey" json:"encryption_key"`
+	CredentialKMSKeyID string `key:"credentialKMSKeyID" json:"credential_kms_key_id"`
+	Host               string `key:"host" json:"host"`
+	Port               int    `key:"port" json:"port"`
+	Name               string `key:"name" json:"name"`
+	Username           string `key:"username" json:"username"`
+	Password           string `key:"password" json:"password"`
+	TimeZone           string `key:"timezone" json:"timezone"`
+	EnableTLS          bool   `key:"enableTLS" json:"enable_tls"`
+	EncryptionKey      string `key:"encryptionKey" json:"encryption_key"`
 	// MaxOpenConns caps this process's database connections; 0 is unbounded.
 	MaxOpenConns int `key:"maxOpenConns" json:"max_open_conns"`
 }
@@ -380,6 +381,7 @@ const (
 )
 
 type ImageServiceConfig struct {
+	UpstreamBuildRegistry          string                         `key:"upstreamBuildRegistry" json:"upstream_build_registry"`
 	LocalCacheEnabled              bool                           `key:"localCacheEnabled" json:"local_cache_enabled"`
 	RegistryStore                  string                         `key:"registryStore" json:"registry_store"`
 	RegistryCredentialProviderName string                         `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
@@ -589,6 +591,7 @@ type JobResourceOverheadConfig struct {
 }
 
 type WorkerConfig struct {
+	CacheRuntimeSecretName       string                        `key:"cacheRuntimeSecretName" json:"cache_runtime_secret_name"`
 	Pools                        map[string]WorkerPoolConfig   `key:"pools" json:"pools"`
 	HostNetwork                  bool                          `key:"hostNetwork" json:"host_network"`
 	UseGatewayServiceHostname    bool                          `key:"useGatewayServiceHostname" json:"use_gateway_service_hostname"`
@@ -626,11 +629,13 @@ type WorkerConfig struct {
 
 // Listener port zero allocates a free worker-local port.
 type EgressConfig struct {
-	Enabled                    bool `key:"enabled" json:"enabled"`
-	TLSPort                    int  `key:"tlsPort" json:"tls_port"`
-	HTTPPort                   int  `key:"httpPort" json:"http_port"`
-	OtherPort                  int  `key:"otherPort" json:"other_port"`
-	MaxConnectionsPerContainer int  `key:"maxConnectionsPerContainer" json:"max_connections_per_container"`
+	DeniedCIDRs                []string `key:"deniedCIDRs" json:"denied_cidrs"`
+	LocalProxyPorts            []int    `key:"localProxyPorts" json:"local_proxy_ports"`
+	Enabled                    bool     `key:"enabled" json:"enabled"`
+	TLSPort                    int      `key:"tlsPort" json:"tls_port"`
+	HTTPPort                   int      `key:"httpPort" json:"http_port"`
+	OtherPort                  int      `key:"otherPort" json:"other_port"`
+	MaxConnectionsPerContainer int      `key:"maxConnectionsPerContainer" json:"max_connections_per_container"`
 }
 
 type ContainerResourceLimitsConfig struct {

@@ -312,6 +312,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 	}
 
 	req := &types.ContainerRequest{
+		BuildOutputImageID: b.imageID,
 		BuildOptions: types.BuildOptions{
 			SourceImage:      sourceImagePtr,
 			SourceImageCreds: sourceImageCreds,

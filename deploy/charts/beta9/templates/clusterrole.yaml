@@ -1,29 +1,32 @@
-{{- if .Values.serviceAccount.create -}}
----
+{{- if .Values.serviceAccount.create }}
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: {{ .Values.serviceAccount.name }}-role
-  labels:
-    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace }}
 rules:
-- apiGroups: ["*"]
-  resources: ["*"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: [{{ .Values.config.worker.cacheRuntimeSecretName | default "beta9-cache-runtime" | quote }}]
+  verbs: ["get", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: {{ .Values.serviceAccount.name }}-role-binding
-  labels:
-    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: Role
   name: {{ .Values.serviceAccount.name }}-role
 subjects:
 - kind: ServiceAccount
   name: {{ .Values.serviceAccount.name }}
   namespace: {{ .Release.Namespace }}
----
-{{- end -}}
+{{- end }}

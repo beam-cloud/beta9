@@ -121,7 +121,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
+	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient, config.Database.Postgres.EncryptionKey)
 	eventRepo := repository.NewEventClientRepo(config, repository.WithWorkspaceWebhooks(workspaceRepo))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -159,7 +159,7 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
+	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker, backendRepo)
 	workerPoolRepo := repository.NewWorkerPoolRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
 	taskDispatcher, err := task.NewDispatcher(ctx, taskRepo)
@@ -299,6 +299,12 @@ func (g *Gateway) initHttp() error {
 	}
 
 	g.echo = e
+	registryProxy, err := repositoryservices.NewWorkerRegistryProxy(g.Config, g.BackendRepo, g.ContainerRepo, g.RedisClient)
+	if err != nil {
+		return err
+	}
+	e.Any("/v2", echo.WrapHandler(registryProxy))
+	e.Any("/v2/*", echo.WrapHandler(registryProxy))
 	g.authMiddleware = auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)
 	authMiddleware := g.authMiddleware
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
@@ -421,7 +427,7 @@ func (g *Gateway) registerRepositoryServices() error {
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
 
-	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo)
+	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo, g.ContainerRepo)
 	pb.RegisterBackendRepositoryServiceServer(g.grpcServer, br)
 
 	return nil

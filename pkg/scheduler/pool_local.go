@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 )
 
@@ -62,6 +63,10 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 		workerPoolRepo:   opts.WorkerPoolRepo,
 		containerRepo:    opts.ContainerRepo,
 		eventRepo:        opts.EventRepo,
+	}
+
+	if err := wpc.publishCacheRuntimeConfig(); err != nil {
+		return nil, err
 	}
 
 	// Start monitoring worker pool size
@@ -142,6 +147,10 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 	token, err := wpc.backendRepo.CreateToken(wpc.ctx, wpc.workspace.Id, types.TokenTypeWorker, true)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := repository.BindWorkerToken(wpc.ctx, wpc.backendRepo, token.ExternalId, workerId); err != nil {
 		return nil, err
 	}
 
@@ -248,7 +257,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName:            wpc.config.Worker.ServiceAccountName,
-			AutomountServiceAccountToken:  ptr.To(true),
+			AutomountServiceAccountToken:  ptr.To(false),
 			HostNetwork:                   wpc.config.Worker.HostNetwork,
 			ImagePullSecrets:              imagePullSecrets,
 			RestartPolicy:                 corev1.RestartPolicyOnFailure,
@@ -292,7 +301,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPoolConfig.Priority,
-		Runtime:       wpc.workerPoolConfig.ContainerRuntime,
+		Runtime:       workerConfig.Worker.Pools[wpc.name].ContainerRuntime,
 		BuildVersion:  wpc.config.Worker.ImageTag,
 		Preemptable:   wpc.workerPoolConfig.Preemptable,
 	}
@@ -312,7 +321,7 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 		config.Monitoring.MetricsCollector = string(types.MetricsCollectorNone)
 		config.Monitoring.Prometheus.ScrapeWorkers = false
 	}
-	return config
+	return common.WorkerRuntimeConfig(config, wpc.name)
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.Job) error {
@@ -343,16 +352,6 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 				},
 			},
 		},
-	}
-
-	if len(wpc.workerPoolConfig.JobSpec.Volumes) > 0 {
-		for _, volume := range wpc.workerPoolConfig.JobSpec.Volumes {
-			vol := corev1.Volume{Name: volume.Name}
-			if volume.Secret.SecretName != "" {
-				vol.Secret = &corev1.SecretVolumeSource{SecretName: volume.Secret.SecretName}
-			}
-			volumes = append(volumes, vol)
-		}
 	}
 
 	volumeSource := corev1.VolumeSource{}
@@ -445,10 +444,6 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 		ReadOnly:  true,
 	})
 
-	if len(wpc.workerPoolConfig.JobSpec.VolumeMounts) > 0 {
-		volumeMounts = append(volumeMounts, wpc.workerPoolConfig.JobSpec.VolumeMounts...)
-	}
-
 	if workerCacheEnabled(wpc.config, wpc.workerPoolConfig) {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      cacheVolumeName,
@@ -479,6 +474,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 	}
 
 	envVars := []corev1.EnvVar{
+		{Name: types.WorkerMinimalConfigEnv, Value: "true"},
 		{
 			Name:  "WORKER_ID",
 			Value: workerId,
@@ -609,8 +605,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		}...)
 	}
 
-	if len(wpc.workerPoolConfig.JobSpec.Env) > 0 {
-		envVars = append(envVars, wpc.workerPoolConfig.JobSpec.Env...)
+	for _, variable := range wpc.workerPoolConfig.JobSpec.Env {
+		if variable.ValueFrom != nil {
+			continue
+		}
+		switch variable.Name {
+		case "GOMAXPROCS", "GOMEMLIMIT", "GOGC":
+			envVars = append(envVars, variable)
+		}
 	}
 
 	configJSON, err := json.MarshalIndent(workerConfig, "", "  ")
@@ -697,4 +699,30 @@ func validateJobResourceOverheadQuantity(name corev1.ResourceName, q resource.Qu
 		}
 	}
 	return nil
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) publishCacheRuntimeConfig() error {
+	name := wpc.config.Worker.CacheRuntimeSecretName
+	if name == "" {
+		return nil
+	}
+	config := common.WorkerRuntimeConfig(wpc.config, "")
+	// The cache coordinator credential is limited to the cache protocol.
+	config.Cache.Coordinator.Token = wpc.config.Cache.Coordinator.Token
+	data, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		secret, err := wpc.kubeClient.CoreV1().Secrets(wpc.config.Worker.Namespace).Get(wpc.ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		secret.Data["config.json"] = data
+		_, err = wpc.kubeClient.CoreV1().Secrets(wpc.config.Worker.Namespace).Update(wpc.ctx, secret, metav1.UpdateOptions{})
+		return err
+	})
 }

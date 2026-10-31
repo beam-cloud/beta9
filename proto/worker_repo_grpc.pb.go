@@ -65,6 +65,8 @@ const (
 	WorkerRepositoryService_GetContainerIps_FullMethodName                  = "/WorkerRepositoryService/GetContainerIps"
 	WorkerRepositoryService_GetContainerIpAssignments_FullMethodName        = "/WorkerRepositoryService/GetContainerIpAssignments"
 	WorkerRepositoryService_RemoveContainerIp_FullMethodName                = "/WorkerRepositoryService/RemoveContainerIp"
+	WorkerRepositoryService_ReportWorkerUsage_FullMethodName                = "/WorkerRepositoryService/ReportWorkerUsage"
+	WorkerRepositoryService_PublishWorkerTelemetry_FullMethodName           = "/WorkerRepositoryService/PublishWorkerTelemetry"
 )
 
 // WorkerRepositoryServiceClient is the client API for WorkerRepositoryService service.
@@ -119,6 +121,8 @@ type WorkerRepositoryServiceClient interface {
 	GetContainerIps(ctx context.Context, in *GetContainerIpsRequest, opts ...grpc.CallOption) (*GetContainerIpsResponse, error)
 	GetContainerIpAssignments(ctx context.Context, in *GetContainerIpAssignmentsRequest, opts ...grpc.CallOption) (*GetContainerIpAssignmentsResponse, error)
 	RemoveContainerIp(ctx context.Context, in *RemoveContainerIpRequest, opts ...grpc.CallOption) (*RemoveContainerIpResponse, error)
+	ReportWorkerUsage(ctx context.Context, in *ReportWorkerUsageRequest, opts ...grpc.CallOption) (*ReportWorkerUsageResponse, error)
+	PublishWorkerTelemetry(ctx context.Context, in *PublishWorkerTelemetryRequest, opts ...grpc.CallOption) (*PublishWorkerTelemetryResponse, error)
 }
 
 type workerRepositoryServiceClient struct {
@@ -589,6 +593,24 @@ func (c *workerRepositoryServiceClient) RemoveContainerIp(ctx context.Context, i
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) ReportWorkerUsage(ctx context.Context, in *ReportWorkerUsageRequest, opts ...grpc.CallOption) (*ReportWorkerUsageResponse, error) {
+	out := new(ReportWorkerUsageResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_ReportWorkerUsage_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) PublishWorkerTelemetry(ctx context.Context, in *PublishWorkerTelemetryRequest, opts ...grpc.CallOption) (*PublishWorkerTelemetryResponse, error) {
+	out := new(PublishWorkerTelemetryResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_PublishWorkerTelemetry_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerRepositoryServiceServer is the server API for WorkerRepositoryService service.
 // All implementations must embed UnimplementedWorkerRepositoryServiceServer
 // for forward compatibility
@@ -641,6 +663,8 @@ type WorkerRepositoryServiceServer interface {
 	GetContainerIps(context.Context, *GetContainerIpsRequest) (*GetContainerIpsResponse, error)
 	GetContainerIpAssignments(context.Context, *GetContainerIpAssignmentsRequest) (*GetContainerIpAssignmentsResponse, error)
 	RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error)
+	ReportWorkerUsage(context.Context, *ReportWorkerUsageRequest) (*ReportWorkerUsageResponse, error)
+	PublishWorkerTelemetry(context.Context, *PublishWorkerTelemetryRequest) (*PublishWorkerTelemetryResponse, error)
 	mustEmbedUnimplementedWorkerRepositoryServiceServer()
 }
 
@@ -785,6 +809,12 @@ func (UnimplementedWorkerRepositoryServiceServer) GetContainerIpAssignments(cont
 }
 func (UnimplementedWorkerRepositoryServiceServer) RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveContainerIp not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) ReportWorkerUsage(context.Context, *ReportWorkerUsageRequest) (*ReportWorkerUsageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportWorkerUsage not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) PublishWorkerTelemetry(context.Context, *PublishWorkerTelemetryRequest) (*PublishWorkerTelemetryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PublishWorkerTelemetry not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) mustEmbedUnimplementedWorkerRepositoryServiceServer() {
 }
@@ -1634,6 +1664,42 @@ func _WorkerRepositoryService_RemoveContainerIp_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_ReportWorkerUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportWorkerUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).ReportWorkerUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_ReportWorkerUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).ReportWorkerUsage(ctx, req.(*ReportWorkerUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_PublishWorkerTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishWorkerTelemetryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).PublishWorkerTelemetry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_PublishWorkerTelemetry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).PublishWorkerTelemetry(ctx, req.(*PublishWorkerTelemetryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerRepositoryService_ServiceDesc is the grpc.ServiceDesc for WorkerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1816,6 +1882,14 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveContainerIp",
 			Handler:    _WorkerRepositoryService_RemoveContainerIp_Handler,
+		},
+		{
+			MethodName: "ReportWorkerUsage",
+			Handler:    _WorkerRepositoryService_ReportWorkerUsage_Handler,
+		},
+		{
+			MethodName: "PublishWorkerTelemetry",
+			Handler:    _WorkerRepositoryService_PublishWorkerTelemetry_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

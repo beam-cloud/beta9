@@ -89,6 +89,8 @@ service WorkerRepositoryService {
       returns (GetContainerIpAssignmentsResponse) {}
   rpc RemoveContainerIp(RemoveContainerIpRequest)
       returns (RemoveContainerIpResponse) {}
+  rpc ReportWorkerUsage(ReportWorkerUsageRequest) returns (ReportWorkerUsageResponse);
+  rpc PublishWorkerTelemetry(PublishWorkerTelemetryRequest) returns (PublishWorkerTelemetryResponse);
 }
 
 message GetNextContainerRequestRequest { string worker_id = 1; }
@@ -424,6 +426,7 @@ message GetCacheOriginCredentialsRequest {
   // Publish a filesystem export under this stub's generated image ID.
   string image_archive_upload_id = 5;
   bool image_archive_upload_data = 6;
+  string container_id = 7;
 }
 
 message GetCacheOriginCredentialsResponse {
@@ -466,6 +469,7 @@ message GetContainerRuntimeCredentialsRequest {
   bool workspace_storage = 6;
   repeated RuntimeMountCredentialRequest mount_credentials = 7;
  repeated string binding_names = 8;
+  bool build_credentials = 9;
 }
 
 message GetContainerRuntimeCredentialsResponse {
@@ -475,6 +479,8 @@ message GetContainerRuntimeCredentialsResponse {
   CacheWorkspaceStorageCredentials workspace_storage = 4;
   repeated RuntimeMountCredentials mount_credentials = 5;
  repeated types.SecretBinding secret_bindings = 6;
+  repeated string build_secrets = 7;
+  string git_token = 8;
 }
 
 message PruneStaleCacheCheckpointsRequest {
@@ -707,3 +713,18 @@ message GetWorkerServiceProxyConfigResponse {
   // Whether its certificate is publicly trusted, so workers verify it.
   bool verify_tls = 5;
 }
+
+enum WorkerUsageOperation { WORKER_USAGE_QUOTE = 0; WORKER_USAGE_COUNTER = 1; WORKER_USAGE_EXTERNAL = 2; }
+message ReportWorkerUsageRequest {
+ string worker_id = 1;
+ string container_id = 2;
+ WorkerUsageOperation operation = 3;
+ string metric = 4;
+ string metadata_json = 5;
+ double value = 6;
+ int64 start_unix_nano = 7;
+ int64 end_unix_nano = 8;
+}
+message ReportWorkerUsageResponse { bool ok = 1; string error_msg = 2; string quote_json = 3; }
+message PublishWorkerTelemetryRequest { string worker_id = 1; string event_json = 2; repeated string events_json = 3; }
+message PublishWorkerTelemetryResponse { bool ok = 1; string error_msg = 2; }

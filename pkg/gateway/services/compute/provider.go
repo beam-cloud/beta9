@@ -23,6 +23,9 @@ const providerPoolPriority = int32(100)
 // type exists and mints a join token for a new machine.
 func (s *Service) GetProviderJoinCommand(ctx context.Context, in *pb.GetProviderJoinCommandRequest) (*pb.GetProviderJoinCommandResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if !auth.HasInteractivePermission(authInfo) {
+		return &pb.GetProviderJoinCommandResponse{Ok: false, ErrMsg: "permission denied"}, nil
+	}
 	workspaceID, actorTokenID := computeWorkspaceID(authInfo), computeActorTokenID(authInfo)
 	if workspaceID == "" || actorTokenID == "" {
 		return &pb.GetProviderJoinCommandResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil

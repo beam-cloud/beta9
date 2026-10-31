@@ -53,7 +53,7 @@ type cachedLayer struct {
 // indexes seeds the latter, so an image built here is restorable without a
 // registry pull as soon as it is published.
 func (c *ImageClient) baseImage(ctx context.Context, request *types.ContainerRequest, sourceImage string) (v1.Image, []cachedLayer, []v1.Descriptor, error) {
-	ref, err := name.ParseReference(sourceImage)
+	ref, err := c.parseImageReference(sourceImage)
 	if err != nil {
 		return nil, nil, nil, err
 	}

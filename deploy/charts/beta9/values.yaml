@@ -9,6 +9,8 @@ global:
 # https://github.com/beam-cloud/beta9/blob/main/pkg/common/config.default.yaml
 config:
   worker:
+    serviceAccountName: beta9-worker
+    cacheRuntimeSecretName: beta9-cache-runtime
     imageRegistry: public.ecr.aws/n4e0e1y0
     imagePVCName: ""
   imageService:
@@ -133,6 +135,7 @@ ingress:
     labels: {}
 
 serviceAccount:
+  create: true
   name: beta9
   annotations: {}
   labels: {}

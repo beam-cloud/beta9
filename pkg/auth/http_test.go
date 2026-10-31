@@ -59,6 +59,7 @@ func mockBackendWithValidToken() MockDetails {
 	}
 
 	tokenForTest := types.Token{
+		TokenType:   types.TokenTypeWorkspace,
 		Id:          1,
 		ExternalId:  "test",
 		Key:         "test",

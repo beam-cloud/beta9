@@ -6,6 +6,7 @@ import (
 	pathpkg "path"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -185,7 +186,16 @@ type agentConfigCacheFS struct {
 
 func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) error {
 	config := newAgentWorkerConfig(bootstrap, slot).sanitizedForAgent()
-	data, err := json.MarshalIndent(config, "", "  ")
+	data, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	runtime, err := common.AgentRuntimeConfig(data, slot.PoolName)
+	if err != nil {
+		return err
+	}
+	runtime.Worker.Egress.DeniedCIDRs = append([]string(nil), bootstrap.DeniedCIDRs...)
+	data, err = json.MarshalIndent(runtime, "", "  ")
 	if err != nil {
 		return err
 	}

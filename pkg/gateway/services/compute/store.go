@@ -44,6 +44,9 @@ func (s *Service) rollbackPoolState(ctx context.Context, workspaceID, poolName s
 }
 
 func (s *Service) saveComputeJoinTokenState(ctx context.Context, state *model.JoinTokenState, ttl time.Duration) error {
+	if state.Revoked && ttl > 0 && ttl < 25*time.Hour {
+		ttl = 25 * time.Hour
+	}
 	return s.computeRepo.SaveJoinTokenState(ctx, state, ttl)
 }
 
@@ -83,6 +86,15 @@ func (s *Service) currentComputeAgentState(ctx context.Context, state *model.Age
 	}
 	if current.TokenHash != state.TokenHash {
 		return nil, nil
+	}
+	if current.JoinTokenHash != "" {
+		join, err := s.computeRepo.GetJoinTokenState(ctx, current.JoinTokenHash)
+		if err != nil {
+			return nil, err
+		}
+		if join != nil && join.Revoked {
+			return nil, nil
+		}
 	}
 	return current, nil
 }

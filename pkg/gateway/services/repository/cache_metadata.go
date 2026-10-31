@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/common"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -170,7 +171,7 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return &pb.GetCacheOriginCredentialsResponse{Ok: true, ImageArchiveUploadUrl: url}, nil
 	}
 
-	registryCredentials := s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry)
+	registryCredentials := s.workerRegistryCredentials(ctx, req)
 	if req.Registry != "" {
 		// Direct OCI pulls only need registry credentials. Resolving workspace
 		// storage and presigning image archives here adds database and object
@@ -178,7 +179,7 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return &pb.GetCacheOriginCredentialsResponse{
 			Ok:                    true,
 			RegistryCredentials:   registryCredentials,
-			BuildRegistry:         s.appConfig.ImageService.EffectiveBuildRegistry(),
+			BuildRegistry:         s.workerBuildRegistry(req.Registry),
 			BuildRepositoryName:   s.appConfig.ImageService.BuildRepositoryName,
 			BuildRegistryInsecure: s.appConfig.ImageService.BuildRegistryInsecure,
 		}, nil
@@ -200,8 +201,8 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 
 // authorizeOriginCredentialWorkspace restricts private-pool (customer compute)
 // worker tokens to credentials for their own workspace. Cluster workers and
-// coordinator-token callers are trusted infrastructure and serve containers
-// across workspaces, so they are not restricted.
+// coordinator-token callers serve assigned content across workspaces. Container
+// assignments and image grants are checked separately.
 func authorizeOriginCredentialWorkspace(ctx context.Context, workspaceID string) error {
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
 	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
@@ -217,35 +218,8 @@ func authorizeOriginCredentialWorkspace(ctx context.Context, workspaceID string)
 }
 
 func (s *WorkerRepositoryService) authorizeOriginCredentialStub(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
-		return nil
-	}
-	if req.StubId == "" {
-		return fmt.Errorf("worker token credential request requires a stub")
-	}
-	if req.ImageId == "" {
-		return nil
-	}
-	if s.backendRepo == nil {
-		return fmt.Errorf("backend repository is unavailable")
-	}
-
-	stub, err := s.backendRepo.GetStubByExternalId(ctx, req.StubId, types.QueryFilter{Field: "workspace_id", Value: req.WorkspaceId})
-	if err != nil {
-		return err
-	}
-	if stub == nil {
-		return fmt.Errorf("stub %q was not found in workspace %q", req.StubId, req.WorkspaceId)
-	}
-	config, err := stub.UnmarshalConfig()
-	if err != nil {
-		return err
-	}
-	if config == nil || config.Runtime.ImageId != req.ImageId {
-		return fmt.Errorf("worker token cannot request credentials for image %q on stub %q", req.ImageId, req.StubId)
-	}
-	return nil
+	_, err := s.assignedImageGrant(ctx, req)
+	return err
 }
 
 func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context, _ *pb.PruneStaleCacheCheckpointsRequest) (*pb.PruneStaleCacheCheckpointsResponse, error) {
@@ -498,10 +472,7 @@ func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, 
 }
 
 func (s *WorkerRepositoryService) registryOriginCredentials(ctx context.Context, workspaceID, imageID, registry string) string {
-	if credentials := s.imageRegistryCredentials(ctx, workspaceID, imageID); credentials != "" {
-		return credentials
-	}
-	return s.buildRegistryCredentials(ctx, registry)
+	return s.imageRegistryCredentials(ctx, workspaceID, imageID)
 }
 
 func (s *WorkerRepositoryService) imageRegistryCredentials(ctx context.Context, workspaceID, imageID string) string {
@@ -624,4 +595,12 @@ func (s *WorkerRepositoryService) GetCacheFsNodeChildren(ctx context.Context, re
 		resp.Children = append(resp.Children, child.ToWorkerCacheProto())
 	}
 	return resp, nil
+}
+
+func (s *WorkerRepositoryService) workerBuildRegistry(requested string) string {
+	if s.isBuildRegistry(requested) {
+		return requested
+	}
+	config := common.WorkerRuntimeConfig(s.appConfig, "")
+	return config.ImageService.BuildRegistry
 }

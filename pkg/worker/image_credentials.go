@@ -80,7 +80,7 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 	}
 
 	stubID := cacheRequestStubID(request)
-	key := strings.Join([]string{workspaceID, stubID, imageID, registry}, "\x00")
+	key := strings.Join([]string{request.ContainerId, workspaceID, stubID, imageID, registry}, "\x00")
 	c.originCredsMu.Lock()
 	if cached, ok := c.originCredsCache[key]; ok && time.Since(cached.fetchedAt) < originCredentialsTTL {
 		c.originCredsMu.Unlock()
@@ -89,6 +89,7 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 	c.originCredsMu.Unlock()
 
 	resp, err := handleGRPCResponse(c.workerRepoClient.GetCacheOriginCredentials(ctx, &pb.GetCacheOriginCredentialsRequest{
+		ContainerId: request.ContainerId,
 		WorkspaceId: workspaceID,
 		StubId:      stubID,
 		Registry:    registry,
@@ -202,4 +203,23 @@ func imageArchiveRegistryConfig(creds *pb.CacheWorkspaceStorageCredentials) type
 		Endpoint:       creds.EndpointUrl,
 		ForcePathStyle: creds.ForcePathStyle,
 	}
+}
+
+// brokerImageReference preserves the repository and content address while
+// directing configured build-registry traffic through the gateway.
+func (c *ImageClient) brokerImageReference(ref string) string {
+	upstream := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(c.config.ImageService.UpstreamBuildRegistry, "https://"), "http://"), "/")
+	if upstream != "" && strings.HasPrefix(ref, upstream+"/") {
+		return c.getBuildRegistry() + strings.TrimPrefix(ref, upstream)
+	}
+	return ref
+}
+func (c *ImageClient) brokerBuildRequest(ctx context.Context, request *types.ContainerRequest) *types.ContainerRequest {
+	request = request.Clone()
+	if request.BuildOptions.SourceImage != nil {
+		source := c.brokerImageReference(*request.BuildOptions.SourceImage)
+		request.BuildOptions.SourceImage = &source
+		request.BuildOptions.SourceImageCreds = c.gatewayRegistryCredentials(ctx, reg.ParseRegistry(source), request)
+	}
+	return request
 }

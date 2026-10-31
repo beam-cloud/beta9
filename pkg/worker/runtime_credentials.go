@@ -113,12 +113,8 @@ func runtimeCredentialsRequest(request *types.ContainerRequest) *pb.GetContainer
 	}
 	workspaceStorage := request.Workspace.StorageAvailable() && !workspaceStorageDownloadAvailable(request.Workspace.Storage)
 	if request.IsBuildRequest() {
-		// A build only needs workspace storage, and only to download its
-		// build context directly.
-		if !workspaceStorage || request.BuildOptions.Dockerfile == nil || request.BuildOptions.BuildCtxObject == nil {
-			return nil
-		}
-		credentials.WorkspaceStorage = true
+		credentials.BuildCredentials = true
+		credentials.WorkspaceStorage = workspaceStorage && request.BuildOptions.Dockerfile != nil && request.BuildOptions.BuildCtxObject != nil
 		return credentials
 	}
 
@@ -187,6 +183,12 @@ func mergeRuntimeEnv(existing, vended []string) []string {
 }
 
 func applyRuntimeCredentials(request *types.ContainerRequest, resp *pb.GetContainerRuntimeCredentialsResponse) {
+	if request.IsBuildRequest() {
+		request.BuildOptions.BuildSecrets = append([]string(nil), resp.BuildSecrets...)
+		if request.BuildOptions.GitSource != nil {
+			request.BuildOptions.GitSource.Token = resp.GitToken
+		}
+	}
 	request.Env = mergeRuntimeEnv(request.Env, resp.Env)
 	for i := range request.SecretBindings {
 		for _, binding := range resp.SecretBindings {

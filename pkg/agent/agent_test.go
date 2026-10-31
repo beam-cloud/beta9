@@ -1230,17 +1230,17 @@ func TestAgentS2ConfigUsesClusterCredentialsOnlyForPlatformPools(t *testing.T) {
 
 func assertGVisorRuntimeConfig(t *testing.T, config map[string]any, slot *pb.AgentWorkerSlot) {
 	t.Helper()
-	if got := config["gvisorPlatform"]; got != slot.GvisorPlatform {
+	if got := config["gvisor_platform"]; got != slot.GvisorPlatform {
 		t.Fatalf("gVisor platform = %v, want %q", got, slot.GvisorPlatform)
 	}
-	if got := config["gvisorRoot"]; got != slot.GvisorRoot {
+	if got := config["gvisor_root"]; got != slot.GvisorRoot {
 		t.Fatalf("gVisor root = %v, want %q", got, slot.GvisorRoot)
 	}
 	wantExtraArgs := make([]any, len(slot.GvisorExtraArgs))
 	for i, arg := range slot.GvisorExtraArgs {
 		wantExtraArgs[i] = arg
 	}
-	if got := config["gvisorExtraArgs"]; !reflect.DeepEqual(got, wantExtraArgs) {
+	if got := config["gvisor_extra_args"]; !reflect.DeepEqual(got, wantExtraArgs) {
 		t.Fatalf("gVisor extra args = %#v, want %#v", got, wantExtraArgs)
 	}
 }
@@ -1292,31 +1292,31 @@ func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gatewayConfig := config["gateway"].(map[string]any)
+	gatewayConfig := config["gateway_service"].(map[string]any)
 	grpcConfig := gatewayConfig["grpc"].(map[string]any)
 	httpConfig := gatewayConfig["http"].(map[string]any)
-	if got := grpcConfig["externalHost"]; got != "host.docker.internal" {
+	if got := grpcConfig["external_host"]; got != "host.docker.internal" {
 		t.Fatalf("grpc external host = %v, want host.docker.internal", got)
 	}
-	if got := grpcConfig["externalPort"]; got != float64(1993) {
+	if got := grpcConfig["external_port"]; got != float64(1993) {
 		t.Fatalf("grpc external port = %v, want 1993", got)
 	}
-	if got := httpConfig["externalHost"]; got != "host.docker.internal" {
+	if got := httpConfig["external_host"]; got != "host.docker.internal" {
 		t.Fatalf("http external host = %v, want host.docker.internal", got)
 	}
-	if got := httpConfig["externalPort"]; got != float64(1994) {
+	if got := httpConfig["external_port"]; got != float64(1994) {
 		t.Fatalf("http external port = %v, want 1994", got)
 	}
 	workerConfig := config["worker"].(map[string]any)
-	if got := workerConfig["useHostResolvConf"]; got != true {
+	if got := workerConfig["use_host_resolv_conf"]; got != true {
 		t.Fatalf("useHostResolvConf = %v, want true", got)
 	}
 	poolsConfig := workerConfig["pools"].(map[string]any)
 	poolConfig := poolsConfig["private-dev"].(map[string]any)
-	if got := poolConfig["criuEnabled"]; got != true {
+	if got := poolConfig["criu_enabled"]; got != true {
 		t.Fatalf("private pool criuEnabled = %v, want true", got)
 	}
-	assertGVisorRuntimeConfig(t, poolConfig["containerRuntimeConfig"].(map[string]any), slot)
+	assertGVisorRuntimeConfig(t, poolConfig["container_runtime_config"].(map[string]any), slot)
 }
 
 func TestAgentLocalRegistryForwardTargetUsesLocalK3DPort(t *testing.T) {
@@ -1556,42 +1556,42 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 			t.Fatalf("obsolete global storage setting %q in worker config", key)
 		}
 	}
-	workspaceStorage := storageConfig["workspaceStorage"].(map[string]any)
-	if got := workspaceStorage["baseMountPath"]; got != types.AgentWorkspacePath {
+	workspaceStorage := storageConfig["workspace_storage"].(map[string]any)
+	if got := workspaceStorage["base_mount_path"]; got != types.AgentWorkspacePath {
 		t.Fatalf("workspace base path = %v, want %q", got, types.AgentWorkspacePath)
 	}
-	if got := workspaceStorage["defaultStorageMode"]; got != types.StorageModeGeese {
+	if got := workspaceStorage["default_storage_mode"]; got != types.StorageModeGeese {
 		t.Fatalf("workspace storage mode = %v, want %q", got, types.StorageModeGeese)
 	}
 	poolConfig := config["worker"].(map[string]any)["pools"].(map[string]any)[slot.PoolName].(map[string]any)
-	assertGVisorRuntimeConfig(t, poolConfig["containerRuntimeConfig"].(map[string]any), slot)
+	assertGVisorRuntimeConfig(t, poolConfig["container_runtime_config"].(map[string]any), slot)
 
-	imageConfig := config["imageService"].(map[string]any)
-	if got := imageConfig["registryStore"]; got != reg.S3ImageRegistryStore {
+	imageConfig := config["image_service"].(map[string]any)
+	if got := imageConfig["registry_store"]; got != reg.S3ImageRegistryStore {
 		t.Fatalf("image registry store = %v, want %q", got, reg.S3ImageRegistryStore)
 	}
-	if got := imageConfig["buildRegistry"]; got != "build.example.com" {
+	if got := imageConfig["build_registry"]; got != "build.example.com" {
 		t.Fatalf("image build registry = %v", got)
 	}
-	if got := imageConfig["buildRepositoryName"]; got != "stage/vm-images" {
+	if got := imageConfig["build_repository_name"]; got != "stage/vm-images" {
 		t.Fatalf("image build repository = %v", got)
 	}
-	if got := imageConfig["buildRegistryInsecure"]; got != false {
+	if got := imageConfig["build_registry_insecure"]; got != false {
 		t.Fatalf("image build registry insecure = %v", got)
 	}
-	if got := imageConfig["clipVersion"]; got != float64(1) {
+	if got := imageConfig["clip_version"]; got != float64(1) {
 		t.Fatalf("image clip version = %v, want 1", got)
 	}
-	if got := imageConfig["localCacheEnabled"]; got != false {
+	if got := imageConfig["local_cache_enabled"]; got != false {
 		t.Fatalf("image local cache enabled = %v, want false", got)
 	}
 
 	monitoringConfig := config["monitoring"].(map[string]any)
-	if got := monitoringConfig["metricsCollector"]; got != string(types.MetricsCollectorNone) {
+	if got := monitoringConfig["metrics_collector"]; got != string(types.MetricsCollectorNone) {
 		t.Fatalf("metrics collector = %v, want disabled collector", got)
 	}
 	prometheusConfig := monitoringConfig["prometheus"].(map[string]any)
-	if got := prometheusConfig["scrapeWorkers"]; got != false {
+	if got := prometheusConfig["scrape_workers"]; got != false {
 		t.Fatalf("prometheus scrapeWorkers = %v, want false", got)
 	}
 	if got := prometheusConfig["port"]; got != float64(0) {
@@ -1599,21 +1599,21 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 
 	workerConfig := config["worker"].(map[string]any)
-	if got := workerConfig["cacheEnabled"]; got != true {
+	if got := workerConfig["cache_enabled"]; got != true {
 		t.Fatalf("worker cacheEnabled = %v, want true", got)
 	}
 	pools := workerConfig["pools"].(map[string]any)
 	pool := pools["private-dev"].(map[string]any)
-	if got := pool["storageMode"]; got != types.StorageModeGeese {
+	if got := pool["storage_mode"]; got != types.StorageModeGeese {
 		t.Fatalf("pool storage mode = %v, want %q", got, types.StorageModeGeese)
 	}
-	if got := pool["networkPreallocation"]; got != true {
+	if got := pool["network_preallocation"]; got != true {
 		t.Fatalf("pool networkPreallocation = %v, want true", got)
 	}
-	if got := pool["networkSlotPoolSize"]; got != float64(64) {
+	if got := pool["network_slot_pool_size"]; got != float64(64) {
 		t.Fatalf("pool networkSlotPoolSize = %v, want 64", got)
 	}
-	if got := pool["containerStartConcurrency"]; got != float64(12) {
+	if got := pool["container_start_concurrency"]; got != float64(12) {
 		t.Fatalf("pool containerStartConcurrency = %v, want 12", got)
 	}
 	poolCache := pool["cache"].(map[string]any)
@@ -1621,7 +1621,7 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	if got := poolCache["enabled"]; got != true {
 		t.Fatalf("pool cache enabled = %v, want true", got)
 	}
-	if got := poolDisk["mountPath"]; got != types.AgentCachePath {
+	if got := poolDisk["mount_path"]; got != types.AgentCachePath {
 		t.Fatalf("pool cache mount path = %v, want %q", got, types.AgentCachePath)
 	}
 
@@ -1634,16 +1634,16 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	if got := cacheConfig["enabled"]; got != true {
 		t.Fatalf("cache enabled = %v, want true", got)
 	}
-	if got := cacheDisk["mountPath"]; got != types.AgentCachePath {
+	if got := cacheDisk["mount_path"]; got != types.AgentCachePath {
 		t.Fatalf("cache disk mount path = %v, want %q", got, types.AgentCachePath)
 	}
-	if got := cacheGlobal["defaultLocality"]; got != "workspace-one/private-dev" {
+	if got := cacheGlobal["default_locality"]; got != "workspace-one/private-dev" {
 		t.Fatalf("cache default locality = %v, want workspace-scoped private pool", got)
 	}
-	if got := cacheServer["diskCacheDir"]; got != filepath.Join(types.AgentCachePath, "workspace-one-private-dev", "machine-a") {
+	if got := cacheServer["disk_cache_dir"]; got != filepath.Join(types.AgentCachePath, "workspace-one-private-dev", "machine-a") {
 		t.Fatalf("cache disk dir = %v, want machine-scoped persistent path", got)
 	}
-	if got := cacheFS["mountPoint"]; got != types.AgentCacheFSMountPath {
+	if got := cacheFS["mount_point"]; got != types.AgentCacheFSMountPath {
 		t.Fatalf("cachefs mount point = %v, want %q", got, types.AgentCacheFSMountPath)
 	}
 	if got := cacheFS["enabled"]; got != true {
@@ -1705,7 +1705,7 @@ func TestWriteWorkerConfigClearsDefaultRegistryCredentials(t *testing.T) {
 		t.Fatalf("worker CRIU mode = %q, want %q", config.Worker.CRIU.Mode, types.CRIUConfigModeNvidia)
 	}
 	wantEgress := types.EgressConfig{Enabled: true, MaxConnectionsPerContainer: 256}
-	if config.Worker.Egress != wantEgress {
+	if !reflect.DeepEqual(config.Worker.Egress, wantEgress) {
 		t.Fatalf("agent worker egress = %+v, want %+v", config.Worker.Egress, wantEgress)
 	}
 
@@ -1741,14 +1741,14 @@ func TestWriteWorkerConfigDisablesCacheFSInAgentContainer(t *testing.T) {
 	}
 
 	storageConfig := config["storage"].(map[string]any)
-	workspaceStorage := storageConfig["workspaceStorage"].(map[string]any)
-	if got := workspaceStorage["defaultStorageMode"]; got != types.StorageModeGeese {
+	workspaceStorage := storageConfig["workspace_storage"].(map[string]any)
+	if got := workspaceStorage["default_storage_mode"]; got != types.StorageModeGeese {
 		t.Fatalf("workspace storage mode = %v, want %q", got, types.StorageModeGeese)
 	}
 	workerConfig := config["worker"].(map[string]any)
 	pools := workerConfig["pools"].(map[string]any)
 	pool := pools["private-dev"].(map[string]any)
-	if got := pool["storageMode"]; got != types.StorageModeGeese {
+	if got := pool["storage_mode"]; got != types.StorageModeGeese {
 		t.Fatalf("pool storage mode = %v, want %q", got, types.StorageModeGeese)
 	}
 

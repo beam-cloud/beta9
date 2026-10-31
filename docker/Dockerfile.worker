@@ -26,6 +26,7 @@ FROM golang:1.23-bookworm AS runc
 
 WORKDIR /workspace
 
+COPY docker/patches/buildah/runtime-helper-reaping.patch /tmp/runtime-helper-reaping.patch
 COPY docker/patches/runc/runc-criu-production-log-level.patch /tmp/runc-criu-production-log-level.patch
 COPY docker/patches/runc/runc-criu-cpu-compatibility.patch /tmp/runc-criu-cpu-compatibility.patch
 
@@ -62,6 +63,8 @@ cd ..
 git clone https://github.com/containers/buildah.git /workspace/buildah
 cd /workspace/buildah
 git reset --hard 9bd608b3c0eaa1476b62763d0bd225745e49d542
+git apply --check --unidiff-zero /tmp/runtime-helper-reaping.patch
+git apply --unidiff-zero /tmp/runtime-helper-reaping.patch
 make BUILDTAGS="cni"
 make install
 EOT
@@ -377,7 +380,7 @@ RUN apt-get remove -y curl && \
     rm -rf /var/lib/apt/lists/* /var/log/*
 
 
-ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
+ENV BUILDAH_RUNTIME=/usr/local/bin/runsc
 
 RUN mkdir -p /workspace/etc
 RUN printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 9.9.9.9\noptions timeout:2 attempts:2\n' > /workspace/etc/resolv.conf

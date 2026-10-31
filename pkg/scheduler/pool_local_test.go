@@ -23,7 +23,7 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 		{"host network", prometheus, true, true, false, false, none},
 		{"pod network", prometheus, false, true, true, true, prometheus},
 		{"scraping disabled", prometheus, false, false, false, false, prometheus},
-		{"openmeter", openmeter, true, true, false, true, openmeter},
+		{"openmeter", openmeter, true, true, false, false, none},
 	}
 
 	for _, tt := range tests {
@@ -91,6 +91,43 @@ func workerConfigFromEnvironment(t *testing.T, env []corev1.EnvVar) types.AppCon
 	}
 	t.Fatal("CONFIG_JSON is missing")
 	return types.AppConfig{}
+}
+
+func TestLocalWorkerJobUsesRuntimeBoundary(t *testing.T) {
+	var pool types.WorkerPoolConfig
+	if err := json.Unmarshal([]byte(`{"container_runtime":"runc","job_spec":{"env":[{"name":"AWS_SECRET_ACCESS_KEY","value":"broad-secret"},{"name":"GOMAXPROCS","value":"2"}],"volumes":[{"name":"legacy-config","secret":{"secret_name":"gateway-config"}}],"volume_mounts":[{"name":"legacy-config","mountPath":"/etc/beta9.d"}]}}`), &pool); err != nil {
+		t.Fatal(err)
+	}
+	controller := &LocalKubernetesWorkerPoolController{name: "build", workerPoolConfig: pool, config: types.AppConfig{ImageService: types.ImageServiceConfig{BuildContainerPoolSelector: "build"}, Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{"build": pool}}}}
+	job, worker := controller.createWorkerJob("worker", 1000, 1024, "", 0, "worker-token")
+	if worker.Runtime != types.ContainerRuntimeGvisor.String() {
+		t.Fatalf("runtime = %s", worker.Runtime)
+	}
+	for _, volume := range job.Spec.Template.Spec.Volumes {
+		if volume.Secret != nil {
+			t.Fatal("worker has a secret volume")
+		}
+	}
+	for _, mount := range job.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if mount.Name == "legacy-config" {
+			t.Fatal("worker has a legacy configuration mount")
+		}
+	}
+	foundTuning := false
+	for _, variable := range job.Spec.Template.Spec.Containers[0].Env {
+		if variable.Name == "AWS_SECRET_ACCESS_KEY" {
+			t.Fatal("worker inherited provider credentials")
+		}
+		if variable.Name == "GOMAXPROCS" && variable.Value == "2" {
+			foundTuning = true
+		}
+	}
+	if !foundTuning {
+		t.Fatal("runtime tuning was omitted")
+	}
+	if job.Spec.Template.Spec.AutomountServiceAccountToken == nil || *job.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Fatal("worker has Kubernetes API credentials")
+	}
 }
 
 func TestApplyJobResourceOverhead(t *testing.T) {

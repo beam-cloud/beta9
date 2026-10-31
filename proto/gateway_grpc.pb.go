@@ -87,6 +87,7 @@ const (
 	GatewayService_UncordonWorker_FullMethodName                  = "/gateway.GatewayService/UncordonWorker"
 	GatewayService_DrainWorker_FullMethodName                     = "/gateway.GatewayService/DrainWorker"
 	GatewayService_ExportWorkspaceConfig_FullMethodName           = "/gateway.GatewayService/ExportWorkspaceConfig"
+	GatewayService_RenewToken_FullMethodName                      = "/gateway.GatewayService/RenewToken"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -175,6 +176,7 @@ type GatewayServiceClient interface {
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
 	// Workspace
 	ExportWorkspaceConfig(ctx context.Context, in *ExportWorkspaceConfigRequest, opts ...grpc.CallOption) (*ExportWorkspaceConfigResponse, error)
+	RenewToken(ctx context.Context, in *RenewTokenRequest, opts ...grpc.CallOption) (*RenewTokenResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -892,6 +894,15 @@ func (c *gatewayServiceClient) ExportWorkspaceConfig(ctx context.Context, in *Ex
 	return out, nil
 }
 
+func (c *gatewayServiceClient) RenewToken(ctx context.Context, in *RenewTokenRequest, opts ...grpc.CallOption) (*RenewTokenResponse, error) {
+	out := new(RenewTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RenewToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -978,6 +989,7 @@ type GatewayServiceServer interface {
 	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
 	// Workspace
 	ExportWorkspaceConfig(context.Context, *ExportWorkspaceConfigRequest) (*ExportWorkspaceConfigResponse, error)
+	RenewToken(context.Context, *RenewTokenRequest) (*RenewTokenResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -1188,6 +1200,9 @@ func (UnimplementedGatewayServiceServer) DrainWorker(context.Context, *DrainWork
 }
 func (UnimplementedGatewayServiceServer) ExportWorkspaceConfig(context.Context, *ExportWorkspaceConfigRequest) (*ExportWorkspaceConfigResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ExportWorkspaceConfig not implemented")
+}
+func (UnimplementedGatewayServiceServer) RenewToken(context.Context, *RenewTokenRequest) (*RenewTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenewToken not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -2453,6 +2468,24 @@ func _GatewayService_ExportWorkspaceConfig_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_RenewToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RenewToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RenewToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RenewToken(ctx, req.(*RenewTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2715,6 +2748,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExportWorkspaceConfig",
 			Handler:    _GatewayService_ExportWorkspaceConfig_Handler,
+		},
+		{
+			MethodName: "RenewToken",
+			Handler:    _GatewayService_RenewToken_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -15,7 +15,7 @@ resources:
 - cluster-role.yaml
 - deployment.yaml
 - persistent-volume-claim.yaml
-- secret.yaml
+- runtime-access.yaml
 - service-account.yaml
 - service.yaml
 

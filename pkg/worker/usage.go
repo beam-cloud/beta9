@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const usageRecordTimeout = 5 * time.Second
@@ -63,6 +64,7 @@ func NewWorkerUsageMetrics(
 	gpuType string,
 	poolMode types.PoolMode,
 	usageRecorder ContainerUsageRecorder,
+	gateways ...pb.WorkerRepositoryServiceClient,
 ) (*WorkerUsageMetrics, error) {
 	metricsRepo, err := usage.NewUsageMetricsRepository(config.Monitoring, string(usage.MetricsSourceWorker))
 	if err != nil {
@@ -80,6 +82,13 @@ func NewWorkerUsageMetrics(
 		openMeterMetadata:   config.Monitoring.MetricsCollector == string(types.MetricsCollectorOpenMeter),
 		now:                 time.Now,
 		newTicker:           usageTicker,
+	}
+	if len(gateways) > 0 && gateways[0] != nil {
+		remote := gatewayWorkerUsage{client: gateways[0], workerID: workerId}
+		wm.metricsRepo = remote
+		wm.quoteProvider = remote.quote
+		wm.usageRecorder = remote
+		wm.openMeterMetadata = true
 	}
 	if ctx != nil {
 		go wm.startBacklogDrain(ctx, usageBacklogDrainInterval)
