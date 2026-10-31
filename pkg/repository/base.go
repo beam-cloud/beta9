@@ -231,6 +231,7 @@ type BackendRepository interface {
 	CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
+	RetrieveActiveTokenByType(ctx context.Context, workspaceId uint, tokenType string) (*types.Token, error)
 	GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error)
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error
