@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -133,7 +134,7 @@ func TestMicroVMCgroupPath(t *testing.T) {
 func TestMicroVMHypervisorArgs(t *testing.T) {
 	root := microVMDisk{arg: "path=/tmp/scratch.ext4", device: "/dev/vda"}
 	extra := []microVMDisk{{arg: "vhost_user=on,socket=/s,num_queues=1,queue_size=128", device: "/dev/vdb"}}
-	args := microVMHypervisorArgs("/run/beam/microvm/c1", "/vmlinux", "console=ttyS0", 2, 1<<30, "02:00:00:00:00:01", root, extra)
+	args := microVMHypervisorArgs("/run/beam/microvm/c1", "/vmlinux", "console=ttyS0", 2, 1<<30, "02:00:00:00:00:01", root, extra, nil)
 	joined := strings.Join(args, " ")
 
 	assert.Contains(t, joined, "--kernel /vmlinux")
@@ -145,11 +146,44 @@ func TestMicroVMHypervisorArgs(t *testing.T) {
 	assert.Contains(t, joined, "--vsock cid=3,socket=/run/beam/microvm/c1/vsock.sock")
 	assert.Contains(t, joined, "--balloon size=0,free_page_reporting=on")
 	assert.Contains(t, joined, "--serial tty --console off")
+	assert.NotContains(t, args, "--memory-zone")
+	assert.NotContains(t, joined, "affinity=")
 
 	cmdline := microVMKernelCmdline()
 	assert.Contains(t, cmdline, "root=beamfs rootfstype=virtiofs rw")
 	assert.Contains(t, cmdline, "init="+microvm.InitPath)
 	assert.Contains(t, cmdline, "console=ttyS0")
+}
+
+func TestMicroVMGPUPlacementArgs(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		placement *microVMPlacement
+		vcpus     int
+		cpuArg    string
+	}{
+		{"node zero", &microVMPlacement{node: 0, cpus: []int{0, 2}}, 2, "boot=2,affinity=[0@[0,2],1@[0,2]]"},
+		{"sparse CPUs", &microVMPlacement{node: 1, cpus: []int{64, 66, 128}}, 2, "boot=2,affinity=[0@[64,66,128],1@[64,66,128]]"},
+		{"shared CPU", &microVMPlacement{node: 1, cpus: []int{64}}, 3, "boot=3,affinity=[0@[64],1@[64],2@[64]]"},
+		{"unknown locality", nil, 2, "boot=2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			memory := microVMMemoryBytes(&specs.Spec{Annotations: map[string]string{MicroVMMemoryMiBAnnotation: "16384"}})
+			args := microVMHypervisorArgs("/state", "/kernel", "", test.vcpus, memory, "mac", microVMDisk{}, nil,
+				test.placement, "/sys/bus/pci/devices/0000:c1:00.0", "/sys/bus/pci/devices/0000:c1:00.1")
+			joined := strings.Join(args, " ")
+			assert.Contains(t, args, test.cpuArg)
+			assert.Contains(t, joined, "--device path=/sys/bus/pci/devices/0000:c1:00.0 path=/sys/bus/pci/devices/0000:c1:00.1")
+			assert.NotContains(t, args, "--balloon")
+			assert.NotContains(t, args, "--numa", "host locality must not change guest NUMA topology")
+			if test.placement == nil {
+				assert.Contains(t, joined, "--memory size=17716740096,shared=on")
+				assert.NotContains(t, args, "--memory-zone")
+			} else {
+				assert.Contains(t, joined, "--memory size=0 --memory-zone id=ram,size=17716740096,shared=on,host_numa_node="+strconv.Itoa(test.placement.node))
+			}
+		})
+	}
 }
 
 func TestMicroVMGuestSpec(t *testing.T) {
