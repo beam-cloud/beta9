@@ -12,12 +12,15 @@ import pytest
 from beta9.abstractions.function import _Invocation
 from beta9.abstractions.sandbox import SandboxFileSystem
 from beta9.channel import (
+    AGENT_MARKERS,
     Channel,
     GatewayHTTP,
     ServiceClient,
+    caller_metadata,
     request_metadata,
     retry_operation,
     rpc_timeout,
+    sdk_version,
 )
 from beta9.clients.function import FunctionInvokeRequest, FunctionInvokeResponse
 
@@ -40,6 +43,46 @@ class TestChannelIdentity(TestCase):
         finally:
             for ch in channels:
                 ch.close()
+
+
+@pytest.mark.parametrize(
+    "env, caller, session",
+    [
+        ({}, "cli/{version}", None),
+        (
+            {"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "c-1"},
+            "cli/{version} (claude-code)",
+            "c-1",
+        ),
+        (
+            {"CURSOR_AGENT": "1", "CURSOR_CONVERSATION_ID": "e0-2a"},
+            "cli/{version} (cursor)",
+            "e0-2a",
+        ),
+        ({"CODEX_THREAD_ID": "t-1"}, "cli/{version} (codex)", "t-1"),
+        ({"CODEX_SANDBOX": "seatbelt"}, "cli/{version} (codex)", None),
+        ({"GEMINI_CLI": "1"}, "cli/{version} (gemini-cli)", None),
+        ({"AI_AGENT": "amp agent\r\n"}, "cli/{version} (amp-agent)", None),
+        ({"CURSOR_AGENT": "1", "CURSOR_CONVERSATION_ID": "a\nb"}, "cli/{version} (cursor)", "a-b"),
+        (
+            {"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "c-1", "BETA9_CALLER": "ci/7"},
+            "ci/7",
+            "c-1",
+        ),
+        ({"CURSOR_AGENT": "1", "BETA9_AGENT_SESSION": "run-9"}, "cli/{version} (cursor)", "run-9"),
+    ],
+)
+def test_caller_metadata_names_the_coding_agent(monkeypatch, env, caller, session):
+    variables = {name for marker in AGENT_MARKERS for name in marker[::2] if name}
+    for name in variables | {"AI_AGENT", "BETA9_CALLER", "BETA9_AGENT_SESSION"}:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    metadata = dict(caller_metadata())
+
+    assert metadata["x-beta9-caller"] == caller.format(version=sdk_version())
+    assert metadata.get("x-beta9-agent-session") == session
 
 
 @pytest.mark.parametrize(

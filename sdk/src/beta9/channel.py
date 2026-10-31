@@ -2,6 +2,7 @@ import atexit
 import functools
 import hashlib
 import os
+import re
 from importlib.metadata import PackageNotFoundError, version
 import sys
 import threading
@@ -343,11 +344,41 @@ def with_grpc_error_handling(func: Callable) -> Callable:
     return wrapper
 
 
+# Variables coding agents export to the commands they run: (marker, agent,
+# variable holding that agent's session id or "" when it exports none).
+AGENT_MARKERS = (
+    ("CLAUDECODE", "claude-code", "CLAUDE_CODE_SESSION_ID"),
+    ("CURSOR_AGENT", "cursor", "CURSOR_CONVERSATION_ID"),
+    ("CODEX_THREAD_ID", "codex", "CODEX_THREAD_ID"),
+    ("CODEX_SANDBOX", "codex", "CODEX_THREAD_ID"),
+    ("GEMINI_CLI", "gemini-cli", ""),
+    ("COPILOT_CLI", "copilot-cli", ""),
+)
+
+
+def attribution_token(value: Any, limit: int = 64) -> str:
+    """`value` reduced to characters every HTTP header and gRPC metadata value accepts."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-")[:limit]
+
+
+def detect_agent() -> Tuple[str, str]:
+    """The coding agent running this process and its session id; empty strings when unknown.
+    AI_AGENT, the cross-vendor convention, names agents without a marker."""
+    for marker, agent, session_variable in AGENT_MARKERS:
+        if os.getenv(marker):
+            session = os.getenv(session_variable, "") if session_variable else ""
+            return agent, attribution_token(session, limit=128)
+    return attribution_token(os.getenv("AI_AGENT")), ""
+
+
 def caller_metadata() -> List[Tuple[str, str]]:
-    """Attribution headers: BETA9_CALLER overrides `cli/<version>`, BETA9_AGENT_SESSION groups one agent run."""
-    caller = os.getenv("BETA9_CALLER") or f"cli/{sdk_version()}"
-    metadata = [("x-beta9-caller", caller)]
-    if session := os.getenv("BETA9_AGENT_SESSION"):
+    """Attribution headers. BETA9_CALLER overrides `cli/<version> (<agent>)`, where the agent
+    is the coding agent running the CLI, if any. BETA9_AGENT_SESSION, else that agent's own
+    session id, groups one agent run."""
+    agent, agent_session = detect_agent()
+    default_caller = f"cli/{sdk_version()} ({agent})" if agent else f"cli/{sdk_version()}"
+    metadata = [("x-beta9-caller", os.getenv("BETA9_CALLER") or default_caller)]
+    if session := os.getenv("BETA9_AGENT_SESSION") or agent_session:
         metadata.append(("x-beta9-agent-session", session))
     return metadata
 
