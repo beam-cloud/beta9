@@ -315,7 +315,7 @@ func agentMachineToProto(state *model.AgentTokenState, worker *types.Worker) *pb
 }
 
 func agentMachineMetrics(state *model.AgentTokenState, worker *types.Worker) *pb.MachineMetrics {
-	totalCPU := state.CPUMillicores
+	totalCPU := firstNonZeroInt64(state.CPUMillicores, int64(state.CPUCount)*1000)
 	totalMemory := int64(firstNonZeroUint64(state.Metrics.MemoryTotalMB, state.MemoryMB))
 	freeGPU := state.Metrics.FreeGPUCount
 	containerCount := state.Metrics.ContainerCount
@@ -324,7 +324,6 @@ func agentMachineMetrics(state *model.AgentTokenState, worker *types.Worker) *pb
 	var usedMemory int64
 
 	if worker != nil {
-		totalCPU = firstNonZeroInt64(worker.TotalCpu, totalCPU)
 		totalMemory = firstNonZeroInt64(worker.TotalMemory, totalMemory)
 		cpuPct = capacityUtilizationPct(worker.TotalCpu, worker.FreeCpu)
 		memoryPct = capacityUtilizationPct(worker.TotalMemory, worker.FreeMemory)

@@ -572,6 +572,12 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 
 	if pool, ok := s.poolForController(controller); ok {
 		worker.Priority = pool.Config.Priority
+		// A new local worker registers its physical CPU times the pool's
+		// multiplier; agent capacity is already schedulable.
+		if !controllerUsesAgentCapacity(controller) {
+			worker.TotalCpu = pool.Config.CPUShareMultiplier.Schedulable(cpu)
+			worker.FreeCpu = worker.TotalCpu
+		}
 	}
 
 	return &provisioningReservation{
@@ -580,20 +586,27 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 	}
 }
 
-func (s *Scheduler) workerCPUForRequest(request *types.ContainerRequest) int64 {
-	cpu := request.Cpu
+func (s *Scheduler) workerCPUForRequest(request *types.ContainerRequest, multiplier types.CPUShareMultiplier) int64 {
+	cpu := multiplier.Physical(request.Cpu)
 	if s.config.Worker.DefaultWorkerCPURequest > cpu {
 		cpu = s.config.Worker.DefaultWorkerCPURequest
 	}
 	return cpu
 }
 
+// workerCPUForControllerRequest is the request itself on agent pools, which
+// place it on existing machines, and the physical size of the worker to
+// create on local pools.
 func (s *Scheduler) workerCPUForControllerRequest(controller WorkerPoolController, request *types.ContainerRequest) int64 {
 	if controllerUsesAgentCapacity(controller) {
 		return request.Cpu
 	}
 
-	cpu := s.workerCPUForRequest(request)
+	var multiplier types.CPUShareMultiplier
+	if pool, ok := s.poolForController(controller); ok {
+		multiplier = pool.Config.CPUShareMultiplier
+	}
+	cpu := s.workerCPUForRequest(request, multiplier)
 	sizing, ok := s.workerPoolSizingForController(controller)
 	if !ok {
 		return cpu

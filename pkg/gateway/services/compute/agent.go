@@ -812,7 +812,7 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 			GPUCount:    worker.TotalGpuCount,
 			GPUs:        agentState.GPUs,
 			Attrs: map[string]string{
-				"cpu_millicores": fmt.Sprintf("%d", worker.TotalCpu),
+				"cpu_millicores": fmt.Sprintf("%d", slot.CPU),
 				"gpu_ids":        strings.Join(agentState.GPUIDs, ","),
 			},
 		})
@@ -938,6 +938,8 @@ func (s *Service) pruneAgentWorkerSlots(ctx context.Context, agentState *model.A
 
 func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenState, worker *types.Worker, poolConfig types.WorkerPoolConfig, tokenID, tokenHash string) *model.AgentWorkerSlotState {
 	runtimeName := agentWorkerRuntime(worker)
+	// Host CPU limits stay physical; worker.TotalCpu includes CPU sharing.
+	cpu := firstNonZeroInt64(agentState.CPUMillicores, int64(agentState.CPUCount)*1000)
 	networkSlots := agentState.NetworkSlotPoolSize
 	startConcurrency := agentState.ContainerStartConcurrency
 	requiresPoolSelector := worker.RequiresPoolSelector
@@ -947,9 +949,12 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 	var authoritativePoolConfig *types.WorkerPoolConfig
 
 	// Managed pool configuration is authoritative and may change while the
-	// machine remains connected. Machine capacity still comes from the worker.
+	// machine remains connected. Capacity still comes from the machine.
 	if agentState.ManagedPoolInstanceID != "" {
 		poolConfigCopy := poolConfig
+		// Only the scheduler reads the multiplier, so changing it must not
+		// change the slot generation and roll the worker.
+		poolConfigCopy.CPUShareMultiplier = 0
 		authoritativePoolConfig = &poolConfigCopy
 		runtimeName = firstNonEmpty(poolConfig.ContainerRuntime, types.ContainerRuntimeRunc.String())
 		if poolConfig.NetworkSlotPoolSize > 0 {
@@ -974,7 +979,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		ContainerRuntime:          runtimeName,
 		ContainerRuntimeConfig:    poolConfig.ContainerRuntimeConfig.WithDefaults(runtimeName),
 		CPUAffinityEnforced:       cpuAffinityEnforced,
-		CPU:                       worker.TotalCpu,
+		CPU:                       cpu,
 		Memory:                    worker.TotalMemory,
 		GPU:                       worker.Gpu,
 		GPUCount:                  worker.TotalGpuCount,

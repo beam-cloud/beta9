@@ -480,7 +480,7 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 		id:                   compute.AgentMachineWorkerID(machine.MachineID),
 		workspaceID:          machine.WorkspaceID,
 		controlPlaneManaged:  machine.ManagedPoolInstanceID != "" && machine.Mode == string(types.PoolModeExternal),
-		cpu:                  cpu,
+		cpu:                  wpc.workerPoolConfig.CPUShareMultiplier.Schedulable(cpu),
 		memory:               int64(machine.MemoryMB),
 		gpu:                  gpu,
 		gpuCount:             machine.GPUCount,

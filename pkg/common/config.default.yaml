@@ -190,6 +190,10 @@ worker:
       # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod (e.g., "nvidia")
       containerRuntime: gvisor  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
       containerStartConcurrency: 32
+      # Optional: vCPUs the scheduler admits per physical CPU (1-16, default 1).
+      # Memory, host and container CPU limits, and billing are unchanged.
+      # poolSizing.defaultWorkerCpu stays physical; minFreeCpu is schedulable.
+      # cpuShareMultiplier: 1.5
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
