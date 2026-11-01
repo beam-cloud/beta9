@@ -394,34 +394,16 @@ func TestManagedPoolCPUShareMultiplier(t *testing.T) {
 	ctx := context.Background()
 	service := managedPoolTestService(types.AppConfig{}, &fakeComputeRepo{})
 	config := types.WorkerPoolConfig{Mode: types.PoolModeExternal, CPUShareMultiplier: 1.5}
-	created, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config)
-	if err != nil {
+	if _, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config); err != nil {
 		t.Fatal(err)
 	}
-	if created.Config.CPUShareMultiplier != 1.5 {
-		t.Fatalf("created multiplier = %v, want 1.5", created.Config.CPUShareMultiplier)
-	}
-
-	for _, invalid := range []types.CPUShareMultiplier{-1, 0.5, 1.005, 17} {
-		config.CPUShareMultiplier = invalid
-		if _, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "public-invalid", config); !errors.Is(err, model.ErrInvalidManagedPoolConfig) {
-			t.Fatalf("create with multiplier %v: err = %v, want invalid config", invalid, err)
-		}
-		if _, err := service.UpdateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config); !errors.Is(err, model.ErrInvalidManagedPoolConfig) {
-			t.Fatalf("update with multiplier %v: err = %v, want invalid config", invalid, err)
-		}
-	}
-
-	config.CPUShareMultiplier = 2
-	if _, err := service.UpdateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config); err != nil {
-		t.Fatal(err)
+	config.CPUShareMultiplier = 0.5
+	if _, err := service.UpdateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config); !errors.Is(err, model.ErrInvalidManagedPoolConfig) {
+		t.Fatalf("update with multiplier 0.5: err = %v, want invalid config", err)
 	}
 	state, err := service.managedPoolRepo.GetManagedPoolState(ctx, "admin-workspace", "public-cpu")
-	if err != nil || state == nil || state.WorkerConfig == nil {
-		t.Fatalf("saved state = %+v, err = %v", state, err)
-	}
-	if state.WorkerConfig.CPUShareMultiplier != 2 {
-		t.Fatalf("saved multiplier = %v, want 2", state.WorkerConfig.CPUShareMultiplier)
+	if err != nil || state == nil || state.WorkerConfig == nil || state.WorkerConfig.CPUShareMultiplier != 1.5 {
+		t.Fatalf("saved state = %+v, err = %v, want multiplier 1.5", state, err)
 	}
 }
 

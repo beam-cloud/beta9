@@ -192,8 +192,6 @@ func TestAgentStartupRetryWaitsForControllerRecovery(t *testing.T) {
 	}
 }
 
-// Only the scheduler reads a pool's CPU share multiplier: agent workers keep
-// physical host limits, and changing the ratio must not roll them.
 func TestAgentSlotIgnoresCPUShareMultiplier(t *testing.T) {
 	agent := &model.AgentTokenState{MachineID: "machine", PoolName: "public-cpu", WorkspaceID: "admin", ManagedPoolInstanceID: "instance", Mode: string(types.PoolModeExternal), CPUCount: 16, CPUMillicores: 16000}
 	generation := ""

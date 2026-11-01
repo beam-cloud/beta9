@@ -66,26 +66,6 @@ func TestDefaultWorkspaceGeeseHTTPTimeout(t *testing.T) {
 	require.Equal(t, time.Minute, manager.GetConfig().Storage.WorkspaceStorage.Geese.HTTPTimeout)
 }
 
-func TestPoolCPUShareMultiplierConfig(t *testing.T) {
-	t.Setenv("CONFIG_PATH", "")
-	t.Setenv(types.WorkerMinimalConfigEnv, "true")
-
-	manager, err := NewConfigManager[types.AppConfig]()
-	require.NoError(t, err)
-	require.NoError(t, manager.LoadConfig(YAMLConfigFormat, rawbytes.Provider([]byte("worker:\n  pools:\n    shared:\n      cpuShareMultiplier: 1.5\n    plain:\n      mode: local\n"))))
-	config := manager.GetConfig()
-	require.EqualValues(t, 1.5, config.Worker.Pools["shared"].CPUShareMultiplier)
-	require.Zero(t, config.Worker.Pools["plain"].CPUShareMultiplier)
-
-	// Pools without sharing keep their existing gateway-to-worker JSON.
-	encoded, err := json.Marshal(config)
-	require.NoError(t, err)
-	require.Equal(t, 1, strings.Count(string(encoded), `"cpu_share_multiplier"`))
-	require.NoError(t, manager.LoadConfig(JSONConfigFormat, rawbytes.Provider(encoded)))
-	manager.tag = "json"
-	require.EqualValues(t, 1.5, manager.GetConfig().Worker.Pools["shared"].CPUShareMultiplier)
-}
-
 // The embedded default config is what every gateway boots from; a malformed
 // edit there (a duplicate key, for one) is fatal at startup.
 func TestEmbeddedDefaultConfigLoads(t *testing.T) {

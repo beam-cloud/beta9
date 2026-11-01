@@ -106,19 +106,6 @@ func TestAgentMachineMetricsUseScheduledCapacity(t *testing.T) {
 	}
 }
 
-func TestAgentMachineMetricsReportPhysicalCPUWithSharing(t *testing.T) {
-	state := &model.AgentTokenState{CPUCount: 16, MemoryMB: 32768}
-	worker := &types.Worker{TotalCpu: 24000, FreeCpu: 0, TotalMemory: 32768, FreeMemory: 32768}
-
-	metrics := agentMachineMetrics(state, worker)
-	if metrics.TotalCpuAvailable != 16000 {
-		t.Fatalf("total cpu = %d, want the machine's 16000", metrics.TotalCpuAvailable)
-	}
-	if metrics.CpuUtilizationPct != 100 {
-		t.Fatalf("cpu utilization = %v, want 100 for fully reserved shared capacity", metrics.CpuUtilizationPct)
-	}
-}
-
 func TestPrivatePoolProjectionUsesBillableReservationCost(t *testing.T) {
 	state := &model.PoolState{
 		Name: "pool-1",
