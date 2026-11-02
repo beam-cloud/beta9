@@ -1699,21 +1699,35 @@ func (s *Worker) keepalive() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := s.setWorkerKeepAlive(); err != nil {
-				consecutiveFailures++
-				if consecutiveFailures == 1 || consecutiveFailures%20 == 0 {
-					log.Warn().Err(err).Int("consecutive_failures", consecutiveFailures).Str("worker_id", s.workerId).Msg("worker keepalive failed")
-				}
-				continue
-			}
-			if consecutiveFailures > 0 {
-				log.Info().Int("consecutive_failures", consecutiveFailures).Str("worker_id", s.workerId).Msg("worker keepalive recovered")
-				consecutiveFailures = 0
-			}
+			consecutiveFailures = s.renewKeepAlive(consecutiveFailures)
 		case <-s.ctx.Done():
 			return
 		}
 	}
+}
+
+// renewKeepAlive returns the number of consecutive failed renewals. An outage
+// longer than the worker TTL expires the registration and an agent pool
+// recreates it as pending, so renewals after a failure acknowledge
+// availability again until that succeeds.
+func (s *Worker) renewKeepAlive(consecutiveFailures int) int {
+	err := s.setWorkerKeepAlive()
+	if err == nil && consecutiveFailures > 0 {
+		ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
+		err = s.acknowledgeAvailable(ctx)
+		cancel()
+	}
+	if err != nil {
+		consecutiveFailures++
+		if consecutiveFailures == 1 || consecutiveFailures%20 == 0 {
+			log.Warn().Err(err).Int("consecutive_failures", consecutiveFailures).Str("worker_id", s.workerId).Msg("worker keepalive failed")
+		}
+		return consecutiveFailures
+	}
+	if consecutiveFailures > 0 {
+		log.Info().Int("consecutive_failures", consecutiveFailures).Str("worker_id", s.workerId).Msg("worker keepalive recovered")
+	}
+	return 0
 }
 
 // setWorkerKeepAlive renews the worker's lease at the gateway. An idle worker
@@ -1737,6 +1751,16 @@ func (s *Worker) setWorkerKeepAlive() error {
 		log.Info().Bool("pool_headroom", headroom).Str("worker_id", s.workerId).Msg("worker pool headroom changed")
 	}
 	return nil
+}
+
+// acknowledgeAvailable asks the gateway to move a pending registration to
+// available; other states keep their status, so it is safe to repeat.
+func (s *Worker) acknowledgeAvailable(ctx context.Context) error {
+	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(ctx, &pb.ToggleWorkerAvailableRequest{
+		WorkerId:   s.workerId,
+		Generation: s.workerGeneration,
+	}))
+	return err
 }
 
 func (s *Worker) profile() {
@@ -1779,10 +1803,7 @@ func (s *Worker) startup() error {
 	if err := s.setWorkerKeepAlive(); err != nil {
 		return err
 	}
-	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
-		WorkerId:   s.workerId,
-		Generation: s.workerGeneration,
-	}))
+	err := s.acknowledgeAvailable(s.ctx)
 	if err != nil {
 		return err
 	}
