@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,8 +23,8 @@ var registryDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 // registryProxy serves the build registry to workers on private and provider
 // pools, which hold no build-registry credentials. A worker may read manifests
 // of its containers' images by tag, and manifests and blobs by digest, which
-// only those manifests reveal. It may upload blobs and push the snapshot tags
-// ("<stub-id>-<unix-time>") of its containers' stubs.
+// only those manifests reveal. It may upload blobs and push the filesystem
+// snapshot tags of its containers' stubs.
 type registryProxy struct {
 	config        types.AppConfig
 	backendRepo   repository.BackendRepository
@@ -156,23 +155,8 @@ func (p *registryProxy) workerImage(ctx context.Context, workerID, imageID strin
 }
 
 func (p *registryProxy) workerSnapshotTag(workerID, tag string) bool {
-	i := strings.LastIndexByte(tag, '-')
-	if i <= 0 {
-		return false
-	}
-	if _, err := strconv.ParseUint(tag[i+1:], 10, 64); err != nil {
-		return false
-	}
-	containers, err := p.containerRepo.GetActiveContainersByWorkerId(workerID)
-	if err != nil {
-		return false
-	}
-	for _, container := range containers {
-		if container.StubId == tag[:i] {
-			return true
-		}
-	}
-	return false
+	stubID, ok := types.SnapshotImageStub(tag)
+	return ok && repositoryservices.WorkerRunsStub(p.containerRepo, workerID, stubID)
 }
 
 func (p *registryProxy) registryCredentials(ctx context.Context) string {

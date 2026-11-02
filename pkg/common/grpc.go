@@ -20,29 +20,42 @@ const (
 // GRPCClientAuthInterceptor adds an authorization header to the outgoing context for unary calls
 func GRPCClientAuthInterceptor(token string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-		if md, ok := metadata.FromIncomingContext(ctx); ok {
-			for _, key := range []string{RequestIDHeader, RequestAckHeader} {
-				for _, value := range md.Get(key) {
-					newCtx = metadata.AppendToOutgoingContext(newCtx, key, value)
-				}
-			}
-		}
-		return invoker(newCtx, method, req, reply, cc, opts...)
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+		return forwardUnaryHeaders(ctx, method, req, reply, cc, invoker, opts...)
 	}
 }
 
 // GRPCClientAuthStreamInterceptor adds an authorization header to the outgoing context for streaming calls
 func GRPCClientAuthStreamInterceptor(token string) grpc.StreamClientInterceptor {
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-		if md, ok := metadata.FromIncomingContext(ctx); ok {
-			for _, value := range md.Get(LogOffsetHeader) {
-				newCtx = metadata.AppendToOutgoingContext(newCtx, LogOffsetHeader, value)
-			}
-		}
-		return streamer(newCtx, desc, cc, method, opts...)
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+		return forwardStreamHeaders(ctx, desc, cc, method, streamer, opts...)
 	}
+}
+
+// forwardUnaryHeaders passes the request ID and ack of the call being served
+// on, so a retried request reaches its destination as the same request.
+func forwardUnaryHeaders(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return invoker(forwardIncomingHeaders(ctx, RequestIDHeader, RequestAckHeader), method, req, reply, cc, opts...)
+}
+
+// forwardStreamHeaders passes the log offset of the call being served on, so a
+// resumed log stream continues where it left off.
+func forwardStreamHeaders(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return streamer(forwardIncomingHeaders(ctx, LogOffsetHeader), desc, cc, method, opts...)
+}
+
+func forwardIncomingHeaders(ctx context.Context, keys ...string) context.Context {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ctx
+	}
+	for _, key := range keys {
+		for _, value := range md.Get(key) {
+			ctx = metadata.AppendToOutgoingContext(ctx, key, value)
+		}
+	}
+	return ctx
 }
 
 // GRPCClientRetryInterceptor retries the call on some gRPC errors

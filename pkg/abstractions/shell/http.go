@@ -100,7 +100,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		if err != nil {
 			return err
 		}
-		client, err := common.NewContainerClient(workerAddress, "", conn)
+		client, err := common.NewContainerClient(workerAddress, conn)
 		if err != nil {
 			return err
 		}

@@ -122,13 +122,14 @@ func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.Checkp
 		}, nil
 	}
 
-	client, _, err := gws.getClient(ctx, in.ContainerId, authInfo.Token.Key, workspaceId)
+	client, err := gws.containerClient(ctx, in.ContainerId, workspaceId)
 	if err != nil {
 		return &pb.CheckpointContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %s", in.ContainerId),
 		}, nil
 	}
+	defer client.Close()
 
 	resp, err := client.Checkpoint(ctx, in.ContainerId, common.ContainerCheckpointOptions{})
 	if err != nil {
@@ -151,44 +152,31 @@ func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.Checkp
 	}, nil
 }
 
-func (gws *GatewayService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {
+func (gws *GatewayService) containerClient(ctx context.Context, containerId, workspaceId string) (*common.ContainerClient, error) {
 	container, err := gws.containerRepo.GetContainerState(containerId)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if container == nil {
-		return nil, nil, errors.New("container not found")
+		return nil, errors.New("container not found")
 	}
 
 	if container.WorkspaceId != workspaceId {
-		return nil, nil, errors.New("invalid workspace")
-	}
-
-	cacheKey := containerId + ":" + token
-	if cached, ok := gws.clientCache.Load(cacheKey); ok {
-		if client, ok := cached.(*common.ContainerClient); ok {
-			return client, container, nil
-		}
+		return nil, errors.New("invalid workspace")
 	}
 
 	hostname, err := gws.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	conn, err := network.ConnectToBackend(ctx, hostname, time.Second*30, gws.tailscale, gws.appConfig.Tailscale, gws.containerRepo)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	client, err := common.NewContainerClient(hostname, "", conn)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	gws.clientCache.Store(cacheKey, client)
-	return client, container, nil
+	return common.NewContainerClient(hostname, conn)
 }
 
 func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {

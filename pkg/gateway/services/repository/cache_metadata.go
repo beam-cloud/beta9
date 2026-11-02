@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -156,10 +156,7 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	if req == nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: "request is required"}, nil
 	}
-	if err := authorizeOriginCredentialWorkspace(ctx, req.WorkspaceId); err != nil {
-		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if err := s.authorizeOriginCredentialStub(ctx, req); err != nil {
+	if err := s.authorizeOriginCredentials(ctx, req); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	if req.ImageArchiveUploadId != "" {
@@ -209,31 +206,27 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	}, nil
 }
 
-// authorizeOriginCredentialWorkspace restricts private-pool (customer compute)
-// worker tokens to credentials for their own workspace. Cluster workers and
-// coordinator-token callers are trusted infrastructure and serve containers
-// across workspaces, so they are not restricted.
-func authorizeOriginCredentialWorkspace(ctx context.Context, workspaceID string) error {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
+// authorizeOriginCredentials limits untrusted workers (customer or provider
+// hardware) to stubs of the workspace their token belongs to, and to a stub's
+// own image. Provider machines belong to the platform's workspace without
+// owning it, so they get credentials only for the stubs they run, as does an
+// image export. Cluster workers and cache servers are trusted infrastructure
+// that serves every workspace.
+func (s *WorkerRepositoryService) authorizeOriginCredentials(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
+	authInfo, ok := untrustedWorker(ctx)
+	if !ok {
 		return nil
 	}
-	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
-		return fmt.Errorf("worker token is not scoped to a workspace")
-	}
-	if workspaceID == "" || workspaceID != authInfo.Workspace.ExternalId {
-		return fmt.Errorf("worker token cannot request credentials for workspace %q", workspaceID)
-	}
-	return nil
-}
-
-func (s *WorkerRepositoryService) authorizeOriginCredentialStub(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
-		return nil
+	if authInfo.Workspace == nil || req.WorkspaceId == "" || req.WorkspaceId != authInfo.Workspace.ExternalId {
+		return fmt.Errorf("worker token cannot request credentials for workspace %q", req.WorkspaceId)
 	}
 	if req.StubId == "" {
 		return fmt.Errorf("worker token credential request requires a stub")
+	}
+	if req.ImageArchiveUploadId != "" || s.platformWorkspace(ctx, req.WorkspaceId) {
+		if !WorkerRunsStub(s.containerRepo, authInfo.Token.WorkerID, req.StubId) {
+			return fmt.Errorf("stub %q is not running on this worker", req.StubId)
+		}
 	}
 	if req.ImageId == "" {
 		return nil
@@ -241,15 +234,7 @@ func (s *WorkerRepositoryService) authorizeOriginCredentialStub(ctx context.Cont
 	if s.backendRepo == nil {
 		return fmt.Errorf("backend repository is unavailable")
 	}
-
-	stub, err := s.backendRepo.GetStubByExternalId(ctx, req.StubId, types.QueryFilter{Field: "workspace_id", Value: req.WorkspaceId})
-	if err != nil {
-		return err
-	}
-	if stub == nil {
-		return fmt.Errorf("stub %q was not found in workspace %q", req.StubId, req.WorkspaceId)
-	}
-	config, err := stub.UnmarshalConfig()
+	config, err := s.workerRuntimeStubConfig(ctx, req.StubId, req.WorkspaceId)
 	if err != nil {
 		return err
 	}
@@ -257,6 +242,33 @@ func (s *WorkerRepositoryService) authorizeOriginCredentialStub(ctx context.Cont
 		return fmt.Errorf("worker token cannot request credentials for image %q on stub %q", req.ImageId, req.StubId)
 	}
 	return nil
+}
+
+// platformWorkspace reports whether workspaceID is the platform's own
+// workspace, or can't be ruled out as it.
+func (s *WorkerRepositoryService) platformWorkspace(ctx context.Context, workspaceID string) bool {
+	if s.backendRepo == nil {
+		return true
+	}
+	admin, err := s.backendRepo.GetAdminWorkspace(ctx)
+	return err != nil || admin == nil || admin.ExternalId == workspaceID
+}
+
+// WorkerRunsStub reports whether the worker has an active container of the stub.
+func WorkerRunsStub(containerRepo repository.ContainerRepository, workerID, stubID string) bool {
+	if containerRepo == nil || workerID == "" || stubID == "" {
+		return false
+	}
+	containers, err := containerRepo.GetActiveContainersByWorkerId(workerID)
+	if err != nil {
+		return false
+	}
+	for _, container := range containers {
+		if container.StubId == stubID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context, _ *pb.PruneStaleCacheCheckpointsRequest) (*pb.PruneStaleCacheCheckpointsResponse, error) {
@@ -397,15 +409,13 @@ func cacheWorkspaceStorageCredentials(workspace *types.Workspace) *pb.CacheWorks
 
 const imageArchivePresignExpiry = 15 * time.Minute
 
-// Export IDs are generated by the gateway as <stub-id>-<unix-time>. Only
-// that stub's worker may publish its index; no bucket credentials leave EKS.
+// imageArchiveUploadURL presigns the upload of a filesystem snapshot of the
+// request's stub, so no bucket credentials leave the cluster.
 func (s *WorkerRepositoryService) imageArchiveUploadURL(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) (string, error) {
 	if _, err := s.workerTokenWorkspaceID(ctx, req.WorkspaceId); err != nil {
 		return "", err
 	}
-	suffix, ok := strings.CutPrefix(req.ImageArchiveUploadId, req.StubId+"-")
-	timestamp, err := strconv.ParseInt(suffix, 10, 64)
-	if req.StubId == "" || !ok || err != nil || timestamp <= 0 {
+	if stubID, ok := types.SnapshotImageStub(req.ImageArchiveUploadId); !ok || req.StubId == "" || stubID != req.StubId {
 		return "", fmt.Errorf("invalid filesystem export image ID")
 	}
 	if _, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId); err != nil {

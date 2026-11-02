@@ -35,8 +35,14 @@ func (b *Builder) imageExists(ctx context.Context, imageID string) (bool, error)
 	return b.Exists(ctx, imageID)
 }
 
-func builtDockerfileKey(buildCtxObject string, lines []string) string {
-	sum := sha256.Sum256([]byte(buildCtxObject + "\x00" + strings.Join(lines, "\n")))
+// builtDockerfileKey keys a built prefix like the image ID it records: a
+// scoped build's prefixes are only reused by its own workspace.
+func builtDockerfileKey(opts *BuildOpts, lines []string) string {
+	key := opts.BuildCtxObject + "\x00" + strings.Join(lines, "\n")
+	if opts.Scope != "" {
+		key = opts.Scope + "\x00" + key
+	}
+	sum := sha256.Sum256([]byte(key))
 	return builtDockerfileKeyPrefix + hex.EncodeToString(sum[:])
 }
 
@@ -98,7 +104,7 @@ func (b *Builder) reuseBuiltPrefix(ctx context.Context, opts *BuildOpts) (docker
 	}
 	lines := dockerfileLines(opts.Dockerfile)
 	for k := len(lines) - 1; k >= minPrefixLines; k-- {
-		imageID, err := b.rdb.Get(ctx, builtDockerfileKey(opts.BuildCtxObject, lines[:k])).Result()
+		imageID, err := b.rdb.Get(ctx, builtDockerfileKey(opts, lines[:k])).Result()
 		if err != nil || imageID == "" {
 			continue
 		}
@@ -133,7 +139,7 @@ func (b *Builder) recordBuiltDockerfile(ctx context.Context, opts *BuildOpts, im
 	if len(lines) < minPrefixLines {
 		return
 	}
-	if err := b.rdb.Set(ctx, builtDockerfileKey(opts.BuildCtxObject, lines), imageID, builtDockerfileTTL).Err(); err != nil {
+	if err := b.rdb.Set(ctx, builtDockerfileKey(opts, lines), imageID, builtDockerfileTTL).Err(); err != nil {
 		log.Warn().Err(err).Str("image_id", imageID).Msg("record built dockerfile")
 	}
 }

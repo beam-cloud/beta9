@@ -116,11 +116,15 @@ func TestBuildPrivateDockerfileWarmIdentityUsesWorkspaceCredentials(t *testing.T
 		}},
 	}
 	dockerfile := "FROM private.example/image:tag\nRUN true\n"
-	opts := &BuildOpts{Dockerfile: "FROM private.example/image@" + digest + "\nRUN true\n", ClipVersion: uint32(types.ClipVersion2)}
+	signingKey := "workspace-signing-key"
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{SigningKey: &signingKey}})
+	opts := &BuildOpts{Dockerfile: "FROM private.example/image@" + digest + "\nRUN true\n", ClipVersion: uint32(types.ClipVersion2), ExistingImageCreds: map[string]string{"USERNAME": "user"}}
 	var err error
+	opts.Scope, err = imageScope(ctx, opts)
+	require.NoError(t, err)
+	require.NotEmpty(t, opts.Scope, "an image built with registry credentials belongs to its workspace")
 	repo.imageID, err = getImageID(opts)
 	require.NoError(t, err)
-	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{}})
 	request := &pb.BuildImageRequest{PythonVersion: "python3.11", Dockerfile: dockerfile, IgnorePython: true,
 		ExistingImageCreds: map[string]string{"USERNAME": "untrusted-client-value", "PASSWORD": "untrusted-client-value"}}
 	for range 2 {

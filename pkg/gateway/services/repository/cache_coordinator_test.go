@@ -23,7 +23,8 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 	t.Setenv("AWS_ROLE_ARN", "")
 	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
 	s := &WorkerRepositoryService{
-		backendRepo: &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
+		backendRepo:   &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
+		containerRepo: &workerContainersRepo{stubIDs: []string{"stub-id", "other-stub"}},
 		appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{Registries: types.ImageRegistriesConfig{S3: types.S3ImageRegistryConfig{
 			BucketName: "images", Region: "us-east-1", AccessKey: "test-key", SecretKey: "test-secret",
 		}}}},
@@ -52,11 +53,67 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 		require.False(t, response.Ok)
 		require.Empty(t, response.ImageArchiveUploadUrl)
 	}
-	request.ImageArchiveUploadId = "stub-id-1780000000"
-	request.WorkspaceId = "workspace-b"
-	response, err := s.GetCacheOriginCredentials(ctx, request)
+	idle := &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-a", StubId: "idle-stub", ImageArchiveUploadId: "idle-stub-1780000000"}
+	response, err := s.GetCacheOriginCredentials(ctx, idle)
 	require.NoError(t, err)
 	require.False(t, response.Ok)
+	require.Contains(t, response.ErrorMsg, "not running")
+
+	request.ImageArchiveUploadId = "stub-id-1780000000"
+	s.cacheCoordinatorToken = "coordinator-token"
+	coordinator := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer coordinator-token"))
+	response, err = s.GetCacheOriginCredentials(coordinator, request)
+	require.NoError(t, err)
+	require.False(t, response.Ok, "only workers export filesystems")
+	require.Empty(t, response.ImageArchiveUploadUrl)
+
+	request.WorkspaceId = "workspace-b"
+	response, err = s.GetCacheOriginCredentials(ctx, request)
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+}
+
+// Provider machines hold tokens in the platform's workspace without owning it,
+// so they get its credentials only for the stubs they run. Private-pool
+// machines may warm any stub of their own workspace.
+func TestGetCacheOriginCredentialsLimitsProviderWorkersToTheirStubs(t *testing.T) {
+	service := &WorkerRepositoryService{
+		backendRepo:   &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
+		containerRepo: &workerContainersRepo{stubIDs: []string{"running-stub"}},
+	}
+	provider := cacheRepositoryWorkspaceAuthContext(originCredentialsAdminWorkspace)
+	for _, imageID := range []string{"", "image-id"} {
+		resp, err := service.GetCacheOriginCredentials(provider, &pb.GetCacheOriginCredentialsRequest{WorkspaceId: originCredentialsAdminWorkspace, StubId: "running-stub", ImageId: imageID})
+		require.NoError(t, err)
+		require.True(t, resp.Ok, resp.ErrorMsg)
+
+		resp, err = service.GetCacheOriginCredentials(provider, &pb.GetCacheOriginCredentialsRequest{WorkspaceId: originCredentialsAdminWorkspace, StubId: "idle-stub", ImageId: imageID})
+		require.NoError(t, err)
+		require.False(t, resp.Ok)
+		require.Contains(t, resp.ErrorMsg, "not running")
+		require.Nil(t, resp.WorkspaceStorage)
+	}
+
+	private := cacheRepositoryWorkspaceAuthContext("workspace-id")
+	resp, err := service.GetCacheOriginCredentials(private, &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-id", StubId: "idle-stub", ImageId: "image-id"})
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrorMsg)
+}
+
+type workerContainersRepo struct {
+	repository.ContainerRepository
+	stubIDs []string
+}
+
+func (r *workerContainersRepo) GetActiveContainersByWorkerId(workerID string) ([]types.ContainerState, error) {
+	if workerID != "worker-1" {
+		return nil, nil
+	}
+	containers := make([]types.ContainerState, 0, len(r.stubIDs))
+	for _, stubID := range r.stubIDs {
+		containers = append(containers, types.ContainerState{StubId: stubID, WorkerId: workerID})
+	}
+	return containers, nil
 }
 
 type pruneCheckpointBackendRepo struct {
@@ -158,6 +215,12 @@ func (r *originCredentialsBackendRepo) GetStubByExternalId(ctx context.Context, 
 			Config:     `{"runtime":{"image_id":"image-id"}}`,
 		},
 	}, nil
+}
+
+const originCredentialsAdminWorkspace = "admin-workspace"
+
+func (r *originCredentialsBackendRepo) GetAdminWorkspace(context.Context) (*types.Workspace, error) {
+	return &types.Workspace{ExternalId: originCredentialsAdminWorkspace}, nil
 }
 
 func (r *originCredentialsBackendRepo) GetImageCredentials(ctx context.Context, workspace *types.Workspace, imageID string) (string, error) {

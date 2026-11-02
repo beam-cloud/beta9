@@ -30,6 +30,8 @@ type BuildOpts struct {
 	IgnorePython       bool
 	ClipVersion        uint32
 	GitSource          *types.GitSource
+	// Scope is set for builds with private inputs; see imageScope.
+	Scope string
 }
 
 func (o *BuildOpts) String() string {

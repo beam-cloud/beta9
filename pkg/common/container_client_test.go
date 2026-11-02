@@ -26,14 +26,14 @@ func TestContainerClientWithDialerDoesNotBlockSharedCacheFill(t *testing.T) {
 	}
 
 	started := time.Now()
-	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", "token", dialer)
+	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", dialer)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
 	require.Less(t, time.Since(started), 100*time.Millisecond)
 }
 
 func TestTerminalCheckpointWaitForReadyHonorsCallerDeadline(t *testing.T) {
-	client, err := NewContainerClientWithDialer(context.Background(), "route://unavailable-worker", "token", func(ctx context.Context, _ string) (net.Conn, error) {
+	client, err := NewContainerClientWithDialer(context.Background(), "route://unavailable-worker", func(ctx context.Context, _ string) (net.Conn, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
@@ -94,7 +94,7 @@ func TestContainerClientWithDialerRetriesOnDeadConnection(t *testing.T) {
 		}
 		return &deadConn{Conn: conn, cut: &cut}, nil
 	}
-	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", "token", dialer)
+	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", dialer)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
 
@@ -167,33 +167,60 @@ func TestStreamLogsReadyWaitsForWorkerAttachment(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
-type logMetadataServer struct {
+// metadataServer echoes the headers a worker receives.
+type metadataServer struct {
 	pb.UnimplementedContainerServiceServer
 }
 
-func (logMetadataServer) ContainerStreamLogs(_ *pb.ContainerStreamLogsRequest, stream pb.ContainerService_ContainerStreamLogsServer) error {
+func (metadataServer) ContainerStreamLogs(_ *pb.ContainerStreamLogsRequest, stream pb.ContainerService_ContainerStreamLogsServer) error {
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	return stream.Send(&pb.ContainerLogEntry{Msg: strings.Join(md.Get("authorization"), "") + ":" + strings.Join(md.Get(LogOffsetHeader), "")})
 }
 
-func TestContainerClientForwardsLogCursor(t *testing.T) {
+func (metadataServer) ContainerSandboxDownloadFile(ctx context.Context, _ *pb.ContainerSandboxDownloadFileRequest) (*pb.ContainerSandboxDownloadFileResponse, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	return &pb.ContainerSandboxDownloadFileResponse{
+		Ok:       true,
+		ErrorMsg: strings.Join(md.Get("authorization"), "") + ":" + strings.Join(md.Get(RequestIDHeader), "") + ":" + strings.Join(md.Get(RequestAckHeader), ""),
+		Data:     make([]byte, 5<<20), // over gRPC's default 4 MiB receive limit
+	}, nil
+}
+
+func newMetadataServerClient(t *testing.T) *ContainerClient {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	server := grpc.NewServer()
-	pb.RegisterContainerServiceServer(server, logMetadataServer{})
+	pb.RegisterContainerServiceServer(server, metadataServer{})
 	go func() { _ = server.Serve(lis) }()
 	t.Cleanup(server.Stop)
 
-	client, err := NewContainerClient(lis.Addr().String(), "token", nil)
+	client, err := NewContainerClient(lis.Addr().String(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+func TestContainerClientForwardsLogCursor(t *testing.T) {
+	client := newMetadataServerClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(LogOffsetHeader, "128"))
+	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(LogOffsetHeader, "128", "authorization", "Bearer user-token"))
 	output := make(chan OutputMsg, 1)
 
 	require.NoError(t, client.StreamLogs(ctx, "container-id", output))
-	require.Equal(t, "Bearer token:128", (<-output).Msg)
+	require.Equal(t, ":128", (<-output).Msg)
+}
+
+func TestContainerClientForwardsRequestIDWithoutCredentials(t *testing.T) {
+	client := newMetadataServerClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(RequestIDHeader, "request-1", RequestAckHeader, "ack-1", "authorization", "Bearer user-token"))
+
+	resp, err := client.SandboxDownloadFile(ctx, &pb.ContainerSandboxDownloadFileRequest{ContainerId: "container-id"})
+	require.NoError(t, err)
+	require.Equal(t, ":request-1:ack-1", resp.ErrorMsg)
+	require.Len(t, resp.Data, 5<<20)
 }
 
 // A relay may stop delivering bytes while TCP still reports a live connection.
@@ -223,7 +250,7 @@ func TestContainerClientRecoversSilentRelayLoss(t *testing.T) {
 
 	var cut atomic.Bool
 	var dials atomic.Int32
-	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", "token", func(ctx context.Context, _ string) (net.Conn, error) {
+	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", func(ctx context.Context, _ string) (net.Conn, error) {
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", lis.Addr().String())
 		if err == nil && dials.Add(1) == 1 {
 			return &blackholeConn{Conn: conn, cut: &cut}, nil

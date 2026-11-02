@@ -282,7 +282,7 @@ func TestTerminalCheckpointJoinsAcrossLostResponseAndContainerRemoval(t *testing
 	t.Cleanup(grpcServer.Stop)
 	var offline atomic.Bool
 	connections := make(chan net.Conn, 16)
-	client, err := common.NewContainerClientWithDialer(context.Background(), "route://worker", "token", func(ctx context.Context, _ string) (net.Conn, error) {
+	client, err := common.NewContainerClientWithDialer(context.Background(), "route://worker", func(ctx context.Context, _ string) (net.Conn, error) {
 		for offline.Load() {
 			select {
 			case <-ctx.Done():
