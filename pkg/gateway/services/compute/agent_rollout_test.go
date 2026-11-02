@@ -18,20 +18,25 @@ type rolloutTokenBackend struct{ repository.BackendRepository }
 func (r *rolloutTokenBackend) GetWorkspaceByExternalId(_ context.Context, id string) (types.Workspace, error) {
 	return types.Workspace{Id: 1, ExternalId: id}, nil
 }
+func rolloutToken(tokenType, workerID string) types.Token {
+	return types.Token{ExternalId: "token-id", Key: "test-token", Active: true, TokenType: tokenType, WorkerID: workerID}
+}
+
 func (r *rolloutTokenBackend) GetTokenByExternalId(context.Context, uint, string) (*types.Token, error) {
-	return &types.Token{ExternalId: "token-id", Key: "test-token", Active: true, TokenType: types.TokenTypeWorker}, nil
+	token := rolloutToken(types.TokenTypeWorker, "")
+	return &token, nil
 }
 func (r *rolloutTokenBackend) CreateToken(_ context.Context, _ uint, tokenType string, _ bool) (types.Token, error) {
-	return types.Token{ExternalId: "token-id", Key: "test-token", Active: true, TokenType: tokenType}, nil
+	return rolloutToken(tokenType, ""), nil
 }
 func (r *rolloutTokenBackend) CreateWorkerToken(_ context.Context, _ uint, tokenType, workerID string) (types.Token, error) {
-	return types.Token{ExternalId: "token-id", Key: "test-token", Active: true, TokenType: tokenType, WorkerID: workerID}, nil
+	return rolloutToken(tokenType, workerID), nil
 }
 func (r *rolloutTokenBackend) BindWorkerToken(context.Context, string, string) (bool, error) {
 	return true, nil
 }
-func (r *rolloutTokenBackend) RevokeTokenByExternalId(context.Context, string) error {
-	return nil
+func (r *rolloutTokenBackend) RevokeTokenByExternalId(context.Context, string) (string, error) {
+	return "", nil
 }
 
 func TestAgentRolloutBusyThenRevertUsesOriginalSlotAndRecoversWorker(t *testing.T) {

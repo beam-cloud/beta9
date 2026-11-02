@@ -235,10 +235,10 @@ type BackendRepository interface {
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
 	GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error)
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
-	UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error
+	SetWorkspaceTokensDisabled(ctx context.Context, workspaceId uint, disabled bool) ([]string, error)
 	ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error)
-	DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) (string, error)
-	RevokeTokenByExternalId(ctx context.Context, externalId string) error
+	DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) error
+	RevokeTokenByExternalId(ctx context.Context, externalId string) (string, error)
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	GetTaskStatus(ctx context.Context, externalId string) (types.TaskStatus, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)

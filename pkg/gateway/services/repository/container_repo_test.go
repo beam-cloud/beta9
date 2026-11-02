@@ -42,16 +42,29 @@ func (r *authorizationContainerRepo) GetContainerState(string) (*types.Container
 	return r.state, r.err
 }
 
-func TestMissingContainerStatePassesOnlyForTrustedWorkers(t *testing.T) {
+func TestMissingContainerStatePassesOnlyForTrustedWorkersFinishingIt(t *testing.T) {
 	containers := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{err: &types.ErrContainerStateNotFound{ContainerId: "container"}}}
+	finishing := []interface{}{
+		&pb.GetContainerStateRequest{ContainerId: "container"},
+		&pb.UpdateContainerStatusRequest{ContainerId: "container"},
+		&pb.DeleteContainerStateRequest{ContainerId: "container"},
+		&pb.SetContainerExitCodeRequest{ContainerId: "vm-container"},
+	}
+	others := []interface{}{
+		&pb.SetContainerExitCodeRequest{ContainerId: "container"},
+		&pb.SetContainerAddressRequest{ContainerId: "container", Address: "10.0.0.1:80"},
+		&pb.SetWorkerAddressRequest{ContainerId: "container", Address: "10.0.0.1:80"},
+	}
 	for tokenType, want := range map[string]codes.Code{types.TokenTypeWorker: codes.OK, types.TokenTypeWorkerPrivate: codes.PermissionDenied} {
 		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 			Token: &types.Token{TokenType: tokenType, WorkerID: "worker"}, Workspace: &types.Workspace{ExternalId: "own"},
 		})
-		err := containers.AuthorizeRequest(ctx, &pb.SetContainerExitCodeRequest{ContainerId: "container"})
-		require.Equal(t, want, status.Code(err), tokenType)
-		err = containers.AuthorizeRequest(ctx, &pb.SetContainerAddressRequest{ContainerId: "container", Address: "10.0.0.1:80"})
-		require.Equal(t, codes.PermissionDenied, status.Code(err), tokenType)
+		for _, req := range finishing {
+			require.Equal(t, want, status.Code(containers.AuthorizeRequest(ctx, req)), "%s %T", tokenType, req)
+		}
+		for _, req := range others {
+			require.Equal(t, codes.PermissionDenied, status.Code(containers.AuthorizeRequest(ctx, req)), "%s %T", tokenType, req)
+		}
 	}
 }
 

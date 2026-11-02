@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -14,9 +13,12 @@ import (
 var errWorkerLifecycleUnauthorized = errors.New("unauthorized worker lifecycle event")
 
 func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Context, req *pb.PushContainerLifecycleEventsRequest) (*pb.PushContainerLifecycleEventsResponse, error) {
-	authInfo, err := workerLifecycleAuth(ctx, req)
-	if err != nil {
-		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
+	caller, err := auth.WorkerFromContext(ctx)
+	if err != nil || req == nil || req.WorkerId != caller.ID {
+		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: errWorkerLifecycleUnauthorized.Error()}, nil
+	}
+	if len(req.Events) == 0 {
+		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: "events are required"}, nil
 	}
 	if s.eventRepo == nil || s.containerRepo == nil || s.workerRepo == nil {
 		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: "worker lifecycle service is unavailable"}, nil
@@ -26,8 +28,8 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 	if err != nil {
 		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
 	}
-	if err := authorizeWorkerLifecycleWorker(authInfo, req.WorkerId, worker); err != nil {
-		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
+	if worker == nil || worker.Id != req.WorkerId {
+		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: errWorkerLifecycleUnauthorized.Error()}, nil
 	}
 	states := make(map[string]*types.ContainerState)
 	events := make([]types.EventContainerLifecycleSchema, 0, len(req.Events))
@@ -50,10 +52,7 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 				}
 				state = nil
 			}
-			if state != nil && state.WorkerId != req.WorkerId {
-				state = nil
-			}
-			if state != nil && authInfo.Token.TokenType == types.TokenTypeWorkerPrivate && (authInfo.Workspace == nil || authInfo.Workspace.ExternalId != state.WorkspaceId) {
+			if !caller.Owns(state) {
 				state = nil
 			}
 			states[event.ContainerID] = state
@@ -74,22 +73,4 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 	}
 
 	return &pb.PushContainerLifecycleEventsResponse{Ok: true}, nil
-}
-
-func authorizeWorkerLifecycleWorker(authInfo *auth.AuthInfo, workerID string, worker *types.Worker) error {
-	if worker == nil || worker.Id != workerID || authInfo.Token.WorkerID != workerID {
-		return errWorkerLifecycleUnauthorized
-	}
-	return nil
-}
-
-func workerLifecycleAuth(ctx context.Context, req *pb.PushContainerLifecycleEventsRequest) (*auth.AuthInfo, error) {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
-		return nil, errWorkerLifecycleUnauthorized
-	}
-	if req == nil || req.WorkerId == "" || len(req.Events) == 0 {
-		return nil, fmt.Errorf("worker id and events are required")
-	}
-	return authInfo, nil
 }

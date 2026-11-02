@@ -542,48 +542,42 @@ func (r *PostgresBackendRepository) ToggleToken(ctx context.Context, workspaceId
 	return token, nil
 }
 
-// DeleteToken returns the deleted key so callers can drop it from the
-// authorization cache; it is empty when nothing was deleted.
-func (r *PostgresBackendRepository) DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) (string, error) {
-	query := `DELETE FROM token WHERE external_id = $1 AND workspace_id = $2 AND token_type NOT IN ` + protectedTokenTypes + ` RETURNING key;`
+func (r *PostgresBackendRepository) DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) error {
+	query := `DELETE FROM token WHERE external_id = $1 AND workspace_id = $2 AND token_type NOT IN ` + protectedTokenTypes + `;`
+	_, err := r.client.ExecContext(ctx, query, extTokenId, workspaceId)
+	return err
+}
+
+// RevokeTokenByExternalId deactivates a token and returns its key, which is
+// empty when there is no such token.
+func (r *PostgresBackendRepository) RevokeTokenByExternalId(ctx context.Context, externalId string) (string, error) {
 	var key string
-	if err := r.client.GetContext(ctx, &key, query, extTokenId, workspaceId); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
-		}
+	err := r.client.GetContext(ctx, &key, `UPDATE token SET active = FALSE WHERE external_id = $1 RETURNING key;`, externalId)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
 		return "", err
 	}
 	return r.openCredential(key)
 }
 
-func (r *PostgresBackendRepository) RevokeTokenByExternalId(ctx context.Context, externalId string) error {
-	updateQuery := `
-    UPDATE token
-    SET active = FALSE
-    WHERE external_id = $1;
-    `
-
-	_, err := r.client.ExecContext(ctx, updateQuery, externalId)
-	if err != nil {
-		return err
+// SetWorkspaceTokensDisabled sets disabled_by_cluster_admin on every token in
+// the workspace except cluster worker tokens, and returns their keys.
+func (r *PostgresBackendRepository) SetWorkspaceTokensDisabled(ctx context.Context, workspaceId uint, disabled bool) ([]string, error) {
+	query := `UPDATE token SET disabled_by_cluster_admin = $2 WHERE workspace_id = $1 AND token_type != $3 RETURNING key;`
+	var keys []string
+	if err := r.client.SelectContext(ctx, &keys, query, workspaceId, disabled, types.TokenTypeWorker); err != nil {
+		return nil, err
 	}
-
-	return nil
-}
-
-func (r *PostgresBackendRepository) UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error {
-	updateQuery := `
-		UPDATE token
-		SET disabled_by_cluster_admin = $1
-		WHERE external_id = $2;
-		`
-
-	_, err := r.client.ExecContext(ctx, updateQuery, disabled, tokenId)
-	if err != nil {
-		return err
+	for i := range keys {
+		key, err := r.openCredential(keys[i])
+		if err != nil {
+			return nil, err
+		}
+		keys[i] = key
 	}
-
-	return nil
+	return keys, nil
 }
 
 // Object

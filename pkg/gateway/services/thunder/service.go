@@ -90,6 +90,11 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 
 	var installCommand string
 	err = s.repo.WithPoolLock(ctx, attrs.workspaceID, attrs.poolName, func(ctx context.Context) error {
+		if current, err := s.clientEnrollmentAttrs(ctx, containerID); err != nil {
+			return err
+		} else if current.workerID != attrs.workerID || current.workspaceID != attrs.workspaceID || current.poolName != attrs.poolName {
+			return fmt.Errorf("container %q moved while enrolling", containerID)
+		}
 		var previousEnrollmentTokenID string
 		if existing, found, err := s.repo.GetClientEnrollment(ctx, containerID); err != nil {
 			return err
@@ -400,21 +405,18 @@ func (s *Service) requireAgentState(ctx context.Context, agentToken string) (*mo
 	return s.agentValidator.ResolveAgentState(ctx, agentToken)
 }
 
+// requireWorkerToken checks that the caller is a worker and, when they are
+// set, that it is the given worker in a workspace it may act in.
 func requireWorkerToken(ctx context.Context, workspaceID, workerID string) error {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
+	worker, err := auth.WorkerFromContext(ctx)
+	if err != nil {
 		return fmt.Errorf("worker token is required")
 	}
-	if workerID != "" && workerID != authInfo.Token.WorkerID {
+	if workerID != "" && workerID != worker.ID {
 		return fmt.Errorf("worker token cannot act for worker %q", workerID)
 	}
-	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate {
-		if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
-			return fmt.Errorf("worker token is not scoped to a workspace")
-		}
-		if workspaceID != "" && workspaceID != authInfo.Workspace.ExternalId {
-			return fmt.Errorf("worker token cannot access workspace %q", workspaceID)
-		}
+	if workspaceID != "" && !worker.InWorkspace(workspaceID) {
+		return fmt.Errorf("worker token cannot access workspace %q", workspaceID)
 	}
 	return nil
 }

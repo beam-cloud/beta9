@@ -78,7 +78,11 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
 	}
-	workspaceID, err := s.workerTokenWorkspaceID(ctx, req.WorkspaceId)
+	worker, err := auth.WorkerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	workspaceID, err := s.workerWorkspaceID(ctx, worker, req.WorkspaceId)
 	if err != nil {
 		return nil, err
 	}
@@ -98,8 +102,7 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 			return nil, err
 		}
 	}
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	if state == nil || state.WorkerId == "" || state.WorkerId != authInfo.Token.WorkerID {
+	if !worker.Owns(state) {
 		return nil, fmt.Errorf("container %q is not assigned to this worker", req.ContainerId)
 	}
 	if state.WorkspaceId != req.WorkspaceId || state.StubId != req.StubId {
@@ -193,29 +196,17 @@ func runtimeCredentialsNeedsSigningKey(req *pb.GetContainerRuntimeCredentialsReq
 	return req != nil && (len(req.SecretNames) > 0 || len(req.BindingNames) > 0 || len(req.MountCredentials) > 0)
 }
 
-func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, workspaceID string) (uint, error) {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
-		return 0, fmt.Errorf("worker token is required")
+// workerWorkspaceID returns the internal ID of a workspace the worker may act
+// in.
+func (s *WorkerRepositoryService) workerWorkspaceID(ctx context.Context, worker *auth.Worker, workspaceID string) (uint, error) {
+	if !worker.InWorkspace(workspaceID) {
+		return 0, fmt.Errorf("worker token cannot request credentials for workspace %q", workspaceID)
 	}
-	if workspaceID == "" {
-		return 0, fmt.Errorf("workspace is required")
+	if worker.Workspace != nil && workspaceID == worker.Workspace.ExternalId && worker.Workspace.Id > 0 {
+		return worker.Workspace.Id, nil
 	}
-
-	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate {
-		if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
-			return 0, fmt.Errorf("worker token is not scoped to a workspace")
-		}
-		if workspaceID != authInfo.Workspace.ExternalId {
-			return 0, fmt.Errorf("worker token cannot request credentials for workspace %q", workspaceID)
-		}
-	}
-
-	if authInfo.Workspace != nil && workspaceID == authInfo.Workspace.ExternalId && authInfo.Workspace.Id > 0 {
-		return authInfo.Workspace.Id, nil
-	}
-	if authInfo.Workspace != nil && workspaceID == authInfo.Workspace.ExternalId && authInfo.Token.WorkspaceId != nil && *authInfo.Token.WorkspaceId > 0 {
-		return *authInfo.Token.WorkspaceId, nil
+	if worker.Workspace != nil && workspaceID == worker.Workspace.ExternalId && worker.Token.WorkspaceId != nil && *worker.Token.WorkspaceId > 0 {
+		return *worker.Token.WorkspaceId, nil
 	}
 	if s.backendRepo == nil {
 		return 0, fmt.Errorf("backend repository is unavailable")

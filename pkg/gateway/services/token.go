@@ -120,21 +120,9 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 		}, nil
 	}
 
-	if err := gws.authorizeTokenChange(ctx, authInfo, req.TokenId); err != nil {
-		return &pb.ToggleTokenResponse{Token: &pb.Token{}, Ok: false, ErrMsg: err.Error()}, nil
-	}
-	token, err := gws.backendRepo.ToggleToken(ctx, authInfo.Workspace.Id, req.TokenId)
+	token, err := auth.NewTokens(gws.backendRepo, gws.workspaceRepo).Toggle(ctx, authInfo.Token, authInfo.Workspace.Id, req.TokenId)
 	if err != nil {
-		return &pb.ToggleTokenResponse{
-			Token:  &pb.Token{},
-			Ok:     false,
-			ErrMsg: "Unable to toggle token.",
-		}, nil
-	}
-	if !token.Active {
-		if err := gws.workspaceRepo.RevokeToken(token.Key); err != nil {
-			return &pb.ToggleTokenResponse{Token: &pb.Token{}, Ok: false, ErrMsg: "Unable to revoke token."}, nil
-		}
+		return &pb.ToggleTokenResponse{Token: &pb.Token{}, Ok: false, ErrMsg: tokenChangeError(err, "Unable to toggle token.")}, nil
 	}
 
 	updatedAt := *timestamppb.New(token.UpdatedAt.Time)
@@ -164,18 +152,8 @@ func (gws *GatewayService) DeleteToken(ctx context.Context, req *pb.DeleteTokenR
 			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
-	if err := gws.authorizeTokenChange(ctx, authInfo, req.TokenId); err != nil {
-		return &pb.DeleteTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	key, err := gws.backendRepo.DeleteToken(ctx, authInfo.Workspace.Id, req.TokenId)
-	if err == nil && key != "" {
-		err = gws.workspaceRepo.RevokeToken(key)
-	}
-	if err != nil {
-		return &pb.DeleteTokenResponse{
-			Ok:     false,
-			ErrMsg: "Unable to delete token.",
-		}, nil
+	if err := auth.NewTokens(gws.backendRepo, gws.workspaceRepo).Delete(ctx, authInfo.Token, authInfo.Workspace.Id, req.TokenId); err != nil {
+		return &pb.DeleteTokenResponse{Ok: false, ErrMsg: tokenChangeError(err, "Unable to delete token.")}, nil
 	}
 
 	return &pb.DeleteTokenResponse{
@@ -183,13 +161,10 @@ func (gws *GatewayService) DeleteToken(ctx context.Context, req *pb.DeleteTokenR
 	}, nil
 }
 
-func (gws *GatewayService) authorizeTokenChange(ctx context.Context, authInfo *auth.AuthInfo, tokenId string) error {
-	token, err := gws.backendRepo.GetTokenByExternalId(ctx, authInfo.Workspace.Id, tokenId)
-	if err != nil {
-		return errors.New("Invalid token ID.")
+func tokenChangeError(err error, message string) string {
+	var rejected auth.TokenChangeError
+	if errors.As(err, &rejected) {
+		return rejected.Error()
 	}
-	if token.TokenType == types.TokenTypeWorkspacePrimary && authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return errors.New("Cannot change the primary token.")
-	}
-	return nil
+	return message
 }

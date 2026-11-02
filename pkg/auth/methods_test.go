@@ -27,6 +27,8 @@ func TestAuthorizeMethod(t *testing.T) {
 		{"cluster admin runs container", types.Token{TokenType: types.TokenTypeClusterAdmin}, pb.Scheduler_RunContainer_FullMethodName, true},
 		{"workspace lists tokens", types.Token{TokenType: types.TokenTypeWorkspace}, pb.GatewayService_ListTokens_FullMethodName, true},
 		{"deployer lists tokens", types.Token{TokenType: types.TokenTypePlatformDeployer}, pb.GatewayService_ListTokens_FullMethodName, false},
+		{"deployer gets a pool join command", types.Token{TokenType: types.TokenTypePlatformDeployer}, pb.GatewayService_GetPoolJoinCommand_FullMethodName, false},
+		{"restricted token gets a pool join command", types.Token{TokenType: types.TokenTypeWorkspaceRestricted}, pb.GatewayService_GetPoolJoinCommand_FullMethodName, false},
 		{"restricted token reads secret", types.Token{TokenType: types.TokenTypeWorkspaceRestricted}, pb.SecretService_GetSecret_FullMethodName, false},
 		{"restricted token deploys", types.Token{TokenType: types.TokenTypeWorkspaceRestricted}, pb.GatewayService_DeployStub_FullMethodName, true},
 	} {

@@ -2,6 +2,8 @@ package apiv1
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -52,23 +54,16 @@ func TestWorkspaceTokenEndpointCannotMintClusterAdminToken(t *testing.T) {
 
 type clusterAdminTokenBackendRepo struct {
 	repository.BackendRepository
-	updated map[string]bool
+	disabled *bool
 }
 
 func (r *clusterAdminTokenBackendRepo) GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error) {
 	return types.Workspace{Id: 1, ExternalId: "workspace"}, nil
 }
 
-func (r *clusterAdminTokenBackendRepo) ListTokens(context.Context, uint) ([]types.Token, error) {
-	return []types.Token{
-		{ExternalId: "token-1", Key: "key-1"},
-		{ExternalId: "token-2", Key: "key-2"},
-	}, nil
-}
-
-func (r *clusterAdminTokenBackendRepo) UpdateTokenAsClusterAdmin(_ context.Context, tokenId string, disabled bool) error {
-	r.updated[tokenId] = disabled
-	return nil
+func (r *clusterAdminTokenBackendRepo) SetWorkspaceTokensDisabled(_ context.Context, _ uint, disabled bool) ([]string, error) {
+	r.disabled = &disabled
+	return []string{"key-1", "key-2"}, nil
 }
 
 type revokingWorkspaceRepo struct {
@@ -84,9 +79,9 @@ func (r *revokingWorkspaceRepo) RevokeToken(tokenKey string) error {
 func TestClusterAdminUpdateAllWorkspaceTokensRevokesAuthorizationCache(t *testing.T) {
 	for _, disabled := range []bool{true, false} {
 		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
-			backendRepo := &clusterAdminTokenBackendRepo{updated: map[string]bool{}}
+			backendRepo := &clusterAdminTokenBackendRepo{}
 			workspaceRepo := &revokingWorkspaceRepo{}
-			group := &TokenGroup{backendRepo: backendRepo, workspaceRepo: workspaceRepo}
+			group := &TokenGroup{backendRepo: backendRepo, tokens: auth.NewTokens(backendRepo, workspaceRepo)}
 			e := echo.New()
 			request := httptest.NewRequest(
 				http.MethodPatch,
@@ -102,16 +97,73 @@ func TestClusterAdminUpdateAllWorkspaceTokensRevokesAuthorizationCache(t *testin
 				t.Fatalf("update tokens failed: %v", err)
 			}
 
-			if got, want := len(backendRepo.updated), 2; got != want {
-				t.Fatalf("updated token count = %d, want %d", got, want)
-			}
-			for _, tokenId := range []string{"token-1", "token-2"} {
-				if got := backendRepo.updated[tokenId]; got != disabled {
-					t.Fatalf("token %s disabled=%t, want %t", tokenId, got, disabled)
-				}
+			if backendRepo.disabled == nil || *backendRepo.disabled != disabled {
+				t.Fatalf("tokens disabled=%v, want %t", backendRepo.disabled, disabled)
 			}
 			if got, want := strings.Join(workspaceRepo.revoked, ","), "key-1,key-2"; got != want {
 				t.Fatalf("revoked token keys = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+type changeTokenBackendRepo struct {
+	repository.BackendRepository
+	token   *types.Token
+	err     error
+	deleted bool
+}
+
+func (r *changeTokenBackendRepo) GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error) {
+	return types.Workspace{Id: 1, ExternalId: "workspace"}, nil
+}
+
+func (r *changeTokenBackendRepo) GetTokenByExternalId(context.Context, uint, string) (*types.Token, error) {
+	return r.token, r.err
+}
+
+func (r *changeTokenBackendRepo) DeleteToken(context.Context, uint, string) error {
+	r.deleted = true
+	return nil
+}
+
+func TestDeleteWorkspaceTokenReportsWhyItCannot(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		token   *types.Token
+		err     error
+		status  int
+		deleted bool
+	}{
+		{"workspace token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkspace}, nil, http.StatusOK, true},
+		{"primary token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkspacePrimary}, nil, http.StatusBadRequest, false},
+		{"worker token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkerPrivate}, nil, http.StatusBadRequest, false},
+		{"cluster admin token", &types.Token{Key: "key", TokenType: types.TokenTypeClusterAdmin}, nil, http.StatusBadRequest, false},
+		{"missing token", nil, fmt.Errorf("token not found: %w", sql.ErrNoRows), http.StatusBadRequest, false},
+		{"database outage", nil, errors.New("connection refused"), http.StatusInternalServerError, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backendRepo := &changeTokenBackendRepo{token: tc.token, err: tc.err}
+			workspaceRepo := &revokingWorkspaceRepo{}
+			group := &TokenGroup{backendRepo: backendRepo, tokens: auth.NewTokens(backendRepo, workspaceRepo)}
+			e := echo.New()
+			recorder := httptest.NewRecorder()
+			ctx := e.NewContext(httptest.NewRequest(http.MethodDelete, "/api/v1/token/workspace/token", nil), recorder)
+			ctx.SetParamNames("workspaceId", "tokenId")
+			ctx.SetParamValues("workspace", "token")
+			authCtx := &auth.HttpAuthContext{Context: ctx, AuthInfo: &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorkspace}}}
+
+			err := group.DeleteWorkspaceToken(authCtx)
+			status := recorder.Code
+			var httpErr *echo.HTTPError
+			if errors.As(err, &httpErr) {
+				status = httpErr.Code
+			}
+			if status != tc.status || backendRepo.deleted != tc.deleted {
+				t.Fatalf("status=%d deleted=%t, want %d %t (err=%v)", status, backendRepo.deleted, tc.status, tc.deleted, err)
+			}
+			if tc.deleted && strings.Join(workspaceRepo.revoked, ",") != "key,key" {
+				t.Fatalf("evicted %v, want the key before and after the delete", workspaceRepo.revoked)
 			}
 		})
 	}

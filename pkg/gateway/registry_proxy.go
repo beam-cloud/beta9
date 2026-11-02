@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -28,7 +29,7 @@ var registryDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 type registryProxy struct {
 	config        types.AppConfig
 	backendRepo   repository.BackendRepository
-	workspaceRepo repository.WorkspaceRepository
+	tokens        auth.Tokens
 	containerRepo repository.ContainerRepository
 	upstream      *httputil.ReverseProxy
 
@@ -45,7 +46,7 @@ func newRegistryProxy(config types.AppConfig, backendRepo repository.BackendRepo
 	return &registryProxy{
 		config:        config,
 		backendRepo:   backendRepo,
-		workspaceRepo: workspaceRepo,
+		tokens:        auth.NewTokens(backendRepo, workspaceRepo),
 		containerRepo: containerRepo,
 		upstream: &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
@@ -68,8 +69,8 @@ func newRegistryProxy(config types.AppConfig, backendRepo repository.BackendRepo
 }
 
 func (p *registryProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	token := p.authorize(r)
-	if token == nil {
+	worker := p.authorize(r)
+	if worker == nil {
 		w.Header().Set("WWW-Authenticate", `Basic realm="beta9"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -77,7 +78,7 @@ func (p *registryProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v2" || r.URL.Path == "/v2/" {
 		return
 	}
-	if !p.permitted(r, token.WorkerID) {
+	if !p.permitted(r, worker) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -89,27 +90,25 @@ func (p *registryProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.upstream.ServeHTTP(w, r)
 }
 
-// authorize returns the request's token when it belongs to a worker on a
-// private or provider pool.
-func (p *registryProxy) authorize(r *http.Request) *types.Token {
+// authorize returns the worker making the request when it is on a private or
+// provider pool.
+func (p *registryProxy) authorize(r *http.Request) *auth.Worker {
 	_, tokenKey, ok := r.BasicAuth()
 	if !ok || tokenKey == "" {
 		return nil
 	}
-	token, workspace, err := p.workspaceRepo.AuthorizeToken(tokenKey)
+	token, workspace, err := p.tokens.Authenticate(r.Context(), tokenKey)
 	if err != nil {
-		if token, workspace, err = p.backendRepo.AuthorizeToken(r.Context(), tokenKey); err != nil {
-			return nil
-		}
-		_ = p.workspaceRepo.SetAuthorizationToken(token, workspace)
-	}
-	if !token.Active || token.DisabledByClusterAdmin || token.TokenType != types.TokenTypeWorkerPrivate || token.WorkerID == "" {
 		return nil
 	}
-	return token
+	worker, err := auth.WorkerFromAuthInfo(&auth.AuthInfo{Token: token, Workspace: workspace})
+	if err != nil || worker.Trusted {
+		return nil
+	}
+	return worker
 }
 
-func (p *registryProxy) permitted(r *http.Request, workerID string) bool {
+func (p *registryProxy) permitted(r *http.Request, worker *auth.Worker) bool {
 	repo := p.config.ImageService.BuildRepositoryName
 	rest, ok := strings.CutPrefix(r.URL.Path, "/v2/"+repo+"/")
 	if !ok || r.URL.RawPath != "" || path.Clean(r.URL.Path) != r.URL.Path {
@@ -125,20 +124,17 @@ func (p *registryProxy) permitted(r *http.Request, workerID string) bool {
 		from := r.URL.Query().Get("from")
 		return (from == "" || from == repo) && (r.Method == http.MethodPost || r.Method == http.MethodPatch || r.Method == http.MethodPut)
 	case kind == "manifests" && read:
-		return registryDigest.MatchString(ref) || p.workerImage(r.Context(), workerID, ref)
+		return registryDigest.MatchString(ref) || p.workerImage(r.Context(), worker, ref)
 	case kind == "manifests" && r.Method == http.MethodPut:
-		return p.workerSnapshotTag(workerID, ref)
+		stubID, ok := types.SnapshotImageStub(ref)
+		return ok && worker.RunsStub(p.containerRepo, stubID)
 	}
 	return false
 }
 
-func (p *registryProxy) workerImage(ctx context.Context, workerID, imageID string) bool {
-	containers, err := p.containerRepo.GetActiveContainersByWorkerId(workerID)
-	if err != nil {
-		return false
-	}
+func (p *registryProxy) workerImage(ctx context.Context, worker *auth.Worker, imageID string) bool {
 	seen := map[string]bool{}
-	for _, container := range containers {
+	for _, container := range worker.Containers(p.containerRepo, "") {
 		if seen[container.StubId] {
 			continue
 		}
@@ -152,11 +148,6 @@ func (p *registryProxy) workerImage(ctx context.Context, workerID, imageID strin
 		}
 	}
 	return false
-}
-
-func (p *registryProxy) workerSnapshotTag(workerID, tag string) bool {
-	stubID, ok := types.SnapshotImageStub(tag)
-	return ok && repositoryservices.WorkerRunsStub(p.containerRepo, workerID, stubID)
 }
 
 func (p *registryProxy) registryCredentials(ctx context.Context) string {

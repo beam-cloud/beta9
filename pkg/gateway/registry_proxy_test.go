@@ -49,7 +49,10 @@ func (registryProxyContainerRepo) GetActiveContainersByWorkerId(workerID string)
 	if workerID != "worker-1" {
 		return nil, nil
 	}
-	return []types.ContainerState{{ContainerId: "container-1", StubId: "stub-1", WorkerId: workerID}}, nil
+	return []types.ContainerState{
+		{ContainerId: "container-1", StubId: "stub-1", WorkerId: workerID, WorkspaceId: "workspace-1"},
+		{ContainerId: "container-2", StubId: "stub-2", WorkerId: workerID, WorkspaceId: "workspace-2"},
+	}, nil
 }
 
 func TestRegistryProxy(t *testing.T) {

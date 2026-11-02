@@ -763,7 +763,7 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	// slot is replaced right away.
 	if existing != nil && existing.WorkerTokenID != tokenID {
 		if existing.WorkerTokenID != "" {
-			if err := s.backendRepo.RevokeTokenByExternalId(ctx, existing.WorkerTokenID); err != nil {
+			if err := s.tokens.Revoke(ctx, existing.WorkerTokenID); err != nil {
 				return nil, "", err
 			}
 		}
@@ -942,13 +942,15 @@ func (s *Service) pruneAgentWorkerSlots(ctx context.Context, agentState *model.A
 		if slot == nil || slot.WorkerID == "" || slot.WorkerID == keepWorkerID {
 			continue
 		}
-		if err := s.computeRepo.DeleteAgentWorkerSlotState(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID); err != nil {
-			return err
-		}
+		// The slot is the only record of its token, so it stays until the
+		// token is revoked.
 		if slot.WorkerTokenID != "" {
-			if err := s.backendRepo.RevokeTokenByExternalId(ctx, slot.WorkerTokenID); err != nil {
+			if err := s.tokens.Revoke(ctx, slot.WorkerTokenID); err != nil {
 				return err
 			}
+		}
+		if err := s.computeRepo.DeleteAgentWorkerSlotState(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID); err != nil {
+			return err
 		}
 		s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 			WorkspaceID: agentState.WorkspaceID,

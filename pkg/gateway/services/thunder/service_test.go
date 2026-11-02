@@ -366,7 +366,7 @@ func TestServiceDeleteClientEnrollmentIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestServicePrivateWorkerTokenIsWorkspaceScoped(t *testing.T) {
+func TestServiceWorkerTokensAreScoped(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 
@@ -388,44 +388,21 @@ func TestServicePrivateWorkerTokenIsWorkspaceScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := service.CreateClientEnrollment(thunderWorkerAuthContext(types.TokenTypeWorkerPrivate, "workspace-2"), &pb.CreateClientEnrollmentRequest{ContainerId: "container-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Ok || !strings.Contains(resp.ErrorMsg, "workspace") {
-		t.Fatalf("CreateClientEnrollment() = %+v", resp)
-	}
-}
-
-func TestServiceWorkerTokenIsWorkerScoped(t *testing.T) {
-	rdb := newThunderRedisClient(t)
-	defer rdb.Close()
-
-	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
-	workerRepo := repository.NewWorkerRedisRepositoryForTest(rdb)
-	if err := workerRepo.AddWorker(&types.Worker{Id: "worker-1", PoolName: "pool-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := containerRepo.SetContainerState("container-1", &types.ContainerState{ContainerId: "container-1", WorkspaceId: "workspace-1", WorkerId: "worker-1", Gpu: "H100", GpuCount: 1}); err != nil {
-		t.Fatal(err)
-	}
-	service, err := NewService(ServiceOpts{
-		Repository:    repository.NewThunderRedisRepository(rdb),
-		Client:        thundersdk.NewClient("https://central.example", "central-token"),
-		ContainerRepo: containerRepo,
-		WorkerRepo:    workerRepo,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-2"}})
-	resp, err := service.CreateClientEnrollment(ctx, &pb.CreateClientEnrollmentRequest{ContainerId: "container-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Ok || !strings.Contains(resp.ErrorMsg, `worker "worker-1"`) {
-		t.Fatalf("CreateClientEnrollment() = %+v", resp)
+	otherWorker := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-2"}})
+	for _, tc := range []struct {
+		ctx  context.Context
+		want string
+	}{
+		{thunderWorkerAuthContext(types.TokenTypeWorkerPrivate, "workspace-2"), "workspace"},
+		{otherWorker, `worker "worker-1"`},
+	} {
+		resp, err := service.CreateClientEnrollment(tc.ctx, &pb.CreateClientEnrollmentRequest{ContainerId: "container-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Ok || !strings.Contains(resp.ErrorMsg, tc.want) {
+			t.Fatalf("CreateClientEnrollment() = %+v, want an error about %s", resp, tc.want)
+		}
 	}
 }
 

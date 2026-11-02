@@ -11,7 +11,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
-	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -181,12 +180,12 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		}
 		// Untrusted workers reach the build registry only through the gateway's
 		// registry proxy, with their own token.
-		if authInfo, ok := untrustedWorker(ctx); ok {
+		if worker, ok := untrustedWorker(ctx); ok {
 			gatewayURL := s.appConfig.GatewayService.HTTP.GetExternalURL()
 			resp.BuildRegistry = normalizeRegistryHost(gatewayURL)
 			resp.BuildRegistryInsecure = strings.HasPrefix(gatewayURL, "http://")
 			if registryHostsEqual(req.Registry, resp.BuildRegistry) {
-				resp.RegistryCredentials = "beta9:" + authInfo.Token.Key
+				resp.RegistryCredentials = "beta9:" + worker.Token.Key
 			}
 		}
 		return resp, nil
@@ -213,18 +212,18 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 // image export. Cluster workers and cache servers are trusted infrastructure
 // that serves every workspace.
 func (s *WorkerRepositoryService) authorizeOriginCredentials(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
-	authInfo, ok := untrustedWorker(ctx)
+	worker, ok := untrustedWorker(ctx)
 	if !ok {
 		return nil
 	}
-	if authInfo.Workspace == nil || req.WorkspaceId == "" || req.WorkspaceId != authInfo.Workspace.ExternalId {
+	if !worker.InWorkspace(req.WorkspaceId) {
 		return fmt.Errorf("worker token cannot request credentials for workspace %q", req.WorkspaceId)
 	}
 	if req.StubId == "" {
 		return fmt.Errorf("worker token credential request requires a stub")
 	}
 	if req.ImageArchiveUploadId != "" || s.platformWorkspace(ctx, req.WorkspaceId) {
-		if !WorkerRunsStub(s.containerRepo, authInfo.Token.WorkerID, req.StubId) {
+		if !worker.RunsStub(s.containerRepo, req.StubId) {
 			return fmt.Errorf("stub %q is not running on this worker", req.StubId)
 		}
 	}
@@ -252,23 +251,6 @@ func (s *WorkerRepositoryService) platformWorkspace(ctx context.Context, workspa
 	}
 	admin, err := s.backendRepo.GetAdminWorkspace(ctx)
 	return err != nil || admin == nil || admin.ExternalId == workspaceID
-}
-
-// WorkerRunsStub reports whether the worker has an active container of the stub.
-func WorkerRunsStub(containerRepo repository.ContainerRepository, workerID, stubID string) bool {
-	if containerRepo == nil || workerID == "" || stubID == "" {
-		return false
-	}
-	containers, err := containerRepo.GetActiveContainersByWorkerId(workerID)
-	if err != nil {
-		return false
-	}
-	for _, container := range containers {
-		if container.StubId == stubID {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context, _ *pb.PruneStaleCacheCheckpointsRequest) (*pb.PruneStaleCacheCheckpointsResponse, error) {
@@ -412,8 +394,12 @@ const imageArchivePresignExpiry = 15 * time.Minute
 // imageArchiveUploadURL presigns the upload of a filesystem snapshot of the
 // request's stub, so no bucket credentials leave the cluster.
 func (s *WorkerRepositoryService) imageArchiveUploadURL(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) (string, error) {
-	if _, err := s.workerTokenWorkspaceID(ctx, req.WorkspaceId); err != nil {
+	worker, err := auth.WorkerFromContext(ctx)
+	if err != nil {
 		return "", err
+	}
+	if !worker.InWorkspace(req.WorkspaceId) {
+		return "", fmt.Errorf("worker token cannot access workspace %q", req.WorkspaceId)
 	}
 	if stubID, ok := types.SnapshotImageStub(req.ImageArchiveUploadId); !ok || req.StubId == "" || stubID != req.StubId {
 		return "", fmt.Errorf("invalid filesystem export image ID")
@@ -530,14 +516,12 @@ func (s *WorkerRepositoryService) registryOriginCredentials(ctx context.Context,
 	return s.buildRegistryCredentials(ctx, registry)
 }
 
-// untrustedWorker returns the caller's auth when it is a worker on customer or
-// provider hardware.
-func untrustedWorker(ctx context.Context) (*auth.AuthInfo, bool) {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
-		return nil, false
-	}
-	return authInfo, true
+// untrustedWorker returns the caller when it is a worker on customer or
+// provider hardware. authorizeCacheRepositoryRequest has checked that a caller
+// with a token is a worker.
+func untrustedWorker(ctx context.Context) (*auth.Worker, bool) {
+	worker, err := auth.WorkerFromContext(ctx)
+	return worker, err == nil && !worker.Trusted
 }
 
 func (s *WorkerRepositoryService) imageRegistryCredentials(ctx context.Context, workspaceID, imageID string) string {

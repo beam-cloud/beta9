@@ -48,14 +48,16 @@ func NewBackendRepositoryService(ctx context.Context, backendRepo repository.Bac
 	}
 }
 
-var errCheckpointNotPermitted = status.Error(codes.PermissionDenied, "checkpoint is not available to this worker")
+var (
+	errCheckpointNotPermitted   = status.Error(codes.PermissionDenied, "checkpoint is not available to this worker")
+	errDiskSnapshotNotPermitted = status.Error(codes.PermissionDenied, "disk snapshot is not available to this worker")
+)
 
-// AuthorizeRequest limits private and provider workers to checkpoints in their
-// own workspace, as authorizeDiskSnapshotWorkspace does for disk snapshots. A
-// checkpoint is published after its container may have stopped and expired, so
-// it cannot be tied to a running container.
+// AuthorizeRequest limits private and provider workers to checkpoints and disk
+// snapshots in their own workspace. Both are published after their container
+// may have stopped and expired, so they can't be tied to a running container.
 func (s *BackendRepositoryService) AuthorizeRequest(ctx context.Context, req interface{}) error {
-	authInfo, err := workerRepositoryAuth(ctx)
+	worker, err := auth.WorkerFromContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -63,27 +65,41 @@ func (s *BackendRepositoryService) AuthorizeRequest(ctx context.Context, req int
 	case *pb.GetCheckpointByIdRequest, *pb.ListCheckpointsRequest:
 		return errCheckpointNotPermitted
 	case *pb.CreateCheckpointRequest:
-		return s.authorizeCheckpointStub(ctx, authInfo, req.StubId)
+		return s.authorizeCheckpoint(ctx, worker, req.StubId, "")
 	case *pb.GetLatestCheckpointByStubIdRequest:
-		return s.authorizeCheckpointStub(ctx, authInfo, req.StubId)
+		return s.authorizeCheckpoint(ctx, worker, req.StubId, "")
 	case *pb.UpdateCheckpointRequest:
-		if authInfo.Token.TokenType == types.TokenTypeWorker {
-			return nil
+		return s.authorizeCheckpoint(ctx, worker, "", req.CheckpointId)
+	case interface{ GetWorkspaceId() string }:
+		if !worker.InWorkspace(req.GetWorkspaceId()) {
+			return errDiskSnapshotNotPermitted
 		}
-		checkpoint, err := s.backendRepo.GetCheckpointById(ctx, req.CheckpointId)
-		if err != nil || checkpoint == nil || authInfo.Workspace == nil || checkpoint.WorkspaceId != authInfo.Workspace.Id {
-			return errCheckpointNotPermitted
-		}
-	}
-	return nil
-}
-
-func (s *BackendRepositoryService) authorizeCheckpointStub(ctx context.Context, authInfo *auth.AuthInfo, stubID string) error {
-	if authInfo.Token.TokenType == types.TokenTypeWorker {
 		return nil
 	}
-	stub, err := s.backendRepo.GetStubByExternalId(ctx, stubID)
-	if err != nil || stub == nil || authInfo.Workspace == nil || stub.WorkspaceId != authInfo.Workspace.Id {
+	return status.Error(codes.PermissionDenied, "request is not available to workers")
+}
+
+// authorizeCheckpoint checks the workspace of the stub, or of the checkpoint
+// when checkpointID is set.
+func (s *BackendRepositoryService) authorizeCheckpoint(ctx context.Context, worker *auth.Worker, stubID, checkpointID string) error {
+	if worker.Trusted {
+		return nil
+	}
+	var workspaceID uint
+	if checkpointID != "" {
+		checkpoint, err := s.backendRepo.GetCheckpointById(ctx, checkpointID)
+		if err != nil || checkpoint == nil {
+			return errCheckpointNotPermitted
+		}
+		workspaceID = checkpoint.WorkspaceId
+	} else {
+		stub, err := s.backendRepo.GetStubByExternalId(ctx, stubID)
+		if err != nil || stub == nil {
+			return errCheckpointNotPermitted
+		}
+		workspaceID = stub.WorkspaceId
+	}
+	if !worker.InWorkspaceID(workspaceID) {
 		return errCheckpointNotPermitted
 	}
 	return nil
@@ -175,9 +191,6 @@ func (s *BackendRepositoryService) UpdateCheckpoint(ctx context.Context, req *pb
 }
 
 func (s *BackendRepositoryService) CreateDiskSnapshot(ctx context.Context, req *pb.CreateDiskSnapshotRequest) (*pb.CreateDiskSnapshotResponse, error) {
-	if err := authorizeDiskSnapshotWorkspace(ctx, req.WorkspaceId); err != nil {
-		return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
 	if err != nil {
 		return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -293,12 +306,10 @@ func (s *BackendRepositoryService) diskSnapshotDownloadURL(ctx context.Context, 
 	return storageClient.StorageClient.GeneratePresignedGetURL(ctx, req.ObjectKey, int64(diskSnapshotURLExpiry.Seconds()), snapshot.BucketName)
 }
 
-// workspaceDiskSnapshot returns a workspace the caller may act for and a
-// snapshot that workspace can read: its own, or another workspace's public one.
+// workspaceDiskSnapshot returns the request's workspace, which AuthorizeRequest
+// checked, and a snapshot that workspace can read: its own, or another
+// workspace's public one.
 func (s *BackendRepositoryService) workspaceDiskSnapshot(ctx context.Context, workspaceID, snapshotID string) (types.Workspace, *types.DiskSnapshot, error) {
-	if err := authorizeDiskSnapshotWorkspace(ctx, workspaceID); err != nil {
-		return types.Workspace{}, nil, err
-	}
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceID)
 	if err != nil {
 		return types.Workspace{}, nil, err
@@ -308,20 +319,6 @@ func (s *BackendRepositoryService) workspaceDiskSnapshot(ctx context.Context, wo
 		return types.Workspace{}, nil, err
 	}
 	return workspace, snapshot, nil
-}
-
-func authorizeDiskSnapshotWorkspace(ctx context.Context, workspaceID string) error {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil {
-		return fmt.Errorf("authorization is required")
-	}
-	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin || authInfo.Token.TokenType == types.TokenTypeWorker {
-		return nil
-	}
-	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId != workspaceID {
-		return fmt.Errorf("token cannot access workspace %q", workspaceID)
-	}
-	return nil
 }
 
 func (s *BackendRepositoryService) diskSnapshotObjectAllowed(ctx context.Context, snapshot *types.DiskSnapshot, storageClient *clients.WorkspaceStorageClient, objectKey string) (bool, error) {
@@ -440,9 +437,6 @@ func (s *BackendRepositoryService) findDiskSnapshot(
 	workspaceExternalID string,
 	lookup func(context.Context, uint) (*types.DiskSnapshot, error),
 ) (*types.DiskSnapshot, error) {
-	if err := authorizeDiskSnapshotWorkspace(ctx, workspaceExternalID); err != nil {
-		return nil, err
-	}
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceExternalID)
 	if err != nil {
 		return nil, err

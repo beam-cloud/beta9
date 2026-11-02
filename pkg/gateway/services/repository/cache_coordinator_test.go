@@ -24,7 +24,7 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
 	s := &WorkerRepositoryService{
 		backendRepo:   &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
-		containerRepo: &workerContainersRepo{stubIDs: []string{"stub-id", "other-stub"}},
+		containerRepo: &workerContainersRepo{workspaceID: "workspace-a", stubIDs: []string{"stub-id", "other-stub"}},
 		appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{Registries: types.ImageRegistriesConfig{S3: types.S3ImageRegistryConfig{
 			BucketName: "images", Region: "us-east-1", AccessKey: "test-key", SecretKey: "test-secret",
 		}}}},
@@ -79,7 +79,7 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 func TestGetCacheOriginCredentialsLimitsProviderWorkersToTheirStubs(t *testing.T) {
 	service := &WorkerRepositoryService{
 		backendRepo:   &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
-		containerRepo: &workerContainersRepo{stubIDs: []string{"running-stub"}},
+		containerRepo: &workerContainersRepo{workspaceID: originCredentialsAdminWorkspace, stubIDs: []string{"running-stub"}},
 	}
 	provider := cacheRepositoryWorkspaceAuthContext(originCredentialsAdminWorkspace)
 	for _, imageID := range []string{"", "image-id"} {
@@ -102,7 +102,8 @@ func TestGetCacheOriginCredentialsLimitsProviderWorkersToTheirStubs(t *testing.T
 
 type workerContainersRepo struct {
 	repository.ContainerRepository
-	stubIDs []string
+	workspaceID string
+	stubIDs     []string
 }
 
 func (r *workerContainersRepo) GetActiveContainersByWorkerId(workerID string) ([]types.ContainerState, error) {
@@ -111,7 +112,7 @@ func (r *workerContainersRepo) GetActiveContainersByWorkerId(workerID string) ([
 	}
 	containers := make([]types.ContainerState, 0, len(r.stubIDs))
 	for _, stubID := range r.stubIDs {
-		containers = append(containers, types.ContainerState{StubId: stubID, WorkerId: workerID})
+		containers = append(containers, types.ContainerState{StubId: stubID, WorkerId: workerID, WorkspaceId: r.workspaceID})
 	}
 	return containers, nil
 }
@@ -378,7 +379,7 @@ func TestCacheCoordinatorClusterWorkersShareUnscopedLocalityWithDaemonSet(t *tes
 	// host even though it lists under a different pool name.
 	clusterCtx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: "admin-workspace"},
-		Token:     &types.Token{TokenType: types.TokenTypeWorker},
+		Token:     &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-1"},
 	})
 	clusterResp, err := service.ListCacheHosts(clusterCtx, &pb.ListCacheHostsRequest{PoolName: "gpu-pool", Locality: "default"})
 	require.NoError(t, err)
@@ -866,7 +867,8 @@ func TestGetCacheOriginCredentialsRejectsNilRequest(t *testing.T) {
 
 func cacheRepositoryAuthContext(tokenType string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token: &types.Token{TokenType: tokenType, WorkerID: "worker-1"},
+		Workspace: &types.Workspace{ExternalId: "worker-workspace"},
+		Token:     &types.Token{TokenType: tokenType, WorkerID: "worker-1"},
 	})
 }
 

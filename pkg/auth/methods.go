@@ -30,6 +30,7 @@ var credentialMethods = map[string]bool{
 	pb.GatewayService_ToggleToken_FullMethodName:            true,
 	pb.GatewayService_DeleteToken_FullMethodName:            true,
 	pb.GatewayService_CreatePoolJoinToken_FullMethodName:    true,
+	pb.GatewayService_GetPoolJoinCommand_FullMethodName:     true,
 	pb.GatewayService_RevokePoolJoinToken_FullMethodName:    true,
 	pb.GatewayService_GetProviderJoinCommand_FullMethodName: true,
 	pb.SecretService_CreateSecret_FullMethodName:            true,

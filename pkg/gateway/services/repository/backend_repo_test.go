@@ -109,9 +109,10 @@ func TestFailDiskSnapshotWithdrawsOnlyOwnSnapshots(t *testing.T) {
 		owner     uint
 		withdrawn bool
 	}{
-		{name: "worker", token: types.Token{TokenType: types.TokenTypeWorker}, owner: 1, withdrawn: true},
-		{name: "public snapshot of another workspace", token: types.Token{TokenType: types.TokenTypeWorker}, owner: 2},
-		{name: "token of another workspace", token: types.Token{TokenType: types.TokenTypeWorkspace}, owner: 1},
+		{name: "worker", token: types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker"}, owner: 1, withdrawn: true},
+		{name: "public snapshot of another workspace", token: types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker"}, owner: 2},
+		{name: "private worker of another workspace", token: types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker"}, owner: 1},
+		{name: "workspace token", token: types.Token{TokenType: types.TokenTypeWorkspace}, owner: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &failDiskSnapshotBackendRepo{snapshot: &types.DiskSnapshot{ExternalId: "snap", WorkspaceId: tt.owner, Status: types.DiskSnapshotStatusAvailable}}
@@ -121,7 +122,13 @@ func TestFailDiskSnapshotWithdrawsOnlyOwnSnapshots(t *testing.T) {
 				Workspace: &types.Workspace{ExternalId: "other"},
 			})
 
-			response, err := service.FailDiskSnapshot(ctx, &pb.FailDiskSnapshotRequest{WorkspaceId: "own", SnapshotId: "snap", Reason: "not checkpointed"})
+			req := &pb.FailDiskSnapshotRequest{WorkspaceId: "own", SnapshotId: "snap", Reason: "not checkpointed"}
+			if err := service.AuthorizeRequest(ctx, req); err != nil {
+				require.False(t, tt.withdrawn, err)
+				require.Nil(t, repo.updated)
+				return
+			}
+			response, err := service.FailDiskSnapshot(ctx, req)
 			require.NoError(t, err)
 			if !tt.withdrawn {
 				require.False(t, response.Ok)
@@ -157,53 +164,43 @@ func TestDiskSnapshotManifestChunkKeys(t *testing.T) {
 	require.ErrorContains(t, err, "digest mismatch")
 }
 
-func TestAuthorizeDiskSnapshotWorkspace(t *testing.T) {
+func TestAuthorizeRequestLimitsDiskSnapshotsToTheWorkersWorkspace(t *testing.T) {
 	for _, tt := range []struct {
-		name          string
-		tokenType     string
-		authWorkspace string
-		requested     string
-		allowed       bool
+		name      string
+		tokenType string
+		requested string
+		allowed   bool
 	}{
-		{name: "primary", tokenType: types.TokenTypeWorkspacePrimary, authWorkspace: "own", requested: "own", allowed: true},
-		{name: "workspace", tokenType: types.TokenTypeWorkspace, authWorkspace: "own", requested: "own", allowed: true},
-		{name: "workspace cross tenant", tokenType: types.TokenTypeWorkspace, authWorkspace: "own", requested: "other"},
-		{name: "restricted cross tenant", tokenType: types.TokenTypeWorkspaceRestricted, authWorkspace: "own", requested: "other"},
-		{name: "private worker", tokenType: types.TokenTypeWorkerPrivate, authWorkspace: "own", requested: "own", allowed: true},
-		{name: "private worker cross tenant", tokenType: types.TokenTypeWorkerPrivate, authWorkspace: "own", requested: "other"},
-		{name: "trusted worker cross tenant", tokenType: types.TokenTypeWorker, authWorkspace: "own", requested: "other", allowed: true},
-		{name: "admin cross tenant", tokenType: types.TokenTypeClusterAdmin, authWorkspace: "own", requested: "other", allowed: true},
+		{name: "private worker", tokenType: types.TokenTypeWorkerPrivate, requested: "own", allowed: true},
+		{name: "private worker cross tenant", tokenType: types.TokenTypeWorkerPrivate, requested: "other"},
+		{name: "private worker without workspace", tokenType: types.TokenTypeWorkerPrivate},
+		{name: "trusted worker cross tenant", tokenType: types.TokenTypeWorker, requested: "other", allowed: true},
+		{name: "workspace token", tokenType: types.TokenTypeWorkspacePrimary, requested: "own"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			repo := &diskSnapshotDownloadBackendRepo{}
+			service := &BackendRepositoryService{backendRepo: repo}
 			ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-				Token:     &types.Token{TokenType: tt.tokenType},
-				Workspace: &types.Workspace{ExternalId: tt.authWorkspace},
+				Token:     &types.Token{TokenType: tt.tokenType, WorkerID: "worker"},
+				Workspace: &types.Workspace{ExternalId: "own"},
 			})
-			err := authorizeDiskSnapshotWorkspace(ctx, tt.requested)
-			if tt.allowed {
-				require.NoError(t, err)
-			} else {
-				require.Error(t, err)
+			for _, req := range []interface{}{
+				&pb.CreateDiskSnapshotRequest{WorkspaceId: tt.requested},
+				&pb.FailDiskSnapshotRequest{WorkspaceId: tt.requested},
+				&pb.GetLatestDiskSnapshotRequest{WorkspaceId: tt.requested},
+				&pb.GetDiskSnapshotRequest{WorkspaceId: tt.requested},
+				&pb.GetDiskSnapshotDownloadURLRequest{WorkspaceId: tt.requested},
+			} {
+				err := service.AuthorizeRequest(ctx, req)
+				if tt.allowed {
+					require.NoError(t, err, "%T", req)
+				} else {
+					require.Error(t, err, "%T", req)
+				}
 			}
+			require.Zero(t, repo.workspaceLookups)
 		})
 	}
-
-	require.Error(t, authorizeDiskSnapshotWorkspace(context.Background(), "workspace"))
-}
-
-func TestGetDiskSnapshotDownloadURLRejectsCrossWorkspaceToken(t *testing.T) {
-	repo := &diskSnapshotDownloadBackendRepo{}
-	service := &BackendRepositoryService{backendRepo: repo}
-	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token:     &types.Token{TokenType: types.TokenTypeWorkspacePrimary},
-		Workspace: &types.Workspace{ExternalId: "own"},
-	})
-
-	response, err := service.GetDiskSnapshotDownloadURL(ctx, &pb.GetDiskSnapshotDownloadURLRequest{WorkspaceId: "other"})
-	require.NoError(t, err)
-	require.False(t, response.Ok)
-	require.Contains(t, response.ErrorMsg, "cannot access workspace")
-	require.Zero(t, repo.workspaceLookups)
 }
 
 func TestGetCachedDiskSnapshotChunkKeys(t *testing.T) {
