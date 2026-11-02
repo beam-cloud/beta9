@@ -333,8 +333,7 @@ const tokenLength = 64
 
 const tokenColumns = `id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id, worker_id`
 
-// Token types whose keys are never returned by listings or toggles, and which
-// workspace token management cannot toggle or delete.
+// Token types that workspace token management never lists, toggles or deletes.
 const protectedTokenTypes = `('` + types.TokenTypeClusterAdmin + `', '` + types.TokenTypeWorker + `', '` + types.TokenTypeWorkerPrivate + `')`
 
 func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error) {
@@ -484,7 +483,7 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
     SELECT ` + tokenColumns + `
     FROM token
     WHERE workspace_id = $1
-	AND token_type NOT IN ('admin', 'worker', 'worker_private')
+	AND token_type NOT IN ` + protectedTokenTypes + `
     ORDER BY created_at DESC;
     `
 
