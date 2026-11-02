@@ -196,7 +196,7 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 	if err != nil {
 		return int(types.ContainerExitCodeStartupFailed), err
 	}
-	args := microVMHypervisorArgs(inst.stateDir, kernel, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra, inst.vfio.paths...)
+	args := microVMHypervisorArgs(inst.stateDir, kernel, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra, inst.vfio.placement, inst.vfio.paths...)
 	return m.boot(ctx, inst, spec, args, opts.OutputWriter, opts.ErrorWriter, opts.Started)
 }
 
@@ -546,6 +546,11 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 		return none, microVMDisk{}, nil, fmt.Errorf("setup microvm cgroup: %w", err)
 	}
 	took("cgroup")
+	inst.vfio.placement, err = (microVMTopology{}).placement(inst.vfio.gpu, spec, inst.cgroup)
+	if err != nil {
+		return none, microVMDisk{}, nil, fmt.Errorf("place microvm near GPU: %w", err)
+	}
+	took("numa")
 	if err := m.startVirtiofsd(ctx, inst); err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("start virtiofsd: %w", err)
 	}
@@ -631,8 +636,12 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	inst.mu.Lock()
 	inst.hypervisor = cmd
 	inst.mu.Unlock()
-	log.Info().Str("container_id", inst.id).Int("pid", cmd.Process.Pid).Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec)).
-		Str("prepare", inst.prepareTimings).Dur("spawn", time.Since(spawnStart)).Msg("microvm started")
+	startedLog := log.Info().Str("container_id", inst.id).Int("pid", cmd.Process.Pid).
+		Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec))
+	if placement := inst.vfio.placement; placement != nil {
+		startedLog.Int("numa_node", placement.node).Ints("host_cpus", placement.cpus)
+	}
+	startedLog.Str("prepare", inst.prepareTimings).Dur("spawn", time.Since(spawnStart)).Msg("microvm started")
 
 	if started != nil {
 		select {

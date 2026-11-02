@@ -25,15 +25,18 @@ type microVMVFIOHost struct {
 }
 
 type microVMVFIO struct {
-	paths []string
-	locks []*os.File
-	once  sync.Once
+	paths     []string
+	locks     []*os.File
+	gpu       string
+	placement *microVMPlacement
+	once      sync.Once
 }
 
 type microVMVFIOGroup struct {
 	path    string
 	devices []string
 	gpus    int
+	gpu     string
 }
 
 // acquire reserves one complete GPU group already bound to vfio-pci. An empty
@@ -92,6 +95,7 @@ func (h microVMVFIOHost) acquire(value string) (_ *microVMVFIO, err error) {
 		}
 		if strings.HasPrefix(strings.TrimSpace(string(class)), "0x03") {
 			groups[id].gpus++
+			groups[id].gpu = path
 		}
 	}
 	if !automatic && len(groups) != 1 {
@@ -140,6 +144,7 @@ func (h microVMVFIOHost) acquire(value string) (_ *microVMVFIO, err error) {
 		for _, device := range group.devices {
 			vfio.paths = append(vfio.paths, filepath.Join(h.pciRoot, device))
 		}
+		vfio.gpu = group.gpu
 		return vfio, nil
 	}
 	return nil, fmt.Errorf("no available VFIO group with exactly one GPU")

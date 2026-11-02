@@ -435,16 +435,38 @@ func microVMKernelCmdline() string {
 	}, " ")
 }
 
-func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory int64, mac string, root microVMDisk, extra []microVMDisk, devices ...string) []string {
+type microVMPlacement struct {
+	node int
+	cpus []int
+}
+
+func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory int64, mac string, root microVMDisk, extra []microVMDisk, placement *microVMPlacement, devices ...string) []string {
+	cpuArg := fmt.Sprintf("boot=%d", vcpus)
+	memoryArgs := []string{"--memory", fmt.Sprintf("size=%d,shared=on", memory)}
+	if placement != nil {
+		cpus := make([]string, len(placement.cpus))
+		for i, cpu := range placement.cpus {
+			cpus[i] = strconv.Itoa(cpu)
+		}
+		affinity := make([]string, vcpus)
+		for i := range affinity {
+			affinity[i] = fmt.Sprintf("%d@[%s]", i, strings.Join(cpus, ","))
+		}
+		cpuArg += ",affinity=[" + strings.Join(affinity, ",") + "]"
+		memoryArgs = []string{"--memory", "size=0", "--memory-zone",
+			fmt.Sprintf("id=ram,size=%d,shared=on,host_numa_node=%d", memory, placement.node)}
+	}
 	args := []string{
 		"--api-socket", "path=" + filepath.Join(stateDir, microVMAPISocket),
 		"--kernel", kernel,
 		"--cmdline", cmdline,
-		"--cpus", fmt.Sprintf("boot=%d", vcpus),
-		"--memory", fmt.Sprintf("size=%d,shared=on", memory),
+		"--cpus", cpuArg,
+	}
+	args = append(args, memoryArgs...)
+	args = append(args,
 		"--fs", fmt.Sprintf("tag=%s,socket=%s,num_queues=1,queue_size=1024", microvm.VirtiofsTag, filepath.Join(stateDir, microVMVirtiofsSocket)),
 		"--disk", root.arg,
-	}
+	)
 	for _, disk := range extra {
 		args = append(args, disk.arg)
 	}

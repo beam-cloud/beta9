@@ -668,8 +668,8 @@ func TestMicroVMVFIOOwnership(t *testing.T) {
 	claim.close()
 	claim.close()
 
-	base := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil)
-	args := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil, claim.paths...)
+	base := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil, nil)
+	args := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil, nil, claim.paths...)
 	require.Contains(t, base, "--balloon")
 	require.NotContains(t, args, "--balloon", "DMA-pinned RAM cannot be reclaimed")
 	require.Contains(t, strings.Join(args, " "), "--device path="+claim.paths[0]+" path="+claim.paths[1])
