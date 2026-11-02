@@ -3,6 +3,7 @@ package worker
 import (
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -36,6 +37,37 @@ func TestContainerIsolationRules(t *testing.T) {
 		require.Contains(t, deny, drop(network))
 	}
 	require.NotContains(t, deny, drop("10.0.0.0/8"))
+}
+
+func TestIsolateContainersFollowsMovedEndpoints(t *testing.T) {
+	if !resolvConfHasUsableNameserver(hostResolvConfPath) {
+		t.Skip("isolation reads the host's nameservers")
+	}
+	gateway := isolationEndpoint{"10.0.4.20", "tcp", 443}
+	moved := isolationEndpoint{"10.0.4.21", "tcp", 443}
+	manager := &ContainerNetworkManager{}
+	manager.config.Worker.UseHostResolvConf = true
+	manager.config.GatewayService.GRPC.ExternalHost = gateway.address
+	manager.config.GatewayService.GRPC.ExternalPort = gateway.port
+	require.NoError(t, manager.isolateContainers())
+	require.Contains(t, manager.isolatedEndpoints, gateway)
+
+	// A refresh with nothing new must not wait on container setup's iptables lock.
+	manager.iptablesMu.Lock()
+	refreshed := make(chan error, 1)
+	go func() { refreshed <- manager.isolateContainers() }()
+	select {
+	case err := <-refreshed:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh without new endpoints waited for the iptables lock")
+	}
+	manager.iptablesMu.Unlock()
+
+	manager.config.GatewayService.GRPC.ExternalHost = moved.address
+	require.NoError(t, manager.isolateContainers())
+	require.Contains(t, manager.isolatedEndpoints, gateway)
+	require.Contains(t, manager.isolatedEndpoints, moved)
 }
 
 func TestHostNetworks(t *testing.T) {

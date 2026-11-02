@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/rs/zerolog/log"
@@ -18,6 +19,8 @@ import (
 // filter rules that apply allow lists, so no allow list can lift it, and it
 // sees each destination before the egress firewall redirects it.
 const containerIsolationChain = "B9-ISOLATION"
+
+const containerIsolationRefreshInterval = time.Minute
 
 // buildahBridgeLinkName is the bridge buildah attaches RUN steps to.
 const buildahBridgeLinkName = "cni-podman0"
@@ -83,12 +86,22 @@ func containerIsolationRules(ipv6, privateNetworks bool, hostNetworks []string, 
 	return allow, deny
 }
 
-// isolateContainers installs containerIsolationChain. Workers sharing a host
-// network share the chain, so each adds its endpoints ahead of the drops.
+// isolateContainers installs containerIsolationChain and lets containers reach
+// endpoints the chain does not let through yet. Workers sharing a host network
+// share the chain, so each adds its endpoints ahead of the drops. An address an
+// endpoint stops resolving to stays open, since containers may still hold DNS
+// answers that name it.
 func (m *ContainerNetworkManager) isolateContainers() error {
 	endpoints, err := m.isolationEndpoints()
 	if err != nil {
 		return err
+	}
+	endpoints = slices.DeleteFunc(endpoints, func(endpoint isolationEndpoint) bool {
+		_, isolated := m.isolatedEndpoints[endpoint]
+		return isolated
+	})
+	if len(endpoints) == 0 && m.isolatedEndpoints != nil {
+		return nil
 	}
 
 	m.iptablesMu.Lock()
@@ -126,7 +139,31 @@ func (m *ContainerNetworkManager) isolateContainers() error {
 			}
 		}
 	}
+	if m.isolatedEndpoints == nil {
+		m.isolatedEndpoints = map[isolationEndpoint]struct{}{}
+	}
+	for _, endpoint := range endpoints {
+		m.isolatedEndpoints[endpoint] = struct{}{}
+	}
 	return nil
+}
+
+// refreshContainerIsolation follows endpoints to new addresses, such as a load
+// balancer's, and retries any that did not resolve before.
+func (m *ContainerNetworkManager) refreshContainerIsolation() {
+	ticker := time.NewTicker(containerIsolationRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := m.isolateContainers(); err != nil {
+				log.Warn().Err(err).Msg("failed to refresh container network isolation")
+			}
+		}
+	}
 }
 
 // isolationEndpoints are the destinations containers and builds keep reaching

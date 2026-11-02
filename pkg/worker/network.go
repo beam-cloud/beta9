@@ -134,6 +134,9 @@ type ContainerNetworkManager struct {
 	// hostNetworks are the host's globally routable networks, which
 	// containers off private pools never reach.
 	hostNetworks []string
+	// isolatedEndpoints are the endpoints containerIsolationChain lets
+	// containers reach.
+	isolatedEndpoints map[isolationEndpoint]struct{}
 }
 
 // pendingSlotDiscard is a used slot detached from its container whose
@@ -578,6 +581,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		m.config.Worker.Egress = m.egress.Config()
 	}
 	go m.cleanupOrphanedNamespaces()
+	go m.refreshContainerIsolation()
 	if m.slotPoolSize > 0 {
 		m.sweepStaleNetworkState()
 		// Prime one round of slots for the first containers that land on this
@@ -1551,7 +1555,7 @@ func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, er
 	slotID := randomNetworkSlotID()
 	reservationID := m.containerNetworkSlotReservationID(slotID)
 	namespace := slotID
-	vethHost, vethContainer := containerVethNames(slotID)
+	vethHost, _ := containerVethNames(slotID)
 	slotReady := false
 	defer func() {
 		if slotReady {
@@ -1584,42 +1588,11 @@ func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, er
 	}
 	defer releaseIP()
 
-	if err = m.createVethPair(vethHost, vethContainer); err != nil {
-		return nil, err
-	}
-
-	hostVeth, err := netlink.LinkByName(vethHost)
-	if err != nil {
-		return nil, err
-	}
-	bridge, err := m.getOrSetupBridge(containerBridgeLinkName)
-	if err != nil {
-		return nil, err
-	}
-	if err = attachToContainerBridge(hostVeth, bridge); err != nil {
-		return nil, err
-	}
-	if err = netlink.LinkSetUp(hostVeth); err != nil {
-		return nil, err
-	}
-
-	newNs, err := netns.NewNamed(namespace)
+	newNs, containerVeth, err := m.createBridgedNamespace(namespace, hostNS, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer newNs.Close()
-
-	if err = netns.Set(hostNS); err != nil {
-		return nil, err
-	}
-
-	containerVeth, err := netlink.LinkByName(vethContainer)
-	if err != nil {
-		return nil, err
-	}
-	if err = netlink.LinkSetNsFd(containerVeth, int(newNs)); err != nil {
-		return nil, err
-	}
 
 	err = m.configureContainerLink(&containerNetworkConfigOpts{
 		containerId:   slotID,
@@ -1855,7 +1828,6 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	defer runtime.UnlockOSThread()
 
 	namespace := containerId
-	vethHost, vethContainer := containerVethNames(containerId)
 
 	// Store default network namespace for later
 	hostNS, err := netns.Get()
@@ -1864,64 +1836,11 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	}
 	defer hostNS.Close()
 
-	// Create a veth pair in the host namespace
-	phaseStart := time.Now()
-	if err = m.createVethPair(vethHost, vethContainer); err != nil {
-		metrics.RecordWorkerStartupPhase("network_create_veth", time.Since(phaseStart), request, map[string]string{"success": "false"})
-		m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkCreateVeth, phaseStart, false, nil)
-		return err
-	}
-	metrics.RecordWorkerStartupPhase("network_create_veth", time.Since(phaseStart), request, map[string]string{"success": "true"})
-	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkCreateVeth, phaseStart, true, nil)
-
-	// Set up the bridge in the host namespace and add the host side of the veth pair to it
-	hostVeth, err := netlink.LinkByName(vethHost)
-	if err != nil {
-		return err
-	}
-	phaseStart = time.Now()
-	bridge, err := m.getOrSetupBridge(containerBridgeLinkName)
-	metrics.RecordWorkerStartupPhase("network_setup_bridge", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkSetupBridge, phaseStart, err == nil, nil)
-	if err != nil {
-		return err
-	}
-
-	// Associate new veth on the host side with the bridge device
-	if err := attachToContainerBridge(hostVeth, bridge); err != nil {
-		return err
-	}
-
-	if err := netlink.LinkSetUp(hostVeth); err != nil {
-		return err
-	}
-
-	// Create a new namespace for the container
-	phaseStart = time.Now()
-	newNs, err := netns.NewNamed(namespace)
-	metrics.RecordWorkerStartupPhase("network_create_namespace", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkCreateNamespace, phaseStart, err == nil, nil)
+	newNs, containerVeth, err := m.createBridgedNamespace(namespace, hostNS, request)
 	if err != nil {
 		return err
 	}
 	defer newNs.Close()
-
-	// By default, creating a new namespace automatically sets the current namespace
-	// to that newly created namespace. So we have to move back to host namespace.
-	err = netns.Set(hostNS)
-	if err != nil {
-		return err
-	}
-
-	// Move the container side of the veth pair into the new namespace
-	containerVeth, err := netlink.LinkByName(vethContainer)
-	if err != nil {
-		return err
-	}
-	err = netlink.LinkSetNsFd(containerVeth, int(newNs))
-	if err != nil {
-		return err
-	}
 
 	// Update the runc spec to use the new network namespace
 	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
@@ -1930,7 +1849,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	})
 
 	// Configure the network inside the container's namespace
-	phaseStart = time.Now()
+	phaseStart := time.Now()
 	err = m.configureContainerNetwork(&containerNetworkConfigOpts{
 		containerId:   containerId,
 		containerVeth: containerVeth,
@@ -1942,7 +1861,9 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkConfigureNamespace, phaseStart, err == nil, nil)
 
 	if err != nil {
-		return err
+		// TearDown finds the veth and namespace through the IP reservation,
+		// which a failed configuration leaves unrecorded.
+		return errors.Join(err, m.deleteNetworkSlotResources(namespace))
 	}
 
 	if err := m.setupNetworkRestrictions(containerId, request); err != nil {
@@ -1995,6 +1916,86 @@ func (m *ContainerNetworkManager) networkRestriction(containerId string, request
 	}
 }
 
+// createBridgedNamespace creates network namespace id holding one end of a
+// veth pair whose other end is an isolated port of the container bridge. On
+// failure it removes what it created. The caller locks the OS thread.
+func (m *ContainerNetworkManager) createBridgedNamespace(id string, hostNS netns.NsHandle, request *types.ContainerRequest) (netns.NsHandle, netlink.Link, error) {
+	recordPhase := func(phase string, lifecycleID types.ContainerLifecycleID, phaseStart time.Time, err error) {
+		if request == nil {
+			return
+		}
+		metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+		m.recordNetworkLifecycle(request, lifecycleID, phaseStart, err == nil, nil)
+	}
+	vethHost, vethContainer := containerVethNames(id)
+
+	// Create a veth pair in the host namespace
+	phaseStart := time.Now()
+	err := m.createVethPair(vethHost, vethContainer)
+	recordPhase("network_create_veth", types.ContainerLifecycleNetworkCreateVeth, phaseStart, err)
+	if err != nil {
+		return netns.None(), nil, err
+	}
+
+	containerNS := netns.None()
+	bridged := false
+	defer func() {
+		if bridged {
+			return
+		}
+		if containerNS.IsOpen() {
+			containerNS.Close()
+		}
+		// NewNamed can fail after moving the thread into the new namespace.
+		_ = netns.Set(hostNS)
+		_ = m.deleteNetworkSlotResources(id)
+	}()
+
+	// Set up the bridge in the host namespace and add the host side of the veth pair to it
+	hostVeth, err := netlink.LinkByName(vethHost)
+	if err != nil {
+		return netns.None(), nil, err
+	}
+	phaseStart = time.Now()
+	bridge, err := m.getOrSetupBridge(containerBridgeLinkName)
+	recordPhase("network_setup_bridge", types.ContainerLifecycleNetworkSetupBridge, phaseStart, err)
+	if err != nil {
+		return netns.None(), nil, err
+	}
+	if err := attachToContainerBridge(hostVeth, bridge); err != nil {
+		return netns.None(), nil, err
+	}
+	if err := netlink.LinkSetUp(hostVeth); err != nil {
+		return netns.None(), nil, err
+	}
+
+	// Create a new namespace for the container
+	phaseStart = time.Now()
+	containerNS, err = netns.NewNamed(id)
+	recordPhase("network_create_namespace", types.ContainerLifecycleNetworkCreateNamespace, phaseStart, err)
+	if err != nil {
+		return netns.None(), nil, err
+	}
+
+	// By default, creating a new namespace automatically sets the current namespace
+	// to that newly created namespace. So we have to move back to host namespace.
+	if err := netns.Set(hostNS); err != nil {
+		return netns.None(), nil, err
+	}
+
+	// Move the container side of the veth pair into the new namespace
+	containerVeth, err := netlink.LinkByName(vethContainer)
+	if err != nil {
+		return netns.None(), nil, err
+	}
+	if err := netlink.LinkSetNsFd(containerVeth, int(containerNS)); err != nil {
+		return netns.None(), nil, err
+	}
+
+	bridged = true
+	return containerNS, containerVeth, nil
+}
+
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
 	link := &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{Name: hostVethName,
@@ -2009,7 +2010,10 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 	}
 	// A bridge port needs no IPv6 of its own; without a link-local address the
 	// host sees no DAD, addresses or routes for it come and go.
-	return netlink.LinkSetIP6AddrGenMode(link, in6AddrGenModeNone)
+	if err := netlink.LinkSetIP6AddrGenMode(link, in6AddrGenModeNone); err != nil {
+		return errors.Join(err, netlink.LinkDel(link))
+	}
+	return nil
 }
 
 func (m *ContainerNetworkManager) getOrSetupBridge(bridgeName string) (netlink.Link, error) {
