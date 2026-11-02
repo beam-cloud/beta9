@@ -102,6 +102,9 @@ const (
 	gatewayTailscaleStartTimeout = 30 * time.Second
 	gatewayLivenessService       = "liveness"
 	gatewayReadinessService      = "readiness"
+
+	gatewayEncryptionRetryInterval    = time.Second
+	gatewayEncryptionMaxRetryInterval = 5 * time.Minute
 )
 
 func NewGateway() (*Gateway, error) {
@@ -142,11 +145,7 @@ func NewGateway() (*Gateway, error) {
 	if err := gateway.migratePostgres(backendRepo); err != nil {
 		return nil, err
 	}
-	go func() {
-		if err := backendRepo.EncryptStoredCredentials(ctx); err != nil {
-			log.Error().Err(err).Msg("failed to encrypt stored credentials")
-		}
-	}()
+	go gateway.encryptStoredCredentials(backendRepo, gatewayEncryptionRetryInterval)
 
 	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config))
 
@@ -222,6 +221,26 @@ func (g *Gateway) migratePostgres(backendRepo postgresMigrator) error {
 		Retries:       480,
 		RetryInterval: 500 * time.Millisecond,
 	}, backendRepo.MigrateContext)
+}
+
+type credentialEncrypter interface {
+	EncryptStoredCredentials(context.Context) error
+}
+
+func (g *Gateway) encryptStoredCredentials(backendRepo credentialEncrypter, retryInterval time.Duration) {
+	for {
+		err := backendRepo.EncryptStoredCredentials(g.ctx)
+		if err == nil || g.ctx.Err() != nil {
+			return
+		}
+		log.Error().Err(err).Dur("retry_in", retryInterval).Msg("failed to encrypt stored credentials")
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-time.After(retryInterval):
+		}
+		retryInterval = min(2*retryInterval, gatewayEncryptionMaxRetryInterval)
+	}
 }
 
 // ensureWorkspaceStorage creates the default bucket and storage row for a

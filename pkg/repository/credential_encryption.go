@@ -9,6 +9,7 @@ import (
 
 	pkgCommon "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 )
 
@@ -104,13 +105,15 @@ func (r *PostgresBackendRepository) EncryptStoredCredentials(ctx context.Context
 		return err
 	}
 
-	if err := r.encryptColumn(ctx, "token", "key", true); err != nil {
+	if err := r.encryptColumn(ctx, conn, "token", "key", true); err != nil {
 		return err
 	}
-	return r.encryptColumn(ctx, "workspace", "signing_key", false)
+	return r.encryptColumn(ctx, conn, "workspace", "signing_key", false)
 }
 
-func (r *PostgresBackendRepository) encryptColumn(ctx context.Context, table, column string, hashed bool) error {
+// encryptColumn runs on the lock connection so the backfill never waits for
+// a second pool connection while holding one.
+func (r *PostgresBackendRepository) encryptColumn(ctx context.Context, conn *sqlx.Conn, table, column string, hashed bool) error {
 	set := column + ` = v.sealed`
 	if hashed {
 		set += `, key_hash = v.hash`
@@ -126,7 +129,7 @@ func (r *PostgresBackendRepository) encryptColumn(ctx context.Context, table, co
 			Id    int64  `db:"id"`
 			Value string `db:"value"`
 		}
-		if err := r.client.SelectContext(ctx, &rows, selectQuery, lastID, credentialEncryptionBatch); err != nil {
+		if err := conn.SelectContext(ctx, &rows, selectQuery, lastID, credentialEncryptionBatch); err != nil {
 			return err
 		}
 		if len(rows) == 0 {
@@ -151,7 +154,7 @@ func (r *PostgresBackendRepository) encryptColumn(ctx context.Context, table, co
 		if len(ids) == 0 {
 			continue
 		}
-		if _, err := r.client.ExecContext(ctx, updateQuery, pq.Array(ids), pq.Array(values), pq.Array(sealed), pq.Array(hashes)); err != nil {
+		if _, err := conn.ExecContext(ctx, updateQuery, pq.Array(ids), pq.Array(values), pq.Array(sealed), pq.Array(hashes)); err != nil {
 			return err
 		}
 	}

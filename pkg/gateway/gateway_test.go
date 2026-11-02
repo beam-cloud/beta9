@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -87,6 +89,46 @@ func TestPostgresMigrationsAreSerializedAcrossReplicas(t *testing.T) {
 	if migrator.max.Load() != 1 || migrator.calls.Load() != 2 {
 		t.Fatalf("migration concurrency=%d calls=%d", migrator.max.Load(), migrator.calls.Load())
 	}
+}
+
+type flakyCredentialEncrypter struct {
+	calls    atomic.Int32
+	failures int32
+}
+
+func (e *flakyCredentialEncrypter) EncryptStoredCredentials(context.Context) error {
+	if e.calls.Add(1) <= e.failures {
+		return errors.New("database unavailable")
+	}
+	return nil
+}
+
+func TestStoredCredentialEncryptionRetriesUntilItCompletes(t *testing.T) {
+	t.Run("completes after failures", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		encrypter := &flakyCredentialEncrypter{failures: 2}
+		(&Gateway{ctx: ctx}).encryptStoredCredentials(encrypter, time.Millisecond)
+		require.Equal(t, int32(3), encrypter.calls.Load())
+	})
+
+	t.Run("stops with the gateway", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		encrypter := &flakyCredentialEncrypter{failures: math.MaxInt32}
+		done := make(chan struct{})
+		go func() {
+			(&Gateway{ctx: ctx}).encryptStoredCredentials(encrypter, time.Millisecond)
+			close(done)
+		}()
+		require.Eventually(t, func() bool { return encrypter.calls.Load() > 1 }, time.Second, time.Millisecond)
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("credential encryption kept retrying after the gateway stopped")
+		}
+	})
 }
 
 func gatewayHealthStatus(t *testing.T, g *Gateway, service string) healthpb.HealthCheckResponse_ServingStatus {
