@@ -3,6 +3,7 @@ package scheduler
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -74,6 +75,60 @@ func TestLocalWorkerConfigUsesGatewayServiceHostname(t *testing.T) {
 	http := config.GatewayService.HTTP
 	if http.ExternalHost != "beta9-gateway" || http.ExternalPort != 1994 || http.TLS {
 		t.Fatalf("worker HTTP config = %+v", http)
+	}
+}
+
+func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
+	controller := &LocalKubernetesWorkerPoolController{config: types.AppConfig{
+		Database: types.DatabaseConfig{
+			Postgres: types.PostgresConfig{Password: "postgres-password", EncryptionKey: "sk_encryption-key"},
+			Redis:    types.RedisConfig{Password: "redis-password"},
+			S2:       types.S2Config{ApiKey: "s2-key"},
+		},
+		Storage:   types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{DefaultAccessKey: "storage-access-key", DefaultSecretKey: "storage-secret-key"}},
+		Providers: types.ProviderConfig{Hetzner: types.HetznerProviderConfig{ApiToken: "hetzner-token"}},
+		Tailscale: types.TailscaleConfig{AuthKey: "tailscale-key", AgentAuthKey: "tailscale-agent-key"},
+	}}
+	controller.config.GatewayService.CreditGate.AuthToken = "credit-gate-token"
+	controller.config.ManagedCompute.Billing.AuthToken = "billing-token"
+	controller.config.ManagedCompute.Billing.PoolRoutes = []types.ManagedComputeBillingPoolRouteConfig{{AuthToken: "billing-route-token"}}
+	controller.config.ImageService.BuildRegistryCredentials.Credentials = map[string]string{"AWS_SECRET_ACCESS_KEY": "build-registry-secret"}
+	controller.config.ImageService.Registries.Docker.Password = "docker-password"
+	controller.config.ImageService.Registries.S3.SecretKey = "image-bucket-secret"
+	controller.config.Cache.Server.Metadata.RedisPasswd = "cache-redis-password"
+	controller.config.Cache.Server.Metadata.ValkeyConfig.Password = "valkey-password"
+	controller.config.Cache.Coordinator.Token = "coordinator-token"
+	controller.config.Cache.Client.Token = "cache-client-token"
+	controller.config.Monitoring.Prometheus.AgentPassword = "prometheus-agent-password"
+
+	job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
+	pod := job.Spec.Template.Spec
+	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+		t.Fatal("worker pod mounts a service account token")
+	}
+	var configJSON string
+	for _, variable := range pod.Containers[0].Env {
+		if variable.Name == "CONFIG_JSON" {
+			configJSON = variable.Value
+		}
+	}
+	for _, secret := range []string{
+		"postgres-password", "sk_encryption-key", "redis-password", "storage-access-key", "storage-secret-key",
+		"hetzner-token", "tailscale-key", "tailscale-agent-key", "credit-gate-token", "build-registry-secret",
+		"docker-password", "cache-redis-password", "valkey-password", "coordinator-token", "prometheus-agent-password",
+		"billing-token", "billing-route-token",
+	} {
+		if strings.Contains(configJSON, secret) {
+			t.Errorf("worker config contains %q", secret)
+		}
+	}
+	for _, credential := range []string{"s2-key", "image-bucket-secret", "cache-client-token"} {
+		if !strings.Contains(configJSON, credential) {
+			t.Errorf("worker config lacks %q", credential)
+		}
+	}
+	if controller.config.Database.Postgres.Password != "postgres-password" {
+		t.Fatal("worker config changed the gateway config")
 	}
 }
 

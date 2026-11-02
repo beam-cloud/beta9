@@ -128,6 +128,12 @@ type ContainerNetworkManager struct {
 	slotPreparer     func(netnsPath string) error
 	lastNetworkSetup atomic.Int64 // unix nanos
 	slotDiscards     chan pendingSlotDiscard
+	// privateNetworks lets containers reach private ranges, which on a
+	// private pool are the machine owner's network.
+	privateNetworks bool
+	// hostNetworks are the host's globally routable networks, which
+	// containers off private pools never reach.
+	hostNetworks []string
 }
 
 // pendingSlotDiscard is a used slot detached from its container whose
@@ -532,6 +538,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		slotPoolSize:        containerNetworkSlotPoolSizeForPool(poolConfig, containerStartLimit),
 		containerSlots:      map[string]*containerNetworkSlot{},
 		portReservations:    map[int]portReservation{},
+		privateNetworks:     poolConfig.Mode == types.PoolModePrivate,
 	}
 
 	// Disable IPv6 if ip6tables is not supported
@@ -541,6 +548,16 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 
 	if _, err := m.getOrSetupBridge(containerBridgeLinkName); err != nil {
 		return nil, err
+	}
+	if !m.privateNetworks {
+		addresses, err := net.InterfaceAddrs()
+		if err != nil {
+			return nil, fmt.Errorf("list host addresses: %w", err)
+		}
+		m.hostNetworks = hostNetworks(addresses)
+	}
+	if err := m.isolateContainers(); err != nil {
+		return nil, fmt.Errorf("isolate container network: %w", err)
 	}
 	if envBool(types.WorkerPersistentEnv) {
 		if err := configureHostNetwork(defaultLink); err != nil {
@@ -1579,7 +1596,7 @@ func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, er
 	if err != nil {
 		return nil, err
 	}
-	if err = netlink.LinkSetMaster(hostVeth, bridge); err != nil {
+	if err = attachToContainerBridge(hostVeth, bridge); err != nil {
 		return nil, err
 	}
 	if err = netlink.LinkSetUp(hostVeth); err != nil {
@@ -1871,7 +1888,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	}
 
 	// Associate new veth on the host side with the bridge device
-	if err := netlink.LinkSetMaster(hostVeth, bridge); err != nil {
+	if err := attachToContainerBridge(hostVeth, bridge); err != nil {
 		return err
 	}
 
@@ -2069,6 +2086,13 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 func (m *ContainerNetworkManager) ensureBridgeConfigured(bridgeName string, bridge netlink.Link) error {
 	if err := netlink.LinkSetUp(bridge); err != nil {
 		return err
+	}
+	if m.ipt6 == nil {
+		// Nothing filters IPv6 here, so containers get no IPv6 address on the
+		// bridge, link-local included, to reach the worker through.
+		if err := os.WriteFile(filepath.Join("/proc/sys/net/ipv6/conf", bridgeName, "disable_ipv6"), []byte("1\n"), 0644); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	bridgeIPv4 := &netlink.Addr{
 		IPNet: &net.IPNet{

@@ -30,6 +30,11 @@ type Policy struct {
 	BindingsOnly bool
 	AllowList    []string
 	Bindings     []types.SecretBinding
+	// PrivateNetworks lets allow-listed private CIDRs through. It is set on
+	// private pools only, where private ranges are the machine owner's network.
+	PrivateNetworks bool
+	// HostNetworks are never dialed, though their addresses may be public.
+	HostNetworks []string
 }
 
 type Dependencies struct {
@@ -315,7 +320,7 @@ func (r *routeTarget) HandleConn(conn net.Conn) {
 		Addr:        target,
 		DialTimeout: peekTimeout,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			return f.dialContext(ctx, network, address, policy.AllowList)
+			return f.dialContext(ctx, network, address, policy)
 		},
 		OnDialError: func(src net.Conn, _ error) { _ = src.Close() },
 	}
@@ -358,20 +363,20 @@ func hasBinding(bindings []types.SecretBinding, host string) bool {
 }
 
 // Validate the resolved address at connect time, including explicit private CIDRs.
-func (f *Firewall) dialContext(ctx context.Context, network, address string, allowList []string) (net.Conn, error) {
+func (f *Firewall) dialContext(ctx context.Context, network, address string, policy Policy) (net.Conn, error) {
 	if f.deps.DialContext != nil {
 		return f.deps.DialContext(ctx, network, address)
 	}
 	dialer := &net.Dialer{Timeout: peekTimeout, ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
-		return checkEgressAddress(address, allowList)
+		return checkEgressAddress(address, policy)
 	}}
 	return dialer.DialContext(ctx, network, address)
 }
 
-func checkEgressAddress(address string, allowList []string) error {
+func checkEgressAddress(address string, policy Policy) error {
 	host, _, err := net.SplitHostPort(address)
 	ip := net.ParseIP(host)
-	if err != nil || ip == nil {
+	if err != nil || ip == nil || containsIP(policy.HostNetworks, ip) {
 		return common.ErrPrivateAddress
 	}
 	if common.IsPublicIP(ip) {
@@ -379,16 +384,22 @@ func checkEgressAddress(address string, allowList []string) error {
 	}
 	// Only RFC1918 and IPv6 ULA destinations can be explicitly allowed.
 	// Metadata, loopback and other special-use ranges remain blocked.
-	if ip.IsPrivate() {
-		cidrs, _ := common.SplitAllowList(allowList)
-		for _, cidr := range cidrs {
-			_, network, _ := net.ParseCIDR(cidr)
-			if network.Contains(ip) {
-				return nil
-			}
+	if ip.IsPrivate() && policy.PrivateNetworks {
+		cidrs, _ := common.SplitAllowList(policy.AllowList)
+		if containsIP(cidrs, ip) {
+			return nil
 		}
 	}
 	return common.ErrPrivateAddress
+}
+
+func containsIP(cidrs []string, ip net.IP) bool {
+	for _, cidr := range cidrs {
+		if _, network, err := net.ParseCIDR(cidr); err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *Firewall) lookup(id string) (*container, error) {

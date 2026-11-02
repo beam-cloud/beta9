@@ -26,11 +26,11 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, work
 	}
 
 	g.PATCH("/admin/:workspaceId", auth.WithClusterAdminAuth(group.ClusterAdminUpdateAllWorkspaceTokens))
-	g.POST("/:workspaceId", auth.WithStrictWorkspaceAuth(group.CreateWorkspaceToken))
-	g.GET("/:workspaceId", auth.WithStrictWorkspaceAuth(group.ListWorkspaceTokens))
-	g.GET("/:workspaceId/signing-key", auth.WithStrictWorkspaceAuth(group.GetSigningKey))
-	g.POST("/:workspaceId/:tokenId/toggle", auth.WithStrictWorkspaceAuth(group.ToggleWorkspaceToken))
-	g.DELETE("/:workspaceId/:tokenId", auth.WithStrictWorkspaceAuth(group.DeleteWorkspaceToken))
+	g.POST("/:workspaceId", auth.WithCredentialAuth(group.CreateWorkspaceToken))
+	g.GET("/:workspaceId", auth.WithCredentialAuth(group.ListWorkspaceTokens))
+	g.GET("/:workspaceId/signing-key", auth.WithCredentialAuth(group.GetSigningKey))
+	g.POST("/:workspaceId/:tokenId/toggle", auth.WithCredentialAuth(group.ToggleWorkspaceToken))
+	g.DELETE("/:workspaceId/:tokenId", auth.WithCredentialAuth(group.DeleteWorkspaceToken))
 
 	return group
 }
@@ -187,8 +187,7 @@ func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
 		return HTTPBadRequest("Cannot delete primary token")
 	}
 
-	err = g.backendRepo.DeleteToken(ctx.Request().Context(), workspace.Id, tokenId)
-	if err != nil {
+	if _, err = g.backendRepo.DeleteToken(ctx.Request().Context(), workspace.Id, tokenId); err != nil {
 		return HTTPInternalServerError("Failed to delete token")
 	}
 

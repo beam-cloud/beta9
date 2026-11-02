@@ -53,7 +53,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				}
 			}
 
-			if !token.Active || token.DisabledByClusterAdmin {
+			if !token.Active || token.DisabledByClusterAdmin || types.IsWorkerTokenType(token.TokenType) {
 				return echo.NewHTTPError(http.StatusUnauthorized)
 			}
 			if !workspace.StorageAvailable() {
@@ -152,6 +152,18 @@ func WithStrictWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Co
 
 		return next(ctx)
 	}
+}
+
+// WithCredentialAuth guards routes that reveal or manage credentials, which
+// deploy tokens never need.
+func WithCredentialAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
+	return WithStrictWorkspaceAuth(func(ctx echo.Context) error {
+		cc, _ := ctx.(*HttpAuthContext)
+		if cc.AuthInfo.Token.TokenType == types.TokenTypePlatformDeployer {
+			return echo.NewHTTPError(http.StatusUnauthorized)
+		}
+		return next(ctx)
+	})
 }
 
 func WithClusterAdminAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {

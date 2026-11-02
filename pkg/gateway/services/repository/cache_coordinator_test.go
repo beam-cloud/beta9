@@ -601,9 +601,12 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	}
 	service := &WorkerRepositoryService{
 		backendRepo: backendRepo,
-		appConfig: types.AppConfig{ImageService: types.ImageServiceConfig{
-			BuildRegistry: "build.example.com", BuildRepositoryName: "stage/images", BuildRegistryInsecure: true,
-		}},
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{HTTP: types.HTTPConfig{ExternalHost: "gateway.example.com", ExternalPort: 443, TLS: true}},
+			ImageService: types.ImageServiceConfig{
+				BuildRegistry: "build.example.com", BuildRepositoryName: "stage/images", BuildRegistryInsecure: true,
+			},
+		},
 	}
 
 	resp, err := service.GetCacheOriginCredentials(
@@ -619,12 +622,53 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
-	require.Equal(t, "build.example.com", resp.BuildRegistry)
+	require.Equal(t, "gateway.example.com", resp.BuildRegistry)
 	require.Equal(t, "stage/images", resp.BuildRepositoryName)
-	require.True(t, resp.BuildRegistryInsecure)
+	require.False(t, resp.BuildRegistryInsecure)
 	require.Equal(t, 1, backendRepo.workspaceWithSigningCalls)
 	require.Zero(t, backendRepo.workspaceByExternalCalls)
 	require.Zero(t, backendRepo.workspaceCalls)
+}
+
+func TestGetCacheOriginCredentialsKeepsBuildRegistryFromPrivateWorkers(t *testing.T) {
+	signingKey := "workspace-signing-key"
+	service := &WorkerRepositoryService{
+		backendRepo: &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7, SigningKey: &signingKey}},
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{HTTP: types.HTTPConfig{ExternalHost: "gateway.example.com", ExternalPort: 443, TLS: true}},
+			ImageService: types.ImageServiceConfig{
+				BuildRegistry:       "build.example.com",
+				BuildRepositoryName: "stage/images",
+				BuildRegistryCredentials: types.BuildRegistryCredentialsConfig{
+					Type:        "basic",
+					Credentials: map[string]string{"USERNAME": "build-user", "PASSWORD": "build-pass"},
+				},
+			},
+		},
+	}
+	request := func(registry string) *pb.GetCacheOriginCredentialsRequest {
+		return &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "image-id", Registry: registry}
+	}
+
+	resp, err := service.GetCacheOriginCredentials(cacheRepositoryAuthContext(types.TokenTypeWorker), request("build.example.com"))
+	require.NoError(t, err)
+	require.Equal(t, "build-user:build-pass", resp.RegistryCredentials)
+	require.Equal(t, "build.example.com", resp.BuildRegistry)
+
+	private := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "workspace-id"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, Key: "worker-token", WorkerID: "worker-1"},
+	})
+	resp, err = service.GetCacheOriginCredentials(private, request("build.example.com"))
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Empty(t, resp.RegistryCredentials)
+	require.Equal(t, "gateway.example.com", resp.BuildRegistry)
+
+	resp, err = service.GetCacheOriginCredentials(private, request("gateway.example.com"))
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, "beta9:worker-token", resp.RegistryCredentials)
 }
 
 func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSigningKey(t *testing.T) {
@@ -759,7 +803,7 @@ func TestGetCacheOriginCredentialsRejectsNilRequest(t *testing.T) {
 
 func cacheRepositoryAuthContext(tokenType string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token: &types.Token{TokenType: tokenType},
+		Token: &types.Token{TokenType: tokenType, WorkerID: "worker-1"},
 	})
 }
 
@@ -768,6 +812,6 @@ func cacheRepositoryAuthContext(tokenType string) context.Context {
 func cacheRepositoryWorkspaceAuthContext(workspaceID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
-		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker-1"},
 	})
 }

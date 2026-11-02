@@ -28,23 +28,16 @@ func NewContainerRepositoryService(ctx context.Context, containerRepo repository
 	return &ContainerRepositoryService{ctx: ctx, containerRepo: containerRepo}
 }
 
-// AuthorizeRequest restricts private workers to containers in their workspace.
-// The auth interceptor calls it before dispatching a repository RPC.
+// AuthorizeRequest limits workers to containers scheduled onto them. The auth
+// interceptor calls it before dispatching a repository RPC.
 func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req interface{}) error {
 	authInfo, err := workerRepositoryAuth(ctx)
 	if err != nil {
 		return err
 	}
-	if authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
-		return nil
-	}
 	request, ok := req.(containerRepositoryRequest)
 	if !ok {
 		return status.Error(codes.PermissionDenied, "container is required")
-	}
-	state, err := containerStateForWorkspace(s.containerRepo, request.GetContainerId(), authInfo.Workspace.ExternalId)
-	if err != nil {
-		return err
 	}
 	var routes []*pb.BackendRoute
 	switch req := req.(type) {
@@ -54,6 +47,15 @@ func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req i
 		routes = req.Routes
 	case *pb.SetWorkerAddressRequest:
 		routes = []*pb.BackendRoute{req.Route}
+	}
+	state, err := containerStateForWorker(s.containerRepo, request.GetContainerId(), authInfo)
+	if err != nil {
+		// Trusted workers still finish containers whose state is gone, such as
+		// publishing a VM's exit code; the handlers report the missing state.
+		if (&types.ErrContainerStateNotFound{}).From(err) && authInfo.Token.TokenType == types.TokenTypeWorker && len(routes) == 0 {
+			return nil
+		}
+		return status.Error(codes.PermissionDenied, "container is not assigned to this worker")
 	}
 	for _, route := range routes {
 		if err := authorizeBackendRoute(state, route); err != nil {
@@ -72,13 +74,18 @@ func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req 
 	return &pb.GetContainerStateResponse{Ok: true, ContainerId: req.ContainerId, State: containerStateToProto(state)}, nil
 }
 
-func containerStateForWorkspace(repo repository.ContainerRepository, containerID, workspaceID string) (*types.ContainerState, error) {
+// containerStateForWorker returns the container's state when the scheduler
+// assigned it to the token's worker. A missing state is returned unwrapped.
+func containerStateForWorker(repo repository.ContainerRepository, containerID string, authInfo *auth.AuthInfo) (*types.ContainerState, error) {
 	if containerID == "" {
 		return nil, status.Error(codes.PermissionDenied, "container is required")
 	}
 	state, err := repo.GetContainerState(containerID)
-	if err != nil || state == nil || state.WorkspaceId != workspaceID {
-		return nil, status.Error(codes.PermissionDenied, "container is not in worker workspace")
+	if err != nil {
+		return nil, err
+	}
+	if state == nil || state.WorkerId == "" || state.WorkerId != authInfo.Token.WorkerID {
+		return nil, status.Error(codes.PermissionDenied, "container is not assigned to this worker")
 	}
 	return state, nil
 }

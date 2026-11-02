@@ -87,10 +87,6 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return nil, fmt.Errorf("backend repository is unavailable")
 	}
 
-	if runtimeCredentialsWorkspaceStorageOnly(req) {
-		return s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
-	}
-
 	// A caller-supplied state only stands in for the lookup when it belongs to
 	// the requested container; otherwise the request is authorized against the
 	// container it names.
@@ -101,6 +97,10 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		if state, err = s.runtimeCredentialsContainerState(ctx, req.ContainerId); err != nil {
 			return nil, err
 		}
+	}
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if state == nil || state.WorkerId == "" || state.WorkerId != authInfo.Token.WorkerID {
+		return nil, fmt.Errorf("container %q is not assigned to this worker", req.ContainerId)
 	}
 	if state.WorkspaceId != req.WorkspaceId || state.StubId != req.StubId {
 		return nil, fmt.Errorf("container %q is not assigned to workspace/stub", req.ContainerId)
@@ -191,14 +191,6 @@ func (s *WorkerRepositoryService) runtimeCredentialsWorkspace(ctx context.Contex
 
 func runtimeCredentialsNeedsSigningKey(req *pb.GetContainerRuntimeCredentialsRequest) bool {
 	return req != nil && (len(req.SecretNames) > 0 || len(req.BindingNames) > 0 || len(req.MountCredentials) > 0)
-}
-
-func runtimeCredentialsWorkspaceStorageOnly(req *pb.GetContainerRuntimeCredentialsRequest) bool {
-	return req != nil &&
-		req.WorkspaceStorage &&
-		!req.RuntimeToken &&
-		len(req.SecretNames) == 0 && len(req.BindingNames) == 0 &&
-		len(req.MountCredentials) == 0
 }
 
 func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, workspaceID string) (uint, error) {

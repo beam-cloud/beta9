@@ -164,12 +164,15 @@ type ImageClient struct {
 	workerId           string
 	workerPoolName     string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
-	logger             *ContainerLogger
-	eventRepo          repo.EventRepository
-	contentReporter    *cacheContentReporter
-	v1CacheGroup       singleflight.Group
-	originCredsMu      sync.Mutex
-	originCredsCache   map[string]*originCredentials
+	// buildNetwork returns the network namespace an image build runs buildah
+	// in, and its release.
+	buildNetwork     func() (string, func(), error)
+	logger           *ContainerLogger
+	eventRepo        repo.EventRepository
+	contentReporter  *cacheContentReporter
+	v1CacheGroup     singleflight.Group
+	originCredsMu    sync.Mutex
+	originCredsCache map[string]*originCredentials
 	// archiveContentMetadata resolves the cached image archive object (hash/size)
 	// for a cachefs path. It is a field so tests can inject a fake; in production
 	// it delegates to the cache client.
@@ -1368,6 +1371,7 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 	if !ok {
 		return
 	}
+	c.useGatewayRegistry(meta, ociInfo)
 
 	if ociInfo.RegistryURL == "" {
 		ociInfo.RegistryURL = "https://docker.io"
@@ -1389,6 +1393,23 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 		record = parsed[0]
 	}
 	c.archiveMetadata.Store(imageId, record)
+}
+
+// useGatewayRegistry points build-registry reads at the gateway's registry
+// proxy on private and provider pools, which hold no build-registry credentials.
+func (c *ImageClient) useGatewayRegistry(meta *clipCommon.ClipArchiveMetadata, ociInfo *clipCommon.OCIStorageInfo) {
+	pool, ok := c.config.Worker.Pools[c.workerPoolName]
+	if !ok || !pool.Mode.AgentHosted() {
+		return
+	}
+	host := strings.TrimPrefix(strings.TrimPrefix(ociInfo.RegistryURL, "https://"), "http://")
+	if strings.Trim(host, "/") != c.config.ImageService.EffectiveBuildRegistry() {
+		return
+	}
+	ociInfo.RegistryURL = c.config.GatewayService.HTTP.GetExternalURL()
+	if _, isValue := meta.StorageInfo.(clipCommon.OCIStorageInfo); isValue {
+		meta.StorageInfo = *ociInfo
+	}
 }
 
 // GetSourceImageRef retrieves the cached source image reference for a v2 image
@@ -2461,12 +2482,19 @@ runroot = "%s"
 	return f.Name(), nil
 }
 
-// buildahIsolationArgs give a RUN step its own PID, IPC and network
-// namespaces. Its commands are tenant code and the worker is privileged, so
-// nothing of the worker's may be reachable from them. Explicit flags win over
-// BUILDAH_ISOLATION and containers.conf.
+const buildahRuntimePath = "/usr/local/bin/runsc"
+
+// buildahIsolationArgs run a RUN step under gVisor with its own PID, IPC and
+// network namespaces. Its commands are tenant code and the worker is
+// privileged, so nothing of the worker's may be reachable from them. Buildah
+// owns the writable layer, so gVisor must write through to it rather than to
+// an overlay of its own. Explicit flags win over BUILDAH_ISOLATION and
+// containers.conf.
 func buildahIsolationArgs() []string {
-	return []string{"--isolation=oci", "--pid=private", "--ipc=private", "--network=private"}
+	return []string{
+		"--isolation=oci", "--runtime=" + buildahRuntimePath, "--runtime-flag=platform=systrap", "--runtime-flag=overlay2=none",
+		"--pid=private", "--ipc=private", "--network=private",
+	}
 }
 
 // buildahEnv returns environment variables for buildah
@@ -2670,7 +2698,13 @@ func newImageCommand(ctx context.Context, command string, args []string, env []s
 	return cmd
 }
 
+// buildNetnsKey carries the network namespace of the build a context belongs to.
+type buildNetnsKey struct{}
+
 func newBuildahCommand(ctx context.Context, args []string, env []string, stdout, stderr io.Writer) *exec.Cmd {
+	if netnsPath, ok := ctx.Value(buildNetnsKey{}).(string); ok {
+		return newImageCommand(ctx, "nsenter", append([]string{"--net=" + netnsPath, "--", "buildah"}, args...), env, stdout, stderr)
+	}
 	return newImageCommand(ctx, "buildah", args, env, stdout, stderr)
 }
 
@@ -2803,6 +2837,14 @@ func (c *ImageClient) warmBaseImageLayersInBackground(ctx context.Context, reque
 
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	startTime := time.Now()
+	if c.buildNetwork != nil {
+		netnsPath, release, err := c.buildNetwork()
+		if err != nil {
+			return err
+		}
+		defer release()
+		ctx = context.WithValue(ctx, buildNetnsKey{}, netnsPath)
+	}
 
 	// Use /dev/shm (tmpfs/RAM) for buildah storage to eliminate disk I/O bottlenecks
 	buildPath, err := os.MkdirTemp("/dev/shm", "buildah-")

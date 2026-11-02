@@ -75,7 +75,7 @@ func workerRepositoryAuth(ctx context.Context) (*auth.AuthInfo, error) {
 	if !ok || authInfo == nil || authInfo.Token == nil {
 		return nil, status.Error(codes.Unauthenticated, "worker token is required")
 	}
-	if !types.IsWorkerTokenType(authInfo.Token.TokenType) {
+	if !types.IsWorkerTokenType(authInfo.Token.TokenType) || authInfo.Token.WorkerID == "" {
 		return nil, status.Error(codes.PermissionDenied, "worker token is required")
 	}
 	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate && (authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "") {
@@ -84,40 +84,34 @@ func workerRepositoryAuth(ctx context.Context) (*auth.AuthInfo, error) {
 	return authInfo, nil
 }
 
-// AuthorizeRequest restricts private workers to their assigned worker slot.
-// The auth interceptor also applies it to decoded streaming requests.
+// AuthorizeRequest limits a worker token to the worker it was issued for and
+// the containers scheduled onto that worker. The auth interceptor also applies
+// it to decoded streaming requests.
 func (s *WorkerRepositoryService) AuthorizeRequest(ctx context.Context, req interface{}) error {
 	authInfo, err := workerRepositoryAuth(ctx)
 	if err != nil {
 		return err
 	}
-	if authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
-		return nil
-	}
-	// Network RPCs use scopedNetworkPrefix and do not need worker or slot lookups.
+	// Network RPCs use scopedNetworkPrefix and carry no worker.
 	if request, ok := req.(workerRepositoryRequest); ok {
-		workerID := request.GetWorkerId()
-		if workerID == "" {
-			return status.Error(codes.PermissionDenied, "worker is required")
-		}
-		worker, err := s.workerRepo.GetWorkerById(workerID)
-		if err != nil || worker == nil || worker.WorkspaceId != authInfo.Workspace.ExternalId {
-			return status.Error(codes.PermissionDenied, "worker is not in token workspace")
-		}
-		if err := s.authorizeWorkerLifecycleWorker(ctx, authInfo, workerID, worker); err != nil {
+		if request.GetWorkerId() != authInfo.Token.WorkerID {
 			return status.Error(codes.PermissionDenied, "worker token is not assigned to worker")
 		}
-		if request, ok := req.(*pb.SetWorkerKeepAliveRequest); ok && request.MachineId != "" && strings.TrimSpace(request.MachineId) != worker.MachineId {
-			return status.Error(codes.PermissionDenied, "worker cannot change its machine")
+		// Cluster workers learn their machine from their first keepalive.
+		if request, ok := req.(*pb.SetWorkerKeepAliveRequest); ok && request.MachineId != "" {
+			worker, err := s.workerRepo.GetWorkerById(request.WorkerId)
+			if err != nil || worker == nil || (worker.MachineId != "" && strings.TrimSpace(request.MachineId) != worker.MachineId) {
+				return status.Error(codes.PermissionDenied, "worker cannot change its machine")
+			}
 		}
 	}
 
 	switch req := req.(type) {
 	case *pb.AddContainerToWorkerRequest:
-		_, err := containerStateForWorkspace(s.containerRepo, req.ContainerId, authInfo.Workspace.ExternalId)
+		_, err := containerStateForWorker(s.containerRepo, req.ContainerId, authInfo)
 		return err
 	case *pb.ClaimContainerRequest:
-		state, err := containerStateForWorkspace(s.containerRepo, req.ContainerId, authInfo.Workspace.ExternalId)
+		state, err := containerStateForWorker(s.containerRepo, req.ContainerId, authInfo)
 		if err != nil {
 			return err
 		}

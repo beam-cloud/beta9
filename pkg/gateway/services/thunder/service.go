@@ -76,7 +76,7 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 	if containerID == "" {
 		return &pb.CreateClientEnrollmentResponse{ErrorMsg: "container id is required"}, nil
 	}
-	if err := requireWorkerToken(ctx, ""); err != nil {
+	if err := requireWorkerToken(ctx, "", ""); err != nil {
 		return &pb.CreateClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
@@ -84,7 +84,7 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 	if err != nil {
 		return &pb.CreateClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
-	if err := requireWorkerToken(ctx, attrs.workspaceID); err != nil {
+	if err := requireWorkerToken(ctx, attrs.workspaceID, attrs.workerID); err != nil {
 		return &pb.CreateClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
@@ -156,7 +156,7 @@ func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClie
 	if containerID == "" {
 		return &pb.DeleteClientEnrollmentResponse{ErrorMsg: "container id is required"}, nil
 	}
-	if err := requireWorkerToken(ctx, ""); err != nil {
+	if err := requireWorkerToken(ctx, "", ""); err != nil {
 		return &pb.DeleteClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
@@ -167,7 +167,7 @@ func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClie
 	if !found {
 		return &pb.DeleteClientEnrollmentResponse{Ok: true}, nil
 	}
-	if err := requireWorkerToken(ctx, state.WorkspaceID); err != nil {
+	if err := requireWorkerToken(ctx, state.WorkspaceID, state.WorkerID); err != nil {
 		return &pb.DeleteClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
@@ -183,7 +183,7 @@ func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClie
 		if current.WorkspaceID != state.WorkspaceID || current.PoolName != state.PoolName {
 			return nil
 		}
-		if err := requireWorkerToken(ctx, current.WorkspaceID); err != nil {
+		if err := requireWorkerToken(ctx, current.WorkspaceID, current.WorkerID); err != nil {
 			return err
 		}
 
@@ -400,10 +400,13 @@ func (s *Service) requireAgentState(ctx context.Context, agentToken string) (*mo
 	return s.agentValidator.ResolveAgentState(ctx, agentToken)
 }
 
-func requireWorkerToken(ctx context.Context, workspaceID string) error {
+func requireWorkerToken(ctx context.Context, workspaceID, workerID string) error {
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
 	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
 		return fmt.Errorf("worker token is required")
+	}
+	if workerID != "" && workerID != authInfo.Token.WorkerID {
+		return fmt.Errorf("worker token cannot act for worker %q", workerID)
 	}
 	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate {
 		if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {

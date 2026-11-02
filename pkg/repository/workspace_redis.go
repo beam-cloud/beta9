@@ -14,10 +14,13 @@ import (
 
 type WorkspaceRedisRepository struct {
 	rdb *common.RedisClient
+	// Encrypts cached authorizations, which hold signing keys and storage
+	// credentials. Empty only where no encryption key is configured.
+	encryptionKey string
 }
 
-func NewWorkspaceRedisRepository(r *common.RedisClient) WorkspaceRepository {
-	return &WorkspaceRedisRepository{rdb: r}
+func NewWorkspaceRedisRepository(r *common.RedisClient, encryptionKey string) WorkspaceRepository {
+	return &WorkspaceRedisRepository{rdb: r, encryptionKey: encryptionKey}
 }
 
 const cachedTokenTTLS = 600 // 10 minutes
@@ -95,14 +98,22 @@ type AuthInfo struct {
 }
 
 func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, *types.Workspace, error) {
-	tokenKey := common.RedisKeys.WorkspaceAuthorizedToken(token)
-	res, err := wr.rdb.Get(context.Background(), tokenKey).Result()
+	res, err := wr.rdb.Get(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(tokenKeyHash(token))).Result()
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if res == "" {
 		return nil, nil, errors.New("token not found")
+	}
+	if wr.encryptionKey != "" {
+		secretKey, err := common.ParseSecretKey(wr.encryptionKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		if res, err = common.Decrypt(secretKey, res); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	info := &AuthInfo{}
@@ -114,30 +125,44 @@ func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, 
 	if info.Token == nil || info.Workspace == nil {
 		return nil, nil, errors.New("token not found")
 	}
+	info.Token.Key = token
 
 	return info.Token, info.Workspace, nil
 }
 
 func (wr *WorkspaceRedisRepository) RevokeToken(tokenKey string) error {
-	err := wr.rdb.Del(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(tokenKey)).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return wr.rdb.Del(context.Background(),
+		common.RedisKeys.WorkspaceAuthorizedToken(tokenKeyHash(tokenKey)),
+		// Entries written before keys were hashed.
+		common.RedisKeys.WorkspaceAuthorizedToken(tokenKey),
+	).Err()
 }
 
 func (wr *WorkspaceRedisRepository) SetAuthorizationToken(token *types.Token, workspace *types.Workspace) error {
+	// Unbound worker tokens are bound shortly after a rollout; caching them would
+	// keep them unusable for the cache TTL.
+	if types.IsWorkerTokenType(token.TokenType) && token.WorkerID == "" {
+		return nil
+	}
+	cachedToken := *token
+	cachedToken.Key = ""
 	bytes, err := json.Marshal(AuthInfo{
 		Workspace: workspace,
-		Token:     token,
+		Token:     &cachedToken,
 	})
 	if err != nil {
 		return err
 	}
-
-	if err := wr.rdb.Set(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(token.Key), bytes, time.Duration(cachedTokenTTLS)*time.Second).Err(); err != nil {
-		return err
+	value := string(bytes)
+	if wr.encryptionKey != "" {
+		secretKey, err := common.ParseSecretKey(wr.encryptionKey)
+		if err != nil {
+			return err
+		}
+		if value, err = common.Encrypt(secretKey, value); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	return wr.rdb.Set(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(tokenKeyHash(token.Key)), value, time.Duration(cachedTokenTTLS)*time.Second).Err()
 }

@@ -779,7 +779,7 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 	s.attachImageCredentials(workerRequest)
 	s.attachBuildRegistryCredentials(workerRequest)
 
-	if s.privateWorkerRequest(worker, workerRequest) {
+	if s.privateWorkerRequest(worker, workerRequest) || s.isProviderWorker(worker) {
 		workerRequest = workerRequest.PrivateWorkerRequest()
 	}
 	workerRequest.Timestamp = time.Now()

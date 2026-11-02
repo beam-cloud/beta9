@@ -1,8 +1,10 @@
 package repository_services
 
 import (
+	"context"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -33,19 +35,33 @@ func TestRegisteredRouteContainerIDScopesContainerRoutes(t *testing.T) {
 type authorizationContainerRepo struct {
 	repository.ContainerRepository
 	state *types.ContainerState
+	err   error
 }
 
 func (r *authorizationContainerRepo) GetContainerState(string) (*types.ContainerState, error) {
-	return r.state, nil
+	return r.state, r.err
+}
+
+func TestMissingContainerStatePassesOnlyForTrustedWorkers(t *testing.T) {
+	containers := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{err: &types.ErrContainerStateNotFound{ContainerId: "container"}}}
+	for tokenType, want := range map[string]codes.Code{types.TokenTypeWorker: codes.OK, types.TokenTypeWorkerPrivate: codes.PermissionDenied} {
+		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+			Token: &types.Token{TokenType: tokenType, WorkerID: "worker"}, Workspace: &types.Workspace{ExternalId: "own"},
+		})
+		err := containers.AuthorizeRequest(ctx, &pb.SetContainerExitCodeRequest{ContainerId: "container"})
+		require.Equal(t, want, status.Code(err), tokenType)
+		err = containers.AuthorizeRequest(ctx, &pb.SetContainerAddressRequest{ContainerId: "container", Address: "10.0.0.1:80"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err), tokenType)
+	}
 }
 
 func TestPrivateWorkerContainerOwnership(t *testing.T) {
-	for _, workspace := range []string{"own", "other"} {
-		t.Run(workspace, func(t *testing.T) {
-			containers := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{state: &types.ContainerState{ContainerId: "container", WorkspaceId: workspace}}}
+	for _, worker := range []string{"worker", "other-worker", ""} {
+		t.Run(worker, func(t *testing.T) {
+			containers := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{state: &types.ContainerState{ContainerId: "container", WorkspaceId: "own", WorkerId: worker}}}
 			client := pb.NewContainerRepositoryServiceClient(repositoryAuthClient(t, &WorkerRepositoryService{}, containers))
 			response, err := client.GetContainerState(repositoryAuthContext(types.TokenTypeWorkerPrivate), &pb.GetContainerStateRequest{ContainerId: "container"})
-			if workspace == "own" {
+			if worker == "worker" {
 				require.NoError(t, err)
 				require.True(t, response.Ok)
 			} else {

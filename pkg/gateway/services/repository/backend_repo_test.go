@@ -223,3 +223,45 @@ func TestGetCachedDiskSnapshotChunkKeys(t *testing.T) {
 	_, ok = service.getCachedDiskSnapshotChunkKeys(&types.DiskSnapshot{ExternalId: "snapshot", ManifestDigest: "digest"}, now.Add(time.Minute))
 	require.False(t, ok)
 }
+
+type checkpointAuthBackendRepo struct{ repository.BackendRepository }
+
+var checkpointAuthWorkspaces = map[string]uint{"own": 1, "other": 2}
+
+func (checkpointAuthBackendRepo) GetStubByExternalId(_ context.Context, id string, _ ...types.QueryFilter) (*types.StubWithRelated, error) {
+	return &types.StubWithRelated{Stub: types.Stub{ExternalId: id, WorkspaceId: checkpointAuthWorkspaces[id]}}, nil
+}
+
+func (checkpointAuthBackendRepo) GetCheckpointById(_ context.Context, id string) (*types.Checkpoint, error) {
+	return &types.Checkpoint{CheckpointId: id, WorkspaceId: checkpointAuthWorkspaces[id]}, nil
+}
+
+func TestCheckpointAuthorizationScopesUntrustedWorkersToTheirWorkspace(t *testing.T) {
+	service := &BackendRepositoryService{backendRepo: checkpointAuthBackendRepo{}}
+	requests := func(workspace string) []interface{} {
+		return []interface{}{
+			&pb.CreateCheckpointRequest{StubId: workspace},
+			&pb.GetLatestCheckpointByStubIdRequest{StubId: workspace},
+			&pb.UpdateCheckpointRequest{CheckpointId: workspace},
+		}
+	}
+	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
+		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+			Token:     &types.Token{TokenType: tokenType, WorkerID: "worker"},
+			Workspace: &types.Workspace{Id: 1, ExternalId: "own"},
+		})
+		for _, req := range requests("own") {
+			require.NoError(t, service.AuthorizeRequest(ctx, req), "%s %T", tokenType, req)
+		}
+		for _, req := range requests("other") {
+			err := service.AuthorizeRequest(ctx, req)
+			if tokenType == types.TokenTypeWorker {
+				require.NoError(t, err, "%T", req)
+			} else {
+				require.ErrorIs(t, err, errCheckpointNotPermitted, "%T", req)
+			}
+		}
+		require.ErrorIs(t, service.AuthorizeRequest(ctx, &pb.GetCheckpointByIdRequest{CheckpointId: "own"}), errCheckpointNotPermitted)
+		require.ErrorIs(t, service.AuthorizeRequest(ctx, &pb.ListCheckpointsRequest{WorkspaceId: "own"}), errCheckpointNotPermitted)
+	}
+}

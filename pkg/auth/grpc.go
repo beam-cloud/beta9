@@ -212,6 +212,9 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 			}
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
+		if err := authorizeMethod(authInfo, info.FullMethod); err != nil {
+			return err
+		}
 
 		// Create a new context with the AuthInfo
 		ctxWithAuth := ai.newContextWithAuth(stream.Context(), authInfo)
@@ -246,6 +249,9 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
+		if err := authorizeMethod(authInfo, info.FullMethod); err != nil {
+			return nil, err
+		}
 
 		// Attach the auth info to context
 		ctx = ai.newContextWithAuth(ctx, authInfo)
@@ -267,7 +273,9 @@ func ContextWithAuthInfo(ctx context.Context, authInfo *AuthInfo) context.Contex
 }
 
 func HasPermission(authInfo *AuthInfo) bool {
-	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted
+	return authInfo != nil && authInfo.Token != nil &&
+		authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted &&
+		!types.IsWorkerTokenType(authInfo.Token.TokenType)
 }
 
 // HasInteractivePermission limits user-controlled interactive sessions to

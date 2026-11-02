@@ -229,13 +229,16 @@ type BackendRepository interface {
 	UpdateObjectSizeByExternalId(ctx context.Context, externalId string, size int) error
 	DeleteObjectByExternalId(ctx context.Context, externalId string) error
 	CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error)
+	CreateWorkerToken(ctx context.Context, workspaceId uint, tokenType string, workerId string) (types.Token, error)
+	BindWorkerToken(ctx context.Context, tokenKey, workerId string) (bool, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
 	GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error)
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error
 	ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error)
-	DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) error
+	DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) (string, error)
+	RevokeTokenByExternalId(ctx context.Context, externalId string) error
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	GetTaskStatus(ctx context.Context, externalId string) (types.TaskStatus, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)

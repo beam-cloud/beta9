@@ -121,7 +121,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
+	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient, config.Database.Postgres.EncryptionKey)
 	eventRepo := repository.NewEventClientRepo(config, repository.WithWorkspaceWebhooks(workspaceRepo))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,6 +142,11 @@ func NewGateway() (*Gateway, error) {
 	if err := gateway.migratePostgres(backendRepo); err != nil {
 		return nil, err
 	}
+	go func() {
+		if err := backendRepo.EncryptStoredCredentials(ctx); err != nil {
+			log.Error().Err(err).Msg("failed to encrypt stored credentials")
+		}
+	}()
 
 	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config))
 
@@ -291,6 +296,9 @@ func (g *Gateway) initHttp() error {
 	e.Use(middleware.Recover())
 	e.GET("/install/agent", agentInstallScriptHandler())
 	e.GET("/install/agent/:os/:arch", agentBinaryHandler())
+	registryProxy := echo.WrapHandler(newRegistryProxy(g.Config, g.BackendRepo, g.WorkspaceRepo, g.ContainerRepo))
+	e.Any("/v2", registryProxy)
+	e.Any("/v2/*", registryProxy)
 
 	// Accept both HTTP/2 and HTTP/1
 	g.httpServer = &http.Server{

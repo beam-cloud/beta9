@@ -199,6 +199,10 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 		return types.Workspace{}, err
 	}
 	signingKey := "sk_" + base64.StdEncoding.EncodeToString(signingKeyBytes)
+	storedSigningKey, err := r.sealCredential(signingKey)
+	if err != nil {
+		return types.Workspace{}, err
+	}
 
 	query := `
 	INSERT INTO workspace (name, external_id, signing_key, is_cluster_admin)
@@ -207,9 +211,10 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 	`
 
 	var context types.Workspace
-	if err := r.client.GetContext(ctx, &context, query, name, externalId, signingKey); err != nil {
+	if err := r.client.GetContext(ctx, &context, query, name, externalId, storedSigningKey); err != nil {
 		return types.Workspace{}, err
 	}
+	context.SigningKey = &signingKey
 
 	return context, nil
 }
@@ -259,6 +264,9 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx c
 	query := `SELECT id, name, created_at, concurrency_limit_id, signing_key, volume_cache_enabled, multi_gpu_enabled FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
+		return types.Workspace{}, err
+	}
+	if err := r.openSigningKey(&workspace); err != nil {
 		return types.Workspace{}, err
 	}
 
@@ -323,7 +331,24 @@ func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*typ
 
 const tokenLength = 64
 
+const tokenColumns = `id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id, worker_id`
+
+// Token types whose keys are never returned by listings or toggles, and which
+// workspace token management cannot toggle or delete.
+const protectedTokenTypes = `('` + types.TokenTypeClusterAdmin + `', '` + types.TokenTypeWorker + `', '` + types.TokenTypeWorkerPrivate + `')`
+
 func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error) {
+	return r.createToken(ctx, workspaceId, tokenType, reusable, "")
+}
+
+func (r *PostgresBackendRepository) CreateWorkerToken(ctx context.Context, workspaceId uint, tokenType string, workerId string) (types.Token, error) {
+	if !types.IsWorkerTokenType(tokenType) || workerId == "" {
+		return types.Token{}, fmt.Errorf("worker tokens require a worker type and worker id")
+	}
+	return r.createToken(ctx, workspaceId, tokenType, true, workerId)
+}
+
+func (r *PostgresBackendRepository) createToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool, workerId string) (types.Token, error) {
 	externalId, err := r.generateExternalId()
 	if err != nil {
 		return types.Token{}, err
@@ -335,24 +360,62 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId
 		return types.Token{}, err
 	}
 	key := base64.URLEncoding.EncodeToString(randomBytes)
-
-	query := `
-	INSERT INTO token (external_id, key, active, token_type, reusable, workspace_id)
-	VALUES ($1, $2, $3, $4, $5, $6)
-	RETURNING id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id;
-	`
-
-	var token types.Token
-	if err := r.client.GetContext(ctx, &token, query, externalId, key, true, tokenType, reusable, workspaceId); err != nil {
+	storedKey, err := r.sealCredential(key)
+	if err != nil {
 		return types.Token{}, err
 	}
+
+	query := `
+	INSERT INTO token (external_id, key, key_hash, active, token_type, reusable, workspace_id, worker_id)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	RETURNING ` + tokenColumns + `;`
+
+	var token types.Token
+	if err := r.client.GetContext(ctx, &token, query, externalId, storedKey, tokenKeyHash(key), true, tokenType, reusable, workspaceId, workerId); err != nil {
+		return types.Token{}, err
+	}
+	token.Key = key
 
 	return token, nil
 }
 
-func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
+// BindWorkerToken binds an unbound worker token to the worker it was issued
+// for. It reports whether the token is now bound to workerId.
+func (r *PostgresBackendRepository) BindWorkerToken(ctx context.Context, tokenKey, workerId string) (bool, error) {
+	if tokenKey == "" || workerId == "" {
+		return false, nil
+	}
+	match, args := r.tokenKeyMatch("", 2, tokenKey)
 	query := `
-	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
+	WITH bound AS (
+		UPDATE token SET worker_id = $1
+		WHERE ` + match + `
+		AND token_type IN ('worker', 'worker_private') AND worker_id = ''
+		RETURNING id
+	)
+	SELECT EXISTS (SELECT 1 FROM bound) OR EXISTS (
+		SELECT 1 FROM token
+		WHERE ` + match + `
+		AND token_type IN ('worker', 'worker_private') AND worker_id = $1
+	);`
+	var bound bool
+	err := r.client.GetContext(ctx, &bound, query, append([]any{workerId}, args...)...)
+	return bound, err
+}
+
+// tokenKeyMatch matches a token by the key bound to $n. Sealed keys are found
+// by their hash, bound to $n+1, which is indexed once credentials are encrypted.
+func (r *PostgresBackendRepository) tokenKeyMatch(alias string, n int, key string) (string, []any) {
+	if !r.config.EncryptCredentials {
+		return fmt.Sprintf("%skey = $%d", alias, n), []any{key}
+	}
+	return fmt.Sprintf("(%[1]skey_hash = $%[3]d OR (%[1]skey_hash IS NULL AND %[1]skey = $%[2]d))", alias, n, n+1), []any{key, tokenKeyHash(key)}
+}
+
+func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
+	match, args := r.tokenKeyMatch("t.", 1, tokenKey)
+	query := `
+	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id, t.worker_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
 		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id",
 		   ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", 
@@ -360,12 +423,16 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
-	WHERE t.key = $1 AND t.active = TRUE;
+	WHERE ` + match + ` AND t.active = TRUE;
 	`
 
 	var token types.Token
 
-	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
+	if err := r.client.GetContext(ctx, &token, query, args...); err != nil {
+		return nil, nil, err
+	}
+	token.Key = tokenKey
+	if err := r.openSigningKey(token.Workspace); err != nil {
 		return nil, nil, err
 	}
 
@@ -394,7 +461,7 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 
 func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
 	query := `
-	SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id
+	SELECT ` + tokenColumns + `
 	FROM token
 	WHERE workspace_id = $1 AND active = TRUE AND token_type = 'workspace_primary' AND disabled_by_cluster_admin = FALSE
 	LIMIT 1;
@@ -405,16 +472,19 @@ func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, wor
 	if err != nil {
 		return nil, err
 	}
+	if token.Key, err = r.openCredential(token.Key); err != nil {
+		return nil, err
+	}
 
 	return &token, nil
 }
 
 func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error) {
 	query := `
-    SELECT id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id
+    SELECT ` + tokenColumns + `
     FROM token
     WHERE workspace_id = $1
-	AND token_type != 'worker'
+	AND token_type NOT IN ('worker', 'worker_private')
     ORDER BY created_at DESC;
     `
 
@@ -423,12 +493,19 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
 	if err != nil {
 		return nil, err
 	}
+	for i := range tokens {
+		if tokens[i].TokenType == types.TokenTypeClusterAdmin {
+			tokens[i].Key = ""
+		} else if tokens[i].Key, err = r.openCredential(tokens[i].Key); err != nil {
+			return nil, err
+		}
+	}
 
 	return tokens, nil
 }
 
 func (r *PostgresBackendRepository) GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error) {
-	query := `SELECT id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id FROM token WHERE external_id = $1 AND workspace_id = $2;`
+	query := `SELECT ` + tokenColumns + ` FROM token WHERE external_id = $1 AND workspace_id = $2;`
 
 	var token types.Token
 	err := r.client.GetContext(ctx, &token, query, extTokenId, workspaceId)
@@ -436,6 +513,9 @@ func (r *PostgresBackendRepository) GetTokenByExternalId(ctx context.Context, wo
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("token not found: %w", err)
 		}
+		return nil, err
+	}
+	if token.Key, err = r.openCredential(token.Key); err != nil {
 		return nil, err
 	}
 
@@ -446,8 +526,8 @@ func (r *PostgresBackendRepository) ToggleToken(ctx context.Context, workspaceId
 	query := `
 	UPDATE token
 	SET active = NOT active
-	WHERE external_id = $1 AND workspace_id = $2
-	RETURNING id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id;
+	WHERE external_id = $1 AND workspace_id = $2 AND token_type NOT IN ` + protectedTokenTypes + `
+	RETURNING ` + tokenColumns + `;
 	`
 
 	var token types.Token
@@ -455,14 +535,25 @@ func (r *PostgresBackendRepository) ToggleToken(ctx context.Context, workspaceId
 	if err != nil {
 		return types.Token{}, err
 	}
+	if token.Key, err = r.openCredential(token.Key); err != nil {
+		return types.Token{}, err
+	}
 
 	return token, nil
 }
 
-func (r *PostgresBackendRepository) DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) error {
-	query := `DELETE FROM token WHERE external_id = $1 AND workspace_id = $2;`
-	_, err := r.client.ExecContext(ctx, query, extTokenId, workspaceId)
-	return err
+// DeleteToken returns the deleted key so callers can drop it from the
+// authorization cache; it is empty when nothing was deleted.
+func (r *PostgresBackendRepository) DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) (string, error) {
+	query := `DELETE FROM token WHERE external_id = $1 AND workspace_id = $2 AND token_type NOT IN ` + protectedTokenTypes + ` RETURNING key;`
+	var key string
+	if err := r.client.GetContext(ctx, &key, query, extTokenId, workspaceId); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return r.openCredential(key)
 }
 
 func (r *PostgresBackendRepository) RevokeTokenByExternalId(ctx context.Context, externalId string) error {
@@ -1162,6 +1253,9 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 		}
 		return &types.StubWithRelated{}, err
 	}
+	if err := r.openSigningKey(&stub.Workspace); err != nil {
+		return nil, err
+	}
 
 	if stub.Workspace.StorageAvailable() {
 		if err := r.decryptFields(stub.Workspace.Storage); err != nil {
@@ -1208,6 +1302,9 @@ func (r *PostgresBackendRepository) GetStubById(ctx context.Context, stubId uint
 			return nil, nil
 		}
 		return &types.StubWithRelated{}, err
+	}
+	if err := r.openSigningKey(&stub.Workspace); err != nil {
+		return nil, err
 	}
 
 	if stub.Workspace.StorageAvailable() {

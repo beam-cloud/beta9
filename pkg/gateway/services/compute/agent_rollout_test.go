@@ -24,6 +24,15 @@ func (r *rolloutTokenBackend) GetTokenByExternalId(context.Context, uint, string
 func (r *rolloutTokenBackend) CreateToken(_ context.Context, _ uint, tokenType string, _ bool) (types.Token, error) {
 	return types.Token{ExternalId: "token-id", Key: "test-token", Active: true, TokenType: tokenType}, nil
 }
+func (r *rolloutTokenBackend) CreateWorkerToken(_ context.Context, _ uint, tokenType, workerID string) (types.Token, error) {
+	return types.Token{ExternalId: "token-id", Key: "test-token", Active: true, TokenType: tokenType, WorkerID: workerID}, nil
+}
+func (r *rolloutTokenBackend) BindWorkerToken(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+func (r *rolloutTokenBackend) RevokeTokenByExternalId(context.Context, string) error {
+	return nil
+}
 
 func TestAgentRolloutBusyThenRevertUsesOriginalSlotAndRecoversWorker(t *testing.T) {
 	ctx := context.Background()

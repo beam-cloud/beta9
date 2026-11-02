@@ -175,13 +175,24 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		// Direct OCI pulls only need registry credentials. Resolving workspace
 		// storage and presigning image archives here adds database and object
 		// store round trips to every cold mount without producing used data.
-		return &pb.GetCacheOriginCredentialsResponse{
+		resp := &pb.GetCacheOriginCredentialsResponse{
 			Ok:                    true,
 			RegistryCredentials:   registryCredentials,
 			BuildRegistry:         s.appConfig.ImageService.EffectiveBuildRegistry(),
 			BuildRepositoryName:   s.appConfig.ImageService.BuildRepositoryName,
 			BuildRegistryInsecure: s.appConfig.ImageService.BuildRegistryInsecure,
-		}, nil
+		}
+		// Untrusted workers reach the build registry only through the gateway's
+		// registry proxy, with their own token.
+		if authInfo, ok := untrustedWorker(ctx); ok {
+			gatewayURL := s.appConfig.GatewayService.HTTP.GetExternalURL()
+			resp.BuildRegistry = normalizeRegistryHost(gatewayURL)
+			resp.BuildRegistryInsecure = strings.HasPrefix(gatewayURL, "http://")
+			if registryHostsEqual(req.Registry, resp.BuildRegistry) {
+				resp.RegistryCredentials = "beta9:" + authInfo.Token.Key
+			}
+		}
+		return resp, nil
 	}
 
 	imageArchiveObjectKey, imageArchiveURL, imageArchiveDataURL := s.imageArchiveCredentials(ctx, req.ImageId)
@@ -470,18 +481,19 @@ func imageArchiveAmbientCredentialsAvailable() bool {
 }
 
 func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, registry string) string {
-	imageCfg := s.appConfig.ImageService
-	buildRegistry := imageCfg.EffectiveBuildRegistry()
-	if registry == "" {
-		return ""
-	}
 	// Only vend build-registry credentials when the requested registry host is
 	// exactly the configured build registry. Substring matching would leak
 	// credentials to look-alike hosts (e.g. "<build-registry>.evil.com").
-	if !registryHostsEqual(registry, buildRegistry) {
+	if registry == "" || !registryHostsEqual(registry, s.appConfig.ImageService.EffectiveBuildRegistry()) {
 		return ""
 	}
+	return BuildRegistryCredentials(ctx, s.appConfig.ImageService)
+}
 
+// BuildRegistryCredentials returns "user:password" credentials for the
+// configured build registry, or "" when none are available.
+func BuildRegistryCredentials(ctx context.Context, imageCfg types.ImageServiceConfig) string {
+	buildRegistry := imageCfg.EffectiveBuildRegistry()
 	dummyImageRef := fmt.Sprintf("%s/%s:dummy", buildRegistry, imageCfg.BuildRepositoryName)
 	creds := imageCfg.BuildRegistryCredentials
 	if creds.Type != "" && len(creds.Credentials) > 0 {
@@ -501,7 +513,21 @@ func (s *WorkerRepositoryService) registryOriginCredentials(ctx context.Context,
 	if credentials := s.imageRegistryCredentials(ctx, workspaceID, imageID); credentials != "" {
 		return credentials
 	}
+	// Build-registry credentials can push to every workspace's images.
+	if _, ok := untrustedWorker(ctx); ok {
+		return ""
+	}
 	return s.buildRegistryCredentials(ctx, registry)
+}
+
+// untrustedWorker returns the caller's auth when it is a worker on customer or
+// provider hardware.
+func untrustedWorker(ctx context.Context) (*auth.AuthInfo, bool) {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
+		return nil, false
+	}
+	return authInfo, true
 }
 
 func (s *WorkerRepositoryService) imageRegistryCredentials(ctx context.Context, workspaceID, imageID string) string {

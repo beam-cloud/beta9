@@ -397,6 +397,38 @@ func TestServicePrivateWorkerTokenIsWorkspaceScoped(t *testing.T) {
 	}
 }
 
+func TestServiceWorkerTokenIsWorkerScoped(t *testing.T) {
+	rdb := newThunderRedisClient(t)
+	defer rdb.Close()
+
+	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
+	workerRepo := repository.NewWorkerRedisRepositoryForTest(rdb)
+	if err := workerRepo.AddWorker(&types.Worker{Id: "worker-1", PoolName: "pool-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := containerRepo.SetContainerState("container-1", &types.ContainerState{ContainerId: "container-1", WorkspaceId: "workspace-1", WorkerId: "worker-1", Gpu: "H100", GpuCount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(ServiceOpts{
+		Repository:    repository.NewThunderRedisRepository(rdb),
+		Client:        thundersdk.NewClient("https://central.example", "central-token"),
+		ContainerRepo: containerRepo,
+		WorkerRepo:    workerRepo,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorker, WorkerID: "worker-2"}})
+	resp, err := service.CreateClientEnrollment(ctx, &pb.CreateClientEnrollmentRequest{ContainerId: "container-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Ok || !strings.Contains(resp.ErrorMsg, `worker "worker-1"`) {
+		t.Fatalf("CreateClientEnrollment() = %+v", resp)
+	}
+}
+
 func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
@@ -883,7 +915,7 @@ func (v *fakeAgentStateValidator) ResolveAgentState(ctx context.Context, agentTo
 }
 
 func thunderWorkerAuthContext(tokenType, workspaceID string) context.Context {
-	authInfo := &auth.AuthInfo{Token: &types.Token{TokenType: tokenType}}
+	authInfo := &auth.AuthInfo{Token: &types.Token{TokenType: tokenType, WorkerID: "worker-1"}}
 	if workspaceID != "" {
 		authInfo.Workspace = &types.Workspace{ExternalId: workspaceID}
 	}

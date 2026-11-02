@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"errors"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -119,6 +120,9 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 		}, nil
 	}
 
+	if err := gws.authorizeTokenChange(ctx, authInfo, req.TokenId); err != nil {
+		return &pb.ToggleTokenResponse{Token: &pb.Token{}, Ok: false, ErrMsg: err.Error()}, nil
+	}
 	token, err := gws.backendRepo.ToggleToken(ctx, authInfo.Workspace.Id, req.TokenId)
 	if err != nil {
 		return &pb.ToggleTokenResponse{
@@ -126,6 +130,11 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 			Ok:     false,
 			ErrMsg: "Unable to toggle token.",
 		}, nil
+	}
+	if !token.Active {
+		if err := gws.workspaceRepo.RevokeToken(token.Key); err != nil {
+			return &pb.ToggleTokenResponse{Token: &pb.Token{}, Ok: false, ErrMsg: "Unable to revoke token."}, nil
+		}
 	}
 
 	updatedAt := *timestamppb.New(token.UpdatedAt.Time)
@@ -155,7 +164,13 @@ func (gws *GatewayService) DeleteToken(ctx context.Context, req *pb.DeleteTokenR
 			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
-	err := gws.backendRepo.DeleteToken(ctx, authInfo.Workspace.Id, req.TokenId)
+	if err := gws.authorizeTokenChange(ctx, authInfo, req.TokenId); err != nil {
+		return &pb.DeleteTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	key, err := gws.backendRepo.DeleteToken(ctx, authInfo.Workspace.Id, req.TokenId)
+	if err == nil && key != "" {
+		err = gws.workspaceRepo.RevokeToken(key)
+	}
 	if err != nil {
 		return &pb.DeleteTokenResponse{
 			Ok:     false,
@@ -166,4 +181,15 @@ func (gws *GatewayService) DeleteToken(ctx context.Context, req *pb.DeleteTokenR
 	return &pb.DeleteTokenResponse{
 		Ok: true,
 	}, nil
+}
+
+func (gws *GatewayService) authorizeTokenChange(ctx context.Context, authInfo *auth.AuthInfo, tokenId string) error {
+	token, err := gws.backendRepo.GetTokenByExternalId(ctx, authInfo.Workspace.Id, tokenId)
+	if err != nil {
+		return errors.New("Invalid token ID.")
+	}
+	if token.TokenType == types.TokenTypeWorkspacePrimary && authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return errors.New("Cannot change the primary token.")
+	}
+	return nil
 }

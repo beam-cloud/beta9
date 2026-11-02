@@ -184,7 +184,7 @@ func TestHostnameDialRejectsPrivateAddresses(t *testing.T) {
 	for _, ip := range []string{"127.0.0.1", "10.0.0.1", "192.168.0.1", "169.254.169.254", "::1", "fd00:abcd::1", "fe80::1", "100.64.0.1", "0.0.0.0", "64:ff9b::a00:1", "64:ff9b::7f00:1"} {
 		require.ErrorIs(t, common.CheckPublicAddress(context.Background(), "tcp", net.JoinHostPort(ip, "443"), nil), common.ErrPrivateAddress)
 	}
-	_, err := (&Firewall{}).dialContext(context.Background(), "tcp", "localhost:443", nil)
+	_, err := (&Firewall{}).dialContext(context.Background(), "tcp", "localhost:443", Policy{})
 	require.Error(t, err)
 	require.NoError(t, common.CheckPublicAddress(context.Background(), "tcp", "8.8.8.8:443", nil))
 }
@@ -214,7 +214,7 @@ func TestEgressAddressAllowsExplicitPrivateCIDRs(t *testing.T) {
 		{"[64:ff9b::a9fe:a9fe]:80", []string{"64:ff9b::/96"}, false},
 	} {
 		t.Run(tc.address+fmt.Sprint(tc.allow), func(t *testing.T) {
-			err := checkEgressAddress(tc.address, tc.allow)
+			err := checkEgressAddress(tc.address, Policy{AllowList: tc.allow, PrivateNetworks: true})
 			if tc.ok {
 				require.NoError(t, err)
 			} else {
@@ -222,6 +222,18 @@ func TestEgressAddressAllowsExplicitPrivateCIDRs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAllowListOpensPrivateCIDRsOnlyOnPrivatePools(t *testing.T) {
+	allow := []string{"10.0.0.0/8"}
+	require.ErrorIs(t, checkEgressAddress("10.1.2.3:443", Policy{AllowList: allow}), common.ErrPrivateAddress)
+	require.NoError(t, checkEgressAddress("10.1.2.3:443", Policy{AllowList: allow, PrivateNetworks: true}))
+}
+
+func TestEgressNeverDialsHostNetworks(t *testing.T) {
+	policy := Policy{Open: true, HostNetworks: []string{"2600:1f18:37a4:c00::/56"}}
+	require.ErrorIs(t, checkEgressAddress("[2600:1f18:37a4:c42::1]:5432", policy), common.ErrPrivateAddress)
+	require.NoError(t, checkEgressAddress("[2600:1f18:37a4:d00::1]:443", policy))
 }
 
 func TestDirectIPDialRejectsPrivateDestination(t *testing.T) {

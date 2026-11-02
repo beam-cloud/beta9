@@ -107,6 +107,35 @@ func TestWorkerResourceCleanerDeletesCompletedWorkerJob(t *testing.T) {
 	assertBacklogContainsContainer(t, rdb, "container-1")
 }
 
+type tokenBindingBackendRepo struct {
+	repo.BackendRepository
+	bound map[string]string
+}
+
+func (r *tokenBindingBackendRepo) BindWorkerToken(_ context.Context, token, workerId string) (bool, error) {
+	r.bound[token] = workerId
+	return true, nil
+}
+
+func TestWorkerResourceCleanerBindsTokensOfPoolJobs(t *testing.T) {
+	withEnv := func(job *batchv1.Job, env ...corev1.EnvVar) *batchv1.Job {
+		job.Spec.Template.Spec.Containers = []corev1.Container{{Name: "worker", Env: env}}
+		return job
+	}
+	kubeClient := fake.NewSimpleClientset(
+		withEnv(cleanerTestWorkerJob("worker-a", "worker-a", "default", ""),
+			corev1.EnvVar{Name: "WORKER_ID", Value: "worker-a"}, corev1.EnvVar{Name: "WORKER_TOKEN", Value: "token-a"}),
+		withEnv(cleanerTestWorkerJob("worker-b", "worker-b", "other", ""),
+			corev1.EnvVar{Name: "WORKER_ID", Value: "worker-b"}, corev1.EnvVar{Name: "WORKER_TOKEN", Value: "token-b"}),
+		withEnv(cleanerTestWorkerJob("worker-c", "worker-c", "default", ""),
+			corev1.EnvVar{Name: "WORKER_ID", Value: "worker-c"}),
+	)
+	backendRepo := &tokenBindingBackendRepo{bound: map[string]string{}}
+	cleaner := WorkerResourceCleaner{PoolName: "default", Config: types.WorkerConfig{Namespace: "beta9"}, KubeClient: kubeClient, BackendRepo: backendRepo}
+	cleaner.BindWorkerTokens(context.Background())
+	assert.Equal(t, map[string]string{"token-a": "worker-a"}, backendRepo.bound)
+}
+
 func cleanerTestWorker(workerId, poolName, machineId string) *types.Worker {
 	return &types.Worker{
 		Id:          workerId,

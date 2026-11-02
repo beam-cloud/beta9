@@ -24,7 +24,7 @@ const providerPoolPriority = int32(100)
 func (s *Service) GetProviderJoinCommand(ctx context.Context, in *pb.GetProviderJoinCommandRequest) (*pb.GetProviderJoinCommandResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID, actorTokenID := computeWorkspaceID(authInfo), computeActorTokenID(authInfo)
-	if workspaceID == "" || actorTokenID == "" {
+	if workspaceID == "" || actorTokenID == "" || !auth.HasInteractivePermission(authInfo) {
 		return &pb.GetProviderJoinCommandResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 	gpu := string(types.NormalizeGPUType(strings.TrimSpace(in.GetGpu())))

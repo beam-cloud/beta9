@@ -715,6 +715,7 @@ func NewWorker() (_ *Worker, err error) {
 		cancel()
 		return nil, err
 	}
+	imageClient.buildNetwork = baseContainerNetworkManager.buildNetwork
 	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport, routeLocalTargetHost)
 	var containerGPUManager GPUManager
 	if gpuCount > 0 && !gpuVirtualized && !defaultRuntime.Capabilities().GPU {

@@ -182,7 +182,7 @@ func (gws *GatewayService) getClient(ctx context.Context, containerId, token str
 		return nil, nil, err
 	}
 
-	client, err := common.NewContainerClient(hostname, token, conn)
+	client, err := common.NewContainerClient(hostname, "", conn)
 	if err != nil {
 		return nil, nil, err
 	}
