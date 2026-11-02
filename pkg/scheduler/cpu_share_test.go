@@ -94,6 +94,21 @@ func TestCPUShareLocalWorkerKeepsPodCPUPhysical(t *testing.T) {
 	require.EqualValues(t, 6000, worker.FreeCpu)
 }
 
+func TestCPUShareProvisioningPlaceholderMatchesLocalWorker(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	request := &types.ContainerRequest{ContainerId: "c", Cpu: 3000, Memory: 1024}
+	for _, controller := range []*LocalWorkerPoolControllerForTest{{name: "local"}, {name: "agent", mode: types.PoolModePrivate}} {
+		s.workerPoolManager.SetPool(controller.Name(), types.WorkerPoolConfig{CPUShareMultiplier: 2}, controller)
+	}
+
+	local, _ := s.workerPoolManager.GetPool("local")
+	cpu := s.workerCPUForControllerRequest(local.Controller, request)
+	require.Equal(t, 2*cpu, s.newProvisioningReservation(request, local.Controller).worker.TotalCpu)
+	agent, _ := s.workerPoolManager.GetPool("agent")
+	require.EqualValues(t, 3000, s.newProvisioningReservation(request, agent.Controller).worker.TotalCpu)
+}
+
 func TestNewSchedulerRejectsInvalidCPUShareMultiplier(t *testing.T) {
 	config := types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
 		"shared": {CPUShareMultiplier: 0.5},

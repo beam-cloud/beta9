@@ -572,6 +572,11 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 
 	if pool, ok := s.poolForController(controller); ok {
 		worker.Priority = pool.Config.Priority
+		// Agent placeholders are request-sized; local ones match the worker to be created.
+		if !controllerUsesAgentCapacity(controller) {
+			worker.TotalCpu = pool.Config.CPUShareMultiplier.Schedulable(cpu)
+			worker.FreeCpu = worker.TotalCpu
+		}
 	}
 
 	return &provisioningReservation{
