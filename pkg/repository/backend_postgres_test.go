@@ -21,6 +21,31 @@ import (
 
 const adminWorkspaceQueryPattern = `SELECT w\.id, w\.external_id.*WHERE w\.is_cluster_admin`
 
+func TestSetWorkspaceTokensDisabledSkipsClusterTokens(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`UPDATE token SET disabled_by_cluster_admin = \$2 WHERE workspace_id = \$1 AND token_type NOT IN \(\$3, \$4\)`).
+		WithArgs(uint(1), true, types.TokenTypeClusterAdmin, types.TokenTypeWorker).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspace).AddRow("key-2", types.TokenTypeWorkerPrivate))
+
+	keys, err := repo.SetWorkspaceTokensDisabled(context.Background(), 1, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"key-1", "key-2"}, keys)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListTokensSkipsClusterTokens(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`token_type NOT IN \('admin', 'worker', 'worker_private'\)`).
+		WithArgs(uint(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspace))
+
+	tokens, err := repo.ListTokens(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, tokens, 1)
+	require.Equal(t, "key-1", tokens[0].Key)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestGenerateDSNSSLMode(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		dsn := GenerateDSN(types.PostgresConfig{EnableTLS: false})

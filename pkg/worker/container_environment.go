@@ -61,28 +61,32 @@ func (s *Worker) applyRuntimeEnvironmentOverrides(env []string, request *types.C
 }
 
 func (s *Worker) gatewayContainerEnvironment() gatewayContainerEnvironment {
+	return newGatewayContainerEnvironment(s.config)
+}
+
+func newGatewayContainerEnvironment(config types.AppConfig) gatewayContainerEnvironment {
 	return gatewayContainerEnvironment{
 		grpcHost: gatewayHostValue(
 			os.Getenv(types.ContainerGatewayGRPCHostEnv),
-			s.config.GatewayService.GRPC.ExternalHost,
-			s.config.GatewayService.Host,
+			config.GatewayService.GRPC.ExternalHost,
+			config.GatewayService.Host,
 		),
 		grpcPort: gatewayPortValue(
 			os.Getenv(types.ContainerGatewayGRPCPortEnv),
-			s.config.GatewayService.GRPC.ExternalPort,
-			s.config.GatewayService.GRPC.Port,
-			s.config.GatewayService.GRPC.TLS,
+			config.GatewayService.GRPC.ExternalPort,
+			config.GatewayService.GRPC.Port,
+			config.GatewayService.GRPC.TLS,
 		),
 		httpHost: gatewayHostValue(
 			os.Getenv(types.ContainerGatewayHTTPHostEnv),
-			s.config.GatewayService.HTTP.ExternalHost,
-			s.config.GatewayService.Host,
+			config.GatewayService.HTTP.ExternalHost,
+			config.GatewayService.Host,
 		),
 		httpPort: gatewayPortValue(
 			os.Getenv(types.ContainerGatewayHTTPPortEnv),
-			s.config.GatewayService.HTTP.ExternalPort,
-			s.config.GatewayService.HTTP.Port,
-			s.config.GatewayService.HTTP.TLS,
+			config.GatewayService.HTTP.ExternalPort,
+			config.GatewayService.HTTP.Port,
+			config.GatewayService.HTTP.TLS,
 		),
 	}
 }

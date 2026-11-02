@@ -65,7 +65,7 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 	}
 	in.Env = env
 
-	resp, err := s.sandboxExecWithConnectRetry(ctx, in, authInfo.Token.Key, authInfo.Workspace.ExternalId, types.SecretBindingsToProto(bindings))
+	resp, err := s.sandboxExecWithConnectRetry(ctx, in, authInfo.Workspace.ExternalId, types.SecretBindingsToProto(bindings))
 	if err != nil {
 		return &pb.PodSandboxExecResponse{
 			Ok:       false,
@@ -119,7 +119,7 @@ func (s *GenericPodService) sandboxExecEnvironment(
 	return env, secrets.Bindings, nil
 }
 
-func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in *pb.PodSandboxExecRequest, token, workspaceID string, bindings []*pb.SecretBinding) (*pb.ContainerSandboxExecResponse, error) {
+func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in *pb.PodSandboxExecRequest, workspaceID string, bindings []*pb.SecretBinding) (*pb.ContainerSandboxExecResponse, error) {
 	deadline := time.Now().Add(sandboxExecConnectRetryTimeout)
 	var lastErr error
 
@@ -131,7 +131,7 @@ func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in 
 			return nil, err
 		}
 
-		client, _, err := s.getClient(ctx, in.ContainerId, token, workspaceID)
+		client, _, err := s.getClient(ctx, in.ContainerId, workspaceID)
 		retryable := false
 		if err != nil {
 			if s.sandboxRequestFailed(in.ContainerId, err) {
@@ -206,7 +206,7 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 		return resp, nil
 	}
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxStatusResponse{
 			Ok:       false,
@@ -306,7 +306,7 @@ func (s *GenericPodService) sandboxExitedStatus(ctx context.Context, containerId
 }
 
 func (s *GenericPodService) sandboxRuntimeStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
-	client, _, err := s.getClient(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, containerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return sandboxStatus(types.SandboxStatusPending), nil
 	}
@@ -359,7 +359,7 @@ func (s *GenericPodService) getSandboxContainerStateForStatus(ctx context.Contex
 func (s *GenericPodService) SandboxStdout(ctx context.Context, in *pb.PodSandboxStdoutRequest) (*pb.PodSandboxStdoutResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxStdoutResponse{
 			Ok:       false,
@@ -390,7 +390,7 @@ func (s *GenericPodService) SandboxStdout(ctx context.Context, in *pb.PodSandbox
 func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandboxStderrRequest) (*pb.PodSandboxStderrResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxStderrResponse{
 			Ok:       false,
@@ -428,7 +428,7 @@ func (s *GenericPodService) SandboxKill(ctx context.Context, in *pb.PodSandboxKi
 		return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
 	}
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxKillResponse{
 			Ok:       false,
@@ -466,7 +466,7 @@ func (s *GenericPodService) SandboxKill(ctx context.Context, in *pb.PodSandboxKi
 func (s *GenericPodService) SandboxUploadFile(ctx context.Context, in *pb.PodSandboxUploadFileRequest) (*pb.PodSandboxUploadFileResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxUploadFileResponse{
 			Ok:       false,
@@ -499,7 +499,7 @@ func (s *GenericPodService) SandboxUploadFile(ctx context.Context, in *pb.PodSan
 func (s *GenericPodService) SandboxDownloadFile(ctx context.Context, in *pb.PodSandboxDownloadFileRequest) (*pb.PodSandboxDownloadFileResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxDownloadFileResponse{
 			Ok:       false,
@@ -533,7 +533,7 @@ func (s *GenericPodService) SandboxDownloadFile(ctx context.Context, in *pb.PodS
 func (s *GenericPodService) SandboxDeleteFile(ctx context.Context, in *pb.PodSandboxDeleteFileRequest) (*pb.PodSandboxDeleteFileResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxDeleteFileResponse{
 			Ok:       false,
@@ -564,7 +564,7 @@ func (s *GenericPodService) SandboxDeleteFile(ctx context.Context, in *pb.PodSan
 func (s *GenericPodService) SandboxCreateDirectory(ctx context.Context, in *pb.PodSandboxCreateDirectoryRequest) (*pb.PodSandboxCreateDirectoryResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxCreateDirectoryResponse{
 			Ok:       false,
@@ -595,7 +595,7 @@ func (s *GenericPodService) SandboxCreateDirectory(ctx context.Context, in *pb.P
 func (s *GenericPodService) SandboxDeleteDirectory(ctx context.Context, in *pb.PodSandboxDeleteDirectoryRequest) (*pb.PodSandboxDeleteDirectoryResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxDeleteDirectoryResponse{
 			Ok:       false,
@@ -626,7 +626,7 @@ func (s *GenericPodService) SandboxDeleteDirectory(ctx context.Context, in *pb.P
 func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSandboxExposePortRequest) (*pb.PodSandboxExposePortResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, container, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, container, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxExposePortResponse{
 			Ok:       false,
@@ -689,7 +689,7 @@ func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSan
 func (s *GenericPodService) SandboxUpdateNetworkPermissions(ctx context.Context, in *pb.PodSandboxUpdateNetworkPermissionsRequest) (*pb.PodSandboxUpdateNetworkPermissionsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxUpdateNetworkPermissionsResponse{
 			Ok:       false,
@@ -714,7 +714,7 @@ func (s *GenericPodService) SandboxUpdateNetworkPermissions(ctx context.Context,
 func (s *GenericPodService) SandboxStatFile(ctx context.Context, in *pb.PodSandboxStatFileRequest) (*pb.PodSandboxStatFileResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxStatFileResponse{
 			Ok:       false,
@@ -757,7 +757,7 @@ func (s *GenericPodService) SandboxStatFile(ctx context.Context, in *pb.PodSandb
 func (s *GenericPodService) SandboxListFiles(ctx context.Context, in *pb.PodSandboxListFilesRequest) (*pb.PodSandboxListFilesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxListFilesResponse{
 			Ok:       false,
@@ -802,7 +802,7 @@ func (s *GenericPodService) SandboxListFiles(ctx context.Context, in *pb.PodSand
 func (s *GenericPodService) SandboxReplaceInFiles(ctx context.Context, in *pb.PodSandboxReplaceInFilesRequest) (*pb.PodSandboxReplaceInFilesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxReplaceInFilesResponse{
 
@@ -834,7 +834,7 @@ func (s *GenericPodService) SandboxReplaceInFiles(ctx context.Context, in *pb.Po
 func (s *GenericPodService) SandboxFindInFiles(ctx context.Context, in *pb.PodSandboxFindInFilesRequest) (*pb.PodSandboxFindInFilesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxFindInFilesResponse{
 			Ok:       false,
@@ -872,12 +872,7 @@ func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandbo
 	readyCtx, cancel := context.WithTimeout(ctx, sandboxConnectReadyTimeout)
 	err := waitForSandboxReady(readyCtx, func(probeCtx context.Context) (*pb.ContainerSandboxStatusResponse, error) {
 		if client == nil {
-			acquiredClient, acquiredContainer, acquireErr := s.getClient(
-				probeCtx,
-				in.ContainerId,
-				authInfo.Token.Key,
-				authInfo.Workspace.ExternalId,
-			)
+			acquiredClient, acquiredContainer, acquireErr := s.getClient(probeCtx, in.ContainerId, authInfo.Workspace.ExternalId)
 			if acquireErr != nil {
 				return nil, acquireErr
 			}
@@ -944,7 +939,7 @@ func waitForSandboxReady(ctx context.Context, probe func(context.Context) (*pb.C
 	}
 }
 
-func (s *GenericPodService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {
+func (s *GenericPodService) getClient(ctx context.Context, containerId, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {
 	phaseStart := time.Now()
 	container, err := s.containerRepo.GetContainerState(containerId)
 	if err != nil {
@@ -973,8 +968,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 	}
 	metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
-	cacheKey := sandboxClientCacheKey(hostname, token)
-	client, cached, err := s.loadOrCreateSandboxClient(ctx, cacheKey, func() (*common.ContainerClient, error) {
+	client, cached, err := s.loadOrCreateSandboxClient(ctx, hostname, func() (*common.ContainerClient, error) {
 		dialer := func(connectCtx context.Context, _ string) (net.Conn, error) {
 			phaseStart := time.Now()
 			conn, dialErr := network.ConnectToBackend(connectCtx, hostname, sandboxConnectWorkerDialTimeout, s.tailscale, s.config.Tailscale, s.containerRepo)
@@ -987,7 +981,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 		}
 
 		phaseStart = time.Now()
-		created, createErr := common.NewContainerClientWithDialer(context.WithoutCancel(ctx), hostname, token, dialer)
+		created, createErr := common.NewContainerClientWithDialer(context.WithoutCancel(ctx), hostname, dialer)
 		if createErr != nil {
 			metrics.RecordSandboxConnectPhase("client_create", workspaceId, container.StubId, string(container.Status), "client_create_failed", false, time.Since(phaseStart))
 			return nil, createErr
@@ -1009,19 +1003,21 @@ type sandboxClientLoadResult struct {
 	cached bool
 }
 
+// loadOrCreateSandboxClient returns the channel to a worker, shared by every
+// sandbox on it.
 func (s *GenericPodService) loadOrCreateSandboxClient(
 	ctx context.Context,
-	cacheKey string,
+	workerAddress string,
 	create func() (*common.ContainerClient, error),
 ) (*common.ContainerClient, bool, error) {
-	if cached, ok := s.clientCache.Load(cacheKey); ok {
+	if cached, ok := s.clientCache.Load(workerAddress); ok {
 		if client, ok := cached.(*common.ContainerClient); ok {
 			return client, true, nil
 		}
 	}
 
-	result := s.clientDialGroup.DoChan(cacheKey, func() (any, error) {
-		if cached, ok := s.clientCache.Load(cacheKey); ok {
+	result := s.clientDialGroup.DoChan(workerAddress, func() (any, error) {
+		if cached, ok := s.clientCache.Load(workerAddress); ok {
 			if client, ok := cached.(*common.ContainerClient); ok {
 				return sandboxClientLoadResult{client: client, cached: true}, nil
 			}
@@ -1031,7 +1027,7 @@ func (s *GenericPodService) loadOrCreateSandboxClient(
 		if err != nil {
 			return nil, err
 		}
-		s.clientCache.Store(cacheKey, client)
+		s.clientCache.Store(workerAddress, client)
 		return sandboxClientLoadResult{client: client}, nil
 	})
 
@@ -1048,10 +1044,6 @@ func (s *GenericPodService) loadOrCreateSandboxClient(
 		}
 		return value.client, value.cached || loaded.Shared, nil
 	}
-}
-
-func sandboxClientCacheKey(workerAddress, token string) string {
-	return workerAddress + ":" + token
 }
 
 func sandboxConnectErrorMessage(_ error) string {
@@ -1112,7 +1104,7 @@ func isTransientSandboxConnectFailure(err error) bool {
 func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSandboxUpdateTTLRequest) (*pb.PodSandboxUpdateTTLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	_, container, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	_, container, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxUpdateTTLResponse{
 			Ok:       false,
@@ -1139,7 +1131,7 @@ func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSand
 func (s *GenericPodService) SandboxCreateImageFromFilesystem(ctx context.Context, in *pb.PodSandboxCreateImageFromFilesystemRequest) (*pb.PodSandboxCreateImageFromFilesystemResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, container, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxCreateImageFromFilesystemResponse{
 			Ok:       false,
@@ -1147,7 +1139,7 @@ func (s *GenericPodService) SandboxCreateImageFromFilesystem(ctx context.Context
 		}, nil
 	}
 
-	imageId := fmt.Sprintf("%s-%d", in.StubId, time.Now().Unix())
+	imageId := types.SnapshotImageID(container.StubId, time.Now())
 	progressChan := make(chan common.OutputMsg, 1000)
 
 	go func() {
@@ -1156,7 +1148,7 @@ func (s *GenericPodService) SandboxCreateImageFromFilesystem(ctx context.Context
 			case <-ctx.Done():
 				return
 			case msg := <-progressChan:
-				log.Info().Str("stub_id", in.StubId).Str("container_id", in.ContainerId).Str("image_id", imageId).Msg(msg.Msg)
+				log.Info().Str("stub_id", container.StubId).Str("container_id", in.ContainerId).Str("image_id", imageId).Msg(msg.Msg)
 				if msg.Done {
 					return
 				}
@@ -1181,7 +1173,7 @@ func (s *GenericPodService) SandboxCreateImageFromFilesystem(ctx context.Context
 func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.PodSandboxSnapshotMemoryRequest) (*pb.PodSandboxSnapshotMemoryResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxSnapshotMemoryResponse{
 			Ok:       false,
@@ -1237,7 +1229,7 @@ func sandboxDiskSnapshots(snapshots []*pb.ContainerDiskSnapshot) []*pb.PodSandbo
 func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.PodSandboxSnapshotDisksRequest) (*pb.PodSandboxSnapshotDisksResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxSnapshotDisksResponse{
 			Ok:       false,
@@ -1262,7 +1254,7 @@ func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.Pod
 func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandboxListUrlsRequest) (*pb.PodSandboxListUrlsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxListUrlsResponse{
 			Ok:       false,
@@ -1318,7 +1310,7 @@ func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandb
 func (s *GenericPodService) SandboxListProcesses(ctx context.Context, in *pb.PodSandboxListProcessesRequest) (*pb.PodSandboxListProcessesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxListProcessesResponse{
 			Ok:       false,

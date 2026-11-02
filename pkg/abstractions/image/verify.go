@@ -6,6 +6,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/pkg/errors"
@@ -33,6 +34,9 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 		return nil, err
 	}
 	opts.ExistingImageCreds = credentials
+	if opts.Scope, err = imageScope(ctx, opts); err != nil {
+		return nil, err
+	}
 
 	if err := recorder.measure(imageVerifyPhasePrepareOptions, func() error {
 		return is.prepareBuildOptionsForImageID(ctx, in, opts)
@@ -60,6 +64,14 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 }
 
 func (is *ContainerImageService) verifyExplicitImageID(ctx context.Context, recorder imageVerifyRecorder, imageID string) (*imageVerifyResult, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if authInfo == nil || authInfo.Workspace == nil {
+		return nil, errors.New("workspace is required")
+	}
+	if err := repository.AuthorizeImage(ctx, is.backendRepo, authInfo.Workspace.ExternalId, imageID); err != nil {
+		return nil, err
+	}
+
 	if is.imageMetadataAuthoritative() {
 		current, err := measureImageVerifyValue(recorder, imageVerifyPhaseMetadata, func() (bool, error) {
 			return is.imageMetadataCurrent(ctx, imageID)

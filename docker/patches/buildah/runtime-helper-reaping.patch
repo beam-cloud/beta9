@@ -1,0 +1,78 @@
+diff --git a/run_common.go b/run_common.go
+index 0863ec2..e78eadb 100644
+--- a/run_common.go
++++ b/run_common.go
+@@ -595,7 +595,11 @@ func runUsingRuntime(options RunOptions, configureNetwork bool, moreCreateArgs [
+ 	if err != nil {
+ 		return 1, fmt.Errorf("from %s creating container for %v: %s: %w", runtime, pargs, runCollectOutput(options.Logger, errorFds, closeBeforeReadingErrorFds), err)
+ 	}
++	children := runtimeChildren()
++	var containerPID int
+ 	defer func() {
++		stopReaping := reapRuntimeChildren(children, containerPID)
++		defer stopReaping()
+ 		err2 := del.Run()
+ 		if err2 != nil {
+ 			if err == nil {
+@@ -615,6 +619,7 @@ func runUsingRuntime(options RunOptions, configureNetwork bool, moreCreateArgs [
+ 	if err != nil {
+ 		return 1, fmt.Errorf("parsing pid %s as a number: %w", string(pidValue), err)
+ 	}
++	containerPID = pid
+ 	var stopped uint32
+ 	var reaping sync.WaitGroup
+ 	reaping.Add(1)
+@@ -1082,6 +1087,53 @@ func runAcceptTerminal(logger *logrus.Logger, consoleListener *net.UnixListener,
+ 	return terminalFD, nil
+ }
+ 
++// runtimeChildren lists our children. Right after create, before we run any
++// command of our own, they are only the processes the runtime left behind.
++func runtimeChildren() map[int]struct{} {
++	children := make(map[int]struct{})
++	files, _ := filepath.Glob("/proc/self/task/*/children")
++	for _, file := range files {
++		data, err := os.ReadFile(file)
++		if err != nil {
++			continue
++		}
++		for _, value := range strings.Fields(string(data)) {
++			pid, err := strconv.Atoi(value)
++			if err == nil && pid > 0 {
++				children[pid] = struct{}{}
++			}
++		}
++	}
++	return children
++}
++
++// reapRuntimeChildren reaps detached runtime helpers while the runtime deletes
++// its container. The container init has a separate waiter. Helpers cannot be
++// left as zombies until delete returns because some runtimes await their exit.
++func reapRuntimeChildren(children map[int]struct{}, excludePID int) func() {
++	delete(children, excludePID)
++	stop, done := make(chan struct{}), make(chan struct{})
++	go func() {
++		defer close(done)
++		ticker := time.NewTicker(10 * time.Millisecond)
++		defer ticker.Stop()
++		for {
++			for pid := range children {
++				waited, err := unix.Wait4(pid, nil, unix.WNOHANG, nil)
++				if waited == pid || errors.Is(err, unix.ECHILD) {
++					delete(children, pid)
++				}
++			}
++			select {
++			case <-stop:
++				return
++			case <-ticker.C:
++			}
++		}
++	}()
++	return func() { close(stop); <-done }
++}
++
+ func reapStrays() {
+ 	// Reap the exit status of anything that was reparented to us, not that
+ 	// we care about their exit status.

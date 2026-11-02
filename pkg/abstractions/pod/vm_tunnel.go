@@ -14,7 +14,7 @@ func (s *GenericPodService) TunnelVM(c echo.Context, containerID string, port ui
 		return err
 	}
 	info := c.(*auth.HttpAuthContext).AuthInfo
-	client, _, err := s.getClient(c.Request().Context(), containerID, info.Token.Key, info.Workspace.ExternalId)
+	client, _, err := s.getClient(c.Request().Context(), containerID, info.Workspace.ExternalId)
 	if err != nil {
 		return err
 	}

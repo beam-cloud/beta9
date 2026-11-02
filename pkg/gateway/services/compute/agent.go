@@ -755,9 +755,19 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	if err != nil {
 		return nil, "", err
 	}
-	token, tokenID, tokenHash, err := s.agentWorkerToken(ctx, workspace.Id, tokenType, existing)
+	token, tokenID, tokenHash, err := s.agentWorkerToken(ctx, workspace.Id, tokenType, worker.Id, existing)
 	if err != nil {
 		return nil, "", err
+	}
+	// A worker whose token was replaced cannot call the gateway to drain, so its
+	// slot is replaced right away.
+	if existing != nil && existing.WorkerTokenID != tokenID {
+		if worker.RolloutGeneration != "" {
+			if err := s.workerRepo.CancelWorkerRollout(worker.Id, worker.RolloutGeneration); err != nil {
+				return nil, "", err
+			}
+		}
+		existing = nil
 	}
 
 	slot := agentWorkerSlotState(s.appConfig, agentState, worker, poolConfig, tokenID, tokenHash)
@@ -878,9 +888,10 @@ func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *m
 		return nil, "", fmt.Errorf("agent state is unavailable")
 	}
 	if agentState.Mode == string(types.PoolModeProvider) {
-		// Provider machines run platform-owned managed endpoint replicas.
+		// Provider machines run platform-owned managed endpoint replicas but are
+		// not trusted with the platform's credentials.
 		workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
-		return workspace, types.TokenTypeWorker, err
+		return workspace, types.TokenTypeWorkerPrivate, err
 	}
 	tokenType := types.TokenTypeWorkerPrivate
 	if agentState.Mode == string(types.PoolModeExternal) {
@@ -894,21 +905,32 @@ func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *m
 }
 
 // agentWorkerToken mints (or reuses) the worker token for an agent worker
-// slot. Private-pool workers use workspace-scoped TokenTypeWorkerPrivate;
-// provider and managed external workers use trusted worker tokens from the
-// admin workspace because they serve platform workloads.
-func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
+// slot, bound to the slot's worker. Private-pool and provider workers use
+// TokenTypeWorkerPrivate; managed external workers use trusted worker tokens.
+func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType, workerID string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
 	if existing != nil && existing.WorkerTokenID != "" {
 		token, err := s.backendRepo.GetTokenByExternalId(ctx, workspaceID, existing.WorkerTokenID)
 		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == tokenType {
 			tokenHash := hashComputeToken(token.Key)
 			if existing.WorkerTokenHash == "" || existing.WorkerTokenHash == tokenHash {
-				return token.Key, token.ExternalId, tokenHash, nil
+				// Binds tokens issued before worker binding existed.
+				bound, err := s.backendRepo.BindWorkerToken(ctx, token.Key, workerID)
+				if err != nil {
+					return "", "", "", err
+				}
+				if bound {
+					return token.Key, token.ExternalId, tokenHash, nil
+				}
 			}
+		}
+		// Revoked before its replacement is minted, so a failed revocation
+		// leaves no token that no slot records.
+		if err := s.tokens.Revoke(ctx, existing.WorkerTokenID); err != nil {
+			return "", "", "", err
 		}
 	}
 
-	createdToken, err := s.backendRepo.CreateToken(ctx, workspaceID, tokenType, true)
+	createdToken, err := s.backendRepo.CreateWorkerToken(ctx, workspaceID, tokenType, workerID)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -919,6 +941,13 @@ func (s *Service) pruneAgentWorkerSlots(ctx context.Context, agentState *model.A
 	for _, slot := range slots {
 		if slot == nil || slot.WorkerID == "" || slot.WorkerID == keepWorkerID {
 			continue
+		}
+		// The slot is the only record of its token, so it stays until the
+		// token is revoked.
+		if slot.WorkerTokenID != "" {
+			if err := s.tokens.Revoke(ctx, slot.WorkerTokenID); err != nil {
+				return err
+			}
 		}
 		if err := s.computeRepo.DeleteAgentWorkerSlotState(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID); err != nil {
 			return err

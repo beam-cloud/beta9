@@ -4,15 +4,24 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
+	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
+	"google.golang.org/grpc"
 )
 
 func TestCloseReleasesPooledSlotsTogether(t *testing.T) {
@@ -63,4 +72,71 @@ func TestCleanupStaleNetworkSlotsReleasesTheLockBeforeDestroyingSlots(t *testing
 
 	require.NoError(t, manager.cleanupStaleNetworkSlots())
 	require.Equal(t, []string{"lock", "list", "unlock", "remove " + reservation}, repoClient.calls)
+}
+
+// unreachableIPWorkerRepoClient cannot list the container IPs in use, so no
+// container IP can be reserved.
+type unreachableIPWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+}
+
+func (unreachableIPWorkerRepoClient) GetContainerIps(context.Context, *pb.GetContainerIpsRequest, ...grpc.CallOption) (*pb.GetContainerIpsResponse, error) {
+	return nil, errors.New("repository unavailable")
+}
+
+func TestSetupRemovesItsNetworkWhenItFails(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("creating network namespaces requires root")
+	}
+	for _, tc := range []struct {
+		name string
+		fail func(t *testing.T, containerId string)
+	}{
+		{"namespace", func(t *testing.T, containerId string) {
+			// NewNamed fails on an existing path after moving the thread into a
+			// new namespace, with the veth already on the bridge.
+			require.NoError(t, os.MkdirAll(types.HostNetnsPath, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(types.HostNetnsPath, containerId), nil, 0o444))
+		}},
+		{"configuration", func(*testing.T, string) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			hostNS, err := netns.Get()
+			require.NoError(t, err)
+			defer hostNS.Close()
+			testNS, err := netns.New()
+			require.NoError(t, err)
+			defer testNS.Close()
+			defer netns.Set(hostNS)
+
+			require.NoError(t, netlink.LinkAdd(&netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: containerBridgeLinkName}}))
+			bridge, err := netlink.LinkByName(containerBridgeLinkName)
+			require.NoError(t, err)
+			manager := &ContainerNetworkManager{
+				ctx:              context.Background(),
+				workerRepoClient: unreachableIPWorkerRepoClient{},
+				defaultLink:      bridge,
+				bridgeConfigured: true,
+				bridgeLink:       bridge,
+			}
+			containerId := "container-" + randomNetworkSlotID()
+			t.Cleanup(func() { _ = deleteNamedNetworkNamespace(containerId) })
+			tc.fail(t, containerId)
+
+			err = manager.Setup(containerId, &specs.Spec{Linux: &specs.Linux{}}, &types.ContainerRequest{ContainerId: containerId})
+			require.Error(t, err)
+
+			current, err := netns.Get()
+			require.NoError(t, err)
+			defer current.Close()
+			require.True(t, current.Equal(testNS), "the thread is back in the worker's namespace")
+			vethHost, _ := containerVethNames(containerId)
+			var notFound netlink.LinkNotFoundError
+			_, err = netlink.LinkByName(vethHost)
+			require.ErrorAs(t, err, &notFound)
+			require.NoFileExists(t, filepath.Join(types.HostNetnsPath, containerId))
+		})
+	}
 }

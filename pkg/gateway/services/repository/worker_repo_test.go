@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -396,9 +397,15 @@ func TestClaimContainerRefusesForeignRouteWorkspaceAfterAcceptance(t *testing.T)
 
 type repositoryAuthWorkspaceRepo struct{ repository.WorkspaceRepository }
 
+// AuthorizeToken accepts "<token type>" for a token bound to "worker" and
+// "<token type>@<worker id>" for any other binding.
 func (repositoryAuthWorkspaceRepo) AuthorizeToken(key string) (*types.Token, *types.Workspace, error) {
 	storageID := uint(1)
-	return &types.Token{TokenType: key, ExternalId: "assigned", Active: true}, &types.Workspace{
+	tokenType, workerID, bound := strings.Cut(key, "@")
+	if !bound {
+		workerID = "worker"
+	}
+	return &types.Token{TokenType: tokenType, ExternalId: "assigned", Active: true, WorkerID: workerID}, &types.Workspace{
 		ExternalId: "own", Storage: &types.WorkspaceStorage{Id: &storageID},
 	}, nil
 }
@@ -407,10 +414,14 @@ func repositoryAuthContext(tokenType string) context.Context {
 	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+tokenType)
 }
 
+func repositoryWorkerAuthContext(tokenType, workerID string) context.Context {
+	return repositoryAuthContext(tokenType + "@" + workerID)
+}
+
 func TestRepositoryAuthorizationRequiresPrivateWorkspace(t *testing.T) {
 	for _, workspace := range []*types.Workspace{nil, {}} {
 		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-			Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate}, Workspace: workspace,
+			Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker"}, Workspace: workspace,
 		})
 		// No repositories: incomplete identities must be rejected before lookup.
 		err := (&WorkerRepositoryService{}).AuthorizeRequest(ctx, &pb.GetWorkerByIdRequest{WorkerId: "worker"})
@@ -422,12 +433,26 @@ func TestRepositoryAuthorizationRequiresPrivateWorkspace(t *testing.T) {
 
 func TestRepositoryAuthorizationRequiresResourceID(t *testing.T) {
 	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate}, Workspace: &types.Workspace{ExternalId: "own"},
+		Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker"}, Workspace: &types.Workspace{ExternalId: "own"},
 	})
 	err := (&WorkerRepositoryService{}).AuthorizeRequest(ctx, &pb.GetWorkerByIdRequest{})
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
 	err = (&ContainerRepositoryService{}).AuthorizeRequest(ctx, &pb.GetContainerStateRequest{})
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+func TestRepositoryAuthorizationRejectsUnboundWorkerTokens(t *testing.T) {
+	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
+		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+			Token: &types.Token{TokenType: tokenType}, Workspace: &types.Workspace{ExternalId: "own"},
+		})
+		err := (&WorkerRepositoryService{}).AuthorizeRequest(ctx, &pb.GetWorkerByIdRequest{})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		err = (&ContainerRepositoryService{}).AuthorizeRequest(ctx, &pb.GetContainerStateRequest{ContainerId: "container"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		err = (&BackendRepositoryService{}).AuthorizeRequest(ctx, &pb.GetLatestCheckpointByStubIdRequest{StubId: "stub"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+	}
 }
 
 func repositoryAuthClient(t *testing.T, workers *WorkerRepositoryService, containers *ContainerRepositoryService) *grpc.ClientConn {
@@ -500,20 +525,19 @@ func (*streamAuthWorkerRepo) RecoverPendingContainerRequests(string) error {
 
 func TestPrivateWorkerAuthorization(t *testing.T) {
 	for _, tc := range []struct {
-		name, workerWorkspace, assignedToken string
-		allowed                              bool
+		name, tokenWorker string
+		allowed           bool
 	}{
-		{name: "foreign worker", workerWorkspace: "other", assignedToken: "assigned"},
-		{name: "unassigned token", workerWorkspace: "own", assignedToken: "another"},
-		{name: "assigned worker", workerWorkspace: "own", assignedToken: "assigned", allowed: true},
+		{name: "another worker", tokenWorker: "other-worker"},
+		{name: "unbound token", tokenWorker: ""},
+		{name: "bound worker", tokenWorker: "worker", allowed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service := &WorkerRepositoryService{
-				workerRepo:  &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker", WorkspaceId: tc.workerWorkspace, PoolName: "pool", MachineId: "machine"}},
-				computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{WorkerID: "worker", WorkerTokenID: tc.assignedToken}}},
+				workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker", WorkspaceId: "own", PoolName: "pool", MachineId: "machine"}},
 			}
 			client := pb.NewWorkerRepositoryServiceClient(repositoryAuthClient(t, service, &ContainerRepositoryService{}))
-			ctx := repositoryAuthContext(types.TokenTypeWorkerPrivate)
+			ctx := repositoryWorkerAuthContext(types.TokenTypeWorkerPrivate, tc.tokenWorker)
 			response, err := client.GetWorkerById(ctx, &pb.GetWorkerByIdRequest{WorkerId: "worker"})
 			if tc.allowed {
 				require.NoError(t, err)
@@ -525,20 +549,30 @@ func TestPrivateWorkerAuthorization(t *testing.T) {
 	}
 }
 
+func TestClusterWorkerReportsItsMachine(t *testing.T) {
+	service := &WorkerRepositoryService{
+		workerRepo: &keepAliveWorkerRepo{worker: &types.Worker{Id: "worker", PoolName: "pool"}},
+	}
+	client := pb.NewWorkerRepositoryServiceClient(repositoryAuthClient(t, service, &ContainerRepositoryService{}))
+	ctx := repositoryWorkerAuthContext(types.TokenTypeWorker, "worker")
+	response, err := client.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{WorkerId: "worker", MachineId: "node"})
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+}
+
 func TestPrivateWorkerStreamsEnforceOwnership(t *testing.T) {
-	for _, workspace := range []string{"own", "other"} {
-		t.Run(workspace, func(t *testing.T) {
+	for _, tokenWorker := range []string{"worker", "other-worker"} {
+		t.Run(tokenWorker, func(t *testing.T) {
 			service := &WorkerRepositoryService{
-				workerRepo:  &streamAuthWorkerRepo{&lifecycleWorkerRepo{worker: &types.Worker{Id: "worker", WorkspaceId: workspace}}},
-				computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{WorkerID: "worker", WorkerTokenID: "assigned"}}},
+				workerRepo: &streamAuthWorkerRepo{&lifecycleWorkerRepo{worker: &types.Worker{Id: "worker", WorkspaceId: "own"}}},
 			}
 			client := pb.NewWorkerRepositoryServiceClient(repositoryAuthClient(t, service, &ContainerRepositoryService{}))
-			ctx := repositoryAuthContext(types.TokenTypeWorkerPrivate)
+			ctx := repositoryWorkerAuthContext(types.TokenTypeWorkerPrivate, tokenWorker)
 			requests, err := client.GetNextContainerRequest(ctx, &pb.GetNextContainerRequestRequest{WorkerId: "worker"})
 			require.NoError(t, err)
 			_, err = requests.Recv()
 			want := codes.PermissionDenied
-			if workspace == "own" {
+			if tokenWorker == "worker" {
 				want = codes.FailedPrecondition
 			}
 			require.Equal(t, want, status.Code(err))
@@ -611,7 +645,7 @@ func TestWorkerNetworkAuthorizationDoesNotAccessRepositories(t *testing.T) {
 	service := &WorkerRepositoryService{}
 	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
 		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-			Token: &types.Token{TokenType: tokenType}, Workspace: &types.Workspace{ExternalId: "own"},
+			Token: &types.Token{TokenType: tokenType, WorkerID: "worker"}, Workspace: &types.Workspace{ExternalId: "own"},
 		})
 		for name, req := range workerNetworkRequests() {
 			t.Run(tokenType+"/"+name, func(t *testing.T) {

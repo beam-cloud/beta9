@@ -89,7 +89,7 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 			return
 		}
 
-		client, err := common.NewContainerClient(hostname, authInfo.Token.Key, conn)
+		client, err := common.NewContainerClient(hostname, conn)
 		clientResult <- containerClientResult{client: client, err: err}
 	}()
 

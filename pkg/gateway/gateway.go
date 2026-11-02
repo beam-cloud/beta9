@@ -102,6 +102,9 @@ const (
 	gatewayTailscaleStartTimeout = 30 * time.Second
 	gatewayLivenessService       = "liveness"
 	gatewayReadinessService      = "readiness"
+
+	gatewayEncryptionRetryInterval    = time.Second
+	gatewayEncryptionMaxRetryInterval = 5 * time.Minute
 )
 
 func NewGateway() (*Gateway, error) {
@@ -121,7 +124,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
+	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient, config.Database.Postgres.EncryptionKey)
 	eventRepo := repository.NewEventClientRepo(config, repository.WithWorkspaceWebhooks(workspaceRepo))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,6 +145,7 @@ func NewGateway() (*Gateway, error) {
 	if err := gateway.migratePostgres(backendRepo); err != nil {
 		return nil, err
 	}
+	go gateway.encryptStoredCredentials(backendRepo, gatewayEncryptionRetryInterval)
 
 	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config))
 
@@ -187,6 +191,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.ComputeService = computesvc.New(computesvc.Options{
 		Config:           config,
 		BackendRepo:      backendRepo,
+		WorkspaceRepo:    workspaceRepo,
 		ContainerRepo:    containerRepo,
 		Scheduler:        scheduler,
 		EventRepo:        eventRepo,
@@ -216,6 +221,26 @@ func (g *Gateway) migratePostgres(backendRepo postgresMigrator) error {
 		Retries:       480,
 		RetryInterval: 500 * time.Millisecond,
 	}, backendRepo.MigrateContext)
+}
+
+type credentialEncrypter interface {
+	EncryptStoredCredentials(context.Context) error
+}
+
+func (g *Gateway) encryptStoredCredentials(backendRepo credentialEncrypter, retryInterval time.Duration) {
+	for {
+		err := backendRepo.EncryptStoredCredentials(g.ctx)
+		if err == nil || g.ctx.Err() != nil {
+			return
+		}
+		log.Error().Err(err).Dur("retry_in", retryInterval).Msg("failed to encrypt stored credentials")
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-time.After(retryInterval):
+		}
+		retryInterval = min(2*retryInterval, gatewayEncryptionMaxRetryInterval)
+	}
 }
 
 // ensureWorkspaceStorage creates the default bucket and storage row for a
@@ -291,6 +316,9 @@ func (g *Gateway) initHttp() error {
 	e.Use(middleware.Recover())
 	e.GET("/install/agent", agentInstallScriptHandler())
 	e.GET("/install/agent/:os/:arch", agentBinaryHandler())
+	registryProxy := echo.WrapHandler(newRegistryProxy(g.Config, g.BackendRepo, g.WorkspaceRepo, g.ContainerRepo))
+	e.Any("/v2", registryProxy)
+	e.Any("/v2/*", registryProxy)
 
 	// Accept both HTTP/2 and HTTP/1
 	g.httpServer = &http.Server{

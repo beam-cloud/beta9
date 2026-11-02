@@ -93,9 +93,9 @@ func (f *Firewall) newSecretProxy(c *container, host string, port int) *secretPr
 		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			c.mu.Lock()
-			allowList := c.policy.AllowList
+			policy := c.policy
 			c.mu.Unlock()
-			return f.dialContext(ctx, network, address, allowList)
+			return f.dialContext(ctx, network, address, policy)
 		},
 		ForceAttemptHTTP2:     true,
 		DisableCompression:    true,

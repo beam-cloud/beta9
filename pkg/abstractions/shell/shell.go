@@ -354,10 +354,7 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 		}, nil
 	}
 
-	// This is an already-established gateway-to-worker connection. The worker
-	// container service does not authenticate these internal RPCs, so never
-	// forward the caller's reusable API token to customer-managed compute.
-	containerClient, err := common.NewContainerClient(containerAddr, "", conn)
+	containerClient, err := common.NewContainerClient(containerAddr, conn)
 	if err != nil {
 		return &pb.CreateShellInExistingContainerResponse{
 			Ok:     false,

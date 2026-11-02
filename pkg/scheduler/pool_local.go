@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -140,7 +142,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 		wpc.workspace = adminWorkspace
 	}
 
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, wpc.workspace.Id, types.TokenTypeWorker, true)
+	token, err := wpc.backendRepo.CreateWorkerToken(wpc.ctx, wpc.workspace.Id, types.TokenTypeWorker, workerId)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +250,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName:            wpc.config.Worker.ServiceAccountName,
-			AutomountServiceAccountToken:  ptr.To(true),
+			AutomountServiceAccountToken:  ptr.To(false),
 			HostNetwork:                   wpc.config.Worker.HostNetwork,
 			ImagePullSecrets:              imagePullSecrets,
 			RestartPolicy:                 corev1.RestartPolicyOnFailure,
@@ -313,6 +315,31 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 		config.Monitoring.MetricsCollector = string(types.MetricsCollectorNone)
 		config.Monitoring.Prometheus.ScrapeWorkers = false
 	}
+
+	// Only the gateway uses these credentials. Workers reach Redis and the
+	// cache metadata through the gateway and get build registry credentials
+	// with each request.
+	config.Database.Postgres = types.PostgresConfig{}
+	config.Database.Redis = types.RedisConfig{}
+	config.Cache.Server.Metadata = cache.MetadataConfig{}
+	config.Cache.Coordinator.Token = ""
+	config.Storage.WorkspaceStorage.DefaultAccessKey = ""
+	config.Storage.WorkspaceStorage.DefaultSecretKey = ""
+	config.ImageService.BuildRegistryCredentials = types.BuildRegistryCredentialsConfig{}
+	config.ImageService.Registries.Docker = types.DockerImageRegistryConfig{}
+	config.GatewayService.CreditGate = types.CreditGateConfig{}
+	config.Providers = types.ProviderConfig{}
+	config.Tailscale = types.TailscaleConfig{}
+	config.Monitoring.Prometheus.AgentPassword = ""
+
+	// Workers report sandbox usage to the billing pool routes, so each route
+	// keeps the token it resolves to. Only the gateway uses the base token.
+	billing := &config.ManagedCompute.Billing
+	billing.PoolRoutes = slices.Clone(billing.PoolRoutes)
+	for i := range billing.PoolRoutes {
+		billing.PoolRoutes[i].AuthToken = billing.PoolRoutes[i].BillingConfig(*billing).AuthToken
+	}
+	billing.AuthToken = ""
 	return config
 }
 
@@ -627,12 +654,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 
 func (wpc *LocalKubernetesWorkerPoolController) monitorAndCleanupWorkers() {
 	cleaner := WorkerResourceCleaner{
-		PoolName:   wpc.name,
-		Config:     wpc.config.Worker,
-		KubeClient: wpc.kubeClient,
-		EventRepo:  wpc.eventRepo,
-		WorkerRepo: wpc.workerRepo,
+		PoolName:    wpc.name,
+		Config:      wpc.config.Worker,
+		KubeClient:  wpc.kubeClient,
+		EventRepo:   wpc.eventRepo,
+		WorkerRepo:  wpc.workerRepo,
+		BackendRepo: wpc.backendRepo,
 	}
+	cleaner.BindWorkerTokens(wpc.ctx)
 
 	ticker := time.NewTicker(wpc.config.Worker.CleanupWorkerInterval)
 	defer ticker.Stop()

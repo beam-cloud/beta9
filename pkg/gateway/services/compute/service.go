@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -22,6 +23,7 @@ const (
 type Service struct {
 	appConfig            types.AppConfig
 	backendRepo          repository.BackendRepository
+	tokens               auth.Tokens
 	containerRepo        repository.ContainerRepository
 	scheduler            *scheduler.Scheduler
 	eventRepo            repository.EventRepository
@@ -44,6 +46,7 @@ type Service struct {
 type Options struct {
 	Config           types.AppConfig
 	BackendRepo      repository.BackendRepository
+	WorkspaceRepo    repository.WorkspaceRepository
 	ContainerRepo    repository.ContainerRepository
 	Scheduler        *scheduler.Scheduler
 	EventRepo        repository.EventRepository
@@ -61,6 +64,7 @@ func New(opts Options) *Service {
 	service := &Service{
 		appConfig:            opts.Config,
 		backendRepo:          opts.BackendRepo,
+		tokens:               auth.NewTokens(opts.BackendRepo, opts.WorkspaceRepo),
 		containerRepo:        opts.ContainerRepo,
 		scheduler:            opts.Scheduler,
 		eventRepo:            opts.EventRepo,

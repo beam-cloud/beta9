@@ -656,9 +656,15 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	var checkpoint *types.Checkpoint = nil
 	var stub *types.StubWithRelated = nil
 
+	if in.ImageId != nil {
+		if err := repository.AuthorizeImage(ctx, s.backendRepo, authInfo.Workspace.ExternalId, *in.ImageId); err != nil {
+			return &pb.CreatePodResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+	}
+
 	if in.CheckpointId != nil {
 		checkpoint, err = s.backendRepo.GetCheckpointById(ctx, *in.CheckpointId)
-		if err != nil {
+		if err != nil || checkpoint.WorkspaceId != authInfo.Workspace.Id {
 			return &pb.CreatePodResponse{
 				Ok: false,
 			}, nil

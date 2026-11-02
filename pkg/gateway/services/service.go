@@ -3,7 +3,6 @@ package gatewayservices
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
@@ -34,7 +33,6 @@ type GatewayService struct {
 	usageMetricsRepo repository.UsageMetricsRepository
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
-	clientCache      *sync.Map
 	endpointRepo     repository.ManagedEndpointRepository // nil when managed endpoints are disabled
 	imageService     pb.ImageServiceServer                // optional; needed to create database services
 	pb.UnimplementedGatewayServiceServer
@@ -80,6 +78,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		computeService = computesvc.New(computesvc.Options{
 			Config:           opts.Config,
 			BackendRepo:      opts.BackendRepo,
+			WorkspaceRepo:    opts.WorkspaceRepo,
 			ContainerRepo:    opts.ContainerRepo,
 			Scheduler:        opts.Scheduler,
 			EventRepo:        opts.EventRepo,
@@ -118,7 +117,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		tailscale:        opts.Tailscale,
 		keyEventManager:  keyEventManager,
-		clientCache:      &sync.Map{},
 		endpointRepo:     endpointRepo,
 		imageService:     opts.ImageService,
 	}, nil

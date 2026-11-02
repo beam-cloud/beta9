@@ -76,7 +76,7 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 	if containerID == "" {
 		return &pb.CreateClientEnrollmentResponse{ErrorMsg: "container id is required"}, nil
 	}
-	if err := requireWorkerToken(ctx, ""); err != nil {
+	if err := requireWorkerToken(ctx, "", ""); err != nil {
 		return &pb.CreateClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
@@ -84,12 +84,17 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 	if err != nil {
 		return &pb.CreateClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
-	if err := requireWorkerToken(ctx, attrs.workspaceID); err != nil {
+	if err := requireWorkerToken(ctx, attrs.workspaceID, attrs.workerID); err != nil {
 		return &pb.CreateClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
 	var installCommand string
 	err = s.repo.WithPoolLock(ctx, attrs.workspaceID, attrs.poolName, func(ctx context.Context) error {
+		if current, err := s.clientEnrollmentAttrs(ctx, containerID); err != nil {
+			return err
+		} else if current.workerID != attrs.workerID || current.workspaceID != attrs.workspaceID || current.poolName != attrs.poolName {
+			return fmt.Errorf("container %q moved while enrolling", containerID)
+		}
 		var previousEnrollmentTokenID string
 		if existing, found, err := s.repo.GetClientEnrollment(ctx, containerID); err != nil {
 			return err
@@ -156,7 +161,7 @@ func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClie
 	if containerID == "" {
 		return &pb.DeleteClientEnrollmentResponse{ErrorMsg: "container id is required"}, nil
 	}
-	if err := requireWorkerToken(ctx, ""); err != nil {
+	if err := requireWorkerToken(ctx, "", ""); err != nil {
 		return &pb.DeleteClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
@@ -167,7 +172,7 @@ func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClie
 	if !found {
 		return &pb.DeleteClientEnrollmentResponse{Ok: true}, nil
 	}
-	if err := requireWorkerToken(ctx, state.WorkspaceID); err != nil {
+	if err := requireWorkerToken(ctx, state.WorkspaceID, state.WorkerID); err != nil {
 		return &pb.DeleteClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
@@ -183,7 +188,7 @@ func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClie
 		if current.WorkspaceID != state.WorkspaceID || current.PoolName != state.PoolName {
 			return nil
 		}
-		if err := requireWorkerToken(ctx, current.WorkspaceID); err != nil {
+		if err := requireWorkerToken(ctx, current.WorkspaceID, current.WorkerID); err != nil {
 			return err
 		}
 
@@ -400,18 +405,18 @@ func (s *Service) requireAgentState(ctx context.Context, agentToken string) (*mo
 	return s.agentValidator.ResolveAgentState(ctx, agentToken)
 }
 
-func requireWorkerToken(ctx context.Context, workspaceID string) error {
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
+// requireWorkerToken checks that the caller is a worker and, when they are
+// set, that it is the given worker in a workspace it may act in.
+func requireWorkerToken(ctx context.Context, workspaceID, workerID string) error {
+	worker, err := auth.WorkerFromContext(ctx)
+	if err != nil {
 		return fmt.Errorf("worker token is required")
 	}
-	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate {
-		if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
-			return fmt.Errorf("worker token is not scoped to a workspace")
-		}
-		if workspaceID != "" && workspaceID != authInfo.Workspace.ExternalId {
-			return fmt.Errorf("worker token cannot access workspace %q", workspaceID)
-		}
+	if workerID != "" && workerID != worker.ID {
+		return fmt.Errorf("worker token cannot act for worker %q", workerID)
+	}
+	if workspaceID != "" && !worker.InWorkspace(workspaceID) {
+		return fmt.Errorf("worker token cannot access workspace %q", workspaceID)
 	}
 	return nil
 }

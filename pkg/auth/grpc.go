@@ -70,14 +70,12 @@ func AuthInfoFromContext(ctx context.Context) (*AuthInfo, bool) {
 
 type AuthInterceptor struct {
 	unauthenticatedMethods map[string]bool
-	backendRepo            repository.BackendRepository
-	workspaceRepo          repository.WorkspaceRepository
+	tokens                 Tokens
 }
 
 func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) *AuthInterceptor {
 	return &AuthInterceptor{
-		backendRepo:   backendRepo,
-		workspaceRepo: workspaceRepo,
+		tokens: NewTokens(backendRepo, workspaceRepo),
 		unauthenticatedMethods: map[string]bool{
 			pb.GatewayService_Authorize_FullMethodName: true,
 			// Replica harness calls carry no workspace token; the service
@@ -123,30 +121,6 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 	}
 }
 
-func (ai *AuthInterceptor) getToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
-	token, workspace, err := ai.workspaceRepo.AuthorizeToken(tokenKey)
-	if err != nil {
-		token, workspace, err = ai.backendRepo.AuthorizeToken(ctx, tokenKey)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		err = ai.workspaceRepo.SetAuthorizationToken(token, workspace)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	if !workspace.StorageAvailable() {
-		if err := ensureWorkspaceStorage(ctx, workspace); err != nil {
-			return nil, nil, err
-		}
-		_ = ai.workspaceRepo.SetAuthorizationToken(token, workspace)
-	}
-
-	return token, workspace, nil
-}
-
 func (ai *AuthInterceptor) isAuthRequired(method string) bool {
 	return !ai.unauthenticatedMethods[method]
 }
@@ -157,18 +131,8 @@ func (ai *AuthInterceptor) validateToken(ctx context.Context, md metadata.MD) (*
 	}
 
 	tokenKey := strings.TrimPrefix(md["authorization"][0], "Bearer ")
-
-	var token *types.Token
-	var workspace *types.Workspace
-	var err error
-
-	token, workspace, err = ai.getToken(ctx, tokenKey)
+	token, workspace, err := ai.tokens.Authenticate(ctx, tokenKey)
 	if err != nil {
-		return nil, false
-	}
-
-	// For now, restricted tokens should not be allowed to access grpc calls
-	if !token.Active || token.DisabledByClusterAdmin {
 		return nil, false
 	}
 	return &AuthInfo{
@@ -212,6 +176,9 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 			}
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
+		if err := authorizeMethod(authInfo, info.FullMethod); err != nil {
+			return err
+		}
 
 		// Create a new context with the AuthInfo
 		ctxWithAuth := ai.newContextWithAuth(stream.Context(), authInfo)
@@ -246,6 +213,9 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
+		if err := authorizeMethod(authInfo, info.FullMethod); err != nil {
+			return nil, err
+		}
 
 		// Attach the auth info to context
 		ctx = ai.newContextWithAuth(ctx, authInfo)
@@ -267,7 +237,9 @@ func ContextWithAuthInfo(ctx context.Context, authInfo *AuthInfo) context.Contex
 }
 
 func HasPermission(authInfo *AuthInfo) bool {
-	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted
+	return authInfo != nil && authInfo.Token != nil &&
+		authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted &&
+		!types.IsWorkerTokenType(authInfo.Token.TokenType)
 }
 
 // HasInteractivePermission limits user-controlled interactive sessions to

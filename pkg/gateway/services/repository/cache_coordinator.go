@@ -28,10 +28,10 @@ func configuredCacheCoordinatorToken(configured string) string {
 
 func (s *WorkerRepositoryService) authorizeCacheRepositoryRequest(ctx context.Context) error {
 	if authInfo, ok := auth.AuthInfoFromContext(ctx); ok && authInfo != nil && authInfo.Token != nil {
-		if types.IsWorkerTokenType(authInfo.Token.TokenType) {
-			return nil
+		if _, err := auth.WorkerFromAuthInfo(authInfo); err != nil {
+			return errCacheCoordinatorUnauthorized
 		}
-		return errCacheCoordinatorUnauthorized
+		return nil
 	}
 
 	if s == nil || s.cacheCoordinatorToken == "" {

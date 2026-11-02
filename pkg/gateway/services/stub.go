@@ -16,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -35,6 +36,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	var warning string
 	var capacity stubCapacityVerdict
+
+	if err := repository.AuthorizeImage(ctx, gws.backendRepo, authInfo.Workspace.ExternalId, in.ImageId); err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
 
 	resourcePolicy, err := gws.stubResourcePolicy(ctx, authInfo.Workspace.ExternalId, in.Pool, in.Name)
 	if err != nil {

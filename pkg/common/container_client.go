@@ -26,6 +26,7 @@ const (
 	containerClientReconnectBaseDelay   = 20 * time.Millisecond
 	containerClientReconnectMaxDelay    = 100 * time.Millisecond
 	containerClientReconnectMinTimeout  = 2 * time.Second
+	containerClientMaxMessageSize       = 1 << 30 // 1Gi
 
 	// A worker restart kills the cached channel's connection; the RPC that
 	// finds out fails with Unavailable while the channel reconnects.
@@ -34,14 +35,16 @@ const (
 
 type ContainerClientDialer func(context.Context, string) (net.Conn, error)
 
+// ContainerClient calls a worker's container service. Workers don't
+// authenticate these calls, so no credentials are sent with them.
 type ContainerClient struct {
-	ServiceUrl   string
-	ServiceToken string
-	conn         *grpc.ClientConn
-	client       pb.ContainerServiceClient
+	ServiceUrl string
+	conn       *grpc.ClientConn
+	client     pb.ContainerServiceClient
 }
 
-func NewContainerClient(serviceUrl, serviceToken string, existingConn net.Conn) (*ContainerClient, error) {
+// NewContainerClient connects to serviceUrl, over existingConn when it is set.
+func NewContainerClient(serviceUrl string, existingConn net.Conn) (*ContainerClient, error) {
 	dialCtx := context.Background()
 	cancel := func() {}
 	dialOptions := []grpc.DialOption{}
@@ -57,7 +60,7 @@ func NewContainerClient(serviceUrl, serviceToken string, existingConn net.Conn) 
 	}
 	defer cancel()
 
-	client, err := newContainerClient(dialCtx, serviceUrl, serviceToken, dialOptions...)
+	client, err := newContainerClient(dialCtx, serviceUrl, dialOptions...)
 	if err != nil && existingConn != nil {
 		_ = existingConn.Close()
 	}
@@ -65,16 +68,11 @@ func NewContainerClient(serviceUrl, serviceToken string, existingConn net.Conn) 
 }
 
 // NewContainerClientWithDialer creates a reconnectable cached gRPC channel.
-func NewContainerClientWithDialer(
-	ctx context.Context,
-	serviceUrl string,
-	serviceToken string,
-	dialer ContainerClientDialer,
-) (*ContainerClient, error) {
+func NewContainerClientWithDialer(ctx context.Context, serviceUrl string, dialer ContainerClientDialer) (*ContainerClient, error) {
 	if dialer == nil {
 		return nil, errors.New("container client dialer is required")
 	}
-	return newContainerClient(ctx, serviceUrl, serviceToken,
+	return newContainerClient(ctx, serviceUrl,
 		grpc.WithContextDialer(dialer),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
@@ -89,16 +87,8 @@ func NewContainerClientWithDialer(
 	)
 }
 
-func newContainerClient(
-	ctx context.Context,
-	serviceUrl string,
-	serviceToken string,
-	additionalDialOptions ...grpc.DialOption,
-) (*ContainerClient, error) {
-	client := &ContainerClient{
-		ServiceUrl:   serviceUrl,
-		ServiceToken: serviceToken,
-	}
+func newContainerClient(ctx context.Context, serviceUrl string, additionalDialOptions ...grpc.DialOption) (*ContainerClient, error) {
+	client := &ContainerClient{ServiceUrl: serviceUrl}
 
 	grpcOption := grpc.WithTransportCredentials(insecure.NewCredentials())
 
@@ -115,16 +105,12 @@ func newContainerClient(
 			Timeout:             2 * time.Second,
 			PermitWithoutStream: true,
 		}),
-	}
-
-	maxMessageSize := 1 << 30 // 1Gi
-	if serviceToken != "" {
-		dialOptions = append(dialOptions, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(serviceToken)),
-			grpc.WithStreamInterceptor(GRPCClientAuthStreamInterceptor(serviceToken)),
-			grpc.WithDefaultCallOptions(
-				grpc.MaxCallRecvMsgSize(maxMessageSize),
-				grpc.MaxCallSendMsgSize(maxMessageSize),
-			))
+		grpc.WithUnaryInterceptor(forwardUnaryHeaders),
+		grpc.WithStreamInterceptor(forwardStreamHeaders),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(containerClientMaxMessageSize),
+			grpc.MaxCallSendMsgSize(containerClientMaxMessageSize),
+		),
 	}
 	dialOptions = append(dialOptions, additionalDialOptions...)
 

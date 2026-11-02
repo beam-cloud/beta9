@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -12,25 +13,25 @@ import (
 )
 
 type TokenGroup struct {
-	routerGroup   *echo.Group
-	config        types.AppConfig
-	backendRepo   repository.BackendRepository
-	workspaceRepo repository.WorkspaceRepository
+	routerGroup *echo.Group
+	config      types.AppConfig
+	backendRepo repository.BackendRepository
+	tokens      auth.Tokens
 }
 
 func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, config types.AppConfig) *TokenGroup {
 	group := &TokenGroup{routerGroup: g,
-		backendRepo:   backendRepo,
-		workspaceRepo: workspaceRepo,
-		config:        config,
+		backendRepo: backendRepo,
+		tokens:      auth.NewTokens(backendRepo, workspaceRepo),
+		config:      config,
 	}
 
 	g.PATCH("/admin/:workspaceId", auth.WithClusterAdminAuth(group.ClusterAdminUpdateAllWorkspaceTokens))
-	g.POST("/:workspaceId", auth.WithStrictWorkspaceAuth(group.CreateWorkspaceToken))
-	g.GET("/:workspaceId", auth.WithStrictWorkspaceAuth(group.ListWorkspaceTokens))
-	g.GET("/:workspaceId/signing-key", auth.WithStrictWorkspaceAuth(group.GetSigningKey))
-	g.POST("/:workspaceId/:tokenId/toggle", auth.WithStrictWorkspaceAuth(group.ToggleWorkspaceToken))
-	g.DELETE("/:workspaceId/:tokenId", auth.WithStrictWorkspaceAuth(group.DeleteWorkspaceToken))
+	g.POST("/:workspaceId", auth.WithCredentialAuth(group.CreateWorkspaceToken))
+	g.GET("/:workspaceId", auth.WithCredentialAuth(group.ListWorkspaceTokens))
+	g.GET("/:workspaceId/signing-key", auth.WithCredentialAuth(group.GetSigningKey))
+	g.POST("/:workspaceId/:tokenId/toggle", auth.WithCredentialAuth(group.ToggleWorkspaceToken))
+	g.DELETE("/:workspaceId/:tokenId", auth.WithCredentialAuth(group.DeleteWorkspaceToken))
 
 	return group
 }
@@ -83,24 +84,8 @@ func (g *TokenGroup) ClusterAdminUpdateAllWorkspaceTokens(ctx echo.Context) erro
 		return HTTPBadRequest("Invalid request")
 	}
 
-	tokens, err := g.backendRepo.ListTokens(ctx.Request().Context(), workspace.Id)
-	if err != nil {
-		return HTTPInternalServerError("Failed to list tokens")
-	}
-
-	for _, token := range tokens {
-		err := g.backendRepo.UpdateTokenAsClusterAdmin(ctx.Request().Context(), token.ExternalId, req.Disabled)
-		if err != nil {
-			return HTTPInternalServerError("Unable to update token")
-		}
-
-		// Evict both enabled and disabled token state. Otherwise, re-enabling a
-		// token can leave a cached disabled authorization in place for the full
-		// cache TTL.
-		err = g.workspaceRepo.RevokeToken(token.Key)
-		if err != nil {
-			return HTTPInternalServerError("Failed to revoke token")
-		}
+	if err := g.tokens.SetDisabledByClusterAdmin(ctx.Request().Context(), workspace.Id, req.Disabled); err != nil {
+		return HTTPInternalServerError("Unable to update tokens")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
@@ -137,32 +122,14 @@ func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
-	tokenId := ctx.Param("tokenId")
-
-	token, err := g.backendRepo.GetTokenByExternalId(ctx.Request().Context(), workspace.Id, tokenId)
+	toggledToken, err := g.tokens.Toggle(ctx.Request().Context(), cc.AuthInfo.Token, workspace.Id, ctx.Param("tokenId"))
 	if err != nil {
-		return HTTPBadRequest("Invalid token ID")
-	}
-
-	if token.TokenType == types.TokenTypeWorkspacePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return HTTPBadRequest("Cannot toggle primary token")
-	}
-
-	toggledToken, err := g.backendRepo.ToggleToken(ctx.Request().Context(), workspace.Id, tokenId)
-	if err != nil {
-		return HTTPInternalServerError("Failed to toggle token")
+		return tokenChangeError(err, "Failed to toggle token")
 	}
 
 	serializedToken, err := serializer.Serialize(toggledToken)
 	if err != nil {
 		return HTTPInternalServerError("Failed to serialize response")
-	}
-
-	if !toggledToken.Active {
-		err = g.workspaceRepo.RevokeToken(token.Key)
-		if err != nil {
-			return HTTPInternalServerError("Failed to revoke token")
-		}
 	}
 
 	return ctx.JSON(http.StatusOK, serializedToken)
@@ -176,30 +143,21 @@ func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
-	tokenId := ctx.Param("tokenId")
-
-	token, err := g.backendRepo.GetTokenByExternalId(ctx.Request().Context(), workspace.Id, tokenId)
-	if err != nil {
-		return HTTPBadRequest("Invalid token ID")
-	}
-
-	if token.TokenType == types.TokenTypeWorkspacePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return HTTPBadRequest("Cannot delete primary token")
-	}
-
-	err = g.backendRepo.DeleteToken(ctx.Request().Context(), workspace.Id, tokenId)
-	if err != nil {
-		return HTTPInternalServerError("Failed to delete token")
-	}
-
-	err = g.workspaceRepo.RevokeToken(token.Key)
-	if err != nil {
-		return HTTPInternalServerError("Failed to revoke token")
+	if err := g.tokens.Delete(ctx.Request().Context(), cc.AuthInfo.Token, workspace.Id, ctx.Param("tokenId")); err != nil {
+		return tokenChangeError(err, "Failed to delete token")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"ok": true,
 	})
+}
+
+func tokenChangeError(err error, message string) error {
+	var rejected auth.TokenChangeError
+	if errors.As(err, &rejected) {
+		return HTTPBadRequest(rejected.Error())
+	}
+	return HTTPInternalServerError(message)
 }
 
 func (g *TokenGroup) GetSigningKey(ctx echo.Context) error {

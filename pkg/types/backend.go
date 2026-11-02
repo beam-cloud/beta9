@@ -256,6 +256,8 @@ type Token struct {
 	CreatedAt              Time       `db:"created_at" json:"created_at" serializer:"created_at"`
 	UpdatedAt              Time       `db:"updated_at" json:"updated_at" serializer:"updated_at"`
 	DisabledByClusterAdmin bool       `db:"disabled_by_cluster_admin" json:"disabled_by_cluster_admin" serializer:"disabled_by_cluster_admin"`
+	// WorkerID is the only worker a worker token may act as; empty for other token types.
+	WorkerID string `db:"worker_id" json:"worker_id,omitempty"`
 }
 
 type Volume struct {

@@ -22,10 +22,12 @@ func (m *ContainerNetworkManager) registerEgress(id string, request *types.Conta
 		return err
 	}
 	return m.egress.Register(id, []string{info.ContainerIp, info.ContainerIpv6}, egress.Policy{
-		BindingsOnly: request.BlockNetwork && len(request.AllowList) == 0,
-		Open:         request.NetworkPolicy() == types.ContainerNetworkPolicyOpen,
-		AllowList:    request.EgressAllowList(),
-		Bindings:     request.SecretBindings,
+		BindingsOnly:    request.BlockNetwork && len(request.AllowList) == 0,
+		Open:            request.NetworkPolicy() == types.ContainerNetworkPolicyOpen,
+		AllowList:       request.EgressAllowList(),
+		Bindings:        request.SecretBindings,
+		PrivateNetworks: m.privateNetworks,
+		HostNetworks:    m.hostNetworks,
 	})
 }
 

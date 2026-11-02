@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -193,10 +194,12 @@ func TestSandboxExecRequiresAuth(t *testing.T) {
 
 type sandboxBackendRepository struct {
 	repository.BackendRepository
-	secrets   []types.Secret
-	secretErr error
-	stub      *types.StubWithRelated
-	stubErr   error
+	secrets       []types.Secret
+	secretErr     error
+	stub          *types.StubWithRelated
+	stubErr       error
+	checkpoint    *types.Checkpoint
+	stubByIdCalls int
 }
 
 func (r *sandboxBackendRepository) GetSecretsByNameDecrypted(
@@ -212,10 +215,14 @@ func (r *sandboxBackendRepository) GetStubByExternalId(context.Context, string, 
 }
 
 func (r *sandboxBackendRepository) GetCheckpointById(context.Context, string) (*types.Checkpoint, error) {
-	return &types.Checkpoint{StubId: 1}, nil
+	if r.checkpoint != nil {
+		return r.checkpoint, nil
+	}
+	return &types.Checkpoint{StubId: 1, WorkspaceId: 7}, nil
 }
 
 func (r *sandboxBackendRepository) GetStubById(context.Context, uint, ...types.QueryFilter) (*types.StubWithRelated, error) {
+	r.stubByIdCalls++
 	return &types.StubWithRelated{Stub: types.Stub{ExternalId: "source-stub"}}, nil
 }
 
@@ -384,21 +391,29 @@ func TestCreatePodRejectsMissingForkStub(t *testing.T) {
 	}
 }
 
-func TestSandboxClientCacheKeyUsesStableWorkerRouteAddress(t *testing.T) {
-	address := types.BackendRouteAddress(types.BackendRouteID("machine-a", "worker-a", "", types.BackendRouteKindWorker, 0))
+func TestCreatePodRejectsOtherWorkspaceCheckpoint(t *testing.T) {
+	checkpointID := "checkpoint-1"
+	backendRepo := &sandboxBackendRepository{checkpoint: &types.Checkpoint{StubId: 1, WorkspaceId: 8}}
+	service := &GenericPodService{backendRepo: backendRepo}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{Id: 7, ExternalId: "workspace-7"}})
 
-	keyA := sandboxClientCacheKey(address, "token")
-	keyB := sandboxClientCacheKey(address, "token")
-	if keyA != keyB {
-		t.Fatalf("worker route cache keys differ: %q != %q", keyA, keyB)
+	resp, err := service.CreatePod(ctx, &pb.CreatePodRequest{CheckpointId: &checkpointID})
+	if err != nil || resp.Ok {
+		t.Fatalf("CreatePod() = (%#v, %v)", resp, err)
+	}
+	if backendRepo.stubByIdCalls != 0 {
+		t.Fatal("CreatePod loaded the stub of another workspace's checkpoint")
 	}
 }
 
-func TestSandboxClientCacheKeyKeepsDifferentWorkerAddressesDistinct(t *testing.T) {
-	keyA := sandboxClientCacheKey("route://worker-a", "token")
-	keyB := sandboxClientCacheKey("route://worker-b", "token")
-	if keyA == keyB {
-		t.Fatalf("worker route cache keys unexpectedly matched: %q", keyA)
+func TestCreatePodRejectsOtherWorkspaceSnapshotImage(t *testing.T) {
+	imageID := types.SnapshotImageID("other-workspace-stub", time.Unix(1700000000, 0))
+	service := &GenericPodService{backendRepo: &sandboxBackendRepository{}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{Id: 7, ExternalId: "workspace-7"}})
+
+	resp, err := service.CreatePod(ctx, &pb.CreatePodRequest{StubId: "own-stub", ImageId: &imageID})
+	if err != nil || resp.Ok || !strings.Contains(resp.ErrorMsg, "not found") {
+		t.Fatalf("CreatePod() = (%#v, %v)", resp, err)
 	}
 }
 
@@ -723,7 +738,7 @@ func newSandboxReconnectTestHarness(t *testing.T) *sandboxReconnectTestHarness {
 		}),
 		containerID: containerID,
 		stubID:      stubID,
-		cacheKey:    sandboxClientCacheKey(workerAddress, token),
+		cacheKey:    workerAddress,
 	}
 }
 

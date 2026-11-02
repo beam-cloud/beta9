@@ -154,6 +154,11 @@ type PostgresConfig struct {
 	TimeZone      string `key:"timezone" json:"timezone"`
 	EnableTLS     bool   `key:"enableTLS" json:"enable_tls"`
 	EncryptionKey string `key:"encryptionKey" json:"encryption_key"`
+	// EncryptCredentials stores token keys and workspace signing keys encrypted
+	// with EncryptionKey and encrypts existing rows. Gateways without support
+	// for encrypted rows cannot authenticate them, so enable it after rollout,
+	// and keep it enabled: sealed token keys are only found by hash.
+	EncryptCredentials bool `key:"encryptCredentials" json:"encrypt_credentials"`
 	// MaxOpenConns caps this process's database connections; 0 is unbounded.
 	MaxOpenConns int `key:"maxOpenConns" json:"max_open_conns"`
 }

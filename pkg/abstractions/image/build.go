@@ -251,7 +251,7 @@ func (b *Build) connectToHost(hostname string, tailscale *network.Tailscale) err
 		return err
 	}
 
-	client, err := common.NewContainerClient(hostname, b.authInfo.Token.Key, conn)
+	client, err := common.NewContainerClient(hostname, conn)
 	if err != nil {
 		b.log(true, "Failed to connect to build container.\n")
 		return err
@@ -378,6 +378,7 @@ func (b *Build) getContainerImageID() (string, error) {
 		EnvVars:           b.opts.EnvVars,
 		Dockerfile:        b.opts.Dockerfile,
 		BuildCtxObject:    b.opts.BuildCtxObject,
+		Scope:             b.opts.Scope,
 	})
 }
 

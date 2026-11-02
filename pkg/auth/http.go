@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -15,6 +16,7 @@ type HttpAuthContext struct {
 }
 
 func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) echo.MiddlewareFunc {
+	tokens := NewTokens(backendRepo, workspaceRepo)
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			// WithAssumedStubAuth checks visibility; the app owns this header.
@@ -42,25 +44,12 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				return next(&HttpAuthContext{c, authInfo})
 			}
 
-			token, workspace, err := workspaceRepo.AuthorizeToken(tokenKey)
+			token, workspace, err := tokens.AuthenticateUser(c.Request().Context(), tokenKey)
+			if errors.Is(err, errWorkspaceStorage) {
+				return echo.NewHTTPError(http.StatusInternalServerError)
+			}
 			if err != nil {
-				token, workspace, err = backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
-				if err != nil {
-					return echo.NewHTTPError(http.StatusUnauthorized)
-				}
-				if err := workspaceRepo.SetAuthorizationToken(token, workspace); err != nil {
-					return echo.NewHTTPError(http.StatusInternalServerError)
-				}
-			}
-
-			if !token.Active || token.DisabledByClusterAdmin {
 				return echo.NewHTTPError(http.StatusUnauthorized)
-			}
-			if !workspace.StorageAvailable() {
-				if err := ensureWorkspaceStorage(c.Request().Context(), workspace); err != nil {
-					return echo.NewHTTPError(http.StatusInternalServerError)
-				}
-				_ = workspaceRepo.SetAuthorizationToken(token, workspace)
 			}
 			authInfo := &AuthInfo{
 				Token:     token,
@@ -152,6 +141,18 @@ func WithStrictWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Co
 
 		return next(ctx)
 	}
+}
+
+// WithCredentialAuth guards routes that reveal or manage credentials, which
+// deploy tokens never need.
+func WithCredentialAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
+	return WithStrictWorkspaceAuth(func(ctx echo.Context) error {
+		cc, _ := ctx.(*HttpAuthContext)
+		if cc.AuthInfo.Token.TokenType == types.TokenTypePlatformDeployer {
+			return echo.NewHTTPError(http.StatusUnauthorized)
+		}
+		return next(ctx)
+	})
 }
 
 func WithClusterAdminAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {

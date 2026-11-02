@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"errors"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -119,13 +120,9 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 		}, nil
 	}
 
-	token, err := gws.backendRepo.ToggleToken(ctx, authInfo.Workspace.Id, req.TokenId)
+	token, err := auth.NewTokens(gws.backendRepo, gws.workspaceRepo).Toggle(ctx, authInfo.Token, authInfo.Workspace.Id, req.TokenId)
 	if err != nil {
-		return &pb.ToggleTokenResponse{
-			Token:  &pb.Token{},
-			Ok:     false,
-			ErrMsg: "Unable to toggle token.",
-		}, nil
+		return &pb.ToggleTokenResponse{Token: &pb.Token{}, Ok: false, ErrMsg: tokenChangeError(err, "Unable to toggle token.")}, nil
 	}
 
 	updatedAt := *timestamppb.New(token.UpdatedAt.Time)
@@ -155,15 +152,19 @@ func (gws *GatewayService) DeleteToken(ctx context.Context, req *pb.DeleteTokenR
 			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
-	err := gws.backendRepo.DeleteToken(ctx, authInfo.Workspace.Id, req.TokenId)
-	if err != nil {
-		return &pb.DeleteTokenResponse{
-			Ok:     false,
-			ErrMsg: "Unable to delete token.",
-		}, nil
+	if err := auth.NewTokens(gws.backendRepo, gws.workspaceRepo).Delete(ctx, authInfo.Token, authInfo.Workspace.Id, req.TokenId); err != nil {
+		return &pb.DeleteTokenResponse{Ok: false, ErrMsg: tokenChangeError(err, "Unable to delete token.")}, nil
 	}
 
 	return &pb.DeleteTokenResponse{
 		Ok: true,
 	}, nil
+}
+
+func tokenChangeError(err error, message string) string {
+	var rejected auth.TokenChangeError
+	if errors.As(err, &rejected) {
+		return rejected.Error()
+	}
+	return message
 }

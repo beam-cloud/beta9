@@ -851,6 +851,12 @@ func TestNewBuildahCommandUsesCancelableProcessGroup(t *testing.T) {
 	require.Equal(t, imageCommandCancelGracePeriod, cmd.WaitDelay)
 }
 
+func TestNewBuildahCommandRunsInBuildNetwork(t *testing.T) {
+	ctx := context.WithValue(context.Background(), buildNetnsKey{}, "/var/run/netns/build")
+	cmd := newBuildahCommand(ctx, []string{"--version"}, nil, io.Discard, io.Discard)
+	require.Equal(t, []string{"nsenter", "--net=/var/run/netns/build", "--", "buildah", "--version"}, cmd.Args)
+}
+
 func TestTerminateImageProcessGroupKillsDescendants(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("process-group signal semantics are validated on Linux workers")
@@ -982,4 +988,43 @@ func TestRemoteLayersSkipsLayersHeldLocally(t *testing.T) {
 
 	// b is not on disk; c has no decompressed hash so it can never be local.
 	require.Equal(t, []string{"sha256:b", "sha256:c"}, (&ImageClient{}).remoteLayers(info, cachePath))
+}
+
+func TestCacheOCIMetadataUsesGatewayRegistryOnAgentHostedPools(t *testing.T) {
+	config := types.AppConfig{
+		ImageService:   types.ImageServiceConfig{BuildRegistry: "registry.example.com"},
+		GatewayService: types.GatewayServiceConfig{HTTP: types.HTTPConfig{ExternalHost: "gateway.example.com", ExternalPort: 443, TLS: true}},
+		Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"private":  {Mode: types.PoolModePrivate},
+			"provider": {Mode: types.PoolModeProvider},
+			"external": {Mode: types.PoolModeExternal},
+			"local":    {Mode: types.PoolModeLocal},
+		}},
+	}
+	for _, tc := range []struct {
+		pool, registry, wantRef string
+	}{
+		{"private", "https://registry.example.com", "gateway.example.com/images:tag"},
+		{"provider", "registry.example.com", "gateway.example.com/images:tag"},
+		{"private", "https://docker.io", "docker.io/images:tag"},
+		{"external", "https://registry.example.com", "registry.example.com/images:tag"},
+		{"local", "https://registry.example.com", "registry.example.com/images:tag"},
+	} {
+		for _, pointer := range []bool{false, true} {
+			client := &ImageClient{config: config, workerPoolName: tc.pool, v2ImageRefs: common.NewSafeMap[string]()}
+			info := clipCommon.OCIStorageInfo{RegistryURL: tc.registry, Repository: "images", Reference: "tag"}
+			meta := &clipCommon.ClipArchiveMetadata{StorageInfo: info}
+			if pointer {
+				meta.StorageInfo = &info
+			}
+			client.cacheOCIMetadata("image", meta)
+
+			ref, ok := client.v2ImageRefs.Get("image")
+			require.True(t, ok)
+			require.Equal(t, tc.wantRef, ref, "%s %s", tc.pool, tc.registry)
+			stored, ok := ociStorageInfo(meta)
+			require.True(t, ok)
+			require.Equal(t, "https://"+strings.Split(tc.wantRef, "/")[0], stored.RegistryURL, "%s %s pointer=%t", tc.pool, tc.registry, pointer)
+		}
+	}
 }

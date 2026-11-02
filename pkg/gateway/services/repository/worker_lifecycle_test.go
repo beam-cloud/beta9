@@ -67,10 +67,7 @@ func TestPushContainerLifecycleEventsUsesAuthoritativeIdentity(t *testing.T) {
 	service := &WorkerRepositoryService{
 		containerRepo: &lifecycleContainerRepo{state: state},
 		workerRepo:    &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}},
-		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
-			WorkerID: "worker-1", WorkerTokenID: "token-1",
-		}}},
-		eventRepo: events,
+		eventRepo:     events,
 	}
 	data, err := json.Marshal(types.EventContainerLifecycleSchema{
 		ID:          types.ContainerLifecycleImageLoad,
@@ -104,10 +101,7 @@ func TestPushContainerLifecycleEventsSkipsAnotherWorkspace(t *testing.T) {
 			WorkerId:    "worker-1",
 		}},
 		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1"}},
-		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
-			WorkerID: "worker-1", WorkerTokenID: "token-1",
-		}}},
-		eventRepo: events,
+		eventRepo:  events,
 	}
 	data, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-1"})
 	require.NoError(t, err)
@@ -129,10 +123,7 @@ func TestPushContainerLifecycleEventsSkipsForeignContainerButKeepsValid(t *testi
 			"container-good":    {ContainerId: "container-good", StubId: "stub-1", WorkspaceId: "workspace-1", WorkerId: "worker-1"},
 		}},
 		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}},
-		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
-			WorkerID: "worker-1", WorkerTokenID: "token-1",
-		}}},
-		eventRepo: events,
+		eventRepo:  events,
 	}
 	foreign, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-foreign"})
 	require.NoError(t, err)
@@ -161,15 +152,16 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkerToken(t *testing.T) {
 			WorkerId:    "worker-1",
 		}},
 		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}},
-		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
-			WorkerID: "worker-1", WorkerTokenID: "token-2",
-		}}},
-		eventRepo: &lifecycleEventRepo{},
+		eventRepo:  &lifecycleEventRepo{},
 	}
 	data, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-1"})
 	require.NoError(t, err)
 
-	response, err := service.PushContainerLifecycleEvents(workerLifecycleContext("workspace-1"), &pb.PushContainerLifecycleEventsRequest{
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker-2"},
+		Workspace: &types.Workspace{ExternalId: "workspace-1"},
+	})
+	response, err := service.PushContainerLifecycleEvents(ctx, &pb.PushContainerLifecycleEventsRequest{
 		WorkerId: "worker-1",
 		Events:   [][]byte{data},
 	})
@@ -180,7 +172,7 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkerToken(t *testing.T) {
 
 func workerLifecycleContext(workspaceID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token: &types.Token{ExternalId: "token-1", TokenType: types.TokenTypeWorkerPrivate},
+		Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker-1"},
 		Workspace: &types.Workspace{
 			ExternalId: workspaceID,
 		},

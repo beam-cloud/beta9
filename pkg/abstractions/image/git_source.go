@@ -89,9 +89,9 @@ func gitAuthURL(src *types.GitSource) string {
 	return u.String()
 }
 
-// gitImageID is what makes two git builds the same image: the commit and how
+// gitImageHash is what makes two git builds the same image: the commit and how
 // it is built. The token and runtime env play no part.
-func gitImageID(opts *BuildOpts) (string, error) {
+func gitImageHash(opts *BuildOpts) (uint64, error) {
 	hash, err := hashstructure.Hash(struct {
 		ClipVersion    uint32
 		RepoURL        string
@@ -109,18 +109,12 @@ func gitImageID(opts *BuildOpts) (string, error) {
 		opts.GitSource.StartCommand,
 		opts.GitSource.BuildCommand,
 	}, hashstructure.FormatV2, nil)
-	if err != nil {
-		return "", err
+	if err != nil || opts.GitSource.Dockerfile == "" {
+		return hash, err
 	}
-	if opts.GitSource.Dockerfile != "" {
-		// Hashed on top, so builds without one keep the ids they had.
-		hash, err = hashstructure.Hash(struct {
-			Build      uint64
-			Dockerfile string
-		}{hash, opts.GitSource.Dockerfile}, hashstructure.FormatV2, nil)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf("%016x", hash), nil
+	// Hashed on top, so builds without one keep the ids they had.
+	return hashstructure.Hash(struct {
+		Build      uint64
+		Dockerfile string
+	}{hash, opts.GitSource.Dockerfile}, hashstructure.FormatV2, nil)
 }
