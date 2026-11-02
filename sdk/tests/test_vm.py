@@ -1020,6 +1020,17 @@ def test_cli_reports_ready_once_vm_accepts_commands(cli_service, monkeypatch, ar
     vm.wait.assert_not_called()
 
 
+def test_cli_new_shows_sync_progress(cli_service, monkeypatch, tmp_path):
+    vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running", "spec": {"ssh": True}})
+    monkeypatch.setattr(vm_cli, "VM", MagicMock(return_value=vm))
+    sync = MagicMock()
+    monkeypatch.setattr(vm_cli, "_sync", sync)
+    result = CliRunner().invoke(vm_cli.management, ["new", "dev", "--sync", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert result.output.index("✓ VM ready") < result.output.index("✓ Files synced")
+    assert sync.call_args.args[0] is vm
+
+
 @pytest.mark.parametrize("as_json", [False, True])
 def test_cli_get_shows_ipv6_and_preserves_json(cli_service, as_json):
     info = {

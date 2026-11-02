@@ -438,7 +438,8 @@ def new(
             vm.create()
             _ready(vm)
         if sync_dir:
-            _sync(vm, sync_dir, False)
+            with _progress("Syncing files", "Files synced", as_json):
+                _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
 
 
