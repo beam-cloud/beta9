@@ -553,49 +553,193 @@ def test_guest_json_commands_preserve_errors(sandbox_vm, method):
     process.stdout.read.assert_not_called()
 
 
-def test_wait_checks_every_service_and_tcp_readiness(sandbox_vm):
+@pytest.fixture
+def readiness_probe(sandbox_vm, monkeypatch):
     vm, sandbox = sandbox_vm
     vm._services_container = None
-    vm.info["spec"].update(ssh=True, desktop=True)
-    sandbox.process.exec.return_value.wait.return_value = 0
-    assert vm.wait(services=True) is vm
-    calls = [call.args for call in sandbox.process.exec.call_args_list]
-    assert calls[:3] == [
-        ("systemctl", "is-active", "--quiet", "beam-terminal.service"),
-        ("systemctl", "is-active", "--quiet", "ssh.service"),
-        ("systemctl", "is-active", "--quiet", "beam-desktop.service"),
-    ]
-    assert calls[3][:2] == ("python3", "-c")
-    assert "[7681, 2222, 8080]" in calls[3][2]
-
-
-@pytest.mark.parametrize("window", [None, "0x0", "0x400001"])
-def test_desktop_readiness_waits_for_window_manager(sandbox_vm, monkeypatch, window):
-    vm, sandbox = sandbox_vm
-    vm.info["spec"].update(desktop=True)
+    commands = MagicMock(return_value=subprocess.CompletedProcess([], 0, b"window id # 0x400001"))
     connections = MagicMock()
-    monkeypatch.setattr("socket.create_connection", connections)
+    monkeypatch.setattr(subprocess, "run", commands)
+    monkeypatch.setattr(socket, "create_connection", connections)
+
+    def execute(code):
+        output = io.StringIO()
+        with patch("sys.stdout", output):
+            try:
+                exec(compile(code, "<readiness>", "exec", optimize=2), {})
+            except SystemExit as error:
+                return SimpleNamespace(exit_code=error.code, stdout=output.getvalue())
+        return SimpleNamespace(exit_code=0, stdout=output.getvalue())
+
+    sandbox.process.run_code.side_effect = execute
+    return vm, sandbox, commands, connections
+
+
+@pytest.mark.parametrize(
+    "ssh,desktop", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_wait_checks_every_service_and_port_in_one_guest_call(readiness_probe, ssh, desktop):
+    vm, sandbox, commands, connections = readiness_probe
+    vm.info["spec"].update(ssh=ssh, desktop=desktop)
+    assert vm.wait(services=True) is vm
+    expected = [("beam-terminal.service", 7681)]
+    if ssh:
+        expected.append(("ssh.service", 2222))
+    if desktop:
+        expected.append(("beam-desktop.service", 8080))
+    assert [
+        call.args[0][-1] for call in commands.call_args_list if call.args[0][0] == "systemctl"
+    ] == [unit for unit, _ in expected]
+    assert [call.args[0] for call in connections.call_args_list] == [
+        ("127.0.0.1", port) for _, port in expected
+    ]
+    sandbox.process.run_code.assert_called_once()
+    sandbox.process.exec.assert_not_called()
+
+
+@pytest.mark.parametrize("unit", ["beam-terminal.service", "ssh.service", "beam-desktop.service"])
+def test_service_readiness_requires_every_enabled_unit(readiness_probe, unit):
+    vm, sandbox, commands, _ = readiness_probe
+    vm.info["spec"].update(ssh=True, desktop=True)
+    commands.side_effect = lambda command, **_: subprocess.CompletedProcess(
+        command, int(command[-1] == unit), b""
+    )
+    assert not vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+    assert commands.call_args.args[0][-1] == unit
+    sandbox.process.run_code.assert_called_once()
+
+
+@pytest.mark.parametrize("port", [7681, 2222, 8080])
+def test_service_readiness_requires_every_enabled_port(readiness_probe, port):
+    vm, sandbox, _, connections = readiness_probe
+    vm.info["spec"].update(ssh=True, desktop=True)
+
+    def connect(address, timeout):
+        if address[1] == port:
+            raise ConnectionRefusedError("service is not listening")
+        return MagicMock()
+
+    connections.side_effect = connect
+    assert not vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+    assert connections.call_args.args[0] == ("127.0.0.1", port)
+
+
+@pytest.mark.parametrize("window,code", [(None, 0), ("0x0", 0), ("0x400001", 0), ("0x400001", 1)])
+def test_desktop_readiness_waits_for_window_manager(readiness_probe, window, code):
+    vm, sandbox, commands, connections = readiness_probe
+    vm.info["spec"].update(desktop=True)
     property_value = (
         f"_NET_SUPPORTING_WM_CHECK(WINDOW): window id # {window}"
         if window
         else "_NET_SUPPORTING_WM_CHECK: no such atom on any window."
     )
-    monkeypatch.setattr(subprocess, "check_output", lambda *_: property_value.encode())
-
-    def execute(command, *args):
-        process = MagicMock()
-        code = 0
-        if command == "python3":
-            try:
-                exec(compile(args[1], "<readiness>", "exec", optimize=2), {})
-            except SystemExit as error:
-                code = error.code
-        process.wait.return_value = code
-        return process
-
-    sandbox.process.exec.side_effect = execute
-    assert vm._services_ready(sandbox, vm_module.time.monotonic() + 10) == (window == "0x400001")
+    commands.side_effect = lambda command, **_: subprocess.CompletedProcess(
+        command, code if command[0] == "xprop" else 0, property_value.encode()
+    )
+    assert vm._services_ready(sandbox, vm_module.time.monotonic() + 10) == (
+        window == "0x400001" and code == 0
+    )
     assert connections.called, "Listening ports alone do not make a desktop usable"
+    assert commands.call_args.args[0] == ("xprop", "-root", "_NET_SUPPORTING_WM_CHECK")
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError(), subprocess.TimeoutExpired("systemctl", 1)])
+def test_service_readiness_retries_failed_guest_commands(readiness_probe, error):
+    vm, sandbox, commands, _ = readiness_probe
+    commands.side_effect = error
+    assert not vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+    commands.side_effect = None
+    assert vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+
+
+def test_service_readiness_uses_one_shared_timeout_budget(readiness_probe, monkeypatch):
+    vm, sandbox, commands, connections = readiness_probe
+    vm.info["spec"].update(ssh=True, desktop=True)
+    clock = [0.0]
+    monkeypatch.setattr(vm_module.time, "monotonic", lambda: clock[0])
+
+    def command(*args, **kwargs):
+        clock[0] += 0.25
+        return subprocess.CompletedProcess(args, 0, b"window id # 0x400001")
+
+    def connect(*args, **kwargs):
+        clock[0] += 0.25
+        return MagicMock()
+
+    commands.side_effect = command
+    connections.side_effect = connect
+    timeout = MagicMock()
+    monkeypatch.setattr(vm_module, "rpc_timeout", timeout)
+    assert vm._services_ready(sandbox, 2)
+    timeout.assert_called_once_with(2)
+    assert [call.kwargs["timeout"] for call in commands.call_args_list] == [2, 1.75, 1.5, 0.5]
+    assert [call.args[1] for call in connections.call_args_list] == [1, 1, 0.75]
+    sandbox.process.run_code.assert_called_once()
+
+
+@pytest.mark.parametrize("status", [grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE])
+def test_service_readiness_retries_transient_rpc_failures(readiness_probe, status):
+    vm, sandbox, _, _ = readiness_probe
+    error = grpc.RpcError()
+    error.code = lambda: status
+    sandbox.process.run_code.side_effect = [error, SimpleNamespace(exit_code=0, stdout="")]
+    assert not vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+    assert vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+
+
+def test_service_readiness_retries_connection_failures(readiness_probe):
+    vm, sandbox, _, _ = readiness_probe
+    sandbox.process.run_code.side_effect = ConnectionError("disconnected")
+    assert not vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+
+
+def test_service_readiness_preserves_rpc_permission_errors(readiness_probe):
+    vm, sandbox, _, _ = readiness_probe
+    error = grpc.RpcError()
+    error.code = lambda: grpc.StatusCode.PERMISSION_DENIED
+    sandbox.process.run_code.side_effect = error
+    with pytest.raises(grpc.RpcError) as raised:
+        vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+    assert raised.value is error
+
+
+def test_service_readiness_rpc_deadline_preserves_the_callers_budget(readiness_probe, monkeypatch):
+    from beta9.channel import _deadline
+
+    vm, sandbox, _, _ = readiness_probe
+    clock = [0.0]
+    monkeypatch.setattr(vm_module.time, "monotonic", lambda: clock[0])
+    observed = []
+    previous = _deadline.get()
+
+    def execute(code):
+        observed.append(_deadline.get())
+        return SimpleNamespace(exit_code=0, stdout="")
+
+    sandbox.process.run_code.side_effect = execute
+    assert vm._services_ready(sandbox, 25)
+    clock[0] = 2
+    assert vm._services_ready(sandbox, 2.25)
+    with vm_module.rpc_timeout(0.1):
+        assert vm._services_ready(sandbox, 2.25)
+    assert observed == [10, 2.25, 2.1]
+    assert _deadline.get() == previous
+
+
+def test_service_readiness_does_not_probe_after_deadline(sandbox_vm):
+    vm, sandbox = sandbox_vm
+    assert not vm._services_ready(sandbox, vm_module.time.monotonic() - 1)
+    sandbox.process.run_code.assert_not_called()
+
+
+def test_service_readiness_cache_expires_with_the_container(readiness_probe):
+    vm, sandbox, _, _ = readiness_probe
+    assert vm.wait(services=True) is vm
+    assert vm.wait(services=True) is vm
+    sandbox.process.run_code.assert_called_once()
+    vm._set({**vm.info, "container_id": "restarted-container"})
+    assert vm.wait(services=True) is vm
+    assert sandbox.process.run_code.call_count == 2
 
 
 def test_wait_for_exec_uses_live_connection_without_status_ticker(sandbox_vm, monkeypatch):
@@ -607,6 +751,7 @@ def test_wait_for_exec_uses_live_connection_without_status_ticker(sandbox_vm, mo
     assert vm.info["status"] == "running"
     refresh.assert_not_called()
     sandbox.process.exec.assert_not_called()
+    sandbox.process.run_code.assert_not_called()
 
 
 @pytest.fixture
@@ -1222,8 +1367,10 @@ def test_local_vm_commands_do_not_fork(cli_service, monkeypatch, tmp_path, comma
     assert result.exit_code == 0, result.output
 
 
-@pytest.mark.parametrize("hung_command", ["systemctl", "python3"])
-def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command, sandbox_vm):
+@pytest.mark.parametrize(
+    "error", [SandboxConnectionError("disconnected"), SandboxProcessError("timed out")]
+)
+def test_wait_retries_failed_service_probes_until_its_deadline(monkeypatch, error, sandbox_vm):
     vm, sandbox = sandbox_vm
     vm._services_container = None
     clock = [0.0]
@@ -1233,19 +1380,12 @@ def test_wait_retries_hung_services_until_its_deadline(monkeypatch, hung_command
         "sleep",
         lambda seconds: clock.__setitem__(0, clock[0] + seconds),
     )
-
-    def execute(command, *args):
-        process = MagicMock()
-        if command == hung_command:
-            process.wait.side_effect = SandboxProcessError("timed out")
-        else:
-            process.wait.return_value = 0
-        return process
-
-    sandbox.process.exec.side_effect = execute
+    sandbox.process.run_code.side_effect = error
     with pytest.raises(TimeoutError, match="VM did not become ready"):
         vm.wait(timeout=1, services=True)
-    assert sandbox.process.exec.call_count >= 2
+    assert sandbox.process.run_code.call_count >= 2
+    assert vm._services_container is None
+    sandbox.process.exec.assert_not_called()
 
 
 def test_fork_connection_survives_parent_close(monkeypatch):
@@ -3205,21 +3345,62 @@ def test_kiosk_native_display_requires_attached_display_gpu(
         assert session.env["__GLX_VENDOR_LIBRARY_NAME"] == "mesa"
 
 
-def test_kiosk_sdk_waits_for_application_not_just_the_stream_port():
-    vm = VM("app", kiosk=Kiosk(["editor"]), ssh=False, _service=SimpleNamespace())
-    vm.info = {"spec": {"desktop": True, "kiosk": {"command": ["editor"]}}}
-    sandbox = MagicMock()
-    processes = []
+@pytest.mark.parametrize(
+    "status,exit_code,ready,error",
+    [
+        ({"state": "starting"}, 1, False, None),
+        ({"state": "ready", "mcp_ready": False}, 0, True, None),
+        ({"state": "error", "error": "Editor failed to start"}, 1, False, "Editor failed to start"),
+        ({"state": "closed"}, 1, False, "Kiosk application is unavailable"),
+        ("not JSON", 1, False, None),
+    ],
+)
+def test_kiosk_sdk_waits_for_the_application_and_preserves_errors(
+    readiness_probe, status, exit_code, ready, error
+):
+    vm, sandbox, commands, _ = readiness_probe
+    vm.info["spec"].update(desktop=True, kiosk={"command": ["editor"]})
 
-    def command(*args):
-        processes.append(args)
-        return MagicMock(wait=MagicMock(return_value=1 if args[-1] == "--check" else 0))
+    def command(args, **kwargs):
+        if args == ("/opt/beam-vm/kiosk", "--check"):
+            output = status if isinstance(status, str) else json.dumps(status)
+            return subprocess.CompletedProcess(args, exit_code, output.encode())
+        return subprocess.CompletedProcess(args, 0, b"")
 
-    sandbox.process.exec.side_effect = command
-    import time
+    commands.side_effect = command
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+    else:
+        assert vm._services_ready(sandbox, vm_module.time.monotonic() + 10) is ready
+    assert commands.call_args.args[0] == ("/opt/beam-vm/kiosk", "--check")
+    sandbox.process.run_code.assert_called_once()
+    sandbox.process.exec.assert_not_called()
 
-    assert not vm._services_ready(sandbox, time.monotonic() + 30)
-    assert ("/opt/beam-vm/kiosk", "--check") in processes
+
+@pytest.mark.parametrize("state", ["error", "closed"])
+def test_kiosk_failure_is_reported_before_waiting_for_stream_ports(readiness_probe, state):
+    vm, sandbox, commands, connections = readiness_probe
+    vm.info["spec"].update(desktop=True, kiosk={"command": ["editor"]})
+    commands.side_effect = lambda command, **_: subprocess.CompletedProcess(
+        command,
+        int(command[0] == "/opt/beam-vm/kiosk"),
+        json.dumps({"state": state, "error": "Application exited"}).encode(),
+    )
+    connections.side_effect = ConnectionRefusedError("not listening")
+    with pytest.raises(RuntimeError, match="Application exited"):
+        vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+    connections.assert_not_called()
+
+
+def test_kiosk_application_ready_still_requires_listening_ports(readiness_probe):
+    vm, sandbox, commands, connections = readiness_probe
+    vm.info["spec"].update(desktop=True, kiosk={"command": ["editor"]})
+    commands.return_value.stdout = b'{"state":"ready"}'
+    connections.side_effect = ConnectionRefusedError("not listening")
+    assert not vm._services_ready(sandbox, vm_module.time.monotonic() + 10)
+    assert commands.call_args.args[0] == ("/opt/beam-vm/kiosk", "--check")
+    connections.assert_called_once()
 
 
 def test_retina_scales_widgets_and_fonts_together():
