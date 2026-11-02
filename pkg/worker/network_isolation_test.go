@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,6 +43,9 @@ func TestContainerIsolationRules(t *testing.T) {
 func TestIsolateContainersFollowsMovedEndpoints(t *testing.T) {
 	if !resolvConfHasUsableNameserver(hostResolvConfPath) {
 		t.Skip("isolation reads the host's nameservers")
+	}
+	for _, name := range []string{types.ContainerGatewayGRPCHostEnv, types.ContainerGatewayGRPCPortEnv, types.ContainerGatewayHTTPHostEnv, types.ContainerGatewayHTTPPortEnv} {
+		t.Setenv(name, "")
 	}
 	gateway := isolationEndpoint{"10.0.4.20", "tcp", 443}
 	moved := isolationEndpoint{"10.0.4.21", "tcp", 443}

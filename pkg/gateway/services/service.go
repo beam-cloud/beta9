@@ -78,6 +78,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		computeService = computesvc.New(computesvc.Options{
 			Config:           opts.Config,
 			BackendRepo:      opts.BackendRepo,
+			WorkspaceRepo:    opts.WorkspaceRepo,
 			ContainerRepo:    opts.ContainerRepo,
 			Scheduler:        opts.Scheduler,
 			EventRepo:        opts.EventRepo,

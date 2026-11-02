@@ -173,7 +173,7 @@ func TestAuthorizeRequestLimitsDiskSnapshotsToTheWorkersWorkspace(t *testing.T) 
 	}{
 		{name: "private worker", tokenType: types.TokenTypeWorkerPrivate, requested: "own", allowed: true},
 		{name: "private worker cross tenant", tokenType: types.TokenTypeWorkerPrivate, requested: "other"},
-		{name: "private worker without workspace", tokenType: types.TokenTypeWorkerPrivate},
+		{name: "private worker request without a workspace", tokenType: types.TokenTypeWorkerPrivate},
 		{name: "trusted worker cross tenant", tokenType: types.TokenTypeWorker, requested: "other", allowed: true},
 		{name: "workspace token", tokenType: types.TokenTypeWorkspacePrimary, requested: "own"},
 	} {

@@ -2,9 +2,11 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -37,6 +39,34 @@ func (r *rolloutTokenBackend) BindWorkerToken(context.Context, string, string) (
 }
 func (r *rolloutTokenBackend) RevokeTokenByExternalId(context.Context, string) (string, error) {
 	return "", nil
+}
+
+type replacedTokenBackend struct {
+	rolloutTokenBackend
+	created int
+}
+
+func (r *replacedTokenBackend) GetTokenByExternalId(context.Context, uint, string) (*types.Token, error) {
+	return &types.Token{ExternalId: "old", Key: "old-key", TokenType: types.TokenTypeWorker}, nil
+}
+func (r *replacedTokenBackend) RevokeTokenByExternalId(context.Context, string) (string, error) {
+	return "old-key", nil
+}
+func (r *replacedTokenBackend) CreateWorkerToken(ctx context.Context, workspaceID uint, tokenType, workerID string) (types.Token, error) {
+	r.created++
+	return r.rolloutTokenBackend.CreateWorkerToken(ctx, workspaceID, tokenType, workerID)
+}
+
+type unavailableTokenCache struct{ repository.WorkspaceRepository }
+
+func (unavailableTokenCache) RevokeToken(string) error { return errors.New("redis unavailable") }
+
+func TestAgentWorkerTokenIsNotReplacedWhileTheOldOneMayBeCached(t *testing.T) {
+	backend := &replacedTokenBackend{}
+	service := &Service{backendRepo: backend, tokens: auth.NewTokens(backend, unavailableTokenCache{})}
+	_, _, _, err := service.agentWorkerToken(context.Background(), 1, types.TokenTypeWorker, "worker", &model.AgentWorkerSlotState{WorkerTokenID: "old"})
+	require.Error(t, err)
+	require.Zero(t, backend.created)
 }
 
 func TestAgentRolloutBusyThenRevertUsesOriginalSlotAndRecoversWorker(t *testing.T) {

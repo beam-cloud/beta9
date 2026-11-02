@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -17,8 +18,18 @@ type tokensBackendRepo struct {
 	token    *types.Token
 	err      error
 	lookups  int
-	changed  bool
 	disabled []string
+
+	cache               *tokensWorkspaceRepo
+	changed             bool
+	evictedBeforeChange []string
+}
+
+func (r *tokensBackendRepo) change() {
+	r.changed = true
+	if r.cache != nil {
+		r.evictedBeforeChange = slices.Clone(r.cache.evicted)
+	}
 }
 
 func (r *tokensBackendRepo) AuthorizeToken(context.Context, string) (*types.Token, *types.Workspace, error) {
@@ -34,12 +45,12 @@ func (r *tokensBackendRepo) GetTokenByExternalId(context.Context, uint, string) 
 }
 
 func (r *tokensBackendRepo) DeleteToken(context.Context, uint, string) error {
-	r.changed = true
+	r.change()
 	return nil
 }
 
 func (r *tokensBackendRepo) ToggleToken(context.Context, uint, string) (types.Token, error) {
-	r.changed = true
+	r.change()
 	return *r.token, nil
 }
 
@@ -132,8 +143,8 @@ func TestChangeChecksTheTokenAndEvictsItAroundTheChange(t *testing.T) {
 					return err
 				},
 			} {
-				backendRepo := &tokensBackendRepo{token: tc.token, err: tc.err}
 				workspaceRepo := &tokensWorkspaceRepo{}
+				backendRepo := &tokensBackendRepo{token: tc.token, err: tc.err, cache: workspaceRepo}
 				err := change(NewTokens(backendRepo, workspaceRepo))
 				if tc.want != nil {
 					require.ErrorIs(t, err, tc.want, name)
@@ -143,6 +154,7 @@ func TestChangeChecksTheTokenAndEvictsItAroundTheChange(t *testing.T) {
 				}
 				require.NoError(t, err, name)
 				require.True(t, backendRepo.changed, name)
+				require.Equal(t, []string{"key"}, backendRepo.evictedBeforeChange, name)
 				require.Equal(t, []string{"key", "key"}, workspaceRepo.evicted, name)
 			}
 		})

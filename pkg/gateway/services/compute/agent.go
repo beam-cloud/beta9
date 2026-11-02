@@ -762,11 +762,6 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	// A worker whose token was replaced cannot call the gateway to drain, so its
 	// slot is replaced right away.
 	if existing != nil && existing.WorkerTokenID != tokenID {
-		if existing.WorkerTokenID != "" {
-			if err := s.tokens.Revoke(ctx, existing.WorkerTokenID); err != nil {
-				return nil, "", err
-			}
-		}
 		if worker.RolloutGeneration != "" {
 			if err := s.workerRepo.CancelWorkerRollout(worker.Id, worker.RolloutGeneration); err != nil {
 				return nil, "", err
@@ -927,6 +922,11 @@ func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenT
 					return token.Key, token.ExternalId, tokenHash, nil
 				}
 			}
+		}
+		// Revoked before its replacement is minted, so a failed revocation
+		// leaves no token that no slot records.
+		if err := s.tokens.Revoke(ctx, existing.WorkerTokenID); err != nil {
+			return "", "", "", err
 		}
 	}
 
