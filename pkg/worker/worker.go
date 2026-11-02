@@ -1754,7 +1754,7 @@ func (s *Worker) setWorkerKeepAlive() error {
 }
 
 // acknowledgeAvailable asks the gateway to move a pending registration to
-// available; other states keep their status, so it is safe to repeat.
+// available. Other states keep their status, so it is safe to repeat.
 func (s *Worker) acknowledgeAvailable(ctx context.Context) error {
 	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(ctx, &pb.ToggleWorkerAvailableRequest{
 		WorkerId:   s.workerId,
