@@ -436,10 +436,18 @@ def new(
     with StoredStdoutInterceptor(capture_logs=as_json):
         with _progress("Creating VM", "VM ready", as_json):
             vm.create()
-            vm.wait(services=True)
+            _ready(vm)
         if sync_dir:
             _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
+
+
+def _ready(vm):
+    # Kiosk readiness reports application launch failures. The desktop page,
+    # desktop controls and SSH wait for their own services, so other VMs are
+    # ready once they accept commands.
+    if vm.info["spec"].get("kiosk") is not None:
+        vm.wait(services=True)
 
 
 def _volumes(entries):
@@ -792,7 +800,7 @@ def start_vm(service, name, as_json, cold=False):
     """Start a stopped VM or resume its saved memory."""
     with _progress("Starting VM", "VM ready", as_json):
         vm = _vm(service, name).start(cold=cold)
-        vm.wait(services=True)
+        _ready(vm)
     _show(vm.info, as_json)
 
 
@@ -845,7 +853,7 @@ def fork_vm(service, source, name, as_json):
             vm = VM(name, snapshot=source, _service=service).create()
         else:
             vm = _vm(service, source).fork(name)
-        vm.wait(services=True)
+        _ready(vm)
     _show(vm.info, as_json)
 
 
