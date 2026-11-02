@@ -390,6 +390,23 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	}
 }
 
+func TestManagedPoolCPUShareMultiplier(t *testing.T) {
+	ctx := context.Background()
+	service := managedPoolTestService(types.AppConfig{}, &fakeComputeRepo{})
+	config := types.WorkerPoolConfig{Mode: types.PoolModeExternal, CPUShareMultiplier: 1.5}
+	if _, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config); err != nil {
+		t.Fatal(err)
+	}
+	config.CPUShareMultiplier = 0.5
+	if _, err := service.UpdateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config); !errors.Is(err, model.ErrInvalidManagedPoolConfig) {
+		t.Fatalf("update with multiplier 0.5: err = %v, want invalid config", err)
+	}
+	state, err := service.managedPoolRepo.GetManagedPoolState(ctx, "admin-workspace", "public-cpu")
+	if err != nil || state == nil || state.WorkerConfig == nil || state.WorkerConfig.CPUShareMultiplier != 1.5 {
+		t.Fatalf("saved state = %+v, err = %v, want multiplier 1.5", state, err)
+	}
+}
+
 func TestManagedPoolsConvergeAcrossGatewayReplicas(t *testing.T) {
 	rdb, err := repository.NewRedisClientForTest()
 	if err != nil {

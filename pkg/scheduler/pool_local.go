@@ -281,12 +281,13 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		},
 	}
 
+	schedulableCpu := wpc.workerPoolConfig.CPUShareMultiplier.Schedulable(workerCpu)
 	return job, &types.Worker{
 		Id:            workerId,
-		FreeCpu:       workerCpu,
+		FreeCpu:       schedulableCpu,
 		FreeMemory:    workerMemory,
 		FreeGpuCount:  workerGpuCount,
-		TotalCpu:      workerCpu,
+		TotalCpu:      schedulableCpu,
 		TotalMemory:   workerMemory,
 		TotalGpuCount: workerGpuCount,
 		Gpu:           workerGpuType,

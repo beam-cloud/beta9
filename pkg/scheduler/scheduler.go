@@ -76,6 +76,11 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	if err := config.Scheduling.Failover.Validate(config.Worker.Pools); err != nil {
 		return nil, err
 	}
+	for name, pool := range config.Worker.Pools {
+		if err := pool.CPUShareMultiplier.Validate(); err != nil {
+			return nil, fmt.Errorf("worker pool %q: %w", name, err)
+		}
+	}
 
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)

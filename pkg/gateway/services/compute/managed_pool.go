@@ -103,6 +103,9 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	default:
 		return types.WorkerPoolConfig{}, fmt.Errorf("unsupported container runtime %q", config.ContainerRuntime)
 	}
+	if err := config.CPUShareMultiplier.Validate(); err != nil {
+		return types.WorkerPoolConfig{}, err
+	}
 	for field, path := range map[string]string{
 		"storage_path":          config.StoragePath,
 		"images_path":           config.ImagesPath,

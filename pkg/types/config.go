@@ -674,6 +674,7 @@ type WorkerPoolConfig struct {
 	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc", "gvisor", or "microvm"
 	ContainerRuntimeConfig    RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"` // Pool-specific container runtime configuration
 	CPUAffinityEnforced       bool                              `key:"cpuAffinityEnforced" json:"cpu_affinity_enforced"`
+	CPUShareMultiplier        CPUShareMultiplier                `key:"cpuShareMultiplier" json:"cpu_share_multiplier,omitempty"`
 	GPUVirtualized            bool                              `key:"gpuVirtualized" json:"gpu_virtualized"`
 	ContainerStartConcurrency int                               `key:"containerStartConcurrency" json:"container_start_concurrency"`
 	NetworkPreallocation      *bool                             `key:"networkPreallocation" json:"network_preallocation"`

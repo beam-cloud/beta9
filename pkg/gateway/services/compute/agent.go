@@ -812,7 +812,7 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 			GPUCount:    worker.TotalGpuCount,
 			GPUs:        agentState.GPUs,
 			Attrs: map[string]string{
-				"cpu_millicores": fmt.Sprintf("%d", worker.TotalCpu),
+				"cpu_millicores": fmt.Sprintf("%d", slot.CPU),
 				"gpu_ids":        strings.Join(agentState.GPUIDs, ","),
 			},
 		})
@@ -950,6 +950,10 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 	// machine remains connected. Machine capacity still comes from the worker.
 	if agentState.ManagedPoolInstanceID != "" {
 		poolConfigCopy := poolConfig
+		// The slot generation hashes this copy, and a new generation restarts the
+		// worker. Only the scheduler reads the multiplier, so it stays out of the
+		// copy and a new value resizes the running worker instead.
+		poolConfigCopy.CPUShareMultiplier = 0
 		authoritativePoolConfig = &poolConfigCopy
 		runtimeName = firstNonEmpty(poolConfig.ContainerRuntime, types.ContainerRuntimeRunc.String())
 		if poolConfig.NetworkSlotPoolSize > 0 {
@@ -974,7 +978,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		ContainerRuntime:          runtimeName,
 		ContainerRuntimeConfig:    poolConfig.ContainerRuntimeConfig.WithDefaults(runtimeName),
 		CPUAffinityEnforced:       cpuAffinityEnforced,
-		CPU:                       worker.TotalCpu,
+		CPU:                       firstNonZeroInt64(agentState.CPUMillicores, int64(agentState.CPUCount)*1000), // Physical, unlike the shared worker.TotalCpu.
 		Memory:                    worker.TotalMemory,
 		GPU:                       worker.Gpu,
 		GPUCount:                  worker.TotalGpuCount,

@@ -191,3 +191,20 @@ func TestAgentStartupRetryWaitsForControllerRecovery(t *testing.T) {
 		require.Equal(t, "actual", state.BuildVersion)
 	}
 }
+
+func TestAgentSlotIgnoresCPUShareMultiplier(t *testing.T) {
+	agent := &model.AgentTokenState{MachineID: "machine", PoolName: "public-cpu", WorkspaceID: "admin", ManagedPoolInstanceID: "instance", Mode: string(types.PoolModeExternal), CPUCount: 16, CPUMillicores: 16000}
+	generation := ""
+	for _, multiplier := range []types.CPUShareMultiplier{0, 1, 1.5, 2} {
+		pool := types.WorkerPoolConfig{Mode: types.PoolModeExternal, ContainerRuntime: types.ContainerRuntimeRunc.String(), CPUShareMultiplier: multiplier}
+		worker := &types.Worker{Id: "worker", TotalCpu: multiplier.Schedulable(16000), TotalMemory: 32768}
+		slot := agentWorkerSlotState(types.AppConfig{}, agent, worker, pool, "token", "hash")
+		require.EqualValues(t, 16000, slot.CPU)
+		require.EqualValues(t, 16000, agentWorkerSlotToProto(slot, "token").Cpu)
+		require.NoError(t, setAgentWorkerSlotGeneration(slot))
+		if generation == "" {
+			generation = slot.Generation
+		}
+		require.Equal(t, generation, slot.Generation, "multiplier %v", multiplier)
+	}
+}
