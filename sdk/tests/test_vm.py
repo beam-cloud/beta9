@@ -854,7 +854,7 @@ def test_cli_access_url_rejects_invalid_port_or_ttl(cli_service, args):
 
 def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch):
     fake = MagicMock()
-    fake.info = {"name": "dev", "id": "resource", "status": "running"}
+    fake.info = {"name": "dev", "id": "resource", "status": "running", "spec": {}}
     factory = MagicMock(return_value=fake)
     monkeypatch.setattr(vm_cli, "VM", factory)
     result = CliRunner().invoke(
@@ -869,11 +869,16 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     assert options["desktop"] is None and options["ssh"] is None
     assert options["_service"] is cli_service
     fake.create.assert_called_once_with()
-    fake.wait.assert_called_once_with(services=True)
+    fake.wait.assert_not_called()
 
 
 def test_cli_forwards_gpu_with_typed_resources(cli_service):
-    cli_service.http.json.return_value = {"name": "dev", "id": "resource", "status": "starting"}
+    cli_service.http.json.return_value = {
+        "name": "dev",
+        "id": "resource",
+        "status": "starting",
+        "spec": {},
+    }
     with patch.object(vm_cli.VM, "wait") as wait:
         result = CliRunner().invoke(
             vm_cli.management,
@@ -893,7 +898,7 @@ def test_cli_forwards_gpu_with_typed_resources(cli_service):
             ],
         )
     assert result.exit_code == 0, result.output
-    assert [call.kwargs for call in wait.call_args_list] == [{}, {"services": True}]
+    assert [call.kwargs for call in wait.call_args_list] == [{}]
     assert cli_service.http.json.call_args.kwargs["json"]["spec"] == {
         "cpu": 2500,
         "memory": 4096,
@@ -926,7 +931,7 @@ def test_cli_rejects_invalid_gpu_before_creation(cli_service):
 )
 def test_cli_preserves_default_image_fast_path(cli_service, monkeypatch, args, base_image):
     vm = MagicMock()
-    vm.info = {"name": "fast", "id": "vm-id", "status": "running"}
+    vm.info = {"name": "fast", "id": "vm-id", "status": "running", "spec": {}}
     factory = MagicMock(return_value=vm)
     monkeypatch.setattr(vm_cli, "VM", factory)
     result = CliRunner().invoke(vm_cli.management, ["new", *args])
@@ -934,7 +939,7 @@ def test_cli_preserves_default_image_fast_path(cli_service, monkeypatch, args, b
     image = factory.call_args.kwargs["image"]
     assert (image.base_image if image else None) == base_image
     vm.create.assert_called_once_with()
-    vm.wait.assert_called_once_with(services=True)
+    vm.wait.assert_not_called()
 
 
 def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, monkeypatch):
@@ -945,6 +950,7 @@ def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, 
         "status": "running",
         "public_ipv6": "2600:1f18:1234:5678:100:abcd:ef01:2345",
         "container_id": "vm-long-internal-runtime",
+        "spec": {"desktop": True},
     }
     monkeypatch.setattr(vm_cli, "VM", lambda *args, **kwargs: vm)
     result = CliRunner().invoke(vm_cli.management, ["new", "--template", "base"])
@@ -971,8 +977,8 @@ def test_cli_creation_shows_progress_without_internal_startup_logs(cli_service, 
         ["fork", "snapshot", "copy"],
     ],
 )
-def test_cli_does_not_report_ready_when_services_fail(cli_service, monkeypatch, as_json, args):
-    vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running"})
+def test_cli_does_not_report_ready_when_kiosk_fails(cli_service, monkeypatch, as_json, args):
+    vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running", "spec": {"kiosk": {}}})
     for method in ("create", "start", "fork"):
         getattr(vm, method).return_value = vm
     vm._api.return_value = [{"id": "snapshot"}]
@@ -986,6 +992,43 @@ def test_cli_does_not_report_ready_when_services_fail(cli_service, monkeypatch, 
     assert "✓ VM ready" not in result.output
     assert "vm-id" not in result.output
     vm.wait.assert_called_once_with(services=True)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["new", "dev"],
+        ["start", "dev"],
+        ["start", "dev", "--cold"],
+        ["resume", "dev"],
+        ["fork", "dev", "copy"],
+        ["fork", "snapshot", "copy"],
+    ],
+)
+def test_cli_reports_ready_once_vm_accepts_commands(cli_service, monkeypatch, args):
+    spec = {"desktop": True, "ssh": True}
+    vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running", "spec": spec})
+    for method in ("create", "start", "fork"):
+        getattr(vm, method).return_value = vm
+    vm._api.return_value = [{"id": "snapshot"}]
+    factory = MagicMock(return_value=vm)
+    factory.get.return_value = vm
+    monkeypatch.setattr(vm_cli, "VM", factory)
+    result = CliRunner().invoke(vm_cli.management, args)
+    assert result.exit_code == 0, result.output
+    assert "✓ VM ready" in result.output
+    vm.wait.assert_not_called()
+
+
+def test_cli_new_shows_sync_progress(cli_service, monkeypatch, tmp_path):
+    vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running", "spec": {"ssh": True}})
+    monkeypatch.setattr(vm_cli, "VM", MagicMock(return_value=vm))
+    sync = MagicMock()
+    monkeypatch.setattr(vm_cli, "_sync", sync)
+    result = CliRunner().invoke(vm_cli.management, ["new", "dev", "--sync", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert result.output.index("✓ VM ready") < result.output.index("✓ Files synced")
+    assert sync.call_args.args[0] is vm
 
 
 @pytest.mark.parametrize("as_json", [False, True])
@@ -1266,7 +1309,9 @@ def test_cli_ip_is_copyable_and_reports_unallocated_addresses(cli_service, addre
 )
 @pytest.mark.parametrize("json_mode", ["command", "global", "env"])
 def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, args, json_mode):
-    vm = MagicMock(info={"id": "vm-12ab34cd56ef7890", "name": "dev", "status": "running"})
+    vm = MagicMock(
+        info={"id": "vm-12ab34cd56ef7890", "name": "dev", "status": "running", "spec": {}}
+    )
     for method in ("create", "start", "pause", "stop", "fork"):
         getattr(vm, method).return_value = vm
     vm._api.return_value = [{"id": "snapshot"}]
@@ -1284,10 +1329,7 @@ def test_long_operations_keep_json_free_of_progress(cli_service, monkeypatch, ar
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == vm.info
-    if args[0] in ("new", "start", "resume", "fork"):
-        vm.wait.assert_called_once_with(services=True)
-    else:
-        vm.wait.assert_not_called()
+    vm.wait.assert_not_called()
 
 
 def test_vm_new_help_has_one_aligned_description_column():
@@ -2108,7 +2150,7 @@ def test_terminal_and_desktop_open_the_direct_vm_not_a_dashboard(
 def test_new_vm_includes_desktop_and_preserves_prebuilt_settings(
     cli_service, monkeypatch, args, expected
 ):
-    vm = MagicMock(info={"name": "dev", "id": "vm-id"})
+    vm = MagicMock(info={"name": "dev", "id": "vm-id", "spec": {}})
     factory = MagicMock(return_value=vm)
     monkeypatch.setattr(vm_cli, "VM", factory)
     result = CliRunner().invoke(vm_cli.management, ["new", "dev", "--json", *args])
@@ -3259,7 +3301,7 @@ def test_kiosk_cli_preserves_argv_and_reports_bad_json(tmp_path, monkeypatch):
     client = MagicMock()
     client.__enter__.return_value = service
     monkeypatch.setattr("beta9.cli.extraclick.ServiceClient", lambda *_: client)
-    fake = MagicMock(info={"name": "app", "status": "starting"})
+    fake = MagicMock(info={"name": "app", "status": "starting", "spec": {"kiosk": {}}})
     factory = MagicMock(return_value=fake)
     monkeypatch.setattr(vm_cli, "VM", factory)
     path = tmp_path / "app.json"
