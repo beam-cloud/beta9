@@ -528,6 +528,11 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	// possible after revocation; no inactive credential authorizes a launch.
 	info := &auth.AuthInfo{Workspace: &workspace, Token: &types.Token{}}
 	ctx = auth.ContextWithAuthInfo(ctx, info)
+	runner, err := s.reconcileRunner(ctx, v)
+	if err != nil {
+		return err
+	}
+
 	if v.DesiredState != types.VMStateRunning {
 		if err := s.stopOrDelete(ctx, v); err != nil {
 			return err
@@ -600,7 +605,8 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 				}
 			}
 
-			if time.Since(v.UpdatedAt) >= time.Minute {
+			// Runner disks are discarded with their single job.
+			if !runner && time.Since(v.UpdatedAt) >= time.Minute {
 				if err := s.snapshotRoot(ctx, v); err != nil {
 					return err
 				}

@@ -279,3 +279,47 @@ type VMArtifactFilter struct {
 	Limit, Offset int
 	VMID          string
 }
+
+// GitHubRunnerInstallation binds a GitHub App installation to the workspace
+// billed for its runners, and to the Beam token that launches them.
+type GitHubRunnerInstallation struct {
+	ID          int64     `db:"id" json:"id"`
+	WorkspaceID uint      `db:"workspace_id" json:"-"`
+	TokenID     string    `db:"token_id" json:"-"`
+	Account     string    `db:"account" json:"account"`
+	AccountType string    `db:"account_type" json:"account_type"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+}
+
+// GitHubRunnerJob is a workflow job that asked for a Beam runner, decoded from
+// GitHub's workflow_job payload. VM is the latest runner started for it, but
+// GitHub runs the job on any idle runner with its label: RunnerName.
+type GitHubRunnerJob struct {
+	ID             int64      `db:"id" json:"id"`
+	InstallationID int64      `db:"installation_id" json:"-"`
+	WorkspaceID    uint       `db:"workspace_id" json:"-"`
+	Repository     string     `db:"repository" json:"repository"`
+	Workflow       string     `db:"workflow" json:"workflow_name"`
+	Name           string     `db:"name" json:"name"`
+	URL            string     `db:"url" json:"html_url"`
+	Label          string     `db:"label" json:"label"`
+	Status         string     `db:"status" json:"status"`
+	Conclusion     string     `db:"conclusion" json:"conclusion"`
+	RunnerName     string     `db:"runner_name" json:"runner_name"`
+	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
+	StartedAt      *time.Time `db:"started_at" json:"started_at"`
+	CompletedAt    *time.Time `db:"completed_at" json:"completed_at"`
+	VM             string     `db:"vm" json:"-"`
+	Attempts       int        `db:"attempts" json:"-"`
+	ProvisionAt    *time.Time `db:"provision_at" json:"-"`
+	Error          string     `db:"error" json:"error,omitempty"`
+}
+
+// GitHubRunner is where a runner VM is registered, and the status of the job
+// GitHub gave it, empty while it is idle.
+type GitHubRunner struct {
+	InstallationID int64  `db:"installation_id"`
+	Repository     string `db:"repository"`
+	Connected      bool   `db:"connected"`
+	JobStatus      string `db:"job_status"`
+}

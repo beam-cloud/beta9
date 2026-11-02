@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.7
+# Build from the repository root, then register it with `beam vm image build`.
+# The resulting content-addressed image ID is abstractions.vm.githubRunners.imageID.
+FROM ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+ARG RUNNER_VERSION=2.338.2
+ARG RUNNER_SHA256=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
+ARG TARGETARCH=amd64
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Reuse the VM image contract, including systemd, Docker, Node and Python.
+COPY sdk/src/beta9/abstractions/vm/assets/ /tmp/beam-vm-assets/
+COPY sdk/src/beta9/abstractions/vm/kiosk_config.py /tmp/beam-vm-assets/
+RUN test "$TARGETARCH" = amd64 \
+    && bash /tmp/beam-vm-assets/install false \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends build-essential jq unzip zip \
+    && useradd --create-home --shell /bin/bash --groups docker runner \
+    && printf 'runner ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/runner \
+    && chmod 0440 /etc/sudoers.d/runner \
+    && mkdir -p /home/runner/actions-runner \
+    && curl -fsSL --retry 3 "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" -o /tmp/runner.tgz \
+    && printf '%s  /tmp/runner.tgz\n' "$RUNNER_SHA256" | sha256sum -c - \
+    && tar -xzf /tmp/runner.tgz -C /home/runner/actions-runner \
+    && /home/runner/actions-runner/bin/installdependencies.sh \
+    && chown -R runner:runner /home/runner \
+    && rm -rf /tmp/beam-vm-assets /tmp/runner.tgz /var/lib/apt/lists/*
+
+COPY <<'EOF' /etc/systemd/system/beam-github-runner.service
+[Unit]
+Description=Beam single-job GitHub Actions runner
+Wants=network-online.target docker.service
+After=network-online.target docker.service beam-guest.service
+
+[Service]
+User=runner
+Environment=HOME=/home/runner
+WorkingDirectory=/home/runner/actions-runner
+ExecStart=/home/runner/actions-runner/run.sh --jitconfig ${BEAM_GITHUB_JIT_CONFIG}
+ExecStopPost=+/usr/bin/systemctl --no-block poweroff
+Restart=no
+RuntimeMaxSec=24h
+TimeoutStopSec=30
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+EOF
+RUN systemctl enable beam-github-runner.service

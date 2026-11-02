@@ -46,6 +46,7 @@ type Service struct {
 	config        types.VMConfig
 	publicNetwork *publicVMNetwork
 	webrtc        *vmWebRTC
+	runners       *githubRunners
 }
 
 type ServiceOpts struct {
@@ -89,6 +90,9 @@ func New(ctx context.Context, opts ServiceOpts) error {
 	}
 
 	registerVMRoutes(opts.RouteGroup, s)
+	if err := s.initGitHubRunners(opts.RouteGroup); err != nil {
+		return err
+	}
 	opts.Server.Any("/vm/:handle/:port", s.proxy)
 	opts.Server.Any("/vm/:handle/:port/*", s.proxy)
 	if s.config.Domain != "" {
