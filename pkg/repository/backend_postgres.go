@@ -484,7 +484,7 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
     SELECT ` + tokenColumns + `
     FROM token
     WHERE workspace_id = $1
-	AND token_type NOT IN ('worker', 'worker_private')
+	AND token_type NOT IN ('admin', 'worker', 'worker_private')
     ORDER BY created_at DESC;
     `
 

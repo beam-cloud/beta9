@@ -33,6 +33,19 @@ func TestSetWorkspaceTokensDisabledSkipsClusterTokens(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestListTokensSkipsClusterTokens(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`token_type NOT IN \('admin', 'worker', 'worker_private'\)`).
+		WithArgs(uint(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspace))
+
+	tokens, err := repo.ListTokens(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, tokens, 1)
+	require.Equal(t, "key-1", tokens[0].Key)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestGenerateDSNSSLMode(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		dsn := GenerateDSN(types.PostgresConfig{EnableTLS: false})
