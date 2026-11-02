@@ -94,6 +94,7 @@ func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
 	controller.config.ManagedCompute.Billing.PoolRoutes = []types.ManagedComputeBillingPoolRouteConfig{{AuthToken: "billing-route-token"}}
 	controller.config.ImageService.BuildRegistryCredentials.Credentials = map[string]string{"AWS_SECRET_ACCESS_KEY": "build-registry-secret"}
 	controller.config.ImageService.Registries.Docker.Password = "docker-password"
+	controller.config.ImageService.Registries.S3.AccessKey = "image-bucket-access-key"
 	controller.config.ImageService.Registries.S3.SecretKey = "image-bucket-secret"
 	controller.config.Cache.Server.Metadata.RedisPasswd = "cache-redis-password"
 	controller.config.Cache.Server.Metadata.ValkeyConfig.Password = "valkey-password"
@@ -116,18 +117,37 @@ func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
 		"postgres-password", "sk_encryption-key", "redis-password", "storage-access-key", "storage-secret-key",
 		"hetzner-token", "tailscale-key", "tailscale-agent-key", "credit-gate-token", "build-registry-secret",
 		"docker-password", "cache-redis-password", "valkey-password", "coordinator-token", "prometheus-agent-password",
-		"billing-token", "billing-route-token",
+		"billing-token",
 	} {
 		if strings.Contains(configJSON, secret) {
 			t.Errorf("worker config contains %q", secret)
 		}
 	}
-	for _, credential := range []string{"s2-key", "image-bucket-secret", "cache-client-token"} {
+	for _, credential := range []string{"s2-key", "image-bucket-access-key", "image-bucket-secret", "cache-client-token", "billing-route-token"} {
 		if !strings.Contains(configJSON, credential) {
 			t.Errorf("worker config lacks %q", credential)
 		}
 	}
 	if controller.config.Database.Postgres.Password != "postgres-password" {
+		t.Fatal("worker config changed the gateway config")
+	}
+}
+
+func TestLocalWorkerConfigKeepsBillingRouteTokens(t *testing.T) {
+	controller := &LocalKubernetesWorkerPoolController{}
+	controller.config.ManagedCompute.Billing.AuthToken = "billing-token"
+	controller.config.ManagedCompute.Billing.PoolRoutes = []types.ManagedComputeBillingPoolRouteConfig{
+		{PoolNamePrefix: "tama-", AuthToken: "route-token"},
+		{PoolNamePrefix: "inherits-"},
+	}
+
+	job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
+	billing := workerConfigFromEnvironment(t, job.Spec.Template.Spec.Containers[0].Env).ManagedCompute.Billing
+	if billing.AuthToken != "" || len(billing.PoolRoutes) != 2 ||
+		billing.PoolRoutes[0].AuthToken != "route-token" || billing.PoolRoutes[1].AuthToken != "billing-token" {
+		t.Fatalf("worker billing config = %+v", billing)
+	}
+	if controller.config.ManagedCompute.Billing.PoolRoutes[1].AuthToken != "" {
 		t.Fatal("worker config changed the gateway config")
 	}
 }

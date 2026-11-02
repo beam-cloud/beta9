@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -327,10 +328,18 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 	config.ImageService.BuildRegistryCredentials = types.BuildRegistryCredentialsConfig{}
 	config.ImageService.Registries.Docker = types.DockerImageRegistryConfig{}
 	config.GatewayService.CreditGate = types.CreditGateConfig{}
-	config.ManagedCompute.Billing = types.ManagedComputeBillingConfig{}
 	config.Providers = types.ProviderConfig{}
 	config.Tailscale = types.TailscaleConfig{}
 	config.Monitoring.Prometheus.AgentPassword = ""
+
+	// Workers report sandbox usage to the billing pool routes, so each route
+	// keeps the token it resolves to. Only the gateway uses the base token.
+	billing := &config.ManagedCompute.Billing
+	billing.PoolRoutes = slices.Clone(billing.PoolRoutes)
+	for i := range billing.PoolRoutes {
+		billing.PoolRoutes[i].AuthToken = billing.PoolRoutes[i].BillingConfig(*billing).AuthToken
+	}
+	billing.AuthToken = ""
 	return config
 }
 

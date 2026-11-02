@@ -170,6 +170,7 @@ func TestPrepareWorkerRequestCredentialsByPoolMode(t *testing.T) {
 	)
 	assert.Equal(t, []string{"SAFE=value"}, providerRequest.Env)
 	assert.Equal(t, []string{"SECRET"}, providerRequest.RuntimeSecretNames)
+	assert.True(t, providerRequest.RuntimeTokenRequired)
 
 	serverlessRequest := scheduler.prepareWorkerRequest(
 		&types.Worker{PoolName: "serverless-pool", PoolSelector: "serverless-pool", ControlPlaneManaged: true},
