@@ -493,15 +493,28 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
 	if err != nil {
 		return nil, err
 	}
-	for i := range tokens {
-		if tokens[i].TokenType == types.TokenTypeClusterAdmin {
-			tokens[i].Key = ""
-		} else if tokens[i].Key, err = r.openCredential(tokens[i].Key); err != nil {
-			return nil, err
-		}
+	if err := r.openTokenKeys(tokens); err != nil {
+		return nil, err
 	}
 
 	return tokens, nil
+}
+
+// openTokenKeys opens stored token keys in place. Cluster admin keys are never
+// returned.
+func (r *PostgresBackendRepository) openTokenKeys(tokens []types.Token) error {
+	for i := range tokens {
+		if tokens[i].TokenType == types.TokenTypeClusterAdmin {
+			tokens[i].Key = ""
+			continue
+		}
+		key, err := r.openCredential(tokens[i].Key)
+		if err != nil {
+			return err
+		}
+		tokens[i].Key = key
+	}
+	return nil
 }
 
 func (r *PostgresBackendRepository) GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error) {
@@ -563,19 +576,20 @@ func (r *PostgresBackendRepository) RevokeTokenByExternalId(ctx context.Context,
 }
 
 // SetWorkspaceTokensDisabled sets disabled_by_cluster_admin on every token in
-// the workspace except cluster worker tokens, and returns their keys.
+// the workspace except cluster admin and cluster worker tokens, and returns
+// their keys.
 func (r *PostgresBackendRepository) SetWorkspaceTokensDisabled(ctx context.Context, workspaceId uint, disabled bool) ([]string, error) {
-	query := `UPDATE token SET disabled_by_cluster_admin = $2 WHERE workspace_id = $1 AND token_type != $3 RETURNING key;`
-	var keys []string
-	if err := r.client.SelectContext(ctx, &keys, query, workspaceId, disabled, types.TokenTypeWorker); err != nil {
+	query := `UPDATE token SET disabled_by_cluster_admin = $2 WHERE workspace_id = $1 AND token_type NOT IN ($3, $4) RETURNING ` + tokenColumns + `;`
+	var tokens []types.Token
+	if err := r.client.SelectContext(ctx, &tokens, query, workspaceId, disabled, types.TokenTypeClusterAdmin, types.TokenTypeWorker); err != nil {
 		return nil, err
 	}
-	for i := range keys {
-		key, err := r.openCredential(keys[i])
-		if err != nil {
-			return nil, err
-		}
-		keys[i] = key
+	if err := r.openTokenKeys(tokens); err != nil {
+		return nil, err
+	}
+	keys := make([]string, len(tokens))
+	for i, token := range tokens {
+		keys[i] = token.Key
 	}
 	return keys, nil
 }

@@ -29,7 +29,7 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 			BucketName: "images", Region: "us-east-1", AccessKey: "test-key", SecretKey: "test-secret",
 		}}}},
 	}
-	ctx := cacheRepositoryWorkspaceAuthContext("workspace-a")
+	ctx := cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-a")
 	request := &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-a", StubId: "stub-id", ImageId: "image-id", ImageArchiveUploadId: "stub-id-1780000000"}
 	for _, data := range []bool{false, true} {
 		request.ImageArchiveUploadData = data
@@ -81,7 +81,7 @@ func TestGetCacheOriginCredentialsLimitsProviderWorkersToTheirStubs(t *testing.T
 		backendRepo:   &originCredentialsBackendRepo{workspace: &types.Workspace{Id: 7}},
 		containerRepo: &workerContainersRepo{workspaceID: originCredentialsAdminWorkspace, stubIDs: []string{"running-stub"}},
 	}
-	provider := cacheRepositoryWorkspaceAuthContext(originCredentialsAdminWorkspace)
+	provider := cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, originCredentialsAdminWorkspace)
 	for _, imageID := range []string{"", "image-id"} {
 		resp, err := service.GetCacheOriginCredentials(provider, &pb.GetCacheOriginCredentialsRequest{WorkspaceId: originCredentialsAdminWorkspace, StubId: "running-stub", ImageId: imageID})
 		require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestGetCacheOriginCredentialsLimitsProviderWorkersToTheirStubs(t *testing.T
 		require.Nil(t, resp.WorkspaceStorage)
 	}
 
-	private := cacheRepositoryWorkspaceAuthContext("workspace-id")
+	private := cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-id")
 	resp, err := service.GetCacheOriginCredentials(private, &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-id", StubId: "idle-stub", ImageId: "image-id"})
 	require.NoError(t, err)
 	require.True(t, resp.Ok, resp.ErrorMsg)
@@ -233,7 +233,7 @@ func (r *originCredentialsBackendRepo) GetImageCredentials(ctx context.Context, 
 
 func TestAuthorizeCacheRepositoryRequestWithWorkerToken(t *testing.T) {
 	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
-		ctx := cacheRepositoryAuthContext(tokenType)
+		ctx := cacheRepositoryAuthContext(tokenType, "worker-workspace")
 
 		if err := (&WorkerRepositoryService{}).authorizeCacheRepositoryRequest(ctx); err != nil {
 			t.Fatalf("authorizeCacheRepositoryRequest failed for %s: %v", tokenType, err)
@@ -253,8 +253,8 @@ func TestAuthorizeCacheRepositoryRequestWithCoordinatorToken(t *testing.T) {
 func TestAuthorizeCacheRepositoryRequestRejectsMissingOrNonWorkerToken(t *testing.T) {
 	for _, ctx := range []context.Context{
 		context.Background(),
-		cacheRepositoryAuthContext(types.TokenTypeWorkspace),
-		cacheRepositoryAuthContext(types.TokenTypeClusterAdmin),
+		cacheRepositoryAuthContext(types.TokenTypeWorkspace, "worker-workspace"),
+		cacheRepositoryAuthContext(types.TokenTypeClusterAdmin, "worker-workspace"),
 		auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{}),
 	} {
 		if err := (&WorkerRepositoryService{}).authorizeCacheRepositoryRequest(ctx); err == nil {
@@ -310,8 +310,8 @@ func TestCacheCoordinatorScopesWorkerLocalityByWorkspaceAndPool(t *testing.T) {
 		require.True(t, resp.Ok, resp.ErrorMsg)
 	}
 
-	ctxA := cacheRepositoryWorkspaceAuthContext("workspace-a")
-	ctxB := cacheRepositoryWorkspaceAuthContext("workspace-b")
+	ctxA := cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-a")
+	ctxB := cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-b")
 	registerCacheHost(ctxA, "host-a", "10.0.0.1:2050")
 	registerCacheHost(ctxB, "host-b", "10.0.0.2:2050")
 
@@ -390,7 +390,7 @@ func TestCacheCoordinatorClusterWorkersShareUnscopedLocalityWithDaemonSet(t *tes
 
 	// A private-pool worker in a customer workspace stays scoped and must not
 	// see the unscoped daemonset host.
-	privateResp, err := service.ListCacheHosts(cacheRepositoryWorkspaceAuthContext("workspace-a"), &pb.ListCacheHostsRequest{PoolName: "gpu-pool", Locality: "default"})
+	privateResp, err := service.ListCacheHosts(cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-a"), &pb.ListCacheHostsRequest{PoolName: "gpu-pool", Locality: "default"})
 	require.NoError(t, err)
 	require.True(t, privateResp.Ok, privateResp.ErrorMsg)
 	require.Empty(t, privateResp.Hosts)
@@ -408,7 +408,7 @@ func TestCacheMetadataScopesWorkerLocalityByWorkspace(t *testing.T) {
 		cacheMetadata: cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb),
 	}
 
-	resp, err := service.AddRecentCacheStub(cacheRepositoryWorkspaceAuthContext("workspace-a"), &pb.AddRecentCacheStubRequest{
+	resp, err := service.AddRecentCacheStub(cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-a"), &pb.AddRecentCacheStubRequest{
 		Locality:    "shared-pool",
 		WorkspaceId: "workspace-a",
 		StubId:      "stub-a",
@@ -417,7 +417,7 @@ func TestCacheMetadataScopesWorkerLocalityByWorkspace(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Ok, resp.ErrorMsg)
 
-	resp, err = service.AddRecentCacheStub(cacheRepositoryWorkspaceAuthContext("workspace-b"), &pb.AddRecentCacheStubRequest{
+	resp, err = service.AddRecentCacheStub(cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-b"), &pb.AddRecentCacheStubRequest{
 		Locality:    "shared-pool",
 		WorkspaceId: "workspace-b",
 		StubId:      "stub-b",
@@ -426,7 +426,7 @@ func TestCacheMetadataScopesWorkerLocalityByWorkspace(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Ok, resp.ErrorMsg)
 
-	listA, err := service.ListRecentCacheStubs(cacheRepositoryWorkspaceAuthContext("workspace-a"), &pb.ListRecentCacheStubsRequest{
+	listA, err := service.ListRecentCacheStubs(cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-a"), &pb.ListRecentCacheStubsRequest{
 		Locality:   "shared-pool",
 		TtlSeconds: 3600,
 		Limit:      10,
@@ -437,7 +437,7 @@ func TestCacheMetadataScopesWorkerLocalityByWorkspace(t *testing.T) {
 	require.Equal(t, "workspace-a", listA.Stubs[0].WorkspaceId)
 	require.Equal(t, "stub-a", listA.Stubs[0].StubId)
 
-	listB, err := service.ListRecentCacheStubs(cacheRepositoryWorkspaceAuthContext("workspace-b"), &pb.ListRecentCacheStubsRequest{
+	listB, err := service.ListRecentCacheStubs(cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-b"), &pb.ListRecentCacheStubsRequest{
 		Locality:   "shared-pool",
 		TtlSeconds: 3600,
 		Limit:      10,
@@ -460,8 +460,8 @@ func TestCacheMetadataScopesPrivateWorkerLocksAndMarkersByWorkspace(t *testing.T
 	service := &WorkerRepositoryService{
 		cacheMetadata: cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb),
 	}
-	ctxA := cacheRepositoryWorkspaceAuthContext("workspace-a")
-	ctxB := cacheRepositoryWorkspaceAuthContext("workspace-b")
+	ctxA := cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-a")
+	ctxB := cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-b")
 
 	lockA, err := service.AcquireCacheReconcileLock(ctxA, &pb.AcquireCacheReconcileLockRequest{
 		Locality:    "shared-pool",
@@ -539,7 +539,7 @@ func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T)
 	}
 
 	resp, err := service.PruneStaleCacheCheckpoints(
-		cacheRepositoryAuthContext(types.TokenTypeWorker),
+		cacheRepositoryAuthContext(types.TokenTypeWorker, "worker-workspace"),
 		&pb.PruneStaleCacheCheckpointsRequest{},
 	)
 
@@ -607,7 +607,7 @@ func TestPruneStaleCacheCheckpointsPrunesStaleSandboxAndEndpointCheckpoints(t *t
 	}
 
 	resp, err := service.PruneStaleCacheCheckpoints(
-		cacheRepositoryAuthContext(types.TokenTypeWorker),
+		cacheRepositoryAuthContext(types.TokenTypeWorker, "worker-workspace"),
 		&pb.PruneStaleCacheCheckpointsRequest{},
 	)
 
@@ -647,7 +647,7 @@ func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *tes
 	}
 
 	resp, err := service.PruneStaleCacheCheckpoints(
-		cacheRepositoryAuthContext(types.TokenTypeWorker),
+		cacheRepositoryAuthContext(types.TokenTypeWorker, "worker-workspace"),
 		&pb.PruneStaleCacheCheckpointsRequest{},
 	)
 
@@ -674,7 +674,7 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	}
 
 	resp, err := service.GetCacheOriginCredentials(
-		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
 			WorkspaceId: "workspace-id",
 			StubId:      "stub-id",
@@ -714,7 +714,7 @@ func TestGetCacheOriginCredentialsKeepsBuildRegistryFromPrivateWorkers(t *testin
 		return &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "image-id", Registry: registry}
 	}
 
-	resp, err := service.GetCacheOriginCredentials(cacheRepositoryAuthContext(types.TokenTypeWorker), request("build.example.com"))
+	resp, err := service.GetCacheOriginCredentials(cacheRepositoryAuthContext(types.TokenTypeWorker, "worker-workspace"), request("build.example.com"))
 	require.NoError(t, err)
 	require.Equal(t, "build-user:build-pass", resp.RegistryCredentials)
 	require.Equal(t, "build.example.com", resp.BuildRegistry)
@@ -744,7 +744,7 @@ func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSignin
 	}
 
 	resp, err := service.GetCacheOriginCredentials(
-		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
 			WorkspaceId: "workspace-id",
 			StubId:      "stub-id",
@@ -781,7 +781,7 @@ func TestGetCacheOriginCredentialsVendsImageArchiveURL(t *testing.T) {
 	}
 
 	resp, err := service.GetCacheOriginCredentials(
-		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
 			WorkspaceId: "workspace-id",
 			StubId:      "stub-id",
@@ -803,7 +803,7 @@ func TestGetCacheOriginCredentialsRejectsWrongWorkerWorkspace(t *testing.T) {
 	service := &WorkerRepositoryService{}
 
 	resp, err := service.GetCacheOriginCredentials(
-		cacheRepositoryWorkspaceAuthContext("workspace-a"),
+		cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-a"),
 		&pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-b"},
 	)
 
@@ -816,7 +816,7 @@ func TestGetCacheOriginCredentialsRejectsPrivateWorkerMissingStub(t *testing.T) 
 	service := &WorkerRepositoryService{}
 
 	resp, err := service.GetCacheOriginCredentials(
-		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
 			WorkspaceId: "workspace-id",
 			ImageId:     "image-id",
@@ -841,7 +841,7 @@ func TestGetCacheOriginCredentialsRejectsPrivateWorkerImageMismatch(t *testing.T
 	}
 
 	resp, err := service.GetCacheOriginCredentials(
-		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-id"),
 		&pb.GetCacheOriginCredentialsRequest{
 			WorkspaceId: "workspace-id",
 			StubId:      "stub-id",
@@ -858,25 +858,19 @@ func TestGetCacheOriginCredentialsRejectsPrivateWorkerImageMismatch(t *testing.T
 func TestGetCacheOriginCredentialsRejectsNilRequest(t *testing.T) {
 	service := &WorkerRepositoryService{}
 
-	resp, err := service.GetCacheOriginCredentials(cacheRepositoryAuthContext(types.TokenTypeWorker), nil)
+	resp, err := service.GetCacheOriginCredentials(cacheRepositoryAuthContext(types.TokenTypeWorker, "worker-workspace"), nil)
 
 	require.NoError(t, err)
 	require.False(t, resp.Ok)
 	require.Contains(t, resp.ErrorMsg, "request")
 }
 
-func cacheRepositoryAuthContext(tokenType string) context.Context {
-	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Workspace: &types.Workspace{ExternalId: "worker-workspace"},
-		Token:     &types.Token{TokenType: tokenType, WorkerID: "worker-1"},
-	})
-}
-
-// cacheRepositoryWorkspaceAuthContext simulates a private-pool worker token,
-// which carries the pool owner's workspace and is subject to workspace scoping.
-func cacheRepositoryWorkspaceAuthContext(workspaceID string) context.Context {
+// cacheRepositoryAuthContext simulates a worker-1 token of this type. A private
+// worker token carries the pool owner's workspace and is subject to workspace
+// scoping.
+func cacheRepositoryAuthContext(tokenType, workspaceID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
-		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker-1"},
+		Token:     &types.Token{TokenType: tokenType, WorkerID: "worker-1"},
 	})
 }

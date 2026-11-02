@@ -24,6 +24,7 @@ const (
 
 var (
 	errInactiveToken    = errors.New("token is inactive")
+	errWorkerToken      = errors.New("worker tokens can't call this API")
 	errWorkspaceStorage = errors.New("workspace storage is unavailable")
 )
 
@@ -43,6 +44,16 @@ func NewTokens(backendRepo repository.BackendRepository, workspaceRepo repositor
 
 // Authenticate returns the active token with this key and its workspace.
 func (t Tokens) Authenticate(ctx context.Context, key string) (*types.Token, *types.Workspace, error) {
+	return t.authenticate(ctx, key, true)
+}
+
+// AuthenticateUser is Authenticate for APIs that worker tokens can't call. It
+// rejects them before preparing their workspace.
+func (t Tokens) AuthenticateUser(ctx context.Context, key string) (*types.Token, *types.Workspace, error) {
+	return t.authenticate(ctx, key, false)
+}
+
+func (t Tokens) authenticate(ctx context.Context, key string, workers bool) (*types.Token, *types.Workspace, error) {
 	token, workspace, err := t.workspaceRepo.AuthorizeToken(key)
 	if err != nil {
 		if token, workspace, err = t.backendRepo.AuthorizeToken(ctx, key); err != nil {
@@ -52,6 +63,9 @@ func (t Tokens) Authenticate(ctx context.Context, key string) (*types.Token, *ty
 	}
 	if !token.Active || token.DisabledByClusterAdmin {
 		return nil, nil, errInactiveToken
+	}
+	if !workers && types.IsWorkerTokenType(token.TokenType) {
+		return nil, nil, errWorkerToken
 	}
 	if !workspace.StorageAvailable() {
 		if err := ensureWorkspaceStorage(ctx, workspace); err != nil {
@@ -89,7 +103,7 @@ func (t Tokens) Delete(ctx context.Context, caller *types.Token, workspaceID uin
 }
 
 // SetDisabledByClusterAdmin disables or re-enables every token in a workspace
-// except cluster worker tokens.
+// except cluster admin and cluster worker tokens.
 func (t Tokens) SetDisabledByClusterAdmin(ctx context.Context, workspaceID uint, disabled bool) error {
 	keys, err := t.backendRepo.SetWorkspaceTokensDisabled(ctx, workspaceID, disabled)
 	if err != nil {

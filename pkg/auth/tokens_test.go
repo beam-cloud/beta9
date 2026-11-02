@@ -114,6 +114,27 @@ func TestAuthenticateRejectsInactiveTokens(t *testing.T) {
 	}
 }
 
+func TestAuthenticateUserRejectsWorkerTokensBeforePreparingStorage(t *testing.T) {
+	prepared := false
+	previous := EnsureWorkspaceStorage
+	EnsureWorkspaceStorage = func(context.Context, *types.Workspace) error {
+		prepared = true
+		return nil
+	}
+	defer func() { EnsureWorkspaceStorage = previous }()
+
+	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
+		tokens := NewTokens(&tokensBackendRepo{token: &types.Token{Key: "key", Active: true, TokenType: tokenType}}, &tokensWorkspaceRepo{})
+		_, _, err := tokens.AuthenticateUser(context.Background(), "key")
+		require.ErrorIs(t, err, errWorkerToken, tokenType)
+		require.False(t, prepared, tokenType)
+
+		_, _, err = tokens.Authenticate(context.Background(), "key")
+		require.NoError(t, err, tokenType)
+		prepared = false
+	}
+}
+
 func TestChangeChecksTheTokenAndEvictsItAroundTheChange(t *testing.T) {
 	clusterAdmin := &types.Token{TokenType: types.TokenTypeClusterAdmin}
 	for _, tc := range []struct {

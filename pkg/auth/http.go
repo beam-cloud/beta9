@@ -44,11 +44,11 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				return next(&HttpAuthContext{c, authInfo})
 			}
 
-			token, workspace, err := tokens.Authenticate(c.Request().Context(), tokenKey)
+			token, workspace, err := tokens.AuthenticateUser(c.Request().Context(), tokenKey)
 			if errors.Is(err, errWorkspaceStorage) {
 				return echo.NewHTTPError(http.StatusInternalServerError)
 			}
-			if err != nil || types.IsWorkerTokenType(token.TokenType) {
+			if err != nil {
 				return echo.NewHTTPError(http.StatusUnauthorized)
 			}
 			authInfo := &AuthInfo{

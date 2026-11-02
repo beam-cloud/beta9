@@ -16,13 +16,16 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-type tokenTypeBackendRepo struct {
-	repository.BackendRepository
-	created bool
+// oneWorkspaceBackendRepo is a backend with a single workspace.
+type oneWorkspaceBackendRepo struct{ repository.BackendRepository }
+
+func (oneWorkspaceBackendRepo) GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error) {
+	return types.Workspace{Id: 1, ExternalId: "workspace"}, nil
 }
 
-func (r *tokenTypeBackendRepo) GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error) {
-	return types.Workspace{Id: 1, ExternalId: "workspace"}, nil
+type tokenTypeBackendRepo struct {
+	oneWorkspaceBackendRepo
+	created bool
 }
 
 func (r *tokenTypeBackendRepo) CreateToken(context.Context, uint, string, bool) (types.Token, error) {
@@ -53,12 +56,8 @@ func TestWorkspaceTokenEndpointCannotMintClusterAdminToken(t *testing.T) {
 }
 
 type clusterAdminTokenBackendRepo struct {
-	repository.BackendRepository
+	oneWorkspaceBackendRepo
 	disabled *bool
-}
-
-func (r *clusterAdminTokenBackendRepo) GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error) {
-	return types.Workspace{Id: 1, ExternalId: "workspace"}, nil
 }
 
 func (r *clusterAdminTokenBackendRepo) SetWorkspaceTokensDisabled(_ context.Context, _ uint, disabled bool) ([]string, error) {
@@ -108,14 +107,10 @@ func TestClusterAdminUpdateAllWorkspaceTokensRevokesAuthorizationCache(t *testin
 }
 
 type changeTokenBackendRepo struct {
-	repository.BackendRepository
+	oneWorkspaceBackendRepo
 	token   *types.Token
 	err     error
 	deleted bool
-}
-
-func (r *changeTokenBackendRepo) GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error) {
-	return types.Workspace{Id: 1, ExternalId: "workspace"}, nil
 }
 
 func (r *changeTokenBackendRepo) GetTokenByExternalId(context.Context, uint, string) (*types.Token, error) {
@@ -133,14 +128,15 @@ func TestDeleteWorkspaceTokenReportsWhyItCannot(t *testing.T) {
 		token   *types.Token
 		err     error
 		status  int
+		message string
 		deleted bool
 	}{
-		{"workspace token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkspace}, nil, http.StatusOK, true},
-		{"primary token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkspacePrimary}, nil, http.StatusBadRequest, false},
-		{"worker token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkerPrivate}, nil, http.StatusBadRequest, false},
-		{"cluster admin token", &types.Token{Key: "key", TokenType: types.TokenTypeClusterAdmin}, nil, http.StatusBadRequest, false},
-		{"missing token", nil, fmt.Errorf("token not found: %w", sql.ErrNoRows), http.StatusBadRequest, false},
-		{"database outage", nil, errors.New("connection refused"), http.StatusInternalServerError, false},
+		{"workspace token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkspace}, nil, http.StatusOK, "", true},
+		{"primary token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkspacePrimary}, nil, http.StatusBadRequest, auth.ErrPrimaryToken.Error(), false},
+		{"worker token", &types.Token{Key: "key", TokenType: types.TokenTypeWorkerPrivate}, nil, http.StatusBadRequest, auth.ErrProtectedToken.Error(), false},
+		{"cluster admin token", &types.Token{Key: "key", TokenType: types.TokenTypeClusterAdmin}, nil, http.StatusBadRequest, auth.ErrProtectedToken.Error(), false},
+		{"missing token", nil, fmt.Errorf("token not found: %w", sql.ErrNoRows), http.StatusBadRequest, auth.ErrTokenNotFound.Error(), false},
+		{"database outage", nil, errors.New("connection refused"), http.StatusInternalServerError, "Failed to delete token", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			backendRepo := &changeTokenBackendRepo{token: tc.token, err: tc.err}
@@ -154,13 +150,15 @@ func TestDeleteWorkspaceTokenReportsWhyItCannot(t *testing.T) {
 			authCtx := &auth.HttpAuthContext{Context: ctx, AuthInfo: &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorkspace}}}
 
 			err := group.DeleteWorkspaceToken(authCtx)
-			status := recorder.Code
+			status, message := recorder.Code, ""
 			var httpErr *echo.HTTPError
 			if errors.As(err, &httpErr) {
 				status = httpErr.Code
+				body, _ := httpErr.Message.(map[string]interface{})
+				message, _ = body["message"].(string)
 			}
-			if status != tc.status || backendRepo.deleted != tc.deleted {
-				t.Fatalf("status=%d deleted=%t, want %d %t (err=%v)", status, backendRepo.deleted, tc.status, tc.deleted, err)
+			if status != tc.status || message != tc.message || backendRepo.deleted != tc.deleted {
+				t.Fatalf("status=%d message=%q deleted=%t, want %d %q %t (err=%v)", status, message, backendRepo.deleted, tc.status, tc.message, tc.deleted, err)
 			}
 			if tc.deleted && strings.Join(workspaceRepo.revoked, ",") != "key,key" {
 				t.Fatalf("evicted %v, want the key before and after the delete", workspaceRepo.revoked)
