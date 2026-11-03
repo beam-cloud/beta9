@@ -333,8 +333,11 @@ const tokenLength = 64
 
 const tokenColumns = `id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id, worker_id`
 
-// Token types that workspace token management never lists, toggles or deletes.
+// Token types that workspace token management never toggles or deletes.
 const protectedTokenTypes = `('` + types.TokenTypeClusterAdmin + `', '` + types.TokenTypeWorker + `', '` + types.TokenTypeWorkerPrivate + `')`
+
+// Token types that workspace token management lists.
+const workspaceTokenTypes = `('` + types.TokenTypeWorkspacePrimary + `', '` + types.TokenTypeWorkspace + `', '` + types.TokenTypeWorkspaceRestricted + `', '` + types.TokenTypePlatformDeployer + `')`
 
 func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error) {
 	return r.createToken(ctx, workspaceId, tokenType, reusable, "")
@@ -458,16 +461,17 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	return &token, token.Workspace, nil
 }
 
-func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
+func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint, tokenType string) (*types.Token, error) {
 	query := `
 	SELECT ` + tokenColumns + `
 	FROM token
-	WHERE workspace_id = $1 AND active = TRUE AND token_type = 'workspace_primary' AND disabled_by_cluster_admin = FALSE
+	WHERE workspace_id = $1 AND active = TRUE AND token_type = $2 AND disabled_by_cluster_admin = FALSE
+	ORDER BY created_at DESC
 	LIMIT 1;
 	`
 
 	var token types.Token
-	err := r.client.GetContext(ctx, &token, query, workspaceId)
+	err := r.client.GetContext(ctx, &token, query, workspaceId, tokenType)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +487,7 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
     SELECT ` + tokenColumns + `
     FROM token
     WHERE workspace_id = $1
-	AND token_type NOT IN ` + protectedTokenTypes + `
+	AND token_type IN ` + workspaceTokenTypes + `
     ORDER BY created_at DESC;
     `
 

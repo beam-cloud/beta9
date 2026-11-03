@@ -288,7 +288,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		return nil, err
 	}
 
-	token, err := es.backendRepo.RetrieveActiveToken(es.ctx, stub.Workspace.Id)
+	token, err := es.backendRepo.RetrieveActiveToken(es.ctx, stub.Workspace.Id, types.TokenTypeWorkspacePrimary)
 	if err != nil {
 		return nil, err
 	}

@@ -33,9 +33,9 @@ func TestSetWorkspaceTokensDisabledSkipsClusterTokens(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestListTokensSkipsClusterTokens(t *testing.T) {
+func TestListTokensListsOnlyWorkspaceTokens(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
-	mock.ExpectQuery(`token_type NOT IN \('admin', 'worker', 'worker_private'\)`).
+	mock.ExpectQuery(`token_type IN \('workspace_primary', 'workspace', 'workspace_restricted', 'platform_deployer'\)`).
 		WithArgs(uint(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspace))
 

@@ -3,6 +3,7 @@ package repository_services
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"testing"
@@ -52,8 +53,13 @@ func (r *workerRuntimeCredentialsBackendRepo) GetSecretsByNameDecrypted(ctx cont
 	return r.secrets, nil
 }
 
-func (r *workerRuntimeCredentialsBackendRepo) ListTokens(ctx context.Context, workspaceID uint) ([]types.Token, error) {
-	return r.tokens, nil
+func (r *workerRuntimeCredentialsBackendRepo) RetrieveActiveToken(ctx context.Context, workspaceID uint, tokenType string) (*types.Token, error) {
+	for _, token := range r.tokens {
+		if token.Active && !token.DisabledByClusterAdmin && token.TokenType == tokenType {
+			return &token, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) CreateToken(ctx context.Context, workspaceID uint, tokenType string, reusable bool) (types.Token, error) {

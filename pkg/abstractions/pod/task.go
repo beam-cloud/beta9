@@ -125,7 +125,7 @@ func (t *PodTask) Retry(ctx context.Context) error {
 		return err
 	}
 
-	token, err := t.ps.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id)
+	token, err := t.ps.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id, types.TokenTypeWorkspacePrimary)
 	if err != nil {
 		return err
 	}

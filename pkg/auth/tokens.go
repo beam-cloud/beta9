@@ -24,6 +24,7 @@ const (
 
 var (
 	errInactiveToken    = errors.New("token is inactive")
+	errRetiredToken     = errors.New("token type is retired")
 	errWorkerToken      = errors.New("worker tokens can't call this API")
 	errWorkspaceStorage = errors.New("workspace storage is unavailable")
 )
@@ -63,6 +64,9 @@ func (t Tokens) authenticate(ctx context.Context, key string, workers bool) (*ty
 	}
 	if !token.Active || token.DisabledByClusterAdmin {
 		return nil, nil, errInactiveToken
+	}
+	if !types.IsTokenType(token.TokenType) {
+		return nil, nil, errRetiredToken
 	}
 	if !workers && types.IsWorkerTokenType(token.TokenType) {
 		return nil, nil, errWorkerToken

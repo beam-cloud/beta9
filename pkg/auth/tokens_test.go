@@ -91,7 +91,7 @@ func (r *tokensWorkspaceRepo) RevokeToken(key string) error {
 }
 
 func TestAuthenticateCachesTheBackendAuthorization(t *testing.T) {
-	backendRepo := &tokensBackendRepo{token: &types.Token{Key: "key", Active: true}}
+	backendRepo := &tokensBackendRepo{token: &types.Token{Key: "key", Active: true, TokenType: types.TokenTypeWorkspace}}
 	workspaceRepo := &tokensWorkspaceRepo{}
 	tokens := NewTokens(backendRepo, workspaceRepo)
 
@@ -111,6 +111,21 @@ func TestAuthenticateRejectsInactiveTokens(t *testing.T) {
 		tokens := NewTokens(&tokensBackendRepo{token: token}, &tokensWorkspaceRepo{})
 		_, _, err := tokens.Authenticate(context.Background(), "key")
 		require.ErrorIs(t, err, errInactiveToken)
+	}
+}
+
+func TestAuthenticateRejectsRetiredTokenTypes(t *testing.T) {
+	for _, tokenType := range []string{"machine", ""} {
+		token := &types.Token{Key: "key", Active: true, TokenType: tokenType}
+		for name, tokens := range map[string]Tokens{
+			"database": NewTokens(&tokensBackendRepo{token: token}, &tokensWorkspaceRepo{}),
+			"cache":    NewTokens(&tokensBackendRepo{}, &tokensWorkspaceRepo{cached: token}),
+		} {
+			_, _, err := tokens.Authenticate(context.Background(), "key")
+			require.ErrorIs(t, err, errRetiredToken, name)
+			_, _, err = tokens.AuthenticateUser(context.Background(), "key")
+			require.ErrorIs(t, err, errRetiredToken, name)
+		}
 	}
 }
 
