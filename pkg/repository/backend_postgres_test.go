@@ -46,6 +46,18 @@ func TestListTokensListsOnlyWorkspaceTokens(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestRetrieveActiveTokenReturnsTheNewestTokenOfItsType(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`token_type = \$2 AND disabled_by_cluster_admin = FALSE ORDER BY created_at DESC, id DESC LIMIT 1`).
+		WithArgs(uint(1), types.TokenTypeWorkspaceRestricted).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspaceRestricted))
+
+	token, err := repo.RetrieveActiveToken(context.Background(), 1, types.TokenTypeWorkspaceRestricted)
+	require.NoError(t, err)
+	require.Equal(t, "key-1", token.Key)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestGenerateDSNSSLMode(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		dsn := GenerateDSN(types.PostgresConfig{EnableTLS: false})
