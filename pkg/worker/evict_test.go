@@ -361,3 +361,31 @@ func TestSpotUsesThirtySecondGraceWithoutChangingOtherVMs(t *testing.T) {
 	request.Stub.Config = `{}`
 	require.Equal(t, 300*time.Second, w.containerTerminationGrace(request))
 }
+
+func TestSpotReturnsProtectedHeadroomWithoutRetiringWorker(t *testing.T) {
+	worker, rt := evictionWorkerForTest(false)
+	worker.persistent = true
+	worker.poolHeadroom.Store(true)
+	victim := addRunningInstance(worker, rt, "spot-headroom")
+	victim.Request.UseVM = true
+	victim.Request.WorkspaceId = "workspace"
+	victim.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
+	victim.Request.Stub.Config = `{"cpu_tier":"spot"}`
+	stopped := make(chan *pb.PreemptVMRequest, 1)
+	worker.backendRepoClient = &spotStopClient{preempt: func(ctx context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+		worker.containerInstances.Delete(r.ContainerId)
+		stopped <- r
+		return &pb.PreemptVMResponse{}, nil
+	}}
+	now := time.Now()
+	worker.reclaimSpotCapacity(now, now)
+	select {
+	case request := <-stopped:
+		require.Equal(t, "spot-headroom", request.ContainerId)
+	case <-time.After(time.Second):
+		t.Fatal("protected headroom was left occupied by Spot")
+	}
+	require.Eventually(t, func() bool { return !worker.spotScaleIn.Load() }, time.Second, time.Millisecond)
+	require.False(t, worker.draining, "reserved workers remain available for protected work")
+	require.Empty(t, rt.signals, "headroom reclamation still requires the durable VM stop path")
+}

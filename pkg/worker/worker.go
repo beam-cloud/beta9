@@ -1285,7 +1285,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	}
 	now := time.Now()
 	s.maybeStartDraining(now)
-	s.reclaimSpotForScaleIn(lastContainerRequest, now)
+	s.reclaimSpotCapacity(lastContainerRequest, now)
 	if !s.shouldExit(lastContainerRequest, now) {
 		return false
 	}

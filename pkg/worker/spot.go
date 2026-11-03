@@ -24,15 +24,16 @@ func (s *Worker) spotContainers() (ids []string, onlySpot bool) {
 	return
 }
 
-// Borrowed work must not pin an otherwise idle or retiring worker. Reuse the
+// Borrowed work must give protected headroom back and must not pin an idle or retiring worker. Reuse the
 // same eviction/durability barrier as replacement requests; never kill a VM
 // merely because its durable stop is slow or unavailable.
-func (s *Worker) reclaimSpotForScaleIn(last, now time.Time) {
+func (s *Worker) reclaimSpotCapacity(last, now time.Time) {
 	ids, onlySpot := s.spotContainers()
 	if len(ids) == 0 || s.spotScaleIn.Load() {
 		return
 	}
-	if !s.draining {
+	// Reclaim reserved headroom without retiring its worker.
+	if !s.draining && !(onlySpot && s.poolHeadroom.Load()) {
 		if s.persistent || !onlySpot || now.Sub(last).Seconds() <= defaultWorkerSpindownTimeS {
 			return
 		}
