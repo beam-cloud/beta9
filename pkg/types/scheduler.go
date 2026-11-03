@@ -99,9 +99,11 @@ type Worker struct {
 	// Keep internal fields after wire fields: go2proto numbers by struct position.
 	RolloutPreviousStatus      WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
 	CheckpointCompatibilityKey string       `json:"-" redis:"checkpoint_compatibility_key" go2proto:"ignore"`
+	CPUTierProtocol            uint32       `json:"-" redis:"cpu_tier_protocol" go2proto:"ignore"`
 }
 
 type WorkerKeepAlive struct {
+	CPUTierProtocol            uint32 `json:"cpu_tier_protocol"`
 	MachineId                  string `json:"machine_id"`
 	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key"`
 }

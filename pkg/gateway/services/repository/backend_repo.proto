@@ -5,6 +5,7 @@ import "google/protobuf/timestamp.proto";
 import "types.proto";
 
 service BackendRepositoryService {
+  rpc PreemptVM(PreemptVMRequest) returns (PreemptVMResponse);
   rpc GetCheckpointById(GetCheckpointByIdRequest)
       returns (GetCheckpointByIdResponse);
   rpc GetLatestCheckpointByStubId(GetLatestCheckpointByStubIdRequest)
@@ -173,3 +174,6 @@ message GetDiskSnapshotDownloadURLResponse {
   string url = 2;
   string error_msg = 3;
 }
+
+message PreemptVMRequest { string workspace_id = 1; string vm_id = 2; string container_id = 3; }
+message PreemptVMResponse {}

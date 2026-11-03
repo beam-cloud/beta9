@@ -564,6 +564,8 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 }
 
 type StubConfigV1 struct {
+	CPUTier            CPUTier            `json:"cpu_tier,omitempty"`
+	CPUPricing         *CPUPriceBinding   `json:"cpu_pricing,omitempty"`
 	Runtime            Runtime            `json:"runtime"`
 	Handler            string             `json:"handler"`
 	OnStart            string             `json:"on_start"`

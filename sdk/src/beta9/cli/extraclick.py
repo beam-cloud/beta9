@@ -96,6 +96,7 @@ class Beta9Command(click.Command):
         "dockerfile": "Build from a Dockerfile.",
         "entrypoint": "Command to run when no handler is provided.",
         "cpu": "CPU cores, such as 0.5 or 2.",
+        "cpu_tier": "CPU capacity: spot, shared or performance.",
         "memory": "Memory, such as 512Mi or 2Gi.",
         "gpu": "GPU type, such as T4.",
         "port": "Port to expose; repeat for multiple ports.",
@@ -531,6 +532,11 @@ def override_config_options(func: click.Command):
         type=click.STRING,
         multiple=True,
         help="Environment variables to pass to the container (e.g. --env VAR1=value --env VAR2=value).",
+    )(f)
+    f = click.option(
+        "--cpu-tier",
+        type=click.Choice(["spot", "shared", "performance"]),
+        help="CPU capacity tier; Spot may be interrupted.",
     )(f)
     f = click.option(
         "--pool",

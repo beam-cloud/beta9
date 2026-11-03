@@ -107,6 +107,7 @@ func ensureGVisorMaxMapCount(path string) (bool, error) {
 }
 
 type Worker struct {
+	spotScaleIn                atomic.Bool
 	checkpointCompatibilityKey string
 
 	workerId                string
@@ -1284,6 +1285,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	}
 	now := time.Now()
 	s.maybeStartDraining(now)
+	s.reclaimSpotForScaleIn(lastContainerRequest, now)
 	if !s.shouldExit(lastContainerRequest, now) {
 		return false
 	}
@@ -1724,9 +1726,11 @@ func (s *Worker) setWorkerKeepAlive() error {
 	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
 	defer cancel()
 
-	idle := s.containerInstances == nil || s.containerInstances.Len() == 0
+	_, onlySpot := s.spotContainers()
+	idle := s.containerInstances == nil || s.containerInstances.Len() == 0 || onlySpot
 	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:                   s.workerId,
+		CpuTierProtocol:            types.CPUTierProtocolVersion,
 		MachineId:                  s.machineID,
 		CheckpointCompatibilityKey: s.checkpointCompatibilityKey,
 		Idle:                       idle,

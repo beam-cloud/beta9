@@ -451,6 +451,11 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		return nil, HTTPInternalServerError("Failed to create app")
 	}
 
+	pricing := clients.NewContainerCostClient(g.config.Monitoring.Metering().ContainerCostHookConfig)
+	lookupPool := func(name string) (types.WorkerPoolConfig, bool) { p, ok := g.config.Worker.Pools[name]; return p, ok }
+	if err := pricing.BindStubCPU(ctx, workspace.ExternalId, stub.Type, stubConfig, lookupPool, true); err != nil {
+		return nil, HTTPBadRequest(err.Error())
+	}
 	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true, app.Id)
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to clone stub")
@@ -530,6 +535,7 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
+	previousConfig := stubConfig
 	updatedFields := make([]string, 0, len(updateReq.Fields))
 	for fieldPath, value := range updateReq.Fields {
 		if fieldPath == "" {
@@ -542,6 +548,9 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		updatedFields = append(updatedFields, fieldPath)
 	}
 
+	if err := stubConfig.ValidateCPURevision(previousConfig); err != nil {
+		return HTTPBadRequest(err.Error())
+	}
 	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)
 	if !valid {
 		return HTTPBadRequest(errorMsg)
@@ -614,6 +623,9 @@ func (g *StubGroup) ScaleStub(ctx echo.Context) error {
 
 // SetConfigField sets a dotted path such as runtime.cpu or autoscaler.max_containers.
 func SetConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
+	if fieldPath == "cpu_pricing" || strings.HasPrefix(fieldPath, "cpu_pricing.") {
+		return fmt.Errorf("CPU prices are resolved by the server")
+	}
 	fields := strings.Split(fieldPath, ".")
 	if len(fields) == 0 {
 		return fmt.Errorf("empty field path")

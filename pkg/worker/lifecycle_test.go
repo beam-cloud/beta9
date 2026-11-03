@@ -4305,6 +4305,7 @@ func (m *restoreFallbackRuntime) Run(ctx context.Context, containerID, bundlePat
 }
 
 type fakeBackendRepoClient struct {
+	pb.BackendRepositoryServiceClient
 	updateCalls         int
 	lastUpdate          *pb.UpdateCheckpointRequest
 	createCalls         int

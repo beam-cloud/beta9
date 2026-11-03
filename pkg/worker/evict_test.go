@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"google.golang.org/grpc"
 	"sync"
 	"syscall"
 	"testing"
@@ -307,4 +309,55 @@ func TestStatusHeartbeatEvictsMarkedVictimOnItsOwnDrainWindow(t *testing.T) {
 		return !exists
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.observed(containerID))
+}
+
+type spotStopClient struct {
+	pb.BackendRepositoryServiceClient
+	preempt func(context.Context, *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error)
+}
+
+func (s *spotStopClient) PreemptVM(ctx context.Context, r *pb.PreemptVMRequest, _ ...grpc.CallOption) (*pb.PreemptVMResponse, error) {
+	return s.preempt(ctx, r)
+}
+
+func TestSpotVMEvictionRequiresDurableRelease(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			worker, rt := evictionWorkerForTest(false)
+			victim := addRunningInstance(worker, rt, "spot-vm")
+			victim.Request.UseVM = true
+			victim.Request.WorkspaceId = "workspace"
+			victim.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
+			victim.Request.Stub.Config = `{"cpu_tier":"spot"}`
+			var stopped bool
+			worker.backendRepoClient = &spotStopClient{preempt: func(ctx context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+				require.Equal(t, "vm-id", r.VmId)
+				if fail {
+					return nil, fmt.Errorf("snapshot unavailable")
+				}
+				// Only a completed durable stop may release the worker's instance.
+				stopped = true
+				worker.containerInstances.Delete(r.ContainerId)
+				return &pb.PreemptVMResponse{}, nil
+			}}
+			err := worker.evictForRequest(context.Background(), &types.ContainerRequest{ContainerId: "replacement", EvictContainerIds: []string{"spot-vm"}})
+			if fail {
+				require.Error(t, err)
+				_, present := worker.containerInstances.Get("spot-vm")
+				require.True(t, present)
+			} else {
+				require.NoError(t, err)
+				require.True(t, stopped)
+			}
+			require.Empty(t, rt.signals)
+		})
+	}
+}
+
+func TestSpotUsesThirtySecondGraceWithoutChangingOtherVMs(t *testing.T) {
+	w, _ := evictionWorkerForTest(false)
+	request := &types.ContainerRequest{UseVM: true, Env: []string{"BEAM_VM_SYSTEMD=1"}, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
+	require.Equal(t, 30*time.Second, w.containerTerminationGrace(request))
+	request.Stub.Config = `{}`
+	require.Equal(t, 300*time.Second, w.containerTerminationGrace(request))
 }

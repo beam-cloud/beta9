@@ -63,7 +63,7 @@ from ..clients.pod import (
 )
 from ..config import ConfigContext
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
-from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
+from ..type import CpuTier, DurableDisk, GpuType, GpuTypeAlias, Pool
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
@@ -241,7 +241,7 @@ class Sandbox(Pod):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: Union[int, str] = 128,
+        memory: Optional[Union[int, str]] = None,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(python_version="python3.11"),
@@ -260,7 +260,9 @@ class Sandbox(Pod):
         ports: Optional[List[int]] = [],
         pool: Optional[Union[str, Pool]] = None,
         context: Optional[ConfigContext] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ):
+        self._default_vm_memory = memory is None
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
         if context is not None:
@@ -268,7 +270,7 @@ class Sandbox(Pod):
 
         super().__init__(
             cpu=cpu,
-            memory=memory,
+            memory=128 if memory is None else memory,
             gpu=gpu,
             gpu_count=gpu_count,
             image=image,
@@ -283,6 +285,7 @@ class Sandbox(Pod):
             allow_list=allow_list,
             docker_enabled=docker_enabled,
             use_vm=use_vm,
+            cpu_tier=cpu_tier,
             ports=ports,
             pool=pool,
             entrypoint=list(SANDBOX_IDLE_ENTRYPOINT),

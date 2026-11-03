@@ -65,6 +65,10 @@ func validate(spec *types.VMSpec) error {
 		spec.Memory = 8192
 	}
 
+	if err := spec.CPUTier.Validate(spec.CPU, spec.Memory, true, spec.GPU != ""); err != nil {
+		return err
+	}
+
 	var err error
 	spec.DiskSize, err = normalizeDiskSize(spec.DiskSize)
 	if err != nil {
@@ -252,6 +256,7 @@ func validateMetadata(metadata map[string]string) error {
 }
 
 type updateRequest struct {
+	CPUTier      *types.CPUTier     `json:"cpu_tier,omitempty"`
 	IdleTimeout  *int64             `json:"idle_timeout,omitempty"`
 	IdleAction   *string            `json:"idle_action,omitempty"`
 	AutoResume   *bool              `json:"auto_resume,omitempty"`
@@ -283,6 +288,20 @@ func (s *Service) update(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
+	if req.CPUTier != nil && *req.CPUTier != v.Spec.CPUTier {
+		if v.Status != types.VMStateStopped || v.DesiredState != types.VMStateStopped {
+			return echo.NewHTTPError(http.StatusConflict, "stop the VM before changing CPU tier")
+		}
+		oldStub, oldTier, oldPool := v.StubID, v.Spec.CPUTier, v.Spec.Pool
+		if err := s.changeCPUTier(&v.Spec, *req.CPUTier); err != nil {
+			return apiError(err)
+		}
+		v.StubID, v.Spec.CPUTier = "", *req.CPUTier
+		if err := s.prepare(ctx, v); err != nil {
+			v.StubID, v.Spec.CPUTier, v.Spec.Pool = oldStub, oldTier, oldPool
+			return apiError(err)
+		}
+	}
 	oldSpec := v.Spec
 	if req.IdleTimeout != nil {
 		v.Spec.IdleTimeout = *req.IdleTimeout
@@ -431,7 +450,7 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 	}
 
 	defer unlock()
-	if v.DesiredState == types.VMStateDeleted || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
+	if v.StopReason == types.VMStopReasonPreempted || v.DesiredState == types.VMStateDeleted || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
 		return nil, false, echo.NewHTTPError(http.StatusConflict, "VM access changed while resuming")
 	}
 
@@ -537,4 +556,18 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 	}
 
 	return s.repo.SaveVM(ctx, v)
+}
+
+// A public pool injected by the old VM default is a placement default, not a
+// private/BYOC choice. Opting into a tier releases that legacy public selector.
+func (s *Service) changeCPUTier(spec *types.VMSpec, tier types.CPUTier) error {
+	if spec.Pool != "" {
+		pools, ok := s.gateway.(interface{ IsHostedCPUPool(string) bool })
+		if !ok || !pools.IsHostedCPUPool(spec.Pool) {
+			return fmt.Errorf("CPU tiers apply only to hosted CPU VMs")
+		}
+		spec.Pool = ""
+	}
+	spec.CPUTier = tier
+	return nil
 }

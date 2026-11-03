@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
 )
 
@@ -43,7 +45,29 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		if victimID == "" || victimID == request.ContainerId {
 			continue
 		}
-		if s.evictContainer(victimID, drain, request.ContainerId) {
+		instance, present := s.containerInstances.Get(victimID)
+		if present && instance != nil && instance.Request.CPUTier() == types.CPUTierSpot && instance.Request.IsPersistentVM() {
+			vmID := ""
+			for _, env := range instance.Request.Env {
+				if strings.HasPrefix(env, "BEAM_VM_ID=") {
+					vmID = strings.TrimPrefix(env, "BEAM_VM_ID=")
+				}
+			}
+			if s.backendRepoClient == nil {
+				return fmt.Errorf("durable VM preemption is unavailable")
+			}
+			_, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: instance.Request.WorkspaceId, VmId: vmID, ContainerId: victimID})
+			if err != nil {
+				return fmt.Errorf("request durable Spot VM stop: %w", err)
+			}
+			victims = append(victims, victimID)
+			continue
+		}
+		victimDrain := drain
+		if present && instance != nil && instance.Request.CPUTier() == types.CPUTierSpot {
+			victimDrain = 30 * time.Second
+		}
+		if s.evictContainer(victimID, victimDrain, request.ContainerId) {
 			victims = append(victims, victimID)
 		}
 	}
@@ -57,7 +81,11 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		Dur("drain", drain).
 		Msg("waiting for evicted containers before starting request")
 	waitStart := time.Now()
-	remaining := s.waitForContainersFinalized(ctx, victims, drain+evictionKillTimeout)
+	wait := drain + evictionKillTimeout
+	if request.CPUTier() != "" {
+		wait = 3 * time.Minute
+	}
+	remaining := s.waitForContainersFinalized(ctx, victims, wait)
 	metrics.RecordWorkerStartupPhase("evict_wait", time.Since(waitStart), request, map[string]string{
 		"victims":  fmt.Sprintf("%d", len(victims)),
 		"released": fmt.Sprintf("%t", len(remaining) == 0),

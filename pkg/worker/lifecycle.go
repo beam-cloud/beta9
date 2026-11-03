@@ -66,6 +66,9 @@ type containerResourceUpdater interface {
 }
 
 func (s *Worker) containerTerminationGrace(request *types.ContainerRequest) time.Duration {
+	if request != nil && request.CPUTier() == types.CPUTierSpot {
+		return 30 * time.Second
+	}
 	grace := time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second
 	if request.IsPersistentVM() {
 		// Standard systemd units default to 90 seconds to stop. Allow

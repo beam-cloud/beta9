@@ -73,6 +73,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	// limits, disk snapshot ownership and microvm-only pool selection.
 	req := &pb.GetOrCreateStubRequest{
 		ImageId:         v.Spec.ImageID,
+		CpuTier:         string(v.Spec.CPUTier),
 		Name:            types.StubTypeVM + "/" + v.ID,
 		AppName:         types.VMAppName,
 		StubType:        types.StubTypeVM,
@@ -124,6 +125,14 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		return fmt.Errorf("%s", resp.ErrMsg)
 	}
 
+	v.CPUPricing = nil
+	if resp.CpuPricing != "" {
+		var binding types.CPUPriceBinding
+		if err := json.Unmarshal([]byte(resp.CpuPricing), &binding); err != nil {
+			return err
+		}
+		v.Spec.CPUTier, v.CPUPricing = binding.Tier, &binding
+	}
 	v.StubID = resp.StubId
 	// start persists the stub and runtime identities together before enqueue.
 	return nil

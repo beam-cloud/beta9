@@ -74,7 +74,7 @@ func durableDisksReadOnly(disks []*pb.DurableDisk) bool {
 }
 
 func ConfigureUnavailablePrivatePoolFallback(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, stubConfig *types.StubConfigV1) error {
-	if stubConfig == nil {
+	if stubConfig == nil || stubConfig.CPUTier != "" {
 		return nil
 	}
 	poolName := stubConfig.PoolSelector()

@@ -475,7 +475,7 @@ func usageTicker(interval time.Duration) (<-chan time.Time, func()) {
 }
 
 func (wm *WorkerUsageMetrics) getContainerCostQuote(request *types.ContainerRequest) clients.ContainerCostQuote {
-	if wm.containerCostClient == nil && wm.quoteProvider == nil {
+	if wm.containerCostClient == nil && wm.quoteProvider == nil && request.CPUTier() == "" {
 		return clients.ContainerCostQuote{}
 	}
 	ctx := wm.ctx

@@ -70,6 +70,8 @@ func apiError(err error) error {
 // values in management responses or template listings.
 func (s *Service) response(v *types.VM) types.VM {
 	copy := *v
+	eligible := v.Spec.GPU == "" && (v.Spec.Pool == "" || s.hostedCPUPool(v.Spec.Pool))
+	copy.CPUTierEligible = &eligible
 	copy.Spec = redactedSpec(v.Spec)
 	copy.CreationDigest = ""
 	copy.TrafficAccessToken = ""
@@ -423,7 +425,32 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
-	if spec.Pool == "" && spec.GPU == "" {
+	if opts.Spec.CPUTier != "" && opts.Spec.Pool == "" && spec.Pool != "" {
+		if err := s.changeCPUTier(&spec, spec.CPUTier); err != nil {
+			return nil, err
+		}
+	}
+	if spec.GPU == "" && spec.CPUTier == "" && (spec.Pool == "" || s.hostedCPUPool(spec.Pool)) {
+		if catalog, ok := s.gateway.(interface {
+			GetCPUTierCatalog(context.Context, *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error)
+		}); ok {
+			result, err := catalog.GetCPUTierCatalog(ctx, &pb.GetCPUTierCatalogRequest{})
+			if err != nil {
+				return nil, err
+			}
+			var defaults struct {
+				Tier types.CPUTier `json:"default_cpu_tier"`
+			}
+			if err := json.Unmarshal([]byte(result.Catalog), &defaults); err != nil {
+				return nil, err
+			}
+			spec.CPUTier = defaults.Tier
+			if defaults.Tier != "" {
+				spec.Pool = ""
+			}
+		}
+	}
+	if spec.Pool == "" && spec.GPU == "" && spec.CPUTier == "" {
 		spec.Pool = s.config.DefaultPool
 	}
 
@@ -517,14 +544,15 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 }
 
 type actionRequest struct {
-	Name         string `json:"name,omitempty"`
-	NoSnapshot   bool   `json:"no_snapshot,omitempty"`
-	Port         uint32 `json:"port,omitempty"`
-	SSHPublicKey string `json:"ssh_public_key,omitempty"`
-	Description  string `json:"description,omitempty"`
-	Protected    *bool  `json:"protected,omitempty"`
-	TTL          int64  `json:"ttl,omitempty"`
-	Cold         bool   `json:"cold,omitempty"`
+	CPUTier      *types.CPUTier `json:"cpu_tier,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	NoSnapshot   bool           `json:"no_snapshot,omitempty"`
+	Port         uint32         `json:"port,omitempty"`
+	SSHPublicKey string         `json:"ssh_public_key,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	Protected    *bool          `json:"protected,omitempty"`
+	TTL          int64          `json:"ttl,omitempty"`
+	Cold         bool           `json:"cold,omitempty"`
 }
 
 func (s *Service) action(c echo.Context) error {
@@ -605,6 +633,10 @@ func (s *Service) action(c echo.Context) error {
 
 	switch c.Param("action") {
 	case "start", "resume":
+		if v.StopReason == types.VMStopReasonPreempted && v.Status != types.VMStateStopped {
+			return echo.NewHTTPError(http.StatusConflict, "wait for Spot preemption to finish before restarting")
+		}
+		v.StopReason = ""
 		if req.Cold {
 			// Finish terminal checkpoint finalization before abandoning RAM.
 			if v.DesiredState == types.VMStatePaused && v.MemoryCheckpointID != "" {
@@ -628,6 +660,9 @@ func (s *Service) action(c echo.Context) error {
 		ctx = operationCtx
 		err = s.pause(ctx, v)
 	case "wake":
+		if v.StopReason == types.VMStopReasonPreempted {
+			return echo.NewHTTPError(http.StatusConflict, "Spot VM was preempted; call start() to restart")
+		}
 		if !v.Spec.AutoResume && v.DesiredState != types.VMStateRunning {
 			return echo.NewHTTPError(http.StatusConflict, "VM is stopped; call start() or enable auto_resume")
 		}
@@ -663,6 +698,11 @@ func (s *Service) action(c echo.Context) error {
 		}
 
 		spec := v.Spec
+		if req.CPUTier != nil {
+			if err := s.changeCPUTier(&spec, *req.CPUTier); err != nil {
+				return apiError(err)
+			}
+		}
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey
 		child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: req.Name, Spec: spec})
@@ -791,4 +831,9 @@ func (s *Service) removeArtifact(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (s *Service) hostedCPUPool(name string) bool {
+	pools, ok := s.gateway.(interface{ IsHostedCPUPool(string) bool })
+	return ok && pools.IsHostedCPUPool(name)
 }

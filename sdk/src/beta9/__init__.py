@@ -2,6 +2,7 @@ from importlib import import_module
 
 
 _EXPORTS = {
+    "CpuTier": (".type", "CpuTier"),
     "VM": (".abstractions.vm", "VM"),
     "Kiosk": (".abstractions.vm", "Kiosk"),
     "MCPServer": (".abstractions.vm", "MCPServer"),

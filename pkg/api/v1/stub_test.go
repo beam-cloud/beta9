@@ -1442,3 +1442,11 @@ func TestSetConfigField(t *testing.T) {
 		})
 	}
 }
+
+func TestCPUPricesCannotBePatched(t *testing.T) {
+	for _, field := range []string{"cpu_pricing", "cpu_pricing.cpu_price_id", "cpu_pricing.cpu_cents_per_hour", "cpu_pricing.version"} {
+		if err := SetConfigField(&types.StubConfigV1{}, field, "forged"); err == nil {
+			t.Fatalf("accepted client pricing field %s", field)
+		}
+	}
+}

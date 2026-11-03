@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	thundersvc "github.com/beam-cloud/beta9/pkg/gateway/services/thunder"
@@ -16,6 +17,7 @@ import (
 )
 
 type GatewayService struct {
+	cpuPricing       *clients.ContainerCostClient
 	ctx              context.Context
 	appConfig        types.AppConfig
 	backendRepo      repository.BackendRepository
@@ -101,6 +103,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 
 	return &GatewayService{
 		ctx:              opts.Ctx,
+		cpuPricing:       clients.NewContainerCostClient(opts.Config.Monitoring.Metering().ContainerCostHookConfig),
 		appConfig:        opts.Config,
 		backendRepo:      opts.BackendRepo,
 		workspaceRepo:    opts.WorkspaceRepo,

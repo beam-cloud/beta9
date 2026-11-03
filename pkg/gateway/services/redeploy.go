@@ -54,6 +54,9 @@ func (gws *GatewayService) RedeployStub(ctx context.Context, authInfo *auth.Auth
 	if err := mutate(config); err != nil {
 		return nil, err
 	}
+	if err := gws.cpuPricing.BindStubCPU(ctx, authInfo.Workspace.ExternalId, stub.Type, config, gws.scheduler.PoolConfig, true); err != nil {
+		return nil, err
+	}
 	refreshManagedPostgres(config)
 	if valid, msg := types.ValidateCpuAndMemory(config.Runtime.Cpu, config.Runtime.Memory, gws.appConfig.GatewayService.StubLimits); !valid {
 		return nil, errors.New(msg)

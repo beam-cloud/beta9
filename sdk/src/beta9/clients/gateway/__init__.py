@@ -510,6 +510,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     use_vm: bool = betterproto.bool_field(50)
     """Run the sandbox in its own virtual machine (microvm pools only)."""
 
+    cpu_tier: str = betterproto.string_field(51)
+
 
 @dataclass(eq=False, repr=False)
 class GetOrCreateStubResponse(betterproto.Message):
@@ -533,6 +535,8 @@ class GetOrCreateStubResponse(betterproto.Message):
      the GPU request. Set instead of capacity_status "none" so clients can
      re-issue stub creation targeting this pool.
     """
+
+    cpu_pricing: str = betterproto.string_field(8)
 
 
 @dataclass(eq=False, repr=False)
@@ -1783,6 +1787,16 @@ class GetAgentPoolVirtualizationResponse(betterproto.Message):
     gpu_virtualized: bool = betterproto.bool_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class GetCpuTierCatalogRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class GetCpuTierCatalogResponse(betterproto.Message):
+    catalog: str = betterproto.string_field(1)
+
+
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -1922,6 +1936,15 @@ class GatewayServiceStub(SyncServiceStub):
             ListTasksRequest,
             ListTasksResponse,
         )(list_tasks_request)
+
+    def get_cpu_tier_catalog(
+        self, get_cpu_tier_catalog_request: "GetCpuTierCatalogRequest"
+    ) -> "GetCpuTierCatalogResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetCPUTierCatalog",
+            GetCpuTierCatalogRequest,
+            GetCpuTierCatalogResponse,
+        )(get_cpu_tier_catalog_request)
 
     def get_or_create_stub(
         self, get_or_create_stub_request: "GetOrCreateStubRequest"

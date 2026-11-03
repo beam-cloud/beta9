@@ -159,6 +159,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	in.Env = expandedEnv
 
 	stubConfig := types.StubConfigV1{
+		CPUTier: types.CPUTier(in.CpuTier),
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
 			Gpus:     gpus,
@@ -201,6 +202,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Disks:              in.Disks,
 		ManagedEndpoint:    managedEndpoint,
 	}
+	if err := gws.cpuPricing.BindStubCPU(ctx, authInfo.Workspace.ExternalId, types.StubType(in.StubType), &stubConfig, gws.scheduler.PoolConfig, !resourcePolicy.privatePoolTargeted); err != nil {
+		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	binding := stubConfig.CPUPricing
 	stubConfig.PreparationCacheKey = preparedStubCacheKey(ctx)
 
 	// A persistent root is shorthand for a qcow machine-root disk: the
@@ -362,6 +367,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	gws.cachePreparedStub(ctx, authInfo.Workspace.ExternalId, stub.ExternalId)
+	bindingJSON := ""
+	if binding != nil {
+		data, _ := json.Marshal(binding)
+		bindingJSON = string(data)
+	}
 
 	return &pb.GetOrCreateStubResponse{
 		Ok:                 err == nil,
@@ -370,6 +380,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		CapacityStatus:     capacity.status,
 		UnsupportedGpus:    capacity.unsupportedGpus,
 		MatchedPrivatePool: capacity.matchedPrivatePool,
+		CpuPricing:         bindingJSON,
 	}, nil
 }
 

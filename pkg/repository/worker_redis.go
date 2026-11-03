@@ -956,6 +956,7 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 		worker.MachineId = machineID
 	}
 	pipe := r.rdb.TxPipeline()
+	pipe.HSet(ctx, stateKey, "cpu_tier_protocol", keepAlive.CPUTierProtocol)
 	if worker.MachineId != oldMachineID {
 		pipe.HSet(ctx, stateKey, "machine_id", worker.MachineId)
 	}

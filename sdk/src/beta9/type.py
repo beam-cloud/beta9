@@ -3,6 +3,9 @@ from enum import Enum
 from typing import Dict, List, Literal, Optional, Type, Union
 
 
+CpuTier = Literal["spot", "shared", "performance"]
+
+
 class LifeCycleMethod(str, Enum):
     OnStart = "on_start"
 

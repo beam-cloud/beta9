@@ -35,6 +35,7 @@ const (
 	GatewayService_EndTask_FullMethodName                         = "/gateway.GatewayService/EndTask"
 	GatewayService_StopTasks_FullMethodName                       = "/gateway.GatewayService/StopTasks"
 	GatewayService_ListTasks_FullMethodName                       = "/gateway.GatewayService/ListTasks"
+	GatewayService_GetCPUTierCatalog_FullMethodName               = "/gateway.GatewayService/GetCPUTierCatalog"
 	GatewayService_GetOrCreateStub_FullMethodName                 = "/gateway.GatewayService/GetOrCreateStub"
 	GatewayService_DeployStub_FullMethodName                      = "/gateway.GatewayService/DeployStub"
 	GatewayService_GetURL_FullMethodName                          = "/gateway.GatewayService/GetURL"
@@ -113,6 +114,7 @@ type GatewayServiceClient interface {
 	EndTask(ctx context.Context, in *EndTaskRequest, opts ...grpc.CallOption) (*EndTaskResponse, error)
 	StopTasks(ctx context.Context, in *StopTasksRequest, opts ...grpc.CallOption) (*StopTasksResponse, error)
 	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
+	GetCPUTierCatalog(ctx context.Context, in *GetCPUTierCatalogRequest, opts ...grpc.CallOption) (*GetCPUTierCatalogResponse, error)
 	// Stubs
 	GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error)
 	DeployStub(ctx context.Context, in *DeployStubRequest, opts ...grpc.CallOption) (*DeployStubResponse, error)
@@ -370,6 +372,15 @@ func (c *gatewayServiceClient) StopTasks(ctx context.Context, in *StopTasksReque
 func (c *gatewayServiceClient) ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error) {
 	out := new(ListTasksResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListTasks_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetCPUTierCatalog(ctx context.Context, in *GetCPUTierCatalogRequest, opts ...grpc.CallOption) (*GetCPUTierCatalogResponse, error) {
+	out := new(GetCPUTierCatalogResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetCPUTierCatalog_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -916,6 +927,7 @@ type GatewayServiceServer interface {
 	EndTask(context.Context, *EndTaskRequest) (*EndTaskResponse, error)
 	StopTasks(context.Context, *StopTasksRequest) (*StopTasksResponse, error)
 	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
+	GetCPUTierCatalog(context.Context, *GetCPUTierCatalogRequest) (*GetCPUTierCatalogResponse, error)
 	// Stubs
 	GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error)
 	DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error)
@@ -1032,6 +1044,9 @@ func (UnimplementedGatewayServiceServer) StopTasks(context.Context, *StopTasksRe
 }
 func (UnimplementedGatewayServiceServer) ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListTasks not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetCPUTierCatalog(context.Context, *GetCPUTierCatalogRequest) (*GetCPUTierCatalogResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCPUTierCatalog not implemented")
 }
 func (UnimplementedGatewayServiceServer) GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetOrCreateStub not implemented")
@@ -1502,6 +1517,24 @@ func _GatewayService_ListTasks_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GatewayServiceServer).ListTasks(ctx, req.(*ListTasksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetCPUTierCatalog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCPUTierCatalogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetCPUTierCatalog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetCPUTierCatalog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetCPUTierCatalog(ctx, req.(*GetCPUTierCatalogRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2515,6 +2548,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListTasks",
 			Handler:    _GatewayService_ListTasks_Handler,
+		},
+		{
+			MethodName: "GetCPUTierCatalog",
+			Handler:    _GatewayService_GetCPUTierCatalog_Handler,
 		},
 		{
 			MethodName: "GetOrCreateStub",

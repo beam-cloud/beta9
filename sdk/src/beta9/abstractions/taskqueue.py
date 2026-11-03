@@ -25,6 +25,7 @@ from ..clients.taskqueue import (
 from ..env import is_local
 from ..schema import Schema
 from ..type import (
+    CpuTier,
     Autoscaler,
     DurableDisk,
     GpuType,
@@ -157,9 +158,11 @@ class TaskQueue(RunnerAbstraction):
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
+            cpu_tier=cpu_tier,
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,

@@ -226,6 +226,7 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                     "description": "CPU cores, e.g. 0.5 or 2; must be positive.",
                 },
                 "memory": {**STRING, "description": "e.g. 2Gi"},
+                "cpu_tier": {"type": "string", "enum": ["spot", "shared", "performance"]},
                 "gpu": {
                     **STRING,
                     "description": "Discover current choices with capabilities; omit for CPU.",
@@ -351,6 +352,7 @@ DEPLOY_FLAGS = {
     "target": "--target",
     "image": "--image",
     "cpu": "--cpu",
+    "cpu_tier": "--cpu-tier",
     "memory": "--memory",
     "gpu": "--gpu",
     "gpu_count": "--gpu-count",

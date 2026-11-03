@@ -14,6 +14,7 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	computemodel "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -886,6 +887,10 @@ func (s *GenericPodService) cloneStub(ctx context.Context, workspace *types.Work
 		return nil, err
 	}
 
+	pricing := clients.NewContainerCostClient(s.config.Monitoring.Metering().ContainerCostHookConfig)
+	if err := pricing.BindStubCPU(ctx, workspace.ExternalId, stub.Type, stubConfig, s.scheduler.PoolConfig, true); err != nil {
+		return nil, err
+	}
 	newStub, err := s.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, stub.ObjectId, workspace.Id, true, app.Id)
 	if err != nil {
 		return nil, err

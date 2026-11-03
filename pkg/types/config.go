@@ -674,6 +674,7 @@ func (m PoolMode) AgentHosted() bool {
 }
 
 type WorkerPoolConfig struct {
+	CPUClass                  CPUTier                           `key:"cpuClass" json:"cpu_class,omitempty"`
 	GPUType                   string                            `key:"gpuType" json:"gpu_type"`
 	Runtime                   string                            `key:"runtime" json:"runtime"`                                 // Kubernetes RuntimeClass for pod (e.g., "nvidia")
 	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc", "gvisor", or "microvm"

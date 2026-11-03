@@ -80,6 +80,10 @@ service GatewayService {
     };
   }
 
+  rpc GetCPUTierCatalog(GetCPUTierCatalogRequest) returns (GetCPUTierCatalogResponse) {
+    option (google.api.http) = { get: "/cpu-tiers" };
+  }
+
   // Stubs
   rpc GetOrCreateStub(GetOrCreateStubRequest)
       returns (GetOrCreateStubResponse) {
@@ -768,6 +772,7 @@ message GetOrCreateStubRequest {
   string managed_endpoint = 49;
   // Run the sandbox in its own virtual machine (microvm pools only).
   bool use_vm = 50;
+  string cpu_tier = 51;
 }
 
 message GetOrCreateStubResponse {
@@ -785,6 +790,7 @@ message GetOrCreateStubResponse {
   // the GPU request. Set instead of capacity_status "none" so clients can
   // re-issue stub creation targeting this pool.
   string matched_private_pool = 7;
+  string cpu_pricing = 8;
 }
 
 message DeployStubRequest {
@@ -1802,3 +1808,6 @@ message GetAgentPoolVirtualizationResponse {
   string err_msg = 2;
   bool gpu_virtualized = 3;
 }
+
+message GetCPUTierCatalogRequest {}
+message GetCPUTierCatalogResponse { string catalog = 1; }

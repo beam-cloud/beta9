@@ -8,6 +8,8 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+const VMStopReasonPreempted = "preempted"
+
 // VM lifecycle states are persisted and exposed by the management API.
 const (
 	VMStateRunning  = "running"
@@ -53,6 +55,7 @@ func WorkerShutdownGraceSeconds(stopGrace int64) int64 {
 
 // VMSpec describes a persistent microVM. GPU requests assign one device.
 type VMSpec struct {
+	CPUTier          CPUTier           `json:"cpu_tier,omitempty"`
 	ImageID          string            `json:"image_id"`
 	CPU              int64             `json:"cpu"`    // millicores
 	Memory           int64             `json:"memory"` // MiB
@@ -205,6 +208,9 @@ func (s VMSpec) RuntimePorts() []uint32 {
 }
 
 type VM struct {
+	CPUTierEligible     *bool             `json:"cpu_tier_eligible,omitempty"`
+	CPUPricing          *CPUPriceBinding  `json:"cpu_pricing,omitempty"`
+	StopReason          string            `json:"stop_reason,omitempty"`
 	ID                  string            `json:"id"`
 	WorkspaceID         uint              `json:"-"`
 	WorkspaceExternalID string            `json:"-"`
