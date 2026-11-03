@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,59 @@ func TestVerifyImageBuildRejectsAnotherWorkspacesSnapshot(t *testing.T) {
 	imageID := types.SnapshotImageID("workspace-a-stub", time.Unix(1700000000, 0))
 	_, err := service.VerifyImageBuild(ctx, &pb.VerifyImageBuildRequest{ImageId: &imageID})
 	require.ErrorContains(t, err, "not found")
+}
+
+func TestVerifyImageBuildRefusesBaseImagesTheWorkspaceCannotUse(t *testing.T) {
+	const registry = "registry.example.com"
+	service := &ContainerImageService{
+		config: types.AppConfig{ImageService: types.ImageServiceConfig{
+			BuildRegistry:       registry,
+			BuildRepositoryName: "users",
+			Runner:              types.RunnerConfig{BaseImageRegistry: registry, BaseImageName: "runner", Tags: map[string]string{"python3.12": "py312"}},
+		}},
+		backendRepo: snapshotOwnerRepository{},
+	}
+	workspace := func(id string) context.Context {
+		return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: id}})
+	}
+	snapshot := registry + "/users:" + types.SnapshotImageID("workspace-a-stub", time.Unix(1700000000, 0))
+	digest := "@sha256:" + strings.Repeat("1", 64)
+
+	for name, tc := range map[string]struct {
+		workspace, baseImage, dockerfile string
+		refused                          bool
+	}{
+		"another workspace's snapshot": {workspace: "workspace-b", baseImage: snapshot, refused: true},
+		"another repository":           {workspace: "workspace-b", baseImage: registry + "/internal:latest", refused: true},
+		"a digest":                     {workspace: "workspace-b", baseImage: registry + "/users" + digest, refused: true},
+		"a tag pinned to a digest":     {workspace: "workspace-b", baseImage: registry + "/users:0123456789abcdef" + digest, refused: true},
+		"a later Dockerfile stage":     {workspace: "workspace-b", dockerfile: "FROM python:3.12 AS build\nFROM " + snapshot + "\n", refused: true},
+		"CRLF line endings":            {workspace: "workspace-b", dockerfile: "FROM " + snapshot + "\r\nRUN true\r\n", refused: true},
+		"its own snapshot":             {workspace: "workspace-a", baseImage: snapshot},
+		"a built image":                {workspace: "workspace-b", baseImage: registry + "/users:0123456789abcdef"},
+		"the runner image":             {workspace: "workspace-b", baseImage: registry + "/runner:py312"},
+		"another registry":             {workspace: "workspace-b", baseImage: "docker.io/library/python:3.12" + digest},
+		"an earlier stage":             {workspace: "workspace-b", dockerfile: "FROM python:3.12 AS base\nFROM base\n"},
+	} {
+		opts := &BuildOpts{Dockerfile: tc.dockerfile}
+		if tc.baseImage != "" {
+			require.NoError(t, opts.setBaseImage(tc.baseImage), name)
+		}
+		err := service.authorizeBaseImages(workspace(tc.workspace), opts)
+		if tc.refused {
+			require.ErrorContains(t, err, "not found", name)
+		} else {
+			require.NoError(t, err, name)
+		}
+	}
+
+	for _, in := range []*pb.VerifyImageBuildRequest{
+		{PythonVersion: "python3.12", ExistingImageUri: snapshot},
+		{PythonVersion: "python3.12", Dockerfile: "FROM " + snapshot + "\n"},
+	} {
+		_, err := service.VerifyImageBuild(workspace("workspace-b"), in)
+		require.ErrorContains(t, err, "not found")
+	}
 }
 
 func scopeTestOpts() (generic, dockerfile, git *BuildOpts) {
