@@ -63,6 +63,7 @@ func mockBackendWithValidToken() MockDetails {
 		ExternalId:  "test",
 		Key:         "test",
 		Active:      true,
+		TokenType:   types.TokenTypeWorkspace,
 		Reusable:    true,
 		WorkspaceId: &workspaceForTest.Id,
 		Workspace:   &workspaceForTest,

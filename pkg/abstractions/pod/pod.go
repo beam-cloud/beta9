@@ -327,7 +327,7 @@ func (ps *GenericPodService) createPodInstance(stubId string, options ...func(*p
 		return nil, err
 	}
 
-	token, err := ps.backendRepo.RetrieveActiveToken(ps.ctx, stub.Workspace.Id)
+	token, err := ps.backendRepo.RetrieveActiveToken(ps.ctx, stub.Workspace.Id, types.TokenTypeWorkspacePrimary)
 	if err != nil {
 		return nil, err
 	}

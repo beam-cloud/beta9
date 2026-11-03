@@ -662,7 +662,7 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 		return nil, err
 	}
 
-	token, err := tq.backendRepo.RetrieveActiveToken(tq.ctx, stub.Workspace.Id)
+	token, err := tq.backendRepo.RetrieveActiveToken(tq.ctx, stub.Workspace.Id, types.TokenTypeWorkspacePrimary)
 	if err != nil {
 		return nil, err
 	}

@@ -244,6 +244,17 @@ func IsWorkerTokenType(tokenType string) bool {
 	return tokenType == TokenTypeWorker || tokenType == TokenTypeWorkerPrivate
 }
 
+// IsTokenType reports whether the gateway issues tokens of this type. Tokens
+// of retired types stay in the database but don't authenticate.
+func IsTokenType(tokenType string) bool {
+	switch tokenType {
+	case TokenTypeClusterAdmin, TokenTypeWorkspacePrimary, TokenTypeWorkspace, TokenTypePlatformDeployer,
+		TokenTypeWorker, TokenTypeWorkerPrivate, TokenTypeWorkspaceRestricted:
+		return true
+	}
+	return false
+}
+
 type Token struct {
 	Id                     uint       `db:"id" json:"id" serializer:"id,source:external_id"`
 	ExternalId             string     `db:"external_id" json:"external_id" serializer:"external_id"`

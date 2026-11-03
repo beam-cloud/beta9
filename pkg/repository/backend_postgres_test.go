@@ -33,9 +33,9 @@ func TestSetWorkspaceTokensDisabledSkipsClusterTokens(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestListTokensSkipsClusterTokens(t *testing.T) {
+func TestListTokensListsOnlyWorkspaceTokens(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
-	mock.ExpectQuery(`token_type NOT IN \('admin', 'worker', 'worker_private'\)`).
+	mock.ExpectQuery(`token_type IN \('workspace_primary', 'workspace', 'workspace_restricted', 'platform_deployer'\)`).
 		WithArgs(uint(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspace))
 
@@ -43,6 +43,18 @@ func TestListTokensSkipsClusterTokens(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tokens, 1)
 	require.Equal(t, "key-1", tokens[0].Key)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRetrieveActiveTokenReturnsTheNewestTokenOfItsType(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`token_type = \$2 AND disabled_by_cluster_admin = FALSE ORDER BY created_at DESC, id DESC LIMIT 1`).
+		WithArgs(uint(1), types.TokenTypeWorkspaceRestricted).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspaceRestricted))
+
+	token, err := repo.RetrieveActiveToken(context.Background(), 1, types.TokenTypeWorkspaceRestricted)
+	require.NoError(t, err)
+	require.Equal(t, "key-1", token.Key)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
