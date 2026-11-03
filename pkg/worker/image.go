@@ -1406,7 +1406,10 @@ func (c *ImageClient) useGatewayRegistry(meta *clipCommon.ClipArchiveMetadata, o
 	if strings.Trim(host, "/") != c.config.ImageService.EffectiveBuildRegistry() {
 		return
 	}
-	ociInfo.RegistryURL = c.config.GatewayService.HTTP.GetExternalURL()
+	// RegistryURL: 123456789012.dkr.ecr.us-east-1.amazonaws.com -> app.beam.cloud
+	// (bare host, not https://app.beam.cloud: gateway credentials are keyed by host).
+	gateway := c.config.GatewayService.HTTP.GetExternalURL()
+	ociInfo.RegistryURL = strings.TrimPrefix(strings.TrimPrefix(gateway, "https://"), "http://")
 	if _, isValue := meta.StorageInfo.(clipCommon.OCIStorageInfo); isValue {
 		meta.StorageInfo = *ociInfo
 	}

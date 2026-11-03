@@ -2666,18 +2666,26 @@ func TestGetAgentPoolVirtualizationReportsGPUVirtualized(t *testing.T) {
 	}
 }
 
-func TestAgentPoolGPUVirtualizedRequiresWorkerConfig(t *testing.T) {
+func TestAgentPoolGPUVirtualizedWithoutWorkerConfig(t *testing.T) {
 	service := &Service{computeRepo: &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {{Name: "pool-1"}},
 		},
 	}}
 
-	_, err := service.agentPoolGPUVirtualized(context.Background(), &model.AgentTokenState{
+	virtualized, err := service.agentPoolGPUVirtualized(context.Background(), &model.AgentTokenState{
 		WorkspaceID: "workspace-1",
 		PoolName:    "pool-1",
 	})
-	if err == nil || err.Error() != "agent pool worker config is unavailable" {
+	if err != nil || virtualized {
+		t.Fatalf("agentPoolGPUVirtualized() = %v, %v, want a workspace pool to be unvirtualized", virtualized, err)
+	}
+
+	_, err = service.agentPoolGPUVirtualized(context.Background(), &model.AgentTokenState{
+		WorkspaceID: "workspace-1",
+		PoolName:    "missing",
+	})
+	if err == nil || err.Error() != "agent pool is unavailable" {
 		t.Fatalf("agentPoolGPUVirtualized() error = %v", err)
 	}
 }

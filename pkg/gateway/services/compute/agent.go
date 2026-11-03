@@ -1279,10 +1279,12 @@ func (s *Service) agentPoolGPUVirtualized(ctx context.Context, agentState *model
 	if err != nil {
 		return false, err
 	}
-	if poolState == nil || poolState.WorkerConfig == nil {
-		return false, errors.New("agent pool worker config is unavailable")
+	if poolState == nil {
+		return false, errors.New("agent pool is unavailable")
 	}
-	return poolState.WorkerConfig.GPUVirtualized, nil
+	// Only managed pools have a worker config. Workspace pools, reserved
+	// machines included, are never GPU virtualized.
+	return poolState.WorkerConfig != nil && poolState.WorkerConfig.GPUVirtualized, nil
 }
 
 func (s *Service) validateAgentTransportConfig(transport string) error {
