@@ -1406,7 +1406,10 @@ func (c *ImageClient) useGatewayRegistry(meta *clipCommon.ClipArchiveMetadata, o
 	if strings.Trim(host, "/") != c.config.ImageService.EffectiveBuildRegistry() {
 		return
 	}
-	ociInfo.RegistryURL = c.config.GatewayService.HTTP.GetExternalURL()
+	// A bare host, like the archive's own: CLIP builds image references from it
+	// and credential providers look it up by exact match.
+	gateway := c.config.GatewayService.HTTP.GetExternalURL()
+	ociInfo.RegistryURL = strings.TrimPrefix(strings.TrimPrefix(gateway, "https://"), "http://")
 	if _, isValue := meta.StorageInfo.(clipCommon.OCIStorageInfo); isValue {
 		meta.StorageInfo = *ociInfo
 	}
