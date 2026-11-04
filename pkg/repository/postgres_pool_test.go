@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -10,10 +11,7 @@ import (
 )
 
 func TestWarmPostgresConnectionsHoldsDistinctConnectionsAndReleases(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-	db.SetMaxOpenConns(8)
+	db, _ := newPoolTestDB(t, 8)
 	require.NoError(t, warmPostgresConnections(context.Background(), db, 8))
 	require.Equal(t, 8, db.Stats().OpenConnections)
 	require.Equal(t, 8, db.Stats().Idle)
@@ -22,9 +20,7 @@ func TestWarmPostgresConnectionsHoldsDistinctConnectionsAndReleases(t *testing.T
 
 func TestWarmPostgresConnectionsCapsOpenAndUnboundedPools(t *testing.T) {
 	for _, maximum := range []int{0, 3} {
-		db, mock, err := sqlmock.New()
-		require.NoError(t, err)
-		db.SetMaxOpenConns(maximum)
+		db, mock := newPoolTestDB(t, maximum)
 		require.NoError(t, warmPostgresConnections(context.Background(), db, 10000))
 		want := 128
 		if maximum > 0 {
@@ -40,10 +36,7 @@ func TestWarmPostgresConnectionsCapsOpenAndUnboundedPools(t *testing.T) {
 }
 
 func TestWarmPostgresConnectionsCancellationReleasesPartialPool(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-	db.SetMaxOpenConns(2)
+	db, _ := newPoolTestDB(t, 2)
 	existing, err := db.Conn(context.Background())
 	require.NoError(t, err)
 	defer existing.Close()
@@ -55,13 +48,20 @@ func TestWarmPostgresConnectionsCancellationReleasesPartialPool(t *testing.T) {
 }
 
 func TestWarmPostgresConnectionsDisabledDoesNotAcquire(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	db, _ := newPoolTestDB(t, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, requested := range []int{0, -1} {
 		require.NoError(t, warmPostgresConnections(ctx, db, requested))
 	}
 	require.Zero(t, db.Stats().InUse)
+}
+
+func newPoolTestDB(t *testing.T, maxOpen int) (*sql.DB, sqlmock.Sqlmock) {
+	t.Helper()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	db.SetMaxOpenConns(maxOpen)
+	t.Cleanup(func() { _ = db.Close() })
+	return db, mock
 }

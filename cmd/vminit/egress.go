@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 func installEgressCA() error {
@@ -195,11 +194,9 @@ func runEgressTrustHooks(root, certificatePath string) error {
 		command.Env = append(os.Environ(), "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 		command.Stdin = strings.NewReader("+" + certificatePath + "\n")
 		command.Stdout, command.Stderr = os.Stdout, os.Stderr
-		started := time.Now()
 		if err := command.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "egress CA hook %s: %v\n", hook.Name(), err)
 		}
-		logf("boot trust hook: name=%s duration_us=%d", hook.Name(), time.Since(started).Microseconds())
 	}
 	return nil
 }

@@ -292,7 +292,7 @@ func TestPublicVMConnectionsShareActivityUntilLastClose(t *testing.T) {
 }
 
 func TestPublicVMAddressRetriesOnlyAddressConflicts(t *testing.T) {
-	for _, failure := range []error{&pq.Error{Code: "23505", Constraint: "persistent_vm_public_ipv6"}, &pq.Error{Code: "23505", Constraint: "persistent_vm_name"}, errors.New("database unavailable")} {
+	for _, failure := range publicAddressRetryFailures() {
 		s, v, _, _, _ := fixture()
 		s.publicNetwork, _ = parsePublicVMNetwork(publicNetworkConfig())
 		store := &networkVMStore{vmStore: s.repo.(*vmStore), saveError: failure}
@@ -340,7 +340,7 @@ func TestFreshVMAddressIsCommittedWithInitialRecord(t *testing.T) {
 }
 
 func TestFreshVMAddressRetriesOnlyAddressConflicts(t *testing.T) {
-	for _, failure := range []error{&pq.Error{Code: "23505", Constraint: "persistent_vm_public_ipv6"}, &pq.Error{Code: "23505", Constraint: "persistent_vm_name"}, errors.New("database unavailable")} {
+	for _, failure := range publicAddressRetryFailures() {
 		s, v, _, _, _ := fixture()
 		s.publicNetwork, _ = parsePublicVMNetwork(publicNetworkConfig())
 		store := &freshAddressVMStore{vmStore: s.repo.(*vmStore), createError: failure}
@@ -854,4 +854,8 @@ func TestPublicVMIngressRequiresTrustedProxyV2Metadata(t *testing.T) {
 	io.Copy(conn, strings.NewReader("GET / HTTP/1.1\r\nHost: spoof\r\n\r\n"))
 	_, err = conn.Read(make([]byte, 1))
 	require.Error(t, err)
+}
+
+func publicAddressRetryFailures() []error {
+	return []error{&pq.Error{Code: "23505", Constraint: "persistent_vm_public_ipv6"}, &pq.Error{Code: "23505", Constraint: "persistent_vm_name"}, errors.New("database unavailable")}
 }

@@ -653,6 +653,7 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		if err != nil {
 			stats.LastError = err.Error()
 			stats.LastClass = "guest_control"
+			stats.Failures++
 			stats.FailureClasses[stats.LastClass]++
 			return nil, false, stats
 		}

@@ -53,33 +53,34 @@ func TestNetworkRuleCleanupBatchBurstAndFailure(t *testing.T) {
 	}
 }
 
-func TestNetworkRuleCleanupBatchCanceledCallerDoesNotBlockCompletion(t *testing.T) {
+func TestNetworkRuleCleanupBatchJoinsDeletionAfterWorkerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := &ContainerNetworkManager{ctx: ctx}
-	started, release, complete := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	started, release := make(chan struct{}), make(chan struct{})
+	var unblock sync.Once
+	t.Cleanup(func() { unblock.Do(func() { close(release) }) })
 	result := make(chan error, 1)
 	go func() {
-		result <- m.queueNetworkSlotRuleCleanup(&containerNetworkSlot{}, func([]*containerNetworkSlot) error {
-			close(started)
-			<-release
-			close(complete)
-			return nil
-		})
+		result <- m.queueNetworkSlotRuleCleanup(&containerNetworkSlot{}, func([]*containerNetworkSlot) error { close(started); <-release; return nil })
 	}()
 	<-started
 	cancel()
-	require.ErrorIs(t, <-result, context.Canceled)
-	close(release)
 	select {
-	case <-complete:
-	case <-time.After(time.Second):
-		t.Fatal("canceled caller blocked shared cleanup")
+	case err := <-result:
+		t.Fatalf("abandoned cleanup before deletion: %v", err)
+	default:
 	}
-	require.ErrorIs(t, m.queueNetworkSlotRuleCleanup(nil, func([]*containerNetworkSlot) error {
-		t.Fatal("already canceled request was enqueued")
-		return nil
-	}), context.Canceled)
+	unblock.Do(func() { close(release) })
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not complete")
+	}
+	called := false
+	require.NoError(t, m.queueNetworkSlotRuleCleanup(nil, func([]*containerNetworkSlot) error { called = true; return nil }))
+	require.True(t, called, "shutdown cleanup must also run after worker cancellation")
 }
 
 func TestNetworkRuleCleanupBatchRealFirewallPreservesOtherAddresses(t *testing.T) {
@@ -90,6 +91,13 @@ func TestNetworkRuleCleanupBatchRealFirewallPreservesOtherAddresses(t *testing.T
 	require.NoError(t, err)
 	m := &ContainerNetworkManager{ipt: ipt}
 	ips := []string{"192.168.1.1", "192.168.1.2", "192.168.1.10"}
+	t.Cleanup(func() {
+		for _, ip := range ips {
+			_ = ipt.DeleteIfExists("nat", "PREROUTING", "-p", "tcp", "--dport", "7111", "-j", "DNAT", "--to-destination", ip+":7111")
+			_ = ipt.DeleteIfExists("filter", "FORWARD", "-s", ip, "-j", "DROP")
+			_ = ipt.DeleteIfExists("filter", "INPUT", "-s", ip, "-m", "comment", "--comment", "owned rule with spaces", "-j", "DROP")
+		}
+	})
 	for _, ip := range ips {
 		require.NoError(t, ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", "7111", "-j", "DNAT", "--to-destination", ip+":7111"))
 		require.NoError(t, ipt.AppendUnique("filter", "FORWARD", "-s", ip, "-j", "DROP"))

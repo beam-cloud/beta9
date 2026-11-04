@@ -59,21 +59,15 @@ func TestMicroVMCPUWeightAppliesWhileQuotaIsDeferred(t *testing.T) {
 	path := t.TempDir()
 	shares := uint64(102)
 	require.NoError(t, applyMicroVMCPU(path, &specs.LinuxCPU{Shares: &shares}))
-	weight, err := os.ReadFile(filepath.Join(path, "cpu.weight"))
-	require.NoError(t, err)
-	require.Equal(t, "4", string(weight))
-	_, err = os.Stat(filepath.Join(path, "cpu.max"))
+	assertCPUFile(t, path, "cpu.weight", "4")
+	_, err := os.Stat(filepath.Join(path, "cpu.max"))
 	require.True(t, os.IsNotExist(err), "startup must still defer the quota")
 	inst := &microVMInstance{id: "weight-test", cgroup: path}
 	m := &MicroVM{vms: map[string]*microVMInstance{inst.id: inst}}
 	shares, quota := uint64(1024), int64(10000)
 	require.NoError(t, m.UpdateResources(context.Background(), inst.id, &specs.LinuxResources{CPU: &specs.LinuxCPU{Shares: &shares, Quota: &quota}}))
-	weight, err = os.ReadFile(filepath.Join(path, "cpu.weight"))
-	require.NoError(t, err)
-	require.Equal(t, "39", string(weight))
-	limit, err := os.ReadFile(filepath.Join(path, "cpu.max"))
-	require.NoError(t, err)
-	require.Equal(t, "10000 100000", string(limit))
+	assertCPUFile(t, path, "cpu.weight", "39")
+	assertCPUFile(t, path, "cpu.max", "10000 100000")
 }
 
 func TestMicroVMCPUWeightBoundsAndFailures(t *testing.T) {
@@ -83,9 +77,7 @@ func TestMicroVMCPUWeightBoundsAndFailures(t *testing.T) {
 	}{{1, "1"}, {2, "1"}, {262144, "10000"}, {^uint64(0), "10000"}} {
 		path := t.TempDir()
 		require.NoError(t, applyMicroVMCPU(path, &specs.LinuxCPU{Shares: &test.shares}))
-		weight, err := os.ReadFile(filepath.Join(path, "cpu.weight"))
-		require.NoError(t, err)
-		require.Equal(t, test.weight, string(weight))
+		assertCPUFile(t, path, "cpu.weight", test.weight)
 	}
 	shares := uint64(102)
 	require.ErrorContains(t, applyMicroVMCPU(filepath.Join(t.TempDir(), "missing"), &specs.LinuxCPU{Shares: &shares}), "set cpu.weight")
@@ -103,12 +95,8 @@ func TestMicroVMRealCPUWeight(t *testing.T) {
 	inst := &microVMInstance{id: name}
 	spec := &specs.Spec{Linux: &specs.Linux{CgroupsPath: name, Resources: &specs.LinuxResources{CPU: &specs.LinuxCPU{Shares: &shares}}}}
 	require.NoError(t, (&MicroVM{}).setupCgroup(inst, spec, 1<<30))
-	weight, err := os.ReadFile(filepath.Join(path, "cpu.weight"))
-	require.NoError(t, err)
-	require.Equal(t, "4", strings.TrimSpace(string(weight)))
-	limit, err := os.ReadFile(filepath.Join(path, "cpu.max"))
-	require.NoError(t, err)
-	require.Equal(t, "max 100000", strings.TrimSpace(string(limit)))
+	assertCPUFile(t, path, "cpu.weight", "4\n")
+	assertCPUFile(t, path, "cpu.max", "max 100000\n")
 }
 
 func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Request)) *microVMInstance {
@@ -174,12 +162,9 @@ func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
 func TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture(t *testing.T) {
 	for _, failCapture := range []bool{false, true} {
 		t.Run(fmt.Sprint(failCapture), func(t *testing.T) {
-			cgroup := t.TempDir()
-			cpuMax := filepath.Join(cgroup, "cpu.max")
 			original := "10000 100000\n"
-			require.NoError(t, os.WriteFile(cpuMax, []byte(original), 0o644))
-			weightPath := filepath.Join(cgroup, "cpu.weight")
-			require.NoError(t, os.WriteFile(weightPath, []byte("4\n"), 0o644))
+			cgroup := newCPUFixture(t, original, "4\n")
+			cpuMax, weightPath := filepath.Join(cgroup, "cpu.max"), filepath.Join(cgroup, "cpu.weight")
 			var observed string
 			inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v1/vm.snapshot" {
@@ -227,10 +212,8 @@ func TestMicroVMSnapshotCPUQuotaRejectsRunningGuest(t *testing.T) {
 
 func TestMicroVMSnapshotWeightRestoredWithUnlimitedQuota(t *testing.T) {
 	for _, weight := range []string{"4", "157"} {
-		inst := &microVMInstance{cgroup: t.TempDir(), paused: true}
-		quotaPath, weightPath := filepath.Join(inst.cgroup, "cpu.max"), filepath.Join(inst.cgroup, "cpu.weight")
-		require.NoError(t, os.WriteFile(quotaPath, []byte("max 100000"), 0644))
-		require.NoError(t, os.WriteFile(weightPath, []byte(weight), 0644))
+		inst := &microVMInstance{cgroup: newCPUFixture(t, "max 100000", weight), paused: true}
+		weightPath := filepath.Join(inst.cgroup, "cpu.weight")
 		want := "100"
 		if weight == "157" {
 			want = weight
@@ -250,10 +233,8 @@ func TestMicroVMSnapshotWeightRestoredWithUnlimitedQuota(t *testing.T) {
 }
 
 func TestMicroVMSnapshotCPUQuotaSerializesResourceUpdate(t *testing.T) {
-	inst := &microVMInstance{id: "quota-test", cgroup: t.TempDir(), paused: true}
+	inst := &microVMInstance{id: "quota-test", cgroup: newCPUFixture(t, "10000 100000", "4"), paused: true}
 	cpuMax := filepath.Join(inst.cgroup, "cpu.max")
-	require.NoError(t, os.WriteFile(cpuMax, []byte("10000 100000"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(inst.cgroup, "cpu.weight"), []byte("4"), 0o644))
 	m := &MicroVM{vms: map[string]*microVMInstance{inst.id: inst}}
 	quota, period := int64(50000), uint64(100000)
 	started, updated := make(chan struct{}), make(chan error, 1)
@@ -1175,4 +1156,20 @@ func TestMicroVMImageKernelRelativeRoot(t *testing.T) {
 	copied, err := os.ReadFile(kernel)
 	require.NoError(t, err)
 	require.Equal(t, "image kernel", string(copied))
+}
+
+func assertCPUFile(t *testing.T, cgroup, name, want string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(cgroup, name))
+	require.NoError(t, err)
+	require.Equal(t, want, string(data))
+}
+
+func newCPUFixture(t *testing.T, quota, weight string) string {
+	t.Helper()
+	cgroup := t.TempDir()
+	for name, value := range map[string]string{"cpu.max": quota, "cpu.weight": weight} {
+		require.NoError(t, os.WriteFile(filepath.Join(cgroup, name), []byte(value), 0644))
+	}
+	return cgroup
 }

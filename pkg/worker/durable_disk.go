@@ -92,13 +92,7 @@ func (s *Worker) pruneDetachedQcowVolumes(ctx context.Context) {
 		pruneCtx, cancel := context.WithTimeout(ctx, time.Minute)
 		var bytesToFree int64
 		if usage, err := fastDiskUsage(s.diskManager.Root()); err == nil {
-			watermark := s.config.Cache.Server.DiskCacheEvictWatermarkPct
-			if watermark > 1 {
-				watermark /= 100
-			}
-			if watermark <= 0 || watermark >= 1 {
-				watermark = 0.80
-			}
+			watermark := cache.NormalizeEvictWatermarkPct(s.config.Cache.Server.DiskCacheEvictWatermarkPct)
 			bytesToFree = reconcilePressureBytesToFree(usage, watermark, s.config.Cache.Disk.MinFreeBytes)
 		}
 		pruned, freed, err := s.diskManager.PruneDetachedWithBudget(pruneCtx, time.Now().Add(-time.Duration(seconds)*time.Second), bytesToFree)

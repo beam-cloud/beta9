@@ -52,9 +52,7 @@ func attachedMarkerTestState() *volumeState {
 }
 
 func TestDetachedMarkerPreservesDurableManifestAndUnpublishedWrites(t *testing.T) {
-	dir := t.TempDir()
-	state := attachedMarkerTestState()
-	require.NoError(t, saveVolumeState(dir, state))
+	dir, state := newAttachedMarkerFixture(t)
 	manifest := filepath.Join(dir, stateFileName)
 	old := time.Now().Add(-24 * time.Hour)
 	require.NoError(t, os.Chtimes(manifest, old, old))
@@ -84,10 +82,7 @@ func TestDetachedMarkerPreservesDurableManifestAndUnpublishedWrites(t *testing.T
 }
 
 func TestDetachedMarkerAcceptsDrainedPendingSliceAfterPublication(t *testing.T) {
-	dir := t.TempDir()
-	state := attachedMarkerTestState()
-	state.Pending = []stateLayer{} // MarkPublished drains the slice without making it nil.
-	require.NoError(t, saveVolumeState(dir, state))
+	dir, state := newAttachedMarkerFixture(t, func(s *volumeState) { s.Pending = []stateLayer{} })
 	before, err := os.ReadFile(filepath.Join(dir, stateFileName))
 	require.NoError(t, err)
 	clearVhostAttachment(state)
@@ -111,18 +106,14 @@ func TestDetachedMarkerRejectsPayloadChangesAndInvalidHints(t *testing.T) {
 		"journal": func(s *volumeState) { s.Journal = true },
 	} {
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			state := attachedMarkerTestState()
-			require.NoError(t, saveVolumeState(dir, state))
+			dir, state := newAttachedMarkerFixture(t)
 			clearVhostAttachment(state)
 			mutate(state)
 			require.ErrorContains(t, saveDetachedVolumeMarker(dir, state), "payload state changed")
 		})
 	}
 	for _, hint := range []string{"", "{", `{"version":2,"state_sha256":"ignored"}`, `{"version":1,"state_sha256":"stale"}`} {
-		dir := t.TempDir()
-		state := attachedMarkerTestState()
-		require.NoError(t, saveVolumeState(dir, state))
+		dir, state := newAttachedMarkerFixture(t)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, detachedMarkerName), []byte(hint), 0600))
 		loaded, err := loadVolumeState(dir)
 		require.NoError(t, err)
@@ -131,9 +122,7 @@ func TestDetachedMarkerRejectsPayloadChangesAndInvalidHints(t *testing.T) {
 }
 
 func TestDetachedMarkerCannotSuppressReattachmentOrChangedManifest(t *testing.T) {
-	dir := t.TempDir()
-	state := attachedMarkerTestState()
-	require.NoError(t, saveVolumeState(dir, state))
+	dir, state := newAttachedMarkerFixture(t)
 	clearVhostAttachment(state)
 	require.NoError(t, saveDetachedVolumeMarker(dir, state))
 	oldHint, err := os.ReadFile(filepath.Join(dir, detachedMarkerName))
@@ -152,4 +141,14 @@ func TestDetachedMarkerCannotSuppressReattachmentOrChangedManifest(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &durable))
 	require.Equal(t, state, &durable)
+}
+
+func newAttachedMarkerFixture(t *testing.T, mutate ...func(*volumeState)) (string, *volumeState) {
+	t.Helper()
+	dir, state := t.TempDir(), attachedMarkerTestState()
+	for _, fn := range mutate {
+		fn(state)
+	}
+	require.NoError(t, saveVolumeState(dir, state))
+	return dir, state
 }

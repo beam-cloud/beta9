@@ -3,11 +3,10 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/beam-cloud/beta9/pkg/common"
 )
 
 // Serialize before enqueue: a caller may change its VM only after the durable
@@ -38,7 +37,6 @@ type vmMutationRequest struct {
 type vmMutationBatcher struct {
 	repo  *PostgresBackendRepository
 	queue chan *vmMutationRequest
-	limit int
 }
 
 func nullableVMAddress(address string) *string {
@@ -51,8 +49,8 @@ func nullableVMAddress(address string) *string {
 func (r *PostgresBackendRepository) mutateVMBatched(ctx context.Context, input vmMutationInput) error {
 	r.vmMutationBatchOnce.Do(func() {
 		limit := min(r.config.VMBurstBatchSize, 128)
-		r.vmMutationBatch = &vmMutationBatcher{repo: r, queue: make(chan *vmMutationRequest, limit*2), limit: limit}
-		go r.vmMutationBatch.run()
+		r.vmMutationBatch = &vmMutationBatcher{repo: r, queue: make(chan *vmMutationRequest, limit*2)}
+		go common.RunBatchQueue(r.vmMutationBatch.queue, limit, r.vmMutationBatch.flush)
 	})
 	request := &vmMutationRequest{ctx: ctx, input: input, done: make(chan error, 1)}
 
@@ -66,24 +64,6 @@ func (r *PostgresBackendRepository) mutateVMBatched(ctx context.Context, input v
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
-	}
-}
-
-func (b *vmMutationBatcher) run() {
-	for first := range b.queue {
-		batch := []*vmMutationRequest{first}
-		timer := time.NewTimer(time.Millisecond)
-	collect:
-		for len(batch) < b.limit {
-			select {
-			case request := <-b.queue:
-				batch = append(batch, request)
-			case <-timer.C:
-				break collect
-			}
-		}
-		timer.Stop()
-		b.flush(batch)
 	}
 }
 
@@ -126,8 +106,7 @@ func (b *vmMutationBatcher) flush(batch []*vmMutationRequest) {
 	if err == nil {
 		err = b.repo.client.SelectContext(ctx, &ids, vmMutationBatchQuery, string(encoded))
 	}
-	var pgErr *pq.Error
-	if errors.As(err, &pgErr) && (pgErr.Code.Class() == "22" || pgErr.Code.Class() == "23" || pgErr.Code.Class() == "40") {
+	if retryVMBatchIndividually(err) {
 		for _, request := range active {
 			b.single(request)
 		}

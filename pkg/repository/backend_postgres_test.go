@@ -429,8 +429,8 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 	postgresRepo := repo.(*PostgresBackendRepository)
 
 	updatedAt := time.Now()
-	mock.ExpectQuery(`WITH existing AS MATERIALIZED`).
-		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11), uint(13), false).
+	mock.ExpectQuery(`WITH input AS MATERIALIZED`).
+		WithArgs(sqlmock.AnyArg(), false).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "workspace_id", "updated_at"}).AddRow(5, 11, updatedAt))
 	stub, err := postgresRepo.GetOrCreateStub(context.Background(), "stub-name", string(types.StubTypeFunction), types.StubConfigV1{}, 7, 11, false, 13)
 

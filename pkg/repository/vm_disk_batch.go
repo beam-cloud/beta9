@@ -3,11 +3,10 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/lib/pq"
 )
 
 type vmDiskBurstKey struct{}
@@ -51,14 +50,13 @@ type vmDiskRequest struct {
 type vmDiskBatcher struct {
 	repo  *PostgresBackendRepository
 	queue chan *vmDiskRequest
-	limit int
 }
 
 func (r *PostgresBackendRepository) createVMDiskBatched(ctx context.Context, input vmDiskInput) (*types.Disk, error) {
 	r.vmDiskBatchOnce.Do(func() {
 		limit := min(r.config.VMBurstBatchSize, 128)
-		r.vmDiskBatch = &vmDiskBatcher{repo: r, queue: make(chan *vmDiskRequest, limit*2), limit: limit}
-		go r.vmDiskBatch.run()
+		r.vmDiskBatch = &vmDiskBatcher{repo: r, queue: make(chan *vmDiskRequest, limit*2)}
+		go common.RunBatchQueue(r.vmDiskBatch.queue, limit, r.vmDiskBatch.flush)
 	})
 	request := &vmDiskRequest{ctx: ctx, input: input, done: make(chan vmDiskResult, 1)}
 
@@ -72,24 +70,6 @@ func (r *PostgresBackendRepository) createVMDiskBatched(ctx context.Context, inp
 		return result.disk, result.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	}
-}
-
-func (b *vmDiskBatcher) run() {
-	for first := range b.queue {
-		batch := []*vmDiskRequest{first}
-		timer := time.NewTimer(time.Millisecond)
-	collect:
-		for len(batch) < b.limit {
-			select {
-			case request := <-b.queue:
-				batch = append(batch, request)
-			case <-timer.C:
-				break collect
-			}
-		}
-		timer.Stop()
-		b.flush(batch)
 	}
 }
 
@@ -124,8 +104,7 @@ func (b *vmDiskBatcher) flush(batch []*vmDiskRequest) {
 	if err == nil {
 		err = b.repo.client.SelectContext(ctx, &rows, vmDiskBatchQuery, string(encoded))
 	}
-	var pgErr *pq.Error
-	if errors.As(err, &pgErr) && (pgErr.Code.Class() == "22" || pgErr.Code.Class() == "23" || pgErr.Code.Class() == "40") {
+	if retryVMBatchIndividually(err) {
 		for _, request := range active {
 			b.single(request)
 		}

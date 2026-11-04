@@ -170,6 +170,7 @@ func TestProcessManagerGuestControlCancellationSkipsProbes(t *testing.T) {
 	require.False(t, ready)
 	require.Zero(t, stats.Attempts)
 	require.Equal(t, "guest_control", stats.LastClass)
+	require.Equal(t, 1, stats.Failures)
 	require.Equal(t, context.Canceled.Error(), stats.LastError)
 }
 

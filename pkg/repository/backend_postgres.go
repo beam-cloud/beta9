@@ -1230,7 +1230,7 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 	}
 
 	if stubType == string(types.StubTypeVM) && !forceCreate && r.config.VMBurstBatchSize > 1 {
-		return r.getOrCreateVMStubBatched(ctx, vmStubInput{
+		return r.getOrCreateVMStubBatched(ctx, stubUpsertInput{
 			Name: name, Type: stubType, Config: configJSON,
 			ObjectID: objectId, WorkspaceID: workspaceId, AppID: appId,
 		})
@@ -1239,29 +1239,12 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 }
 
 func (r *PostgresBackendRepository) getOrCreateStub(ctx context.Context, name, stubType, configJSON string, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error) {
-	// Resolve, create/touch, and update app activity in one transaction and
-	// round trip. Concurrent VM starts otherwise queue for a connection three times.
-	const columns = `id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id`
-	query := `
-	WITH existing AS MATERIALIZED (
-		SELECT id FROM stub
-		WHERE name=$1 AND type=$2 AND object_id=$3 AND config::jsonb=$4::jsonb
-			AND workspace_id=$5 AND app_id=$6 AND NOT $7
-		LIMIT 1
-	), created AS (
-		INSERT INTO stub (name, type, config, object_id, workspace_id, app_id)
-		SELECT $1, $2, $4, $3, $5, $6 WHERE NOT EXISTS (SELECT 1 FROM existing)
-		RETURNING ` + columns + `
-	), touched AS (
-		UPDATE stub SET updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT id FROM existing)
-		RETURNING ` + columns + `
-	), activity AS (
-		UPDATE app SET updated_at=NOW() WHERE id=$6
-			AND ` + appActivityNeedsRefresh + `
-	)
-	SELECT * FROM created UNION ALL SELECT * FROM touched`
+	input, err := json.Marshal(stubUpsertInput{Name: name, Type: stubType, Config: json.RawMessage(configJSON), ObjectID: objectId, WorkspaceID: workspaceId, AppID: appId})
+	if err != nil {
+		return types.Stub{}, err
+	}
 	var stub types.Stub
-	err := r.client.GetContext(ctx, &stub, query, name, stubType, objectId, configJSON, workspaceId, appId, forceCreate)
+	err = r.client.GetContext(ctx, &stub, singleStubUpsertQuery, string(input), forceCreate)
 	return stub, err
 }
 

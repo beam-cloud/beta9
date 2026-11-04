@@ -16,15 +16,11 @@ import (
 
 func TestGuestMountsParallelizeOnlyWithinBudget(t *testing.T) {
 	entered := make(chan int, 3)
-	release := make(chan struct{})
-	var unblock sync.Once
-	t.Cleanup(func() { unblock.Do(func() { close(release) }) })
-	done := make(chan error, 1)
-	go func() {
-		done <- applyGuestMounts("/root", []microvm.Mount{{Destination: "/a"}, {Destination: "/b"}, {Destination: "/c"}}, 2,
-			func(_, path string) (string, error) { return path, nil },
-			func(i int, _ microvm.Mount) error { entered <- i; <-release; return nil })
-	}()
+	done, release := runBlockingGuestMounts(t, func(i int, unblocked <-chan struct{}) error {
+		entered <- i
+		<-unblocked
+		return nil
+	})
 	for range 2 {
 		select {
 		case <-entered:
@@ -37,14 +33,9 @@ func TestGuestMountsParallelizeOnlyWithinBudget(t *testing.T) {
 		t.Fatal("mount concurrency exceeded budget")
 	default:
 	}
-	unblock.Do(func() { close(release) })
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("mounts did not finish")
+	release()
+	if err := waitForGuestMounts(t, done); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -80,25 +71,19 @@ func TestGuestMountsOrderParentsTmpfsAndCanonicalAliases(t *testing.T) {
 func TestGuestMountFailureJoinsInflightWorkAndStopsNextBatch(t *testing.T) {
 	failure := errors.New("mount failed")
 	var laterStarted atomic.Bool
-	entered, release := make(chan struct{}), make(chan struct{})
-	var unblock sync.Once
-	t.Cleanup(func() { unblock.Do(func() { close(release) }) })
-	done := make(chan error, 1)
-	go func() {
-		done <- applyGuestMounts("/root", []microvm.Mount{{Destination: "/a"}, {Destination: "/b"}, {Destination: "/c"}}, 2,
-			func(_, path string) (string, error) { return path, nil }, func(i int, _ microvm.Mount) error {
-				if i == 0 {
-					return failure
-				}
-				if i == 1 {
-					close(entered)
-					<-release
-					return nil
-				}
-				laterStarted.Store(true)
-				return nil
-			})
-	}()
+	entered := make(chan struct{})
+	done, release := runBlockingGuestMounts(t, func(i int, unblocked <-chan struct{}) error {
+		if i == 0 {
+			return failure
+		}
+		if i == 1 {
+			close(entered)
+			<-unblocked
+			return nil
+		}
+		laterStarted.Store(true)
+		return nil
+	})
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
@@ -109,14 +94,9 @@ func TestGuestMountFailureJoinsInflightWorkAndStopsNextBatch(t *testing.T) {
 		t.Fatal("returned while an in-flight mount could still change the namespace")
 	default:
 	}
-	unblock.Do(func() { close(release) })
-	select {
-	case err := <-done:
-		if !errors.Is(err, failure) {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("mount batch did not join")
+	release()
+	if err := waitForGuestMounts(t, done); !errors.Is(err, failure) {
+		t.Fatal(err)
 	}
 	if laterStarted.Load() {
 		t.Fatal("later mount batch started after a failure")
@@ -146,5 +126,30 @@ func TestCanonicalMountTargetResolvesAliasesAndRejectsUncertainRoots(t *testing.
 	}
 	if _, err := canonicalMountTarget(root, "/dangling"); err == nil {
 		t.Fatal("dangling symlink must use serial setup")
+	}
+}
+
+func runBlockingGuestMounts(t *testing.T, apply func(int, <-chan struct{}) error) (<-chan error, func()) {
+	t.Helper()
+	unblocked := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(unblocked) }) }
+	t.Cleanup(release)
+	done := make(chan error, 1)
+	go func() {
+		done <- applyGuestMounts("/root", []microvm.Mount{{Destination: "/a"}, {Destination: "/b"}, {Destination: "/c"}}, 2,
+			func(_, path string) (string, error) { return path, nil }, func(i int, _ microvm.Mount) error { return apply(i, unblocked) })
+	}()
+	return done, release
+}
+
+func waitForGuestMounts(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Second):
+		t.Fatal("mount batch did not join")
+		return nil
 	}
 }

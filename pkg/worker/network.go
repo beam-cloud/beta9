@@ -99,8 +99,8 @@ type ContainerNetworkManager struct {
 	bridgeMu            sync.Mutex
 	ipMu                sync.Mutex
 	iptablesMu          sync.Mutex
-	ruleCleanupMu       sync.Mutex
-	ruleCleanupPending  *networkRuleCleanupBatch
+	ruleCleanupOnce     sync.Once
+	ruleCleanupQueue    chan networkRuleCleanupRequest
 	portExposureMu      sync.Mutex
 	containerLocksMu    sync.Mutex
 	containerLocks      sync.Map

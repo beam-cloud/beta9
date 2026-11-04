@@ -1604,21 +1604,29 @@ func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (micro
 		return microvm.Mount{}, err
 	}
 
-	flags := uintptr(unix.MS_BIND)
-	if slices.Contains(mount.Options, "rbind") {
-		flags |= unix.MS_REC
-	}
-	if err := unix.Mount(mount.Source, target, "", flags, ""); err != nil {
-		return microvm.Mount{}, fmt.Errorf("bind %s to %s: %w", mount.Source, target, err)
-	}
-	inst.submounts = append(inst.submounts, target)
 	readOnly := slices.Contains(mount.Options, "ro")
-	if readOnly {
-		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
-			return microvm.Mount{}, fmt.Errorf("remount %s read-only: %w", target, err)
-		}
+	if err := inst.bindCanvas(mount.Source, target, slices.Contains(mount.Options, "rbind"), readOnly); err != nil {
+		return microvm.Mount{}, err
 	}
 	return microvm.Mount{Type: microvm.MountBind, Source: guestSource, Destination: dest, File: isFile, ReadOnly: readOnly}, nil
+}
+
+// Register every successful bind before remounting so teardown handles failures.
+func (inst *microVMInstance) bindCanvas(source, target string, recursive, readOnly bool) error {
+	flags := uintptr(unix.MS_BIND)
+	if recursive {
+		flags |= unix.MS_REC
+	}
+	if err := unix.Mount(source, target, "", flags, ""); err != nil {
+		return fmt.Errorf("bind %s to %s: %w", source, target, err)
+	}
+	inst.submounts = append(inst.submounts, target)
+	if readOnly {
+		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+			return fmt.Errorf("remount %s read-only: %w", target, err)
+		}
+	}
+	return nil
 }
 
 // --- virtiofsd -----------------------------------------------------------------

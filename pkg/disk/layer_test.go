@@ -143,25 +143,7 @@ func TestNearbySparseChunksRoundTripWithoutFillingLargeHoles(t *testing.T) {
 			t.Fatalf("large hole materialized: %+v", chunk)
 		}
 	}
-	store := newMemoryChunkStore()
-	if err := UploadLayer(context.Background(), store, source, layer); err != nil {
-		t.Fatal(err)
-	}
-	restored := filepath.Join(dir, "restored.qcow2")
-	if err := fetchLayer(context.Background(), store, layer, restored, nil); err != nil {
-		t.Fatal(err)
-	}
-	want, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(restored)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatal("sparse restore changed source bytes")
-	}
+	roundTripLayer(t, dir, source, layer)
 }
 
 type discardChunkSink struct{}
@@ -238,29 +220,9 @@ func TestLayerScanUploadFetchRoundTrip(t *testing.T) {
 		}
 	}
 
-	store := newMemoryChunkStore()
-	if err := UploadLayer(context.Background(), store, sourcePath, layer); err != nil {
-		t.Fatal(err)
-	}
+	store := roundTripLayer(t, dir, sourcePath, layer)
 	if len(store.objects) != len(layer.Chunks) {
 		t.Fatalf("uploaded %d objects, expected %d", len(store.objects), len(layer.Chunks))
-	}
-
-	destPath := filepath.Join(dir, "restored.qcow2")
-	if err := fetchLayer(context.Background(), store, layer, destPath, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	source, err := os.ReadFile(sourcePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	restored, err := os.ReadFile(destPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(source, restored) {
-		t.Fatal("restored layer differs from source")
 	}
 }
 
@@ -459,4 +421,28 @@ func TestFetchLayerRejectsCorruptChunks(t *testing.T) {
 	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
 		t.Fatal("corrupt fetch must not leave a layer file behind")
 	}
+}
+
+func roundTripLayer(t *testing.T, dir, source string, layer *types.DiskSnapshotFile) *memoryChunkStore {
+	t.Helper()
+	store := newMemoryChunkStore()
+	if err := UploadLayer(context.Background(), store, source, layer); err != nil {
+		t.Fatal(err)
+	}
+	restored := filepath.Join(dir, "restored.qcow2")
+	if err := fetchLayer(context.Background(), store, layer, restored, nil); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("layer roundtrip changed source bytes")
+	}
+	return store
 }

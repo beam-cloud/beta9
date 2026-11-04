@@ -15,7 +15,7 @@ import (
 )
 
 func stubBatchRequest(ctx context.Context, name string, app uint) *vmStubRequest {
-	return &vmStubRequest{ctx: ctx, input: vmStubInput{
+	return &vmStubRequest{ctx: ctx, input: stubUpsertInput{
 		Name: name, Type: string(types.StubTypeVM), Config: json.RawMessage(`{"runtime":{"image_id":"batch-test"}}`),
 		ObjectID: 1, WorkspaceID: 1, AppID: app,
 	}, done: make(chan vmStubResult, 1)}
@@ -26,6 +26,8 @@ func TestVMStubBatchWaitsForDatabaseAndDeduplicates(t *testing.T) {
 	batcher := &vmStubBatcher{repo: repo.(*PostgresBackendRepository)}
 	first := stubBatchRequest(context.Background(), "same", 1)
 	second := stubBatchRequest(context.Background(), "same", 1)
+	first.input.Config = json.RawMessage(`{"runtime":{"image_id":"batch-test","cpu":9007199254740993},"env":{"a":"one","b":"two"}}`)
+	second.input.Config = json.RawMessage(`{"env":{"b":"two","a":"one"},"runtime":{"cpu":9007199254740993,"image_id":"batch-test"}}`)
 	mock.ExpectQuery(`WITH input AS MATERIALIZED`).WithArgs(sqlmock.AnyArg()).
 		WillDelayFor(80 * time.Millisecond).
 		WillReturnRows(sqlmock.NewRows([]string{"batch_index", "id", "name"}).AddRow(1, 7, "same"))
@@ -144,4 +146,16 @@ func TestVMStubBatchIntegration(t *testing.T) {
 	}
 	require.NoError(t, db.Get(&count, `SELECT count(*) FROM stub WHERE name='burst'`))
 	require.Equal(t, 1, count)
+}
+
+func TestStubInputCanonicalizationPreservesLargeIntegers(t *testing.T) {
+	first := stubBatchRequest(context.Background(), "same", 1).input
+	first.Config = json.RawMessage(`{"n":9007199254740993}`)
+	second := first
+	second.Config = json.RawMessage(`{"n":9007199254740992}`)
+	a, err := canonicalStubInput(first)
+	require.NoError(t, err)
+	b, err := canonicalStubInput(second)
+	require.NoError(t, err)
+	require.NotEqual(t, string(a), string(b), "distinct JSONB integers must not be deduplicated")
 }

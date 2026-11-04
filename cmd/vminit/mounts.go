@@ -45,18 +45,12 @@ func applyGuestMounts(root string, mounts []microvm.Mount, limit int, resolve fu
 		for _, old := range batch {
 			conflict = conflict || mountPathsOverlap(raw, old.raw)
 		}
-		if conflict || limit == 1 {
-			if err := flush(); err != nil {
-				return err
-			}
-			if err := apply(i, mount); err != nil {
-				return err
-			}
-			i++
-			continue
+		var canonical string
+		var resolveErr error
+		if !conflict && limit > 1 {
+			canonical, resolveErr = resolve(root, raw)
 		}
-		canonical, err := resolve(root, raw)
-		if err != nil {
+		if conflict || limit == 1 || resolveErr != nil {
 			if err := flush(); err != nil {
 				return err
 			}

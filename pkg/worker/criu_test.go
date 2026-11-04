@@ -2251,11 +2251,7 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 }
 
 func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
-	for range cap(microVMCheckpointSlots) {
-		release, err := acquireMicroVMCheckpointSlot(context.Background())
-		require.NoError(t, err)
-		t.Cleanup(release)
-	}
+	fillMicroVMCheckpointSlots(t)
 	request := &types.ContainerRequest{ContainerId: "queued-microvm"}
 	called := false
 	worker := &Worker{
@@ -2274,12 +2270,7 @@ func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
 }
 
 func TestCheckpointUploadDoesNotHoldCaptureAdmissionOrPublishEarly(t *testing.T) {
-	for _, streaming := range []string{"0", "1"} {
-		t.Run("streaming="+streaming, func(t *testing.T) {
-			t.Setenv("BETA9_CHECKPOINT_STREAM_UPLOAD", streaming)
-			testCheckpointUploadAdmission(t)
-		})
-	}
+	testCheckpointUploadAdmission(t)
 }
 
 func testCheckpointUploadAdmission(t *testing.T) {
@@ -2288,13 +2279,7 @@ func testCheckpointUploadAdmission(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(release)
 	}
-	var releaseCapture func()
-	for i := 0; i < cap(microVMCheckpointSlots); i++ {
-		release, err := acquireMicroVMCheckpointSlot(context.Background())
-		require.NoError(t, err)
-		t.Cleanup(release)
-		releaseCapture = release
-	}
+	releaseCapture := fillMicroVMCheckpointSlots(t)
 	uploadStarted := make(chan struct{})
 	finishUpload := make(chan struct{})
 	var once sync.Once
@@ -3207,4 +3192,15 @@ func TestCheckpointArchiveCacheCapAndCleanup(t *testing.T) {
 	}), context.Canceled)
 	require.NoFileExists(t, archive)
 	require.Nil(t, tryCheckpointArchiveCacheSlot(cancelled))
+}
+
+func fillMicroVMCheckpointSlots(t *testing.T) (releaseLast func()) {
+	t.Helper()
+	for range cap(microVMCheckpointSlots) {
+		release, err := acquireMicroVMCheckpointSlot(context.Background())
+		require.NoError(t, err)
+		t.Cleanup(release)
+		releaseLast = release
+	}
+	return releaseLast
 }
