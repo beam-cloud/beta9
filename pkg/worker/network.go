@@ -99,6 +99,8 @@ type ContainerNetworkManager struct {
 	bridgeMu            sync.Mutex
 	ipMu                sync.Mutex
 	iptablesMu          sync.Mutex
+	ruleCleanupMu       sync.Mutex
+	ruleCleanupPending  *networkRuleCleanupBatch
 	portExposureMu      sync.Mutex
 	containerLocksMu    sync.Mutex
 	containerLocks      sync.Map
@@ -1243,12 +1245,12 @@ func (m *ContainerNetworkManager) releaseUnusedNetworkSlotWithContext(ctx contex
 	return nil
 }
 
-func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId string, spec *specs.Spec, request *types.ContainerRequest) (bool, error) {
+func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(ctx context.Context, containerId string, spec *specs.Spec, request *types.ContainerRequest) (bool, error) {
 	m.slotMu.Lock()
 	claimedSlot := m.containerSlots[containerId]
 	m.slotMu.Unlock()
 	if claimedSlot != nil {
-		return true, m.installPreallocatedNetworkSlot(containerId, claimedSlot, spec, request)
+		return true, m.installPreallocatedNetworkSlot(ctx, containerId, claimedSlot, spec, request)
 	}
 	var slot *containerNetworkSlot
 	discardedSlots := 0
@@ -1287,6 +1289,7 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 
 	phaseStart := time.Now()
 	err := m.assignPreallocatedNetworkSlot(containerId, slot)
+	common.RecordStartupSpan(ctx, "network.assign_slot_ip", phaseStart, time.Now())
 	metrics.RecordWorkerStartupPhase("network_set_container_ip", time.Since(phaseStart), request, map[string]string{
 		"success":      fmt.Sprintf("%t", err == nil),
 		"mode":         "preallocated",
@@ -1301,10 +1304,10 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 	if err != nil {
 		return true, errors.Join(err, m.discardNetworkSlot(containerId, slot, true))
 	}
-	return true, m.installPreallocatedNetworkSlot(containerId, slot, spec, request)
+	return true, m.installPreallocatedNetworkSlot(ctx, containerId, slot, spec, request)
 }
 
-func (m *ContainerNetworkManager) installPreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot, spec *specs.Spec, request *types.ContainerRequest) error {
+func (m *ContainerNetworkManager) installPreallocatedNetworkSlot(ctx context.Context, containerId string, slot *containerNetworkSlot, spec *specs.Spec, request *types.ContainerRequest) error {
 	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
 		Type: specs.NetworkNamespace,
 		Path: slot.netnsPath,
@@ -1320,7 +1323,7 @@ func (m *ContainerNetworkManager) installPreallocatedNetworkSlot(containerId str
 	}
 
 	log.Debug().Str("container_id", containerId).Str("ip_address", slot.ip).Str("network_slot", slot.id).Msg("container preallocated network slot assigned")
-	if err := m.setupNetworkRestrictions(containerId, request); err != nil {
+	if err := m.setupNetworkRestrictionsContext(ctx, containerId, request); err != nil {
 		return errors.Join(err, m.rollbackPreallocatedNetworkSlotAssignment(containerId, slot))
 	}
 
@@ -1811,15 +1814,25 @@ func firstExistingPath(paths ...string) string {
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
+	return m.SetupContext(context.Background(), containerId, spec, request)
+}
+
+// SetupContext carries the opt-in startup trace; network ownership and cleanup
+// retain their existing worker lifetime rather than depending on this context.
+func (m *ContainerNetworkManager) SetupContext(ctx context.Context, containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
 	if spec == nil || spec.Linux == nil {
 		return errors.New("container network setup requires a Linux runtime spec")
 	}
 	m.lastNetworkSetup.Store(time.Now().UnixNano())
 
+	endLock := common.StartupSpan(ctx, "network.container_lock")
 	unlockContainer := m.lockContainerNetwork(containerId)
+	endLock()
 	defer unlockContainer()
 
-	usedSlot, err := m.setupPreallocatedNetworkSlot(containerId, spec, request)
+	endSlot := common.StartupSpan(ctx, "network.slot_setup")
+	usedSlot, err := m.setupPreallocatedNetworkSlot(ctx, containerId, spec, request)
+	endSlot()
 	if usedSlot || err != nil {
 		return err
 	}
@@ -1836,7 +1849,9 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	}
 	defer hostNS.Close()
 
+	endNamespace := common.StartupSpan(ctx, "network.create_namespace")
 	newNs, containerVeth, err := m.createBridgedNamespace(namespace, hostNS, request)
+	endNamespace()
 	if err != nil {
 		return err
 	}
@@ -1857,6 +1872,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 		containerNS:   newNs,
 		request:       request,
 	})
+	common.RecordStartupSpan(ctx, "network.configure_namespace", phaseStart, time.Now())
 	metrics.RecordWorkerStartupPhase("network_configure_namespace", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkConfigureNamespace, phaseStart, err == nil, nil)
 
@@ -1866,7 +1882,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 		return errors.Join(err, m.deleteNetworkSlotResources(namespace))
 	}
 
-	if err := m.setupNetworkRestrictions(containerId, request); err != nil {
+	if err := m.setupNetworkRestrictionsContext(ctx, containerId, request); err != nil {
 		return err
 	}
 
@@ -1874,8 +1890,17 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 }
 
 func (m *ContainerNetworkManager) setupNetworkRestrictions(containerId string, request *types.ContainerRequest) error {
+	return m.setupNetworkRestrictionsContext(context.Background(), containerId, request)
+}
+
+func (m *ContainerNetworkManager) setupNetworkRestrictionsContext(ctx context.Context, containerId string, request *types.ContainerRequest) error {
+	endRestrictions := common.StartupSpan(ctx, "network.restrictions")
+	defer endRestrictions()
 	if m.egress != nil {
-		if err := m.registerEgress(containerId, request); err != nil {
+		endRegister := common.StartupSpan(ctx, "network.egress_register")
+		err := m.registerEgress(containerId, request)
+		endRegister()
+		if err != nil {
 			return err
 		}
 	}
@@ -1889,6 +1914,7 @@ func (m *ContainerNetworkManager) setupNetworkRestrictions(containerId string, r
 
 	phaseStart := time.Now()
 	err := apply()
+	common.RecordStartupSpan(ctx, "network.policy_apply", phaseStart, time.Now())
 	success := err == nil
 	metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{
 		"mode":    mode,
@@ -2819,19 +2845,33 @@ func (m *ContainerNetworkManager) deferNetworkSlotDiscard(containerId string, sl
 }
 
 func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *containerNetworkSlot) error {
-	info, err := containerNetworkInfoFromIP(slot.id, slot.ip, m.ipt6 != nil)
-	if err != nil {
-		return err
+	if os.Getenv("BETA9_NETWORK_CLEANUP_BATCH") == "1" {
+		return m.removeNetworkSlotRulesBatched(slot)
+	}
+	return m.removeNetworkSlotRuleBatch([]*containerNetworkSlot{slot})
+}
+
+func (m *ContainerNetworkManager) removeNetworkSlotRuleBatch(slots []*containerNetworkSlot) error {
+	ips4, ips6 := make([]string, 0, len(slots)), make([]string, 0, len(slots))
+	for _, slot := range slots {
+		info, err := containerNetworkInfoFromIP(slot.id, slot.ip, m.ipt6 != nil)
+		if err != nil {
+			return err
+		}
+		ips4 = append(ips4, info.ContainerIp)
+		if info.ContainerIpv6 != "" {
+			ips6 = append(ips6, info.ContainerIpv6)
+		}
 	}
 
 	m.iptablesMu.Lock()
 	defer m.iptablesMu.Unlock()
 
-	if err := m.removeIPTablesRules(info.ContainerIp, m.ipt); err != nil {
+	if err := m.removeIPTablesRulesForIPs(ips4, m.ipt); err != nil {
 		return err
 	}
-	if m.ipt6 != nil && info.ContainerIpv6 != "" {
-		if err := m.removeIPTablesRules(info.ContainerIpv6, m.ipt6); err != nil {
+	if m.ipt6 != nil && len(ips6) > 0 {
+		if err := m.removeIPTablesRulesForIPs(ips6, m.ipt6); err != nil {
 			return err
 		}
 	}
@@ -2845,6 +2885,10 @@ func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *conta
 // rules per exposed port, so the deletes go through one iptables-restore
 // transaction per family; the per-rule path remains as the fallback.
 func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.IPTables) error {
+	return m.removeIPTablesRulesForIPs([]string{ip}, ipt)
+}
+
+func (m *ContainerNetworkManager) removeIPTablesRulesForIPs(ips []string, ipt *iptables.IPTables) error {
 	chains := [][2]string{{"nat", "PREROUTING"}, {"filter", "FORWARD"}, {"filter", "INPUT"}}
 	doomed := make(map[string][]string, len(chains))
 	var batch strings.Builder
@@ -2857,7 +2901,7 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 
 		var matched []string
 		for _, rule := range rules {
-			if iptablesRuleMatchesIP(rule, ip) && strings.HasPrefix(rule, "-A ") {
+			if iptablesRuleMatchesAnyIP(rule, ips) && strings.HasPrefix(rule, "-A ") {
 				matched = append(matched, rule)
 			}
 		}

@@ -1,13 +1,16 @@
 package auth
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type HttpAuthContext struct {
@@ -19,9 +22,36 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 	tokens := NewTokens(backendRepo, workspaceRepo)
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			trace := common.NewStartupTrace(c.Request().Header.Get("X-Beam-Startup-Trace") == "1" && strings.Contains(c.Path(), "/vm"))
+			traceCtx := common.ContextWithStartupTrace(c.Request().Context(), trace)
+			if trace != nil {
+				c.SetRequest(c.Request().WithContext(traceCtx))
+			}
+			finishAuth := common.StartupSpan(traceCtx, "http.authenticate")
+			var poolStats func() sql.DBStats
+			if trace != nil {
+				if pool, ok := backendRepo.(interface{ DBStats() sql.DBStats }); ok {
+					poolStats = pool.DBStats
+					trace.Attribute("postgres_pool_before", pool.DBStats())
+				}
+			}
+			defer func() {
+				finishAuth()
+				if trace != nil {
+					if poolStats != nil {
+						trace.Attribute("postgres_pool_after", poolStats())
+					}
+					trace.Log(log.Info().Str("component", "gateway").Str("path", c.Path()))
+				}
+			}()
+			invoke := func(context echo.Context) error {
+				finishAuth()
+				defer common.StartupSpan(traceCtx, "http.handler")()
+				return next(context)
+			}
 			// WithAssumedStubAuth checks visibility; the app owns this header.
 			if kind, route := serviceInvocationRoute(c.Path()); kind != "" && route == "public" {
-				return next(c)
+				return invoke(c)
 			}
 
 			req := c.Request()
@@ -32,7 +62,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				// Check query param for token
 				tokenKey = req.URL.Query().Get("auth_token")
 				if tokenKey == "" {
-					return next(c)
+					return invoke(c)
 				}
 			}
 
@@ -41,7 +71,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				if err != nil {
 					return echo.NewHTTPError(http.StatusUnauthorized, "invalid service credential")
 				}
-				return next(&HttpAuthContext{c, authInfo})
+				return invoke(&HttpAuthContext{c, authInfo})
 			}
 
 			token, workspace, err := tokens.AuthenticateUser(c.Request().Context(), tokenKey)
@@ -60,7 +90,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 				},
 			}
 
-			return next(&HttpAuthContext{c, authInfo})
+			return invoke(&HttpAuthContext{c, authInfo})
 		}
 	}
 }

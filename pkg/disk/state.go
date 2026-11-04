@@ -1,10 +1,13 @@
 package disk
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/beam-cloud/beta9/pkg/common"
 )
 
 // Volume directory layout: layer files under layersSubdir, the durability
@@ -143,20 +146,35 @@ func loadVolumeState(dir string) (*volumeState, error) {
 	if err := json.Unmarshal(data, state); err != nil {
 		return nil, fmt.Errorf("parse volume state in %s: %w", dir, err)
 	}
+	applyDetachedVolumeMarker(dir, data, state)
 	return state, nil
 }
 
 func saveVolumeState(dir string, state *volumeState) error {
+	return saveVolumeStateContext(context.Background(), dir, state)
+}
+
+func saveVolumeStateContext(ctx context.Context, dir string, state *volumeState) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(dir, stateFileName), data)
+	// Clear the advisory shutdown hint before installing any new live state.
+	// After a host crash all daemons are gone, so losing this unlink is safe;
+	// a stale hint also cannot match a changed payload manifest's digest.
+	if err := os.Remove(filepath.Join(dir, detachedMarkerName)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return writeFileAtomicContext(ctx, filepath.Join(dir, stateFileName), data)
 }
 
 // writeFileAtomic replaces path with data through a synced temporary file and
 // a rename, so a crash mid-write never leaves a torn file behind.
 func writeFileAtomic(path string, data []byte) error {
+	return writeFileAtomicContext(context.Background(), path, data)
+}
+
+func writeFileAtomicContext(ctx context.Context, path string, data []byte) error {
 	tmpPath := path + ".tmp"
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -167,13 +185,20 @@ func writeFileAtomic(path string, data []byte) error {
 		file.Close()
 		return err
 	}
-	return replaceFileAtomic(file, path)
+	return replaceFileAtomicContext(ctx, file, path)
 }
 
 // replaceFileAtomic takes ownership of file and installs it after syncing its
 // contents. Syncing the destination directory makes the rename durable too.
 func replaceFileAtomic(file *os.File, path string) error {
-	if err := file.Sync(); err != nil {
+	return replaceFileAtomicContext(context.Background(), file, path)
+}
+
+func replaceFileAtomicContext(ctx context.Context, file *os.File, path string) error {
+	endSync := common.StartupSpan(ctx, "disk.state.file_sync")
+	err := file.Sync()
+	endSync()
+	if err != nil {
 		file.Close()
 		return err
 	}
@@ -188,5 +213,6 @@ func replaceFileAtomic(file *os.File, path string) error {
 		return err
 	}
 	defer directory.Close()
+	defer common.StartupSpan(ctx, "disk.state.directory_sync")()
 	return directory.Sync()
 }

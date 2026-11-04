@@ -17,6 +17,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -656,6 +657,11 @@ func qcowChainVirtualSize(manifests []*types.DiskSnapshotManifest) int64 {
 // snapshotQcowDurableDiskMount seals the volume and publishes every pending
 // layer, oldest first, as ordinary DiskSnapshot generations.
 func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, mode durableDiskSyncMode) (*types.DiskSnapshot, error) {
+	return s.snapshotQcowDurableDiskMountWithSeal(ctx, request, mount, mode, nil)
+}
+
+func (s *Worker) snapshotQcowDurableDiskMountWithSeal(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, mode durableDiskSyncMode, sealed func()) (*types.DiskSnapshot, error) {
+	defer common.StartupSpan(ctx, "checkpoint.qcow.snapshot")()
 	if mount.ReadOnly {
 		return nil, nil
 	}
@@ -677,7 +683,9 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 	if err != nil {
 		return nil, err
 	}
+	endLatest := common.StartupSpan(ctx, "checkpoint.qcow.latest_metadata")
 	latest, err := s.latestQcowSnapshotRow(ctx, request, mount)
+	endLatest()
 	if err != nil {
 		return nil, err
 	}
@@ -690,7 +698,10 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 			if err != nil {
 				return err
 			}
-			if err := volume.MarkPublished(layer.Path, row.ExternalId); err != nil {
+			endPublished := common.StartupSpan(ctx, "checkpoint.qcow.mark_published")
+			publishErr := volume.MarkPublishedContext(ctx, layer.Path, row.ExternalId)
+			endPublished()
+			if err := publishErr; err != nil {
 				if errors.Is(err, disk.ErrNotCheckpointed) {
 					s.withdrawQcowSnapshot(ctx, request, row, err)
 				}
@@ -701,7 +712,7 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		}
 		return nil
 	}
-	if err := snapshotQcowVolume(ctx, volume, mode, latest == nil, publish); err != nil {
+	if err := snapshotQcowVolumeWithSeal(ctx, volume, mode, latest == nil, publish, sealed); err != nil {
 		return published, err
 	}
 	// A flatten can overtake a background merge, leaving fewer published
@@ -729,6 +740,10 @@ type qcowSnapshotVolume interface {
 // Explicit and final snapshots must also capture the current head: publishing
 // a backlog alone would omit writes made since the last successful seal.
 func snapshotQcowVolume(ctx context.Context, volume qcowSnapshotVolume, mode durableDiskSyncMode, force bool, publish func([]disk.SealedLayer) error) error {
+	return snapshotQcowVolumeWithSeal(ctx, volume, mode, force, publish, nil)
+}
+
+func snapshotQcowVolumeWithSeal(ctx context.Context, volume qcowSnapshotVolume, mode durableDiskSyncMode, force bool, publish func([]disk.SealedLayer) error, onSealed func()) error {
 	checkpoint := func(sealed []disk.SealedLayer) error {
 		if err := publish(sealed); err != nil {
 			return err
@@ -760,8 +775,14 @@ func snapshotQcowVolume(ctx context.Context, volume qcowSnapshotVolume, mode dur
 		force = false // Publishing the backlog established the first generation.
 	}
 	sealed, skipped, err := sealQcowVolume(ctx, volume, force)
-	if err != nil || skipped {
+	if err != nil {
 		return err
+	}
+	if onSealed != nil {
+		onSealed()
+	}
+	if skipped {
+		return nil
 	}
 	return checkpoint(sealed)
 }
@@ -770,6 +791,7 @@ func snapshotQcowVolume(ctx context.Context, volume qcowSnapshotVolume, mode dur
 // depth cap: compaction follows each publish, so nothing else would retry the
 // failed ones that left it there.
 func sealQcowVolume(ctx context.Context, volume qcowSnapshotVolume, force bool) ([]disk.SealedLayer, bool, error) {
+	defer common.StartupSpan(ctx, "checkpoint.qcow.seal")()
 	sealed, skipped, err := volume.Seal(ctx, force)
 	if !errors.Is(err, disk.ErrMaxChainDepth) {
 		return sealed, skipped, err
@@ -964,7 +986,10 @@ func (s *Worker) createQcowGeneration(ctx context.Context, request *types.Contai
 	manifestDigest := sha256.Sum256(manifestBytes)
 	objectPrefix := durableDiskSnapshotObjectPrefix(mount, generation)
 	manifestKey := path.Join(objectPrefix, durableDiskManifestFileName)
-	if err := store.Upload(ctx, manifestKey, manifestBytes); err != nil {
+	endManifest := common.StartupSpan(ctx, "checkpoint.qcow.upload_manifest")
+	manifestErr := store.Upload(ctx, manifestKey, manifestBytes)
+	endManifest()
+	if err := manifestErr; err != nil {
 		return nil, nil, fmt.Errorf("upload qcow snapshot manifest: %w", err)
 	}
 
@@ -995,11 +1020,13 @@ func (s *Worker) createQcowGeneration(ctx context.Context, request *types.Contai
 	if err := check(); err != nil {
 		return nil, nil, err
 	}
+	endMetadata := common.StartupSpan(ctx, "checkpoint.qcow.publish_metadata")
 	resp, err := handleGRPCResponse(s.backendRepoClient.CreateDiskSnapshot(ctx, &pb.CreateDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),
 		StubId:      cacheRequestStubID(request),
 		Snapshot:    durableDiskSnapshotToProto(snapshot),
 	}))
+	endMetadata()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1020,17 +1047,22 @@ func (s *Worker) uploadFlattenedQcowLayer(ctx context.Context, mount *types.Moun
 // uploadQcowLayer chunks a qcow image and uploads the chunks the published
 // chain does not already hold.
 func (s *Worker) uploadQcowLayer(ctx context.Context, mount *types.Mount, store *durableDiskSnapshotBucketStore, key, imagePath string) (*types.DiskSnapshotFile, error) {
+	endScan := common.StartupSpan(ctx, "checkpoint.qcow.scan_layer")
 	chunkPrefix := durableDiskChunkPrefix(mount)
 	layer, err := disk.ScanLayer(ctx, imagePath, func(digest string) string {
 		return path.Join(chunkPrefix, strings.TrimPrefix(digest, "sha256:"))
 	})
+	endScan()
 	if err != nil {
 		return nil, fmt.Errorf("scan qcow layer: %w", err)
 	}
 
 	upload := s.qcowUploadChunks(key, layer, store.bucket)
 	sink := &qcowChunkSink{ctx: ctx, store: store}
-	if err := disk.UploadLayer(ctx, sink, imagePath, upload); err != nil {
+	endChunks := common.StartupSpan(ctx, "checkpoint.qcow.upload_chunks")
+	uploadErr := disk.UploadLayer(ctx, sink, imagePath, upload)
+	endChunks()
+	if err := uploadErr; err != nil {
 		return nil, err
 	}
 	if skipped := len(layer.Chunks) - len(upload.Chunks); skipped > 0 {

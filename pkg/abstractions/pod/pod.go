@@ -441,6 +441,7 @@ func forceResourceLimitsRequested(ctx context.Context) bool {
 }
 
 func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, opts runOptions) (string, error) {
+	defer common.StartupSpan(ctx, "schedule.pod_run")()
 	if !podRunnableStub(stub.Type) {
 		return "", fmt.Errorf("stub type <%s> cannot be run through pods", stub.Type)
 	}
@@ -459,11 +460,16 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	if err := s.configureMachinePlacement(ctx, workspace.ExternalId, opts.machineId, &stubConfig); err != nil {
 		return "", err
 	}
-	if err := s.prepareDurableDiskPlacement(ctx, workspace, &stubConfig); err != nil {
-		return "", err
+	endPlacement := common.StartupSpan(ctx, "schedule.disk_placement")
+	placementErr := s.prepareDurableDiskPlacement(ctx, workspace, &stubConfig)
+	endPlacement()
+	if placementErr != nil {
+		return "", placementErr
 	}
 
+	endSecrets := common.StartupSpan(ctx, "schedule.secrets")
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(ctx, s.backendRepo, workspace, stubConfig, stub.Type.IsSandbox())
+	endSecrets()
 	if err != nil {
 		return "", err
 	}
@@ -473,12 +479,14 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		containerId = s.generateContainerId(stub.ExternalId, stub.Type)
 	}
 
+	endMounts := common.StartupSpan(ctx, "schedule.mounts")
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		containerId,
 		stub,
 		workspace,
 		stubConfig,
 	)
+	endMounts()
 	if err != nil {
 		return "", err
 	}
@@ -518,6 +526,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		ports = stubConfig.Ports
 	}
 
+	endKeepWarm := common.StartupSpan(ctx, "schedule.keep_warm")
 	setPodKeepWarmLock(
 		context.Background(),
 		s.containerRepo,
@@ -526,6 +535,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		containerId,
 		stubConfig.KeepWarmSeconds,
 	)
+	endKeepWarm()
 
 	if imageId == nil {
 		imageId = &stubConfig.Runtime.ImageId
@@ -571,7 +581,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		return "", err
 	}
 
-	err = s.scheduler.Run(runRequest)
+	err = s.scheduler.RunContext(ctx, runRequest)
 	if err != nil {
 		setPodKeepWarmLock(
 			context.Background(),

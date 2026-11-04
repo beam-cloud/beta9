@@ -363,6 +363,25 @@ func TestMergeStubCacheRequiredContentRecordKeepsMostRecentlyReportedCheckpoint(
 	}
 }
 
+func TestMutableVolumeRequirementsReplaceObsoleteHashes(t *testing.T) {
+	merged := map[string]types.CacheRequiredContentItem{}
+	for _, item := range []types.CacheRequiredContentItem{
+		{Kind: types.CacheContentKindVolume, Hash: "old", Source: "volumes/model", SourceBucket: "a"},
+		{Kind: types.CacheContentKindVolume, Hash: "other-path", Source: "volumes/other", SourceBucket: "a"},
+		{Kind: types.CacheContentKindVolume, Hash: "other-bucket", Source: "volumes/model", SourceBucket: "b"},
+		{Kind: types.CacheContentKindVolume, Hash: "new", Source: "volumes/model", SourceBucket: "a"},
+		{Kind: types.CacheContentKindVolume, Hash: "unknown-path-1"},
+		{Kind: types.CacheContentKindVolume, Hash: "unknown-path-2"},
+	} {
+		mergeStubCacheRequiredContentItem(merged, item)
+	}
+	var hashes []string
+	for _, item := range stubCacheRequiredContentItems(merged) {
+		hashes = append(hashes, item.Hash)
+	}
+	require.ElementsMatch(t, []string{"new", "other-path", "other-bucket", "unknown-path-1", "unknown-path-2"}, hashes)
+}
+
 func TestMergeStubCacheRequiredContentRecordKeepsLatestDiskSnapshotGeneration(t *testing.T) {
 	merged := map[string]types.CacheRequiredContentItem{}
 	writeRecord := func(items ...types.CacheRequiredContentItem) {

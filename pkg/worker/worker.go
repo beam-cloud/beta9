@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -424,6 +425,9 @@ func (i *ContainerInstance) setContainerPortAddress(port int32, address string) 
 }
 
 type ContainerOptions struct {
+	StartupTrace          *common.StartupTrace
+	BindBootPreparation   func(context.Context) context.Context
+	FinishBootPreparation func()
 	// NetworkPrepared means its namespace was assigned during image/disk setup.
 	NetworkPrepared             bool
 	BundlePath                  string
@@ -879,6 +883,7 @@ func (s *Worker) Run() error {
 	go s.listenForShutdown()
 	go s.manageWorkerCapacity()
 	go s.processStopContainerEvents()
+	go s.pruneIdleImageMounts(s.ctx)
 
 	lastContainerRequest := time.Now()
 	reconnectDelay := containerRequestStreamInterval
@@ -1038,9 +1043,28 @@ func (s *Worker) runContainerRequestWithRunner(
 	runContainer func(context.Context, *types.ContainerRequest, func() error) error,
 ) {
 	containerId := request.ContainerId
+	if request.IsPersistentVM() {
+		// Cover pre-claim metadata/image work too. A resume reaches here after
+		// the API and scheduler; optional hydration must not get a head start
+		// while these reads wait on the gateway.
+		defer beginCheckpointCriticalIO()()
+	}
 	log.Info().Str("container_id", containerId).Msg("running container")
 
 	ctx, cancelStartup := context.WithCancel(s.ctx)
+	trace := common.NewStartupTrace(request.IsPersistentVM() && os.Getenv("BETA9_TRACE_VM_STARTUP") == "1")
+	trace.Identity("", containerId)
+	ctx = common.ContextWithStartupTrace(ctx, trace)
+	endPreparation := common.StartupSpan(ctx, "worker.pre_claim")
+	if request.Checkpoint == nil {
+		if preparation, ok := s.runtime.(interface {
+			BeginBootPreparation(context.Context) (context.Context, func())
+		}); ok {
+			var finish func()
+			ctx, finish = preparation.BeginBootPreparation(ctx)
+			defer finish()
+		}
+	}
 
 	s.registerContainerCancel(containerId, cancelStartup)
 	defer func() {
@@ -1068,7 +1092,11 @@ func (s *Worker) runContainerRequestWithRunner(
 	// the request: a stop that races the claim is observed afterwards through
 	// the startup context, so the container is failed (and its exit reported)
 	// rather than silently forgotten while the gateway believes it is ours.
-	claimed, err := s.claimContainer(s.ctx, request)
+	endPreparation()
+	endClaim := common.StartupSpan(ctx, "worker.claim_rpc")
+	claimCtx := common.ContextWithStartupTrace(s.ctx, common.StartupTraceFromContext(ctx))
+	claimed, err := s.claimContainer(claimCtx, request)
+	endClaim()
 	rootPreparation.finishClaim(request, err)
 	if err != nil {
 		if !claimed {
@@ -1741,7 +1769,8 @@ func (s *Worker) setWorkerKeepAlive() error {
 }
 
 func (s *Worker) profile() {
-	if !s.config.DebugMode {
+	startupProfiling := os.Getenv("BETA9_PROFILE_STARTUP") == "1"
+	if !s.config.DebugMode && !startupProfiling {
 		return
 	}
 
@@ -1751,9 +1780,13 @@ func (s *Worker) profile() {
 		return
 	}
 
-	srv := &http.Server{
-		Addr: fmt.Sprintf(":%d", port),
+	address := fmt.Sprintf(":%d", port)
+	if startupProfiling {
+		address = fmt.Sprintf("127.0.0.1:%d", port)
+		goruntime.SetBlockProfileRate(100000)
+		goruntime.SetMutexProfileFraction(5)
 	}
+	srv := &http.Server{Addr: address}
 
 	go func() {
 		log.Info().Msgf("starting pprof server on :%d", port)

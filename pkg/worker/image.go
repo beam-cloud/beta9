@@ -158,6 +158,7 @@ type ImageClient struct {
 	mountedFuseServers *common.SafeMap[*fuse.Server]
 	mountLocks         map[string]*sync.Mutex
 	mountLocksMu       sync.Mutex
+	mountLastUsed      sync.Map // image id -> time.Time, guarded by its mount lock
 	skopeoClient       common.SkopeoClient
 	config             types.AppConfig
 	publishingConfig   atomic.Pointer[types.ImageServiceConfig]
@@ -298,10 +299,17 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 
 func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
 	startTime := time.Now()
-
-	if c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit") {
-		c.recordSuccessfulImageLoad(ctx, request, nil)
-		return time.Since(startTime), nil
+	if c.mountedImageReady(request.ImageId) {
+		unlock := c.lockImageMount(request.ImageId)
+		hit := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit")
+		if hit {
+			c.mountLastUsed.Store(request.ImageId, time.Now())
+		}
+		unlock()
+		if hit {
+			c.recordSuccessfulImageLoad(ctx, request, nil)
+			return time.Since(startTime), nil
+		}
 	}
 
 	// One mutex per image serializes every mount attempt in this process, and
@@ -309,11 +317,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	// the lock is held. Cross-process work on the shared archive and layer
 	// files is guarded by file locks where it happens.
 	localLockStart := time.Now()
-	unlockMount := c.lockImageMount(request.ImageId)
+	unlockMount := sync.OnceFunc(c.lockImageMount(request.ImageId))
 	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.local_mount_lock"), localLockStart, time.Since(localLockStart), true, nil)
 	defer unlockMount()
 
 	if c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_local_lock") {
+		c.mountLastUsed.Store(request.ImageId, time.Now())
+		// Owner reporting can make RPCs. Keep hot-image callers parallel once
+		// their mount is fenced against expiry and its recency is refreshed.
+		unlockMount()
 		c.recordSuccessfulImageLoad(ctx, request, nil)
 		return time.Since(startTime), nil
 	}
@@ -341,6 +353,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.mount_archive"), mountStart, time.Since(mountStart), true, map[string]string{
 		"storage_mode": archive.storageMode,
 	})
+	unlockMount()
 	c.recordSuccessfulImageLoad(ctx, request, archive.metadata)
 
 	return time.Since(startTime), nil
@@ -1305,12 +1318,16 @@ func (c *ImageClient) mountLazyImageArchive(ctx context.Context, request *types.
 	}
 
 	c.mountedFuseServers.Set(request.ImageId, server)
+	c.mountLastUsed.Store(request.ImageId, time.Now())
 	go func() {
 		if err := <-serverErrors; err != nil {
 			log.Error().Err(err).Str("image_id", request.ImageId).Msg("image mount server failed")
 		}
+		unlock := c.lockImageMount(request.ImageId)
+		defer unlock()
 		if current, ok := c.mountedFuseServers.Get(request.ImageId); ok && current == server {
 			c.mountedFuseServers.Delete(request.ImageId)
+			c.mountLastUsed.Delete(request.ImageId)
 		}
 	}()
 	return nil
@@ -1557,13 +1574,21 @@ func (c *ImageClient) Cleanup() error {
 	})
 
 	for imageId, server := range mountedFuseServers {
-		mountPoint := c.imageMountPoint(imageId)
-		log.Info().Str("image_id", imageId).Str("mount_point", mountPoint).Msg("un-mounting image")
-		server.Unmount()
-		if err := forceUnmountImageMount(mountPoint); err != nil {
-			log.Warn().Str("image_id", imageId).Str("mount_point", mountPoint).Err(err).Msg("failed to force unmount image mount")
-		}
-		c.mountedFuseServers.Delete(imageId)
+		func() {
+			unlock := c.lockImageMount(imageId)
+			defer unlock()
+			if current, ok := c.mountedFuseServers.Get(imageId); !ok || current != server {
+				return
+			}
+			mountPoint := c.imageMountPoint(imageId)
+			log.Info().Str("image_id", imageId).Str("mount_point", mountPoint).Msg("un-mounting image")
+			server.Unmount()
+			if err := forceUnmountImageMount(mountPoint); err != nil {
+				log.Warn().Str("image_id", imageId).Str("mount_point", mountPoint).Err(err).Msg("failed to force unmount image mount")
+			}
+			c.mountedFuseServers.Delete(imageId)
+			c.mountLastUsed.Delete(imageId)
+		}()
 	}
 
 	log.Info().Str("path", c.imageCachePath).Msg("cleaning up cachefs image cache")

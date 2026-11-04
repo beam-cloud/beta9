@@ -2,12 +2,15 @@ package auth
 
 import (
 	"context"
+	"os"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -200,12 +203,36 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 
 func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		phasePrefix := "claim"
+		if claim, ok := req.(*pb.ClaimContainerRequest); ok && strings.HasPrefix(claim.ContainerId, "vm-") && os.Getenv("BETA9_TRACE_VM_STARTUP") == "1" {
+			trace := common.NewStartupTrace(true)
+			trace.Identity("", claim.ContainerId)
+			ctx = common.ContextWithStartupTrace(ctx, trace)
+			endRPC := common.StartupSpan(ctx, "claim.server_rpc")
+			defer func() {
+				endRPC()
+				trace.LogEvent(log.Info().Str("component", "gateway_claim"), "vm startup claim trace")
+			}()
+		} else if snapshot, ok := req.(*pb.CreateDiskSnapshotRequest); ok && os.Getenv("BETA9_TRACE_VM_STARTUP") == "1" {
+			phasePrefix = "repository"
+			trace := common.NewStartupTrace(true)
+			trace.Attribute("rpc_method", info.FullMethod)
+			trace.Attribute("stub_id", snapshot.StubId)
+			ctx = common.ContextWithStartupTrace(ctx, trace)
+			endRPC := common.StartupSpan(ctx, "repository.CreateDiskSnapshot.server")
+			defer func() {
+				endRPC()
+				trace.LogEvent(log.Info().Str("component", "gateway_repository"), "vm repository trace")
+			}()
+		}
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
+		endAuthenticate := common.StartupSpan(ctx, phasePrefix+".authenticate")
 		authInfo, valid := ai.validateToken(ctx, md)
+		endAuthenticate()
 		if !valid {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(ctx, req)
@@ -220,7 +247,10 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 		// Attach the auth info to context
 		ctx = ai.newContextWithAuth(ctx, authInfo)
 		if service, ok := info.Server.(RequestAuthorizer); ok && ai.isAuthRequired(info.FullMethod) {
-			if err := service.AuthorizeRequest(ctx, req); err != nil {
+			endAuthorize := common.StartupSpan(ctx, phasePrefix+".authorize_request")
+			err := service.AuthorizeRequest(ctx, req)
+			endAuthorize()
+			if err != nil {
 				return nil, err
 			}
 		}

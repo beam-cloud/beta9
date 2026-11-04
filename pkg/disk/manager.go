@@ -19,7 +19,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/rs/zerolog/log"
 )
 
@@ -90,6 +92,15 @@ type Config struct {
 	// SpareCount is the number of formatted roots retained per virtual size.
 	// Zero uses the small default pool suitable for NBD exports.
 	SpareCount int
+	// SpareRefillQuietPeriod defers background formatting after a spare is
+	// consumed while prepared roots remain. An empty pool refills immediately.
+	SpareRefillQuietPeriod time.Duration
+	// BeforeSpareBuild can defer optional refill while foreground work is
+	// active. Empty pools still build immediately so warm-up cannot deadlock.
+	BeforeSpareBuild func(context.Context) error
+	// DetachedStateMarker records confirmed vhost daemon shutdown separately
+	// from the immutable, already synced payload manifest.
+	DetachedStateMarker bool
 
 	// Test hooks.
 	SysBlockPath string
@@ -99,22 +110,28 @@ type Config struct {
 
 // Manager owns every qcow2 volume on a worker node.
 type Manager struct {
-	root          string
-	binaries      Binaries
-	sysBlockPath  string
-	devPath       string
-	run           runner
-	execs         bool // run is the real exec runner, so binaries and devices are the host's
-	maxChainDepth int
-	spareExport   ExportMode
-	spareCount    int
+	root                   string
+	binaries               Binaries
+	sysBlockPath           string
+	devPath                string
+	run                    runner
+	execs                  bool // run is the real exec runner, so binaries and devices are the host's
+	maxChainDepth          int
+	spareExport            ExportMode
+	spareCount             int
+	spareRefillQuietPeriod time.Duration
+	beforeSpareBuild       func(context.Context) error
+	detachedStateMarker    bool
 
 	mu      sync.Mutex
 	volumes map[string]*Volume
 	// spares are pre-built fresh volumes by virtual size (see spare.go).
-	spares      map[int64][]*Volume
-	spareBuilds map[int64]bool
-	closed      bool
+	spares         map[int64][]*Volume
+	spareBuilds    map[int64]bool
+	spareSizes     []int64 // nil until persisted recency is loaded; guarded by mu
+	spareLastTaken map[int64]time.Time
+	closed         bool
+	cachePruneMu   sync.Mutex
 
 	// nbdReadyMu serializes the first NBD preparation so concurrent first
 	// attaches share one pass instead of each validating every device.
@@ -156,20 +173,24 @@ func NewManager(config Config) *Manager {
 	}
 	spareCtx, spareCancel := context.WithCancel(context.Background())
 	return &Manager{
-		root:          config.Root,
-		binaries:      config.Binaries,
-		sysBlockPath:  config.SysBlockPath,
-		devPath:       config.DevPath,
-		run:           run,
-		execs:         config.Runner == nil,
-		maxChainDepth: config.MaxChainDepth,
-		spareExport:   config.SpareExport,
-		spareCount:    config.SpareCount,
-		volumes:       make(map[string]*Volume),
-		spares:        make(map[int64][]*Volume),
-		spareBuilds:   make(map[int64]bool),
-		spareCtx:      spareCtx,
-		spareCancel:   spareCancel,
+		root:                   config.Root,
+		binaries:               config.Binaries,
+		sysBlockPath:           config.SysBlockPath,
+		devPath:                config.DevPath,
+		run:                    run,
+		execs:                  config.Runner == nil,
+		maxChainDepth:          config.MaxChainDepth,
+		spareExport:            config.SpareExport,
+		spareCount:             config.SpareCount,
+		spareRefillQuietPeriod: max(0, config.SpareRefillQuietPeriod),
+		beforeSpareBuild:       config.BeforeSpareBuild,
+		detachedStateMarker:    config.DetachedStateMarker,
+		volumes:                make(map[string]*Volume),
+		spares:                 make(map[int64][]*Volume),
+		spareBuilds:            make(map[int64]bool),
+		spareLastTaken:         make(map[int64]time.Time),
+		spareCtx:               spareCtx,
+		spareCancel:            spareCancel,
 	}
 }
 
@@ -214,6 +235,7 @@ func (m *Manager) preflight() error {
 
 // Attach brings a volume online and registers it under its key.
 func (m *Manager) Attach(ctx context.Context, spec AttachSpec, source ChunkSource) (*Volume, error) {
+	defer common.StartupSpan(ctx, "disk.attach")()
 	if err := m.preflight(); err != nil {
 		return nil, err
 	}
@@ -238,14 +260,17 @@ func (m *Manager) Attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 		return nil, fmt.Errorf("volume %s: unsupported export mode %q", spec.Key, spec.Export)
 	}
 
+	endAdmission := common.StartupSpan(ctx, "disk.attach_admission")
 	m.mu.Lock()
 	if _, exists := m.volumes[spec.Key]; exists {
 		m.mu.Unlock()
+		endAdmission()
 		return nil, fmt.Errorf("volume %s is already attached", spec.Key)
 	}
 	// Reserve the key while attaching so concurrent attaches cannot race.
 	m.volumes[spec.Key] = nil
 	m.mu.Unlock()
+	endAdmission()
 
 	volume, err := m.attach(ctx, spec, source)
 
@@ -349,7 +374,9 @@ func (m *Manager) Recover(ctx context.Context) error {
 	// Spares for the sizes this node saw last time are built while the worker
 	// is still booting, so its first fresh attach adopts one.
 	defer func() {
-		for _, size := range m.rememberedSpareSizes() {
+		sizes := m.rememberedSpareSizes()
+		m.retainSpareSizes(sizes)
+		for _, size := range sizes {
 			m.replenishSpares(size)
 		}
 	}()

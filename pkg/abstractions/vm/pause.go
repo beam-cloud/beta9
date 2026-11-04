@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
@@ -13,6 +14,7 @@ import (
 // paused. The terminal checkpoint owns shutdown; a normal systemd shutdown
 // would change those disks underneath the saved memory image.
 func (s *Service) pause(ctx context.Context, v *types.VM) error {
+	defer common.StartupSpan(ctx, "vm.pause")()
 	if v.Spec.GPU != "" {
 		return echo.NewHTTPError(409, "GPU VMs cannot pause memory; stop to preserve saved files")
 	}
@@ -35,11 +37,16 @@ func (s *Service) pause(ctx context.Context, v *types.VM) error {
 
 	v.DesiredState, v.Status = types.VMStatePaused, types.VMStatePausing
 	v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
-	if err := s.repo.SaveVM(ctx, v); err != nil {
+	endIntent := common.StartupSpan(ctx, "pause.save_intent")
+	saveErr := s.repo.SaveVM(ctx, v)
+	endIntent()
+	if err := saveErr; err != nil {
 		return err
 	}
 
+	endCapture := common.StartupSpan(ctx, "pause.capture_and_persist")
 	resp, err := s.runtime.SandboxSnapshotMemory(ctx, &pb.PodSandboxSnapshotMemoryRequest{StubId: v.StubID, ContainerId: v.ContainerID, TerminateAfterCheckpoint: true})
+	endCapture()
 	if err != nil {
 		return err
 	}
@@ -67,10 +74,14 @@ func (s *Service) pause(ctx context.Context, v *types.VM) error {
 
 	v.MemoryCheckpointID, v.MemoryDiskSnapshots = resp.CheckpointId, paired
 	v.RootSnapshotID = paired[rootDisk(v)]
-	if err := s.repo.SaveVM(ctx, v); err != nil {
+	endPairing := common.StartupSpan(ctx, "pause.save_pairing")
+	saveErr = s.repo.SaveVM(ctx, v)
+	endPairing()
+	if err := saveErr; err != nil {
 		return err
 	}
 
+	defer common.StartupSpan(ctx, "pause.finalize")()
 	return s.stop(ctx, v, false)
 }
 

@@ -7,6 +7,8 @@
 !proto/**
 !go.mod
 !go.sum
+!hack
+!hack/worker-build-modfile.go
 !sdk
 !sdk/**
 !deploy/github-builder

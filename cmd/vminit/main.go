@@ -65,6 +65,7 @@ func main() {
 	}
 	code, err := run()
 	if err != nil {
+		flushBootTraceConsole()
 		logf("fatal: %v", err)
 	}
 	powerOff(code)
@@ -75,6 +76,10 @@ var bootStart = time.Now()
 // logf prefixes the seconds since init started so the console shows where
 // boot time goes.
 func logf(format string, args ...any) {
+	if strings.HasPrefix(format, "boot ") {
+		guestBootTrace.record(fmt.Sprintf(format, args...))
+		return
+	}
 	fmt.Fprintf(os.Stdout, "vminit[+%.3fs]: "+format+"\n", append([]any{time.Since(bootStart).Seconds()}, args...)...)
 }
 
@@ -92,6 +97,10 @@ func powerOff(code int) {
 
 func run() (int, error) {
 	logf("boot phase: init entered")
+	var uptime unix.Timespec
+	if unix.ClockGettime(unix.CLOCK_BOOTTIME, &uptime) == nil {
+		logf("boot clock: init entered uptime_us=%d", uptime.Nano()/1000)
+	}
 	if err := mountEarly(); err != nil {
 		return -1, err
 	}
@@ -100,10 +109,13 @@ func run() (int, error) {
 	if err != nil {
 		return -1, err
 	}
+	guestBootTrace.enabled = vm.TraceStartup
+	logf("boot phase: vm spec read")
 	spec, err := readOCISpec()
 	if err != nil {
 		return -1, err
 	}
+	logf("boot phase: oci spec read")
 
 	if err := assembleRoot(vm); err != nil {
 		return -1, fmt.Errorf("assemble root: %w", err)
@@ -156,6 +168,7 @@ func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (i
 		return -1, err
 	}
 	logf("boot phase: control connected")
+	guestBootTrace.connect(ctrl.send)
 	defer ctrl.close()
 	go workload.watchOOM(ctrl)
 	ctrl.systemd = systemd
@@ -289,12 +302,15 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := waitForDevice(vm.RootDisk); err != nil {
 		return err
 	}
+	logf("boot phase: root device ready")
 	if err := enableWriteCache(vm.RootDisk); err != nil {
 		return err
 	}
+	logf("boot phase: root write cache configured")
 	if err := unix.Mount(vm.RootDisk, microvm.DiskMount, "ext4", 0, ""); err != nil {
 		return fmt.Errorf("mount %s: %w", vm.RootDisk, err)
 	}
+	logf("boot phase: root disk mounted")
 	upper := filepath.Join(microvm.DiskMount, microvm.DiskOverlayUpper)
 	work := filepath.Join(microvm.DiskMount, microvm.DiskOverlayWork)
 	docker := filepath.Join(microvm.DiskMount, microvm.DiskDockerDir)
@@ -306,6 +322,7 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := clearOverlayOrigins(upper); err != nil {
 		return fmt.Errorf("clear stale overlay origins: %w", err)
 	}
+	logf("boot phase: overlay upper prepared")
 	// overlayfs wants a work dir it created; one left by a previous mount
 	// (possibly by a container runtime on another host) is rejected.
 	if err := os.RemoveAll(work); err != nil {
@@ -314,18 +331,21 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
+	logf("boot phase: overlay work prepared")
 
 	// A non-recursive bind of the virtio-fs root gives the overlay a lower
 	// without the pseudo filesystems and submounts stacked on it.
 	if err := unix.Mount("/", microvm.ImageMount, "", unix.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind image root: %w", err)
 	}
+	logf("boot phase: image lower bound")
 	// virtio-fs inode handles change on cold boots and forks. Keep copied-up
 	// data on the durable disk instead of indexing or referencing lower inodes.
 	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=off", microvm.ImageMount, upper, work)
 	if err := unix.Mount("overlay", microvm.NewRoot, "overlay", 0, overlayOpts); err != nil {
 		return fmt.Errorf("mount overlay (%s): %w", overlayOpts, err)
 	}
+	logf("boot phase: overlay mounted")
 
 	newRoot := microvm.NewRoot
 	// Keep the disk reachable in the final root for FIFREEZE and Docker.
@@ -342,7 +362,9 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := mountPseudo(newRoot); err != nil {
 		return fmt.Errorf("mount pseudo filesystems: %w", err)
 	}
-	for _, mount := range vm.Mounts {
+	logf("boot phase: pseudo filesystems mounted")
+	if err := applyGuestMounts(newRoot, vm.Mounts, vm.MountConcurrency, canonicalMountTarget, func(i int, mount microvm.Mount) error {
+		mountStarted := time.Now()
 		var err error
 		switch mount.Type {
 		case microvm.MountTmpfs:
@@ -353,7 +375,12 @@ func assembleRoot(vm *microvm.Spec) error {
 		if err != nil {
 			return err
 		}
+		logf("boot mount: index=%d destination=%s duration_us=%d", i, mount.Destination, time.Since(mountStarted).Microseconds())
+		return nil
+	}); err != nil {
+		return err
 	}
+	logf("boot phase: spec mounts applied")
 	if vm.Docker {
 		target := filepath.Join(newRoot, microvm.DockerDataRoot)
 		if err := os.MkdirAll(target, 0o710); err != nil {

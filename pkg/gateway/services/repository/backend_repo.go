@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -191,7 +192,9 @@ func (s *BackendRepositoryService) UpdateCheckpoint(ctx context.Context, req *pb
 }
 
 func (s *BackendRepositoryService) CreateDiskSnapshot(ctx context.Context, req *pb.CreateDiskSnapshotRequest) (*pb.CreateDiskSnapshotResponse, error) {
+	endWorkspace := common.StartupSpan(ctx, "repository.CreateDiskSnapshot.workspace_lookup")
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	endWorkspace()
 	if err != nil {
 		return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -203,7 +206,9 @@ func (s *BackendRepositoryService) CreateDiskSnapshot(ctx context.Context, req *
 	snapshot.WorkspaceId = workspace.Id
 
 	if req.StubId != "" {
+		endStub := common.StartupSpan(ctx, "repository.CreateDiskSnapshot.stub_lookup")
 		stub, err := s.backendRepo.GetStubByExternalId(ctx, req.StubId)
+		endStub()
 		if err != nil {
 			return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
@@ -213,7 +218,9 @@ func (s *BackendRepositoryService) CreateDiskSnapshot(ctx context.Context, req *
 		snapshot.StubId = stub.Id
 	}
 
+	endCommit := common.StartupSpan(ctx, "repository.CreateDiskSnapshot.database_commit")
 	created, err := s.backendRepo.CreateDiskSnapshot(ctx, snapshot)
+	endCommit()
 	if err != nil {
 		return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}

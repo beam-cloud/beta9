@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func installEgressCA() error {
@@ -28,6 +29,7 @@ func installEgressCAAt(root string) error {
 	if err != nil {
 		return err
 	}
+	logf("boot phase: egress trust source read")
 	for remaining := data; len(remaining) > 0; {
 		block, rest := pem.Decode(remaining)
 		if block == nil {
@@ -63,6 +65,7 @@ func installSystemCA(root string, certificate, fallbackBundle []byte) error {
 	} else if err != nil {
 		return err
 	}
+	logf("boot phase: guest trust bundle read")
 
 	hash, err := egressCASubjectHash(certificate)
 	if err != nil {
@@ -89,14 +92,17 @@ func installSystemCA(root string, certificate, fallbackBundle []byte) error {
 		merged.WriteByte('\n')
 	}
 	merged.Write(certificate)
+	logf("boot phase: egress trust bundle merged")
 	// Commit the bundle first. If interrupted, the source file still identifies
 	// the old CA so the next boot can finish retiring it safely.
 	if err := writeTrustFile(bundlePath, merged.Bytes()); err != nil {
 		return err
 	}
+	logf("boot phase: egress trust bundle written")
 	if err := writeTrustFile(caPath, certificate); err != nil {
 		return err
 	}
+	logf("boot phase: egress trust certificate written")
 	certDir := filepath.Dir(bundlePath)
 	const linkName = "beam-egress.pem"
 	if err := replaceTrustLink(filepath.Join(certDir, linkName), "../../../usr/local/share/ca-certificates/beam-egress.crt"); err != nil {
@@ -116,7 +122,10 @@ func installSystemCA(root string, certificate, fallbackBundle []byte) error {
 			return err
 		}
 	}
-	return runEgressTrustHooks(root, filepath.Join(certDir, linkName))
+	logf("boot phase: egress trust links installed")
+	err = runEgressTrustHooks(root, filepath.Join(certDir, linkName))
+	logf("boot phase: egress trust hooks finished")
+	return err
 }
 
 func egressCASubjectHash(certificate []byte) (string, error) {
@@ -160,6 +169,7 @@ func runEgressTrustHooks(root, certificatePath string) error {
 	if err != nil {
 		return err
 	}
+	logf("boot phase: egress trust hooks listed")
 	for _, hook := range hooks {
 		if hook.IsDir() || strings.IndexFunc(hook.Name(), func(c rune) bool {
 			return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-')
@@ -171,15 +181,43 @@ func runEgressTrustHooks(root, certificatePath string) error {
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
 			continue
 		}
+		if hook.Name() == "beam-browser" {
+			// The shipped hook exits before doing any work during early init.
+			// Avoid loading a shell and cat through virtio-fs for that no-op;
+			// retain execution after systemd starts and for modified hooks.
+			pid1, pidErr := os.ReadFile("/proc/1/comm")
+			script, scriptErr := os.ReadFile(path)
+			if pidErr == nil && scriptErr == nil && earlyBrowserTrustHookIsNoop(script, strings.TrimSpace(string(pid1))) {
+				continue
+			}
+		}
 		command := exec.Command(path)
 		command.Env = append(os.Environ(), "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 		command.Stdin = strings.NewReader("+" + certificatePath + "\n")
 		command.Stdout, command.Stderr = os.Stdout, os.Stderr
+		started := time.Now()
 		if err := command.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "egress CA hook %s: %v\n", hook.Name(), err)
 		}
+		logf("boot trust hook: name=%s duration_us=%d", hook.Name(), time.Since(started).Microseconds())
 	}
 	return nil
+}
+
+func earlyBrowserTrustHookIsNoop(script []byte, pid1 string) bool {
+	if pid1 == "systemd" || pid1 == "" || !bytes.HasPrefix(script, []byte("#!/bin/sh\n")) {
+		return false
+	}
+	var commands []string
+	for _, line := range strings.Split(string(script), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			commands = append(commands, line)
+		}
+	}
+	return len(commands) == 3 && commands[0] == "set -eu" &&
+		commands[1] == `[ "$(cat /proc/1/comm)" = systemd ] || exit 0` &&
+		commands[2] == "exec /opt/beam-vm/browser-trust"
 }
 
 func writeTrustFile(path string, data []byte) error {

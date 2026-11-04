@@ -32,19 +32,25 @@ const (
 )
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
+	defer common.StartupSpan(ctx, "stub.prepare")()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	var warning string
 	var capacity stubCapacityVerdict
 
-	if err := repository.AuthorizeImage(ctx, gws.backendRepo, authInfo.Workspace.ExternalId, in.ImageId); err != nil {
+	endPhase := common.StartupSpan(ctx, "stub.authorize_image")
+	imageErr := repository.AuthorizeImage(ctx, gws.backendRepo, authInfo.Workspace.ExternalId, in.ImageId)
+	endPhase()
+	if imageErr != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
-			ErrMsg: err.Error(),
+			ErrMsg: imageErr.Error(),
 		}, nil
 	}
 
+	endPhase = common.StartupSpan(ctx, "stub.resource_policy")
 	resourcePolicy, err := gws.stubResourcePolicy(ctx, authInfo.Workspace.ExternalId, in.Pool, in.Name)
+	endPhase()
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
@@ -149,7 +155,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	servingConfig := servingConfigFromProto(in.Serving)
 
 	// Secret/db references become bindings; URLs and integers are inlined.
+	endPhase = common.StartupSpan(ctx, "stub.references")
 	expandedEnv, referenceBindings, err := gws.expandStubReferences(ctx, authInfo, in)
+	endPhase()
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
@@ -310,7 +318,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		requestedSecrets = append(requestedSecrets, secretBinding{Name: requestedSecret.Name})
 	}
 	requestedSecrets = append(requestedSecrets, referenceBindings...)
+	endPhase = common.StartupSpan(ctx, "stub.secrets")
 	stubConfig.Secrets, err = gws.resolveSecretBindings(ctx, authInfo.Workspace, uniqueByEnvName(requestedSecrets))
+	endPhase()
 	if err == nil && types.StubType(in.StubType).IsSandbox() {
 		err = common.ValidateSandboxSecrets(stubConfig.Secrets, stubConfig.AllowList)
 	}
@@ -318,7 +328,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
+	endPhase = common.StartupSpan(ctx, "stub.volumes")
 	err = gws.configureVolumes(ctx, in.Volumes, authInfo.Workspace)
+	endPhase()
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
@@ -326,19 +338,26 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	if err := gws.configureDurableDiskPlacement(ctx, authInfo.Workspace, &stubConfig); err != nil {
+	endPhase = common.StartupSpan(ctx, "stub.disk_placement")
+	err = gws.configureDurableDiskPlacement(ctx, authInfo.Workspace, &stubConfig)
+	endPhase()
+	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
 		}, nil
 	}
 
+	endPhase = common.StartupSpan(ctx, "stub.identity")
 	app, object, err := gws.prepareStubIdentity(ctx, authInfo.Workspace, in, stubConfig.Disks)
+	endPhase()
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
+	endPhase = common.StartupSpan(ctx, "stub.database_write")
 	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id, in.ForceCreate, app.Id)
+	endPhase()
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
@@ -380,11 +399,16 @@ func (gws *GatewayService) prepareStubIdentity(ctx context.Context, workspace *t
 	var app *types.App
 	var object types.Object
 	group.Go(func() error {
+		defer common.StartupSpan(prepareCtx, "stub.disk_database")()
+		diskCtx := prepareCtx
+		if in.StubType == types.StubTypeVM {
+			diskCtx = repository.ContextWithVMDiskBurst(diskCtx)
+		}
 		for _, disk := range disks {
 			if disk == nil || disk.Name == "" {
 				continue
 			}
-			if _, err := gws.backendRepo.GetOrCreateDisk(prepareCtx, workspace.Id, &types.Disk{
+			if _, err := gws.backendRepo.GetOrCreateDisk(diskCtx, workspace.Id, &types.Disk{
 				Name: types.SafeDurableDiskName(disk.Name), Size: disk.Size,
 				Filesystem: disk.Filesystem, Driver: disk.Driver, MountPath: disk.MountPath,
 			}); err != nil {
@@ -395,6 +419,7 @@ func (gws *GatewayService) prepareStubIdentity(ctx context.Context, workspace *t
 		return nil
 	})
 	group.Go(func() error {
+		defer common.StartupSpan(prepareCtx, "stub.app_database")()
 		name := in.AppName
 		if name == "" {
 			name = in.Name
@@ -407,6 +432,7 @@ func (gws *GatewayService) prepareStubIdentity(ctx context.Context, workspace *t
 		return nil
 	})
 	group.Go(func() error {
+		defer common.StartupSpan(prepareCtx, "stub.object_database")()
 		var err error
 		if strings.TrimSpace(in.ObjectId) == "" {
 			if types.StubType(in.StubType).IsSandbox() {

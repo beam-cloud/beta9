@@ -879,6 +879,7 @@ func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandbo
 			client = acquiredClient
 			container = acquiredContainer
 		}
+		defer common.StartupSpan(probeCtx, "readiness.worker_rpc")()
 		return client.SandboxReadyContext(probeCtx, in.ContainerId)
 	})
 	cancel()
@@ -942,6 +943,7 @@ func waitForSandboxReady(ctx context.Context, probe func(context.Context) (*pb.C
 func (s *GenericPodService) getClient(ctx context.Context, containerId, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {
 	phaseStart := time.Now()
 	container, err := s.containerRepo.GetContainerState(containerId)
+	common.RecordStartupSpan(ctx, "readiness.container_state", phaseStart, time.Now())
 	if err != nil {
 		metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, "", "", "state_lookup_failed", false, time.Since(phaseStart))
 		return nil, nil, err
@@ -961,6 +963,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, workspac
 	phaseStart = time.Now()
 	addressCtx, cancel := context.WithTimeout(ctx, sandboxConnectWorkerAddressTimeout)
 	hostname, err := s.containerRepo.GetWorkerAddress(addressCtx, containerId)
+	common.RecordStartupSpan(ctx, "readiness.worker_address", phaseStart, time.Now())
 	cancel()
 	if err != nil {
 		metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "worker_address_unavailable", false, time.Since(phaseStart))
@@ -968,6 +971,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, workspac
 	}
 	metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
+	endClient := common.StartupSpan(ctx, "readiness.worker_client")
 	client, cached, err := s.loadOrCreateSandboxClient(ctx, hostname, func() (*common.ContainerClient, error) {
 		dialer := func(connectCtx context.Context, _ string) (net.Conn, error) {
 			phaseStart := time.Now()
@@ -989,6 +993,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, workspac
 		metrics.RecordSandboxConnectPhase("client_create", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 		return created, nil
 	})
+	endClient()
 	if err != nil {
 		return nil, nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -119,7 +120,12 @@ func containerLifecycleFromDuration(id types.ContainerLifecycleID, request *type
 }
 
 func (s *Worker) recordStartupLifecycle(ctx context.Context, request *types.ContainerRequest, id types.ContainerLifecycleID, startedAt time.Time, success bool, attrs map[string]string) {
+	common.RecordStartupSpan(ctx, string(id), startedAt, time.Now())
 	duration := time.Since(startedAt)
-	log.Info().Str("container_id", request.ContainerId).Str("startup_phase", string(id)).Dur("duration", duration).Msg("container startup phase")
+	// The complete startup trace already includes this phase. Keep its event
+	// publication below, without serializing a second stdout record per phase.
+	if common.StartupTraceFromContext(ctx) == nil {
+		log.Info().Str("container_id", request.ContainerId).Str("startup_phase", string(id)).Dur("duration", duration).Msg("container startup phase")
+	}
 	s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(id, request, startedAt, duration, success, attrs))
 }

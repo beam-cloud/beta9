@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -34,7 +35,9 @@ func (s *Worker) claimContainer(ctx context.Context, request *types.ContainerReq
 	var network *networkClaim
 	if request.Stub.Type.IsSandbox() {
 		if preparer, ok := s.containerNetworkManager.(networkClaimPreparer); ok {
+			endNetwork := common.StartupSpan(ctx, "claim.prepare_network_slot")
 			network = preparer.prepareNetworkClaim(request.ContainerId)
+			endNetwork()
 			if network != nil {
 				claim.Network = network.request()
 				defer network.close()
@@ -49,7 +52,9 @@ func (s *Worker) claimContainer(ctx context.Context, request *types.ContainerReq
 	var resp *pb.ClaimContainerResponse
 	for {
 		attemptCtx, cancel := context.WithTimeout(ctx, containerRequestAckTimeout)
+		endRPC := common.StartupSpan(ctx, "claim.rpc_roundtrip")
 		resp, err = s.workerRepoClient.ClaimContainer(attemptCtx, claim)
+		endRPC()
 		cancel()
 		if err == nil {
 			break
@@ -72,7 +77,9 @@ func (s *Worker) claimContainer(ctx context.Context, request *types.ContainerReq
 	}
 
 	if resp.Credentials != nil {
+		endCredentials := common.StartupSpan(ctx, "claim.apply_credentials")
 		applyRuntimeCredentials(request, resp.Credentials)
+		endCredentials()
 	}
 	if claim.Credentials != nil && claim.Credentials.WorkspaceStorage && request.IsBuildRequest() && !workspaceStorageDownloadAvailable(request.Workspace.Storage) {
 		return true, errors.New("workspace storage credentials are required to download build context directly")
@@ -83,7 +90,10 @@ func (s *Worker) claimContainer(ctx context.Context, request *types.ContainerReq
 		return true, nil
 	}
 	if network != nil {
-		if err := network.commit(resp.StartupPrepared); err != nil {
+		endNetwork := common.StartupSpan(ctx, "claim.commit_network_slot")
+		err := network.commit(resp.StartupPrepared)
+		endNetwork()
+		if err != nil {
 			return true, err
 		}
 	}

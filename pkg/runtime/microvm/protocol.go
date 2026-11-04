@@ -71,7 +71,8 @@ const (
 
 // Spec is what the host tells the guest init about this VM, at SpecFile.
 type Spec struct {
-	Network Network `json:"network"`
+	Network      Network `json:"network"`
+	TraceStartup bool    `json:"trace_startup,omitempty"`
 
 	// Application budget, excluding guest control headroom.
 	WorkloadMemoryBytes int64 `json:"workload_memory_bytes"`
@@ -86,6 +87,8 @@ type Spec struct {
 	// Mounts are the OCI mounts the guest applies into the new root, in spec
 	// order, after its own pseudo filesystems.
 	Mounts []Mount `json:"mounts,omitempty"`
+	// MountConcurrency bounds independent bind setup. Zero retains spec order.
+	MountConcurrency int `json:"mount_concurrency,omitempty"`
 }
 
 // Network is the static configuration of the guest's single NIC. Addresses
@@ -127,10 +130,11 @@ type Mount struct {
 // both sides exchange newline-delimited JSON.
 const (
 	// Guest -> host.
-	MsgStarted = "started" // Payload: Pid of the container process.
-	MsgExit    = "exit"    // Payload: Code, the container process exit code.
-	MsgAck     = "ack"     // Payload: ID of the command, OK, Error.
-	MsgPing    = "ping"    // Keepalive; lets init notice a connection that died with a restore.
+	MsgStarted   = "started"    // Payload: Pid of the container process.
+	MsgExit      = "exit"       // Payload: Code, the container process exit code.
+	MsgAck       = "ack"        // Payload: ID of the command, OK, Error.
+	MsgPing      = "ping"       // Keepalive; lets init notice a connection that died with a restore.
+	MsgBootTrace = "boot_trace" // Payload: bounded, opt-in startup measurements.
 
 	MsgApplicationOOM = "application_oom" // Payload: OOM; the VM remains running.
 
@@ -237,7 +241,29 @@ type Message struct {
 	// current wall time with the network configuration before exec is ready.
 	TimeUnixNano int64 `json:"time_unix_nano,omitempty"`
 
-	OOM *ApplicationOOM `json:"oom,omitempty"`
+	OOM       *ApplicationOOM `json:"oom,omitempty"`
+	BootTrace []BootEvent     `json:"boot_trace,omitempty"`
+}
+
+// BootEvent carries guest measurements over vsock, avoiding serial-console
+// port-I/O exits for every character in detailed startup instrumentation.
+type BootEvent struct {
+	Name         string   `json:"name"`
+	TimeUnixNano int64    `json:"time_unix_nano"`
+	ElapsedUS    int64    `json:"elapsed_us"`
+	CPU          *BootCPU `json:"cpu,omitempty"`
+}
+
+// BootCPU separates time spent executing from time the guest waited to run.
+// Guest counters retain Linux's USER_HZ units; process times are microseconds.
+type BootCPU struct {
+	UserTicks       uint64 `json:"user_ticks"`
+	SystemTicks     uint64 `json:"system_ticks"`
+	IdleTicks       uint64 `json:"idle_ticks"`
+	IOWaitTicks     uint64 `json:"iowait_ticks"`
+	StealTicks      uint64 `json:"steal_ticks"`
+	ProcessUserUS   int64  `json:"process_user_us"`
+	ProcessSystemUS int64  `json:"process_system_us"`
 }
 
 // ApplicationOOM reports guest memory-cgroup kills, separate from a host

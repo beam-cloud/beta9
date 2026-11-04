@@ -365,6 +365,13 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
+	return s.RunContext(s.ctx, request)
+}
+
+// RunContext carries request instrumentation through synchronous scheduling.
+// Scheduling ownership and cancellation continue to use the scheduler context.
+func (s *Scheduler) RunContext(ctx context.Context, request *types.ContainerRequest) error {
+	defer common.StartupSpan(ctx, "schedule.scheduler_run")()
 	if !s.buildPoolAllowed(request.PoolSelector, request) {
 		requestLog(log.Info(), request).Msg("run request rejected: pool reserved for image builds")
 		return errors.New("pool does not support this request")
@@ -384,30 +391,42 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
+	endExemption := common.StartupSpan(ctx, "schedule.quota_exemption")
 	exempt := s.privatePoolQuotaExempt(request)
+	endExemption()
 
-	if err := s.checkWorkspaceCredit(request, exempt); err != nil {
-		requestLog(log.Info(), request).Str("reason", err.Error()).Msg("run request rejected: insufficient credits")
-		return err
+	endCredit := common.StartupSpan(ctx, "schedule.credit")
+	creditErr := s.checkWorkspaceCredit(request, exempt)
+	endCredit()
+	if creditErr != nil {
+		requestLog(log.Info(), request).Str("reason", creditErr.Error()).Msg("run request rejected: insufficient credits")
+		return creditErr
 	}
 
+	endQuota := common.StartupSpan(ctx, "schedule.quota")
 	quota, err := s.concurrencyLimitFor(request, exempt)
+	endQuota()
 	if err != nil {
 		return err
 	}
 
+	endState := common.StartupSpan(ctx, "schedule.container_state")
 	err = s.containerRepo.CreateContainerStateWithConcurrencyLimit(quota, request)
+	endState()
 	if err != nil {
 		return err
 	}
 
+	endCheckpoint := common.StartupSpan(ctx, "schedule.checkpoint")
 	s.attachLatestCheckpoint(request)
+	endCheckpoint()
 
 	requestedEvent := request.Clone()
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
 
 	queueStart := time.Now()
 	err = s.addRequestToBacklog(request)
+	common.RecordStartupSpan(ctx, "schedule.backlog_push", queueStart, time.Now())
 	s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerQueuePush, queueStart, time.Now(), err == nil, map[string]string{
 		"retry_count": fmt.Sprintf("%d", request.RetryCount),
 	})

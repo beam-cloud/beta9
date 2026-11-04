@@ -1,0 +1,148 @@
+--- a/pkg/clip/fsnode.go
++++ b/pkg/clip/fsnode.go
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"context"
++	"os"
+ 	"path"
+ 	"strconv"
+ 	"sync"
+@@ -161,6 +162,12 @@
+ }
+ 
+ func (n *FSNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
++	// Image handles hold no per-open state. On capable kernels ENOSYS
++	// disables OPEN/RELEASE RPCs for this immutable filesystem; reads still
++	// carry the node ID and offset. Keep the existing path unless opted in.
++	if os.Getenv("BETA9_CLIP_NO_OPEN_RPC") == "1" {
++		return nil, 0, syscall.ENOSYS
++	}
+ 	log.Debug().Str("path", n.clipNode.Path).Uint32("flags", flags).Msg("Open called")
+ 	if n.clipNode == nil || n.clipNode.NodeType != common.FileNode {
+ 		return nil, 0, fs.OK
+@@ -168,9 +175,21 @@
+ 	return newClipFileHandle(n), fuse.FOPEN_KEEP_CACHE | fuse.FOPEN_NOFLUSH, fs.OK
+ }
+ 
++// Without OPEN the kernel cannot receive FOPEN_NOFLUSH. Disable the equally
++// stateless FLUSH callback once as well; the image mount is read-only.
++func (n *FSNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
++	if os.Getenv("BETA9_CLIP_NO_OPEN_RPC") == "1" {
++		return syscall.ENOSYS
++	}
++	return fs.OK
++}
++
+ func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+ 	if fh, ok := f.(*clipFileHandle); ok && fh != nil {
+ 		return fh.Read(ctx, dest, off)
++	}
++	if os.Getenv("BETA9_CLIP_NO_OPEN_RPC") == "1" {
++		return newClipFileHandle(n).Read(ctx, dest, off)
+ 	}
+ 	return n.readData(ctx, dest, off)
+ }
+--- a/pkg/clip/clip.go
++++ b/pkg/clip/clip.go
+@@ -98,6 +98,15 @@
+ 	}
+ }
+ 
++// No-open reads are only enabled for the immutable image mount. Let the
++// kernel enforce permissions and reject writes before skipping OPEN RPCs.
++func immutableImageMountFlags() []string {
++	if os.Getenv("BETA9_CLIP_NO_OPEN_RPC") == "1" {
++		return []string{"ro", "default_permissions"}
++	}
++	return nil
++}
++
+ // Create Archive
+ func CreateArchive(options CreateOptions) error {
+ 	log.Info().Msgf("creating archive from %s to %s", options.InputPath, options.OutputPath)
+@@ -222,7 +231,15 @@
+ 		log.Info().Int("max_write", limit).Msg("capping FUSE read/write size to fit fs.pipe-max-size")
+ 		maxWrite = limit
+ 	}
+-	server, err := fuse.NewServer(fs.NewNodeFS(root, immutableFilesystemOptions()), options.MountPoint, &fuse.MountOptions{
++	rawFS := fs.NewNodeFS(root, immutableFilesystemOptions())
++	var extraCapabilities uint64
++	if os.Getenv("BETA9_CLIP_NO_OPEN_RPC") == "1" {
++		rawFS = &immutableDirectoryFS{RawFileSystem: rawFS}
++		extraCapabilities = noOpendirSupport
++	}
++	server, err := fuse.NewServer(rawFS, options.MountPoint, &fuse.MountOptions{
++		ExtraCapabilities:    extraCapabilities,
++		Options:              immutableImageMountFlags(),
+ 		MaxBackground:        512,
+ 		DisableXAttrs:        true,
+ 		EnableSymlinkCaching: true,
+--- /dev/null
++++ b/pkg/clip/immutable_directory.go
+@@ -0,0 +1,65 @@
++package clip
++
++import (
++	"syscall"
++
++	"github.com/hanwen/go-fuse/v2/fuse"
++)
++
++// Linux FUSE_NO_OPENDIR_SUPPORT (fuse protocol 7.29). Request it through
++// ExtraCapabilities; older kernels keep the original handle-based path.
++const noOpendirSupport = uint64(1 << 24)
++
++// Image directory entries and their ordering are immutable for the mount's
++// lifetime. Most directory opens never enumerate anything. Let capable kernels
++// skip OPENDIR/RELEASEDIR, creating a temporary bridge handle only for READDIR.
++// Reconstructing the list stream preserves its index-based offset cookies,
++// while delegating READDIRPLUS keeps go-fuse's inode and lookup accounting.
++type immutableDirectoryFS struct {
++	fuse.RawFileSystem
++	stateless bool
++}
++
++func (f *immutableDirectoryFS) Init(server *fuse.Server) {
++	f.stateless = server.KernelSettings().Flags64()&noOpendirSupport != 0
++	f.RawFileSystem.Init(server)
++}
++
++func (f *immutableDirectoryFS) OpenDir(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
++	if f.stateless {
++		return fuse.ENOSYS
++	}
++	return f.RawFileSystem.OpenDir(cancel, in, out)
++}
++
++func (f *immutableDirectoryFS) ReadDir(cancel <-chan struct{}, in *fuse.ReadIn, out *fuse.DirEntryList) fuse.Status {
++	return f.readDirectory(cancel, in, out, false)
++}
++
++func (f *immutableDirectoryFS) ReadDirPlus(cancel <-chan struct{}, in *fuse.ReadIn, out *fuse.DirEntryList) fuse.Status {
++	return f.readDirectory(cancel, in, out, true)
++}
++
++func (f *immutableDirectoryFS) readDirectory(cancel <-chan struct{}, in *fuse.ReadIn, out *fuse.DirEntryList, plus bool) fuse.Status {
++	if f.stateless {
++		var opened fuse.OpenOut
++		if status := f.RawFileSystem.OpenDir(cancel, &fuse.OpenIn{InHeader: in.InHeader, Flags: syscall.O_RDONLY | syscall.O_DIRECTORY}, &opened); status != fuse.OK {
++			return status
++		}
++		defer f.RawFileSystem.ReleaseDir(&fuse.ReleaseIn{InHeader: in.InHeader, Fh: opened.Fh})
++		copy := *in
++		copy.Fh = opened.Fh
++		in = &copy
++	}
++	if plus {
++		return f.RawFileSystem.ReadDirPlus(cancel, in, out)
++	}
++	return f.RawFileSystem.ReadDir(cancel, in, out)
++}
++
++func (f *immutableDirectoryFS) FsyncDir(cancel <-chan struct{}, in *fuse.FsyncIn) fuse.Status {
++	if f.stateless {
++		return fuse.OK // The image is read-only and has no dirty directory state.
++	}
++	return f.RawFileSystem.FsyncDir(cancel, in)
++}

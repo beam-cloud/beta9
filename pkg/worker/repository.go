@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -92,6 +93,9 @@ func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 			Timeout:             grpcClientKeepaliveTimeout,
 			PermitWithoutStream: true,
 		}),
+	}
+	if os.Getenv("BETA9_PROFILE_STARTUP") == "1" {
+		opts = append(opts, grpc.WithStatsHandler(repositoryRPCTraceStats{}))
 	}
 
 	if token != "" {

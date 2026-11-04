@@ -39,6 +39,16 @@ type seekableReaderAt interface {
 	io.Seeker
 }
 
+// StorageUploadOptions bounds an optional multipart policy. The zero value
+// retains the existing upload policy; streaming readers keep one buffered part.
+type StorageUploadOptions struct {
+	PartSize    int64
+	Concurrency int
+	// StreamingConcurrency opts unseekable readers into at most two buffered
+	// 5 MiB parts. Zero preserves the one-part streaming policy.
+	StreamingConcurrency int
+}
+
 type StorageClient struct {
 	s3Client      *s3.Client
 	presignClient *s3.PresignClient
@@ -51,7 +61,7 @@ type storageClientConfig struct {
 
 func (c storageClientConfig) newClient(ctx context.Context) (*StorageClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithHTTPClient(common.AWSHTTPClient()),
+		config.WithHTTPClient(storageHTTPClient(ctx)),
 		config.WithRegion(c.region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(c.accessKey, c.secretKey, "")),
 	)
@@ -358,14 +368,45 @@ func (c *StorageClient) UploadToBucketWithReader(ctx context.Context, key string
 // UploadToBucketWithReaderAndMetadata is UploadToBucketWithReader with user
 // metadata attached to the object.
 func (c *StorageClient) UploadToBucketWithReaderAndMetadata(ctx context.Context, key string, data io.Reader, bucket string, metadata map[string]string) error {
-	uploader := newStorageMultipartUploader(c.s3Client, data)
-	_, err := uploader.Upload(ctx, &s3.PutObjectInput{
+	return c.uploadToBucketWithReaderOptions(ctx, key, data, bucket, metadata, StorageUploadOptions{})
+}
+
+func (c *StorageClient) uploadToBucketWithReaderOptions(ctx context.Context, key string, data io.Reader, bucket string, metadata map[string]string, opts StorageUploadOptions) error {
+	uploader, err := newStorageMultipartUploaderWithOptions(c.s3Client, data, opts)
+	if err != nil {
+		return err
+	}
+	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket:   aws.String(bucket),
 		Key:      aws.String(key),
 		Body:     data,
 		Metadata: metadata,
 	})
 	return err
+}
+
+func newStorageMultipartUploaderWithOptions(client *s3.Client, body io.Reader, opts StorageUploadOptions) (*manager.Uploader, error) {
+	if opts.PartSize != 0 && (opts.PartSize < manager.MinUploadPartSize || opts.PartSize > 512<<20) {
+		return nil, fmt.Errorf("multipart part size must be between 5 and 512 MiB")
+	}
+	if opts.Concurrency < 0 || opts.Concurrency > storageMultipartUploadWorkers {
+		return nil, fmt.Errorf("multipart concurrency must be between 1 and %d", storageMultipartUploadWorkers)
+	}
+	if opts.StreamingConcurrency < 0 || opts.StreamingConcurrency > 2 {
+		return nil, fmt.Errorf("streaming multipart concurrency must be between 1 and 2")
+	}
+	uploader := newStorageMultipartUploader(client, body)
+	if _, seekable := body.(seekableReaderAt); seekable {
+		if opts.PartSize != 0 {
+			uploader.PartSize = opts.PartSize
+		}
+		if opts.Concurrency != 0 {
+			uploader.Concurrency = opts.Concurrency
+		}
+	} else if opts.StreamingConcurrency > 0 {
+		uploader.Concurrency = opts.StreamingConcurrency
+	}
+	return uploader, nil
 }
 
 func newStorageMultipartUploader(client *s3.Client, body io.Reader) *manager.Uploader {
@@ -736,6 +777,10 @@ func (c *WorkspaceStorageClient) Upload(ctx context.Context, key string, data []
 
 func (c *WorkspaceStorageClient) UploadWithReader(ctx context.Context, key string, data io.Reader) error {
 	return c.StorageClient.UploadToBucketWithReader(ctx, key, data, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) UploadWithReaderOptions(ctx context.Context, key string, data io.Reader, opts StorageUploadOptions) error {
+	return c.StorageClient.uploadToBucketWithReaderOptions(ctx, key, data, *c.WorkspaceStorage.BucketName, nil, opts)
 }
 
 func (c *WorkspaceStorageClient) UploadWithReaderAndMetadata(ctx context.Context, key string, data io.Reader, metadata map[string]string) error {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/rs/zerolog/log"
 )
 
@@ -69,6 +70,7 @@ func (m *Manager) resolveVolumeDir(key string) (string, error) {
 // spare is destroyed and nil is returned so the caller builds the volume the
 // slow way.
 func (m *Manager) adoptSpare(ctx context.Context, spec AttachSpec) *Volume {
+	defer common.StartupSpan(ctx, "disk.adopt_spare")()
 	spare := m.takeSpare(spec.VirtualSizeBytes, spec.Export)
 	if spare == nil {
 		return nil
@@ -90,6 +92,7 @@ func (m *Manager) adoptSpare(ctx context.Context, spec AttachSpec) *Volume {
 // the state save leaves a spare, which recovery removes; one after it leaves
 // an ordinary crashed volume with nothing written yet.
 func (v *Volume) adopt(ctx context.Context, spec AttachSpec) error {
+	defer common.StartupSpan(ctx, "disk.rekey_spare")()
 	m := v.manager
 	keyDir := m.volumeDir(spec.Key)
 	if err := os.RemoveAll(keyDir); err != nil {
@@ -129,7 +132,10 @@ func (v *Volume) adopt(ctx context.Context, spec AttachSpec) error {
 	}
 	v.state.Owner = spec.Owner
 	v.owner = spec.Owner
-	if err := saveVolumeState(v.dir, v.state); err != nil {
+	endSave := common.StartupSpan(ctx, "disk.persist_adoption")
+	err := saveVolumeStateContext(ctx, v.dir, v.state)
+	endSave()
+	if err != nil {
 		return err
 	}
 	if spec.Export == ExportVhostUser {
@@ -184,6 +190,9 @@ func (m *Manager) takeSpare(size int64, export ExportMode) *Volume {
 			continue
 		}
 		m.spares[size] = append(pool[:i], pool[i+1:]...)
+		if m.spareRefillQuietPeriod > 0 {
+			m.spareLastTaken[size] = time.Now()
+		}
 		return spare
 	}
 	return nil
@@ -197,6 +206,7 @@ func (m *Manager) rememberSpareSize(size int64) {
 	defer m.spareSizesMu.Unlock()
 	sizes := m.rememberedSpareSizes()
 	if len(sizes) > 0 && sizes[0] == size {
+		m.retainSpareSizes(sizes)
 		return
 	}
 	sizes = append([]int64{size}, slices.DeleteFunc(sizes, func(s int64) bool { return s == size })...)
@@ -207,7 +217,51 @@ func (m *Manager) rememberSpareSize(size int64) {
 	for i, s := range sizes {
 		lines[i] = strconv.FormatInt(s, 10)
 	}
-	_ = writeFileAtomic(filepath.Join(m.root, spareSizesFile), []byte(strings.Join(lines, "\n")+"\n"))
+	if err := writeFileAtomic(filepath.Join(m.root, spareSizesFile), []byte(strings.Join(lines, "\n")+"\n")); err == nil {
+		m.retainSpareSizes(sizes)
+	}
+}
+
+// The on-disk MRU bound must also bound live daemons and formatted heads.
+// Remove retired pools under admission's mutex; release their resources in
+// the background so requesting a new size doesn't wait for old QSDs to stop.
+func (m *Manager) retainSpareSizes(sizes []int64) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.spareSizes = append([]int64{}, sizes...)
+	for size := range m.spareLastTaken {
+		if !m.spareSizeRetained(size) {
+			delete(m.spareLastTaken, size)
+		}
+	}
+	var retired []*Volume
+	for size, pool := range m.spares {
+		if !m.spareSizeRetained(size) {
+			retired = append(retired, pool...)
+			delete(m.spares, size)
+		}
+	}
+	if len(retired) > 0 {
+		m.spareWG.Add(1)
+	}
+	m.mu.Unlock()
+	if len(retired) > 0 {
+		go func() {
+			defer m.spareWG.Done()
+			for _, spare := range retired {
+				spare.destroy()
+			}
+		}()
+	}
+}
+
+// Caller holds m.mu. A manager that hasn't loaded recency can still build
+// explicitly requested spares (including recovery and test callers).
+func (m *Manager) spareSizeRetained(size int64) bool {
+	return m.spareSizes == nil || slices.Contains(m.spareSizes, size)
 }
 
 func (m *Manager) rememberedSpareSizes() []int64 {
@@ -228,7 +282,7 @@ func (m *Manager) rememberedSpareSizes() []int64 {
 // One builder runs per size at a time; destroySpares cancels and joins them.
 func (m *Manager) replenishSpares(size int64) {
 	m.mu.Lock()
-	if m.closed || m.spareBuilds[size] || len(m.spares[size]) >= m.spareCount {
+	if m.closed || !m.spareSizeRetained(size) || m.spareBuilds[size] || len(m.spares[size]) >= m.spareCount {
 		m.mu.Unlock()
 		return
 	}
@@ -247,13 +301,30 @@ func (m *Manager) replenishSpares(size int64) {
 		}()
 		for {
 			m.mu.Lock()
-			done := m.closed || len(m.spares[size]) >= m.spareCount
+			done := m.closed || !m.spareSizeRetained(size) || len(m.spares[size]) >= m.spareCount
+			optional := len(m.spares[size]) > 0
+			delay := m.spareRefillDelay(size, time.Now())
 			m.mu.Unlock()
 			if done {
 				return
 			}
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				select {
+				case <-m.spareCtx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+				continue // A later take can extend the quiet window.
+			}
 			if m.spareExport != ExportVhostUser && m.freeNBDDevices() <= spareDeviceReserve {
 				return
+			}
+			if optional && m.beforeSpareBuild != nil {
+				if err := m.beforeSpareBuild(m.spareCtx); err != nil {
+					return
+				}
 			}
 			spare, err := m.buildSpare(m.spareCtx, size)
 			if err != nil {
@@ -263,7 +334,7 @@ func (m *Manager) replenishSpares(size int64) {
 				return
 			}
 			m.mu.Lock()
-			if m.closed {
+			if m.closed || !m.spareSizeRetained(size) {
 				m.mu.Unlock()
 				spare.destroy()
 				return
@@ -272,6 +343,19 @@ func (m *Manager) replenishSpares(size int64) {
 			m.mu.Unlock()
 		}
 	}()
+}
+
+// Called under m.mu. Preserve immediate warm-up and refill an exhausted pool
+// even during sustained demand; only optional inventory work can wait.
+func (m *Manager) spareRefillDelay(size int64, now time.Time) time.Duration {
+	if m.spareRefillQuietPeriod <= 0 || len(m.spares[size]) == 0 {
+		return 0
+	}
+	last := m.spareLastTaken[size]
+	if last.IsZero() {
+		return 0
+	}
+	return max(0, last.Add(m.spareRefillQuietPeriod).Sub(now))
 }
 
 // WarmSpares builds clean formatted heads before a worker starts receiving

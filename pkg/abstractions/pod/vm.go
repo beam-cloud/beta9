@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
@@ -14,7 +15,9 @@ import (
 // RunVM reuses sandbox scheduling while preserving the VM service's reserved
 // runtime identity. Never allow a VM to fall back to a container runtime.
 func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stubID, containerID string, vmSpec types.VMSpec, checkpointID string, checkpointDisks map[string]string) error {
+	endLookup := common.StartupSpan(ctx, "schedule.stub_database")
 	stub, err := s.backendRepo.GetStubByExternalId(ctx, stubID)
+	endLookup()
 	if err != nil {
 		return err
 	}

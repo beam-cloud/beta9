@@ -31,7 +31,9 @@ func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Con
 // the container's persisted state when the caller already holds it (the claim
 // path); nil means it is looked up here.
 func (s *WorkerRepositoryService) vendRuntimeCredentials(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest, state *types.ContainerState) *pb.GetContainerRuntimeCredentialsResponse {
+	endAuthorize := common.StartupSpan(ctx, "claim.authorize_credentials")
 	workspace, err := s.authorizeWorkerRuntimeCredentialRequest(ctx, req, state)
+	endAuthorize()
 	if err != nil {
 		return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
 	}
@@ -176,6 +178,7 @@ func (s *WorkerRepositoryService) runtimeCredentialsContainerState(ctx context.C
 }
 
 func (s *WorkerRepositoryService) runtimeCredentialsWorkspace(ctx context.Context, workspaceID uint, req *pb.GetContainerRuntimeCredentialsRequest) (*types.Workspace, error) {
+	defer common.StartupSpan(ctx, "claim.workspace_lookup")()
 	if runtimeCredentialsNeedsSigningKey(req) {
 		workspace, err := s.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx, req.WorkspaceId)
 		if err != nil {

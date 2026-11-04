@@ -385,13 +385,16 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 // machine stop is not done until its container is gone, so each phase here
 // is user-visible latency worth attributing when it regresses.
 func (s *Worker) shutdownPhases() *common.PhaseTimer {
-	if !s.config.DebugMode {
+	if !s.config.DebugMode && os.Getenv("BETA9_PROFILE_STARTUP") != "1" {
 		return nil
 	}
 	return common.NewPhaseTimer()
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int, exitReported bool) {
+	if request != nil && request.IsPersistentVM() {
+		defer beginCheckpointCriticalIO()()
+	}
 	phases := s.shutdownPhases()
 
 	hasDurableDisk := request != nil && request.HasDurableDiskMount()
@@ -669,6 +672,8 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 }
 
 func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *types.ContainerRequest, waitForEviction func() error) error {
+	defer common.StartupSpan(ctx, "worker.prepare")()
+	defer beginCheckpointCriticalIO()()
 	containerId := request.ContainerId
 	startupStartedAt := time.Now()
 
@@ -861,6 +866,7 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 	}()
 
 	opts := &ContainerOptions{
+		StartupTrace:                common.StartupTraceFromContext(ctx),
 		NetworkPrepared:             networkSpec != nil,
 		BundlePath:                  bundlePath,
 		HostBindPort:                bindPorts[0],
@@ -901,6 +907,7 @@ func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *t
 		phaseStart = time.Now()
 		portsHandedOff = true
 		filesystemRestoreHandedOff = true
+		opts.BindBootPreparation, opts.FinishBootPreparation = runtime.HandoffMicroVMBootPreparation(ctx)
 		s.containerWg.Add(1)
 		go s.spawn(request, spec, outputLogger, opts)
 		metrics.RecordWorkerStartupPhase("spawn_enqueue", time.Since(phaseStart), request, nil)
@@ -1027,7 +1034,14 @@ func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerR
 
 func (s *Worker) prepareContainerNetwork(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec) error {
 	startedAt := time.Now()
-	err := s.containerNetworkManager.Setup(request.ContainerId, spec, request)
+	var err error
+	if traced, ok := s.containerNetworkManager.(interface {
+		SetupContext(context.Context, string, *specs.Spec, *types.ContainerRequest) error
+	}); ok {
+		err = traced.SetupContext(ctx, request.ContainerId, spec, request)
+	} else {
+		err = s.containerNetworkManager.Setup(request.ContainerId, spec, request)
+	}
 	metrics.RecordWorkerStartupPhase("network_setup", time.Since(startedAt), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, startedAt, err == nil, nil)
 	if err != nil {
@@ -1356,6 +1370,18 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				startupCPU.Quota = nil
 				startupCPU.Burst = nil
 				startupCPU.Period = nil
+				if s.runtime != nil && s.runtime.Name() == types.ContainerRuntimeMicroVM.String() {
+					// Guest init and the VMM need host CPU before application limits land.
+					startupCPU.Shares = nil
+					if request.Checkpoint == nil {
+						startupCPU.Shares = microVMBootCPUShares()
+						if startupCPU.Shares != nil {
+							if options != nil && options.StartupTrace != nil {
+								options.StartupTrace.Attribute("boot_cpu_shares", strconv.FormatUint(*startupCPU.Shares, 10))
+							}
+						}
+					}
+				}
 				// gVisor fixes the guest CPU topology when the sandbox starts;
 				// a later resource update cannot change what nproc reports.
 				if !requestForcesResourceLimits(request) {
@@ -1772,8 +1798,18 @@ func validateContainerSpec(spec *specs.Spec) error {
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	defer s.containerWg.Done()
+	releaseStartupIO := func() {}
+	if request.IsPersistentVM() {
+		releaseStartupIO = beginCheckpointCriticalIO()
+	}
+	defer releaseStartupIO()
 
 	ctx, cancel := context.WithCancel(s.ctx)
+	ctx = common.ContextWithStartupTrace(ctx, opts.StartupTrace)
+	if opts.BindBootPreparation != nil {
+		ctx = opts.BindBootPreparation(ctx)
+		defer opts.FinishBootPreparation()
+	}
 	defer s.containerNetworkManager.ReleasePortReservations(request.ContainerId)
 
 	defer func() {
@@ -1804,6 +1840,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer opts.AddressesRegistered.waitForTeardown()
 
 	// Create overlayfs for container
+	endSpawnSetup := common.StartupSpan(ctx, "worker.spawn_setup")
 	overlay := s.createOverlay(request, opts.BundlePath)
 	restoreFilesystemCleanupNeeded := opts.CheckpointFilesystemRestore != nil
 	defer func() {
@@ -1824,6 +1861,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		outputLogger.Info(s, "done", false, "success", false, "stream", "stdout")
 	})
 	s.containerInstances.Set(containerId, containerInstance)
+	endSpawnSetup()
 
 	// Setup container overlay filesystem
 	var err error
@@ -1862,13 +1900,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
-	if err := resolveImageUser(spec.Root.Path, &spec.Process.User); err != nil {
+	endImageUser := common.StartupSpan(ctx, "worker.resolve_image_user")
+	imageUserErr := resolveImageUser(spec.Root.Path, &spec.Process.User)
+	endImageUser()
+	if imageUserErr != nil {
 		exitCode = int(types.ContainerExitCodeStartupFailed)
-		outputLogger.Error(fmt.Sprintf("Failed to resolve image user: %v\n", err))
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to resolve image user")
+		outputLogger.Error(fmt.Sprintf("Failed to resolve image user: %v\n", imageUserErr))
+		log.Error().Str("container_id", containerId).Err(imageUserErr).Msg("failed to resolve image user")
 		return
 	}
+	endSDKMounts := common.StartupSpan(ctx, "worker.prune_sdk_mounts")
 	spec.Mounts = pruneUnreachableSDKMounts(spec.Mounts, containerInstance.Overlay.RootPath())
+	endSDKMounts()
 
 	// Network setup (a gateway round trip) and GPU assignment (device
 	// discovery) are independent until the spec is amended, so they overlap.
@@ -1878,6 +1921,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	assignGPU := request.RequiresGPU() && gpuManager != nil && (s.gpuVirtualizedForRequest(request) || s.runtime.Capabilities().GPU)
 	var assignedDevices []int
 	var deviceSetup errgroup.Group
+	endDevices := common.StartupSpan(ctx, "worker.network_and_devices")
 	if !opts.NetworkPrepared {
 		deviceSetup.Go(func() error { return s.prepareContainerNetwork(ctx, request, spec) })
 	}
@@ -1895,18 +1939,28 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return err
 		})
 	}
-	if deviceSetup.Wait() != nil {
+	deviceErr := deviceSetup.Wait()
+	endDevices()
+	if deviceErr != nil {
 		return
 	}
-	if err := s.serviceProxy.Attach(request, spec); err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to attach service proxy: %v", err)
+	endProxy := common.StartupSpan(ctx, "worker.service_proxy")
+	proxyErr := s.serviceProxy.Attach(request, spec)
+	endProxy()
+	if proxyErr != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to attach service proxy: %v", proxyErr)
 		return
 	}
-	if err := s.attachEgressTrust(request, spec); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to attach egress trust")
+	endTrust := common.StartupSpan(ctx, "worker.egress_trust")
+	trustErr := s.attachEgressTrust(request, spec)
+	endTrust()
+	if trustErr != nil {
+		log.Error().Str("container_id", containerId).Err(trustErr).Msg("failed to attach egress trust")
 		return
 	}
+	endSNI := common.StartupSpan(ctx, "worker.service_proxy_sni")
 	s.serviceProxy.AttachNodeSNI(request, spec)
+	endSNI()
 	if assignGPU {
 		// Only use CDI if runtime supports it
 		if !s.gpuVirtualizedForRequest(request) && s.runtime.Capabilities().CDI {
@@ -1941,8 +1995,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
 
-	if err := s.prepareSandboxProcess(request, spec); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to prepare sandbox process")
+	endSandboxProcess := common.StartupSpan(ctx, "worker.sandbox_process")
+	sandboxProcessErr := s.prepareSandboxProcess(request, spec)
+	endSandboxProcess()
+	if sandboxProcessErr != nil {
+		log.Error().Str("container_id", containerId).Err(sandboxProcessErr).Msg("failed to prepare sandbox process")
 		return
 	}
 
@@ -1976,7 +2033,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, true, map[string]string{"runtime": s.runtime.Name()})
 
 	// Write container config spec to disk
+	endSerialize := common.StartupSpan(ctx, "worker.serialize_config")
 	configContents, err := json.Marshal(spec)
+	endSerialize()
 	if err != nil {
 		return
 	}
@@ -2014,6 +2073,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	go func() {
 		// When the process starts monitor it and potentially checkpoint it
+		defer releaseStartupIO()
 		pid, ok := <-startedChan
 		if !ok {
 			return
@@ -2037,6 +2097,20 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxProcessManagerReady, phaseStart, processManagerReady, processManagerStats.attrs())
 
 			instance, exists = s.attachProcessManager(ctx, request, processManagerClient, processManagerReady)
+			releaseStartupIO()
+			quotaGrace := sandboxCPUQuotaGrace
+			if exists && instance.Runtime != nil {
+				quotaGrace = sandboxCPUThrottleGrace(instance.Runtime.Name())
+			}
+			if exists && processManagerReady {
+				// Boot CPU must be handed back independently of trace formatting
+				// and stdout backpressure from other simultaneous starts.
+				go s.applyDeferredSandboxCPUThrottle(ctx, request, quotaGrace)
+			}
+			if opts.StartupTrace != nil {
+				opts.StartupTrace.Attribute("cpu_quota_grace_ms", quotaGrace.Milliseconds())
+				opts.StartupTrace.Log(log.Info().Str("component", "worker").Bool("exec_ready", processManagerReady))
+			}
 			if !exists {
 				return
 			}
@@ -2047,7 +2121,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
-			go s.applyDeferredSandboxCPUThrottle(ctx, request, sandboxCPUQuotaGrace)
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
 			}
@@ -2432,6 +2505,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 					return exitCode, err
 				}
 				exitCode, err = s.waitForRestoredContainerExit(ctx, instance.Runtime, request.ContainerId, exitCode)
+				if request.IsPersistentVM() {
+					defer beginCheckpointCriticalIO()()
+				}
 				terminalCheckpoint := s.waitForTerminalAutoCheckpoint(ctx, request)
 				if err != nil && terminalCheckpoint {
 					log.Info().Str("container_id", request.ContainerId).Int("exit_code", exitCode).Msg("restored container exited after terminal checkpoint")
@@ -2500,6 +2576,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
 	})
+	if request.IsPersistentVM() {
+		defer beginCheckpointCriticalIO()()
+	}
 	terminalCheckpoint := s.waitForTerminalAutoCheckpoint(ctx, request)
 	finishRuntimeStarted()
 	if err != nil {
@@ -2770,6 +2849,20 @@ func (s *Worker) deferCPUThrottle(request *types.ContainerRequest, cpu *specs.Li
 	instance.DeferredCPUQuota = cpu
 	s.containerInstances.Set(request.ContainerId, instance)
 	return true
+}
+
+func sandboxCPUThrottleGrace(runtimeName string) time.Duration {
+	if runtimeName == types.ContainerRuntimeMicroVM.String() {
+		// Apply only after authenticated process-manager readiness above. Ready
+		// VMs need not retain an unlimited CPU allowance while a burst's remaining
+		// guests are still booting. Keep the existing default until measured.
+		if raw := os.Getenv("BETA9_MICROVM_CPU_QUOTA_GRACE"); raw != "" {
+			if grace, err := time.ParseDuration(raw); err == nil && grace >= 0 && grace <= sandboxCPUQuotaGrace {
+				return grace
+			}
+		}
+	}
+	return sandboxCPUQuotaGrace
 }
 
 func (s *Worker) applyDeferredCPUThrottle(request *types.ContainerRequest, instance *ContainerInstance) error {

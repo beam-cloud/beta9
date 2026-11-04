@@ -1,12 +1,14 @@
 package common
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -44,6 +46,10 @@ type ContainerOverlayLayer struct {
 // overlayVolatileUnsupported is set once the kernel rejects a volatile mount
 // (overlayfs "volatile" landed in Linux 5.10) so later mounts skip the retry.
 var overlayVolatileUnsupported atomic.Bool
+
+var mountOverlayFS = func(target, options string) ([]byte, error) {
+	return exec.Command("mount", "-t", "overlay", "overlay", "-o", options, target).CombinedOutput()
+}
 
 func NewContainerOverlay(request *types.ContainerRequest, rootPath string, overlayPath string) *ContainerOverlay {
 	return &ContainerOverlay{
@@ -349,7 +355,7 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
 	volatile := layer.volatile && !overlayVolatileUnsupported.Load()
 	if volatile {
-		out, err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions+",volatile", layer.merged).CombinedOutput()
+		out, err := mountOverlayFS(layer.merged, mntOptions+",volatile")
 		if err == nil {
 			log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Bool("volatile", true).Dur("duration", time.Since(startTime)).Msg("mounted kernel overlay layer")
 			return nil
@@ -357,14 +363,14 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 		// Pre-5.10 kernels reject the option with EINVAL; everything else is
 		// a real failure that a retry without it would only mask.
 		msg := strings.ToLower(string(out))
-		if !strings.Contains(msg, "invalid argument") && !strings.Contains(msg, "bad option") {
+		if !errors.Is(err, syscall.EINVAL) && !strings.Contains(msg, "invalid argument") && !strings.Contains(msg, "bad option") {
 			return fmt.Errorf("mount overlay: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 		volatileOut := strings.TrimSpace(string(out))
 		if _, err := freshWorkDir(filepath.Dir(layer.work)); err != nil {
 			return err
 		}
-		if out, err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).CombinedOutput(); err != nil {
+		if out, err := mountOverlayFS(layer.merged, mntOptions); err != nil {
 			return fmt.Errorf("mount overlay: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 		// The same mount succeeded without the option, so the option is
@@ -374,7 +380,7 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 		return nil
 	}
 
-	if out, err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).CombinedOutput(); err != nil {
+	if out, err := mountOverlayFS(layer.merged, mntOptions); err != nil {
 		return fmt.Errorf("mount overlay: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 

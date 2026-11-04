@@ -131,6 +131,21 @@ func TestMicroVMCgroupPath(t *testing.T) {
 	assert.Equal(t, "/sys/fs/cgroup/beta9/abc", microVMCgroupPath(&specs.Spec{Linux: &specs.Linux{CgroupsPath: "/beta9/abc"}}, "abc"))
 }
 
+func TestMicroVMKernelInitTraceIsOptIn(t *testing.T) {
+	for _, value := range []string{"", "0", "true", "1"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("BETA9_MICROVM_KERNEL_INIT_TRACE", value)
+			args := strings.Fields(microVMKernelCmdline())
+			assert.Contains(t, args, "loglevel=4")
+			if value == "1" {
+				assert.Contains(t, args, "initcall_debug")
+			} else {
+				assert.NotContains(t, args, "initcall_debug")
+			}
+		})
+	}
+}
+
 func TestMicroVMHypervisorArgs(t *testing.T) {
 	root := microVMDisk{arg: "path=/tmp/scratch.ext4", device: "/dev/vda"}
 	extra := []microVMDisk{{arg: "vhost_user=on,socket=/s,num_queues=1,queue_size=128", device: "/dev/vdb"}}

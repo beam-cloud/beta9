@@ -89,6 +89,7 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
 	if err != nil {
 		return err
 	}
+	logf("boot phase: systemd binary resolved")
 
 	if spec.Process == nil {
 		return fmt.Errorf("missing VM workload")
@@ -97,27 +98,33 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
 	if err := prepareSystemdTmp("/", processEnv(spec.Process, "BEAM_VM_DESKTOP") == "true"); err != nil {
 		return err
 	}
+	logf("boot phase: systemd tmp prepared")
 
 	// Give the guest its own hosts file. Container mounts can be read-only,
 	// and KasmVNC/xauth require the guest hostname to resolve locally.
 	if err := guestHosts(spec.Hostname); err != nil {
 		return err
 	}
+	logf("boot phase: systemd hosts prepared")
 
 	if err := workload.configureSystemd("/"); err != nil {
 		return err
 	}
+	logf("boot phase: systemd memory configured")
 
 	if err := writeSystemdBootFiles("/", spec.Process); err != nil {
 		return err
 	}
+	logf("boot phase: systemd boot files written")
 
 	agent := exec.Command("/.beam/init", "--systemd-agent")
+	agent.Env = append(os.Environ(), bootTraceEnv+"="+guestBootTrace.handoff())
 	agent.Stdin, agent.Stdout, agent.Stderr = os.Stdin, os.Stdout, os.Stderr
 	agent.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := agent.Start(); err != nil {
 		return fmt.Errorf("start guest agent: %w", err)
 	}
+	logf("boot phase: systemd agent spawned")
 
 	if err := os.WriteFile(systemdAgentPIDFile, []byte(strconv.Itoa(agent.Process.Pid)+"\n"), 0600); err != nil {
 		agent.Process.Kill()
@@ -389,6 +396,8 @@ func guestHosts(hostname string) error {
 }
 
 func runSystemdAgent() (int, error) {
+	guestBootTrace.restore(os.Getenv(bootTraceEnv))
+	os.Unsetenv(bootTraceEnv)
 	data, err := os.ReadFile(systemdProcessFile)
 	if err != nil {
 		return 1, err

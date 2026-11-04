@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
+
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
@@ -644,6 +646,30 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 	backoff := goprocInitialBackoff
 	stats := processManagerWaitStats{FailureClasses: map[string]int{}}
 	nextSlowLog := goprocSlowReadyLogInterval
+	if guest, ok := instance.Runtime.(interface {
+		WaitForGuestControl(context.Context, string) error
+	}); ok {
+		end := common.StartupSpan(ctx, "sandbox.wait_guest_control")
+		err := guest.WaitForGuestControl(ctx, containerId)
+		end()
+		if err != nil {
+			stats.LastError = err.Error()
+			stats.LastClass = "guest_control"
+			stats.FailureClasses[stats.LastClass]++
+			return nil, false, stats
+		}
+		if os.Getenv("BETA9_MICROVM_TCP_READY_GATE") == "1" {
+			end := common.StartupSpan(ctx, "sandbox.wait_process_manager_socket")
+			err := waitProcessManagerSocket(ctx, sandboxProcessManagerEndpoints(instance))
+			end()
+			if err != nil {
+				stats.LastError = err.Error()
+				stats.LastClass = "guest_socket"
+				stats.FailureClasses[stats.LastClass]++
+				return nil, false, stats
+			}
+		}
+	}
 
 	for {
 		stats.Attempts++
@@ -737,10 +763,14 @@ func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (
 func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint) (*goproc.GoProcClient, error) {
 	var lastErr, retryableErr error
 	for _, endpoint := range endpoints {
+		endClient := common.StartupSpan(ctx, "sandbox.process_manager_client")
 		client, err := goproc.NewGoProcClient(ctx, endpoint.dialHost(), uint(endpoint.port))
+		endClient()
 		if err == nil {
 			probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+			endProbe := common.StartupSpan(ctx, "sandbox.process_manager_authenticated_ready")
 			err = client.ReadyContext(probeCtx)
+			endProbe()
 			cancel()
 			if err == nil {
 				return client, nil

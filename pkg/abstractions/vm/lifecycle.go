@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -42,6 +43,7 @@ func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 }
 
 func (s *Service) prepare(ctx context.Context, v *types.VM) error {
+	defer common.StartupSpan(ctx, "vm.prepare_stub")()
 	if v.StubID != "" {
 		return nil
 	}
@@ -130,14 +132,20 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
+	defer common.StartupSpan(ctx, "vm.start")()
+	endPhase := common.StartupSpan(ctx, "vm.public_ipv6")
 	if v.Spec.Kiosk != nil && v.Spec.Kiosk.Transport == types.VMKioskTransportWebRTC && s.webrtc == nil {
 		return fmt.Errorf("kiosk WebRTC requires the shared TCP gateway")
 	}
 	if err := s.ensurePublicIPv6(ctx, v); err != nil {
+		endPhase()
 		return err
 	}
+	endPhase()
 
+	endPhase = common.StartupSpan(ctx, "vm.runtime_state")
 	state, err := s.runtimeState(v)
+	endPhase()
 	if err != nil {
 		return err
 	}
@@ -172,12 +180,18 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		}
 	}
 	v.ContainerID = ""
-	if err := s.validateMemoryDisks(ctx, v); err != nil {
+	endPhase = common.StartupSpan(ctx, "vm.validate_memory_disks")
+	err = s.validateMemoryDisks(ctx, v)
+	endPhase()
+	if err != nil {
 		return err
 	}
 
 	v.LaunchAttempts++
-	if err := s.repo.SaveVM(ctx, v); err != nil {
+	endPhase = common.StartupSpan(ctx, "vm.save_attempt")
+	err = s.repo.SaveVM(ctx, v)
+	endPhase()
+	if err != nil {
 		return err
 	}
 	if retiredProofObserved {
@@ -196,11 +210,16 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 
 	v.Status = types.VMStateStarting
 	v.Error = ""
-	if err := s.repo.SaveVM(ctx, v); err != nil {
+	endPhase = common.StartupSpan(ctx, "vm.save_runtime_identity")
+	err = s.repo.SaveVM(ctx, v)
+	endPhase()
+	if err != nil {
 		return err
 	}
 
+	endPhase = common.StartupSpan(ctx, "vm.schedule")
 	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
+	endPhase()
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
 			v.ContainerID = ""

@@ -86,7 +86,10 @@ func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error 
 	}
 
 	ctx, _ := requestContext(c)
+	endReady := common.StartupSpan(ctx, "api.exec_readiness")
 	ready, err := s.runtime.SandboxConnect(ctx, &pb.PodSandboxConnectRequest{ContainerId: v.ContainerID})
+	endReady()
+	defer common.StartupSpan(ctx, "api.response_encode")()
 	if err != nil {
 		return apiError(err)
 	}
@@ -300,6 +303,7 @@ type createRequest struct {
 
 func (s *Service) create(c echo.Context) error {
 	ctx, info := requestContext(c)
+	defer common.StartupSpan(ctx, "api.create")()
 	var req createRequest
 	if err := decode(c, &req); err != nil {
 		return err
@@ -399,10 +403,12 @@ func (s *Service) create(c echo.Context) error {
 		return apiError(err)
 	}
 
+	common.StartupTraceFromContext(ctx).Identity(v.ID, v.ContainerID)
 	return s.launchResponse(c, http.StatusCreated, v)
 }
 
 func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.VMCreateOptions) (*types.VM, error) {
+	defer common.StartupSpan(ctx, "vm.create")()
 	name, spec := opts.Name, opts.Spec
 	if err := s.configureKioskTransport(&spec); err != nil {
 		return nil, err
@@ -462,14 +468,18 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		LastActiveAt:        now,
 	}
 
+	endLock := common.StartupSpan(ctx, "vm.lock")
 	unlock, err := s.repo.LockVM(ctx, id)
+	endLock()
 	if err != nil {
 		return nil, err
 	}
 
 	defer unlock()
 	if opts.RequestID != "" {
+		endLookup := common.StartupSpan(ctx, "vm.idempotency_lookup")
 		existing, err := s.repo.GetVM(ctx, info.Workspace.Id, id)
+		endLookup()
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -504,7 +514,10 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 	}
 
 	// Hold the lifecycle lock before publishing the row to the reconciler.
-	if err := s.repo.CreateVM(ctx, v); err != nil {
+	endInsert := common.StartupSpan(ctx, "vm.insert")
+	err = s.createVMRecord(ctx, v)
+	endInsert()
+	if err != nil {
 		return nil, err
 	}
 
@@ -529,6 +542,7 @@ type actionRequest struct {
 
 func (s *Service) action(c echo.Context) error {
 	ctx, info := requestContext(c)
+	defer common.StartupSpan(ctx, "api."+c.Param("action"))()
 	var req actionRequest
 	if err := decode(c, &req); err != nil {
 		return err
@@ -593,6 +607,7 @@ func (s *Service) action(c echo.Context) error {
 	if err != nil {
 		return apiError(err)
 	}
+	common.StartupTraceFromContext(ctx).Identity(v.ID, v.ContainerID)
 
 	defer func() {
 		if unlock != nil {

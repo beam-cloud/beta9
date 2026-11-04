@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
 	"strconv"
@@ -31,8 +33,22 @@ func main() {
 	} else {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
-	if config.PrettyLogs {
+	if config.PrettyLogs && os.Getenv("BETA9_WORKER_JSON_LOGS") != "1" {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+	} else if os.Getenv("BETA9_WORKER_BUFFERED_JSON_LOGS") == "1" {
+		writer := common.NewBufferedJSONLogWriter(os.Stderr, 8<<20, 4096)
+		defer func() {
+			if err := writer.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "flush worker JSON logs: %v\n", err)
+			}
+		}()
+		log.Logger = log.Output(writer)
+		if os.Getenv("BETA9_PROFILE_STARTUP") == "1" {
+			http.HandleFunc("/debug/log-queue", func(response http.ResponseWriter, _ *http.Request) {
+				response.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(response).Encode(writer.Stats())
+			})
+		}
 	}
 
 	metrics.InitializeMetricsRepository(config.Monitoring.VictoriaMetrics)

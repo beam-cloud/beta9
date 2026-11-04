@@ -513,7 +513,6 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 		cleanupInstalled()
 		return actualHash, size, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
-
 	if err := cas.publishExpectedHashPages(expectedHash, tmpDir, chunkCount, size); err != nil {
 		cleanupInstalled()
 		return "", size, err

@@ -1335,46 +1335,56 @@ func sameStringSet(a, b []string) bool {
 }
 
 func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.T) {
-	rt := &mockResourceRuntime{mockRuntime: mockRuntime{name: "runc"}}
-	containerInstances := common.NewSafeMap[*ContainerInstance]()
-	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt, CPUSet: "0"})
+	t.Setenv("BETA9_MICROVM_BOOT_CPU_SHARES", "")
+	for _, runtimeName := range []string{"runc", types.ContainerRuntimeMicroVM.String()} {
+		t.Run(runtimeName, func(t *testing.T) {
+			rt := &mockResourceRuntime{mockRuntime: mockRuntime{name: runtimeName}}
+			containerInstances := common.NewSafeMap[*ContainerInstance]()
+			containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt, CPUSet: "0"})
 
-	worker := &Worker{
-		config: types.AppConfig{
-			Worker: types.WorkerConfig{
-				ContainerResourceLimits: types.ContainerResourceLimitsConfig{
-					CPUEnforced:         true,
-					CPUAffinityEnforced: true,
-					MemoryEnforced:      true,
+			worker := &Worker{
+				config: types.AppConfig{
+					Worker: types.WorkerConfig{
+						ContainerResourceLimits: types.ContainerResourceLimitsConfig{
+							CPUEnforced:         true,
+							CPUAffinityEnforced: true,
+							MemoryEnforced:      true,
+						},
+					},
 				},
-			},
-		},
-		runtime:            rt,
-		containerInstances: containerInstances,
+				runtime:            rt,
+				containerInstances: containerInstances,
+			}
+
+			spec, err := worker.specFromRequest(&types.ContainerRequest{
+				ContainerId: "container-1",
+				EntryPoint:  []string{"sleep", "60"},
+				Cpu:         100,
+				Memory:      128,
+				Stub: types.StubWithRelated{Stub: types.Stub{
+					Type: types.StubType(types.StubTypeSandbox),
+				}},
+			}, &ContainerOptions{BindPorts: []int{8001}})
+			require.NoError(t, err)
+			require.NotNil(t, spec.Linux.Resources)
+			require.NotNil(t, spec.Linux.Resources.CPU)
+			if runtimeName == types.ContainerRuntimeMicroVM.String() {
+				require.Nil(t, spec.Linux.Resources.CPU.Shares)
+			} else {
+				require.NotNil(t, spec.Linux.Resources.CPU.Shares)
+			}
+			require.Nil(t, spec.Linux.Resources.CPU.Quota)
+			require.Nil(t, spec.Linux.Resources.CPU.Period)
+			require.Empty(t, spec.Linux.Resources.CPU.Cpus)
+			require.NotNil(t, spec.Linux.Resources.Memory)
+
+			instance, exists := containerInstances.Get("container-1")
+			require.True(t, exists)
+			require.NotNil(t, instance.DeferredCPUQuota)
+			require.Equal(t, "0", instance.DeferredCPUQuota.Cpus)
+			require.Equal(t, uint64(102), *instance.DeferredCPUQuota.Shares)
+		})
 	}
-
-	spec, err := worker.specFromRequest(&types.ContainerRequest{
-		ContainerId: "container-1",
-		EntryPoint:  []string{"sleep", "60"},
-		Cpu:         100,
-		Memory:      128,
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			Type: types.StubType(types.StubTypeSandbox),
-		}},
-	}, &ContainerOptions{BindPorts: []int{8001}})
-	require.NoError(t, err)
-	require.NotNil(t, spec.Linux.Resources)
-	require.NotNil(t, spec.Linux.Resources.CPU)
-	require.NotNil(t, spec.Linux.Resources.CPU.Shares)
-	require.Nil(t, spec.Linux.Resources.CPU.Quota)
-	require.Nil(t, spec.Linux.Resources.CPU.Period)
-	require.Empty(t, spec.Linux.Resources.CPU.Cpus)
-	require.NotNil(t, spec.Linux.Resources.Memory)
-
-	instance, exists := containerInstances.Get("container-1")
-	require.True(t, exists)
-	require.NotNil(t, instance.DeferredCPUQuota)
-	require.Equal(t, "0", instance.DeferredCPUQuota.Cpus)
 }
 
 func TestSpecFromRequestKeepsSandboxCPUThrottleWhenRuntimeCannotUpdate(t *testing.T) {
@@ -1464,6 +1474,24 @@ func TestApplyDeferredSandboxCPUThrottleClearsQuotaAfterRuntimeUpdate(t *testing
 	updated, exists := containerInstances.Get("container-1")
 	require.True(t, exists)
 	require.Nil(t, updated.DeferredCPUQuota)
+}
+
+func TestSandboxCPUThrottleGraceIsBoundedAndMicroVMOnly(t *testing.T) {
+	for _, value := range []string{"", "bad", "-1s", "11s", "0s", "250ms"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("BETA9_MICROVM_CPU_QUOTA_GRACE", value)
+			want := sandboxCPUQuotaGrace
+			if value == "0s" {
+				want = 0
+			}
+			if value == "250ms" {
+				want = 250 * time.Millisecond
+			}
+			require.Equal(t, want, sandboxCPUThrottleGrace(types.ContainerRuntimeMicroVM.String()))
+			require.Equal(t, sandboxCPUQuotaGrace, sandboxCPUThrottleGrace("runc"))
+			require.Equal(t, sandboxCPUQuotaGrace, sandboxCPUThrottleGrace("gvisor"))
+		})
+	}
 }
 
 // A runtime update that fails once (a slow runsc under load) is retried after
@@ -4146,6 +4174,7 @@ type mockExecCall struct {
 }
 
 type mockRuntime struct {
+	mu           sync.Mutex
 	name         string
 	capabilities runtime.Capabilities
 	state        func(context.Context, string) (runtime.State, error)
@@ -4173,11 +4202,15 @@ func (m *mockRuntime) Run(ctx context.Context, containerID, bundlePath string, o
 }
 
 func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.Process, opts *runtime.ExecOpts) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.execCalls = append(m.execCalls, mockExecCall{containerID: containerID, proc: proc})
 	return m.execErr
 }
 
 func (m *mockRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.signals = append(m.signals, sig)
 	if opts == nil {
 		opts = &runtime.KillOpts{}

@@ -3,9 +3,11 @@ package worker
 import (
 	"context"
 	"errors"
+	"os"
 	"sync/atomic"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -176,8 +178,17 @@ func (s *Worker) detachFinalQcowDurableDisks(request *types.ContainerRequest) er
 	if request == nil || s.diskManager == nil {
 		return nil
 	}
+	defer beginCheckpointCriticalIO()()
 	ctx, cancel := context.WithTimeout(s.durableDiskCleanupContext(), durableDiskCleanupGrace)
 	defer cancel()
+	trace := common.NewStartupTrace(os.Getenv("BETA9_TRACE_VM_STARTUP") == "1")
+	if trace != nil {
+		trace.Identity("", request.ContainerId)
+		ctx = common.ContextWithStartupTrace(ctx, trace)
+		defer func() {
+			trace.LogEvent(log.Info().Str("component", "worker_disk_finalization"), "vm disk finalization trace")
+		}()
+	}
 
 	var errs error
 	for i := range request.Mounts {

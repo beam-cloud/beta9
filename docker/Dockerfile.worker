@@ -192,10 +192,11 @@ ENV GONOSUMDB="github.com/beam-cloud/*"
 COPY go.mod go.sum ./
 RUN go mod download
 COPY --exclude=sdk . .
+RUN go run hack/worker-build-modfile.go /tmp/worker-build.mod
 
 # gVisor's nosplit CPU probes need optimization to stay within Go's stack limit.
-RUN go build -gcflags "all=-N" -gcflags "gvisor.dev/gvisor/pkg/cpuid=" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
-RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
+RUN go build -modfile /tmp/worker-build.mod -gcflags "all=-N" -gcflags "gvisor.dev/gvisor/pkg/cpuid=" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
+RUN go build -modfile /tmp/worker-build.mod -o /usr/local/bin/worker ./cmd/worker/main.go
 RUN go build -o /usr/local/bin/agent ./cmd/agent
 # Guest init for microvm sandboxes: static, PID 1 inside the VM.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/beam-vminit ./cmd/vminit
@@ -205,6 +206,25 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/beam-vmi
 FROM golang AS uv
 RUN curl -LsSf https://astral.sh/uv/0.6.13/install.sh | sh
 
+# Build the pinned process manager with the output-drain fix. The client and
+# protocol stay at the same version; saved VM checkpoints retain their binary.
+FROM golang AS goproc
+ARG TARGETARCH
+ARG GOPROC_VERSION=0.1.17
+WORKDIR /build
+COPY go.mod go.sum ./
+COPY docker/patches/goproc/bounded-output-drain.patch /tmp/bounded-output-drain.patch
+RUN set -eux; \
+    go mod download github.com/beam-cloud/goproc@v${GOPROC_VERSION}; \
+    cp -a "$(go env GOMODCACHE)/github.com/beam-cloud/goproc@v${GOPROC_VERSION}" /build/goproc; \
+    chmod -R u+w /build/goproc; \
+    cd /build/goproc; \
+    git apply --check /tmp/bounded-output-drain.patch; \
+    git apply /tmp/bounded-output-drain.patch; \
+    go test ./pkg; \
+    mkdir -p /out; \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/goproc ./cmd
+
 # final image
 # ========================
 FROM nvidia/cuda:12.8.0-base-ubuntu22.04 AS release
@@ -212,7 +232,6 @@ FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
 ARG TARGETARCH
-ARG GOPROC_VERSION=0.1.17
 ENV DEBIAN_FRONTEND="noninteractive"
 WORKDIR /workspace
 
@@ -224,7 +243,7 @@ RUN apt-get update && \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         tee /etc/apt/sources.list.d/nvidia-container-toolkit.list && \
     apt-get update && \
-    apt-get install -y psmisc tini iproute2 iptables kmod \
+    apt-get install -y psmisc tini iproute2 iptables kmod zstd \
         # qcow durable disks: qemu-img + qemu-storage-daemon, kernel NBD client,
         # and ext4 tooling for formatting freshly created volumes. libglib2.0-0
         # is the runtime dependency of the qemu-storage-daemon built above.
@@ -372,8 +391,7 @@ EOT
 
 RUN apt-get install -y wget git busybox-static
 
-RUN wget "https://github.com/beam-cloud/goproc/releases/download/v${GOPROC_VERSION}/goproc-${GOPROC_VERSION}-linux-${TARGETARCH}" \
-      -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc
+COPY --from=goproc --chmod=755 /out/goproc /usr/local/bin/goproc
 
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \

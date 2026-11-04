@@ -145,7 +145,7 @@ func TestClaimNetworkInstallsWithoutAnotherRepositoryCall(t *testing.T) {
 	// A nil client fails the test if setup tries to publish the IP again.
 	m := &ContainerNetworkManager{containerSlots: map[string]*containerNetworkSlot{"c1": slot}, containerInstances: instances, slotPoolClosed: true}
 	spec := &specs.Spec{Linux: &specs.Linux{}}
-	used, err := m.setupPreallocatedNetworkSlot("c1", spec, nil)
+	used, err := m.setupPreallocatedNetworkSlot(context.Background(), "c1", spec, nil)
 	require.NoError(t, err)
 	require.True(t, used)
 	require.Equal(t, []specs.LinuxNamespace{{Type: specs.NetworkNamespace, Path: slot.netnsPath}}, spec.Linux.Namespaces)

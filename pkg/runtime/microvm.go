@@ -357,6 +357,7 @@ func underAny(path string, prefixes ...string) bool {
 // decided that the guest has to act on.
 func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDisk, extra []microVMDisk, mounts []microvm.Mount) *microvm.Spec {
 	vmSpec := &microvm.Spec{
+		TraceStartup:        os.Getenv("BETA9_TRACE_VM_STARTUP") == "1",
 		WorkloadMemoryBytes: microVMWorkloadMemoryBytes(spec),
 		Network:             network,
 		RootDisk:            root.device,
@@ -414,7 +415,7 @@ func waitForPath(ctx context.Context, path string, timeout time.Duration, gaveUp
 // --- hypervisor ------------------------------------------------------------------
 
 func microVMKernelCmdline() string {
-	return strings.Join([]string{
+	args := []string{
 		"console=ttyS0",
 		"root=" + microvm.VirtiofsTag,
 		"rootfstype=virtiofs",
@@ -425,6 +426,9 @@ func microVMKernelCmdline() string {
 		"reboot=k",
 		"panic=0",
 		"loglevel=4",
+		// Routine systemd progress otherwise generates serial-port VM exits
+		// for every character across the burst. Failures still reach console.
+		"systemd.show_status=error",
 		"random.trust_cpu=on",
 		// 64-bit DMA does not need an eagerly zeroed software bounce buffer.
 		"swiotlb=noforce",
@@ -432,7 +436,13 @@ func microVMKernelCmdline() string {
 		"i8042.nomux",
 		"i8042.nopnp",
 		"i8042.nokbd",
-	}, " ")
+	}
+	if os.Getenv("BETA9_MICROVM_KERNEL_INIT_TRACE") == "1" {
+		// Keep initcall timings in the guest ring buffer; loglevel=4 avoids
+		// serial-port traffic for these debug-level diagnostic messages.
+		args = append(args, "initcall_debug")
+	}
+	return strings.Join(args, " ")
 }
 
 type microVMPlacement struct {

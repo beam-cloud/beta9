@@ -44,6 +44,13 @@ func (r *PostgresBackendRepository) CreateVM(ctx context.Context, vm *types.VM) 
 		return err
 	}
 
+	if r.config.VMBurstBatchSize > 1 {
+		return r.mutateVMBatched(ctx, vmMutationInput{Create: true, Row: vmMutationRow{
+			ID: vm.ID, WorkspaceID: vm.WorkspaceID, WorkspaceExternalID: vm.WorkspaceExternalID,
+			TokenID: vm.TokenID, Name: vm.Name, Handle: vm.Handle, Data: data,
+			LastActiveAt: vm.LastActiveAt, PublicIPv6: nullableVMAddress(vm.PublicIPv6),
+		}})
+	}
 	_, err = r.client.ExecContext(ctx, `INSERT INTO persistent_vm (id,workspace_id,workspace_external_id,token_id,name,handle,data,last_active_at,public_ipv6) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::inet)`, vm.ID, vm.WorkspaceID, vm.WorkspaceExternalID, vm.TokenID, vm.Name, vm.Handle, data, vm.LastActiveAt, vm.PublicIPv6)
 	return err
 }
@@ -55,6 +62,9 @@ func (r *PostgresBackendRepository) SaveVM(ctx context.Context, vm *types.VM) er
 		return err
 	}
 
+	if r.config.VMBurstBatchSize > 1 {
+		return r.mutateVMBatched(ctx, vmMutationInput{Row: vmMutationRow{ID: vm.ID, Data: data, TokenID: vm.TokenID}})
+	}
 	result, err := r.client.ExecContext(ctx, `UPDATE persistent_vm SET data=$2,token_id=$3 WHERE id=$1`, vm.ID, data, vm.TokenID)
 	if err != nil {
 		return err

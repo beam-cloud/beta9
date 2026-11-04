@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -2250,7 +2251,7 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 }
 
 func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
-	for range microVMCheckpointConcurrency {
+	for range cap(microVMCheckpointSlots) {
 		release, err := acquireMicroVMCheckpointSlot(context.Background())
 		require.NoError(t, err)
 		t.Cleanup(release)
@@ -2270,6 +2271,92 @@ func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
 	defer cancel()
 	require.ErrorIs(t, worker.createCheckpoint(ctx, &CreateCheckpointOpts{Request: request, CheckpointId: "queued"}), context.DeadlineExceeded)
 	require.False(t, called, "admission must precede guest freeze, pause and capture")
+}
+
+func TestCheckpointUploadDoesNotHoldCaptureAdmissionOrPublishEarly(t *testing.T) {
+	for _, streaming := range []string{"0", "1"} {
+		t.Run("streaming="+streaming, func(t *testing.T) {
+			t.Setenv("BETA9_CHECKPOINT_STREAM_UPLOAD", streaming)
+			testCheckpointUploadAdmission(t)
+		})
+	}
+}
+
+func testCheckpointUploadAdmission(t *testing.T) {
+	for i := 0; i < cap(checkpointArchiveSlots)-1; i++ {
+		release, err := acquireCheckpointSlot(context.Background(), checkpointArchiveSlots)
+		require.NoError(t, err)
+		t.Cleanup(release)
+	}
+	var releaseCapture func()
+	for i := 0; i < cap(microVMCheckpointSlots); i++ {
+		release, err := acquireMicroVMCheckpointSlot(context.Background())
+		require.NoError(t, err)
+		t.Cleanup(release)
+		releaseCapture = release
+	}
+	uploadStarted := make(chan struct{})
+	finishUpload := make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		once.Do(func() { close(uploadStarted) })
+		select {
+		case <-finishUpload:
+			w.Header().Set("ETag", `"checkpoint"`)
+			w.WriteHeader(http.StatusOK)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cacheCtx, cancelCache := context.WithCancel(context.Background())
+	cancelCache() // optional CAS fill is unrelated to durable publication
+	root := t.TempDir()
+	checkpointPath := filepath.Join(root, "saved")
+	require.NoError(t, os.MkdirAll(checkpointPath, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "memory"), []byte("captured RAM"), 0600))
+	id, endpoint, region, credential, bucket := uint(1), server.URL, "us-east-1", "test", "test"
+	request := &types.ContainerRequest{Workspace: types.Workspace{Name: "test", Storage: &types.WorkspaceStorage{
+		Id: &id, EndpointUrl: &endpoint, Region: &region, AccessKey: &credential, SecretKey: &credential, BucketName: &bucket,
+	}}}
+	worker := &Worker{cacheManager: &WorkerCacheManager{ctx: cacheCtx, checkpointRoot: root, client: &cache.Client{}}}
+	type result struct {
+		metadata *checkpointCacheMetadata
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		metadata, err := worker.persistCheckpoint(ctx, request, "saved", checkpointPath, nil, releaseCapture)
+		done <- result{metadata, err}
+	}()
+	select {
+	case <-uploadStarted:
+	case result := <-done:
+		t.Fatalf("upload did not start: %v", result.err)
+	case <-ctx.Done():
+		t.Fatal("upload did not start")
+	}
+	admissionCtx, cancelAdmission := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancelAdmission()
+	release, err := acquireMicroVMCheckpointSlot(admissionCtx)
+	require.NoError(t, err, "the next capture must proceed while origin upload is pending")
+	defer release()
+	releaseArchive, err := acquireCheckpointSlot(admissionCtx, checkpointArchiveSlots)
+	require.NoError(t, err, "the next archive must proceed while origin upload is pending")
+	defer releaseArchive()
+	select {
+	case <-done:
+		t.Fatal("checkpoint became available before origin upload completed")
+	default:
+	}
+	close(finishUpload)
+	persisted := <-done
+	require.NoError(t, persisted.err)
+	require.NotNil(t, persisted.metadata)
+	require.NotEmpty(t, persisted.metadata.hash)
+	require.Positive(t, persisted.metadata.sizeBytes)
 }
 
 func TestCreateFilesystemCheckpointFallbackStopsAndCapturesOverlay(t *testing.T) {

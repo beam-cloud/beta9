@@ -1,0 +1,89 @@
+--- a/pkg/process.go
++++ b/pkg/process.go
+@@ -13,7 +13,9 @@
+ const (
+ 	ProcessStreamStdout = "stdout"
+ 	ProcessStreamStderr = "stderr"
+-	processWaitDelay    = 100 * time.Millisecond
++	// A fractional CPU may not schedule the output copier within one quota
++	// period. Retain a bounded drain deadline without truncating normal output.
++	processWaitDelay = 2 * time.Second
+ )
+ 
+ type ProcessLogSink interface {
+@@ -209,6 +211,11 @@
+ 		}
+ 		if p.cmd.ProcessState != nil {
+ 			p.exitCode = processExitCode(p.cmd.ProcessState)
++			// A successful child exit does not make failed output collection a
++			// success. Status and Wait must agree when the drain deadline expires.
++			if p.exitCode == 0 && p.waitErr != nil {
++				p.exitCode = 1
++			}
+ 			return
+ 		}
+ 
+--- a/pkg/process_test.go
++++ b/pkg/process_test.go
+@@ -4,6 +4,7 @@
+ 	"bytes"
+ 	"context"
+ 	"errors"
++	"os/exec"
+ 	"testing"
+ 	"time"
+ )
+@@ -186,3 +187,53 @@
+ 		t.Fatalf("stdout was exposed after log failure: %q", stdout)
+ 	}
+ }
++
++// Reproduces the lost-output failure when a 100 ms wait deadline races a
++// temporarily descheduled output copier on fractional-CPU VMs.
++func TestOutputDrainSurvivesMoreThanOneCPUQuotaPeriod(t *testing.T) {
++	sink := newBlockingLogSink()
++	proc, err := NewProcess(context.Background())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := proc.ExecWithLogSink([]string{"sh", "-c", "printf retained-output"}, "/", nil, false, sink); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-sink.chunks:
++	case <-time.After(time.Second):
++		t.Fatal("no output chunk")
++	}
++	time.Sleep(250 * time.Millisecond)
++	sink.acks <- struct{}{}
++	code, err := proc.Wait()
++	if err != nil || code != 0 {
++		t.Fatalf("Wait()=%d,%v; output drain must survive a delayed copier", code, err)
++	}
++	if got := proc.Stdout(); got != "retained-output" {
++		t.Fatalf("stdout=%q", got)
++	}
++}
++
++func TestOutputDrainFailureCannotReportStatusSuccess(t *testing.T) {
++	proc, err := NewProcess(context.Background())
++	if err != nil {
++		t.Fatal(err)
++	}
++	cmd := exec.Command("sh", "-c", "sleep 0.2 & printf owned-output")
++	cmd.WaitDelay = 10 * time.Millisecond
++	proc.cmd = cmd
++	proc.stdoutBuf = &SafeBuffer{}
++	proc.stderrBuf = &SafeBuffer{}
++	cmd.Stdout, cmd.Stderr = proc.stdoutBuf, proc.stderrBuf
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	code, err := proc.Wait()
++	if !errors.Is(err, exec.ErrWaitDelay) {
++		t.Fatalf("Wait error=%v; want ErrWaitDelay", err)
++	}
++	if code != 1 || proc.ExitCode() != 1 || proc.Running() {
++		t.Fatalf("failed drain reported success: code=%d status=%d running=%v", code, proc.ExitCode(), proc.Running())
++	}
++}

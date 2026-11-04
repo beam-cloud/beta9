@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/beam-cloud/beta9/pkg/common"
 )
 
 // Node names inside each daemon's block graph. One daemon serves exactly one
@@ -74,6 +76,7 @@ type qsdProcess struct {
 // socket exists. fmtNode is the node name of the active qcow2 layer, which
 // changes on every pivot.
 func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode string, readOnly bool, export ExportMode) (*qsdProcess, error) {
+	defer common.StartupSpan(ctx, "disk.start_qsd")()
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -132,6 +135,12 @@ func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode st
 		return nil, err
 	}
 	proc.pid = pid
+	if export == ExportVhostUser && m.execs {
+		if err := initializeVhostWriteBack(ctx, proc.exportSocket); err != nil {
+			_ = m.stopQSD(context.Background(), proc)
+			return nil, fmt.Errorf("initialize vhost-user write cache: %w", err)
+		}
+	}
 	return proc, nil
 }
 

@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -20,6 +21,93 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
+
+func TestNativeCheckpointTarEncoderFailureCannotHangProducer(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "failed-encoder")
+	require.NoError(t, os.WriteFile(binary, []byte("#!/bin/sh\nexit 7\n"), 0700))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	producer := exec.CommandContext(ctx, "sh", "-c", "exec yes checkpoint")
+	err := writeCheckpointTarNative(ctx, producer, &bytes.Buffer{}, binary)
+	require.ErrorContains(t, err, "compress checkpoint")
+	require.NoError(t, ctx.Err(), "encoder exit must close the pipe rather than wait for cancellation")
+}
+
+func TestNativeCheckpointTarProducerFailureIsNotPublishedAsSuccess(t *testing.T) {
+	binary, err := exec.LookPath("zstd")
+	if err != nil {
+		t.Skip("native zstd is not installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	producer := exec.CommandContext(ctx, "sh", "-c", "exit 9")
+	require.Error(t, writeCheckpointTarNative(ctx, producer, &bytes.Buffer{}, binary))
+	require.NoError(t, ctx.Err())
+}
+
+func TestCheckpointZstdWindowBounds(t *testing.T) {
+	for _, value := range []string{"", "0", "22", "28", "100", "bad", "27 --no-check"} {
+		t.Setenv("BETA9_CHECKPOINT_ZSTD_LONG_WINDOW", value)
+		require.Equal(t, []string{"-q", "-1", "--single-thread", "--check", "-c"}, checkpointZstdArgs())
+	}
+	for _, value := range []string{"23", "25", "27"} {
+		t.Setenv("BETA9_CHECKPOINT_ZSTD_LONG_WINDOW", value)
+		require.Contains(t, checkpointZstdArgs(), "--long="+value)
+		require.Contains(t, checkpointZstdArgs(), "--single-thread")
+		require.Contains(t, checkpointZstdArgs(), "--check")
+	}
+}
+
+func TestNativeCheckpointLongWindowRestoresThroughProductionDecoder(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs GNU tar")
+	}
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("native zstd is not installed")
+	}
+	t.Setenv("BETA9_CHECKPOINT_NATIVE_ZSTD", "1")
+	t.Setenv("BETA9_CHECKPOINT_ZSTD_LONG_WINDOW", "27")
+	root := t.TempDir()
+	src := filepath.Join(root, "checkpoint")
+	require.NoError(t, os.Mkdir(src, 0755))
+	file, err := os.Create(filepath.Join(src, "memory"))
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(1<<30))
+	payload := bytes.Repeat([]byte("checkpoint native memory roundtrip\n"), 4096)
+	_, err = file.WriteAt(payload, 1<<29)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, unix.Setxattr(filepath.Join(src, "memory"), "user.beta9.test", []byte("native"), 0))
+	archive := filepath.Join(root, "archive.zst")
+	_, size, err := createTarWithSHA256(src, archive)
+	require.NoError(t, err)
+	require.Less(t, size, int64(1<<20))
+	data, err := os.ReadFile(archive)
+	require.NoError(t, err)
+	dst := filepath.Join(root, "decoded")
+	require.NoError(t, os.Mkdir(dst, 0755))
+	require.NoError(t, untarCheckpointReader(context.Background(), bytes.NewReader(data), dst))
+	restored := filepath.Join(dst, "checkpoint", "memory")
+	info, err := os.Stat(restored)
+	require.NoError(t, err)
+	require.Equal(t, int64(1<<30), info.Size())
+	require.Less(t, info.Sys().(*syscall.Stat_t).Blocks*512, int64(1<<20))
+	got := make([]byte, len(payload))
+	file, err = os.Open(restored)
+	require.NoError(t, err)
+	_, err = file.ReadAt(got, 1<<29)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.Equal(t, payload, got)
+	xattr := make([]byte, 32)
+	n, err := unix.Getxattr(restored, "user.beta9.test", xattr)
+	require.NoError(t, err)
+	require.Equal(t, "native", string(xattr[:n]))
+	data[len(data)-1] ^= 1
+	bad := filepath.Join(root, "bad")
+	require.NoError(t, os.Mkdir(bad, 0755))
+	require.Error(t, untarCheckpointReader(context.Background(), bytes.NewReader(data), bad), "a corrupt frame footer must fail after tar reaches its end marker")
+}
 
 func TestDirectoryArchivePreservesOverlayWhiteoutWithoutMaterializingItInCache(t *testing.T) {
 	if runtime.GOOS != "linux" {

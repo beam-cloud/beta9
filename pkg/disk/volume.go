@@ -181,7 +181,9 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	// Fresh exports can adopt a formatted spare. A VM switches its export
 	// from NBD to vhost-user without formatting on the launch path.
 	if fresh && spec.Journal == nil {
+		endRecency := common.StartupSpan(ctx, "disk.spare_recency")
 		m.rememberSpareSize(spec.VirtualSizeBytes)
+		endRecency()
 		defer m.replenishSpares(spec.VirtualSizeBytes)
 		if volume := m.adoptSpare(ctx, spec); volume != nil {
 			return volume, nil
@@ -755,7 +757,13 @@ var ErrNotCheckpointed = errors.New("published layer is not the journal's checkp
 // MarkPublished records that a sealed layer was durably published as the
 // given snapshot, moving it from the pending list into the chain.
 func (v *Volume) MarkPublished(sealedPath, snapshotID string) error {
+	return v.MarkPublishedContext(context.Background(), sealedPath, snapshotID)
+}
+
+func (v *Volume) MarkPublishedContext(ctx context.Context, sealedPath, snapshotID string) error {
+	endLock := common.StartupSpan(ctx, "disk.mark_published_lock")
 	v.mu.Lock()
+	endLock()
 	defer v.mu.Unlock()
 	if len(v.state.Pending) == 0 || v.state.Pending[0].Path != sealedPath {
 		err := fmt.Errorf("sealed layer %s is not the oldest pending layer of volume %s", sealedPath, v.state.Key)
@@ -773,7 +781,7 @@ func (v *Volume) MarkPublished(sealedPath, snapshotID string) error {
 	}
 	v.state.Chain = append(v.state.Chain, stateLayer{SnapshotID: snapshotID, Path: sealedPath})
 	v.state.Pending = v.state.Pending[1:]
-	return saveVolumeState(v.dir, v.state)
+	return saveVolumeStateContext(ctx, v.dir, v.state)
 }
 
 // Flatten collapses a sealed layer and its whole backing chain into one
@@ -922,14 +930,20 @@ func (v *Volume) Republished(ids map[string]string) error {
 // detach unmounts, disconnects, and stops the daemon. Layer files and state
 // stay behind for reuse by the next attachment.
 func (v *Volume) detach(ctx context.Context) error {
+	defer common.StartupSpan(ctx, "disk.detach")()
+	endLock := common.StartupSpan(ctx, "disk.detach_lock")
 	v.mu.Lock()
+	endLock()
 	defer v.mu.Unlock()
 	if !v.state.Attached {
 		return nil
 	}
 
 	if v.state.exportMode() == ExportVhostUser {
-		if err := v.manager.stopQSD(ctx, v.qsd); err != nil {
+		endStop := common.StartupSpan(ctx, "disk.stop_qsd")
+		err := v.manager.stopQSD(ctx, v.qsd)
+		endStop()
+		if err != nil {
 			return err
 		}
 		v.qsd = nil
@@ -937,7 +951,20 @@ func (v *Volume) detach(ctx context.Context) error {
 		v.state.QSDPid = 0
 		v.state.QMPSocket = ""
 		v.state.ExportSocket = ""
-		if err := saveVolumeState(v.dir, v.state); err != nil {
+		if v.manager.detachedStateMarker {
+			endMarker := common.StartupSpan(ctx, "disk.detached_marker")
+			markerErr := saveDetachedVolumeMarker(v.dir, v.state)
+			endMarker()
+			if markerErr == nil {
+				return os.RemoveAll(v.manager.runtimeDir(v.state.Key))
+			}
+			if os.Getenv("BETA9_PROFILE_STARTUP") == "1" {
+				log.Info().Err(markerErr).Str("volume", v.state.Key).Msg("qcow detached marker used synchronous fallback")
+			}
+			// Changed payload metadata or a failed hint write retains the
+			// original synchronous durability path.
+		}
+		if err := saveVolumeStateContext(ctx, v.dir, v.state); err != nil {
 			return err
 		}
 		return os.RemoveAll(v.manager.runtimeDir(v.state.Key))

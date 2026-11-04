@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -23,6 +25,32 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
+
+func TestStorageClientsReuseHTTPConnectionsAcrossInstances(t *testing.T) {
+	var connections atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+	for i := 0; i < 25; i++ {
+		client, err := NewWorkspaceStorageClient(context.Background(), "workspace", testWorkspaceStorage(server.URL))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists, err := client.Exists(context.Background(), "pool-reuse-probe"); err != nil || !exists {
+			t.Fatalf("probe request failed: exists=%t error=%v", exists, err)
+		}
+	}
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("25 independent storage clients opened %d TCP connections; expected the shared pool to reuse one", got)
+	}
+}
 
 func TestStorageResponseChecksums(t *testing.T) {
 	checksums := map[string]string{"absent": "", "valid": "NhCmhg==", "corrupt": "AAAAAA=="} // CRC32 of "hello" is NhCmhg==.
