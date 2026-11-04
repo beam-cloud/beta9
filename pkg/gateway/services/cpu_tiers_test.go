@@ -42,7 +42,7 @@ func TestResolveStubCPUTier(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, tier)
 	_, err = resolve(types.StubConfigV1{CPUTier: types.CPUTierSpot})
-	require.Error(t, err)
+	require.ErrorContains(t, err, "CPU tiers are not enabled")
 	for _, pool := range []string{"performance", "shared"} {
 		tier, err = resolve(onPool(pool, types.StubConfigV1{}))
 		require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestResolveStubCPUTier(t *testing.T) {
 		require.Equal(t, types.CPUTierPerformance, tier)
 	}
 	_, err = resolve(types.StubConfigV1{CPUTier: types.CPUTierShared})
-	require.Error(t, err)
+	require.ErrorContains(t, err, "CPU tiers are not enabled")
 
 	// A workspace with tiers enabled may choose Shared, but only within its
 	// limits and on a pool that runs it.
@@ -71,7 +71,7 @@ func TestResolveStubCPUTier(t *testing.T) {
 	_, err = resolve(onPool("performance", shared))
 	require.ErrorContains(t, err, `pool "performance" does not run shared CPU work`)
 	_, err = resolve(types.StubConfigV1{CPUTier: types.CPUTierShared, Runtime: large.Runtime})
-	require.Error(t, err, "shared stubs are limited to 8 vCPU")
+	require.ErrorContains(t, err, "the shared tier supports at most 8 vCPU")
 
 	// Private and GPU stubs keep their placement and get no tier.
 	for _, config := range []types.StubConfigV1{onPool("private", types.StubConfigV1{}), {Runtime: gpu}} {

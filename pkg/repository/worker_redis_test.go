@@ -56,6 +56,18 @@ func setPendingContainerRequests(t *testing.T, rdb *common.RedisClient, requests
 	}
 }
 
+// runScheduleScript runs the schedule script for one request that evicts nothing.
+func runScheduleScript(rdb *common.RedisClient, workerID string, request *types.ContainerRequest, payload []byte, batchID, stateKey, assignment string) (interface{}, error) {
+	return scheduleContainerRequestsScript.Run(context.TODO(), rdb, []string{
+		common.RedisKeys.SchedulerWorkerState(workerID),
+		common.RedisKeys.SchedulerWorkerRequests(workerID),
+		common.RedisKeys.SchedulerContainerWorkerIndex(workerID),
+	}, request.CapacityCpu(), capacityMemoryForRequest(request), 0, 1, workerID,
+		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID,
+		0, 0, 0, 0, types.ContainerStateTtlSWhileStopping, request.ContainerId,
+		stateKey, payload, "", assignment, request.CapacityCpu()).Result()
+}
+
 func TestNewWorkerRedisRepository(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
@@ -1625,14 +1637,8 @@ func TestScheduleContainerRequestsValidatesCapacityFieldsBeforeWriting(t *testin
 
 	payload, err := json.Marshal(request)
 	assert.NoError(t, err)
-	result, err := scheduleContainerRequestsScript.Run(context.TODO(), rdb, []string{
-		common.RedisKeys.SchedulerWorkerState(worker.Id),
-		common.RedisKeys.SchedulerWorkerRequests(worker.Id),
-		common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id),
-	}, request.Cpu, capacityMemoryForRequest(request), 0, 1, worker.Id,
-		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, "batch-invalid-resource-version",
-		0, 0, 0, 0, types.ContainerStateTtlSWhileStopping, request.ContainerId,
-		common.RedisKeys.SchedulerContainerState(request.ContainerId), payload, "", "assignment-invalid-resource-version", request.Cpu).Result()
+	result, err := runScheduleScript(rdb, worker.Id, request, payload, "batch-invalid-resource-version",
+		common.RedisKeys.SchedulerContainerState(request.ContainerId), "assignment-invalid-resource-version")
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, result)
 	assert.Error(t, err)
@@ -1656,25 +1662,11 @@ func TestScheduleBatchMarkerSurvivesImmediateContainerFinalization(t *testing.T)
 	batchID := "batch-immediate-finalize"
 	assignment := "assignment-immediate-finalize"
 	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
-	result, err := scheduleContainerRequestsScript.Run(context.TODO(), rdb, []string{
-		common.RedisKeys.SchedulerWorkerState(worker.Id),
-		common.RedisKeys.SchedulerWorkerRequests(worker.Id),
-		common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id),
-	}, request.Cpu, capacityMemoryForRequest(request), 0, 1, worker.Id,
-		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID,
-		0, 0, 0, 0, types.ContainerStateTtlSWhileStopping, request.ContainerId,
-		stateKey, payload, "", assignment, request.Cpu).Result()
+	result, err := runScheduleScript(rdb, worker.Id, request, payload, batchID, stateKey, assignment)
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, result)
 	assert.NoError(t, err)
-	retried, err := scheduleContainerRequestsScript.Run(context.TODO(), rdb, []string{
-		common.RedisKeys.SchedulerWorkerState(worker.Id),
-		common.RedisKeys.SchedulerWorkerRequests(worker.Id),
-		common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id),
-	}, request.Cpu, capacityMemoryForRequest(request), 0, 1, worker.Id,
-		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID,
-		0, 0, 0, 0, types.ContainerStateTtlSWhileStopping, request.ContainerId,
-		stateKey, payload, "", assignment, request.Cpu).Result()
+	retried, err := runScheduleScript(rdb, worker.Id, request, payload, batchID, stateKey, assignment)
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, retried)
 	assert.NoError(t, err)
