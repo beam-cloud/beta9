@@ -90,3 +90,6 @@ quantiles and guest CPU/steal observations. `mechanism-evidence.json` retains
 correctness and performance experiments, including rejected approaches and
 measurement-scope corrections. An experiment that passed correctness did not
 necessarily improve whole-burst latency.
+
+Release decisions and their supporting measurements: [consolidation.md](consolidation.md).
+The reproduced deferred network-sweep fix is carried here as well.

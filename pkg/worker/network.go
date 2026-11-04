@@ -714,6 +714,11 @@ func (m *ContainerNetworkManager) fillNetworkSlotPool() {
 // fillNetworkSlotPoolUpTo tops the pool up towards slotPoolSize, creating at
 // most maxSlots new slots in this pass (0 means no cap).
 func (m *ContainerNetworkManager) fillNetworkSlotPoolUpTo(maxSlots int) {
+	// A deferred sweep treats reservations from this worker ID as leftovers
+	// from its previous process. Never create a new pool that it could delete.
+	if !m.staleSweepDone.Load() {
+		return
+	}
 	if m.refillDeferred() {
 		return
 	}
