@@ -25,17 +25,16 @@ const evictionRecheckInterval = time.Second
 // waiting on its resources; an endpoint's drain_seconds does not extend it.
 var maxPreemptionDrain = 10 * time.Second
 
-// borrowedReleaseTimeout bounds the wait for victims on borrowed CPU tier
-// capacity, which get their full drain and, for VMs, a snapshot before they stop.
+// borrowedReleaseTimeout bounds a pass that reclaims borrowed CPU tier capacity.
 const borrowedReleaseTimeout = 3 * time.Minute
 
 // ErrEvictionIncomplete is returned when victims chosen for a request were
 // still holding their resources after the drain and kill windows passed.
 var ErrEvictionIncomplete = errors.New("evicted containers did not release their resources in time")
 
-// evictForRequest stops the request's victims and waits until they are
-// finalized. A victim still present after the drain and kill windows fails the
-// request rather than letting it start on held resources.
+// evictForRequest stops the request's victims and waits until they have
+// released their resources. A victim still holding them after the drain and
+// kill windows fails the request rather than letting it start on them.
 func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRequest) error {
 	if request == nil || len(request.EvictContainerIds) == 0 {
 		return nil
@@ -52,7 +51,7 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 			continue
 		}
 		if instance, _ := s.containerInstances.Get(victimID); instance != nil && instance.Request.Borrowed() {
-			wait = borrowedReleaseTimeout
+			wait = max(wait, time.Duration(instance.Request.DrainSeconds)*time.Second+evictionKillTimeout)
 		}
 		release, err := s.releaseVictim(ctx, victimID, drain, request.ContainerId)
 		if err != nil {
@@ -72,7 +71,7 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		Dur("drain", drain).
 		Msg("waiting for evicted containers before starting request")
 	waitStart := time.Now()
-	remaining := s.waitForContainersFinalized(ctx, victims, wait)
+	remaining := s.waitForContainersReleased(ctx, victims, wait)
 	metrics.RecordWorkerStartupPhase("evict_wait", time.Since(waitStart), request, map[string]string{
 		"victims":  fmt.Sprintf("%d", len(victims)),
 		"released": fmt.Sprintf("%t", len(remaining) == 0),
@@ -87,33 +86,25 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 	log.Error().
 		Str("container_id", request.ContainerId).
 		Strs("evict_container_ids", remaining).
-		Msg("evicted containers did not finalize in time; failing request instead of starting on held resources")
+		Msg("evicted containers did not release their resources in time; failing request instead of starting on them")
 	s.cancelContainer(request.ContainerId)
 	return fmt.Errorf("%w: %v", ErrEvictionIncomplete, remaining)
 }
 
 // releaseVictim starts stopping an eviction victim and reports whether it is
-// present and must be waited for. Spot gets its full drain, and a running
-// durable Spot VM is stopped by the VM reconciler, which snapshots it first
-// (see PreemptVM). The reconciler's stop sets a stop reason, after which the
-// VM is evicted like any other victim. So is a VM being deleted or no longer
-// running here, which PreemptVM rejects: it has nothing to preserve.
+// present and must be waited for. Spot gets its full drain. A running durable
+// Spot VM is first recorded as preempted, so its reconciler records the stop
+// rather than restarting it; PreemptVM rejects a VM being deleted or no longer
+// running here, which has nothing to record.
 func (s *Worker) releaseVictim(ctx context.Context, victimID string, drain time.Duration, forContainerID string) (bool, error) {
 	instance, _ := s.containerInstances.Get(victimID)
 	if instance != nil && instance.Request.Borrowed() {
 		drain = time.Duration(instance.Request.DrainSeconds) * time.Second
 		if exitCode, reason := instance.lifecycleState(); exitCode < 0 && reason == "" && instance.Request.IsPersistentVM() {
-			if instance.preemptionRequested.Load() {
-				return true, nil
-			}
 			request := instance.Request
 			_, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: request.WorkspaceId, VmId: request.VMID(), ContainerId: victimID})
-			if err == nil {
-				instance.preemptionRequested.Store(true)
-				return true, nil
-			}
-			if status.Code(err) != codes.FailedPrecondition {
-				return false, fmt.Errorf("request durable VM stop: %w", err)
+			if err != nil && status.Code(err) != codes.FailedPrecondition {
+				return false, fmt.Errorf("record durable VM preemption: %w", err)
 			}
 		}
 	}
@@ -178,7 +169,7 @@ func (s *Worker) escalateEviction(containerID string, drain time.Duration) {
 	if workerCtx == nil {
 		workerCtx = context.Background()
 	}
-	if remaining := s.waitForContainersFinalized(workerCtx, []string{containerID}, drain); len(remaining) == 0 {
+	if remaining := s.waitForContainersReleased(workerCtx, []string{containerID}, drain); len(remaining) == 0 {
 		return
 	}
 	if workerCtx.Err() != nil {
@@ -190,20 +181,21 @@ func (s *Worker) escalateEviction(containerID string, drain time.Duration) {
 	}
 }
 
-// waitForContainersFinalized waits on the instance table's removal signal
-// until every container is gone, the timeout passes or ctx ends. It returns
-// the containers still present.
-func (s *Worker) waitForContainersFinalized(ctx context.Context, containerIDs []string, timeout time.Duration) []string {
+// waitForContainersReleased waits on the instance table's signal until every
+// container is gone or has released its resources while it finishes syncing
+// durable disks, the timeout passes or ctx ends. It returns the containers
+// still holding resources.
+func (s *Worker) waitForContainersReleased(ctx context.Context, containerIDs []string, timeout time.Duration) []string {
 	deadline := time.Now().Add(timeout)
 	recheck := time.NewTicker(evictionRecheckInterval)
 	defer recheck.Stop()
 	for {
-		// Take the signal before checking so a removal between the check and
+		// Take the signal before checking so a release between the check and
 		// the wait cannot be missed.
 		removed := s.containerInstances.Removed()
 		remaining := make([]string, 0, len(containerIDs))
 		for _, id := range containerIDs {
-			if _, exists := s.containerInstances.Get(id); exists {
+			if instance, exists := s.containerInstances.Get(id); exists && !(instance != nil && instance.resourcesReleased.Load()) {
 				remaining = append(remaining, id)
 			}
 		}

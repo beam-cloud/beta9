@@ -13,6 +13,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestBuildRegistryCredentialsUsesFallbackWithoutLeakingToOtherHosts(t *testing.T) {
@@ -69,6 +71,63 @@ func TestGetLatestCheckpointReturnsStoredCompatibilityKey(t *testing.T) {
 			require.True(t, response.Ok)
 			require.Nil(t, response.Checkpoint)
 			require.Equal(t, request.CompatibilityKey, response.CompatibilityKey)
+		})
+	}
+}
+
+type preemptVMBackendRepo struct {
+	repository.BackendRepository
+	repository.VMRepository
+	vm    types.VM
+	saved *types.VM
+}
+
+func (r *preemptVMBackendRepo) GetWorkspaceByExternalId(_ context.Context, externalID string) (types.Workspace, error) {
+	return types.Workspace{Id: 1, ExternalId: externalID}, nil
+}
+
+func (r *preemptVMBackendRepo) LockVM(context.Context, string) (func(), error) {
+	return func() {}, nil
+}
+
+func (r *preemptVMBackendRepo) GetVM(context.Context, uint, string) (*types.VM, error) {
+	v := r.vm
+	return &v, nil
+}
+
+func (r *preemptVMBackendRepo) SaveVM(_ context.Context, v *types.VM) error {
+	r.saved = v
+	return nil
+}
+
+func TestPreemptVMRecordsTheStopOfOnlyARunningSpotVM(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		tier        types.CPUTier
+		desired     string
+		containerID string
+		recorded    bool
+	}{
+		{"running Spot VM", types.CPUTierSpot, types.VMStateRunning, "container", true},
+		{"replaced runtime", types.CPUTierSpot, types.VMStateRunning, "old-container", false},
+		{"Shared VM", types.CPUTierShared, types.VMStateRunning, "container", false},
+		{"deleted VM", types.CPUTierSpot, types.VMStateDeleted, "container", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := &preemptVMBackendRepo{vm: types.VM{ContainerID: "container", Status: types.VMStateRunning, DesiredState: test.desired}}
+			repo.vm.Spec.CPUTier = test.tier
+			service := &BackendRepositoryService{backendRepo: repo}
+
+			_, err := service.PreemptVM(context.Background(), &pb.PreemptVMRequest{WorkspaceId: "workspace", VmId: "vm", ContainerId: test.containerID})
+			if !test.recorded {
+				require.Equal(t, codes.FailedPrecondition, status.Code(err))
+				require.Nil(t, repo.saved)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, types.VMStateStopping, repo.saved.Status)
+			require.Equal(t, types.VMStopReasonPreempted, repo.saved.StopReason)
+			require.Equal(t, types.VMStateStopped, repo.saved.DesiredState)
 		})
 	}
 }

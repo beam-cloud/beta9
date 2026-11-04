@@ -62,6 +62,15 @@ func (m *SafeMap[V]) Delete(key string) {
 	m.removed = make(chan struct{})
 }
 
+// Wake closes the channel Removed returned without deleting an entry, for
+// waiters whose condition changed while their entry stays.
+func (m *SafeMap[V]) Wake() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	close(m.removed)
+	m.removed = make(chan struct{})
+}
+
 func (m *SafeMap[V]) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

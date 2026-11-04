@@ -529,8 +529,9 @@ func diskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
 	}
 }
 
-// PreemptVM asks the VM reconciler to snapshot and stop a Spot VM under its
-// lifecycle lock; workers never kill a VM to reclaim it.
+// PreemptVM records, under the VM's lifecycle lock, that a worker is reclaiming
+// a Spot VM, so the reconciler records the stop instead of restarting the VM.
+// The worker then stops it, and its final disk sync commits the root.
 func (s *BackendRepositoryService) PreemptVM(ctx context.Context, req *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
 	repo, ok := s.backendRepo.(repository.VMRepository)
 	if !ok {
@@ -552,8 +553,7 @@ func (s *BackendRepositoryService) PreemptVM(ctx context.Context, req *pb.Preemp
 	if v.ContainerID != req.ContainerId || !v.Spec.CPUTier.Borrows() || v.DesiredState == types.VMStateDeleted {
 		return nil, status.Error(codes.FailedPrecondition, "runtime is not a reclaimable Spot VM")
 	}
-	// The reconciler moves the VM to stopping once it has snapshotted it.
-	v.StopReason, v.DesiredState = types.VMStopReasonPreempted, types.VMStateStopped
+	v.Status, v.StopReason, v.DesiredState = types.VMStateStopping, types.VMStopReasonPreempted, types.VMStateStopped
 	if err := repo.SaveVM(ctx, v); err != nil {
 		return nil, err
 	}

@@ -224,7 +224,7 @@ type ContainerInstance struct {
 	Runtime                    runtime.Runtime
 	terminalCheckpointCreated  atomic.Bool
 	StopEscalationStarted      atomic.Bool
-	preemptionRequested        atomic.Bool // the VM reconciler was asked to stop this Spot VM
+	resourcesReleased          atomic.Bool // exited and handed back its CPU set and GPUs, though still finalizing
 	StuckMountRecoveryStarted  atomic.Bool
 	statusHeartbeatMu          sync.Mutex
 	egressMu                   sync.Mutex

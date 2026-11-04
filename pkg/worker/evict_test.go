@@ -20,13 +20,15 @@ import (
 
 // evictionRuntime records signals; SIGTERM exits the container only when
 // drainExits is set, SIGKILL does unless ignoreKill is set (a victim wedged
-// in the kernel or a slow device release).
+// in the kernel or a slow device release). With syncsDisks set, an exited
+// container stays while its durable disks sync, having released its resources.
 type evictionRuntime struct {
 	mockRuntime
 	mu         sync.Mutex
 	worker     *Worker
 	drainExits bool
 	ignoreKill bool
+	syncsDisks bool
 	signals    map[string][]syscall.Signal
 }
 
@@ -38,7 +40,12 @@ func (r *evictionRuntime) Kill(_ context.Context, containerID string, signal sys
 	}
 	r.signals[containerID] = append(r.signals[containerID], signal)
 	if (signal == syscall.SIGKILL && !r.ignoreKill) || r.drainExits {
-		r.worker.containerInstances.Delete(containerID)
+		if instance, exists := r.worker.containerInstances.Get(containerID); exists && r.syncsDisks {
+			instance.resourcesReleased.Store(true)
+			r.worker.containerInstances.Wake()
+		} else {
+			r.worker.containerInstances.Delete(containerID)
+		}
 	}
 	return nil
 }
@@ -343,32 +350,34 @@ func (s *spotStopClient) PreemptVM(ctx context.Context, r *pb.PreemptVMRequest, 
 	return s.preempt(ctx, r)
 }
 
-func TestSpotVMEvictionRequiresDurableRelease(t *testing.T) {
+func TestSpotVMIsRecordedPreemptedThenEvictedWithoutWaitingForItsSync(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
-			worker, rt := evictionWorkerForTest(false)
+			worker, rt := evictionWorkerForTest(true)
+			rt.syncsDisks = true
 			addSpotVMInstance(worker, rt, "spot-vm")
-			var stopped bool
+			preempted := false
 			worker.backendRepoClient = &spotStopClient{preempt: func(ctx context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
 				require.Equal(t, "vm-id", r.VmId)
 				if fail {
-					return nil, fmt.Errorf("snapshot unavailable")
+					return nil, fmt.Errorf("gateway unavailable")
 				}
-				// Only a completed durable stop may release the worker's instance.
-				stopped = true
-				worker.containerInstances.Delete(r.ContainerId)
+				// The VM's reconciler must know before the VM stops.
+				require.Empty(t, rt.observed("spot-vm"))
+				preempted = true
 				return &pb.PreemptVMResponse{}, nil
 			}}
 			err := worker.evictForRequest(context.Background(), &types.ContainerRequest{ContainerId: "replacement", EvictContainerIds: []string{"spot-vm"}})
+			_, present := worker.containerInstances.Get("spot-vm")
+			require.True(t, present)
 			if fail {
 				require.Error(t, err)
-				_, present := worker.containerInstances.Get("spot-vm")
-				require.True(t, present)
+				require.Empty(t, rt.observed("spot-vm"))
 			} else {
 				require.NoError(t, err)
-				require.True(t, stopped)
+				require.True(t, preempted)
+				require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-vm"))
 			}
-			require.Empty(t, rt.signals)
 		})
 	}
 }
@@ -393,17 +402,11 @@ func TestStatusHeartbeatReleasesSpotVictimsLikeTheirDisplacingRequest(t *testing
 		require.False(t, done)
 	}
 
-	// A running durable Spot VM is left for the VM reconciler to snapshot and
-	// stop, which the worker asks for once.
+	// A running durable Spot VM is recorded as preempted once, then drains like Spot.
 	vm := addSpotVMInstance(worker, rt, "spot-vm")
 	heartbeat(vm)
 	heartbeat(vm)
 	require.Equal(t, 1, preemptions)
-	require.Empty(t, rt.observed("spot-vm"))
-
-	// Once the reconciler's stop reaches the worker, the VM drains like Spot.
-	vm.setStopReason(types.StopContainerReasonUser)
-	heartbeat(vm)
 	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-vm"))
 
 	// PreemptVM rejects a VM being deleted or no longer running here, which
@@ -442,25 +445,24 @@ func TestSpotUsesThirtySecondGraceWithoutChangingOtherVMs(t *testing.T) {
 }
 
 func TestSpotReturnsProtectedHeadroomWithoutRetiringWorker(t *testing.T) {
-	worker, rt := evictionWorkerForTest(false)
+	worker, rt := evictionWorkerForTest(true)
 	worker.persistent = true
 	worker.poolHeadroom.Store(true)
 	addSpotVMInstance(worker, rt, "spot-headroom")
-	stopped := make(chan *pb.PreemptVMRequest, 1)
+	preempted := make(chan *pb.PreemptVMRequest, 1)
 	worker.backendRepoClient = &spotStopClient{preempt: func(ctx context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
-		worker.containerInstances.Delete(r.ContainerId)
-		stopped <- r
+		preempted <- r
 		return &pb.PreemptVMResponse{}, nil
 	}}
 	now := time.Now()
 	worker.reclaimBorrowedCapacity(now, now)
 	select {
-	case request := <-stopped:
+	case request := <-preempted:
 		require.Equal(t, "spot-headroom", request.ContainerId)
 	case <-time.After(time.Second):
 		t.Fatal("protected headroom was left occupied by Spot")
 	}
 	require.Eventually(t, func() bool { return !worker.reclaiming.Load() }, time.Second, time.Millisecond)
 	require.False(t, worker.draining, "reserved workers remain available for protected work")
-	require.Empty(t, rt.signals, "headroom reclamation still requires the durable VM stop path")
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-headroom"))
 }

@@ -130,26 +130,42 @@ func TestDefaultTierMustFitTheVMBeforeItIsSaved(t *testing.T) {
 	require.Len(t, s.repo.(*vmStore).rows, saved)
 }
 
-func TestPreemptionReasonSurvivesDurableStopAndBlocksTrafficResume(t *testing.T) {
-	// Only the first attempt snapshots: a failed one leaves the VM in error,
-	// and the retry may find it already shutting down.
-	for status, snapshots := range map[string]int{types.VMStateRunning: 1, types.VMStateError: 0} {
-		t.Run(status, func(t *testing.T) {
+// stoppingContainers is the container repository while a worker stops a VM:
+// after the first read, the VM's container is gone.
+type stoppingContainers struct {
+	*vmContainers
+	reads int
+}
+
+func (c *stoppingContainers) GetContainerState(id string) (*types.ContainerState, error) {
+	if c.reads++; c.reads > 1 {
+		delete(c.states, id)
+	}
+	return c.vmContainers.GetContainerState(id)
+}
+
+func TestPreemptedVMStopsWithoutALiveSnapshotAndBlocksTrafficResume(t *testing.T) {
+	// Its worker stops a preempted VM. One evicted for a request is STOPPING
+	// by then, but one the worker reclaims on its own may still be running
+	// here and is stopped again. Neither is snapshotted while it holds the
+	// capacity: its final sync commits the root.
+	for status, stops := range map[types.ContainerStatus]int{types.ContainerStatusStopping: 0, types.ContainerStatusRunning: 1} {
+		t.Run(string(status), func(t *testing.T) {
 			s, v, info, runtime, gateway := fixture()
-			v.Spec.CPUTier, v.Spec.AutoResume, v.Status = types.CPUTierSpot, true, status
-			// As PreemptVM leaves the VM, and the scheduler the container it evicts.
-			v.StopReason, v.DesiredState = types.VMStopReasonPreempted, types.VMStateStopped
-			state := gateway.containers.states[v.ContainerID]
-			state.Status, state.Evicting = types.ContainerStatusStopping, true
-			// Nothing else stops the VM, so a stop that only waits would time out.
+			v.Spec.CPUTier, v.Spec.AutoResume = types.CPUTierSpot, true
+			// As PreemptVM leaves the VM.
+			v.Status, v.StopReason, v.DesiredState = types.VMStateStopping, types.VMStopReasonPreempted, types.VMStateStopped
+			gateway.containers.states[v.ContainerID].Status = status
+			gateway.containers.exitCode = int(types.ContainerExitCodeEvicted)
+			s.containers = &stoppingContainers{vmContainers: gateway.containers}
 			ctx, cancel := context.WithTimeout(auth.ContextWithAuthInfo(context.Background(), info), 5*time.Second)
 			defer cancel()
 			require.NoError(t, s.stop(ctx, v, false))
 			require.Equal(t, types.VMStateStopped, v.Status)
 			require.Equal(t, types.VMStopReasonPreempted, v.StopReason)
 			require.Equal(t, "root-after-shutdown", v.RootSnapshotID)
-			require.Equal(t, snapshots, runtime.snapshots)
-			require.Equal(t, 1, gateway.stops)
+			require.Zero(t, runtime.snapshots)
+			require.Equal(t, stops, gateway.stops)
 			rec := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId+"/"+v.Name+"/wake", "{}")
 			require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 			require.Contains(t, rec.Body.String(), "call start()")
