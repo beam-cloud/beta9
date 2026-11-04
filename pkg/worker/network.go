@@ -99,6 +99,8 @@ type ContainerNetworkManager struct {
 	bridgeMu            sync.Mutex
 	ipMu                sync.Mutex
 	iptablesMu          sync.Mutex
+	ruleCleanupOnce     sync.Once
+	ruleCleanupQueue    chan networkRuleCleanupRequest
 	portExposureMu      sync.Mutex
 	containerLocksMu    sync.Mutex
 	containerLocks      sync.Map
@@ -712,6 +714,11 @@ func (m *ContainerNetworkManager) fillNetworkSlotPool() {
 // fillNetworkSlotPoolUpTo tops the pool up towards slotPoolSize, creating at
 // most maxSlots new slots in this pass (0 means no cap).
 func (m *ContainerNetworkManager) fillNetworkSlotPoolUpTo(maxSlots int) {
+	// A deferred sweep treats reservations from this worker ID as leftovers
+	// from its previous process. Never create a new pool that it could delete.
+	if !m.staleSweepDone.Load() {
+		return
+	}
 	if m.refillDeferred() {
 		return
 	}
@@ -2819,19 +2826,33 @@ func (m *ContainerNetworkManager) deferNetworkSlotDiscard(containerId string, sl
 }
 
 func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *containerNetworkSlot) error {
-	info, err := containerNetworkInfoFromIP(slot.id, slot.ip, m.ipt6 != nil)
-	if err != nil {
-		return err
+	if os.Getenv(types.WorkerNetworkCleanupBatchEnv) == "1" {
+		return m.removeNetworkSlotRulesBatched(slot)
+	}
+	return m.removeNetworkSlotRuleBatch([]*containerNetworkSlot{slot})
+}
+
+func (m *ContainerNetworkManager) removeNetworkSlotRuleBatch(slots []*containerNetworkSlot) error {
+	ips4, ips6 := make([]string, 0, len(slots)), make([]string, 0, len(slots))
+	for _, slot := range slots {
+		info, err := containerNetworkInfoFromIP(slot.id, slot.ip, m.ipt6 != nil)
+		if err != nil {
+			return err
+		}
+		ips4 = append(ips4, info.ContainerIp)
+		if info.ContainerIpv6 != "" {
+			ips6 = append(ips6, info.ContainerIpv6)
+		}
 	}
 
 	m.iptablesMu.Lock()
 	defer m.iptablesMu.Unlock()
 
-	if err := m.removeIPTablesRules(info.ContainerIp, m.ipt); err != nil {
+	if err := m.removeIPTablesRulesForIPs(ips4, m.ipt); err != nil {
 		return err
 	}
-	if m.ipt6 != nil && info.ContainerIpv6 != "" {
-		if err := m.removeIPTablesRules(info.ContainerIpv6, m.ipt6); err != nil {
+	if m.ipt6 != nil && len(ips6) > 0 {
+		if err := m.removeIPTablesRulesForIPs(ips6, m.ipt6); err != nil {
 			return err
 		}
 	}
@@ -2845,6 +2866,10 @@ func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *conta
 // rules per exposed port, so the deletes go through one iptables-restore
 // transaction per family; the per-rule path remains as the fallback.
 func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.IPTables) error {
+	return m.removeIPTablesRulesForIPs([]string{ip}, ipt)
+}
+
+func (m *ContainerNetworkManager) removeIPTablesRulesForIPs(ips []string, ipt *iptables.IPTables) error {
 	chains := [][2]string{{"nat", "PREROUTING"}, {"filter", "FORWARD"}, {"filter", "INPUT"}}
 	doomed := make(map[string][]string, len(chains))
 	var batch strings.Builder
@@ -2857,7 +2882,7 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 
 		var matched []string
 		for _, rule := range rules {
-			if iptablesRuleMatchesIP(rule, ip) && strings.HasPrefix(rule, "-A ") {
+			if iptablesRuleMatchesAnyIP(rule, ips) && strings.HasPrefix(rule, "-A ") {
 				matched = append(matched, rule)
 			}
 		}

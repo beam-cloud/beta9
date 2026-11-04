@@ -881,6 +881,7 @@ func (s *Worker) Run() error {
 	go s.listenForShutdown()
 	go s.manageWorkerCapacity()
 	go s.processStopContainerEvents()
+	go s.pruneIdleImageMounts(s.ctx)
 
 	lastContainerRequest := time.Now()
 	reconnectDelay := containerRequestStreamInterval

@@ -292,7 +292,7 @@ func TestPublicVMConnectionsShareActivityUntilLastClose(t *testing.T) {
 }
 
 func TestPublicVMAddressRetriesOnlyAddressConflicts(t *testing.T) {
-	for _, failure := range []error{&pq.Error{Code: "23505", Constraint: "persistent_vm_public_ipv6"}, &pq.Error{Code: "23505", Constraint: "persistent_vm_name"}, errors.New("database unavailable")} {
+	for _, failure := range publicAddressRetryFailures() {
 		s, v, _, _, _ := fixture()
 		s.publicNetwork, _ = parsePublicVMNetwork(publicNetworkConfig())
 		store := &networkVMStore{vmStore: s.repo.(*vmStore), saveError: failure}
@@ -306,6 +306,55 @@ func TestPublicVMAddressRetriesOnlyAddressConflicts(t *testing.T) {
 			require.ErrorIs(t, err, failure)
 			require.Empty(t, v.PublicIPv6)
 			require.Equal(t, 1, store.saveCalls)
+		}
+	}
+}
+
+type freshAddressVMStore struct {
+	*vmStore
+	createError error
+	addresses   []string
+}
+
+func (r *freshAddressVMStore) CreateVM(ctx context.Context, v *types.VM) error {
+	r.addresses = append(r.addresses, v.PublicIPv6)
+	if len(r.addresses) == 1 && r.createError != nil {
+		return r.createError
+	}
+	return r.vmStore.CreateVM(ctx, v)
+}
+
+func TestFreshVMAddressIsCommittedWithInitialRecord(t *testing.T) {
+	s, original, info, runtime, _ := fixture()
+	s.publicNetwork, _ = parsePublicVMNetwork(publicNetworkConfig())
+	// No assignment repository: attempting a second address transaction would
+	// fail. Creation must persist the address before scheduling instead.
+	store := &freshAddressVMStore{vmStore: s.repo.(*vmStore)}
+	s.repo = store
+	v, err := s.createVM(auth.ContextWithAuthInfo(context.Background(), info), info, types.VMCreateOptions{Name: "fresh-address", Spec: original.Spec})
+	require.NoError(t, err)
+	require.Equal(t, []string{v.PublicIPv6}, store.addresses)
+	require.NotEmpty(t, v.PublicIPv6)
+	require.Equal(t, v.PublicIPv6, store.rows[v.ID].PublicIPv6)
+	require.Len(t, runtime.requests, 1)
+}
+
+func TestFreshVMAddressRetriesOnlyAddressConflicts(t *testing.T) {
+	for _, failure := range publicAddressRetryFailures() {
+		s, v, _, _, _ := fixture()
+		s.publicNetwork, _ = parsePublicVMNetwork(publicNetworkConfig())
+		store := &freshAddressVMStore{vmStore: s.repo.(*vmStore), createError: failure}
+		s.repo = store
+		err := s.createVMRecord(context.Background(), v)
+		if pg, ok := failure.(*pq.Error); ok && pg.Constraint == "persistent_vm_public_ipv6" {
+			require.NoError(t, err)
+			require.Len(t, store.addresses, 2)
+			require.NotEqual(t, store.addresses[0], store.addresses[1])
+			require.Equal(t, store.addresses[1], store.rows[v.ID].PublicIPv6)
+		} else {
+			require.ErrorIs(t, err, failure)
+			require.Len(t, store.addresses, 1)
+			require.Empty(t, v.PublicIPv6)
 		}
 	}
 }
@@ -805,4 +854,8 @@ func TestPublicVMIngressRequiresTrustedProxyV2Metadata(t *testing.T) {
 	io.Copy(conn, strings.NewReader("GET / HTTP/1.1\r\nHost: spoof\r\n\r\n"))
 	_, err = conn.Read(make([]byte, 1))
 	require.Error(t, err)
+}
+
+func publicAddressRetryFailures() []error {
+	return []error{&pq.Error{Code: "23505", Constraint: "persistent_vm_public_ipv6"}, &pq.Error{Code: "23505", Constraint: "persistent_vm_name"}, errors.New("database unavailable")}
 }

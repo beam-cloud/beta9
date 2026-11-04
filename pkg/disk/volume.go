@@ -929,7 +929,10 @@ func (v *Volume) detach(ctx context.Context) error {
 	}
 
 	if v.state.exportMode() == ExportVhostUser {
-		if err := v.manager.stopQSD(ctx, v.qsd); err != nil {
+
+		err := v.manager.stopQSD(ctx, v.qsd)
+
+		if err != nil {
 			return err
 		}
 		v.qsd = nil
@@ -937,6 +940,16 @@ func (v *Volume) detach(ctx context.Context) error {
 		v.state.QSDPid = 0
 		v.state.QMPSocket = ""
 		v.state.ExportSocket = ""
+		if v.manager.detachedStateMarker {
+
+			markerErr := saveDetachedVolumeMarker(v.dir, v.state)
+
+			if markerErr == nil {
+				return os.RemoveAll(v.manager.runtimeDir(v.state.Key))
+			}
+			// Changed payload metadata or a failed hint write retains the
+			// original synchronous durability path.
+		}
 		if err := saveVolumeState(v.dir, v.state); err != nil {
 			return err
 		}

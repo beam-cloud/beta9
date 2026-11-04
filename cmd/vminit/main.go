@@ -70,12 +70,8 @@ func main() {
 	powerOff(code)
 }
 
-var bootStart = time.Now()
-
-// logf prefixes the seconds since init started so the console shows where
-// boot time goes.
 func logf(format string, args ...any) {
-	fmt.Fprintf(os.Stdout, "vminit[+%.3fs]: "+format+"\n", append([]any{time.Since(bootStart).Seconds()}, args...)...)
+	fmt.Fprintf(os.Stdout, "vminit: "+format+"\n", args...)
 }
 
 // powerOff flushes and halts the VM; the host reads the exit code from the
@@ -91,11 +87,9 @@ func powerOff(code int) {
 }
 
 func run() (int, error) {
-	logf("boot phase: init entered")
 	if err := mountEarly(); err != nil {
 		return -1, err
 	}
-	logf("boot phase: early mounts ready")
 	vm, err := readVMSpec()
 	if err != nil {
 		return -1, err
@@ -108,7 +102,6 @@ func run() (int, error) {
 	if err := assembleRoot(vm); err != nil {
 		return -1, fmt.Errorf("assemble root: %w", err)
 	}
-	logf("boot phase: root assembled")
 	if err := pivotRoot(); err != nil {
 		return -1, fmt.Errorf("pivot root: %w", err)
 	}
@@ -118,7 +111,6 @@ func run() (int, error) {
 		return -1, fmt.Errorf("configure workload memory: %w", err)
 	}
 	defer workload.close()
-	logf("boot phase: root pivoted")
 	hostname := spec.Hostname
 	if hostname != "" {
 		if err := unix.Sethostname([]byte(hostname)); err != nil {
@@ -128,13 +120,10 @@ func run() (int, error) {
 	if err := configureNetwork(vm.Network); err != nil {
 		return -1, fmt.Errorf("configure network: %w", err)
 	}
-	logf("boot phase: network configured")
 	if processEnv(spec.Process, "BEAM_VM_SYSTEMD") == "1" {
-		logf("boot phase: installing egress trust")
 		if err := installEgressCA(); err != nil {
 			return -1, err
 		}
-		logf("boot phase: egress trust installed")
 		return -1, bootSystemd(spec, workload)
 	}
 
@@ -142,7 +131,6 @@ func run() (int, error) {
 }
 
 func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (int, error) {
-	logf("boot phase: workload agent entered")
 	if err := serveVsock(microvm.FSPort, handleFSConn); err != nil {
 		return -1, err
 	}
@@ -155,7 +143,6 @@ func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (i
 	if err != nil {
 		return -1, err
 	}
-	logf("boot phase: control connected")
 	defer ctrl.close()
 	go workload.watchOOM(ctrl)
 	ctrl.systemd = systemd
@@ -342,7 +329,7 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := mountPseudo(newRoot); err != nil {
 		return fmt.Errorf("mount pseudo filesystems: %w", err)
 	}
-	for _, mount := range vm.Mounts {
+	if err := applyGuestMounts(newRoot, vm.Mounts, vm.MountConcurrency, canonicalMountTarget, func(i int, mount microvm.Mount) error {
 		var err error
 		switch mount.Type {
 		case microvm.MountTmpfs:
@@ -350,9 +337,9 @@ func assembleRoot(vm *microvm.Spec) error {
 		default:
 			err = applyBind(newRoot, mount)
 		}
-		if err != nil {
-			return err
-		}
+		return err
+	}); err != nil {
+		return err
 	}
 	if vm.Docker {
 		target := filepath.Join(newRoot, microvm.DockerDataRoot)
@@ -1384,7 +1371,6 @@ func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (i
 	ctrl.send(microvm.Message{Type: microvm.MsgStarted, Pid: pid})
 	go ctrl.serve(func() int { return pid })
 	go ctrl.heartbeat(controlHeartbeat)
-	logf("started %v as pid %d", proc.Args, pid)
 
 	waitPID := -1
 	if ctrl.systemd {
@@ -1407,11 +1393,7 @@ func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (i
 			// Sync before reporting: FUSE_SYNCFS flushes the host filesystems
 			// behind the virtio-fs binds (object-storage volumes upload here),
 			// and the host tears the VM down once it hears of the exit.
-			syncStart := time.Now()
 			unix.Sync()
-			if took := time.Since(syncStart); took > time.Second {
-				logf("synced filesystems in %s", took.Round(time.Millisecond))
-			}
 			ctrl.send(microvm.Message{Type: microvm.MsgExit, Code: code})
 			return code, nil
 		}

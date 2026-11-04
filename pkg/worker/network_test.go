@@ -413,6 +413,7 @@ func TestFillNetworkSlotPoolSkipsClosedPool(t *testing.T) {
 		slotPoolClosed: true,
 	}
 
+	manager.staleSweepDone.Store(true)
 	manager.fillNetworkSlotPool()
 
 	if len(manager.freeSlots) != 0 || manager.totalSlots != 0 {
@@ -1200,4 +1201,25 @@ func TestEgressRulesRedirectTCPAndOnlyAllowResolverUDP(t *testing.T) {
 			require.Contains(t, strings.Join(rule.args, " "), "--comment box")
 		}
 	}
+}
+
+func TestNetworkSlotPoolWaitsForDeferredStaleSweep(t *testing.T) {
+	repoClient := &slotPoolWorkerRepoClient{}
+	manager := &ContainerNetworkManager{
+		ctx: context.Background(), workerRepoClient: repoClient, slotPoolSize: 1,
+	}
+	var fills sync.WaitGroup
+	for range 8 {
+		fills.Add(1)
+		go func() { defer fills.Done(); manager.fillNetworkSlotPool() }()
+	}
+	fills.Wait()
+	require.Empty(t, repoClient.calls, "no reservations or namespaces may be created before the stale sweep finishes")
+	require.Zero(t, manager.totalSlots)
+	// After cleanup, the normal pool-lock path is available again. A zero
+	// target avoids creating real namespaces in this unit test.
+	manager.slotPoolSize = 0
+	manager.staleSweepDone.Store(true)
+	manager.fillNetworkSlotPool()
+	require.Equal(t, []string{"lock", "unlock"}, repoClient.calls)
 }

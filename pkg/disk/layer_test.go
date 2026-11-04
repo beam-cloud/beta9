@@ -10,6 +10,7 @@ import (
 	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -81,6 +82,68 @@ func TestSplitExtentRejectsTruncatedSource(t *testing.T) {
 	if _, err := splitExtent(context.Background(), file, make([]byte, 4096), 0, chunkMinSize+4096); !errors.Is(err, io.EOF) {
 		t.Fatalf("truncated extent must fail, got %v", err)
 	}
+}
+
+func TestSparseExtentCoalescingBoundsPaddingAndRange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   []chunkSpan
+		want []chunkSpan
+	}{
+		{"nearby metadata", []chunkSpan{{0, 256 << 10}, {320 << 10, 256 << 10}}, []chunkSpan{{0, 576 << 10}}},
+		{"large hole", []chunkSpan{{0, 1 << 20}, {2 << 20, 1 << 20}}, []chunkSpan{{0, 1 << 20}, {2 << 20, 1 << 20}}},
+		{"tiny data", []chunkSpan{{0, 4096}, {64 << 10, 4096}}, []chunkSpan{{0, 4096}, {64 << 10, 4096}}},
+		{"bounded range", []chunkSpan{{0, chunkMaxSize}, {chunkMaxSize + 4096, 1 << 20}}, []chunkSpan{{0, chunkMaxSize}, {chunkMaxSize + 4096, 1 << 20}}},
+		{"padding carries across merges", []chunkSpan{{0, 128 << 10}, {192 << 10, 128 << 10}, {384 << 10, 4096}}, []chunkSpan{{0, 320 << 10}, {384 << 10, 4096}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := coalesceSparseExtents(tc.in)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("regions = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNearbySparseChunksRoundTripWithoutFillingLargeHoles(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "sparse.qcow2")
+	f, err := os.Create(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	data := make([]byte, 256<<10)
+	mathrand.NewChaCha8([32]byte{'s', 'p', 'a', 'r', 's', 'e'}).Read(data)
+	for i := range 4 {
+		if _, err := f.WriteAt(data, int64(i)*(320<<10)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Retain explicit zero writes and a distant data extent byte for byte,
+	// without uploading the large holes between them.
+	if _, err := f.WriteAt(make([]byte, 64<<10), 40<<20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt(data, 64<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	layer, err := ScanLayer(context.Background(), source, chunkKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(layer.Chunks) >= 5 || StoredBytes(layer) > 5*int64(len(data))*5/4 {
+		t.Fatalf("did not reduce small-object fanout within padding budget: %d chunks, %d bytes", len(layer.Chunks), StoredBytes(layer))
+	}
+	for _, chunk := range layer.Chunks {
+		if chunk.OffsetBytes < 64<<20 && chunk.OffsetBytes+chunk.SizeBytes > 2<<20 {
+			t.Fatalf("large hole materialized: %+v", chunk)
+		}
+	}
+	roundTripLayer(t, dir, source, layer)
 }
 
 type discardChunkSink struct{}
@@ -157,29 +220,9 @@ func TestLayerScanUploadFetchRoundTrip(t *testing.T) {
 		}
 	}
 
-	store := newMemoryChunkStore()
-	if err := UploadLayer(context.Background(), store, sourcePath, layer); err != nil {
-		t.Fatal(err)
-	}
+	store := roundTripLayer(t, dir, sourcePath, layer)
 	if len(store.objects) != len(layer.Chunks) {
 		t.Fatalf("uploaded %d objects, expected %d", len(store.objects), len(layer.Chunks))
-	}
-
-	destPath := filepath.Join(dir, "restored.qcow2")
-	if err := fetchLayer(context.Background(), store, layer, destPath, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	source, err := os.ReadFile(sourcePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	restored, err := os.ReadFile(destPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(source, restored) {
-		t.Fatal("restored layer differs from source")
 	}
 }
 
@@ -378,4 +421,28 @@ func TestFetchLayerRejectsCorruptChunks(t *testing.T) {
 	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
 		t.Fatal("corrupt fetch must not leave a layer file behind")
 	}
+}
+
+func roundTripLayer(t *testing.T, dir, source string, layer *types.DiskSnapshotFile) *memoryChunkStore {
+	t.Helper()
+	store := newMemoryChunkStore()
+	if err := UploadLayer(context.Background(), store, source, layer); err != nil {
+		t.Fatal(err)
+	}
+	restored := filepath.Join(dir, "restored.qcow2")
+	if err := fetchLayer(context.Background(), store, layer, restored, nil); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("layer roundtrip changed source bytes")
+	}
+	return store
 }

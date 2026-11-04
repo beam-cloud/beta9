@@ -86,6 +86,8 @@ type Spec struct {
 	// Mounts are the OCI mounts the guest applies into the new root, in spec
 	// order, after its own pseudo filesystems.
 	Mounts []Mount `json:"mounts,omitempty"`
+	// MountConcurrency bounds independent bind setup. Zero retains spec order.
+	MountConcurrency int `json:"mount_concurrency,omitempty"`
 }
 
 // Network is the static configuration of the guest's single NIC. Addresses

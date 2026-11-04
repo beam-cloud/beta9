@@ -636,7 +636,8 @@ func (s *Worker) markContainerStopping(containerId string, expirySeconds int64) 
 }
 
 func (s *Worker) deleteContainer(containerId string) {
-	if instance, exists := s.containerInstances.Get(containerId); exists {
+	instance, exists := s.containerInstances.Get(containerId)
+	if exists {
 		instance.tunnels.close()
 		if instance.LogBuffer != nil {
 			if s.containerServer != nil && instance.Request != nil && (instance.Request.Stub.Type.Kind() == types.StubTypeFunction || instance.Request.IsBuildRequest()) {
@@ -645,15 +646,18 @@ func (s *Worker) deleteContainer(containerId string) {
 				instance.LogBuffer.Dispose()
 			}
 		}
-	}
-	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
-		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
-			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
+		if instance.SandboxProcessManager != nil {
+			if err := instance.SandboxProcessManager.Cleanup(); err != nil {
+				log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
+			}
 		}
 	}
 
 	if err := s.deleteContainerState(containerId); err != nil {
 		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state")
+	}
+	if exists && instance.Request != nil {
+		s.imageClient.touchImageMount(instance.Request.ImageId)
 	}
 	s.containerInstances.Delete(containerId)
 }
@@ -1386,6 +1390,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				startupCPU.Quota = nil
 				startupCPU.Burst = nil
 				startupCPU.Period = nil
+				if s.runtime != nil && s.runtime.Name() == types.ContainerRuntimeMicroVM.String() {
+					// Guest init and the VMM need host CPU before application limits land.
+					startupCPU.Shares = nil
+					if request.Checkpoint == nil {
+						shares := uint64(400)
+						startupCPU.Shares = &shares
+					}
+				}
 				// gVisor fixes the guest CPU topology when the sandbox starts;
 				// a later resource update cannot change what nproc reports.
 				if !requestForcesResourceLimits(request) {
@@ -2077,7 +2089,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
-			go s.applyDeferredSandboxCPUThrottle(ctx, request, sandboxCPUQuotaGrace)
+			go s.applyDeferredSandboxCPUThrottle(ctx, request, sandboxCPUThrottleGrace(instance.Runtime.Name()))
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
 			}
@@ -2800,6 +2812,13 @@ func (s *Worker) deferCPUThrottle(request *types.ContainerRequest, cpu *specs.Li
 	instance.DeferredCPUQuota = cpu
 	s.containerInstances.Set(request.ContainerId, instance)
 	return true
+}
+
+func sandboxCPUThrottleGrace(runtimeName string) time.Duration {
+	if runtimeName == types.ContainerRuntimeMicroVM.String() {
+		return 0
+	}
+	return sandboxCPUQuotaGrace
 }
 
 func (s *Worker) applyDeferredCPUThrottle(request *types.ContainerRequest, instance *ContainerInstance) error {

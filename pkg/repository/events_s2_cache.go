@@ -50,7 +50,7 @@ func (c *stubCacheContents) get(streamName s2.StreamName) *stubCacheContent {
 
 // ReadStubCacheRequiredContent reads the coalesced required-content set for a
 // stub from the dedicated S2 cache stream. Items are merged by
-// (hash, routing_key) keeping the most recent report for each.
+// immutable content identity or mutable source path, keeping the latest report.
 func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {
 	if workspaceID == "" || stubID == "" {
 		return nil, fmt.Errorf("workspace id and stub id are required to read stub cache required content")
@@ -157,11 +157,6 @@ func normalizeStubCacheRequiredContentItem(item types.CacheRequiredContentItem) 
 }
 
 func stubCacheRequiredContentItemKey(item types.CacheRequiredContentItem) string {
-	// Keep only the checkpoint most recently reported by a stub. Explicit
-	// restores of older checkpoints still fetch their archive from origin.
-	if item.Kind == types.CacheContentKindCheckpoint {
-		return string(types.CacheContentKindCheckpoint)
-	}
 	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
 		return strings.Join([]string{
 			string(item.Kind),
@@ -171,7 +166,7 @@ func stubCacheRequiredContentItemKey(item types.CacheRequiredContentItem) string
 			item.RoutingKey,
 		}, "\x00")
 	}
-	return item.Hash + "\x00" + item.RoutingKey
+	return item.CoalescingKey()
 }
 
 func latestDiskSnapshotContentGeneration(merged map[string]types.CacheRequiredContentItem, diskName string) int64 {

@@ -66,9 +66,10 @@ type microVMInstance struct {
 	console        *tailWriter
 	prepareTimings string // per-step durations of prepare, for the start log line
 
-	mu     sync.Mutex
-	exited bool
-	paused bool // vCPUs stopped by Checkpoint; nothing in the guest can run
+	mu          sync.Mutex
+	resourcesMu sync.Mutex // CPU updates must not race a paused snapshot's temporary quota.
+	exited      bool
+	paused      bool // vCPUs stopped by Checkpoint; nothing in the guest can run
 	// killed is set when the host SIGKILLs the hypervisor (a forced stop, a
 	// signal the guest would not take, a terminal checkpoint); Run reports
 	// that as the container's exit, not a VM failure.
@@ -350,7 +351,7 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 		inst.killHypervisor()
 		return fmt.Errorf("validate checkpoint block queues: %w", err)
 	}
-	if err == nil && inst.scratch != "" {
+	if inst.scratch != "" {
 		if err = copySparse(inst.scratch, filepath.Join(opts.ImagePath, checkpointRootDisk)); err != nil {
 			err = fmt.Errorf("copy root disk: %w", err)
 		}
@@ -368,6 +369,7 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 // captures device state destructively, even when its response is an error.
 func snapshotMicroVM(ctx context.Context, inst *microVMInstance, snapshotDir string, seal func(context.Context) error) (mustStop bool, err error) {
 	api := inst.api()
+
 	if err := api.put(ctx, "vm.pause", nil); err != nil {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), microVMControlRequestTimeout)
 		defer cancel()
@@ -390,7 +392,86 @@ func snapshotMicroVM(ctx context.Context, inst *microVMInstance, snapshotDir str
 			return resumeErr != nil, errors.Join(err, resumeErr)
 		}
 	}
-	return true, api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir})
+
+	captureStarted := false
+	err = inst.withSnapshotCPU(func() error {
+		captureStarted = true
+		return api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir})
+	})
+	var restoreErr *snapshotCPURestoreError
+	if !captureStarted && !errors.As(err, &restoreErr) {
+		resumeErr := inst.resumeUncapturedSnapshot(ctx)
+		return resumeErr != nil, errors.Join(err, resumeErr)
+	}
+	return true, err
+}
+
+type snapshotCPURestoreError struct{ err error }
+
+func (e *snapshotCPURestoreError) Error() string { return e.err.Error() }
+func (e *snapshotCPURestoreError) Unwrap() error { return e.err }
+
+// The vCPUs are paused before this is called. Copying guest RAM is host work,
+// but the hypervisor shares the tenant's cgroup. A fractional tenant quota can
+// otherwise throttle a memory dump across many quota periods. Restore the exact
+// quota before any caller can resume the guest, including on capture failure.
+func (inst *microVMInstance) withSnapshotCPU(capture func() error) (err error) {
+	inst.resourcesMu.Lock()
+	defer inst.resourcesMu.Unlock()
+	if inst.cgroup == "" {
+		return capture()
+	}
+	if !inst.isPaused() {
+		return errors.New("snapshot CPU allowance requires paused vCPUs")
+	}
+	path := filepath.Join(inst.cgroup, "cpu.max")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read snapshot cpu.max: %w", err)
+	}
+	fields := strings.Fields(string(original))
+	if len(fields) != 2 {
+		return fmt.Errorf("invalid snapshot cpu.max: %q", original)
+	}
+	weightPath := filepath.Join(inst.cgroup, "cpu.weight")
+	weight, err := os.ReadFile(weightPath)
+	if err != nil {
+		return fmt.Errorf("read snapshot cpu.weight: %w", err)
+	}
+	weightValue, err := strconv.ParseUint(strings.TrimSpace(string(weight)), 10, 64)
+	if err != nil || weightValue < microVMMinCPUWeight || weightValue > microVMMaxCPUWeight {
+		return fmt.Errorf("invalid snapshot cpu.weight: %q", weight)
+	}
+	quotaChanged, weightChanged := false, false
+	defer func() {
+		var restoreFailure error
+		if weightChanged {
+			if restoreErr := os.WriteFile(weightPath, weight, 0o644); restoreErr != nil {
+				restoreFailure = errors.Join(restoreFailure, fmt.Errorf("restore snapshot cpu.weight: %w", restoreErr))
+			}
+		}
+		if quotaChanged {
+			if restoreErr := os.WriteFile(path, original, 0o644); restoreErr != nil {
+				restoreFailure = errors.Join(restoreFailure, fmt.Errorf("restore snapshot cpu.max: %w", restoreErr))
+			}
+		}
+		if restoreFailure != nil {
+			err = errors.Join(err, &snapshotCPURestoreError{err: restoreFailure})
+		}
+	}()
+	if fields[0] != "max" {
+		if err := os.WriteFile(path, []byte("max "+fields[1]), 0o644); err != nil {
+			return fmt.Errorf("allow snapshot CPU: %w", err)
+		}
+		quotaChanged = true
+	}
+	if weightValue < microVMDefaultCPUWeight {
+		if err := os.WriteFile(weightPath, []byte(strconv.FormatUint(microVMDefaultCPUWeight, 10)), 0o644); err != nil {
+			return fmt.Errorf("allow snapshot CPU weight: %w", err)
+		}
+		weightChanged = true
+	}
+	return capture()
 }
 
 func (inst *microVMInstance) resumeUncapturedSnapshot(ctx context.Context) error {
@@ -722,12 +803,35 @@ func (m *MicroVM) UpdateResources(ctx context.Context, containerID string, resou
 	if inst.cgroup == "" || resources == nil {
 		return nil
 	}
-	cpuMax := cpuMaxString(resources.CPU)
-	if cpuMax == "" {
-		return nil
+	inst.resourcesMu.Lock()
+	defer inst.resourcesMu.Unlock()
+	return applyMicroVMCPU(inst.cgroup, resources.CPU)
+}
+
+const (
+	microVMMinCPUShares     = 2
+	microVMMaxCPUShares     = 262144
+	microVMMinCPUWeight     = 1
+	microVMMaxCPUWeight     = 10000
+	microVMDefaultCPUWeight = 100
+)
+
+// Preserve the OCI share budget while the startup quota is deferred. Otherwise
+// each small VM gets the kernel's full default weight and crowds out the worker
+// during a burst. Use the same conversion as the installed runc runtime.
+func applyMicroVMCPU(path string, cpu *specs.LinuxCPU) error {
+	if cpu != nil && cpu.Shares != nil && *cpu.Shares != 0 {
+		shares := min(max(*cpu.Shares, microVMMinCPUShares), microVMMaxCPUShares)
+		// runc v1.2 uses this linear mapping from [2,262144] to [1,10000].
+		weight := microVMMinCPUWeight + (shares-microVMMinCPUShares)*(microVMMaxCPUWeight-microVMMinCPUWeight)/(microVMMaxCPUShares-microVMMinCPUShares)
+		if err := os.WriteFile(filepath.Join(path, "cpu.weight"), []byte(strconv.FormatUint(weight, 10)), 0o644); err != nil {
+			return fmt.Errorf("set cpu.weight: %w", err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(inst.cgroup, "cpu.max"), []byte(cpuMax), 0o644); err != nil {
-		return fmt.Errorf("set cpu.max: %w", err)
+	if cpuMax := cpuMaxString(cpu); cpuMax != "" {
+		if err := os.WriteFile(filepath.Join(path, "cpu.max"), []byte(cpuMax), 0o644); err != nil {
+			return fmt.Errorf("set cpu.max: %w", err)
+		}
 	}
 	return nil
 }
@@ -847,6 +951,30 @@ func (m *MicroVM) instance(containerID string) (*microVMInstance, bool) {
 	defer m.mu.Unlock()
 	inst, ok := m.vms[containerID]
 	return inst, ok
+}
+
+// WaitForGuestControl avoids probing TCP services before guest init has even
+// assembled its root and connected the control channel. Callers must still
+// authenticate and check the process manager's own readiness afterward.
+func (m *MicroVM) WaitForGuestControl(ctx context.Context, containerID string) error {
+	inst, ok := m.instance(containerID)
+	if !ok {
+		return ErrContainerNotFound{ContainerID: containerID}
+	}
+	inst.mu.Lock()
+	ctrl, exited := inst.ctrl, inst.exitDone
+	inst.mu.Unlock()
+	if ctrl == nil {
+		return fmt.Errorf("microvm %s has no guest control channel", containerID)
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-exited:
+		return fmt.Errorf("microvm %s exited before guest control connected", containerID)
+	case <-ctrl.ready:
+		return nil
+	}
 }
 
 var _ GuestFilesystem = (*MicroVM)(nil)
@@ -1391,7 +1519,7 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 	if restoreFrom != "" {
 		initPath = filepath.Join(restoreFrom, checkpointInitFile)
 	}
-	if err := copyFile(initPath, filepath.Join(inst.canvas, microvm.InitPath), 0o755); err != nil {
+	if err := inst.installGuestInit(initPath); err != nil {
 		return fmt.Errorf("install guest init: %w", err)
 	}
 
@@ -1408,7 +1536,9 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 		}
 		mounts = append(mounts, bind)
 	}
-	data, err := json.MarshalIndent(microVMGuestSpec(spec, network, root, extra, mounts), "", "  ")
+	guestSpec := microVMGuestSpec(spec, network, root, extra, mounts)
+	guestSpec.MountConcurrency = 4
+	data, err := json.MarshalIndent(guestSpec, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -1486,21 +1616,29 @@ func (inst *microVMInstance) bindIntoCanvas(index int, mount specs.Mount) (micro
 		return microvm.Mount{}, err
 	}
 
-	flags := uintptr(unix.MS_BIND)
-	if slices.Contains(mount.Options, "rbind") {
-		flags |= unix.MS_REC
-	}
-	if err := unix.Mount(mount.Source, target, "", flags, ""); err != nil {
-		return microvm.Mount{}, fmt.Errorf("bind %s to %s: %w", mount.Source, target, err)
-	}
-	inst.submounts = append(inst.submounts, target)
 	readOnly := slices.Contains(mount.Options, "ro")
-	if readOnly {
-		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
-			return microvm.Mount{}, fmt.Errorf("remount %s read-only: %w", target, err)
-		}
+	if err := inst.bindCanvas(mount.Source, target, slices.Contains(mount.Options, "rbind"), readOnly); err != nil {
+		return microvm.Mount{}, err
 	}
 	return microvm.Mount{Type: microvm.MountBind, Source: guestSource, Destination: dest, File: isFile, ReadOnly: readOnly}, nil
+}
+
+// Register every successful bind before remounting so teardown handles failures.
+func (inst *microVMInstance) bindCanvas(source, target string, recursive, readOnly bool) error {
+	flags := uintptr(unix.MS_BIND)
+	if recursive {
+		flags |= unix.MS_REC
+	}
+	if err := unix.Mount(source, target, "", flags, ""); err != nil {
+		return fmt.Errorf("bind %s to %s: %w", source, target, err)
+	}
+	inst.submounts = append(inst.submounts, target)
+	if readOnly {
+		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+			return fmt.Errorf("remount %s read-only: %w", target, err)
+		}
+	}
+	return nil
 }
 
 // --- virtiofsd -----------------------------------------------------------------
@@ -1612,10 +1750,8 @@ func (m *MicroVM) setupCgroup(inst *microVMInstance, spec *specs.Spec, guestMemo
 	if err := os.WriteFile(filepath.Join(path, "memory.max"), []byte(strconv.FormatInt(guestMemory+microVMMemoryHeadroom, 10)), 0o644); err != nil {
 		return fmt.Errorf("set memory.max: %w", err)
 	}
-	if cpuMax := microVMCPUMax(spec); cpuMax != "" {
-		if err := os.WriteFile(filepath.Join(path, "cpu.max"), []byte(cpuMax), 0o644); err != nil {
-			return fmt.Errorf("set cpu.max: %w", err)
-		}
+	if spec.Linux != nil && spec.Linux.Resources != nil {
+		return applyMicroVMCPU(path, spec.Linux.Resources.CPU)
 	}
 	return nil
 }

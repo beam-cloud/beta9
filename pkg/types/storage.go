@@ -74,6 +74,16 @@ type Disk struct {
 	DeletedAt   NullTime `db:"deleted_at" json:"deleted_at,omitempty"`
 }
 
+// DiskCreateInput is the shared input for single and batched disk creation.
+type DiskCreateInput struct {
+	WorkspaceID uint   `json:"workspace_id"`
+	Name        string `json:"name"`
+	Size        string `json:"size"`
+	Filesystem  string `json:"filesystem"`
+	Driver      string `json:"driver"`
+	MountPath   string `json:"mount_path"`
+}
+
 type DiskWithRelated struct {
 	Disk
 	Workspace Workspace `db:"workspace" json:"workspace"`

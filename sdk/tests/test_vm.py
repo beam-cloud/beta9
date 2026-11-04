@@ -404,6 +404,37 @@ def test_verified_launch_reuses_ready_connection_for_first_operation():
     selected.http.json.assert_not_called()
 
 
+@pytest.mark.parametrize("action", ["create", "start"])
+def test_verified_launch_does_not_repeat_wait_or_touch_idle_lease(monkeypatch, action):
+    selected = service()
+    vm = VM("dev", template="base", _service=selected)
+    monkeypatch.setattr(vm, "prepare", lambda: vm)
+    api = MagicMock(return_value={
+        "id": "vm-id", "name": "dev", "status": "running",
+        "container_id": "runtime", "stub_id": "stub",
+        "spec": {"idle_timeout": 900}, "exec_ready": True,
+    })
+    monkeypatch.setattr(vm, "_api", api)
+    assert getattr(vm, action)() is vm
+    assert api.call_count == 1
+    assert api.call_args.kwargs["params"] == {"wait": "exec"}
+    assert vm._connected is not None
+
+
+@pytest.mark.parametrize("action", ["create", "start"])
+def test_launch_without_server_readiness_keeps_client_wait(monkeypatch, action):
+    vm = VM("dev", template="base", _service=service())
+    monkeypatch.setattr(vm, "prepare", lambda: vm)
+    monkeypatch.setattr(vm, "_api", MagicMock(return_value={
+        "id": "vm-id", "name": "dev", "status": "starting",
+        "container_id": "runtime", "spec": {"idle_timeout": 900},
+    }))
+    wait = MagicMock(return_value=vm)
+    monkeypatch.setattr(vm, "wait", wait)
+    assert getattr(vm, action)() is vm
+    wait.assert_called_once_with()
+
+
 def test_ready_connection_refreshes_after_lease_to_observe_external_stop(monkeypatch):
     selected = service()
     clock = [10.0]

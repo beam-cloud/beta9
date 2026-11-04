@@ -1009,6 +1009,16 @@ func StubScopedContainerPrefixes() []string {
 	return []string{StubTypeSandbox, StubTypeVM, StubTypePod, StubTypeEndpoint, StubTypeTaskQueue, "managed"}
 }
 
+// StubUpsertInput is the shared input for single and batched stub creation.
+type StubUpsertInput struct {
+	Name        string          `json:"name"`
+	Type        string          `json:"type"`
+	Config      json.RawMessage `json:"config"`
+	ObjectID    uint            `json:"object_id"`
+	WorkspaceID uint            `json:"workspace_id"`
+	AppID       uint            `json:"app_id"`
+}
+
 // @go2proto
 type Stub struct {
 	Id            uint     `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
