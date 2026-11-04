@@ -52,7 +52,7 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		victimDrain := drain
 		if instance, _ := s.containerInstances.Get(victimID); instance != nil && instance.Request.CPUTier() == types.CPUTierSpot {
 			victimDrain, wait = types.SpotDrainSeconds*time.Second, spotReleaseTimeout
-			if instance.Request.IsPersistentVM() {
+			if exitCode, _ := instance.lifecycleState(); exitCode < 0 && instance.Request.IsPersistentVM() {
 				// The VM reconciler snapshots and stops the VM; the worker only waits.
 				if _, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: instance.Request.WorkspaceId, VmId: instance.Request.VMID(), ContainerId: victimID}); err != nil {
 					return fmt.Errorf("request durable Spot VM stop: %w", err)

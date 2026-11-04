@@ -457,7 +457,7 @@ func (g *vmGateway) StopContainer(_ context.Context, in *pb.StopContainerRequest
 	g.backend.latest = "root-after-shutdown"
 	return &pb.StopContainerResponse{Ok: true}, nil
 }
-func (g *vmGateway) ResolveCPUTier(_ context.Context, _ *types.Workspace, requested types.CPUTier, eligible bool) (types.CPUTier, error) {
+func (g *vmGateway) ResolveCPUTier(_ context.Context, _ *types.Workspace, requested types.CPUTier, _ string, eligible bool) (types.CPUTier, error) {
 	if !eligible && requested != "" {
 		return "", types.ErrCPUTierIneligible
 	}

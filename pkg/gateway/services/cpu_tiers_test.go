@@ -19,6 +19,8 @@ func TestResolveStubCPUTier(t *testing.T) {
 	defer server.Close()
 	pools := scheduler.NewWorkerPoolManager()
 	pools.SetPool("private", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+	pools.SetPool("legacy", types.WorkerPoolConfig{}, nil)
+	pools.SetPool("shared", types.WorkerPoolConfig{CPUClass: types.CPUTierShared, CPUShareMultiplier: 2.5}, nil)
 	pools.SetPool("performance", types.WorkerPoolConfig{CPUClass: types.CPUTierPerformance, CPUShareMultiplier: 1}, nil)
 	gws := &GatewayService{scheduler: scheduler.NewSchedulerForCapacityChecks(nil, nil, pools)}
 	resolve := func(config types.StubConfigV1) (types.CPUTier, error) {
@@ -43,8 +45,19 @@ func TestResolveStubCPUTier(t *testing.T) {
 	require.Error(t, err)
 	_, err = resolve(types.StubConfigV1{Runtime: types.Runtime{Cpu: 16000, Memory: 1024}})
 	require.Error(t, err, "shared stubs are limited to 8 vCPU")
+
+	// A targeted pool's class is the tier: untagged pools stay untiered, and a
+	// pool of another class is a tier the workspace may not choose.
+	tier, err = resolve(types.StubConfigV1{Pool: &types.PoolConfig{Name: "legacy"}})
+	require.NoError(t, err)
+	require.Empty(t, tier)
+	tier, err = resolve(types.StubConfigV1{Pool: &types.PoolConfig{Name: "shared"}, Runtime: types.Runtime{Cpu: 1000, Memory: 1024}})
+	require.NoError(t, err)
+	require.Equal(t, types.CPUTierShared, tier)
 	_, err = resolve(types.StubConfigV1{Pool: &types.PoolConfig{Name: "performance"}})
-	require.Error(t, err, "the default tier does not match the pool")
+	require.ErrorContains(t, err, "not enabled")
+	_, err = resolve(types.StubConfigV1{CPUTier: types.CPUTierShared, Pool: &types.PoolConfig{Name: "legacy"}})
+	require.ErrorContains(t, err, "pool does not support")
 
 	// Private and GPU stubs keep their placement and get no tier.
 	for _, config := range []types.StubConfigV1{{Pool: &types.PoolConfig{Name: "private"}}, {Runtime: gpu}} {

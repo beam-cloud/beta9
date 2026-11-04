@@ -1448,6 +1448,8 @@ func workerFromHash(key string, res map[string]string) *types.Worker {
 			worker.WorkspaceId = v
 		case "control_plane_managed":
 			worker.ControlPlaneManaged = boolean(v)
+		case "cpu_tier_protocol":
+			worker.CPUTierProtocol = u32(v)
 		}
 	}
 	return worker

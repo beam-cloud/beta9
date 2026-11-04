@@ -23,6 +23,7 @@ import (
 
 var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+var errVMPreempted = echo.NewHTTPError(http.StatusConflict, "Spot VM was preempted; call start() to restart")
 
 func normalizeDiskSize(size string) (string, error) {
 	if size == "" {
@@ -285,17 +286,17 @@ func (s *Service) update(c echo.Context) error {
 	}
 
 	if req.CPUTier != nil && *req.CPUTier != v.Spec.CPUTier {
-		if v.Status != types.VMStateStopped || v.DesiredState != types.VMStateStopped {
-			return echo.NewHTTPError(http.StatusConflict, "stop the VM before changing CPU tier")
-		}
 		spec := v.Spec
 		spec.CPUTier = *req.CPUTier
 		if err := s.resolveCPUTier(ctx, info.Workspace, &spec); err != nil {
 			return apiError(err)
 		}
-		v.Spec, v.StubID = spec, ""
-		if err := s.prepare(ctx, v); err != nil {
-			return apiError(err)
+		if spec.CPUTier != v.Spec.CPUTier {
+			if v.Status != types.VMStateStopped || v.DesiredState != types.VMStateStopped {
+				return echo.NewHTTPError(http.StatusConflict, "stop the VM before changing CPU tier")
+			}
+			// The next start creates a stub for the new tier.
+			v.Spec, v.StubID = spec, ""
 		}
 	}
 	oldSpec := v.Spec
@@ -446,7 +447,10 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 	}
 
 	defer unlock()
-	if v.StopReason == types.VMStopReasonPreempted || v.DesiredState == types.VMStateDeleted || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
+	if v.StopReason == types.VMStopReasonPreempted {
+		return nil, false, errVMPreempted
+	}
+	if v.DesiredState == types.VMStateDeleted || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
 		return nil, false, echo.NewHTTPError(http.StatusConflict, "VM access changed while resuming")
 	}
 
@@ -560,11 +564,10 @@ func (s *Service) cpuTierEligible(spec types.VMSpec) bool {
 	return spec.GPU == "" && (spec.Pool == "" || s.gateway.IsHostedCPUPool(spec.Pool))
 }
 
-// resolveCPUTier sets a VM's CPU tier, the requested one or the workspace
-// default, and its pool: a tier replaces a hosted pool, and untiered CPU VMs
-// use the default pool.
+// resolveCPUTier sets a VM's CPU tier and pool: a tier replaces a hosted pool,
+// and untiered CPU VMs without a pool use the default pool.
 func (s *Service) resolveCPUTier(ctx context.Context, workspace *types.Workspace, spec *types.VMSpec) error {
-	tier, err := s.gateway.ResolveCPUTier(ctx, workspace, spec.CPUTier, s.cpuTierEligible(*spec))
+	tier, err := s.gateway.ResolveCPUTier(ctx, workspace, spec.CPUTier, spec.Pool, s.cpuTierEligible(*spec))
 	if err != nil {
 		return err
 	}

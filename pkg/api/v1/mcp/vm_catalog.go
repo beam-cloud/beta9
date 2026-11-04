@@ -45,6 +45,11 @@ func vmBlockNetworkSchema() map[string]any {
 	return map[string]any{"type": "boolean", "description": "Block outbound traffic except bound credential hosts. Cannot combine with allow_list; inbound port access is configured separately."}
 }
 
+func vmCPUTierSchema() map[string]any {
+	tiers := []string{string(types.CPUTierSpot), string(types.CPUTierShared), string(types.CPUTierPerformance)}
+	return map[string]any{"type": "string", "enum": tiers, "description": "CPU capacity tier for a CPU VM with no pool or a hosted pool, which the tier replaces; GPU and private-pool VMs cannot use one. Omitted, the pool's tier or, without a pool, the account default applies. Needs at least 1 vCPU and 1 GiB. Spot uses spare capacity and may be stopped, and then needs an explicit start."}
+}
+
 func vmSpecSchema() map[string]any {
 	command := map[string]any{"type": "array", "items": str("Argument"), "minItems": 1, "maxItems": types.VMKioskMaxCommandArgs}
 	spec := schema(props{
@@ -54,7 +59,7 @@ func vmSpecSchema() map[string]any {
 		"gpu":             str("One GPU type, for example RTX4090; omitted for CPU-only VMs"),
 		"disk_size":       str("Writable root capacity; fresh VM default 50Gi, maximum 100Gi"),
 		"pool":            str("VM-capable worker pool"),
-		"cpu_tier":        map[string]any{"type": "string", "enum": []string{"spot", "shared", "performance"}, "description": "CPU capacity tier; Spot may be stopped and requires explicit restart."},
+		"cpu_tier":        vmCPUTierSchema(),
 		"env":             strList("KEY=value entries"),
 		"secrets":         strList("Workspace secret names with approved hosts; guest env receives placeholders for HTTPS request headers. BETA9_TOKEN/BEAM_TOKEN are explicit plaintext opt-ins."),
 		"ports":           map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000)},
@@ -154,13 +159,14 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		),
 		vmTool(
 			"update_vm",
-			"Change idle timeout/action, auto-resume, metadata or outbound network policy. metadata "+
-				"replaces the existing map.",
+			"Change idle timeout/action, auto-resume, metadata, outbound network policy or CPU tier. "+
+				"metadata replaces the existing map. Stop the VM before changing cpu_tier; the new tier "+
+				"replaces a hosted pool and applies from the next start.",
 			vmSchema(props{
 				"idle_timeout":  boundedInt(0, 365*24*60*60, 0),
 				"idle_action":   enum("stop", "pause"),
 				"auto_resume":   boolean(),
-				"cpu_tier":      enum("spot", "shared", "performance"),
+				"cpu_tier":      vmCPUTierSchema(),
 				"metadata":      stringMapSchema(),
 				"block_network": vmBlockNetworkSchema(),
 				"allow_list":    vmAllowListSchema(),

@@ -77,10 +77,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		return nil, err
 	}
 	for name, pool := range config.Worker.Pools {
-		if pool.CPUClass != "" && !pool.CPUClass.MatchesPool(pool) {
-			return nil, fmt.Errorf("worker pool %q: CPU class requires hosted CPU capacity with Shared 2.5x or Performance 1x", name)
-		}
-		if err := pool.CPUShareMultiplier.Validate(); err != nil {
+		if err := pool.ValidateCPU(); err != nil {
 			return nil, fmt.Errorf("worker pool %q: %w", name, err)
 		}
 	}

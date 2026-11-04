@@ -51,9 +51,16 @@ func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTi
 	return &pb.GetCPUTierCatalogResponse{Catalog: string(data)}, err
 }
 
-// ResolveCPUTier returns the tier a new workload runs on: the requested one, or
-// the workspace's default when the workload may use a tier.
-func (gws *GatewayService) ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, eligible bool) (types.CPUTier, error) {
+// ResolveCPUTier returns the tier a new CPU workload runs on: the requested one,
+// else the class of the pool it targets, or the workspace default when it
+// targets none. Only hosted CPU pools sell tiers, and untagged ones keep running
+// untiered work. eligible is false for GPU, platform and private workloads.
+func (gws *GatewayService) ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, poolName string, eligible bool) (types.CPUTier, error) {
+	pool, known := gws.scheduler.PoolConfig(poolName)
+	eligible = eligible && (poolName == "" || known && pool.HostedCPU())
+	if requested == "" && poolName != "" && eligible {
+		requested, eligible = pool.CPUClass, pool.CPUClass != ""
+	}
 	if !eligible {
 		if requested != "" {
 			return "", types.ErrCPUTierIneligible
@@ -67,17 +74,15 @@ func (gws *GatewayService) ResolveCPUTier(ctx context.Context, workspace *types.
 	return policy.Resolve(requested)
 }
 
-// resolveStubCPUTier sets a new stub's CPU tier. Only hosted CPU stubs may use
-// one; eligible is false for stubs placed on private capacity.
+// resolveStubCPUTier sets a new stub's CPU tier, which must suit the pool the
+// stub targets. eligible is false for stubs placed on private capacity.
 func (gws *GatewayService) resolveStubCPUTier(ctx context.Context, workspace *types.Workspace, kind types.StubType, config *types.StubConfigV1, eligible bool) error {
 	selector := config.PoolSelector()
-	pool, known := gws.scheduler.PoolConfig(selector)
-	eligible = eligible && !kind.IsPlatformWorkload() && !config.RequiresGPU() && (selector == "" || known && pool.HostedCPU())
-	tier, err := gws.ResolveCPUTier(ctx, workspace, config.CPUTier, eligible)
+	tier, err := gws.ResolveCPUTier(ctx, workspace, config.CPUTier, selector, eligible && !kind.IsPlatformWorkload() && !config.RequiresGPU())
 	if err != nil {
 		return err
 	}
-	if tier != "" && selector != "" && !tier.MatchesPool(pool) {
+	if pool, _ := gws.scheduler.PoolConfig(selector); tier != "" && selector != "" && !tier.MatchesPool(pool) {
 		return fmt.Errorf("pool does not support the selected CPU tier")
 	}
 	config.CPUTier = tier

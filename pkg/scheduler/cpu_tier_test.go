@@ -50,4 +50,23 @@ func TestTieredCPUUsesFreeCapacityBeforeReclaimingSpot(t *testing.T) {
 	request.OpportunisticOnly, request.Evictable = true, true
 	_, err = s.selectWorkerFromWorkers([]*types.Worker{full}, request)
 	require.Error(t, err)
+	worker, err = s.selectWorkerFromWorkers([]*types.Worker{full, &free}, request)
+	require.NoError(t, err)
+	require.Equal(t, "free", worker.Id)
+}
+
+func TestSpotSkipsWorkersHoldingPoolHeadroom(t *testing.T) {
+	shared := types.WorkerPoolConfig{CPUClass: types.CPUTierShared, CPUShareMultiplier: 2.5, PoolSizing: types.WorkerPoolJobSpecPoolSizingConfig{MinFreeCPU: "4000m", MinFreeMemory: "0", MinFreeGPU: "0"}}
+	s := &Scheduler{workerPoolManager: NewWorkerPoolManager(), config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{"shared": shared}}}}
+	s.workerPoolManager.SetPool("shared", shared, nil)
+	worker := func(id string) *types.Worker {
+		return &types.Worker{Id: id, PoolName: "shared", CPUTierProtocol: types.CPUTierProtocolVersion, Status: types.WorkerStatusAvailable, TotalCpu: 8000, TotalMemory: 16000, FreeCpu: 8000, FreeMemory: 16000}
+	}
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1024, OpportunisticOnly: true, Evictable: true, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
+	// "a" holds the pool's 4 vCPU floor and would evict Spot on its next keepalive.
+	selected, err := s.selectWorkerFromWorkers([]*types.Worker{worker("a"), worker("b")}, request)
+	require.NoError(t, err)
+	require.Equal(t, "b", selected.Id)
+	_, err = s.selectWorkerFromWorkers([]*types.Worker{worker("a")}, request)
+	require.Error(t, err)
 }

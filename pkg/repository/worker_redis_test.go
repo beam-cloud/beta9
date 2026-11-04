@@ -915,6 +915,19 @@ func TestSetWorkerKeepAliveUpdatesMachineID(t *testing.T) {
 	assert.Equal(t, "machine-b", updatedWorker.MachineId)
 }
 
+func TestKeepAliveCPUTierProtocolIsReadBack(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.Nil(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	assert.Nil(t, repo.AddWorker(&types.Worker{Id: "tier-worker", Status: types.WorkerStatusAvailable, PoolName: "pool-a"}))
+	assert.Nil(t, repo.SetWorkerKeepAlive("tier-worker", types.WorkerKeepAlive{CPUTierProtocol: types.CPUTierProtocolVersion}))
+
+	workers, err := repo.GetAllWorkersInPool("pool-a")
+	assert.Nil(t, err)
+	assert.Len(t, workers, 1)
+	assert.Equal(t, types.CPUTierProtocolVersion, workers[0].CPUTierProtocol)
+}
+
 func TestWorkerCheckpointCompatibilityKey(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.Nil(t, err)

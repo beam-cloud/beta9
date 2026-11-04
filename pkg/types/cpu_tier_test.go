@@ -21,6 +21,7 @@ func TestCPUTierPlacement(t *testing.T) {
 		{CPUTierSpot, shared, true}, {CPUTierSpot, performance, true},
 		{CPUTierSpot, WorkerPoolConfig{CPUClass: CPUTierShared, CPUShareMultiplier: 1}, false},
 		{CPUTierShared, WorkerPoolConfig{CPUClass: CPUTierShared, CPUShareMultiplier: 2.5, Mode: PoolModePrivate}, false},
+		{CPUTierShared, WorkerPoolConfig{CPUClass: CPUTierShared, CPUShareMultiplier: 2.5, Mode: PoolModeExternal}, false},
 		{CPUTierPerformance, WorkerPoolConfig{CPUClass: CPUTierPerformance, GPUType: "A100"}, false},
 	} {
 		require.Equal(t, tc.want, tc.tier.MatchesPool(tc.pool), "%s %+v", tc.tier, tc.pool)

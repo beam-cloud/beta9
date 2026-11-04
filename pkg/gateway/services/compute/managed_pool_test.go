@@ -401,6 +401,11 @@ func TestManagedPoolCPUShareMultiplier(t *testing.T) {
 	if _, err := service.UpdateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config); !errors.Is(err, model.ErrInvalidManagedPoolConfig) {
 		t.Fatalf("update with multiplier 0.5: err = %v, want invalid config", err)
 	}
+	// Agent capacity cannot sell a CPU tier.
+	config.CPUShareMultiplier, config.CPUClass = 2.5, types.CPUTierShared
+	if _, err := service.UpdateManagedPool(ctx, clusterAdminAuth(), "public-cpu", config); !errors.Is(err, model.ErrInvalidManagedPoolConfig) {
+		t.Fatalf("update with CPU class: err = %v, want invalid config", err)
+	}
 	state, err := service.managedPoolRepo.GetManagedPoolState(ctx, "admin-workspace", "public-cpu")
 	if err != nil || state == nil || state.WorkerConfig == nil || state.WorkerConfig.CPUShareMultiplier != 1.5 {
 		t.Fatalf("saved state = %+v, err = %v, want multiplier 1.5", state, err)

@@ -35,11 +35,19 @@ func (c *atomicTestClock) Add(duration time.Duration) {
 	c.nanos.Add(duration.Nanoseconds())
 }
 
+// newCostTestClient returns a client for a test billing service that serves handler.
+func newCostTestClient(t *testing.T, handler http.HandlerFunc) *ContainerCostClient {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+}
+
 func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *testing.T) {
 	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
 	var calls atomic.Int32
 	var fail atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			t.Errorf("authorization = %q, want bearer token", r.Header.Get("Authorization"))
@@ -55,10 +63,7 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 			EffectiveAt:    now.Add(-time.Hour).Format(time.RFC3339Nano),
 			ValidUntil:     now.Add(time.Minute).Format(time.RFC3339Nano),
 		})
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	client.now = clock.Now
 	request := &types.ContainerRequest{ContainerId: "container-1", Cpu: 1_000, Memory: 1_024}
 
@@ -136,7 +141,7 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 
 func TestContainerCostClientSeparatesWorkspaceAndSandboxQuotes(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		var request ContainerCostRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -150,10 +155,7 @@ func TestContainerCostClientSeparatesWorkspaceAndSandboxQuotes(t *testing.T) {
 			cost = "0.3"
 		}
 		_, _ = fmt.Fprintf(w, `{"cost_per_ms":%q}`, cost)
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	standard := &types.ContainerRequest{WorkspaceId: "workspace-a", Cpu: 1_000, Memory: 1_024}
 	otherWorkspace := &types.ContainerRequest{WorkspaceId: "workspace-b", Cpu: 1_000, Memory: 1_024}
 	sandbox := &types.ContainerRequest{
@@ -180,7 +182,7 @@ func TestContainerCostClientSeparatesWorkspaceAndSandboxQuotes(t *testing.T) {
 // concurrent requests must not share prices across workspaces or stub kinds.
 func TestContainerCostClientDoesNotCoalesceAcrossWorkspacesOrStubKinds(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		var request ContainerCostRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -202,10 +204,7 @@ func TestContainerCostClientDoesNotCoalesceAcrossWorkspacesOrStubKinds(t *testin
 			cost = "0.4"
 		}
 		_, _ = fmt.Fprintf(w, `{"cost_per_ms":%q}`, cost)
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	requests := map[string]*types.ContainerRequest{
 		"workspace-a": {WorkspaceId: "workspace-a", Cpu: 1_000, Memory: 1_024},
 		"workspace-b": {WorkspaceId: "workspace-b", Cpu: 1_000, Memory: 1_024},
@@ -245,16 +244,13 @@ func TestContainerCostClientDoesNotCoalesceAcrossWorkspacesOrStubKinds(t *testin
 func TestContainerCostClientRetriesWhenNoQuoteWasCached(t *testing.T) {
 	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) == 1 {
 			http.Error(w, "try again", http.StatusServiceUnavailable)
 			return
 		}
 		_, _ = w.Write([]byte(`{"cost_per_ms":"0.25","pricing_version":"legacy"}`))
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	client.now = clock.Now
 	request := &types.ContainerRequest{Cpu: 1_000, Memory: 1_024}
 	if quote, err := client.GetContainerCostQuote(context.Background(), request); err == nil || quote.Valid {
@@ -288,14 +284,11 @@ func TestContainerCostClientRetriesWhenNoQuoteWasCached(t *testing.T) {
 
 func TestContainerCostClientCoalescesConcurrentRefreshes(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		time.Sleep(50 * time.Millisecond)
 		_, _ = w.Write([]byte(`{"cost_per_ms":"0.125"}`))
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	request := &types.ContainerRequest{Cpu: 2_000, Memory: 4_096, Gpu: " T4 ", GpuCount: 1}
 
 	const goroutines = 12
@@ -336,13 +329,10 @@ func TestContainerCostClientCoalescesConcurrentRefreshes(t *testing.T) {
 
 func TestContainerCostClientCoalescesFailedRefresh(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	client.now = func() time.Time { return time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC) }
 	request := &types.ContainerRequest{Cpu: 1_000, Memory: 1_024}
 
@@ -401,13 +391,10 @@ func TestContainerCostClientRejectsInvalidResponses(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(test.status)
 				_, _ = w.Write([]byte(test.body))
-			}))
-			t.Cleanup(server.Close)
-
-			client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+			})
 			quote, err := client.GetContainerCostQuote(context.Background(), &types.ContainerRequest{Cpu: 1_000})
 			if err == nil || quote.Valid {
 				t.Fatalf("quote = %+v, err = %v; want rejected response", quote, err)
@@ -417,15 +404,12 @@ func TestContainerCostClientRejectsInvalidResponses(t *testing.T) {
 }
 
 func TestContainerCostClientUsesBoundedHTTPTimeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 		case <-time.After(100 * time.Millisecond):
 		}
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	client.client.Timeout = 20 * time.Millisecond
 	started := time.Now()
 	quote, err := client.GetContainerCostQuote(context.Background(), &types.ContainerRequest{Cpu: 1_000})
@@ -441,15 +425,12 @@ func TestContainerCostClientWaitersCancelIndependently(t *testing.T) {
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		close(requestStarted)
 		<-releaseRequest
 		_, _ = w.Write([]byte(`{"cost_per_ms":"0.125"}`))
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	first := make(chan error, 1)
 	go func() {
@@ -479,13 +460,10 @@ func TestContainerCostClientWaitersCancelIndependently(t *testing.T) {
 
 func TestContainerCostClientCanceledLookupUsesCacheWithoutRefreshing(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		_, _ = w.Write([]byte(`{"cost_per_ms":"0.125"}`))
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	})
 	cachedRequest := &types.ContainerRequest{Cpu: 1_000}
 	quote, err := client.GetContainerCostQuote(context.Background(), cachedRequest)
 	if err != nil || !quote.Valid {
@@ -515,16 +493,14 @@ func TestContainerCostClientCanceledLookupUsesCacheWithoutRefreshing(t *testing.
 func TestTieredQuotesArePerStubAndPolicyIsCached(t *testing.T) {
 	var mu sync.Mutex
 	var requests []ContainerCostRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newCostTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		var request ContainerCostRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 		mu.Lock()
 		requests = append(requests, request)
 		mu.Unlock()
 		require.NoError(t, json.NewEncoder(w).Encode(ContainerCostResponse{CostPerMs: "0.1", CPUTierPolicy: types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierShared}}))
-	}))
-	defer server.Close()
-	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test"})
+	})
 
 	request := func(stubID, config string) *types.ContainerRequest {
 		return &types.ContainerRequest{WorkspaceId: "workspace", StubId: stubID, Cpu: 1000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: config}}}
@@ -555,4 +531,44 @@ func TestTieredQuotesArePerStubAndPolicyIsCached(t *testing.T) {
 	policy, err := offline.CPUTierPolicy(context.Background(), "workspace")
 	require.NoError(t, err)
 	require.Equal(t, types.CPUTierPolicy{}, policy)
+}
+
+func TestCPUTierPolicyIsUnavailableUntilBillingAnswers(t *testing.T) {
+	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
+	var calls atomic.Int32
+	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			http.Error(w, "try again", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"cost_per_ms":"0","cpu_tier_policy":{"enabled":true,"default_cpu_tier":"shared"}}`))
+	})
+	client.now = clock.Now
+	// The failed lookup and every lookup in its retry window fail.
+	for range 2 {
+		_, err := client.CPUTierPolicy(context.Background(), "workspace")
+		require.Error(t, err)
+	}
+	require.Equal(t, int32(1), calls.Load())
+	clock.Add(containerCostRetryDelay)
+	policy, err := client.CPUTierPolicy(context.Background(), "workspace")
+	require.NoError(t, err)
+	require.Equal(t, types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierShared}, policy)
+}
+
+func TestContainerCostClientPrunesIdleQuotes(t *testing.T) {
+	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
+	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"cost_per_ms":"0.25"}`))
+	})
+	client.now = clock.Now
+	quote := func(stubID string) {
+		_, err := client.GetContainerCostQuote(context.Background(), &types.ContainerRequest{StubId: stubID, Cpu: 1000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"shared"}`}}})
+		require.NoError(t, err)
+	}
+	quote("stopped-a")
+	quote("stopped-b")
+	clock.Add(2 * containerCostIdleTimeout)
+	quote("running")
+	require.Len(t, client.quotes, 1)
 }

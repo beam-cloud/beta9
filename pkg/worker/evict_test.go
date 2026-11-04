@@ -77,6 +77,14 @@ func addRunningInstance(worker *Worker, rt runtime.Runtime, containerID string) 
 	return instance
 }
 
+func addSpotVMInstance(worker *Worker, rt runtime.Runtime, containerID string) *ContainerInstance {
+	instance := addRunningInstance(worker, rt, containerID)
+	instance.Request.UseVM, instance.Request.WorkspaceId = true, "workspace"
+	instance.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
+	instance.Request.Stub.Config = `{"cpu_tier":"spot"}`
+	return instance
+}
+
 func TestEvictForRequestRejectsUnverifiedExplicitGPUCheckpoint(t *testing.T) {
 	for _, key := range []string{"", "v1:other", "v2:other"} {
 		t.Run(key, func(t *testing.T) {
@@ -210,8 +218,9 @@ func TestOnlySpotVictimsExtendTheEvictionWait(t *testing.T) {
 	shortenEvictionKillTimeout(t, 300*time.Millisecond)
 	worker, rt := evictionWorkerForTest(false)
 	rt.ignoreKill = true
-	addRunningInstance(worker, rt, "victim-1")
-	request := &types.ContainerRequest{EvictContainerIds: []string{"victim-1"}, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"shared"}`}}}
+	victim := addRunningInstance(worker, rt, "victim-1")
+	victim.Request.Stub.Config = `{"cpu_tier":"shared"}`
+	request := &types.ContainerRequest{EvictContainerIds: []string{"victim-1"}}
 	started := time.Now()
 	require.ErrorIs(t, worker.evictForRequest(context.Background(), request), ErrEvictionIncomplete)
 	require.Less(t, time.Since(started), 5*time.Second)
@@ -335,10 +344,7 @@ func TestSpotVMEvictionRequiresDurableRelease(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
 			worker, rt := evictionWorkerForTest(false)
-			victim := addRunningInstance(worker, rt, "spot-vm")
-			victim.Request.UseVM, victim.Request.WorkspaceId = true, "workspace"
-			victim.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
-			victim.Request.Stub.Config = `{"cpu_tier":"spot"}`
+			addSpotVMInstance(worker, rt, "spot-vm")
 			var stopped bool
 			worker.backendRepoClient = &spotStopClient{preempt: func(ctx context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
 				require.Equal(t, "vm-id", r.VmId)
@@ -364,6 +370,21 @@ func TestSpotVMEvictionRequiresDurableRelease(t *testing.T) {
 	}
 }
 
+func TestExitingSpotVMIsWaitedForWithoutPreemption(t *testing.T) {
+	worker, rt := evictionWorkerForTest(false)
+	addSpotVMInstance(worker, rt, "spot-vm").setExitCode(0)
+	worker.backendRepoClient = &spotStopClient{preempt: func(context.Context, *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+		t.Fatal("an exiting VM was preempted")
+		return nil, nil
+	}}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		worker.containerInstances.Delete("spot-vm")
+	}()
+	require.NoError(t, worker.evictForRequest(context.Background(), &types.ContainerRequest{ContainerId: "replacement", EvictContainerIds: []string{"spot-vm"}}))
+	require.Empty(t, rt.signals)
+}
+
 func TestSpotUsesThirtySecondGraceWithoutChangingOtherVMs(t *testing.T) {
 	w, _ := evictionWorkerForTest(false)
 	request := &types.ContainerRequest{UseVM: true, Env: []string{"BEAM_VM_SYSTEMD=1"}, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
@@ -376,10 +397,7 @@ func TestSpotReturnsProtectedHeadroomWithoutRetiringWorker(t *testing.T) {
 	worker, rt := evictionWorkerForTest(false)
 	worker.persistent = true
 	worker.poolHeadroom.Store(true)
-	victim := addRunningInstance(worker, rt, "spot-headroom")
-	victim.Request.UseVM, victim.Request.WorkspaceId = true, "workspace"
-	victim.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
-	victim.Request.Stub.Config = `{"cpu_tier":"spot"}`
+	addSpotVMInstance(worker, rt, "spot-headroom")
 	stopped := make(chan *pb.PreemptVMRequest, 1)
 	worker.backendRepoClient = &spotStopClient{preempt: func(ctx context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
 		worker.containerInstances.Delete(r.ContainerId)

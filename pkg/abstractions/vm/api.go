@@ -425,16 +425,19 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
-	if err := s.resolveCPUTier(ctx, info.Workspace, &spec); err != nil {
-		return nil, err
-	}
-
 	now := time.Now().UTC()
 	id := vmID(info.Workspace.Id, opts.RequestID)
 	if name == "" {
 		name = defaultVMName(id)
 	}
 
+	// A replay must match the stored digest, which covers the request with the
+	// default pool applied but not the CPU tier, so a new tier default or a
+	// billing outage can't fail it.
+	requested := spec
+	if requested.Pool == "" && requested.GPU == "" {
+		requested.Pool = s.config.DefaultPool
+	}
 	var imageSpec []byte
 	if opts.Image != nil {
 		imageSpec, _ = (proto.MarshalOptions{Deterministic: true}).Marshal(opts.Image)
@@ -444,7 +447,7 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		Spec     types.VMSpec
 		Metadata map[string]string
 		Image    []byte `json:",omitempty"`
-	}{name, spec, opts.Metadata, imageSpec})
+	}{name, requested, opts.Metadata, imageSpec})
 	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
 	v := &types.VM{
 		ID:                  id,
@@ -491,6 +494,9 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
+	if err := s.resolveCPUTier(ctx, info.Workspace, &v.Spec); err != nil {
+		return nil, err
+	}
 	if opts.Image != nil {
 		if s.images == nil {
 			return nil, echo.NewHTTPError(http.StatusPreconditionRequired, "VM image needs to be built")
@@ -636,7 +642,7 @@ func (s *Service) action(c echo.Context) error {
 		err = s.pause(ctx, v)
 	case "wake":
 		if v.StopReason == types.VMStopReasonPreempted {
-			return echo.NewHTTPError(http.StatusConflict, "Spot VM was preempted; call start() to restart")
+			return errVMPreempted
 		}
 		if !v.Spec.AutoResume && v.DesiredState != types.VMStateRunning {
 			return echo.NewHTTPError(http.StatusConflict, "VM is stopped; call start() or enable auto_resume")

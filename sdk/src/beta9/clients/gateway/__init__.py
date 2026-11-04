@@ -1793,6 +1793,11 @@ class GetCpuTierCatalogRequest(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class GetCpuTierCatalogResponse(betterproto.Message):
     catalog: str = betterproto.string_field(1)
+    """
+    JSON object with the workspace's tier policy (enabled, default_cpu_tier),
+     the pools that sell a tier (pools: {name: {cpu_class, valid, ready,
+     ready_runtimes}}) and the gateway's tier features (capabilities).
+    """
 
 
 class GatewayServiceStub(SyncServiceStub):

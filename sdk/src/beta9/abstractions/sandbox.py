@@ -403,12 +403,19 @@ class Sandbox(Pod):
             ```
         """
 
-        # CPU tier VMs need 1 GiB; without a tier or pool, the account default decides.
+        # CPU tier VMs need 1 GiB. Without a tier, a pool's CPU class or, with no
+        # pool, the account default decides it.
         if self._memory_defaulted and self.use_vm and not self.gpu:
             tier = self.cpu_tier
-            if not tier and not self.pool_config:
-                catalog = self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog
-                tier = json.loads(catalog).get("default_cpu_tier")
+            if not tier:
+                catalog = json.loads(
+                    self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog
+                )
+                if self.pool_config:
+                    pool = catalog["pools"].get(self.pool_config.selector, {})
+                    tier = pool.get("cpu_class")
+                else:
+                    tier = catalog["default_cpu_tier"]
             if tier:
                 self.memory = 1024
 

@@ -13997,6 +13997,9 @@ type GetCPUTierCatalogResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// JSON object with the workspace's tier policy (enabled, default_cpu_tier),
+	// the pools that sell a tier (pools: {name: {cpu_class, valid, ready,
+	// ready_runtimes}}) and the gateway's tier features (capabilities).
 	Catalog string `protobuf:"bytes,1,opt,name=catalog,proto3" json:"catalog,omitempty"`
 }
 

@@ -78,7 +78,18 @@ func (t CPUTier) MatchesPool(p WorkerPoolConfig) bool {
 // HostedCPU reports whether the pool is Beam-hosted CPU capacity, the only
 // capacity CPU tiers use.
 func (p WorkerPoolConfig) HostedCPU() bool {
-	return p.GPUType == "" && !p.Mode.AgentHosted()
+	return p.GPUType == "" && !p.AgentHosted()
+}
+
+// ValidateCPU checks the pool's CPU share multiplier and the CPU class it sells.
+func (p WorkerPoolConfig) ValidateCPU() error {
+	if err := p.CPUShareMultiplier.Validate(); err != nil {
+		return err
+	}
+	if p.CPUClass != "" && !p.CPUClass.MatchesPool(p) {
+		return fmt.Errorf("CPU class requires hosted CPU capacity with Shared 2.5x or Performance 1x")
+	}
+	return nil
 }
 
 func (r *ContainerRequest) CPUTier() CPUTier {

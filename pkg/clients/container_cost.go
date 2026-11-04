@@ -21,6 +21,7 @@ const (
 	containerCostRequestTimeout = 5 * time.Second
 	containerCostQuoteRefresh   = 5 * time.Minute
 	containerCostRetryDelay     = 5 * time.Second
+	containerCostIdleTimeout    = time.Hour
 	containerCostResponseLimit  = 1 << 20
 	containerCostErrorLimit     = 4 << 10
 )
@@ -76,10 +77,11 @@ type ContainerCostClient struct {
 	endpoint string
 	token    string
 
-	mu      sync.RWMutex
-	quotes  map[ContainerCostRequest]containerCostCacheEntry
-	refresh singleflight.Group
-	now     func() time.Time
+	mu       sync.RWMutex
+	quotes   map[ContainerCostRequest]containerCostCacheEntry
+	prunedAt time.Time
+	refresh  singleflight.Group
+	now      func() time.Time
 }
 
 func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCostClient {
@@ -128,6 +130,9 @@ func (c *ContainerCostClient) CPUTierPolicy(ctx context.Context, workspaceID str
 	}
 	quote, err := c.lookup(ctx, ContainerCostRequest{WorkspaceId: workspaceID, PolicyOnly: true})
 	if !quote.Valid {
+		if err == nil {
+			err = fmt.Errorf("CPU tier policy is unavailable")
+		}
 		return types.CPUTierPolicy{}, err
 	}
 	return quote.CPUTierPolicy, nil
@@ -162,6 +167,7 @@ func (c *ContainerCostClient) lookup(ctx context.Context, key ContainerCostReque
 
 		c.mu.Lock()
 		c.quotes[key] = containerCostCacheEntry{quote: quote, refreshAt: refreshAt}
+		c.prune()
 		c.mu.Unlock()
 		return containerCostResult{quote: quote}, nil
 	})
@@ -285,7 +291,23 @@ func (c *ContainerCostClient) rememberFailure(key ContainerCostRequest) Containe
 	entry := c.quotes[key]
 	entry.retryAt = c.now().Add(containerCostRetryDelay)
 	c.quotes[key] = entry
+	c.prune()
 	return entry.quote
+}
+
+// prune drops entries no lookup has refreshed or retried for an hour, such as
+// the quotes of stubs that stopped running. Callers hold c.mu.
+func (c *ContainerCostClient) prune() {
+	now := c.now()
+	if now.Sub(c.prunedAt) < containerCostIdleTimeout {
+		return
+	}
+	c.prunedAt = now
+	for key, entry := range c.quotes {
+		if now.Sub(entry.refreshAt) > containerCostIdleTimeout && now.Sub(entry.retryAt) > containerCostIdleTimeout {
+			delete(c.quotes, key)
+		}
+	}
 }
 
 func (c *ContainerCostClient) lastGood(key ContainerCostRequest) ContainerCostQuote {

@@ -42,6 +42,7 @@ from ...schema import Schema
 from ...sync import FileSyncer
 from ...type import (
     _AUTOSCALER_TYPES,
+    CPU_TIERS,
     Autoscaler,
     CpuTier,
     DurableDisk,
@@ -178,6 +179,8 @@ class RunnerAbstraction(BaseAbstraction):
         self.on_start: str = ""
         self.on_deploy: "AbstractCallableWrapper" = self.parse_on_deploy(on_deploy)
         self.callback_url = callback_url or ""
+        if cpu_tier and cpu_tier not in CPU_TIERS:
+            raise ValueError(f"cpu_tier must be one of: {', '.join(CPU_TIERS)}")
         self.cpu_tier = cpu_tier or ""
         self.cpu = self.parse_cpu(cpu)
         self.memory = self.parse_memory(memory)
