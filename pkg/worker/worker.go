@@ -1006,6 +1006,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		return false
 	}
 
+	request.ReservedCpu = request.CPUTier().CPUReservation(s.poolConfig, request.Cpu)
 	instance := &ContainerInstance{
 		Id:        request.ContainerId,
 		StubId:    request.StubId,

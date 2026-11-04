@@ -694,10 +694,21 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
 	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
 	tier := request.CPUTier()
+	var overflow []WorkerPoolController
 	controllers = slices.DeleteFunc(controllers, func(controller WorkerPoolController) bool {
 		pool, _ := s.PoolConfig(controller.Name())
-		return !s.buildPoolAllowed(controller.Name(), request) || !tier.MatchesPool(pool)
+		if !s.buildPoolAllowed(controller.Name(), request) || !tier.MatchesPool(pool) {
+			return true
+		}
+		if tier.Overflows(pool) {
+			overflow = append(overflow, controller)
+			return true
+		}
+		return false
 	})
+	// Overflow pools come last, so work only adds workers to them when its own
+	// pools can't.
+	controllers = append(controllers, overflow...)
 	controllers = s.filterControllersByCheckpointAccelerator(controllers, request)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
@@ -787,6 +798,7 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 	if s.privateWorkerRequest(worker, workerRequest) || s.isProviderWorker(worker) {
 		workerRequest = workerRequest.PrivateWorkerRequest()
 	}
+	workerRequest.ReservedCpu = s.cpuReservation(worker, workerRequest)
 	workerRequest.Timestamp = time.Now()
 	return workerRequest
 }
@@ -1403,6 +1415,9 @@ type scoredWorker struct {
 	storageRank  int32
 	// evictionRank is 1 when placing here would stop evictable containers.
 	evictionRank int32
+	// overflow is set when the request runs here only as overflow (see
+	// types.CPUTier.Overflows).
+	overflow bool
 }
 
 // Constants used for scoring workers
@@ -1458,15 +1473,18 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	}
 
 	// Score workers based on status and priority
+	tier := request.CPUTier()
 	scoredWorkers := []scoredWorker{}
 	for _, worker := range filteredWorkers {
+		pool, _ := s.PoolConfig(workerPoolSelector(worker))
 		score := scoreWorkerForRequest(worker, request)
 		scoredWorkers = append(scoredWorkers, scoredWorker{
 			worker:       worker,
 			score:        score,
 			failoverRank: failoverRankForWorker(chain, worker, request),
 			storageRank:  s.storagePreferenceRank(worker, request),
-			evictionRank: evictionRankForWorker(worker, request),
+			evictionRank: evictionRankForWorker(worker, request, tier.CPUReservation(pool, request.Cpu)),
+			overflow:     tier.Overflows(pool),
 		})
 	}
 
@@ -1475,8 +1493,12 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	// remain available to workspaces that cannot run on agents. Explicit chain
 	// order still takes precedence over ordinary pool priority. CPU tier work
 	// ranks free capacity first, so it evicts Spot only when no worker has room.
-	tiered := request.CPUTier() != ""
+	// Overflow capacity comes last of all, even after reclaiming Spot.
+	tiered := tier != ""
 	sort.Slice(scoredWorkers, func(i, j int) bool {
+		if scoredWorkers[i].overflow != scoredWorkers[j].overflow {
+			return !scoredWorkers[i].overflow
+		}
 		if tiered && scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {
 			return scoredWorkers[i].evictionRank < scoredWorkers[j].evictionRank
 		}
@@ -1505,13 +1527,13 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	return scoredWorkers[0].worker, nil
 }
 
-// evictionRankForWorker is 0 when the request fits in the worker's free
-// capacity and 1 when it only fits by evicting containers.
-func evictionRankForWorker(worker *types.Worker, request *types.ContainerRequest) int32 {
+// evictionRankForWorker is 0 when the request, taking cpu, fits in the worker's
+// free capacity and 1 when it only fits by evicting containers.
+func evictionRankForWorker(worker *types.Worker, request *types.ContainerRequest, cpu int64) int32 {
 	if worker == nil || request == nil || !request.MayEvict() {
 		return 0
 	}
-	if worker.FreeCpu < request.Cpu || worker.FreeMemory < capacityMemoryForScheduling(request) {
+	if worker.FreeCpu < cpu || worker.FreeMemory < capacityMemoryForScheduling(request) {
 		return 1
 	}
 	if request.RequiresGPU() && worker.FreeGpuCount < gpuCountForScheduling(request) {
@@ -1817,12 +1839,25 @@ func calculateBackoffDelay(retryCount int) time.Duration {
 }
 
 // filterWorkersByCPUTier keeps the workers whose pool may run the request's CPU
-// tier. Tiered work also needs a known pool, as an unknown pool's zero config
-// would pass for Performance, and a worker that runs the tier protocol.
+// tier and that have room for the CPU it reserves there. Tiered work also needs
+// a known pool, as an unknown pool's zero config would pass for Performance,
+// and tiered or overflow work a worker that runs the tier protocol.
 func (s *Scheduler) filterWorkersByCPUTier(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	tier := request.CPUTier()
 	return slices.DeleteFunc(workers, func(w *types.Worker) bool {
 		pool, known := s.PoolConfig(workerPoolSelector(w))
-		return !tier.MatchesPool(pool) || tier != "" && (!known || w.CPUTierProtocol != types.CPUTierProtocolVersion)
+		switch {
+		case !tier.MatchesPool(pool), tier != "" && !known,
+			(tier != "" || tier.Overflows(pool)) && w.CPUTierProtocol != types.CPUTierProtocolVersion:
+			return true
+		}
+		cpu, _, _ := schedulableCapacity(w, request)
+		return cpu < tier.CPUReservation(pool, request.Cpu)
 	})
+}
+
+// cpuReservation is the CPU the request takes from the worker's capacity.
+func (s *Scheduler) cpuReservation(worker *types.Worker, request *types.ContainerRequest) int64 {
+	pool, _ := s.PoolConfig(workerPoolSelector(worker))
+	return request.CPUTier().CPUReservation(pool, request.Cpu)
 }

@@ -257,6 +257,13 @@ type ContainerState struct {
 	Evicting     bool   `redis:"evicting" json:"evicting,omitempty"`
 	DrainSeconds uint32 `redis:"drain_seconds" json:"drain_seconds,omitempty"`
 	EvictOrder   int32  `redis:"evict_order" json:"evict_order,omitempty"`
+	// ReservedCpu mirrors ContainerRequest.ReservedCpu for the scheduled request.
+	ReservedCpu int64 `redis:"reserved_cpu" json:"reserved_cpu,omitempty" go2proto:"ignore"`
+}
+
+// CapacityCpu is the CPU the container takes from its worker's capacity.
+func (s *ContainerState) CapacityCpu() int64 {
+	return max(s.ReservedCpu, s.Cpu)
 }
 
 // @go2proto
@@ -440,6 +447,15 @@ type ContainerRequest struct {
 	// they never fall back to a container runtime.
 	UseVM          bool            `json:"use_vm,omitempty"`
 	SecretBindings []SecretBinding `json:"secret_bindings,omitempty"`
+	// ReservedCpu is the CPU the request takes from its worker's capacity (see
+	// CPUTier.CPUReservation). The scheduler sets it when it places the request
+	// and the worker when it accepts it; zero means Cpu.
+	ReservedCpu int64 `json:"reserved_cpu,omitempty" go2proto:"ignore"`
+}
+
+// CapacityCpu is the CPU the request takes from its worker's capacity.
+func (c *ContainerRequest) CapacityCpu() int64 {
+	return max(c.ReservedCpu, c.Cpu)
 }
 
 // @go2proto

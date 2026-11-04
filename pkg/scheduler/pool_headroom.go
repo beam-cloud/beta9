@@ -106,6 +106,7 @@ func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request
 			c.FreeGpu += uint(w.FreeGpuCount)
 		}
 	}
+	tier := request.CPUTier()
 	keep := map[string]bool{}
 	sizings := map[string]*types.WorkerPoolSizingConfig{}
 	for name, c := range ready {
@@ -115,14 +116,15 @@ func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request
 			continue
 		}
 		sizings[name] = sizing
+		pool, _ := s.PoolConfig(name)
 		after := WorkerPoolCapacity{
-			FreeCpu:    c.FreeCpu - request.Cpu,
+			FreeCpu:    c.FreeCpu - tier.CPUReservation(pool, request.Cpu),
 			FreeMemory: c.FreeMemory - capacityMemoryForScheduling(request),
 			FreeGpu:    c.FreeGpu - min(c.FreeGpu, uint(gpuCountForScheduling(request))),
 		}
 		keep[name] = !after.belowMinimum(sizing)
 	}
-	borrowed := request.Borrowed()
+	borrowed := tier.Borrows()
 	filtered := make([]*types.Worker, 0, len(workers))
 	for _, w := range workers {
 		if !keep[w.PoolName] {

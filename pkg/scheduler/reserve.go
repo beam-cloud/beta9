@@ -709,7 +709,7 @@ func gpuCountForScheduling(request *types.ContainerRequest) uint32 {
 func (s *Scheduler) reserveWorkerCapacity(worker *types.Worker, request *types.ContainerRequest) bool {
 	normalizeGPURequest(request)
 
-	cpu := request.Cpu
+	cpu := s.cpuReservation(worker, request)
 	memory := capacityMemoryForScheduling(request)
 	freeCPU, freeMemory, freeGPU := schedulableCapacity(worker, request)
 	if freeCPU < cpu || freeMemory < memory {

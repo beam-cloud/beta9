@@ -499,7 +499,7 @@ func TestTieredQuotesArePerStubAndPolicyIsCached(t *testing.T) {
 		mu.Lock()
 		requests = append(requests, request)
 		mu.Unlock()
-		require.NoError(t, json.NewEncoder(w).Encode(ContainerCostResponse{CostPerMs: "0.1", CPUTierPolicy: types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierShared}}))
+		require.NoError(t, json.NewEncoder(w).Encode(ContainerCostResponse{CostPerMs: "0.1", CPUTierPolicy: types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierPerformance}}))
 	})
 
 	request := func(stubID, config string) *types.ContainerRequest {
@@ -522,7 +522,7 @@ func TestTieredQuotesArePerStubAndPolicyIsCached(t *testing.T) {
 	for range 2 {
 		policy, err := client.CPUTierPolicy(context.Background(), "workspace")
 		require.NoError(t, err)
-		require.Equal(t, types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierShared}, policy)
+		require.Equal(t, types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierPerformance}, policy)
 	}
 	require.Len(t, requests, 4)
 	require.Equal(t, ContainerCostRequest{WorkspaceId: "workspace", PolicyOnly: true}, requests[3])
@@ -541,7 +541,7 @@ func newEnrolledCostTestClient(t *testing.T, down *atomic.Bool) *ContainerCostCl
 			http.Error(w, "down", http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = w.Write([]byte(`{"cost_per_ms":"0.25","cpu_tier_policy":{"enabled":true,"default_cpu_tier":"shared"}}`))
+		_, _ = w.Write([]byte(`{"cost_per_ms":"0.25","cpu_tier_policy":{"enabled":true,"default_cpu_tier":"performance"}}`))
 	})
 }
 
@@ -560,7 +560,7 @@ func TestCPUTierPolicyIsUnavailableUntilBillingAnswers(t *testing.T) {
 	clock.Add(containerCostRetryDelay)
 	policy, err := client.CPUTierPolicy(context.Background(), "workspace")
 	require.NoError(t, err)
-	require.Equal(t, types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierShared}, policy)
+	require.Equal(t, types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierPerformance}, policy)
 }
 
 func TestContainerCostClientPrunesIdleStubQuotes(t *testing.T) {

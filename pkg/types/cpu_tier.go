@@ -53,11 +53,17 @@ type CPUTierPolicy struct {
 	DefaultCPUTier CPUTier `json:"default_cpu_tier"`
 }
 
+// unshared reports whether work on the tier never shares CPU: untiered and
+// Performance work. Workloads opt into Shared and Spot.
+func (t CPUTier) unshared() bool {
+	return t == "" || t == CPUTierPerformance
+}
+
 // Resolve returns the requested tier, or the default when none is requested.
-// A policy can't make a borrowing tier the default.
+// Only a tier that never shares CPU can be the default.
 func (p CPUTierPolicy) Resolve(requested CPUTier) (CPUTier, error) {
 	switch {
-	case requested == "" && p.DefaultCPUTier.Borrows():
+	case requested == "" && !p.DefaultCPUTier.unshared():
 		return "", fmt.Errorf("invalid CPU tier policy: %s must be chosen explicitly", p.DefaultCPUTier)
 	case requested == "":
 		return p.DefaultCPUTier, nil
@@ -90,15 +96,35 @@ func (c *StubConfigV1) ValidateCPUTier() error {
 	return c.CPUTier.Validate(c.Runtime.Cpu, c.Runtime.Memory, c.UseVM, c.RequiresGPU())
 }
 
-// MatchesPool reports whether work on tier t may run in pool p. Untiered work
-// stays off shared pools, which it never opted into; tiered work runs on pools
-// that sell its tier or one it borrows from.
+// MatchesPool reports whether work on tier t may run in pool p. Tiered work
+// runs on pools that sell its tier or one it borrows from, and untiered work
+// on any pool. Work that never shares CPU also overflows onto Shared pools.
 func (t CPUTier) MatchesPool(p WorkerPoolConfig) bool {
 	class := p.CPUClass()
-	if t == "" {
-		return class != CPUTierShared
+	switch {
+	case t == "" || t.Overflows(p):
+		return true
+	case class == "":
+		return false
 	}
-	return class != "" && (class == t || slices.Contains(cpuTiers[t].borrowsFrom, class))
+	return class == t || slices.Contains(cpuTiers[t].borrowsFrom, class)
+}
+
+// Overflows reports whether work on tier t runs in pool p only as overflow,
+// once the pools it would otherwise use are full: untiered and Performance
+// work on a Shared pool, where it doesn't share CPU (see CPUReservation).
+func (t CPUTier) Overflows(p WorkerPoolConfig) bool {
+	return t.unshared() && p.CPUClass() == CPUTierShared
+}
+
+// CPUReservation is the CPU that work on tier t asking for cpu takes from the
+// capacity of a worker in pool p. Overflow work takes a physical CPU for each
+// vCPU, so the workers it shares never overbook it.
+func (t CPUTier) CPUReservation(p WorkerPoolConfig, cpu int64) int64 {
+	if t.Overflows(p) {
+		return p.CPUShareMultiplier.Schedulable(cpu)
+	}
+	return cpu
 }
 
 // CPUClass is the tier a pool sells. A hosted CPU pool that schedules more than

@@ -46,9 +46,10 @@ func TestCPUTierPlacementAndWorkerCompatibility(t *testing.T) {
 		tier string
 		want []string
 	}{
-		// Untiered work stays off shared pools, and only it may use a pool the
-		// scheduler doesn't know.
-		{"", []string{"performance", "gpu", "unknown"}}, {"shared", []string{"shared"}}, {"performance", []string{"performance"}}, {"spot", []string{"shared", "performance"}},
+		// Only untiered work may use a pool the scheduler doesn't know. It and
+		// Performance work overflow onto shared pools, but not onto workers
+		// that predate the tier protocol.
+		{"", []string{"performance", "shared", "gpu", "unknown"}}, {"shared", []string{"shared"}}, {"performance", []string{"performance", "shared"}}, {"spot", []string{"shared", "performance"}},
 	} {
 		request := &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"` + tc.tier + `"}`}}}
 		workers := []*types.Worker{}
@@ -80,6 +81,56 @@ func TestTieredCPUUsesFreeCapacityBeforeReclaimingSpot(t *testing.T) {
 	worker, err = s.selectWorkerFromWorkers([]*types.Worker{full, &free}, request)
 	require.NoError(t, err)
 	require.Equal(t, "free", worker.Id)
+}
+
+func TestUnsharedCPUOverflowsOntoSharedPoolsLast(t *testing.T) {
+	s := tierScheduler(map[string]types.WorkerPoolConfig{"performance": {}, "shared": sharedPool})
+	worker := func(id, pool string, free, spot int64) *types.Worker {
+		return &types.Worker{Id: id, PoolName: pool, CPUTierProtocol: types.CPUTierProtocolVersion, Status: types.WorkerStatusAvailable,
+			TotalCpu: 10000, TotalMemory: 16000, FreeCpu: free, FreeMemory: 16000 - 2*spot, EvictableCpu: spot, EvictableMemory: 2 * spot}
+	}
+	request := func(tier string) *types.ContainerRequest {
+		return &types.ContainerRequest{Cpu: 2000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"` + tier + `"}`}}}
+	}
+	for _, tier := range []string{"", "performance"} {
+		// Spot on a Performance worker is reclaimed before the work overflows.
+		selected, err := s.selectWorkerFromWorkers([]*types.Worker{worker("roomy", "shared", 8000, 0), worker("spot", "performance", 0, 4000)}, request(tier))
+		require.NoError(t, err)
+		require.Equal(t, "spot", selected.Id)
+
+		// Once Performance is full, the work takes a physical CPU per vCPU on
+		// a Shared worker, so one with room for 2 vCPU of Shared work can't take it.
+		r := request(tier)
+		selected, err = s.selectWorkerFromWorkers([]*types.Worker{worker("full", "performance", 0, 0), worker("tight", "shared", 4000, 0), worker("roomy", "shared", 8000, 0)}, r)
+		require.NoError(t, err)
+		require.Equal(t, "roomy", selected.Id)
+		require.Equal(t, int64(5000), s.prepareWorkerRequest(selected, r).ReservedCpu)
+		require.True(t, s.reserveWorkerCapacity(selected, r))
+		require.Equal(t, int64(3000), selected.FreeCpu)
+		_, err = s.selectWorkerFromWorkers([]*types.Worker{worker("full", "performance", 0, 0), worker("tight", "shared", 4000, 0)}, request(tier))
+		require.Error(t, err)
+	}
+
+	shared := request("shared")
+	selected, err := s.selectWorkerFromWorkers([]*types.Worker{worker("tight", "shared", 4000, 0)}, shared)
+	require.NoError(t, err)
+	require.Equal(t, int64(2000), s.prepareWorkerRequest(selected, shared).ReservedCpu)
+}
+
+func TestUnsharedCPUProvisionsSharedPoolsLast(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
+	shared := sharedPool
+	shared.Priority = 10
+	for name, config := range map[string]types.WorkerPoolConfig{"shared": shared, "performance": {}} {
+		scheduler.workerPoolManager.SetPool(name, config, &LocalWorkerPoolControllerForTest{ctx: scheduler.ctx, name: name, config: scheduler.config, workerRepo: scheduler.workerRepo})
+	}
+	for tier, want := range map[string][]string{"": {"performance", "shared"}, "performance": {"performance", "shared"}, "shared": {"shared"}} {
+		controllers, err := scheduler.getControllers(&types.ContainerRequest{Cpu: 1000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"` + tier + `"}`}}})
+		require.NoError(t, err)
+		require.Equal(t, want, controllerNames(controllers), tier)
+	}
 }
 
 func TestSpotWaitsForSpareCapacity(t *testing.T) {

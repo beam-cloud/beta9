@@ -1632,7 +1632,7 @@ func TestScheduleContainerRequestsValidatesCapacityFieldsBeforeWriting(t *testin
 	}, request.Cpu, capacityMemoryForRequest(request), 0, 1, worker.Id,
 		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, "batch-invalid-resource-version",
 		0, 0, 0, 0, types.ContainerStateTtlSWhileStopping, request.ContainerId,
-		common.RedisKeys.SchedulerContainerState(request.ContainerId), payload, "", "assignment-invalid-resource-version").Result()
+		common.RedisKeys.SchedulerContainerState(request.ContainerId), payload, "", "assignment-invalid-resource-version", request.Cpu).Result()
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, result)
 	assert.Error(t, err)
@@ -1663,7 +1663,7 @@ func TestScheduleBatchMarkerSurvivesImmediateContainerFinalization(t *testing.T)
 	}, request.Cpu, capacityMemoryForRequest(request), 0, 1, worker.Id,
 		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID,
 		0, 0, 0, 0, types.ContainerStateTtlSWhileStopping, request.ContainerId,
-		stateKey, payload, "", assignment).Result()
+		stateKey, payload, "", assignment, request.Cpu).Result()
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, result)
 	assert.NoError(t, err)
@@ -1674,7 +1674,7 @@ func TestScheduleBatchMarkerSurvivesImmediateContainerFinalization(t *testing.T)
 	}, request.Cpu, capacityMemoryForRequest(request), 0, 1, worker.Id,
 		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID,
 		0, 0, 0, 0, types.ContainerStateTtlSWhileStopping, request.ContainerId,
-		stateKey, payload, "", assignment).Result()
+		stateKey, payload, "", assignment, request.Cpu).Result()
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, retried)
 	assert.NoError(t, err)

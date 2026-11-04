@@ -928,6 +928,35 @@ func TestContainerCPUAffinityIsOptInAndLoadBalanced(t *testing.T) {
 	require.True(t, firstSet.Intersection(secondSet).IsEmpty())
 }
 
+func TestUnsharedWorkReservesAPhysicalCPUOnSharedWorker(t *testing.T) {
+	instances := common.NewSafeMap[*ContainerInstance]()
+	worker := &Worker{
+		poolConfig:         types.WorkerPoolConfig{CPUShareMultiplier: 2.5},
+		containerInstances: instances,
+		cpuLimit:           2000,
+	}
+	worker.config.Worker.ContainerResourceLimits.CPUAffinityEnforced = true
+	request := func(id string, tier types.CPUTier) *types.ContainerRequest {
+		return &types.ContainerRequest{ContainerId: id, EntryPoint: []string{"sleep", "60"}, Cpu: 1000,
+			Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePodDeployment), Config: `{"cpu_tier":"` + string(tier) + `"}`}}}
+	}
+
+	performance := request("performance", types.CPUTierPerformance)
+	require.True(t, worker.reserveContainerInstance(performance))
+	require.Equal(t, int64(2500), performance.ReservedCpu)
+	reserved, _ := instances.Get(performance.ContainerId)
+
+	// Shared work packs onto the other core before it shares the one the
+	// Performance container reserved.
+	for _, id := range []string{"shared-1", "shared-2"} {
+		shared := request(id, types.CPUTierShared)
+		require.True(t, worker.reserveContainerInstance(shared))
+		require.Equal(t, shared.Cpu, shared.ReservedCpu)
+		instance, _ := instances.Get(id)
+		require.NotEqual(t, reserved.CPUSet, instance.CPUSet)
+	}
+}
+
 func TestForcedResourceLimitsOptIntoCPUAffinity(t *testing.T) {
 	instances := common.NewSafeMap[*ContainerInstance]()
 	worker := &Worker{

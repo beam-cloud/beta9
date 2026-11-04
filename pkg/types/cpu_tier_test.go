@@ -19,14 +19,31 @@ func TestCPUTierPlacement(t *testing.T) {
 		pool WorkerPoolConfig
 		want bool
 	}{
-		{"", performance, true}, {"", shared, false}, {"", gpu, true}, {"", agent, true},
+		{"", performance, true}, {"", shared, true}, {"", gpu, true}, {"", agent, true},
 		{CPUTierShared, shared, true}, {CPUTierShared, performance, false},
-		{CPUTierPerformance, performance, true}, {CPUTierPerformance, shared, false},
+		{CPUTierPerformance, performance, true}, {CPUTierPerformance, shared, true},
+		{CPUTierPerformance, gpu, false},
 		{CPUTierSpot, shared, true}, {CPUTierSpot, performance, true},
 		{CPUTierSpot, gpu, false}, {CPUTierShared, agent, false},
 		{CPUTierShared, WorkerPoolConfig{Mode: PoolModeExternal, CPUShareMultiplier: 2.5}, false},
 	} {
 		require.Equal(t, tc.want, tc.tier.MatchesPool(tc.pool), "%s %+v", tc.tier, tc.pool)
+	}
+
+	// Work that never shares CPU only overflows onto Shared pools, and takes
+	// a physical CPU there for each vCPU.
+	for _, tc := range []struct {
+		tier CPUTier
+		pool WorkerPoolConfig
+		want int64
+	}{
+		{"", shared, 2500}, {CPUTierPerformance, shared, 2500},
+		{CPUTierShared, shared, 1000}, {CPUTierSpot, shared, 1000},
+		{"", performance, 1000}, {CPUTierPerformance, performance, 1000},
+		{"", gpu, 1000}, {"", agent, 1000},
+	} {
+		require.Equal(t, tc.want, tc.tier.CPUReservation(tc.pool, 1000), "%s %+v", tc.tier, tc.pool)
+		require.Equal(t, tc.want != 1000, tc.tier.Overflows(tc.pool), "%s %+v", tc.tier, tc.pool)
 	}
 }
 
@@ -44,31 +61,34 @@ func TestCPUTierWorkloadLimits(t *testing.T) {
 }
 
 func TestCPUTierPolicyResolve(t *testing.T) {
-	enrolled := CPUTierPolicy{DefaultCPUTier: CPUTierShared}
+	enrolled := CPUTierPolicy{DefaultCPUTier: CPUTierPerformance}
 	for _, tc := range []struct {
 		policy    CPUTierPolicy
 		requested CPUTier
 		want      CPUTier
 	}{
 		{CPUTierPolicy{}, "", ""},
-		{enrolled, "", CPUTierShared},
-		{enrolled, CPUTierShared, CPUTierShared},
+		{enrolled, "", CPUTierPerformance},
+		{enrolled, CPUTierPerformance, CPUTierPerformance},
 		{CPUTierPolicy{Enabled: true}, CPUTierSpot, CPUTierSpot},
 	} {
 		tier, err := tc.policy.Resolve(tc.requested)
 		require.NoError(t, err)
 		require.Equal(t, tc.want, tier)
 	}
-	_, err := enrolled.Resolve(CPUTierSpot)
+	_, err := enrolled.Resolve(CPUTierShared)
 	require.ErrorContains(t, err, "not enabled")
 	_, err = CPUTierPolicy{}.Resolve(CPUTierPerformance)
 	require.ErrorContains(t, err, "not enabled")
 
-	// Spot is opt-in: a policy may allow it but never make it the default.
-	spotDefault := CPUTierPolicy{Enabled: true, DefaultCPUTier: CPUTierSpot}
-	_, err = spotDefault.Resolve("")
-	require.ErrorContains(t, err, "must be chosen explicitly")
-	tier, err := spotDefault.Resolve(CPUTierSpot)
-	require.NoError(t, err)
-	require.Equal(t, CPUTierSpot, tier)
+	// Shared and Spot are opt-in: a policy may allow them but never make
+	// either the default.
+	for _, opted := range []CPUTier{CPUTierShared, CPUTierSpot} {
+		policy := CPUTierPolicy{Enabled: true, DefaultCPUTier: opted}
+		_, err = policy.Resolve("")
+		require.ErrorContains(t, err, "must be chosen explicitly")
+		tier, err := policy.Resolve(opted)
+		require.NoError(t, err)
+		require.Equal(t, opted, tier)
+	}
 }

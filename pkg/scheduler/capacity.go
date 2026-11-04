@@ -144,7 +144,7 @@ func (c *capacityCheck) restoreReplacedCapacity() {
 			continue
 		}
 		replacedRequest := containerRequestFromState(container)
-		worker.FreeCpu += container.Cpu
+		worker.FreeCpu += container.CapacityCpu()
 		worker.FreeMemory += capacityMemoryForScheduling(replacedRequest)
 		worker.FreeGpuCount += gpuCountForScheduling(replacedRequest)
 		c.capFreeCapacity(worker)
@@ -175,7 +175,7 @@ func (c *capacityCheck) placeReplicas() CapacityCheckResult {
 }
 
 func (c *capacityCheck) reserve(worker *types.Worker) {
-	worker.FreeCpu -= c.request.Cpu
+	worker.FreeCpu -= c.scheduler.cpuReservation(worker, c.request)
 	worker.FreeMemory -= capacityMemoryForScheduling(c.request)
 	if c.request.RequiresGPU() {
 		worker.FreeGpuCount -= gpuCountForScheduling(c.request)
