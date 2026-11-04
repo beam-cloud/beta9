@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import grpc
 import pytest
 
 from beta9.abstractions.endpoint import Endpoint
@@ -41,6 +42,21 @@ def test_vm_sandbox_omitted_memory_follows_the_cpu_tier(kwargs, default_tier, me
     sandbox.prepare_runtime = MagicMock(return_value=False)
     sandbox.create()
     assert sandbox.memory == memory
+
+
+def test_vm_sandbox_on_a_pool_does_not_need_the_tier_catalog():
+    sandbox = Sandbox(use_vm=True, pool="private-pool")
+    sandbox.gateway_stub = MagicMock()
+    sandbox.gateway_stub.get_cpu_tier_catalog.side_effect = grpc.RpcError()
+    sandbox.prepare_runtime = MagicMock(return_value=False)
+    sandbox.create()
+    assert sandbox.memory == 128
+    # Without a pool the account default decides, so the catalog is required.
+    unpooled = Sandbox(use_vm=True)
+    unpooled.gateway_stub = sandbox.gateway_stub
+    unpooled.prepare_runtime = MagicMock(return_value=False)
+    with pytest.raises(grpc.RpcError):
+        unpooled.create()
 
 
 def test_vm_tier_creation_and_stopped_update_use_normal_api():

@@ -47,7 +47,7 @@ func vmBlockNetworkSchema() map[string]any {
 
 func vmCPUTierSchema() map[string]any {
 	tiers := []string{string(types.CPUTierSpot), string(types.CPUTierShared), string(types.CPUTierPerformance)}
-	return map[string]any{"type": "string", "enum": tiers, "description": "CPU capacity tier for a CPU VM with no pool or a hosted pool, which the tier replaces; GPU and private-pool VMs cannot use one. Omitted, the pool's tier or, without a pool, the account default applies. Needs at least 1 vCPU and 1 GiB. Spot uses spare capacity and may be stopped, and then needs an explicit start."}
+	return map[string]any{"type": "string", "enum": tiers, "description": "CPU capacity tier for a CPU VM with no pool or a hosted pool, which the tier replaces; GPU and private-pool VMs cannot use one. Omitted, the pool's tier or, without a pool, the account default applies. Needs at least 1 vCPU and 1 GiB; Shared allows at most 8 vCPU and 16 GiB. Spot uses spare capacity and may be stopped, and then needs an explicit start."}
 }
 
 func vmSpecSchema() map[string]any {

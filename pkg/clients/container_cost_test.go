@@ -556,19 +556,31 @@ func TestCPUTierPolicyIsUnavailableUntilBillingAnswers(t *testing.T) {
 	require.Equal(t, types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierShared}, policy)
 }
 
-func TestContainerCostClientPrunesIdleQuotes(t *testing.T) {
+func TestContainerCostClientPrunesIdleStubQuotes(t *testing.T) {
 	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
+	var down atomic.Bool
 	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"cost_per_ms":"0.25"}`))
+		if down.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"cost_per_ms":"0.25","cpu_tier_policy":{"enabled":true,"default_cpu_tier":"shared"}}`))
 	})
 	client.now = clock.Now
-	quote := func(stubID string) {
+	quote := func(stubID string) error {
 		_, err := client.GetContainerCostQuote(context.Background(), &types.ContainerRequest{StubId: stubID, Cpu: 1000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"shared"}`}}})
-		require.NoError(t, err)
+		return err
 	}
-	quote("stopped-a")
-	quote("stopped-b")
+	require.NoError(t, quote("stopped"))
+	_, err := client.CPUTierPolicy(context.Background(), "workspace")
+	require.NoError(t, err)
+
 	clock.Add(2 * containerCostIdleTimeout)
-	quote("running")
-	require.Len(t, client.quotes, 1)
+	down.Store(true)
+	require.Error(t, quote("running"))
+	// The stopped stub's quote is gone, but the policy still covers the outage.
+	require.Len(t, client.quotes, 2)
+	policy, err := client.CPUTierPolicy(context.Background(), "workspace")
+	require.NoError(t, err)
+	require.True(t, policy.Enabled)
 }

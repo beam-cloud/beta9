@@ -408,9 +408,16 @@ class Sandbox(Pod):
         if self._memory_defaulted and self.use_vm and not self.gpu:
             tier = self.cpu_tier
             if not tier:
-                catalog = json.loads(
-                    self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog
-                )
+                try:
+                    catalog = json.loads(
+                        self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog
+                    )
+                except grpc.RpcError:
+                    # Private and untagged pools need no tier, and a tiered pool
+                    # can't be used without billing anyway.
+                    if not self.pool_config:
+                        raise
+                    catalog = {"pools": {}}
                 if self.pool_config:
                     pool = catalog["pools"].get(self.pool_config.selector, {})
                     tier = pool.get("cpu_class")

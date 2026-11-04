@@ -295,8 +295,10 @@ func (c *ContainerCostClient) rememberFailure(key ContainerCostRequest) Containe
 	return entry.quote
 }
 
-// prune drops entries no lookup has refreshed or retried for an hour, such as
-// the quotes of stubs that stopped running. Callers hold c.mu.
+// prune drops the quotes of tiered stubs that no lookup has refreshed or
+// retried for an hour, which would otherwise accumulate as stubs come and go.
+// Policies and untiered quotes are bounded by workspaces and resources, so
+// they keep their last good value for billing outages. Callers hold c.mu.
 func (c *ContainerCostClient) prune() {
 	now := c.now()
 	if now.Sub(c.prunedAt) < containerCostIdleTimeout {
@@ -304,7 +306,7 @@ func (c *ContainerCostClient) prune() {
 	}
 	c.prunedAt = now
 	for key, entry := range c.quotes {
-		if now.Sub(entry.refreshAt) > containerCostIdleTimeout && now.Sub(entry.retryAt) > containerCostIdleTimeout {
+		if key.StubId != "" && now.Sub(entry.refreshAt) > containerCostIdleTimeout && now.Sub(entry.retryAt) > containerCostIdleTimeout {
 			delete(c.quotes, key)
 		}
 	}
