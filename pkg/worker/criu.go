@@ -42,39 +42,55 @@ import (
 )
 
 const (
-	gpuCntEnvKey                    = types.WorkerGPUCountEnv
-	defaultCheckpointDeadline       = 10 * time.Minute
-	defaultCheckpointOperationTTL   = 10 * time.Minute
-	readyLogRate                    = 10
-	checkpointFsDir                 = "filesystem" // Legacy materialized upper directory.
-	checkpointFsArchive             = "filesystem.tar"
-	checkpointProcessManagerFile    = "goproc"
-	checkpointArchiveExtension      = ".tar"
-	checkpointOriginPrefix          = types.DefaultCheckpointsPrefix
-	checkpointTriggerHTTP           = "http"
-	checkpointProgressInterval      = 10 * time.Second
-	terminalCheckpointStopWait      = 5 * time.Second
-	checkpointStatePublicationTTL   = 5 * time.Second
-	checkpointFilesystemOnlyFile    = "filesystem-only"
-	checkpointFilesystemOnDiskFile  = "filesystem-on-disk" // Upper layer lives on a disk the checkpoint carries.
-	checkpointFilesystemOnDiskV1    = "v1\n"
-	checkpointFilesystemOnlyV1      = "v1\n"
-	checkpointForcedRuncProfileFile = "beam-forced-runc-profile"
-	checkpointForcedRuncProfileV1   = "v1\n"
-	restoreReadinessTimeout         = 15 * time.Second
-	restoreReadinessInterval        = 100 * time.Millisecond
-	restoreReadinessStableFor       = 250 * time.Millisecond
-	checkpointOriginConcurrency     = 64
-	checkpointOriginReadAttempts    = 3
-	checkpointCacheConcurrency      = 8
-	microVMCheckpointConcurrency    = 8
-	checkpointOriginIdleTimeout     = time.Minute
+	gpuCntEnvKey                      = types.WorkerGPUCountEnv
+	defaultCheckpointDeadline         = 10 * time.Minute
+	defaultCheckpointOperationTTL     = 10 * time.Minute
+	readyLogRate                      = 10
+	checkpointFsDir                   = "filesystem" // Legacy materialized upper directory.
+	checkpointFsArchive               = "filesystem.tar"
+	checkpointProcessManagerFile      = "goproc"
+	checkpointArchiveExtension        = ".tar"
+	checkpointOriginPrefix            = types.DefaultCheckpointsPrefix
+	checkpointTriggerHTTP             = "http"
+	checkpointProgressInterval        = 10 * time.Second
+	terminalCheckpointStopWait        = 5 * time.Second
+	checkpointStatePublicationTTL     = 5 * time.Second
+	checkpointFilesystemOnlyFile      = "filesystem-only"
+	checkpointFilesystemOnDiskFile    = "filesystem-on-disk" // Upper layer lives on a disk the checkpoint carries.
+	checkpointFilesystemOnDiskV1      = "v1\n"
+	checkpointFilesystemOnlyV1        = "v1\n"
+	checkpointForcedRuncProfileFile   = "beam-forced-runc-profile"
+	checkpointForcedRuncProfileV1     = "v1\n"
+	restoreReadinessTimeout           = 15 * time.Second
+	restoreReadinessInterval          = 100 * time.Millisecond
+	restoreReadinessStableFor         = 250 * time.Millisecond
+	checkpointOriginConcurrency       = 64
+	checkpointOriginUploadConcurrency = 16
+	checkpointArchiveConcurrency      = 32
+	checkpointOriginReadAttempts      = 3
+	checkpointCacheConcurrency        = 8
+	microVMCheckpointConcurrency      = 8
+	checkpointOriginIdleTimeout       = time.Minute
 )
 
 var checkpointOriginSlots = make(chan struct{}, checkpointOriginConcurrency)
-var microVMCheckpointSlots = make(chan struct{}, microVMCheckpointConcurrency)
+var checkpointOriginUploadSlots = make(chan struct{}, checkpointConcurrency(os.Getenv(types.CheckpointUploadConcurrencyEnv), checkpointOriginUploadConcurrency))
+var checkpointArchiveSlots = make(chan struct{}, checkpointConcurrency(os.Getenv(types.CheckpointArchiveConcurrencyEnv), checkpointArchiveConcurrency))
+
+// Capture admission includes retained guest RAM and compression work until the
+// archive completes, independently of origin upload admission.
+var microVMCheckpointSlots = make(chan struct{}, checkpointConcurrency(os.Getenv(types.MicroVMCheckpointConcurrencyEnv), microVMCheckpointConcurrency))
+var microVMSnapshotIOSlots = newMicroVMSnapshotIOSlots(os.Getenv(types.MicroVMSnapshotIOConcurrencyEnv))
 var checkpointArchiveCacheSlots = make(chan struct{}, checkpointCacheConcurrency)
 var errCheckpointOriginInactive = errors.New("memory checkpoint download made no progress before the inactivity deadline")
+
+func checkpointConcurrency(value string, fallback int) int {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 1 || n > 128 {
+		return fallback
+	}
+	return n
+}
 
 var checkpointRuntimeEnvOverrides = []string{
 	"UV_USE_IO_URING=0",
@@ -1072,7 +1088,8 @@ func captureCheckpointFilesystem(ctx context.Context, instance *ContainerInstanc
 	defer cleanupUpper()
 	legacyPath := filepath.Join(checkpointPath, checkpointFsDir)
 	archivePath := filepath.Join(checkpointPath, checkpointFsArchive)
-	copyErr := copyDirectoryContext(ctx, upperDir, legacyPath, []string{"config.json", "outputs", "snapshot"})
+	excluded := []string{specBaseName, "outputs", "snapshot"}
+	copyErr := copyDirectoryContext(ctx, upperDir, legacyPath, excluded)
 	if copyErr != nil {
 		if err := os.RemoveAll(legacyPath); err != nil {
 			return errors.Join(fmt.Errorf("copy checkpoint filesystem state: %w", copyErr), fmt.Errorf("remove partial checkpoint filesystem state: %w", err))
@@ -1083,7 +1100,7 @@ func captureCheckpointFilesystem(ctx context.Context, instance *ContainerInstanc
 		if err := os.Remove(archivePath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("reset checkpoint filesystem archive: %w", err)
 		}
-		if err := archiveDirectoryContext(ctx, upperDir, archivePath, []string{"config.json", "outputs", "snapshot"}); err != nil {
+		if err := archiveDirectoryContext(ctx, upperDir, archivePath, excluded); err != nil {
 			_ = os.Remove(archivePath)
 			return errors.Join(fmt.Errorf("copy checkpoint filesystem state: %w", copyErr), fmt.Errorf("archive checkpoint filesystem state: %w", err))
 		}
@@ -1309,11 +1326,13 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 		defer release()
 	}
+	var releaseMicroVMCapture func()
 	if runtimeName == types.ContainerRuntimeMicroVM.String() {
 		release, err := acquireMicroVMCheckpointSlot(checkpointCtx)
 		if err != nil {
 			return fmt.Errorf("wait for microvm checkpoint admission: %w", err)
 		}
+		releaseMicroVMCapture = release
 		defer release()
 	}
 	resumeOOMWatcher := func() {}
@@ -1331,6 +1350,12 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	checkpointPath := ""
 	disksSealed := false
+	var diskPublication *checkpointDiskPublication
+	defer func() {
+		if diskPublication != nil {
+			diskPublication.cancelAndWait()
+		}
+	}()
 	if filesystemOnly {
 		runtimeName = types.CheckpointRuntimeFilesystem
 		opts.CheckpointRuntime = runtimeName
@@ -1345,6 +1370,17 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		// Runtimes that stop the container to checkpoint seal the disks while
 		// it is stopped, so disk and memory image are from the same instant.
 		sealDisks := func(sealCtx context.Context) error {
+			if checkpointDiskPipelineEnabled(opts.Request, runtimeName, terminateRuntime) {
+				diskPublication = startCheckpointDiskPublication(checkpointCtx, func(publishCtx context.Context, onSealed func()) ([]*types.DiskSnapshot, error) {
+					return s.syncDurableDiskMountsWithSeal(publishCtx, opts.Request, durableDiskSyncMemoryCheckpoint, onSealed)
+				})
+				if err := diskPublication.waitSealed(sealCtx); err != nil {
+					return err
+				}
+				disksSealed = true
+				return nil
+			}
+
 			snapshots, sealErr := s.syncDurableDiskMounts(sealCtx, opts.Request, durableDiskSyncMemoryCheckpoint)
 			if sealErr != nil {
 				return sealErr
@@ -1352,10 +1388,23 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 			opts.DiskSnapshots, disksSealed = snapshots, true
 			return nil
 		}
-		checkpointPath, err = s.criuManager.CreateCheckpoint(checkpointCtx, checkpointHookRuntime{Runtime: instance.Runtime, whilePaused: sealDisks}, opts.CheckpointId, opts.Request, terminateRuntime)
+		checkpointPath, err = withCheckpointCaptureIO(runtimeName, microVMSnapshotIOSlots, func(admit func(context.Context) error) (string, error) {
+			whilePaused := func(pausedCtx context.Context) error {
+				if err := admit(pausedCtx); err != nil {
+					return err
+				}
+				return sealDisks(pausedCtx)
+			}
+			return s.criuManager.CreateCheckpoint(checkpointCtx, checkpointHookRuntime{Runtime: instance.Runtime, whilePaused: whilePaused}, opts.CheckpointId, opts.Request, terminateRuntime)
+		})
 		if err != nil {
 			checkpointErr := err
 			if filesystemFallback {
+				if diskPublication != nil {
+					diskPublication.cancelAndWait()
+					diskPublication = nil
+					disksSealed = false
+				}
 				runtimeName = types.CheckpointRuntimeFilesystem
 				opts.CheckpointRuntime = runtimeName
 				if checkpointCtx.Err() != nil {
@@ -1395,7 +1444,8 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	if !filesystemOnly {
-		if err = captureCheckpointProcessManager(instance, checkpointPath); err != nil {
+		err = captureCheckpointProcessManager(instance, checkpointPath)
+		if err != nil {
 			return err
 		}
 		if checkpointFilesystemOnDisk(opts.Request, instance.Runtime) {
@@ -1433,7 +1483,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	if opts.OutputLogger != nil {
 		opts.OutputLogger.Info("Persisting container checkpoint")
 	}
-	persistedMetadata, err = s.persistCheckpoint(checkpointCtx, opts.Request, opts.CheckpointId, checkpointPath, opts.OutputLogger)
+	persistedMetadata, err = s.persistCheckpoint(checkpointCtx, opts.Request, opts.CheckpointId, checkpointPath, opts.OutputLogger, releaseMicroVMCapture)
 	if err != nil {
 		if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
 			err = fmt.Errorf("checkpoint persistence timed out after %s: %w", defaultCheckpointOperationTTL, err)
@@ -1443,6 +1493,13 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 			opts.OutputLogger.Error(fmt.Sprintf("Failed to persist checkpoint: %v", err))
 		}
 		return err
+	}
+
+	if diskPublication != nil {
+		opts.DiskSnapshots, err = diskPublication.wait(checkpointCtx)
+		if err != nil {
+			return fmt.Errorf("publish checkpoint disk: %w", err)
+		}
 	}
 
 	if opts.WaitForSignal {
@@ -1472,15 +1529,20 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	return nil
 }
 
-// Bound native capture and archive writes together through origin publication:
-// a burst of checkpoints must leave the disk backend room to seal and fsync.
+// Bound native capture and compression writes together. Origin uploads have
+// their own admission: a slow upload must not keep the next guest running
+// while it waits for an otherwise idle capture slot.
 func acquireMicroVMCheckpointSlot(ctx context.Context) (func(), error) {
+	return acquireCheckpointSlot(ctx, microVMCheckpointSlots)
+}
+
+func acquireCheckpointSlot(ctx context.Context, slots chan struct{}) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	select {
-	case microVMCheckpointSlots <- struct{}{}:
-		release := sync.OnceFunc(func() { <-microVMCheckpointSlots })
+	case slots <- struct{}{}:
+		release := sync.OnceFunc(func() { <-slots })
 		if err := ctx.Err(); err != nil {
 			release()
 			return nil, err
@@ -1489,6 +1551,117 @@ func acquireMicroVMCheckpointSlot(ctx context.Context) (func(), error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func newMicroVMSnapshotIOSlots(value string) chan struct{} {
+	n := checkpointConcurrency(value, 0)
+	if n == 0 {
+		return nil
+	}
+	return make(chan struct{}, n)
+}
+
+// The existing capture lease bounds all unarchived checkpoints. This separate
+// gate limits pivots and memory writes after the guest has paused. Queued
+// guests must stop using CPU before compression of earlier captures begins.
+// Release after capture joins so compression can overlap the next capture.
+func withCheckpointCaptureIO(runtimeName string, slots chan struct{}, capture func(admit func(context.Context) error) (string, error)) (string, error) {
+	if runtimeName != types.ContainerRuntimeMicroVM.String() || slots == nil {
+		return capture(func(context.Context) error { return nil })
+	}
+	var once sync.Once
+	release := func() {}
+	var admissionErr error
+	admit := func(pausedCtx context.Context) error {
+		once.Do(func() {
+			var slotRelease func()
+			slotRelease, admissionErr = acquireCheckpointSlot(pausedCtx, slots)
+			if admissionErr == nil {
+				release = slotRelease
+			}
+		})
+		return admissionErr
+	}
+	defer func() { release() }()
+	return capture(admit)
+}
+
+// Memory can be captured after the disk pivot is durable while its immutable
+// layers upload. Keep the first rollout narrow: terminal native snapshots with
+// exactly one writable qcow disk. Other checkpoint kinds retain the serial path.
+func checkpointDiskPipelineEnabled(request *types.ContainerRequest, runtimeName string, terminal bool) bool {
+	if os.Getenv(types.CheckpointDiskPipelineEnv) != "1" || !terminal || runtimeName != types.ContainerRuntimeMicroVM.String() || request == nil {
+		return false
+	}
+	writable := 0
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
+		if mount.DurableDisk == nil || mount.ReadOnly {
+			continue
+		}
+		if !isQcowDurableDiskMount(mount) {
+			return false
+		}
+		writable++
+	}
+	return writable == 1
+}
+
+type checkpointDiskPublication struct {
+	sealed, done chan struct{}
+	cancel       context.CancelFunc
+	snapshots    []*types.DiskSnapshot
+	err          error
+}
+
+func startCheckpointDiskPublication(ctx context.Context, publish func(context.Context, func()) ([]*types.DiskSnapshot, error)) *checkpointDiskPublication {
+	ctx, cancel := context.WithCancel(ctx)
+	p := &checkpointDiskPublication{sealed: make(chan struct{}), done: make(chan struct{}), cancel: cancel}
+	onSealed := sync.OnceFunc(func() { close(p.sealed) })
+	go func() {
+		defer close(p.done)
+		p.snapshots, p.err = publish(ctx, onSealed)
+	}()
+	return p
+}
+
+func (p *checkpointDiskPublication) waitSealed(ctx context.Context) (err error) {
+	defer func() {
+		if err != nil {
+			p.cancelAndWait()
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.sealed:
+		return ctx.Err()
+	case <-p.done:
+		if p.err != nil {
+			return p.err
+		}
+		select {
+		case <-p.sealed:
+			return ctx.Err()
+		default:
+			return errors.New("disk publication completed without a seal fence")
+		}
+	}
+}
+
+func (p *checkpointDiskPublication) wait(ctx context.Context) ([]*types.DiskSnapshot, error) {
+	select {
+	case <-ctx.Done():
+		p.cancelAndWait()
+		return p.snapshots, errors.Join(ctx.Err(), p.err)
+	case <-p.done:
+		return p.snapshots, p.err
+	}
+}
+
+func (p *checkpointDiskPublication) cancelAndWait() {
+	p.cancel()
+	<-p.done // Never detach or release a disk while publication still uses it.
 }
 
 func (s *Worker) markCheckpointFailed(ctx context.Context, opts *CreateCheckpointOpts, runtimeName string, metadata *checkpointCacheMetadata) {
@@ -1544,7 +1717,7 @@ func checkpointAccelerator(request *types.ContainerRequest) string {
 	return "CPU"
 }
 
-func (s *Worker) persistCheckpoint(ctx context.Context, request *types.ContainerRequest, checkpointId, checkpointPath string, outputLogger *slog.Logger) (*checkpointCacheMetadata, error) {
+func (s *Worker) persistCheckpoint(ctx context.Context, request *types.ContainerRequest, checkpointId, checkpointPath string, outputLogger *slog.Logger, archiveReady func()) (*checkpointCacheMetadata, error) {
 	if s.cacheManager == nil || s.cacheManager.client == nil {
 		return nil, fmt.Errorf("cache is required for checkpoint persistence")
 	}
@@ -1562,14 +1735,37 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 		outputLogger.Info("Creating checkpoint archive...\n")
 	}
 	archiveProgress := newCheckpointPersistenceProgress(outputLogger, "archive", 0)
+
+	releaseArchive, err := acquireCheckpointSlot(ctx, checkpointArchiveSlots)
+
+	if err != nil {
+		return nil, err
+	}
 	archiveStarted := time.Now()
-	hash, size, err := createTarWithSHA256Progress(ctx, checkpointPath, archivePath, archiveProgress.update)
+	hash, size, err := func() (string, int64, error) {
+		defer releaseArchive()
+		return createTarWithSHA256Progress(ctx, checkpointPath, archivePath, archiveProgress.update)
+	}()
+
 	if err != nil {
 		_ = os.Remove(archivePath)
 		return nil, err
 	}
 	archiveProgress.finish(size)
 	log.Info().Str("checkpoint_id", checkpointId).Int64("bytes", size).Dur("duration", time.Since(archiveStarted)).Msg("checkpoint archive created")
+	if archiveReady != nil {
+		archiveReady()
+	}
+	// The archive remains private until the origin upload and state publication
+	// succeed. Pipelining changes admission, never the durability boundary.
+
+	releaseUpload, err := acquireCheckpointSlot(ctx, checkpointOriginUploadSlots)
+
+	if err != nil {
+		_ = os.Remove(archivePath)
+		return nil, err
+	}
+	defer releaseUpload()
 
 	originKey := checkpointOriginKey(checkpointId)
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
@@ -1588,10 +1784,12 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	uploadProgress := newCheckpointPersistenceProgress(outputLogger, "upload", size)
 	uploadStarted := time.Now()
 	uploadReader := &checkpointUploadReader{file: f, total: size, progress: uploadProgress.update}
-	if err := storageClient.UploadWithReader(ctx, originKey, uploadReader); err != nil {
+	uploadErr := storageClient.UploadWithReader(ctx, originKey, uploadReader)
+
+	if uploadErr != nil {
 		_ = f.Close()
 		_ = os.Remove(archivePath)
-		return nil, err
+		return nil, uploadErr
 	}
 	uploadProgress.finish(size)
 	log.Info().Str("checkpoint_id", checkpointId).Int64("bytes", size).Dur("duration", time.Since(uploadStarted)).Msg("checkpoint archive uploaded")
@@ -2181,20 +2379,6 @@ func validateCheckpointKind(checkpointPath string, filesystemOnly bool) error {
 	return nil
 }
 
-type ErrCheckpointRuntimeIncompatible struct {
-	RuntimeName string
-	PayloadName string
-	Err         error
-}
-
-func (e *ErrCheckpointRuntimeIncompatible) Error() string {
-	return fmt.Sprintf("checkpoint is incompatible with %s: required runtime payload %s: %v", e.RuntimeName, e.PayloadName, e.Err)
-}
-
-func (e *ErrCheckpointRuntimeIncompatible) Unwrap() error {
-	return e.Err
-}
-
 func validateCheckpointRuntimePayload(checkpointPath, runtimeName string) error {
 	payloadName := ""
 	switch runtimeName {
@@ -2211,15 +2395,11 @@ func validateCheckpointRuntimePayload(checkpointPath, runtimeName string) error 
 
 	payloadPath := filepath.Join(checkpointPath, payloadName)
 	info, err := os.Stat(payloadPath)
-	if err != nil {
-		return &ErrCheckpointRuntimeIncompatible{RuntimeName: runtimeName, PayloadName: payloadName, Err: err}
+	if err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
+		err = errors.New("payload is empty or invalid")
 	}
-	if !info.Mode().IsRegular() || info.Size() == 0 {
-		return &ErrCheckpointRuntimeIncompatible{
-			RuntimeName: runtimeName,
-			PayloadName: payloadName,
-			Err:         errors.New("payload is empty or invalid"),
-		}
+	if err != nil {
+		return fmt.Errorf("checkpoint is incompatible with %s: required runtime payload %s: %w", runtimeName, payloadName, err)
 	}
 	return nil
 }

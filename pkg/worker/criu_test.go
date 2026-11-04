@@ -22,7 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -2250,11 +2252,7 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 }
 
 func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
-	for range microVMCheckpointConcurrency {
-		release, err := acquireMicroVMCheckpointSlot(context.Background())
-		require.NoError(t, err)
-		t.Cleanup(release)
-	}
+	fillMicroVMCheckpointSlots(t)
 	request := &types.ContainerRequest{ContainerId: "queued-microvm"}
 	called := false
 	worker := &Worker{
@@ -2270,6 +2268,77 @@ func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
 	defer cancel()
 	require.ErrorIs(t, worker.createCheckpoint(ctx, &CreateCheckpointOpts{Request: request, CheckpointId: "queued"}), context.DeadlineExceeded)
 	require.False(t, called, "admission must precede guest freeze, pause and capture")
+}
+
+func TestCheckpointUploadDoesNotHoldCaptureAdmissionOrPublishEarly(t *testing.T) {
+	for i := 0; i < cap(checkpointArchiveSlots)-1; i++ {
+		release, err := acquireCheckpointSlot(context.Background(), checkpointArchiveSlots)
+		require.NoError(t, err)
+		t.Cleanup(release)
+	}
+	releaseCapture := fillMicroVMCheckpointSlots(t)
+	uploadStarted := make(chan struct{})
+	finishUpload := make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		once.Do(func() { close(uploadStarted) })
+		select {
+		case <-finishUpload:
+			w.Header().Set("ETag", `"checkpoint"`)
+			w.WriteHeader(http.StatusOK)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cacheCtx, cancelCache := context.WithCancel(context.Background())
+	cancelCache() // optional CAS fill is unrelated to durable publication
+	root := t.TempDir()
+	checkpointPath := filepath.Join(root, "saved")
+	require.NoError(t, os.MkdirAll(checkpointPath, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "memory"), []byte("captured RAM"), 0600))
+	id, endpoint, region, credential, bucket := uint(1), server.URL, "us-east-1", "test", "test"
+	request := &types.ContainerRequest{Workspace: types.Workspace{Name: "test", Storage: &types.WorkspaceStorage{
+		Id: &id, EndpointUrl: &endpoint, Region: &region, AccessKey: &credential, SecretKey: &credential, BucketName: &bucket,
+	}}}
+	worker := &Worker{cacheManager: &WorkerCacheManager{ctx: cacheCtx, checkpointRoot: root, client: &cache.Client{}}}
+	type result struct {
+		metadata *checkpointCacheMetadata
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		metadata, err := worker.persistCheckpoint(ctx, request, "saved", checkpointPath, nil, releaseCapture)
+		done <- result{metadata, err}
+	}()
+	select {
+	case <-uploadStarted:
+	case result := <-done:
+		t.Fatalf("upload did not start: %v", result.err)
+	case <-ctx.Done():
+		t.Fatal("upload did not start")
+	}
+	admissionCtx, cancelAdmission := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancelAdmission()
+	release, err := acquireMicroVMCheckpointSlot(admissionCtx)
+	require.NoError(t, err, "the next capture must proceed while origin upload is pending")
+	defer release()
+	releaseArchive, err := acquireCheckpointSlot(admissionCtx, checkpointArchiveSlots)
+	require.NoError(t, err, "the next archive must proceed while origin upload is pending")
+	defer releaseArchive()
+	select {
+	case <-done:
+		t.Fatal("checkpoint became available before origin upload completed")
+	default:
+	}
+	close(finishUpload)
+	persisted := <-done
+	require.NoError(t, persisted.err)
+	require.NotNil(t, persisted.metadata)
+	require.NotEmpty(t, persisted.metadata.hash)
+	require.Positive(t, persisted.metadata.sizeBytes)
 }
 
 func TestCreateFilesystemCheckpointFallbackStopsAndCapturesOverlay(t *testing.T) {
@@ -3120,4 +3189,196 @@ func TestCheckpointArchiveCacheCapAndCleanup(t *testing.T) {
 	}), context.Canceled)
 	require.NoFileExists(t, archive)
 	require.Nil(t, tryCheckpointArchiveCacheSlot(cancelled))
+}
+
+func fillMicroVMCheckpointSlots(t *testing.T) (releaseLast func()) {
+	t.Helper()
+	for range cap(microVMCheckpointSlots) {
+		release, err := acquireMicroVMCheckpointSlot(context.Background())
+		require.NoError(t, err)
+		t.Cleanup(release)
+		releaseLast = release
+	}
+	return releaseLast
+}
+
+func TestCheckpointCaptureIOCancellationAndFailureRelease(t *testing.T) {
+	slots := newMicroVMSnapshotIOSlots("1")
+	entered, finish, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	want := errors.New("capture failed")
+	go func() {
+		_, err := withCheckpointCaptureIO(types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
+			if err := admit(context.Background()); err != nil {
+				return "", err
+			}
+			// A duplicated paused callback must not acquire a second slot.
+			if err := admit(context.Background()); err != nil {
+				return "", err
+			}
+			close(entered)
+			<-finish
+			return "", want
+		})
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("capture did not start")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	paused := false
+	_, err := withCheckpointCaptureIO(types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
+		paused = true
+		if err := admit(ctx); err != nil {
+			return "", err
+		}
+		t.Fatal("cancelled queued capture wrote memory")
+		return "", nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, paused, "guest must pause before waiting for an IO slot")
+	close(finish)
+	require.ErrorIs(t, <-done, want)
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	path, err := withCheckpointCaptureIO(types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
+		return "captured", admit(ctx)
+	})
+	require.NoError(t, err)
+	require.Equal(t, "captured", path)
+	_, err = withCheckpointCaptureIO(types.ContainerRuntimeMicroVM.String(), slots, func(func(context.Context) error) (string, error) { return "", want })
+	require.ErrorIs(t, err, want)
+	require.Empty(t, slots, "failure before pause must not retain a slot")
+	for _, value := range []string{"", "0", "129", "bad"} {
+		require.Nil(t, newMicroVMSnapshotIOSlots(value))
+	}
+}
+
+func TestCheckpointDiskPipelineSealPrecedesCaptureButPublicationStillFencesAvailability(t *testing.T) {
+	sealed, originAck := make(chan struct{}), make(chan struct{})
+	volume := &backloggedQcowVolume{writes: 1, depth: 1}
+	want := &types.DiskSnapshot{ExternalId: "durable-generation"}
+	p := startCheckpointDiskPublication(context.Background(), func(ctx context.Context, onSealed func()) ([]*types.DiskSnapshot, error) {
+		err := snapshotQcowVolumeWithSeal(ctx, volume, durableDiskSyncMemoryCheckpoint, false, func([]disk.SealedLayer) error {
+			close(sealed)
+			select {
+			case <-originAck:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}, onSealed)
+		return []*types.DiskSnapshot{want}, err
+	})
+	defer p.cancelAndWait()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, p.waitSealed(ctx), "capture should proceed before origin acknowledges")
+	<-sealed
+	require.Equal(t, []string{"seal"}, volume.events)
+	finished := make(chan error, 1)
+	go func() {
+		rows, err := p.wait(ctx)
+		if len(rows) != 1 || rows[0] != want {
+			err = errors.Join(err, errors.New("lost paired disk generation"))
+		}
+		finished <- err
+	}()
+	select {
+	case <-finished:
+		t.Fatal("availability outran disk origin acknowledgement")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(originAck)
+	require.NoError(t, <-finished)
+}
+
+func TestCheckpointDiskPipelineFailuresAndCancellationJoinPublisher(t *testing.T) {
+	sealFailure := errors.New("disk pivot failed")
+	p := startCheckpointDiskPublication(context.Background(), func(context.Context, func()) ([]*types.DiskSnapshot, error) {
+		return nil, sealFailure
+	})
+	require.ErrorIs(t, p.waitSealed(context.Background()), sealFailure)
+	p.cancelAndWait()
+	joined := make(chan struct{})
+	p = startCheckpointDiskPublication(context.Background(), func(ctx context.Context, onSealed func()) ([]*types.DiskSnapshot, error) {
+		onSealed()
+		<-ctx.Done()
+		defer close(joined)
+		return nil, ctx.Err()
+	})
+	require.NoError(t, p.waitSealed(context.Background()))
+	p.cancelAndWait()
+	select {
+	case <-joined:
+	default:
+		t.Fatal("cancellation returned before the publisher released its disk")
+	}
+	_, err := p.wait(context.Background())
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestCheckpointDiskPipelineRejectsMissingSealAndLateOriginFailure(t *testing.T) {
+	for _, onSealed := range []bool{false, true} {
+		originFailure := errors.New("disk upload failed")
+		p := startCheckpointDiskPublication(context.Background(), func(_ context.Context, seal func()) ([]*types.DiskSnapshot, error) {
+			if onSealed {
+				seal()
+				return nil, originFailure
+			}
+			return nil, nil
+		})
+		if onSealed {
+			_, err := p.wait(context.Background())
+			require.ErrorIs(t, err, originFailure)
+		} else {
+			require.ErrorContains(t, p.waitSealed(context.Background()), "without a seal fence")
+		}
+		p.cancelAndWait()
+	}
+}
+
+func TestCheckpointDiskPipelineEligibility(t *testing.T) {
+	t.Setenv(types.CheckpointDiskPipelineEnv, "1")
+	request := &types.ContainerRequest{Mounts: []types.Mount{{DurableDisk: &types.DurableDiskMountConfig{Driver: types.DurableDiskDriverQcow}}}}
+	native := types.ContainerRuntimeMicroVM.String()
+	require.True(t, checkpointDiskPipelineEnabled(request, native, true))
+	require.False(t, checkpointDiskPipelineEnabled(request, native, false))
+	require.False(t, checkpointDiskPipelineEnabled(request, types.ContainerRuntimeRunc.String(), true))
+	request.Mounts = append(request.Mounts, request.Mounts[0])
+	require.False(t, checkpointDiskPipelineEnabled(request, native, true), "multiple disk fences require a separate implementation")
+	t.Setenv(types.CheckpointDiskPipelineEnv, "0")
+	request.Mounts = request.Mounts[:1]
+	require.False(t, checkpointDiskPipelineEnabled(request, native, true))
+}
+
+func TestCheckpointDiskPipelineCancellationJoinsBeforeFallback(t *testing.T) {
+	cancelled, finish := make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(finish) }) })
+	p := startCheckpointDiskPublication(context.Background(), func(ctx context.Context, _ func()) ([]*types.DiskSnapshot, error) {
+		<-ctx.Done()
+		close(cancelled)
+		<-finish
+		return nil, ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- p.waitSealed(ctx) }()
+	cancel()
+	<-cancelled
+	select {
+	case err := <-result:
+		t.Fatalf("fallback could acquire the disk before publication finished: %v", err)
+	default:
+	}
+	release.Do(func() { close(finish) })
+	require.ErrorIs(t, <-result, context.Canceled)
+	select {
+	case <-p.done:
+	default:
+		t.Fatal("publication was not joined")
+	}
 }

@@ -25,6 +25,80 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestWaitForGuestControl(t *testing.T) {
+	for _, outcome := range []string{"ready", "exit", "cancel", "missing", "no_control"} {
+		t.Run(outcome, func(t *testing.T) {
+			ready, exited := make(chan struct{}), make(chan struct{})
+			inst := &microVMInstance{ctrl: &microVMControl{ready: ready}, exitDone: exited}
+			m := &MicroVM{vms: map[string]*microVMInstance{"guest": inst}}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			switch outcome {
+			case "ready":
+				close(ready)
+			case "exit":
+				close(exited)
+			case "cancel":
+				cancel()
+			case "missing":
+				delete(m.vms, "guest")
+			case "no_control":
+				inst.ctrl = nil
+			}
+			err := m.WaitForGuestControl(ctx, "guest")
+			if outcome == "ready" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestMicroVMCPUWeightAppliesWhileQuotaIsDeferred(t *testing.T) {
+	path := t.TempDir()
+	shares := uint64(102)
+	require.NoError(t, applyMicroVMCPU(path, &specs.LinuxCPU{Shares: &shares}))
+	assertCPUFile(t, path, "cpu.weight", "4")
+	_, err := os.Stat(filepath.Join(path, "cpu.max"))
+	require.True(t, os.IsNotExist(err), "startup must still defer the quota")
+	inst := &microVMInstance{id: "weight-test", cgroup: path}
+	m := &MicroVM{vms: map[string]*microVMInstance{inst.id: inst}}
+	shares, quota := uint64(1024), int64(10000)
+	require.NoError(t, m.UpdateResources(context.Background(), inst.id, &specs.LinuxResources{CPU: &specs.LinuxCPU{Shares: &shares, Quota: &quota}}))
+	assertCPUFile(t, path, "cpu.weight", "39")
+	assertCPUFile(t, path, "cpu.max", "10000 100000")
+}
+
+func TestMicroVMCPUWeightBoundsAndFailures(t *testing.T) {
+	for _, test := range []struct {
+		shares uint64
+		weight string
+	}{{1, "1"}, {2, "1"}, {262144, "10000"}, {^uint64(0), "10000"}} {
+		path := t.TempDir()
+		require.NoError(t, applyMicroVMCPU(path, &specs.LinuxCPU{Shares: &test.shares}))
+		assertCPUFile(t, path, "cpu.weight", test.weight)
+	}
+	shares := uint64(102)
+	require.ErrorContains(t, applyMicroVMCPU(filepath.Join(t.TempDir(), "missing"), &specs.LinuxCPU{Shares: &shares}), "set cpu.weight")
+}
+
+func TestMicroVMRealCPUWeight(t *testing.T) {
+	if os.Getenv("BETA9_MICROVM_REAL_CGROUP") != "1" {
+		t.Skip("requires a writable cgroup v2 mount")
+	}
+	name := fmt.Sprintf("beam-weight-test-%d", os.Getpid())
+	path := filepath.Join(microVMSysfsCgroupRoot, name)
+	require.NoError(t, os.Mkdir(path, 0755))
+	t.Cleanup(func() { require.NoError(t, os.Remove(path)) })
+	shares := uint64(102)
+	inst := &microVMInstance{id: name}
+	spec := &specs.Spec{Linux: &specs.Linux{CgroupsPath: name, Resources: &specs.LinuxResources{CPU: &specs.LinuxCPU{Shares: &shares}}}}
+	require.NoError(t, (&MicroVM{}).setupCgroup(inst, spec, 1<<30))
+	assertCPUFile(t, path, "cpu.weight", "4\n")
+	assertCPUFile(t, path, "cpu.max", "max 100000\n")
+}
+
 func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Request)) *microVMInstance {
 	t.Helper()
 	inst := &microVMInstance{id: "snapshot-test", stateDir: t.TempDir()}
@@ -36,83 +110,214 @@ func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Re
 	return inst
 }
 
+type snapshotActions struct {
+	mu     sync.Mutex
+	values []string
+}
+
+func (a *snapshotActions) record(action string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.values = append(a.values, action)
+}
+
+func (a *snapshotActions) serve(w http.ResponseWriter, r *http.Request) {
+	a.record(r.URL.Path)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *snapshotActions) require(t *testing.T, want ...string) {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	require.Equal(t, want, a.values)
+}
+
+func resumableSnapshotTestInstance(t *testing.T) (*microVMInstance, func(bool)) {
+	t.Helper()
+	var actions snapshotActions
+	inst := snapshotTestInstance(t, actions.serve)
+	return inst, func(mustStop bool) {
+		t.Helper()
+		require.False(t, mustStop)
+		require.False(t, inst.isPaused())
+		actions.require(t, "/api/v1/vm.pause", "/api/v1/vm.resume")
+	}
+}
+
 func TestMicroVMSnapshotSealsDisksBeforeCapture(t *testing.T) {
-	var mu sync.Mutex
-	var actions []string
-	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		actions = append(actions, r.URL.Path)
-		w.WriteHeader(http.StatusNoContent)
-	})
+	var actions snapshotActions
+	inst := snapshotTestInstance(t, actions.serve)
 	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error {
-		mu.Lock()
-		defer mu.Unlock()
-		actions = append(actions, "seal")
+		actions.record("seal")
 		return nil
 	})
 	require.NoError(t, err)
 	require.True(t, mustStop)
 	require.True(t, inst.isPaused())
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, []string{"/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot"}, actions)
+	actions.require(t, "/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot")
 }
 
 func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
-	var mu sync.Mutex
-	var snapshots, resumes int
+	var actions snapshotActions
 	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		switch r.URL.Path {
-		case "/api/v1/vm.snapshot":
-			snapshots++
+		actions.record(r.URL.Path)
+		if r.URL.Path == "/api/v1/vm.snapshot" {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
-		case "/api/v1/vm.resume":
-			resumes++
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	captured, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
-	mu.Lock()
-	defer mu.Unlock()
 	require.Error(t, err)
 	require.True(t, captured)
 	require.True(t, inst.isPaused())
-	require.Equal(t, 1, snapshots)
-	require.Zero(t, resumes)
+	actions.require(t, "/api/v1/vm.pause", "/api/v1/vm.snapshot")
+}
+
+func TestMicroVMSnapshotCPUPreparationFailureResumesBeforeCapture(t *testing.T) {
+	inst, assertResumed := resumableSnapshotTestInstance(t)
+	inst.cgroup = t.TempDir() // Missing cgroup controls make preparation fail before capture.
+	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
+	require.ErrorContains(t, err, "read snapshot cpu.max")
+	assertResumed(mustStop)
+}
+
+func TestMicroVMSnapshotCPUPreparationFailureStopsIfResumeFails(t *testing.T) {
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/vm.resume" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path == "/api/v1/vm.snapshot" {
+			t.Error("snapshot attempted after CPU preparation failed")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	inst.cgroup = t.TempDir()
+	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
+	require.ErrorContains(t, err, "resume uncaptured vm")
+	require.True(t, mustStop)
+	require.True(t, inst.isPaused())
+}
+
+func TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture(t *testing.T) {
+	for _, failCapture := range []bool{false, true} {
+		t.Run(fmt.Sprint(failCapture), func(t *testing.T) {
+			original := "10000 100000\n"
+			cgroup := newCPUFixture(t, original, "4\n")
+			cpuMax, weightPath := filepath.Join(cgroup, "cpu.max"), filepath.Join(cgroup, "cpu.weight")
+			var observed string
+			inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/vm.snapshot" {
+					weight, weightErr := os.ReadFile(weightPath)
+					if weightErr != nil || string(weight) != "100" {
+						t.Errorf("capture weight: %q, %v", weight, weightErr)
+					}
+					value, err := os.ReadFile(cpuMax)
+					if err != nil {
+						t.Error(err)
+					}
+					observed = string(value)
+					if failCapture {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			inst.cgroup = cgroup
+			mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error {
+				value, err := os.ReadFile(cpuMax)
+				require.NoError(t, err)
+				require.Equal(t, original, string(value), "disk publication keeps the tenant quota")
+				return nil
+			})
+			require.Equal(t, failCapture, err != nil)
+			require.True(t, mustStop)
+			require.True(t, inst.isPaused())
+			require.Equal(t, "max 100000", observed)
+			restored, err := os.ReadFile(cpuMax)
+			require.NoError(t, err)
+			require.Equal(t, original, string(restored))
+			restoredWeight, err := os.ReadFile(weightPath)
+			require.NoError(t, err)
+			require.Equal(t, "4\n", string(restoredWeight))
+		})
+	}
+}
+
+func TestMicroVMSnapshotCPUQuotaRejectsRunningGuest(t *testing.T) {
+	inst := &microVMInstance{cgroup: t.TempDir()}
+	require.ErrorContains(t, inst.withSnapshotCPU(func() error { t.Fatal("must not capture"); return nil }), "paused vCPUs")
+}
+
+func TestMicroVMSnapshotWeightRestoredWithUnlimitedQuota(t *testing.T) {
+	for _, weight := range []string{"4", "157"} {
+		inst := &microVMInstance{cgroup: newCPUFixture(t, "max 100000", weight), paused: true}
+		weightPath := filepath.Join(inst.cgroup, "cpu.weight")
+		want := "100"
+		if weight == "157" {
+			want = weight
+		}
+		captureErr := errors.New("capture failed")
+		err := inst.withSnapshotCPU(func() error {
+			actual, err := os.ReadFile(weightPath)
+			require.NoError(t, err)
+			require.Equal(t, want, string(actual))
+			return captureErr
+		})
+		require.ErrorIs(t, err, captureErr)
+		actual, err := os.ReadFile(weightPath)
+		require.NoError(t, err)
+		require.Equal(t, weight, string(actual))
+	}
+}
+
+func TestMicroVMSnapshotCPUQuotaSerializesResourceUpdate(t *testing.T) {
+	inst := &microVMInstance{id: "quota-test", cgroup: newCPUFixture(t, "10000 100000", "4"), paused: true}
+	cpuMax := filepath.Join(inst.cgroup, "cpu.max")
+	m := &MicroVM{vms: map[string]*microVMInstance{inst.id: inst}}
+	quota, period := int64(50000), uint64(100000)
+	started, updated := make(chan struct{}), make(chan error, 1)
+	require.NoError(t, inst.withSnapshotCPU(func() error {
+		go func() {
+			close(started)
+			updated <- m.UpdateResources(context.Background(), inst.id, &specs.LinuxResources{CPU: &specs.LinuxCPU{Quota: &quota, Period: &period}})
+		}()
+		<-started
+		select {
+		case err := <-updated:
+			t.Fatalf("resource update raced capture: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+		return nil
+	}))
+	select {
+	case err := <-updated:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("resource update did not finish after capture")
+	}
+	value, err := os.ReadFile(cpuMax)
+	require.NoError(t, err)
+	require.Equal(t, "50000 100000", string(value), "restoring the previous quota must not overwrite a newer update")
 }
 
 func TestMicroVMSnapshotSealFailureResumesBeforeAnyCapture(t *testing.T) {
-	var mu sync.Mutex
-	var actions []string
-	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		actions = append(actions, r.URL.Path)
-		w.WriteHeader(http.StatusNoContent)
-	})
+	inst, assertResumed := resumableSnapshotTestInstance(t)
 	sealErr := errors.New("disk publication failed")
 	captured, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error { return sealErr })
-	mu.Lock()
-	defer mu.Unlock()
 	require.ErrorIs(t, err, sealErr)
-	require.False(t, captured)
-	require.False(t, inst.isPaused())
-	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.resume"}, actions)
+	assertResumed(captured)
 }
 
 func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var mu sync.Mutex
-	var actions []string
+	var actions snapshotActions
 	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		actions = append(actions, r.URL.Path)
-		mu.Unlock()
+		actions.record(r.URL.Path)
 		switch r.URL.Path {
 		case "/api/v1/vm.pause":
 			cancel() // CH paused, but the client never receives the response.
@@ -131,9 +336,7 @@ func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, mustStop)
 	require.False(t, inst.isPaused(), "resolve and resume the actual paused VM despite caller cancellation")
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.info", "/api/v1/vm.resume"}, actions)
+	actions.require(t, "/api/v1/vm.pause", "/api/v1/vm.info", "/api/v1/vm.resume")
 }
 
 func TestMicroVMRestoreCannotUsePreviousConnectionAcknowledgement(t *testing.T) {
@@ -380,18 +583,32 @@ func TestRestoreCanvasKeepsCheckpointExecutable(t *testing.T) {
 	current := filepath.Join(t.TempDir(), "init")
 	require.NoError(t, os.WriteFile(current, []byte("upgraded agent"), 0o755))
 	rt := &MicroVM{cfg: Config{MicroVMInitPath: current}}
-	inst := &microVMInstance{canvas: t.TempDir()}
 	spec := &specs.Spec{}
-	require.NoError(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, checkpoint))
+	prepare := func(from string) (*microVMInstance, error) {
+		inst := &microVMInstance{canvas: t.TempDir()}
+		t.Cleanup(func() {
+			for _, target := range inst.submounts {
+				require.NoError(t, unix.Unmount(target, unix.MNT_DETACH))
+			}
+		})
+		return inst, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, from)
+	}
+	inst, err := prepare(checkpoint)
+	if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+		t.Skip("requires privileged bind mounts")
+	}
+	require.NoError(t, err)
 	data, err := os.ReadFile(filepath.Join(inst.canvas, microvm.InitPath))
 	require.NoError(t, err)
 	require.Equal(t, "captured agent", string(data))
-	require.NoError(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, ""))
+	inst, err = prepare("")
+	require.NoError(t, err)
 	data, err = os.ReadFile(filepath.Join(inst.canvas, microvm.InitPath))
 	require.NoError(t, err)
 	require.Equal(t, "upgraded agent", string(data))
 	require.NoError(t, os.Remove(filepath.Join(checkpoint, checkpointInitFile)))
-	require.Error(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, checkpoint), "never substitute another executable into captured memory")
+	_, err = prepare(checkpoint)
+	require.Error(t, err, "never substitute another executable into captured memory")
 }
 
 func TestLinkLocalFromMAC(t *testing.T) {
@@ -965,4 +1182,20 @@ func TestMicroVMImageKernelRelativeRoot(t *testing.T) {
 	copied, err := os.ReadFile(kernel)
 	require.NoError(t, err)
 	require.Equal(t, "image kernel", string(copied))
+}
+
+func assertCPUFile(t *testing.T, cgroup, name, want string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(cgroup, name))
+	require.NoError(t, err)
+	require.Equal(t, want, string(data))
+}
+
+func newCPUFixture(t *testing.T, quota, weight string) string {
+	t.Helper()
+	cgroup := t.TempDir()
+	for name, value := range map[string]string{"cpu.max": quota, "cpu.weight": weight} {
+		require.NoError(t, os.WriteFile(filepath.Join(cgroup, name), []byte(value), 0644))
+	}
+	return cgroup
 }

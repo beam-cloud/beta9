@@ -98,6 +98,19 @@ type CacheRequiredContentItem struct {
 	SnapshotGeneration int64            `json:"snapshot_generation,omitempty"`
 }
 
+// CoalescingKey identifies requirements that replace one another. A mutable
+// volume path and a stub's RAM checkpoint need only their latest report;
+// retaining every historical hash keeps obsolete bytes protected forever.
+func (i CacheRequiredContentItem) CoalescingKey() string {
+	if i.Kind == CacheContentKindCheckpoint {
+		return string(i.Kind)
+	}
+	if i.Kind == CacheContentKindVolume && i.Source != "" {
+		return strings.Join([]string{string(i.Kind), i.SourceBucket, i.Source}, "\x00")
+	}
+	return i.Hash + "\x00" + i.RoutingKey
+}
+
 // EventStubCacheRequiredContentSchema is the coalesced required-content report
 // for a stub, persisted to the stub cache stream in S2. Locality records where
 // the content was observed; the reconciler uses the locality-scoped recent-stub

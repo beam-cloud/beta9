@@ -132,6 +132,12 @@ func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode st
 		return nil, err
 	}
 	proc.pid = pid
+	if export == ExportVhostUser && m.execs {
+		if err := initializeVhostWriteBack(ctx, proc.exportSocket); err != nil {
+			_ = m.stopQSD(context.Background(), proc)
+			return nil, fmt.Errorf("initialize vhost-user write cache: %w", err)
+		}
+	}
 	return proc, nil
 }
 

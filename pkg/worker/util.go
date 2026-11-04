@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -353,25 +354,12 @@ func createTarWithSHA256Progress(ctx context.Context, srcDir, destTar string, pr
 
 		hasher := sha256.New()
 		counter := &countingWriter{progress: progress}
-		// RAM checkpoints compress well. Two encoder workers overlap compression
-		// with tar reads while checkpoint admission bounds total CPU use.
-		encoder, err := zstd.NewWriter(io.MultiWriter(out, hasher, counter),
-			zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderConcurrency(2))
-		if err != nil {
-			_ = out.Close()
-			_ = os.Remove(destTar)
-			return "", 0, err
-		}
 		tarArgs := append(tarSparseArgs(), "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
 		cmd := exec.CommandContext(ctx, "tar", tarArgs...)
 		var stderr bytes.Buffer
-		cmd.Stdout = encoder
 		cmd.Stderr = &stderr
 
-		runErr := cmd.Run()
-		if err := encoder.Close(); runErr == nil {
-			runErr = err
-		}
+		runErr := writeCheckpointTar(ctx, cmd, io.MultiWriter(out, hasher, counter))
 		closeErr := out.Close()
 		if runErr != nil {
 			_ = os.Remove(destTar)
@@ -394,6 +382,59 @@ func createTarWithSHA256Progress(ctx context.Context, srcDir, destTar string, pr
 	}
 
 	return "", 0, lastErr
+}
+
+func writeCheckpointTar(ctx context.Context, tar *exec.Cmd, output io.Writer) error {
+	if binary, err := exec.LookPath("zstd"); err == nil {
+		return writeCheckpointTarNative(ctx, tar, output, binary)
+	}
+	// Keep the portable encoder when the native tool is not installed.
+	encoder, err := zstd.NewWriter(output,
+		zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderConcurrency(2))
+	if err != nil {
+		return err
+	}
+	tar.Stdout = encoder
+	runErr := tar.Run()
+	return errors.Join(runErr, encoder.Close())
+}
+
+func writeCheckpointTarNative(ctx context.Context, tar *exec.Cmd, output io.Writer, binary string) error {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	defer writer.Close()
+	// Independent checkpoints already provide parallel work. One encoder
+	// thread avoids oversubscribing the host during a burst; at 32 concurrent
+	// checkpoints this halved CPU cost without increasing archive size.
+	// The checksum is mandatory: restore validates the frame footer.
+	encoder := exec.CommandContext(ctx, binary, "-q", "-1", "--single-thread", "--check", "-c")
+	var stderr bytes.Buffer
+	encoder.Stdin, encoder.Stdout, encoder.Stderr = reader, output, &stderr
+	tar.Stdout = writer
+	if err := encoder.Start(); err != nil {
+		return err
+	}
+	if err := tar.Start(); err != nil {
+		_ = reader.Close()
+		_ = writer.Close()
+		_ = encoder.Process.Kill()
+		_ = encoder.Wait()
+		return err
+	}
+	// Only the children own the pipe now. Closing the parent's descriptors is
+	// essential: a failed encoder must deliver EPIPE to tar, and tar must deliver
+	// EOF when it exits, so neither child can leave a checkpoint writer hung.
+	_ = reader.Close()
+	_ = writer.Close()
+	tarErr := tar.Wait()
+	encodeErr := encoder.Wait()
+	if encodeErr != nil {
+		encodeErr = tarCommandError("compress checkpoint", encodeErr, stderr)
+	}
+	return errors.Join(tarErr, encodeErr)
 }
 
 type countingWriter struct {

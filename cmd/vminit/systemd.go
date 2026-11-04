@@ -6,19 +6,16 @@ package main
 // an ordinary systemd service to retain the worker's vsock and filesystem
 // protocol. Transient boot configuration lives on /run, never on the disk.
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
@@ -125,7 +122,6 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
 	}
 
 	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
-	logf("boot phase: executing systemd")
 	return unix.Exec(binary, []string{binary, "--unit=multi-user.target"}, env)
 }
 
@@ -399,9 +395,6 @@ func runSystemdAgent() (int, error) {
 		return 1, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go logExecReadiness(ctx)
 	workload, err := openWorkloadMemory()
 	if err != nil {
 		return 1, err
@@ -490,24 +483,4 @@ func moveAgentProcessTree(pid int, group string, visited map[int]bool) error {
 	}
 
 	return nil
-}
-
-// Record when the workload opens exec without adding a boot dependency.
-func logExecReadiness(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	for {
-		conn, err := (&net.Dialer{Timeout: 20 * time.Millisecond}).DialContext(ctx, "tcp", "127.0.0.1:7111")
-		if err == nil {
-			conn.Close()
-			logf("boot phase: exec TCP listening")
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
 }
