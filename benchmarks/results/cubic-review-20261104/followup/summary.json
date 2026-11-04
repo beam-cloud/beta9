@@ -1,0 +1,15 @@
+{
+  "commit": "0c321055b0fa9c1ea0ac0c4fe6ec32aa2a3ce355",
+  "source_files_verified": 1065,
+  "image_digest": "sha256:30db48e6b3c6b6da2d1705f2ba7a6be534c2fb2e23defabbeb146aa92f39d9e5",
+  "canary_vms": 10,
+  "proofs_exact": true,
+  "all_owned_vms_removed": true,
+  "budgets_passed": false,
+  "burst_wall_ms": {
+    "launch": 515.623,
+    "pause_0": 8195.626,
+    "restore_0": 557.653
+  },
+  "notes": "Final follow-up checks cover quarantine documentation, shared test fixtures and avoiding unknown-image mutex allocation. Local forwarding was restored after a failed read before any VM was paused."
+}

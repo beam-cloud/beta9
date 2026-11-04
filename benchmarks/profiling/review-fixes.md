@@ -3,8 +3,9 @@
 PR: https://github.com/beam-cloud/beta9/pull/2107
 
 Production commit `09f1f6e306f6cf8a99e1ed5ae107b023db0920ad` addresses the
-remaining active review findings. All 69 Cubic threads are resolved; 53 were
-open at the start of this pass. Removed profiling/experiment threads have
+remaining active review findings. All 73 current Cubic threads are resolved;
+53 were open initially and four follow-up findings arrived during validation.
+Removed profiling/experiment threads have
 specific explanations; accepted fixes were checked against current code.
 
 ## Changes
@@ -87,3 +88,19 @@ with HTTP health 200. Image digest:
 
 Earlier mechanism evidence and the full 100-sample-per-size study remain in
 [release-followup.md](release-followup.md) and [consolidation.md](consolidation.md).
+
+## Final follow-up
+
+Commit `0c321055` documents quarantine's failure-path blocking, shares batch
+integration and resumable-snapshot fixtures, and checks mount presence before
+allocating an image mutex. A 1,000-unknown-image regression verifies no retained
+mutexes. Focused race suites and the six real Postgres cases passed again.
+
+The final image, built from all 1,065 matching source files, passed privileged
+checks and a 10-VM lifecycle canary: start 0.516s, pause **8.196s**, restore
+0.558s. All state proofs matched and owned VMs were removed. Pause again missed
+the 8s budget; the earlier 50-VM miss remains recorded. The three original boot
+identities are preserved, the worker is uncordoned and health is HTTP 200.
+
+[Final follow-up evidence](../results/cubic-review-20261104/followup/summary.json)
+and [all resolved threads](../results/cubic-review-20261104/final-review-threads.json).
