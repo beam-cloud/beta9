@@ -177,7 +177,7 @@ func (s *Service) onDemandPoolState(ctx context.Context, workspaceID, gpu, poolN
 	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{
 		GPUType: gpu,
 		Mode:    types.PoolModeExternal,
-	}, s.appConfig.Worker.CPUTiers)
+	})
 	if err != nil {
 		return nil, err
 	}

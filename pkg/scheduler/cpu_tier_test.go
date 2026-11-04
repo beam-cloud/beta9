@@ -4,26 +4,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
 var sharedPool = types.WorkerPoolConfig{CPUClass: types.CPUTierShared, CPUShareMultiplier: 2.5}
 
-// defaultCPUTiers is worker.cpuTiers from the default config.
-func defaultCPUTiers(t *testing.T) types.CPUTiers {
-	configManager, err := common.NewConfigManager[types.AppConfig]()
-	require.NoError(t, err)
-	return configManager.GetConfig().Worker.CPUTiers
-}
-
 // spotRequest is a 1 vCPU / 1 GiB request as Run marks it for Spot.
 func spotRequest() *types.ContainerRequest {
 	return &types.ContainerRequest{Cpu: 1000, Memory: 1024, OpportunisticOnly: true, Evictable: true, DrainSeconds: 30, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
 }
 
-func TestRunAppliesTheTiersSettings(t *testing.T) {
+func TestRunMarksOnlySpotEvictable(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	require.NoError(t, err)
 	scheduler.workerPoolManager.SetPool("shared", sharedPool, &LocalWorkerPoolControllerForTest{ctx: scheduler.ctx, name: "shared", config: scheduler.config, workerRepo: scheduler.workerRepo})
@@ -32,8 +24,7 @@ func TestRunAppliesTheTiersSettings(t *testing.T) {
 	}
 	spot := request("spot", "spot")
 	require.NoError(t, scheduler.Run(spot))
-	require.True(t, spot.Borrowed())
-	require.True(t, spot.OpportunisticOnly)
+	require.True(t, spot.Evictable && spot.OpportunisticOnly)
 	require.Equal(t, uint32(30), spot.DrainSeconds)
 	shared := request("shared", "shared")
 	require.NoError(t, scheduler.Run(shared))
@@ -41,7 +32,7 @@ func TestRunAppliesTheTiersSettings(t *testing.T) {
 }
 
 func TestCPUTierPlacementAndWorkerCompatibility(t *testing.T) {
-	s := &Scheduler{workerPoolManager: NewWorkerPoolManager(), config: types.AppConfig{Worker: types.WorkerConfig{CPUTiers: defaultCPUTiers(t)}}}
+	s := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
 	for name, p := range map[string]types.WorkerPoolConfig{
 		"legacy": {}, "shared": sharedPool,
 		"performance": {CPUClass: types.CPUTierPerformance},
@@ -69,7 +60,7 @@ func TestCPUTierPlacementAndWorkerCompatibility(t *testing.T) {
 }
 
 func TestTieredCPUUsesFreeCapacityBeforeReclaimingSpot(t *testing.T) {
-	s := &Scheduler{workerPoolManager: NewWorkerPoolManager(), config: types.AppConfig{Worker: types.WorkerConfig{CPUTiers: defaultCPUTiers(t)}}}
+	s := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
 	s.workerPoolManager.SetPool("shared", sharedPool, nil)
 	full := &types.Worker{Id: "full", PoolName: "shared", CPUTierProtocol: types.CPUTierProtocolVersion, Status: types.WorkerStatusAvailable, TotalCpu: 8000, TotalMemory: 16000, FreeCpu: 0, FreeMemory: 0, EvictableCpu: 4000, EvictableMemory: 8000, Priority: 100}
 	free := *full
@@ -116,7 +107,7 @@ func TestSpotWaitsForSpareCapacity(t *testing.T) {
 func TestSpotSkipsWorkersHoldingPoolHeadroom(t *testing.T) {
 	shared := sharedPool
 	shared.PoolSizing = types.WorkerPoolJobSpecPoolSizingConfig{MinFreeCPU: "4000m", MinFreeMemory: "0", MinFreeGPU: "0"}
-	s := &Scheduler{workerPoolManager: NewWorkerPoolManager(), config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{"shared": shared}, CPUTiers: defaultCPUTiers(t)}}}
+	s := &Scheduler{workerPoolManager: NewWorkerPoolManager(), config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{"shared": shared}}}}
 	s.workerPoolManager.SetPool("shared", shared, nil)
 	worker := func(id string) *types.Worker {
 		return &types.Worker{Id: id, PoolName: "shared", CPUTierProtocol: types.CPUTierProtocolVersion, Status: types.WorkerStatusAvailable, TotalCpu: 8000, TotalMemory: 16000, FreeCpu: 8000, FreeMemory: 16000}

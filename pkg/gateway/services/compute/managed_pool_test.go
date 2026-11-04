@@ -208,7 +208,7 @@ func TestManagedPoolServiceRejectsForgedClientCapability(t *testing.T) {
 }
 
 func TestManagedPoolCPUAffinityDefaultsDisabled(t *testing.T) {
-	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{Mode: types.PoolModeExternal}, nil)
+	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{Mode: types.PoolModeExternal})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestManagedGPUPoolDefaultsToNvidiaRuntime(t *testing.T) {
 	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{
 		Mode:    types.PoolModeExternal,
 		GPUType: "RTX4090",
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestManagedGPUPoolDefaultsToNvidiaRuntime(t *testing.T) {
 		Mode:    types.PoolModeExternal,
 		GPUType: "RTX4090",
 		Runtime: "custom-nvidia",
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestManagedPoolRejectsRelativeHostPaths(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			config.Mode = types.PoolModeExternal
-			if _, err := normalizeManagedPoolConfig(config, nil); err == nil {
+			if _, err := normalizeManagedPoolConfig(config); err == nil {
 				t.Fatal("relative path was accepted")
 			}
 		})

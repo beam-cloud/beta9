@@ -595,7 +595,6 @@ type JobResourceOverheadConfig struct {
 
 type WorkerConfig struct {
 	Pools                        map[string]WorkerPoolConfig   `key:"pools" json:"pools"`
-	CPUTiers                     CPUTiers                      `key:"cpuTiers" json:"cpu_tiers"`
 	HostNetwork                  bool                          `key:"hostNetwork" json:"host_network"`
 	UseGatewayServiceHostname    bool                          `key:"useGatewayServiceHostname" json:"use_gateway_service_hostname"`
 	UseHostResolvConf            bool                          `key:"useHostResolvConf" json:"use_host_resolv_conf"`
@@ -681,7 +680,7 @@ type WorkerPoolConfig struct {
 	ContainerRuntimeConfig    RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"` // Pool-specific container runtime configuration
 	CPUAffinityEnforced       bool                              `key:"cpuAffinityEnforced" json:"cpu_affinity_enforced"`
 	CPUShareMultiplier        CPUShareMultiplier                `key:"cpuShareMultiplier" json:"cpu_share_multiplier,omitempty"`
-	CPUClass                  CPUTier                           `key:"cpuClass" json:"cpu_class,omitempty"` // CPU tier sold from this pool, which sets its CPU share multiplier
+	CPUClass                  CPUTier                           `key:"cpuClass" json:"cpu_class,omitempty"` // CPU tier sold from this pool: shared or performance, which sets its CPU share multiplier
 	GPUVirtualized            bool                              `key:"gpuVirtualized" json:"gpu_virtualized"`
 	ContainerStartConcurrency int                               `key:"containerStartConcurrency" json:"container_start_concurrency"`
 	NetworkPreallocation      *bool                             `key:"networkPreallocation" json:"network_preallocation"`

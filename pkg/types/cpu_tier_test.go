@@ -6,13 +6,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testCPUTiers matches the worker.cpuTiers defaults in config.default.yaml.
-var testCPUTiers = CPUTiers{
-	CPUTierShared:      {CPUShareMultiplier: 2.5, MaxCpu: 8000, MaxMemory: 16384},
-	CPUTierPerformance: {CPUShareMultiplier: 1},
-	CPUTierSpot:        {BorrowsFrom: []CPUTier{CPUTierShared, CPUTierPerformance}, DrainSeconds: 30},
-}
-
 func TestCPUTierPlacement(t *testing.T) {
 	shared := WorkerPoolConfig{CPUClass: CPUTierShared}
 	performance := WorkerPoolConfig{CPUClass: CPUTierPerformance, CPUShareMultiplier: 1}
@@ -32,15 +25,15 @@ func TestCPUTierPlacement(t *testing.T) {
 		{CPUTierShared, WorkerPoolConfig{CPUClass: CPUTierShared, Mode: PoolModeExternal}, false},
 		{CPUTierPerformance, WorkerPoolConfig{CPUClass: CPUTierPerformance, GPUType: "A100"}, false},
 	} {
-		require.Equal(t, tc.want, testCPUTiers.MatchesPool(tc.tier, tc.pool), "%s %+v", tc.tier, tc.pool)
+		require.Equal(t, tc.want, tc.tier.MatchesPool(tc.pool), "%s %+v", tc.tier, tc.pool)
 	}
 }
 
 func TestCPUTierPoolsScheduleAtTheirTiersMultiplier(t *testing.T) {
-	pool, err := testCPUTiers.NormalizePool(WorkerPoolConfig{CPUClass: CPUTierShared})
+	pool, err := WorkerPoolConfig{CPUClass: CPUTierShared}.NormalizeCPU()
 	require.NoError(t, err)
 	require.Equal(t, CPUShareMultiplier(2.5), pool.CPUShareMultiplier)
-	pool, err = testCPUTiers.NormalizePool(WorkerPoolConfig{CPUShareMultiplier: 1.5})
+	pool, err = WorkerPoolConfig{CPUShareMultiplier: 1.5}.NormalizeCPU()
 	require.NoError(t, err)
 	require.Equal(t, CPUShareMultiplier(1.5), pool.CPUShareMultiplier, "untagged pools keep their own multiplier")
 	for _, invalid := range []WorkerPoolConfig{
@@ -48,28 +41,25 @@ func TestCPUTierPoolsScheduleAtTheirTiersMultiplier(t *testing.T) {
 		{CPUClass: CPUTierSpot},
 		{CPUClass: "turbo"},
 		{CPUClass: CPUTierShared, Mode: PoolModePrivate},
+		{CPUClass: CPUTierPerformance, GPUType: "A100"},
 		{CPUShareMultiplier: 20},
 	} {
-		_, err := testCPUTiers.NormalizePool(invalid)
+		_, err := invalid.NormalizeCPU()
 		require.Error(t, err, "%+v", invalid)
 	}
-
-	require.NoError(t, testCPUTiers.Validate())
-	require.Error(t, CPUTiers{CPUTierSpot: {BorrowsFrom: []CPUTier{CPUTierShared}}}.Validate())
-	require.Error(t, CPUTiers{CPUTierShared: {}, "a": {BorrowsFrom: []CPUTier{"b"}}, "b": {BorrowsFrom: []CPUTier{CPUTierShared}}}.Validate())
-	require.Error(t, CPUTiers{CPUTierShared: {CPUShareMultiplier: 0.5}}.Validate())
 }
 
 func TestCPUTierWorkloadLimits(t *testing.T) {
-	require.NoError(t, testCPUTiers.ValidateWorkload("", 64000, 1<<20, false, true))
-	require.NoError(t, testCPUTiers.ValidateWorkload(CPUTierShared, 100, 128, false, false))
-	require.NoError(t, testCPUTiers.ValidateWorkload(CPUTierPerformance, 64000, 1<<18, false, false))
-	require.Error(t, testCPUTiers.ValidateWorkload(CPUTierShared, 999, 1024, true, false))
-	require.Error(t, testCPUTiers.ValidateWorkload(CPUTierShared, 1000, 1023, true, false))
-	require.ErrorContains(t, testCPUTiers.ValidateWorkload(CPUTierShared, 8001, 1024, false, false), "The shared tier supports at most 8 vCPU")
-	require.ErrorContains(t, testCPUTiers.ValidateWorkload(CPUTierShared, 1000, 16385, false, false), "at most 16 GiB RAM")
-	require.ErrorIs(t, testCPUTiers.ValidateWorkload(CPUTierSpot, 1000, 1024, true, true), ErrCPUTierIneligible)
-	require.ErrorContains(t, testCPUTiers.ValidateWorkload("turbo", 1000, 1024, false, false), "unknown CPU tier")
+	require.NoError(t, CPUTier("").Validate(64000, 1<<20, false, true))
+	require.NoError(t, CPUTierShared.Validate(100, 128, false, false))
+	require.NoError(t, CPUTierPerformance.Validate(64000, 1<<18, false, false))
+	require.Error(t, CPUTierShared.Validate(999, 1024, true, false))
+	require.Error(t, CPUTierShared.Validate(1000, 1023, true, false))
+	require.ErrorContains(t, CPUTierShared.Validate(8001, 1024, false, false), "The shared tier supports at most 8 vCPU and 16 GiB RAM")
+	require.Error(t, CPUTierShared.Validate(1000, 16385, false, false))
+	require.ErrorIs(t, CPUTierShared.Validate(1000, 1024, false, true), ErrCPUTierIneligible)
+	require.ErrorIs(t, CPUTierSpot.Validate(1000, 1024, true, true), ErrCPUTierIneligible)
+	require.ErrorContains(t, CPUTier("turbo").Validate(1000, 1024, false, false), "unknown CPU tier")
 }
 
 func TestCPUTierPolicyResolve(t *testing.T) {
@@ -92,4 +82,12 @@ func TestCPUTierPolicyResolve(t *testing.T) {
 	require.ErrorContains(t, err, "not enabled")
 	_, err = CPUTierPolicy{}.Resolve(CPUTierPerformance)
 	require.ErrorContains(t, err, "not enabled")
+
+	// Spot is opt-in: a policy may allow it but never make it the default.
+	spotDefault := CPUTierPolicy{Enabled: true, DefaultCPUTier: CPUTierSpot}
+	_, err = spotDefault.Resolve("")
+	require.ErrorContains(t, err, "must be chosen explicitly")
+	tier, err := spotDefault.Resolve(CPUTierSpot)
+	require.NoError(t, err)
+	require.Equal(t, CPUTierSpot, tier)
 }

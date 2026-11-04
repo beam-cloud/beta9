@@ -77,27 +77,6 @@ func TestEmbeddedDefaultConfigLoads(t *testing.T) {
 	require.Equal(t, 0, manager.GetConfig().Database.Postgres.MaxOpenConns, "the pool stays unbounded unless configured")
 }
 
-func TestCPUTiersDefaultAndOverride(t *testing.T) {
-	t.Setenv("CONFIG_PATH", "")
-	t.Setenv(types.WorkerMinimalConfigEnv, "")
-
-	manager, err := NewConfigManager[types.AppConfig]()
-	require.NoError(t, err)
-	tiers := manager.GetConfig().Worker.CPUTiers
-	require.NoError(t, tiers.Validate())
-	require.Equal(t, types.CPUTiers{
-		types.CPUTierShared:      {CPUShareMultiplier: 2.5, MaxCpu: 8000, MaxMemory: 16384},
-		types.CPUTierPerformance: {CPUShareMultiplier: 1},
-		types.CPUTierSpot:        {BorrowsFrom: []types.CPUTier{types.CPUTierShared, types.CPUTierPerformance}, DrainSeconds: 30},
-	}, tiers)
-
-	// An override changes one setting and keeps the rest of the tier.
-	require.NoError(t, manager.LoadConfig(YAMLConfigFormat, rawbytes.Provider([]byte("worker:\n  cpuTiers:\n    spot:\n      drainSeconds: 60\n"))))
-	spot := manager.GetConfig().Worker.CPUTiers[types.CPUTierSpot]
-	require.Equal(t, uint32(60), spot.DrainSeconds)
-	require.Equal(t, []types.CPUTier{types.CPUTierShared, types.CPUTierPerformance}, spot.BorrowsFrom)
-}
-
 func TestCompletionBudgetsAreLoadedForYAMLAndJSONConfig(t *testing.T) {
 	for _, overlay := range []string{"", `{"gateway_service":{"host":"test"}}`} {
 		t.Run(overlay, func(t *testing.T) {

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/clients"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -23,9 +22,7 @@ func TestResolveStubCPUTier(t *testing.T) {
 	pools.SetPool("legacy", types.WorkerPoolConfig{}, nil)
 	pools.SetPool("shared", types.WorkerPoolConfig{CPUClass: types.CPUTierShared, CPUShareMultiplier: 2.5}, nil)
 	pools.SetPool("performance", types.WorkerPoolConfig{CPUClass: types.CPUTierPerformance, CPUShareMultiplier: 1}, nil)
-	configManager, err := common.NewConfigManager[types.AppConfig]()
-	require.NoError(t, err)
-	gws := &GatewayService{appConfig: configManager.GetConfig(), scheduler: scheduler.NewSchedulerForCapacityChecks(nil, nil, pools)}
+	gws := &GatewayService{scheduler: scheduler.NewSchedulerForCapacityChecks(nil, nil, pools)}
 	resolve := func(config types.StubConfigV1) (types.CPUTier, error) {
 		err := gws.resolveStubCPUTier(context.Background(), &types.Workspace{ExternalId: "workspace"}, types.StubType("function"), &config, true)
 		return config.CPUTier, err

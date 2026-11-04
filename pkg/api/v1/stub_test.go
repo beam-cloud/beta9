@@ -1449,7 +1449,6 @@ func TestUpdateConfigKeepsCPUTier(t *testing.T) {
 		`{"runtime.cpu":16000}`:      "The shared tier supports at most 8 vCPU",
 	} {
 		stubGroup, mock, e := NewStubGroupWithMockForTest()
-		stubGroup.config.Worker.CPUTiers = types.CPUTiers{types.CPUTierShared: {MaxCpu: 8000, MaxMemory: 16384}}
 		mock.ExpectQuery("SELECT").WithArgs("stub").WillReturnRows(generateMockStubRows(1, "stub", "Test Stub", `{"runtime":{"cpu":1000,"memory":1000},"cpu_tier":"shared"}`, 1))
 		req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"fields":`+fields+`}`))
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)

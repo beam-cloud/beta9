@@ -12,13 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testCPUTiers matches the worker.cpuTiers defaults in config.default.yaml.
-var testCPUTiers = types.CPUTiers{
-	types.CPUTierShared:      {CPUShareMultiplier: 2.5, MaxCpu: 8000, MaxMemory: 16384},
-	types.CPUTierPerformance: {CPUShareMultiplier: 1},
-	types.CPUTierSpot:        {BorrowsFrom: []types.CPUTier{types.CPUTierShared, types.CPUTierPerformance}, DrainSeconds: 30},
-}
-
 type tierVMGateway struct {
 	*vmGateway
 	defaultTier types.CPUTier

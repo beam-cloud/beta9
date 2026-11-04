@@ -471,7 +471,7 @@ func fixture() (*Service, *types.VM, *auth.AuthInfo, *vmRuntime, *vmGateway) {
 	backend := &vmBackend{latest: "root-after-shutdown"}
 	runtime := &vmRuntime{containers: containers}
 	gateway := &vmGateway{containers: containers, backend: backend}
-	s := &Service{repo: store, containers: containers, backend: backend, runtime: runtime, gateway: gateway, config: types.VMConfig{Domain: "vm.example.com"}, cpuTiers: testCPUTiers}
+	s := &Service{repo: store, containers: containers, backend: backend, runtime: runtime, gateway: gateway, config: types.VMConfig{Domain: "vm.example.com"}}
 	v := &types.VM{ID: uuid.NewString(), WorkspaceID: 7, Name: "dev", Handle: "dev-" + uuid.NewString(), DesiredState: "running", Status: "running", EverRunning: true, StubID: uuid.NewString(), Spec: types.VMSpec{ImageID: "base", CPU: 1000, Memory: 1024, DiskSize: "50GiB", Ports: []uint32{7681, 8080}, Desktop: true}}
 	v.ContainerID = "sandbox-" + v.StubID + "-12345678"
 	runtime.diskName = rootDisk(v)

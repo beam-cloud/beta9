@@ -79,7 +79,7 @@ func (s *Service) managedPoolWorkspace(ctx context.Context, authInfo *auth.AuthI
 	return s.adminWorkspaceID(ctx)
 }
 
-func normalizeManagedPoolConfig(config types.WorkerPoolConfig, tiers types.CPUTiers) (types.WorkerPoolConfig, error) {
+func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPoolConfig, error) {
 	if config.Mode == "" {
 		config.Mode = types.PoolModeExternal
 	}
@@ -103,7 +103,7 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig, tiers types.CPUTi
 	default:
 		return types.WorkerPoolConfig{}, fmt.Errorf("unsupported container runtime %q", config.ContainerRuntime)
 	}
-	config, err := tiers.NormalizePool(config)
+	config, err := config.NormalizeCPU()
 	if err != nil {
 		return types.WorkerPoolConfig{}, err
 	}
@@ -201,7 +201,7 @@ func (s *Service) activeManagedPoolState(state *model.PoolState) (*model.PoolSta
 		return nil, errors.New("managed pool source is invalid")
 	}
 
-	normalized, err := normalizeManagedPoolConfig(config, s.appConfig.Worker.CPUTiers)
+	normalized, err := normalizeManagedPoolConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +258,7 @@ func (s *Service) managedPoolCatalog(ctx context.Context) (map[string]*model.Poo
 	sort.Strings(names)
 	var catalogErrors []error
 	for _, name := range names {
-		config, err := normalizeManagedPoolConfig(s.appConfig.Worker.Pools[name], s.appConfig.Worker.CPUTiers)
+		config, err := normalizeManagedPoolConfig(s.appConfig.Worker.Pools[name])
 		if err != nil {
 			catalogErrors = append(catalogErrors, fmt.Errorf("pool %q: %w", name, err))
 			continue
@@ -560,7 +560,7 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 	if _, exists := s.appConfig.Worker.Pools[name]; exists {
 		return nil, model.ErrManagedPoolConflict
 	}
-	config, err = normalizeManagedPoolConfig(config, s.appConfig.Worker.CPUTiers)
+	config, err = normalizeManagedPoolConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
 	}
@@ -620,7 +620,7 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 	if err := s.requireManagedPoolRepository(); err != nil {
 		return nil, err
 	}
-	config, err = normalizeManagedPoolConfig(config, s.appConfig.Worker.CPUTiers)
+	config, err = normalizeManagedPoolConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
 	}

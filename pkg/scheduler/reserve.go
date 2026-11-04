@@ -45,9 +45,9 @@ func (a *schedulingAttempt) run() {
 
 func (a *schedulingAttempt) runWaitingOrProvisioning() {
 	// Opportunistic requests only ever fill idle capacity. They never queue
-	// against pending workers or provision new ones. Borrowed CPU tier work
-	// waits for capacity to free up; managed endpoint replicas fail at once,
-	// and their controller retries on its own cadence.
+	// against pending workers or provision new ones. Spot waits for capacity
+	// to free up; managed endpoint replicas fail at once, and their controller
+	// retries on its own cadence.
 	if a.request.OpportunisticOnly {
 		waited := time.Since(a.request.Timestamp)
 		if a.request.Borrowed() && waited < maxScheduleRetryDuration {

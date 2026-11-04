@@ -578,5 +578,5 @@ func (s *Service) resolveCPUTier(ctx context.Context, workspace *types.Workspace
 	case spec.Pool == "" && spec.GPU == "":
 		spec.Pool = s.config.DefaultPool
 	}
-	return s.cpuTiers.ValidateWorkload(tier, spec.CPU, spec.Memory, true, spec.GPU != "")
+	return tier.Validate(spec.CPU, spec.Memory, true, spec.GPU != "")
 }

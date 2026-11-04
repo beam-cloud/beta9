@@ -529,8 +529,8 @@ func diskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
 	}
 }
 
-// PreemptVM asks the VM reconciler to snapshot and stop a VM on borrowed CPU
-// tier capacity under its lifecycle lock; workers never kill a VM to reclaim it.
+// PreemptVM asks the VM reconciler to snapshot and stop a Spot VM under its
+// lifecycle lock; workers never kill a VM to reclaim it.
 func (s *BackendRepositoryService) PreemptVM(ctx context.Context, req *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
 	repo, ok := s.backendRepo.(repository.VMRepository)
 	if !ok {
@@ -549,13 +549,8 @@ func (s *BackendRepositoryService) PreemptVM(ctx context.Context, req *pb.Preemp
 	if err != nil {
 		return nil, err
 	}
-	state, err := s.containerRepo.GetContainerState(req.ContainerId)
-	if err != nil {
-		return nil, err
-	}
-	// The scheduler makes only borrowed CPU tier work evictable.
-	if v.ContainerID != req.ContainerId || v.Spec.CPUTier == "" || !state.Evictable || v.DesiredState == types.VMStateDeleted {
-		return nil, status.Error(codes.FailedPrecondition, "runtime is not a reclaimable VM")
+	if v.ContainerID != req.ContainerId || !v.Spec.CPUTier.Borrows() || v.DesiredState == types.VMStateDeleted {
+		return nil, status.Error(codes.FailedPrecondition, "runtime is not a reclaimable Spot VM")
 	}
 	v.StopReason, v.Status, v.DesiredState = types.VMStopReasonPreempted, types.VMStateStopping, types.VMStateStopped
 	if err := repo.SaveVM(ctx, v); err != nil {
