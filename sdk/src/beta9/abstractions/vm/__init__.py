@@ -34,7 +34,7 @@ from ...clients.volume import VolumeServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
 from ...terminal import cli_name
-from ...type import DurableDisk, GpuType, GpuTypeAlias, normalize_gpu_type
+from ...type import CpuTier, DurableDisk, GpuType, GpuTypeAlias, normalize_gpu_type
 from ...utils import local_process_kwargs
 from ..image import Image
 from ..sandbox import SandboxInstance
@@ -216,6 +216,7 @@ class VM:
         ttl: Optional[int] = None,
         idle_action: Optional[str] = None,
         pool: Optional[str] = None,
+        cpu_tier: Optional[CpuTier] = None,
         template: Optional[str] = None,
         snapshot: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
@@ -270,6 +271,7 @@ class VM:
             "idle_timeout": ttl,
             "idle_action": idle_action,
             "pool": pool,
+            "cpu_tier": cpu_tier,
             "auto_resume": auto_resume,
             "block_network": block_network,
             "allow_list": allow_list,
@@ -620,8 +622,10 @@ class VM:
             vm.close()
             raise
 
-    def update(self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None) -> "VM":
-        """Change idle stopping and metadata without replacing the VM or URLs.
+    def update(
+        self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None, cpu_tier=None
+    ) -> "VM":
+        """Change idle stopping, metadata or a stopped VM's CPU tier without replacing the VM or URLs.
 
         Metadata replaces the complete map; pass {} to clear it. It is visible
         in management responses, so use workspace secrets for credentials.
@@ -631,6 +635,7 @@ class VM:
             "idle_action": idle_action,
             "auto_resume": auto_resume,
             "metadata": metadata,
+            "cpu_tier": cpu_tier,
         }
         return self._set(
             self._api(
@@ -702,8 +707,9 @@ class VM:
     def create_template(self, name=None, description=""):
         return self._action("template", name=name or self.name, description=description)
 
-    def fork(self, name=None, wait=True) -> "VM":
-        info = self._action("fork", name=name or "", ssh_public_key=public_key())
+    def fork(self, name=None, wait=True, *, cpu_tier=None) -> "VM":
+        tier = {"cpu_tier": cpu_tier} if cpu_tier else {}
+        info = self._action("fork", name=name or "", ssh_public_key=public_key(), **tier)
         # SDK-owned children have independent connections; caller-owned
         # clients retain their explicit shared lifetime.
         child = (

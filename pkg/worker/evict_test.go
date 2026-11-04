@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"syscall"
 	"testing"
@@ -12,17 +13,22 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // evictionRuntime records signals; SIGTERM exits the container only when
 // drainExits is set, SIGKILL does unless ignoreKill is set (a victim wedged
-// in the kernel or a slow device release).
+// in the kernel or a slow device release). With syncsDisks set, an exited
+// container stays while its durable disks sync, having released its resources.
 type evictionRuntime struct {
 	mockRuntime
 	mu         sync.Mutex
 	worker     *Worker
 	drainExits bool
 	ignoreKill bool
+	syncsDisks bool
 	signals    map[string][]syscall.Signal
 }
 
@@ -34,7 +40,12 @@ func (r *evictionRuntime) Kill(_ context.Context, containerID string, signal sys
 	}
 	r.signals[containerID] = append(r.signals[containerID], signal)
 	if (signal == syscall.SIGKILL && !r.ignoreKill) || r.drainExits {
-		r.worker.containerInstances.Delete(containerID)
+		if instance, exists := r.worker.containerInstances.Get(containerID); exists && r.syncsDisks {
+			instance.resourcesReleased.Store(true)
+			r.worker.containerInstances.Wake()
+		} else {
+			r.worker.containerInstances.Delete(containerID)
+		}
 	}
 	return nil
 }
@@ -72,6 +83,21 @@ func addRunningInstance(worker *Worker, rt runtime.Runtime, containerID string) 
 		Runtime:  rt,
 	}
 	worker.containerInstances.Set(containerID, instance)
+	return instance
+}
+
+// addSpotInstance adds a running Spot container as the scheduler marks one.
+func addSpotInstance(worker *Worker, rt runtime.Runtime, containerID string) *ContainerInstance {
+	instance := addRunningInstance(worker, rt, containerID)
+	instance.Request.Stub.Config = `{"cpu_tier":"spot"}`
+	instance.Request.Evictable, instance.Request.DrainSeconds = true, 30
+	return instance
+}
+
+func addSpotVMInstance(worker *Worker, rt runtime.Runtime, containerID string) *ContainerInstance {
+	instance := addSpotInstance(worker, rt, containerID)
+	instance.Request.UseVM, instance.Request.WorkspaceId = true, "workspace"
+	instance.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
 	return instance
 }
 
@@ -204,6 +230,25 @@ func TestEvictForRequestFailsWhenVictimsOutliveKillWindow(t *testing.T) {
 	require.True(t, exists)
 }
 
+func TestOnlySpotVictimsExtendTheEvictionWait(t *testing.T) {
+	shortenEvictionKillTimeout(t, 500*time.Millisecond)
+	// Spot is killed after its own drain, which outlasts the request's drain
+	// and kill window.
+	worker, rt := evictionWorkerForTest(false)
+	addSpotInstance(worker, rt, "spot").Request.DrainSeconds = 1
+	require.NoError(t, worker.evictForRequest(context.Background(), &types.ContainerRequest{EvictContainerIds: []string{"spot"}}))
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.observed("spot"))
+
+	worker, rt = evictionWorkerForTest(false)
+	rt.ignoreKill = true
+	victim := addRunningInstance(worker, rt, "victim-1")
+	victim.Request.Stub.Config = `{"cpu_tier":"shared"}`
+	request := &types.ContainerRequest{EvictContainerIds: []string{"victim-1"}}
+	started := time.Now()
+	require.ErrorIs(t, worker.evictForRequest(context.Background(), request), ErrEvictionIncomplete)
+	require.Less(t, time.Since(started), 5*time.Second)
+}
+
 func TestRunContainerRequestFailsInsteadOfStartingOnHeldResources(t *testing.T) {
 	shortenEvictionKillTimeout(t, 300*time.Millisecond)
 	workerCtx, cancelWorker := context.WithCancel(context.Background())
@@ -307,4 +352,128 @@ func TestStatusHeartbeatEvictsMarkedVictimOnItsOwnDrainWindow(t *testing.T) {
 		return !exists
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.observed(containerID))
+}
+
+type spotStopClient struct {
+	pb.BackendRepositoryServiceClient
+	preempt func(context.Context, *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error)
+}
+
+func (s *spotStopClient) PreemptVM(ctx context.Context, r *pb.PreemptVMRequest, _ ...grpc.CallOption) (*pb.PreemptVMResponse, error) {
+	return s.preempt(ctx, r)
+}
+
+func TestSpotVMIsRecordedPreemptedThenEvictedWithoutWaitingForItsSync(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			worker, rt := evictionWorkerForTest(true)
+			rt.syncsDisks = true
+			addSpotVMInstance(worker, rt, "spot-vm")
+			preempted := false
+			worker.backendRepoClient = &spotStopClient{preempt: func(ctx context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+				require.Equal(t, "vm-id", r.VmId)
+				if fail {
+					return nil, fmt.Errorf("gateway unavailable")
+				}
+				// The VM's reconciler must know before the VM stops.
+				require.Empty(t, rt.observed("spot-vm"))
+				preempted = true
+				return &pb.PreemptVMResponse{}, nil
+			}}
+			err := worker.evictForRequest(context.Background(), &types.ContainerRequest{ContainerId: "replacement", EvictContainerIds: []string{"spot-vm"}})
+			_, present := worker.containerInstances.Get("spot-vm")
+			require.True(t, present)
+			if fail {
+				require.Error(t, err)
+				require.Empty(t, rt.observed("spot-vm"))
+			} else {
+				require.NoError(t, err)
+				require.True(t, preempted)
+				require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-vm"))
+			}
+		})
+	}
+}
+
+func TestStatusHeartbeatReleasesSpotVictimsLikeTheirDisplacingRequest(t *testing.T) {
+	previous := maxPreemptionDrain
+	maxPreemptionDrain = 0 // Victims other than Spot would be killed at once.
+	t.Cleanup(func() { maxPreemptionDrain = previous })
+	worker, rt := evictionWorkerForTest(false)
+	worker.containerRepoClient = &fakeContainerRepoClient{state: &pb.ContainerState{Status: string(types.ContainerStatusStopping), Evicting: true, DrainSeconds: 30}}
+	preemptions := 0
+	worker.backendRepoClient = &spotStopClient{preempt: func(_ context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+		if r.ContainerId == "stale-vm" {
+			return nil, status.Error(codes.FailedPrecondition, "runtime is not a reclaimable Spot VM")
+		}
+		preemptions++
+		return &pb.PreemptVMResponse{}, nil
+	}}
+	heartbeat := func(instance *ContainerInstance) {
+		done, err := worker.updateContainerStatusOnce(context.Background(), instance.Request)
+		require.NoError(t, err)
+		require.False(t, done)
+	}
+
+	// A running durable Spot VM is recorded as preempted once, then drains like Spot.
+	vm := addSpotVMInstance(worker, rt, "spot-vm")
+	heartbeat(vm)
+	heartbeat(vm)
+	require.Equal(t, 1, preemptions)
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-vm"))
+
+	// PreemptVM rejects a VM being deleted or no longer running here, which
+	// drains like Spot at once.
+	heartbeat(addSpotVMInstance(worker, rt, "stale-vm"))
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("stale-vm"))
+
+	heartbeat(addSpotInstance(worker, rt, "spot-container"))
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-container"))
+	require.Equal(t, 1, preemptions)
+}
+
+func TestExitingSpotVMIsWaitedForWithoutPreemption(t *testing.T) {
+	worker, rt := evictionWorkerForTest(false)
+	addSpotVMInstance(worker, rt, "spot-vm").setExitCode(0)
+	worker.backendRepoClient = &spotStopClient{preempt: func(context.Context, *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+		t.Fatal("an exiting VM was preempted")
+		return nil, nil
+	}}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		worker.containerInstances.Delete("spot-vm")
+	}()
+	require.NoError(t, worker.evictForRequest(context.Background(), &types.ContainerRequest{ContainerId: "replacement", EvictContainerIds: []string{"spot-vm"}}))
+	require.Empty(t, rt.signals)
+}
+
+func TestSpotUsesThirtySecondGraceWithoutChangingOtherVMs(t *testing.T) {
+	w, rt := evictionWorkerForTest(false)
+	request := addSpotVMInstance(w, rt, "spot-vm").Request
+	require.Equal(t, 30*time.Second, w.containerTerminationGrace(request))
+	request.Stub.Config = `{}`
+	require.Equal(t, 300*time.Second, w.containerTerminationGrace(request))
+}
+
+func TestSpotReturnsProtectedHeadroomWithoutRetiringWorker(t *testing.T) {
+	worker, rt := evictionWorkerForTest(true)
+	worker.persistent = true
+	worker.poolHeadroom.Store(true)
+	addSpotVMInstance(worker, rt, "spot-headroom")
+	preempted := make(chan *pb.PreemptVMRequest, 1)
+	worker.backendRepoClient = &spotStopClient{preempt: func(ctx context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+		preempted <- r
+		return &pb.PreemptVMResponse{}, nil
+	}}
+	now := time.Now()
+	worker.reclaimBorrowedCapacity(now, now)
+	select {
+	case request := <-preempted:
+		require.Equal(t, "spot-headroom", request.ContainerId)
+	case <-time.After(time.Second):
+		t.Fatal("protected headroom was left occupied by Spot")
+	}
+	require.Eventually(t, func() bool { return !worker.reclaiming.Load() }, time.Second, time.Millisecond)
+	require.False(t, worker.draining, "reserved workers remain available for protected work")
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-headroom"))
 }

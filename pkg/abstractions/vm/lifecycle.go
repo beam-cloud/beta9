@@ -73,6 +73,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	// limits, disk snapshot ownership and microvm-only pool selection.
 	req := &pb.GetOrCreateStubRequest{
 		ImageId:         v.Spec.ImageID,
+		CpuTier:         string(v.Spec.CPUTier),
 		Name:            types.StubTypeVM + "/" + v.ID,
 		AppName:         types.VMAppName,
 		StubType:        types.StubTypeVM,
@@ -335,8 +336,10 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 
 	if err == nil && state.Status != types.ContainerStatusStopping && (v.DesiredState != types.VMStatePaused || v.MemoryCheckpointID == "") {
 		// Commit the root before releasing compute. --no-snapshot skips only
-		// the named artifact, never filesystem durability.
-		if state.Status == types.ContainerStatusRunning {
+		// the named artifact, never filesystem durability. A preempted VM's
+		// worker is already stopping it, and its final sync commits the root
+		// once the VM has given its capacity back.
+		if state.Status == types.ContainerStatusRunning && v.StopReason != types.VMStopReasonPreempted {
 			if err := s.snapshotRoot(ctx, v); err != nil {
 				return err
 			}

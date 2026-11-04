@@ -1442,3 +1442,22 @@ func TestSetConfigField(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateConfigKeepsCPUTier(t *testing.T) {
+	for fields, want := range map[string]string{
+		`{"cpu_tier":"performance"}`: "Redeploy to change CPU tier",
+		`{"runtime.cpu":16000}`:      "the shared tier supports at most 8 vCPU",
+	} {
+		stubGroup, mock, e := NewStubGroupWithMockForTest()
+		mock.ExpectQuery("SELECT").WithArgs("stub").WillReturnRows(generateMockStubRows(1, "stub", "Test Stub", `{"runtime":{"cpu":1000,"memory":1000},"cpu_tier":"shared"}`, 1))
+		req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"fields":`+fields+`}`))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		c := e.NewContext(req, httptest.NewRecorder())
+		c.SetParamNames("stubId")
+		c.SetParamValues("stub")
+		err := stubGroup.UpdateConfig(&auth.HttpAuthContext{Context: c, AuthInfo: &auth.AuthInfo{Workspace: &types.Workspace{Id: 1}}})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("update %s: err = %v, want %q", fields, err, want)
+		}
+	}
+}

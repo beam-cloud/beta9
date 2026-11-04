@@ -172,6 +172,7 @@ type Worker struct {
 	draining         bool
 	drainStartedAt   time.Time
 	nextDrainAttempt time.Time
+	reclaiming       atomic.Bool // set while borrowed CPU tier containers are evicted to free capacity
 	routeTransport   string
 	ctx              context.Context
 	cancel           func()
@@ -223,6 +224,7 @@ type ContainerInstance struct {
 	Runtime                    runtime.Runtime
 	terminalCheckpointCreated  atomic.Bool
 	StopEscalationStarted      atomic.Bool
+	resourcesReleased          atomic.Bool // exited and handed back its CPU set and GPUs, though still finalizing
 	StuckMountRecoveryStarted  atomic.Bool
 	statusHeartbeatMu          sync.Mutex
 	egressMu                   sync.Mutex
@@ -1004,6 +1006,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		return false
 	}
 
+	request.ReservedCpu = request.CPUTier().CPUReservation(s.poolConfig, request.Cpu)
 	instance := &ContainerInstance{
 		Id:        request.ContainerId,
 		StubId:    request.StubId,
@@ -1285,6 +1288,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	}
 	now := time.Now()
 	s.maybeStartDraining(now)
+	s.reclaimBorrowedCapacity(lastContainerRequest, now)
 	if !s.shouldExit(lastContainerRequest, now) {
 		return false
 	}
@@ -1517,8 +1521,8 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 			// displacing request normally drives the stop, but if it was
 			// requeued elsewhere this path still reclaims the capacity, on
 			// the container's own drain window.
-			s.evictContainer(request.ContainerId, min(time.Duration(state.DrainSeconds)*time.Second, maxPreemptionDrain), "")
-			return false, nil
+			_, _, err := s.releaseVictim(ctx, request.ContainerId, min(time.Duration(state.DrainSeconds)*time.Second, maxPreemptionDrain), "")
+			return false, err
 		}
 		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
 		return false, nil
@@ -1725,12 +1729,14 @@ func (s *Worker) setWorkerKeepAlive() error {
 	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
 	defer cancel()
 
-	idle := s.containerInstances == nil || s.containerInstances.Len() == 0
+	// Borrowed CPU tier work does not stop a worker from counting as idle.
+	_, idle := s.borrowedContainers()
 	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:                   s.workerId,
 		MachineId:                  s.machineID,
 		CheckpointCompatibilityKey: s.checkpointCompatibilityKey,
 		Idle:                       idle,
+		CpuTierProtocol:            types.CPUTierProtocolVersion,
 	}))
 	if err != nil {
 		return err

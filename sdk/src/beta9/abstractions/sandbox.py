@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import io
+import json
 import os
 import shlex
 import time
@@ -21,7 +22,12 @@ from ..abstractions.image import Image
 from ..abstractions.pod import Pod
 from ..abstractions.volume import CloudBucket, Volume
 from ..channel import RECOVERY_TIMEOUT, rpc_timeout
-from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopContainerResponse
+from ..clients.gateway import (
+    GatewayServiceStub,
+    GetCpuTierCatalogRequest,
+    StopContainerRequest,
+    StopContainerResponse,
+)
 from ..clients.pod import (
     CreatePodRequest,
     CreatePodResponse,
@@ -63,7 +69,7 @@ from ..clients.pod import (
 )
 from ..config import ConfigContext
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
-from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
+from ..type import CpuTier, DurableDisk, GpuType, GpuTypeAlias, Pool
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
@@ -241,7 +247,7 @@ class Sandbox(Pod):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: Union[int, str] = 128,
+        memory: Optional[Union[int, str]] = None,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(python_version="python3.11"),
@@ -260,7 +266,9 @@ class Sandbox(Pod):
         ports: Optional[List[int]] = [],
         pool: Optional[Union[str, Pool]] = None,
         context: Optional[ConfigContext] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ):
+        self._memory_defaulted = memory is None
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
         if context is not None:
@@ -268,7 +276,7 @@ class Sandbox(Pod):
 
         super().__init__(
             cpu=cpu,
-            memory=memory,
+            memory=128 if memory is None else memory,
             gpu=gpu,
             gpu_count=gpu_count,
             image=image,
@@ -283,6 +291,7 @@ class Sandbox(Pod):
             allow_list=allow_list,
             docker_enabled=docker_enabled,
             use_vm=use_vm,
+            cpu_tier=cpu_tier,
             ports=ports,
             pool=pool,
             entrypoint=list(SANDBOX_IDLE_ENTRYPOINT),
@@ -393,6 +402,26 @@ class Sandbox(Pod):
             print(f"Sandbox created with ID: {instance.sandbox_id()}")
             ```
         """
+
+        # CPU tier VMs need 1 GiB. Without a tier, the account default applies,
+        # unless the VM targets a pool that sells none (a private or agent pool).
+        if self._memory_defaulted and self.use_vm and not self.gpu:
+            tier = self.cpu_tier
+            if not tier:
+                try:
+                    catalog = json.loads(
+                        self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog
+                    )
+                except grpc.RpcError:
+                    # Private and agent pools need no tier, and a tier can't be
+                    # used without billing anyway.
+                    if not self.pool_config:
+                        raise
+                    catalog = {"pools": {}}
+                if not self.pool_config or self.pool_config.selector in catalog["pools"]:
+                    tier = catalog["default_cpu_tier"]
+            if tier:
+                self.memory = 1024
 
         if not self.prepare_runtime(
             stub_type=SANDBOX_STUB_TYPE,

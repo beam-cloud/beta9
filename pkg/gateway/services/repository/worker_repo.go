@@ -429,6 +429,7 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 	err := s.workerRepo.SetWorkerKeepAlive(req.WorkerId, types.WorkerKeepAlive{
 		MachineId:                  req.MachineId,
 		CheckpointCompatibilityKey: req.CheckpointCompatibilityKey,
+		CPUTierProtocol:            req.CpuTierProtocol,
 	})
 	if err != nil {
 		return &pb.SetWorkerKeepAliveResponse{Ok: false, ErrorMsg: err.Error()}, nil

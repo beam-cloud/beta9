@@ -8,7 +8,10 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // evictionKillTimeout bounds how long a killed victim may take to release its resources.
@@ -22,13 +25,16 @@ const evictionRecheckInterval = time.Second
 // waiting on its resources; an endpoint's drain_seconds does not extend it.
 var maxPreemptionDrain = 10 * time.Second
 
+// borrowedReleaseTimeout bounds a pass that reclaims borrowed CPU tier capacity.
+const borrowedReleaseTimeout = 3 * time.Minute
+
 // ErrEvictionIncomplete is returned when victims chosen for a request were
 // still holding their resources after the drain and kill windows passed.
 var ErrEvictionIncomplete = errors.New("evicted containers did not release their resources in time")
 
-// evictForRequest stops the request's victims and waits until they are
-// finalized. A victim still present after the drain and kill windows fails the
-// request rather than letting it start on held resources.
+// evictForRequest stops the request's victims and waits until they have
+// released their resources. A victim still holding them after the drain and
+// kill windows fails the request rather than letting it start on them.
 func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRequest) error {
 	if request == nil || len(request.EvictContainerIds) == 0 {
 		return nil
@@ -38,13 +44,19 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 	}
 
 	drain := min(time.Duration(request.EvictDrainSeconds)*time.Second, maxPreemptionDrain)
+	wait := drain
 	victims := make([]string, 0, len(request.EvictContainerIds))
 	for _, victimID := range request.EvictContainerIds {
 		if victimID == "" || victimID == request.ContainerId {
 			continue
 		}
-		if s.evictContainer(victimID, drain, request.ContainerId) {
+		victimDrain, present, err := s.releaseVictim(ctx, victimID, drain, request.ContainerId)
+		if err != nil {
+			return err
+		}
+		if present {
 			victims = append(victims, victimID)
+			wait = max(wait, victimDrain)
 		}
 	}
 	if len(victims) == 0 {
@@ -57,7 +69,7 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		Dur("drain", drain).
 		Msg("waiting for evicted containers before starting request")
 	waitStart := time.Now()
-	remaining := s.waitForContainersFinalized(ctx, victims, drain+evictionKillTimeout)
+	remaining := s.waitForContainersReleased(ctx, victims, wait+evictionKillTimeout)
 	metrics.RecordWorkerStartupPhase("evict_wait", time.Since(waitStart), request, map[string]string{
 		"victims":  fmt.Sprintf("%d", len(victims)),
 		"released": fmt.Sprintf("%t", len(remaining) == 0),
@@ -72,9 +84,30 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 	log.Error().
 		Str("container_id", request.ContainerId).
 		Strs("evict_container_ids", remaining).
-		Msg("evicted containers did not finalize in time; failing request instead of starting on held resources")
+		Msg("evicted containers did not release their resources in time; failing request instead of starting on them")
 	s.cancelContainer(request.ContainerId)
 	return fmt.Errorf("%w: %v", ErrEvictionIncomplete, remaining)
+}
+
+// releaseVictim starts stopping an eviction victim on the given drain, or on
+// Spot's own, and returns that drain and whether the victim is present and
+// must be waited for. A running durable Spot VM is first recorded as
+// preempted, so its reconciler records the stop rather than restarting it;
+// PreemptVM rejects a VM being deleted or no longer running here, which has
+// nothing to record.
+func (s *Worker) releaseVictim(ctx context.Context, victimID string, drain time.Duration, forContainerID string) (time.Duration, bool, error) {
+	instance, _ := s.containerInstances.Get(victimID)
+	if instance != nil && instance.Request.Borrowed() {
+		request := instance.Request
+		drain = s.containerTerminationGrace(request)
+		if exitCode, reason := instance.lifecycleState(); exitCode < 0 && reason == "" && request.IsPersistentVM() {
+			_, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: request.WorkspaceId, VmId: request.VMID(), ContainerId: victimID})
+			if err != nil && status.Code(err) != codes.FailedPrecondition {
+				return 0, false, fmt.Errorf("record durable VM preemption: %w", err)
+			}
+		}
+	}
+	return drain, s.evictContainer(victimID, drain, forContainerID), nil
 }
 
 // evictContainer sends SIGTERM and escalates to SIGKILL after the drain
@@ -135,7 +168,7 @@ func (s *Worker) escalateEviction(containerID string, drain time.Duration) {
 	if workerCtx == nil {
 		workerCtx = context.Background()
 	}
-	if remaining := s.waitForContainersFinalized(workerCtx, []string{containerID}, drain); len(remaining) == 0 {
+	if remaining := s.waitForContainersReleased(workerCtx, []string{containerID}, drain); len(remaining) == 0 {
 		return
 	}
 	if workerCtx.Err() != nil {
@@ -147,20 +180,21 @@ func (s *Worker) escalateEviction(containerID string, drain time.Duration) {
 	}
 }
 
-// waitForContainersFinalized waits on the instance table's removal signal
-// until every container is gone, the timeout passes or ctx ends. It returns
-// the containers still present.
-func (s *Worker) waitForContainersFinalized(ctx context.Context, containerIDs []string, timeout time.Duration) []string {
+// waitForContainersReleased waits on the instance table's signal until every
+// container is gone or has released its resources while it finishes syncing
+// durable disks, the timeout passes or ctx ends. It returns the containers
+// still holding resources.
+func (s *Worker) waitForContainersReleased(ctx context.Context, containerIDs []string, timeout time.Duration) []string {
 	deadline := time.Now().Add(timeout)
 	recheck := time.NewTicker(evictionRecheckInterval)
 	defer recheck.Stop()
 	for {
-		// Take the signal before checking so a removal between the check and
+		// Take the signal before checking so a release between the check and
 		// the wait cannot be missed.
 		removed := s.containerInstances.Removed()
 		remaining := make([]string, 0, len(containerIDs))
 		for _, id := range containerIDs {
-			if _, exists := s.containerInstances.Get(id); exists {
+			if instance, exists := s.containerInstances.Get(id); exists && !(instance != nil && instance.resourcesReleased.Load()) {
 				remaining = append(remaining, id)
 			}
 		}

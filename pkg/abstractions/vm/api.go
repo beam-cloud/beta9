@@ -70,6 +70,8 @@ func apiError(err error) error {
 // values in management responses or template listings.
 func (s *Service) response(v *types.VM) types.VM {
 	copy := *v
+	eligible := s.cpuTierEligible(v.Spec)
+	copy.CPUTierEligible = &eligible
 	copy.Spec = redactedSpec(v.Spec)
 	copy.CreationDigest = ""
 	copy.TrafficAccessToken = ""
@@ -423,16 +425,19 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
-	if spec.Pool == "" && spec.GPU == "" {
-		spec.Pool = s.config.DefaultPool
-	}
-
 	now := time.Now().UTC()
 	id := vmID(info.Workspace.Id, opts.RequestID)
 	if name == "" {
 		name = defaultVMName(id)
 	}
 
+	// A replay must match the stored digest, which covers the request with the
+	// default pool applied but not the CPU tier, so a new tier default or a
+	// billing outage can't fail it.
+	requested := spec
+	if requested.Pool == "" && requested.GPU == "" {
+		requested.Pool = s.config.DefaultPool
+	}
 	var imageSpec []byte
 	if opts.Image != nil {
 		imageSpec, _ = (proto.MarshalOptions{Deterministic: true}).Marshal(opts.Image)
@@ -442,7 +447,7 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		Spec     types.VMSpec
 		Metadata map[string]string
 		Image    []byte `json:",omitempty"`
-	}{name, spec, opts.Metadata, imageSpec})
+	}{name, requested, opts.Metadata, imageSpec})
 	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
 	v := &types.VM{
 		ID:                  id,
@@ -489,6 +494,9 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
+	if err := s.resolveCPUTier(ctx, info.Workspace, &v.Spec); err != nil {
+		return nil, err
+	}
 	if opts.Image != nil {
 		if s.images == nil {
 			return nil, echo.NewHTTPError(http.StatusPreconditionRequired, "VM image needs to be built")
@@ -517,14 +525,15 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 }
 
 type actionRequest struct {
-	Name         string `json:"name,omitempty"`
-	NoSnapshot   bool   `json:"no_snapshot,omitempty"`
-	Port         uint32 `json:"port,omitempty"`
-	SSHPublicKey string `json:"ssh_public_key,omitempty"`
-	Description  string `json:"description,omitempty"`
-	Protected    *bool  `json:"protected,omitempty"`
-	TTL          int64  `json:"ttl,omitempty"`
-	Cold         bool   `json:"cold,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	NoSnapshot   bool          `json:"no_snapshot,omitempty"`
+	Port         uint32        `json:"port,omitempty"`
+	SSHPublicKey string        `json:"ssh_public_key,omitempty"`
+	CPUTier      types.CPUTier `json:"cpu_tier,omitempty"`
+	Description  string        `json:"description,omitempty"`
+	Protected    *bool         `json:"protected,omitempty"`
+	TTL          int64         `json:"ttl,omitempty"`
+	Cold         bool          `json:"cold,omitempty"`
 }
 
 func (s *Service) action(c echo.Context) error {
@@ -605,6 +614,10 @@ func (s *Service) action(c echo.Context) error {
 
 	switch c.Param("action") {
 	case "start", "resume":
+		if v.StopReason == types.VMStopReasonPreempted && v.Status != types.VMStateStopped {
+			return echo.NewHTTPError(http.StatusConflict, "wait for Spot preemption to finish before restarting")
+		}
+		v.StopReason = ""
 		if req.Cold {
 			// Finish terminal checkpoint finalization before abandoning RAM.
 			if v.DesiredState == types.VMStatePaused && v.MemoryCheckpointID != "" {
@@ -628,6 +641,9 @@ func (s *Service) action(c echo.Context) error {
 		ctx = operationCtx
 		err = s.pause(ctx, v)
 	case "wake":
+		if v.StopReason == types.VMStopReasonPreempted {
+			return errVMPreempted
+		}
 		if !v.Spec.AutoResume && v.DesiredState != types.VMStateRunning {
 			return echo.NewHTTPError(http.StatusConflict, "VM is stopped; call start() or enable auto_resume")
 		}
@@ -663,6 +679,9 @@ func (s *Service) action(c echo.Context) error {
 		}
 
 		spec := v.Spec
+		if req.CPUTier != "" {
+			spec.CPUTier = req.CPUTier
+		}
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey
 		child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: req.Name, Spec: spec})

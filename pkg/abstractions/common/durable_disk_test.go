@@ -41,6 +41,16 @@ func restorableDiskSnapshot(id, disk string) *types.DiskSnapshot {
 	}
 }
 
+func TestPrivatePoolFallbackLeavesTieredStubsAlone(t *testing.T) {
+	tiered := &types.StubConfigV1{CPUTier: types.CPUTierShared, Pool: &types.PoolConfig{Name: "shared-pool"}}
+	untiered := &types.StubConfigV1{Pool: &types.PoolConfig{Name: "shared-pool"}}
+	for _, config := range []*types.StubConfigV1{tiered, untiered} {
+		require.NoError(t, ConfigureUnavailablePrivatePoolFallback(context.Background(), DurableDiskPlacementRepos{}, &types.Workspace{}, config))
+	}
+	require.Equal(t, "shared-pool", tiered.PoolSelector())
+	require.Nil(t, untiered.Pool)
+}
+
 func TestDurableDiskFallbackHonorsExplicitSourceSnapshot(t *testing.T) {
 	repo := &durableDiskPlacementBackendRepo{
 		source:    restorableDiskSnapshot("source-snapshot", "source-disk"),

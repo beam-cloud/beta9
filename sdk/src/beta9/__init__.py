@@ -20,6 +20,7 @@ _EXPORTS = {
     "Container": (".abstractions.base.container", "Container"),
     "env": (".env", None),
     "GpuType": (".type", "GpuType"),
+    "CpuTier": (".type", "CpuTier"),
     "DatabaseServingConfig": (".type", "DatabaseServingConfig"),
     "DurableDisk": (".type", "DurableDisk"),
     "Pool": (".type", "Pool"),

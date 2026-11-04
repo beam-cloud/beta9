@@ -25,6 +25,7 @@ func protoMap(m proto.Message) map[string]any {
 
 // Configuration fields exposed by app tools.
 var configView = []string{
+	"cpu_tier",
 	"runtime",
 	"autoscaler",
 	"keep_warm_seconds",

@@ -168,6 +168,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:   in.Memory,
 			ImageId:  in.ImageId,
 		},
+		CPUTier:            types.CPUTier(in.CpuTier),
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
 		OnDeploy:           in.OnDeploy,
@@ -202,6 +203,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Pool:               resourcePolicy.pool,
 		Disks:              in.Disks,
 		ManagedEndpoint:    managedEndpoint,
+	}
+	if err := gws.resolveStubCPUTier(ctx, authInfo.Workspace, types.StubType(in.StubType), &stubConfig, !resourcePolicy.privatePoolTargeted); err != nil {
+		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	stubConfig.PreparationCacheKey = preparedStubCacheKey(ctx)
 

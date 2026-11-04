@@ -66,6 +66,9 @@ type containerResourceUpdater interface {
 }
 
 func (s *Worker) containerTerminationGrace(request *types.ContainerRequest) time.Duration {
+	if request.Borrowed() {
+		return time.Duration(request.DrainSeconds) * time.Second
+	}
 	grace := time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second
 	if request.IsPersistentVM() {
 		// Standard systemd units default to 90 seconds to stop. Allow
@@ -414,6 +417,11 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	if hasDurableDisk {
+		// The runtime has exited, so the container's CPU set and GPUs go back
+		// before its final sync, which a request that evicted it doesn't wait
+		// for (see waitForContainersReleased).
+		s.releaseContainerResources(containerId, request)
+		s.markContainerResourcesReleased(containerId)
 		exitCode, exitReported = s.finalizeDurableDiskMounts(containerId, request, exitCode, exitReported)
 		phases.Mark("disks")
 	}
@@ -426,21 +434,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	phases.Mark("exit_code")
 
-	// Only the CPU set hand-back shares state with reserveContainerInstance.
-	// The GPU and network managers synchronize themselves, and their teardown
-	// (a Thunder RPC, a netns deletion that waits on the kernel) must not hold
-	// up the request stream, which reserves under the same lock.
-	s.containerLock.Lock()
-	if instance, exists := s.containerInstances.Get(containerId); exists {
-		instance.CPUSet = ""
-		instance.RestoreCPUAffinityDeferred = false
-		s.containerInstances.Set(containerId, instance)
-	}
-	s.containerLock.Unlock()
-
-	// De-allocate GPU devices so they are available for new containers
-	if manager := s.gpuManagerForRequest(request); request != nil && request.RequiresGPU() && manager != nil {
-		manager.UnassignGPUDevices(context.Background(), containerId)
+	if !hasDurableDisk {
+		s.releaseContainerResources(containerId, request)
 	}
 
 	// Tear down container network components - best effort
@@ -468,6 +463,72 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	s.finishContainerShutdown(containerId, request, phases)
 	phases.Fields(log.Info().Str("container_id", containerId)).Msg("finalized container shutdown")
+}
+
+// releaseContainerResources hands back an exited container's CPU set and GPUs.
+func (s *Worker) releaseContainerResources(containerId string, request *types.ContainerRequest) {
+	// Only the CPU set hand-back shares state with reserveContainerInstance.
+	// The GPU and network managers synchronize themselves, and their teardown
+	// (a Thunder RPC, a netns deletion that waits on the kernel) must not hold
+	// up the request stream, which reserves under the same lock.
+	s.containerLock.Lock()
+	if instance, exists := s.containerInstances.Get(containerId); exists {
+		instance.CPUSet = ""
+		instance.RestoreCPUAffinityDeferred = false
+		s.containerInstances.Set(containerId, instance)
+	}
+	s.containerLock.Unlock()
+
+	// De-allocate GPU devices so they are available for new containers
+	if manager := s.gpuManagerForRequest(request); request != nil && request.RequiresGPU() && manager != nil {
+		manager.UnassignGPUDevices(context.Background(), containerId)
+	}
+}
+
+// markContainerResourcesReleased wakes requests waiting for a finalizing
+// container to release its resources once its runtime has stopped. A runtime
+// still exiting, or a state check that fails, is checked again until the
+// container is gone, so the waiters don't wait out its final sync.
+func (s *Worker) markContainerResourcesReleased(containerId string) {
+	if s.releaseIfRuntimeStopped(containerId) {
+		return
+	}
+	go func() {
+		workerCtx := s.ctx
+		if workerCtx == nil {
+			workerCtx = context.Background()
+		}
+		recheck := time.NewTicker(evictionRecheckInterval)
+		defer recheck.Stop()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-recheck.C:
+			}
+			if s.releaseIfRuntimeStopped(containerId) {
+				return
+			}
+		}
+	}()
+}
+
+// releaseIfRuntimeStopped marks a finalizing container's resources released
+// once its runtime has stopped, and reports whether there is nothing left to
+// check.
+func (s *Worker) releaseIfRuntimeStopped(containerId string) bool {
+	instance, rt, exists := s.observedContainerRuntime(containerId)
+	if !exists {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), containerRuntimeStateTimeout)
+	defer cancel()
+	if runtimeNeedsGraceKill(ctx, rt, containerId) {
+		return false
+	}
+	instance.resourcesReleased.Store(true)
+	s.containerInstances.Wake()
+	return true
 }
 
 // Publication outlives the container's canceled execution context. Keep the

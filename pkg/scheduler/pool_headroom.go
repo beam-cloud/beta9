@@ -82,16 +82,19 @@ func (c *WorkerPoolCapacity) belowMinimum(sizing *types.WorkerPoolSizingConfig) 
 // filterWorkersByPoolHeadroom drops, for an opportunistic request, every worker
 // of a pool whose ready free capacity would fall under its minFree* floor once
 // the request is placed. Capacity here is already debited by earlier requests
-// in the batch.
+// in the batch. Spot also skips the workers holding the floor, which evict
+// Spot work (see WorkerHoldsPoolHeadroom).
 func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	if request == nil || !request.OpportunisticOnly {
 		return workers
 	}
 	ready := map[string]*WorkerPoolCapacity{}
+	pools := map[string][]*types.Worker{}
 	for _, w := range workers {
 		if w.Status != types.WorkerStatusAvailable {
 			continue
 		}
+		pools[w.PoolName] = append(pools[w.PoolName], w)
 		c := ready[w.PoolName]
 		if c == nil {
 			c = &WorkerPoolCapacity{}
@@ -103,25 +106,34 @@ func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request
 			c.FreeGpu += uint(w.FreeGpuCount)
 		}
 	}
+	tier := request.CPUTier()
 	keep := map[string]bool{}
+	sizings := map[string]*types.WorkerPoolSizingConfig{}
 	for name, c := range ready {
 		sizing := s.poolSizing(name)
 		if sizing == nil {
 			keep[name] = true
 			continue
 		}
+		sizings[name] = sizing
+		pool, _ := s.PoolConfig(name)
 		after := WorkerPoolCapacity{
-			FreeCpu:    c.FreeCpu - request.Cpu,
+			FreeCpu:    c.FreeCpu - tier.CPUReservation(pool, request.Cpu),
 			FreeMemory: c.FreeMemory - capacityMemoryForScheduling(request),
 			FreeGpu:    c.FreeGpu - min(c.FreeGpu, uint(gpuCountForScheduling(request))),
 		}
 		keep[name] = !after.belowMinimum(sizing)
 	}
+	borrowed := tier.Borrows()
 	filtered := make([]*types.Worker, 0, len(workers))
 	for _, w := range workers {
-		if keep[w.PoolName] {
-			filtered = append(filtered, w)
+		if !keep[w.PoolName] {
+			continue
 		}
+		if sizing := sizings[w.PoolName]; borrowed && sizing != nil && w.Status == types.WorkerStatusAvailable && freeCapacityAhead(pools[w.PoolName], w.Id).belowMinimum(sizing) {
+			continue
+		}
+		filtered = append(filtered, w)
 	}
 	return filtered
 }

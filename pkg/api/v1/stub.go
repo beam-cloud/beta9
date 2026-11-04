@@ -302,6 +302,10 @@ func (g *StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub
 		stubConfig.Runtime.GpuCount = uint32(*overrideConfig.GpuCount)
 	}
 
+	if err := stubConfig.ValidateCPUTier(); err != nil {
+		return HTTPBadRequest(err.Error())
+	}
+
 	stubConfigBytes, err := json.Marshal(stubConfig)
 	if err != nil {
 		return HTTPBadRequest("Failed to process overrides")
@@ -530,6 +534,7 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
+	tier := stubConfig.CPUTier
 	updatedFields := make([]string, 0, len(updateReq.Fields))
 	for fieldPath, value := range updateReq.Fields {
 		if fieldPath == "" {
@@ -542,6 +547,12 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		updatedFields = append(updatedFields, fieldPath)
 	}
 
+	if stubConfig.CPUTier != tier {
+		return HTTPBadRequest("Redeploy to change CPU tier")
+	}
+	if err := stubConfig.ValidateCPUTier(); err != nil {
+		return HTTPBadRequest(err.Error())
+	}
 	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)
 	if !valid {
 		return HTTPBadRequest(errorMsg)

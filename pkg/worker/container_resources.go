@@ -35,9 +35,12 @@ func NewStandardResources() *StandardResources {
 	}
 }
 
+// maxCPUShares is the kernel's cpu.shares limit.
+const maxCPUShares uint64 = 262144
+
 func (r *StandardResources) calculateCPUShares(millicores int64) uint64 {
 	shares := uint64(millicores) * r.standardCPUShare / 1000
-	return shares
+	return min(shares, maxCPUShares)
 }
 
 func (r *StandardResources) calculateCPUQuota(millicores int64) int64 {
@@ -45,9 +48,12 @@ func (r *StandardResources) calculateCPUQuota(millicores int64) int64 {
 	return quota
 }
 
+// GetCPU weighs the container by the capacity it reserved, so under contention
+// work that reserved a physical CPU per vCPU gets them, and caps it at the CPU
+// it asked for.
 func (r *StandardResources) GetCPU(request *types.ContainerRequest) *specs.LinuxCPU {
 	return &specs.LinuxCPU{
-		Shares: ptr.To(r.calculateCPUShares(request.Cpu)),
+		Shares: ptr.To(r.calculateCPUShares(request.CapacityCpu())),
 		Quota:  ptr.To(r.calculateCPUQuota(request.Cpu)),
 		Period: ptr.To(r.standardCPUPeriod),
 	}
@@ -121,7 +127,7 @@ func (s *Worker) allocateContainerCPUSet(request *types.ContainerRequest) string
 
 		millicores := int64(1000)
 		if instance.Request != nil && instance.Request.Cpu > 0 {
-			millicores = instance.Request.Cpu
+			millicores = instance.Request.CapacityCpu()
 		}
 		perCPU := (millicores + int64(reserved.Size()) - 1) / int64(reserved.Size())
 		for _, cpu := range reserved.List() {

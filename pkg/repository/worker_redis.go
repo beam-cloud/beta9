@@ -398,7 +398,7 @@ if (queue_type ~= "none" and queue_type ~= "list") or (index_type ~= "none" and 
 	return {-5}
 
 end
-for i = first_request, #ARGV, 4 do
+for i = first_request, #ARGV, 5 do
 	local state_type = redis.call("TYPE", ARGV[i]).ok
 	if state_type ~= "hash" then
 		return {-4}
@@ -490,13 +490,14 @@ for i = first_victim, first_request - 1, 4 do
 	end
 end
 local machine_id = redis.call("HGET", KEYS[1], "machine_id") or ""
-for i = first_request, #ARGV, 4 do
+for i = first_request, #ARGV, 5 do
 	local state = ARGV[i]
 	redis.call("RPUSH", KEYS[2], ARGV[i + 1])
 	redis.call("HSET", state,
 		"worker_id", ARGV[5],
 		"machine_id", machine_id,
 		"gpu", ARGV[i + 2],
+		"reserved_cpu", ARGV[i + 4],
 		ARGV[6], ARGV[i + 3])
 	redis.call("HDEL", state, ARGV[7], ARGV[8])
 	redis.call("SADD", KEYS[3], state)
@@ -873,7 +874,7 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		if state, ok := byID[request.ContainerId]; ok {
 			evictable = reclaimable(state, workerId)
 		}
-		usage.add(request.Cpu, capacityMemoryForRequest(request),
+		usage.add(request.CapacityCpu(), capacityMemoryForRequest(request),
 			gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount), evictable)
 	}
 	for _, state := range states {
@@ -905,7 +906,7 @@ func (c *workerReservedCapacity) addContainerState(state *types.ContainerState, 
 	}
 	memory := capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory, UseVM: worker.Runtime == types.ContainerRuntimeMicroVM.String()})
 	gpu := gpuCountForCapacity(state.Gpu, nil, state.GpuCount)
-	c.add(state.Cpu, memory, gpu, reclaimable(state, worker.Id))
+	c.add(state.CapacityCpu(), memory, gpu, reclaimable(state, worker.Id))
 }
 
 func (c *workerReservedCapacity) add(cpu, memory int64, gpu uint32, evictable bool) {
@@ -956,6 +957,7 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 		worker.MachineId = machineID
 	}
 	pipe := r.rdb.TxPipeline()
+	pipe.HSet(ctx, stateKey, "cpu_tier_protocol", keepAlive.CPUTierProtocol)
 	if worker.MachineId != oldMachineID {
 		pipe.HSet(ctx, stateKey, "machine_id", worker.MachineId)
 	}
@@ -1447,6 +1449,8 @@ func workerFromHash(key string, res map[string]string) *types.Worker {
 			worker.WorkspaceId = v
 		case "control_plane_managed":
 			worker.ControlPlaneManaged = boolean(v)
+		case "cpu_tier_protocol":
+			worker.CPUTierProtocol = u32(v)
 		}
 	}
 	return worker
@@ -1608,7 +1612,7 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	}
 	result, err := r.adjustWorkerCapacity(
 		worker.Id,
-		direction*request.Cpu,
+		direction*request.CapacityCpu(),
 		direction*capacityMemoryForRequest(request),
 		direction*int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount)),
 		1,
@@ -1779,18 +1783,19 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			request := queued[index].request
 			requestGPU := int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount))
 			requestMemory := capacityMemoryForRequest(request)
-			cpu += request.Cpu
+			requestCPU := request.CapacityCpu()
+			cpu += requestCPU
 			memory += requestMemory
 			gpu += requestGPU
 			if request.Evictable {
-				evictableCPU += request.Cpu
+				evictableCPU += requestCPU
 				evictableMemory += requestMemory
 				evictableGPU += requestGPU
 			}
 			if request.MayEvict() {
 				beneficiaries = append(beneficiaries, request.ContainerId)
 			} else {
-				idleOnlyCPU += request.Cpu
+				idleOnlyCPU += requestCPU
 				idleOnlyMemory += requestMemory
 				idleOnlyGPU += requestGPU
 			}
@@ -1859,7 +1864,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			args = append(args, victim.stateKey, victim.cpu, victim.memory, int64(victim.gpu))
 		}
 		for _, item := range queued {
-			args = append(args, item.stateKey, item.payload, item.request.Gpu, item.assignment)
+			args = append(args, item.stateKey, item.payload, item.request.Gpu, item.assignment, item.request.CapacityCpu())
 		}
 		value, runErr := scheduleContainerRequestsScript.Run(ctx, r.rdb, []string{
 			common.RedisKeys.SchedulerWorkerState(worker.Id),

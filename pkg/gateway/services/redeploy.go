@@ -58,6 +58,9 @@ func (gws *GatewayService) RedeployStub(ctx context.Context, authInfo *auth.Auth
 	if valid, msg := types.ValidateCpuAndMemory(config.Runtime.Cpu, config.Runtime.Memory, gws.appConfig.GatewayService.StubLimits); !valid {
 		return nil, errors.New(msg)
 	}
+	if err := gws.resolveStubCPUTier(ctx, authInfo.Workspace, stub.Type, config, true); err != nil {
+		return nil, err
+	}
 	next, err := gws.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *config, stub.ObjectId, authInfo.Workspace.Id, true, stub.AppId)
 	if err != nil {
 		return nil, fmt.Errorf("create stub: %w", err)

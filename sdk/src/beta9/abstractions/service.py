@@ -3,6 +3,7 @@ import os
 from typing import Dict, List, Optional, Tuple, Union
 
 from ..type import (
+    CpuTier,
     DurableDisk,
     GpuType,
     GpuTypeAlias,
@@ -201,6 +202,7 @@ class Service(Pod):
         app_kind: str = "",
         serving_protocol: str = "",
         serving: Optional[ServingConfig] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ) -> None:
         if command is not None and entrypoint:
             raise ValueError("Specify either command or entrypoint, not both.")
@@ -224,6 +226,7 @@ class Service(Pod):
             ports=service_ports,
             name=name,
             cpu=cpu,
+            cpu_tier=cpu_tier,
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,

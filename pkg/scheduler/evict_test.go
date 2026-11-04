@@ -36,7 +36,7 @@ func TestSchedulableCapacityIncludesEvictableOnlyForRequestsThatMayEvict(t *test
 	assert.Equal(t, int64(6000), cpu)
 	assert.Equal(t, int64(10000), memory)
 	assert.Equal(t, uint32(2), gpu)
-	assert.Equal(t, int32(1), evictionRankForWorker(worker, serverless))
+	assert.Equal(t, int32(1), evictionRankForWorker(worker, serverless, serverless.Cpu))
 
 	for _, request := range []*types.ContainerRequest{
 		{Cpu: 1000, Memory: 1000, GpuRequest: []string{"A10G"}, GpuCount: 1, Evictable: true, OpportunisticOnly: true},
@@ -46,10 +46,10 @@ func TestSchedulableCapacityIncludesEvictableOnlyForRequestsThatMayEvict(t *test
 		assert.Equal(t, int64(4000), cpu)
 		assert.Equal(t, int64(8000), memory)
 		assert.Equal(t, uint32(0), gpu)
-		assert.Equal(t, int32(0), evictionRankForWorker(worker, request))
+		assert.Equal(t, int32(0), evictionRankForWorker(worker, request, request.Cpu))
 	}
 
-	assert.Equal(t, int32(0), evictionRankForWorker(evictableWorker("idle", "beta9-a10g", 1, 1), serverless))
+	assert.Equal(t, int32(0), evictionRankForWorker(evictableWorker("idle", "beta9-a10g", 1, 1), serverless, serverless.Cpu))
 }
 
 func TestSelectWorkerPrefersIdleCapacityOverEviction(t *testing.T) {

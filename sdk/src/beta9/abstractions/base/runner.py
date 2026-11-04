@@ -42,7 +42,9 @@ from ...schema import Schema
 from ...sync import FileSyncer
 from ...type import (
     _AUTOSCALER_TYPES,
+    CPU_TIERS,
     Autoscaler,
+    CpuTier,
     DurableDisk,
     GpuType,
     GpuTypeAlias,
@@ -144,6 +146,7 @@ class RunnerAbstraction(BaseAbstraction):
         checkpoint_readiness_port: Optional[int] = None,
         checkpoint_readiness_timeout: int = 600,
         checkpoint_readiness_interval: int = 1,
+        cpu_tier: Optional[CpuTier] = None,
     ) -> None:
         super().__init__()
 
@@ -176,6 +179,9 @@ class RunnerAbstraction(BaseAbstraction):
         self.on_start: str = ""
         self.on_deploy: "AbstractCallableWrapper" = self.parse_on_deploy(on_deploy)
         self.callback_url = callback_url or ""
+        if cpu_tier and cpu_tier not in CPU_TIERS:
+            raise ValueError(f"cpu_tier must be one of: {', '.join(CPU_TIERS)}")
+        self.cpu_tier = cpu_tier or ""
         self.cpu = self.parse_cpu(cpu)
         self.memory = self.parse_memory(memory)
         self.gpu = gpu
@@ -737,6 +743,7 @@ class RunnerAbstraction(BaseAbstraction):
             outputs=outputs,
             docker_enabled=self.docker_enabled,
             use_vm=self.use_vm,
+            cpu_tier=self.cpu_tier,
             tcp=self.tcp,
             block_network=self.block_network,
             allow_list=self.allow_list,

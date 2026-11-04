@@ -122,6 +122,43 @@ func TestScheduleEvictsToCoverShortfall(t *testing.T) {
 	assert.Equal(t, stored.EvictableGpuCount, worker.EvictableGpuCount)
 }
 
+func TestReservedCPUIsHeldUntilTheContainerLeaves(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb).(*WorkerRedisRepository)
+
+	// The request reserves 5000 for its 2000 CPU, more than is free, so the
+	// Spot container must make room.
+	worker := &types.Worker{Id: "worker-reserved-cpu", Status: types.WorkerStatusAvailable, TotalCpu: 10000, TotalMemory: 16000}
+	spot := seedRunningContainer(t, rdb, worker.Id, &types.ContainerState{ContainerId: "spot", Cpu: 6000, Memory: 1000, Evictable: true})
+	assert.NoError(t, repo.AddWorker(worker))
+	assert.Equal(t, int64(4000), worker.FreeCpu)
+
+	request := &types.ContainerRequest{ContainerId: "overflow", Cpu: 2000, ReservedCpu: 5000, Memory: 1000}
+	setPendingContainerRequests(t, rdb, request)
+	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	assert.NoError(t, rdb.HSet(context.TODO(), stateKey, "cpu", request.Cpu).Err())
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
+	assert.Equal(t, []string{"spot"}, request.EvictContainerIds)
+	assert.Equal(t, int64(5000), queuedRequest(t, rdb, worker.Id).ReservedCpu)
+
+	// Once the Spot container is gone, the queued request and then, after the
+	// worker takes it, the container's state hold the whole reservation.
+	workerIndex := common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id)
+	assert.NoError(t, rdb.Del(context.TODO(), spot).Err())
+	assert.NoError(t, rdb.SRem(context.TODO(), workerIndex, spot).Err())
+	assert.NoError(t, repo.UpdateWorkerCapacity(worker, request, types.AddCapacity))
+	assert.Equal(t, int64(5000), worker.FreeCpu)
+	assert.NoError(t, rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Err())
+	assert.NoError(t, repo.UpdateWorkerCapacity(worker, request, types.AddCapacity))
+	assert.Equal(t, int64(5000), worker.FreeCpu)
+
+	assert.NoError(t, rdb.Del(context.TODO(), stateKey).Err())
+	assert.NoError(t, rdb.SRem(context.TODO(), workerIndex, stateKey).Err())
+	assert.NoError(t, repo.UpdateWorkerCapacity(worker, request, types.AddCapacity))
+	assert.Equal(t, int64(10000), worker.FreeCpu)
+}
+
 func TestScheduleDoesNotEvictForIdleOnlyRequests(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NoError(t, err)
@@ -206,7 +243,7 @@ func TestScheduleEvictionRejectsStaleVictims(t *testing.T) {
 		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, "batch-stale",
 		0, 0, 0, 1, types.ContainerStateTtlSWhileStopping, request.ContainerId,
 		victimKey, 1000, 1250, 1,
-		common.RedisKeys.SchedulerContainerState(request.ContainerId), payload, "A10G", "assignment-stale").Result()
+		common.RedisKeys.SchedulerContainerState(request.ContainerId), payload, "A10G", "assignment-stale", request.Cpu).Result()
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, result)
 	assert.True(t, errors.Is(err, ErrEvictionVictimsChanged), err)

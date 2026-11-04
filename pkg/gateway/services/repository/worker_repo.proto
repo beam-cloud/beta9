@@ -253,6 +253,7 @@ message SetWorkerKeepAliveRequest {
   // workers' keepalives skip the pool scan.
   bool idle = 3;
   string checkpoint_compatibility_key = 4;
+  uint32 cpu_tier_protocol = 5;
 }
 
 message SetWorkerKeepAliveResponse {

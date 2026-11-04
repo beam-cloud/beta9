@@ -55,8 +55,8 @@ const (
 	ContainerSchedulingFailureManagedFallbackConcurrencyLimit ContainerSchedulingFailureReason = "managed_fallback_concurrency_limit"
 	ContainerSchedulingFailureManagedFallbackNoCapacity       ContainerSchedulingFailureReason = "managed_fallback_no_capacity"
 	// ContainerSchedulingFailureNoOpportunisticCapacity is reported when an
-	// OpportunisticOnly request finds no idle worker; it never waits or
-	// provisions.
+	// OpportunisticOnly request finds no idle worker: at once for managed
+	// endpoint replicas, and once the scheduling window ends for Spot.
 	ContainerSchedulingFailureNoOpportunisticCapacity ContainerSchedulingFailureReason = "no_opportunistic_capacity"
 )
 
@@ -99,11 +99,13 @@ type Worker struct {
 	// Keep internal fields after wire fields: go2proto numbers by struct position.
 	RolloutPreviousStatus      WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
 	CheckpointCompatibilityKey string       `json:"-" redis:"checkpoint_compatibility_key" go2proto:"ignore"`
+	CPUTierProtocol            uint32       `json:"-" redis:"cpu_tier_protocol" go2proto:"ignore"`
 }
 
 type WorkerKeepAlive struct {
 	MachineId                  string `json:"machine_id"`
 	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key"`
+	CPUTierProtocol            uint32 `json:"cpu_tier_protocol"`
 }
 
 func StableStorageNodeID(machineID, workerID string) string {
@@ -255,6 +257,13 @@ type ContainerState struct {
 	Evicting     bool   `redis:"evicting" json:"evicting,omitempty"`
 	DrainSeconds uint32 `redis:"drain_seconds" json:"drain_seconds,omitempty"`
 	EvictOrder   int32  `redis:"evict_order" json:"evict_order,omitempty"`
+	// ReservedCpu mirrors ContainerRequest.ReservedCpu for the scheduled request.
+	ReservedCpu int64 `redis:"reserved_cpu" json:"reserved_cpu,omitempty" go2proto:"ignore"`
+}
+
+// CapacityCpu is the CPU the container takes from its worker's capacity.
+func (s *ContainerState) CapacityCpu() int64 {
+	return max(s.ReservedCpu, s.Cpu)
 }
 
 // @go2proto
@@ -438,6 +447,15 @@ type ContainerRequest struct {
 	// they never fall back to a container runtime.
 	UseVM          bool            `json:"use_vm,omitempty"`
 	SecretBindings []SecretBinding `json:"secret_bindings,omitempty"`
+	// ReservedCpu is the CPU the request takes from its worker's capacity (see
+	// CPUTier.CPUReservation). The scheduler sets it when it places the request
+	// and the worker when it accepts it; zero means Cpu.
+	ReservedCpu int64 `json:"reserved_cpu,omitempty" go2proto:"ignore"`
+}
+
+// CapacityCpu is the CPU the request takes from its worker's capacity.
+func (c *ContainerRequest) CapacityCpu() int64 {
+	return max(c.ReservedCpu, c.Cpu)
 }
 
 // @go2proto

@@ -5,8 +5,8 @@ import "sync"
 type SafeMap[V any] struct {
 	mu   sync.RWMutex
 	_map map[string]V
-	// removed is closed and replaced on every Delete so waiters can block on
-	// an entry disappearing instead of polling.
+	// removed is closed and replaced on every Delete and Wake so waiters can
+	// block on an entry disappearing or changing instead of polling.
 	removed chan struct{}
 }
 
@@ -19,8 +19,8 @@ func NewSafeMap[V any]() *SafeMap[V] {
 }
 
 // Removed returns a channel that is closed the next time any entry is
-// deleted. Callers re-check their condition and call Removed again to keep
-// waiting.
+// deleted or Wake is called. Callers re-check their condition and call
+// Removed again to keep waiting.
 func (m *SafeMap[V]) Removed() <-chan struct{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -58,6 +58,18 @@ func (m *SafeMap[V]) Delete(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m._map, key)
+	m.wakeLocked()
+}
+
+// Wake closes the channel Removed returned without deleting an entry, for
+// waiters whose condition changed while their entry stays.
+func (m *SafeMap[V]) Wake() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.wakeLocked()
+}
+
+func (m *SafeMap[V]) wakeLocked() {
 	close(m.removed)
 	m.removed = make(chan struct{})
 }

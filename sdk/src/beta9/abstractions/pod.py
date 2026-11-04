@@ -34,6 +34,7 @@ from ..config import ConfigContext, get_settings
 from ..runner.common import USER_CODE_DIR
 from ..sync import FileSyncer
 from ..type import (
+    CpuTier,
     DurableDisk,
     GpuType,
     GpuTypeAlias,
@@ -204,9 +205,11 @@ class Pod(RunnerAbstraction, DeployableMixin):
         app_kind: str = "",
         serving_protocol: str = "",
         serving: Optional[ServingConfig] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
+            cpu_tier=cpu_tier,
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,

@@ -228,6 +228,7 @@ def _show(info, as_json):
     help="RAM in MiB; defaults to 8192.",
 )
 @click.option("--gpu", metavar="TYPE", help="One GPU, for example RTX4090.")
+@extraclick.cpu_tier_option
 @click.option(
     "--disk-size",
     help="Writable disk over the base image; 1–100 GiB, default 50 GiB.",
@@ -342,6 +343,7 @@ def new(
     service,
     name,
     cpu,
+    cpu_tier,
     memory,
     disk_size,
     image_uri,
@@ -404,6 +406,7 @@ def new(
         name,
         image=image,
         cpu=cpu,
+        cpu_tier=cpu_tier,
         memory=memory,
         gpu=gpu,
         disk_size=disk_size,
@@ -599,6 +602,7 @@ def ip_vm(service, name):
 
 @management.command("update")
 @click.argument("name")
+@extraclick.cpu_tier_option
 @click.option(
     "--ttl",
     type=click.IntRange(0, 31536000),
@@ -615,13 +619,19 @@ def ip_vm(service, name):
 @click.option("--clear-metadata", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json, idle_action=None):
-    """Update idle sleep, automatic resume and metadata."""
+def update_vm(
+    service, name, cpu_tier, ttl, auto_resume, metadata, clear_metadata, as_json, idle_action=None
+):
+    """Update idle sleep, automatic resume, metadata and the CPU tier of a stopped VM."""
     if metadata and clear_metadata:
         raise click.UsageError("Choose --metadata or --clear-metadata")
     values = _key_values(metadata) if metadata or clear_metadata else None
     vm = _vm(service, name).update(
-        ttl=ttl, idle_action=idle_action, auto_resume=auto_resume, metadata=values
+        ttl=ttl,
+        idle_action=idle_action,
+        auto_resume=auto_resume,
+        metadata=values,
+        cpu_tier=cpu_tier,
     )
     _show(vm.info, as_json)
 
@@ -844,16 +854,17 @@ def remove_vm(service, name):
 @management.command("fork")
 @click.argument("source")
 @click.argument("name", required=False)
+@extraclick.cpu_tier_option
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def fork_vm(service, source, name, as_json):
+def fork_vm(service, source, name, as_json, cpu_tier):
     """Create an independent VM from a VM or snapshot."""
     with _progress("Forking VM", "VM ready", as_json):
         snapshots = VM(_service=service)._api("GET", "/artifacts/snapshot")
         if any(item["id"] == source for item in snapshots):
-            vm = VM(name, snapshot=source, _service=service).create()
+            vm = VM(name, snapshot=source, cpu_tier=cpu_tier, _service=service).create()
         else:
-            vm = _vm(service, source).fork(name)
+            vm = _vm(service, source).fork(name, cpu_tier=cpu_tier)
         _ready(vm)
     _show(vm.info, as_json)
 

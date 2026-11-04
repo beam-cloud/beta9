@@ -565,6 +565,7 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 
 type StubConfigV1 struct {
 	Runtime            Runtime            `json:"runtime"`
+	CPUTier            CPUTier            `json:"cpu_tier,omitempty"`
 	Handler            string             `json:"handler"`
 	OnStart            string             `json:"on_start"`
 	OnDeploy           string             `json:"on_deploy"`

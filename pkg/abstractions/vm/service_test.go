@@ -457,6 +457,13 @@ func (g *vmGateway) StopContainer(_ context.Context, in *pb.StopContainerRequest
 	g.backend.latest = "root-after-shutdown"
 	return &pb.StopContainerResponse{Ok: true}, nil
 }
+func (g *vmGateway) ResolveCPUTier(_ context.Context, _ *types.Workspace, requested types.CPUTier, _ string, eligible bool) (types.CPUTier, error) {
+	if !eligible && requested != "" {
+		return "", types.ErrCPUTierIneligible
+	}
+	return requested, nil
+}
+func (g *vmGateway) IsHostedCPUPool(string) bool { return false }
 
 func fixture() (*Service, *types.VM, *auth.AuthInfo, *vmRuntime, *vmGateway) {
 	store := &vmStore{rows: map[string]*types.VM{}}

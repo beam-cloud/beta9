@@ -78,6 +78,12 @@ func TestSchedulingFailureMessageExplainsWorkerProvisioningLimit(t *testing.T) {
 	require.Equal(t, "Beta9 could not provision a compatible worker in pool \"gpu-pool\" after several attempts. Check that the pool has enough CPU, memory, and GPU capacity.", message)
 }
 
+func TestSchedulingFailureMessageExplainsSpotCapacityTimeout(t *testing.T) {
+	message := schedulingFailureMessage(common.ContainerSchedulingFailure{Reason: types.ContainerSchedulingFailureNoOpportunisticCapacity})
+
+	require.Equal(t, "No spare capacity became available for this Spot workload before scheduling timed out. Try again later, or use the shared or performance CPU tier.", message)
+}
+
 func TestTaskSchedulingFailureIgnoresStaleContainer(t *testing.T) {
 	backend := &schedulingFailureBackend{task: &types.TaskWithRelated{
 		Task: types.Task{ExternalId: "task-id", ContainerId: "new-container", Status: types.TaskStatusPending},

@@ -36,9 +36,9 @@ var (
 )
 
 // containerStoppingLease is the lease of an exited durable-disk container. An
-// eviction victim keeps the long lease whatever its disks: it holds its
-// resources until finalization ends, and the worker's capacity counts them
-// only while its state exists.
+// eviction victim keeps the long lease whatever its disks: the worker's
+// capacity counts its resources only while its state exists, which must last
+// until finalization ends even though the request that evicted it has started.
 func (s *Worker) containerStoppingLease(containerID string, request *types.ContainerRequest) stoppingLease {
 	if s.containerInstances != nil {
 		if instance, exists := s.containerInstances.Get(containerID); exists && instance != nil {
@@ -140,7 +140,7 @@ func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, conta
 	detachErr := s.detachFinalQcowDurableDisks(request)
 	if finalErr := errors.Join(syncErr, detachErr); finalErr != nil {
 		log.Error().Str("container_id", containerID).Err(finalErr).Msg("failed to finalize durable disks during container cleanup")
-		finalExitCode = durableDiskSyncFailureExitCode(exitCode)
+		finalExitCode = durableDiskSyncFailureExitCode(exitCode, request.IsPersistentVM())
 		if finalExitCode != exitCode {
 			s.setLocalContainerExitCode(containerID, finalExitCode)
 			finalExitReported = false
@@ -229,11 +229,12 @@ func durableDiskFinalSyncMode(exitCode int) durableDiskSyncMode {
 }
 
 // durableDiskSyncFailureExitCode reports a failed final sync as a failure
-// unless the container already failed. An eviction keeps its code: replica
-// controllers read it as the authoritative sign of an eviction.
-func durableDiskSyncFailureExitCode(exitCode int) int {
+// unless the container already failed. An eviction keeps its code, which
+// replica controllers read as the authoritative sign of an eviction, except on
+// a VM: its reconciler must not record the stop with an older root.
+func durableDiskSyncFailureExitCode(exitCode int, vm bool) int {
 	if types.ContainerExitCode(exitCode) == types.ContainerExitCodeStartupFailed ||
-		(exitedCleanly(exitCode) && types.ContainerExitCode(exitCode) != types.ContainerExitCodeEvicted) {
+		(exitedCleanly(exitCode) && (vm || types.ContainerExitCode(exitCode) != types.ContainerExitCodeEvicted)) {
 		return int(types.ContainerExitCodeUnknownError)
 	}
 	return exitCode
