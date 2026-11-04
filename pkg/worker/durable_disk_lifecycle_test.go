@@ -357,6 +357,28 @@ func TestEvictedContainerReleasesResourcesBeforeItsFinalSync(t *testing.T) {
 	fixture.releaseAndWaitForClear(t, clearDone)
 }
 
+func TestEvictedContainerIsReleasedOnceItsRuntimeIsSeenStopped(t *testing.T) {
+	fixture := newLockedDurableDiskFinalizationFixture(t, "container-evicted-stale-state")
+	request := fixture.request
+	// The runtime still reports the container running when clearContainer first checks.
+	stoppedAt := time.Now().Add(300 * time.Millisecond)
+	rt := &mockRuntime{state: func(context.Context, string) (runtime.State, error) {
+		if time.Now().Before(stoppedAt) {
+			return runtime.State{Status: types.RuncContainerStatusRunning}, nil
+		}
+		return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+	}}
+	worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, rt)
+	instance, _ := worker.containerInstances.Get(request.ContainerId)
+	instance.setStopReason(types.StopContainerReasonEvicted)
+	clearDone := clearContainerAsync(worker, request, int(types.ContainerExitCodeEvicted))
+
+	require.Empty(t, worker.waitForContainersReleased(context.Background(), []string{request.ContainerId}, 5*time.Second))
+	_, syncing := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, syncing)
+	fixture.releaseAndWaitForClear(t, clearDone)
+}
+
 func snapshotLeaseEvery(refresh time.Duration) stoppingLease {
 	lease := snapshotDiskStoppingLease
 	lease.refresh = refresh

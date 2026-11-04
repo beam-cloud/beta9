@@ -486,18 +486,49 @@ func (s *Worker) releaseContainerResources(containerId string, request *types.Co
 }
 
 // markContainerResourcesReleased wakes requests waiting for a finalizing
-// container to release its resources, once its runtime has stopped.
+// container to release its resources once its runtime has stopped. A runtime
+// still exiting, or a state check that fails, is checked again until the
+// container is gone, so the waiters don't wait out its final sync.
 func (s *Worker) markContainerResourcesReleased(containerId string) {
+	if s.releaseIfRuntimeStopped(containerId) {
+		return
+	}
+	go func() {
+		workerCtx := s.ctx
+		if workerCtx == nil {
+			workerCtx = context.Background()
+		}
+		recheck := time.NewTicker(evictionRecheckInterval)
+		defer recheck.Stop()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-recheck.C:
+			}
+			if s.releaseIfRuntimeStopped(containerId) {
+				return
+			}
+		}
+	}()
+}
+
+// releaseIfRuntimeStopped marks a finalizing container's resources released
+// once its runtime has stopped, and reports whether there is nothing left to
+// check.
+func (s *Worker) releaseIfRuntimeStopped(containerId string) bool {
 	instance, rt, exists := s.observedContainerRuntime(containerId)
 	if !exists {
-		return
+		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), containerRuntimeStateTimeout)
 	defer cancel()
-	if !runtimeNeedsGraceKill(ctx, rt, containerId) {
-		instance.resourcesReleased.Store(true)
-		s.containerInstances.Wake()
+	if runtimeNeedsGraceKill(ctx, rt, containerId) {
+		return false
 	}
+	instance.resourcesReleased.Store(true)
+	s.containerInstances.Wake()
+	return true
 }
 
 // Publication outlives the container's canceled execution context. Keep the
