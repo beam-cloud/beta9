@@ -23,9 +23,9 @@ const evictionRecheckInterval = time.Second
 // waiting on its resources; an endpoint's drain_seconds does not extend it.
 var maxPreemptionDrain = 10 * time.Second
 
-// spotReleaseTimeout bounds the wait for Spot victims, which get their full
-// drain and, for VMs, a snapshot before they stop.
-const spotReleaseTimeout = 3 * time.Minute
+// borrowedReleaseTimeout bounds the wait for victims on borrowed CPU tier
+// capacity, which get their full drain and, for VMs, a snapshot before they stop.
+const borrowedReleaseTimeout = 3 * time.Minute
 
 // ErrEvictionIncomplete is returned when victims chosen for a request were
 // still holding their resources after the drain and kill windows passed.
@@ -50,12 +50,12 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 			continue
 		}
 		victimDrain := drain
-		if instance, _ := s.containerInstances.Get(victimID); instance != nil && instance.Request.CPUTier() == types.CPUTierSpot {
-			victimDrain, wait = types.SpotDrainSeconds*time.Second, spotReleaseTimeout
+		if instance, _ := s.containerInstances.Get(victimID); instance != nil && instance.Request.Borrowed() {
+			victimDrain, wait = time.Duration(instance.Request.DrainSeconds)*time.Second, borrowedReleaseTimeout
 			if exitCode, _ := instance.lifecycleState(); exitCode < 0 && instance.Request.IsPersistentVM() {
 				// The VM reconciler snapshots and stops the VM; the worker only waits.
 				if _, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: instance.Request.WorkspaceId, VmId: instance.Request.VMID(), ContainerId: victimID}); err != nil {
-					return fmt.Errorf("request durable Spot VM stop: %w", err)
+					return fmt.Errorf("request durable VM stop: %w", err)
 				}
 				victims = append(victims, victimID)
 				continue

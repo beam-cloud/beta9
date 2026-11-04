@@ -302,7 +302,7 @@ func (g *StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub
 		stubConfig.Runtime.GpuCount = uint32(*overrideConfig.GpuCount)
 	}
 
-	if err := stubConfig.ValidateCPUTier(); err != nil {
+	if err := stubConfig.ValidateCPUTier(g.config.Worker.CPUTiers); err != nil {
 		return HTTPBadRequest(err.Error())
 	}
 
@@ -550,7 +550,7 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 	if stubConfig.CPUTier != tier {
 		return HTTPBadRequest("Redeploy to change CPU tier")
 	}
-	if err := stubConfig.ValidateCPUTier(); err != nil {
+	if err := stubConfig.ValidateCPUTier(g.config.Worker.CPUTiers); err != nil {
 		return HTTPBadRequest(err.Error())
 	}
 	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)

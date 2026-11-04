@@ -82,8 +82,8 @@ func (c *WorkerPoolCapacity) belowMinimum(sizing *types.WorkerPoolSizingConfig) 
 // filterWorkersByPoolHeadroom drops, for an opportunistic request, every worker
 // of a pool whose ready free capacity would fall under its minFree* floor once
 // the request is placed. Capacity here is already debited by earlier requests
-// in the batch. Spot also skips the workers holding the floor, which evict
-// Spot work (see WorkerHoldsPoolHeadroom).
+// in the batch. Borrowed CPU tier work also skips the workers holding the
+// floor, which evict it (see WorkerHoldsPoolHeadroom).
 func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	if request == nil || !request.OpportunisticOnly {
 		return workers
@@ -122,13 +122,13 @@ func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request
 		}
 		keep[name] = !after.belowMinimum(sizing)
 	}
-	spot := request.CPUTier() == types.CPUTierSpot
+	borrowed := request.Borrowed()
 	filtered := make([]*types.Worker, 0, len(workers))
 	for _, w := range workers {
 		if !keep[w.PoolName] {
 			continue
 		}
-		if sizing := sizings[w.PoolName]; spot && sizing != nil && w.Status == types.WorkerStatusAvailable && freeCapacityAhead(pools[w.PoolName], w.Id).belowMinimum(sizing) {
+		if sizing := sizings[w.PoolName]; borrowed && sizing != nil && w.Status == types.WorkerStatusAvailable && freeCapacityAhead(pools[w.PoolName], w.Id).belowMinimum(sizing) {
 			continue
 		}
 		filtered = append(filtered, w)

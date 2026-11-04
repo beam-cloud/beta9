@@ -172,7 +172,7 @@ type Worker struct {
 	draining         bool
 	drainStartedAt   time.Time
 	nextDrainAttempt time.Time
-	reclaimingSpot   atomic.Bool // set while Spot containers are evicted to free capacity
+	reclaiming       atomic.Bool // set while borrowed CPU tier containers are evicted to free capacity
 	routeTransport   string
 	ctx              context.Context
 	cancel           func()
@@ -1285,7 +1285,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	}
 	now := time.Now()
 	s.maybeStartDraining(now)
-	s.reclaimSpotCapacity(lastContainerRequest, now)
+	s.reclaimBorrowedCapacity(lastContainerRequest, now)
 	if !s.shouldExit(lastContainerRequest, now) {
 		return false
 	}
@@ -1726,8 +1726,8 @@ func (s *Worker) setWorkerKeepAlive() error {
 	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
 	defer cancel()
 
-	// Spot work does not stop a worker from counting as idle.
-	_, idle := s.spotContainers()
+	// Borrowed CPU tier work does not stop a worker from counting as idle.
+	_, idle := s.borrowedContainers()
 	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:                   s.workerId,
 		MachineId:                  s.machineID,

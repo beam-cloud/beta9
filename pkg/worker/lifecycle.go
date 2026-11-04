@@ -66,8 +66,8 @@ type containerResourceUpdater interface {
 }
 
 func (s *Worker) containerTerminationGrace(request *types.ContainerRequest) time.Duration {
-	if request.CPUTier() == types.CPUTierSpot {
-		return types.SpotDrainSeconds * time.Second
+	if request.Borrowed() {
+		return time.Duration(request.DrainSeconds) * time.Second
 	}
 	grace := time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second
 	if request.IsPersistentVM() {

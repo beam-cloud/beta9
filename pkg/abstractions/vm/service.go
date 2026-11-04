@@ -46,6 +46,7 @@ type Service struct {
 	gateway       Gateway
 	images        ImageVerifier
 	config        types.VMConfig
+	cpuTiers      types.CPUTiers
 	publicNetwork *publicVMNetwork
 	webrtc        *vmWebRTC
 }
@@ -53,6 +54,7 @@ type Service struct {
 type ServiceOpts struct {
 	StateRepo     VMRepository
 	Config        types.VMConfig
+	CPUTiers      types.CPUTiers
 	BackendRepo   repository.BackendRepository
 	ContainerRepo repository.ContainerRepository
 	Runtime       Runtime
@@ -81,6 +83,7 @@ func New(ctx context.Context, opts ServiceOpts) error {
 		gateway:    opts.Gateway,
 		images:     opts.Images,
 		config:     opts.Config,
+		cpuTiers:   opts.CPUTiers,
 	}
 
 	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {

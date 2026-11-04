@@ -183,6 +183,20 @@ imageService:
         ln -s /usr/local/bin/pip3 /usr/bin/pip && \
         ln -s /usr/local/bin/pip3 /usr/bin/pip3
 worker:
+  # CPU capacity tiers. A pool sells a tier by setting cpuClass to its name and
+  # schedules at the tier's cpuShareMultiplier. A tier with borrowsFrom runs only
+  # on idle capacity of those tiers' pools: it never adds workers, waits for room,
+  # and gets drainSeconds notice when that capacity is reclaimed.
+  cpuTiers:
+    shared:
+      cpuShareMultiplier: 2.5
+      maxCpu: 8000  # Millicores per workload
+      maxMemory: 16384  # MiB per workload
+    performance:
+      cpuShareMultiplier: 1
+    spot:
+      borrowsFrom: [shared, performance]
+      drainSeconds: 30
   pools:
     default:
       mode: local
@@ -191,6 +205,7 @@ worker:
       containerRuntime: gvisor  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
       containerStartConcurrency: 32
       # cpuShareMultiplier: 1.5  # Optional: vCPUs scheduled per physical CPU, from 1 to 16 (CPU limits, memory and billing stay physical)
+      # cpuClass: shared  # Optional: the CPU tier this hosted CPU pool sells, at that tier's cpuShareMultiplier
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor

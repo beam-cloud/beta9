@@ -82,6 +82,7 @@ func addSpotVMInstance(worker *Worker, rt runtime.Runtime, containerID string) *
 	instance.Request.UseVM, instance.Request.WorkspaceId = true, "workspace"
 	instance.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
 	instance.Request.Stub.Config = `{"cpu_tier":"spot"}`
+	instance.Request.Evictable, instance.Request.DrainSeconds = true, 30
 	return instance
 }
 
@@ -387,7 +388,7 @@ func TestExitingSpotVMIsWaitedForWithoutPreemption(t *testing.T) {
 
 func TestSpotUsesThirtySecondGraceWithoutChangingOtherVMs(t *testing.T) {
 	w, _ := evictionWorkerForTest(false)
-	request := &types.ContainerRequest{UseVM: true, Env: []string{"BEAM_VM_SYSTEMD=1"}, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
+	request := &types.ContainerRequest{UseVM: true, Env: []string{"BEAM_VM_SYSTEMD=1"}, Evictable: true, DrainSeconds: 30, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
 	require.Equal(t, 30*time.Second, w.containerTerminationGrace(request))
 	request.Stub.Config = `{}`
 	require.Equal(t, 300*time.Second, w.containerTerminationGrace(request))
@@ -405,14 +406,14 @@ func TestSpotReturnsProtectedHeadroomWithoutRetiringWorker(t *testing.T) {
 		return &pb.PreemptVMResponse{}, nil
 	}}
 	now := time.Now()
-	worker.reclaimSpotCapacity(now, now)
+	worker.reclaimBorrowedCapacity(now, now)
 	select {
 	case request := <-stopped:
 		require.Equal(t, "spot-headroom", request.ContainerId)
 	case <-time.After(time.Second):
 		t.Fatal("protected headroom was left occupied by Spot")
 	}
-	require.Eventually(t, func() bool { return !worker.reclaimingSpot.Load() }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !worker.reclaiming.Load() }, time.Second, time.Millisecond)
 	require.False(t, worker.draining, "reserved workers remain available for protected work")
 	require.Empty(t, rt.signals, "headroom reclamation still requires the durable VM stop path")
 }

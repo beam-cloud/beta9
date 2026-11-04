@@ -35,7 +35,7 @@ func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTi
 	pools := map[string]*cpuTierPool{}
 	for name, p := range gws.scheduler.PoolConfigs() {
 		if p.CPUClass != "" {
-			pools[name] = &cpuTierPool{CPUClass: p.CPUClass, Valid: p.CPUClass.MatchesPool(p), ReadyRuntimes: map[string]bool{}}
+			pools[name] = &cpuTierPool{CPUClass: p.CPUClass, Valid: gws.appConfig.Worker.CPUTiers.MatchesPool(p.CPUClass, p), ReadyRuntimes: map[string]bool{}}
 		}
 	}
 	for _, w := range workers {
@@ -82,11 +82,12 @@ func (gws *GatewayService) resolveStubCPUTier(ctx context.Context, workspace *ty
 	if err != nil {
 		return err
 	}
-	if pool, _ := gws.scheduler.PoolConfig(selector); tier != "" && selector != "" && !tier.MatchesPool(pool) {
+	tiers := gws.appConfig.Worker.CPUTiers
+	if pool, _ := gws.scheduler.PoolConfig(selector); tier != "" && selector != "" && !tiers.MatchesPool(tier, pool) {
 		return fmt.Errorf("pool does not support the selected CPU tier")
 	}
 	config.CPUTier = tier
-	return config.ValidateCPUTier()
+	return config.ValidateCPUTier(tiers)
 }
 
 func (gws *GatewayService) IsHostedCPUPool(name string) bool {

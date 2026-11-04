@@ -727,6 +727,7 @@ func (g *Gateway) registerServices() error {
 	if err := vm.New(g.ctx, vm.ServiceOpts{
 		StateRepo:     vm.NewVMRedisRepository(g.RedisClient),
 		Config:        vmConfig,
+		CPUTiers:      g.Config.Worker.CPUTiers,
 		TCPConfig:     g.Config.Abstractions.Pod.TCP,
 		BackendRepo:   g.BackendRepo,
 		ContainerRepo: g.ContainerRepo,

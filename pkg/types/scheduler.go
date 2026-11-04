@@ -56,7 +56,8 @@ const (
 	ContainerSchedulingFailureManagedFallbackNoCapacity       ContainerSchedulingFailureReason = "managed_fallback_no_capacity"
 	// ContainerSchedulingFailureNoOpportunisticCapacity is reported when an
 	// OpportunisticOnly request finds no idle worker: at once for managed
-	// endpoint replicas, and once the scheduling window ends for Spot.
+	// endpoint replicas, and once the scheduling window ends for borrowed CPU
+	// tier work.
 	ContainerSchedulingFailureNoOpportunisticCapacity ContainerSchedulingFailureReason = "no_opportunistic_capacity"
 )
 
