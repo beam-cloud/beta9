@@ -1,0 +1,278 @@
+{
+  "database_evidence": {
+    "observed_baseline_commit_waiter_peaks": {
+      "vm": 56,
+      "stub": 73,
+      "disk": 9
+    },
+    "stub_tuple_lock_peak": 25,
+    "wait_event": "IO:XactSync",
+    "credits_exhausted": false,
+    "probe_logged_tables": true,
+    "probe_rows": 100,
+    "probe_rounds": [
+      {
+        "individual_ms": 4291.973,
+        "batch_16_ms": 55.779,
+        "batch_100_ms": 24.571
+      },
+      {
+        "individual_ms": 638.009,
+        "batch_16_ms": 55.123,
+        "batch_100_ms": 18.582
+      },
+      {
+        "individual_ms": 162.938,
+        "batch_16_ms": 16.219,
+        "batch_100_ms": 11.285
+      }
+    ],
+    "probe_schema_removed": true,
+    "batching_enabled_only_by_config": true,
+    "staging_max_open_connections": 32,
+    "staging_vm_burst_batch_size": 128,
+    "latest_control_plane_p50_ms": 464.8,
+    "latest_control_plane_p95_ms": 588.2,
+    "latest_disk_commit_waiter_peak": 1,
+    "latest_stub_commit_waiter_peak": 1,
+    "stub_workspace_name_index_verified_present_and_valid": true,
+    "read_only_index_audit": "/tmp/microvm-stub-index-probe.log"
+  },
+  "qcow_retention": {
+    "pruned_detached_caches": 3650,
+    "freed_allocated_bytes": 398360776704,
+    "ttl_days": 7,
+    "live_expiry_restore_proof": "/tmp/microvm-live-ttl-proof.json",
+    "proof_retained_ram_disk_and_boot_identity": true,
+    "unpublished_zero_writes_retained": true
+  },
+  "native_compression_probe": {
+    "input_bytes": 147824640,
+    "go_fastest_warm_ms": [
+      183.025,
+      164.512
+    ],
+    "go_fastest_warm_cpu_ms": [
+      324.454,
+      302.758
+    ],
+    "go_output_bytes": 43167683,
+    "native_level1_threads2_warm_ms": [
+      86.079,
+      84.205
+    ],
+    "native_level1_threads2_cpu_ms": [
+      193.876,
+      183.433
+    ],
+    "native_output_bytes": 44229855,
+    "decoded_sha256_matches": true,
+    "source_report": "/tmp/microvm-compress-native-probe.log"
+  },
+  "checkpoint_cpu_quota_probe": {
+    "report": "/tmp/microvm-checkpoint-cpu-probe.json",
+    "same_image_and_memory": true,
+    "vm_cpu": [
+      0.1,
+      1
+    ],
+    "native_memory_snapshot_ms": [
+      638.044,
+      79.006
+    ],
+    "throttled_usec": [
+      1004896,
+      0
+    ],
+    "both_restored_and_removed": true
+  },
+  "sparse_object_fanout_probe": {
+    "owned_vm": "vm-8853c01e0b32acff",
+    "old_objects": 9,
+    "old_stored_bytes": 1728512,
+    "new_objects": 1,
+    "new_stored_bytes": 2093056,
+    "exact_file_sha256": "85b4249453b97df772679f846feb18d3580df132e75abc81c2cbe8bd0fcaf7ea",
+    "qemu_img_compare": "Images are identical.",
+    "artifact_on_test_host": "/mnt/beam/burst-20261103/probes/sparse-object-fanout-2/result.json"
+  },
+  "process_output_drain_failure": {
+    "evidence": {
+      "name": "burst-10802bc82d73-85",
+      "id": "vm-09571ed97da13aff",
+      "container_id": "vm-d1c758ac-79b9-42fd-82c7-26f9286da287-4b6324ab",
+      "original_command_wait": {
+        "container_id": "vm-d1c758ac-79b9-42fd-82c7-26f9286da287-4b6324ab",
+        "name": "burst-10802bc82d73-85",
+        "pid": 805,
+        "status_exit": 0,
+        "wait_error": "exec: WaitDelay expired before I/O complete",
+        "wait_exit": -1
+      },
+      "ram": "cdfb76b208a24fd49ccb5b42804221d9",
+      "disk": "cdfb76b208a24fd49ccb5b42804221d9",
+      "removed_after_forensics": true
+    },
+    "upstream": "github.com/beam-cloud/goproc v0.1.17",
+    "cause_proven_for_this_incident": true,
+    "upstream_regressions": "Both fail: 250ms delayed copier returns ErrWaitDelay; an actual drain failure reports successful status 0",
+    "patched_regressions": "Both pass, and full process-manager race suite passes",
+    "patch": "docker/patches/goproc/bounded-output-drain.patch",
+    "staging_validation_pending": false,
+    "historical_incidents": "Same class is plausible; their original processes were not retained, so exact causes remain unproven",
+    "staging_validation": "v25: all 100 initial and all 100 post-restore RAM, disk, and boot proofs exact; original failures remain recorded"
+  },
+  "image_fuse_bottleneck": {
+    "profile": "/tmp/microvm-v27ops-fuse.jsonl",
+    "image_device": "0:49",
+    "image_id": "e4dfe91b656cf522",
+    "open_requests": 79200,
+    "opendir_requests": 14002,
+    "file_open_aggregate_wait_ms": 43387.764131,
+    "opendir_aggregate_wait_ms": 18924.556271,
+    "kernel_response_write_total_ms": 285.295158,
+    "interpretation": "Many stateless OPEN/RELEASE RPCs and scheduling waits, not bulk bytes or long kernel writev calls",
+    "real_kernel_probe": {
+      "baseline_open": 324,
+      "baseline_release": 324,
+      "optimized_open": 3,
+      "optimized_release": 2,
+      "optimized_flush": 3,
+      "read_requests_both": 16,
+      "exact_mmap_parallel_reads_symlinks_modes": true,
+      "write_rejected_read_only": true,
+      "open_reader_blocks_unmount": true
+    },
+    "burst_candidate": {
+      "version": "v28",
+      "image_fuse_responses": 28407,
+      "baseline_responses": 184484,
+      "startup_ms": 2586.0462081618607,
+      "opendir_requests": 13713,
+      "opendir_aggregate_wait_ms": 39993.271,
+      "result": "No whole-startup improvement; directory-open scheduling waits increased. Testing zero-message opendir next."
+    },
+    "directory_rpc_reference": "https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html",
+    "directory_candidate_v29": {
+      "image_fuse_responses": 1083,
+      "baseline_responses": 184484,
+      "opendir_requests": 0,
+      "startup_ms": 2605.2718753926456,
+      "guest_control_p50_ms": 480.4,
+      "prior_v28_guest_control_p50_ms": 907.6,
+      "host_prepare_p95_ms": 727.9,
+      "durable_disk_attach_max_ms": 930.9,
+      "large_directory_seek_parallel_and_busy_reader_real_kernel_tests_passed": true,
+      "conclusion": "Guest readiness improved; host preparation and cgroup scheduling tails now dominate whole startup."
+    },
+    "scope_caveat": "Aggregate fixed-window counts include verification work; real isolated FUSE correctness/opcode tests are valid, and whole-launch timings show no proven end-to-end win."
+  },
+  "checkpoint_disk_pipeline": {
+    "candidate": "v30",
+    "enabled_only_terminal_native_single_writable_qcow_disk": true,
+    "all_100_state_proofs_exact": true,
+    "pause_ms": 9917.89,
+    "restore_ms": 5063.22,
+    "runtime_capture_p50_ms": 1601.0,
+    "disk_seal_max_ms": 1044.0,
+    "final_detach_p50_ms": 1921.0,
+    "final_detach_max_ms": 3706.8,
+    "final_state_file_sync_max_ms": 3432.8,
+    "finding": "Post-stop attachment-state fsync has become a dominant pause tail; testing separate recoverable hint without modifying durable payload state."
+  },
+  "detached_marker_probe": {
+    "v32_pause_ms": 8578.12,
+    "attempts": 100,
+    "synchronous_fallbacks": 100,
+    "reason": "DeepEqual rejected semantically identical drained empty slices omitted by JSON; fast-path performance unproven in this run",
+    "corrected_next_candidate": "v33",
+    "real_qcow_map_safety_cases_passed": 12,
+    "corrected_drained_pending_slice_regression_added": true,
+    "authoritative_manifest_bytes_preserved": true,
+    "unpublished_writes_retained": true,
+    "v33": {
+      "fast_detaches": 100,
+      "synchronous_fallbacks": 0,
+      "detach_max_ms": 8.8,
+      "hint_max_ms": 1.1,
+      "all_state_proofs_exact": true,
+      "pause_ms": 12188.55,
+      "origin_upload_tail_ms": 9024.9,
+      "restore_ms": 4921.83
+    }
+  },
+  "buffered_logging_probe": {
+    "run": "v33",
+    "queue_peak_bytes": 299596,
+    "limit_bytes": 8388608,
+    "backpressure_waits": 0,
+    "accepted_and_flushed_chunks": 17582,
+    "sink_error": false,
+    "startup_ms": 2902.15,
+    "whole_startup_improvement_proved": false,
+    "remaining_issue": "Cold-boot VM cgroups collectively starve worker service preparation; testing explicit boot shares while retaining deferred tenant limits."
+  },
+  "origin_upload_hedge_v35": {
+    "stage_delay_ms": 1250,
+    "maximum_extra_concurrent_upload_calls": 4,
+    "eligible_single_put_max_bytes_exclusive": 67108864,
+    "pause_ms": 12844.3386,
+    "restore_ms": 3770.7932,
+    "exact_restored_proofs": 100,
+    "result": "Missed pause target. Slowest checkpoint: 2.001s runtime capture, 0.556s process-manager copy, 2.051s archive admission, 1.128s archive, 0.312s upload admission, 6.257s origin upload. Hedge began 4.941s after primary start and won after 1.315s; primary cancellation joined before acknowledgement."
+  },
+  "boot_cpu_weight_probe_v39": {
+    "boot_shares": 400,
+    "cgroup_weight": 16,
+    "start_ms": 2334.88,
+    "pause_ms": 8705.95,
+    "immediate_restore_ms": 9068.29,
+    "exact_initial_and_restored_proofs": 100,
+    "removed": 100,
+    "result": "Modest startup gain from v38 weight=4, targets still unmet. Per-VM core scheduling unchanged."
+  },
+  "socket_readiness_probe_v40": {
+    "authenticated_probes": 167,
+    "v38_probes": 1788,
+    "startup_ms": 2673.0,
+    "pause_ms": 8341.5,
+    "immediate_restore_ms": 8933.25,
+    "all_100_proofs_exact": true,
+    "result": "No startup win in this run despite fewer channel constructions; pause still misses target. Longer cache quiet period did not solve immediate restore tail."
+  },
+  "systemd_boot_status_probe_v41": {
+    "kernel_parameter": "systemd.show_status=error",
+    "start_ms": 2346.2,
+    "pause_ms": 8655.71,
+    "restore_ms": 8563.45,
+    "all_100_proofs_exact": true,
+    "result": "No target met. Routine progress now suppressed, unit failure statuses retained."
+  },
+  "pause_before_io_admission_v42": {
+    "runtime_io_slots": 32,
+    "unarchived_checkpoint_bound": 100,
+    "change": "Freeze/pause guest before queueing for pivot and memory-write admission; keep IO slot through runtime capture and release before compression.",
+    "checks": [
+      "race: queued cancellation after pause does not enter memory capture",
+      "race: duplicate paused callback does not acquire twice",
+      "race: failures before pause retain no IO slot",
+      "native snapshot: seal failure resumes before capture",
+      "native snapshot: CPU quota/weight restore and resource-update serialization",
+      "native snapshot: lost pause-response recovery"
+    ],
+    "stage_burst_pending": false,
+    "first_burst_pause_ms": 7855.259332805872,
+    "startup_ms": 2295.1699160039425,
+    "all_100_initial_and_restore_proofs_exact": true,
+    "removed": 100,
+    "immediate_restore_ms": 9313.24,
+    "result": "First durable pause target pass at 7855.26ms; startup 2295.17ms still misses, immediate restore also exceeds original 5s target."
+  },
+  "profiling_scope_correction": {
+    "applies_to": "fixed-duration profiles through v34",
+    "startup": "Four-second profiles included verification after launch; historical aggregate CPU/FUSE counts cannot all be attributed to cold boot. Benchmark wall times and lifecycle spans remain valid.",
+    "pause": "Twenty-second captures included subsequent restore; historical whole-window CPU and IO shares are not pause-only. Initial-container-ID filtered detach timings remain valid.",
+    "perf_clock": "Historical perf used MONOTONIC_RAW, differing from MONOTONIC by about 15.8 seconds; v35 uses explicit mono clock and acknowledged enable before launch.",
+    "v35": "Harness gates state seeding until startup profile ends and gates restore until pause profile ends. CPU samples filtered to worker lifecycle span bounds. The initial perf command still lacks explicit guest sampling, so host vCPU samples do not identify guest kernel functions."
+  }
+}

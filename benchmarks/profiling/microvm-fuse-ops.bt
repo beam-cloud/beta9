@@ -1,0 +1,23 @@
+BEGIN { printf("{\"ready\":true}\n"); }
+kfunc:fuse_dev_do_write /comm == "worker"/ {
+ @started[tid]=nsecs;
+ @device[tid]=args.fud->fc->dev;
+ @size[tid]=args.nbytes;
+}
+kretfunc:fuse_dev_do_write /@started[tid]/ {
+ $d=@device[tid];$elapsed=nsecs-@started[tid];
+ @calls[$d]=count();@total[$d]=sum($elapsed);@maximum[$d]=max($elapsed);@bytes[$d]=sum(@size[tid]);
+ delete(@started[tid]);delete(@device[tid]);delete(@size[tid]);
+}
+kfunc:fuse_simple_request /comm == "virtiofsd" || comm == "worker"/ {
+ @request_started[tid]=nsecs;@request_device[tid]=args.fm->fc->dev;@request_opcode[tid]=args.args->opcode;
+}
+kretfunc:fuse_simple_request /@request_started[tid]/ {
+ $d=@request_device[tid];$op=@request_opcode[tid];$elapsed=nsecs-@request_started[tid];
+ @request_calls[$d,$op]=count();@request_total[$d,$op]=sum($elapsed);@request_max[$d,$op]=max($elapsed);
+ delete(@request_started[tid]);delete(@request_device[tid]);delete(@request_opcode[tid]);
+}
+END {
+ print(@calls);print(@total);print(@maximum);print(@bytes);print(@request_calls);print(@request_total);print(@request_max);
+ clear(@calls);clear(@total);clear(@maximum);clear(@bytes);clear(@started);clear(@device);clear(@size);clear(@request_calls);clear(@request_total);clear(@request_max);clear(@request_started);clear(@request_device);clear(@request_opcode);
+}

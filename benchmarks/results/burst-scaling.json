@@ -1,0 +1,4636 @@
+{
+  "conditions": {
+    "pool": "microvm-cpu",
+    "image_id": "e4dfe91b656cf522",
+    "worker_binary_sha256": "99771df9165ed2318a4b9071a75aef17ff31a0da04cc540187cb7b5d853c19ec",
+    "persistent_go_sampling": false,
+    "bounded_startup_tracing": true,
+    "kernel_initcall_debug": false,
+    "SMT_VM_isolation": true,
+    "guest_cpu": 1,
+    "workload_cpu": 0.1,
+    "workload_memory_mib": 512,
+    "guest_memory_mib": 1024,
+    "disk_size": "1GiB",
+    "ssh": false,
+    "desktop": false,
+    "boot_cpu_weight": 16,
+    "virtiofsd_threads": 16,
+    "boot_batch_window": "0s",
+    "gateway": "Okteto diagnostic gateway with prewarmed 32-connection DB pool; gateway sampling remains enabled",
+    "outside_clock": [
+      "image preparation",
+      "SDK/HTTP connections",
+      "prepared network inventory",
+      "spare disk inventory"
+    ],
+    "cohorts": {
+      "10": 10,
+      "50": 2
+    },
+    "sample_total_per_burst_size": 100,
+    "notes": [
+      "Startup-only study, initial guest boot/RAM/disk proof required for every VM; no pause/restore cycles.",
+      "Different configuration than historical v42: persistent worker sampling and kernel initcall debug off. Do not mix historical 100-VM figures into these pooled quantiles.",
+      "Observed nearest-rank p95/p99; repeats within a cohort share load and are not independent estimates of a production SLO."
+    ]
+  },
+  "summary": [
+    {
+      "burst_size": 10,
+      "cohorts": 10,
+      "samples": 100,
+      "launch": {
+        "n": 100,
+        "p50_ms": 411.890750285238,
+        "p95_ms": 457.5890419073403,
+        "p99_ms": 464.64262483641505,
+        "max_ms": 465.1296245865524
+      },
+      "whole_burst_wall": {
+        "n": 10,
+        "p50_ms": 426.9457911141217,
+        "p95_ms": 467.7047501318157,
+        "p99_ms": 467.7047501318157,
+        "max_ms": 467.7047501318157
+      }
+    },
+    {
+      "burst_size": 50,
+      "cohorts": 2,
+      "samples": 100,
+      "launch": {
+        "n": 100,
+        "p50_ms": 1039.0897919423878,
+        "p95_ms": 1115.718916989863,
+        "p99_ms": 1123.2913751155138,
+        "max_ms": 1135.364375077188
+      },
+      "whole_burst_wall": {
+        "n": 2,
+        "p50_ms": 1112.9407496191561,
+        "p95_ms": 1140.8733753487468,
+        "p99_ms": 1140.8733753487468,
+        "max_ms": 1140.8733753487468
+      }
+    }
+  ],
+  "cohorts": [
+    {
+      "count": 10,
+      "ordinal": 1,
+      "wall_ms": 465.0284997187555,
+      "client_user_cpu_ms": 18.037999999999997,
+      "client_system_cpu_ms": 12.937000000000005,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 5.625,
+      "n": 10,
+      "p50_ms": 447.629916947335,
+      "p95_ms": 464.64262483641505,
+      "p99_ms": 464.64262483641505,
+      "max_ms": 464.64262483641505
+    },
+    {
+      "count": 10,
+      "ordinal": 2,
+      "wall_ms": 457.91916688904166,
+      "client_user_cpu_ms": 14.364000000000043,
+      "client_system_cpu_ms": 7.695999999999994,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 6.81,
+      "n": 10,
+      "p50_ms": 438.9332076534629,
+      "p95_ms": 455.85733419284225,
+      "p99_ms": 455.85733419284225,
+      "max_ms": 455.85733419284225
+    },
+    {
+      "count": 10,
+      "ordinal": 3,
+      "wall_ms": 418.0906666442752,
+      "client_user_cpu_ms": 10.59400000000002,
+      "client_system_cpu_ms": 6.6090000000000035,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 2.383,
+      "n": 10,
+      "p50_ms": 396.92754205316305,
+      "p95_ms": 417.6675002090633,
+      "p99_ms": 417.6675002090633,
+      "max_ms": 417.6675002090633
+    },
+    {
+      "count": 10,
+      "ordinal": 4,
+      "wall_ms": 415.25445925071836,
+      "client_user_cpu_ms": 14.002000000000015,
+      "client_system_cpu_ms": 7.474999999999995,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 3.652,
+      "n": 10,
+      "p50_ms": 400.5155418999493,
+      "p95_ms": 414.35716673731804,
+      "p99_ms": 414.35716673731804,
+      "max_ms": 414.35716673731804
+    },
+    {
+      "count": 10,
+      "ordinal": 5,
+      "wall_ms": 423.3174999244511,
+      "client_user_cpu_ms": 9.038000000000018,
+      "client_system_cpu_ms": 5.534999999999998,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 1.822,
+      "n": 10,
+      "p50_ms": 393.6482910066843,
+      "p95_ms": 423.1007075868547,
+      "p99_ms": 423.1007075868547,
+      "max_ms": 423.1007075868547
+    },
+    {
+      "count": 10,
+      "ordinal": 6,
+      "wall_ms": 419.43058324977756,
+      "client_user_cpu_ms": 13.172000000000017,
+      "client_system_cpu_ms": 6.756999999999999,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 2.093,
+      "n": 10,
+      "p50_ms": 396.3343328796327,
+      "p95_ms": 418.3962079696357,
+      "p99_ms": 418.3962079696357,
+      "max_ms": 418.3962079696357
+    },
+    {
+      "count": 10,
+      "ordinal": 7,
+      "wall_ms": 436.0886667855084,
+      "client_user_cpu_ms": 8.222999999999981,
+      "client_system_cpu_ms": 5.378000000000008,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 1.48,
+      "n": 10,
+      "p50_ms": 413.2564999163151,
+      "p95_ms": 435.96458435058594,
+      "p99_ms": 435.96458435058594,
+      "max_ms": 435.96458435058594
+    },
+    {
+      "count": 10,
+      "ordinal": 8,
+      "wall_ms": 426.9457911141217,
+      "client_user_cpu_ms": 11.900000000000022,
+      "client_system_cpu_ms": 7.327,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 3.667,
+      "n": 10,
+      "p50_ms": 403.9870002306998,
+      "p95_ms": 426.81433307006955,
+      "p99_ms": 426.81433307006955,
+      "max_ms": 426.81433307006955
+    },
+    {
+      "count": 10,
+      "ordinal": 9,
+      "wall_ms": 467.7047501318157,
+      "client_user_cpu_ms": 15.112000000000014,
+      "client_system_cpu_ms": 8.168999999999995,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 2.915,
+      "n": 10,
+      "p50_ms": 401.40241710469127,
+      "p95_ms": 465.1296245865524,
+      "p99_ms": 465.1296245865524,
+      "max_ms": 465.1296245865524
+    },
+    {
+      "count": 10,
+      "ordinal": 10,
+      "wall_ms": 442.9744170047343,
+      "client_user_cpu_ms": 14.268000000000002,
+      "client_system_cpu_ms": 7.017999999999996,
+      "removed": 10,
+      "proofs_exact": true,
+      "client_start_spread_ms": 1.682,
+      "n": 10,
+      "p50_ms": 422.3553752526641,
+      "p95_ms": 441.555832978338,
+      "p99_ms": 441.555832978338,
+      "max_ms": 441.555832978338
+    },
+    {
+      "count": 50,
+      "ordinal": 1,
+      "wall_ms": 1140.8733753487468,
+      "client_user_cpu_ms": 66.84900000000005,
+      "client_system_cpu_ms": 47.343000000000025,
+      "removed": 50,
+      "proofs_exact": true,
+      "client_start_spread_ms": 17.188,
+      "n": 50,
+      "p50_ms": 1056.6116669215262,
+      "p95_ms": 1119.6287497878075,
+      "p99_ms": 1135.364375077188,
+      "max_ms": 1135.364375077188
+    },
+    {
+      "count": 50,
+      "ordinal": 2,
+      "wall_ms": 1112.9407496191561,
+      "client_user_cpu_ms": 54.724,
+      "client_system_cpu_ms": 38.382,
+      "removed": 50,
+      "proofs_exact": true,
+      "client_start_spread_ms": 17.494,
+      "n": 50,
+      "p50_ms": 1015.8084579743445,
+      "p95_ms": 1089.9521671235561,
+      "p99_ms": 1109.0699592605233,
+      "max_ms": 1109.0699592605233
+    }
+  ],
+  "coverage": [
+    {
+      "burst": "scale-v48-n10-r01",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r02",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r03",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r04",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r05",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r06",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r07",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r08",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r09",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n10-r10",
+      "expected": 10,
+      "worker": 10,
+      "gateway": 10,
+      "guest": 10
+    },
+    {
+      "burst": "scale-v48-n50-r01",
+      "expected": 50,
+      "worker": 50,
+      "gateway": 50,
+      "guest": 50
+    },
+    {
+      "burst": "scale-v48-n50-r02",
+      "expected": 50,
+      "worker": 50,
+      "gateway": 50,
+      "guest": 50
+    }
+  ],
+  "stages": [
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "api.create",
+      "n": 100,
+      "p50_ms": 379.304,
+      "p95_ms": 425.782,
+      "p99_ms": 431.872,
+      "max_ms": 435.41
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "api.exec_readiness",
+      "n": 100,
+      "p50_ms": 291.436,
+      "p95_ms": 329.509,
+      "p99_ms": 337.966,
+      "max_ms": 342.429
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "api.response_encode",
+      "n": 100,
+      "p50_ms": 0.035,
+      "p95_ms": 0.056,
+      "p99_ms": 0.06,
+      "max_ms": 0.065
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "disk.batch_database_commit",
+      "n": 91,
+      "p50_ms": 6.377,
+      "p95_ms": 12.153,
+      "p99_ms": 12.672,
+      "max_ms": 12.672
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "disk.batch_wait_and_commit",
+      "n": 100,
+      "p50_ms": 10.464,
+      "p95_ms": 18.061,
+      "p99_ms": 20.94,
+      "max_ms": 23.655
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "http.authenticate",
+      "n": 100,
+      "p50_ms": 0.419,
+      "p95_ms": 0.654,
+      "p99_ms": 0.751,
+      "max_ms": 0.902
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "http.handler",
+      "n": 100,
+      "p50_ms": 379.309,
+      "p95_ms": 425.786,
+      "p99_ms": 431.875,
+      "max_ms": 435.415
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "readiness.container_state",
+      "n": 100,
+      "p50_ms": 0.317,
+      "p95_ms": 0.97,
+      "p99_ms": 4.16,
+      "max_ms": 5.683
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "readiness.worker_address",
+      "n": 100,
+      "p50_ms": 51.203,
+      "p95_ms": 101.168,
+      "p99_ms": 101.235,
+      "max_ms": 101.262
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "readiness.worker_client",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.003,
+      "p99_ms": 0.004,
+      "max_ms": 0.005
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "readiness.worker_rpc",
+      "n": 100,
+      "p50_ms": 231.075,
+      "p95_ms": 262.222,
+      "p99_ms": 269.675,
+      "max_ms": 270.723
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.backlog_push",
+      "n": 100,
+      "p50_ms": 1.068,
+      "p95_ms": 1.587,
+      "p99_ms": 1.783,
+      "max_ms": 6.654
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.checkpoint",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.003,
+      "max_ms": 0.012
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.container_state",
+      "n": 100,
+      "p50_ms": 1.445,
+      "p95_ms": 2.209,
+      "p99_ms": 5.555,
+      "max_ms": 7.255
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.credit",
+      "n": 100,
+      "p50_ms": 0.29,
+      "p95_ms": 0.515,
+      "p99_ms": 0.656,
+      "max_ms": 0.706
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.disk_placement",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002,
+      "p99_ms": 0.008,
+      "max_ms": 0.02
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.keep_warm",
+      "n": 100,
+      "p50_ms": 0.306,
+      "p95_ms": 0.596,
+      "p99_ms": 0.946,
+      "max_ms": 2.078
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.mounts",
+      "n": 100,
+      "p50_ms": 0.003,
+      "p95_ms": 0.005,
+      "p99_ms": 0.008,
+      "max_ms": 0.052
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.pod_run",
+      "n": 100,
+      "p50_ms": 6.633,
+      "p95_ms": 13.431,
+      "p99_ms": 19.488,
+      "max_ms": 20.704
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.quota",
+      "n": 100,
+      "p50_ms": 2.237,
+      "p95_ms": 7.502,
+      "p99_ms": 15.695,
+      "max_ms": 16.985
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.quota_exemption",
+      "n": 100,
+      "p50_ms": 0.532,
+      "p95_ms": 0.972,
+      "p99_ms": 1.191,
+      "max_ms": 2.572
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.scheduler_run",
+      "n": 100,
+      "p50_ms": 6.144,
+      "p95_ms": 12.969,
+      "p99_ms": 19.097,
+      "max_ms": 19.927
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.secrets",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.002,
+      "max_ms": 0.03
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "schedule.stub_database",
+      "n": 100,
+      "p50_ms": 4.511,
+      "p95_ms": 10.442,
+      "p99_ms": 12.335,
+      "max_ms": 13.723
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.app_database",
+      "n": 100,
+      "p50_ms": 3.105,
+      "p95_ms": 6.696,
+      "p99_ms": 8.208,
+      "max_ms": 8.683
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.authorize_image",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.004,
+      "max_ms": 0.004
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.batch_database_commit",
+      "n": 94,
+      "p50_ms": 14.414,
+      "p95_ms": 19.915,
+      "p99_ms": 26.176,
+      "max_ms": 26.176
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.batch_wait_and_commit",
+      "n": 100,
+      "p50_ms": 20.968,
+      "p95_ms": 32.374,
+      "p99_ms": 40.208,
+      "max_ms": 40.243
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.database_write",
+      "n": 100,
+      "p50_ms": 21.006,
+      "p95_ms": 32.383,
+      "p99_ms": 40.216,
+      "max_ms": 40.276
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.disk_database",
+      "n": 100,
+      "p50_ms": 13.5,
+      "p95_ms": 23.705,
+      "p99_ms": 24.245,
+      "max_ms": 27.186
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.disk_placement",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002,
+      "p99_ms": 0.004,
+      "max_ms": 0.016
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.identity",
+      "n": 100,
+      "p50_ms": 13.519,
+      "p95_ms": 23.726,
+      "p99_ms": 24.303,
+      "max_ms": 27.208
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.object_database",
+      "n": 100,
+      "p50_ms": 3.162,
+      "p95_ms": 6.542,
+      "p99_ms": 7.658,
+      "max_ms": 7.776
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.prepare",
+      "n": 100,
+      "p50_ms": 34.135,
+      "p95_ms": 55.857,
+      "p99_ms": 65.519,
+      "max_ms": 65.569
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.references",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.003,
+      "p99_ms": 0.004,
+      "max_ms": 0.005
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.resource_policy",
+      "n": 100,
+      "p50_ms": 0.938,
+      "p95_ms": 1.422,
+      "p99_ms": 1.54,
+      "max_ms": 1.597
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.secrets",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.007,
+      "max_ms": 0.011
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "stub.volumes",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.002,
+      "p99_ms": 0.006,
+      "max_ms": 0.022
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.batch_database_commit",
+      "n": 289,
+      "p50_ms": 7.083,
+      "p95_ms": 9.911,
+      "p99_ms": 15.442,
+      "max_ms": 18.751
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.batch_wait_and_commit",
+      "n": 300,
+      "p50_ms": 8.901,
+      "p95_ms": 14.471,
+      "p99_ms": 16.582,
+      "max_ms": 19.874
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.create",
+      "n": 100,
+      "p50_ms": 86.686,
+      "p95_ms": 103.554,
+      "p99_ms": 118.106,
+      "max_ms": 118.125
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.idempotency_lookup",
+      "n": 100,
+      "p50_ms": 1.66,
+      "p95_ms": 4.192,
+      "p99_ms": 4.709,
+      "max_ms": 7.201
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.insert",
+      "n": 100,
+      "p50_ms": 10.953,
+      "p95_ms": 16.173,
+      "p99_ms": 16.57,
+      "max_ms": 16.799
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.lock",
+      "n": 100,
+      "p50_ms": 2.411,
+      "p95_ms": 4.91,
+      "p99_ms": 5.486,
+      "max_ms": 5.783
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.prepare_stub",
+      "n": 100,
+      "p50_ms": 34.159,
+      "p95_ms": 55.87,
+      "p99_ms": 65.523,
+      "max_ms": 65.58
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.public_ipv6",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001,
+      "max_ms": 0.003
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.runtime_state",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001,
+      "max_ms": 0.006
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.save_attempt",
+      "n": 100,
+      "p50_ms": 8.541,
+      "p95_ms": 11.122,
+      "p99_ms": 16.581,
+      "max_ms": 16.611
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.save_runtime_identity",
+      "n": 100,
+      "p50_ms": 8.45,
+      "p95_ms": 14.509,
+      "p99_ms": 19.877,
+      "max_ms": 19.898
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.schedule",
+      "n": 100,
+      "p50_ms": 11.906,
+      "p95_ms": 17.368,
+      "p99_ms": 33.128,
+      "max_ms": 33.287
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.start",
+      "n": 100,
+      "p50_ms": 69.348,
+      "p95_ms": 85.78,
+      "p99_ms": 96.651,
+      "max_ms": 96.743
+    },
+    {
+      "burst_size": 10,
+      "component": "gateway",
+      "stage": "vm.validate_memory_disks",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "claim.commit_network_slot",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.007,
+      "p99_ms": 0.011,
+      "max_ms": 0.025
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "claim.prepare_network_slot",
+      "n": 100,
+      "p50_ms": 0.013,
+      "p95_ms": 0.029,
+      "p99_ms": 0.032,
+      "max_ms": 0.052
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "claim.rpc_roundtrip",
+      "n": 100,
+      "p50_ms": 38.604,
+      "p95_ms": 40.944,
+      "p99_ms": 64.433,
+      "max_ms": 67.809
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "disk.adopt_spare",
+      "n": 100,
+      "p50_ms": 2.627,
+      "p95_ms": 18.459,
+      "p99_ms": 34.399,
+      "max_ms": 34.874
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "disk.attach",
+      "n": 100,
+      "p50_ms": 3.023,
+      "p95_ms": 18.492,
+      "p99_ms": 34.443,
+      "max_ms": 34.917
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "disk.attach_admission",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.004,
+      "max_ms": 0.019
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "disk.persist_adoption",
+      "n": 100,
+      "p50_ms": 2.455,
+      "p95_ms": 18.418,
+      "p99_ms": 34.348,
+      "max_ms": 34.83
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "disk.rekey_spare",
+      "n": 100,
+      "p50_ms": 2.623,
+      "p95_ms": 18.458,
+      "p99_ms": 34.397,
+      "max_ms": 34.872
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "disk.spare_recency",
+      "n": 100,
+      "p50_ms": 0.01,
+      "p95_ms": 0.025,
+      "p99_ms": 11.063,
+      "max_ms": 15.659
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "disk.state.directory_sync",
+      "n": 100,
+      "p50_ms": 0.729,
+      "p95_ms": 1.018,
+      "p99_ms": 1.406,
+      "max_ms": 1.912
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "disk.state.file_sync",
+      "n": 100,
+      "p50_ms": 1.663,
+      "p95_ms": 17.589,
+      "p99_ms": 33.526,
+      "max_ms": 33.86
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.boot_admission",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001,
+      "max_ms": 0.002
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.boot_batch_admission",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.canvas",
+      "n": 100,
+      "p50_ms": 0.429,
+      "p95_ms": 0.709,
+      "p99_ms": 0.823,
+      "max_ms": 0.846
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.cgroup",
+      "n": 100,
+      "p50_ms": 0.204,
+      "p95_ms": 0.448,
+      "p99_ms": 0.575,
+      "max_ms": 0.624
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.cgroup.cpu_weight",
+      "n": 100,
+      "p50_ms": 0.011,
+      "p95_ms": 0.022,
+      "p99_ms": 0.028,
+      "max_ms": 0.031
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.cgroup.memory_max",
+      "n": 100,
+      "p50_ms": 0.019,
+      "p95_ms": 0.146,
+      "p99_ms": 0.229,
+      "max_ms": 0.239
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.cgroup.mkdir",
+      "n": 100,
+      "p50_ms": 0.153,
+      "p95_ms": 0.361,
+      "p99_ms": 0.459,
+      "max_ms": 0.475
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.control_listener",
+      "n": 100,
+      "p50_ms": 0.039,
+      "p95_ms": 0.084,
+      "p99_ms": 0.207,
+      "max_ms": 1.948
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.disks",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.003,
+      "p99_ms": 0.004,
+      "max_ms": 0.004
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.guest_control_ready",
+      "n": 100,
+      "p50_ms": 156.231,
+      "p95_ms": 174.188,
+      "p99_ms": 178.767,
+      "max_ms": 181.185
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.hypervisor_spawn",
+      "n": 100,
+      "p50_ms": 0.265,
+      "p95_ms": 0.691,
+      "p99_ms": 1.975,
+      "max_ms": 14.015
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.instance",
+      "n": 100,
+      "p50_ms": 0.057,
+      "p95_ms": 0.097,
+      "p99_ms": 0.108,
+      "max_ms": 0.155
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.network",
+      "n": 100,
+      "p50_ms": 0.037,
+      "p95_ms": 0.07,
+      "p99_ms": 0.085,
+      "max_ms": 0.108
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.numa",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.pre_daemon_admission",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002,
+      "p99_ms": 0.003,
+      "max_ms": 0.003
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.prepare",
+      "n": 100,
+      "p50_ms": 6.382,
+      "p95_ms": 7.07,
+      "p99_ms": 8.02,
+      "max_ms": 9.086
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.state_directory",
+      "n": 100,
+      "p50_ms": 0.031,
+      "p95_ms": 0.071,
+      "p99_ms": 0.235,
+      "max_ms": 0.273
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "microvm.virtiofsd",
+      "n": 100,
+      "p50_ms": 5.513,
+      "p95_ms": 6.33,
+      "p99_ms": 6.39,
+      "max_ms": 7.459
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "mount.bind_source_dirs",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.003,
+      "p99_ms": 0.003,
+      "max_ms": 0.004
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "mount.durable_disk",
+      "n": 100,
+      "p50_ms": 3.457,
+      "p95_ms": 18.552,
+      "p99_ms": 34.538,
+      "max_ms": 35.06
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "mount.overlay_setup",
+      "n": 100,
+      "p50_ms": 0.26,
+      "p95_ms": 0.418,
+      "p99_ms": 0.585,
+      "max_ms": 0.591
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "mount.setup",
+      "n": 100,
+      "p50_ms": 0.075,
+      "p95_ms": 0.287,
+      "p99_ms": 0.436,
+      "max_ms": 0.451
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "network.container_lock",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.003,
+      "p99_ms": 0.003,
+      "max_ms": 0.004
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "network.egress_register",
+      "n": 100,
+      "p50_ms": 0.003,
+      "p95_ms": 0.01,
+      "p99_ms": 0.012,
+      "max_ms": 0.017
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "network.expose_ports",
+      "n": 100,
+      "p50_ms": 0.011,
+      "p95_ms": 0.026,
+      "p99_ms": 0.073,
+      "max_ms": 0.093
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "network.restrictions",
+      "n": 100,
+      "p50_ms": 0.003,
+      "p95_ms": 0.011,
+      "p99_ms": 0.013,
+      "max_ms": 0.018
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "network.setup",
+      "n": 100,
+      "p50_ms": 0.019,
+      "p95_ms": 0.052,
+      "p99_ms": 0.087,
+      "max_ms": 0.15
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "network.slot_setup",
+      "n": 100,
+      "p50_ms": 0.008,
+      "p95_ms": 0.029,
+      "p99_ms": 0.033,
+      "max_ms": 0.13
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "runtime.config_write",
+      "n": 100,
+      "p50_ms": 0.029,
+      "p95_ms": 0.067,
+      "p99_ms": 0.219,
+      "max_ms": 0.471
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "runtime.prepare",
+      "n": 100,
+      "p50_ms": 0.004,
+      "p95_ms": 0.008,
+      "p99_ms": 0.01,
+      "max_ms": 0.054
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "sandbox.process_manager_authenticated_ready",
+      "n": 100,
+      "p50_ms": 2.351,
+      "p95_ms": 7.658,
+      "p99_ms": 9.554,
+      "max_ms": 11.237
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "sandbox.process_manager_client",
+      "n": 100,
+      "p50_ms": 0.035,
+      "p95_ms": 0.065,
+      "p99_ms": 0.072,
+      "max_ms": 0.088
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "sandbox.process_manager_ready",
+      "n": 100,
+      "p50_ms": 188.115,
+      "p95_ms": 209.811,
+      "p99_ms": 218.574,
+      "max_ms": 219.933
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "sandbox.wait_guest_control",
+      "n": 100,
+      "p50_ms": 155.75,
+      "p95_ms": 173.071,
+      "p99_ms": 178.403,
+      "max_ms": 179.836
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "sandbox.wait_process_manager_socket",
+      "n": 100,
+      "p50_ms": 26.524,
+      "p95_ms": 43.408,
+      "p99_ms": 48.681,
+      "max_ms": 50.188
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.claim_rpc",
+      "n": 100,
+      "p50_ms": 38.658,
+      "p95_ms": 40.967,
+      "p99_ms": 64.466,
+      "max_ms": 67.896
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.egress_trust",
+      "n": 100,
+      "p50_ms": 0.304,
+      "p95_ms": 0.557,
+      "p99_ms": 0.752,
+      "max_ms": 1.666
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.network_and_devices",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.port_allocation",
+      "n": 100,
+      "p50_ms": 0.075,
+      "p95_ms": 0.217,
+      "p99_ms": 0.235,
+      "max_ms": 0.266
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.pre_claim",
+      "n": 100,
+      "p50_ms": 0.047,
+      "p95_ms": 0.098,
+      "p99_ms": 0.115,
+      "max_ms": 0.123
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.prepare",
+      "n": 100,
+      "p50_ms": 3.811,
+      "p95_ms": 19.027,
+      "p99_ms": 34.982,
+      "max_ms": 35.364
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.prune_sdk_mounts",
+      "n": 100,
+      "p50_ms": 0.043,
+      "p95_ms": 0.068,
+      "p99_ms": 0.083,
+      "max_ms": 0.085
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.read_bundle_config",
+      "n": 100,
+      "p50_ms": 0.01,
+      "p95_ms": 0.019,
+      "p99_ms": 0.022,
+      "max_ms": 0.033
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.resolve_image_user",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.sandbox_process",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.004,
+      "p99_ms": 0.007,
+      "max_ms": 0.008
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.serialize_config",
+      "n": 100,
+      "p50_ms": 0.02,
+      "p95_ms": 0.043,
+      "p99_ms": 0.056,
+      "max_ms": 0.099
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.service_proxy",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002,
+      "p99_ms": 0.003,
+      "max_ms": 0.004
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.service_proxy_sni",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002,
+      "p99_ms": 0.002,
+      "max_ms": 0.002
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.set_address_map",
+      "n": 100,
+      "p50_ms": 35.997,
+      "p95_ms": 37.998,
+      "p99_ms": 46.889,
+      "max_ms": 49.661
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.spawn_setup",
+      "n": 100,
+      "p50_ms": 0.003,
+      "p95_ms": 0.007,
+      "p99_ms": 0.007,
+      "max_ms": 0.025
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.spec_from_request",
+      "n": 100,
+      "p50_ms": 0.197,
+      "p95_ms": 0.302,
+      "p99_ms": 0.429,
+      "max_ms": 0.476
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.start_queue_wait",
+      "n": 100,
+      "p50_ms": 0.005,
+      "p95_ms": 0.009,
+      "p99_ms": 0.01,
+      "max_ms": 0.013
+    },
+    {
+      "burst_size": 10,
+      "component": "worker",
+      "stage": "worker.trace_envelope",
+      "n": 100,
+      "p50_ms": 241.914978,
+      "p95_ms": 275.1294,
+      "p99_ms": 286.142417,
+      "max_ms": 286.558776
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "api.create",
+      "n": 100,
+      "p50_ms": 1001.881,
+      "p95_ms": 1084.034,
+      "p99_ms": 1087.569,
+      "max_ms": 1097.313
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "api.exec_readiness",
+      "n": 100,
+      "p50_ms": 787.218,
+      "p95_ms": 856.599,
+      "p99_ms": 881.256,
+      "max_ms": 884.117
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "api.response_encode",
+      "n": 100,
+      "p50_ms": 0.034,
+      "p95_ms": 0.048,
+      "p99_ms": 0.056,
+      "max_ms": 0.059
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "disk.batch_database_commit",
+      "n": 99,
+      "p50_ms": 9.003,
+      "p95_ms": 20.46,
+      "p99_ms": 32.073,
+      "max_ms": 32.073
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "disk.batch_wait_and_commit",
+      "n": 100,
+      "p50_ms": 24.56,
+      "p95_ms": 36.842,
+      "p99_ms": 36.932,
+      "max_ms": 37.194
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "http.authenticate",
+      "n": 100,
+      "p50_ms": 0.389,
+      "p95_ms": 0.578,
+      "p99_ms": 0.636,
+      "max_ms": 0.689
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "http.handler",
+      "n": 100,
+      "p50_ms": 1001.885,
+      "p95_ms": 1084.037,
+      "p99_ms": 1087.571,
+      "max_ms": 1097.316
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "readiness.container_state",
+      "n": 100,
+      "p50_ms": 0.418,
+      "p95_ms": 4.137,
+      "p99_ms": 11.312,
+      "max_ms": 11.978
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "readiness.worker_address",
+      "n": 100,
+      "p50_ms": 101.149,
+      "p95_ms": 126.606,
+      "p99_ms": 126.843,
+      "max_ms": 130.253
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "readiness.worker_client",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.003,
+      "p99_ms": 0.009,
+      "max_ms": 0.011
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "readiness.worker_rpc",
+      "n": 100,
+      "p50_ms": 688.919,
+      "p95_ms": 748.528,
+      "p99_ms": 757.035,
+      "max_ms": 763.753
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.backlog_push",
+      "n": 100,
+      "p50_ms": 1.576,
+      "p95_ms": 9.763,
+      "p99_ms": 9.912,
+      "max_ms": 16.829
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.checkpoint",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.003,
+      "max_ms": 0.004
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.container_state",
+      "n": 100,
+      "p50_ms": 2.15,
+      "p95_ms": 27.226,
+      "p99_ms": 44.423,
+      "max_ms": 49.707
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.credit",
+      "n": 100,
+      "p50_ms": 0.327,
+      "p95_ms": 2.131,
+      "p99_ms": 3.865,
+      "max_ms": 13.185
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.disk_placement",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002,
+      "p99_ms": 0.004,
+      "max_ms": 0.007
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.keep_warm",
+      "n": 100,
+      "p50_ms": 0.335,
+      "p95_ms": 8.113,
+      "p99_ms": 12.656,
+      "max_ms": 23.901
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.mounts",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.004,
+      "p99_ms": 0.004,
+      "max_ms": 0.004
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.pod_run",
+      "n": 100,
+      "p50_ms": 16.213,
+      "p95_ms": 60.96,
+      "p99_ms": 70.089,
+      "max_ms": 84.777
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.quota",
+      "n": 100,
+      "p50_ms": 5.481,
+      "p95_ms": 27.303,
+      "p99_ms": 31.799,
+      "max_ms": 33.832
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.quota_exemption",
+      "n": 100,
+      "p50_ms": 0.639,
+      "p95_ms": 5.164,
+      "p99_ms": 13.538,
+      "max_ms": 13.826
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.scheduler_run",
+      "n": 100,
+      "p50_ms": 15.849,
+      "p95_ms": 60.612,
+      "p99_ms": 69.72,
+      "max_ms": 84.453
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.secrets",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "schedule.stub_database",
+      "n": 100,
+      "p50_ms": 12.563,
+      "p95_ms": 40.927,
+      "p99_ms": 45.678,
+      "max_ms": 47.189
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.app_database",
+      "n": 100,
+      "p50_ms": 9.836,
+      "p95_ms": 19.417,
+      "p99_ms": 24.465,
+      "max_ms": 25.251
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.authorize_image",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001,
+      "max_ms": 0.009
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.batch_database_commit",
+      "n": 97,
+      "p50_ms": 26.821,
+      "p95_ms": 43.934,
+      "p99_ms": 44.521,
+      "max_ms": 44.521
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.batch_wait_and_commit",
+      "n": 100,
+      "p50_ms": 39.831,
+      "p95_ms": 56.466,
+      "p99_ms": 56.479,
+      "max_ms": 56.49
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.database_write",
+      "n": 100,
+      "p50_ms": 39.841,
+      "p95_ms": 56.481,
+      "p99_ms": 56.488,
+      "max_ms": 56.508
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.disk_database",
+      "n": 100,
+      "p50_ms": 34.771,
+      "p95_ms": 45.423,
+      "p99_ms": 54.926,
+      "max_ms": 55.041
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.disk_placement",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.002,
+      "p99_ms": 0.003,
+      "max_ms": 0.018
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.identity",
+      "n": 100,
+      "p50_ms": 34.794,
+      "p95_ms": 45.437,
+      "p99_ms": 54.952,
+      "max_ms": 55.071
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.object_database",
+      "n": 100,
+      "p50_ms": 6.95,
+      "p95_ms": 18.234,
+      "p99_ms": 21.425,
+      "max_ms": 36.491
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.prepare",
+      "n": 100,
+      "p50_ms": 69.444,
+      "p95_ms": 103.301,
+      "p99_ms": 103.395,
+      "max_ms": 103.428
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.references",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.003,
+      "p99_ms": 0.005,
+      "max_ms": 0.007
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.resource_policy",
+      "n": 100,
+      "p50_ms": 1.12,
+      "p95_ms": 1.433,
+      "p99_ms": 1.587,
+      "max_ms": 1.659
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.secrets",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "stub.volumes",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.batch_database_commit",
+      "n": 299,
+      "p50_ms": 18.148,
+      "p95_ms": 26.422,
+      "p99_ms": 26.45,
+      "max_ms": 26.454
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.batch_wait_and_commit",
+      "n": 300,
+      "p50_ms": 20.155,
+      "p95_ms": 37.085,
+      "p99_ms": 39.317,
+      "max_ms": 44.865
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.create",
+      "n": 100,
+      "p50_ms": 212.221,
+      "p95_ms": 237.739,
+      "p99_ms": 253.938,
+      "max_ms": 254.184
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.idempotency_lookup",
+      "n": 100,
+      "p50_ms": 3.057,
+      "p95_ms": 10.042,
+      "p99_ms": 11.245,
+      "max_ms": 11.838
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.insert",
+      "n": 100,
+      "p50_ms": 27.018,
+      "p95_ms": 38.54,
+      "p99_ms": 39.343,
+      "max_ms": 39.348
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.lock",
+      "n": 100,
+      "p50_ms": 3.728,
+      "p95_ms": 13.192,
+      "p99_ms": 14.331,
+      "max_ms": 14.901
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.prepare_stub",
+      "n": 100,
+      "p50_ms": 69.447,
+      "p95_ms": 103.308,
+      "p99_ms": 103.408,
+      "max_ms": 103.436
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.public_ipv6",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.002,
+      "max_ms": 0.002
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.runtime_state",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.002,
+      "p99_ms": 0.002,
+      "max_ms": 0.003
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.save_attempt",
+      "n": 100,
+      "p50_ms": 21.178,
+      "p95_ms": 27.925,
+      "p99_ms": 27.939,
+      "max_ms": 27.964
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.save_runtime_identity",
+      "n": 100,
+      "p50_ms": 15.524,
+      "p95_ms": 18.49,
+      "p99_ms": 41.073,
+      "max_ms": 44.89
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.schedule",
+      "n": 100,
+      "p50_ms": 31.084,
+      "p95_ms": 84.235,
+      "p99_ms": 98.333,
+      "max_ms": 98.959
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.start",
+      "n": 100,
+      "p50_ms": 160.213,
+      "p95_ms": 202.394,
+      "p99_ms": 219.215,
+      "max_ms": 225.782
+    },
+    {
+      "burst_size": 50,
+      "component": "gateway",
+      "stage": "vm.validate_memory_disks",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "claim.commit_network_slot",
+      "n": 100,
+      "p50_ms": 0.003,
+      "p95_ms": 0.012,
+      "p99_ms": 0.202,
+      "max_ms": 0.535
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "claim.prepare_network_slot",
+      "n": 100,
+      "p50_ms": 0.016,
+      "p95_ms": 0.042,
+      "p99_ms": 0.065,
+      "max_ms": 0.118
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "claim.rpc_roundtrip",
+      "n": 100,
+      "p50_ms": 46.964,
+      "p95_ms": 51.161,
+      "p99_ms": 62.485,
+      "max_ms": 62.669
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "disk.adopt_spare",
+      "n": 100,
+      "p50_ms": 4.451,
+      "p95_ms": 16.157,
+      "p99_ms": 19.523,
+      "max_ms": 22.076
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "disk.attach",
+      "n": 100,
+      "p50_ms": 4.764,
+      "p95_ms": 16.917,
+      "p99_ms": 19.554,
+      "max_ms": 22.387
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "disk.attach_admission",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002,
+      "p99_ms": 0.004,
+      "max_ms": 0.005
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "disk.persist_adoption",
+      "n": 100,
+      "p50_ms": 4.322,
+      "p95_ms": 15.226,
+      "p99_ms": 19.478,
+      "max_ms": 22.024
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "disk.rekey_spare",
+      "n": 100,
+      "p50_ms": 4.449,
+      "p95_ms": 16.152,
+      "p99_ms": 19.52,
+      "max_ms": 22.074
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "disk.spare_recency",
+      "n": 100,
+      "p50_ms": 0.014,
+      "p95_ms": 0.232,
+      "p99_ms": 0.899,
+      "max_ms": 0.927
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "disk.state.directory_sync",
+      "n": 100,
+      "p50_ms": 1.361,
+      "p95_ms": 5.572,
+      "p99_ms": 12.937,
+      "max_ms": 16.188
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "disk.state.file_sync",
+      "n": 100,
+      "p50_ms": 2.235,
+      "p95_ms": 6.148,
+      "p99_ms": 14.698,
+      "max_ms": 14.744
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.boot_admission",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.003,
+      "p99_ms": 0.005,
+      "max_ms": 0.013
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.boot_batch_admission",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001,
+      "max_ms": 0.001
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.canvas",
+      "n": 100,
+      "p50_ms": 0.823,
+      "p95_ms": 10.364,
+      "p99_ms": 29.785,
+      "max_ms": 31.263
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.cgroup",
+      "n": 100,
+      "p50_ms": 0.838,
+      "p95_ms": 24.785,
+      "p99_ms": 34.048,
+      "max_ms": 36.869
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.cgroup.cpu_weight",
+      "n": 100,
+      "p50_ms": 0.029,
+      "p95_ms": 0.101,
+      "p99_ms": 0.405,
+      "max_ms": 0.445
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.cgroup.memory_max",
+      "n": 100,
+      "p50_ms": 0.041,
+      "p95_ms": 7.157,
+      "p99_ms": 13.346,
+      "max_ms": 23.548
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.cgroup.mkdir",
+      "n": 100,
+      "p50_ms": 0.592,
+      "p95_ms": 20.201,
+      "p99_ms": 23.789,
+      "max_ms": 33.51
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.control_listener",
+      "n": 100,
+      "p50_ms": 0.062,
+      "p95_ms": 1.491,
+      "p99_ms": 5.353,
+      "max_ms": 10.505
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.disks",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.006,
+      "p99_ms": 0.009,
+      "max_ms": 0.154
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.guest_control_ready",
+      "n": 100,
+      "p50_ms": 516.773,
+      "p95_ms": 619.097,
+      "p99_ms": 669.081,
+      "max_ms": 669.699
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.hypervisor_spawn",
+      "n": 100,
+      "p50_ms": 1.117,
+      "p95_ms": 17.483,
+      "p99_ms": 25.102,
+      "max_ms": 26.371
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.instance",
+      "n": 100,
+      "p50_ms": 0.086,
+      "p95_ms": 0.274,
+      "p99_ms": 0.623,
+      "max_ms": 0.789
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.network",
+      "n": 100,
+      "p50_ms": 0.069,
+      "p95_ms": 1.62,
+      "p99_ms": 21.803,
+      "max_ms": 22.083
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.numa",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.002,
+      "p99_ms": 0.002,
+      "max_ms": 0.002
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.pre_daemon_admission",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.006,
+      "p99_ms": 0.008,
+      "max_ms": 0.017
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.prepare",
+      "n": 100,
+      "p50_ms": 10.403,
+      "p95_ms": 47.091,
+      "p99_ms": 55.104,
+      "max_ms": 55.891
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.state_directory",
+      "n": 100,
+      "p50_ms": 0.049,
+      "p95_ms": 5.348,
+      "p99_ms": 7.14,
+      "max_ms": 9.232
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "microvm.virtiofsd",
+      "n": 100,
+      "p50_ms": 6.303,
+      "p95_ms": 19.47,
+      "p99_ms": 25.493,
+      "max_ms": 31.7
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "mount.bind_source_dirs",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.004,
+      "p99_ms": 0.007,
+      "max_ms": 0.081
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "mount.durable_disk",
+      "n": 100,
+      "p50_ms": 6.688,
+      "p95_ms": 24.398,
+      "p99_ms": 38.275,
+      "max_ms": 39.537
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "mount.overlay_setup",
+      "n": 100,
+      "p50_ms": 0.52,
+      "p95_ms": 12.356,
+      "p99_ms": 15.586,
+      "max_ms": 26.081
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "mount.setup",
+      "n": 100,
+      "p50_ms": 0.146,
+      "p95_ms": 5.785,
+      "p99_ms": 11.618,
+      "max_ms": 11.854
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "network.container_lock",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.005,
+      "p99_ms": 0.019,
+      "max_ms": 0.071
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "network.egress_register",
+      "n": 100,
+      "p50_ms": 0.005,
+      "p95_ms": 0.017,
+      "p99_ms": 0.029,
+      "max_ms": 0.039
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "network.expose_ports",
+      "n": 100,
+      "p50_ms": 0.023,
+      "p95_ms": 22.961,
+      "p99_ms": 24.33,
+      "max_ms": 24.355
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "network.restrictions",
+      "n": 100,
+      "p50_ms": 0.007,
+      "p95_ms": 0.018,
+      "p99_ms": 0.03,
+      "max_ms": 0.044
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "network.setup",
+      "n": 100,
+      "p50_ms": 0.03,
+      "p95_ms": 0.08,
+      "p99_ms": 0.096,
+      "max_ms": 0.139
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "network.slot_setup",
+      "n": 100,
+      "p50_ms": 0.013,
+      "p95_ms": 0.037,
+      "p99_ms": 0.046,
+      "max_ms": 0.055
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "runtime.config_write",
+      "n": 100,
+      "p50_ms": 0.055,
+      "p95_ms": 0.434,
+      "p99_ms": 2.465,
+      "max_ms": 4.92
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "runtime.prepare",
+      "n": 100,
+      "p50_ms": 0.005,
+      "p95_ms": 0.022,
+      "p99_ms": 0.044,
+      "max_ms": 0.046
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "sandbox.process_manager_authenticated_ready",
+      "n": 100,
+      "p50_ms": 13.474,
+      "p95_ms": 29.482,
+      "p99_ms": 37.755,
+      "max_ms": 47.138
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "sandbox.process_manager_client",
+      "n": 100,
+      "p50_ms": 0.059,
+      "p95_ms": 0.483,
+      "p99_ms": 1.092,
+      "max_ms": 1.785
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "sandbox.process_manager_ready",
+      "n": 100,
+      "p50_ms": 612.278,
+      "p95_ms": 686.188,
+      "p99_ms": 709.899,
+      "max_ms": 724.29
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "sandbox.wait_guest_control",
+      "n": 100,
+      "p50_ms": 508.315,
+      "p95_ms": 612.917,
+      "p99_ms": 665.722,
+      "max_ms": 667.919
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "sandbox.wait_process_manager_socket",
+      "n": 100,
+      "p50_ms": 76.945,
+      "p95_ms": 124.28,
+      "p99_ms": 149.998,
+      "max_ms": 156.874
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.claim_rpc",
+      "n": 100,
+      "p50_ms": 47.005,
+      "p95_ms": 51.193,
+      "p99_ms": 62.584,
+      "max_ms": 62.718
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.egress_trust",
+      "n": 100,
+      "p50_ms": 0.594,
+      "p95_ms": 8.473,
+      "p99_ms": 22.927,
+      "max_ms": 23.241
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.network_and_devices",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.007,
+      "max_ms": 0.007
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.port_allocation",
+      "n": 100,
+      "p50_ms": 0.125,
+      "p95_ms": 4.556,
+      "p99_ms": 6.982,
+      "max_ms": 22.594
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.pre_claim",
+      "n": 100,
+      "p50_ms": 0.05,
+      "p95_ms": 0.123,
+      "p99_ms": 0.217,
+      "max_ms": 0.227
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.prepare",
+      "n": 100,
+      "p50_ms": 11.479,
+      "p95_ms": 29.417,
+      "p99_ms": 38.509,
+      "max_ms": 39.802
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.prune_sdk_mounts",
+      "n": 100,
+      "p50_ms": 0.07,
+      "p95_ms": 0.581,
+      "p99_ms": 4.105,
+      "max_ms": 11.932
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.read_bundle_config",
+      "n": 100,
+      "p50_ms": 0.015,
+      "p95_ms": 0.032,
+      "p99_ms": 3.996,
+      "max_ms": 14.024
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.resolve_image_user",
+      "n": 100,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.003,
+      "max_ms": 0.477
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.sandbox_process",
+      "n": 100,
+      "p50_ms": 0.003,
+      "p95_ms": 0.011,
+      "p99_ms": 0.027,
+      "max_ms": 0.033
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.serialize_config",
+      "n": 100,
+      "p50_ms": 0.039,
+      "p95_ms": 0.106,
+      "p99_ms": 0.352,
+      "max_ms": 2.006
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.service_proxy",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.007,
+      "p99_ms": 0.008,
+      "max_ms": 0.008
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.service_proxy_sni",
+      "n": 100,
+      "p50_ms": 0.002,
+      "p95_ms": 0.007,
+      "p99_ms": 0.008,
+      "max_ms": 0.009
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.set_address_map",
+      "n": 100,
+      "p50_ms": 37.465,
+      "p95_ms": 56.739,
+      "p99_ms": 58.645,
+      "max_ms": 58.754
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.spawn_setup",
+      "n": 100,
+      "p50_ms": 0.004,
+      "p95_ms": 0.011,
+      "p99_ms": 0.03,
+      "max_ms": 0.058
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.spec_from_request",
+      "n": 100,
+      "p50_ms": 0.308,
+      "p95_ms": 9.485,
+      "p99_ms": 11.227,
+      "max_ms": 12.364
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.start_queue_wait",
+      "n": 100,
+      "p50_ms": 0.008,
+      "p95_ms": 0.025,
+      "p99_ms": 0.171,
+      "max_ms": 0.3
+    },
+    {
+      "burst_size": 50,
+      "component": "worker",
+      "stage": "worker.trace_envelope",
+      "n": 100,
+      "p50_ms": 707.584101,
+      "p95_ms": 767.108771,
+      "p99_ms": 775.197964,
+      "max_ms": 782.185962
+    }
+  ],
+  "guest": [
+    {
+      "burst_size": 10,
+      "stage": "agent_to_tcp_listener",
+      "n": 100,
+      "p50_ms": 25.461,
+      "p95_ms": 37.386,
+      "p99_ms": 48.418,
+      "max_ms": 125.287
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_control connected",
+      "n": 100,
+      "p50_ms": 32.728,
+      "p95_ms": 47.857,
+      "p99_ms": 51.746,
+      "max_ms": 54.876
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_early mounts ready",
+      "n": 100,
+      "p50_ms": 0.075,
+      "p95_ms": 0.161,
+      "p99_ms": 0.236,
+      "max_ms": 0.976
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_egress trust bundle merged",
+      "n": 100,
+      "p50_ms": 22.356,
+      "p95_ms": 34.942,
+      "p99_ms": 36.283,
+      "max_ms": 38.833
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_egress trust bundle written",
+      "n": 100,
+      "p50_ms": 23.625,
+      "p95_ms": 36.063,
+      "p99_ms": 38.486,
+      "max_ms": 40.061
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_egress trust certificate written",
+      "n": 100,
+      "p50_ms": 24.114,
+      "p95_ms": 36.498,
+      "p99_ms": 40.764,
+      "max_ms": 41.091
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_egress trust hooks finished",
+      "n": 100,
+      "p50_ms": 24.661,
+      "p95_ms": 37.03,
+      "p99_ms": 41.364,
+      "max_ms": 42.494
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_egress trust hooks listed",
+      "n": 100,
+      "p50_ms": 24.472,
+      "p95_ms": 36.89,
+      "p99_ms": 41.209,
+      "max_ms": 41.619
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_egress trust installed",
+      "n": 100,
+      "p50_ms": 24.682,
+      "p95_ms": 37.044,
+      "p99_ms": 41.383,
+      "max_ms": 42.533
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_egress trust links installed",
+      "n": 100,
+      "p50_ms": 24.237,
+      "p95_ms": 36.66,
+      "p99_ms": 40.923,
+      "max_ms": 41.329
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_egress trust source read",
+      "n": 100,
+      "p50_ms": 20.6,
+      "p95_ms": 32.28,
+      "p99_ms": 33.11,
+      "max_ms": 33.117
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_exec TCP listening",
+      "n": 100,
+      "p50_ms": 59.459,
+      "p95_ms": 80.043,
+      "p99_ms": 83.326,
+      "max_ms": 160.747
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_guest trust bundle read",
+      "n": 100,
+      "p50_ms": 21.47,
+      "p95_ms": 34.03,
+      "p99_ms": 35.525,
+      "max_ms": 36.603
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_image lower bound",
+      "n": 100,
+      "p50_ms": 3.31,
+      "p95_ms": 11.466,
+      "p99_ms": 18.486,
+      "max_ms": 18.646
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_init entered",
+      "n": 100,
+      "p50_ms": 0.001,
+      "p95_ms": 0.005,
+      "p99_ms": 0.006,
+      "max_ms": 0.006
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_installing egress trust",
+      "n": 100,
+      "p50_ms": 20.141,
+      "p95_ms": 29.819,
+      "p99_ms": 32.738,
+      "max_ms": 32.758
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_network configured",
+      "n": 100,
+      "p50_ms": 20.114,
+      "p95_ms": 29.805,
+      "p99_ms": 32.719,
+      "max_ms": 32.742
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_oci spec read",
+      "n": 100,
+      "p50_ms": 1.029,
+      "p95_ms": 3.071,
+      "p99_ms": 4.292,
+      "max_ms": 4.43
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_overlay mounted",
+      "n": 100,
+      "p50_ms": 3.493,
+      "p95_ms": 11.629,
+      "p99_ms": 18.643,
+      "max_ms": 18.911
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_overlay upper prepared",
+      "n": 100,
+      "p50_ms": 3.206,
+      "p95_ms": 11.336,
+      "p99_ms": 18.318,
+      "max_ms": 18.439
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_overlay work prepared",
+      "n": 100,
+      "p50_ms": 3.231,
+      "p95_ms": 11.369,
+      "p99_ms": 18.372,
+      "max_ms": 18.53
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_pseudo filesystems mounted",
+      "n": 100,
+      "p50_ms": 4.119,
+      "p95_ms": 11.962,
+      "p99_ms": 19.04,
+      "max_ms": 19.23
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_root assembled",
+      "n": 100,
+      "p50_ms": 8.805,
+      "p95_ms": 17.962,
+      "p99_ms": 22.539,
+      "max_ms": 24.687
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_root device ready",
+      "n": 100,
+      "p50_ms": 1.059,
+      "p95_ms": 3.09,
+      "p99_ms": 4.316,
+      "max_ms": 4.489
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_root disk mounted",
+      "n": 100,
+      "p50_ms": 2.785,
+      "p95_ms": 10.359,
+      "p99_ms": 16.626,
+      "max_ms": 17.74
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_root pivoted",
+      "n": 100,
+      "p50_ms": 18.949,
+      "p95_ms": 28.354,
+      "p99_ms": 31.88,
+      "max_ms": 31.989
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_root write cache configured",
+      "n": 100,
+      "p50_ms": 1.103,
+      "p95_ms": 3.124,
+      "p99_ms": 4.355,
+      "max_ms": 4.585
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_spec mounts applied",
+      "n": 100,
+      "p50_ms": 8.79,
+      "p95_ms": 17.918,
+      "p99_ms": 22.52,
+      "max_ms": 24.675
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_systemd binary resolved",
+      "n": 100,
+      "p50_ms": 24.832,
+      "p95_ms": 37.246,
+      "p99_ms": 41.559,
+      "max_ms": 42.712
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_systemd boot files written",
+      "n": 100,
+      "p50_ms": 26.766,
+      "p95_ms": 39.295,
+      "p99_ms": 43.869,
+      "max_ms": 44.319
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_systemd hosts prepared",
+      "n": 100,
+      "p50_ms": 25.354,
+      "p95_ms": 38.264,
+      "p99_ms": 42.486,
+      "max_ms": 43.342
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_systemd memory configured",
+      "n": 100,
+      "p50_ms": 25.425,
+      "p95_ms": 38.334,
+      "p99_ms": 42.576,
+      "max_ms": 43.419
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_systemd tmp prepared",
+      "n": 100,
+      "p50_ms": 24.847,
+      "p95_ms": 37.263,
+      "p99_ms": 41.577,
+      "max_ms": 42.734
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_vm spec read",
+      "n": 100,
+      "p50_ms": 0.455,
+      "p95_ms": 2.46,
+      "p99_ms": 3.343,
+      "max_ms": 3.913
+    },
+    {
+      "burst_size": 10,
+      "stage": "init_to_workload agent entered",
+      "n": 100,
+      "p50_ms": 32.32,
+      "p95_ms": 47.712,
+      "p99_ms": 51.609,
+      "max_ms": 54.69
+    },
+    {
+      "burst_size": 10,
+      "stage": "kernel_to_init_entry",
+      "n": 100,
+      "p50_ms": 66.172,
+      "p95_ms": 79.328,
+      "p99_ms": 95.852,
+      "max_ms": 97.32
+    },
+    {
+      "burst_size": 10,
+      "stage": "root_mount",
+      "n": 100,
+      "p50_ms": 1.289,
+      "p95_ms": 9.206,
+      "p99_ms": 15.694,
+      "max_ms": 16.36
+    },
+    {
+      "burst_size": 10,
+      "stage": "spec_mounts",
+      "n": 100,
+      "p50_ms": 3.752,
+      "p95_ms": 7.152,
+      "p99_ms": 8.798,
+      "max_ms": 15.242
+    },
+    {
+      "burst_size": 50,
+      "stage": "agent_to_tcp_listener",
+      "n": 100,
+      "p50_ms": 72.706,
+      "p95_ms": 110.399,
+      "p99_ms": 123.548,
+      "max_ms": 148.846
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_control connected",
+      "n": 100,
+      "p50_ms": 91.858,
+      "p95_ms": 130.82,
+      "p99_ms": 140.528,
+      "max_ms": 170.72
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_early mounts ready",
+      "n": 100,
+      "p50_ms": 0.151,
+      "p95_ms": 0.256,
+      "p99_ms": 0.47,
+      "max_ms": 0.528
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_egress trust bundle merged",
+      "n": 100,
+      "p50_ms": 54.106,
+      "p95_ms": 83.252,
+      "p99_ms": 90.892,
+      "max_ms": 99.808
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_egress trust bundle written",
+      "n": 100,
+      "p50_ms": 59.477,
+      "p95_ms": 88.176,
+      "p99_ms": 105.567,
+      "max_ms": 126.197
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_egress trust certificate written",
+      "n": 100,
+      "p50_ms": 62.077,
+      "p95_ms": 93.198,
+      "p99_ms": 107.504,
+      "max_ms": 132.586
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_egress trust hooks finished",
+      "n": 100,
+      "p50_ms": 63.749,
+      "p95_ms": 94.526,
+      "p99_ms": 110.383,
+      "max_ms": 143.522
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_egress trust hooks listed",
+      "n": 100,
+      "p50_ms": 63.079,
+      "p95_ms": 94.084,
+      "p99_ms": 109.68,
+      "max_ms": 141.434
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_egress trust installed",
+      "n": 100,
+      "p50_ms": 63.825,
+      "p95_ms": 94.557,
+      "p99_ms": 110.419,
+      "max_ms": 143.613
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_egress trust links installed",
+      "n": 100,
+      "p50_ms": 62.405,
+      "p95_ms": 93.413,
+      "p99_ms": 108.218,
+      "max_ms": 134.624
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_egress trust source read",
+      "n": 100,
+      "p50_ms": 48.657,
+      "p95_ms": 74.418,
+      "p99_ms": 85.478,
+      "max_ms": 92.704
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_exec TCP listening",
+      "n": 100,
+      "p50_ms": 166.599,
+      "p95_ms": 223.852,
+      "p99_ms": 240.988,
+      "max_ms": 241.592
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_guest trust bundle read",
+      "n": 100,
+      "p50_ms": 52.424,
+      "p95_ms": 82.128,
+      "p99_ms": 89.889,
+      "max_ms": 97.756
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_image lower bound",
+      "n": 100,
+      "p50_ms": 10.613,
+      "p95_ms": 26.58,
+      "p99_ms": 36.487,
+      "max_ms": 48.485
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_init entered",
+      "n": 100,
+      "p50_ms": 0.004,
+      "p95_ms": 0.009,
+      "p99_ms": 0.027,
+      "max_ms": 0.031
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_installing egress trust",
+      "n": 100,
+      "p50_ms": 45.594,
+      "p95_ms": 72.32,
+      "p99_ms": 83.763,
+      "max_ms": 89.523
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_network configured",
+      "n": 100,
+      "p50_ms": 45.549,
+      "p95_ms": 72.231,
+      "p99_ms": 83.707,
+      "max_ms": 89.48
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_oci spec read",
+      "n": 100,
+      "p50_ms": 3.258,
+      "p95_ms": 9.48,
+      "p99_ms": 13.843,
+      "max_ms": 15.529
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_overlay mounted",
+      "n": 100,
+      "p50_ms": 11.416,
+      "p95_ms": 27.185,
+      "p99_ms": 39.288,
+      "max_ms": 48.87
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_overlay upper prepared",
+      "n": 100,
+      "p50_ms": 9.871,
+      "p95_ms": 25.684,
+      "p99_ms": 31.451,
+      "max_ms": 48.212
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_overlay work prepared",
+      "n": 100,
+      "p50_ms": 9.907,
+      "p95_ms": 25.763,
+      "p99_ms": 35.909,
+      "max_ms": 48.254
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_pseudo filesystems mounted",
+      "n": 100,
+      "p50_ms": 13.474,
+      "p95_ms": 28.924,
+      "p99_ms": 48.233,
+      "max_ms": 49.568
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_root assembled",
+      "n": 100,
+      "p50_ms": 29.471,
+      "p95_ms": 54.913,
+      "p99_ms": 61.902,
+      "max_ms": 73.378
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_root device ready",
+      "n": 100,
+      "p50_ms": 3.457,
+      "p95_ms": 9.546,
+      "p99_ms": 14.039,
+      "max_ms": 15.57
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_root disk mounted",
+      "n": 100,
+      "p50_ms": 8.398,
+      "p95_ms": 22.377,
+      "p99_ms": 28.313,
+      "max_ms": 47.318
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_root pivoted",
+      "n": 100,
+      "p50_ms": 41.961,
+      "p95_ms": 65.422,
+      "p99_ms": 78.45,
+      "max_ms": 86.165
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_root write cache configured",
+      "n": 100,
+      "p50_ms": 3.566,
+      "p95_ms": 9.62,
+      "p99_ms": 14.157,
+      "max_ms": 15.638
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_spec mounts applied",
+      "n": 100,
+      "p50_ms": 29.417,
+      "p95_ms": 54.859,
+      "p99_ms": 61.779,
+      "max_ms": 73.174
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_systemd binary resolved",
+      "n": 100,
+      "p50_ms": 64.715,
+      "p95_ms": 95.11,
+      "p99_ms": 110.971,
+      "max_ms": 145.119
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_systemd boot files written",
+      "n": 100,
+      "p50_ms": 71.109,
+      "p95_ms": 100.416,
+      "p99_ms": 115.323,
+      "max_ms": 152.49
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_systemd hosts prepared",
+      "n": 100,
+      "p50_ms": 66.936,
+      "p95_ms": 98.106,
+      "p99_ms": 112.557,
+      "max_ms": 147.932
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_systemd memory configured",
+      "n": 100,
+      "p50_ms": 67.176,
+      "p95_ms": 98.295,
+      "p99_ms": 112.671,
+      "max_ms": 148.075
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_systemd tmp prepared",
+      "n": 100,
+      "p50_ms": 64.776,
+      "p95_ms": 95.145,
+      "p99_ms": 111.01,
+      "max_ms": 145.225
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_vm spec read",
+      "n": 100,
+      "p50_ms": 1.48,
+      "p95_ms": 3.932,
+      "p99_ms": 7.621,
+      "max_ms": 12.893
+    },
+    {
+      "burst_size": 50,
+      "stage": "init_to_workload agent entered",
+      "n": 100,
+      "p50_ms": 90.283,
+      "p95_ms": 127.277,
+      "p99_ms": 135.044,
+      "max_ms": 170.476
+    },
+    {
+      "burst_size": 50,
+      "stage": "kernel_to_init_entry",
+      "n": 100,
+      "p50_ms": 209.176,
+      "p95_ms": 289.486,
+      "p99_ms": 333.961,
+      "max_ms": 384.301
+    },
+    {
+      "burst_size": 50,
+      "stage": "root_mount",
+      "n": 100,
+      "p50_ms": 4.459,
+      "p95_ms": 16.309,
+      "p99_ms": 26.211,
+      "max_ms": 45.188
+    },
+    {
+      "burst_size": 50,
+      "stage": "spec_mounts",
+      "n": 100,
+      "p50_ms": 13.965,
+      "p95_ms": 28.721,
+      "p99_ms": 43.541,
+      "max_ms": 52.656
+    }
+  ],
+  "guest_cpu": [
+    {
+      "burst_size": 10,
+      "stage": "control connected",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 80
+    },
+    {
+      "burst_size": 10,
+      "stage": "control connected",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust bundle merged",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust bundle merged",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust bundle written",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust bundle written",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust certificate written",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust certificate written",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust hooks finished",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust hooks finished",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust hooks listed",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust hooks listed",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust installed",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust installed",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust links installed",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust links installed",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust source read",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "egress trust source read",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "exec TCP listening",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 60,
+      "p95_ms": 80,
+      "p99_ms": 80,
+      "max_ms": 90
+    },
+    {
+      "burst_size": 10,
+      "stage": "exec TCP listening",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 30,
+      "max_ms": 100
+    },
+    {
+      "burst_size": 10,
+      "stage": "guest trust bundle read",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "guest trust bundle read",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "image lower bound",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "image lower bound",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "installing egress trust",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "installing egress trust",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "network configured",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "network configured",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "oci spec read",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "oci spec read",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "overlay mounted",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "overlay mounted",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "overlay upper prepared",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "overlay upper prepared",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "overlay work prepared",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "overlay work prepared",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "pseudo filesystems mounted",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "pseudo filesystems mounted",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "root assembled",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "root assembled",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "root device ready",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "root device ready",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "root disk mounted",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "root disk mounted",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "root pivoted",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "root pivoted",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "root write cache configured",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "root write cache configured",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "spec mounts applied",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "spec mounts applied",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd binary resolved",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd binary resolved",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd boot files written",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd boot files written",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd hosts prepared",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd hosts prepared",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd memory configured",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd memory configured",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd tmp prepared",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "systemd tmp prepared",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "vm spec read",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 40,
+      "p95_ms": 50,
+      "p99_ms": 60,
+      "max_ms": 60
+    },
+    {
+      "burst_size": 10,
+      "stage": "vm spec read",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 0,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 10,
+      "stage": "workload agent entered",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 50,
+      "p95_ms": 60,
+      "p99_ms": 60,
+      "max_ms": 70
+    },
+    {
+      "burst_size": 10,
+      "stage": "workload agent entered",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 10,
+      "p95_ms": 20,
+      "p99_ms": 20,
+      "max_ms": 30
+    },
+    {
+      "burst_size": 50,
+      "stage": "control connected",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 100,
+      "p99_ms": 110,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "control connected",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 250,
+      "p95_ms": 350,
+      "p99_ms": 370,
+      "max_ms": 370
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust bundle merged",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust bundle merged",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 230,
+      "p95_ms": 330,
+      "p99_ms": 340,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust bundle written",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust bundle written",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 230,
+      "p95_ms": 330,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust certificate written",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust certificate written",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 230,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust hooks finished",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust hooks finished",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 240,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust hooks listed",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust hooks listed",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 240,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust installed",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust installed",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 240,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust links installed",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust links installed",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 230,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust source read",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "egress trust source read",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 220,
+      "p95_ms": 320,
+      "p99_ms": 340,
+      "max_ms": 340
+    },
+    {
+      "burst_size": 50,
+      "stage": "exec TCP listening",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 100,
+      "p95_ms": 120,
+      "p99_ms": 130,
+      "max_ms": 130
+    },
+    {
+      "burst_size": 50,
+      "stage": "exec TCP listening",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 300,
+      "p95_ms": 390,
+      "p99_ms": 410,
+      "max_ms": 410
+    },
+    {
+      "burst_size": 50,
+      "stage": "guest trust bundle read",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "guest trust bundle read",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 230,
+      "p95_ms": 320,
+      "p99_ms": 340,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "image lower bound",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "image lower bound",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 330
+    },
+    {
+      "burst_size": 50,
+      "stage": "installing egress trust",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "installing egress trust",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 220,
+      "p95_ms": 320,
+      "p99_ms": 340,
+      "max_ms": 340
+    },
+    {
+      "burst_size": 50,
+      "stage": "network configured",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "network configured",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 220,
+      "p95_ms": 320,
+      "p99_ms": 340,
+      "max_ms": 340
+    },
+    {
+      "burst_size": 50,
+      "stage": "oci spec read",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 60,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "oci spec read",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 320
+    },
+    {
+      "burst_size": 50,
+      "stage": "overlay mounted",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "overlay mounted",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 330
+    },
+    {
+      "burst_size": 50,
+      "stage": "overlay upper prepared",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "overlay upper prepared",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 330
+    },
+    {
+      "burst_size": 50,
+      "stage": "overlay work prepared",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "overlay work prepared",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 330
+    },
+    {
+      "burst_size": 50,
+      "stage": "pseudo filesystems mounted",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "pseudo filesystems mounted",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 330
+    },
+    {
+      "burst_size": 50,
+      "stage": "root assembled",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "root assembled",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 220,
+      "p95_ms": 320,
+      "p99_ms": 330,
+      "max_ms": 340
+    },
+    {
+      "burst_size": 50,
+      "stage": "root device ready",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 60,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "root device ready",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 320
+    },
+    {
+      "burst_size": 50,
+      "stage": "root disk mounted",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "root disk mounted",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 330
+    },
+    {
+      "burst_size": 50,
+      "stage": "root pivoted",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "root pivoted",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 220,
+      "p95_ms": 320,
+      "p99_ms": 340,
+      "max_ms": 340
+    },
+    {
+      "burst_size": 50,
+      "stage": "root write cache configured",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 60,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "root write cache configured",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 320
+    },
+    {
+      "burst_size": 50,
+      "stage": "spec mounts applied",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 70,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "spec mounts applied",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 220,
+      "p95_ms": 320,
+      "p99_ms": 330,
+      "max_ms": 340
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd binary resolved",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd binary resolved",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 240,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd boot files written",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 100,
+      "p99_ms": 110,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd boot files written",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 240,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 360
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd hosts prepared",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 100,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd hosts prepared",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 240,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd memory configured",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 100,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd memory configured",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 240,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd tmp prepared",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "systemd tmp prepared",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 240,
+      "p95_ms": 340,
+      "p99_ms": 350,
+      "max_ms": 350
+    },
+    {
+      "burst_size": 50,
+      "stage": "vm spec read",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 60,
+      "p95_ms": 90,
+      "p99_ms": 100,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "vm spec read",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 200,
+      "p95_ms": 310,
+      "p99_ms": 320,
+      "max_ms": 320
+    },
+    {
+      "burst_size": 50,
+      "stage": "workload agent entered",
+      "counter": "cumulative_guest_cpu",
+      "n": 100,
+      "p50_ms": 80,
+      "p95_ms": 100,
+      "p99_ms": 110,
+      "max_ms": 110
+    },
+    {
+      "burst_size": 50,
+      "stage": "workload agent entered",
+      "counter": "cumulative_guest_steal",
+      "n": 100,
+      "p50_ms": 250,
+      "p95_ms": 350,
+      "p99_ms": 360,
+      "max_ms": 370
+    }
+  ]
+}

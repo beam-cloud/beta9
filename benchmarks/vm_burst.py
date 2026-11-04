@@ -87,7 +87,7 @@ def distribution(values):
         "count": len(values),
         "p50_ms": values[math.ceil(len(values) * 0.50) - 1] if values else None,
         "p95_ms": values[math.ceil(len(values) * 0.95) - 1] if values else None,
-        "max_ms": values[-1] if values else None,
+        "p99_ms": values[math.ceil(len(values) * 0.99) - 1] if values else None,        "max_ms": values[-1] if values else None,
     }
 
 

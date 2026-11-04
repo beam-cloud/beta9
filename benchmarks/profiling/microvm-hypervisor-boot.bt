@@ -1,0 +1,28 @@
+BEGIN { printf("{\"ready\":true}\n"); }
+tracepoint:sched:sched_process_exec
+/comm == "cloud-hyperviso"/
+{
+ @exec[pid] = nsecs;
+ printf("{\"event\":\"exec\",\"pid\":%d,\"ns\":%llu}\n", pid, nsecs);
+}
+tracepoint:syscalls:sys_enter_ioctl
+/@exec[pid]/
+{
+ @start[tid] = nsecs;
+ @cmd[tid] = args->cmd;
+}
+tracepoint:syscalls:sys_exit_ioctl
+/@start[tid]/
+{
+ if (nsecs-@start[tid] >= 1000000 || @cmd[tid] == 0xae01 || @cmd[tid] == 0xae41) {
+ printf("{\"event\":\"create_ioctl\",\"pid\":%d,\"tid\":%d,\"cmd\":%u,\"ns\":%llu,\"duration_ns\":%llu,\"result\":%d}\n", pid, tid, @cmd[tid], nsecs, nsecs-@start[tid], args->ret);
+ }
+ delete(@start[tid]); delete(@cmd[tid]);
+}
+tracepoint:kvm:kvm_entry
+/@exec[pid]/
+{
+ printf("{\"event\":\"first_guest_instruction\",\"pid\":%d,\"vcpu\":%u,\"ns\":%llu,\"exec_elapsed_ns\":%llu}\n", pid, args->vcpu_id, nsecs, nsecs-@exec[pid]);
+ delete(@exec[pid]);
+}
+END { clear(@exec); clear(@start); clear(@cmd); }
