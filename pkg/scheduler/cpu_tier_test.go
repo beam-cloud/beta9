@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var sharedPool = types.WorkerPoolConfig{CPUClass: types.CPUTierShared, CPUShareMultiplier: 2.5}
+var sharedPool = types.WorkerPoolConfig{CPUShareMultiplier: 2.5}
 
 // spotRequest is a 1 vCPU / 1 GiB request as Run marks it for Spot.
 func spotRequest() *types.ContainerRequest {
@@ -41,16 +41,18 @@ func TestRunMarksOnlySpotEvictable(t *testing.T) {
 }
 
 func TestCPUTierPlacementAndWorkerCompatibility(t *testing.T) {
-	s := tierScheduler(map[string]types.WorkerPoolConfig{"legacy": {}, "shared": sharedPool, "performance": {CPUClass: types.CPUTierPerformance}})
+	s := tierScheduler(map[string]types.WorkerPoolConfig{"performance": {}, "shared": sharedPool, "gpu": {GPUType: "A10G"}})
 	for _, tc := range []struct {
 		tier string
 		want []string
 	}{
-		{"", []string{"legacy"}}, {"shared", []string{"shared"}}, {"performance", []string{"performance"}}, {"spot", []string{"shared", "performance"}},
+		// Untiered work stays off shared pools, and only it may use a pool the
+		// scheduler doesn't know.
+		{"", []string{"performance", "gpu", "unknown"}}, {"shared", []string{"shared"}}, {"performance", []string{"performance"}}, {"spot", []string{"shared", "performance"}},
 	} {
 		request := &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"` + tc.tier + `"}`}}}
 		workers := []*types.Worker{}
-		for _, name := range []string{"legacy", "shared", "performance"} {
+		for _, name := range []string{"performance", "shared", "gpu", "unknown"} {
 			workers = append(workers, &types.Worker{Id: name, PoolName: name, CPUTierProtocol: types.CPUTierProtocolVersion})
 		}
 		workers = append(workers, &types.Worker{Id: "old-binary", PoolName: "shared"})

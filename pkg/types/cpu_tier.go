@@ -21,18 +21,17 @@ const (
 )
 
 // cpuTiers defines the CPU tiers, which only hosted CPU workloads use. Shared
-// and Performance sell the capacity of hosted CPU pools whose cpuClass names
-// them, scheduled at the tier's CPU share multiplier. Spot is the lowest tier
-// and only runs when chosen: it borrows idle Shared and Performance capacity,
-// never adds workers, and gets drainSeconds notice when it is reclaimed.
+// and Performance sell the capacity of hosted CPU pools of their class (see
+// CPUClass). Spot is the lowest tier and only runs when chosen: it borrows
+// idle capacity from every hosted CPU pool, never adds workers, and gets
+// drainSeconds notice when it is reclaimed.
 var cpuTiers = map[CPUTier]struct {
-	cpuShareMultiplier CPUShareMultiplier
-	maxCpu, maxMemory  int64 // Per workload, in millicores and MiB
-	borrowsFrom        []CPUTier
-	drainSeconds       uint32
+	maxCpu, maxMemory int64 // Per workload, in millicores and MiB
+	borrowsFrom       []CPUTier
+	drainSeconds      uint32
 }{
-	CPUTierShared:      {cpuShareMultiplier: 2.5, maxCpu: 8000, maxMemory: 16384},
-	CPUTierPerformance: {cpuShareMultiplier: 1},
+	CPUTierShared:      {maxCpu: 8000, maxMemory: 16384},
+	CPUTierPerformance: {},
 	CPUTierSpot:        {borrowsFrom: []CPUTier{CPUTierShared, CPUTierPerformance}, drainSeconds: 30},
 }
 
@@ -92,41 +91,33 @@ func (c *StubConfigV1) ValidateCPUTier() error {
 }
 
 // MatchesPool reports whether work on tier t may run in pool p. Untiered work
-// stays on untagged pools; tiered work runs on pools that sell its tier or one
-// it borrows from.
+// stays off shared pools, which it never opted into; tiered work runs on pools
+// that sell its tier or one it borrows from.
 func (t CPUTier) MatchesPool(p WorkerPoolConfig) bool {
+	class := p.CPUClass()
 	if t == "" {
-		return p.CPUClass == ""
+		return class != CPUTierShared
 	}
-	_, err := p.NormalizeCPU()
-	return err == nil && p.CPUClass != "" && (p.CPUClass == t || slices.Contains(cpuTiers[t].borrowsFrom, p.CPUClass))
+	return class != "" && (class == t || slices.Contains(cpuTiers[t].borrowsFrom, class))
+}
+
+// CPUClass is the tier a pool sells. A hosted CPU pool that schedules more than
+// one vCPU per physical CPU sells Shared, and any other hosted CPU pool sells
+// Performance. GPU and agent pools sell none.
+func (p WorkerPoolConfig) CPUClass() CPUTier {
+	switch {
+	case !p.HostedCPU():
+		return ""
+	case p.CPUShareMultiplier.hundredths() > 100:
+		return CPUTierShared
+	}
+	return CPUTierPerformance
 }
 
 // HostedCPU reports whether the pool is Beam-hosted CPU capacity, the only
 // capacity CPU tiers use.
 func (p WorkerPoolConfig) HostedCPU() bool {
 	return p.GPUType == "" && !p.AgentHosted()
-}
-
-// NormalizeCPU validates the pool's CPU share multiplier and gives a pool that
-// sells a tier that tier's multiplier. Only hosted CPU pools sell a tier, and
-// never a borrowing one; a pool may repeat its tier's multiplier but not
-// change it.
-func (p WorkerPoolConfig) NormalizeCPU() (WorkerPoolConfig, error) {
-	if err := p.CPUShareMultiplier.Validate(); err != nil || p.CPUClass == "" {
-		return p, err
-	}
-	tier, ok := cpuTiers[p.CPUClass]
-	switch {
-	case !ok || p.CPUClass.Borrows():
-		return p, fmt.Errorf("CPU class must be %q or %q", CPUTierShared, CPUTierPerformance)
-	case !p.HostedCPU():
-		return p, fmt.Errorf("CPU class requires hosted CPU capacity")
-	case p.CPUShareMultiplier != 0 && p.CPUShareMultiplier.hundredths() != tier.cpuShareMultiplier.hundredths():
-		return p, fmt.Errorf("CPU class %q schedules at %gx", p.CPUClass, float64(tier.cpuShareMultiplier.hundredths())/100)
-	}
-	p.CPUShareMultiplier = tier.cpuShareMultiplier
-	return p, nil
 }
 
 func (r *ContainerRequest) CPUTier() CPUTier {

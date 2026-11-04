@@ -12,13 +12,13 @@ import (
 
 type cpuTierPool struct {
 	CPUClass      types.CPUTier   `json:"cpu_class"`
-	Valid         bool            `json:"valid"`
 	Ready         bool            `json:"ready"`
 	ReadyRuntimes map[string]bool `json:"ready_runtimes"`
 }
 
 // GetCPUTierCatalog returns the workspace's CPU tier policy with the gateway's
-// tiered pools, their readiness and its CPU tier capabilities.
+// hosted CPU pools, the tier each sells and its readiness, and the gateway's
+// CPU tier capabilities.
 func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error) {
 	info, _ := auth.AuthInfoFromContext(ctx)
 	if info == nil || info.Workspace == nil {
@@ -34,8 +34,8 @@ func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTi
 	}
 	pools := map[string]*cpuTierPool{}
 	for name, p := range gws.scheduler.PoolConfigs() {
-		if p.CPUClass != "" {
-			pools[name] = &cpuTierPool{CPUClass: p.CPUClass, Valid: p.CPUClass.MatchesPool(p), ReadyRuntimes: map[string]bool{}}
+		if class := p.CPUClass(); class != "" {
+			pools[name] = &cpuTierPool{CPUClass: class, ReadyRuntimes: map[string]bool{}}
 		}
 	}
 	for _, w := range workers {
@@ -52,16 +52,13 @@ func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTi
 }
 
 // ResolveCPUTier returns the tier a new CPU workload runs on: the requested one,
-// else the class of the pool it targets, or the workspace default when it
-// targets none. Only hosted CPU pools sell tiers, and untagged ones keep running
-// untiered work. eligible is false for GPU, platform and private workloads.
+// else the workspace default. The pool it targets never sets the tier, and
+// untiered work can't target a shared pool, which it never opted into. eligible
+// is false for GPU, platform and private workloads, and so is work that targets
+// a pool other than a hosted CPU pool.
 func (gws *GatewayService) ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, poolName string, eligible bool) (types.CPUTier, error) {
 	pool, known := gws.scheduler.PoolConfig(poolName)
-	eligible = eligible && (poolName == "" || known && pool.HostedCPU())
-	if requested == "" && poolName != "" && eligible {
-		requested, eligible = pool.CPUClass, pool.CPUClass != ""
-	}
-	if !eligible {
+	if !eligible || poolName != "" && !(known && pool.HostedCPU()) {
 		if requested != "" {
 			return "", types.ErrCPUTierIneligible
 		}
@@ -71,7 +68,11 @@ func (gws *GatewayService) ResolveCPUTier(ctx context.Context, workspace *types.
 	if err != nil {
 		return "", err
 	}
-	return policy.Resolve(requested)
+	tier, err := policy.Resolve(requested)
+	if err == nil && tier == "" && poolName != "" && !tier.MatchesPool(pool) {
+		return "", fmt.Errorf("pool %q runs shared CPU; set cpu_tier to %q to use it", poolName, types.CPUTierShared)
+	}
+	return tier, err
 }
 
 // resolveStubCPUTier sets a new stub's CPU tier, which must suit the pool the
@@ -83,7 +84,7 @@ func (gws *GatewayService) resolveStubCPUTier(ctx context.Context, workspace *ty
 		return err
 	}
 	if pool, _ := gws.scheduler.PoolConfig(selector); tier != "" && selector != "" && !tier.MatchesPool(pool) {
-		return fmt.Errorf("pool does not support the selected CPU tier")
+		return fmt.Errorf("pool %q does not run %s CPU work", selector, tier)
 	}
 	config.CPUTier = tier
 	return config.ValidateCPUTier()

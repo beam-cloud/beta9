@@ -403,8 +403,8 @@ class Sandbox(Pod):
             ```
         """
 
-        # CPU tier VMs need 1 GiB. Without a tier, a pool's CPU class or, with no
-        # pool, the account default decides it.
+        # CPU tier VMs need 1 GiB. Without a tier, the account default applies,
+        # unless the VM targets a pool that sells none (a private or agent pool).
         if self._memory_defaulted and self.use_vm and not self.gpu:
             tier = self.cpu_tier
             if not tier:
@@ -413,15 +413,12 @@ class Sandbox(Pod):
                         self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog
                     )
                 except grpc.RpcError:
-                    # Private and untagged pools need no tier, and a tiered pool
-                    # can't be used without billing anyway.
+                    # Private and agent pools need no tier, and a tier can't be
+                    # used without billing anyway.
                     if not self.pool_config:
                         raise
                     catalog = {"pools": {}}
-                if self.pool_config:
-                    pool = catalog["pools"].get(self.pool_config.selector, {})
-                    tier = pool.get("cpu_class")
-                else:
+                if not self.pool_config or self.pool_config.selector in catalog["pools"]:
                     tier = catalog["default_cpu_tier"]
             if tier:
                 self.memory = 1024

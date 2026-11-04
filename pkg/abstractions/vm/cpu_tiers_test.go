@@ -24,7 +24,7 @@ func (g *tierVMGateway) ResolveCPUTier(ctx context.Context, workspace *types.Wor
 	if g.err != nil {
 		return "", g.err
 	}
-	if eligible && requested == "" && pool == "" {
+	if eligible && requested == "" {
 		return g.defaultTier, nil
 	}
 	return g.vmGateway.ResolveCPUTier(ctx, workspace, requested, pool, eligible)
@@ -84,7 +84,8 @@ func TestRequestReplayDoesNotResolveTheTierAgain(t *testing.T) {
 
 func TestTierReplacesOnlyHostedPools(t *testing.T) {
 	s, v, info, _, gateway := fixture()
-	s.gateway = &tierVMGateway{vmGateway: gateway, defaultTier: types.CPUTierPerformance}
+	tiers := &tierVMGateway{vmGateway: gateway, defaultTier: types.CPUTierPerformance}
+	s.gateway = tiers
 	ctx := auth.ContextWithAuthInfo(context.Background(), info)
 	child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "from-template", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool", CPUTier: types.CPUTierShared}})
 	require.NoError(t, err)
@@ -92,11 +93,16 @@ func TestTierReplacesOnlyHostedPools(t *testing.T) {
 	require.Empty(t, child.Spec.Pool)
 	require.Nil(t, gateway.stub.Pool)
 	require.Equal(t, types.CPUTierShared, child.Spec.CPUTier)
-	// Without a tier, the untagged pool keeps the VM untiered.
-	legacy, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "legacy", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool"}})
+	// The default tier replaces a hosted pool too; only untiered VMs keep it.
+	defaulted, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "defaulted", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool"}})
 	require.NoError(t, err)
-	require.Empty(t, legacy.Spec.CPUTier)
-	require.Equal(t, "old-public-pool", legacy.Spec.Pool)
+	require.Equal(t, types.CPUTierPerformance, defaulted.Spec.CPUTier)
+	require.Empty(t, defaulted.Spec.Pool)
+	tiers.defaultTier = ""
+	untiered, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "untiered", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool"}})
+	require.NoError(t, err)
+	require.Empty(t, untiered.Spec.CPUTier)
+	require.Equal(t, "old-public-pool", untiered.Spec.Pool)
 	_, err = s.createVM(ctx, info, types.VMCreateOptions{Name: "private", Spec: types.VMSpec{ImageID: "image", Pool: "private-pool", CPUTier: types.CPUTierShared}})
 	require.ErrorContains(t, err, "hosted CPU")
 

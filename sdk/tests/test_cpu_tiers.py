@@ -29,8 +29,10 @@ def test_tier_is_exposed_by_cpu_workload_constructors(cls):
         ({}, "", 128),
         ({"cpu_tier": "spot"}, "", 1024),
         ({"memory": 128, "cpu_tier": "shared"}, "", 128),
-        ({"pool": "shared-pool"}, "", 1024),
-        ({"pool": "legacy-pool"}, "shared", 128),
+        # A pool never sets the tier, and one that sells none takes no default.
+        ({"pool": "shared-pool"}, "shared", 1024),
+        ({"pool": "shared-pool"}, "", 128),
+        ({"pool": "private-pool"}, "shared", 128),
     ],
 )
 def test_vm_sandbox_omitted_memory_follows_the_cpu_tier(kwargs, default_tier, memory):

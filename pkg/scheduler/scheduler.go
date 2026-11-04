@@ -76,15 +76,11 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	if err := config.Scheduling.Failover.Validate(config.Worker.Pools); err != nil {
 		return nil, err
 	}
-	pools := make(map[string]types.WorkerPoolConfig, len(config.Worker.Pools))
 	for name, pool := range config.Worker.Pools {
-		normalized, err := pool.NormalizeCPU()
-		if err != nil {
+		if err := pool.CPUShareMultiplier.Validate(); err != nil {
 			return nil, fmt.Errorf("worker pool %q: %w", name, err)
 		}
-		pools[name] = normalized
 	}
-	config.Worker.Pools = pools
 
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
@@ -1823,7 +1819,7 @@ func calculateBackoffDelay(retryCount int) time.Duration {
 func (s *Scheduler) filterWorkersByCPUTier(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	tier := request.CPUTier()
 	return slices.DeleteFunc(workers, func(w *types.Worker) bool {
-		pool, _ := s.PoolConfig(workerPoolSelector(w))
-		return !tier.MatchesPool(pool) || tier != "" && w.CPUTierProtocol != types.CPUTierProtocolVersion
+		pool, known := s.PoolConfig(workerPoolSelector(w))
+		return !tier.MatchesPool(pool) || tier != "" && (!known || w.CPUTierProtocol != types.CPUTierProtocolVersion)
 	})
 }

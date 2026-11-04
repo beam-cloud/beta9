@@ -7,45 +7,26 @@ import (
 )
 
 func TestCPUTierPlacement(t *testing.T) {
-	shared := WorkerPoolConfig{CPUClass: CPUTierShared}
-	performance := WorkerPoolConfig{CPUClass: CPUTierPerformance, CPUShareMultiplier: 1}
-	legacy := WorkerPoolConfig{}
+	performance, shared := WorkerPoolConfig{}, WorkerPoolConfig{CPUShareMultiplier: 2.5}
+	gpu := WorkerPoolConfig{GPUType: "A100", CPUShareMultiplier: 2}
+	agent := WorkerPoolConfig{Mode: PoolModePrivate, CPUShareMultiplier: 2}
+	require.Equal(t, CPUTierPerformance, WorkerPoolConfig{CPUShareMultiplier: 1}.CPUClass())
+	require.Equal(t, CPUTierShared, WorkerPoolConfig{CPUShareMultiplier: 1.01}.CPUClass())
+	require.Equal(t, CPUTier(""), gpu.CPUClass())
+	require.Equal(t, CPUTier(""), agent.CPUClass())
 	for _, tc := range []struct {
 		tier CPUTier
 		pool WorkerPoolConfig
 		want bool
 	}{
-		{"", legacy, true}, {"", shared, false}, {CPUTierShared, legacy, false},
+		{"", performance, true}, {"", shared, false}, {"", gpu, true}, {"", agent, true},
 		{CPUTierShared, shared, true}, {CPUTierShared, performance, false},
 		{CPUTierPerformance, performance, true}, {CPUTierPerformance, shared, false},
 		{CPUTierSpot, shared, true}, {CPUTierSpot, performance, true},
-		{CPUTierSpot, WorkerPoolConfig{CPUClass: CPUTierShared, CPUShareMultiplier: 1}, false},
-		{CPUTierSpot, WorkerPoolConfig{CPUClass: CPUTierSpot}, false},
-		{CPUTierShared, WorkerPoolConfig{CPUClass: CPUTierShared, Mode: PoolModePrivate}, false},
-		{CPUTierShared, WorkerPoolConfig{CPUClass: CPUTierShared, Mode: PoolModeExternal}, false},
-		{CPUTierPerformance, WorkerPoolConfig{CPUClass: CPUTierPerformance, GPUType: "A100"}, false},
+		{CPUTierSpot, gpu, false}, {CPUTierShared, agent, false},
+		{CPUTierShared, WorkerPoolConfig{Mode: PoolModeExternal, CPUShareMultiplier: 2.5}, false},
 	} {
 		require.Equal(t, tc.want, tc.tier.MatchesPool(tc.pool), "%s %+v", tc.tier, tc.pool)
-	}
-}
-
-func TestCPUTierPoolsScheduleAtTheirTiersMultiplier(t *testing.T) {
-	pool, err := WorkerPoolConfig{CPUClass: CPUTierShared}.NormalizeCPU()
-	require.NoError(t, err)
-	require.Equal(t, CPUShareMultiplier(2.5), pool.CPUShareMultiplier)
-	pool, err = WorkerPoolConfig{CPUShareMultiplier: 1.5}.NormalizeCPU()
-	require.NoError(t, err)
-	require.Equal(t, CPUShareMultiplier(1.5), pool.CPUShareMultiplier, "untagged pools keep their own multiplier")
-	for _, invalid := range []WorkerPoolConfig{
-		{CPUClass: CPUTierShared, CPUShareMultiplier: 1},
-		{CPUClass: CPUTierSpot},
-		{CPUClass: "turbo"},
-		{CPUClass: CPUTierShared, Mode: PoolModePrivate},
-		{CPUClass: CPUTierPerformance, GPUType: "A100"},
-		{CPUShareMultiplier: 20},
-	} {
-		_, err := invalid.NormalizeCPU()
-		require.Error(t, err, "%+v", invalid)
 	}
 }
 
