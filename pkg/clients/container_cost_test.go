@@ -533,23 +533,30 @@ func TestTieredQuotesArePerStubAndPolicyIsCached(t *testing.T) {
 	require.Equal(t, types.CPUTierPolicy{}, policy)
 }
 
-func TestCPUTierPolicyIsUnavailableUntilBillingAnswers(t *testing.T) {
-	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
-	var calls atomic.Int32
-	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		if calls.Add(1) == 1 {
-			http.Error(w, "try again", http.StatusServiceUnavailable)
+// newEnrolledCostTestClient returns a client for a billing service that quotes
+// an enrolled workspace, or fails while down is set.
+func newEnrolledCostTestClient(t *testing.T, down *atomic.Bool) *ContainerCostClient {
+	return newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		if down.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = w.Write([]byte(`{"cost_per_ms":"0","cpu_tier_policy":{"enabled":true,"default_cpu_tier":"shared"}}`))
+		_, _ = w.Write([]byte(`{"cost_per_ms":"0.25","cpu_tier_policy":{"enabled":true,"default_cpu_tier":"shared"}}`))
 	})
+}
+
+func TestCPUTierPolicyIsUnavailableUntilBillingAnswers(t *testing.T) {
+	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
+	var down atomic.Bool
+	down.Store(true)
+	client := newEnrolledCostTestClient(t, &down)
 	client.now = clock.Now
-	// The failed lookup and every lookup in its retry window fail.
-	for range 2 {
-		_, err := client.CPUTierPolicy(context.Background(), "workspace")
-		require.Error(t, err)
-	}
-	require.Equal(t, int32(1), calls.Load())
+	_, err := client.CPUTierPolicy(context.Background(), "workspace")
+	require.Error(t, err)
+	// Billing is back, but lookups in the retry window still fail.
+	down.Store(false)
+	_, err = client.CPUTierPolicy(context.Background(), "workspace")
+	require.Error(t, err)
 	clock.Add(containerCostRetryDelay)
 	policy, err := client.CPUTierPolicy(context.Background(), "workspace")
 	require.NoError(t, err)
@@ -559,13 +566,7 @@ func TestCPUTierPolicyIsUnavailableUntilBillingAnswers(t *testing.T) {
 func TestContainerCostClientPrunesIdleStubQuotes(t *testing.T) {
 	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
 	var down atomic.Bool
-	client := newCostTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		if down.Load() {
-			http.Error(w, "down", http.StatusServiceUnavailable)
-			return
-		}
-		_, _ = w.Write([]byte(`{"cost_per_ms":"0.25","cpu_tier_policy":{"enabled":true,"default_cpu_tier":"shared"}}`))
-	})
+	client := newEnrolledCostTestClient(t, &down)
 	client.now = clock.Now
 	quote := func(stubID string) error {
 		_, err := client.GetContainerCostQuote(context.Background(), &types.ContainerRequest{StubId: stubID, Cpu: 1000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"shared"}`}}})
