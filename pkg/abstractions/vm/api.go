@@ -441,11 +441,14 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 	}
 	switch {
 	case spec.CPUTier != "" && !eligible:
-		return nil, fmt.Errorf("CPU tiers apply only to hosted CPU VMs")
+		return nil, types.ErrCPUTierIneligible
 	case spec.CPUTier != "":
 		spec.Pool = ""
 	case spec.Pool == "" && spec.GPU == "":
 		spec.Pool = s.config.DefaultPool
+	}
+	if err := spec.CPUTier.Validate(spec.CPU, spec.Memory, true, spec.GPU != ""); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -538,11 +541,11 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 }
 
 type actionRequest struct {
-	CPUTier      string `json:"cpu_tier,omitempty"`
 	Name         string `json:"name,omitempty"`
 	NoSnapshot   bool   `json:"no_snapshot,omitempty"`
 	Port         uint32 `json:"port,omitempty"`
 	SSHPublicKey string `json:"ssh_public_key,omitempty"`
+	CPUTier      string `json:"cpu_tier,omitempty"`
 	Description  string `json:"description,omitempty"`
 	Protected    *bool  `json:"protected,omitempty"`
 	TTL          int64  `json:"ttl,omitempty"`

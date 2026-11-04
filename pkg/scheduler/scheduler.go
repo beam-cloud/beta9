@@ -1479,7 +1479,8 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	// Native requested GPUs take precedence over failover capacity. Within the
 	// same tier, storage-backed work prefers agent capacity so local workers
 	// remain available to workspaces that cannot run on agents. Explicit chain
-	// order still takes precedence over ordinary pool priority.
+	// order still takes precedence over ordinary pool priority. CPU tier work
+	// ranks free capacity first, so it evicts Spot only when no worker has room.
 	tiered := request.CPUTier() != ""
 	sort.Slice(scoredWorkers, func(i, j int) bool {
 		if tiered && scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {

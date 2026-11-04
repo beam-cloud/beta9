@@ -19,7 +19,6 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BackendRepositoryService_PreemptVM_FullMethodName                   = "/BackendRepositoryService/PreemptVM"
 	BackendRepositoryService_GetCheckpointById_FullMethodName           = "/BackendRepositoryService/GetCheckpointById"
 	BackendRepositoryService_GetLatestCheckpointByStubId_FullMethodName = "/BackendRepositoryService/GetLatestCheckpointByStubId"
 	BackendRepositoryService_ListCheckpoints_FullMethodName             = "/BackendRepositoryService/ListCheckpoints"
@@ -30,13 +29,13 @@ const (
 	BackendRepositoryService_GetLatestDiskSnapshot_FullMethodName       = "/BackendRepositoryService/GetLatestDiskSnapshot"
 	BackendRepositoryService_GetDiskSnapshot_FullMethodName             = "/BackendRepositoryService/GetDiskSnapshot"
 	BackendRepositoryService_GetDiskSnapshotDownloadURL_FullMethodName  = "/BackendRepositoryService/GetDiskSnapshotDownloadURL"
+	BackendRepositoryService_PreemptVM_FullMethodName                   = "/BackendRepositoryService/PreemptVM"
 )
 
 // BackendRepositoryServiceClient is the client API for BackendRepositoryService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BackendRepositoryServiceClient interface {
-	PreemptVM(ctx context.Context, in *PreemptVMRequest, opts ...grpc.CallOption) (*PreemptVMResponse, error)
 	GetCheckpointById(ctx context.Context, in *GetCheckpointByIdRequest, opts ...grpc.CallOption) (*GetCheckpointByIdResponse, error)
 	GetLatestCheckpointByStubId(ctx context.Context, in *GetLatestCheckpointByStubIdRequest, opts ...grpc.CallOption) (*GetLatestCheckpointByStubIdResponse, error)
 	ListCheckpoints(ctx context.Context, in *ListCheckpointsRequest, opts ...grpc.CallOption) (*ListCheckpointsResponse, error)
@@ -47,6 +46,7 @@ type BackendRepositoryServiceClient interface {
 	GetLatestDiskSnapshot(ctx context.Context, in *GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*GetLatestDiskSnapshotResponse, error)
 	GetDiskSnapshot(ctx context.Context, in *GetDiskSnapshotRequest, opts ...grpc.CallOption) (*GetDiskSnapshotResponse, error)
 	GetDiskSnapshotDownloadURL(ctx context.Context, in *GetDiskSnapshotDownloadURLRequest, opts ...grpc.CallOption) (*GetDiskSnapshotDownloadURLResponse, error)
+	PreemptVM(ctx context.Context, in *PreemptVMRequest, opts ...grpc.CallOption) (*PreemptVMResponse, error)
 }
 
 type backendRepositoryServiceClient struct {
@@ -55,15 +55,6 @@ type backendRepositoryServiceClient struct {
 
 func NewBackendRepositoryServiceClient(cc grpc.ClientConnInterface) BackendRepositoryServiceClient {
 	return &backendRepositoryServiceClient{cc}
-}
-
-func (c *backendRepositoryServiceClient) PreemptVM(ctx context.Context, in *PreemptVMRequest, opts ...grpc.CallOption) (*PreemptVMResponse, error) {
-	out := new(PreemptVMResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_PreemptVM_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *backendRepositoryServiceClient) GetCheckpointById(ctx context.Context, in *GetCheckpointByIdRequest, opts ...grpc.CallOption) (*GetCheckpointByIdResponse, error) {
@@ -156,11 +147,19 @@ func (c *backendRepositoryServiceClient) GetDiskSnapshotDownloadURL(ctx context.
 	return out, nil
 }
 
+func (c *backendRepositoryServiceClient) PreemptVM(ctx context.Context, in *PreemptVMRequest, opts ...grpc.CallOption) (*PreemptVMResponse, error) {
+	out := new(PreemptVMResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_PreemptVM_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BackendRepositoryServiceServer is the server API for BackendRepositoryService service.
 // All implementations must embed UnimplementedBackendRepositoryServiceServer
 // for forward compatibility
 type BackendRepositoryServiceServer interface {
-	PreemptVM(context.Context, *PreemptVMRequest) (*PreemptVMResponse, error)
 	GetCheckpointById(context.Context, *GetCheckpointByIdRequest) (*GetCheckpointByIdResponse, error)
 	GetLatestCheckpointByStubId(context.Context, *GetLatestCheckpointByStubIdRequest) (*GetLatestCheckpointByStubIdResponse, error)
 	ListCheckpoints(context.Context, *ListCheckpointsRequest) (*ListCheckpointsResponse, error)
@@ -171,6 +170,7 @@ type BackendRepositoryServiceServer interface {
 	GetLatestDiskSnapshot(context.Context, *GetLatestDiskSnapshotRequest) (*GetLatestDiskSnapshotResponse, error)
 	GetDiskSnapshot(context.Context, *GetDiskSnapshotRequest) (*GetDiskSnapshotResponse, error)
 	GetDiskSnapshotDownloadURL(context.Context, *GetDiskSnapshotDownloadURLRequest) (*GetDiskSnapshotDownloadURLResponse, error)
+	PreemptVM(context.Context, *PreemptVMRequest) (*PreemptVMResponse, error)
 	mustEmbedUnimplementedBackendRepositoryServiceServer()
 }
 
@@ -178,9 +178,6 @@ type BackendRepositoryServiceServer interface {
 type UnimplementedBackendRepositoryServiceServer struct {
 }
 
-func (UnimplementedBackendRepositoryServiceServer) PreemptVM(context.Context, *PreemptVMRequest) (*PreemptVMResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PreemptVM not implemented")
-}
 func (UnimplementedBackendRepositoryServiceServer) GetCheckpointById(context.Context, *GetCheckpointByIdRequest) (*GetCheckpointByIdResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCheckpointById not implemented")
 }
@@ -211,6 +208,9 @@ func (UnimplementedBackendRepositoryServiceServer) GetDiskSnapshot(context.Conte
 func (UnimplementedBackendRepositoryServiceServer) GetDiskSnapshotDownloadURL(context.Context, *GetDiskSnapshotDownloadURLRequest) (*GetDiskSnapshotDownloadURLResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetDiskSnapshotDownloadURL not implemented")
 }
+func (UnimplementedBackendRepositoryServiceServer) PreemptVM(context.Context, *PreemptVMRequest) (*PreemptVMResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PreemptVM not implemented")
+}
 func (UnimplementedBackendRepositoryServiceServer) mustEmbedUnimplementedBackendRepositoryServiceServer() {
 }
 
@@ -223,24 +223,6 @@ type UnsafeBackendRepositoryServiceServer interface {
 
 func RegisterBackendRepositoryServiceServer(s grpc.ServiceRegistrar, srv BackendRepositoryServiceServer) {
 	s.RegisterService(&BackendRepositoryService_ServiceDesc, srv)
-}
-
-func _BackendRepositoryService_PreemptVM_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PreemptVMRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).PreemptVM(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BackendRepositoryService_PreemptVM_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).PreemptVM(ctx, req.(*PreemptVMRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _BackendRepositoryService_GetCheckpointById_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -423,6 +405,24 @@ func _BackendRepositoryService_GetDiskSnapshotDownloadURL_Handler(srv interface{
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BackendRepositoryService_PreemptVM_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PreemptVMRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackendRepositoryServiceServer).PreemptVM(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackendRepositoryService_PreemptVM_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackendRepositoryServiceServer).PreemptVM(ctx, req.(*PreemptVMRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BackendRepositoryService_ServiceDesc is the grpc.ServiceDesc for BackendRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -430,10 +430,6 @@ var BackendRepositoryService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "BackendRepositoryService",
 	HandlerType: (*BackendRepositoryServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "PreemptVM",
-			Handler:    _BackendRepositoryService_PreemptVM_Handler,
-		},
 		{
 			MethodName: "GetCheckpointById",
 			Handler:    _BackendRepositoryService_GetCheckpointById_Handler,
@@ -473,6 +469,10 @@ var BackendRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetDiskSnapshotDownloadURL",
 			Handler:    _BackendRepositoryService_GetDiskSnapshotDownloadURL_Handler,
+		},
+		{
+			MethodName: "PreemptVM",
+			Handler:    _BackendRepositoryService_PreemptVM_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -41,9 +41,9 @@ from ...exceptions import ImageBuildError
 from ...schema import Schema
 from ...sync import FileSyncer
 from ...type import (
-    CpuTier,
     _AUTOSCALER_TYPES,
     Autoscaler,
+    CpuTier,
     DurableDisk,
     GpuType,
     GpuTypeAlias,

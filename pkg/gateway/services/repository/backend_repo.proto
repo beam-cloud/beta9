@@ -5,7 +5,6 @@ import "google/protobuf/timestamp.proto";
 import "types.proto";
 
 service BackendRepositoryService {
-  rpc PreemptVM(PreemptVMRequest) returns (PreemptVMResponse);
   rpc GetCheckpointById(GetCheckpointByIdRequest)
       returns (GetCheckpointByIdResponse);
   rpc GetLatestCheckpointByStubId(GetLatestCheckpointByStubIdRequest)
@@ -24,6 +23,7 @@ service BackendRepositoryService {
   rpc GetDiskSnapshot(GetDiskSnapshotRequest) returns (GetDiskSnapshotResponse);
   rpc GetDiskSnapshotDownloadURL(GetDiskSnapshotDownloadURLRequest)
       returns (GetDiskSnapshotDownloadURLResponse);
+  rpc PreemptVM(PreemptVMRequest) returns (PreemptVMResponse);
 }
 
 message GetCheckpointByIdRequest { string checkpoint_id = 1; }

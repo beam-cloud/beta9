@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -24,8 +23,8 @@ const evictionRecheckInterval = time.Second
 // waiting on its resources; an endpoint's drain_seconds does not extend it.
 var maxPreemptionDrain = 10 * time.Second
 
-// spotReleaseTimeout bounds how long a tiered request waits for its Spot
-// victims, which include durable VM stops.
+// spotReleaseTimeout bounds the wait for Spot victims, which get their full
+// drain and, for VMs, a snapshot before they stop.
 const spotReleaseTimeout = 3 * time.Minute
 
 // ErrEvictionIncomplete is returned when victims chosen for a request were
@@ -44,24 +43,18 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 	}
 
 	drain := min(time.Duration(request.EvictDrainSeconds)*time.Second, maxPreemptionDrain)
+	wait := drain + evictionKillTimeout
 	victims := make([]string, 0, len(request.EvictContainerIds))
 	for _, victimID := range request.EvictContainerIds {
 		if victimID == "" || victimID == request.ContainerId {
 			continue
 		}
-		instance, _ := s.containerInstances.Get(victimID)
 		victimDrain := drain
-		if instance != nil && instance.Request.CPUTier() == types.CPUTierSpot {
-			victimDrain = types.SpotDrainSeconds * time.Second
+		if instance, _ := s.containerInstances.Get(victimID); instance != nil && instance.Request.CPUTier() == types.CPUTierSpot {
+			victimDrain, wait = types.SpotDrainSeconds*time.Second, spotReleaseTimeout
 			if instance.Request.IsPersistentVM() {
-				// The VM reconciler snapshots and stops it; the worker only waits.
-				vmID := ""
-				for _, env := range instance.Request.Env {
-					if id, ok := strings.CutPrefix(env, "BEAM_VM_ID="); ok {
-						vmID = id
-					}
-				}
-				if _, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: instance.Request.WorkspaceId, VmId: vmID, ContainerId: victimID}); err != nil {
+				// The VM reconciler snapshots and stops the VM; the worker only waits.
+				if _, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: instance.Request.WorkspaceId, VmId: instance.Request.VMID(), ContainerId: victimID}); err != nil {
 					return fmt.Errorf("request durable Spot VM stop: %w", err)
 				}
 				victims = append(victims, victimID)
@@ -82,10 +75,6 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		Dur("drain", drain).
 		Msg("waiting for evicted containers before starting request")
 	waitStart := time.Now()
-	wait := drain + evictionKillTimeout
-	if request.CPUTier() != "" {
-		wait = spotReleaseTimeout
-	}
 	remaining := s.waitForContainersFinalized(ctx, victims, wait)
 	metrics.RecordWorkerStartupPhase("evict_wait", time.Since(waitStart), request, map[string]string{
 		"victims":  fmt.Sprintf("%d", len(victims)),

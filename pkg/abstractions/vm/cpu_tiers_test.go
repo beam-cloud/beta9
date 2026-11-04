@@ -12,9 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type tierVMGateway struct{ *vmGateway }
+type tierVMGateway struct {
+	*vmGateway
+	defaultTier types.CPUTier
+}
 
 func (g *tierVMGateway) IsHostedCPUPool(name string) bool { return name == "old-public-pool" }
+func (g *tierVMGateway) GetCPUTierCatalog(context.Context, *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error) {
+	return &pb.GetCPUTierCatalogResponse{Catalog: `{"default_cpu_tier":"` + string(g.defaultTier) + `"}`}, nil
+}
 func (g *tierVMGateway) GetOrCreateStub(ctx context.Context, req *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	response, err := g.vmGateway.GetOrCreateStub(ctx, req)
 	if err != nil {
@@ -27,7 +33,7 @@ func (g *tierVMGateway) GetOrCreateStub(ctx context.Context, req *pb.GetOrCreate
 
 func TestTierChangeRequiresStoppedVMAndNewStub(t *testing.T) {
 	s, v, info, _, gateway := fixture()
-	s.gateway = &tierVMGateway{gateway}
+	s.gateway = &tierVMGateway{vmGateway: gateway}
 	v.Spec.Pool = "old-public-pool"
 	oldStub, handle, disk := v.StubID, v.Handle, rootDisk(v)
 	api := managementAPI(s, info)
@@ -47,7 +53,7 @@ func TestTierChangeRequiresStoppedVMAndNewStub(t *testing.T) {
 
 func TestTierReplacesOnlyHostedPools(t *testing.T) {
 	s, v, info, _, gateway := fixture()
-	s.gateway = &tierVMGateway{gateway}
+	s.gateway = &tierVMGateway{vmGateway: gateway}
 	ctx := auth.ContextWithAuthInfo(context.Background(), info)
 	child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "from-template", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool", CPUTier: types.CPUTierShared}})
 	require.NoError(t, err)
@@ -67,6 +73,19 @@ func TestTierReplacesOnlyHostedPools(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "private-pool", saved.Spec.Pool)
 	require.Empty(t, saved.Spec.CPUTier)
+}
+
+func TestDefaultTierMustFitTheVMBeforeItIsSaved(t *testing.T) {
+	s, _, info, _, gateway := fixture()
+	s.gateway = &tierVMGateway{vmGateway: gateway, defaultTier: types.CPUTierShared}
+	ctx := auth.ContextWithAuthInfo(context.Background(), info)
+	child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "default", Spec: types.VMSpec{ImageID: "image"}})
+	require.NoError(t, err)
+	require.Equal(t, types.CPUTierShared, child.Spec.CPUTier)
+	saved := len(s.repo.(*vmStore).rows)
+	_, err = s.createVM(ctx, info, types.VMCreateOptions{Name: "large", Spec: types.VMSpec{ImageID: "image", CPU: 16000, Memory: 32768}})
+	require.ErrorContains(t, err, "Shared supports at most 8 vCPU")
+	require.Len(t, s.repo.(*vmStore).rows, saved)
 }
 
 func TestPreemptionReasonSurvivesDurableStopAndBlocksTrafficResume(t *testing.T) {

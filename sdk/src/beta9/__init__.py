@@ -2,7 +2,6 @@ from importlib import import_module
 
 
 _EXPORTS = {
-    "CpuTier": (".type", "CpuTier"),
     "VM": (".abstractions.vm", "VM"),
     "Kiosk": (".abstractions.vm", "Kiosk"),
     "MCPServer": (".abstractions.vm", "MCPServer"),
@@ -21,6 +20,7 @@ _EXPORTS = {
     "Container": (".abstractions.base.container", "Container"),
     "env": (".env", None),
     "GpuType": (".type", "GpuType"),
+    "CpuTier": (".type", "CpuTier"),
     "DatabaseServingConfig": (".type", "DatabaseServingConfig"),
     "DurableDisk": (".type", "DurableDisk"),
     "Pool": (".type", "Pool"),

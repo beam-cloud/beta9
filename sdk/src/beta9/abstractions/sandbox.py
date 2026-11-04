@@ -268,7 +268,7 @@ class Sandbox(Pod):
         context: Optional[ConfigContext] = None,
         cpu_tier: Optional[CpuTier] = None,
     ):
-        self._default_vm_memory = memory is None
+        self._memory_defaulted = memory is None
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
         if context is not None:
@@ -404,7 +404,7 @@ class Sandbox(Pod):
         """
 
         # CPU tier VMs need 1 GiB; without a tier or pool, the account default decides.
-        if self._default_vm_memory and self.use_vm and not self.gpu:
+        if self._memory_defaulted and self.use_vm and not self.gpu:
             tier = self.cpu_tier
             if not tier and not self.pool_config:
                 catalog = self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog

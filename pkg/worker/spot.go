@@ -25,32 +25,34 @@ func (s *Worker) spotContainers() (ids []string, onlySpot bool) {
 	return
 }
 
-// Spot work must not hold pool headroom or keep an idle or draining worker
-// alive. It is evicted like a replacement request's victims, so Spot VMs stop
-// durably instead of being killed.
-func (s *Worker) reclaimSpotCapacity(last, now time.Time) {
+// reclaimSpotCapacity evicts Spot containers when the worker is draining, when
+// it holds its pool's minimum free capacity, or when Spot alone has kept it up
+// past the idle spindown timeout (it starts draining first).
+func (s *Worker) reclaimSpotCapacity(lastContainerRequest, now time.Time) {
 	ids, onlySpot := s.spotContainers()
-	if len(ids) == 0 || s.spotScaleIn.Load() {
+	if len(ids) == 0 || s.reclaimingSpot.Load() {
 		return
 	}
 	if !s.draining && !(onlySpot && s.poolHeadroom.Load()) {
-		if s.persistent || !onlySpot || now.Sub(last).Seconds() <= defaultWorkerSpindownTimeS {
+		if s.persistent || !onlySpot || now.Sub(lastContainerRequest).Seconds() <= defaultWorkerSpindownTimeS {
 			return
 		}
+		// The refreshed keepalive may report headroom; the next pass then evicts without draining.
 		if s.setWorkerKeepAlive() != nil || s.poolHeadroom.Load() || s.disableScheduling() != nil {
 			return
 		}
 		s.draining, s.drainStartedAt = true, now
 	}
-	if !s.spotScaleIn.CompareAndSwap(false, true) {
+	if !s.reclaimingSpot.CompareAndSwap(false, true) {
 		return
 	}
 	go func() {
-		defer s.spotScaleIn.Store(false)
+		defer s.reclaimingSpot.Store(false)
 		ctx, cancel := context.WithTimeout(s.ctx, spotReleaseTimeout)
 		defer cancel()
-		if err := s.evictForRequest(ctx, &types.ContainerRequest{EvictContainerIds: ids, EvictDrainSeconds: types.SpotDrainSeconds}); err != nil {
-			log.Warn().Err(err).Str("worker_id", s.workerId).Msg("Spot scale-in is waiting for durable release")
+		// Evicting like a request's victims stops Spot VMs durably.
+		if err := s.evictForRequest(ctx, &types.ContainerRequest{EvictContainerIds: ids}); err != nil {
+			log.Warn().Err(err).Str("worker_id", s.workerId).Msg("Spot containers have not released their capacity yet")
 		}
 	}()
 }

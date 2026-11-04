@@ -77,6 +77,7 @@ type GenericPodService struct {
 	rdb             *common.RedisClient
 	tailscale       *network.Tailscale
 	eventRepo       repository.EventRepository
+	cpuPricing      *clients.ContainerCostClient
 	controller      *abstractions.InstanceController
 	podInstances    *common.SafeMap[*podInstance]
 	instanceLoads   singleflight.Group
@@ -108,6 +109,7 @@ func NewPodService(
 		tailscale:       opts.Tailscale,
 		config:          opts.Config,
 		eventRepo:       opts.EventRepo,
+		cpuPricing:      clients.NewContainerCostClient(opts.Config.Monitoring.ContainerCostHookConfig),
 		podInstances:    common.NewSafeMap[*podInstance](),
 		drainCtx:        opts.DrainContext,
 	}
@@ -887,8 +889,7 @@ func (s *GenericPodService) cloneStub(ctx context.Context, workspace *types.Work
 		return nil, err
 	}
 
-	pricing := clients.NewContainerCostClient(s.config.Monitoring.Metering().ContainerCostHookConfig)
-	if err := pricing.BindStubCPU(ctx, workspace.ExternalId, stub.Type, stubConfig, s.scheduler.PoolConfig, true); err != nil {
+	if err := s.cpuPricing.BindCPUPricing(ctx, workspace.ExternalId, stub.Type, stubConfig, s.scheduler.PoolConfigs(), true); err != nil {
 		return nil, err
 	}
 	newStub, err := s.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, stub.ObjectId, workspace.Id, true, app.Id)

@@ -103,7 +103,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 
 	return &GatewayService{
 		ctx:              opts.Ctx,
-		cpuPricing:       clients.NewContainerCostClient(opts.Config.Monitoring.Metering().ContainerCostHookConfig),
 		appConfig:        opts.Config,
 		backendRepo:      opts.BackendRepo,
 		workspaceRepo:    opts.WorkspaceRepo,
@@ -122,5 +121,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		keyEventManager:  keyEventManager,
 		endpointRepo:     endpointRepo,
 		imageService:     opts.ImageService,
+		cpuPricing:       clients.NewContainerCostClient(opts.Config.Monitoring.ContainerCostHookConfig),
 	}, nil
 }

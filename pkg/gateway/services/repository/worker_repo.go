@@ -427,9 +427,9 @@ func (s *WorkerRepositoryService) RemoveWorker(ctx context.Context, req *pb.Remo
 
 func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *pb.SetWorkerKeepAliveRequest) (*pb.SetWorkerKeepAliveResponse, error) {
 	err := s.workerRepo.SetWorkerKeepAlive(req.WorkerId, types.WorkerKeepAlive{
-		CPUTierProtocol:            req.CpuTierProtocol,
 		MachineId:                  req.MachineId,
 		CheckpointCompatibilityKey: req.CheckpointCompatibilityKey,
+		CPUTierProtocol:            req.CpuTierProtocol,
 	})
 	if err != nil {
 		return &pb.SetWorkerKeepAliveResponse{Ok: false, ErrorMsg: err.Error()}, nil

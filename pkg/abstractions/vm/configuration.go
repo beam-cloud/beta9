@@ -65,10 +65,6 @@ func validate(spec *types.VMSpec) error {
 		spec.Memory = 8192
 	}
 
-	if err := spec.CPUTier.Validate(spec.CPU, spec.Memory, true, spec.GPU != ""); err != nil {
-		return err
-	}
-
 	var err error
 	spec.DiskSize, err = normalizeDiskSize(spec.DiskSize)
 	if err != nil {
@@ -256,13 +252,13 @@ func validateMetadata(metadata map[string]string) error {
 }
 
 type updateRequest struct {
-	CPUTier      *types.CPUTier     `json:"cpu_tier,omitempty"`
 	IdleTimeout  *int64             `json:"idle_timeout,omitempty"`
 	IdleAction   *string            `json:"idle_action,omitempty"`
 	AutoResume   *bool              `json:"auto_resume,omitempty"`
 	Metadata     *map[string]string `json:"metadata,omitempty"`
 	BlockNetwork *bool              `json:"block_network,omitempty"`
 	AllowList    *[]string          `json:"allow_list,omitempty"`
+	CPUTier      *types.CPUTier     `json:"cpu_tier,omitempty"`
 }
 
 func (s *Service) update(c echo.Context) error {
@@ -293,7 +289,7 @@ func (s *Service) update(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusConflict, "stop the VM before changing CPU tier")
 		}
 		if !s.cpuTierEligible(v.Spec) {
-			return apiError(fmt.Errorf("CPU tiers apply only to hosted CPU VMs"))
+			return apiError(types.ErrCPUTierIneligible)
 		}
 		v.Spec.CPUTier, v.Spec.Pool, v.StubID = *req.CPUTier, "", ""
 		if err := s.prepare(ctx, v); err != nil {
@@ -556,8 +552,8 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 	return s.repo.SaveVM(ctx, v)
 }
 
-// A public pool injected by the old VM default is a placement default, not a
-// private/BYOC choice, so a CPU tier may replace it.
+// cpuTierEligible reports whether a VM may use a CPU tier: a CPU VM with no pool
+// or a hosted one, which the tier replaces. Private and BYOC pools are kept.
 func (s *Service) cpuTierEligible(spec types.VMSpec) bool {
 	return spec.GPU == "" && (spec.Pool == "" || s.gateway.IsHostedCPUPool(spec.Pool))
 }

@@ -35,6 +35,7 @@ type StubGroup struct {
 	containerRepo         repository.ContainerRepository
 	eventRepo             repository.EventRepository
 	redisClient           *common.RedisClient
+	cpuPricing            *clients.ContainerCostClient
 	sandboxHistoryQueries singleflight.Group
 }
 
@@ -49,6 +50,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, conta
 		config:        config,
 		eventRepo:     eventRepo,
 		redisClient:   redisClient,
+		cpuPricing:    clients.NewContainerCostClient(config.Monitoring.ContainerCostHookConfig),
 	}
 
 	g.GET("/:workspaceId/sandboxes", auth.WithWorkspaceAuth(group.ListSandboxes))                       // Lists sandboxes (enriched with live container state) for a workspace
@@ -451,9 +453,7 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		return nil, HTTPInternalServerError("Failed to create app")
 	}
 
-	pricing := clients.NewContainerCostClient(g.config.Monitoring.Metering().ContainerCostHookConfig)
-	lookupPool := func(name string) (types.WorkerPoolConfig, bool) { p, ok := g.config.Worker.Pools[name]; return p, ok }
-	if err := pricing.BindStubCPU(ctx, workspace.ExternalId, stub.Type, stubConfig, lookupPool, true); err != nil {
+	if err := g.cpuPricing.BindCPUPricing(ctx, workspace.ExternalId, stub.Type, stubConfig, g.config.Worker.Pools, true); err != nil {
 		return nil, HTTPBadRequest(err.Error())
 	}
 	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true, app.Id)

@@ -107,7 +107,6 @@ func ensureGVisorMaxMapCount(path string) (bool, error) {
 }
 
 type Worker struct {
-	spotScaleIn                atomic.Bool
 	checkpointCompatibilityKey string
 
 	workerId                string
@@ -173,6 +172,7 @@ type Worker struct {
 	draining         bool
 	drainStartedAt   time.Time
 	nextDrainAttempt time.Time
+	reclaimingSpot   atomic.Bool // set while Spot containers are evicted to free capacity
 	routeTransport   string
 	ctx              context.Context
 	cancel           func()
@@ -1726,13 +1726,14 @@ func (s *Worker) setWorkerKeepAlive() error {
 	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
 	defer cancel()
 
+	// Spot work does not stop a worker from counting as idle.
 	_, idle := s.spotContainers()
 	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:                   s.workerId,
-		CpuTierProtocol:            types.CPUTierProtocolVersion,
 		MachineId:                  s.machineID,
 		CheckpointCompatibilityKey: s.checkpointCompatibilityKey,
 		Idle:                       idle,
+		CpuTierProtocol:            types.CPUTierProtocolVersion,
 	}))
 	if err != nil {
 		return err

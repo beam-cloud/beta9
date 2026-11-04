@@ -80,8 +80,11 @@ service GatewayService {
     };
   }
 
-  rpc GetCPUTierCatalog(GetCPUTierCatalogRequest) returns (GetCPUTierCatalogResponse) {
-    option (google.api.http) = { get: "/cpu-tiers" };
+  rpc GetCPUTierCatalog(GetCPUTierCatalogRequest)
+      returns (GetCPUTierCatalogResponse) {
+    option (google.api.http) = {
+      get : "/cpu-tiers"
+    };
   }
 
   // Stubs

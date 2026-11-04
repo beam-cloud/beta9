@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -18,6 +17,8 @@ type cpuTierPool struct {
 	ReadyRuntimes map[string]bool `json:"ready_runtimes"`
 }
 
+// GetCPUTierCatalog returns the workspace's billing catalog with the gateway's
+// tiered pools, their readiness and its CPU tier capabilities.
 func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error) {
 	info, _ := auth.AuthInfoFromContext(ctx)
 	if info == nil || info.Workspace == nil {
@@ -26,12 +27,12 @@ func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTi
 	if gws.cpuPricing == nil {
 		return &pb.GetCPUTierCatalogResponse{Catalog: `{"enabled":false,"default_cpu_tier":"","cpu_tiers":{}}`}, nil
 	}
-	quote, err := gws.cpuPricing.ResolveCPU(ctx, clients.ContainerCostRequest{WorkspaceId: info.Workspace.ExternalId, CatalogOnly: true})
+	raw, err := gws.cpuPricing.CPUTierCatalog(ctx, info.Workspace.ExternalId)
 	if err != nil {
 		return nil, err
 	}
 	var catalog map[string]any
-	if err := json.Unmarshal(quote.CPUTierCatalog, &catalog); err != nil {
+	if err := json.Unmarshal(raw, &catalog); err != nil {
 		return nil, err
 	}
 	workers, err := gws.workerRepo.GetAllWorkers()

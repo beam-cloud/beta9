@@ -26,7 +26,7 @@ import (
 type BackendRepositoryService struct {
 	ctx                     context.Context
 	backendRepo             repository.BackendRepository
-	containers              repository.ContainerRepository
+	containerRepo           repository.ContainerRepository
 	diskSnapshotObjectMu    sync.Mutex
 	diskSnapshotObjectCache map[string]diskSnapshotObjectCacheEntry
 	diskSnapshotObjectGroup singleflight.Group
@@ -41,11 +41,11 @@ type diskSnapshotObjectCacheEntry struct {
 	keys      map[string]struct{}
 }
 
-func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository, containers repository.ContainerRepository) *BackendRepositoryService {
+func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository) *BackendRepositoryService {
 	return &BackendRepositoryService{
 		ctx:                     ctx,
 		backendRepo:             backendRepo,
-		containers:              containers,
+		containerRepo:           containerRepo,
 		diskSnapshotObjectCache: make(map[string]diskSnapshotObjectCacheEntry),
 	}
 }
@@ -65,7 +65,7 @@ func (s *BackendRepositoryService) AuthorizeRequest(ctx context.Context, req int
 	}
 	switch req := req.(type) {
 	case *pb.PreemptVMRequest:
-		_, err := worker.Container(s.containers, req.ContainerId)
+		_, err := worker.Container(s.containerRepo, req.ContainerId)
 		return err
 	case *pb.GetCheckpointByIdRequest, *pb.ListCheckpointsRequest:
 		return errCheckpointNotPermitted

@@ -206,6 +206,17 @@ func TestEvictForRequestFailsWhenVictimsOutliveKillWindow(t *testing.T) {
 	require.True(t, exists)
 }
 
+func TestOnlySpotVictimsExtendTheEvictionWait(t *testing.T) {
+	shortenEvictionKillTimeout(t, 300*time.Millisecond)
+	worker, rt := evictionWorkerForTest(false)
+	rt.ignoreKill = true
+	addRunningInstance(worker, rt, "victim-1")
+	request := &types.ContainerRequest{EvictContainerIds: []string{"victim-1"}, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"shared"}`}}}
+	started := time.Now()
+	require.ErrorIs(t, worker.evictForRequest(context.Background(), request), ErrEvictionIncomplete)
+	require.Less(t, time.Since(started), 5*time.Second)
+}
+
 func TestRunContainerRequestFailsInsteadOfStartingOnHeldResources(t *testing.T) {
 	shortenEvictionKillTimeout(t, 300*time.Millisecond)
 	workerCtx, cancelWorker := context.WithCancel(context.Background())
@@ -383,7 +394,7 @@ func TestSpotReturnsProtectedHeadroomWithoutRetiringWorker(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("protected headroom was left occupied by Spot")
 	}
-	require.Eventually(t, func() bool { return !worker.spotScaleIn.Load() }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !worker.reclaimingSpot.Load() }, time.Second, time.Millisecond)
 	require.False(t, worker.draining, "reserved workers remain available for protected work")
 	require.Empty(t, rt.signals, "headroom reclamation still requires the durable VM stop path")
 }

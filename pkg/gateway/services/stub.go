@@ -159,7 +159,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	in.Env = expandedEnv
 
 	stubConfig := types.StubConfigV1{
-		CPUTier: types.CPUTier(in.CpuTier),
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
 			Gpus:     gpus,
@@ -167,6 +166,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:   in.Memory,
 			ImageId:  in.ImageId,
 		},
+		CPUTier:            types.CPUTier(in.CpuTier),
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
 		OnDeploy:           in.OnDeploy,
@@ -202,7 +202,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Disks:              in.Disks,
 		ManagedEndpoint:    managedEndpoint,
 	}
-	if err := gws.cpuPricing.BindStubCPU(ctx, authInfo.Workspace.ExternalId, types.StubType(in.StubType), &stubConfig, gws.scheduler.PoolConfig, !resourcePolicy.privatePoolTargeted); err != nil {
+	if err := gws.cpuPricing.BindCPUPricing(ctx, authInfo.Workspace.ExternalId, types.StubType(in.StubType), &stubConfig, gws.scheduler.PoolConfigs(), !resourcePolicy.privatePoolTargeted); err != nil {
 		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	stubConfig.PreparationCacheKey = preparedStubCacheKey(ctx)

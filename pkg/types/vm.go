@@ -3,11 +3,14 @@ package types
 import (
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+// VMStopReasonPreempted marks a Spot VM stopped to reclaim its capacity. It
+// stays stopped until an explicit start; wake and auto-resume do not restart it.
 const VMStopReasonPreempted = "preempted"
 
 // VM lifecycle states are persisted and exposed by the management API.
@@ -45,6 +48,15 @@ func isPersistentVM(useVM bool, env []string) bool {
 	return useVM && slices.Contains(env, "BEAM_VM_SYSTEMD=1")
 }
 
+func (r *ContainerRequest) VMID() string {
+	for _, env := range r.Env {
+		if id, ok := strings.CutPrefix(env, "BEAM_VM_ID="); ok {
+			return id
+		}
+	}
+	return ""
+}
+
 // WorkerShutdownGraceSeconds covers task drain, systemd shutdown and disk cleanup.
 func WorkerShutdownGraceSeconds(stopGrace int64) int64 {
 	if stopGrace <= 0 {
@@ -55,13 +67,13 @@ func WorkerShutdownGraceSeconds(stopGrace int64) int64 {
 
 // VMSpec describes a persistent microVM. GPU requests assign one device.
 type VMSpec struct {
-	CPUTier          CPUTier           `json:"cpu_tier,omitempty"`
 	ImageID          string            `json:"image_id"`
 	CPU              int64             `json:"cpu"`    // millicores
 	Memory           int64             `json:"memory"` // MiB
 	GPU              string            `json:"gpu,omitempty"`
 	DiskSize         string            `json:"disk_size"`
 	Pool             string            `json:"pool,omitempty"`
+	CPUTier          CPUTier           `json:"cpu_tier,omitempty"`
 	Env              []string          `json:"env,omitempty"`
 	Secrets          []string          `json:"secrets,omitempty"`
 	Ports            []uint32          `json:"ports,omitempty"`
@@ -208,9 +220,6 @@ func (s VMSpec) RuntimePorts() []uint32 {
 }
 
 type VM struct {
-	CPUTierEligible     *bool             `json:"cpu_tier_eligible,omitempty"`
-	CPUPricing          *CPUPriceBinding  `json:"cpu_pricing,omitempty"`
-	StopReason          string            `json:"stop_reason,omitempty"`
 	ID                  string            `json:"id"`
 	WorkspaceID         uint              `json:"-"`
 	WorkspaceExternalID string            `json:"-"`
@@ -223,10 +232,12 @@ type VM struct {
 	PublicIPv6          string            `json:"public_ipv6,omitempty"`
 	Spec                VMSpec            `json:"spec"`
 	StubID              string            `json:"stub_id,omitempty"`
+	CPUPricing          *CPUPriceBinding  `json:"cpu_pricing,omitempty"`
 	ContainerID         string            `json:"container_id,omitempty"`
 	DesiredState        string            `json:"desired_state"`
 	Status              string            `json:"status"`
 	Error               string            `json:"error,omitempty"`
+	StopReason          string            `json:"stop_reason,omitempty"`
 	Generation          int64             `json:"generation"`
 	LaunchAttempts      int               `json:"launch_attempts"`
 	EverRunning         bool              `json:"ever_running"`
@@ -242,6 +253,7 @@ type VM struct {
 	KioskURL            string            `json:"kiosk_url,omitempty"`
 	MCPURL              string            `json:"mcp_url,omitempty"`
 	BrowserAuth         bool              `json:"browser_auth,omitempty"`
+	CPUTierEligible     *bool             `json:"cpu_tier_eligible,omitempty"` // set only in responses
 	URLs                map[uint32]string `json:"urls"`
 }
 

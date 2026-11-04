@@ -28,8 +28,8 @@ from ..clients.endpoint import (
 from ..env import is_local
 from ..schema import Schema
 from ..type import (
-    CpuTier,
     Autoscaler,
+    CpuTier,
     DurableDisk,
     GpuType,
     GpuTypeAlias,

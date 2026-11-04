@@ -38,13 +38,14 @@ type ContainerCostResponse struct {
 // ContainerCostQuote is a validated quote returned by the billing service.
 // Valid distinguishes a real zero-cost quote from the absence of a quote.
 type ContainerCostQuote struct {
-	CPUPricing     *types.CPUPriceBinding
-	CPUTierCatalog json.RawMessage
 	CostPerMs      float64
 	PricingVersion string
 	EffectiveAt    time.Time
 	ValidUntil     time.Time
 	Valid          bool
+
+	CPUPricing     *types.CPUPriceBinding
+	CPUTierCatalog json.RawMessage
 }
 
 type ContainerCostRequest struct {
@@ -97,7 +98,8 @@ func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCost
 }
 
 // GetContainerCostQuote caches by workspace, stub kind and resources for five minutes (or valid_until).
-// A failed refresh returns the last good quote and retries on a later lookup.
+// A failed refresh returns the last good quote and retries on a later lookup. Tiered requests are
+// priced from their stub's bound prices without a lookup.
 func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request *types.ContainerRequest) (ContainerCostQuote, error) {
 	binding, err := request.CPUPricing()
 	if err != nil {
@@ -312,39 +314,37 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-// ResolveCPU skips the quote cache so catalog revisions reach new stubs immediately.
-func (c *ContainerCostClient) ResolveCPU(ctx context.Context, request ContainerCostRequest) (ContainerCostQuote, error) {
-	if c == nil {
-		return ContainerCostQuote{}, fmt.Errorf("CPU tier billing is not configured")
-	}
-	quote, _, err := c.fetch(ctx, request)
-	return quote, err
-}
-
-// BindStubCPU gives every new stub (created, cloned or redeployed) current
-// server prices; prices from a parent stub or a client are never kept.
-func (c *ContainerCostClient) BindStubCPU(ctx context.Context, workspaceID string, kind types.StubType, config *types.StubConfigV1, poolConfig func(string) (types.WorkerPoolConfig, bool), eligible bool) error {
+// BindCPUPricing binds current prices to a new stub revision (created, cloned or
+// redeployed), resolving the workspace's default tier when none is selected.
+// Prices from a parent stub or a client are never kept. eligible is false for
+// stubs placed on private capacity.
+func (c *ContainerCostClient) BindCPUPricing(ctx context.Context, workspaceID string, kind types.StubType, config *types.StubConfigV1, pools map[string]types.WorkerPoolConfig, eligible bool) error {
 	config.CPUPricing = nil
 	selector := config.PoolSelector()
-	pool, known := poolConfig(selector)
+	pool, known := pools[selector]
 	if !eligible || selector != "" && !(known && pool.HostedCPU()) || kind.IsPlatformWorkload() || config.RequiresGPU() {
 		if config.CPUTier != "" {
-			return fmt.Errorf("CPU tiers apply only to hosted CPU workloads")
+			return types.ErrCPUTierIneligible
 		}
 		return nil
 	}
-	if c == nil && config.CPUTier == "" {
+	if c == nil {
+		if config.CPUTier != "" {
+			return fmt.Errorf("CPU tier billing is not configured")
+		}
 		return nil
 	}
-	quote, err := c.ResolveCPU(ctx, ContainerCostRequest{
+	// Uncached, so catalog changes reach new stubs immediately.
+	quote, _, err := c.fetch(ctx, ContainerCostRequest{
 		WorkspaceId: workspaceID, Cpu: config.Runtime.Cpu, Memory: config.Runtime.Memory,
 		Sandbox: kind.Kind() == types.StubTypeSandbox, VM: kind.Kind() == types.StubTypeVM,
 		CPUTier: config.CPUTier, ResolveCPUTier: true,
 	})
+	if err != nil {
+		return err
+	}
 	binding := quote.CPUPricing
 	switch {
-	case err != nil:
-		return err
 	case binding == nil && config.CPUTier == "":
 		return nil
 	case binding == nil || config.CPUTier != "" && binding.Tier != config.CPUTier:
@@ -360,4 +360,10 @@ func (c *ContainerCostClient) BindStubCPU(ctx context.Context, workspaceID strin
 	}
 	config.CPUTier, config.CPUPricing = binding.Tier, binding
 	return nil
+}
+
+// CPUTierCatalog returns the CPU tiers a workspace may choose and its default tier.
+func (c *ContainerCostClient) CPUTierCatalog(ctx context.Context, workspaceID string) (json.RawMessage, error) {
+	quote, _, err := c.fetch(ctx, ContainerCostRequest{WorkspaceId: workspaceID, CatalogOnly: true})
+	return quote.CPUTierCatalog, err
 }

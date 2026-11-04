@@ -674,13 +674,13 @@ func (m PoolMode) AgentHosted() bool {
 }
 
 type WorkerPoolConfig struct {
-	CPUClass                  CPUTier                           `key:"cpuClass" json:"cpu_class,omitempty"`
 	GPUType                   string                            `key:"gpuType" json:"gpu_type"`
 	Runtime                   string                            `key:"runtime" json:"runtime"`                                 // Kubernetes RuntimeClass for pod (e.g., "nvidia")
 	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc", "gvisor", or "microvm"
 	ContainerRuntimeConfig    RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"` // Pool-specific container runtime configuration
 	CPUAffinityEnforced       bool                              `key:"cpuAffinityEnforced" json:"cpu_affinity_enforced"`
 	CPUShareMultiplier        CPUShareMultiplier                `key:"cpuShareMultiplier" json:"cpu_share_multiplier,omitempty"`
+	CPUClass                  CPUTier                           `key:"cpuClass" json:"cpu_class,omitempty"` // CPU tier sold from this pool: shared or performance
 	GPUVirtualized            bool                              `key:"gpuVirtualized" json:"gpu_virtualized"`
 	ContainerStartConcurrency int                               `key:"containerStartConcurrency" json:"container_start_concurrency"`
 	NetworkPreallocation      *bool                             `key:"networkPreallocation" json:"network_preallocation"`

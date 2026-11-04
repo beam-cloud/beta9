@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 )
@@ -11,6 +12,8 @@ const CPUTierProtocolVersion uint32 = 1
 
 // SpotDrainSeconds is the notice Spot work gets before it is stopped.
 const SpotDrainSeconds = 30
+
+var ErrCPUTierIneligible = errors.New("CPU tiers apply only to hosted CPU workloads")
 
 type CPUTier string
 
@@ -31,6 +34,7 @@ type CPUPriceBinding struct {
 	MemoryCentsPerGiBHour string  `json:"memory_cents_per_gib_hour"`
 }
 
+// Validate checks that a workload's shape fits the tier.
 func (t CPUTier) Validate(cpu, memory int64, nativeVM, gpu bool) error {
 	switch {
 	case t == "":
@@ -38,7 +42,7 @@ func (t CPUTier) Validate(cpu, memory int64, nativeVM, gpu bool) error {
 	case t != CPUTierSpot && t != CPUTierShared && t != CPUTierPerformance:
 		return fmt.Errorf("unknown CPU tier %q", t)
 	case gpu:
-		return fmt.Errorf("CPU tiers apply only to hosted CPU workloads")
+		return ErrCPUTierIneligible
 	case nativeVM && (cpu < 1000 || memory < 1024):
 		return fmt.Errorf("CPU tier VMs require at least 1 vCPU and 1 GiB RAM")
 	case t == CPUTierShared && (cpu > 8000 || memory > 16384):
@@ -47,8 +51,9 @@ func (t CPUTier) Validate(cpu, memory int64, nativeVM, gpu bool) error {
 	return nil
 }
 
-// MatchesPool is the only tier-to-pool policy. Untagged pools retain legacy
-// placement; Spot inherits the multiplier of the capacity it borrows.
+// MatchesPool reports whether work on tier t may run in pool p. Untiered work
+// stays on untagged pools. Shared and Performance need a hosted pool of their
+// class with a 2.5x or 1x CPU share multiplier; Spot borrows from either.
 func (t CPUTier) MatchesPool(p WorkerPoolConfig) bool {
 	if t == "" {
 		return p.CPUClass == ""
@@ -58,7 +63,8 @@ func (t CPUTier) MatchesPool(p WorkerPoolConfig) bool {
 	return valid && (t == CPUTierSpot || t == p.CPUClass)
 }
 
-// HostedCPU reports whether CPU tiers may use the pool.
+// HostedCPU reports whether the pool is Beam-hosted CPU capacity, the only
+// capacity CPU tiers use.
 func (p WorkerPoolConfig) HostedCPU() bool {
 	return p.GPUType == "" && !p.Mode.AgentHosted()
 }
@@ -91,6 +97,7 @@ func (r *ContainerRequest) CPUPricing() (*CPUPriceBinding, error) {
 	return c.CPUPricing, nil
 }
 
+// CostPerMs prices cpu millicores and memory MiB in cents per millisecond.
 func (b *CPUPriceBinding) CostPerMs(cpu, memory int64) (float64, error) {
 	c, okCPU := new(big.Rat).SetString(b.CPUCentsPerHour)
 	m, okMemory := new(big.Rat).SetString(b.MemoryCentsPerGiBHour)
@@ -102,9 +109,8 @@ func (b *CPUPriceBinding) CostPerMs(cpu, memory int64) (float64, error) {
 	return cost, nil
 }
 
-// Bound resource changes need a fresh stub, so historical duration cannot be
-// replayed with a different shape or price. Replica/env edits keep the binding;
-// Validate rejects added GPUs.
+// ValidateCPURevision rejects in-place changes to a stub's tier or a tiered
+// stub's resources. Usage is priced from the stub, so these need a redeploy.
 func (c *StubConfigV1) ValidateCPURevision(previous StubConfigV1) error {
 	r, p := c.Runtime, previous.Runtime
 	if c.CPUTier != previous.CPUTier || c.CPUTier != "" && (r.Cpu != p.Cpu || r.Memory != p.Memory || r.GpuCount != p.GpuCount) {

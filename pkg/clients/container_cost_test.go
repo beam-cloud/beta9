@@ -528,14 +528,13 @@ func TestCPUPriceResolutionOnCreationAndClone(t *testing.T) {
 	defer server.Close()
 	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test"})
 	config := types.StubConfigV1{Runtime: types.Runtime{Cpu: 4000, Memory: 8192}, UseVM: true}
-	lookup := func(string) (types.WorkerPoolConfig, bool) { return types.WorkerPoolConfig{}, false }
-	require.NoError(t, client.BindStubCPU(context.Background(), "owner-workspace", types.StubType(types.StubTypeVM), &config, lookup, true))
+	require.NoError(t, client.BindCPUPricing(context.Background(), "owner-workspace", types.StubType(types.StubTypeVM), &config, nil, true))
 	require.Equal(t, types.CPUTierShared, config.CPUTier)
 	require.Equal(t, "current", config.CPUPricing.Version)
 	// Clones never inherit authoritative prices, even when their selected tier stays the same.
 	config.CPUPricing = &types.CPUPriceBinding{Tier: types.CPUTierShared, Version: "old"}
 	binding.Version = "next"
-	require.NoError(t, client.BindStubCPU(context.Background(), "owner-workspace", types.StubType(types.StubTypeVM), &config, lookup, true))
+	require.NoError(t, client.BindCPUPricing(context.Background(), "owner-workspace", types.StubType(types.StubTypeVM), &config, nil, true))
 	require.Equal(t, "next", config.CPUPricing.Version)
 	require.Equal(t, 2, calls)
 	// Workers reuse the stored amount without a live billing connection.
@@ -549,16 +548,14 @@ func TestCPUPriceResolutionOnCreationAndClone(t *testing.T) {
 
 func TestPrivateAndGPUKeepLegacyPricingWithoutBillingLookup(t *testing.T) {
 	var offline *ContainerCostClient
-	lookup := func(string) (types.WorkerPoolConfig, bool) {
-		return types.WorkerPoolConfig{Mode: types.PoolModePrivate}, true
-	}
+	pools := map[string]types.WorkerPoolConfig{"private": {Mode: types.PoolModePrivate}}
 	for _, config := range []types.StubConfigV1{
 		{Pool: &types.PoolConfig{Name: "private"}},
 		{Runtime: types.Runtime{Gpus: []types.GpuType{types.GPU_T4}, GpuCount: 1}},
 	} {
-		require.NoError(t, offline.BindStubCPU(context.Background(), "workspace", types.StubType("function"), &config, lookup, true))
+		require.NoError(t, offline.BindCPUPricing(context.Background(), "workspace", types.StubType("function"), &config, pools, true))
 		require.Nil(t, config.CPUPricing)
 		config.CPUTier = types.CPUTierShared
-		require.Error(t, offline.BindStubCPU(context.Background(), "workspace", types.StubType("function"), &config, lookup, true))
+		require.ErrorIs(t, offline.BindCPUPricing(context.Background(), "workspace", types.StubType("function"), &config, pools, true), types.ErrCPUTierIneligible)
 	}
 }

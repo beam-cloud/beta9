@@ -103,9 +103,9 @@ type Worker struct {
 }
 
 type WorkerKeepAlive struct {
-	CPUTierProtocol            uint32 `json:"cpu_tier_protocol"`
 	MachineId                  string `json:"machine_id"`
 	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key"`
+	CPUTierProtocol            uint32 `json:"cpu_tier_protocol"`
 }
 
 func StableStorageNodeID(machineID, workerID string) string {
