@@ -50,11 +50,15 @@ func testVMBatchCancellation[T any](t *testing.T, mock sqlmock.Sqlmock, query st
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	started := make(chan struct{})
-	var once sync.Once
+	proceed := make(chan struct{})
+	var once, release sync.Once
+	unblock := func() { release.Do(func() { close(proceed) }) }
+	t.Cleanup(unblock)
 	mock.ExpectQuery(query).WithArgs(sqlArgumentMatcher(func(driver.Value) bool {
 		once.Do(func() { close(started) })
+		<-proceed
 		return true
-	})).WillDelayFor(80 * time.Millisecond).WillReturnRows(rows)
+	})).WillReturnRows(rows)
 	results := make(chan error, 2)
 	for _, id := range []string{"first", "second"} {
 		go func() { results <- submit(ctx, id) }()
@@ -72,6 +76,7 @@ func testVMBatchCancellation[T any](t *testing.T, mock sqlmock.Sqlmock, query st
 		t.Fatalf("caller returned before its database outcome was known: %v", err)
 	case <-time.After(10 * time.Millisecond):
 	}
+	unblock()
 	for range 2 {
 		require.NoError(t, <-results, "a committed write must not become a cancellation failure")
 	}
