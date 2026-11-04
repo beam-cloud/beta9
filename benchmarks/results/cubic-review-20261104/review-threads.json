@@ -1,0 +1,561 @@
+{
+  "commit": "09f1f6e3",
+  "total": 69,
+  "resolved": 69,
+  "previously_unresolved": 53,
+  "manual_replies_and_resolutions": 39,
+  "threads": [
+    {
+      "id": "PRRT_kwDOKtkjw86zoIBG",
+      "path": "pkg/worker/network_cleanup_batch.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Batch rule cleanup is canceled with the worker lifetime context, so shutdown can retire a slot while permanently retaining its IP reservation. Run the batch on an independent bounded cleanup context (or pass the teardown context) and wait for the batch result before deciding to quarantine the address.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIBL",
+      "path": "benchmarks/vm_burst.py",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThe initial and restore mismatch branches duplicate the same three-attempt guest diagnostic and error-recording logic; extract that shared work into a helper so changes to retries or diagnostics stay consistent.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIBT",
+      "path": "pkg/clients/storage_http_trace.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: The trace wrapper is selected only when the S3 client is constructed, so a client created with `context.Background()` never records later requests carrying a startup trace. Install the wrapper unconditionally and let `Do` inspect each request context.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIBZ",
+      "path": "pkg/worker/container_events.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: With `BETA9_TRACE_VM_STARTUP=1`, this guard drops the per-phase `container startup phase` log for every phase. The complete trace is only emitted at exec-ready, so phases on failed starts and `sandbox_apply_cpu_quota`, which runs after that emit, are never logged anywhere. Keep the per-phase log unconditional, or emit the trace on every exit path before dropping the line.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICC",
+      "path": ".dockerignore",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: `!hack` is too broad. It pulls all of `hack/` into the worker build context, including `hack/stage/` and its private module cache tarball. Remove this line and keep only `!hack/worker-build-modfile.go`.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICG",
+      "path": "pkg/repository/backend_postgres.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThe batch query duplicates `getOrCreateStub`’s matching, create/touch, and app-activity logic, so changes to these rules can drift between paths. Extract the common upsert semantics while keeping the batch-specific set handling separate.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICJ",
+      "path": "pkg/worker/util.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Pin External Dependencies to Specific Versions**\n\nThis native path invokes whichever `zstd` is on `PATH`, while the worker image installs `zstd` without a version pin. Pin the package version or enforce a pinned binary version before invoking it.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICM",
+      "path": "pkg/runtime/microvm_guest_init_linux.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis repeats `bindIntoCanvas`’s bind, submount-registration, and read-only remount sequence. Extract the shared mount-and-registration logic into a helper to keep the behavior consistent.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICT",
+      "path": "docker/Dockerfile.worker",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Pin External Dependencies to Specific Versions**\n\nPin the newly added `zstd` package to a specific apt version; otherwise builds can install different versions as the Ubuntu repository changes.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICX",
+      "path": "benchmarks/vm_burst.py",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: This benchmark fails on Python 3.8, which the bundled `beta9` SDK supports, because `vars(args) | {...}` requires dictionary-union support from Python 3.9. Use `{**vars(args), ...}` or explicitly require Python 3.9+.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICd",
+      "path": "sdk/src/beta9/abstractions/vm/__init__.py",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\n`_submit_creation` and `start` duplicate the same `exec_ready` wait decision. Move it into a shared helper so readiness behavior stays consistent.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICg",
+      "path": "pkg/worker/checkpoint_upload_stream.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\n`persistStreamingCheckpoint` repeats the same timed slot-acquisition and release sequence for upload and archive, and `persistCheckpoint` repeats the pattern. Extract a shared admission helper to keep this logic consistent.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoICs",
+      "path": "pkg/worker/criu_test.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis slot-fill loop duplicates the one in TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM: both fill every microVM checkpoint slot with acquireMicroVMCheckpointSlot and t.Cleanup(release). Extract a shared helper (parameterized to capture the last release) so slot-admission changes land in one place.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIC1",
+      "path": "cmd/vminit/mounts.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nBoth fallback branches duplicate the flush-and-apply error handling. Extract that sequence into a shared helper so changes to the fallback behavior stay consistent.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIC-",
+      "path": "pkg/runtime/microvm_boot_batch_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: This test passes even if `spawnFinished()` never releases the handed-off reservation, because the 1s window deadline opens the group anyway. Run `wait` in a goroutine and require it to return within a short timeout (well below the window), so the release is actually verified.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIDN",
+      "path": "pkg/auth/http.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Any caller can enable VM tracing before authentication by sending `X-Beam-Startup-Trace: 1`, causing a trace log and optional pool-stat collection per request. Gate this header behind a server-side profiling flag and, if retained, an authorized diagnostic path.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIDU",
+      "path": "pkg/disk/spare.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: An exhausted spare pool can stay empty while the refill builder is sleeping on the quiet timer or waiting in `BeforeSpareBuild`. `optional` and `delay` are computed once per loop pass, and nothing re-checks the pool after that. Re-evaluate `len(m.spares[size])` after the wait so an empty pool builds immediately.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIDa",
+      "path": "cmd/worker/main.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: With `BETA9_WORKER_BUFFERED_JSON_LOGS=1`, the error logged just before `os.Exit(1)` in `container_server.go` can be dropped, because the deferred `writer.Close()` never runs. Consider flushing the writer before any `os.Exit`, or having `WriteLevel` flush on ErrorLevel as well.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIDh",
+      "path": "docker/Dockerfile.worker",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: The patched goproc is only produced in this Dockerfile. `Dockerfile.worker-overlay` still downloads the unpatched release binary over `/usr/local/bin/goproc`, so overlay images used by `hack/microvm-smoke.sh` and `hack/worker-e2e-image.sh` will not get the output-drain fix. Apply the same patched build there, or pull the patched binary from a shared artifact.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIDo",
+      "path": "docker/patches/goproc/bounded-output-drain.patch",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: This raises the output-drain deadline for every process exec, not only the fractional-CPU case. A command that exits while a background child still holds stdout or stderr now blocks for 2s instead of 100ms. Consider a shorter deadline, or limit the longer wait to the copier-stall case.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIDv",
+      "path": "pkg/runtime/microvm_linux.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: `snapshotMicroVM` returns `mustStop=true` even when `withSnapshotCPU` fails before `vm.snapshot` runs. A cgroup read or write failure then kills a VM that could have been resumed. Return `mustStop` only when the capture callback was invoked.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIDz",
+      "path": "pkg/repository/vm_stub_batch.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: The dedupe key depends on the raw config bytes, but the comment claims key order is normalized. Configs that differ only in key order are not deduped, so the batch can insert duplicate stubs and then return an index error to all callers. Normalize the config (for example, decode and re-marshal it through a map or typed struct) before building the dedupe key, or drop the claim in the comment.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoID8",
+      "path": "pkg/repository/vm.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: The batched path can report failure for a write that still commits. `mutateVMBatched` returns `ctx.Err()` when the caller's context is canceled, but the flush runs on a detached 30s context and does not observe that cancellation. Callers that treat an error as \"not persisted\" can then retry or roll back and diverge from the database. Consider only reporting ctx errors before the request is handed to the batcher, or returning the batch outcome once it has been queued.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIEC",
+      "path": "pkg/abstractions/vm/pause.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nBoth persistence points repeat the same span-wrapped `SaveVM` and error-handling block. Extract this into a helper that accepts the span name to keep the persistence telemetry logic consistent.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIEN",
+      "path": "pkg/disk/layer.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis repeats the environment-integer parsing and range check in `pkg/runtime/microvm_boot_admission.go`. Extract a shared bounded-integer parser and keep each caller’s fallback policy local.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIEV",
+      "path": "cmd/vminit/mounts_test.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nBoth TestGuestMountsParallelizeOnlyWithinBudget and TestGuestMountFailureJoinsInflightWorkAndStopsNextBatch duplicate the same blocking applyGuestMounts harness: the release channel, sync.Once cleanup, buffered done channel, the goroutine wrapping applyGuestMounts with identical mounts (/a, /b, /c, budget 2), and the select-with-time.After completion waits. Extract this into a shared helper (e.g., runWithBlockingMounts returning the done channel and a release func) and pass only the per-test mount callback, so harness changes are made in one place.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIEf",
+      "path": "pkg/repository/postgres_pool_test.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nAll four tests in this file repeat the same mock setup: `db, _, err := sqlmock.New()`, `require.NoError(t, err)`, `defer db.Close()`, and (in three of them) `db.SetMaxOpenConns(...)`. Extract a shared helper — e.g. `func newMockDB(t *testing.T, maxOpen int) (*sql.DB, sqlmock.Sqlmock)` that calls `sqlmock.New()`, requires no error, sets max open conns, and registers `t.Cleanup(func() { db.Close() })` — and have each test call it. The repo already centralizes test setup this way in pkg/repository/testutils.go, and a single helper keeps future changes to mock construction or connection limits in one place.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIEm",
+      "path": "pkg/worker/microvm_boot_cpu_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis assertion recomputes the expected weight with the same expression used by production (`pkg/runtime/microvm_linux.go`, `applyMicroVMCPUContext`: `weight := 1 + (shares-2)*9999/262142`). The identical formula now exists in two places, and because the test re-derives the expected value instead of asserting independent values, a regression in the runc weight mapping would pass the test unnoticed. Assert hard-coded boundary weights (e.g. shares 2→1, 262144→10000) or extract the conversion into a shared helper used by both the runtime and this test.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIEq",
+      "path": "pkg/worker/durable_disk.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis loop duplicates the cache watermark normalization and 0.80 fallback already exposed by `cache.Server.EvictWatermarkPct()`. Reuse the shared watermark policy so future normalization changes cannot diverge.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIEx",
+      "path": "pkg/clients/storage_http_trace_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nBoth tests repeat the same blocks: identical trace/context setup, an identical buffer+zerolog `trace.Log` dump, and a near-identical secret-redaction loop that only differs in its secret list. Extract helpers (e.g. `assertTraceRedacts(t, output, secrets...)`, plus a `newTracedClient`/trace-dump helper) so the trace schema and sensitive-field list are maintained in one place.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIE8",
+      "path": "cmd/vminit/systemd.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: The new `boot phase: systemd agent spawned` milestone is never observable. The trace handoff to the agent is serialized on line ~121, before the agent starts, so this event is recorded after the snapshot. PID 1 then `unix.Exec`s systemd without ever flushing or sending its timeline. Move the milestone before the handoff, for example as `boot phase: systemd agent starting` placed above `agent.Env = ...`, so it is carried into the agent's restored timeline.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIFD",
+      "path": "pkg/clients/storage_http_trace.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Wrapping `request.Body` unconditionally also wraps `http.NoBody`. That can change how net/http frames an empty request when startup tracing is enabled. Skip the wrapper for `http.NoBody` so the traced request keeps the same framing as the untraced one.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIFT",
+      "path": "pkg/disk/layer_test.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThe new TestNearbySparseChunksRoundTripWithoutFillingLargeHoles repeats the ~13-line upload/fetch/byte-compare block already used in TestLayerScanUploadFetchRoundTrip (and partially in the corrupt-chunk and chunk-gate tests): newMemoryChunkStore, UploadLayer, fetchLayer, os.ReadFile of both files, bytes.Equal. The two copies already carry different failure messages, so future changes to the round-trip pipeline must be applied in multiple places. Extract a shared helper, e.g. roundTripLayer(t, dir, source, layer), that uploads, fetches, and byte-compares the restored file against the source, and have both tests call it.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIFc",
+      "path": "pkg/runtime/microvm_boot_batch_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThe \"assert blocked\" scaffolding is duplicated: `TestMicroVMBootBatchWaitsForPreparation` and `TestMicroVMBootBatchEarlyPreparationRegistersBeforeRuntime` both build a `done` channel, spawn the wait in a goroutine, and assert it hasn't returned within 10ms. `TestMicroVMBootBatchHandoffKeepsPreparationUntilRuntime` repeats the `b.mu.Lock()/require.Nil(t, b.current)` check from `TestMicroVMBootBatchEarlyPreparationRegistersBeforeRuntime`, and `&microVMBootBatcher{window: time.Second}` is constructed in four tests. Extract helpers such as `assertBlocks(t, wait, msg)` (spawning the waiter and asserting it blocks for 10ms) so the timeout and channel wiring live in one place and can't drift between tests.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIFg",
+      "path": "pkg/runtime/microvm_linux_test.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThe new weight/quota tests repeat the same cgroup fixture setup and read-assert blocks: `os.ReadFile(filepath.Join(path, \"cpu.weight\"))` + `require.NoError` + `require.Equal` appears in TestMicroVMCPUWeightAppliesWhileQuotaIsDeferred, TestMicroVMCPUWeightBoundsAndFailures, and TestMicroVMRealCPUWeight (and the cpu.max reads likewise), while the `os.WriteFile(cpu.max, ...)`/`os.WriteFile(cpu.weight, ...)` fixture setup is repeated in all three snapshot quota tests. Extract helpers such as `readCPUWeight(t, path) string` and `writeCPUQuotaFixture(t, cgroup)`, consistent with the existing `snapshotTestInstance` helper, so a change to the cgroup file names or plumbing is made in one place.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIFk",
+      "path": "pkg/abstractions/vm/network_test.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\n`TestFreshVMAddressRetriesOnlyAddressConflicts` duplicates the failure table and retry scaffolding of `TestPublicVMAddressRetriesOnlyAddressConflicts` directly above it (identical error table, fixture setup, and conflict-vs-other-error branching). Extracting the shared failure table (and optionally a helper for the retry loop) keeps future retry-failure changes in one place.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIFr",
+      "path": "pkg/worker/network_cleanup_batch.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis repeats the one-millisecond request collection and batch completion logic in `vmMutationBatcher.run` and `vmDiskBatcher.run`. Extract the shared batching lifecycle so timing and request-drain behavior do not need to be maintained in three places.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIFz",
+      "path": "hack/worker-build-modfile.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: The argument check accepts `go.mod` as the output path, which lets this tool add a replace directive to the repository `go.mod` and point it at a temp copy. Reject a `go.mod` basename here so the header's guarantee holds.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIF8",
+      "path": "pkg/clients/storage_upload_pacing.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: An invalid `BETA9_STORAGE_UPLOAD_MBIT_PER_SEC` value silently disables upload pacing. Log a warning when the variable is set but rejected, matching the `storage_tcp_linux.go` init path.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIGE",
+      "path": "pkg/runtime/microvm_linux.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: The thread-count override accepts `0`, which makes virtiofsd serve requests serially. This is the stall the comment above it describes. Require at least 1 thread.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIGO",
+      "path": "pkg/disk/spare.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: If persisting spare-sizes fails, the new size is never added to the in-memory retained set, so replenishSpares will not build spares for it. Before this change the write error was ignored and spares were still built. Apply the in-memory retention regardless of the write result, or log the failure and keep building.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIGU",
+      "path": "docker/patches/clip/no-open-rpc.patch",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: With OPENDIR skipped, each READDIR page opens and releases a fresh bridge handle, so large directories are re-enumerated on every page. Consider caching the opened directory stream per directory for the duration of the listing, or measure the cost on directories with many entries before enabling this by default.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIGa",
+      "path": "cmd/vminit/main.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Each spec mount adds an event to the 64-entry boot timeline. With many mounts, later boot phase events such as `control connected` are silently dropped. Log the per-mount timing only when tracing is enabled, or raise the cap so late lifecycle events are kept.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIGh",
+      "path": "pkg/worker/image_mount_cache.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Idle time is measured from the last `PullLazy` call, not from when the last container released the image. A container that runs longer than the TTL gets its mount retired on the next tick after it stops, so the next start for that image pays a full remount. Consider refreshing `mountLastUsed` when the container releases the image.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIGq",
+      "path": "pkg/worker/network.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: In batched mode, one slot's rule-removal failure makes `removeNetworkSlotRuleBatch` return an error for the whole batch, so every other slot's IP stays quarantined even when its rules were removed. Record per-slot errors (for example with `errors.Join`) and still attempt the remaining slots' removal, so only the failing slot keeps its IP quarantined.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIGx",
+      "path": "pkg/abstractions/vm/lifecycle.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: The WebRTC configuration error returns before `vm.public_ipv6` is ended, so traced launches omit that phase and leave its runtime trace region open. Defer the end function; its `sync.OnceFunc` makes the existing success-path call safe.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIG4",
+      "path": "cmd/vminit/boot_trace.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: Custom agent: **Prevent Redundant Code Duplication**\n\n`handoff` and `restore` declare the same snapshot schema separately; extract a shared named type so the JSON contract cannot drift between the writer and reader.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIHB",
+      "path": "pkg/runtime/microvm_linux.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: Custom agent: **Prevent Redundant Code Duplication**\n\n`Run` duplicates the boot-batch span and `waitForBoot` sequence in both `lateBatch` branches. Extract that sequence into a helper so its tracing and wait behavior stay consistent.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIHI",
+      "path": "pkg/clients/storage_tcp_linux_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: The `GetsockoptString` error is lost here. The closure assigns to the same `err` that `raw.Control` then overwrites, so `t.Error` never sees it. Use a separate variable for the sockopt error and check it.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIHP",
+      "path": "pkg/auth/grpc.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: Custom agent: **Prevent Redundant Code Duplication**\n\nThese request branches duplicate trace creation, context attachment, span setup, and deferred logging. Extract the shared lifecycle into a helper and pass the request-specific annotations and labels.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIHa",
+      "path": "pkg/disk/detached_marker_test.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P3: Custom agent: **Prevent Redundant Code Duplication**\n\nThis new test file repeats the same setup block (`dir := t.TempDir()`, `attachedMarkerTestState()`, `saveVolumeState`, `clearVhostAttachment`, `saveDetachedVolumeMarker`) in all four detached-marker tests, and the file already factored `attachedMarkerTestState()` into a helper, so the preamble should be consolidated too. Extract a fixture helper such as `func newDetachedMarkerFixture(t *testing.T) (string, *volumeState)` that creates the temp dir, saves the attached state, and clears vhost attachment, then have each test call it; per-test assertions and mutations remain inline since they diverge after setup.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIHf",
+      "path": "cmd/vminit/egress.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: Custom agent: **Prevent Redundant Code Duplication**\n\nThis duplicates the guest-mount timing/logging pattern in `main.go`; move the shared duration logging into a helper so profiling changes stay consistent.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIHn",
+      "path": "pkg/worker/image_no_open_linux_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: Custom agent: **Prevent Redundant Code Duplication**\n\nThe WaitGroup + buffered error channel + drain loop scaffolding is duplicated verbatim between TestImageNoOpenRPCRealFuse and assertImageDirectoryReads (pkg/worker/image_no_open_linux_test.go). Extract it into a shared helper that runs a worker closure and collects errors, e.g. a small `func runConcurrent(t *testing.T, workers int, fn func(int) error)`, so changes to error-collection behavior apply in one place.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIHx",
+      "path": "pkg/clients/storage_tcp_linux.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: An unrecognized `BETA9_STORAGE_TCP_CONGESTION` value silently keeps the default transport. Values like `BBR` or `bbr ` are not matched and produce no log. Warn when the value is non-empty and not `bbr`.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIH8",
+      "path": "pkg/worker/sandbox.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: The new `guest_control` and `guest_socket` failure paths bump `FailureClasses` but not `Failures`, so the lifecycle event reports `failure_count=0` for a failed wait. Increment `stats.Failures` alongside the class count in both branches.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIII",
+      "path": "pkg/clients/storage_tcp_linux.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: This comment is inaccurate for bbr mode. `WithDialerOptions` returns a new client with its own transport, so storage requests no longer share the pool used by `common.AWSHTTPClient()`. Describe the split explicitly so the pool contract in `pkg/common/aws.go` stays accurate.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIIT",
+      "path": "pkg/worker/durable_disk_lifecycle.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: This trace is enabled for every durable-disk container, not only VMs. Gate it like the other startup-trace sites, using `request.IsPersistentVM()`, so non-VM containers do not log VM traces.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIId",
+      "path": "pkg/abstractions/vm/lifecycle.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: The `vm.prepare_stub` span is deferred before the `StubID` early return, so it is recorded even when no stub is prepared. Move the defer below the guard so the span only measures real stub preparation.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoIIo",
+      "path": "pkg/worker/network_cleanup_batch_test.go",
+      "resolved": true,
+      "previously_resolved": true,
+      "comment": "P3: This gated iptables test leaves its `192.168.1.10` rules in the host firewall after it passes, and the other IPs' rules remain if it fails midway. Register a `t.Cleanup` right after the `ips` slice that deletes each rule with `ipt.DeleteIfExists`.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zoII2",
+      "path": "pkg/worker/process_manager_socket.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: The socket preflight loops silently until the container context ends. The 30s 'process manager not ready yet' warning only runs after this returns, so a guest that never opens the port logs nothing. Log a slow-wait warning from this loop or return elapsed time to the caller.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zr1-1",
+      "path": "pkg/repository/vm_batch.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P1: `retryVMBatchIndividually` treats every class-40 error as rolled back, but class 40 includes `40003` (`statement_completion_unknown`); replaying each request can repeat a batch whose completion is unknown. Match explicit rollback codes and exclude `40003`.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zr1-6",
+      "path": "go.mod",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: This moves goproc from the tested commit `a70f7739dd77` to the `v0.1.18` tag. The PR description still says it pins merged heads, and the benchmarks and proofs were run on the pseudo-version. Confirm that the `v0.1.18` tag contains the same goproc changes this PR relies on, or revert to the pseudo-version and keep the measured binary.",
+      "resolved_by": "luke-lombardi"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zr1_F",
+      "path": "docker/Dockerfile.worker",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: This downloads the goproc binary without verifying its checksum, unlike the gVisor and cuda-checkpoint steps in this file. Add a pinned `sha256sum -c` check for the release asset, or document why it is exempt.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zr1_N",
+      "path": "pkg/repository/backend_postgres_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: The `AnyArg()` for the JSON payload means this test no longer asserts the stub name, type, object ID, workspace ID, or app ID that `getOrCreateStub` now sends. Use a custom sqlmock argument matcher that unmarshals the JSON and checks those fields.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zsiaN",
+      "path": "pkg/repository/vm.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P1: A failed acquire or unlock calls `discard()`, which closes the shared session connection and silently drops advisory locks that other VMs on that session still hold. `s.held` is not cleared, so those operations keep running without the cross-replica fence. Consider tracking lost locks and signalling their holders, or avoiding a whole-session discard when only one lock operation fails.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zsiaT",
+      "path": "pkg/repository/vm_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nAll four integration tests in this PR repeat the same dev-DB bootstrap: read BETA9_VM_TEST_DSN and skip when unset, sqlx.Connect, register a db.Close cleanup, and build the PostgresBackendRepository. TestVMLockPoolIntegration, TestVMRepositoryIntegration, TestVMPagesIntegration, and TestVMReconciliationCandidatesIntegration each carry this block, and three of them also duplicate the workspace-ID parse. Extract a newVMIntegrationRepo(t) helper into testutils.go (next to the existing NewBackendPostgresRepositoryForTest) and reuse it in all four tests.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zsiaW",
+      "path": "pkg/repository/vm_batch_test.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\n`TestVMMutationBatchDoesNotReplayAmbiguousFailure`, `TestVMStubBatchDoesNotReplayAmbiguousFailure`, and `TestDiskBurstBatchDoesNotReplayAmbiguousFailure` are near-identical: each builds two requests, expects a `context.DeadlineExceeded` query, flushes the batch, and asserts both result channels return the same error. They differ only in the request factory, SQL matcher, and batcher/result-channel type. Extract the shared skeleton (expect query error → flush → assert `DeadlineExceeded` on both channels → check mock expectations) into one helper, e.g. parameterized by the matcher, a flush closure, and an error accessor, so replay-semantics changes are made once instead of in three places.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zsiae",
+      "path": "pkg/worker/criu.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P2: `waitSealed` can return on context cancellation while the disk publication goroutine is still running. On the filesystem fallback path, the later `syncDurableDiskMounts` call can then contend with that publication for the same durable disk lock. Cancel and wait for the publication before falling back.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    },
+    {
+      "id": "PRRT_kwDOKtkjw86zspbc",
+      "path": "pkg/worker/durable_disk.go",
+      "resolved": true,
+      "previously_resolved": false,
+      "comment": "P3: This promotes the cleanup error log to Warn, but a routine prune deadline now hits this branch every minute on a busy worker. Keep Debug for deadline-exceeded errors, or log at Warn only for non-timeout failures.",
+      "resolved_by": "cubic-dev-ai[bot]"
+    }
+  ]
+}

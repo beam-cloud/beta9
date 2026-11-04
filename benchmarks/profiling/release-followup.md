@@ -2,6 +2,8 @@
 
 Production PR: https://github.com/beam-cloud/beta9/pull/2107
 
+Latest review fixes and staging validation: [review-fixes.md](review-fixes.md).
+
 Latest cleanup and staging smoke: [guest diagnostics cleanup](#guest-diagnostics-cleanup).
 The earlier 200-VM study below remains associated with its original commit.
 

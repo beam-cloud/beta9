@@ -2,6 +2,8 @@
 
 Production PR: https://github.com/beam-cloud/beta9/pull/2107
 
+Current review fixes and staging validation: [review-fixes.md](review-fixes.md).
+
 Latest validation after the goproc CI release and duplication cleanup:
 [release-followup.md](release-followup.md). The earlier release measurements
 below remain historical; the follow-up records a 5.294s restore tail miss at 50.
