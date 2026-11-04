@@ -371,6 +371,43 @@ func TestSpotVMEvictionRequiresDurableRelease(t *testing.T) {
 	}
 }
 
+func TestStatusHeartbeatReleasesSpotVictimsLikeTheirDisplacingRequest(t *testing.T) {
+	previous := maxPreemptionDrain
+	maxPreemptionDrain = 0 // Victims other than Spot would be killed at once.
+	t.Cleanup(func() { maxPreemptionDrain = previous })
+	worker, rt := evictionWorkerForTest(false)
+	worker.containerRepoClient = &fakeContainerRepoClient{state: &pb.ContainerState{Status: string(types.ContainerStatusStopping), Evicting: true, DrainSeconds: 30}}
+	preemptions := 0
+	worker.backendRepoClient = &spotStopClient{preempt: func(context.Context, *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+		preemptions++
+		return &pb.PreemptVMResponse{}, nil
+	}}
+	heartbeat := func(instance *ContainerInstance) {
+		done, err := worker.updateContainerStatusOnce(context.Background(), instance.Request)
+		require.NoError(t, err)
+		require.False(t, done)
+	}
+
+	// A running durable Spot VM is left for the VM reconciler to snapshot and
+	// stop, which the worker asks for once.
+	vm := addSpotVMInstance(worker, rt, "spot-vm")
+	heartbeat(vm)
+	heartbeat(vm)
+	require.Equal(t, 1, preemptions)
+	require.Empty(t, rt.observed("spot-vm"))
+
+	// Once the reconciler's stop reaches the worker, the VM drains like Spot.
+	vm.setStopReason(types.StopContainerReasonUser)
+	heartbeat(vm)
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-vm"))
+
+	container := addRunningInstance(worker, rt, "spot-container")
+	container.Request.Stub.Config, container.Request.Evictable, container.Request.DrainSeconds = `{"cpu_tier":"spot"}`, true, 30
+	heartbeat(container)
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-container"))
+	require.Equal(t, 1, preemptions)
+}
+
 func TestExitingSpotVMIsWaitedForWithoutPreemption(t *testing.T) {
 	worker, rt := evictionWorkerForTest(false)
 	addSpotVMInstance(worker, rt, "spot-vm").setExitCode(0)

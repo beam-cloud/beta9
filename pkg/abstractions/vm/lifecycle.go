@@ -334,10 +334,14 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 		return err
 	}
 
-	if err == nil && state.Status != types.ContainerStatusStopping && (v.DesiredState != types.VMStatePaused || v.MemoryCheckpointID == "") {
+	// The scheduler marks a Spot VM it evicts STOPPING before anything stops
+	// it, so it is stopped here like a running VM. Only the first attempt
+	// snapshots it: a retry may find the VM already shutting down.
+	evicted := err == nil && state.Evicting
+	if err == nil && (state.Status != types.ContainerStatusStopping || evicted) && (v.DesiredState != types.VMStatePaused || v.MemoryCheckpointID == "") {
 		// Commit the root before releasing compute. --no-snapshot skips only
 		// the named artifact, never filesystem durability.
-		if state.Status == types.ContainerStatusRunning {
+		if state.Status == types.ContainerStatusRunning || evicted && v.Status == types.VMStateRunning {
 			if err := s.snapshotRoot(ctx, v); err != nil {
 				return err
 			}

@@ -49,19 +49,14 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		if victimID == "" || victimID == request.ContainerId {
 			continue
 		}
-		victimDrain := drain
 		if instance, _ := s.containerInstances.Get(victimID); instance != nil && instance.Request.Borrowed() {
-			victimDrain, wait = time.Duration(instance.Request.DrainSeconds)*time.Second, borrowedReleaseTimeout
-			if exitCode, _ := instance.lifecycleState(); exitCode < 0 && instance.Request.IsPersistentVM() {
-				// The VM reconciler snapshots and stops the VM; the worker only waits.
-				if _, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: instance.Request.WorkspaceId, VmId: instance.Request.VMID(), ContainerId: victimID}); err != nil {
-					return fmt.Errorf("request durable VM stop: %w", err)
-				}
-				victims = append(victims, victimID)
-				continue
-			}
+			wait = borrowedReleaseTimeout
 		}
-		if s.evictContainer(victimID, victimDrain, request.ContainerId) {
+		release, err := s.releaseVictim(ctx, victimID, drain, request.ContainerId)
+		if err != nil {
+			return err
+		}
+		if release {
 			victims = append(victims, victimID)
 		}
 	}
@@ -93,6 +88,29 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		Msg("evicted containers did not finalize in time; failing request instead of starting on held resources")
 	s.cancelContainer(request.ContainerId)
 	return fmt.Errorf("%w: %v", ErrEvictionIncomplete, remaining)
+}
+
+// releaseVictim starts stopping an eviction victim and reports whether it is
+// present and must be waited for. Spot gets its full drain, and a running
+// durable Spot VM is stopped by the VM reconciler, which snapshots it first
+// (see PreemptVM). The reconciler's stop sets a stop reason, after which the
+// VM is evicted like any other victim.
+func (s *Worker) releaseVictim(ctx context.Context, victimID string, drain time.Duration, forContainerID string) (bool, error) {
+	instance, _ := s.containerInstances.Get(victimID)
+	if instance != nil && instance.Request.Borrowed() {
+		drain = time.Duration(instance.Request.DrainSeconds) * time.Second
+		if exitCode, reason := instance.lifecycleState(); exitCode < 0 && reason == "" && instance.Request.IsPersistentVM() {
+			if !instance.preemptionRequested.Load() {
+				request := instance.Request
+				if _, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: request.WorkspaceId, VmId: request.VMID(), ContainerId: victimID}); err != nil {
+					return false, fmt.Errorf("request durable VM stop: %w", err)
+				}
+				instance.preemptionRequested.Store(true)
+			}
+			return true, nil
+		}
+	}
+	return s.evictContainer(victimID, drain, forContainerID), nil
 }
 
 // evictContainer sends SIGTERM and escalates to SIGKILL after the drain

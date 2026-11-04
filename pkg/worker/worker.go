@@ -224,6 +224,7 @@ type ContainerInstance struct {
 	Runtime                    runtime.Runtime
 	terminalCheckpointCreated  atomic.Bool
 	StopEscalationStarted      atomic.Bool
+	preemptionRequested        atomic.Bool // the VM reconciler was asked to stop this Spot VM
 	StuckMountRecoveryStarted  atomic.Bool
 	statusHeartbeatMu          sync.Mutex
 	egressMu                   sync.Mutex
@@ -1518,8 +1519,8 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 			// displacing request normally drives the stop, but if it was
 			// requeued elsewhere this path still reclaims the capacity, on
 			// the container's own drain window.
-			s.evictContainer(request.ContainerId, min(time.Duration(state.DrainSeconds)*time.Second, maxPreemptionDrain), "")
-			return false, nil
+			_, err := s.releaseVictim(ctx, request.ContainerId, min(time.Duration(state.DrainSeconds)*time.Second, maxPreemptionDrain), "")
+			return false, err
 		}
 		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
 		return false, nil

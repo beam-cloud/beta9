@@ -552,7 +552,8 @@ func (s *BackendRepositoryService) PreemptVM(ctx context.Context, req *pb.Preemp
 	if v.ContainerID != req.ContainerId || !v.Spec.CPUTier.Borrows() || v.DesiredState == types.VMStateDeleted {
 		return nil, status.Error(codes.FailedPrecondition, "runtime is not a reclaimable Spot VM")
 	}
-	v.StopReason, v.Status, v.DesiredState = types.VMStopReasonPreempted, types.VMStateStopping, types.VMStateStopped
+	// The reconciler moves the VM to stopping once it has snapshotted it.
+	v.StopReason, v.DesiredState = types.VMStopReasonPreempted, types.VMStateStopped
 	if err := repo.SaveVM(ctx, v); err != nil {
 		return nil, err
 	}
