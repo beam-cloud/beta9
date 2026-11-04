@@ -1,0 +1,7 @@
+ok  	github.com/beam-cloud/beta9/pkg/repository	12.080s
+ok  	github.com/beam-cloud/beta9/pkg/runtime	10.422s
+ok  	github.com/beam-cloud/beta9/pkg/worker	67.538s
+ok  	github.com/beam-cloud/beta9/pkg/disk	100.931s
+ok  	github.com/beam-cloud/beta9/pkg/abstractions/vm	3.825s
+ok  	github.com/beam-cloud/beta9/pkg/gateway/services	1.993s
+ok  	github.com/beam-cloud/beta9/pkg/gateway/services/repository	1.646s

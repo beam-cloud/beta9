@@ -1,0 +1,9 @@
+6:41PM INF creating checkpoint checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 container_id=vm-12e48bc4-8598-40d7-9fe7-407827bbe213-f029a6a8
+6:41PM INF creating terminal checkpoint checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 container_id=vm-12e48bc4-8598-40d7-9fe7-407827bbe213-f029a6a8
+6:41PM INF checkpoint created successfully checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 checkpoint_path=/var/lib/beta9/cache/6a96a1ce-bc17-4f47-9fc7-3a040c6933be-microvm-cpu/machine-2e91b508-f28d-4051-b3e1-a1cb824d6c47/checkpoints/f033f4fc-d195-49d5-87a1-b4b260aac056 runtime=microvm work_dir=/tmp/f033f4fc-d195-49d5-87a1-b4b260aac056
+6:41PM INF checkpoint archive created bytes=38740971 checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 duration=396.915499
+6:42PM INF checkpoint archive uploaded bytes=38740971 checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 duration=5734.049965
+6:42PM INF checkpoint created successfully checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 container_id=vm-12e48bc4-8598-40d7-9fe7-407827bbe213-f029a6a8
+6:42PM INF checkpoint restored successfully checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 image_path=/var/lib/beta9/cache/6a96a1ce-bc17-4f47-9fc7-3a040c6933be-microvm-cpu/machine-2e91b508-f28d-4051-b3e1-a1cb824d6c47/checkpoints/f033f4fc-d195-49d5-87a1-b4b260aac056 runtime=microvm work_dir=/tmp/f033f4fc-d195-49d5-87a1-b4b260aac056/vm-12e48bc4-8598-40d7-9fe7-407827bbe213-baf79cd8
+6:42PM INF checkpoint runtime restore finished checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 container_id=vm-12e48bc4-8598-40d7-9fe7-407827bbe213-baf79cd8 duration=3965.910867 restored=true
+6:42PM INF checkpoint restore completed checkpoint_id=f033f4fc-d195-49d5-87a1-b4b260aac056 container_id=vm-12e48bc4-8598-40d7-9fe7-407827bbe213-baf79cd8 duration=4052.770272

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "steady-otter-972197",
+    "id": "vm-d825f0a58c972197",
+    "old_container_id": "vm-302f7359-f1d8-439e-b514-5bd5e7f25942-9357ad93",
+    "boot_id": "fa077a94-22f0-4407-bb7c-e4327700ac7e",
+    "checkpoint_id": "3837d0c2-02b2-4dea-9c37-2ced8a79dddc",
+    "paused": true,
+    "restored_boot_id": "fa077a94-22f0-4407-bb7c-e4327700ac7e",
+    "resumed": true
+  },
+  {
+    "name": "mellow-otter-683124",
+    "id": "vm-a84b2aa320683124",
+    "old_container_id": "vm-68d313aa-29f2-4798-9afc-8369f7cd44fb-36f9eafc",
+    "boot_id": "aae55938-32f8-4b26-a8fc-99cfc03d4d89",
+    "checkpoint_id": "ebccbccb-155d-4459-ae99-20ddb9a37ef9",
+    "paused": true,
+    "restored_boot_id": "aae55938-32f8-4b26-a8fc-99cfc03d4d89",
+    "resumed": true
+  },
+  {
+    "name": "gentle-willow-a030b4",
+    "id": "vm-5fde78f11ca030b4",
+    "old_container_id": "vm-21ef6fda-fde7-46a9-89ce-5daff75a1ae2-320fe04b",
+    "boot_id": "bf527744-8cbf-44f1-9b39-f32c7c45bef3",
+    "checkpoint_id": "e03f15bc-e078-4b68-a841-9071b5e46702",
+    "paused": true,
+    "restored_boot_id": "bf527744-8cbf-44f1-9b39-f32c7c45bef3",
+    "resumed": true
+  }
+]

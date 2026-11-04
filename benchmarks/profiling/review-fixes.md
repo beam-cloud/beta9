@@ -2,9 +2,12 @@
 
 PR: https://github.com/beam-cloud/beta9/pull/2107
 
+Latest release revision: `6930d9ef`; see [cleanup pass](#cleanup-pass) for the
+latest source receipts, all timing outcomes and preserved-VM handoff.
+
 Production commit `09f1f6e306f6cf8a99e1ed5ae107b023db0920ad` addresses the
-remaining active review findings. All 73 current Cubic threads are resolved;
-53 were open initially and four follow-up findings arrived during validation.
+remaining active review findings. All 74 current Cubic threads are resolved;
+53 were open initially and five follow-up findings arrived during validation.
 Removed profiling/experiment threads have
 specific explanations; accepted fixes were checked against current code.
 
@@ -104,3 +107,50 @@ identities are preserved, the worker is uncordoned and health is HTTP 200.
 
 [Final follow-up evidence](../results/cubic-review-20261104/followup/summary.json)
 and [all resolved threads](../results/cubic-review-20261104/final-review-threads.json).
+
+## Cleanup pass
+
+Commits `8917966a` and `6930d9ef` move shared stub/disk creation inputs and worker
+configuration keys into existing `pkg/types` files. Private queue, session and
+runtime machinery remains with its owner. Snapshot action recording is shared
+across success and recovery tests; checkpoint admission, exclusions and publisher
+cancellation use their existing common helpers. Image retirement now has one
+per-mount flow, and recency refresh occurs after cleanup immediately before the
+last local container reference is released. A regression verifies this ordering
+and the full idle grace period. The final Cubic follow-up also uses the shared
+disk-driver key in the gateway fallback.
+
+Linux race validation passed across all seven affected packages, plus types and
+abstraction common; final disk/worker cases and all six real Postgres cases
+passed. The lock harness acquired 100 independent locks in 32.745ms. Privileged
+FUSE, shared-init/cgroup, snapshot, disk-publication, firewall and overlay cases
+passed. All 1,065 checked Okteto source files match the final release revision.
+The one-line gateway follow-up rebuilds the exact deployed worker checksum.
+
+The same prepared-image/network/client fixture and per-VM SMT isolation were used.
+These are individual whole-burst observations, not a repeated-cohort p95 estimate.
+
+| Cohort | Whole-burst start | Durable pause | Restore |
+| --- | --- | --- | --- |
+| 10 | 0.555s | 3.083s | 0.623s |
+| 50 | **1.529s** | **8.742s** | 4.490s |
+| Final gateway canary: 10 | 0.618s | 5.005s | 0.580s |
+
+All 70 RAM/disk/boot proofs matched, fresh boot identities were unique, and all
+owned VMs were removed. The 50-VM startup and pause misses remain recorded. Its
+slowest pause checkpoint archived 38,740,971 bytes in 396.915ms and spent
+5,734.050ms in the post-admission upload phase; file IO, client/retries, network
+and origin contributions are not separated by that measurement. Consistent
+startup <=1.5s and pause <=8s are still not established.
+
+Only the three original VMs remain, with their boot identities preserved. The
+worker is uncordoned, normal Air supervision is active, HTTP health is 200 and
+network capacity is replenished. NVMe had 1,648,830,128,128 bytes available (53.0%
+used) at handoff. No retention interval was shortened for the benchmark.
+
+[Cleanup validation, raw cohorts and checksums](../results/cubic-review-20261104/simplification/summary.json),
+[Linux race](../results/cubic-review-20261104/simplification/linux-race.log),
+[final checks and real Postgres](../results/cubic-review-20261104/simplification/final-validation.log),
+[privileged checks and deployment](../results/cubic-review-20261104/simplification/staging.log),
+[handoff](../results/cubic-review-20261104/simplification/handoff.json),
+[review audit](../results/cubic-review-20261104/simplification/review-threads.json).
