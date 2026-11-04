@@ -121,29 +121,65 @@ func (s *Service) ensurePublicIPv6(ctx context.Context, v *types.VM) error {
 		return nil
 	}
 	for range 16 {
-		var address [16]byte
-		if _, err := rand.Read(address[:]); err != nil {
-			return err
-		}
-		pool, err := rand.Int(rand.Reader, big.NewInt(int64(len(s.publicNetwork.prefixes))))
+		candidate, err := s.publicNetwork.randomAddress()
 		if err != nil {
 			return err
 		}
-		prefix := s.publicNetwork.prefixes[pool.Int64()]
+		assigned, err := s.publicNetwork.repo.AssignVMPublicIPv6(ctx, v.ID, candidate)
+		if err == nil {
+			v.PublicIPv6 = assigned
+			return nil
+		}
+		var pg *pq.Error
+		if !errors.As(err, &pg) || pg.Code != "23505" || pg.Constraint != "persistent_vm_public_ipv6" {
+			return err
+		}
+	}
+	return fmt.Errorf("unable to reserve a public IPv6 for VM %s", v.ID)
+}
+
+func (n *publicVMNetwork) randomAddress() (string, error) {
+	for range 16 {
+		var address [16]byte
+		if _, err := rand.Read(address[:]); err != nil {
+			return "", err
+		}
+		pool, err := rand.Int(rand.Reader, big.NewInt(int64(len(n.prefixes))))
+		if err != nil {
+			return "", err
+		}
+		prefix := n.prefixes[pool.Int64()]
 		base := prefix.Addr().As16()
 		for bit := range prefix.Bits() {
 			mask := byte(1 << (7 - bit%8))
 			address[bit/8] = address[bit/8]&^mask | base[bit/8]&mask
 		}
 		candidate := netip.AddrFrom16(address)
-		if candidate == prefix.Addr() {
-			continue
+		if candidate != prefix.Addr() {
+			return candidate.String(), nil
 		}
-		assigned, err := s.publicNetwork.repo.AssignVMPublicIPv6(ctx, v.ID, candidate.String())
+	}
+	return "", fmt.Errorf("unable to choose a public VM IPv6")
+}
+
+// A fresh VM reserves its address in the initial INSERT's unique index. This
+// avoids a second commit per VM while preserving database ownership across
+// replicas and ambiguous responses. Existing VMs still use COALESCE allocation.
+func (s *Service) createVMRecord(ctx context.Context, v *types.VM) error {
+	if s.publicNetwork == nil {
+		return s.repo.CreateVM(ctx, v)
+	}
+	for range 16 {
+		address, err := s.publicNetwork.randomAddress()
+		if err != nil {
+			return err
+		}
+		v.PublicIPv6 = address
+		err = s.repo.CreateVM(ctx, v)
 		if err == nil {
-			v.PublicIPv6 = assigned
 			return nil
 		}
+		v.PublicIPv6 = ""
 		var pg *pq.Error
 		if !errors.As(err, &pg) || pg.Code != "23505" || pg.Constraint != "persistent_vm_public_ipv6" {
 			return err

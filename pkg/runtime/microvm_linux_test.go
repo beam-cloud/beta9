@@ -25,6 +25,92 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestWaitForGuestControl(t *testing.T) {
+	for _, outcome := range []string{"ready", "exit", "cancel", "missing", "no_control"} {
+		t.Run(outcome, func(t *testing.T) {
+			ready, exited := make(chan struct{}), make(chan struct{})
+			inst := &microVMInstance{ctrl: &microVMControl{ready: ready}, exitDone: exited}
+			m := &MicroVM{vms: map[string]*microVMInstance{"guest": inst}}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			switch outcome {
+			case "ready":
+				close(ready)
+			case "exit":
+				close(exited)
+			case "cancel":
+				cancel()
+			case "missing":
+				delete(m.vms, "guest")
+			case "no_control":
+				inst.ctrl = nil
+			}
+			err := m.WaitForGuestControl(ctx, "guest")
+			if outcome == "ready" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestMicroVMCPUWeightAppliesWhileQuotaIsDeferred(t *testing.T) {
+	path := t.TempDir()
+	shares := uint64(102)
+	require.NoError(t, applyMicroVMCPU(path, &specs.LinuxCPU{Shares: &shares}))
+	weight, err := os.ReadFile(filepath.Join(path, "cpu.weight"))
+	require.NoError(t, err)
+	require.Equal(t, "4", string(weight))
+	_, err = os.Stat(filepath.Join(path, "cpu.max"))
+	require.True(t, os.IsNotExist(err), "startup must still defer the quota")
+	inst := &microVMInstance{id: "weight-test", cgroup: path}
+	m := &MicroVM{vms: map[string]*microVMInstance{inst.id: inst}}
+	shares, quota := uint64(1024), int64(10000)
+	require.NoError(t, m.UpdateResources(context.Background(), inst.id, &specs.LinuxResources{CPU: &specs.LinuxCPU{Shares: &shares, Quota: &quota}}))
+	weight, err = os.ReadFile(filepath.Join(path, "cpu.weight"))
+	require.NoError(t, err)
+	require.Equal(t, "39", string(weight))
+	limit, err := os.ReadFile(filepath.Join(path, "cpu.max"))
+	require.NoError(t, err)
+	require.Equal(t, "10000 100000", string(limit))
+}
+
+func TestMicroVMCPUWeightBoundsAndFailures(t *testing.T) {
+	for _, test := range []struct {
+		shares uint64
+		weight string
+	}{{1, "1"}, {2, "1"}, {262144, "10000"}, {^uint64(0), "10000"}} {
+		path := t.TempDir()
+		require.NoError(t, applyMicroVMCPU(path, &specs.LinuxCPU{Shares: &test.shares}))
+		weight, err := os.ReadFile(filepath.Join(path, "cpu.weight"))
+		require.NoError(t, err)
+		require.Equal(t, test.weight, string(weight))
+	}
+	shares := uint64(102)
+	require.ErrorContains(t, applyMicroVMCPU(filepath.Join(t.TempDir(), "missing"), &specs.LinuxCPU{Shares: &shares}), "set cpu.weight")
+}
+
+func TestMicroVMRealCPUWeight(t *testing.T) {
+	if os.Getenv("BETA9_MICROVM_REAL_CGROUP") != "1" {
+		t.Skip("requires a writable cgroup v2 mount")
+	}
+	name := fmt.Sprintf("beam-weight-test-%d", os.Getpid())
+	path := filepath.Join(microVMSysfsCgroupRoot, name)
+	require.NoError(t, os.Mkdir(path, 0755))
+	t.Cleanup(func() { require.NoError(t, os.Remove(path)) })
+	shares := uint64(102)
+	inst := &microVMInstance{id: name}
+	spec := &specs.Spec{Linux: &specs.Linux{CgroupsPath: name, Resources: &specs.LinuxResources{CPU: &specs.LinuxCPU{Shares: &shares}}}}
+	require.NoError(t, (&MicroVM{}).setupCgroup(inst, spec, 1<<30))
+	weight, err := os.ReadFile(filepath.Join(path, "cpu.weight"))
+	require.NoError(t, err)
+	require.Equal(t, "4", strings.TrimSpace(string(weight)))
+	limit, err := os.ReadFile(filepath.Join(path, "cpu.max"))
+	require.NoError(t, err)
+	require.Equal(t, "max 100000", strings.TrimSpace(string(limit)))
+}
+
 func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Request)) *microVMInstance {
 	t.Helper()
 	inst := &microVMInstance{id: "snapshot-test", stateDir: t.TempDir()}
@@ -83,6 +169,116 @@ func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
 	require.True(t, inst.isPaused())
 	require.Equal(t, 1, snapshots)
 	require.Zero(t, resumes)
+}
+
+func TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture(t *testing.T) {
+	for _, failCapture := range []bool{false, true} {
+		t.Run(fmt.Sprint(failCapture), func(t *testing.T) {
+			cgroup := t.TempDir()
+			cpuMax := filepath.Join(cgroup, "cpu.max")
+			original := "10000 100000\n"
+			require.NoError(t, os.WriteFile(cpuMax, []byte(original), 0o644))
+			weightPath := filepath.Join(cgroup, "cpu.weight")
+			require.NoError(t, os.WriteFile(weightPath, []byte("4\n"), 0o644))
+			var observed string
+			inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/vm.snapshot" {
+					weight, weightErr := os.ReadFile(weightPath)
+					if weightErr != nil || string(weight) != "100" {
+						t.Errorf("capture weight: %q, %v", weight, weightErr)
+					}
+					value, err := os.ReadFile(cpuMax)
+					if err != nil {
+						t.Error(err)
+					}
+					observed = string(value)
+					if failCapture {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			inst.cgroup = cgroup
+			mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error {
+				value, err := os.ReadFile(cpuMax)
+				require.NoError(t, err)
+				require.Equal(t, original, string(value), "disk publication keeps the tenant quota")
+				return nil
+			})
+			require.Equal(t, failCapture, err != nil)
+			require.True(t, mustStop)
+			require.True(t, inst.isPaused())
+			require.Equal(t, "max 100000", observed)
+			restored, err := os.ReadFile(cpuMax)
+			require.NoError(t, err)
+			require.Equal(t, original, string(restored))
+			restoredWeight, err := os.ReadFile(weightPath)
+			require.NoError(t, err)
+			require.Equal(t, "4\n", string(restoredWeight))
+		})
+	}
+}
+
+func TestMicroVMSnapshotCPUQuotaRejectsRunningGuest(t *testing.T) {
+	inst := &microVMInstance{cgroup: t.TempDir()}
+	require.ErrorContains(t, inst.withSnapshotCPU(func() error { t.Fatal("must not capture"); return nil }), "paused vCPUs")
+}
+
+func TestMicroVMSnapshotWeightRestoredWithUnlimitedQuota(t *testing.T) {
+	for _, weight := range []string{"4", "157"} {
+		inst := &microVMInstance{cgroup: t.TempDir(), paused: true}
+		quotaPath, weightPath := filepath.Join(inst.cgroup, "cpu.max"), filepath.Join(inst.cgroup, "cpu.weight")
+		require.NoError(t, os.WriteFile(quotaPath, []byte("max 100000"), 0644))
+		require.NoError(t, os.WriteFile(weightPath, []byte(weight), 0644))
+		want := "100"
+		if weight == "157" {
+			want = weight
+		}
+		captureErr := errors.New("capture failed")
+		err := inst.withSnapshotCPU(func() error {
+			actual, err := os.ReadFile(weightPath)
+			require.NoError(t, err)
+			require.Equal(t, want, string(actual))
+			return captureErr
+		})
+		require.ErrorIs(t, err, captureErr)
+		actual, err := os.ReadFile(weightPath)
+		require.NoError(t, err)
+		require.Equal(t, weight, string(actual))
+	}
+}
+
+func TestMicroVMSnapshotCPUQuotaSerializesResourceUpdate(t *testing.T) {
+	inst := &microVMInstance{id: "quota-test", cgroup: t.TempDir(), paused: true}
+	cpuMax := filepath.Join(inst.cgroup, "cpu.max")
+	require.NoError(t, os.WriteFile(cpuMax, []byte("10000 100000"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(inst.cgroup, "cpu.weight"), []byte("4"), 0o644))
+	m := &MicroVM{vms: map[string]*microVMInstance{inst.id: inst}}
+	quota, period := int64(50000), uint64(100000)
+	started, updated := make(chan struct{}), make(chan error, 1)
+	require.NoError(t, inst.withSnapshotCPU(func() error {
+		go func() {
+			close(started)
+			updated <- m.UpdateResources(context.Background(), inst.id, &specs.LinuxResources{CPU: &specs.LinuxCPU{Quota: &quota, Period: &period}})
+		}()
+		<-started
+		select {
+		case err := <-updated:
+			t.Fatalf("resource update raced capture: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+		return nil
+	}))
+	select {
+	case err := <-updated:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("resource update did not finish after capture")
+	}
+	value, err := os.ReadFile(cpuMax)
+	require.NoError(t, err)
+	require.Equal(t, "50000 100000", string(value), "restoring the previous quota must not overwrite a newer update")
 }
 
 func TestMicroVMSnapshotSealFailureResumesBeforeAnyCapture(t *testing.T) {
@@ -380,18 +576,32 @@ func TestRestoreCanvasKeepsCheckpointExecutable(t *testing.T) {
 	current := filepath.Join(t.TempDir(), "init")
 	require.NoError(t, os.WriteFile(current, []byte("upgraded agent"), 0o755))
 	rt := &MicroVM{cfg: Config{MicroVMInitPath: current}}
-	inst := &microVMInstance{canvas: t.TempDir()}
 	spec := &specs.Spec{}
-	require.NoError(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, checkpoint))
+	prepare := func(from string) (*microVMInstance, error) {
+		inst := &microVMInstance{canvas: t.TempDir()}
+		t.Cleanup(func() {
+			for _, target := range inst.submounts {
+				require.NoError(t, unix.Unmount(target, unix.MNT_DETACH))
+			}
+		})
+		return inst, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, from)
+	}
+	inst, err := prepare(checkpoint)
+	if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+		t.Skip("requires privileged bind mounts")
+	}
+	require.NoError(t, err)
 	data, err := os.ReadFile(filepath.Join(inst.canvas, microvm.InitPath))
 	require.NoError(t, err)
 	require.Equal(t, "captured agent", string(data))
-	require.NoError(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, ""))
+	inst, err = prepare("")
+	require.NoError(t, err)
 	data, err = os.ReadFile(filepath.Join(inst.canvas, microvm.InitPath))
 	require.NoError(t, err)
 	require.Equal(t, "upgraded agent", string(data))
 	require.NoError(t, os.Remove(filepath.Join(checkpoint, checkpointInitFile)))
-	require.Error(t, rt.prepareCanvas(inst, spec, microvm.Network{}, microVMDisk{}, nil, checkpoint), "never substitute another executable into captured memory")
+	_, err = prepare(checkpoint)
+	require.Error(t, err, "never substitute another executable into captured memory")
 }
 
 func TestLinkLocalFromMAC(t *testing.T) {

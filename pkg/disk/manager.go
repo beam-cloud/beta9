@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -90,6 +91,12 @@ type Config struct {
 	// SpareCount is the number of formatted roots retained per virtual size.
 	// Zero uses the small default pool suitable for NBD exports.
 	SpareCount int
+	// SpareRefillQuietPeriod defers background formatting after a spare is
+	// consumed while prepared roots remain. An empty pool refills immediately.
+	SpareRefillQuietPeriod time.Duration
+	// DetachedStateMarker records confirmed vhost daemon shutdown separately
+	// from the immutable, already synced payload manifest.
+	DetachedStateMarker bool
 
 	// Test hooks.
 	SysBlockPath string
@@ -99,22 +106,27 @@ type Config struct {
 
 // Manager owns every qcow2 volume on a worker node.
 type Manager struct {
-	root          string
-	binaries      Binaries
-	sysBlockPath  string
-	devPath       string
-	run           runner
-	execs         bool // run is the real exec runner, so binaries and devices are the host's
-	maxChainDepth int
-	spareExport   ExportMode
-	spareCount    int
+	root                   string
+	binaries               Binaries
+	sysBlockPath           string
+	devPath                string
+	run                    runner
+	execs                  bool // run is the real exec runner, so binaries and devices are the host's
+	maxChainDepth          int
+	spareExport            ExportMode
+	spareCount             int
+	spareRefillQuietPeriod time.Duration
+	detachedStateMarker    bool
 
 	mu      sync.Mutex
 	volumes map[string]*Volume
 	// spares are pre-built fresh volumes by virtual size (see spare.go).
-	spares      map[int64][]*Volume
-	spareBuilds map[int64]bool
-	closed      bool
+	spares         map[int64][]*Volume
+	spareBuilds    map[int64]bool
+	spareSizes     []int64 // nil until persisted recency is loaded; guarded by mu
+	spareLastTaken map[int64]time.Time
+	closed         bool
+	cachePruneMu   sync.Mutex
 
 	// nbdReadyMu serializes the first NBD preparation so concurrent first
 	// attaches share one pass instead of each validating every device.
@@ -156,20 +168,23 @@ func NewManager(config Config) *Manager {
 	}
 	spareCtx, spareCancel := context.WithCancel(context.Background())
 	return &Manager{
-		root:          config.Root,
-		binaries:      config.Binaries,
-		sysBlockPath:  config.SysBlockPath,
-		devPath:       config.DevPath,
-		run:           run,
-		execs:         config.Runner == nil,
-		maxChainDepth: config.MaxChainDepth,
-		spareExport:   config.SpareExport,
-		spareCount:    config.SpareCount,
-		volumes:       make(map[string]*Volume),
-		spares:        make(map[int64][]*Volume),
-		spareBuilds:   make(map[int64]bool),
-		spareCtx:      spareCtx,
-		spareCancel:   spareCancel,
+		root:                   config.Root,
+		binaries:               config.Binaries,
+		sysBlockPath:           config.SysBlockPath,
+		devPath:                config.DevPath,
+		run:                    run,
+		execs:                  config.Runner == nil,
+		maxChainDepth:          config.MaxChainDepth,
+		spareExport:            config.SpareExport,
+		spareCount:             config.SpareCount,
+		spareRefillQuietPeriod: max(0, config.SpareRefillQuietPeriod),
+		detachedStateMarker:    config.DetachedStateMarker,
+		volumes:                make(map[string]*Volume),
+		spares:                 make(map[int64][]*Volume),
+		spareBuilds:            make(map[int64]bool),
+		spareLastTaken:         make(map[int64]time.Time),
+		spareCtx:               spareCtx,
+		spareCancel:            spareCancel,
 	}
 }
 
@@ -349,7 +364,9 @@ func (m *Manager) Recover(ctx context.Context) error {
 	// Spares for the sizes this node saw last time are built while the worker
 	// is still booting, so its first fresh attach adopts one.
 	defer func() {
-		for _, size := range m.rememberedSpareSizes() {
+		sizes := m.rememberedSpareSizes()
+		m.retainSpareSizes(sizes)
+		for _, size := range sizes {
 			m.replenishSpares(size)
 		}
 	}()

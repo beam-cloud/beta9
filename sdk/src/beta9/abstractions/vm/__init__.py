@@ -460,7 +460,10 @@ class VM:
     def _submit_creation(self, wait):
         kwargs = {"params": {"wait": "exec"}} if wait else {}
         self._set(self._api("POST", json=self._creation_body, **kwargs))
-        return self.wait() if wait else self
+        # The blocking response already passed authenticated worker readiness.
+        # Calling wait again also touches the idle lease and adds a transaction
+        # to every launch. Older gateways still use the ordinary wait path.
+        return self.wait() if wait and not self.info.get("exec_ready") else self
 
     @classmethod
     def get(cls, name: str, *, context=None, _service=None) -> "VM":
@@ -601,7 +604,7 @@ class VM:
                 **({"params": {"wait": "exec"}} if wait else {}),
             )
         )
-        return self.wait() if wait else self
+        return self.wait() if wait and not self.info.get("exec_ready") else self
 
     resume = start
 

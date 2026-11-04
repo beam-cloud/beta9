@@ -161,6 +161,12 @@ type PostgresConfig struct {
 	EncryptCredentials bool `key:"encryptCredentials" json:"encrypt_credentials"`
 	// MaxOpenConns caps this process's database connections; 0 is unbounded.
 	MaxOpenConns int `key:"maxOpenConns" json:"max_open_conns"`
+	// WarmConnections opens a bounded pool before accepting requests. Zero
+	// disables prewarming; the target is capped at MaxOpenConns and 128.
+	WarmConnections int `key:"warmConnections" json:"warm_connections"`
+	// VMBurstBatchSize groups simultaneous VM and stub mutations into durable
+	// statement. Values <= 1 disable batching; the collection window is 1 ms.
+	VMBurstBatchSize int `key:"vmBurstBatchSize" json:"vm_burst_batch_size"`
 }
 
 type S2Config struct {

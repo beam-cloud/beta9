@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
@@ -111,6 +112,65 @@ func TestWorkerDockerStartupCanceledTreatsMissingContainerAsTeardown(t *testing.
 
 type readyGoProcServer struct {
 	goprocpb.UnimplementedGoProcServer
+}
+
+type guestControlWaitRuntime struct {
+	runtime.Runtime
+	wait func(context.Context, string) error
+}
+
+func (r guestControlWaitRuntime) WaitForGuestControl(ctx context.Context, id string) error {
+	return r.wait(ctx, id)
+}
+
+type countedReadyGoProcServer struct {
+	goprocpb.UnimplementedGoProcServer
+	calls atomic.Int64
+}
+
+func (s *countedReadyGoProcServer) Ready(context.Context, *goprocpb.ReadyRequest) (*goprocpb.ReadyResponse, error) {
+	s.calls.Add(1)
+	return &goprocpb.ReadyResponse{Ok: true}, nil
+}
+
+func TestProcessManagerWaitsForGuestControlThenChecksReady(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	service := &countedReadyGoProcServer{}
+	goprocpb.RegisterGoProcServer(server, service)
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	instance := &ContainerInstance{
+		ContainerAddressMap: map[int32]string{types.WorkerSandboxProcessManagerPort: listener.Addr().String()},
+		Runtime: guestControlWaitRuntime{wait: func(ctx context.Context, id string) error {
+			require.Equal(t, "guest", id)
+			require.Zero(t, service.calls.Load(), "no readiness probes before guest control")
+			return nil
+		}},
+	}
+	client, ready, stats := (&Worker{}).waitForProcessManager(ctx, "guest", instance)
+	require.True(t, ready)
+	require.Equal(t, 1, stats.Attempts)
+	require.EqualValues(t, 1, service.calls.Load(), "guest control does not replace the Ready RPC")
+	t.Cleanup(func() { _ = client.Cleanup() })
+}
+
+func TestProcessManagerGuestControlCancellationSkipsProbes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	instance := &ContainerInstance{Runtime: guestControlWaitRuntime{wait: func(ctx context.Context, _ string) error {
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	}}}
+	client, ready, stats := (&Worker{}).waitForProcessManager(ctx, "guest", instance)
+	require.Nil(t, client)
+	require.False(t, ready)
+	require.Zero(t, stats.Attempts)
+	require.Equal(t, "guest_control", stats.LastClass)
+	require.Equal(t, context.Canceled.Error(), stats.LastError)
 }
 
 func TestVMReservationOwnsSandboxReadiness(t *testing.T) {

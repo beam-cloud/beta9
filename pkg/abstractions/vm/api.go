@@ -504,7 +504,7 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 	}
 
 	// Hold the lifecycle lock before publishing the row to the reconciler.
-	if err := s.repo.CreateVM(ctx, v); err != nil {
+	if err := s.createVMRecord(ctx, v); err != nil {
 		return nil, err
 	}
 

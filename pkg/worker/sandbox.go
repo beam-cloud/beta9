@@ -644,6 +644,19 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 	backoff := goprocInitialBackoff
 	stats := processManagerWaitStats{FailureClasses: map[string]int{}}
 	nextSlowLog := goprocSlowReadyLogInterval
+	if guest, ok := instance.Runtime.(interface {
+		WaitForGuestControl(context.Context, string) error
+	}); ok {
+
+		err := guest.WaitForGuestControl(ctx, containerId)
+
+		if err != nil {
+			stats.LastError = err.Error()
+			stats.LastClass = "guest_control"
+			stats.FailureClasses[stats.LastClass]++
+			return nil, false, stats
+		}
+	}
 
 	for {
 		stats.Attempts++

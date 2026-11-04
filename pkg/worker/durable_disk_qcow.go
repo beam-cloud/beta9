@@ -656,6 +656,11 @@ func qcowChainVirtualSize(manifests []*types.DiskSnapshotManifest) int64 {
 // snapshotQcowDurableDiskMount seals the volume and publishes every pending
 // layer, oldest first, as ordinary DiskSnapshot generations.
 func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, mode durableDiskSyncMode) (*types.DiskSnapshot, error) {
+	return s.snapshotQcowDurableDiskMountWithSeal(ctx, request, mount, mode, nil)
+}
+
+func (s *Worker) snapshotQcowDurableDiskMountWithSeal(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, mode durableDiskSyncMode, sealed func()) (*types.DiskSnapshot, error) {
+
 	if mount.ReadOnly {
 		return nil, nil
 	}
@@ -701,7 +706,7 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		}
 		return nil
 	}
-	if err := snapshotQcowVolume(ctx, volume, mode, latest == nil, publish); err != nil {
+	if err := snapshotQcowVolumeWithSeal(ctx, volume, mode, latest == nil, publish, sealed); err != nil {
 		return published, err
 	}
 	// A flatten can overtake a background merge, leaving fewer published
@@ -729,6 +734,10 @@ type qcowSnapshotVolume interface {
 // Explicit and final snapshots must also capture the current head: publishing
 // a backlog alone would omit writes made since the last successful seal.
 func snapshotQcowVolume(ctx context.Context, volume qcowSnapshotVolume, mode durableDiskSyncMode, force bool, publish func([]disk.SealedLayer) error) error {
+	return snapshotQcowVolumeWithSeal(ctx, volume, mode, force, publish, nil)
+}
+
+func snapshotQcowVolumeWithSeal(ctx context.Context, volume qcowSnapshotVolume, mode durableDiskSyncMode, force bool, publish func([]disk.SealedLayer) error, onSealed func()) error {
 	checkpoint := func(sealed []disk.SealedLayer) error {
 		if err := publish(sealed); err != nil {
 			return err
@@ -760,8 +769,14 @@ func snapshotQcowVolume(ctx context.Context, volume qcowSnapshotVolume, mode dur
 		force = false // Publishing the backlog established the first generation.
 	}
 	sealed, skipped, err := sealQcowVolume(ctx, volume, force)
-	if err != nil || skipped {
+	if err != nil {
 		return err
+	}
+	if onSealed != nil {
+		onSealed()
+	}
+	if skipped {
+		return nil
 	}
 	return checkpoint(sealed)
 }

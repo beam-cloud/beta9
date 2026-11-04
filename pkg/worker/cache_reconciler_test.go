@@ -125,6 +125,35 @@ func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 	}
 }
 
+func TestReporterCoalescesMutableRequirementsBeforePublishing(t *testing.T) {
+	for _, kind := range []types.CacheContentKind{types.CacheContentKindCheckpoint, types.CacheContentKindVolume} {
+		t.Run(string(kind), func(t *testing.T) {
+			events := &fakeEventRepo{}
+			r := newTestReporter(events)
+			for _, hash := range []string{"old", "new"} {
+				r.reportItems("ws", "stub", kind, []types.CacheRequiredContentItem{{Hash: hash, Source: "volume/path"}})
+			}
+			r.flush()
+			require.Len(t, events.pushed, 1)
+			require.Len(t, events.pushed[0].Items, 1)
+			require.Equal(t, "new", events.pushed[0].Items[0].Hash)
+		})
+	}
+}
+
+func TestReporterRetryCannotReplaceNewerRequirement(t *testing.T) {
+	r := newTestReporter(&fakeEventRepo{})
+	for _, kind := range []types.CacheContentKind{types.CacheContentKindCheckpoint, types.CacheContentKindVolume} {
+		old := types.CacheRequiredContentItem{Kind: kind, Hash: "old", Source: "path"}
+		newer := old
+		newer.Hash = "new"
+		r.reportItems("ws", "stub", kind, []types.CacheRequiredContentItem{newer})
+		key := reporterKey{workspaceID: "ws", stubID: "stub", kind: kind}
+		r.requeue(map[reporterKey]map[string]types.CacheRequiredContentItem{key: {old.CoalescingKey(): old}}, nil)
+		require.Equal(t, "new", r.pending[key][old.CoalescingKey()].Hash)
+	}
+}
+
 func TestAuditCacheChurnEventIncludesMachineFields(t *testing.T) {
 	t.Setenv(types.WorkerMachineEnv, "machine-a")
 	events := &fakeEventRepo{}
@@ -588,19 +617,19 @@ func TestLoadRecentRequiredContentCachesByLastSeen(t *testing.T) {
 	content, complete := manager.loadRecentRequiredContent(stubs)
 	require.True(t, complete)
 	require.Len(t, content, 2)
-	require.Equal(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
+	require.ElementsMatch(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
 
 	// Unchanged scores are served from cache without new reads.
 	content, complete = manager.loadRecentRequiredContent(stubs)
 	require.True(t, complete)
 	require.Len(t, content, 2)
 	require.Equal(t, "h1", content[0].items[0].Hash)
-	require.Equal(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
+	require.ElementsMatch(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
 
 	// A bumped score (new activity/content) forces a re-read of that stub only.
 	stubs[1].LastSeen = seenB.Add(time.Second)
 	_, _ = manager.loadRecentRequiredContent(stubs)
-	require.Equal(t, []string{"ws|stub-a", "ws|stub-b", "ws|stub-b"}, fake.readKeys)
+	require.ElementsMatch(t, []string{"ws|stub-a", "ws|stub-b", "ws|stub-b"}, fake.readKeys)
 
 	// Stubs that age out of the recent index are evicted from the cache.
 	_, _ = manager.loadRecentRequiredContent(stubs[1:])
@@ -611,6 +640,95 @@ func TestLoadRecentRequiredContentCachesByLastSeen(t *testing.T) {
 	_, complete = manager.loadRecentRequiredContent([]cache.RecentStub{{WorkspaceID: "ws", StubID: "stub-c", LastSeen: seenA}})
 	require.False(t, complete)
 	require.NotContains(t, manager.requiredContentCache, "ws|stub-c")
+}
+
+type requiredContentReadFunc struct {
+	repo.EventRepository
+	read func(context.Context, string, string) ([]types.CacheRequiredContentItem, error)
+}
+
+func (f requiredContentReadFunc) ReadStubCacheRequiredContent(ctx context.Context, ws, stub string) ([]types.CacheRequiredContentItem, error) {
+	return f.read(ctx, ws, stub)
+}
+
+func TestLoadRecentRequiredContentBoundsParallelReadsAndRetriesFailures(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	defer release()
+	started := make(chan struct{}, 64)
+	var active, peak, calls atomic.Int32
+	var fail atomic.Bool
+	fail.Store(true)
+	reader := requiredContentReadFunc{read: func(ctx context.Context, _, stub string) ([]types.CacheRequiredContentItem, error) {
+		calls.Add(1)
+		n := active.Add(1)
+		defer active.Add(-1)
+		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
+		}
+		started <- struct{}{}
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if stub == "17" && fail.Load() {
+			return nil, errors.New("temporary S2 read failure")
+		}
+		return []types.CacheRequiredContentItem{{Hash: stub}}, nil
+	}}
+	manager := &WorkerCacheManager{ctx: ctx, eventRepo: reader}
+	stubs := make([]cache.RecentStub, 64)
+	for i := range stubs {
+		stubs[i] = cache.RecentStub{WorkspaceID: "ws", StubID: fmt.Sprint(i), LastSeen: time.Unix(100, 0)}
+	}
+	type outcome struct {
+		content  []recentStubContent
+		complete bool
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		content, complete := manager.loadRecentRequiredContent(stubs)
+		done <- outcome{content, complete}
+	}()
+	for range 32 {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("independent reads did not run concurrently")
+		}
+	}
+	require.Equal(t, int32(32), peak.Load())
+	select {
+	case <-started:
+		t.Fatal("required-content read bound exceeded")
+	default:
+	}
+	release()
+	var result outcome
+	select {
+	case result = <-done:
+	case <-ctx.Done():
+		t.Fatal("working-set read did not finish")
+	}
+	require.False(t, result.complete, "a missing protection record must still defer pruning")
+	require.Len(t, result.content, 63)
+	require.NotContains(t, manager.requiredContentCache, "ws|17")
+	for i, item := range result.content {
+		if i >= 17 {
+			i++
+		}
+		require.Equal(t, fmt.Sprint(i), item.items[0].Hash)
+	}
+	fail.Store(false)
+	content, complete := manager.loadRecentRequiredContent(stubs)
+	require.True(t, complete)
+	require.Len(t, content, 64)
+	require.Equal(t, int32(65), calls.Load(), "only the failed stub should need another read")
+	for i, item := range content {
+		require.Equal(t, fmt.Sprint(i), item.items[0].Hash)
+	}
 }
 
 // An S2 outage must not turn a retained object into an eviction candidate.

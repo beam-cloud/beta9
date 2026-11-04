@@ -342,7 +342,7 @@ func assembleRoot(vm *microvm.Spec) error {
 	if err := mountPseudo(newRoot); err != nil {
 		return fmt.Errorf("mount pseudo filesystems: %w", err)
 	}
-	for _, mount := range vm.Mounts {
+	if err := applyGuestMounts(newRoot, vm.Mounts, vm.MountConcurrency, canonicalMountTarget, func(i int, mount microvm.Mount) error {
 		var err error
 		switch mount.Type {
 		case microvm.MountTmpfs:
@@ -350,9 +350,9 @@ func assembleRoot(vm *microvm.Spec) error {
 		default:
 			err = applyBind(newRoot, mount)
 		}
-		if err != nil {
-			return err
-		}
+		return err
+	}); err != nil {
+		return err
 	}
 	if vm.Docker {
 		target := filepath.Join(newRoot, microvm.DockerDataRoot)

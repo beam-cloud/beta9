@@ -99,6 +99,15 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 		return nil, err
 	}
 
+	input := vmDiskInput{WorkspaceID: workspaceId, Name: name, Size: strings.TrimSpace(disk.Size),
+		Filesystem: strings.TrimSpace(filesystem), Driver: driver, MountPath: strings.TrimSpace(disk.MountPath)}
+	if vmDiskBurstEnabled(ctx) && r.config.VMBurstBatchSize > 1 {
+		return r.createVMDiskBatched(ctx, input)
+	}
+	return r.insertDisk(ctx, input)
+}
+
+func (r *PostgresBackendRepository) insertDisk(ctx context.Context, input vmDiskInput) (*types.Disk, error) {
 	query := fmt.Sprintf(`
 		INSERT INTO disk (workspace_id, name, size, filesystem, driver, mount_path)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -107,15 +116,10 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 
 	var created types.Disk
 	if err := r.client.GetContext(ctx, &created, query,
-		workspaceId,
-		name,
-		strings.TrimSpace(disk.Size),
-		strings.TrimSpace(filesystem),
-		driver,
-		strings.TrimSpace(disk.MountPath),
+		input.WorkspaceID, input.Name, input.Size, input.Filesystem, input.Driver, input.MountPath,
 	); err != nil {
 		if err == sql.ErrNoRows {
-			return r.GetDisk(ctx, workspaceId, name)
+			return r.GetDisk(ctx, input.WorkspaceID, input.Name)
 		}
 		return nil, err
 	}
